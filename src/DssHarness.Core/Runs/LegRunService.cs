@@ -96,6 +96,17 @@ public sealed record LegRunRequest(
     public Func<PlacedLeg, Action<string, string>?>? HostNotes { get; init; }
 
     /// <summary>
+    /// What the command refuses of a leg before its work starts that does not wait on the leg's build, asked before the
+    /// leg waits for its machine's slot - so a run its own work would refuse is refused before the wait rather than after
+    /// it, and ends as it would have once the leg ran - or <see langword="null"/> where it asks nothing then. Asked of a
+    /// leg whose slot this process asks for: here, of a leg this process runs - an ssh host's own run of the legs it was
+    /// sent among them, before it admits them; and of a WSL distribution, by the command run there, for a leg it runs and
+    /// this machine admits. A leg that waits for no slot is asked nothing here: its work refuses it as it starts, after no
+    /// wait.
+    /// </summary>
+    public LegAdmissionCheck? AdmissionCheck { get; init; }
+
+    /// <summary>
     /// Who is told of the run's legs as it goes - every leg placed and where it works, each copy once it is made, each
     /// leg once it has ended - or <see langword="null"/> where nobody is: a step of an orchestrator run lets its tree go
     /// by it. Never sent to a host: the machine that placed a leg says where it works and when its copy is made.
@@ -141,6 +152,21 @@ public interface ILegIsolation
     /// <param name="distribution">The distribution.</param>
     Agents.Isolation.ExecutionIsolation ForDistribution(string distribution);
 }
+
+/// <summary>
+/// What a command refuses of a leg before its work starts that does not wait on the leg's build: asked before the leg
+/// waits for its machine's slot (<see cref="LegRunRequest.AdmissionCheck"/>).
+/// </summary>
+/// <param name="Here">
+/// Asks it of a leg this process runs, given the leg's work as it would start, its build not yet made, and nothing of it
+/// begun: what refuses it throws the refusal, as the work would.
+/// </param>
+/// <param name="OnHost">
+/// What the command is given after <see cref="LegRunRequest.RemoteArguments"/> to ask it on the host of a leg another
+/// machine's process runs and this machine admits - a WSL distribution's - in the host's copy and by its own values, and
+/// run nothing.
+/// </param>
+public sealed record LegAdmissionCheck(Func<LegWork, CancellationToken, Task> Here, IReadOnlyList<string> OnHost);
 
 /// <summary>One unit of a leg's work asking its machine to take it: an arm of a sweep.</summary>
 /// <param name="Unit">The unit, as the machine's record of its heavy legs names it after its leg: <c>leg/unit</c>.</param>
@@ -281,30 +307,46 @@ public sealed class LegRunService(
             .ToOutcome(request.Json, _output.Shown);
 
     /// <summary>
-    /// Runs <paramref name="work"/> on every selected leg and answers what it reached, in the terms its caller answers
-    /// in: what the build, test and run use cases answer with - which a step of an orchestrator run will call - and the
-    /// commands' own bodies below them.
+    /// Places the legs <paramref name="request"/> selects, as <see cref="ExecuteAsync"/> places them, and asks
+    /// <see cref="LegRunRequest.AdmissionCheck"/> of each this process runs, as it is asked before the leg waits for its
+    /// slot - with nothing synced, locked, admitted or run, and no run kept: what the machine a WSL distribution runs on asks
+    /// of the distribution before it takes the slot of a leg the distribution runs.
     /// </summary>
-    /// <param name="commandName">The command reporting, which prefixes every line it writes.</param>
-    /// <param name="runId">
-    /// The run, begun and said by the command that asks for it before anything could refuse it, which every record and
-    /// the ledger name.
-    /// </param>
-    /// <param name="request">What the command was asked to do.</param>
-    /// <param name="work">What one leg does once its tree is ready.</param>
-    /// <param name="cancellationToken">Stops the run.</param>
-    public async Task<LegRunResult> ExecuteAsync(
-        string commandName,
-        RunId runId,
-        LegRunRequest request,
-        Func<LegWork, CancellationToken, Task<LegEntry>> work,
-        CancellationToken cancellationToken = default)
+    /// <param name="request">What the command was asked to do, with the check it asks of each leg.</param>
+    /// <param name="cancellationToken">Stops the survey and the checks.</param>
+    /// <returns>The legs checked, by name: a leg that could not be placed is left to the run, which says why.</returns>
+    /// <exception cref="HarnessException">The run, or the check of one of its legs, refused.</exception>
+    public async Task<IReadOnlyList<string>> CheckBeforeAdmissionAsync(LegRunRequest request, CancellationToken cancellationToken = default)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(commandName);
-        ArgumentNullException.ThrowIfNull(runId);
         ArgumentNullException.ThrowIfNull(request);
-        ArgumentNullException.ThrowIfNull(work);
 
+        var (context, placed, _) = await PlaceAsync(request, cancellationToken).ConfigureAwait(false);
+        var runs = placed.Where(leg => !leg.Dispatched).ToList();
+
+        if (request.AdmissionCheck is { } check)
+        {
+            // Under a run of its own that is never begun: what the check works out from the run - where an action's
+            // working space would be - is the shape of every run's, and nothing of it is made.
+            var runId = RunId.New();
+            var runDirectory = context.Layout.RunDirectory(runId.Value);
+
+            foreach (var leg in runs)
+            {
+                await check.Here(new LegWork(leg, RunsIn(context, leg), runId, runDirectory, request.Time) { KeepGoing = request.KeepGoing }, cancellationToken).ConfigureAwait(false);
+            }
+        }
+
+        return [.. runs.Select(leg => leg.Name)];
+    }
+
+    /// <summary>
+    /// The repository, and the legs <paramref name="request"/> selects placed on the hosts measured for them, with the
+    /// lines of those no host could take - after what the whole run would refuse before any host is measured.
+    /// </summary>
+    private async Task<(HarnessContext Context, IReadOnlyList<PlacedLeg> Placed, IReadOnlyList<LegEntry> Skipped)> PlaceAsync(
+        LegRunRequest request,
+        CancellationToken cancellationToken)
+    {
         var context = await _contextLoader.LoadAsync(request.Directory, cancellationToken).ConfigureAwait(false);
 
         // Asked of the legs the command line selects, before any host is measured: a run asked to set up that nothing it
@@ -331,6 +373,44 @@ public sealed class LegRunService(
             .ConfigureAwait(false);
 
         var placed = LegRunPlan.From(context, report, _platform, _pathBudget, out var skipped);
+
+        return (context, placed, skipped);
+    }
+
+    /// <summary>
+    /// The repository as a leg's work runs by it: a context made for the leg's copy, where it works in one - whose tree is
+    /// the copy, and whose machine state, values, secrets and the lock among it, stays where this machine keeps it - and the
+    /// repository's own otherwise.
+    /// </summary>
+    private HarnessContext RunsIn(HarnessContext context, PlacedLeg leg)
+        => leg.LocalCopy ? _contextLoader.ForCopy(context, leg.HostTreeRoot) : context;
+
+    /// <summary>
+    /// Runs <paramref name="work"/> on every selected leg and answers what it reached, in the terms its caller answers
+    /// in: what the build, test and run use cases answer with - which a step of an orchestrator run will call - and the
+    /// commands' own bodies below them.
+    /// </summary>
+    /// <param name="commandName">The command reporting, which prefixes every line it writes.</param>
+    /// <param name="runId">
+    /// The run, begun and said by the command that asks for it before anything could refuse it, which every record and
+    /// the ledger name.
+    /// </param>
+    /// <param name="request">What the command was asked to do.</param>
+    /// <param name="work">What one leg does once its tree is ready.</param>
+    /// <param name="cancellationToken">Stops the run.</param>
+    public async Task<LegRunResult> ExecuteAsync(
+        string commandName,
+        RunId runId,
+        LegRunRequest request,
+        Func<LegWork, CancellationToken, Task<LegEntry>> work,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(commandName);
+        ArgumentNullException.ThrowIfNull(runId);
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(work);
+
+        var (context, placed, skipped) = await PlaceAsync(request, cancellationToken).ConfigureAwait(false);
         var factor = context.Config.Defaults.DurationWarningFactor;
 
         if (placed.Count == 0)
@@ -878,6 +958,11 @@ public sealed class LegRunService(
             // A heavy leg waits here, once its tree is synced and its lock taken, until its machine takes it: another run of
             // its variant is refused-locked meanwhile, as it would be while it ran. Its slot is given back when its work
             // ends, and before the lock is.
+            if (await CheckBeforeTheSlotAsync(context, leg, request, runId, runDirectory, ledger, cancellationToken).ConfigureAwait(false) is { } poisoned)
+            {
+                return Ended(leg, poisoned.Verdict, poisoned.Detail ?? string.Empty, started) with { Retried = poisoned.Retried, Tree = tree };
+            }
+
             using var admitted = await AdmitAsync(context, leg, request, runId, ledger, cancellationToken).ConfigureAwait(false);
 
             if (admitted is { Refusal: { } refusal })
@@ -938,10 +1023,8 @@ public sealed class LegRunService(
     }
 
     /// <summary>
-    /// Asks the machine <paramref name="leg"/>'s work runs on to take it, where this process is on that machine, the
-    /// machine declares admission, and the leg is heavy - or runs in a WSL distribution under a workload admitting each
-    /// unit of its work, which this machine takes whole, its units asking nothing there; <see langword="null"/> where
-    /// any of those is not so.
+    /// Asks the machine <paramref name="leg"/>'s work runs on to take it, where the leg waits for a slot of it here
+    /// (<see cref="WaitsForASlotHere"/>); <see langword="null"/> where it does not.
     /// </summary>
     /// <remarks>
     /// Asked by a process on the machine the work runs on, which outlives that work: this one, for a leg of this machine
@@ -950,23 +1033,82 @@ public sealed class LegRunService(
     /// nothing: this machine's process took it before dispatching it, and the distribution's own figures do not show this
     /// machine's memory.
     /// </remarks>
-    private Task<Admission?> AdmitAsync(
+    private async Task<Admission?> AdmitAsync(
         HarnessContext context,
         PlacedLeg leg,
         LegRunRequest request,
         RunId runId,
         LegLedger ledger,
         CancellationToken cancellationToken)
+        => WaitsForASlotHere(context, leg, request)
+            ? await AskAsync(context, leg, request, runId, ledger, leg.Name, leg.Need, settle: true, cancellationToken).ConfigureAwait(false)
+            : null;
+
+    /// <summary>
+    /// Whether <paramref name="leg"/> waits here for a slot of the machine its work runs on: this process is on that
+    /// machine, the machine declares admission, and the leg is heavy - or runs in a WSL distribution under a workload
+    /// admitting each unit of its work, which this machine takes whole, its units asking nothing there.
+    /// </summary>
+    private bool WaitsForASlotHere(HarnessContext context, PlacedLeg leg, LegRunRequest request)
     {
         // Heavy as it is on this leg's system: a heavy step limited by runOn, or one that builds, makes the legs of those
         // systems alone heavy. A workload admitting each unit of its work holds no slot for the leg - but for a leg in a
         // WSL distribution, which this machine takes whole, its units asking nothing there.
         var workload = request.Workload.On(leg.Leg.Os);
 
-        return workload.Heavy || (workload.AdmitsEachUnit && leg.Named.Kind == HostKind.Wsl)
-            ? AskAsync(context, leg, request, runId, ledger, leg.Name, leg.Need, settle: true, cancellationToken)
-            : Task.FromResult<Admission?>(null);
+        return (workload.Heavy || (workload.AdmitsEachUnit && leg.Named.Kind == HostKind.Wsl)) && AdmissionHere(context, leg, request) is not null;
     }
+
+    /// <summary>
+    /// Asks the command's check of <paramref name="leg"/> (<see cref="LegRunRequest.AdmissionCheck"/>) before the leg waits
+    /// for its slot, where it waits for one here (<see cref="WaitsForASlotHere"/>) - so a run its own work would refuse is
+    /// refused before the wait rather than after it, ending as it would have once the leg ran: of a leg this process
+    /// runs, here, as its work would start; of one a distribution runs - the only leg another machine's process runs whose
+    /// slot this process asks for - by the distribution, whose check reads its copy, which the sync made, and its own
+    /// values, which no sync carries.
+    /// </summary>
+    /// <returns>
+    /// The leg's <c>poisoned</c> line where the distribution's DssHarness failed as a defect as it checked, started once
+    /// more, as the leg's run there would have ended - no slot is waited for to learn it again; <see langword="null"/>
+    /// where nothing refused the leg, or the command asks nothing of it.
+    /// </returns>
+    /// <exception cref="HarnessException">The check refused the run, as its work would have refused it.</exception>
+    private async Task<LegEntry?> CheckBeforeTheSlotAsync(
+        HarnessContext context,
+        PlacedLeg leg,
+        LegRunRequest request,
+        RunId runId,
+        string runDirectory,
+        LegLedger ledger,
+        CancellationToken cancellationToken)
+    {
+        if (request.AdmissionCheck is not { } check || !WaitsForASlotHere(context, leg, request))
+        {
+            return null;
+        }
+
+        if (!leg.Dispatched)
+        {
+            await check.Here(new LegWork(leg, RunsIn(context, leg), runId, runDirectory, request.Time) { KeepGoing = request.KeepGoing }, cancellationToken).ConfigureAwait(false);
+
+            return null;
+        }
+
+        ledger.Transition(leg.Name, $"asking {leg.Host.Host} to check the leg there before it waits for a slot here");
+
+        return await _remoteLegs.CheckAsync(ledger.CommandName, leg, [.. request.RemoteArguments ?? [], .. check.OnHost], cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// The rule by which this process asks the machine <paramref name="leg"/>'s work runs on to take its work, or
+    /// <see langword="null"/> where this process asks nothing: the leg's work runs on an ssh host, whose own process asks;
+    /// this process runs a leg in a WSL distribution for the machine it runs on, which asked; or the machine declares no
+    /// admission.
+    /// </summary>
+    private AdmissionRule? AdmissionHere(HarnessContext context, PlacedLeg leg, LegRunRequest request)
+        => (request.Here is null && leg.Host.Host.Kind == HostKind.Ssh) || request.Here is { Kind: HostKind.Wsl }
+            ? null
+            : AdmissionRuleOf(context, leg, request.Here);
 
     /// <summary>
     /// Asks the machine <paramref name="leg"/>'s work runs on to take <paramref name="asking"/> - the leg, or a unit of its
@@ -985,12 +1127,7 @@ public sealed class LegRunService(
         bool settle,
         CancellationToken cancellationToken)
     {
-        if ((request.Here is null && leg.Host.Host.Kind == HostKind.Ssh) || request.Here is { Kind: HostKind.Wsl })
-        {
-            return null;
-        }
-
-        if (AdmissionRuleOf(context, leg, request.Here) is not { } rule)
+        if (AdmissionHere(context, leg, request) is not { } rule)
         {
             return null;
         }
@@ -1292,13 +1429,8 @@ public sealed class LegRunService(
         // A leg that works in a copy of its tree runs by the configuration and the actions of the reading: a context made
         // for the copy, whose tree is the copy and whose machine state - values, secrets, the lock - stays where this
         // machine keeps it. Records stay in the run's own directory, as they do for a host's leg.
-        HarnessContext runsIn = context;
+        var runsIn = RunsIn(context, working);
         var runsAs = working;
-
-        if (working.LocalCopy)
-        {
-            runsIn = _contextLoader.ForCopy(context, working.HostTreeRoot);
-        }
 
         // The work of a run's machine step's leg builds, tests and runs what its agents wrote: held inside the operating
         // system's isolation, the leg's own, decided before anything of it starts. Where the isolation is required and

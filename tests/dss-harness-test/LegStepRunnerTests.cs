@@ -645,6 +645,9 @@ public sealed class LegStepRunnerTests : IDisposable
         public Task<UseCaseResult<ArmListing>> ListAsync(MutationLegsRequest request, CancellationToken cancellationToken = default)
             => throw new NotSupportedException("a step never lists arms");
 
+        public Task<LegRunResult> CheckBeforeAdmissionAsync(RunnerLegsRequest request, CancellationToken cancellationToken = default)
+            => throw new NotSupportedException("a step never checks a run's legs alone: only a WSL distribution is asked to");
+
         private Task<LegRunResult> Answered(LegCommandRequest request)
         {
             Asked.Add(request);

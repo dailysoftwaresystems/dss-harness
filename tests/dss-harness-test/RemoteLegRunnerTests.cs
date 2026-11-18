@@ -1119,6 +1119,156 @@ public sealed class RemoteLegRunnerTests
     }
 
     /// <summary>
+    /// A host asked to check a leg before this machine admits it is sent the leg's own command, for that leg alone and on
+    /// itself, in its copy of the tree, with what has it check and run nothing after the command's own options - and no
+    /// --json, for the check keeps no ledger: it is answered by how it finished. One that refused nothing returns.
+    /// </summary>
+    [Fact]
+    public async Task AHostAskedToCheckALeg_IsSentTheLegsOwnCommand_WithWhatHasItRunNothing()
+    {
+        HostCommand? sent = null;
+        var hosts = new ScriptedHostCommands((_, command) =>
+        {
+            sent = command;
+
+            return HostResults.Finished(command, HarnessExit.Success);
+        });
+
+        var leg = Leg() with
+        {
+            Distributions = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase) { ["Ubuntu-24"] = "Example-Linux", ["Alpine"] = null },
+        };
+
+        var poisoned = await Runner(hosts).CheckAsync(
+            "run", leg, ["corpus", "--input", "sources=a b", "--check-before-admission"], TestContext.Current.CancellationToken);
+
+        var request = Request(sent);
+
+        Assert.Null(poisoned);
+        Assert.Equal(HostAgentRequestKind.Run, request.Kind);
+        Assert.Equal("/home/dev/repo", request.Directory);
+        Assert.Null(request.RunId);
+        Assert.Equal(
+            ["run", "--legs", "wsl-debug", RemoteLegRunner.HereOption, "wsl Example-Linux", "corpus", "--input", "sources=a b", "--check-before-admission"],
+            request.Arguments);
+
+        // Told beside its command line what the leg's run there would be: a run line naming a distribution is checked as
+        // that run would read it, where the host's copy holds no item to read it from.
+        Assert.Equal(new Dictionary<string, string> { ["Ubuntu-24"] = "Example-Linux" }, request.Distributions);
+    }
+
+    /// <summary>
+    /// What a host's check refused is this run's refusal, in the host's own words and with its code - a value the leg's
+    /// input refuses by the host's own values among it - as it was once the leg ran there, only before this machine took
+    /// the leg's slot rather than after.
+    /// </summary>
+    [Theory]
+    [InlineData(HarnessExit.Refused)]
+    [InlineData(HarnessExit.ConfigInvalid)]
+    [InlineData(HarnessExit.UsageError)]
+    public async Task AHostsRefusalOfACheck_IsThisRunsRefusal_InTheHostsOwnWords(int code)
+    {
+        const string Said = "'actions/corpus.yml' declares what its inputs take, and this run's are not that: input 'sources', "
+            + "from the runner's .env, holds 43 item(s) parted by ' ', and it takes at most 32. Nothing was run.";
+
+        var hosts = new ScriptedHostCommands((_, command) =>
+        {
+            command.OnErrorLine?.Invoke(FailureLine.For("run", Said));
+
+            return HostResults.Finished(command, code);
+        });
+
+        var refusal = await Assert.ThrowsAsync<HarnessException>(() => Runner(hosts).CheckAsync(
+            "run", Leg(), ["corpus", "--check-before-admission"], TestContext.Current.CancellationToken));
+
+        Assert.Equal(code, refusal.ExitCode);
+        Assert.Equal($"wsl Example-Linux refused 'run' for leg 'wsl-debug': {Said}", refusal.Message);
+    }
+
+    /// <summary>
+    /// A check a host ended any other way than by passing, refusing or failing as a defect of its own - one it could not
+    /// finish - is no verdict about the code and no refusal: the host is unavailable, with the code it ended with and what
+    /// it said, and it is asked no more.
+    /// </summary>
+    [Fact]
+    public async Task ACheckAHostEndedAnyOtherWay_IsTheHostUnavailable_NamingTheCodeAndWhatItSaid()
+    {
+        var hosts = new ScriptedHostCommands((_, command) =>
+        {
+            command.OnErrorLine?.Invoke(FailureLine.For("run", "something went wrong"));
+
+            return HostResults.Finished(command, HarnessExit.CommandFailed);
+        });
+
+        var failure = await Assert.ThrowsAsync<HarnessException>(() => Runner(hosts).CheckAsync(
+            "run", Leg(), ["corpus", "--check-before-admission"], TestContext.Current.CancellationToken));
+
+        Assert.Equal(HarnessExit.HostUnavailable, failure.ExitCode);
+        Assert.Equal(
+            $"wsl Example-Linux checked 'run' for leg 'wsl-debug' and exited {HarnessExit.CommandFailed}, saying: something went wrong",
+            failure.Message);
+        Assert.Single(hosts.Calls);
+    }
+
+    /// <summary>
+    /// A check whose host's DssHarness failed as a defect as it started is asked once more, as a run of the leg is - a
+    /// check runs nothing, so every start of one is before anything ran there - and one that then refuses nothing lets the
+    /// leg go on to wait for its slot, a warning saying what the first start said.
+    /// </summary>
+    [Fact]
+    public async Task ACheckWhoseHostsDssHarnessFailedAsItStarted_IsAskedOnceMore_AndOneThatThenPassesRefusesNothing()
+    {
+        var harness = new HarnessFactory();
+        var starts = 0;
+        var hosts = new ScriptedHostCommands((_, command) =>
+        {
+            if (++starts == 1)
+            {
+                command.OnErrorLine?.Invoke(FailureLine.For("run", CouldNotLoad));
+                return HostResults.Finished(command, HarnessExit.InternalError);
+            }
+
+            return HostResults.Finished(command, HarnessExit.Success);
+        });
+
+        var poisoned = await Runner(hosts, harness).CheckAsync("run", Leg(), ["corpus", "--check-before-admission"], TestContext.Current.CancellationToken);
+
+        Assert.Null(poisoned);
+        Assert.Equal(1 + RemoteLegRunner.MostRestarts, hosts.Calls.Count);
+        Assert.Contains(
+            $"run: WARN - wsl-debug: wsl Example-Linux's DssHarness exited 70 as it started, before anything ran there, saying: {CouldNotLoad}; "
+                + "asking it to check the leg once more",
+            harness.StandardError.ToString(),
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A check whose host's DssHarness fails as it starts again is the leg's poisoned line, as the leg's run there would
+    /// have ended - the harness failing, never a host that could not be reached - naming the host, the code and what each
+    /// start said, so no slot is waited for to learn it again; it is asked no more than once more.
+    /// </summary>
+    [Fact]
+    public async Task ACheckWhoseHostsDssHarnessFailsAsItStartsAgain_IsTheLegsPoisonedLine()
+    {
+        var hosts = new ScriptedHostCommands((_, command) =>
+        {
+            command.OnErrorLine?.Invoke(FailureLine.For("run", CouldNotLoad));
+            return HostResults.Finished(command, HarnessExit.InternalError);
+        });
+
+        var poisoned = await Runner(hosts).CheckAsync("run", Leg(), ["corpus", "--check-before-admission"], TestContext.Current.CancellationToken);
+
+        Assert.Equal(1 + RemoteLegRunner.MostRestarts, hosts.Calls.Count);
+        Assert.NotNull(poisoned);
+        Assert.Equal(LegVerdict.Poisoned, poisoned.Verdict);
+        Assert.Equal(
+            "wsl Example-Linux ran 'run' for leg 'wsl-debug', and its DssHarness failed as it started, before anything ran there: "
+            + $"it exited 70, saying: {CouldNotLoad}",
+            poisoned.Detail);
+        Assert.Equal([$"wsl Example-Linux's DssHarness exited 70 as it started, before anything ran there, saying: {CouldNotLoad}"], poisoned.Retried);
+    }
+
+    /// <summary>
     /// A set-up the leg left running on the host, where the host's run ended with no line for the leg, is told to this run
     /// as the host's ledger names it, so this run says it too, whatever else it makes of the host's answer.
     /// </summary>

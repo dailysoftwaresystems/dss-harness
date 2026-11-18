@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using System.Text.RegularExpressions;
 using DssHarness.Core.Configuration;
 using DssHarness.Core.Execution;
 using DssHarness.Core.FileSystem;
@@ -255,6 +254,14 @@ public sealed class ActionFileParser(
             string? fallback = null;
             string? inputDescription = null;
             var required = false;
+            string? pattern = null;
+            string? separator = null;
+            int? minItems = null;
+            int? maxItems = null;
+
+            // Whether every key that bounds the value was read as it should be: a declaration that refused one is
+            // not held to the others, nor its default to it, which would refuse it twice over one mistake.
+            var bounded = true;
 
             foreach (var (declarationKeyNode, declarationValueNode) in declaration.Children)
             {
@@ -265,22 +272,41 @@ public sealed class ActionFileParser(
                     continue;
                 }
 
+                var setting = $"{owner}.{inputName}.{key}";
+
                 switch (key)
                 {
                     case "default":
-                        fallback = YamlReading.RequireScalar(declarationValueNode, $"{owner}.{inputName}.default", problems);
+                        fallback = YamlReading.RequireScalar(declarationValueNode, setting, problems);
                         break;
 
                     case "required":
-                        required = YamlReading.RequireBoolean(declarationValueNode, $"{owner}.{inputName}.required", problems)
+                        required = YamlReading.RequireBoolean(declarationValueNode, setting, problems)
                             ?? false;
                         break;
 
                     case "description":
-                        inputDescription = YamlReading.RequireScalar(
-                            declarationValueNode,
-                            $"{owner}.{inputName}.description",
-                            problems);
+                        inputDescription = YamlReading.RequireScalar(declarationValueNode, setting, problems);
+                        break;
+
+                    case "pattern":
+                        pattern = ReadInputPattern(declarationValueNode, setting, problems);
+                        bounded &= pattern is not null;
+                        break;
+
+                    case "separator":
+                        separator = ReadSeparator(declarationValueNode, setting, problems);
+                        bounded &= separator is not null;
+                        break;
+
+                    case "minItems":
+                        minItems = ReadItemCount(declarationValueNode, setting, most: false, problems);
+                        bounded &= minItems is not null;
+                        break;
+
+                    case "maxItems":
+                        maxItems = ReadItemCount(declarationValueNode, setting, most: true, problems);
+                        bounded &= maxItems is not null;
                         break;
 
                     default:
@@ -291,8 +317,161 @@ public sealed class ActionFileParser(
             RefuseShadowedInput(keyNode, inputName, problems);
             RefuseUnwritableInput(keyNode, inputName, problems);
 
-            yield return new ActionInput(inputName, fallback, required, inputDescription);
+            var input = new ActionInput(inputName, fallback, required, inputDescription)
+            {
+                Pattern = pattern,
+                Separator = separator,
+                MinItems = minItems,
+                MaxItems = maxItems,
+            };
+
+            if (bounded)
+            {
+                RefuseSenselessBounds(declaration, owner, input, problems);
+            }
+
+            yield return input;
         }
+    }
+
+    /// <summary>
+    /// Records a problem for each bound of <paramref name="input"/> that reads nothing, or that no value could meet, and
+    /// for a default its own declaration refuses.
+    /// </summary>
+    /// <param name="node">The input's declaration, for the line number.</param>
+    /// <param name="owner">Whose inputs these are, as a problem names them.</param>
+    /// <param name="input">The input as declared, every key it bounds its value by read as it should be.</param>
+    /// <param name="problems">Where problems are collected.</param>
+    /// <remarks>
+    /// A key that loads is a key that is read: <c>minItems</c> or <c>maxItems</c> with no <c>separator</c> would count
+    /// items nothing parts, and a <c>separator</c> with neither would part a value nothing counts. A default is a value
+    /// like any other, and one its own input refuses would be refused on every run that left the input to it - said
+    /// here, once, rather than on each of them.
+    /// </remarks>
+    private static void RefuseSenselessBounds(YamlNode node, string owner, ActionInput input, List<string> problems)
+    {
+        var name = Named(owner, input.Name);
+        var counted = input.MinItems is not null || input.MaxItems is not null;
+
+        if (counted && input.Separator is null)
+        {
+            problems.Add(YamlReading.At(node, $"{name} declares {(input.MinItems is null ? "maxItems" : "minItems")} and no "
+                + "separator, so nothing parts its value into the items it would count. Declare the text between them under separator."));
+            return;
+        }
+
+        if (!counted && input.Separator is not null)
+        {
+            problems.Add(YamlReading.At(node, $"{name} declares a separator and neither minItems nor maxItems, so nothing "
+                + "counts the items it parts. Bound them, or leave separator out."));
+            return;
+        }
+
+        if (input.MinItems > input.MaxItems)
+        {
+            problems.Add(YamlReading.At(node, $"{name} takes at least {input.MinItems} items and at most {input.MaxItems}, "
+                + "which no value can hold."));
+            return;
+        }
+
+        if (input.Default is { } fallback && input.Refusal(fallback) is { } refusal)
+        {
+            problems.Add(YamlReading.At(node, $"the default of {name} {refusal}, so every run left to it would be refused."));
+        }
+    }
+
+    /// <summary>
+    /// A declared input's <c>pattern</c>: a regular expression its whole value must match, refused where it is empty -
+    /// held to the whole value, it would take only an empty one - or is no regular expression this tool can run.
+    /// </summary>
+    /// <param name="node">The <c>pattern</c> value.</param>
+    /// <param name="setting">What a problem calls the key.</param>
+    /// <param name="problems">Where problems are collected.</param>
+    private static string? ReadInputPattern(YamlNode node, string setting, List<string> problems)
+    {
+        var pattern = YamlReading.RequireScalar(node, setting, problems);
+
+        if (pattern is null)
+        {
+            return null;
+        }
+
+        if (pattern.Length == 0)
+        {
+            problems.Add(YamlReading.At(node, $"'{setting}' is empty; held to the whole value, it would take only an empty "
+                + "one. Leave it out to take any value."));
+            return null;
+        }
+
+        if (HarnessConfigValidator.PatternProblem(pattern, $"'{setting}'") is { } problem)
+        {
+            problems.Add(YamlReading.At(node, problem));
+            return null;
+        }
+
+        // Compiled as it is matched as well: a pattern that ends in a comment running to the end of its line, under
+        // the x option, takes in what holds it to the whole value, and is a pattern no value could be matched against.
+        if (HarnessConfigValidator.PatternProblem(ActionInput.Whole(pattern), $"'{setting}'") is not null)
+        {
+            problems.Add(YamlReading.At(node, $"'{setting}' ends in a comment that runs to the end of its line, which "
+                + "would take in what holds it to the whole value. End the comment with a line break."));
+            return null;
+        }
+
+        return pattern;
+    }
+
+    /// <summary>A declared input's <c>separator</c>: any text but the empty one, which parts nothing.</summary>
+    /// <param name="node">The <c>separator</c> value.</param>
+    /// <param name="setting">What a problem calls the key.</param>
+    /// <param name="problems">Where problems are collected.</param>
+    private static string? ReadSeparator(YamlNode node, string setting, List<string> problems)
+    {
+        var separator = YamlReading.RequireScalar(node, setting, problems);
+
+        if (separator is { Length: 0 })
+        {
+            problems.Add(YamlReading.At(node, $"'{setting}' is empty, which parts nothing."));
+            return null;
+        }
+
+        return separator;
+    }
+
+    /// <summary>
+    /// A declared input's <c>minItems</c> or <c>maxItems</c>: a whole number of at least 1. Zero is refused as a negative
+    /// count is: as the fewest it bounds nothing, every value holding at least none, and as the most it takes only a value
+    /// with no item at all.
+    /// </summary>
+    /// <param name="node">The value.</param>
+    /// <param name="setting">What a problem calls the key.</param>
+    /// <param name="most">Whether it is <c>maxItems</c>, for what a problem says of zero.</param>
+    /// <param name="problems">Where problems are collected.</param>
+    private static int? ReadItemCount(YamlNode node, string setting, bool most, List<string> problems)
+    {
+        var text = YamlReading.RequireScalar(node, setting, problems);
+
+        if (text is null)
+        {
+            return null;
+        }
+
+        if (!int.TryParse(text, System.Globalization.NumberStyles.AllowLeadingSign, System.Globalization.CultureInfo.InvariantCulture, out var count))
+        {
+            problems.Add(YamlReading.At(node, $"'{setting}' is '{text}', which is not a whole number of items."));
+            return null;
+        }
+
+        if (count < 1)
+        {
+            problems.Add(YamlReading.At(node, $"'{setting}' is {count}: "
+                + (count < 0 ? "a count of items is never negative."
+                    : most ? "it would take only a value with no item at all. Leave it out to take any number."
+                    : "every value holds at least none, so it bounds nothing. Leave it out.")));
+            return null;
+        }
+
+        return count;
     }
 
     /// <summary>How a problem names one declared input: the action's as it always has, a step's under its step.</summary>
@@ -1018,13 +1197,9 @@ public sealed class ActionFileParser(
             return null;
         }
 
-        try
+        if (HarnessConfigValidator.PatternProblem(pattern, "'successPattern'") is { } problem)
         {
-            _ = new Regex(pattern, RegexOptions.None, PatternTimeout);
-        }
-        catch (ArgumentException exception)
-        {
-            problems.Add(YamlReading.At(node, $"'successPattern' does not compile: {exception.Message}"));
+            problems.Add(YamlReading.At(node, problem));
             return null;
         }
 

@@ -5335,7 +5335,13 @@ one of the runtime's own assemblies, once, as the runtime or the tool there was 
 started, and the next run was fine. A start that then answers is the leg's line, which says what the
 failed start said (`retried once: ...`, and `retried` in `--json`), so a failure the second start
 did not meet is never hidden; one that fails so again is `poisoned`, saying it was retried. Once
-anything ran there, the command is never started again.
+anything ran there, the command is never started again. A WSL distribution's check of a heavy leg
+before this machine takes its slot (`RemoteLegRunner.CheckAsync`) goes through the same start
+(`AskStartedOnceMoreAsync`), told beside its command line what the leg's run there is told - its
+distributions among it, so it refuses what that run would and nothing it would not: it runs
+nothing, so a check that failed so is always one before anything ran, asked once more, and one
+that fails so again is the leg's `poisoned` line, which `LegRunService.CheckBeforeTheSlotAsync`
+ends the leg with before it waits for any slot.
 
 ### A host's home is `~`
 
@@ -7288,6 +7294,55 @@ sibling directory whose name merely starts the same way is outside, not inside.
   `--manual-step`s, so no leg there runs a default where the command line gave a value, or the
   runner's own steps where it named others. The value is a plain one, on a command line and so in
   the process table; a secret stays in `.secrets`.
+- **An input declares what its value must be, and a run holds every value to it before any leg is
+  placed.** `pattern` is a .NET regular expression the whole value must match, case and all; for a
+  list, `separator` is the text between its items, matched as written, and `minItems` and
+  `maxItems`, each at least 1, bound how many it holds. An item is the text between separators with
+  white space trimmed from either end, and one left empty is not counted, so a separator of one
+  space parts a run of spaces as one does and a trailing separator adds no item; an empty value
+  holds none. The checks are declared beside the input rather than made by the action's own
+  program because a program refuses a value only once its leg runs, after a heavy leg waited for a
+  slot of its machine: a consumer's run waited 49 minutes to be told it gave 43 sources where its
+  script took 32. Each declaration is held to sense when the file is read - an empty or unreadable
+  pattern, one ending in a comment that would take in its anchors, a bound with no separator, a
+  separator with no bound, a count below 1 and a `minItems` over `maxItems` are refused, and so is
+  a default its own input refuses. One rule gives every input its value and holds it to its input
+  (`ActionInputs`), asked wherever the values are known and always before a leg is admitted: by
+  `run` and a workflow's `run` step (`RunnerLegs`) before any leg is placed, synced, locked or
+  admitted, and by each leg's runner as it starts. A required input with no value and a value its
+  input refuses are refused at once, every such input named, as a usage error (10); then a step
+  naming an input that is not required and has no value, as a configuration error (12), for it is
+  the file that lets the input go without one. Before any leg is placed, a leg this machine runs is
+  held to this machine's `.env`; a leg another machine runs only to what `--input` gave, which
+  reaches every machine alike, since that machine's `.env` is its own and never synced. The rest
+  is that machine's to hold, by the same rule run there: an ssh host before it admits the leg, as
+  its `run` begins; and a WSL distribution, whose leg this machine admits, when this machine asks
+  it to - once the leg's copy is synced and locked and before this machine asks for the leg's slot,
+  the dispatcher sends the distribution's host agent the leg's own `run` line with the hidden
+  `--check-before-admission` (`RunnerLegs.CheckBeforeAdmissionAsync`), which places the leg there
+  and asks of it what the leg's slot is asked after below, and runs nothing, its refusal the run's.
+  The host agent's `run` request is the channel and not the survey: a survey is taken before the
+  sync, of the host rather than of a runner, and would read an action file the sync has yet to
+  bring. The runner values are read here only where a leg here needs them, so a run of other
+  machines' legs is never refused over this machine's.
+- **Everything a leg's runner refuses before its first step that does not wait on its build is
+  refused before a heavy leg waits for its slot.** The run's request carries the check
+  (`LegRunRequest.AdmissionCheck`), which `LegRunService.AdmitAsync` asks right before it asks for
+  the slot, once the leg's tree is synced and locked: of a leg this process runs, here
+  (`IRunnerRunService.VetAsync`); of a WSL distribution's, by the distribution, as above; an ssh
+  host's own run asks it of the legs it was sent before it admits them. `VetAsync` makes the very
+  checks the runner makes as it starts, in their order and through the same code
+  (`RunnerRunService.VetStepsAsync` and `RefuseUnstartableAsync`, which the start calls too): the
+  steps the run selects and the leg's system runs, the inputs and the names each run line holds,
+  the tool policy, a line that starts nothing or names what the leg has nothing for, a secret in an
+  argument list, and an action's working space and kept output git does not ignore - with nothing
+  performed, written or started. What waits on the build stays at the start: a step reading the
+  build of a leg this run did not build (`RefuseUnbuilt`), and what a predefined action refuses as
+  it is performed. A run check's runner is vetted alike, by its own values, and what refuses it is
+  warned of on the leg's line rather than refusing the run: a check runs only where a failure
+  matches the exception it confirms, so a run that may never start it is not refused over it, and
+  one that does is refused by it then, the failure left unexcused. A leg that waits for no slot is
+  asked nothing before: its runner refuses it as it starts, after no wait.
 - **Each line is a program and its arguments, never a shell string.** No shell parses it, so no
   shell's word splitting, globbing or process emulation sits between the harness and the program.
 - The splitter honours double quotes only, understands no escape, and strips every `"` from the
@@ -7299,8 +7354,8 @@ sibling directory whose name merely starts the same way is outside, not inside.
 - The first token must be a program the configuration declares under `tools`, a path inside
   the repository, or the name of one of the leg's compilers alone - `{compiler_C}` or
   `{compiler_CXX}`, which starts what the leg's build identified and built with. An undeclared
-  program is refused before anything runs — the same list `install-missing-tools` guarantees is
-  installed. It is judged as it will start: its names
+  program is refused before anything runs, and before a heavy leg waits for its slot — the same
+  list `install-missing-tools` guarantees is installed. It is judged as it will start: its names
   filled in, and a relative path read from the directory its step runs in, both worked out by the
   one function the run starts it with. Read as written, `{dir}/tool` was inside the repository
   while the step started a program wherever `{dir}` pointed. A refusal says what a line was

@@ -3417,6 +3417,34 @@ public sealed partial class HelpTests
     }
 
     /// <summary>
+    /// The legs topic says that a host's DssHarness failing as a defect is a poisoned leg, that one failing so before
+    /// anything ran is started once more, how the line says it, and that a WSL distribution's check of a heavy leg before
+    /// its slot is asked once more alike and, failing again, is the leg's poisoned line with no slot waited for.
+    /// </summary>
+    [Fact]
+    public void LegsTopic_SaysAHostsDssHarnessFailingAsItStarts_IsStartedOnceMore_ItsCheckBeforeTheSlotAlike()
+    {
+        var words = Prose.Words(HelpText.Of("legs").StandardOutput);
+
+        foreach (var text in new[]
+        {
+            $"A leg whose host's DssHarness fails as a defect (exit {HarnessExit.InternalError}) with no line for it is poisoned - "
+                + "the harness failing, never a host that could not be reached - its line naming the host, the code and what the "
+                + "host said.",
+            "the leg is started there again, once at most, which is safe since nothing ran: a runtime or a tool replaced "
+                + "there while it started fails that way once.",
+            "A start that then answers is the leg's line, which says what the failed start said ('retried once: ...', and "
+                + "retried in --json); one that fails so again is poisoned, saying it was retried. Once anything ran there, the "
+                + "leg is never started again.",
+            "A WSL distribution asked to check a heavy leg before this machine takes its slot is asked once more alike - a "
+                + "check runs nothing - and one that fails so again is the leg's poisoned line, with no slot waited for.",
+        })
+        {
+            Assert.Contains(text, words, StringComparison.Ordinal);
+        }
+    }
+
+    /// <summary>
     /// The legs topic says where a leg works - its tree, its host's copy, or its own in the tree's .legs - and the order
     /// of precedence in one sentence: the command's option, a runner's writesTree, the leg's own key, the default, the
     /// tree.
@@ -3781,12 +3809,83 @@ public sealed partial class HelpTests
         {
             "resolved from 'run --input <name>=<value>' first, .harness-config/runner/.env second and each "
                 + "input's own 'default' last; .secrets never gives one a value.",
-            "A required input with none of them is refused before the first step runs, and so is a step naming "
-                + "one that is not required and has none, naming the input and how it can have one.",
+            "A required input with none of them is refused, and so is a step naming one that is not required and has "
+                + "none, naming the input and how it can have one - both before any leg is admitted (below).",
             "default its value when neither --input nor the runner's .env gives one",
             "--input takes one name=value each time it is given",
             "an empty value and a name given twice",
             "a secret stays in",
+        })
+        {
+            Assert.Contains(text, words, StringComparison.Ordinal);
+        }
+    }
+
+    /// <summary>
+    /// The runners topic says that everything a leg's runner refuses before its first step that does not wait on the
+    /// leg's build is refused before a heavy leg waits for its slot, where each leg is checked, what stays at the start
+    /// because it waits on the build, and that a run check's runner is warned of rather than refusing the run.
+    /// </summary>
+    [Fact]
+    public void RunnersTopic_SaysWhatARunnerRefusesBeforeItsBuild_IsRefusedBeforeAHeavyLegWaitsForItsSlot()
+    {
+        var words = Prose.Words(HelpText.Of("runners").StandardOutput);
+
+        foreach (var text in new[]
+        {
+            "Everything else a leg's runner would refuse before its first step that does not wait on the leg's build is "
+                + "refused before a heavy leg waits for its slot as well, by the checks the runner makes as it starts and in "
+                + "their order: the steps the run selects and the leg's system runs, every input and every name a run line "
+                + "holds, each program a line starts held to the tool policy, a line that starts nothing or would put a "
+                + "secret in its arguments, and an action's working space git does not ignore.",
+            "A leg this machine runs is checked here once its tree is synced and locked, right before its slot is asked "
+                + "for; a WSL distribution's leg by the distribution, sent the leg's own run line with "
+                + $"{DssHarness.Core.Application.Legs.RunnerLegs.CheckBeforeAdmissionOption}, which checks and runs nothing; an ssh host's by the host, "
+                + "before it admits the leg.",
+            "A step reading the build of a leg this run did not build is refused as the runner starts, after the slot, "
+                + "for the build it waits on is made then; a leg that waits for no slot is checked as its runner starts.",
+            "A run check's runner is checked alike, and what would refuse it is warned of rather than refusing the run: a "
+                + "check runs only where a failure matches the exception it confirms, and one that starts it is refused by "
+                + "it then, leaving that failure unexcused.",
+        })
+        {
+            Assert.Contains(text, words, StringComparison.Ordinal);
+        }
+    }
+
+    /// <summary>
+    /// The runners topic says what an input may declare its value must be - its pattern, and for a list its separator and
+    /// bounds - how items are counted, which declarations are refused when the file is read, and that a required input
+    /// with no value, a value its input refuses and a step naming an input with no value are refused before any leg is
+    /// admitted, by whose .env: a WSL distribution's checked by it before this machine asks for the leg's slot.
+    /// </summary>
+    [Fact]
+    public async Task RunnersTopic_SaysWhatAnInputMayDeclareItsValueMustBe_AndThatItIsHeldBeforeAnyLegIsAdmitted()
+    {
+        var result = HelpText.Of("runners");
+        var words = Prose.Words(result.StandardOutput);
+
+        foreach (var text in new[]
+        {
+            "An input may declare what its value must be: 'pattern', a .NET regular expression the whole value must "
+                + "match, case and all - [0-9]+ takes 12 and not 12a; and for a list, 'separator', the text between its "
+                + "items, matched as written, with 'minItems', 'maxItems' or both, each at least 1.",
+            "An item is the text between separators with white space trimmed from either end, and one left empty is "
+                + "not counted, so a separator of one space parts a run of spaces as one does and a trailing separator "
+                + "adds no item.",
+            "an empty or unreadable pattern, a bound with no separator, a separator with no bound and a minItems over "
+                + "maxItems are refused, and so is a default its own input refuses.",
+            "A required input with no value, and a value its input refuses, are refused before any leg is placed, "
+                + "synced, locked or admitted - a heavy run never waits for a slot to be told - naming every such input "
+                + "at once, as a usage error; then a step naming an input with no value, as a configuration error; and "
+                + "all of it again as each leg's runner starts.",
+            "A leg this machine runs is held to this machine's .env; for a leg another machine runs, only what --input "
+                + "gave is held to its input here, since that machine's .env is its own, and the rest is that machine's "
+                + "to hold by its own values: a WSL distribution, whose leg this machine admits, is asked to check it "
+                + "once the leg's copy is synced and before this machine asks for the leg's slot, its refusal the run's; "
+                + "an ssh host checks it before it admits the leg itself.",
+            "pattern a .NET regular expression its whole value must match",
+            "separator the text between the items of its value, which minItems and maxItems count",
         })
         {
             Assert.Contains(text, words, StringComparison.Ordinal);

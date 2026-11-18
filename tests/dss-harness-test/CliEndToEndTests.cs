@@ -1209,21 +1209,23 @@ public sealed partial class CliEndToEndTests
     /// <summary>
     /// A run refused inside its leg before any leg reached a verdict prints no table: the heading alone,
     /// above the FAIL line saying why, read as a table whose rows had gone missing. Where its records
-    /// are is still said.
+    /// are is still said. Refused by a run line naming what nothing fills in, which the leg's runner
+    /// finds as it starts - an input with no value is refused before any leg is placed, with no run's
+    /// records to name.
     /// </summary>
     [Fact]
     public async Task ARunStoppedBeforeAnyLegReachedAVerdict_PrintsNoTable_OnlyWhyItStopped()
     {
         using var temp = new TempDirectory();
         var token = TestContext.Current.CancellationToken;
-        await PrepareInputWithNoValueAsync(temp, token);
+        await PrepareInputWithNoValueAsync(temp, token, declared: false);
 
         var result = await CliRunner.RunAsync(["run", "probe", "--legs", "native", "-C", temp.Path], token);
         var output = result.StandardOutput + result.StandardError;
 
         Assert.NotEqual(HarnessExit.Success, result.ExitCode);
         Assert.Contains("run: FAIL - ", result.StandardError, StringComparison.Ordinal);
-        Assert.Contains("which has no value: give it one with --input area=<value>", result.StandardError, StringComparison.Ordinal);
+        Assert.Contains("'stage' run line names '{area}', which nothing here can fill in", result.StandardError, StringComparison.Ordinal);
         Assert.Contains("logs: ", output, StringComparison.Ordinal);
         Assert.DoesNotContain(LedgerReport.Headings[1], output, StringComparison.Ordinal);
         Assert.DoesNotContain(LedgerReport.Headings[2], output, StringComparison.Ordinal);
@@ -3768,9 +3770,11 @@ public sealed partial class CliEndToEndTests
 
     /// <summary>
     /// A repository with one leg this machine can run, and a runner whose step names an input of its
-    /// action that has no value: a run of it is refused inside the leg, before any leg reaches a verdict.
+    /// action that has no value - refused before any leg is placed - or, where it is not
+    /// <paramref name="declared"/>, a name nothing fills in - refused inside the leg, before any leg
+    /// reaches a verdict.
     /// </summary>
-    private static async Task PrepareInputWithNoValueAsync(TempDirectory temp, CancellationToken token)
+    private static async Task PrepareInputWithNoValueAsync(TempDirectory temp, CancellationToken token, bool declared = true)
     {
         var harness = new HarnessFactory();
         var platform = harness.Platform;
@@ -3785,16 +3789,9 @@ public sealed partial class CliEndToEndTests
 
         temp.WriteFile(
             Path.Combine(".harness-config", "runner", "actions", "probe", "probe.yml"),
-            """
-            name: probe
-            inputs:
-              area:
-                description: where the rows are staged
-            steps:
-              - name: stage
-                run: |
-                  dotnet {area}
-            """);
+            "name: probe\n"
+            + (declared ? "inputs:\n  area:\n    description: where the rows are staged\n" : string.Empty)
+            + "steps:\n  - name: stage\n    run: |\n      dotnet {area}\n");
     }
 
     /// <summary>An initialised repository whose path budget any temporary directory fits.</summary>

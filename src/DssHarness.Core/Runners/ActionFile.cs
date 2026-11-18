@@ -1,4 +1,6 @@
+using System.Text.RegularExpressions;
 using DssHarness.Core.Configuration;
+using DssHarness.Core.Output;
 using DssHarness.Core.Results;
 
 namespace DssHarness.Core.Runners;
@@ -82,7 +84,107 @@ public static class PredefinedActions
 /// <param name="Default">What to use when nothing supplies it, or <see langword="null"/>.</param>
 /// <param name="Required">Whether the run is refused when nothing supplies it and there is no default.</param>
 /// <param name="Description">What the value is for, shown when it is missing.</param>
-public sealed record ActionInput(string Name, string? Default, bool Required, string? Description);
+/// <remarks>
+/// What a value must be is declared beside it - <see cref="Pattern"/>, and for a list <see cref="Separator"/> with
+/// <see cref="MinItems"/> and <see cref="MaxItems"/> - rather than checked by the action's own program, because a run
+/// gives every input its value before any leg is placed (<see cref="ActionInputs"/>): a value the program refused only
+/// once its leg ran was refused after the leg had waited for its machine's heavy-leg slot, a consumer's run waiting 49
+/// minutes to be told it gave 43 sources where its script took 32.
+/// </remarks>
+public sealed record ActionInput(string Name, string? Default, bool Required, string? Description)
+{
+    /// <summary>
+    /// A .NET regular expression the whole value must match, or <see langword="null"/> where any value is taken. Held to
+    /// the whole value - <c>[0-9]+</c> takes <c>12</c> and not <c>12a</c> - whatever <see cref="Separator"/> says, and
+    /// matched as written, case and all.
+    /// </summary>
+    public string? Pattern { get; init; }
+
+    /// <summary>
+    /// The text between the items of a list value, which <see cref="MinItems"/> and <see cref="MaxItems"/> count; read
+    /// only by them, so it is declared exactly where one of them is. Matched as written, never as a pattern.
+    /// </summary>
+    public string? Separator { get; init; }
+
+    /// <summary>The fewest items the value may hold, as <see cref="Items"/> counts them; at least 1 where declared.</summary>
+    public int? MinItems { get; init; }
+
+    /// <summary>The most items the value may hold, as <see cref="Items"/> counts them; at least 1 where declared.</summary>
+    public int? MaxItems { get; init; }
+
+    /// <summary>
+    /// How many items <paramref name="value"/> holds: the text between each <see cref="Separator"/>, white space trimmed
+    /// from either end, an item left empty not counted. So a separator of one space parts a run of spaces as one does,
+    /// and a doubled, leading or trailing separator adds no item; a value with no separator in it is one item, and an
+    /// empty one none.
+    /// </summary>
+    /// <param name="value">The value.</param>
+    /// <exception cref="InvalidOperationException">The input declares no separator.</exception>
+    public int Items(string value)
+    {
+        ArgumentNullException.ThrowIfNull(value);
+
+        var separator = Separator ?? throw new InvalidOperationException($"Input '{Name}' declares no separator, so its value holds no items.");
+
+        return value.Split(separator, StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries).Length;
+    }
+
+    /// <summary>
+    /// Why <paramref name="value"/> is not one this input takes, said as what follows the input's name - its pattern not
+    /// matching it whole, or its items too few or too many - or <see langword="null"/> where it is one. An empty value is
+    /// held to them like any other: it holds no item.
+    /// </summary>
+    /// <param name="value">The value, as it was given, read or declared.</param>
+    /// <remarks>
+    /// A value its pattern could not be matched against within <see cref="ActionFileParser.PatternTimeout"/> is refused:
+    /// not known to be one the input takes is not taken.
+    /// </remarks>
+    public string? Refusal(string value)
+    {
+        ArgumentNullException.ThrowIfNull(value);
+
+        if (Pattern is { } pattern)
+        {
+            try
+            {
+                if (!Regex.IsMatch(value, Whole(pattern), RegexOptions.CultureInvariant, ActionFileParser.PatternTimeout))
+                {
+                    return $"is '{value}', which its pattern '{pattern}' does not match";
+                }
+            }
+            catch (RegexMatchTimeoutException)
+            {
+                return $"is '{value}', which its pattern '{pattern}' could not be matched against within "
+                    + $"{ReportText.Limit(ActionFileParser.PatternTimeout)}, so it is not known to be one it takes";
+            }
+        }
+
+        if (Separator is not { } separator || (MinItems is null && MaxItems is null))
+        {
+            return null;
+        }
+
+        var items = Items(value);
+        var parted = $"{ReportText.Counted(items, "item")} parted by '{Shown(separator)}'";
+
+        return items < MinItems
+            ? $"holds {parted}, and it takes at least {MinItems}"
+            : items > MaxItems
+                ? $"holds {parted}, and it takes at most {MaxItems}"
+                : null;
+    }
+
+    /// <summary>
+    /// <paramref name="pattern"/> as it is matched: held to the whole value, from its start to its end, as a group of its
+    /// own so an alternation inside it is held whole too.
+    /// </summary>
+    /// <param name="pattern">The pattern, as declared.</param>
+    internal static string Whole(string pattern) => $@"\A(?:{pattern})\z";
+
+    /// <summary><paramref name="separator"/> as a message quotes it, a line break, a return or a tab written as its escape.</summary>
+    private static string Shown(string separator)
+        => separator.Replace("\r", "\\r", StringComparison.Ordinal).Replace("\n", "\\n", StringComparison.Ordinal).Replace("\t", "\\t", StringComparison.Ordinal);
+}
 
 /// <summary>
 /// One program and its arguments, taken from one line of a step's <c>run</c> block.

@@ -595,13 +595,53 @@ public static class HelpTopics
             $"An action's 'inputs' are resolved from 'run {CommandLineInputs.Option} <name>=<value>' first, "
             + $"{HarnessLayout.RunnerDirectoryRelative}/{HarnessLayout.RunnerEnvDirectoryName} second and each input's "
             + $"own 'default' last; {HarnessLayout.RunnerSecretsDirectoryName} never gives one a value. A required input "
-            + "with none of them is refused before the first step runs, and so is a step naming one that is not "
-            + "required and has none, naming the input and how it can have one. Where the action has a "
+            + "with none of them is refused, and so is a step naming one that is not required and has none, naming "
+            + "the input and how it can have one - both before any leg is admitted (below). Where the action has a "
             + $"{PredefinedActions.ReadInputs} step, the same values reach every step as INPUT_<NAME> in the "
             + "environment. The environment is how a secret is handed over, under its own name: a value spliced "
             + "into a command line reaches the process table, where anything on the machine can read it. A step's "
             + "own inputs are resolved the same way and reach only its own run lines, by name; the environment "
             + "holds the action's alone.");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            "An input may declare what its value must be: 'pattern', a .NET regular expression the whole value must "
+            + "match, case and all - [0-9]+ takes 12 and not 12a; and for a list, 'separator', the text between its "
+            + "items, matched as written, with 'minItems', 'maxItems' or both, each at least 1. An item is the text "
+            + "between separators with white space trimmed from either end, and one left empty is not counted, so a "
+            + "separator of one space parts a run of spaces as one does and a trailing separator adds no item. Each "
+            + "declaration is held to sense when the file is read: an empty or unreadable pattern, a bound with no "
+            + "separator, a separator with no bound and a minItems over maxItems are refused, and so is a default its "
+            + "own input refuses.");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            "A required input with no value, and a value its input refuses, are refused before any leg is placed, "
+            + "synced, locked or admitted - a heavy run never waits for a slot to be told - naming every such input "
+            + "at once, as a usage error; then a step naming an input with no value, as a configuration error; and "
+            + "all of it again as each leg's runner starts. A leg this machine runs is held to this machine's "
+            + $"{HarnessLayout.RunnerEnvDirectoryName}; for a leg another machine runs, only what "
+            + $"{CommandLineInputs.Option} gave is held to its input here, since that machine's "
+            + $"{HarnessLayout.RunnerEnvDirectoryName} is its own, and the rest is that machine's to hold by its own "
+            + "values: a WSL distribution, whose leg this machine admits, is asked to check it once the leg's copy is "
+            + "synced and before this machine asks for the leg's slot, its refusal the run's; an ssh host checks it "
+            + "before it admits the leg itself.");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            "Everything else a leg's runner would refuse before its first step that does not wait on the leg's build is "
+            + "refused before a heavy leg waits for its slot as well, by the checks the runner makes as it starts and in "
+            + "their order: the steps the run selects and the leg's system runs, every input and every name a run line "
+            + "holds, each program a line starts held to the tool policy, a line that starts nothing or would put a "
+            + "secret in its arguments, and an action's working space git does not ignore. A leg this machine runs is "
+            + "checked here once its tree is synced and locked, right before its slot is asked for; a WSL "
+            + "distribution's leg by the distribution, sent the leg's own run line with "
+            + $"{Application.Legs.RunnerLegs.CheckBeforeAdmissionOption}, which checks and runs nothing; an ssh host's by the host, before "
+            + "it admits the leg. A step reading the build of a leg this run did not build is refused as the runner "
+            + "starts, after the slot, for the build it waits on is made then; a leg that waits for no slot is checked "
+            + "as its runner starts. A run check's runner is checked alike, and what would refuse it is warned of rather "
+            + "than refusing the run: a check runs only where a failure matches the exception it confirms, and one that "
+            + "starts it is refused by it then, leaving that failure unexcused.");
         builder.AppendLine();
         builder.AppendLine($"{CommandLineInputs.Option} takes one name=value each time it is given, for an input the action");
         builder.AppendLine("declares or a step the run runs declares for itself, and only for the runner the");
@@ -2101,7 +2141,9 @@ public static class HelpTopics
             + "nothing ran: a runtime or a tool replaced there while it started fails that way once. "
             + "A start that then answers is the leg's line, which says what the failed start said ('retried once: ...', and "
             + "retried in --json); one that fails so again is poisoned, saying it was retried. Once anything ran there, the leg "
-            + "is never started again.");
+            + "is never started again. A WSL distribution asked to check a heavy leg before this machine takes its slot is "
+            + "asked once more alike - a check runs nothing - and one that fails so again is the leg's poisoned line, with no "
+            + "slot waited for.");
         builder.AppendLine();
         AppendWrapped(
             builder,

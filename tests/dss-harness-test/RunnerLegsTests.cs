@@ -1,10 +1,15 @@
+using DssHarness.Core.Application;
 using DssHarness.Core.Application.Legs;
+using DssHarness.Core.Composition;
 using DssHarness.Core.Configuration;
 using DssHarness.Core.Execution;
+using DssHarness.Core.Hosts;
 using DssHarness.Core.Orchestration.Flow;
+using DssHarness.Core.Output;
 using DssHarness.Core.Repository;
 using DssHarness.Core.Results;
 using DssHarness.Core.Runners;
+using DssHarness.Core.Runs;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace DssHarness.Tests;
@@ -12,7 +17,8 @@ namespace DssHarness.Tests;
 /// <summary>
 /// run's use case, in process: every refusal it makes before any leg is placed or any host is measured - a runner
 /// nobody declared, a manual step of a runner with no action, a runner or a run check that writes the tree where a leg
-/// would work in a copy, and --local-copy with --in-place - each with nothing run and no run kept.
+/// would work in a copy, --local-copy with --in-place, and an input with no value or one it refuses - each with nothing
+/// run and no run kept.
 /// </summary>
 public sealed class RunnerLegsTests
 {
@@ -134,6 +140,429 @@ public sealed class RunnerLegsTests
         Assert.Equal("--local-copy and --in-place say opposite things about where this run's own legs work. Give one.", refused.Message);
         LegUseCases.IsTheConfigurationsRead(unread, empty);
         NothingWasRun(temp);
+    }
+
+    /// <summary>
+    /// A value its input refuses - 43 sources where the action takes at most 32, the consumer's case - is refused before
+    /// any leg is placed: no host measured, no run kept, and the heavy-leg slot this machine's only one is held by
+    /// another run never waited for, as a usage error naming the input, where its value came from and why.
+    /// </summary>
+    [Fact]
+    public async Task AValueItsInputRefuses_IsRefusedBeforeAnyLegIsPlaced_NeverWaitingForTheSlotAnotherRunHolds()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var (inspector, record) = await CompilingAsync(temp, harness);
+
+        var refused = await RefusedAsync(harness, Sources(temp, 43), inspector, record);
+
+        Assert.Equal(HarnessExit.UsageError, refused.ExitCode);
+        Assert.Equal(
+            $"'{await ActionPathAsync(temp, harness)}' declares what its inputs take, and this run's are not that: input 'sources', "
+                + "given with --input, holds 43 item(s) parted by ' ', and it takes at most 32. Nothing was run.",
+            refused.Message);
+        NeverPlaced(temp, harness, inspector, record);
+    }
+
+    /// <summary>
+    /// A required input with no value anywhere is refused before any leg is placed too, naming where a value could have
+    /// come from - with this machine's .env, which the leg this machine runs reads - rather than once the leg had waited
+    /// for its slot and its runner started.
+    /// </summary>
+    [Fact]
+    public async Task ARequiredInputWithNoValue_IsRefusedBeforeAnyLegIsPlaced()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var (inspector, record) = await CompilingAsync(temp, harness);
+
+        var refused = await RefusedAsync(harness, Sources(temp, 2) with { Runner = "compile-rooted" }, inspector, record);
+
+        Assert.Equal(HarnessExit.UsageError, refused.ExitCode);
+        Assert.Equal(
+            $"'{await ActionPathAsync(temp, harness, "rooted")}' requires input(s) root, and none was given with --input, found in "
+                + $"{(await harness.ContextLoader.LoadAsync(temp.Path, Token)).Layout.RunnerEnvDirectory} or declared as a default, "
+                + "so its steps would run with nothing where a value belongs. Nothing was run.",
+            refused.Message);
+        NeverPlaced(temp, harness, inspector, record);
+    }
+
+    /// <summary>
+    /// A value its input takes goes on: the leg is placed - its host measured - and waits for the slot another run holds
+    /// until its machine's bound, and is not admitted. The scene the refusals above are made in is one whose run reaches
+    /// admission, so what refused them came before it.
+    /// </summary>
+    [Fact]
+    public async Task AValueItsInputTakes_GoesOnToWaitForItsSlot()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var (inspector, record) = await CompilingAsync(temp, harness);
+
+        await using var services = Services(harness, inspector, record);
+        var result = await services.GetRequiredService<IRunnerLegs>().RunAsync(Sources(temp, 32), RunId.New(), Token);
+
+        Assert.Equal(LegExit.NotAdmitted, result.ExitCode);
+        Assert.Equal(LegVerdict.NotAdmitted, Assert.Single(result.Report.Lines).Verdict);
+        Assert.Equal([HostId.Local], inspector.Inspected);
+        Assert.Equal(["other"], AdmissionKit.Read(record).Select(entry => entry.Leg));
+    }
+
+    /// <summary>
+    /// A leg another machine runs reads that machine's .env, never this one's: before it is placed, only what --input gave
+    /// is held to its input - refused here as for a leg of this machine - and this machine's runner values are not read at
+    /// all, so a run of another machine's legs is never refused over them, a .env here that defines a name twice included.
+    /// </summary>
+    [Fact]
+    public async Task ALegAnotherMachineRuns_IsHeldOnlyToWhatTheCommandLineGave_AndThisMachinesValuesAreNotRead()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var (inspector, record) = await CompilingAsync(temp, harness);
+        temp.WriteFile(Path.Combine(".harness-config", "runner", ".env", "a.env"), "root=here\nroot=again\n");
+
+        var refused = await RefusedAsync(harness, Sources(temp, 33) with { LegNames = ["there"], Runner = "compile-rooted" }, inspector, record);
+
+        Assert.Equal(HarnessExit.UsageError, refused.ExitCode);
+        Assert.Equal(
+            $"'{await ActionPathAsync(temp, harness, "rooted")}' declares what its inputs take, and this run's are not that: input "
+                + "'sources', given with --input, holds 33 item(s) parted by ' ', and it takes at most 32. Nothing was run.",
+            refused.Message);
+        NeverPlaced(temp, harness, inspector, record);
+    }
+
+    /// <summary>
+    /// A step naming an input that is neither required nor given a default, which this run gave no value, is refused
+    /// before any leg is placed too - after every input was found to have a value it takes where it needs one - as the
+    /// leg's runner would refuse it: the file lets the input go without a value, a configuration error naming the line,
+    /// the input and how it can have one, rather than once the leg had waited for its slot.
+    /// </summary>
+    [Fact]
+    public async Task AStepNamingAnInputWithNoValue_IsRefusedBeforeAnyLegIsPlaced()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var (inspector, record) = await CompilingAsync(temp, harness);
+
+        var refused = await RefusedAsync(harness, Sources(temp, 2) with { Runner = "compile-labelled" }, inspector, record);
+
+        Assert.Equal(HarnessExit.ConfigInvalid, refused.ExitCode);
+        Assert.Equal(
+            "'compile' run line names '{label}', an input of the action, which has no value: give it one with --input "
+                + $"label=<value> or in {(await harness.ContextLoader.LoadAsync(temp.Path, Token)).Layout.RunnerEnvDirectory}, "
+                + "or declare a default for it.",
+            refused.Message);
+        NeverPlaced(temp, harness, inspector, record);
+    }
+
+    /// <summary>
+    /// A program nothing declares, which the leg's runner refuses before its first step, is refused before the leg waits
+    /// for its slot: the leg placed and its tree locked, and then refused as its runner would refuse it, in the same words
+    /// and with its code, the slot another run holds never waited for and nothing run.
+    /// </summary>
+    [Fact]
+    public async Task AProgramNothingDeclares_IsRefusedBeforeTheLegWaitsForItsSlot()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var (inspector, record) = await CompilingAsync(temp, harness);
+
+        await using var services = Services(harness, inspector, record);
+        var result = await services.GetRequiredService<IRunnerLegs>().RunAsync(Sources(temp, 2) with { Runner = "compile-undeclared" }, RunId.New(), Token);
+
+        Assert.Equal(HarnessExit.Refused, result.ExitCode);
+        Assert.Equal(
+            $"'{await ActionPathAsync(temp, harness, "undeclared")}' names 1 program(s) that may not run:{Environment.NewLine}"
+                + "  - line 9: 'make' is not declared under 'tools' and is not a path inside the repository (declared: 'dotnet').",
+            result.Message);
+        WaitedForNothing(harness, inspector, record, result);
+    }
+
+    /// <summary>
+    /// A run line naming what nothing fills in, which the leg's runner refuses before its first step, is refused before
+    /// the leg waits for its slot too, as its runner would refuse it.
+    /// </summary>
+    [Fact]
+    public async Task ANameNothingFillsIn_IsRefusedBeforeTheLegWaitsForItsSlot()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var (inspector, record) = await CompilingAsync(temp, harness);
+
+        await using var services = Services(harness, inspector, record);
+        var result = await services.GetRequiredService<IRunnerLegs>().RunAsync(Sources(temp, 2) with { Runner = "compile-unfilled" }, RunId.New(), Token);
+
+        Assert.Equal(HarnessExit.ConfigInvalid, result.ExitCode);
+        Assert.StartsWith("'compile' run line names '{nothing}', which nothing here can fill in.", result.Message, StringComparison.Ordinal);
+        WaitedForNothing(harness, inspector, record, result);
+    }
+
+    /// <summary>
+    /// A line that would put a secret in its arguments, which the leg's runner refuses as its steps would start, is
+    /// refused before the leg waits for its slot as well - by the same check and in the same words, the secret never said,
+    /// the slot another run holds never waited for and nothing run.
+    /// </summary>
+    [Fact]
+    public async Task ASecretALineWouldCarry_IsRefusedBeforeTheLegWaitsForItsSlot()
+    {
+        const string Secret = "not-a-real-secret-4f2a";
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var (inspector, record) = await CompilingAsync(temp, harness);
+        temp.WriteFile(Path.Combine(".harness-config", "runner", ".secrets", "ci.env"), $"HARNESS_TOKEN={Secret}\n");
+        temp.WriteFile(Path.Combine(".harness-config", "runner", ".env", "a.env"), $"DB_URL=https://reader:{Secret}@db\n");
+
+        await using var services = Services(harness, inspector, record);
+        var result = await services.GetRequiredService<IRunnerLegs>().RunAsync(Sources(temp, 2) with { Runner = "compile-leaking" }, RunId.New(), Token);
+
+        Assert.Equal(HarnessExit.Refused, result.ExitCode);
+        Assert.Equal(
+            "Step 'compile' of runner 'compile-leaking' puts a secret in its argument list, where the log header, the "
+                + "process table and any error quoting the command would all carry it. Hand it over through the environment instead.",
+            result.Message);
+        Assert.DoesNotContain(Secret, harness.StandardOutput.ToString() + harness.StandardError.ToString(), StringComparison.Ordinal);
+        WaitedForNothing(harness, inspector, record, result);
+    }
+
+    /// <summary>
+    /// A run check whose runner its own steps would refuse is said before the leg waits for its slot, and the run goes
+    /// on: the check runs only where a failure matches the expected exception it confirms, so a run whose check may never
+    /// run is not refused over it - one that starts it is refused by it then, leaving the failure unexcused.
+    /// </summary>
+    [Fact]
+    public async Task ARunCheckItsOwnStepsWouldRefuse_IsSaidBeforeTheLegWaits_AndTheRunGoesOn()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var (inspector, record) = await CompilingAsync(temp, harness);
+
+        await using var services = Services(harness, inspector, record);
+        var result = await services.GetRequiredService<IRunnerLegs>().RunAsync(Sources(temp, 2) with { Runner = "compile-checked" }, RunId.New(), Token);
+
+        Assert.Equal(LegExit.NotAdmitted, result.ExitCode);
+        Assert.Equal(LegVerdict.NotAdmitted, Assert.Single(result.Report.Lines).Verdict);
+        Assert.Contains(
+            "run: WARN - native: run check 'check-undeclared' of runner 'compile-checked' would be refused were a failure it "
+                + $"confirms to start it, leaving that failure unexcused: '{await ActionPathAsync(temp, harness, "undeclared")}' "
+                + "names 1 program(s) that may not run:",
+            harness.StandardError.ToString(),
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// What a WSL distribution is asked before the machine it runs on takes its leg's slot: the run's own line with
+    /// --here and the check's option, which holds the leg - one that machine runs now - to that machine's own .env, by
+    /// the same rule and in the same terms the run would, and to everything else its runner would refuse before its first
+    /// step that does not wait on its build, and runs nothing: what its inputs refuse refused before its host is measured,
+    /// the rest once it is placed, no slot asked for and no run kept.
+    /// </summary>
+    [Fact]
+    public async Task ACheckBeforeAdmission_HoldsTheLegToTheValuesOfTheMachineItRunsOn_AndRunsNothing()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var (inspector, record) = await CompilingAsync(temp, harness);
+        temp.WriteFile(
+            Path.Combine(".harness-config", "runner", ".env", "a.env"),
+            $"sources={string.Join(" ", Enumerable.Range(1, 33).Select(index => $"s{index}.c"))}\n");
+
+        var request = new RunnerLegsRequest
+        {
+            Directory = temp.Path,
+            Runner = "compile-rooted",
+            LegNames = ["there"],
+            Here = HostId.Ssh("vps"),
+            Inputs = new Dictionary<string, string> { ["root"] = "/srv" },
+        };
+
+        await using var services = Services(harness, inspector, record);
+        var legs = services.GetRequiredService<IRunnerLegs>();
+
+        var refused = await Assert.ThrowsAsync<HarnessException>(() => legs.CheckBeforeAdmissionAsync(request, Token));
+
+        Assert.Equal(HarnessExit.UsageError, refused.ExitCode);
+        Assert.Equal(
+            $"'{await ActionPathAsync(temp, harness, "rooted")}' declares what its inputs take, and this run's are not that: input "
+                + "'sources', from the runner's .env, holds 33 item(s) parted by ' ', and it takes at most 32. Nothing was run.",
+            refused.Message);
+        NeverPlaced(temp, harness, inspector, record);
+
+        temp.WriteFile(Path.Combine(".harness-config", "runner", ".env", "a.env"), "sources=a.c b.c\n");
+
+        var passed = await legs.CheckBeforeAdmissionAsync(request, Token);
+
+        Assert.Equal(
+            (HarnessExit.Success, true, (RunId?)null, (string?)null),
+            (passed.ExitCode, passed.Stopped, passed.Run, passed.RunDirectory));
+        Assert.Equal(
+            "runner 'compile-rooted': nothing a run of it would refuse before its legs wait for their slots was found, "
+                + "checking leg(s) there; nothing was run",
+            passed.Message);
+        Assert.Empty(passed.Report.Lines);
+        Assert.Equal([HostId.Local], inspector.Inspected);
+        Assert.Equal([AdmissionKit.Holder(harness, "other")], AdmissionKit.Read(record));
+        NothingWasRun(temp);
+
+        var undeclared = await Assert.ThrowsAsync<HarnessException>(() => legs.CheckBeforeAdmissionAsync(
+            request with { Runner = "compile-undeclared", Inputs = new Dictionary<string, string>() },
+            Token));
+
+        Assert.Equal(HarnessExit.Refused, undeclared.ExitCode);
+        Assert.StartsWith($"'{await ActionPathAsync(temp, harness, "undeclared")}' names 1 program(s) that may not run:", undeclared.Message, StringComparison.Ordinal);
+        Assert.Equal([AdmissionKit.Holder(harness, "other")], AdmissionKit.Read(record));
+        NothingWasRun(temp);
+    }
+
+    /// <summary>
+    /// A repository whose runners run an action of a heavy step bounding its sources at 32 - one of them requiring a root
+    /// besides, another naming an input nothing need give a value - on a leg of this machine and one of an ssh host, this
+    /// machine declaring one heavy-leg slot, which another run holds; with the survey that measures this machine as it is,
+    /// and the slots' record the test's own.
+    /// </summary>
+    private static async Task<(RecordingInspector Inspector, string Record)> CompilingAsync(TempDirectory temp, HarnessFactory harness)
+    {
+        var platform = harness.Platform;
+
+        await harness.InitializeHarnessAsync(temp.Path, Token, new HarnessConfig
+        {
+            BuildConfigs = { ["debug"] = new BuildConfiguration() },
+            Tools = { new ToolConfig { Name = "dotnet" } },
+            SshItems = { "vps" },
+            Hosts = new HostsConfig { Ssh = { ["vps"] = new SshHostConfig { RepositoryPath = "/home/dev/repo" } } },
+            Defaults = new HarnessDefaults { Admission = new AdmissionSettings { HeavyLegs = 1, MaxWaitMinutes = 1 } },
+            Legs =
+            {
+                ["native"] = HostDoubles.Leg(platform.PlatformKey, platform.Processor),
+                ["there"] = new LegConfig { Os = platform.PlatformKey, Processor = platform.Processor, Config = "debug", Ssh = "vps" },
+            },
+            PredefinedRunners =
+            {
+                ["compile"] = new RunnerConfig { Action = "compile/compile.yml", Legs = ["native"] },
+                ["compile-rooted"] = new RunnerConfig { Action = "rooted/rooted.yml", Legs = ["native"] },
+                ["compile-labelled"] = new RunnerConfig { Action = "labelled/labelled.yml", Legs = ["native"] },
+                ["compile-undeclared"] = new RunnerConfig { Action = "undeclared/undeclared.yml", Legs = ["native"] },
+                ["compile-unfilled"] = new RunnerConfig { Action = "unfilled/unfilled.yml", Legs = ["native"] },
+                ["compile-leaking"] = new RunnerConfig { Action = "leaking/leaking.yml", Legs = ["native"] },
+                ["compile-checked"] = new RunnerConfig
+                {
+                    Action = "compile/compile.yml",
+                    Legs = ["native"],
+                    ExpectedExceptions =
+                    [
+                        new ExpectedException
+                        {
+                            ExceptionType = "Flake",
+                            Messages = ["it flaked"],
+                            Message = "excused: the device was busy",
+                            EarnedOn = "2026-10-13",
+                            EarnedAt = "local",
+                            Mechanism = "the device is shared",
+                            Anchor = "D-AREA-TOPIC-ONE",
+                            RunChecks = [new RunCheck { PredefinedRunner = "check-undeclared" }],
+                        },
+                    ],
+                },
+                ["check-undeclared"] = new RunnerConfig { Action = "undeclared/undeclared.yml", Legs = ["native"] },
+            },
+        });
+
+        const string Steps = """
+            steps:
+              - name: compile
+                heavy: true
+                run: |
+                  dotnet --version
+            """;
+
+        temp.WriteFile(
+            Path.Combine(".harness-config", "runner", "actions", "compile", "compile.yml"),
+            "inputs:\n  sources:\n    separator: ' '\n    maxItems: 32\n" + Steps);
+        temp.WriteFile(
+            Path.Combine(".harness-config", "runner", "actions", "rooted", "rooted.yml"),
+            "inputs:\n  sources:\n    separator: ' '\n    maxItems: 32\n  root:\n    required: true\n" + Steps);
+        temp.WriteFile(
+            Path.Combine(".harness-config", "runner", "actions", "labelled", "labelled.yml"),
+            "inputs:\n  sources:\n    separator: ' '\n    maxItems: 32\n  label:\n    description: what the build is called\n"
+                + Steps.Replace("dotnet --version", "dotnet --version {label}", StringComparison.Ordinal));
+        temp.WriteFile(
+            Path.Combine(".harness-config", "runner", "actions", "undeclared", "undeclared.yml"),
+            "inputs:\n  sources:\n    separator: ' '\n    maxItems: 32\n" + Steps.Replace("dotnet --version", "make --version", StringComparison.Ordinal));
+        temp.WriteFile(
+            Path.Combine(".harness-config", "runner", "actions", "unfilled", "unfilled.yml"),
+            "inputs:\n  sources:\n    separator: ' '\n    maxItems: 32\n" + Steps.Replace("dotnet --version", "dotnet --version {nothing}", StringComparison.Ordinal));
+
+        temp.WriteFile(
+            Path.Combine(".harness-config", "runner", "actions", "leaking", "leaking.yml"),
+            "inputs:\n  sources:\n    separator: ' '\n    maxItems: 32\n" + Steps.Replace("dotnet --version", "dotnet --version {DB_URL}", StringComparison.Ordinal));
+
+        var record = temp.Combine("state", "admission.json");
+        AdmissionKit.Write(record, AdmissionKit.Holder(harness, "other"));
+
+        return (new RecordingInspector(host => new HostReport { Host = host, Os = platform.PlatformKey, Processor = platform.Processor }), record);
+    }
+
+    /// <summary>A run of 'compile' in place on its own legs, giving <paramref name="count"/> sources.</summary>
+    private static RunnerLegsRequest Sources(TempDirectory temp, int count) => new()
+    {
+        Directory = temp.Path,
+        Runner = "compile",
+        InPlace = true,
+        Inputs = new Dictionary<string, string>
+        {
+            ["sources"] = string.Join(" ", Enumerable.Range(1, count).Select(index => $"s{index}.c")),
+        },
+    };
+
+    /// <summary>Where the action file of <paramref name="action"/> is read from, every link followed, as a refusal names it.</summary>
+    private static async Task<string> ActionPathAsync(TempDirectory temp, HarnessFactory harness, string action = "compile")
+        => harness.FileSystem.ResolveLinks(Path.Combine(
+            (await harness.ContextLoader.LoadAsync(temp.Path, Token)).Layout.RunnerActionsDirectory,
+            action,
+            $"{action}.yml"));
+
+    /// <summary>
+    /// That a run was refused before any of its legs was placed: no host measured, the slots' record as another run left
+    /// it, and no run kept.
+    /// </summary>
+    private static void NeverPlaced(TempDirectory temp, HarnessFactory harness, RecordingInspector inspector, string record)
+    {
+        Assert.Empty(inspector.Inspected);
+        Assert.Equal([AdmissionKit.Holder(harness, "other")], AdmissionKit.Read(record));
+        NothingWasRun(temp);
+    }
+
+    /// <summary>
+    /// That a run was refused once its leg was placed and before the leg waited for its slot: this machine measured, the
+    /// slots' record as another run left it, and no leg's line, its work never started.
+    /// </summary>
+    private static void WaitedForNothing(HarnessFactory harness, RecordingInspector inspector, string record, LegRunResult result)
+    {
+        Assert.Equal([HostId.Local], inspector.Inspected);
+        Assert.Equal([AdmissionKit.Holder(harness, "other")], AdmissionKit.Read(record));
+        Assert.Empty(result.Report.Lines);
+    }
+
+    /// <summary>
+    /// run's use case as the tool's own registrations build it, save that this machine is measured by
+    /// <paramref name="inspector"/> and its heavy-leg slots are kept at <paramref name="record"/> under a clock every wait
+    /// moves: a run that goes on reaches only what the test holds.
+    /// </summary>
+    private static ServiceProvider Services(HarnessFactory harness, RecordingInspector inspector, string record)
+    {
+        var services = new ServiceCollection()
+            .AddDssHarness(new SessionOptions { Command = RunnerRunService.CommandName, Prompting = false }, OperationId.New(), output: _ => harness.Output);
+
+        services.AddSingleton<IHostInspector>(inspector);
+        services.AddSingleton(AdmissionKit.Admission(harness, record, new ScriptedGauge(10), new ManualClock()));
+
+        return services.BuildServiceProvider(new ServiceProviderOptions { ValidateOnBuild = true });
+    }
+
+    private static async Task<HarnessException> RefusedAsync(HarnessFactory harness, RunnerLegsRequest request, RecordingInspector inspector, string record)
+    {
+        await using var services = Services(harness, inspector, record);
+
+        return await Assert.ThrowsAsync<HarnessException>(() => services.GetRequiredService<IRunnerLegs>().RunAsync(request, RunId.New(), Token));
     }
 
     /// <summary>

@@ -1837,7 +1837,7 @@ public sealed class RunnerRunServiceTests
         var refusal = await Assert.ThrowsAsync<HarnessException>(
             () => Service(factory).RunAsync(config, request, TestContext.Current.CancellationToken));
 
-        Assert.Equal(HarnessExit.ConfigInvalid, refusal.ExitCode);
+        Assert.Equal(HarnessExit.UsageError, refusal.ExitCode);
         Assert.Contains("requires input(s) size (step 'bench')", refusal.Message, StringComparison.Ordinal);
     }
 
@@ -2268,12 +2268,70 @@ public sealed class RunnerRunServiceTests
         var refusal = await Assert.ThrowsAsync<HarnessException>(
             () => Service(factory).RunAsync(config, request, TestContext.Current.CancellationToken));
 
-        Assert.Equal(HarnessExit.ConfigInvalid, refusal.ExitCode);
+        Assert.Equal(HarnessExit.UsageError, refusal.ExitCode);
         Assert.Contains(
             $"requires input(s) runner, and none was given with --input, found in {request.Layout.RunnerEnvDirectory} "
             + "or declared as a default",
             refusal.Message,
             StringComparison.Ordinal);
+        Assert.False(Directory.Exists(temp.Combine(".harness-config", "runs", RunId)));
+    }
+
+    /// <summary>
+    /// A leg's runner holds every input to what it declares as it starts, from the values its own machine holds - the last
+    /// line of defence, for a leg whose machine's .env the run could not read before it placed the leg: a value given with
+    /// --input that its pattern refuses and one the runner's .env gives holding too many items are refused together,
+    /// before the first step and as a usage error, each named with where it came from; values each input takes run.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task AnInputsDeclaredValue_IsHeldAsTheLegsRunnerStarts_FromItsOwnMachinesValues(bool taken)
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        temp.WriteFile(Path.Combine(".harness-config", "runner", ".env", "ci.env"), taken ? "sources=a.c b.c\n" : "sources=a.c b.c  c.c\n");
+
+        await WriteActionAsync(factory, temp, """
+            name: corpus
+            inputs:
+              sources:
+                separator: ' '
+                maxItems: 2
+              mode:
+                pattern: 'fast|full'
+            steps:
+              - name: version
+                run: |
+                  dotnet --version
+            """);
+
+        var config = Config();
+        config.Tools.Add(new ToolConfig { Name = "dotnet" });
+
+        var request = Request(temp, new RunnerConfig { Action = "corpus/corpus.yml" }) with
+        {
+            Inputs = new Dictionary<string, string> { ["mode"] = taken ? "full" : "fastest" },
+        };
+
+        if (taken)
+        {
+            var result = await Service(factory).RunAsync(config, request, TestContext.Current.CancellationToken);
+
+            Assert.Equal(LegVerdict.Passed, result.Verdict.Verdict);
+            return;
+        }
+
+        var refusal = await Assert.ThrowsAsync<HarnessException>(
+            () => Service(factory).RunAsync(config, request, TestContext.Current.CancellationToken));
+        var path = factory.FileSystem.ResolveLinks(temp.Combine(".harness-config", "runner", "actions", "corpus", "corpus.yml"));
+
+        Assert.Equal(HarnessExit.UsageError, refusal.ExitCode);
+        Assert.Equal(
+            $"'{path}' declares what its inputs take, and this run's are not that: input 'sources', from the runner's .env, "
+                + "holds 3 item(s) parted by ' ', and it takes at most 2; input 'mode', given with --input, is 'fastest', which "
+                + "its pattern 'fast|full' does not match. Nothing was run.",
+            refusal.Message);
         Assert.False(Directory.Exists(temp.Combine(".harness-config", "runs", RunId)));
     }
 

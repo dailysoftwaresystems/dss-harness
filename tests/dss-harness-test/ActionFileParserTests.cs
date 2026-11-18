@@ -254,7 +254,7 @@ public sealed class ActionFileParserTests
             StringComparison.Ordinal);
 
         Assert.Contains(
-            "'successPattern' does not compile",
+            "'successPattern' is not a valid regular expression",
             Refused("""
                 steps:
                   - name: build
@@ -850,6 +850,103 @@ public sealed class ActionFileParserTests
 
         // The action's own inputs are the action's alone; a step's are not added to them.
         Assert.Equal(["root"], action.Inputs.Select(input => input.Name));
+    }
+
+    /// <summary>
+    /// An input - the action's or a step's own - may declare what its value must be: a pattern its whole value matches,
+    /// and for a list the text between its items and how many it holds; each is read as written, a default meeting them.
+    /// </summary>
+    [Fact]
+    public void AnInputsPattern_SeparatorAndItemBounds_AreRead()
+    {
+        var action = Parse("""
+            inputs:
+              sources:
+                separator: ' '
+                minItems: 1
+                maxItems: 32
+                pattern: '[a-z/]+\.c( [a-z/]+\.c)*'
+                default: main.c
+            steps:
+              - name: build
+                inputs:
+                  mode:
+                    pattern: 'fast|full'
+                run: |
+                  cmake --build build
+            """);
+
+        Assert.Equal(
+            new ActionInput("sources", "main.c", false, null)
+            {
+                Pattern = @"[a-z/]+\.c( [a-z/]+\.c)*",
+                Separator = " ",
+                MinItems = 1,
+                MaxItems = 32,
+            },
+            Assert.Single(action.Inputs));
+        Assert.Equal(new ActionInput("mode", null, false, null) { Pattern = "fast|full" }, Assert.Single(Assert.Single(action.Steps).Inputs));
+    }
+
+    /// <summary>
+    /// What an input's value must be is held to sense when the file is read, the action's and a step's alike, with the key
+    /// and its line named: a pattern that is empty, does not compile or ends in a comment that would take in its anchors; a
+    /// separator that is empty; a count that is no whole number, below 1, or bounds nothing a separator parts; a separator
+    /// nothing counts; bounds no value can hold; and a default its own input refuses - each a check that would refuse
+    /// every run, or none, where it reads as guarding something.
+    /// </summary>
+    [Theory]
+    [InlineData("pattern: ''", "line 3, column 14: 'inputs.sources.pattern' is empty; held to the whole value, it would take only an empty one. Leave it out to take any value.")]
+    [InlineData("pattern: '(?x)[a-z]+ # letters'", "line 3, column 14: 'inputs.sources.pattern' ends in a comment that runs to the end of its line, which would take in what holds it to the whole value. End the comment with a line break.")]
+    [InlineData("separator: ''\n    maxItems: 3", "line 3, column 16: 'inputs.sources.separator' is empty, which parts nothing.")]
+    [InlineData("maxItems: 32", "line 3, column 5: input 'sources' declares maxItems and no separator, so nothing parts its value into the items it would count. Declare the text between them under separator.")]
+    [InlineData("minItems: 2", "line 3, column 5: input 'sources' declares minItems and no separator, so nothing parts its value into the items it would count. Declare the text between them under separator.")]
+    [InlineData("separator: ' '", "line 3, column 5: input 'sources' declares a separator and neither minItems nor maxItems, so nothing counts the items it parts. Bound them, or leave separator out.")]
+    [InlineData("separator: ' '\n    minItems: 5\n    maxItems: 3", "line 3, column 5: input 'sources' takes at least 5 items and at most 3, which no value can hold.")]
+    [InlineData("separator: ' '\n    maxItems: -1", "line 4, column 15: 'inputs.sources.maxItems' is -1: a count of items is never negative.")]
+    [InlineData("separator: ' '\n    minItems: 0", "line 4, column 15: 'inputs.sources.minItems' is 0: every value holds at least none, so it bounds nothing. Leave it out.")]
+    [InlineData("separator: ' '\n    maxItems: 0", "line 4, column 15: 'inputs.sources.maxItems' is 0: it would take only a value with no item at all. Leave it out to take any number.")]
+    [InlineData("separator: ' '\n    maxItems: many", "line 4, column 15: 'inputs.sources.maxItems' is 'many', which is not a whole number of items.")]
+    [InlineData("pattern: '[0-9]+'\n    default: 12a", "line 3, column 5: the default of input 'sources' is '12a', which its pattern '[0-9]+' does not match, so every run left to it would be refused.")]
+    [InlineData("separator: ','\n    maxItems: 2\n    default: 'a, b, c'", "line 3, column 5: the default of input 'sources' holds 3 item(s) parted by ',', and it takes at most 2, so every run left to it would be refused.")]
+    public void WhatAnInputsValueMustBe_IsHeldToSense_WhenTheFileIsRead(string declaration, string expected)
+    {
+        var path = Path.Combine("actions", "compile", "compile.yml");
+        var refusal = Refused($"inputs:\n  sources:\n    {declaration}\nsteps:\n  - name: build\n    run: cmake --build build\n");
+
+        Assert.Equal(HarnessExit.ConfigInvalid, refusal.ExitCode);
+        Assert.Equal($"'{path}' has 1 problem(s):{Environment.NewLine}  - {expected}", refusal.Message);
+    }
+
+    /// <summary>
+    /// A pattern that is no regular expression is refused in the words config.json refuses one in - the one check every
+    /// declared pattern is held to - naming the input's key; and a step's own inputs are held to sense as the action's are.
+    /// </summary>
+    [Fact]
+    public void AnInputsUnreadablePattern_AndAStepInputsUnreadBound_AreRefused_NamingWhere()
+    {
+        var path = Path.Combine("actions", "compile", "compile.yml");
+        var compiled = Assert.ThrowsAny<ArgumentException>(() => new Regex("[0-9")).Message;
+
+        var refusal = Refused("""
+            inputs:
+              size:
+                pattern: '[0-9'
+            steps:
+              - name: build
+                inputs:
+                  sources:
+                    maxItems: 2
+                run: cmake --build build
+            """);
+
+        Assert.Equal(HarnessExit.ConfigInvalid, refusal.ExitCode);
+        Assert.Equal(
+            $"'{path}' has 2 problem(s):{Environment.NewLine}"
+                + $"  - line 3, column 14: 'inputs.size.pattern' is not a valid regular expression: {compiled}{Environment.NewLine}"
+                + "  - line 8, column 9: step 'build' inputs.sources declares maxItems and no separator, so nothing parts its value "
+                + "into the items it would count. Declare the text between them under separator.",
+            refusal.Message);
     }
 
     /// <summary>

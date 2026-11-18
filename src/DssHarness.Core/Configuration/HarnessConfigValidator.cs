@@ -2542,13 +2542,31 @@ public static partial class HarnessConfigValidator
             return;
         }
 
+        if (PatternProblem(pattern, setting) is { } problem)
+        {
+            problems.Add(problem);
+        }
+    }
+
+    /// <summary>
+    /// Why <paramref name="pattern"/> is no regular expression this tool can run, said of <paramref name="setting"/>, or
+    /// <see langword="null"/> where it compiles: the one check a pattern a file declares is held to, a pattern of
+    /// config.json and of an action file alike, so the two files are refused for one mistake in one way.
+    /// </summary>
+    /// <param name="pattern">The pattern, as written.</param>
+    /// <param name="setting">What the problem calls the setting that declares it.</param>
+    internal static string? PatternProblem(string pattern, string setting)
+    {
+        ArgumentNullException.ThrowIfNull(pattern);
+
         try
         {
             _ = new Regex(pattern, RegexOptions.None, TimeSpan.FromSeconds(1));
+            return null;
         }
         catch (ArgumentException ex)
         {
-            problems.Add($"{setting} is not a valid regular expression: {ex.Message}");
+            return $"{setting} is not a valid regular expression: {ex.Message}";
         }
     }
 }
