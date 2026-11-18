@@ -308,9 +308,8 @@ public sealed class FlowStepRunnerTests : IDisposable
             StringComparison.Ordinal);
 
         // The README counts them in words and names each.
-        string[] words = ["Zero", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine", "Ten", "Eleven", "Twelve", "Thirteen", "Fourteen", "Fifteen", "Sixteen", "Seventeen", "Eighteen", "Nineteen", "Twenty"];
         var readme = Prose.Document("README.md");
-        var served = readme.IndexOf($"{words[FlowStepRunners.Served.Count]} steps are served so far:", StringComparison.Ordinal);
+        var served = readme.IndexOf($"{Spelled(FlowStepRunners.Served.Count)} steps are served so far:", StringComparison.Ordinal);
 
         Assert.True(served >= 0, "the README counts the steps served");
         var listed = readme[served..readme.IndexOf("A check that finds red", served, StringComparison.Ordinal)];
@@ -321,6 +320,15 @@ public sealed class FlowStepRunnerTests : IDisposable
             StringComparison.Ordinal);
         Assert.Equal(GhProcess.Limit, PublisherCommands.PushLimit);
         Assert.IsType<FlowStepRunners>(provider.GetRequiredService<IFlowStepRunner>());
+    }
+
+    /// <summary>A count below a hundred as the README writes it at a sentence's start: "Twenty-one".</summary>
+    private static string Spelled(int count)
+    {
+        string[] ones = ["Zero", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine", "Ten", "Eleven", "Twelve", "Thirteen", "Fourteen", "Fifteen", "Sixteen", "Seventeen", "Eighteen", "Nineteen"];
+        string[] tens = ["Twenty", "Thirty", "Forty", "Fifty", "Sixty", "Seventy", "Eighty", "Ninety"];
+        Assert.InRange(count, 0, 99);
+        return count < 20 ? ones[count] : count % 10 == 0 ? tens[(count / 10) - 2] : $"{tens[(count / 10) - 2]}-{ones[count % 10].ToLowerInvariant()}";
     }
 
     /// <summary>
