@@ -2024,6 +2024,7 @@ public sealed class FlowService(
             new("questions", layout.QuestionsFile),
             new("updates", layout.UpdatesFile),
             new("issues", layout.PreExistingIssuesFile),
+            new("affectedTests", layout.AffectedTestsFile),
             new("definition", layout.DefinitionFile),
             new("events", layout.EventsFile),
             new("report", layout.ReportFile),

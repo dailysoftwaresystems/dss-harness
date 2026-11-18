@@ -777,6 +777,7 @@ public sealed class FlowServiceTests
         Assert.NotNull(store.ReadWorkflowStatus(run));
         Assert.NotNull(store.ReadDefinition(run));
         Assert.NotNull(store.ReadFlowQuestions(run));
+        Assert.NotNull(store.ReadAffectedTests(run));
         Assert.Null(store.ReadOwner(run));
         Assert.True(File.Exists(run.ReportFile));
         Assert.True(File.Exists(run.ReportJsonFile));
@@ -789,6 +790,7 @@ public sealed class FlowServiceTests
                 $"questions: {run.QuestionsFile}",
                 $"updates: {run.UpdatesFile}",
                 $"issues: {run.PreExistingIssuesFile}",
+                $"affectedTests: {run.AffectedTestsFile}",
                 $"definition: {run.DefinitionFile}",
                 $"events: {run.EventsFile}",
                 $"report: {run.ReportFile}",
@@ -1079,7 +1081,7 @@ public sealed class FlowServiceTests
         Assert.Equal("Done", document["status"]!.GetValue<string>());
         Assert.Equal(0d, document["spent"]!["usd"]!.GetValue<double>());
         Assert.Equal(
-            ["run", "state", "status", "questions", "updates", "issues", "definition", "events", "report", "reportJson", "folds", "log"],
+            ["run", "state", "status", "questions", "updates", "issues", "affectedTests", "definition", "events", "report", "reportJson", "folds", "log"],
             document["records"]!.AsObject().Select(member => member.Key));
         Assert.Equal(run.FlowFile, document["records"]!["state"]!.GetValue<string>());
         Assert.Equal(run.LogFile("r1"), document["records"]!["log"]!.GetValue<string>());
@@ -3074,6 +3076,7 @@ public sealed class FlowServiceTests
                 $"questions: {run.QuestionsFile}",
                 $"updates: {run.UpdatesFile}",
                 $"issues: {run.PreExistingIssuesFile}",
+                $"affectedTests: {run.AffectedTestsFile}",
                 $"definition: {run.DefinitionFile}",
                 $"events: {run.EventsFile}",
                 $"report: {run.ReportFile}",
@@ -3090,7 +3093,7 @@ public sealed class FlowServiceTests
         Assert.Equal("r1", document["run"]!.GetValue<string>());
         Assert.Equal("Stopped", document["status"]!.GetValue<string>());
         Assert.Equal(
-            ["run", "state", "status", "questions", "updates", "issues", "definition", "events", "report", "reportJson", "folds", "log"],
+            ["run", "state", "status", "questions", "updates", "issues", "affectedTests", "definition", "events", "report", "reportJson", "folds", "log"],
             document["records"]!.AsObject().Select(member => member.Key));
 
         var logged = repository.Harness.OrchestrationLog.Read(run.LogFile("r1"))[^1];

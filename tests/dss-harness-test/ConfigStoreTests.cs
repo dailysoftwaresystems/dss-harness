@@ -1150,7 +1150,7 @@ public sealed class ConfigStoreTests
     [InlineData("""{ "runner": "ctest", "successPattern": "ok", "labelArg": "-R" }""", "test on windows, linux, macos: labelArg '-R' chooses tests by name to ctest, so --label would read a label as a name; declare '-L'")]
     [InlineData("""{ "runner": "ctest", "successPattern": "ok", "excludeArg": "-L" }""", "test on windows, linux, macos: excludeArg '-L' chooses tests to ctest, so --exclude would run only the tests it names; declare an option that leaves them out, such as '-LE'")]
     [InlineData("""{ "runner": "ctest", "successPattern": "ok", "excludeArg": "-LE", "excludeJoin": ";" }""", "test on windows, linux, macos: excludeJoin ';' joins nothing to ctest, which reads what it joins as one pattern holding ';', so joined exclusions would leave out no test; declare \"excludeJoin\": \"|\"")]
-    [InlineData("""{ "runner": "ctest", "successPattern": "ok", "filterArg": "-R", "filterJoin": ";" }""", "test on windows, linux, macos: filterJoin ';' joins nothing to ctest, which reads what it joins as one pattern holding ';', so joined filter units would choose no test; declare \"filterJoin\": \"|\"")]
+    [InlineData("""{ "runner": "ctest", "successPattern": "ok", "filterArg": "-R", "filterJoin": ";" }""", "test on windows, linux, macos: filterJoin ';' joins nothing to ctest, which reads what it joins as one regular expression holding ';', so joined filter units would not choose the tests any of them names; declare \"filterJoin\": \"|\"")]
     public void Load_RejectsATestInvocationThatCannotWork(string invocation, string expected)
     {
         var exception = LoadInvalid(
@@ -1192,6 +1192,50 @@ public sealed class ConfigStoreTests
         Assert.Contains("test on linux: excludeJoin ','", exception.Message, StringComparison.Ordinal);
         Assert.DoesNotContain("linux, macos: filterArg", exception.Message, StringComparison.Ordinal);
         Assert.DoesNotContain("excludeJoin ';'", exception.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// ctest, dotnet test and dart test are refused, when the file is read, an invocation that would give them several
+    /// filter units as anything but the tests any of them names: a filterArg with no filterJoin - each unit after an option
+    /// of its own, of which ctest keeps the last, dotnet test refuses a second and dart test runs only a test every one
+    /// matches - and a join but '|', each problem naming the join to declare; and dart's --plain-name, which takes several
+    /// units neither way, naming --name. A config.json an earlier init wrote, with its filterArg and no filterJoin, is
+    /// refused so, not run on the last unit alone.
+    /// </summary>
+    [Theory]
+    [InlineData("""{ "runner": "ctest", "successPattern": "ok", "filterArg": "-R" }""", "filterArg '-R' would reach ctest once for each filter unit, no filterJoin joining them, and of -R it keeps only the last - never the tests any unit names; declare \"filterJoin\": \"|\", so they reach it as one regular expression")]
+    [InlineData("""{ "runner": "ctest", "successPattern": "ok", "filterArg": "--label-regex", "filterJoin": "" }""", "filterArg '--label-regex' would reach ctest once for each filter unit, no filterJoin joining them, and of --label-regex it reads each as one more that a test must match - never the tests any unit names; declare \"filterJoin\": \"|\", so they reach it as one regular expression")]
+    [InlineData("""{ "runner": "dotnet", "args": ["test", "--no-build"], "successPattern": "ok", "filterArg": "--filter" }""", "filterArg '--filter' would reach dotnet test once for each filter unit, no filterJoin joining them, and of --filter it takes one alone, refusing a command line that gives it twice - never the tests any unit names; declare \"filterJoin\": \"|\", so they reach it as one filter expression")]
+    [InlineData("""{ "runner": "C:/Program Files/dotnet/dotnet.exe", "args": ["-d", "test"], "successPattern": "ok", "filterArg": "--filter", "filterJoin": "&" }""", "filterJoin '&' joins nothing to dotnet test, which reads what it joins as one filter expression holding '&', so joined filter units would not choose the tests any of them names; declare \"filterJoin\": \"|\"")]
+    [InlineData("""{ "runner": "dart", "args": ["test"], "successPattern": "ok", "filterArg": "-n" }""", "filterArg '-n' would reach dart test once for each filter unit, no filterJoin joining them, and of -n it runs only a test whose name matches every one - never the tests any unit names; declare \"filterJoin\": \"|\", so they reach it as one regular expression")]
+    [InlineData("""{ "runner": "dart", "args": ["test"], "successPattern": "ok", "filterArg": "--plain-name", "filterJoin": "|" }""", "filterArg '--plain-name' gives dart test plain text, so several filter units would reach it neither apart, where it runs only a test whose name holds every one, nor joined, where it would look for the join as text; declare '--name', which reads a regular expression, with \"filterJoin\": \"|\"")]
+    public void Load_RefusesAFilterArgSeveralUnitsWouldNotReachAsAlternatives_NamingTheJoin(string invocation, string problem)
+    {
+        var exception = LoadInvalid(
+            $$"""{ "projects": [ { "name": "main", "type": "cmake", "test": { "all": {{invocation}} } } ] }""");
+
+        Assert.Contains($"test on windows, linux, macos: {problem}\n", exception.Message + "\n", StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A runner the harness does not know reads its filter option given twice as its own, so a filterArg with no join
+    /// loads for it - dotnet and dart run with a command other than test among them - as it does for a known runner whose
+    /// filterJoin is '|'.
+    /// </summary>
+    [Theory]
+    [InlineData("""{ "runner": "run-suite", "successPattern": "ok", "filterArg": "--name" }""")]
+    [InlineData("""{ "runner": "dotnet", "args": ["run", "--project", "tests"], "successPattern": "ok", "filterArg": "--filter" }""")]
+    [InlineData("""{ "runner": "dart", "args": ["run", "tool/test.dart"], "successPattern": "ok", "filterArg": "--name" }""")]
+    [InlineData("""{ "runner": "dotnet", "args": ["test"], "successPattern": "ok", "filterArg": "--filter-class" }""")]
+    [InlineData("""{ "runner": "ctest", "successPattern": "ok", "filterArg": "-R", "filterJoin": "|" }""")]
+    [InlineData("""{ "runner": "dotnet", "args": ["test"], "successPattern": "ok", "filterArg": "--filter", "filterJoin": "|" }""")]
+    [InlineData("""{ "runner": "dart", "args": ["test"], "successPattern": "ok", "filterArg": "--name", "filterJoin": "|" }""")]
+    public void Load_AcceptsAFilterArg_ThatSeveralUnitsReachAsAlternatives_OrAnUnknownRunnersOwn(string invocation)
+    {
+        var config = LoadValid(
+            $$"""{ "projects": [ { "name": "main", "type": "cmake", "test": { "all": {{invocation}} } } ] }""");
+
+        Assert.NotNull(Assert.Single(config.Projects).Test!.All!.FilterArg);
     }
 
     /// <summary>

@@ -72,29 +72,28 @@ public static class TestInvocationResolver
 
     /// <summary>
     /// What is wrong with how <paramref name="invocation"/> passes --filter, --label and --exclude on, where its runner
-    /// is ctest and ctest would read them otherwise. Each of ctest's options chooses tests or leaves them out, by name
-    /// or by label, and one declared for another purpose does the opposite of what was asked without a word: an
-    /// excludeArg of -L runs only the tests --exclude names. And ctest reads a joined value as one regular expression,
-    /// so a join other than '|' leaves out nothing, and chooses nothing: measured with ctest 4.3.2, -LE "slow;gpu" ran
-    /// every test.
+    /// would read them otherwise. Each of ctest's options chooses tests or leaves them out, by name or by label, and one
+    /// declared for another purpose does the opposite of what was asked without a word: an excludeArg of -L runs only
+    /// the tests --exclude names. And ctest reads a joined value as one regular expression, so a join other than '|'
+    /// leaves out nothing, and chooses nothing: measured with ctest 4.3.2, -LE "slow;gpu" ran every test. How several
+    /// filter units reach ctest, dotnet test and dart test - none of which runs the tests any of them names given apart -
+    /// is <see cref="FilterUnits"/>'s to say.
     /// </summary>
     /// <param name="invocation">The invocation, merged for one operating system.</param>
     public static IEnumerable<string> Misread(ResolvedTestInvocation invocation)
     {
         ArgumentNullException.ThrowIfNull(invocation);
 
-        if (Ctest.SelectionOf(invocation.Runner, invocation.FilterArg) is { } filter)
+        if (Ctest.SelectionOf(invocation.Runner, invocation.FilterArg) is { Excludes: true })
         {
-            if (filter.Excludes)
+            yield return $"filterArg '{invocation.FilterArg}' leaves tests out to ctest, so --filter would run every test but "
+                + $"those it names; declare an option that chooses them, such as '{Ctest.FilterArg}'";
+        }
+        else
+        {
+            foreach (var problem in FilterUnits.Misread(invocation))
             {
-                yield return $"filterArg '{invocation.FilterArg}' leaves tests out to ctest, so --filter would run every test but "
-                    + $"those it names; declare an option that chooses them, such as '{Ctest.FilterArg}'";
-            }
-
-            if (invocation.FilterJoin is { Length: > 0 } join && !string.Equals(join, Ctest.FilterJoin, StringComparison.Ordinal))
-            {
-                yield return $"filterJoin '{join}' joins nothing to ctest, which reads what it joins as one pattern holding "
-                    + $"'{join}', so joined filter units would choose no test; declare \"filterJoin\": \"{Ctest.FilterJoin}\"";
+                yield return problem;
             }
         }
 
@@ -151,12 +150,13 @@ public static class TestInvocationResolver
     /// <para>
     /// The filter chooses the tests to run - those any of its units names - each exclusion leaves its tests out and each
     /// label is one more the tests to run must carry, whatever else the invocation chooses them by. Several units reach
-    /// ctest only joined, since given -R twice it keeps the last. ctest reads each
-    /// of its options that choose tests beside another of the same kind - given twice, or set by a test
+    /// ctest, dotnet test and dart test only joined, and none is given a filter beside the same option its args give,
+    /// since none runs the tests any value names given its filter option twice (see <see cref="FilterUnits"/>). ctest
+    /// reads each of its options that choose tests beside another of the same kind - given twice, or set by a test
     /// preset - keeping only the last where it names tests, and taking only a test every one matches
     /// where it names labels. So exclusions are added to the args' own where they stand (see
-    /// <see cref="Excluding"/>); a filter beside a -R the args give, and a filter or an exclusion beside a
-    /// preset that sets the same filter, is refused rather than run on a selection nobody asked for. A
+    /// <see cref="Excluding"/>); a filter or an exclusion beside a
+    /// preset that sets the same filter is refused rather than run on a selection nobody asked for. A
     /// label is not, since ctest reads it as one more a test must carry, which is what it asks. Beside
     /// what voids the options, any of the three is refused: --rerun-failed; --union in the args - but an
     /// exclusion by -E, which ctest still reads there unless something chooses tests by name; a preset that
@@ -198,28 +198,11 @@ public static class TestInvocationResolver
                     + "how to pass one to this runner.");
             }
 
-            var option = Ctest.SelectionOf(invocation.Runner, invocation.FilterArg);
             var join = invocation.FilterJoin is { Length: > 0 } declared ? declared : null;
 
-            RefuseBeside(invocation, preset, option, "A filter", sameFilterRefuses: true);
-
-            if (option is not null && Ctest.Values(invocation.Args, option.Spellings).Values.Count > 0)
-            {
-                throw new HarnessException(
-                    HarnessExit.UsageError,
-                    $"A filter was given, and the test settings' args give {invocation.FilterArg} already, of which ctest "
-                    + $"{Twice(option)}: the filter would not choose the tests it names among theirs. Give it in the args, or "
-                    + "take theirs out.");
-            }
-
-            if (filters.Count > 1 && join is null && option is not null)
-            {
-                throw new HarnessException(
-                    HarnessExit.UsageError,
-                    $"{filters.Count} filter units would reach ctest apart, each after {invocation.FilterArg}, of which it "
-                    + $"{Twice(option)} - never the tests any of them names. Declare \"filterJoin\": \"{Ctest.FilterJoin}\" in the "
-                    + "test settings, so they reach it as one regular expression.");
-            }
+            RefuseBeside(invocation, preset, Ctest.SelectionOf(invocation.Runner, invocation.FilterArg), "A filter", sameFilterRefuses: true);
+            FilterUnits.RefuseGivenInArgs(invocation);
+            FilterUnits.RefuseApart(invocation, filters.Count, join);
 
             foreach (var value in join is null ? filters : [string.Join(join, filters)])
             {
@@ -454,10 +437,6 @@ public static class TestInvocationResolver
         }
     }
 
-    /// <summary>What ctest makes of one of its options given twice, to end a sentence.</summary>
-    private static string Twice(Ctest.Selection option)
-        => option.Narrows ? "reads each as one more that a test must match" : "keeps only the last";
-
     /// <summary>Which tests one of ctest's options chooses with <paramref name="value"/>, to end a sentence that names it.</summary>
     private static string Matching(Ctest.Selection option, string value = "it")
         => option.Reads == Ctest.Part.Label ? $"carrying a label that matches {value}" : $"whose name matches {value}";
@@ -537,7 +516,7 @@ public static class TestInvocationResolver
             throw new HarnessException(
                 HarnessExit.UsageError,
                 $"{own.Count + given.Count} exclusions would reach ctest apart, each after {invocation.ExcludeArg}, of which it "
-                + $"{Twice(option)} - never what each leaves out. Declare \"excludeJoin\": \"{Ctest.ExcludeJoin}\" in the test "
+                + $"{option.GivenTwice} - never what each leaves out. Declare \"excludeJoin\": \"{Ctest.ExcludeJoin}\" in the test "
                 + "settings, so they reach it as one regular expression.");
         }
 
@@ -632,7 +611,7 @@ public static class TestInvocationResolver
                 throw new HarnessException(
                     HarnessExit.UsageError,
                     $"{what} was given, and the test settings run ctest with test preset '{_name}', which sets "
-                    + $"filter.{option.PresetFilter} itself; given that and {option.Spellings[0]}, ctest {Twice(option)}. Declare "
+                    + $"filter.{option.PresetFilter} itself; given that and {option.Spellings[0]}, ctest {option.GivenTwice}. Declare "
                     + "it in the preset, or run ctest without one.");
             }
 

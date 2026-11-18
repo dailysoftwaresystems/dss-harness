@@ -42,7 +42,8 @@ is asked once for a round: where the items still do not pass, a person is asked 
    there is carried out by telling somebody: each piece becomes work of the run, done by a step of its own, and
    built, tested, folded and reviewed as any item is.
    - `added`: an item the plan did not have. `item` is the item, exactly as it stands in `items`: sized to one
-     builder's cycle, never more and never a sliver of one, with its own definition of done.
+     builder's cycle, never more and never a sliver of one, with its own definition of done, and named as no work item
+     of this run has been - an item a round built is changed, never added again under its name.
    - `changed`: an item the plan had, that is now to be done differently, whether it has not started, is being
      built, or is built and committed. `item` is the item as it now stands in `items`, under the name it had.
      Where it was built, a step does it again from what is there: say under `keep` what of the work stays, under

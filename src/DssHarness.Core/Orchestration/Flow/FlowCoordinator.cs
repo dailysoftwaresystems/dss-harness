@@ -4958,8 +4958,13 @@ public sealed class FlowCoordinator
 
                 if (!holds)
                 {
-                    var skipped = Create(scope, declaration, FlowInstanceState.Skipped, made: skipped => skipped.SkippedBecause = "its when read false");
-                    ForgetUnitsOf(skipped);
+                    // The units it keeps are taken out before the skip is recorded, as a retry's are before its end: a crash
+                    // between the two then leaves no entry a step that never runs again would hold for ever.
+                    var skipped = Create(scope, declaration, FlowInstanceState.Skipped, made: skipped =>
+                    {
+                        skipped.SkippedBecause = "its when read false";
+                        ForgetUnitsOf(skipped);
+                    });
                     HandlersFollow(skipped, FlowInstanceState.Skipped);
                     changed = true;
                     continue;
@@ -11874,28 +11879,24 @@ public sealed class FlowCoordinator
         {
             // What the pieces of a plan update are checked with, and what they owe: the items of the round they join,
             // where the run has one - and the names of the work items the plan had, which a piece that changes or
-            // withdraws one names; and, where this check opens the round, the items updates owe it, which join its
-            // own as one list.
+            // withdraws one names; the names every instance of the work-item group carries, over every round, which no
+            // work item a round opens with or an added piece makes may take, for the run knows a work item by its name
+            // alone; and, where this check opens the round, the items updates owe it, which join its own as one list.
             if (CurrentRound() is { } round)
             {
                 read["round"] = FlowValue.Of(new JsonArray([.. LiveItemsOf(round).Select(item => item.Item.ToNode()?.DeepClone())]));
             }
 
-            var known = new List<string>();
-
-            foreach (var name in _created.Where(group => group.Step.IsGroup && group.Path == groupPath)
+            var carried = _created.Where(group => group.Step.IsGroup && group.Path == groupPath)
                 .SelectMany(group => group.Children)
                 .Select(ItemNameOf)
                 .OfType<string>()
-                .Concat(ItemsCheckedBefore(instance)))
-            {
-                if (!known.Contains(name, StringComparer.Ordinal))
-                {
-                    known.Add(name);
-                }
-            }
+                .Distinct(StringComparer.Ordinal)
+                .ToList();
+            var known = carried.Concat(ItemsCheckedBefore(instance)).Distinct(StringComparer.Ordinal).ToList();
 
             read["known"] = FlowValue.Of(new JsonArray([.. known.Select(name => (JsonNode?)name)]));
+            read["carried"] = FlowValue.Of(new JsonArray([.. carried.Select(name => (JsonNode?)name)]));
 
             if (OpensTheRound(instance, groupPath) is not null)
             {

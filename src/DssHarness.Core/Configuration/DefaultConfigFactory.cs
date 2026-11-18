@@ -161,8 +161,8 @@ public static class DefaultConfigFactory
                 Args = ["test"],
                 FilterArg = "--filter",
 
-                // A filter expression joins its alternatives by |: two --filter options are not two alternatives.
-                FilterJoin = "|",
+                // dotnet test takes one --filter, refusing a second, and its filter expression joins alternatives by |.
+                FilterJoin = FilterUnits.Alternatives,
 
                 // The summary is matched as text, and dotnet otherwise translates it into the
                 // machine's language: the same run would be witnessed on one host and not another.
@@ -182,7 +182,7 @@ public static class DefaultConfigFactory
 
                 // dart test runs only a test every --name matches, and --name takes a regular expression, whose | makes
                 // one that matches what any of the filter's units names.
-                FilterJoin = "|",
+                FilterJoin = FilterUnits.Alternatives,
                 CoresArgs = ["--concurrency={cores}"],
                 SuccessPattern = "All tests passed!",
                 CountPattern = @"\+(?<total>\d+)(?: ~\d+)?: All tests passed!",

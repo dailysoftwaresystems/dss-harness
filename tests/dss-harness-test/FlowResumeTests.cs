@@ -833,11 +833,15 @@ public sealed class FlowResumeTests
         Assert.Equal("a1", taken.File.Steps[1].Agent);
     }
 
-    /// <summary>A run's questions or issues missing are refused by name, never made again empty: a step waiting on a question would wait for ever.</summary>
+    /// <summary>
+    /// A run's questions, issues or affected tests missing are refused by name, never made again empty: a step waiting on a
+    /// question would wait for ever, and a gate reading run.affectedTests would run none of the tests the run's work affects.
+    /// </summary>
     [Theory]
     [InlineData("questions.json", "its questions and answers")]
     [InlineData("pre-existing-issues.json", "its pre-existing issues")]
-    public async Task ARunsQuestionsOrIssuesMissing_AreRefusedByName(string missing, string what)
+    [InlineData(OrchestratorLayout.AffectedTestsFileName, "its affected tests")]
+    public async Task ARunsQuestionsIssuesOrAffectedTestsMissing_AreRefusedByName(string missing, string what)
     {
         using var temp = new TempDirectory();
         var definition = Parse("""

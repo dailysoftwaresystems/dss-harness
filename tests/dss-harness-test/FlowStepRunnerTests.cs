@@ -118,6 +118,7 @@ public sealed class FlowStepRunnerTests : IDisposable
                             Runner = "ctest",
                             Args = ["--output-on-failure", "-E", "slow", "--exclude-regex=gpu|net"],
                             FilterArg = "-R",
+                            FilterJoin = "|",
                             ExcludeArg = "-E",
                             ExcludeJoin = "|",
                             SuccessPattern = "passed",
@@ -828,6 +829,71 @@ public sealed class FlowStepRunnerTests : IDisposable
         Assert.Equal(
             [PlanValidator.MostItemsProblem(9)],
             [.. tooMany.Output!["problems"]!.AsArray().Select(problem => problem!.GetValue<string>())]);
+    }
+
+    /// <summary>
+    /// A work item is known by its name across the run - its record of affected tests keeps an item's units under it, and
+    /// a plan update finds the item by it - so the check that opens a round refuses a round's own item under a name an
+    /// earlier round's item carries, and passes an owed one under it, for a changed or a removed piece names the item it
+    /// does again or takes back; and a plan update's added piece under such a name is refused, its changed one passed.
+    /// </summary>
+    [Fact]
+    public async Task ANameAnEarlierRoundCarries_IsRefusedToARoundsOwnItemAndToAnAddedPiece_AndPassedToAChangedOne()
+    {
+        var (harness, repository) = await RepositoryAsync();
+        var runner = new PlanCheckRunner(harness.ContextLoader, harness.Platform, Validator(harness));
+        var opening = new WorkflowStep { Name = "item-check", Type = "validate-plan", Items = "plan.items" };
+        const string Reused = "work item 'one' is named as a work item an earlier round of the run carries, and a work item is known by its name across the run - its tests and its updates are kept under it: a further item is named for what it settles, and one that does that item again is a changed piece of it";
+
+        async Task<IReadOnlyList<string>> ProblemsAsync(WorkflowStep step, Dictionary<string, FlowValue> read)
+        {
+            var result = await runner.RunAsync(Run(step, repository.Path, read), Token);
+            Assert.True(result.Passed, result.Error);
+            return [.. result.Output!["problems"]!.AsArray().Select(problem => problem!.GetValue<string>())];
+        }
+
+        Assert.Equal(
+            [Reused],
+            await ProblemsAsync(opening, new Dictionary<string, FlowValue>
+            {
+                ["items"] = FlowValue.Of(new JsonArray(Item("one"), Item("two", "src/two/**"))),
+                ["owed"] = FlowValue.Of(new JsonArray()),
+                ["carried"] = FlowValue.Of(new JsonArray("one", "three")),
+            }));
+
+        // An owed item under a carried name replaces the round's own one of it, and is the item a piece does again.
+        Assert.Empty(await ProblemsAsync(opening, new Dictionary<string, FlowValue>
+        {
+            ["items"] = FlowValue.Of(new JsonArray(Item("one"), Item("two", "src/two/**"))),
+            ["owed"] = FlowValue.Of(new JsonArray(Item("one"))),
+            ["carried"] = FlowValue.Of(new JsonArray("one", "three")),
+        }));
+
+        // A check that opens no round - its items are the plan's, which holds the items rounds built - refuses none.
+        var check = new WorkflowStep { Name = "check", Type = "validate-plan", Items = "plan.items" };
+
+        Assert.Empty(await ProblemsAsync(check, new Dictionary<string, FlowValue>
+        {
+            ["items"] = FlowValue.Of(new JsonArray(Item("one"), Item("two", "src/two/**"))),
+            ["carried"] = FlowValue.Of(new JsonArray("one")),
+        }));
+
+        Assert.Equal(
+            ["the piece for 'one' is 'added', and a work item a round of the run carries is named so, and a work item is known by its name across the run: name the new item for what it settles, or make the piece 'changed' to do that item again"],
+            await ProblemsAsync(check, new Dictionary<string, FlowValue>
+            {
+                ["items"] = FlowValue.Of(new JsonArray(Item("one"))),
+                ["scope"] = FlowValue.Of(new JsonArray(Piece("added", Item("one")))),
+                ["known"] = FlowValue.Of(new JsonArray()),
+                ["carried"] = FlowValue.Of(new JsonArray("one")),
+            }));
+        Assert.Empty(await ProblemsAsync(check, new Dictionary<string, FlowValue>
+        {
+            ["items"] = FlowValue.Of(new JsonArray(Item("one"))),
+            ["scope"] = FlowValue.Of(new JsonArray(Piece("changed", Item("one")))),
+            ["known"] = FlowValue.Of(new JsonArray("one")),
+            ["carried"] = FlowValue.Of(new JsonArray("one")),
+        }));
     }
 
     private static readonly WorkflowStep CreateStep = new() { Name = "make", Type = "create-agent", Agent = "worker.md" };

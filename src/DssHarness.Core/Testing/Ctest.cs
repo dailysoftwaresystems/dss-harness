@@ -322,5 +322,8 @@ internal static class Ctest
     {
         /// <summary>The filter a test preset sets it with, under <c>filter</c>: <c>include.name</c> and the like.</summary>
         public string PresetFilter => $"{(Excludes ? "exclude" : "include")}.{(Reads == Part.Label ? "label" : "name")}";
+
+        /// <summary>What ctest makes of it given twice, to end a sentence.</summary>
+        public string GivenTwice => Narrows ? "reads each as one more that a test must match" : "keeps only the last";
     }
 }

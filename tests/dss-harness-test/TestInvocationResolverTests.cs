@@ -994,6 +994,60 @@ public sealed class TestInvocationResolverTests
     }
 
     /// <summary>
+    /// dotnet test and dart test are refused several filter units apart as ctest is, each naming what it makes of its
+    /// option given twice and the join to declare - dotnet test refuses a second --filter, dart test runs only a test
+    /// every --name matches - and dart's --plain-name, which reads plain text, is refused several either way, naming
+    /// --name; joined by '|' they reach dotnet test and dart test as one value, and one unit reaches each as itself.
+    /// </summary>
+    [Fact]
+    public void SeveralFilterUnits_ReachDotnetTestAndDartTestJoined_AndAreRefusedApart()
+    {
+        var dotnet = Invocation(args: ["test", "--no-build"], filterArg: "--filter", runner: "dotnet");
+        var dart = Invocation(args: ["test"], filterArg: "--name", runner: "/usr/lib/dart/bin/dart");
+        var plain = Invocation(args: ["test"], filterArg: "-N", runner: "dart", filterJoin: "|");
+
+        Assert.Equal(
+            "2 filter units would reach dotnet test apart, each after --filter, of which it takes one alone, refusing a command line that gives it twice - never the tests any of them names. Declare \"filterJoin\": \"|\" in the test settings, so they reach it as one filter expression.",
+            Assert.Throws<HarnessException>(() => TestInvocationResolver.CommandFor(dotnet, cores: 6, filters: ["ReportTests", "FrameTests"], excludes: null)).Message);
+        Assert.Equal(
+            "3 filter units would reach dart test apart, each after --name, of which it runs only a test whose name matches every one - never the tests any of them names. Declare \"filterJoin\": \"|\" in the test settings, so they reach it as one regular expression.",
+            Assert.Throws<HarnessException>(() => TestInvocationResolver.CommandFor(dart, cores: 6, filters: ["parser", "lexer", "frame"], excludes: null)).Message);
+
+        var refused = Assert.Throws<HarnessException>(() => TestInvocationResolver.CommandFor(plain, cores: 6, filters: ["parser", "lexer"], excludes: null));
+
+        Assert.Equal(HarnessExit.UsageError, refused.ExitCode);
+        Assert.Equal(
+            "2 filter units would reach dart test after -N, which reads its value as plain text: given apart it runs only a test whose name holds every one, and joined it would look for the join as text - never the tests any of them names. Declare filterArg '--name' with \"filterJoin\": \"|\" in the test settings, so they reach it as one regular expression.",
+            refused.Message);
+
+        Assert.Equal(["test", "--no-build", "--filter", "ReportTests|FrameTests"], TestInvocationResolver.CommandFor(dotnet with { FilterJoin = "|" }, cores: 6, filters: ["ReportTests", "FrameTests"], excludes: null).Arguments);
+        Assert.Equal(["test", "--name", "parser|lexer"], TestInvocationResolver.CommandFor(dart with { FilterJoin = "|" }, cores: 6, filters: ["parser", "lexer"], excludes: null).Arguments);
+        Assert.Equal(["test", "--no-build", "--filter", "ReportTests"], TestInvocationResolver.CommandFor(dotnet, cores: 6, filters: ["ReportTests"], excludes: null).Arguments);
+        Assert.Equal(["test", "-N", "parser"], TestInvocationResolver.CommandFor(plain, cores: 6, filters: ["parser"], excludes: null).Arguments);
+
+        // dotnet run with another command reads its own options as its own: each unit after a filterArg of its own.
+        Assert.Equal(
+            ["run", "--filter", "parser", "--filter", "lexer"],
+            TestInvocationResolver.CommandFor(dotnet with { Args = ["run"] }, cores: 6, filters: ["parser", "lexer"], excludes: null).Arguments);
+    }
+
+    /// <summary>
+    /// A filter beside the same option the args of dotnet test or dart test give is refused as ctest's beside -R is, in
+    /// either spelling and form, naming what the runner makes of the option given twice: the filter would not choose the
+    /// tests it names among theirs.
+    /// </summary>
+    [Theory]
+    [InlineData("dotnet", new[] { "test", "--filter", "Category=fast" }, "--filter", "A filter was given, and the test settings' args give --filter already, of which dotnet test takes one alone, refusing a command line that gives it twice: the filter would not choose the tests it names among theirs. Give it in the args, or take theirs out.")]
+    [InlineData("dart", new[] { "test", "--name=frame" }, "-n", "A filter was given, and the test settings' args give -n already, of which dart test runs only a test whose name matches every one: the filter would not choose the tests it names among theirs. Give it in the args, or take theirs out.")]
+    public void AFilterBesideTheSameOptionTheArgsGive_IsRefusedForDotnetTestAndDartTest(string runner, string[] args, string filterArg, string expected)
+    {
+        var refused = Assert.Throws<HarnessException>(() => TestInvocationResolver.CommandFor(
+            Invocation(args: args, filterArg: filterArg, runner: runner, filterJoin: "|"), cores: 6, filters: ["parser"], excludes: null));
+
+        Assert.Equal((HarnessExit.UsageError, expected), (refused.ExitCode, refused.Message));
+    }
+
+    /// <summary>
     /// A filter of several units chooses the tests any of them names, so ctest is refused it as choosing none only where
     /// every unit is left out, each by the exclusion that leaves it out; one unit left out beside one that is not runs.
     /// </summary>

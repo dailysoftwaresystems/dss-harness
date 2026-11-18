@@ -1135,8 +1135,8 @@ public sealed class ImplementationFlowTests
             ["preExisting"] = new JsonArray(),
         };
 
-    /// <summary>A remedy item, owning its own paths and reusing the tool the tree holds.</summary>
-    private static JsonObject Remedy(string name, string owned)
+    /// <summary>A remedy item, owning its own paths and reusing the tool the tree holds, tested on the unit a test gives or the workflow's job tests.</summary>
+    private static JsonObject Remedy(string name, string owned, string tests = "WorkflowJobTests")
         => new()
         {
             ["name"] = name,
@@ -1148,7 +1148,7 @@ public sealed class ImplementationFlowTests
             ["reuses"] = new JsonArray(new JsonObject { ["path"] = "src/tool.cs", ["what"] = "the tool" }),
             ["creates"] = new JsonArray(),
             ["replaces"] = new JsonArray(),
-            ["tests"] = new JsonArray("WorkflowJobTests"),
+            ["tests"] = new JsonArray(tests),
             ["noTests"] = "",
             ["classes"] = new JsonArray(),
             ["noClass"] = "the remedy decides nothing: it names a job",
@@ -2200,6 +2200,80 @@ public sealed class ImplementationFlowTests
                 ["one: ReportTests, FrameTests"],
                 kit.Harness.OrchestrationStore.ReadAffectedTests(kit.RunOf())!.Entries.Select(entry => $"{entry.Key}: {string.Join(", ", entry.Units)}"));
             Assert.Equal(["ReportTests", "FrameTests"], Assert.Single(tests, run => run.Step.Name == "gate").Step.Filter!.Written);
+        }
+
+        /// <summary>
+        /// A round whose work items all name no test runs none at its gate: the gate ends skipped, saying the shipped
+        /// reason, its runner never asked - and the round goes on as one whose gate held: the mutation sweep runs, its when
+        /// reading a skipped gate's missing passed as no failure (gate.passed ?? true), the self-audit runs, and the run
+        /// ends done.
+        /// </summary>
+        [Fact]
+        public async Task ARoundWhoseItemsAllNameNoTest_SkipsItsGate_AndGoesOnThroughTheSweepToItsEnd()
+        {
+            using var temp = new TempDirectory();
+            var kit = await PrepareAsync(
+                temp,
+                ground: new Ground(Legs: true, Mutations: true),
+                script: agents => agents.Queue(
+                    "planner",
+                    Completed(Plan(One(noTests: "it writes the report's prose, which no test reads"), One("notes", "docs/notes/**", noTests: "it carries the report's notes, which no test reads")))));
+
+            var end = await StartAsync(kit, "request=Ship the orders report.", "preapproved=yes");
+
+            Assert.True(HarnessExit.Success == end.ExitCode, $"{end.Message} | {Shown(kit)}");
+            Assert.Equal(nameof(FlowRunStatus.Done), kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf())!.Status);
+
+            // No test ran but the baseline the run starts from - neither item's verify nor the gate - and each item kept no
+            // unit under its name.
+            Assert.Equal(["baseline"], kit.Steps.Of("test").Select(run => run.Instance));
+            Assert.Equal(
+                ["notes: ", "one: "],
+                kit.Harness.OrchestrationStore.ReadAffectedTests(kit.RunOf())!.Entries.Select(entry => $"{entry.Key}: {string.Join(", ", entry.Units)}").Order(StringComparer.Ordinal));
+
+            var flow = kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf())!.Steps;
+            var gate = Assert.Single(flow, step => step.Step == "rounds.gate");
+
+            Assert.Equal(
+                (nameof(FlowInstanceState.Skipped), "its filter names no test: no work item built in this run names a test its change affects"),
+                (gate.State, gate.SkippedBecause));
+
+            // The round went on past it, as past a gate that held: the sweep and the self-audit ran.
+            Assert.Single(kit.Steps.Of("check-mutations"));
+            Assert.Equal(
+                [("rounds.mutations", nameof(FlowInstanceState.Done)), ("rounds.self-audit", nameof(FlowInstanceState.Done))],
+                [.. flow.Where(step => step.Step is "rounds.mutations" or "rounds.self-audit").Select(step => (step.Step, step.State)).OrderBy(step => step.Step, StringComparer.Ordinal)]);
+        }
+
+        /// <summary>
+        /// A remedy keeps its units under a key of its own - its name, the step whose failure it puts right and the
+        /// recovery's visit - so two remedies of one diagnosis keep theirs side by side, and the round's item keeps its own
+        /// under its name beside them: none replaces another, and the gate runs the units of every entry.
+        /// </summary>
+        [Fact]
+        public async Task EachRemedy_KeepsItsUnitsUnderAKeyOfItsOwn_BesideTheRoundsItem()
+        {
+            using var temp = new TempDirectory();
+            var kit = await PrepareAsync(
+                temp,
+                ground: new Ground(Legs: true),
+                script: agents => agents.Queue(
+                    "diagnostician",
+                    Completed(Diagnosis(
+                        course: "fix",
+                        items: [Remedy("frame", "src/frame/**", tests: "FrameTests"), Remedy("name", "src/name/**", tests: "NameTests")],
+                        summary: "The build is red: the tool names a type that is gone"))),
+                machine: steps => steps.Queue("build", MachineSteps.Red(HarnessExit.CommandFailed, "the build is red: Tool.Frame is not defined")));
+
+            var done = await StartAsync(kit, "request=Ship the orders report.", "preapproved=yes");
+
+            Assert.True(HarnessExit.Success == done.ExitCode, $"{done.Message} | {string.Join(" | ", done.Details ?? [])} | {Shown(kit)}");
+            Assert.Equal(
+                ["one: ReportTests", "remedy frame for build, visit 1: FrameTests", "remedy name for build, visit 1: NameTests"],
+                kit.Harness.OrchestrationStore.ReadAffectedTests(kit.RunOf())!.Entries.Select(entry => $"{entry.Key}: {string.Join(", ", entry.Units)}").Order(StringComparer.Ordinal));
+            Assert.Equal(
+                ["FrameTests", "NameTests", "ReportTests"],
+                Assert.Single(kit.Steps.Of("test"), run => run.Step.Name == "gate").Step.Filter!.Written.Order(StringComparer.Ordinal));
         }
 
         /// <summary>

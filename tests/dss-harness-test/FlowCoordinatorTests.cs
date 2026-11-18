@@ -354,6 +354,40 @@ public sealed class FlowCoordinatorTests
     }
 
     /// <summary>
+    /// A test step its when skips takes its key's entry out of the run's record of affected tests before its skip is
+    /// recorded: a crash between the two writes leaves the record without the entry, where the other way round the entry
+    /// would stand for good - a skipped step is never drawn again - and a gate would filter on units nothing built.
+    /// </summary>
+    [Fact]
+    public async Task ATestStepItsWhenSkips_TakesItsUnitsOutBeforeItsSkipIsRecorded()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: first
+                type: test
+                filter: [Alpha]
+                affected: 'kept'
+              - name: gone
+                type: test
+                dependsOn: [first]
+                when: 'false'
+                filter: [Gamma]
+                affected: 'kept'
+            """);
+        var records = new Snapshots();
+        var crashing = new CrashingRecords(records, _ => false, picksStep: (instance, to) => instance == "gone" && to == nameof(FlowInstanceState.Skipped));
+
+        _ = await new FlowCoordinator(definition, new FakeRunner(), new RunnerFacts(), new JumpingClock(), records: crashing).RunAsync(TestContext.Current.CancellationToken);
+
+        // The process ended as the skip was recorded: what reached the disk before it is the record a resume reads.
+        Assert.True(crashing.Ended);
+        Assert.Equal(
+            ["kept: Alpha (by first)", "nothing kept"],
+            records.Affected.Select(written => written.Count == 0 ? "nothing kept" : string.Join(" | ", written.Select(entry => $"{entry.Key}: {string.Join(", ", entry.Units)} (by {entry.By})"))));
+    }
+
+    /// <summary>
     /// An expression the engine asks whether something holds that reads neither true nor false - a test step's filterWhen
     /// where the step starts, a when where a step is drawn, a repeat's until - is unreadable: what reads it fails 12,
     /// saying why, and is never ended as the engine's own fault, nor does it end the session.

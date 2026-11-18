@@ -2185,8 +2185,8 @@ public static partial class HarnessConfigValidator
             }
         }
 
-        // How --filter, --label and --exclude reach ctest, each problem said once with the systems it
-        // holds for: read otherwise, they run the opposite of what was asked, and say nothing.
+        // How --filter, --label and --exclude reach ctest, and several filter units ctest, dotnet test and dart test, each
+        // problem said once with the systems it holds for: read otherwise, they run what was not asked, and say nothing.
         var misread = merged
             .SelectMany(entry => TestInvocationResolver.Misread(entry.Invocation).Select(problem => (entry.Platform, Problem: problem)))
             .GroupBy(entry => entry.Problem, StringComparer.Ordinal);

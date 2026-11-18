@@ -701,7 +701,10 @@ the run's input answers, nor the budget's own, nor a kind its `kinds` leaves out
 step starts that yields one - each given to every leg's runner after the invocation's `filterArg`,
 all joined into one value by its `filterJoin` where it declares one (`|` for ctest, dotnet and dart,
 which `init` seeds, so the tests any unit names run) and each after a `filterArg` of its own where
-it does not, as `test --filter`, given more than once, gives them. A filter that reads no unit runs
+it does not, as `test --filter`, given more than once, gives them. None of ctest, `dotnet test` and
+`dart test` runs the tests any unit names given its filter option apart - ctest keeps the last `-R`,
+`dotnet test` refuses a second `--filter`, `dart test` runs only a test every `--name` matches - so
+each is refused, when `config.json` is read, a `filterArg` with no `filterJoin` or a join but `|`. A filter that reads no unit runs
 no test: the step ends skipped, saying why - its `noTests`, filled where it starts. Its
 `filterWhen` is an expression that switches the filter: where it reads false the step gives none
 and every test of its legs runs. Its `affected` keeps the units it runs in the run's record of

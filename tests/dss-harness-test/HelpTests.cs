@@ -3066,10 +3066,13 @@ public sealed partial class HelpTests
             "has been built; where it still finds none, the detail of a leg that did not pass says",
             "so, unless --no-tests=ignore keeps ctest quiet. A label beside labels the args or a",
             "When the file is read, ctest is also refused an invocation that would pass an option",
-            "filterJoin other than '|', which ctest would read as part of one pattern that leaves",
+            "'|', which ctest would read as part of one pattern that leaves out nothing. And ctest,",
+            "refused a filterArg with no filterJoin, which would give them several units apart, and",
+            "neither way, and is refused for --name. Each is refused a filter beside the same",
             "'test --filter' may be given more than once, each value a unit that names tests, and",
-            "dart's --name - declares filterJoin, and the units reach it as one value joined by",
-            "shared section declares. A workflow's test step gives its filter's units the same way.",
+            "its filter option apart - ctest keeps only the last -R, dotnet test refuses a second",
+            "--filter, and dart test runs only a test every --name matches - so each declares",
+            "section declares. A workflow's test step gives its filter's units the same way.",
             "given - of several filter units, where it is so of every one. With excludeArg '-LE',",
         })
         {

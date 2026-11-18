@@ -2145,7 +2145,13 @@ entry's units, each once (`FlowAffectedTestsFile.UnitsOf`), restored at a resume
 that reads no unit ends the step skipped with its `noTests`, its runner never asked. The runner gives the units to
 `TestService` as a list (`TestRequest.Filters`), and `TestInvocationResolver.CommandFor` joins them by the
 invocation's `filterJoin` into one value after `filterArg` where it declares one and gives each its own `filterArg`
-where it does not - ctest refused several apart, and a join but `|`, as its exclusions are. How the run stands without its `always` steps (`run.status`, `run.done` and the
+where it does not. `FilterUnits` owns what the runners `init` seeds make of several units: none of ctest,
+`dotnet test` and `dart test` runs the tests any of them names given its filter option apart - ctest keeps the last
+`-R`, `dotnet test` refuses a second `--filter` (measured with the .NET SDK 11.0.100, and Microsoft.Testing.Platform's
+frameworks declare the option one value in all), `dart test` runs only a test every `--name` matches, as its own help
+says - so the file's reader refuses each a `filterArg` with no `filterJoin`, and a join but `|`
+(`TestInvocationResolver.Misread`), and dart's `--plain-name`, which reads plain text and takes several units neither
+way, for `--name`; and `CommandFor` refuses several units apart and a filter beside the same option the args give. How the run stands without its `always` steps (`run.status`, `run.done` and the
 rest) is read by an `always` step alone; a placeholder stands in a key that is a template and is
 refused in any other where the file is read; a pull request's `base` reads nothing but the run's
 inputs and `run.name`, one base for every pull request; and a prompt's own placeholders - a reason
@@ -3602,8 +3608,13 @@ declared, so a builder's rework inside a review loop is among the steps that go 
 records, of the instance that carried the item before); in an instance no update made, the kind is `added` and the texts
 are empty. `PlanValidator.CheckPieces` checks the pieces with the items where a `validate-plan` step's `scope` names
 them - each of the four kinds and its texts, an `added` or `changed` item an item of the plan's list by name and member
-for member, no two pieces one work item, a `changed` or `removed` piece naming a work item the plan had - and the items
-an update places are checked with those of the round they join as one list, only the bound of eight not carried over.
+for member, no two pieces one work item, a `changed` or `removed` piece naming a work item the plan had, an `added`
+one naming none an instance of the work-item group carries - and the items an update places are checked with those of
+the round they join as one list, only the bound of eight not carried over. A work item is known by its name across
+the run - `ItemInstanceNamed`, its tests' key in `affected-tests.json`, its updates - so the check that opens a round
+is handed the names every instance of the group carries (`carried`, read where it starts) and refuses a round's own
+item under one of them (`PlanValidator.Check`'s `carried`), an owed item excepted: a changed or a removed piece names
+the item it does again or takes back.
 The pieces are told as they are placed: every `told` piece's message is sent through the attempt's own
 telling (`FlowTelling`, made where a reason attempt starts and handed to the runner - `ReasonStepRunner` wires its
 messages channel and its handoff signal into the agent run) - a reason step in flight that a piece names, by its own

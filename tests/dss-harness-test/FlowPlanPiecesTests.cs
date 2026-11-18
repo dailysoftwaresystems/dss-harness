@@ -2109,6 +2109,70 @@ public sealed class FlowPlanPiecesTests
     }
 
     /// <summary>
+    /// The flow of <see cref="Flow"/> whose round is a loop of two iterations, each item built and its agent dropped with
+    /// no question asked of it.
+    /// </summary>
+    private static readonly string TwoRoundsFlow = Flow
+        .Replace(
+            "  - name: rounds\n    dependsOn: [planning]\n    steps:\n",
+            "  - name: rounds\n    dependsOn: [planning]\n    repeat:\n      until: 'iteration == 2'\n      maxIterations: 2\n    steps:\n",
+            StringComparison.Ordinal)
+        .Replace(
+            "          - name: probe\n            type: pause\n            question: '{piece.kind}|{piece.changed}|{piece.before}'\n            options: [go, stop]\n            dependsOn: [build]\n",
+            string.Empty,
+            StringComparison.Ordinal)
+        .Replace("            dependsOn: [probe]", "            dependsOn: [build]", StringComparison.Ordinal);
+
+    /// <summary>
+    /// The check that opens a round is handed the names every instance of the work-item group carries, over every round -
+    /// none as the first round opens, the first round's items as the second does - beside the names the plan had: the run
+    /// knows a work item by its name alone, so the check refuses a round's own item under one an earlier round carries.
+    /// </summary>
+    [Fact]
+    public async Task TheCheckThatOpensARound_IsHandedTheNamesTheEarlierRoundsItemsCarry()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse(TwoRoundsFlow);
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+        var handed = new List<(IReadOnlyList<string> Carried, IReadOnlyList<string> Known)>();
+
+        static IReadOnlyList<string> NamesOf(FlowStepRun run, string key)
+            => [.. run.Read![key].ToNode()!.AsArray().Select(name => name!.GetValue<string>())];
+
+        var runner = new FakeRunner()
+            .On("plan", _ => FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Concluded(Item("one"), Item("two"))))
+            .On("item-check", run =>
+            {
+                lock (handed)
+                {
+                    handed.Add((NamesOf(run, "carried"), NamesOf(run, "known")));
+                }
+
+                return FlowStepResult.Ended(passed: true, HarnessExit.Success, output: new JsonObject
+                {
+                    ["ok"] = true,
+                    ["problems"] = new JsonArray(),
+                    ["items"] = UnionOf(run),
+                });
+            });
+
+        using (records)
+        {
+            var coordinator = CoordinatorOf(definition, runner, records, harness, layout);
+
+            _ = await coordinator.RunAsync(Token);
+            Assert.True(coordinator.TryAnswer(coordinator.OpenQuestions.Single().Id, "go", null, out _));
+            var end = await coordinator.RunAsync(Token).WaitAsync(Bound, Token);
+
+            Assert.True(FlowRunStatus.Done == end.Status, end.Summary);
+        }
+
+        Assert.Equal(
+            ["carried [] known []", "carried [one, two] known [one, two]"],
+            handed.Select(visit => $"carried [{string.Join(", ", visit.Carried)}] known [{string.Join(", ", visit.Known)}]"));
+    }
+
+    /// <summary>
     /// The flow of <see cref="Flow"/> whose work items are each tested once their builder has answered, on their own units
     /// alone - the item's and those its builder's newest answer adds - kept under the item's name in the run's record of
     /// affected tests, with the reason it runs none where it names none.

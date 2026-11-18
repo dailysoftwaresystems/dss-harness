@@ -103,5 +103,8 @@ Whether the round is clean, which is true exactly when you give no work item; th
 verify; and the work items of a further round, shaped as the plan's items are and at most 8: each sized to one
 builder's cycle, never more and never a sliver of one, each with its own definition of done - statements a check can
 answer one by one, the first of them the finding it settles - and each that changes a decision with its classes, or
-saying why in noClass where it decides none. Where the item audit found a site an item's class lacked or a cell its
+saying why in noClass where it decides none. Each takes a name no work item of this run has had, in this round or an
+earlier one: the run knows a work item by its name, and keeps its tests and its updates under it, so a further item
+named as one already built would stand in that item's place - a follow-up to an item is a work item of its own, named
+for what it settles. Where the item audit found a site an item's class lacked or a cell its
 universe left out, the item that settles it carries the class whole: its site list extended by what the audit found.
