@@ -2471,6 +2471,32 @@ public sealed class CodeGraphLinkerTests
         Assert.Contains(new CodeEdge("msbuild:app.csproj", "xml:Directory.Build.props#OutputPath", CodeEdgeKinds.Uses, 2, CodeConfidences.Unique), linked.Edges);
     }
 
+    /// <summary>
+    /// A class a document writes is a use of the rule of that name, looked for among rules alone: the style sheet's
+    /// <c>.btn</c> reaches the page that writes <c>class="btn"</c>, and nothing else of that name is its target.
+    /// </summary>
+    [Fact]
+    public void AClassADocumentWrites_IsAUseOfTheRuleOfThatName_AmongRulesAlone()
+    {
+        var rule = new ExtractNode("css:site.css#.btn", CodeNodeKinds.Member, ".btn", ".btn", 8, 11, ".btn") { SubKind = "rule" };
+        var member = new ExtractNode("c:Helper", CodeNodeKinds.Member, ".btn", "Helper..btn", 1, 1, ".btn");
+        var page = new ExtractNode("html:index.html#body", CodeNodeKinds.Section, "body", "index.html#body", 1, 9, "body");
+
+        var linked = CodeGraphLinker.Link(
+        [
+            new CodeGraphFile("site.css", "css", new FileExtract([rule])),
+            new CodeGraphFile("index.html", "html", new FileExtract([page])
+            {
+                References = [new ExtractReference(page.Id, CodeEdgeKinds.Uses, ".btn", 5) { Qualifier = new ExtractQualifier(CodeQualifierKinds.Selector) }],
+            }),
+            new CodeGraphFile("helper.c", "c", new FileExtract([member])),
+        ]);
+
+        Assert.Contains(new CodeEdge("html:index.html#body", "css:site.css#.btn", CodeEdgeKinds.Uses, 5, CodeConfidences.Exact), linked.Edges);
+        Assert.DoesNotContain(linked.Edges, edge => edge.To == "c:Helper" && edge.Kind == CodeEdgeKinds.Uses);
+        Assert.DoesNotContain(linked.External, pair => pair.Key == page.Id);
+    }
+
     private static CodeGraphLinked Link(params CodeGraphFile[] files) => CodeGraphLinker.Link(files);
 
     private static CodeGraphFile File(string path, IReadOnlyList<ExtractNode> nodes, IReadOnlyList<ExtractReference>? references = null, IReadOnlyList<ExtractScope>? scopes = null, IReadOnlyList<ExtractImport>? imports = null)

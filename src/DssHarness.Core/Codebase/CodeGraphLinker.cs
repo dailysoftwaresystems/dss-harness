@@ -766,6 +766,10 @@ public static class CodeGraphLinker
                         ? (held, CodeConfidences.Exact)
                         : (Distinct(RepositoryNamed(from.File, name).Where(target => target.Node.Scope is null && Own(target))), CodeConfidences.Exact);
 
+                case CodeQualifierKinds.Selector:
+                    // A selector names a rule wherever the repository declares one so: the styles a page is told by.
+                    return (Distinct(RepositoryNamed(from.File, name).Where(target => target.Node.SubKind == "rule")), CodeConfidences.Exact);
+
                 default:
                     // A value the scopes hold, nearer than any type or scope of its name, is that value; a type or a scope is
                     // found as one is named; a name that is neither is every type or scope it ends.

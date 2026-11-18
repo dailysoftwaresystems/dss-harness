@@ -213,7 +213,7 @@ public sealed class CodebaseGraphQueryServiceTests
         Assert.Null(noneDocument["view"]);
         Assert.Null(noneDocument["answer"]);
         Assert.Equal((HarnessExit.UsageError, "give exactly one of --find, --node, --related, --outline or --body"), (two.ExitCode, two.Message));
-        Assert.Equal((HarnessExit.UsageError, "--related needs --relation: one of callers, callees, derived, implementations, references, tests, includedBy"), (noRelation.ExitCode, noRelation.Message));
+        Assert.Equal((HarnessExit.UsageError, "--related needs --relation: one of callers, callees, derived, implementations, references, tests, includedBy, styledBy, styles"), (noRelation.ExitCode, noRelation.Message));
 
         foreach (var (outcome, op) in new[] { (two, (string?)null), (noRelation, "related") })
         {
@@ -379,7 +379,7 @@ public sealed class CodebaseGraphQueryServiceTests
 
     /// <summary>A misuse is a usage error (10) told before anything is read - never hidden by a run with no graph (13).</summary>
     [Theory]
-    [InlineData("relation", "relation is 'siblings': give one of callers, callees, derived, implementations, references, tests, includedBy")]
+    [InlineData("relation", "relation is 'siblings': give one of callers, callees, derived, implementations, references, tests, includedBy, styledBy, styles")]
     [InlineData("depth", "depth is 9: give 1 to 3")]
     [InlineData("find", "query is empty: the words to match, split at case changes, underscores, digits and dots as a name is.")]
     [InlineData("body", "op 'body' needs symbols: 1 to 8 handles, ids or names")]

@@ -4498,6 +4498,21 @@ A linker that answers otherwise raises `CodeGraphLinker.Revision`,
 which every link result names: a graph linked by another revision is linked again, though no file changed and none is
 read again.
 
+The page and its styles are read too. `html` (`.html`, `.htm`, read through AngleSharp with its source references
+kept) makes each landmark (`main`, `nav`, `header`, `footer`, `aside`, `article`, `section`) and each element with an
+`id` a `section` over its lines, the `body` one over all; each class the document writes a `uses` of the rule
+`.name` and each id a `uses` of `#id`, looked for among rules alone by a qualifier of its own (`selector`); a custom
+element (`<my-widget>`) an `instantiates` of a component of that name; a `script src`, `link href`, `img src` and
+`a href` naming a local file by a relative path an import of it; an `on*=` handler a call of the function it names;
+and an inline `<script>` read by the JavaScript reader with the document's other lines blanked, so its declarations
+and literals carry the lines they stand on. `css` (`.css`, `.scss`, `.sass`, `.less`) makes each simple part of each
+selector - `.btn`, `#main`, `my-widget`, and no pseudo-class or attribute - a member SubKind `rule` named as the
+selector writes it, over the rule's lines; each custom property and each SCSS or Less variable a `constant`; each
+`@keyframes` name a rule and each `@mixin` a member; a `var(--x)` and a bare `$x` a use of the constant, an
+`@include` a use of the mixin, an `@extend` an inheritance; and an `@import`, `@use` and `@forward` naming a file an
+import of it. `related` answers `styledBy` (the rules that style a node) and `styles` (what a rule reaches), so "who
+uses this class" and "what styles this element" are one call each.
+
 A sync (`ICodebaseGraphService.SyncAsync`) lists the main checkout by three calls of `IGitClient` that take no lock -
 `ListIndexAsync` (`ls-files --stage -v -z`, the one reading of the index the whole tool shares), `ListWorkingFilesAsync`
 (`status --porcelain=v2 -z --untracked-files=all --no-renames`) and `HashWorkingFilesAsync` (`hash-object`, its paths on

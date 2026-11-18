@@ -183,8 +183,14 @@ public static class GraphRelations
     /// <summary>What imports the node: a file that imports it, or a project that names it.</summary>
     public const string IncludedBy = "includedBy";
 
+    /// <summary>The rules that style the node: the classes and ids it is told by, as a style sheet declares them.</summary>
+    public const string StyledBy = "styledBy";
+
+    /// <summary>The elements and components a rule reaches: what is styled by it.</summary>
+    public const string Styles = "styles";
+
     /// <summary>Every relation a <c>related</c> walk may follow.</summary>
-    public static IReadOnlyList<string> All { get; } = [Callers, Callees, Derived, Implementations, References, Tests, IncludedBy];
+    public static IReadOnlyList<string> All { get; } = [Callers, Callees, Derived, Implementations, References, Tests, IncludedBy, StyledBy, Styles];
 
     /// <summary>The edges <paramref name="relation"/> follows: each kind, and which way from the node.</summary>
     /// <param name="relation">One of <see cref="All"/>.</param>
@@ -198,6 +204,8 @@ public static class GraphRelations
         References => [(GraphSide.In, CodeEdgeKinds.References), (GraphSide.In, CodeEdgeKinds.Instantiates)],
         Tests => [(GraphSide.In, CodeEdgeKinds.Tests)],
         IncludedBy => [(GraphSide.In, CodeEdgeKinds.Imports), (GraphSide.In, CodeEdgeKinds.ProjectReference)],
+        StyledBy => [(GraphSide.Out, CodeEdgeKinds.Uses)],
+        Styles => [(GraphSide.In, CodeEdgeKinds.Uses)],
         _ => throw new ArgumentOutOfRangeException(nameof(relation), relation, "Not a relation a related walk follows."),
     };
 }

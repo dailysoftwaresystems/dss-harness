@@ -552,8 +552,14 @@ public static class CodeQualifierKinds
     /// </summary>
     public const string Scope = "scope";
 
+    /// <summary>
+    /// A selector, as markup writes one - <c>.class</c>, <c>#id</c>, an element - the name looked for among rules alone:
+    /// the style sheet's, wherever the repository declares them.
+    /// </summary>
+    public const string Selector = "selector";
+
     /// <summary>Every kind.</summary>
-    public static IReadOnlyList<string> All { get; } = [This, Base, Named, Type, Prefix, Value, Scope];
+    public static IReadOnlyList<string> All { get; } = [This, Base, Named, Type, Prefix, Value, Scope, Selector];
 }
 
 /// <summary>A place an implementation saw something it cannot bind, or stopped reading.</summary>

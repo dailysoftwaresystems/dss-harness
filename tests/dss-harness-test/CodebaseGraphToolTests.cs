@@ -660,7 +660,7 @@ public sealed partial class CodebaseGraphToolTests
     [InlineData("""{"op":"find"}""", "op 'find' needs query: the words to match, split at case changes, underscores, digits and dots as a name is.")]
     [InlineData("""{"op":"node","symbol":"Total","query":"x"}""", "op 'node' does not read query: it reads symbol, page")]
     [InlineData("""{"op":"related","symbol":"Total"}""", "op 'related' needs relation: which edge to follow.")]
-    [InlineData("""{"op":"related","symbol":"Total","relation":"siblings"}""", "relation is 'siblings': give one of callers, callees, derived, implementations, references, tests, includedBy")]
+    [InlineData("""{"op":"related","symbol":"Total","relation":"siblings"}""", "relation is 'siblings': give one of callers, callees, derived, implementations, references, tests, includedBy, styledBy, styles")]
     [InlineData("""{"op":"related","symbol":"Total","relation":"callers","depth":4}""", "depth is 4: give 1 to 3")]
     [InlineData("""{"op":"related","symbol":"Total","relation":"callers","depth":0}""", "depth is 0: give 1 to 3")]
     [InlineData("""{"op":"find","query":"x","offset":1}""", "op 'find' does not read offset: an answer's further pages are asked by page, from 1")]
