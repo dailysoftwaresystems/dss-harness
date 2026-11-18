@@ -2995,6 +2995,11 @@ public static class WorkflowValidator
                 _problems.Add($"{lead}codebaseGraph.generated is '{generated}', which is none of {string.Join(", ", Codebase.CodebaseGraphShape.GeneratedValues.Select(value => $"'{value}'"))}: generated code's declarations are kept, its file's entry naming why it is generated, or left out with the file listed");
             }
 
+            if (graph.KeyNaming is { Count: 0 })
+            {
+                _problems.Add($"{lead}codebaseGraph.keyNaming is given empty, which is never read as no key joined: name its policies, or leave the key out for {string.Join(" and ", Codebase.CodebaseGraphShape.DefaultKeyNaming)}");
+            }
+
             foreach (var twice in (graph.KeyNaming ?? []).GroupBy(naming => naming, StringComparer.Ordinal).Where(group => group.Count() > 1))
             {
                 _problems.Add($"{lead}codebaseGraph.keyNaming names '{twice.Key}' more than once");
@@ -3023,6 +3028,10 @@ public static class WorkflowValidator
                     {
                         _problems.Add($"{lead}codebaseGraph.claims maps endings to '{language}', which this tool has no extractor for; it extracts: {string.Join(", ", extractors)}");
                     }
+                    else if (graph.Languages is { Count: > 0 } used && !string.IsNullOrWhiteSpace(language) && !used.Contains(language, StringComparer.Ordinal))
+                    {
+                        _problems.Add($"{lead}codebaseGraph.claims maps endings to '{language}', which codebaseGraph.languages leaves out, so the fallback would read every file it claims: name '{language}' in languages, or leave its claims out");
+                    }
 
                     if (endings.Count == 0)
                     {
@@ -3046,9 +3055,10 @@ public static class WorkflowValidator
         }
 
         /// <summary>
-        /// Whether two <c>codebaseGraph</c> blocks give the run's graph one shape, as <see cref="FlowCodebaseGraph.Shape"/>
-        /// reads them - every default held where a block says nothing. A block whose patterns are no patterns is refused
-        /// for them, and is weighed as it is written.
+        /// Whether two <c>codebaseGraph</c> blocks give the run's graph one shape, as the shape itself says
+        /// (<see cref="Codebase.CodebaseGraphShape.SameAs"/>) - every default held where a block says nothing, a list of one
+        /// set alike in any order. A block whose patterns are no patterns is refused for them, and its patterns are weighed
+        /// as they are written.
         /// </summary>
         private static bool SameShape(FlowCodebaseGraph one, FlowCodebaseGraph other)
         {
@@ -3058,29 +3068,13 @@ public static class WorkflowValidator
             static bool Same(IReadOnlyList<string>? first, IReadOnlyList<string>? second)
                 => first is null ? second is null : second is not null && first.SequenceEqual(second, StringComparer.Ordinal);
 
-            static bool SameClaims(IReadOnlyDictionary<string, IReadOnlyList<string>>? first, IReadOnlyDictionary<string, IReadOnlyList<string>>? second)
-                => first is null ? second is null
-                : second is not null
-                && first.Count == second.Count
-                && first.All(pair => second.TryGetValue(pair.Key, out var endings) && Same(pair.Value, endings));
-
             if (!Readable(one) || !Readable(other))
             {
-                return Same(one.Include, other.Include) && Same(one.Exclude, other.Exclude) && Same(one.Languages, other.Languages)
-                    && one.MaxFileBytes == other.MaxFileBytes && one.Generated == other.Generated && one.MapTokens == other.MapTokens
-                    && Same(one.KeyNaming, other.KeyNaming) && SameClaims(one.Claims, other.Claims);
+                return Same(one.Include, other.Include) && Same(one.Exclude, other.Exclude)
+                    && (one with { Include = null, Exclude = null }).Shape.SameAs((other with { Include = null, Exclude = null }).Shape);
             }
 
-            var (first, second) = (one.Shape, other.Shape);
-
-            return first.Include.Select(pattern => pattern.ToString()).SequenceEqual(second.Include.Select(pattern => pattern.ToString()), StringComparer.Ordinal)
-                && first.Exclude.Select(pattern => pattern.ToString()).SequenceEqual(second.Exclude.Select(pattern => pattern.ToString()), StringComparer.Ordinal)
-                && Same(first.Languages, second.Languages)
-                && first.MaxFileBytes == second.MaxFileBytes
-                && first.ExcludeGenerated == second.ExcludeGenerated
-                && first.MapTokens == second.MapTokens
-                && Same(first.KeyNaming, second.KeyNaming)
-                && SameClaims(first.Claims, second.Claims);
+            return one.Shape.SameAs(other.Shape);
         }
 
         /// <summary>Refuses <paramref name="value"/> outside <paramref name="least"/> to <paramref name="most"/>; whether it holds, absent among them.</summary>

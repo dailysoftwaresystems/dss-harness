@@ -88,6 +88,7 @@ public sealed record CodeGraphManifest(
             : string.IsNullOrWhiteSpace(Tree) ? "it names no tree"
             : Extractors.FirstOrDefault(extractor => extractor is null || string.IsNullOrWhiteSpace(extractor.Language) || extractor.Version < 1) is { } wrong ? $"it names an implementation as '{wrong?.Language}' at version {wrong?.Version.ToString(CultureInfo.InvariantCulture)}"
             : Extractors.GroupBy(extractor => extractor.Language, StringComparer.Ordinal).FirstOrDefault(group => group.Count() > 1) is { } twice ? $"it names the implementation '{twice.Key}' twice"
+            : KeyNaming is { } naming && CodebaseGraphShape.NamingProblem(naming) is { } policies ? $"its keyNaming {policies}"
             : Files.FirstOrDefault(file => OrchestrationRules.RelativePathProblem(file.Key, "a file's path") is not null || file.Value?.Problem() is not null) is { Key: not null } bad ? OrchestrationRules.RelativePathProblem(bad.Key, "a file's path") ?? $"its file '{bad.Key}': {bad.Value?.Problem() ?? "it is null"}"
             : Files.Select(file => ReadBy(file.Key, file.Value)).FirstOrDefault(found => found is not null) is { } unread ? unread
             : Digest != DigestOf(Extractors, Files) ? "its digest is not the digest of what it says"

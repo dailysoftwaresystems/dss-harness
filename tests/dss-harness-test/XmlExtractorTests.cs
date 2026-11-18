@@ -179,7 +179,58 @@ public sealed class XmlExtractorTests : CodeGraphExtractorContractTests<XmlExtra
         var refused = Read("doc.xml", "<!DOCTYPE root [<!ENTITY x \"y\">]>\n<root>&x;</root>");
 
         Assert.Empty(refused.Nodes);
-        Assert.Single(refused.Dynamic);
+        Assert.Equal([new ExtractDynamic(1, "the file declares a DTD, which is never read, and nothing after it is read")], refused.Dynamic);
+
+        // A root whose x:Class names no type - one ending in a dot - is a section, as every other root is.
+        Assert.Equal(
+            [("xml:Views/Odd.xaml#Window", CodeNodeKinds.Section)],
+            Read("Views/Odd.xaml", "<Window x:Class=\"Shop.\" xmlns:x=\"http://schemas.microsoft.com/winfx/2006/xaml\" />").Nodes.Select(node => (node.Id, node.Kind)));
+    }
+
+    /// <summary>
+    /// A file that nests past <see cref="DataNodes.MostNesting"/> elements is read no deeper - what nests past the bound
+    /// passed over whole, the line it begins on marked, what follows it read - and a file of many thousand levels is read in
+    /// a moment.
+    /// </summary>
+    [Fact]
+    public void AFileNestedPastTheBound_IsReadNoDeeper_AndWhatFollowsIsRead()
+    {
+        var text = "<root>\n" + string.Concat(Enumerable.Repeat("<a>", 100_000)) + string.Concat(Enumerable.Repeat("</a>", 100_000)) + "\n<item name=\"after\" />\n</root>\n";
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        var extract = Read("deep.xml", text);
+
+        Assert.Equal(["xml:deep.xml#root", "xml:deep.xml#root/item/after"], extract.Nodes.Select(node => node.Id));
+        Assert.Equal([new ExtractDynamic(2, $"the file nests more than {DataNodes.MostNesting} elements deep here, and nothing deeper is read")], extract.Dynamic);
+        Assert.True(watch.Elapsed < TimeSpan.FromSeconds(10), $"the file took {watch.Elapsed} to read");
+    }
+
+    /// <summary>
+    /// Every node an XML file gives is one the core holds: an element whose path is longer than a signature keeps it whole
+    /// in its id and is cut in its signature alone; an id-like attribute of white space names nothing; elements are counted
+    /// against <see cref="FileExtract.MostKeys"/> as keys are, the rest counted past them; and where the file stops reading
+    /// as XML, the reader's reason is said.
+    /// </summary>
+    [Fact]
+    public void EveryNodeAnXmlFileGives_IsOneTheCoreHolds()
+    {
+        var segment = new string('s', 60);
+        var deep = $"<root>{string.Concat(Enumerable.Repeat($"<{segment}>", 5))}<item name=\"x\" /><item name=\"  \" />{string.Concat(Enumerable.Repeat($"</{segment}>", 5))}</root>";
+        var extract = Read("long.xml", deep);
+        var item = Assert.Single(extract.Nodes, node => node.SubKind == CodeSubKinds.Element);
+
+        Assert.Equal($"root/{string.Join('/', Enumerable.Repeat(segment, 5))}/item/x", item.Qualified);
+        Assert.True(item.Signature.Length <= FileExtract.MostSignature, $"the signature is {item.Signature.Length} characters");
+        Assert.Null(extract.WithDigests(CodeFileText.Lines(deep)).Problem("xml", 1));
+
+        var many = $"<root>\n{string.Concat(Enumerable.Range(0, FileExtract.MostKeys + 2).Select(at => $"<item name=\"i{at}\" />\n"))}</root>\n";
+        var counted = Read("many.xml", many);
+
+        Assert.Equal((FileExtract.MostKeys, 3), (counted.Nodes.Count, counted.KeysBeyond));
+
+        var broken = Read("broken.xml", "<root>\n  <item name=\"a\">\n</root>\n");
+
+        Assert.Equal(["xml:broken.xml#root", "xml:broken.xml#root/item/a"], broken.Nodes.Select(node => node.Id));
+        Assert.Equal([new ExtractDynamic(3, "the file stops reading as XML here (The 'item' start tag on line 2 position 4 does not match the end tag of 'root'), and nothing after it is read")], broken.Dynamic);
     }
 
     private static FileExtract Read(string path, string text) => new XmlExtractor().Extract(new CodeFileInput(path, text));

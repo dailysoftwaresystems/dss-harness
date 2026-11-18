@@ -517,7 +517,7 @@ public sealed class CodebaseGraphTool(
             var left = 0;
             var unsure = _queries.Unsure(card.Id);
 
-            foreach (var (group, members, recall) in _queries.Edges(card.Id).Groups)
+            foreach (var (group, members) in _queries.Edges(card.Id).Groups)
             {
                 var kept = members.Where(edge => Reads(edge.Card)).ToList();
                 left += members.Count - kept.Count;
@@ -527,14 +527,14 @@ public sealed class CodebaseGraphTool(
                     continue;
                 }
 
-                // Every edge of the kind decides whether the graph is sure of the answer: no page's bound hides one. A
-                // group of recall - a use - is never a doubt: its candidates say nothing of how sure the graph is of what
-                // it declares.
-                unsure |= !recall && kept.Any(edge => string.Equals(edge.Confidence, CodeConfidences.Candidates, StringComparison.Ordinal) || _queries.Unsure(edge.Card.Id));
+                // Every edge of the kind decides whether the graph is sure of the answer: no page's bound hides one. A use
+                // is recall, never a doubt - its candidates say nothing of how sure the graph is of what it declares.
+                unsure |= kept.Any(_queries.Doubts);
                 sections.Add(Section($"{group} ({kept.Count}):", [.. kept.Select(edge => new GraphEntry("  " + EdgeLine(edge)))], NodeLinesAKind));
             }
 
             notes.AddRange(Notes(left));
+            notes.AddRange(_queries.UnreadOf(card));
 
             if (unsure)
             {
@@ -570,7 +570,7 @@ public sealed class CodebaseGraphTool(
             var sections = new List<GraphSection>();
             var notes = new List<string>(Notes(reached.Count - kept.Count));
 
-            if (_queries.Unsure(card.Id) || kept.Any(one => one.Candidates || _queries.Unsure(one.Card.Id)))
+            if (_queries.Unsure(card.Id) || kept.Any(_queries.Doubts))
             {
                 var searched = await SearchAsync(card.Name, token).ConfigureAwait(false);
                 sections.AddRange(searched.SectionsOf(card.Name));
@@ -648,6 +648,9 @@ public sealed class CodebaseGraphTool(
     private GraphAnswer OutlineOf(string path, IReadOnlyList<GraphCard> cards)
     {
         var leading = new List<string> { $"outline of {path} ({ReportText.Counted(cards.Count, "declaration")}):" };
+
+        // What the graph does not hold of the file is said before what it does: an outline that stops where its reader did is never read as the whole file.
+        leading.AddRange(_queries.Unread(path));
 
         if (cards.Count == 0)
         {

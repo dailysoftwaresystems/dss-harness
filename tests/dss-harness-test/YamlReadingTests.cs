@@ -59,6 +59,14 @@ public sealed class YamlReadingTests
 
         Assert.Null(YamlReading.Load("a: 1\n---\nb: 2\n", "a test file is one document", null, out var several));
         Assert.Equal((0, 0, "the file holds 2 YAML documents; a test file is one document."), (several!.Line, several.Column, several.Why));
+
+        // A key written twice is said where the second is; a fault the reader says no place of is said of the whole file,
+        // never of a line it would make up.
+        Assert.Null(YamlReading.Load("a: 1\nb: 2\na: 3\n", "one", null, out var twice));
+        Assert.Equal((3, 1, "the file is not valid YAML (Duplicate key a)."), (twice!.Line, twice.Column, twice.Why));
+
+        Assert.Null(YamlReading.Load("a: 1\nb: !<> c\n", "one", null, out var placeless));
+        Assert.Equal((0, 0, "the file does not read as YAML, at a place its reader does not say (Tag value must not be empty. (Parameter 'value'))."), (placeless!.Line, placeless.Column, placeless.Why));
     }
 
     /// <summary>

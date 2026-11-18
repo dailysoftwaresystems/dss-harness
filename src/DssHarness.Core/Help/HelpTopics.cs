@@ -5334,8 +5334,14 @@ public static class HelpTopics
             + $"An edge says how sure it is: {CodeConfidences.Exact} where the code itself says where to look, "
             + $"{CodeConfidences.Unique} where one declaration has that name and arity, {CodeConfidences.Candidates} where two to "
             + $"{CodeConfidences.MostCandidates} do, an edge to each and none picked; a name with more is counted unresolved, and one "
-            + "the repository does not declare is counted external. No model writes any of it: every node and edge is read from "
-            + "a file by a program.");
+            + "the repository does not declare is counted external. The keys' join gives a configuration key a uses edge of "
+            + $"{CodeConfidences.Candidates} from each declaration holding a string literal of its last segment or its whole path, "
+            + "and from each field or property its last segment names as codebaseGraph.keyNaming writes it, even where one key alone "
+            + $"is so named, for nothing says the code reads that key; a literal or a name that names more than {CodeConfidences.MostCandidates} "
+            + "keys joins none. A use is recall and never a doubt: no uses edge is counted, nor makes a node or a file unsure. "
+            + "A configuration key, an element and a style rule are reached only by what names one so - a key's join, an "
+            + "MSBuild $(Name), a selector, a use through an import's prefix - never by a name alone, as code names code. "
+            + "No model writes any of it: every node and edge is read from a file by a program.");
         builder.AppendLine();
         AppendWrapped(
             builder,
@@ -5344,7 +5350,8 @@ public static class HelpTopics
             + "does not look at - kept out of the checkout, as a sparse checkout or skip-worktree keeps it, or marked "
             + "assume-unchanged - is in it where its file is there, hashed and read as it stands, and a repository inside the tree "
             + "that git lists whole is not entered. Each file is read by "
-            + "the one implementation that claims it: by its exact name, else by its extension, else by the fallback, which lists "
+            + "the one implementation that claims it: by its exact name, else by an ending codebaseGraph.claims maps, else by its "
+            + "extension, else by the fallback, which lists "
             + "it; where two claim one file their tests of its first characters decide, and a file both or neither says is theirs is "
             + "listed ambiguous. Each file read is listed once more when the reads are done - git asked of it again as a sync "
             + "asks, never a hash of a file git finds clean - and what was made of it is kept only where the listing still gives "

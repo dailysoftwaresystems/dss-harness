@@ -358,6 +358,56 @@ public sealed partial class CodebaseGraphToolTests
     }
 
     /// <summary>
+    /// <c>styledBy</c> follows a node's uses of a style rule alone - the classes and ids a page is told by - and
+    /// <c>styles</c> the uses into a rule alone: a member's reads of a field, and the uses of a field, are neither.
+    /// </summary>
+    [Fact]
+    public async Task StyledByAndStyles_FollowTheUsesOfARuleAlone()
+    {
+        using var tree = await TreeAsync(
+            ("web/site.css", ".btn { color: red; }\n#cart { margin: 0; }\n"),
+            ("web/index.html", "<html>\n<body>\n<button class=\"btn\">Go</button>\n<div id=\"cart\"></div>\n</body>\n</html>\n"),
+            ("src/Reader.cs", "class Reader\n{\n    int count;\n    void Take() { count++; }\n}\n"));
+        var queries = await QueriesAsync(tree);
+        var read = Assert.Single(tree.Symbols().Edges, edge => edge.Kind == CodeEdgeKinds.Uses && edge.To.EndsWith("Reader.count", StringComparison.Ordinal));
+
+        string[] Reached(string id, string relation) => [.. queries.Related(id, relation, 1).Select(reached => reached.Card.Id)];
+
+        // The page's body is told by the class, the element of the id by the id; each rule styles what names it.
+        Assert.Equal(["css:web/site.css#.btn"], Reached("html:web/index.html#body", GraphRelations.StyledBy));
+        Assert.Equal(["css:web/site.css##cart"], Reached("html:web/index.html#cart", GraphRelations.StyledBy));
+        Assert.Equal(["html:web/index.html#body"], Reached("css:web/site.css#.btn", GraphRelations.Styles));
+        Assert.Equal(["html:web/index.html#cart"], Reached("css:web/site.css##cart", GraphRelations.Styles));
+
+        // A method's read of a field is no rule that styles it, and the field no rule that styles the method.
+        Assert.Empty(Reached(read.From, GraphRelations.StyledBy));
+        Assert.Empty(Reached(read.To, GraphRelations.Styles));
+    }
+
+    /// <summary>
+    /// What the graph does not hold of a file is said where an answer gives the file, before what it holds: an outline of
+    /// a data file that stopped reading says the line and why, one of a file past the keys an extract keeps says how many
+    /// are in no node, and a node of one of its keys says so of its file.
+    /// </summary>
+    [Fact]
+    public async Task AnAnswerAboutAFile_SaysWhatTheGraphDoesNotHoldOfIt()
+    {
+        var many = "{\n" + string.Join(",\n", Enumerable.Range(0, FileExtract.MostKeys + 2).Select(at => $"  \"k{at}\": {at}")) + "\n}\n";
+        using var tree = await TreeAsync(("config/broken.yml", "first: 1\nsecond: @x\n"), ("config/many.json", many));
+        var queries = await QueriesAsync(tree);
+        var tool = Tool(tree, queries);
+        var stopped = Assert.Single(queries.Unread("config/broken.yml"));
+        const string Beyond = "2 of its keys and elements are in no node: past the 5000 nodes its extract keeps, or nested deeper than its reader reads keys";
+
+        Assert.StartsWith("line 2: the file stops reading as YAML here (", stopped, StringComparison.Ordinal);
+        Assert.Equal(["outline of config/broken.yml (1 declaration(s)):", stopped], (await AskAsync(tool, """{"op":"outline","path":"config/broken.yml"}""")).Text.Split('\n')[..2]);
+        Assert.Equal([Beyond], queries.Unread("config/many.json"));
+        Assert.Contains(Beyond, (await AskAsync(tool, """{"op":"outline","path":"config/many.json"}""")).Text.Split('\n'));
+        Assert.Contains(Beyond, (await AskAsync(tool, """{"op":"node","symbol":"k0"}""")).Text.Split('\n'));
+        Assert.Empty(queries.Unread("src/Shapes.cs"));
+    }
+
+    /// <summary>
     /// A node its file no longer holds is said gone - its body not served from lines that are not its own, its edit not
     /// written - and a whole file is no declaration an edit replaces.
     /// </summary>

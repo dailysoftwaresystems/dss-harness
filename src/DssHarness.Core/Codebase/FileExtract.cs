@@ -7,8 +7,9 @@ namespace DssHarness.Core.Codebase;
 /// <summary>
 /// What an implementation of <see cref="ICodeGraphExtractor"/> makes of one file: language-neutral, the model of the graph
 /// and nothing of any language - its declarations, the scopes they are put in, what the file imports, what an address
-/// means, the references it makes by name, unresolved, and four marks - a prototype, a test, generated code and what it
-/// cannot bind - of which the linker reads the first two, without knowing why they were set.
+/// means, the references it makes by name, unresolved, and five marks - a prototype, a test, a part of a declaration
+/// another file holds the rest of, generated code and what it cannot bind - of which the linker reads the first three,
+/// without knowing why they were set.
 /// </summary>
 /// <remarks>
 /// The linker resolves every reference by the same steps for every language - the qualifier's scope, the enclosing
@@ -54,9 +55,10 @@ public sealed record FileExtract(IReadOnlyList<ExtractNode> Nodes)
 
     /// <summary>
     /// The string literals the file holds, of at least <see cref="LeastLiteral"/> characters, each with its line: the
-    /// values the data of the code is written in - what a search of the graph may ask for by its value - interpolated and
-    /// template strings giving their constant parts. At most <see cref="MostLiterals"/> of them are kept, the rest
-    /// counted in <see cref="LiteralsBeyond"/>; <see langword="null"/> where the file holds none.
+    /// values the data of the code is written in - what the keys' join reads, a literal naming a configuration key -
+    /// interpolated and template strings giving their constant parts. At most <see cref="MostLiterals"/> of them are
+    /// kept, the rest counted in <see cref="LiteralsBeyond"/>, which an answer about the file says; <see langword="null"/>
+    /// where the file holds none.
     /// </summary>
     public IReadOnlyList<ExtractLiteral>? Literals { get; init; }
 
@@ -64,7 +66,11 @@ public sealed record FileExtract(IReadOnlyList<ExtractNode> Nodes)
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public int LiteralsBeyond { get; init; }
 
-    /// <summary>How many configuration keys the file holds past the <see cref="MostKeys"/> an extract keeps.</summary>
+    /// <summary>
+    /// How many configuration keys and elements a data file holds that its extract keeps no node of: those past the
+    /// <see cref="MostKeys"/> nodes it keeps, and those nested deeper than its reader reads keys - which an answer about
+    /// the file says.
+    /// </summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public int KeysBeyond { get; init; }
 
@@ -74,7 +80,7 @@ public sealed record FileExtract(IReadOnlyList<ExtractNode> Nodes)
     /// <summary>The most string literals an extract keeps of one file; the rest are counted, not kept.</summary>
     public const int MostLiterals = 2000;
 
-    /// <summary>The most configuration keys an extract keeps of one file; the rest are counted, not kept.</summary>
+    /// <summary>The most nodes an extract keeps of one data file - its keys, its sections and its elements alike; the keys and elements past them are counted, not kept.</summary>
     public const int MostKeys = 5000;
 
     /// <summary>
@@ -257,7 +263,10 @@ public sealed record FileExtract(IReadOnlyList<ExtractNode> Nodes)
 /// <param name="Signature">Its header on one line, at most <see cref="FileExtract.MostSignature"/> characters.</param>
 public sealed record ExtractNode(string Id, string Kind, string Name, string Qualified, int Start, int End, string Signature)
 {
-    /// <summary>The kind within its kind, which the implementation names freely: a <c>class</c>, a <c>method</c>.</summary>
+    /// <summary>
+    /// The kind within its kind, which the implementation names freely - a <c>class</c>, a <c>method</c> - but for the
+    /// kinds of data the linker reads (<see cref="CodeSubKinds"/>): a configuration key, an element, a style rule.
+    /// </summary>
     public string? SubKind { get; init; }
 
     /// <summary>The scope it is declared in, by its qualified name; <see langword="null"/> where it is the repository's own.</summary>
@@ -506,7 +515,7 @@ public sealed record ExtractReference(string From, string Kind, string Name, int
             : Arity is < 0 ? "its arity is below zero"
             : Qualifier is { } qualifier && !CodeQualifierKinds.All.Contains(qualifier.Kind, StringComparer.Ordinal) ? $"its qualifier's kind is '{qualifier.Kind}', which is none of {string.Join(", ", CodeQualifierKinds.All)}"
             : Qualifier is { Kind: CodeQualifierKinds.Named or CodeQualifierKinds.Type or CodeQualifierKinds.Prefix } named && string.IsNullOrWhiteSpace(named.Name) ? "its qualifier names nothing"
-            : Qualifier is { Kind: CodeQualifierKinds.Value or CodeQualifierKinds.Scope, Name: { } value } && string.IsNullOrWhiteSpace(value) ? "its qualifier's name is empty"
+            : Qualifier is { Kind: CodeQualifierKinds.Value or CodeQualifierKinds.Scope or CodeQualifierKinds.Key, Name: { } value } && string.IsNullOrWhiteSpace(value) ? "its qualifier's name is empty"
             : null;
 }
 
@@ -560,13 +569,20 @@ public static class CodeQualifierKinds
     public const string Scope = "scope";
 
     /// <summary>
-    /// A selector, as markup writes one - <c>.class</c>, <c>#id</c>, an element - the name looked for among rules alone:
-    /// the style sheet's, wherever the repository declares them.
+    /// A selector, as markup writes one - <c>.class</c>, <c>#id</c>, an element - the name looked for among rules alone
+    /// (<see cref="CodeSubKinds.Rule"/>): the style sheet's, wherever the repository declares them.
     /// </summary>
     public const string Selector = "selector";
 
+    /// <summary>
+    /// A configuration key, by its name, as an MSBuild project's <c>$(Name)</c> writes one: the name looked for among keys
+    /// alone (<see cref="CodeSubKinds.Key"/>), wherever the repository declares them; with a name, among the keys of the
+    /// language it names alone - the xml extractor's for MSBuild, an imported <c>.props</c> file's property among them.
+    /// </summary>
+    public const string Key = "key";
+
     /// <summary>Every kind.</summary>
-    public static IReadOnlyList<string> All { get; } = [This, Base, Named, Type, Prefix, Value, Scope, Selector];
+    public static IReadOnlyList<string> All { get; } = [This, Base, Named, Type, Prefix, Value, Scope, Selector, Key];
 }
 
 /// <summary>A place an implementation saw something it cannot bind, or stopped reading.</summary>

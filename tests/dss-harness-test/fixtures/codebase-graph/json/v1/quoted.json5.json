@@ -1,1 +1,1 @@
-{"nodes":[],"scopes":[],"imports":[],"addressRoots":[],"references":[],"dynamic":[{"line":2,"why":"the file stops reading as JSON here"}]}
+{"nodes":[],"scopes":[],"imports":[],"addressRoots":[],"references":[],"dynamic":[{"line":2,"why":"the file stops reading as JSON here ('q' is an invalid start of a property name. Expected a '\"'), and nothing of it is read"}]}

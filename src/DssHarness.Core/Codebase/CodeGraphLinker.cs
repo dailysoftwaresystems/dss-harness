@@ -38,8 +38,9 @@ namespace DssHarness.Core.Codebase;
 /// hangs on the order the files come in.
 /// </para>
 /// <para>
-/// <c>dispatches</c>, <c>declares</c> and <c>tests</c> are derived after, from the <c>implements</c> edges and the marks
-/// every extract may set. The extracts keep names and not targets, so linking again after a file changed binds a name it
+/// <c>dispatches</c>, <c>declares</c>, <c>tests</c> and <c>partOf</c> are derived after, from the <c>implements</c> edges and
+/// the marks every extract may set, and so is the keys' join - the <c>uses</c> a configuration key gains from the literals
+/// and the values that name it. The extracts keep names and not targets, so linking again after a file changed binds a name it
 /// added to callers in files that did not change: each reference keeps what its finding read - the names it looked up,
 /// the scopes it climbed, the types whose bases it went through, the imports and paths it followed - and linking again
 /// (<see cref="Relink"/>) finds again only the references of the files that changed and those that read something a
@@ -132,7 +133,7 @@ public static class CodeGraphLinker
         /// <summary>The bases of one type, by its id.</summary>
         Bases,
 
-        /// <summary>What every file of one language imports.</summary>
+        /// <summary>What every file of one language imports, and what every file of it under a directory does.</summary>
         Global,
 
         /// <summary>The address roots every extract declares.</summary>
@@ -589,7 +590,7 @@ public static class CodeGraphLinker
             // does not hold, a value of the language's own - and says nothing of how sure the graph is of what it does
             // declare: a use is recall, never a doubt, so its findings count nowhere the unsureness of a node or a file
             // is read from.
-            if (reference.Kind == CodeEdgeKinds.Uses)
+            if (CodeEdgeKinds.Recall(reference.Kind))
             {
                 return;
             }
@@ -774,9 +775,11 @@ public static class CodeGraphLinker
                         ? (held, CodeConfidences.Exact)
                         : (Distinct(RepositoryNamed(from.File, name).Where(target => target.Node.Scope is null && Own(target))), CodeConfidences.Exact);
 
-                case CodeQualifierKinds.Selector:
-                    // A selector names a rule wherever the repository declares one so: the styles a page is told by.
-                    return (Distinct(RepositoryNamed(from.File, name).Where(target => target.Node.SubKind == "rule")), CodeConfidences.Exact);
+                case CodeQualifierKinds.Selector or CodeQualifierKinds.Key:
+                    // A selector names a rule, and a key qualifier a configuration key, wherever the repository declares
+                    // one so - the styles a page is told by, the property a project reads - each of its own kind alone, as
+                    // Takes keeps it; a key qualifier with a name, of the language it names alone.
+                    return (Distinct(RepositoryNamed(from.File, name).Where(target => accepts(target) && (qualifier.Kind != CodeQualifierKinds.Key || qualifier.Name is null || target.File.Language == qualifier.Name))), CodeConfidences.Exact);
 
                 default:
                     // A value the scopes hold, nearer than any type or scope of its name, is that value; a type or a scope is
@@ -1309,16 +1312,11 @@ public static class CodeGraphLinker
                 .Concat(file.Language is { } named && _global.TryGetValue(named, out var global)
                     ? global.Where(made => !ReferenceEquals(made.File, file)).Select(made => (made.Import, made.File))
                     : [])
+                // A directory's scope imports are its language's, read as what every file of it imports is: a file that
+                // declares one come, gone or changed alters that key, so every finding that looked past its scopes is found
+                // again - whether or not a file declaring one stood under it before.
                 .Concat(file.Language is { } declared && _ofDirectory.TryGetValue(declared, out var ofDirectory)
-                    ? ofDirectory
-                        .Where(held => Under(file.Path, held.Directory))
-                        .Select(held =>
-                        {
-                            // A finding that reads a directory's scope import is found again when the file declaring it
-                            // changes, as one that reads an import is.
-                            Touch(Read.Imports, held.File.Path);
-                            return (held.Import with { Form = CodeImportForms.Scope }, file);
-                        })
+                    ? ofDirectory.Where(held => Under(file.Path, held.Directory)).Select(held => (held.Import with { Form = CodeImportForms.Scope }, file))
                     : []);
         }
 
@@ -1587,26 +1585,33 @@ public static class CodeGraphLinker
 
         /// <summary>
         /// The keys' join: each <c>uses</c> edge a key of a configuration file gains - from the declaration that holds a
-        /// string literal equal to the key's last segment or its whole path, and from each member whose name is the key's
-        /// last segment as a declared naming policy writes it - of <see cref="CodeConfidences.Candidates"/>, for nothing
-        /// says the code reads that key. A use is recall and never a doubt, so none of it is counted anywhere.
+        /// string literal equal to the key's last segment or its whole path, and from each value (a field, a property)
+        /// whose name is the key's last segment as a declared naming policy writes it - of
+        /// <see cref="CodeConfidences.Candidates"/>, for nothing says the code reads that key. A literal or a member's name
+        /// that names more than <see cref="CodeConfidences.MostCandidates"/> keys joins none, as a reference that names more
+        /// declarations is no edge: a word every file of data holds - <c>name</c>, <c>version</c> - says nothing of which
+        /// key is read. A use is recall and never a doubt, so none of it is counted anywhere.
         /// </summary>
         private void Keys()
         {
-            var keys = _declarations.Where(declaration => declaration.Node.SubKind == "key").ToList();
-
-            if (keys.Count == 0)
-            {
-                return;
-            }
-
             var bySegment = new Dictionary<string, List<Declaration>>(StringComparer.Ordinal);
             var byPath = new Dictionary<string, List<Declaration>>(StringComparer.Ordinal);
+            var byMember = new Dictionary<string, List<Declaration>>(StringComparer.Ordinal);
 
-            foreach (var key in keys)
+            foreach (var key in _declarations.Where(declaration => declaration.Node.SubKind == CodeSubKinds.Key).DistinctBy(declaration => declaration.Id, StringComparer.Ordinal))
             {
                 Add(bySegment, key.Node.Name, key);
                 Add(byPath, key.Node.Qualified, key);
+
+                foreach (var name in MemberNames(key.Node.Name))
+                {
+                    Add(byMember, name, key);
+                }
+            }
+
+            if (bySegment.Count == 0)
+            {
+                return;
             }
 
             foreach (var file in _files)
@@ -1620,56 +1625,72 @@ public static class CodeGraphLinker
 
                 foreach (var literal in literals)
                 {
-                    var joined = (bySegment.TryGetValue(literal.Value, out var byName) ? byName : []).Concat(byPath.TryGetValue(literal.Value, out var named) ? named : []);
+                    var joined = Distinct((bySegment.TryGetValue(literal.Value, out var byName) ? byName : []).Concat(byPath.TryGetValue(literal.Value, out var named) ? named : []));
 
-                    foreach (var key in joined)
+                    foreach (var key in joined.Count <= CodeConfidences.MostCandidates ? joined : [])
                     {
                         _edges.Add(new CodeEdge(OwnerOf(declarations, file, literal.Line), key.Id, CodeEdgeKinds.Uses, literal.Line, CodeConfidences.Candidates));
                     }
                 }
             }
 
-            foreach (var key in keys)
+            foreach (var (name, keys) in byMember.Where(named => named.Value.Count <= CodeConfidences.MostCandidates))
             {
-                foreach (var member in MembersNamed(key.Node.Name))
+                // A deserialiser binds a key to a value of its name - a field, a property - and never to a member it calls,
+                // nor to another file's data.
+                foreach (var member in (_byName.TryGetValue(name, out var members) ? members : []).Where(member => IsValue(member) && !CodeSubKinds.IsData(member.Node.SubKind)))
                 {
-                    _edges.Add(new CodeEdge(member.Id, key.Id, CodeEdgeKinds.Uses, member.Node.Start, CodeConfidences.Candidates));
+                    foreach (var key in keys)
+                    {
+                        _edges.Add(new CodeEdge(member.Id, key.Id, CodeEdgeKinds.Uses, member.Node.Start, CodeConfidences.Candidates));
+                    }
                 }
             }
         }
 
         /// <summary>
-        /// The members of the whole tree whose name is <paramref name="segment"/> as one of the naming policies the
-        /// repository declares writes it: the key itself under <c>exact</c>, and the member's name the policy's shape of
-        /// the segment gives under each of the others - <c>calling_convention</c> and <c>calling-convention</c> both the
-        /// member <c>CallingConvention</c> reads. A policy takes only a key shaped as it writes them: a camelCase one has
-        /// no separator and begins lower-case, a snake_case one holds an underscore, a kebab-case one a dash.
+        /// The names of the members a key's last segment <paramref name="segment"/> is as the naming policies the repository
+        /// declares write them: the segment itself under <c>exact</c>, and under each of the others the member's name the
+        /// policy's shape of the segment gives - <c>calling_convention</c>, <c>calling-convention</c> and
+        /// <c>callingConvention</c> each the member <c>CallingConvention</c>, <c>timeout</c> under any of them
+        /// <c>Timeout</c>. A policy takes only a segment shaped as it writes one: a camelCase one has no separator and
+        /// begins lower-case; a snake_case one is lower-case words and digits joined by underscores, a kebab-case one by
+        /// dashes - one word alone among them, <c>s3_bucket</c> <c>S3Bucket</c>.
         /// </summary>
-        private IEnumerable<Declaration> MembersNamed(string segment)
+        private IEnumerable<string> MemberNames(string segment)
         {
-            var names = new HashSet<string>(StringComparer.Ordinal) { segment };
+            if (segment.Length == 0)
+            {
+                return [];
+            }
+
+            static bool Words(string text, char separator)
+                => text.All(character => char.IsAsciiLetterLower(character) || char.IsAsciiDigit(character) || character == separator) && char.IsAsciiLetterLower(text[0]);
+
+            var names = new HashSet<string>(StringComparer.Ordinal);
 
             foreach (var naming in _keyNaming)
             {
                 var words = naming switch
                 {
-                    CodebaseGraphShape.SnakeCase when segment.Contains('_', StringComparison.Ordinal) && segment.All(character => char.IsLower(character) || character == '_')
-                        => segment.Split('_', StringSplitOptions.RemoveEmptyEntries),
-                    CodebaseGraphShape.KebabCase when segment.Contains('-', StringComparison.Ordinal) && segment.All(character => char.IsLower(character) || character == '-')
-                        => segment.Split('-', StringSplitOptions.RemoveEmptyEntries),
-                    CodebaseGraphShape.CamelCase when segment.IndexOfAny(['_', '-']) < 0 && char.IsLower(segment[0])
-                        => [segment],
+                    CodebaseGraphShape.Exact => null,
+                    CodebaseGraphShape.SnakeCase when Words(segment, '_') => segment.Split('_', StringSplitOptions.RemoveEmptyEntries),
+                    CodebaseGraphShape.KebabCase when Words(segment, '-') => segment.Split('-', StringSplitOptions.RemoveEmptyEntries),
+                    CodebaseGraphShape.CamelCase when segment.IndexOfAny(['_', '-']) < 0 && char.IsLower(segment[0]) => [segment],
                     _ => [],
                 };
 
-                if (words.Length > 0)
+                if (words is null)
+                {
+                    names.Add(segment);
+                }
+                else if (words.Length > 0)
                 {
                     names.Add(string.Concat(words.Select(word => string.Create(CultureInfo.InvariantCulture, $"{char.ToUpperInvariant(word[0])}{word[1..]}"))));
                 }
             }
 
-            return names.SelectMany(name => _byName.TryGetValue(name, out var named) ? named : [])
-                .Where(declaration => declaration.Node is { Kind: CodeNodeKinds.Member, SubKind: not "key" });
+            return names;
         }
 
         /// <summary>
@@ -1927,7 +1948,9 @@ public static class CodeGraphLinker
 
             if (file.Language is { } language)
             {
-                foreach (var import in extract.Imports.Where(import => import.Global))
+                // What every file of the language imports, and what every file under a directory of it does: both are read
+                // under the language's key, so a finding that read neither is found again when one comes.
+                foreach (var import in extract.Imports.Where(import => import.Global || import.Form == CodeImportForms.Directory))
                 {
                     Add(Read.Global, language, ImportPart(import));
                 }
@@ -2101,9 +2124,26 @@ public static class CodeGraphLinker
     /// <summary>Whether a reference of <paramref name="kind"/> names a base of the type it is made in.</summary>
     private static bool IsBase(string kind) => kind is CodeEdgeKinds.Inherits or CodeEdgeKinds.Implements or CodeEdgeKinds.MixesIn;
 
-    /// <summary>Whether <paramref name="target"/> is something <paramref name="reference"/> can name: of a kind its edge reaches, and taking its arity.</summary>
+    /// <summary>
+    /// Whether <paramref name="target"/> is something <paramref name="reference"/> can name: of a kind its edge reaches, and
+    /// taking its arity. A node of data - a configuration key, an element, a style rule (<see cref="CodeSubKinds"/>) - is
+    /// reached only by a reference that says it names one: a selector a rule and a key qualifier a key, of the kind it
+    /// names alone, and a use through an import's prefix whatever the file it imports declares - never one that names it
+    /// by its name alone, as code names code: the one place that says what a reference may reach.
+    /// </summary>
     private static bool Takes(ExtractReference reference, Declaration target)
-        => reference.Kind switch
+    {
+        if (CodeSubKinds.ReachedBy(reference.Qualifier?.Kind) is { } reached)
+        {
+            return target.Node.Kind == CodeNodeKinds.Member && target.Node.SubKind == reached;
+        }
+
+        if (CodeSubKinds.IsData(target.Node.SubKind) && (reference.Kind != CodeEdgeKinds.Uses || reference.Qualifier?.Kind != CodeQualifierKinds.Prefix))
+        {
+            return false;
+        }
+
+        return reference.Kind switch
         {
             CodeEdgeKinds.Calls => (target.Node.Kind == CodeNodeKinds.Member && target.Node.TakesArity(reference.Arity)) || target.Node.Kind == CodeNodeKinds.Type,
             CodeEdgeKinds.Uses => target.Node.Kind is CodeNodeKinds.Member or CodeNodeKinds.Type,
@@ -2111,6 +2151,7 @@ public static class CodeGraphLinker
             CodeEdgeKinds.ProjectReference => target.Node.Kind == CodeNodeKinds.Project,
             _ => target.Node.Kind == CodeNodeKinds.Type,
         };
+    }
 
     /// <summary>Whether <paramref name="declaration"/> is a type or a scope: what a qualifier may name to be looked in.</summary>
     private static bool IsContainer(Declaration declaration) => IsContainer(declaration.Node);

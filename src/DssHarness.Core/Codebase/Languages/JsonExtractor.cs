@@ -1,23 +1,22 @@
 using System.Globalization;
-using System.Text;
 using System.Text.Json;
 
 namespace DssHarness.Core.Codebase.Languages;
 
 /// <summary>
 /// A JSON data file - <c>.json</c>, <c>.jsonc</c> and <c>.json5</c>, comments and trailing commas allowed - read as the
-/// data it holds: each top-level member that holds others a <c>section</c> over its lines, and each scalar key anywhere
-/// down to <see cref="FileExtract.MostKeys"/> of them a <c>member</c> SubKind <c>key</c> named by its path
-/// (<c>targets.x64.callingConvention</c>), its value as its summary. A <c>$schema</c> or an external <c>$ref</c> that
-/// names a file by a relative path is an import of it. The named manifests - <c>package.json</c>,
-/// <c>tsconfig.json</c>, <c>jsconfig.json</c>, <c>composer.json</c> - keep their own extractors, an exact name winning
-/// over an extension; where the file stops reading as JSON, the line it stops at is marked dynamic.
+/// data it holds, its nodes made as every data file's are (<see cref="DataNodes"/>): each top-level member that holds
+/// others a <c>section</c> over its lines, and each scalar key anywhere down to <see cref="DataNodes.MostDepth"/> places of
+/// its path a <c>member</c> SubKind <c>key</c> named by its path (<c>targets.x64.callingConvention</c>, an item by its place
+/// <c>limits[1].value</c>, a name that is empty or white space in brackets <c>packages[""].name</c>), its value as its
+/// summary. A <c>$schema</c> or a <c>$ref</c> that names another file by a path relative to this one - its <c>#</c> pointer
+/// into that file left out - is an import of it; a pointer into this file alone, an address with a scheme and a rooted path
+/// name none. The named manifests - <c>package.json</c>, <c>tsconfig.json</c>, <c>jsconfig.json</c>, <c>composer.json</c> -
+/// keep their own extractors, an exact name winning over an extension; where the file stops reading as JSON, nothing of it
+/// is read and the line it stops at is marked dynamic, with the reader's reason.
 /// </summary>
 public sealed class JsonExtractor : ICodeGraphExtractor
 {
-    /// <summary>How deep a file's keys are read: no data file nests past it.</summary>
-    private const int MostDepth = 8;
-
     /// <inheritdoc/>
     public string Language => "json";
 
@@ -32,11 +31,12 @@ public sealed class JsonExtractor : ICodeGraphExtractor
 
     /// <inheritdoc/>
     public CodeGraphExtractorHelp Help { get; } = new(
-        "JSON data files (.json, .jsonc, .json5, comments and trailing commas allowed): each scalar key anywhere in the file as a key node named by its path with its value as its summary, each top-level member that holds others as a section over its lines, and a $schema or an external $ref naming a file by a relative path as an import of it",
+        "JSON data files (.json, .jsonc, .json5, comments and trailing commas allowed): each scalar key anywhere in the file as a key node named by its path (an item by its place, [0]; a name empty or of white space in brackets, [\"\"]) with its value as its summary, each top-level member that holds others as a section over its lines, and a $schema or a $ref naming another file by a relative path - its # pointer left out - as an import of it",
         [
-            "what JSON5 writes that JSON does not - an unquoted name, a single-quoted string, a hexadecimal number: where the reader stops, nothing in it is read, the line it stops at marked dynamic",
-            $"a key nested past 8 levels, and a file of more than {FileExtract.MostKeys.ToString(CultureInfo.InvariantCulture)} keys: the first {FileExtract.MostKeys.ToString(CultureInfo.InvariantCulture)} are kept, the rest counted",
-            "a key's value past the cut of a summary, and a secret a key holds: neither is masked here",
+            "what JSON5 writes that JSON does not - an unquoted name, a single-quoted string, a hexadecimal number: where the reader stops, nothing in it is read, the line it stops at marked dynamic with the reader's reason",
+            $"a key nested past {DataNodes.MostDepth.ToString(CultureInfo.InvariantCulture)} places of its path, and a file of more than {FileExtract.MostKeys.ToString(CultureInfo.InvariantCulture)} keys and sections: the first {FileExtract.MostKeys.ToString(CultureInfo.InvariantCulture)} are kept, the rest counted, and an answer about the file says how many",
+            "a key's value past the cut of a summary; a secret a key holds is kept as the file writes it, as reading the file shows it, and an answer masks only the run's own secrets, as every tool's answer does",
+            "a $ref of a pointer into this file, of an address with a scheme (https:, urn:) or of a rooted path: no import",
             "the named manifests - package.json, tsconfig.json, jsconfig.json, composer.json - which their own extractors read",
         ]);
 
@@ -47,149 +47,78 @@ public sealed class JsonExtractor : ICodeGraphExtractor
 
         var lines = input.Lines;
         var root = JsonOutline.LoadAny(input.Text, lenient: true, out var stop);
-        var nodes = new List<ExtractNode>();
+        var nodes = new DataNodes(Language, input.Path, lines.Count);
         var imports = new List<ExtractImport>();
-        var ids = new ExtractIds();
-        var keys = 0;
-        var beyond = 0;
 
         if (root is not null)
         {
-            Walk(input.Path, lines.Count, root, [], null, ids, nodes, imports, ref keys, ref beyond);
+            var value = new Value(root);
+            nodes.Walk(value);
+            Imports(root, lines.Count, imports);
         }
 
-        // A top-level member's section runs to the line before the next one's, or to the file's end: the file is walked
-        // in its own order, so every key of a section stands before the next one begins.
-        var sections = nodes.Select((node, at) => (node, at)).Where(held => held.node.Kind == CodeNodeKinds.Section).ToList();
-
-        for (var held = 0; held < sections.Count; held++)
+        if (stop is not null)
         {
-            var start = sections[held].node.Start;
-            var end = held + 1 < sections.Count ? sections[held + 1].node.Start - 1 : Math.Max(lines.Count, 1);
-            nodes[sections[held].at] = sections[held].node with { End = Math.Max(start, end) };
+            nodes.Stopped(stop.Line, stop.Detail is { } detail ? $"the file stops reading as JSON here ({detail}), and nothing of it is read" : stop.Why);
         }
 
-        return new FileExtract([.. nodes])
+        return new FileExtract([.. nodes.Nodes])
         {
             Imports = imports,
-            KeysBeyond = beyond,
-            Dynamic = stop is null ? [] : [new ExtractDynamic(FileExtract.LineWithin(stop.Line, lines.Count), stop.Why)],
+            KeysBeyond = nodes.Beyond,
+            Dynamic = nodes.Dynamic,
         };
     }
 
     /// <summary>
-    /// Walks <paramref name="value"/> under the key path <paramref name="path"/>: a scalar key a key node named by its
-    /// path; an object or array at the top a section over its lines, and each of its members walked in turn; an array
-    /// item's path holding its place.
+    /// Each <c>$schema</c> and <c>$ref</c> anywhere in <paramref name="value"/> that names another file by a path relative to
+    /// this one, as an import of it: its <c>#</c> pointer into that file and its <c>?</c> query left out; one that is a
+    /// pointer into this file alone, an address with a scheme, a rooted path or a protocol-relative one names none.
     /// </summary>
-    private void Walk(
-        string file,
-        int lineCount,
-        JsonOutlineValue value,
-        IReadOnlyList<string> path,
-        string? section,
-        ExtractIds ids,
-        List<ExtractNode> nodes,
-        List<ExtractImport> imports,
-        ref int keys,
-        ref int beyond)
+    private static void Imports(JsonOutlineValue value, int lineCount, List<ExtractImport> imports)
     {
-        switch (value.Kind)
+        foreach (var property in value.Properties ?? [])
         {
-            case JsonValueKind.Object:
-                foreach (var property in value.Properties!)
-                {
-                    Member(file, lineCount, property, [.. path, property.Name], section, ids, nodes, imports, ref keys, ref beyond);
-                }
+            if (property.Name is "$schema" or "$ref" && property.Value.NonEmpty is { } written && Local(written) is { } target)
+            {
+                imports.Add(new ExtractImport(CodeImportForms.Relative, target, FileExtract.LineWithin(property.Value.Line, lineCount)));
+            }
 
-                break;
+            Imports(property.Value, lineCount, imports);
+        }
 
-            case JsonValueKind.Array:
-                for (var at = 0; at < value.Items!.Count; at++)
-                {
-                    var place = $"[{at.ToString(CultureInfo.InvariantCulture)}]";
-                    Member(file, lineCount, new JsonOutlineProperty(place, value.Items[at].Line, value.Items[at]), [.. path, place], section, ids, nodes, imports, ref keys, ref beyond);
-                }
-
-                break;
+        foreach (var item in value.Items ?? [])
+        {
+            Imports(item, lineCount, imports);
         }
     }
 
-    /// <summary>One property or item of a walk: a scalar a key, a container at the top a section, and a container below walked on.</summary>
-    private void Member(
-        string file,
-        int lineCount,
-        JsonOutlineProperty property,
-        IReadOnlyList<string> path,
-        string? section,
-        ExtractIds ids,
-        List<ExtractNode> nodes,
-        List<ExtractImport> imports,
-        ref int keys,
-        ref int beyond)
+    /// <summary>The file <paramref name="written"/> names by a path relative to this one, its pointer and query left out; <see langword="null"/> where it names none.</summary>
+    private static string? Local(string written)
     {
-        var name = property.Name;
+        var path = written.Split('#', 2)[0].Split('?', 2)[0];
 
-        if (property.Value.Kind is JsonValueKind.Object or JsonValueKind.Array)
-        {
-            if (path.Count == 1)
-            {
-                var id = ids.Next($"{Language}:{file}#{name}");
-                nodes.Add(new ExtractNode(id, CodeNodeKinds.Section, name, $"{file}#{name}", FileExtract.LineWithin(property.Value.Line, lineCount), Math.Max(lineCount, 1), name)
-                {
-                    Parent = section,
-                });
-                section = id;
-            }
-
-            if (path.Count < MostDepth)
-            {
-                Walk(file, lineCount, property.Value, path, section, ids, nodes, imports, ref keys, ref beyond);
-            }
-
-            return;
-        }
-
-        if (name is "$schema" or "$ref" && property.Value.Text is { Length: > 0 } written && written[0] != '#' && !written.Contains("://", StringComparison.Ordinal))
-        {
-            imports.Add(new ExtractImport(CodeImportForms.Relative, written, FileExtract.LineWithin(property.Value.Line, lineCount)));
-        }
-
-        if (keys >= FileExtract.MostKeys)
-        {
-            beyond++;
-            return;
-        }
-
-        keys++;
-        var line = FileExtract.LineWithin(property.Line, lineCount);
-        var key = KeyPath(path);
-
-        nodes.Add(new ExtractNode(ids.Next($"{Language}:{file}#{key}"), CodeNodeKinds.Member, name, key, line, line, key)
-        {
-            SubKind = "key",
-            Parent = section,
-            Summary = property.Value.Text is { Length: > 0 } text ? ExtractText.Summary(text) : null,
-        });
+        return path.Length == 0 || path[0] is '/' or '\\' || path.Contains(':', StringComparison.Ordinal) ? null : path;
     }
 
-    /// <summary>The key path of <paramref name="parts"/>: each name joined by a dot, an array item's place held to the part before it.</summary>
-    internal static string KeyPath(IReadOnlyList<string> parts)
+    /// <summary>A JSON value as a walk of its keys reads it (<see cref="IDataValue"/>).</summary>
+    private sealed class Value(JsonOutlineValue value) : IDataValue
     {
-        var path = new StringBuilder();
+        private long? _scalars;
 
-        foreach (var part in parts)
-        {
-            if (part[0] == '[')
-            {
-                _ = path.Append(part);
-            }
-            else
-            {
-                _ = path.Append(path.Length == 0 ? part : $".{part}");
-            }
-        }
+        public bool Holds => value.Kind is JsonValueKind.Object or JsonValueKind.Array;
 
-        return path.ToString();
+        public string? Text => value.Text;
+
+        public int End => Math.Max(value.Line, value.End);
+
+        public bool Repeated => false;
+
+        public long Scalars => _scalars ??= Holds ? Members.Sum(member => member.Value.Scalars) : 1;
+
+        public IEnumerable<(DataPlace Place, int Line, IDataValue Value)> Members
+            => value.Kind == JsonValueKind.Object
+                ? value.Properties!.Select(property => (DataPlace.Named(property.Name), property.Line, (IDataValue)new Value(property.Value)))
+                : (value.Items ?? []).Select((item, at) => (DataPlace.At(at), item.Line, (IDataValue)new Value(item)));
     }
 }

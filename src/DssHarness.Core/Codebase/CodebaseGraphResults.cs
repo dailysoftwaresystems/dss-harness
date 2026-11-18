@@ -78,7 +78,14 @@ public sealed record GraphMatches(IReadOnlyList<GraphCard> Cards, int Total);
 /// <summary>One edge of a node, as a group of the <c>node</c> operation gives it: the node at its other end, and how sure the edge is.</summary>
 /// <param name="Card">The node at the edge's other end.</param>
 /// <param name="Confidence">How sure the surest edge to it is (<see cref="CodeConfidences"/>).</param>
-public sealed record GraphEdge(GraphCard Card, string Confidence);
+public sealed record GraphEdge(GraphCard Card, string Confidence)
+{
+    /// <summary>
+    /// Whether the edge is recall, never a doubt (<see cref="CodeEdgeKinds.Recall"/>): neither how sure it is nor the node
+    /// it reaches says how sure an answer that gives it is.
+    /// </summary>
+    public bool Recall { get; init; }
+}
 
 /// <summary>A node's edges, grouped by kind as the <c>node</c> operation gives them.</summary>
 /// <param name="Callers">The members that call it.</param>
@@ -108,24 +115,23 @@ public sealed record GraphEdges(
     IReadOnlyList<GraphEdge> Parts)
 {
     /// <summary>
-    /// Each group with the name the <c>node</c> operation prints it under, in that order, and whether its edges are recall:
-    /// a use, read or written without a call, finds a site and never says how sure the graph is of what it declares, so no
-    /// edge of a recall group is a doubt - however many candidates it has.
+    /// Each group with the name the <c>node</c> operation prints it under, in that order. Whether an edge of it is a doubt
+    /// is the edge's own (<see cref="GraphEdge.Recall"/>, read by <see cref="CodebaseGraphQueries.Doubts(GraphEdge)"/>).
     /// </summary>
-    public IReadOnlyList<(string Name, IReadOnlyList<GraphEdge> Edges, bool Recall)> Groups =>
+    public IReadOnlyList<(string Name, IReadOnlyList<GraphEdge> Edges)> Groups =>
     [
-        ("callers", Callers, false),
-        ("callees", Callees, false),
-        ("bases", Bases, false),
-        ("derived", Derived, false),
-        ("implementations", Implementations, false),
-        ("overrides", Overrides, false),
-        ("references", References, false),
-        ("users", Users, true),
-        ("uses", Uses, true),
-        ("tests", Tests, false),
-        ("includes", Includes, false),
-        ("parts", Parts, false),
+        ("callers", Callers),
+        ("callees", Callees),
+        ("bases", Bases),
+        ("derived", Derived),
+        ("implementations", Implementations),
+        ("overrides", Overrides),
+        ("references", References),
+        ("users", Users),
+        ("uses", Uses),
+        ("tests", Tests),
+        ("includes", Includes),
+        ("parts", Parts),
     ];
 }
 
@@ -140,8 +146,14 @@ public sealed record GraphReached(GraphCard Card, int Distance)
     /// </summary>
     public int? Crowded { get; init; }
 
-    /// <summary>Whether an edge it was reached by is of <c>candidates</c>: the walk is not sure it goes there.</summary>
+    /// <summary>Whether an edge it was reached by is of <c>candidates</c>, and no use: the walk is not sure it goes there.</summary>
     public bool Candidates { get; init; }
+
+    /// <summary>
+    /// Whether every edge it was reached by is recall, never a doubt (<see cref="CodeEdgeKinds.Recall"/>): neither how sure
+    /// they are nor the node itself says how sure the walk's answer is.
+    /// </summary>
+    public bool Recall { get; init; }
 }
 
 /// <summary>The repository at a glance: its projects, its top directories with their files, its namespaces with what they declare.</summary>
@@ -187,10 +199,10 @@ public static class GraphRelations
     /// <summary>What imports the node: a file that imports it, or a project that names it.</summary>
     public const string IncludedBy = "includedBy";
 
-    /// <summary>The rules that style the node: the classes and ids it is told by, as a style sheet declares them.</summary>
+    /// <summary>The rules that style the node: the classes and ids it is told by, as a style sheet declares them - its uses of a rule, and of nothing else.</summary>
     public const string StyledBy = "styledBy";
 
-    /// <summary>The elements and components a rule reaches: what is styled by it.</summary>
+    /// <summary>The elements and components a rule reaches: what is styled by it - the uses of the node where it is a rule, and nothing of any other node.</summary>
     public const string Styles = "styles";
 
     /// <summary>Every relation a <c>related</c> walk may follow.</summary>
@@ -212,6 +224,15 @@ public static class GraphRelations
         Styles => [(GraphSide.In, CodeEdgeKinds.Uses)],
         _ => throw new ArgumentOutOfRangeException(nameof(relation), relation, "Not a relation a related walk follows."),
     };
+
+    /// <summary>
+    /// The kind within a kind (<see cref="CodeSubKinds"/>) the node an edge <paramref name="relation"/> follows enters
+    /// must be, whichever way the edge is followed: a rule for <see cref="StyledBy"/> and <see cref="Styles"/>, whose
+    /// uses are those of a style rule alone - a selector the one reference that reaches one - and not a member's reads, a
+    /// binding of markup or the keys' join; <see langword="null"/> where any node is.
+    /// </summary>
+    /// <param name="relation">One of <see cref="All"/>.</param>
+    public static string? Into(string relation) => relation is StyledBy or Styles ? CodeSubKinds.Rule : null;
 }
 
 /// <summary>One edge a walk follows from a node: the node it reaches, which way and by what kind, and how sure the surest such edge is.</summary>

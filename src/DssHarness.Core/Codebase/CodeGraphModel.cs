@@ -72,7 +72,11 @@ public static class CodeEdgeKinds
     /// <summary>A member or a type to a type it names.</summary>
     public const string References = "references";
 
-    /// <summary>A member to a member it reads or writes without calling it: a field, a property, a constant or an enum member, and a name a <c>nameof</c> names.</summary>
+    /// <summary>
+    /// A declaration to what it reads, writes or names without calling it: a field, a property, a constant or an enum
+    /// member, and a name a <c>nameof</c> names; a style rule a page's markup names; a configuration key a project's
+    /// <c>$(Name)</c> names, and one the keys' join gives the code that names it.
+    /// </summary>
     public const string Uses = "uses";
 
     /// <summary>
@@ -106,8 +110,8 @@ public static class CodeEdgeKinds
         (Dispatches, "an interface's member to each member that answers it for a type"),
         (Instantiates, "a member to a type it makes"),
         (References, "a member or a type to a type it names"),
-        (Uses, "a member to a member it reads or writes without calling it"),
-        (PartOf, "one part of a declaration to another: a view and the type its x:Class names"),
+        (Uses, "a declaration to what it reads, writes or names without calling it: a member, a style rule its markup names, a configuration key its code names"),
+        (PartOf, "one part of a declaration to another: a view and the type its x:Class names, a component and its code-behind"),
         (Declares, "a declaration with no body to the one with a body"),
         (Tests, "a test to a member it calls directly"),
         (ProjectReference, "a project to a project it names"),
@@ -115,6 +119,54 @@ public static class CodeEdgeKinds
 
     /// <summary>Every kind an edge of a graph may be.</summary>
     public static IReadOnlyList<string> All { get; } = [.. Described.Select(described => described.Kind)];
+
+    /// <summary>
+    /// Whether an edge of <paramref name="kind"/> is recall, never a doubt - a use: what it reaches, or fails to, and how
+    /// sure it is say nothing of how sure the graph is of what it declares, so no count of a node's or a file's
+    /// unsureness, and no answer's, is read from it. The one owner of that rule, which the linker, the queries and the
+    /// <c>graph</c> tool ask.
+    /// </summary>
+    /// <param name="kind">An edge's kind.</param>
+    public static bool Recall(string kind) => kind == Uses;
+}
+
+/// <summary>
+/// The kinds within a kind the linker reads, of the nodes of data files and style sheets - a configuration key, an
+/// element, a style rule - which no reference reaches by its name alone: only one whose qualifier says it names one
+/// (<see cref="ReachedBy"/>), or an import's prefix, which names what the file it imports declares. Every other kind
+/// within a kind is its implementation's to name freely.
+/// </summary>
+public static class CodeSubKinds
+{
+    /// <summary>
+    /// A configuration key - JSON's and YAML's, a <c>.resx</c>'s <c>data</c>, a <c>.props</c> file's property - named by
+    /// its path: reached by a key qualifier, an MSBuild project's <c>$(Name)</c>, and joined by the keys' join to the
+    /// code that names it.
+    /// </summary>
+    public const string Key = "key";
+
+    /// <summary>An element of an XML file named by an id-like attribute: data, which no reference reaches by its name alone.</summary>
+    public const string Element = "element";
+
+    /// <summary>A style sheet's rule - a selector's simple part, a <c>@keyframes</c> name: reached by a selector.</summary>
+    public const string Rule = "rule";
+
+    /// <summary>Whether <paramref name="subKind"/> is a data file's or a style sheet's, which no reference reaches by its name alone.</summary>
+    /// <param name="subKind">A node's kind within its kind, or <see langword="null"/>.</param>
+    public static bool IsData(string? subKind) => subKind is Key or Element or Rule;
+
+    /// <summary>
+    /// The kind within a kind a reference of the qualifier <paramref name="qualifier"/> reaches alone: a rule for a
+    /// selector, a key for a key qualifier; <see langword="null"/> for every other, which reaches no node of data by its
+    /// name alone.
+    /// </summary>
+    /// <param name="qualifier">The kind of a reference's qualifier (<see cref="CodeQualifierKinds"/>), or <see langword="null"/>.</param>
+    public static string? ReachedBy(string? qualifier) => qualifier switch
+    {
+        CodeQualifierKinds.Selector => Rule,
+        CodeQualifierKinds.Key => Key,
+        _ => null,
+    };
 }
 
 /// <summary>How sure an edge is of its target.</summary>
@@ -128,11 +180,13 @@ public static class CodeConfidences
 
     /// <summary>
     /// Two to <see cref="MostCandidates"/> declarations have that name and arity: an edge to each, none picked. A name
-    /// with more is counted unresolved.
+    /// with more is counted unresolved - a use's counted nowhere, for a use is recall. The keys' join is candidates
+    /// whatever it finds, one key among them, for nothing says the code reads that key; a literal or a member that names
+    /// more than <see cref="MostCandidates"/> keys joins none.
     /// </summary>
     public const string Candidates = "candidates";
 
-    /// <summary>The most declarations a reference is made an edge to each of; past it, it is counted unresolved.</summary>
+    /// <summary>The most declarations a reference is made an edge to each of - the most keys a literal or a member is joined to; past it, it is counted unresolved, a use and the keys' join nowhere.</summary>
     public const int MostCandidates = 5;
 
     /// <summary>Every confidence an edge may carry, the surest first.</summary>

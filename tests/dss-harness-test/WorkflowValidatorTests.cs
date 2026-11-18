@@ -5139,6 +5139,79 @@ public sealed class WorkflowValidatorTests
                 """));
     }
 
+    /// <summary>
+    /// V52: a keyNaming given empty is refused, as every list of the block is given empty; a claim maps endings to an
+    /// implementation this build extracts, and to one the block's languages name where it names them - one they leave out
+    /// would have the files it claims read by the fallback.
+    /// </summary>
+    [Fact]
+    public void V52_AnEmptyKeyNaming_AndAClaimOfAnImplementationUnknownOrLeftOut_AreRefused()
+    {
+        var definition = Parse("""
+            name: flow
+            codebaseGraph:
+              languages: [json, markdown]
+              keyNaming: []
+              claims:
+                json: [.lang.json]
+                xml: [.lang.xml]
+                cobol: [.cbl]
+            steps:
+              - name: map
+                type: graphify-codebase
+            """);
+
+        Assert.Equal(
+            [
+                "codebaseGraph.keyNaming is given empty, which is never read as no key joined: name its policies, or leave the key out for camelCase and exact",
+                "codebaseGraph.claims maps endings to 'xml', which codebaseGraph.languages leaves out, so the fallback would read every file it claims: name 'xml' in languages, or leave its claims out",
+                $"codebaseGraph.claims maps endings to 'cobol', which this tool has no extractor for; it extracts: {string.Join(", ", DssHarness.Core.Codebase.CodeGraphExtractors.OfThisBuild.Languages)}",
+            ],
+            WorkflowValidator.Validate(definition, hasCommitTemplate: false, files: null, languages: DssHarness.Core.Codebase.CodeGraphExtractors.OfThisBuild.Languages));
+    }
+
+    /// <summary>
+    /// V66: two uses that govern themselves shape the run's one graph alike as the shape reads their blocks - a keyNaming
+    /// that spells the default out is the default, in any order, and claims alike in any order are alike - and differently
+    /// where the policies or the claims differ.
+    /// </summary>
+    [Fact]
+    public void TwoGoverningUses_ShapeTheRunsGraphAlike_AsTheShapeReadsTheirKeysAndClaims()
+    {
+        static string Used(string name, string graph) => $"name: {name}\ncodebaseGraph:\n{graph}steps:\n  - name: chore\n    type: orient\n";
+
+        var files = new[]
+        {
+            ("flow/plain/plain.yml", Used("plain", "  mapTokens: 100\n")),
+            ("flow/spelled/spelled.yml", Used("spelled", "  mapTokens: 100\n  keyNaming: [exact, camelCase]\n")),
+            ("flow/snake/snake.yml", Used("snake", "  mapTokens: 100\n  keyNaming: [snake_case]\n")),
+            ("flow/claims/claims.yml", Used("claims", "  mapTokens: 100\n  claims:\n    json: [.a.json, .b.json]\n")),
+            ("flow/reordered/reordered.yml", Used("reordered", "  mapTokens: 100\n  claims:\n    json: [.b.json, .a.json]\n")),
+        };
+
+        static string Caller(string first, string second)
+            => $"""
+                name: flow
+                steps:
+                  - name: graph
+                    type: graphify-codebase
+                  - name: one
+                    use: ./{first}/{first}.yml
+                    useParentLimits: false
+                  - name: two
+                    use: ./{second}/{second}.yml
+                    useParentLimits: false
+                """;
+
+        static string Differ(string first, string second)
+            => $"steps 'one' and 'two' govern themselves (useParentLimits: false) by the workflows 'flow/{first}' and 'flow/{second}', which shape the run's graph differently, and the run's own workflow declares no codebaseGraph: a run has one graph, of one shape - declare it in the run's own workflow, or give the two one shape";
+
+        Assert.Empty(UsedProblems(Caller("plain", "spelled"), files));
+        Assert.Empty(UsedProblems(Caller("claims", "reordered"), files));
+        Assert.Equal([Differ("plain", "snake")], UsedProblems(Caller("plain", "snake"), files));
+        Assert.Equal([Differ("plain", "claims")], UsedProblems(Caller("plain", "claims"), files));
+    }
+
     /// <summary>V52: a language the workflow names is one this build extracts, said with every one it does.</summary>
     [Fact]
     public void V52_ALanguageThisToolDoesNotExtract_IsRefused_NamingEveryOneItDoes()

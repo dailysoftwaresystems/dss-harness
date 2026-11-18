@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Globalization;
+using DssHarness.Core.Output;
 
 namespace DssHarness.Core.Codebase;
 
@@ -31,7 +32,6 @@ public sealed class CodebaseGraphQueries
     private readonly IReadOnlyDictionary<(string Kind, GraphSide Side), int> _percentile;
     private readonly IReadOnlyDictionary<string, FileExtract?> _extracts;
     private readonly IReadOnlySet<string> _testFiles;
-    private readonly ILookup<string, (string Path, int Line)> _literals;
     private readonly ConcurrentDictionary<string, GraphCard> _cards = new(StringComparer.Ordinal);
 
     /// <summary>Every path the view holds, by its spelling in any case: made once, where a file system that finds a name in any case first asks.</summary>
@@ -74,6 +74,7 @@ public sealed class CodebaseGraphQueries
         }
 
         _extracts = extracts;
+        LiteralsCut = [.. extracts.Where(file => file.Value is { LiteralsBeyond: > 0 }).Select(file => file.Key).Order(StringComparer.Ordinal)];
 
         // A file that declares a test - its implementation marks the test - is test code whole: its classes, fixtures and
         // helpers beside the tests.
@@ -132,7 +133,6 @@ public sealed class CodebaseGraphQueries
         _out = symbols.Edges.ToLookup(edge => edge.From, StringComparer.Ordinal);
         _in = symbols.Edges.ToLookup(edge => edge.To, StringComparer.Ordinal);
         _percentile = Percentiles(symbols.Edges, kept.Count);
-        _literals = extracts.SelectMany(file => (file.Value?.Literals ?? []).Select(literal => (file.Key, literal))).ToLookup(entry => entry.literal.Value, entry => (entry.Key, entry.literal.Line), StringComparer.Ordinal);
         _parts = symbols.Edges.Where(edge => string.Equals(edge.Kind, CodeEdgeKinds.PartOf, StringComparison.Ordinal))
             .SelectMany(edge => new[] { (edge.From, edge.To), (edge.To, edge.From) })
             .GroupBy(pair => pair.Item1, StringComparer.Ordinal)
@@ -252,19 +252,6 @@ public sealed class CodebaseGraphQueries
 
     /// <summary>The files, by path, whose extract the view no longer holds - one that does not read, or no longer declares what the link names - their declarations in no answer.</summary>
     public IReadOnlyList<string> Unheld { get; }
-
-    /// <summary>
-    /// Every place the tree holds a string literal of the value <paramref name="value"/>: its file and its line. A
-    /// literal is data the code is written in, not a node - no edge reaches it - so it is looked up by its value alone;
-    /// the node its line is declared in is <see cref="AtLine(string, int)"/> to ask of.
-    /// </summary>
-    /// <param name="value">The literal's value, as the code writes it between its quotes.</param>
-    public IReadOnlyList<(string Path, int Line)> LiteralsOf(string value)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(value);
-
-        return [.. _literals[value].OrderBy(place => place.Path, StringComparer.Ordinal).ThenBy(place => place.Line)];
-    }
 
     /// <summary>
     /// The path the view holds <paramref name="path"/> at - as given, or with its backslashes read as separators, as a path
@@ -467,7 +454,7 @@ public sealed class CodebaseGraphQueries
         IReadOnlyList<GraphEdge> Group(GraphSide side, string kind)
             => [.. of.SelectMany(one => Steps(one, [(side, kind)]))
                 .GroupBy(step => step.To, StringComparer.Ordinal)
-                .Select(alike => new GraphEdge(Card(alike.Key), alike.Select(step => step.Confidence).Aggregate(CodeConfidences.Surer)))];
+                .Select(alike => new GraphEdge(Card(alike.Key), alike.Select(step => step.Confidence).Aggregate(CodeConfidences.Surer)) { Recall = CodeEdgeKinds.Recall(kind) })];
 
         return new GraphEdges(
             Group(GraphSide.In, CodeEdgeKinds.Calls),
@@ -486,9 +473,9 @@ public sealed class CodebaseGraphQueries
 
     /// <summary>
     /// The nodes reached from <paramref name="id"/> - and every other part of its declaration, a part walked as the node
-    /// itself - over <paramref name="relation"/> to <paramref name="depth"/>, by distance. A node with more edges of the
-    /// relation's kinds than the view's 99th percentile of any of them (and at least
-    /// <see cref="CrowdFloor"/>) is given and not gone through.
+    /// itself - over <paramref name="relation"/> to <paramref name="depth"/>, by distance, each edge into the kind of node
+    /// the relation enters alone (<see cref="GraphRelations.Into"/>). A node with more edges of the relation's kinds than
+    /// the view's 99th percentile of any of them (and at least <see cref="CrowdFloor"/>) is given and not gone through.
     /// </summary>
     /// <param name="id">A node's id, the view's.</param>
     /// <param name="relation">What to follow: one of <see cref="GraphRelations.All"/>.</param>
@@ -499,6 +486,7 @@ public sealed class CodebaseGraphQueries
         ArgumentOutOfRangeException.ThrowIfGreaterThan(depth, 3);
 
         var edges = GraphRelations.Edges(relation);
+        var into = GraphRelations.Into(relation);
         var of = OneDeclaration(id);
         var seen = new HashSet<string>(StringComparer.Ordinal) { id };
         seen.UnionWith(of);
@@ -511,17 +499,23 @@ public sealed class CodebaseGraphQueries
 
             foreach (var from in frontier)
             {
-                var unsure = ByCandidates(from, edges);
-
-                foreach (var to in Neighbours(from, edges).OrderBy(to => to, StringComparer.Ordinal))
+                foreach (var steps in Steps(from, edges, into).GroupBy(step => step.To, StringComparer.Ordinal).OrderBy(alike => alike.Key, StringComparer.Ordinal))
                 {
+                    var to = steps.Key;
+
                     if (!seen.Add(to))
                     {
                         continue;
                     }
 
-                    var crowded = Crowd(to, edges);
-                    reached.Add(new GraphReached(Card(to), hop) { Crowded = crowded, Candidates = unsure.Contains(to) });
+                    // A use is recall, never a doubt: its candidates leave the walk as sure as it was.
+                    var crowded = Crowd(to, edges, into);
+                    reached.Add(new GraphReached(Card(to), hop)
+                    {
+                        Crowded = crowded,
+                        Candidates = steps.Any(step => !CodeEdgeKinds.Recall(step.Kind) && string.Equals(step.Confidence, CodeConfidences.Candidates, StringComparison.Ordinal)),
+                        Recall = steps.All(step => CodeEdgeKinds.Recall(step.Kind)),
+                    });
 
                     if (crowded is null)
                     {
@@ -544,29 +538,33 @@ public sealed class CodebaseGraphQueries
     /// </summary>
     /// <param name="id">A node's id, the view's.</param>
     /// <param name="edges">The kinds walked, each with the side it is followed from.</param>
-    public int? Crowd(string id, IReadOnlyList<(GraphSide Side, string Kind)> edges)
+    /// <param name="into">The kind within a kind each edge's target must be (<see cref="GraphRelations.Into"/>); null for any.</param>
+    public int? Crowd(string id, IReadOnlyList<(GraphSide Side, string Kind)> edges, string? into = null)
     {
         ArgumentNullException.ThrowIfNull(edges);
 
         var bound = edges.Max(edge => _percentile.GetValueOrDefault((edge.Kind, edge.Side)));
-        var degree = Neighbours(id, edges).Count;
+        var degree = Steps(id, edges, into).Select(step => step.To).Distinct(StringComparer.Ordinal).Count();
         return degree >= CrowdFloor && degree > bound ? degree : null;
     }
 
     /// <summary>
     /// Each node the view holds that one edge of <paramref name="edges"/> reaches from <paramref name="id"/>, once for each
     /// kind and side it is reached by, with the surest confidence of the edges that reach it so - by id, then by the order
-    /// <paramref name="edges"/> names them.
+    /// <paramref name="edges"/> names them; where <paramref name="into"/> is given, only by an edge whose target is of that
+    /// kind within a kind.
     /// </summary>
     /// <param name="id">A node's id, the view's.</param>
     /// <param name="edges">The kinds to follow, each with the side it is followed from.</param>
-    public IReadOnlyList<GraphStep> Steps(string id, IReadOnlyList<(GraphSide Side, string Kind)> edges)
+    /// <param name="into">The kind within a kind each edge's target must be (<see cref="GraphRelations.Into"/>); null for any.</param>
+    public IReadOnlyList<GraphStep> Steps(string id, IReadOnlyList<(GraphSide Side, string Kind)> edges, string? into = null)
     {
         ArgumentNullException.ThrowIfNull(edges);
 
         return [.. edges
             .SelectMany((edge, order) => (edge.Side == GraphSide.Out ? _out[id] : _in[id])
                 .Where(found => string.Equals(found.Kind, edge.Kind, StringComparison.Ordinal))
+                .Where(found => into is null || string.Equals(SubKindOf(found.To), into, StringComparison.Ordinal))
                 .Select(found => (To: edge.Side == GraphSide.Out ? found.To : found.From, edge.Side, edge.Kind, found.Confidence, Order: order)))
             .Where(step => _symbols.ContainsKey(step.To))
             .GroupBy(step => (step.To, step.Side, step.Kind, step.Order))
@@ -650,14 +648,36 @@ public sealed class CodebaseGraphQueries
 
     /// <summary>
     /// Whether a node an answer names makes the answer not sure, so it adds a text search: its file carries a
-    /// <c>generated</c> or a <c>dynamic</c> mark, or it has external or unresolved callees. An edge of <c>candidates</c> an
-    /// answer gives makes it not sure too, judged where the answer gives it.
+    /// <c>generated</c> or a <c>dynamic</c> mark, or it has external or unresolved callees; or it is a configuration key
+    /// while a file of the view holds string literals past those its extract keeps (<see cref="LiteralsCut"/>), which the
+    /// keys' join does not read. An edge of <c>candidates</c> an answer gives makes it not sure too, judged where the
+    /// answer gives it - but a use's, which is recall (<see cref="CodeEdgeKinds.Recall"/>).
     /// </summary>
     /// <param name="id">A node's id, the view's.</param>
     public bool Unsure(string id)
-        => (_nodes.TryGetValue(id, out var at) && at.Count > 0 && (Generated(at[0].Path) || Dynamic(at[0].Path)))
+        => (_nodes.TryGetValue(id, out var at) && at.Count > 0 && (Generated(at[0].Path) || Dynamic(at[0].Path) || (at[0].Node.SubKind == CodeSubKinds.Key && LiteralsCut.Count > 0)))
             || _read.Symbols.External.GetValueOrDefault(id) > 0
             || _read.Symbols.Unresolved.GetValueOrDefault(id) > 0;
+
+    /// <summary>
+    /// Whether <paramref name="edge"/>, which an answer gives, makes the answer not sure: it is of <c>candidates</c>, or
+    /// the node it reaches is <see cref="Unsure"/> - but a use's, which is recall and never a doubt
+    /// (<see cref="CodeEdgeKinds.Recall"/>). The one rule of it, the <c>node</c> operation's and a walk's.
+    /// </summary>
+    /// <param name="edge">An edge of a node's group.</param>
+    public bool Doubts(GraphEdge edge)
+    {
+        ArgumentNullException.ThrowIfNull(edge);
+        return !edge.Recall && (string.Equals(edge.Confidence, CodeConfidences.Candidates, StringComparison.Ordinal) || Unsure(edge.Card.Id));
+    }
+
+    /// <summary>Whether <paramref name="reached"/>, which a walk gives, makes its answer not sure, as <see cref="Doubts(GraphEdge)"/> says of an edge.</summary>
+    /// <param name="reached">A node a walk reached.</param>
+    public bool Doubts(GraphReached reached)
+    {
+        ArgumentNullException.ThrowIfNull(reached);
+        return reached.Candidates || (!reached.Recall && Unsure(reached.Card.Id));
+    }
 
     /// <summary>Whether the file at <paramref name="path"/> is generated code: its entry says so, or holds the mark a later sync keeps it generated by.</summary>
     /// <param name="path">A file's path, relative to the tree with forward separators.</param>
@@ -713,7 +733,7 @@ public sealed class CodebaseGraphQueries
                 if (string.Equals(edge.Kind, CodeEdgeKinds.Contains, StringComparison.Ordinal)
                     || string.Equals(edge.Kind, CodeEdgeKinds.Declares, StringComparison.Ordinal)
                     // A use is recall, never a doubt: its confidence says nothing of how sure the graph is of what it declares.
-                    || string.Equals(edge.Kind, CodeEdgeKinds.Uses, StringComparison.Ordinal))
+                    || CodeEdgeKinds.Recall(edge.Kind))
                 {
                     continue;
                 }
@@ -735,6 +755,85 @@ public sealed class CodebaseGraphQueries
             ? $"more than a quarter of its {edges.ToString(CultureInfo.InvariantCulture)} references the linker left candidates or unresolved"
             : null;
     }
+
+    /// <summary>
+    /// What an answer about the file at <paramref name="path"/> says the graph does not hold of it, a line each: the state
+    /// it is held in where no implementation read it, with why; where its implementation stopped reading it or could not
+    /// bind it, by line and why - the first, where there are several; the keys and elements, and the string literals, its
+    /// extract counts past those it keeps. None where the graph holds the whole of it, or where the view holds no such file.
+    /// </summary>
+    /// <param name="path">A file's path, relative to the tree with forward separators.</param>
+    public IReadOnlyList<string> Unread(string path)
+    {
+        ArgumentNullException.ThrowIfNull(path);
+
+        if (!_read.Files.TryGetValue(path, out var entry))
+        {
+            return [];
+        }
+
+        if (!CodeFileStates.Extracted.Contains(entry.State, StringComparer.Ordinal))
+        {
+            return [entry.Why is { } why ? $"{path} is {entry.State}: {why}" : $"{path} is {entry.State}"];
+        }
+
+        var extract = _extracts.TryGetValue(path, out var held) ? held : _read.Extract(path);
+        var lines = new List<string>();
+
+        if (string.Equals(entry.State, CodeFileStates.Listed, StringComparison.Ordinal))
+        {
+            lines.Add($"{path} is {entry.State}: no implementation of the graph reads its language");
+        }
+
+        if (extract?.Dynamic is { Count: > 0 } dynamic)
+        {
+            var first = dynamic.OrderBy(mark => mark.Line).First();
+            lines.Add(dynamic.Count == 1
+                ? $"line {first.Line.ToString(CultureInfo.InvariantCulture)}: {first.Why}"
+                : $"{ReportText.Counted(dynamic.Count, "place")} the graph cannot bind, the first at line {first.Line.ToString(CultureInfo.InvariantCulture)}: {first.Why}");
+        }
+
+        if (extract is { KeysBeyond: > 0 } keyed)
+        {
+            lines.Add($"{keyed.KeysBeyond.ToString(CultureInfo.InvariantCulture)} of its keys and elements are in no node: past the {FileExtract.MostKeys.ToString(CultureInfo.InvariantCulture)} nodes its extract keeps, or nested deeper than its reader reads keys");
+        }
+
+        if (extract is { LiteralsBeyond: > 0 } literal)
+        {
+            lines.Add($"{ReportText.Counted(literal.LiteralsBeyond, "string literal")} of it past the {FileExtract.MostLiterals.ToString(CultureInfo.InvariantCulture)} its extract keeps are joined to no configuration key");
+        }
+
+        return lines;
+    }
+
+    /// <summary>
+    /// What an answer about the node <paramref name="card"/> says the graph does not hold of it: of a file or a
+    /// configuration key, what <see cref="Unread"/> says of its file; of a key, also the files whose string literals past
+    /// those their extracts keep the keys' join does not read. None of any other node.
+    /// </summary>
+    /// <param name="card">A node the view holds.</param>
+    public IReadOnlyList<string> UnreadOf(GraphCard card)
+    {
+        ArgumentNullException.ThrowIfNull(card);
+
+        var key = string.Equals(card.SubKind, CodeSubKinds.Key, StringComparison.Ordinal);
+
+        if (!key && !string.Equals(card.Kind, CodeNodeKinds.File, StringComparison.Ordinal))
+        {
+            return [];
+        }
+
+        return key && LiteralsCut.Count > 0
+            ? [.. Unread(card.Path), $"{ReportText.Counted(LiteralsCut.Count, "file")} of the view hold string literals past the {FileExtract.MostLiterals.ToString(CultureInfo.InvariantCulture)} an extract keeps, which the keys' join does not read: {ReportText.Listed([.. LiteralsCut])}"]
+            : Unread(card.Path);
+    }
+
+    /// <summary>
+    /// The files whose extracts hold more string literals than the <see cref="FileExtract.MostLiterals"/> each keeps, by
+    /// path: what the keys' join reads is not all they write, so a key read only past what they keep is joined to none
+    /// of them, and an answer about a key is not sure of its users.
+    /// </summary>
+    public IReadOnlyList<string> LiteralsCut { get; }
 
     /// <summary>The nodes in the file at <paramref name="path"/>, as a text hit is turned to a card where one covers its line.</summary>
     /// <param name="path">A file's path, relative to the tree with forward separators.</param>
@@ -775,13 +874,8 @@ public sealed class CodebaseGraphQueries
         return AtLine(HeldPath(symbol[..colon]) ?? symbol[..colon], line);
     }
 
-    /// <summary>The nodes an edge of <paramref name="edges"/>' kinds of <c>candidates</c> leads to from <paramref name="from"/> in one hop.</summary>
-    private HashSet<string> ByCandidates(string from, IReadOnlyList<(GraphSide Side, string Kind)> edges)
-        => [.. Steps(from, edges).Where(step => string.Equals(step.Confidence, CodeConfidences.Candidates, StringComparison.Ordinal)).Select(step => step.To)];
-
-    /// <summary>The nodes the view holds that <paramref name="edges"/> reach from <paramref name="id"/> in one hop, each once.</summary>
-    private HashSet<string> Neighbours(string id, IReadOnlyList<(GraphSide Side, string Kind)> edges)
-        => [.. Steps(id, edges).Select(step => step.To)];
+    /// <summary>The kind within a kind of the node <paramref name="id"/>, where the view holds it.</summary>
+    private string? SubKindOf(string id) => _nodes.TryGetValue(id, out var at) && at.Count > 0 ? at[0].Node.SubKind : null;
 
     private double Score(GraphCard card, string query, Terms terms)
     {

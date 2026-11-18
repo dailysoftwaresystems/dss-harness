@@ -170,6 +170,60 @@ public sealed class CodebaseGraphServiceTests
         Assert.Contains(graph.Symbols().Nodes, node => node.Id == "toy:A");
     }
 
+    /// <summary>
+    /// A claim the workflow maps an ending by, come since the last sync, gives the files of that ending to the
+    /// implementation it names: they are read again by it, and every other file keeps its extract.
+    /// </summary>
+    [Fact]
+    public async Task AClaimCome_ReadsAgainTheFilesItGivesAnotherImplementation_AndNoOther()
+    {
+        using var graph = await Graph.CreateAsync();
+        graph.Write("src/a.toy", "class A\n");
+        graph.Write("src/b.lang.json", "class B\n");
+        await graph.CommitAsync();
+        await graph.Over(graph.Toy, new JsonExtractor(), new ListedExtractor(), new MarkdownExtractor()).SyncAsync();
+
+        Assert.Equal("json", graph.Manifest().Files["src/b.lang.json"].Language);
+
+        var claimed = await graph.Shaped(CodebaseGraphShape.Of(null, null, null, null, null, null, claims: new Dictionary<string, IReadOnlyList<string>> { ["toy"] = [".lang.json"] })).SyncAsync();
+
+        Assert.Equal((1, 2), (claimed.Extracted, claimed.Reused));
+        Assert.Equal("toy", graph.Manifest().Files["src/b.lang.json"].Language);
+        Assert.Contains(graph.Symbols().Nodes, node => node.Id == "toy:B");
+    }
+
+    /// <summary>
+    /// The keys' join follows the workflow's keyNaming: a policy come since the last sync links the graph again, reading
+    /// no file, and an agent's view is linked under the policies its base was synced by.
+    /// </summary>
+    [Fact]
+    public async Task AChangedKeyNaming_LinksAgainReadingNoFile_AndAViewJoinsUnderItsBases()
+    {
+        const string Key = "json:app.json#calling_convention";
+        const string Property = "csharp:Reader.CallingConvention";
+
+        using var graph = await Graph.CreateAsync();
+        graph.Write("app.json", "{ \"calling_convention\": \"cdecl\" }\n");
+        graph.Write("Reader.cs", "class Reader\n{\n}\n");
+        graph.Write("Other.cs", "class Other\n{\n    public string CallingConvention { get; set; }\n}\n");
+        await graph.CommitAsync();
+        await graph.Over(new CSharpExtractor(), new JsonExtractor(), new ListedExtractor(), new MarkdownExtractor()).SyncAsync();
+
+        Assert.DoesNotContain(graph.Symbols().Edges, edge => edge is { To: Key, Kind: CodeEdgeKinds.Uses });
+
+        var snake = await graph.Shaped(CodebaseGraphShape.Of(null, null, null, null, null, null, keyNaming: [CodebaseGraphShape.SnakeCase])).SyncAsync();
+
+        Assert.Equal(0, snake.Extracted);
+        Assert.Contains(graph.Symbols().Edges, edge => edge is { From: "csharp:Other.CallingConvention", To: Key, Kind: CodeEdgeKinds.Uses });
+
+        var worktree = await graph.WorktreeAsync("w");
+        Graph.WriteIn(worktree, "Reader.cs", "class Reader\n{\n    public string CallingConvention { get; set; }\n}\n");
+        await graph.SyncViewAsync("w", worktree);
+        var read = (await graph.CheckAsync("w", worktree, "Reader.cs")).Read;
+
+        Assert.Contains(read.Symbols.Edges, edge => edge is { From: Property, To: Key, Kind: CodeEdgeKinds.Uses, Confidence: CodeConfidences.Candidates });
+    }
+
     /// <summary>A manifest that does not read is never guessed at: the graph is built again whole, and says why.</summary>
     [Fact]
     public async Task AManifestThatDoesNotRead_IsBuiltAgainWhole()

@@ -156,7 +156,37 @@ public sealed class MsbuildExtractorTests : CodeGraphExtractorContractTests<Msbu
 
         Assert.Equal(["One.csproj"], extract.References.Select(reference => reference.Name));
         Assert.Equal(("Broken.csproj", 1, 6), (Assert.Single(extract.Nodes).Name, extract.Nodes[0].Start, extract.Nodes[0].End));
-        Assert.Equal([new ExtractDynamic(4, "the file stops reading as XML here, and nothing after it is read")], extract.Dynamic);
+        Assert.Equal([new ExtractDynamic(4, "the file stops reading as XML here (The 'ItemGroup' start tag on line 2 position 4 does not match the end tag of 'Wrong'), and nothing after it is read")], extract.Dynamic);
         Assert.Empty(Extractor.Extract(new CodeFileInput("src/Shapes/Shapes.csproj", Shapes)).Dynamic);
+    }
+
+    /// <summary>
+    /// Each <c>$(Name)</c> is read where the file writes it - an attribute's value over several lines, an element's text
+    /// beside an entity, a CDATA section - on the line it stands on, each a use of the key of that name an XML file
+    /// declares; one a comment writes is none, and none is read past the place the file stops reading as XML.
+    /// </summary>
+    [Fact]
+    public void EachPropertyIsAUseOfAnXmlKey_ReadWhereTheFileWritesIt_AndNeverInAComment()
+    {
+        const string Text = """
+            <Project>
+              <PropertyGroup Label="x"
+                Condition="'$(One)' ==
+                '$(Two)'">
+                <Out>&amp;$(Three) <!-- $(Old) --> $(Four)</Out>
+                <Note><![CDATA[
+                  $(Five) ]]></Note>
+              </PropertyGroup>
+            </Project>
+            <Late Value="$(Late)" />
+            """;
+
+        var extract = Extractor.Extract(new CodeFileInput("Uses.csproj", Text));
+
+        Assert.Equal(
+            [("One", 3), ("Two", 4), ("Three", 5), ("Four", 5), ("Five", 7)],
+            extract.References.Select(reference => (reference.Name, reference.Line)));
+        Assert.All(extract.References, reference => Assert.Equal((CodeEdgeKinds.Uses, new ExtractQualifier(CodeQualifierKinds.Key, "xml")), (reference.Kind, reference.Qualifier)));
+        Assert.Equal([10], extract.Dynamic.Select(mark => mark.Line));
     }
 }

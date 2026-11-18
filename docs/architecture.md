@@ -4296,12 +4296,12 @@ is an implementation of one contract, `ICodeGraphExtractor` - its `Language`, it
 `Outlines` its files rather than reading a language's declarations, a pure `Extract` and its `Help` - which answers a
 language-neutral `FileExtract`: nodes - a value's type (`ValueType`), the type an extension extends (`Extends`) and
 the scope whose declarations alone see it (`SeenIn`) among what they say - the scopes they are put in (open to
-other files or closed: what a closed one declares, and the type or scope it is the scope of, its file's alone), imports by scope, relative path, address or path ending, with their prefixes and filters, an import that stands in for the one before it (`Fallback`), an export (`Export`) and an import of a file whose imports this one shares (`Shares`),
+other files or closed: what a closed one declares, and the type or scope it is the scope of, its file's alone), imports by scope, relative path, address, path ending or directory (a scope every file under a directory imports), with their prefixes and filters, an import that stands in for the one before it (`Fallback`), an export (`Export`) and an import of a file whose imports this one shares (`Shares`),
 address roots, references by name with their qualifiers, the string literals the file holds - each of at least
 `FileExtract.LeastLiteral` characters with its line, at most `FileExtract.MostLiterals` kept and the rest counted, an
-interpolated or template string's constant parts, its holes read as code - and four marks - a prototype, a test,
-generated code with why, and each line it saw something it cannot bind or stopped reading at (`dynamic`) - of which
-the linker reads the first two. Beside the calls, every reader of C#, JavaScript, TypeScript, PHP, Dart, C and C++
+interpolated or template string's constant parts, its holes read as code - and five marks - a prototype, a test, a
+part of a declaration other files hold parts of too (`Part`), generated code with why, and each line it saw something it
+cannot bind or stopped reading at (`dynamic`), with why - of which the linker reads the first three. Beside the calls, every reader of C#, JavaScript, TypeScript, PHP, Dart, C and C++
 gives each member a member reads or writes without calling it - a field, a property, a constant, an enum member, any
 name a `nameof` names - as a `uses` reference, qualified as its receiver is where the file says, and a use that names
 nothing the repository declares is the common case and counts nowhere: a use is recall, never a doubt, so it makes
@@ -4309,21 +4309,33 @@ neither a node `unsure` nor a file's unsureness. A use is looked for as a member
 steps as a call), and `query-codebase-graph`'s `node` answers a node's `users` and `uses` groups beside its callers
 and callees.
 
-The data a repository's code is configured by is read too. `json` (`.json`, `.jsonc`, `.json5`, the named manifests
-keeping their own extractors), `yaml` (`.yml`, `.yaml`, but `pubspec.yaml`, its anchors and aliases followed and its
-merge keys read, a GitHub Actions workflow's jobs and steps sections and a local action's `uses:` an import of its
-`action.yml`) and `xml` (`.xml`, `.config`, `.props`, `.targets`, `.resx`, `.xaml`, `.manifest`, `.nuspec`, but the
-MSBuild projects and solutions `msbuild` keeps) each make every scalar key anywhere in the file a member node of
-SubKind `key` named by its path (`targets.x64.callingConvention`), its value as its summary, bounded in depth and
-count (`FileExtract.MostKeys`, the rest counted in `KeysBeyond`); a top-level member that holds others is a section;
-an element with an id-like attribute (`name`, `key`, `id`, `x:Name`) is an element node named by it; a `.resx`'s
-`data name=` and a `.props` or `.targets`'s `PropertyGroup` children are keys, and a `$(Name)` an MSBuild project
-writes is a `uses` of the key of that name wherever the repository declares it, its `Import Project` an import of the
-file it names. The linker joins each key to the code that names it: a string literal equal to the key's last segment
-or whole path, and each member whose name is the segment as a naming policy the repository declares
-(`codebaseGraph.keyNaming`: `camelCase`, `snake_case`, `kebab-case` or `exact`, the last two the default) writes it -
-each a `uses` edge of `candidates`, for nothing says the code reads that key; the join is derived whole at every link,
-so a changed policy links again and reads no file again. A `.xaml` root's `x:Class` and a C# `partial` type say they
+The data a repository's code is configured by is read too, every data file's nodes made by one owner (`DataNodes`):
+a key a member node of SubKind `key`, an element one of SubKind `element`, each counted against `FileExtract.MostKeys`
+with the rest counted in `KeysBeyond`, a summary and a signature put on one line and cut, so no data file's extract is
+one the core refuses. `json` (`.json`, `.jsonc`, `.json5`, the named manifests keeping their own extractors) and `yaml`
+(`.yml`, `.yaml`, but `pubspec.yaml`) each make every scalar key anywhere in the file down to `DataNodes.MostDepth`
+places of its path a key named by its path (`targets.x64.callingConvention`, an item by its place `limits[1].value`, an
+empty name in brackets `packages[""].name`), its value as its summary, and each top-level member that holds others a
+section over its lines. JSON stops where its reader does, nothing of the file read, and reads a `$schema` or `$ref`
+naming another file by a relative path - its `#` pointer left out - as an import of it. YAML follows anchors and
+aliases - what they repeat bounded by `DataNodes.MostRepeated` visits, the rest counted and the line marked - reads
+merge keys, one or a list, makes each document of a file of several a section by its place (`[0]`), reads a GitHub
+Actions workflow's jobs and steps as sections, a step's local `uses:` an import of its `action.yml` and a job's an import
+of the workflow file it names, and keeps what it read before the place it stops reading, marked. An empty JSON or YAML
+file, or one of comments alone, is no stop. `xml` (`.xml`, `.config`, `.props`, `.targets`, `.resx`, `.xaml`, `.manifest`, `.nuspec`, but the MSBuild projects
+and solutions `msbuild` keeps) makes its root a section, an element with an id-like attribute (`name`, `key`, `id`,
+`x:Name`) an element named by its path and that attribute, and keys of a `.resx`'s `data name=` and of a `.props` or
+`.targets`'s `PropertyGroup` children alone, a `.props` or `.targets`'s `Import Project` an import of the file it names.
+No data file nests deeper than `DataNodes.MostNesting` is read past it, the line marked with why. A `$(Name)` an MSBuild
+project's attribute or element text writes - a comment never - is a `uses` of the key of that name an XML file declares
+(the `key` qualifier). A key, an element and a style rule are reached only by a reference that says it names one - a
+`key` qualifier, a `selector` qualifier, a use through an import's prefix - and by the keys' join, never by a name alone
+as code names code (`Takes`, the one place that says what a reference may reach). The linker joins each key to the code
+that names it: a string literal equal to the key's last segment or whole path, and each field or property whose name is
+the segment as a naming policy the repository declares (`codebaseGraph.keyNaming`: `camelCase`, `snake_case`,
+`kebab-case` or `exact`, `camelCase` and `exact` the default) writes it - each a `uses` edge of `candidates`, for nothing
+says the code reads that key, and a literal or a name that names more than `CodeConfidences.MostCandidates` keys joins
+none; the join is derived whole at every link, so a changed policy links again and reads no file again. A `.xaml` root's `x:Class` and a C# `partial` type say they
 are parts of one declaration (`ExtractNode.Part`), and the linker derives `partOf` between the parts of one qualified
 name - ids stay per language - which every walk that reads members - the `node` operation, a `related` walk, a type's
 outline, the spans a body is served from - walks as one. A repository may map further file name endings to an
@@ -4335,7 +4347,8 @@ An implementation is registered by being written: the one scan of the core (`Cor
 (`AddCoreImplementationsOf<T>`), and the registry built from them refuses two of one name, two claims of one exact name or extension of which either gives no
 content test, no fallback or two, a fallback that claims a name or an extension, a claimed name no file can bear or
 extension no file has, and a version below 1 - so a clash is a red test, never an order. A file goes to the
-claimants of its exact name, else of its extension, else to the fallback (`listed`); their content tests decide among
+claimants of its exact name, else of an ending `codebaseGraph.claims` maps, else of its extension, else to the fallback
+(`listed`); their content tests decide among
 several, and none or several saying yes lists it `ambiguous`. Everything else about the graph - `codebaseGraph.languages`,
 V52's names and `help codebase-graph`'s table - is read from the registry. A test keeps the core from mentioning
 anything under `Codebase\Languages\`. Every span counts lines as `CodeFileText.Lines` cuts them - CR LF, LF and CR
@@ -4454,8 +4467,9 @@ each file once, an export making nothing visible to the file that makes it, and 
 (`ExtractImport.Shares`, a Dart part's of its library) importing those after its own; the repository by name and arity - a
 qualifier being read as such a prefix too where no type or scope has it as its whole qualified name, from the file
 that makes the import or, made global, from every file of its language, and a name no value or type has that an import's
-prefix is standing for that import, written as a value or before a type's name - and derives `dispatches`, `declares`
-and `tests` from the `implements` edges and the marks. A type is looked in before its bases and its bases a level at a
+prefix is standing for that import, written as a value or before a type's name - and derives `dispatches`, `declares`,
+`tests` and `partOf` from the `implements` edges and the marks, and the keys' join from the literals and the fields
+and properties that name a key. A type is looked in before its bases and its bases a level at a
 time, each level nearest first, the first rank that holds the name deciding with all it holds: the mixins each type of
 the level names, a rank each, the last first - each applied over what comes before it - then one rank of everything
 the level's types inherit and implement, a mixin's own inherited bases (what a Dart mixin is declared `on`) not followed
@@ -4510,8 +4524,9 @@ selector - `.btn`, `#main`, `my-widget`, and no pseudo-class or attribute - a me
 selector writes it, over the rule's lines; each custom property and each SCSS or Less variable a `constant`; each
 `@keyframes` name a rule and each `@mixin` a member; a `var(--x)` and a bare `$x` a use of the constant, an
 `@include` a use of the mixin, an `@extend` an inheritance; and an `@import`, `@use` and `@forward` naming a file an
-import of it. `related` answers `styledBy` (the rules that style a node) and `styles` (what a rule reaches), so "who
-uses this class" and "what styles this element" are one call each.
+import of it. `related` answers `styledBy` (the rules that style a node: its `uses` edges to a rule, SubKind `rule`, alone) and
+`styles` (what a rule reaches: the nodes whose `uses` edges reach it, asked of a rule - of any other node, nothing), so
+"who uses this class" and "what styles this element" are one call each.
 
 Razor views (.cshtml) and Blazor components (.razor) are one implementation, `razor`: a component is the class its
 `@code` block is - the block's opening line read as the `partial class` the page compiles to, named by its file, in

@@ -1,27 +1,27 @@
 using System.Globalization;
 using DssHarness.Core.Yaml;
-using YamlDotNet.RepresentationModel;
+using YamlDotNet.Core;
 
 namespace DssHarness.Core.Codebase.Languages;
 
 /// <summary>
 /// A YAML data file - <c>.yml</c> and <c>.yaml</c>, but a Dart package's <c>pubspec.yaml</c>, which its own extractor
-/// reads - read as the data it holds, its anchors and aliases followed and its merge keys read as the keys of the
-/// mapping that merges them: each scalar key anywhere down to <see cref="FileExtract.MostKeys"/> of them a
-/// <c>member</c> SubKind <c>key</c> named by its path, its value as its summary. A GitHub Actions workflow -
-/// a YAML file under <c>.github/workflows/</c> - is read further as its jobs and its steps, each a <c>section</c>, and
-/// a step's or job's <c>uses:</c> that names a local action by a path of the repository is an import of its
-/// <c>action.yml</c>. Where the file stops reading as YAML, the line it stops at is marked dynamic.
+/// reads - read as the data it holds, its nodes made as every data file's are (<see cref="DataNodes"/>): each top-level
+/// member that holds others a <c>section</c> over its lines, and each scalar key anywhere down to
+/// <see cref="DataNodes.MostDepth"/> places of its path a <c>member</c> SubKind <c>key</c> named by its path, its value as
+/// its summary. Its aliases are followed - a key reached through one on the alias's line, where the key is written into
+/// this place - at most <see cref="DataNodes.MostRepeated"/> nodes, and its merge keys read as the keys of the mapping that
+/// merges them, one merged of a list of mappings too, a key the mapping writes itself winning. A file of several documents
+/// is each document a section by its place, <c>[0]</c> the first. A GitHub Actions workflow - a YAML file under
+/// <c>.github/workflows/</c> - is read further as its jobs and its steps, each a <c>section</c> inside its holder: a step's
+/// <c>uses:</c> that names a local action by a path of the repository an import of its <c>action.yml</c>, and a job's
+/// <c>uses:</c> that names a reusable workflow of the repository an import of that workflow's file. Where the file stops
+/// reading as YAML, or nests past <see cref="DataNodes.MostNesting"/> levels, what was read before is kept and the line is
+/// marked dynamic.
 /// </summary>
 public sealed class YamlExtractor : ICodeGraphExtractor
 {
-    /// <summary>How deep a file's keys are read: no data file nests past it.</summary>
-    private const int MostDepth = 8;
-
-    /// <summary>How deep a file may nest at all, past which nothing of it is read: a guard against a file made to nest without end.</summary>
-    private const int MostNesting = 100;
-
-    /// <summary>The id-like attributes a workflow's keys are named by.</summary>
+    /// <summary>The key a workflow names its jobs under.</summary>
     private const string Jobs = "jobs";
 
     /// <inheritdoc/>
@@ -38,12 +38,14 @@ public sealed class YamlExtractor : ICodeGraphExtractor
 
     /// <inheritdoc/>
     public CodeGraphExtractorHelp Help { get; } = new(
-        "YAML data files (.yml, .yaml, anchors and aliases followed and merge keys read): each scalar key anywhere in the file as a key node named by its path with its value as its summary, a GitHub Actions workflow's jobs and steps each as a section, and a uses: naming a local action as an import of its action.yml",
+        "YAML data files (.yml, .yaml, anchors and aliases followed and merge keys read): each scalar key anywhere in the file as a key node named by its path with its value as its summary, each top-level member that holds others as a section over its lines, each document of a file of several as a section by its place ([0] the first), a GitHub Actions workflow's jobs and steps each as a section, a step's uses: naming a local action as an import of its action.yml, and a job's uses: naming a reusable workflow of the repository as an import of its file",
         [
             "pubspec.yaml, which the pubspec extractor reads",
-            $"a key nested past 8 levels, a file nested past {MostNesting.ToString(System.Globalization.CultureInfo.InvariantCulture)} levels, and a file of more than {FileExtract.MostKeys.ToString(System.Globalization.CultureInfo.InvariantCulture)} keys: the first {FileExtract.MostKeys.ToString(System.Globalization.CultureInfo.InvariantCulture)} are kept, the rest counted",
-            "a key's value past the cut of a summary, and a secret a key holds: neither is masked here",
-            "a step's or a job's uses: that names an action of a marketplace or of a repository by its owner: no import of it",
+            $"a key nested past {DataNodes.MostDepth.ToString(CultureInfo.InvariantCulture)} places of its path, and a file of more than {FileExtract.MostKeys.ToString(CultureInfo.InvariantCulture)} keys and sections: the first {FileExtract.MostKeys.ToString(CultureInfo.InvariantCulture)} are kept, the rest counted, and an answer about the file says how many",
+            $"what aliases repeat past {DataNodes.MostRepeated.ToString(CultureInfo.InvariantCulture)} nodes, and what a file nests past {DataNodes.MostNesting.ToString(CultureInfo.InvariantCulture)} levels: counted or not read, the line marked dynamic",
+            "what follows the point a file stops reading as YAML - a template's {{ }} among it: what came before is read, the line it stops at marked dynamic",
+            "a key's value past the cut of a summary; a secret a key holds is kept as the file writes it, as reading the file shows it, and an answer masks only the run's own secrets, as every tool's answer does",
+            "a uses: that names an action or a workflow of a marketplace or of another repository by its owner: no import of it",
         ]);
 
     /// <inheritdoc/>
@@ -51,39 +53,40 @@ public sealed class YamlExtractor : ICodeGraphExtractor
     {
         ArgumentNullException.ThrowIfNull(input);
 
-        var lines = input.Lines;
-        var stop = YamlReading.TooDeepBy(input.Text, MostNesting);
-        YamlNode? root = null;
-
-        if (stop is null)
-        {
-            root = YamlReading.LoadDocument(input.Text, "a data file holds one", bounds: null, out var loaded);
-            stop = loaded;
-        }
-
-        var nodes = new List<ExtractNode>();
+        var lines = new Lines(CodeFileText.LineIndex(input.Text), input.Lines.Count, input.Text.Length);
+        var read = YamlReading.Written(input.Text, DataNodes.MostNesting);
+        var nodes = new DataNodes(Language, input.Path, input.Lines.Count);
         var imports = new List<ExtractImport>();
-        var ids = new ExtractIds();
-        var keys = 0;
-        var beyond = 0;
+        var reading = new Reading(lines, nodes);
+
+        // A file of several documents is each document by its place; one of one, that document.
+        IDataValue? root = read.Documents.Count switch
+        {
+            0 => null,
+            1 => new Node(read.Documents[0], null, reading),
+            _ => new Documents(read.Documents, reading),
+        };
 
         if (root is not null)
         {
-            if (root is YamlMappingNode workflow && IsWorkflow(input.Path))
+            var sections = nodes.Walk(root);
+
+            if (read.Documents.Count == 1 && root.Holds && IsWorkflow(input.Path) && sections.TryGetValue(Jobs, out var jobs))
             {
-                Workflow(input.Path, lines.Count, workflow, ids, nodes, imports, ref keys, ref beyond);
-            }
-            else
-            {
-                Walk(input.Path, lines.Count, root, [], null, ids, nodes, imports, ref keys, ref beyond);
+                Workflow(input.Path, root, jobs, nodes, imports, lines);
             }
         }
 
-        return new FileExtract([.. nodes])
+        foreach (var stop in read.Stops)
+        {
+            nodes.Stopped(lines.Of(stop.At), stop.Why);
+        }
+
+        return new FileExtract([.. nodes.Nodes])
         {
             Imports = imports,
-            KeysBeyond = beyond,
-            Dynamic = stop is null ? [] : [new ExtractDynamic(FileExtract.LineWithin(stop.Line, lines.Count), $"the file stops reading here: {stop.Why}")],
+            KeysBeyond = nodes.Beyond,
+            Dynamic = nodes.Dynamic,
         };
     }
 
@@ -92,93 +95,84 @@ public sealed class YamlExtractor : ICodeGraphExtractor
         => path.StartsWith(".github/workflows/", StringComparison.Ordinal) && (path.EndsWith(".yml", StringComparison.Ordinal) || path.EndsWith(".yaml", StringComparison.Ordinal));
 
     /// <summary>
-    /// A workflow: each job a <c>section</c> over its lines and each of its steps a section inside it, a <c>uses:</c> that
-    /// names a local action an import of its <c>action.yml</c>, and its keys - and every other key of the file - as any
-    /// data file's are.
+    /// A workflow's jobs and steps: each job a <c>section</c> over its lines inside the <c>jobs</c> section, each of its steps
+    /// a section inside it - each where the text writes it, an alias by its own line - a step's <c>uses:</c> naming a local
+    /// action an import of its <c>action.yml</c>, a job's naming a reusable workflow of the repository an import of its file.
     /// </summary>
-    private void Workflow(
-        string file,
-        int lineCount,
-        YamlMappingNode root,
-        ExtractIds ids,
-        List<ExtractNode> nodes,
-        List<ExtractImport> imports,
-        ref int keys,
-        ref int beyond)
+    private void Workflow(string file, IDataValue root, string jobsSection, DataNodes nodes, List<ExtractImport> imports, Lines lines)
     {
-        Walk(file, lineCount, root, [], null, ids, nodes, imports, ref keys, ref beyond);
-
-        if (!root.Children.TryGetValue(new YamlScalarNode(Jobs), out var held) || held is not YamlMappingNode jobs)
+        if (root.Members.FirstOrDefault(member => member.Place.Name == Jobs) is not { Value.Holds: true } held)
         {
             return;
         }
 
-        foreach (var (key, value) in jobs.Children)
+        foreach (var (place, jobLine, job) in held.Value.Members)
         {
-            if (YamlReading.ScalarOf(key) is not { Length: > 0 } job || value is not YamlMappingNode mapping)
+            if (place.Name is not { Length: > 0 } name || !job.Holds)
             {
                 continue;
             }
 
-            var jobLine = Line(key, lineCount);
-            var jobSection = ids.Next($"{Language}:{file}#{Jobs}.{job}");
-            nodes.Add(new ExtractNode(jobSection, CodeNodeKinds.Section, job, $"{file}#{Jobs}.{job}", jobLine, SpanOf(value, lineCount), $"{Jobs}.{job}"));
+            var jobEnd = Math.Max(jobLine, job.End);
+            var jobPath = DataNodes.PathOf([DataPlace.Named(Jobs), place]);
 
-            foreach (var (inner, step) in mapping.Children)
+            if (nodes.Section(name, jobPath, jobLine, jobEnd, jobsSection) is not { } jobSection)
             {
-                if (YamlReading.ScalarOf(inner) is not "steps" || step is not YamlSequenceNode listed)
+                return;
+            }
+
+            var members = job.Members.ToList();
+            Used(file, members, workflow: true, imports);
+
+            if (members.FirstOrDefault(member => member.Place.Name == "steps") is not { Value.Holds: true } steps)
+            {
+                continue;
+            }
+
+            var items = steps.Value.Members.ToList();
+
+            for (var at = 0; at < items.Count; at++)
+            {
+                if (!items[at].Value.Holds)
                 {
                     continue;
                 }
 
-                for (var at = 0; at < listed.Children.Count; at++)
-                {
-                    if (listed.Children[at] is not YamlMappingNode one)
-                    {
-                        continue;
-                    }
+                var start = items[at].Line;
+                var end = at + 1 < items.Count ? Math.Max(start, items[at + 1].Line - 1) : Math.Max(start, jobEnd);
+                var step = items[at].Value.Members.ToList();
+                var named = step.FirstOrDefault(member => member.Place.Name == "name").Value?.Text is { Length: > 0 } given ? given : $"step {(at + 1).ToString(CultureInfo.InvariantCulture)}";
 
-                    var start = Line(one, lineCount);
-                    var end = at + 1 < listed.Children.Count ? Math.Max(start, Line(listed.Children[at + 1], lineCount) - 1) : Math.Max(start, SpanOf(value, lineCount));
-                    var named = NameOf(one) is { Length: > 0 } name ? name : $"step {(at + 1).ToString(System.Globalization.CultureInfo.InvariantCulture)}";
-                    var id = ids.Next($"{jobSection}.steps[{at.ToString(System.Globalization.CultureInfo.InvariantCulture)}]");
-
-                    nodes.Add(new ExtractNode(id, CodeNodeKinds.Section, named, $"{file}#{Jobs}.{job}.steps[{at.ToString(System.Globalization.CultureInfo.InvariantCulture)}]", start, end, $"{Jobs}.{job}.steps[{at.ToString(System.Globalization.CultureInfo.InvariantCulture)}]")
-                    {
-                        Parent = jobSection,
-                    });
-
-                    UsedAction(file, lineCount, one, imports);
-                }
+                _ = nodes.Section(named, DataNodes.PathOf([DataPlace.Named(Jobs), place, DataPlace.Named("steps"), DataPlace.At(at)]), start, Math.Min(end, jobEnd), jobSection);
+                Used(file, step, workflow: false, imports);
             }
         }
     }
 
-    /// <summary>The <c>name</c> a step gives itself, where it gives one.</summary>
-    private static string? NameOf(YamlMappingNode step)
-        => step.Children.TryGetValue(new YamlScalarNode("name"), out var named) ? YamlReading.ScalarOf(named) : null;
-
     /// <summary>
-    /// A <c>uses:</c> of <paramref name="mapping"/> that names a local action: an import of its <c>action.yml</c>, with
-    /// <c>action.yaml</c> standing in for it where that is the one the tree holds. A local action's path is the
-    /// repository's own root, so the import names it from the workflow file's directory.
+    /// A <c>uses:</c> among <paramref name="members"/> - a step's or a job's - that names a path of the repository: a job's an
+    /// import of the reusable workflow's file it names, a step's of the local action's <c>action.yml</c>, with
+    /// <c>action.yaml</c> standing in for it where that is the one the tree holds. A path of the repository is its root's,
+    /// so the import names it from the workflow file's directory.
     /// </summary>
-    private static void UsedAction(string file, int lineCount, YamlMappingNode mapping, List<ExtractImport> imports)
+    private static void Used(string file, IReadOnlyList<(DataPlace Place, int Line, IDataValue Value)> members, bool workflow, List<ExtractImport> imports)
     {
-        if (!mapping.Children.TryGetValue(new YamlScalarNode("uses"), out var used) || YamlReading.ScalarOf(used) is not { Length: > 1 } action || action[0] != '.')
+        if (members.FirstOrDefault(member => member.Place.Name == "uses") is not { Value.Text: { Length: > 1 } used } uses || used[0] != '.')
         {
             return;
         }
 
-        var line = Line(used, lineCount);
-        var directory = action.EndsWith("@", StringComparison.Ordinal) ? action : action.Split('@')[0];
+        var path = used.Split('@')[0];
 
-        foreach (var pair in new[] { ("action.yml", false), ("action.yaml", true) })
+        if (workflow)
         {
-            if (Rooted(file, CodeGraphIds.Clean($"{directory}/{pair.Item1}")) is { } target)
-            {
-                imports.Add(new ExtractImport(CodeImportForms.Relative, target, line) { Fallback = pair.Item2 });
-            }
+            imports.Add(new ExtractImport(CodeImportForms.Relative, Rooted(file, CodeGraphIds.Clean(path)), uses.Line));
+            return;
+        }
+
+        foreach (var (name, fallback) in new[] { ("action.yml", false), ("action.yaml", true) })
+        {
+            imports.Add(new ExtractImport(CodeImportForms.Relative, Rooted(file, CodeGraphIds.Clean($"{path}/{name}")), uses.Line) { Fallback = fallback });
         }
     }
 
@@ -194,117 +188,218 @@ public sealed class YamlExtractor : ICodeGraphExtractor
         return string.Concat(Enumerable.Repeat("../", up)) + written;
     }
 
-    /// <summary>
-    /// Walks <paramref name="node"/> under the key path <paramref name="path"/>: a scalar key a key node named by its
-    /// path, a mapping's keys walked in turn - a merge key's merged mapping walked as the merging one's own - and a
-    /// sequence item's path holding its place.
-    /// </summary>
-    private void Walk(
-        string file,
-        int lineCount,
-        YamlNode node,
-        IReadOnlyList<string> path,
-        string? section,
-        ExtractIds ids,
-        List<ExtractNode> nodes,
-        List<ExtractImport> imports,
-        ref int keys,
-        ref int beyond)
+    /// <summary>The file's lines, as the core counts them: a mark of the reader's told as the line its character is on.</summary>
+    /// <param name="index">Where the file's lines begin.</param>
+    /// <param name="count">How many lines the file has.</param>
+    /// <param name="length">How long its text is.</param>
+    private sealed class Lines(CodeLineIndex index, int count, int length)
     {
-        if (path.Count >= MostDepth)
-        {
-            return;
-        }
+        /// <summary>The line <paramref name="mark"/> begins on, within the file's.</summary>
+        public int Of(Mark mark) => FileExtract.LineWithin(index.LineAt((int)Math.Clamp(mark.Index, 0, length)), count);
 
-        switch (node)
-        {
-            case YamlMappingNode mapping:
-                foreach (var (key, value) in mapping.Children)
-                {
-                    if (YamlReading.ScalarOf(key) is not { Length: > 0 } name)
-                    {
-                        continue;
-                    }
-
-                    if (name == "<<")
-                    {
-                        // A merge key's mapping is the merging one's own: walked at its path, and no key of its own.
-                        Walk(file, lineCount, value, path, section, ids, nodes, imports, ref keys, ref beyond);
-                        continue;
-                    }
-
-                    Member(file, lineCount, name, value, [.. path, name], section, ids, nodes, imports, ref keys, ref beyond);
-                }
-
-                break;
-
-            case YamlSequenceNode sequence:
-                for (var at = 0; at < sequence.Children.Count; at++)
-                {
-                    var place = $"[{at.ToString(System.Globalization.CultureInfo.InvariantCulture)}]";
-                    Member(file, lineCount, place, sequence.Children[at], [.. path, place], section, ids, nodes, imports, ref keys, ref beyond);
-                }
-
-                break;
-        }
+        /// <summary>The line the character before <paramref name="mark"/> is on: where what ends there ends.</summary>
+        public int Before(Mark mark) => FileExtract.LineWithin(index.LineAt((int)Math.Clamp(mark.Index - 1, 0, length)), count);
     }
 
-    /// <summary>One key or item of a walk: a scalar a key, a container walked on.</summary>
-    private void Member(
-        string file,
-        int lineCount,
-        string name,
-        YamlNode value,
-        IReadOnlyList<string> path,
-        string? section,
-        ExtractIds ids,
-        List<ExtractNode> nodes,
-        List<ExtractImport> imports,
-        ref int keys,
-        ref int beyond)
+    /// <summary>
+    /// What reading one file's nodes shares: its lines, how many scalar keys each node holds - counted once a node - and the
+    /// budget of what the file repeats by reference (<see cref="DataNodes.Repeats"/>), which a merge key's reading spends
+    /// as a walk's does.
+    /// </summary>
+    /// <param name="lines">The file's lines.</param>
+    /// <param name="nodes">The file's nodes, whose budget of repeats is the file's.</param>
+    private sealed class Reading(Lines lines, DataNodes nodes)
     {
-        if (value is YamlMappingNode or YamlSequenceNode)
-        {
-            Walk(file, lineCount, value, path, section, ids, nodes, imports, ref keys, ref beyond);
-            return;
-        }
+        public Lines Lines => lines;
 
-        if (keys >= FileExtract.MostKeys)
-        {
-            beyond++;
-            return;
-        }
+        public DataNodes Nodes => nodes;
 
-        keys++;
-        var key = JsonExtractor.KeyPath(path);
-        var line = FileExtract.LineWithin((int)Math.Clamp(value.Start.Line, 1, int.MaxValue), lineCount);
-
-        nodes.Add(new ExtractNode(ids.Next($"{Language}:{file}#{key}"), CodeNodeKinds.Member, name, key, line, line, key)
-        {
-            SubKind = "key",
-            Parent = section,
-            Summary = YamlReading.ScalarOf(value) is { Length: > 0 } scalar && ExtractText.Flat(scalar) is { Length: > 0 } flat ? ExtractText.Summary(flat) : null,
-        });
+        public Dictionary<YamlWritten, long> Scalars { get; } = new(ReferenceEqualityComparer.Instance);
     }
 
-    /// <summary>The line <paramref name="node"/> begins on, within the file's <paramref name="lineCount"/> lines.</summary>
-    private static int Line(YamlNode node, int lineCount) => FileExtract.LineWithin((int)Math.Clamp(node.Start.Line, 1, int.MaxValue), lineCount);
+    /// <summary>A file's documents, each by its place, as a walk of its keys reads them.</summary>
+    private sealed class Documents(IReadOnlyList<YamlWritten> documents, Reading reading) : IDataValue
+    {
+        public bool Holds => true;
+
+        public string? Text => null;
+
+        public int End => documents.Max(document => new Node(document, null, reading).End);
+
+        public bool Repeated => false;
+
+        public long Scalars => documents.Sum(document => new Node(document, null, reading).Scalars);
+
+        public IEnumerable<(DataPlace Place, int Line, IDataValue Value)> Members
+            => documents.Select((document, at) => (DataPlace.At(at), reading.Lines.Of(document.Start), (IDataValue)new Node(document, null, reading)));
+    }
 
     /// <summary>
-    /// The last line <paramref name="node"/> or anything inside it is written on, within the file's
-    /// <paramref name="lineCount"/> lines: a collection's own end mark is not where its content ends, so its last line is
-    /// read from everything it holds.
+    /// A YAML node as a walk of its keys reads it: an alias as the node it names, every line where this place writes it -
+    /// through an alias, the alias's own line, which <paramref name="over"/> holds for all it repeats.
     /// </summary>
-    private static int SpanOf(YamlNode node, int lineCount)
+    /// <param name="written">The node as the text writes it here.</param>
+    /// <param name="over">The line of the alias it is reached through, where it is reached through one; null where written here.</param>
+    /// <param name="reading">What reading the file's nodes shares.</param>
+    private sealed class Node(YamlWritten written, int? over, Reading reading) : IDataValue
     {
-        var last = (int)Math.Clamp(node.Start.Line, 1, int.MaxValue);
+        private readonly Lines _lines = reading.Lines;
 
-        foreach (var child in node.AllNodes)
+        /// <summary>What the node is: an alias's node, or itself; null for an alias that names nothing or is not followed.</summary>
+        private YamlWritten? Resolved => written.Kind == YamlWrittenKind.Alias ? written.Target : written;
+
+        /// <summary>The line of the alias the node and all it holds are reached through, where it is one.</summary>
+        private int? Over => over ?? (written.Kind == YamlWrittenKind.Alias ? _lines.Of(written.Start) : null);
+
+        /// <summary>A container, or an alias not followed: what it repeats nests too deep to read, and none of it is.</summary>
+        public bool Holds => written.Cut || Resolved?.Kind is YamlWrittenKind.Mapping or YamlWrittenKind.Sequence;
+
+        public string? Text => Resolved?.Kind == YamlWrittenKind.Scalar ? Resolved.Value : null;
+
+        public int End => Over ?? Last(written);
+
+        public bool Repeated => over is not null;
+
+        public long Scalars => written is { Kind: YamlWrittenKind.Alias, Cut: true } ? 0 : Resolved is not { } node ? 1 : Count(node);
+
+        public IEnumerable<(DataPlace Place, int Line, IDataValue Value)> Members
         {
-            last = Math.Max(last, (int)Math.Clamp(child.End.Line, 1, int.MaxValue));
-            last = Math.Max(last, (int)Math.Clamp(child.Start.Line, 1, int.MaxValue));
+            get
+            {
+                if (written.Cut || Resolved is not { Cut: false } node)
+                {
+                    yield break;
+                }
+
+                if (node.Kind == YamlWrittenKind.Sequence)
+                {
+                    for (var at = 0; at < node.Children.Count; at++)
+                    {
+                        yield return (DataPlace.At(at), Over ?? _lines.Of(node.Children[at].Start), new Node(node.Children[at], Over, reading));
+                    }
+
+                    yield break;
+                }
+
+                if (node.Kind != YamlWrittenKind.Mapping)
+                {
+                    yield break;
+                }
+
+                foreach (var member in Effective(node, Over))
+                {
+                    yield return member;
+                }
+            }
         }
 
-        return FileExtract.LineWithin(last, lineCount);
+        /// <summary>
+        /// The keys of <paramref name="mapping"/>, as a mapping that merges others reads: its own, in the order written, then
+        /// each merged mapping's - of a merge key's mapping or list of mappings, in order - but one of a name a key before it
+        /// gave, the mapping's own winning, an earlier merged one over a later. Each key a merge reads - one it gives, and one
+        /// a key before it shadows - is a visit of what the file repeats (<see cref="DataNodes.Repeats"/>): a few lines of
+        /// merges of large mappings stand for many keys, and past the file's budget none is read.
+        /// </summary>
+        private IEnumerable<(DataPlace Place, int Line, IDataValue Value)> Effective(YamlWritten mapping, int? repeated)
+        {
+            var given = new HashSet<string>(StringComparer.Ordinal);
+            var merged = new List<(YamlWritten Source, int? Over)>();
+
+            for (var at = 0; at + 1 < mapping.Children.Count; at += 2)
+            {
+                var (key, value) = (mapping.Children[at], mapping.Children[at + 1]);
+
+                if (key is { Kind: YamlWrittenKind.Scalar, Plain: true, Value: "<<" })
+                {
+                    merged.AddRange(Merged(value, repeated));
+                    continue;
+                }
+
+                if (key.Kind != YamlWrittenKind.Scalar || key.Value is not { } name)
+                {
+                    continue;
+                }
+
+                given.Add(name);
+                yield return (DataPlace.Named(name), repeated ?? _lines.Of(key.Start), new Node(value, repeated, reading));
+            }
+
+            foreach (var (source, through) in merged)
+            {
+                foreach (var member in new Node(source, through, reading).Members)
+                {
+                    if (!reading.Nodes.Repeats(member.Line))
+                    {
+                        yield break;
+                    }
+
+                    if (member.Place.Name is { } name && given.Add(name))
+                    {
+                        yield return member;
+                    }
+                }
+            }
+        }
+
+        /// <summary>The mappings a merge key's value merges: a mapping, an alias of one, or a list of either, each with the line of the alias it is reached through.</summary>
+        private IEnumerable<(YamlWritten Source, int? Over)> Merged(YamlWritten value, int? repeated)
+        {
+            var through = repeated ?? (value.Kind == YamlWrittenKind.Alias ? _lines.Of(value.Start) : null);
+            var resolved = value.Kind == YamlWrittenKind.Alias ? value.Target : value;
+
+            if (resolved?.Kind == YamlWrittenKind.Mapping)
+            {
+                yield return (value, repeated);
+            }
+            else if (resolved?.Kind == YamlWrittenKind.Sequence && !resolved.Cut)
+            {
+                foreach (var item in resolved.Children)
+                {
+                    if ((item.Kind == YamlWrittenKind.Alias ? item.Target : item)?.Kind == YamlWrittenKind.Mapping)
+                    {
+                        yield return (item, through);
+                    }
+                }
+            }
+        }
+
+        /// <summary>How many scalar keys <paramref name="node"/> holds at any depth, merged keys among them - a scalar itself one: counted once a node, so a count of what aliases repeat costs what the text writes.</summary>
+        private long Count(YamlWritten node)
+        {
+            if (node.Kind == YamlWrittenKind.Scalar)
+            {
+                return 1;
+            }
+
+            if (reading.Scalars.TryGetValue(node, out var known))
+            {
+                return known;
+            }
+
+            long count = 0;
+
+            foreach (var member in new Node(node, null, reading).Members)
+            {
+                var more = member.Value.Scalars;
+                count = more > long.MaxValue - count ? long.MaxValue : count + more;
+            }
+
+            reading.Scalars[node] = count;
+            return count;
+        }
+
+        /// <summary>
+        /// The last line <paramref name="node"/> is written on: a scalar's or an alias's own, a flow container's closing
+        /// bracket's, and a block container's - whose own end is where the next thing begins - the last of what it holds.
+        /// </summary>
+        private int Last(YamlWritten node)
+        {
+            if (node.Kind is YamlWrittenKind.Scalar or YamlWrittenKind.Alias || node.Flow || node.Cut)
+            {
+                return Math.Max(_lines.Of(node.Start), _lines.Before(node.End));
+            }
+
+            return node.Children.Count == 0 ? _lines.Of(node.Start) : Math.Max(_lines.Of(node.Start), node.Children.Max(Last));
+        }
     }
 }

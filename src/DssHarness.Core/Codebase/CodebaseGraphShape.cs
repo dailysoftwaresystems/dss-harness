@@ -10,12 +10,22 @@ namespace DssHarness.Core.Codebase;
 /// </summary>
 /// <param name="Include">Only paths one of these matches are graphed; every path where none is given.</param>
 /// <param name="Exclude">Paths one of these matches are not graphed.</param>
-/// <param name="Languages">The implementations used, by name; every one the registry holds where <see langword="null"/>. A file whose claimant is left out is read by the fallback.</param>
+/// <param name="Languages">The implementations used, by name, in ordinal order; every one the registry holds where <see langword="null"/>. A file whose claimant is left out is read by the fallback.</param>
 /// <param name="MaxFileBytes">The largest file read; one larger is listed <c>tooLarge</c>.</param>
 /// <param name="ExcludeGenerated">Whether a generated file's declarations are left out (<c>exclude</c>) rather than kept, its file's entry naming why it is generated (<c>low</c>).</param>
 /// <param name="MapTokens">The cap, in tokens, of the run's repository map; 0 asks for none.</param>
-/// <param name="KeyNaming">The naming policies a configuration key's last segment is joined to a member's name by: <c>camelCase</c>, <c>snake_case</c>, <c>kebab-case</c> and <c>exact</c>, the last two the default.</param>
-/// <param name="Claims">The file name endings, each with its dot, the repository maps to an implementation, by its name - <c>.lang.json</c> to <c>json</c>, say - claimed after an exact name the registry holds and before an extension: null where the repository maps none.</param>
+/// <param name="KeyNaming">
+/// The naming policies a configuration key's last segment is joined to a member's name by - <c>camelCase</c>,
+/// <c>snake_case</c>, <c>kebab-case</c> and <c>exact</c> - each once, in that order (<see cref="NamingValues"/>):
+/// <c>camelCase</c> and <c>exact</c> the default (<see cref="DefaultKeyNaming"/>), which <see cref="Of"/> holds where the
+/// workflow says none, and <see langword="null"/> stands for.
+/// </param>
+/// <param name="Claims">
+/// The file name endings, each with its dot, the repository maps to an implementation, by its name - <c>.lang.json</c> to
+/// <c>json</c>, say - claimed after an exact name the registry holds and before an extension: each implementation's
+/// endings in lower case and ordinal order, as <see cref="Of"/> holds them, a file's name read in any case; null where the
+/// repository maps none.
+/// </param>
 public sealed record CodebaseGraphShape(
     IReadOnlyList<GlobPattern> Include,
     IReadOnlyList<GlobPattern> Exclude,
@@ -69,19 +79,90 @@ public sealed record CodebaseGraphShape(
     public static IReadOnlyList<string> DefaultKeyNaming { get; } = [CamelCase, Exact];
 
     /// <summary>
-    /// The naming policies a key's last segment is joined by, as <paramref name="keyNaming"/> says them - the default
-    /// where it says none, or says nothing the graph reads.
+    /// The naming policies a key's last segment is joined by, as <paramref name="keyNaming"/> says them, each once in the
+    /// order <see cref="NamingValues"/> lists them: the default where it is <see langword="null"/>.
     /// </summary>
-    /// <param name="keyNaming">What the workflow's <c>keyNaming</c> says, or null.</param>
+    /// <param name="keyNaming">The policies a shape holds, or null for the default.</param>
+    /// <exception cref="ArgumentException"><paramref name="keyNaming"/> names none, or one the graph joins no key by: what the definition's check and a manifest's refuse.</exception>
     public static IReadOnlyList<string> NamingOf(IReadOnlyList<string>? keyNaming)
-        => keyNaming is { Count: > 0 } && keyNaming.All(naming => NamingValues.Contains(naming, StringComparer.Ordinal)) ? keyNaming : DefaultKeyNaming;
+        => keyNaming is null ? DefaultKeyNaming
+            : NamingProblem(keyNaming) is { } wrong ? throw new ArgumentException($"the key naming {wrong}", nameof(keyNaming))
+            : Named(keyNaming);
+
+    /// <summary>
+    /// What is wrong with <paramref name="keyNaming"/> as the policies a key is joined by - it names none, or one the graph
+    /// joins no key by - said to follow its subject; <see langword="null"/> where nothing is.
+    /// </summary>
+    /// <param name="keyNaming">The policies a block or a manifest names.</param>
+    public static string? NamingProblem(IReadOnlyList<string> keyNaming)
+    {
+        ArgumentNullException.ThrowIfNull(keyNaming);
+
+        return keyNaming.Count == 0 ? "names no policy"
+            : keyNaming.FirstOrDefault(naming => !NamingValues.Contains(naming, StringComparer.Ordinal)) is { } unknown ? $"names '{unknown}', which is none of {string.Join(", ", NamingValues.Select(value => $"'{value}'"))}"
+            : null;
+    }
+
+    /// <summary>
+    /// <paramref name="keyNaming"/> each once: those of <see cref="NamingValues"/> in its order, then any other in the order
+    /// written - which the definition's check refuses, kept so a shape that names it is no other shape.
+    /// </summary>
+    private static IReadOnlyList<string> Named(IReadOnlyList<string> keyNaming)
+        => [.. NamingValues.Where(naming => keyNaming.Contains(naming, StringComparer.Ordinal)), .. keyNaming.Where(naming => !NamingValues.Contains(naming, StringComparer.Ordinal)).Distinct(StringComparer.Ordinal)];
+
+    /// <summary>
+    /// <paramref name="claims"/> as a shape holds them: each implementation's endings in lower case, each once in ordinal
+    /// order, the implementations in ordinal order - a file's name read in any case, two that map alike one map; null
+    /// where it maps none.
+    /// </summary>
+    /// <param name="claims">An implementation's name to the endings it claims, as a block or a manifest writes them, or null.</param>
+    public static IReadOnlyDictionary<string, IReadOnlyList<string>>? ClaimsOf(IReadOnlyDictionary<string, IReadOnlyList<string>>? claims)
+        => claims is null ? null
+            : new SortedDictionary<string, IReadOnlyList<string>>(
+                claims.ToDictionary(claim => claim.Key, claim => (IReadOnlyList<string>)[.. claim.Value.Select(ending => ending.ToLowerInvariant()).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)], StringComparer.Ordinal),
+                StringComparer.Ordinal);
+
+    /// <summary>Whether <paramref name="one"/> and <paramref name="other"/> map the same endings to the same implementations, as <see cref="ClaimsOf"/> holds them: the one owner of whether two claims are one.</summary>
+    /// <param name="one">Claims, or null for none.</param>
+    /// <param name="other">Other claims, or null for none.</param>
+    public static bool SameClaims(IReadOnlyDictionary<string, IReadOnlyList<string>>? one, IReadOnlyDictionary<string, IReadOnlyList<string>>? other)
+    {
+        var (first, second) = (ClaimsOf(one), ClaimsOf(other));
+
+        return first is null ? second is null
+            : second is not null && first.Count == second.Count && first.All(claim => second.TryGetValue(claim.Key, out var endings) && claim.Value.SequenceEqual(endings, StringComparer.Ordinal));
+    }
+
+    /// <summary>
+    /// Whether this shape and <paramref name="other"/> make one graph: the same patterns, implementations, largest file,
+    /// generated code, map, naming policies and claims, each as a shape holds it - a default said and one left out alike,
+    /// two lists of one set alike. The one owner of whether two shapes are one.
+    /// </summary>
+    /// <param name="other">Another shape.</param>
+    public bool SameAs(CodebaseGraphShape other)
+    {
+        ArgumentNullException.ThrowIfNull(other);
+
+        static bool Same(IReadOnlyList<string>? one, IReadOnlyList<string>? two)
+            => one is null ? two is null : two is not null && one.Order(StringComparer.Ordinal).SequenceEqual(two.Order(StringComparer.Ordinal), StringComparer.Ordinal);
+
+        return Include.Select(pattern => pattern.ToString()).SequenceEqual(other.Include.Select(pattern => pattern.ToString()), StringComparer.Ordinal)
+            && Exclude.Select(pattern => pattern.ToString()).SequenceEqual(other.Exclude.Select(pattern => pattern.ToString()), StringComparer.Ordinal)
+            && Same(Languages, other.Languages)
+            && MaxFileBytes == other.MaxFileBytes
+            && ExcludeGenerated == other.ExcludeGenerated
+            && MapTokens == other.MapTokens
+            && Named(KeyNaming ?? DefaultKeyNaming).SequenceEqual(Named(other.KeyNaming ?? DefaultKeyNaming), StringComparer.Ordinal)
+            && SameClaims(Claims, other.Claims);
+    }
 
     /// <summary>The shape where the workflow says nothing of the graph.</summary>
     public static CodebaseGraphShape Default { get; } = new([], [], null, DefaultMaxFileBytes, ExcludeGenerated: false, DefaultMapTokens);
 
     /// <summary>
     /// The shape the workflow's block says, each key it leaves out at its default: the patterns read as
-    /// <see cref="GlobPattern"/> reads them, which the definition's check held them to before any run.
+    /// <see cref="GlobPattern"/> reads them, which the definition's check held them to before any run; the implementations,
+    /// the naming policies and the claims each held in one order, so two blocks that say one set alike give one shape.
     /// </summary>
     /// <param name="include">The block's <c>include</c>, or <see langword="null"/>.</param>
     /// <param name="exclude">The block's <c>exclude</c>, or <see langword="null"/>.</param>
@@ -103,12 +184,12 @@ public sealed record CodebaseGraphShape(
         => new(
             [.. (include ?? []).Select(GlobPattern.Parse)],
             [.. (exclude ?? []).Select(GlobPattern.Parse)],
-            languages,
+            languages is null ? null : [.. languages.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)],
             maxFileBytes ?? DefaultMaxFileBytes,
             generated == GeneratedExclude,
             mapTokens ?? DefaultMapTokens,
-            keyNaming,
-            claims);
+            Named(keyNaming ?? DefaultKeyNaming),
+            ClaimsOf(claims));
 
     /// <summary>Whether <paramref name="path"/> is graphed: matched by an <c>include</c> where any is given, and by no <c>exclude</c>.</summary>
     /// <param name="path">A path relative to the tree, with forward separators.</param>
@@ -119,34 +200,4 @@ public sealed record CodebaseGraphShape(
     /// <summary>Whether the implementation named <paramref name="language"/> is used.</summary>
     /// <param name="language">An implementation's name.</param>
     public bool Uses(string language) => Languages is null || Languages.Contains(language, StringComparer.Ordinal);
-
-    /// <summary>
-    /// The implementation the repository's <c>claims</c> map gives the file at <paramref name="path"/> by the longest
-    /// ending its name ends with, where its name is none the registry holds exactly and the map gives one; null where
-    /// none does.
-    /// </summary>
-    /// <param name="path">A file's path, relative to the tree's root with forward separators.</param>
-    public string? EndingClaimOf(string path)
-    {
-        if (Claims is not { Count: > 0 } claims)
-        {
-            return null;
-        }
-
-        var name = CodeGraphIds.FileName(path);
-        var (longest, language) = (0, null as string);
-
-        foreach (var (claimed, endings) in claims)
-        {
-            foreach (var ending in endings)
-            {
-                if (ending.Length > longest && name.EndsWith(ending, StringComparison.OrdinalIgnoreCase))
-                {
-                    (longest, language) = (ending.Length, claimed);
-                }
-            }
-        }
-
-        return language;
-    }
 }

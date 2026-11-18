@@ -238,6 +238,26 @@ public sealed class CodeGraphExtractorsTests
     }
 
     /// <summary>
+    /// The architecture and the help say what the code holds of how a file is claimed and how keys are joined: a
+    /// workflow's claimed endings after an exact name and before an extension, the keys' join of candidates and its bound,
+    /// and the default naming policies the shape holds.
+    /// </summary>
+    [Fact]
+    public void TheDocs_SayTheClaimOrderTheKeysJoinAndItsDefault_AsTheCodeHoldsThem()
+    {
+        var architecture = Prose.Document("docs", "architecture.md");
+        var help = Prose.Words(DssHarness.Core.Help.HelpTopics.Render("codebase-graph"));
+        var defaults = string.Join(" and ", CodebaseGraphShape.DefaultKeyNaming.Select(naming => $"`{naming}`"));
+        var policies = string.Join(", ", CodebaseGraphShape.NamingValues.SkipLast(1).Select(naming => $"`{naming}`")) + $" or `{CodebaseGraphShape.NamingValues[^1]}`";
+
+        Assert.Contains($"(`codebaseGraph.keyNaming`: {policies}, {defaults} the default)", architecture, StringComparison.Ordinal);
+        Assert.Contains($"a literal or a name that names more than `CodeConfidences.MostCandidates` keys joins none", architecture, StringComparison.Ordinal);
+        Assert.Contains("A file goes to the claimants of its exact name, else of an ending `codebaseGraph.claims` maps, else of its extension, else to the fallback", architecture, StringComparison.Ordinal);
+        Assert.Contains("by its exact name, else by an ending codebaseGraph.claims maps, else by its extension, else by the fallback", help, StringComparison.Ordinal);
+        Assert.Contains($"a literal or a name that names more than {CodeConfidences.MostCandidates} keys joins none", help, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// Nothing of the tool outside the implementations' own folder names one of them or their namespace: the store, the
     /// sync, the linker, the step, help and the validator know no language by name, so a new one is one class and its tests.
     /// A type nested in one is its own alone, which no code outside it can name.

@@ -1270,7 +1270,8 @@ public sealed class CodebaseGraphService(
             CodeGraphSymbolsFile? symbols = null;
             (IReadOnlyDictionary<string, CodeGraphFile>? Files, CodeGraphLinked? Linked) linked = (null, null);
 
-            if (previous is not null && ownPrevious && previous.Digest == digest)
+            // A link made under other naming policies joined its keys otherwise: the files read alike, the link is made again.
+            if (previous is not null && ownPrevious && previous.Digest == digest && SameNaming(previous))
             {
                 linked = held?.Linked is not null && held.Base == digest ? (held.Files, held.Linked) : (null, null);
 
@@ -1295,7 +1296,7 @@ public sealed class CodebaseGraphService(
             {
                 Languages = _shape.Languages,
                 KeyNaming = _shape.KeyNaming is null ? null : [.. _shape.KeyNaming],
-                Claims = _shape.Claims is null ? null : new Dictionary<string, IReadOnlyList<string>>(_shape.Claims.ToDictionary(claim => claim.Key, claim => claim.Value, StringComparer.Ordinal), StringComparer.Ordinal),
+                Claims = CodebaseGraphShape.ClaimsOf(_shape.Claims),
             };
 
             _service._store.WriteGraphManifest(_run, manifest);
@@ -1628,31 +1629,19 @@ public sealed class CodebaseGraphService(
 
         /// <summary>
         /// Whether the tree is read as <paramref name="manifest"/>'s files were: by the same implementations at the same
-        /// versions, under the same languages and the same mapped claims. The naming policies join no file's reading, so
-        /// they are not asked here: the join is derived whole at every link.
+        /// versions, under the same languages and the same mapped claims (<see cref="CodebaseGraphShape.SameClaims"/>). The
+        /// naming policies join no file's reading, so they are not asked here: the join is derived whole at every link, and
+        /// a link made under others is made again (<see cref="SameNaming"/>).
         /// </summary>
         private bool SameReading(CodeGraphManifest manifest)
             => manifest.Extractors.SequenceEqual(_versions)
                 && (manifest.Languages ?? []).SequenceEqual(_shape.Languages ?? [], StringComparer.Ordinal)
                 && (manifest.Languages is null) == (_shape.Languages is null)
-                && SameClaims(manifest);
+                && CodebaseGraphShape.SameClaims(manifest.Claims, _shape.Claims);
 
-        /// <summary>Whether <paramref name="manifest"/>'s mapped claims are the shape's, each ending of each language.</summary>
-        private bool SameClaims(CodeGraphManifest manifest)
-        {
-            if ((manifest.Claims is null) != (_shape.Claims is null))
-            {
-                return false;
-            }
-
-            var before = Mapped(manifest.Claims);
-            var now = Mapped(_shape.Claims);
-
-            return before.SequenceEqual(now);
-
-            static IEnumerable<(string Language, string Ending)> Mapped(IReadOnlyDictionary<string, IReadOnlyList<string>>? claims)
-                => claims is null ? [] : claims.SelectMany(claim => claim.Value.Select(ending => (claim.Key, ending))).OrderBy(mapped => mapped.Key, StringComparer.Ordinal).ThenBy(mapped => mapped.ending, StringComparer.Ordinal);
-        }
+        /// <summary>Whether <paramref name="manifest"/>'s link joined its keys under the naming policies the shape names: one link made under others is made again.</summary>
+        private bool SameNaming(CodeGraphManifest manifest)
+            => CodebaseGraphShape.NamingOf(manifest.KeyNaming).SequenceEqual(CodebaseGraphShape.NamingOf(_shape.KeyNaming), StringComparer.Ordinal);
 
         /// <summary>The entry of <paramref name="file"/> kept from <paramref name="before"/>, where it is of that blob and nothing else that decides it changed; null otherwise.</summary>
         private CodeGraphFileEntry? Kept(string path, Listed file, CodeGraphFileEntry? before, bool sameReading)
