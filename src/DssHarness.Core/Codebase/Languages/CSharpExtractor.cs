@@ -70,9 +70,21 @@ public sealed class CSharpExtractor : ICodeGraphExtractor
     public FileExtract Extract(CodeFileInput input)
     {
         ArgumentNullException.ThrowIfNull(input);
+        return Read(Language, input);
+    }
+
+    /// <summary>
+    /// Reads C# text as another implementation's extract - a Razor file's code blocks among them - every id prefixed by
+    /// <paramref name="language"/>: the one walker every implementation's C# is read by.
+    /// </summary>
+    /// <param name="language">The implementation the extract is part of: the prefix of every id.</param>
+    /// <param name="input">The C# text, at the lines it stands on in its own file.</param>
+    internal static FileExtract Read(string language, CodeFileInput input)
+    {
+        ArgumentNullException.ThrowIfNull(input);
 
         var root = CSharpSyntaxTree.ParseText(input.Text, Options).GetCompilationUnitRoot();
-        return new Reading($"{Language}:", input.Path, CodeFileText.LineIndex(input.Text), root).Read();
+        return new Reading($"{language}:", input.Path, CodeFileText.LineIndex(input.Text), root).Read();
     }
 
     /// <summary>The attributes a test framework marks a test with, by their names as written: xUnit's, NUnit's and MSTest's.</summary>

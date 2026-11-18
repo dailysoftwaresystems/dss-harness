@@ -2497,6 +2497,39 @@ public sealed class CodeGraphLinkerTests
         Assert.DoesNotContain(linked.External, pair => pair.Key == page.Id);
     }
 
+    /// <summary>
+    /// A scope import a file declares for its directory - a Razor <c>_ViewImports.cshtml</c>'s <c>@using</c> - every
+    /// file of the language under that directory imports: a view's unqualified name is found through it among the two
+    /// the repository declares, and a file of another language, or outside the subtree, is left with both.
+    /// </summary>
+    [Fact]
+    public void ADirectorysScopeImport_ReachesEveryFileOfItsLanguageUnderIt_AndNoOther()
+    {
+        var linked = CodeGraphLinker.Link(
+        [
+            File("Views/_ViewImports.cshtml", [Member("Imported", 0)], imports: [Import(CodeImportForms.Directory, "Shop.Web")]) with { Language = "razor" },
+            File("Views/Cart.cshtml", [Member("Cart", 0)], [Ref("Cart", CodeEdgeKinds.References, "Helper")]) with { Language = "razor" },
+            File("Views/Deep/Other.cshtml", [Member("Other", 0)], [Ref("Other", CodeEdgeKinds.References, "Helper") with { Line = 2 }]) with { Language = "razor" },
+            File("Elsewhere/None.cshtml", [Member("None", 0)], [Ref("None", CodeEdgeKinds.References, "Helper") with { Line = 3 }]) with { Language = "razor" },
+            File("Views/Plain.c", [Member("Plain", 0)], [Ref("Plain", CodeEdgeKinds.References, "Helper") with { Line = 4 }]) with { Language = "c" },
+            File("shop.t", [Type("Shop.Web.Helper")], scopes: [Open("Shop.Web")]),
+            File("other.t", [Type("Other.Helper")], scopes: [Open("Other")]),
+        ]);
+
+        Assert.Contains(new CodeEdge("t:Cart", "t:Shop.Web.Helper", CodeEdgeKinds.References, 1, CodeConfidences.Unique), linked.Edges);
+        Assert.Contains(new CodeEdge("t:Other", "t:Shop.Web.Helper", CodeEdgeKinds.References, 2, CodeConfidences.Unique), linked.Edges);
+
+        // With no scope to say which Helper, both are the reference's, and neither alone: the file outside the subtree
+        // and the one of another language keep the two candidates.
+        foreach (var from in new[] { "t:None", "t:Plain" })
+        {
+            var found = linked.Edges.Where(edge => edge.From == from && edge.Kind == CodeEdgeKinds.References).ToList();
+
+            Assert.Equal(2, found.Count);
+            Assert.All(found, edge => Assert.Equal(CodeConfidences.Candidates, edge.Confidence));
+        }
+    }
+
     private static CodeGraphLinked Link(params CodeGraphFile[] files) => CodeGraphLinker.Link(files);
 
     private static CodeGraphFile File(string path, IReadOnlyList<ExtractNode> nodes, IReadOnlyList<ExtractReference>? references = null, IReadOnlyList<ExtractScope>? scopes = null, IReadOnlyList<ExtractImport>? imports = null)

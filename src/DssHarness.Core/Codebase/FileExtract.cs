@@ -426,10 +426,10 @@ public sealed record ExtractImport(string Form, string Target, int Line)
             : string.IsNullOrWhiteSpace(Target) ? "it names nothing"
             : !FileExtract.Within(Line, lineCount) ? string.Create(CultureInfo.InvariantCulture, $"it is on line {Line}, outside the file's {lineCount}")
             : Prefix is { } prefix && string.IsNullOrWhiteSpace(prefix) ? "its prefix is empty"
-            : Fallback && Form == CodeImportForms.Scope ? "it is of a scope, and stands in for another import: only an import of a file does"
-            : Export && Form == CodeImportForms.Scope ? "it is of a scope, and is an export: only an import of a file is exported"
+            : Fallback && Form is CodeImportForms.Scope or CodeImportForms.Directory ? "it is of a scope, and stands in for another import: only an import of a file does"
+            : Export && Form is CodeImportForms.Scope or CodeImportForms.Directory ? "it is of a scope, and is an export: only an import of a file is exported"
             : Export && Prefix is not null ? "it is an export with a prefix: an export makes names visible by themselves"
-            : Shares && Form == CodeImportForms.Scope ? "it is of a scope, and shares its imports: only a file's are shared"
+            : Shares && Form is CodeImportForms.Scope or CodeImportForms.Directory ? "it is of a scope, and shares its imports: only a file's are shared"
             : Shares && (Export || Prefix is not null || Show is not null || Hide is not null) ? "it shares its imports, and is an export or has a prefix or a filter: what is shared is the file's imports as they are"
             : null;
 }
@@ -449,8 +449,15 @@ public static class CodeImportForms
     /// <summary>A file, by the ending of its path: every file of the tree whose path ends so.</summary>
     public const string Ending = "ending";
 
+    /// <summary>
+    /// A scope, by its qualified name, that every file of the implementation's language under the declaring file's
+    /// directory - the whole subtree - imports: a Razor <c>_ViewImports.cshtml</c>'s and Blazor's <c>_Imports.razor</c>'s
+    /// <c>@using</c>.
+    /// </summary>
+    public const string Directory = "directory";
+
     /// <summary>Every form.</summary>
-    public static IReadOnlyList<string> All { get; } = [Scope, Relative, Address, Ending];
+    public static IReadOnlyList<string> All { get; } = [Scope, Relative, Address, Ending, Directory];
 }
 
 /// <summary>

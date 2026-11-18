@@ -257,6 +257,9 @@ public static class CodeGraphLinker
 
         /// <summary>What every file of each language imports (<see cref="ExtractImport.Global"/>), with the file that says so.</summary>
         private readonly Dictionary<string, List<(CodeGraphFile File, ExtractImport Import)>> _global = new(StringComparer.Ordinal);
+
+        /// <summary>The scope imports each file of a language declares for the whole of its directory's subtree: a Razor <c>_ViewImports.cshtml</c>'s <c>@using</c> among them.</summary>
+        private readonly Dictionary<string, List<(string Directory, CodeGraphFile File, ExtractImport Import)>> _ofDirectory = new(StringComparer.Ordinal);
         private readonly Dictionary<string, List<Declaration>> _byId = new(StringComparer.Ordinal);
 
         /// <summary>Every declaration by the scope it is declared in and its name.</summary>
@@ -357,6 +360,11 @@ public static class CodeGraphLinker
                 foreach (var import in extract.Imports.Where(import => import.Global && file.Language is not null))
                 {
                     Add(_global, file.Language!, (file, import));
+                }
+
+                foreach (var import in extract.Imports.Where(import => import.Form == CodeImportForms.Directory && file.Language is not null))
+                {
+                    Add(_ofDirectory, file.Language!, (file.Path[..(file.Path.LastIndexOf('/') + 1)], file, import));
                 }
 
                 foreach (var scope in extract.Scopes)
@@ -1292,13 +1300,25 @@ public static class CodeGraphLinker
                 Touch(Read.Global, language);
             }
 
-            // An export makes names visible to the file's importers, not to the file.
-            var own = Taken(file).Where(import => !import.Export).ToList();
+            // An export makes names visible to the file's importers, not to the file; a directory import is applied to
+            // the declaring file too, below, as one of the subtree it declares for.
+            var own = Taken(file).Where(import => !import.Export && import.Form != CodeImportForms.Directory).ToList();
 
             return own.Select(import => (import, file))
                 .Concat(own.Where(import => import.Shares).SelectMany(import => FilesOf(import, file)).Distinct(StringComparer.Ordinal).SelectMany(SharedOf))
                 .Concat(file.Language is { } named && _global.TryGetValue(named, out var global)
                     ? global.Where(made => !ReferenceEquals(made.File, file)).Select(made => (made.Import, made.File))
+                    : [])
+                .Concat(file.Language is { } declared && _ofDirectory.TryGetValue(declared, out var ofDirectory)
+                    ? ofDirectory
+                        .Where(held => Under(file.Path, held.Directory))
+                        .Select(held =>
+                        {
+                            // A finding that reads a directory's scope import is found again when the file declaring it
+                            // changes, as one that reads an import is.
+                            Touch(Read.Imports, held.File.Path);
+                            return (held.Import with { Form = CodeImportForms.Scope }, file);
+                        })
                     : []);
         }
 
@@ -1357,7 +1377,7 @@ public static class CodeGraphLinker
             {
                 var from = CodeGraphIds.FileId(file.Path);
 
-                foreach (var import in Taken(file))
+                foreach (var import in Taken(file).Where(import => import.Form != CodeImportForms.Directory))
                 {
                     if (import.Form == CodeImportForms.Scope)
                     {
@@ -2038,6 +2058,10 @@ public static class CodeGraphLinker
         /// </summary>
         private bool Sees(Declaration from, Declaration declaration)
             => Sees(from.File, declaration) && (declaration.SeenKey is not { } seen || Chain(from).Contains(seen, StringComparer.Ordinal));
+
+        /// <summary>Whether <paramref name="path"/> is under the directory <paramref name="directory"/>, the tree's root as empty: a scope import a file declares for its directory's subtree.</summary>
+        private static bool Under(string path, string directory)
+            => directory.Length == 0 || path.StartsWith(directory, StringComparison.Ordinal);
 
         private static string KeyOf(CodeGraphFile file, string name, HashSet<string> closed)
             => closed.Contains(name) ? ClosedKey(file.Path, name) : OpenKey(name);

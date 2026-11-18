@@ -4513,6 +4513,17 @@ selector writes it, over the rule's lines; each custom property and each SCSS or
 import of it. `related` answers `styledBy` (the rules that style a node) and `styles` (what a rule reaches), so "who
 uses this class" and "what styles this element" are one call each.
 
+Razor views (.cshtml) and Blazor components (.razor) are one implementation, `razor`: a component is the class its
+`@code` block is - the block's opening line read as the `partial class` the page compiles to, named by its file, in
+the namespace a `@namespace` gives it or its directory's path - so the C# reader walks its members with the markup
+blanked, each on the line it stands on, and the class says it is a part, which the linker joins to its `.razor.cs`
+code-behind; a view is a section over its lines with the same done for `@functions`. `@model`, `@inject` and
+`@inherits` are references, an `@inject`'s name a member typed by the service it is given; a PascalCase element, a
+`<partial name=` and an `@Html.Partial("x")` are instantiates, an `@on*` attribute a call of its handler and another
+`@` attribute a use of the name its value begins with. A `_ViewImports.cshtml` and an `_Imports.razor` declare each
+`@using` they hold for the whole of their directory's subtree: an import of the `directory` form, which the linker
+applies to every file of the language under it, and to no file of another language or outside it.
+
 A sync (`ICodebaseGraphService.SyncAsync`) lists the main checkout by three calls of `IGitClient` that take no lock -
 `ListIndexAsync` (`ls-files --stage -v -z`, the one reading of the index the whole tool shares), `ListWorkingFilesAsync`
 (`status --porcelain=v2 -z --untracked-files=all --no-renames`) and `HashWorkingFilesAsync` (`hash-object`, its paths on
