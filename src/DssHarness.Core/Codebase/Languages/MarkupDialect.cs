@@ -43,14 +43,12 @@ internal sealed partial class MarkupDialect
     /// A Vue template's: a component's tag - PascalCase as written, or with a dash, which names the component its
     /// PascalCase form does, as Vue resolves <c>&lt;foo-bar&gt;</c> and <c>&lt;FooBar&gt;</c> alike - an instantiates;
     /// a <c>v-on:x</c> or <c>@x</c> attribute, its modifiers among them (<c>@click.prevent</c>), a handler; a
-    /// <c>v-bind:x</c>, <c>:x</c> or <c>.x</c> attribute a binding; its tags matched as written.
+    /// <c>v-bind:x</c>, <c>:x</c> or <c>.x</c> attribute a binding, as is every other directive whose value is an
+    /// expression - <c>v-model</c>, <c>v-if</c>, <c>v-show</c>, a directive of the component's own; a <c>v-for</c> a
+    /// loop over the list its expression names, its aliases names of its own; a <c>v-slot</c> or <c>#x</c> one that
+    /// declares the names its value writes; its tags matched as written.
     /// </summary>
-    public static MarkupDialect Vue { get; } = new(
-        closesAsHtml: false,
-        element => Named(element.Tag) ?? (element.Name.Contains('-', StringComparison.Ordinal) ? (Pascal(element.Name), null) : null),
-        attribute => attribute.Name.StartsWith('@') || attribute.Name.StartsWith("v-on:", StringComparison.Ordinal) ? Role.Handler
-            : attribute.Name.StartsWith(':') || attribute.Name.StartsWith('.') || attribute.Name == "v-bind" || attribute.Name.StartsWith("v-bind:", StringComparison.Ordinal) ? Role.Binding
-            : Role.None);
+    public static MarkupDialect Vue { get; } = new(closesAsHtml: false, element => Named(element.Tag) ?? (element.Name.Contains('-', StringComparison.Ordinal) ? (Pascal(element.Name), null) : null), VueRole);
 
     /// <summary>
     /// A Razor file's: a PascalCase or dotted tag an instantiates of the component it names, and a
@@ -75,6 +73,12 @@ internal sealed partial class MarkupDialect
 
         /// <summary>A binding: a use of the name its expression begins with.</summary>
         Binding,
+
+        /// <summary>A loop: a use of the name the expression of the list it walks begins with, its aliases declared.</summary>
+        Loop,
+
+        /// <summary>A slot's: the names its value writes declared, and nothing used.</summary>
+        Declares,
     }
 
     /// <summary>Whether its elements close as HTML closes a page's, where their end tags are left out; else as written.</summary>
@@ -83,13 +87,15 @@ internal sealed partial class MarkupDialect
     /// <summary>
     /// What <paramref name="element"/> says, each a reference made from <paramref name="from"/>: its classes and its id
     /// uses of the rules that style them, the component its tag makes, and what each of its handlers calls and its bindings
-    /// use - qualified by <paramref name="members"/>, where they are a component's members.
+    /// and loops use - qualified by <paramref name="members"/>, where they are a component's members - but a name
+    /// <paramref name="local"/> holds, which the markup declares itself and no member is.
     /// </summary>
     /// <param name="element">The element.</param>
     /// <param name="from">The id of the node the references are made from.</param>
     /// <param name="members">The qualifier of the names its handlers and bindings name: <see cref="CodeQualifierKinds.This"/> where they are the component's members; <see langword="null"/> where they are looked for as any name is.</param>
     /// <param name="references">Where the references go.</param>
-    public void Read(MarkupElement element, string from, ExtractQualifier? members, List<ExtractReference> references)
+    /// <param name="local">The names the markup declares where the element stands - a loop's aliases, a slot's - as <see cref="Declared"/> gives them; none where <see langword="null"/>.</param>
+    public void Read(MarkupElement element, string from, ExtractQualifier? members, List<ExtractReference> references, IReadOnlySet<string>? local = null)
     {
         ArgumentNullException.ThrowIfNull(element);
         ArgumentNullException.ThrowIfNull(references);
@@ -119,18 +125,47 @@ internal sealed partial class MarkupDialect
                     break;
             }
 
-            switch (_role(attribute))
+            (string Kind, string Name)? said = _role(attribute) switch
             {
-                case Role.Handler when Handled(attribute.Value) is var (name, called):
-                    references.Add(new ExtractReference(from, called ? CodeEdgeKinds.Calls : CodeEdgeKinds.Uses, name, attribute.Line) { Qualifier = members });
-                    break;
+                Role.Handler when Handled(attribute.Value) is var (name, called) => (called ? CodeEdgeKinds.Calls : CodeEdgeKinds.Uses, name),
+                Role.Binding when Begins(attribute.Value) is { } name => (CodeEdgeKinds.Uses, name),
+                Role.Loop when Looped().Match(attribute.Value) is { Success: true } loop && Begins(loop.Groups["list"].Value) is { } name => (CodeEdgeKinds.Uses, name),
+                _ => null,
+            };
 
-                case Role.Binding when Begins(attribute.Value) is { } name:
-                    references.Add(new ExtractReference(from, CodeEdgeKinds.Uses, name, attribute.Line) { Qualifier = members });
-                    break;
+            if (said is var (kind, named) && local?.Contains(named) != true)
+            {
+                references.Add(new ExtractReference(from, kind, named, attribute.Line) { Qualifier = members });
+            }
+        }
+    }
 
-                default:
-                    break;
+    /// <summary>
+    /// The names <paramref name="element"/> declares for itself and what it holds - a <c>v-for</c>'s aliases, the names a
+    /// <c>v-slot</c> or <c>#x</c> value writes - each a pattern's name as JavaScript binds it: <c>(item, index)</c> both,
+    /// <c>{ row: line }</c> <c>line</c> alone.
+    /// </summary>
+    public IEnumerable<string> Declared(MarkupElement element)
+    {
+        ArgumentNullException.ThrowIfNull(element);
+
+        foreach (var attribute in element.Attributes)
+        {
+            var pattern = _role(attribute) switch
+            {
+                Role.Loop when Looped().Match(attribute.Value) is { Success: true } loop => loop.Groups["alias"].Value,
+                Role.Declares => attribute.Value,
+                _ => null,
+            };
+
+            if (pattern is null)
+            {
+                continue;
+            }
+
+            foreach (Match bound in Bound().Matches(Defaultless().Replace(pattern, string.Empty)))
+            {
+                yield return bound.Groups["name"].Value;
             }
         }
     }
@@ -207,6 +242,39 @@ internal sealed partial class MarkupDialect
     internal static string Pascal(string tag)
         => string.Concat(tag.Split('-', StringSplitOptions.RemoveEmptyEntries).Select(part => char.ToUpperInvariant(part[0]) + part[1..]));
 
+    /// <summary>What a Vue attribute is: a directive by its name, its argument and modifiers past it (<c>v-model:title.trim</c> a <c>v-model</c>).</summary>
+    private static Role VueRole(MarkupAttribute attribute)
+    {
+        var name = attribute.Name;
+
+        if (name.StartsWith('@') || name == "v-on" || name.StartsWith("v-on:", StringComparison.Ordinal))
+        {
+            return Role.Handler;
+        }
+
+        if (name.StartsWith(':') || name.StartsWith('.'))
+        {
+            return Role.Binding;
+        }
+
+        if (name.StartsWith('#'))
+        {
+            return Role.Declares;
+        }
+
+        if (!name.StartsWith("v-", StringComparison.Ordinal))
+        {
+            return Role.None;
+        }
+
+        return (name.IndexOfAny([':', '.']) is var end and > 0 ? name[..end] : name) switch
+        {
+            "v-for" => Role.Loop,
+            "v-slot" => Role.Declares,
+            _ => Role.Binding,
+        };
+    }
+
     /// <summary>What a Razor attribute is: a directive attribute by its name and modifier, another by whether its value is written as an expression.</summary>
     private static Role RazorRole(MarkupAttribute attribute)
     {
@@ -242,4 +310,16 @@ internal sealed partial class MarkupDialect
     /// <summary>The first name an expression begins with, past a <c>!</c> and an opening parenthesis.</summary>
     [GeneratedRegex(@"^[!(\s]*(?<name>[A-Za-z_$][A-Za-z0-9_$]*)", RegexOptions.CultureInvariant)]
     private static partial Regex First();
+
+    /// <summary>A loop's value as Vue reads it: its aliases, <c>in</c> or <c>of</c>, and the expression of the list it walks.</summary>
+    [GeneratedRegex(@"^\s*(?<alias>[\s\S]*?)\s+(?:in|of)\s+(?<list>\S[\s\S]*)$", RegexOptions.CultureInvariant)]
+    private static partial Regex Looped();
+
+    /// <summary>A name a pattern binds: one no property key is - none a <c>:</c> follows - and no part of a longer name.</summary>
+    [GeneratedRegex(@"(?<![A-Za-z0-9_$])(?<name>[A-Za-z_$][A-Za-z0-9_$]*)(?![A-Za-z0-9_$])(?!\s*:)", RegexOptions.CultureInvariant)]
+    private static partial Regex Bound();
+
+    /// <summary>A pattern's default value, up to the next of its names: no name it binds.</summary>
+    [GeneratedRegex(@"=[^,}\])]*", RegexOptions.CultureInvariant)]
+    private static partial Regex Defaultless();
 }

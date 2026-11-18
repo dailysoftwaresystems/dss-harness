@@ -248,6 +248,28 @@ public sealed class RazorExtractorTests : CodeGraphExtractorContractTests<RazorE
     }
 
     /// <summary>
+    /// A binding's modifiers are read by what each says: <c>:after</c> and <c>:set</c> name a handler, a call of it;
+    /// <c>:get</c> a value, a use of it; and one that holds no expression - <c>:format</c> - nothing, on a
+    /// <c>@bind-Value</c> and a <c>@bind</c> alike.
+    /// </summary>
+    [Fact]
+    public void ABindingsModifiers_AreReadByWhatEachSays()
+    {
+        var extract = Read("Shared/Field.razor", "<Input @bind-Value=\"Name\" @bind-Value:after=\"Saved\" @bind:get=\"Value\" @bind:set=\"Changed\" @bind:format=\"yyyy\" />\n");
+        var members = new ExtractQualifier(CodeQualifierKinds.This);
+
+        Assert.Equal(
+            [
+                new ExtractReference("razor:Shared.Field", CodeEdgeKinds.Instantiates, "Input", 1),
+                new ExtractReference("razor:Shared.Field", CodeEdgeKinds.Uses, "Name", 1) { Qualifier = members },
+                new ExtractReference("razor:Shared.Field", CodeEdgeKinds.Calls, "Saved", 1) { Qualifier = members },
+                new ExtractReference("razor:Shared.Field", CodeEdgeKinds.Uses, "Value", 1) { Qualifier = members },
+                new ExtractReference("razor:Shared.Field", CodeEdgeKinds.Calls, "Changed", 1) { Qualifier = members },
+            ],
+            extract.References);
+    }
+
+    /// <summary>
     /// A <c>_ViewImports.cshtml</c> and an <c>_Imports.razor</c> declare each <c>@using</c> they hold for the whole of
     /// their directory's subtree: an import of the directory form, which the linker applies to every file of the
     /// language under it.

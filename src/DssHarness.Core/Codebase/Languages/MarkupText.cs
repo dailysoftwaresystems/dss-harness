@@ -12,7 +12,8 @@ namespace DssHarness.Core.Codebase.Languages;
 /// elements are matched by one walk over the tokens, a stack and no recursion, however deep the markup nests. A page's
 /// elements close as HTML closes them where their end tags are left out - a <c>p</c> at the next block, an <c>li</c> at
 /// the next item; a component's are matched as written, <c>/&gt;</c> closing any element, as Vue's and Razor's compilers
-/// read them, so no tag is dropped as a browser drops one it finds out of place.
+/// read them, so no tag is dropped as a browser drops one it finds out of place, and a component named as an element
+/// whose text is raw - a <c>Title</c>, a <c>Textarea</c> - holds markup.
 /// </summary>
 internal sealed class MarkupText
 {
@@ -233,7 +234,9 @@ internal sealed class MarkupText
                     _foreign += name is "svg" or "math" ? 1 : 0;
                     tokenizer.IsAcceptingCharacterData = _foreign > 0;
 
-                    if (_foreign == 0 && Raw.TryGetValue(name, out var mode))
+                    // A component's tag is matched as written, so a component named as an element whose text is raw -
+                    // a Title, a Textarea - holds markup as any component does.
+                    if (_foreign == 0 && (_closesAsHtml || element.Tag == name) && Raw.TryGetValue(name, out var mode))
                     {
                         tokenizer.State = mode;
                     }

@@ -12,9 +12,10 @@ namespace DssHarness.Core.Codebase.Languages;
 /// by the JavaScript reader as the one module Vue compiles them to, the script's default export the component itself.
 /// Its template's elements, nested templates among them: a component's tag - <c>&lt;FooBar&gt;</c> or
 /// <c>&lt;foo-bar&gt;</c>, each naming <c>FooBar</c> - an <c>instantiates</c>; a <c>v-on</c> or <c>@</c> attribute, its
-/// modifiers among them, a call of the handler it names; a <c>v-bind</c>, <c>:</c> attribute or <c>{{ }}</c> a use of the
-/// name its expression begins with - each a member of the component, looked for on it as the template compiles them -
-/// and each class and id a use of the rule that styles it. Each style block - scoped among them - is read by the style
+/// modifiers among them, a call of the handler it names; a <c>v-bind</c>, <c>:</c> attribute, another directive's
+/// expression - <c>v-model</c>, <c>v-if</c> - a <c>v-for</c>'s list or <c>{{ }}</c> a use of the name its expression
+/// begins with - each a member of the component, looked for on it as the template compiles them, but a name a
+/// <c>v-for</c> or a <c>v-slot</c> declares where it stands - and each class and id a use of the rule that styles it. Each style block - scoped among them - is read by the style
 /// sheet's reader; the script and styles are embedded as every markup embeds code (<see cref="EmbeddedCode"/>).
 /// </summary>
 public sealed partial class VueExtractor : ICodeGraphExtractor
@@ -36,9 +37,9 @@ public sealed partial class VueExtractor : ICodeGraphExtractor
 
     /// <inheritdoc/>
     public CodeGraphExtractorHelp Help { get; } = new(
-        "Vue single-file components (.vue): the component a type named by its file and qualified by its path, exported default, so an import of it binds to it and a member through it to its script's declaration; its script blocks - TypeScript where lang=\"ts\" - read by the JavaScript reader as the one module Vue compiles them to, its default export the component itself; its template's component tags - <FooBar> and <foo-bar> alike - as instantiates, its v-on and @ attributes as calls and its v-bind, : and {{ }} as uses of the component's members, and its classes and ids as uses of the rules that style them; and each style block read by the style sheet's reader",
+        "Vue single-file components (.vue): the component a type named by its file and qualified by its path, exported default, so an import of it binds to it and a member through it to its script's declaration; its script blocks - TypeScript where lang=\"ts\" - read by the JavaScript reader as the one module Vue compiles them to, its default export the component itself; its template's component tags - <FooBar> and <foo-bar> alike - as instantiates, its v-on and @ attributes as calls and its v-bind, :, v-model, v-if and every other directive's expression, a v-for's list and {{ }} as uses of the component's members - a v-for's alias and a v-slot's name the template's own, no member - and its classes and ids as uses of the rules that style them; and each style block read by the style sheet's reader",
         [
-            "a template's control flow and its other directives - v-if, v-for, v-model, v-slot - and an expression past the name it begins with: no reference of them",
+            "a template expression past the name it begins with, and one that begins with none - an object, a literal: no reference of what it holds",
             "a template written in another language (lang=\"pug\"): not read",
             "a style block's SCSS, Less and its framework-specific syntaxes: read as the style sheet's reader reads them",
             "a script block that names its file by src: not read, and no import of it",
@@ -92,25 +93,68 @@ public sealed partial class VueExtractor : ICodeGraphExtractor
     /// <summary>
     /// What the template says: each element its markup holds - nested templates among them - read by the markup's one
     /// rule, and each <c>{{ }}</c> its text holds a use of the name its expression begins with, each a member of the
-    /// component, looked for on it.
+    /// component, looked for on it - but a name the template declares where it stands, a loop's alias or a slot's, which
+    /// is no member.
     /// </summary>
     private static void Template(MarkupText markup, MarkupElement template, string component, int lineCount, List<ExtractReference> references)
     {
         var members = new ExtractQualifier(CodeQualifierKinds.This);
+        var elements = markup.Elements;
 
-        foreach (var element in markup.Elements.Where(element => markup.Inside(element, template)))
+        // The names declared where each element stands: its own loop's aliases and slot's names, and its ancestors'.
+        var local = new IReadOnlySet<string>?[elements.Count];
+
+        for (var at = 0; at < elements.Count; at++)
         {
-            MarkupDialect.Vue.Read(element, component, members, references);
+            var element = elements[at];
+
+            if (!markup.Inside(element, template))
+            {
+                continue;
+            }
+
+            var inherited = element.Parent >= 0 ? local[element.Parent] : null;
+            var declared = new HashSet<string>(MarkupDialect.Vue.Declared(element), StringComparer.Ordinal);
+
+            if (declared.Count > 0 && inherited is not null)
+            {
+                declared.UnionWith(inherited);
+            }
+
+            local[at] = declared.Count > 0 ? declared : inherited;
+            MarkupDialect.Vue.Read(element, component, members, references, local[at]);
         }
+
+        // Each run of text with the element it stands in, found by one sweep over both in the order they are written.
+        var open = new List<int>();
+        var next = 0;
 
         foreach (var (start, end) in markup.Texts.Where(text => text.Start >= template.OpenEnd && text.End <= template.Close))
         {
+            for (; next < elements.Count && elements[next].Start < start; next++)
+            {
+                Leave(open, elements[next].Start);
+                open.Add(next);
+            }
+
+            Leave(open, start);
+            var names = open.Count > 0 ? local[open[^1]] : null;
+
             foreach (Match mustache in Mustaches().Matches(markup.Text[start..end]))
             {
-                if (MarkupDialect.Begins(mustache.Groups["code"].Value) is { } name)
+                if (MarkupDialect.Begins(mustache.Groups["code"].Value) is { } name && names?.Contains(name) != true)
                 {
                     references.Add(new ExtractReference(component, CodeEdgeKinds.Uses, name, FileExtract.LineWithin(markup.LineAt(start + mustache.Index), lineCount)) { Qualifier = members });
                 }
+            }
+        }
+
+        // The elements open that end before the offset left: what stands there is in none of them.
+        void Leave(List<int> held, int offset)
+        {
+            while (held.Count > 0 && offset >= Math.Max(elements[held[^1]].Close, elements[held[^1]].OpenEnd))
+            {
+                held.RemoveAt(held.Count - 1);
             }
         }
     }

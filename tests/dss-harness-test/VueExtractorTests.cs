@@ -176,7 +176,7 @@ public sealed class VueExtractorTests : CodeGraphExtractorContractTests<VueExtra
 
         Assert.Equal(
             [
-                ("ChildItem", CodeEdgeKinds.Instantiates, 13), ("Other", CodeEdgeKinds.Instantiates, 14), ("save", CodeEdgeKinds.Calls, 14),
+                ("ok", CodeEdgeKinds.Uses, 13), ("ChildItem", CodeEdgeKinds.Instantiates, 13), ("Other", CodeEdgeKinds.Instantiates, 14), ("save", CodeEdgeKinds.Calls, 14),
                 ("Comp", CodeEdgeKinds.Instantiates, 15), ("count", CodeEdgeKinds.Uses, 15), ("submit", CodeEdgeKinds.Calls, 15),
             ],
             extract.References.Where(reference => reference.Line is >= 11 and <= 18).Select(reference => (reference.Name, reference.Kind, reference.Line)));
@@ -218,6 +218,57 @@ public sealed class VueExtractorTests : CodeGraphExtractorContractTests<VueExtra
 
         Assert.Equal(["vue:src/Billing.vue"], extract.Nodes.Where(node => node.Name == "default" || node.Exports?.Contains("default") == true).Select(node => node.Id));
         Assert.Equal([("vue:src/Billing.vue", "charge", 6)], extract.References.Select(reference => (reference.From, reference.Name, reference.Line)));
+    }
+
+    /// <summary>
+    /// A component named as an element whose text HTML reads raw - a <c>Title</c> - holds markup as any component does,
+    /// for its tag is matched as written; a <c>textarea</c> as written is that element, its text read for what it binds.
+    /// </summary>
+    [Fact]
+    public void AComponentNamedAsARawTextElement_HoldsMarkup()
+    {
+        var extract = Read("src/Page.vue", "<template>\n  <Title><child-item /></Title>\n  <textarea>{{ note }}<b-tag /></textarea>\n</template>\n");
+        var members = new ExtractQualifier(CodeQualifierKinds.This);
+
+        Assert.Equal(
+            [
+                new ExtractReference("vue:src/Page.vue", CodeEdgeKinds.Instantiates, "Title", 2),
+                new ExtractReference("vue:src/Page.vue", CodeEdgeKinds.Instantiates, "ChildItem", 2),
+                new ExtractReference("vue:src/Page.vue", CodeEdgeKinds.Uses, "note", 3) { Qualifier = members },
+            ],
+            extract.References);
+    }
+
+    /// <summary>
+    /// Every directive whose value is an expression - <c>v-model</c> with its modifiers, <c>v-if</c>, one of the
+    /// component's own - is a use of the name it begins with, and a <c>v-for</c> one of the list it walks; a name a
+    /// <c>v-for</c>'s aliases or a slot's value declares is the template's own where it stands - in the element and what
+    /// it holds, its text among it, and nowhere after its end - and no member's, though a property a slot's pattern
+    /// renames, and a name its default value gives, is.
+    /// </summary>
+    [Fact]
+    public void EveryDirectivesExpression_IsAUse_AndANameTheTemplateDeclaresIsNoMember()
+    {
+        var extract = Read("src/List.vue", """
+            <template>
+              <ul>
+                <li v-for="(item, index) in items" :key="index" @click="pick(item)">{{ item.name }} {{ total }}</li>
+              </ul>
+              <input v-model.trim="name" v-if="shown" v-focus="target">
+              <Table v-slot="{ row: line, size = fallback }">{{ line }} {{ row }} {{ size }} {{ fallback }}</Table>
+              <Panel #header="slot">{{ slot.title }}</Panel>
+              <p>{{ item }}</p>
+              <div><Panel #footer="note">x</Panel>{{ note }}</div>
+            </template>
+            """);
+
+        Assert.Equal(
+            [
+                ("items", CodeEdgeKinds.Uses, 3), ("pick", CodeEdgeKinds.Calls, 3), ("name", CodeEdgeKinds.Uses, 5), ("shown", CodeEdgeKinds.Uses, 5),
+                ("target", CodeEdgeKinds.Uses, 5), ("Table", CodeEdgeKinds.Instantiates, 6), ("Panel", CodeEdgeKinds.Instantiates, 7), ("Panel", CodeEdgeKinds.Instantiates, 9),
+                ("total", CodeEdgeKinds.Uses, 3), ("row", CodeEdgeKinds.Uses, 6), ("fallback", CodeEdgeKinds.Uses, 6), ("item", CodeEdgeKinds.Uses, 8), ("note", CodeEdgeKinds.Uses, 9),
+            ],
+            extract.References.Select(reference => (reference.Name, reference.Kind, reference.Line)));
     }
 
     /// <summary>A dashed tag names the component its PascalCase form does, and a component's file in either case names it so.</summary>

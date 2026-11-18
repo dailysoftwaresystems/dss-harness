@@ -152,6 +152,54 @@ public sealed class HtmlExtractorTests : CodeGraphExtractorContractTests<HtmlExt
     }
 
     /// <summary>
+    /// Every element HTML closes where its end tag is left out ends where HTML closes it, at the last line its own content
+    /// is written on: a paragraph at the next block, a row at the next row, a cell at the next cell, a table's head at
+    /// its body, a term at its definition, an option at the next option, a group of options at the next group, a heading
+    /// at the next heading; so each holds no section after it.
+    /// </summary>
+    [Fact]
+    public void AnElementLeftOpen_EndsWhereHtmlClosesIt()
+    {
+        var extract = Read("left.html", """
+            <body>
+            <p id="one">first
+            <div id="block">x</div>
+            <table>
+            <tr id="r1"><td id="c1">a<td id="c2">b
+            <tr id="r2"><td>c
+            </table>
+            <dl><dt id="t">term<dd id="d">def</dl>
+            <select><option id="o1">a<option id="o2">b</select>
+            <select><optgroup id="g1"><option>a<optgroup id="g2"><option>b</select>
+            <table><thead id="th1"><tr><td>a<tbody id="tb1"><tr><td>b</table>
+            <h1 id="h">Title
+            <h2 id="h2">Sub</h2>
+            </body>
+            """);
+        var names = extract.Nodes.ToDictionary(node => node.Id, node => node.Name);
+
+        Assert.Equal(
+            [
+                ("body", 1, 14, null), ("one", 2, 2, "body"), ("block", 3, 3, "body"), ("r1", 5, 5, "body"), ("c1", 5, 5, "r1"), ("c2", 5, 5, "r1"),
+                ("r2", 6, 6, "body"), ("t", 8, 8, "body"), ("d", 8, 8, "body"), ("o1", 9, 9, "body"), ("o2", 9, 9, "body"), ("g1", 10, 10, "body"),
+                ("g2", 10, 10, "body"), ("th1", 11, 11, "body"), ("tb1", 11, 11, "body"), ("h", 12, 12, "body"), ("h2", 13, 13, "body"),
+            ],
+            extract.Nodes.Select(node => (node.Name, node.Start, node.End, node.Parent is { } parent ? names[parent] : null)));
+    }
+
+    /// <summary>
+    /// A page's head is left at the first element it does not hold - the body's start tag among them - and a second start
+    /// tag of the body opens nothing: the body is the root's, and one.
+    /// </summary>
+    [Fact]
+    public void AHeadLeftOpen_EndsAtTheBody_AndASecondBodyOpensNothing()
+    {
+        var markup = MarkupText.Read("<html><head><title>t</title>\n<body><p>x</p>\n<body class=\"late\"></body></html>", closesAsHtml: true);
+
+        Assert.Equal([("html", -1), ("head", 0), ("title", 1), ("body", 0), ("p", 3)], markup.Elements.Select(element => (element.Name, element.Parent)));
+    }
+
+    /// <summary>
     /// The body's node is named as every section is - by its id, where it has one - and what stands outside every section,
     /// a class on the root element among it, is used from that node: one id, decided once, so no reference hangs from a
     /// node the extract does not hold.

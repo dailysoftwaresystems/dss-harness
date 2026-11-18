@@ -4517,7 +4517,8 @@ read by one reader (`MarkupText`): AngleSharp's HTML tokenizer, so a tag, an att
 element (a script, a style) are read as a browser reads them and no tag a comment holds is an element, and one walk
 over its tokens - a stack, no recursion, however deep the markup nests - that matches each element to its end tag: a
 page's as HTML closes them where their end tags are left out (a `p` at the next block, an `li` at the next item), a
-component's as written, `/>` closing any element, so no tag is dropped as a browser drops one it finds out of place.
+component's as written, `/>` closing any element, so no tag is dropped as a browser drops one it finds out of place,
+and a component named as a raw-text element is - a `<Title>`, a `<Textarea>` - holds markup as any component does.
 What one element says is one rule over a table each kind gives (`MarkupDialect`): each class a `uses` of the rule
 `.name`, split at ASCII white space as HTML splits a class list, and an id a `uses` of `#id`, looked for among rules
 alone by a qualifier of its own (`selector`); which tag is a component's, an `instantiates`; which attributes name a
@@ -4587,9 +4588,11 @@ their own start tag says `lang="ts"` - are read by the JavaScript reader as the 
 script's default export the component itself, each of its own declarations that export's options object names a
 member the component shows whoever imports it. Its `<template>` is read by the markup reader, nested templates among
 it: a component's tag - `<FooBar>` or `<foo-bar>`, each naming `FooBar` - an instantiates; a `v-on` or `@` attribute,
-its modifiers among them, a call of the handler it names; a `v-bind`, `:` attribute or `{{ }}` a use of the name its
-expression begins with - each looked for as the template compiles it, a member of the component (`this`) - and each
-class and id a use of the rule that styles it. Its `<style>` blocks - scoped among them - are read by the style
+its modifiers among them, a call of the handler it names; a `v-bind`, `:` attribute, every other directive's
+expression (`v-model`, `v-if`, a directive of the component's own), a `v-for`'s list and `{{ }}` a use of the name its
+expression begins with - each looked for as the template compiles it, a member of the component (`this`), but a name
+a `v-for`'s aliases or a `v-slot`'s value declares where it stands, the template's own and no member - and each class
+and id a use of the rule that styles it. Its `<style>` blocks - scoped among them - are read by the style
 sheet's reader, which the css implementation answers for another language's file as the C# reader does.
 
 A sync (`ICodebaseGraphService.SyncAsync`) lists the main checkout by three calls of `IGitClient` that take no lock -
