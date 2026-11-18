@@ -1,30 +1,45 @@
-using System.Globalization;
+using System.Text;
 using System.Text.RegularExpressions;
+using Microsoft.CodeAnalysis.CSharp;
 
 namespace DssHarness.Core.Codebase.Languages;
 
 /// <summary>
-/// A Razor view (<c>.cshtml</c>) or a Blazor component (<c>.razor</c>): a component is a <c>type</c> named by its file
-/// and its <c>@namespace</c> - its directory's path where it says none - marked a part of its code-behind partial,
-/// which the linker joins to it; <c>@model</c>, <c>@inject</c> and <c>@inherits</c> are references, an
-/// <c>@inject</c>'s name a member of the value its type names, <c>@using</c> a scope import; the code of
-/// <c>@code</c> and <c>@functions</c> blocks is read by the C# reader with the markup blanked, so its declarations
-/// carry the lines they stand on; a PascalCase element or a <c>&lt;partial name=</c> an <c>instantiates</c> of a
-/// component or view of that name, an <c>@Html.Partial("x")</c> an instantiates of the view it names, an
-/// <c>@on*</c> attribute a call of the handler it names and another <c>@</c> attribute a use of the name its value
-/// begins with. A view is a <c>section</c> over its lines. A <c>_ViewImports.cshtml</c> and an <c>_Imports.razor</c>
-/// apply each <c>@using</c> they hold to every file of the language under their directory.
+/// A Razor view (<c>.cshtml</c>) or a Blazor component (<c>.razor</c>). A component is a <c>type</c> named by its file in
+/// its <c>@namespace</c> - else the namespace its directory's path gives, each part made a C# name as Razor makes it,
+/// none at the tree's root - marked a part of its code-behind partial, which the linker joins to it; a view is a
+/// <c>section</c> over its lines. The class either compiles to is read by the C# reader, with the markup blanked so each
+/// declaration carries the line it stands on: the code of its <c>@code</c> and <c>@functions</c> blocks - each found as
+/// C#'s own lexer reads it, so no brace a string or a comment holds ends one - an <c>@inject</c> a property of the type it
+/// is given, <c>@model</c> its <c>Model</c> property, <c>@inherits</c> and <c>@implements</c> its bases; each
+/// <c>@using</c> is read by the C# reader too, a scope import - a <c>_ViewImports.cshtml</c>'s and an
+/// <c>_Imports.razor</c>'s reaching every file of the language under their directory. Its markup - comments, code and
+/// directives taken out - is read by the markup reader every markup file shares (<see cref="MarkupText"/>,
+/// <see cref="MarkupDialect.Razor"/>): a PascalCase or dotted element and a <c>&lt;partial name=</c> an
+/// <c>instantiates</c>, as is an <c>Html.Partial("x")</c> and its kin; an <c>@on*</c> attribute a call of the
+/// component's member it names, and <c>@bind</c> and another <c>@</c> attribute a use of one. The C# is embedded as
+/// every markup embeds code (<see cref="EmbeddedCode"/>).
 /// </summary>
 public sealed partial class RazorExtractor : ICodeGraphExtractor
 {
     /// <summary>The names of the files whose <c>@using</c> reaches a whole directory's subtree.</summary>
     private static readonly HashSet<string> Imports = new(StringComparer.OrdinalIgnoreCase) { "_ViewImports.cshtml", "_Imports.razor" };
 
+    /// <summary>The directives a line of Razor begins with: what it says of the file, never markup.</summary>
+    private static readonly HashSet<string> DirectiveNames = new(StringComparer.Ordinal)
+    {
+        "using", "model", "inherits", "inject", "namespace", "layout", "attribute", "page", "implements", "typeparam", "preservewhitespace",
+        "rendermode", "addTagHelper", "removeTagHelper", "tagHelperPrefix",
+    };
+
+    /// <summary>The statements whose parenthesis holds C#: what the markup reader is not given.</summary>
+    private static readonly HashSet<string> Statements = new(StringComparer.Ordinal) { "if", "for", "foreach", "while", "switch", "lock", "using", "catch" };
+
     /// <inheritdoc/>
     public string Language => "razor";
 
     /// <inheritdoc/>
-    public int Version => 1;
+    public int Version => 2;
 
     /// <inheritdoc/>
     public CodeGraphClaims Claims { get; } = CodeGraphClaims.OfExtensions(".cshtml", ".razor");
@@ -34,11 +49,12 @@ public sealed partial class RazorExtractor : ICodeGraphExtractor
 
     /// <inheritdoc/>
     public CodeGraphExtractorHelp Help { get; } = new(
-        "Razor views (.cshtml) and Blazor components (.razor): a component as a type named by its file and its @namespace, a part of its code-behind partial; @model, @inject and @inherits as references, an @inject's name a member; @using as a scope import - one a _ViewImports.cshtml or _Imports.razor holds reaching every file of the language under its directory; @code and @functions read by the C# reader with the markup blanked; a PascalCase element, a partial name= and an @Html.Partial(\"x\") as instantiates; an @on* attribute a call and another @ attribute a use",
+        "Razor views (.cshtml) and Blazor components (.razor): a component as a type named by its file in its @namespace - else the namespace its directory's path gives, none at the tree's root - a part of its code-behind partial, a view as a section over its lines; the class each compiles to read by the C# reader with the markup blanked - its @code and @functions blocks, an @inject a property of the type it is given, @model its Model property, @inherits and @implements its bases; @using read by the C# reader as a scope import - one a _ViewImports.cshtml or _Imports.razor holds reaching every file of the language under its directory; and its markup read by the reader every markup file shares: a PascalCase element, a partial name= and an Html.Partial(\"x\") as instantiates, an @on* attribute a call of the component's member it names, and @bind and another @ attribute a use of one",
         [
-            "inline C# expressions in the markup - an @x, a @{ } block - read as text, and a component with no @namespace joins its code-behind only where its directory's path names the partial's namespace",
+            "inline C# in the markup - an @x, an @( ), a @{ } block - read as no code, and a component with no @namespace joins its code-behind only where its directory's path names the partial's namespace",
             "what a tag helper is, and an element no component of the tree names: an instantiates that resolves nowhere, counted as such",
-            "a layout a view or component names by @layout: no reference of it",
+            "a layout a view or component names by @layout, and the route an @page gives: no reference of them",
+            "a generic component's @typeparam: its class read as no generic type",
         ]);
 
     /// <inheritdoc/>
@@ -46,260 +62,328 @@ public sealed partial class RazorExtractor : ICodeGraphExtractor
     {
         ArgumentNullException.ThrowIfNull(input);
 
-        var lines = input.Lines;
+        var text = EmbeddedCode.LineFeeds(input.Text);
+        var lineCount = input.Lines.Count;
         var name = CodeGraphIds.FileName(input.Path);
         var component = name.EndsWith(".razor", StringComparison.OrdinalIgnoreCase);
-        var view = name.EndsWith(".cshtml", StringComparison.OrdinalIgnoreCase);
-        var nodes = new List<ExtractNode>();
+        var className = Identifier(name.LastIndexOf('.') is var dot and > 0 ? name[..dot] : name);
+        var razor = Parts.Of(text);
+        var scope = razor.Directives.FirstOrDefault(directive => directive.Name == "namespace" && directive.Rest.Length > 0)?.Rest ?? FolderNamespace(input.Path);
+        var qualified = ExtractText.Qualify(scope, className);
+
+        // The head of the extract, which the markup's references are made from: a component's type, a view's section.
+        ExtractNode? head = component
+            ? new ExtractNode($"{Language}:{qualified}", CodeNodeKinds.Type, className, qualified, 1, Math.Max(lineCount, 1), ExtractText.Signature(qualified)) { SubKind = "component", Part = true }
+            : new ExtractNode($"{Language}:{input.Path}#view", CodeNodeKinds.Section, className, $"{input.Path}#view", 1, Math.Max(lineCount, 1), ExtractText.Signature(className)) { SubKind = "view" };
+        var from = head.Id;
+
+        var embedded = new List<FileExtract>();
+
+        if (Members(text, razor, scope, className) is { } members)
+        {
+            var read = CSharpExtractor.Read(Language, new CodeFileInput(input.Path, members));
+
+            // Where the class the code is read as is the component the file is, the class is the node, the one made for it
+            // before is not: one type, the component, its members its own.
+            if (component && read.Nodes.Any(node => node.Id == head.Id && node.Kind == CodeNodeKinds.Type))
+            {
+                read = read with { Nodes = [.. read.Nodes.Select(node => node.Id == head.Id ? node with { SubKind = "component" } : node)] };
+                head = null;
+            }
+
+            embedded.Add(read);
+        }
+
+        if (Usings(text, razor) is { } usings)
+        {
+            var read = CSharpExtractor.Read(Language, new CodeFileInput(input.Path, usings));
+
+            embedded.Add(Imports.Contains(name)
+                ? read with { Imports = [.. read.Imports.Select(import => import.Form == CodeImportForms.Scope ? import with { Form = CodeImportForms.Directory } : import)] }
+                : read);
+        }
+
+        // The markup with what is no markup taken out - Razor's comments, the code blocks, the directives - so it is read
+        // where it stands; the C# its expressions hold taken out too for the markup reader, though not for the partials
+        // they render.
         var references = new List<ExtractReference>();
-        var imports = new List<ExtractImport>();
-        var ids = new ExtractIds();
-        string? namespaceOf = null;
-        var code = new List<string>(lines.Count);
+        var outside = EmbeddedCode.Blanked(text, [.. razor.Comments, .. razor.Blocks.Select(block => (block.Keyword, Math.Min(block.Close + 1, text.Length))), .. razor.Directives.Select(directive => (directive.Start, directive.End))]);
+        var lines = CodeFileText.LineIndex(outside);
 
-        for (var at = 0; at < lines.Count; at++)
+        foreach (Match partial in HtmlPartials().Matches(outside))
         {
-            code.Add(string.Empty);
+            references.Add(new ExtractReference(from, CodeEdgeKinds.Instantiates, ExtractText.Whole(partial.Groups["name"].Value), FileExtract.LineWithin(lines.LineAt(partial.Index), lineCount)));
         }
 
-        // The namespace first, for the head of the extract to be named by it: a Blazor component a type and a part of
-        // its code-behind partial, a view a section over its lines.
-        for (var at = 0; at < lines.Count; at++)
+        var markup = MarkupText.Read(EmbeddedCode.Blanked(outside, razor.Expressions), MarkupDialect.Razor.ClosesAsHtml);
+        var qualifier = component ? new ExtractQualifier(CodeQualifierKinds.This) : null;
+
+        foreach (var element in markup.Elements)
         {
-            if (Directive().Match(lines[at].TrimStart()) is { Success: true } named && named.Groups["name"].Value == "namespace")
-            {
-                namespaceOf = named.Groups["rest"].Value.Trim();
-                break;
-            }
+            MarkupDialect.Razor.Read(element, from, qualifier, references);
         }
 
-        var simple = name[..name.LastIndexOf('.')];
-
-        if (component || view)
-        {
-            var qualified = ExtractText.Qualify(namespaceOf ?? FolderOf(input.Path), simple);
-            nodes.Add(component
-                ? new ExtractNode(ids.Next($"{Language}:{qualified}"), CodeNodeKinds.Type, simple, qualified, 1, Math.Max(lines.Count, 1), qualified) { SubKind = "component", Part = true }
-                : new ExtractNode(ids.Next($"{Language}:{input.Path}#view"), CodeNodeKinds.Section, simple, $"{input.Path}#view", 1, Math.Max(lines.Count, 1), simple) { SubKind = "view" });
-        }
-
-        // The directives a line of its own begins, and the code blocks read by the C# reader with the markup blanked.
-        // A code block's opening line is the partial class the page or component compiles to - named by its file, in the
-        // namespace a component says or its directory's path - so its members are the class's own, at their own lines,
-        // and the class itself is a part of its code-behind partial.
-        var inside = 0;
-        var wrapped = false;
-
-        for (var at = 0; at < lines.Count; at++)
-        {
-            var line = lines[at];
-            var trimmed = line.TrimStart();
-
-            if (inside > 0)
-            {
-                code[at] = line;
-                inside += Count(line, '{') - Count(line, '}');
-
-                if (inside <= 0)
-                {
-                    inside = 0;
-                }
-
-                continue;
-            }
-
-            if (Directive().Match(trimmed) is { Success: true } directive)
-            {
-                switch (directive.Groups["name"].Value)
-                {
-                    case "using":
-                        imports.Add(new ExtractImport(Imports.Contains(name) ? CodeImportForms.Directory : CodeImportForms.Scope, directive.Groups["rest"].Value.Trim(), at + 1));
-                        break;
-
-                    case "model" or "inherits" when Plain(directive.Groups["rest"].Value) is { Length: > 0 } written:
-                        references.Add(new ExtractReference(nodes[0].Id, CodeEdgeKinds.References, written, at + 1));
-                        break;
-
-                    case "inject" when Injected().Match(directive.Groups["rest"].Value.Trim()) is { Success: true } injected:
-                        nodes.Add(new ExtractNode(ids.Next($"{Language}:{input.Path}#{injected.Groups["name"].Value}"), CodeNodeKinds.Member, injected.Groups["name"].Value, injected.Groups["name"].Value, at + 1, at + 1, $"@inject {directive.Groups["rest"].Value.Trim()}")
-                        {
-                            SubKind = "property",
-                            Parent = nodes[0].Id,
-                            ValueType = Last(injected.Groups["type"].Value.Trim()),
-                        });
-                        references.Add(new ExtractReference(nodes[0].Id, CodeEdgeKinds.References, Last(injected.Groups["type"].Value.Trim()), at + 1));
-                        break;
-
-                    default:
-                        break;
-                }
-
-                continue;
-            }
-
-            if (CodeBlock().Match(trimmed) is { Success: true })
-            {
-                code[at] = new string(' ', Math.Max(0, line.Length - trimmed.Length)) + $"partial class {simple} {{";
-                wrapped = true;
-                inside = Math.Max(0, Count(line, '{') - Count(line, '}'));
-                continue;
-            }
-
-            Markup(nodes, references, line, at + 1);
-        }
-
-        var text = string.Join('\n', code);
-
-        if (wrapped)
-        {
-            // The namespace stands on the file's first line - a file-scoped one, so the code keeps its own lines.
-            var scope = namespaceOf ?? FolderOf(input.Path) ?? simple;
-            var rest = code.Count > 1 ? string.Join('\n', code[1..]) : string.Empty;
-            text = $"namespace {scope};\n{rest}";
-        }
-
-        var read = CSharpExtractor.Read(Language, new CodeFileInput(input.Path, text));
-        nodes.AddRange(read.Nodes);
-        references.AddRange(read.References);
-        imports.AddRange(read.Imports);
-
-        // Where the code block's class is the component the file is - a Blazor component's @code - the class the reader
-        // found is the node, the one made for it before is not, and the component spans the file: the injects its
-        // markup declares are its members as much as the code's own.
-        if (component && nodes.Count > 0 && read.Nodes.Any(node => node.Id == nodes[0].Id))
-        {
-            var componentId = nodes[0].Id;
-            nodes.RemoveAt(0);
-
-            var at = nodes.FindIndex(node => node.Id == componentId);
-
-            if (at >= 0)
-            {
-                nodes[at] = nodes[at] with { Start = 1, End = Math.Max(lines.Count, 1) };
-
-                // The scopes the component is declared in - the namespace a @namespace gives it - hold the file whole,
-                // as the component does.
-                for (var parent = nodes[at].Parent; parent is not null;)
-                {
-                    var holder = nodes.FindIndex(node => node.Id == parent);
-
-                    if (holder < 0)
-                    {
-                        break;
-                    }
-
-                    nodes[holder] = nodes[holder] with { End = Math.Max(nodes[holder].End, Math.Max(lines.Count, 1)) };
-                    parent = nodes[holder].Parent;
-                }
-            }
-        }
-
-        return new FileExtract([.. nodes])
-        {
-            References = references,
-            Imports = imports,
-            Literals = read.Literals,
-            LiteralsBeyond = read.LiteralsBeyond,
-        };
+        // The partials its text renders and what its elements say, in the order the file writes them.
+        return EmbeddedCode.Merged(new FileExtract(head is null ? [] : [head]) { References = [.. references.OrderBy(reference => reference.Line)] }, embedded);
     }
 
-    /// <summary>What the markup of one line holds: components made, partials named, handlers called and attributes used.</summary>
-    private void Markup(List<ExtractNode> nodes, List<ExtractReference> references, string line, int at)
+    /// <summary>
+    /// The class the file compiles to as C# the C# reader reads, each part on the line it stands on and every other line
+    /// blank: on the first line, before what it holds, the namespace and the class's opening; each code block's code
+    /// without its own braces; an <c>@inject</c> a property of the type it is given, <c>@model</c> the <c>Model</c>
+    /// property, <c>@inherits</c> and <c>@implements</c> a part of the class with that base; and the class's close after
+    /// the last line. <see langword="null"/> where the file holds none of them.
+    /// </summary>
+    private static string? Members(string text, Parts razor, string? scope, string className)
     {
-        if (nodes.Count == 0)
+        var spans = CodeFileText.Spans(text);
+        var code = new string[spans.Count];
+        var any = false;
+
+        foreach (var (_, open, close) in razor.Blocks)
         {
-            return;
-        }
-
-        var from = nodes[0].Id;
-
-        foreach (Match element in Elements().Matches(line))
-        {
-            var tag = element.Groups["tag"].Value;
-
-            if (char.IsUpper(tag[0]) || tag.Contains('.', StringComparison.Ordinal))
+            for (var line = LineOf(spans, open); line < spans.Count && spans[line].Start < close; line++)
             {
-                references.Add(new ExtractReference(from, CodeEdgeKinds.Instantiates, tag, at));
+                var start = Math.Max(spans[line].Start, open + 1);
+                var end = Math.Min(spans[line].End, close);
+
+                if (end > start)
+                {
+                    code[line] = code[line] is null ? text[start..end] : $"{code[line]} {text[start..end]}";
+                }
             }
+
+            any = true;
         }
 
-        foreach (Match partial in Partials().Matches(line))
+        foreach (var directive in razor.Directives)
         {
-            references.Add(new ExtractReference(from, CodeEdgeKinds.Instantiates, partial.Groups["name"].Value, at));
+            var written = directive.Rest.TrimEnd(';').Trim();
+
+            code[directive.Line] = directive.Name switch
+            {
+                "inject" when Injected().Match(written) is { Success: true } injected => $"{injected.Groups["type"].Value} {injected.Groups["name"].Value} {{ get; }}",
+                "model" when written.Length > 0 => $"{written} Model {{ get; }}",
+                "inherits" or "implements" when written.Length > 0 => $"}} partial class {className} : {written} {{",
+                _ => code[directive.Line],
+            };
+
+            any |= code[directive.Line] is not null && directive.Name is "inject" or "model" or "inherits" or "implements";
         }
 
-        foreach (Match call in HtmlPartials().Matches(line))
+        if (!any)
         {
-            references.Add(new ExtractReference(from, CodeEdgeKinds.Instantiates, call.Groups["name"].Value, at));
+            return null;
         }
 
-        foreach (Match handler in Handlers().Matches(line))
+        code[0] = $"{(scope is null ? string.Empty : $"namespace {scope}; ")}partial class {className} {{ {code[0]}";
+        code[^1] = $"{code[^1]} }}";
+        return string.Join('\n', code);
+    }
+
+    /// <summary>Each <c>@using</c> as the C# directive it is, on the line it stands on, and every other line blank; <see langword="null"/> where the file holds none.</summary>
+    private static string? Usings(string text, Parts razor)
+    {
+        var usings = razor.Directives.Where(directive => directive.Name == "using" && directive.Rest.Length > 0).ToList();
+
+        if (usings.Count == 0)
         {
-            references.Add(new ExtractReference(from, CodeEdgeKinds.Calls, handler.Groups["name"].Value, at));
+            return null;
         }
 
-        foreach (Match bound in Attributes().Matches(line))
+        var code = new string[CodeFileText.Spans(text).Count];
+
+        foreach (var directive in usings)
         {
-            references.Add(new ExtractReference(from, CodeEdgeKinds.Uses, bound.Groups["name"].Value, at));
+            code[directive.Line] = $"using {directive.Rest.TrimEnd(';').Trim()};";
+        }
+
+        return string.Join('\n', code);
+    }
+
+    /// <summary>The index of the line <paramref name="offset"/> stands on.</summary>
+    private static int LineOf(IReadOnlyList<CodeLineSpan> spans, int offset)
+    {
+        var line = 0;
+
+        while (line + 1 < spans.Count && spans[line + 1].Start <= offset)
+        {
+            line++;
+        }
+
+        return line;
+    }
+
+    /// <summary>
+    /// The namespace a component with no <c>@namespace</c> is given: its directory's path from the tree's root, each part
+    /// made a C# name as Razor makes one; <see langword="null"/> at the root, where it is in none.
+    /// </summary>
+    private static string? FolderNamespace(string path)
+        => path.LastIndexOf('/') is var slash and > 0 ? string.Join('.', path[..slash].Split('/', StringSplitOptions.RemoveEmptyEntries).Select(Identifier)) : null;
+
+    /// <summary>
+    /// <paramref name="name"/> made a C# name as Razor makes a file's or a folder's one: each character no name may hold an
+    /// underscore, and an underscore before a first one that may not begin a name - <c>my-app</c> is <c>my_app</c>.
+    /// </summary>
+    private static string Identifier(string name)
+    {
+        if (name.Length == 0)
+        {
+            return "_";
+        }
+
+        var built = new StringBuilder(name.Length + 1);
+
+        if (!SyntaxFacts.IsIdentifierStartCharacter(name[0]))
+        {
+            built.Append('_');
+        }
+
+        foreach (var character in name)
+        {
+            built.Append(SyntaxFacts.IsIdentifierPartCharacter(character) ? character : '_');
+        }
+
+        return built.ToString();
+    }
+
+    /// <summary>
+    /// What a Razor file holds that is no markup, as Razor reads it from the top: its comments (<c>@* *@</c>), its code
+    /// blocks (<c>@code</c> and <c>@functions</c>, the brace on their line or a later one), the directives a line begins
+    /// with, and the C# of its explicit expressions and of its statements' parentheses - each block and parenthesis
+    /// closed where C#'s own lexer says.
+    /// </summary>
+    private sealed record Parts(List<(int Start, int End)> Comments, List<(int Keyword, int Open, int Close)> Blocks, List<Directive> Directives, List<(int Start, int End)> Expressions)
+    {
+        /// <summary>The parts <paramref name="text"/> holds.</summary>
+        public static Parts Of(string text)
+        {
+            var parts = new Parts([], [], [], []);
+            var lines = CodeFileText.LineIndex(text);
+
+            for (var at = 0; at < text.Length;)
+            {
+                if (text[at] != '@' || at + 1 >= text.Length)
+                {
+                    at++;
+                    continue;
+                }
+
+                var next = text[at + 1];
+
+                if (next == '@')
+                {
+                    at += 2;
+                    continue;
+                }
+
+                if (next == '*')
+                {
+                    var end = text.IndexOf("*@", at + 2, StringComparison.Ordinal) is var stop and >= 0 ? stop + 2 : text.Length;
+                    parts.Comments.Add((at, end));
+                    at = end;
+                    continue;
+                }
+
+                if (next == '(')
+                {
+                    var close = CSharpExtractor.Closing(text, at + 1);
+                    parts.Expressions.Add((at, Math.Min(close + 1, text.Length)));
+                    at = Math.Min(close + 1, text.Length);
+                    continue;
+                }
+
+                var word = Word(text, at + 1);
+                var after = at + 1 + word.Length;
+
+                if (StartsLine(text, at) && word is "code" or "functions" && Skipped(text, after) is var open && open < text.Length && text[open] == '{')
+                {
+                    var close = CSharpExtractor.Closing(text, open);
+                    parts.Blocks.Add((at, open, close));
+                    at = Math.Min(close + 1, text.Length);
+                    continue;
+                }
+
+                if (StartsLine(text, at) && DirectiveNames.Contains(word) && (after == text.Length || text[after] is ' ' or '\t' or '\n'))
+                {
+                    var end = text.IndexOf('\n', at) is var stop and >= 0 ? stop : text.Length;
+                    var rest = text[after..end].Trim();
+
+                    // A using with a parenthesis is a statement, whose parenthesis holds C#.
+                    if (word != "using" || !rest.StartsWith('('))
+                    {
+                        parts.Directives.Add(new Directive(word, rest, lines.LineAt(at) - 1, at, end));
+                        at = end;
+                        continue;
+                    }
+                }
+
+                if (Statements.Contains(word) && Skipped(text, after) is var parenthesis && parenthesis < text.Length && text[parenthesis] == '(')
+                {
+                    var close = CSharpExtractor.Closing(text, parenthesis);
+                    parts.Expressions.Add((parenthesis, Math.Min(close + 1, text.Length)));
+                    at = Math.Min(close + 1, text.Length);
+                    continue;
+                }
+
+                at++;
+            }
+
+            return parts;
+        }
+
+        /// <summary>The name written at <paramref name="at"/>: letters, digits and underscores.</summary>
+        private static string Word(string text, int at)
+        {
+            var end = at;
+
+            while (end < text.Length && (char.IsAsciiLetterOrDigit(text[end]) || text[end] == '_'))
+            {
+                end++;
+            }
+
+            return text[at..end];
+        }
+
+        /// <summary>Where the first character past <paramref name="at"/> that is no white space stands, line breaks among it.</summary>
+        private static int Skipped(string text, int at)
+        {
+            while (at < text.Length && char.IsWhiteSpace(text[at]))
+            {
+                at++;
+            }
+
+            return at;
+        }
+
+        /// <summary>Whether nothing but white space is before <paramref name="at"/> on its line.</summary>
+        private static bool StartsLine(string text, int at)
+        {
+            for (var before = at - 1; before >= 0 && text[before] != '\n'; before--)
+            {
+                if (text[before] is not (' ' or '\t'))
+                {
+                    return false;
+                }
+            }
+
+            return true;
         }
     }
 
-    /// <summary>The namespace a component with no <c>@namespace</c> is given: its directory's path from the tree's root.</summary>
-    private static string? FolderOf(string path)
-        => path.LastIndexOf('/') is var slash and > 0 ? path[..slash].Replace('/', '.') : null;
-
-    /// <summary>A directive at a line's start: <c>@name rest</c>.</summary>
-    [GeneratedRegex(@"^@(?<name>using|model|inherits|inject|namespace|layout|attribute|page|implements)\s+(?<rest>.+)$", RegexOptions.CultureInvariant)]
-    private static partial Regex Directive();
-
-    /// <summary>A <c>@code</c> or <c>@functions</c> block's opening.</summary>
-    [GeneratedRegex(@"^@(code|functions)\s*\{", RegexOptions.CultureInvariant)]
-    private static partial Regex CodeBlock();
+    /// <summary>A directive a line of Razor begins with.</summary>
+    /// <param name="Name">Its name: <c>using</c>, <c>inject</c>.</param>
+    /// <param name="Rest">What it says, the rest of its line.</param>
+    /// <param name="Line">The index of its line, from 0.</param>
+    /// <param name="Start">Where its <c>@</c> stands.</param>
+    /// <param name="End">Where its line ends.</param>
+    private sealed record Directive(string Name, string Rest, int Line, int Start, int End);
 
     /// <summary>An <c>@inject</c>'s rest: a type and the name it is given.</summary>
     [GeneratedRegex(@"^(?<type>.+?)\s+(?<name>[A-Za-z_][A-Za-z0-9_]*)$", RegexOptions.CultureInvariant)]
     private static partial Regex Injected();
 
-    /// <summary>An element a line opens, by its tag.</summary>
-    [GeneratedRegex(@"<(?<tag>[A-Za-z][A-Za-z0-9_.\-]*)", RegexOptions.CultureInvariant)]
-    private static partial Regex Elements();
-
-    /// <summary>A partial a line names.</summary>
-    [GeneratedRegex(@"<partial[^>]*name=""(?<name>[^""]+)""", RegexOptions.CultureInvariant)]
-    private static partial Regex Partials();
-
-    /// <summary>An <c>@Html.Partial("x")</c> a line holds.</summary>
-    [GeneratedRegex(@"@Html\.Partial\(""(?<name>[^""]+)""\)", RegexOptions.CultureInvariant)]
+    /// <summary>A partial a view renders by its name: <c>Html.Partial("x")</c>, <c>PartialAsync</c>, <c>RenderPartial</c> and <c>RenderPartialAsync</c>, with what else they are given.</summary>
+    [GeneratedRegex(@"\bHtml\.(?:Render)?Partial(?:Async)?\s*\(\s*""(?<name>[^""\n]+)""", RegexOptions.CultureInvariant)]
     private static partial Regex HtmlPartials();
-
-    /// <summary>An <c>@on*</c> attribute's handler: the first name its value begins with.</summary>
-    [GeneratedRegex(@"@on\w+\s*=\s*""(?<name>[A-Za-z_][A-Za-z0-9_]*)", RegexOptions.CultureInvariant)]
-    private static partial Regex Handlers();
-
-    /// <summary>Another <c>@</c> attribute - an <c>@on*</c> handler's excepted, a call of its own - : the first name its value begins with.</summary>
-    [GeneratedRegex(@"@(?!on)\w+\s*=\s*""(?<name>[A-Za-z_][A-Za-z0-9_]*)", RegexOptions.CultureInvariant)]
-    private static partial Regex Attributes();
-
-    /// <summary>The plain name <paramref name="written"/> is, its generics and path taken off.</summary>
-    private static string Plain(string written)
-        => Last(written.Split('<')[0].Trim());
-
-    /// <summary>The last part of a dotted name.</summary>
-    private static string Last(string written) => written[(written.LastIndexOf('.') + 1)..];
-
-    /// <summary>How many of <paramref name="character"/> <paramref name="line"/> holds.</summary>
-    private static int Count(string line, char character)
-    {
-        var count = 0;
-
-        foreach (var one in line)
-        {
-            if (one == character)
-            {
-                count++;
-            }
-        }
-
-        return count;
-    }
 }

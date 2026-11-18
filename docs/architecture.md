@@ -4512,14 +4512,28 @@ A linker that answers otherwise raises `CodeGraphLinker.Revision`,
 which every link result names: a graph linked by another revision is linked again, though no file changed and none is
 read again.
 
-The page and its styles are read too. `html` (`.html`, `.htm`, read through AngleSharp with its source references
-kept) makes each landmark (`main`, `nav`, `header`, `footer`, `aside`, `article`, `section`) and each element with an
-`id` a `section` over its lines, the `body` one over all; each class the document writes a `uses` of the rule
-`.name` and each id a `uses` of `#id`, looked for among rules alone by a qualifier of its own (`selector`); a custom
+The page and its styles are read too. Every markup file - an HTML page, a Vue component, a Razor file's markup - is
+read by one reader (`MarkupText`): AngleSharp's HTML tokenizer, so a tag, an attribute, a comment and a raw-text
+element (a script, a style) are read as a browser reads them and no tag a comment holds is an element, and one walk
+over its tokens - a stack, no recursion, however deep the markup nests - that matches each element to its end tag: a
+page's as HTML closes them where their end tags are left out (a `p` at the next block, an `li` at the next item), a
+component's as written, `/>` closing any element, so no tag is dropped as a browser drops one it finds out of place.
+What one element says is one rule over a table each kind gives (`MarkupDialect`): each class a `uses` of the rule
+`.name`, split at ASCII white space as HTML splits a class list, and an id a `uses` of `#id`, looked for among rules
+alone by a qualifier of its own (`selector`); which tag is a component's, an `instantiates`; which attributes name a
+handler - a `calls` of the function its value names alone or calls first, an arrow function's head passed over, else
+a `uses` of the name it begins with - and which bind a value, a `uses` of the name its expression begins with. Code a
+markup file holds is embedded one way (`EmbeddedCode`): its language's own reader is given the host's text with only
+the code kept, so what it declares carries the host's lines, and every field of what it answers - nodes, scopes,
+imports, references, dynamic marks, literals - is merged into the host's extract. `html` (`.html`, `.htm`) makes each
+landmark (`main`, `nav`, `header`, `footer`, `aside`, `article`, `section`) and each element with an `id` a `section`
+from its start tag to its end tag, a `<template>`'s content among them, and the `body` one that holds what no other
+does - named by its id where it has one, the node every reference made outside a section is made from; a custom
 element (`<my-widget>`) an `instantiates` of a component of that name; a `script src`, `link href`, `img src` and
-`a href` naming a local file by a relative path an import of it; an `on*=` handler a call of the function it names;
-and an inline `<script>` read by the JavaScript reader with the document's other lines blanked, so its declarations
-and literals carry the lines they stand on.
+`a href` naming a local file by a relative path - one that climbs among them - an import of it; an `on*=` attribute a
+handler; each inline `<script>` of JavaScript read by the JavaScript reader as a program of its own, from where its
+start tag ends - a module where its type is `module`, and one of another type, a template a framework reads, no code
+- and each `<style>` by the style sheet's reader.
 
 `css` (`.css`, `.scss`, `.sass`, `.less`) reads a sheet over the structural scanner's core, as the code readers do:
 `CssLexer` cuts it into tokens - a string to its own quote not escaped, an unquoted `url(...)` one token, `/* */` a
@@ -4546,24 +4560,37 @@ the linker's one rule for an exported name. `related` answers `styledBy` (the ru
 edges to a rule, SubKind `rule`, alone) and `styles` (what a rule reaches: the nodes whose `uses` edges reach it, asked
 of a rule - of any other node, nothing), so "who uses this class" and "what styles this element" are one call each.
 
-Razor views (.cshtml) and Blazor components (.razor) are one implementation, `razor`: a component is the class its
-`@code` block is - the block's opening line read as the `partial class` the page compiles to, named by its file, in
-the namespace a `@namespace` gives it or its directory's path - so the C# reader walks its members with the markup
-blanked, each on the line it stands on, and the class says it is a part, which the linker joins to its `.razor.cs`
-code-behind; a view is a section over its lines with the same done for `@functions`. `@model`, `@inject` and
-`@inherits` are references, an `@inject`'s name a member typed by the service it is given; a PascalCase element, a
-`<partial name=` and an `@Html.Partial("x")` are instantiates, an `@on*` attribute a call of its handler and another
-`@` attribute a use of the name its value begins with. A `_ViewImports.cshtml` and an `_Imports.razor` declare each
-`@using` they hold for the whole of their directory's subtree: an import of the `directory` form, which the linker
-applies to every file of the language under it, and to no file of another language or outside it.
+Razor views (.cshtml) and Blazor components (.razor) are one implementation, `razor`: a component is a type named by
+its file in the namespace a `@namespace` gives it - else its directory's path, each part made a C# name as Razor makes
+it (`my-app` is `my_app`), none at the tree's root - and a view a section over its lines. The class either compiles
+to is C# the C# reader reads, the markup blanked so each declaration carries the line it stands on: on the first
+line, before what it holds, its namespace and its `partial class`; the code of each `@code` and `@functions` block,
+found as the compiler's own lexer reads it (`CSharpExtractor.Closing`), so a brace a string or a comment holds ends no
+block, and one on the line after the keyword opens it; an `@inject` a property of the type it is given, `@model` its
+`Model` property, and `@inherits` and `@implements` a part of the class with that base. Where that class is the
+component, it is the component's node, and says it is a part, which the linker joins to its `.razor.cs` code-behind.
+Each `@using` is read by the C# reader too, so a static one imports its type and an alias names its prefix. The
+markup - Razor's comments, the code, the directives and the C# of its expressions taken out - is read by the markup
+reader: a PascalCase or dotted element and a `<partial name=` are instantiates, as is an `Html.Partial("x")` and its
+kin (`PartialAsync`, `RenderPartial`); an `@on*` attribute, `@bind:after` and `@bind:set` a call of the component's
+member it names, and `@bind`, `@bind-Value` and another `@` attribute a use of one. A `_ViewImports.cshtml` and an
+`_Imports.razor` declare each `@using` they hold for the whole of their directory's subtree: an import of the
+`directory` form, which the linker applies to every file of the language under it, and to no file of another
+language or outside it.
 
-A Vue single-file component (`.vue`) is one implementation, `vue`: the component a type named by its file and
-exported `default`, so `import Foo from './Foo.vue'` binds to it; its `<script>` - TypeScript where
-`lang="ts"` - read by the JavaScript reader with the other lines blanked; its `<template>` read line by line, a
-component's tag - `<FooBar>` or `<foo-bar>` - an instantiates of a component of that name, a `v-on` or `@` attribute
-a call of the handler it names, a `v-bind`, `:` attribute or `{{ }}` a use of the name its expression begins with,
-and each class and id a use of the rule that styles it; and its `<style>` - scoped among them - read by the style
-sheet's reader, which the css implementation now answers for another language's file as the C# reader does.
+A Vue single-file component (`.vue`) is one implementation, `vue`: the component a type named by its file in
+PascalCase, as Vue names it, qualified by the file's path - the scope its script declares in, so the script's
+declarations are its members - and exported `default`, so `import Foo from './Foo.vue'` binds to it (the JavaScript
+reader binds a default import of a single-file component to what it exports by default, and one of a style sheet or
+an image to nothing by a name) and `Foo.x` to its member `x`. Its `<script>` and `<script setup>` - TypeScript where
+their own start tag says `lang="ts"` - are read by the JavaScript reader as the one module Vue compiles them to, the
+script's default export the component itself, each of its own declarations that export's options object names a
+member the component shows whoever imports it. Its `<template>` is read by the markup reader, nested templates among
+it: a component's tag - `<FooBar>` or `<foo-bar>`, each naming `FooBar` - an instantiates; a `v-on` or `@` attribute,
+its modifiers among them, a call of the handler it names; a `v-bind`, `:` attribute or `{{ }}` a use of the name its
+expression begins with - each looked for as the template compiles it, a member of the component (`this`) - and each
+class and id a use of the rule that styles it. Its `<style>` blocks - scoped among them - are read by the style
+sheet's reader, which the css implementation answers for another language's file as the C# reader does.
 
 A sync (`ICodebaseGraphService.SyncAsync`) lists the main checkout by three calls of `IGitClient` that take no lock -
 `ListIndexAsync` (`ls-files --stage -v -z`, the one reading of the index the whole tool shares), `ListWorkingFilesAsync`

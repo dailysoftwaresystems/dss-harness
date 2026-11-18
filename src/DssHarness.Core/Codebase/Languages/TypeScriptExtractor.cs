@@ -13,7 +13,7 @@ public sealed class TypeScriptExtractor : ICodeGraphExtractor
     public string Language => "typescript";
 
     /// <inheritdoc/>
-    public int Version => 3;
+    public int Version => 4;
 
     /// <inheritdoc/>
     public CodeGraphClaims Claims { get; } = CodeGraphClaims.OfExtensions(".ts", ".mts", ".cts", ".tsx");

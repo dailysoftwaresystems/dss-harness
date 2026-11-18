@@ -505,6 +505,32 @@ public sealed class JavaScriptExtractorTests : CodeGraphExtractorContractTests<J
     }
 
     /// <summary>
+    /// A default import of a single-file component binds the component it exports by default, as one of a script does -
+    /// a member through it is that export's - while one of a file that exports nothing by a name, a style sheet, binds its
+    /// prefix alone.
+    /// </summary>
+    [Fact]
+    public void ADefaultImportOfAComponent_BindsItsDefaultExport_AndOneOfAStyleSheetNone()
+    {
+        var extract = Read("src/main.js", """
+            import Cart from './Cart.vue';
+            import styles from './site.css';
+
+            export function go() {
+              Cart.open();
+              styles.paint();
+            }
+            """);
+
+        Assert.Equal(
+            [("./Cart.vue", "Cart", "default"), ("./site.css", "styles", null)],
+            extract.Imports.Select(import => (import.Target, import.Prefix, import.Show is null ? null : string.Join(',', import.Show))));
+        Assert.Equal(
+            [("open", "named", "Cart.default"), ("paint", "prefix", "styles")],
+            extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Calls).Select(reference => (reference.Name, reference.Qualifier?.Kind, reference.Qualifier?.Name)));
+    }
+
+    /// <summary>
     /// A specifier with no extension is tried as Node tries it - as written, with each of JavaScript's extensions, then
     /// the directory's index with each - each standing in for the one before, the first the tree holds taken; one with an
     /// extension, or naming no script, as written; an absolute one or a URL is no import of the tree.

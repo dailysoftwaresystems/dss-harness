@@ -150,6 +150,9 @@ internal sealed class JsReading
         ".woff", ".woff2", ".ttf", ".otf", ".eot", ".mp3", ".mp4", ".webm", ".wav", ".csv",
     };
 
+    /// <summary>The extensions among those of what is no script whose file is a single-file component, exported by default as the component it is.</summary>
+    private static readonly HashSet<string> ComponentExtensions = new(StringComparer.OrdinalIgnoreCase) { ".vue", ".svelte", ".astro" };
+
     private readonly InterpolatedText _text;
     private readonly ScannedText _scan;
     private readonly string _prefix;
@@ -190,6 +193,9 @@ internal sealed class JsReading
     /// <summary>Whether the file is a module, whose declarations are its own but what it exports.</summary>
     private bool _module;
 
+    /// <summary>Whether the text is a module as the markup that embeds it says; <see langword="null"/> where what it holds says.</summary>
+    private readonly bool? _moduleSaid;
+
     /// <summary>The scope the file's top-level declarations are put in: its path in a module, none in a script.</summary>
     private string? _scope;
 
@@ -201,16 +207,20 @@ internal sealed class JsReading
     /// <param name="path">The file's path.</param>
     /// <param name="text">Its text.</param>
     /// <param name="typescript">Whether it is TypeScript, whose types the reader takes.</param>
-    /// <param name="script">Where the text is script alone - another file's embedded script, its markup blanked - so no
-    /// markup is lexed however the file is named; null where the name says, as a file of its own does.</param>
-    public JsReading(string language, string path, string text, bool typescript, bool? script = null)
+    /// <param name="markup">Whether the text may hold JSX - an embedded script's, as its block's language says, a Vue
+    /// component's <c>lang="tsx"</c> - however the file is named; null where its name says, as a file of its own does.</param>
+    /// <param name="module">Whether the text is a module - an embedded script's, as the markup that holds it says, a Vue
+    /// component's always and a page's where its type is <c>module</c> - whatever it holds; null where what it holds
+    /// says, as a file of its own does.</param>
+    public JsReading(string language, string path, string text, bool typescript, bool? markup = null, bool? module = null)
     {
         var name = CodeGraphIds.FileName(path);
 
         _typescript = typescript;
+        _moduleSaid = module;
 
         // JavaScript writes no type that a < could open, so every file of it may hold markup; TypeScript's .tsx alone does.
-        _markup = script ?? (!typescript || name.EndsWith(".tsx", StringComparison.OrdinalIgnoreCase));
+        _markup = markup ?? (!typescript || name.EndsWith(".tsx", StringComparison.OrdinalIgnoreCase));
         _text = JsLexer.Scan(text, _markup);
         _scan = _text.Scan;
         _prefix = $"{language}:";
@@ -225,7 +235,7 @@ internal sealed class JsReading
     /// <summary>The file's extract.</summary>
     public FileExtract Read()
     {
-        _module = IsModule();
+        _module = _moduleSaid ?? IsModule();
         _scope = _module ? _path : null;
 
         if (_module)
@@ -459,11 +469,11 @@ internal sealed class JsReading
             }
             else if (_scan.IsName(clause))
             {
-                // What a file of no script kind a module binds - a Vue component, a style sheet - is named by no export
-                // of its own: the binding is the import's prefix alone, so a member of what it binds is looked for in
-                // what the file itself declares.
-                var asset = AssetExtensions.Contains(specifier[(specifier.LastIndexOf('.') + 1)..].Length > 0 ? $".{specifier[(specifier.LastIndexOf('.') + 1)..]}" : string.Empty);
-                Bind(_scan.Text(clause), specifier, asset ? null : "default", line);
+                // A default import binds what the file exports by default - a single-file component's is the component
+                // it is - but a file of no script kind that is none - a style sheet, an image - exports nothing by a name:
+                // its binding is the import's prefix alone, so a member of what it binds is looked for in what the file
+                // itself declares.
+                Bind(_scan.Text(clause), specifier, ExportsNothing(specifier) ? null : "default", line);
                 clause = _scan.Next(clause);
             }
             else
@@ -791,6 +801,18 @@ internal sealed class JsReading
         {
             yield return $"{stemmed}/index{added}";
         }
+    }
+
+    /// <summary>
+    /// Whether the file <paramref name="specifier"/> names exports nothing by a name: one of no script kind that is no
+    /// single-file component - a style sheet, an image, data - as a bundler imports it.
+    /// </summary>
+    private static bool ExportsNothing(string specifier)
+    {
+        var name = specifier[(specifier.LastIndexOf('/') + 1)..];
+        var extension = name.LastIndexOf('.') is var dot and > 0 ? name[dot..] : string.Empty;
+
+        return AssetExtensions.Contains(extension) && !ComponentExtensions.Contains(extension);
     }
 
     /// <summary>The specifier the text at <paramref name="at"/> holds; <see langword="null"/> where it is none - empty, interpolated, or left open.</summary>

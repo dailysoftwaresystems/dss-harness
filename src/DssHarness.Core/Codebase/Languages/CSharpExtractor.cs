@@ -87,6 +87,41 @@ public sealed class CSharpExtractor : ICodeGraphExtractor
         return new Reading($"{language}:", input.Path, CodeFileText.LineIndex(input.Text), root).Read();
     }
 
+    /// <summary>
+    /// Where the bracket at <paramref name="open"/> of <paramref name="text"/> - a <c>{</c> or a <c>(</c> - is closed, as
+    /// the compiler's own lexer reads what it holds: a string, an interpolated or raw one among them, a character and a
+    /// comment each one token, so no bracket inside one counts; the text's length where nothing closes it. How another
+    /// implementation finds the C# its markup holds - a Razor file's code blocks and expressions - by C#'s rules.
+    /// </summary>
+    /// <param name="text">The text.</param>
+    /// <param name="open">Where the bracket stands.</param>
+    internal static int Closing(string text, int open)
+    {
+        ArgumentNullException.ThrowIfNull(text);
+
+        var (opens, closes) = text[open] == '(' ? (SyntaxKind.OpenParenToken, SyntaxKind.CloseParenToken) : (SyntaxKind.OpenBraceToken, SyntaxKind.CloseBraceToken);
+        var depth = 0;
+
+        foreach (var token in SyntaxFactory.ParseTokens(text, offset: open, initialTokenPosition: open, options: Options))
+        {
+            if (token.IsKind(SyntaxKind.EndOfFileToken))
+            {
+                break;
+            }
+
+            if (token.IsKind(opens))
+            {
+                depth++;
+            }
+            else if (token.IsKind(closes) && --depth == 0)
+            {
+                return token.SpanStart;
+            }
+        }
+
+        return text.Length;
+    }
+
     /// <summary>The attributes a test framework marks a test with, by their names as written: xUnit's, NUnit's and MSTest's.</summary>
     private static readonly HashSet<string> TestAttributes = new(StringComparer.Ordinal) { "Fact", "Theory", "Test", "TestCase", "TestCaseSource", "TestMethod", "DataTestMethod" };
 
