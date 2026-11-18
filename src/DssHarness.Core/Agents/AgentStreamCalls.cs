@@ -5,14 +5,18 @@ using DssHarness.Core.Agents.ClaudeCode;
 namespace DssHarness.Core.Agents;
 
 /// <summary>
-/// One tool call a stored stream holds that went through: the id its client gave it, the tool as the runtime names it, the
-/// input the model wrote and the answer it was given.
+/// One tool call a stored stream holds that was answered: the id its client gave it, the tool as the runtime names it, the
+/// input the model wrote, the answer it was given and whether that answer says it succeeded.
 /// </summary>
 /// <param name="Id">The call's id, as the stream holds it: what a closing record's search or measurement cites.</param>
 /// <param name="Tool">The tool (<see cref="AgentStreamCalls.ToolOf"/>): a tool of the engine's tool server by the runtime's name, any other by its client's.</param>
 /// <param name="Input">Its input, the JSON object the model wrote, as the stream holds it masked.</param>
 /// <param name="Result">Its answer, masked and capped as the stream holds it.</param>
-public sealed record AgentStreamCall(string Id, string Tool, JsonObject Input, string Result)
+/// <param name="Ok">
+/// Whether its answer says it succeeded - it went through. A measure call whose cell failed or was not measured answers
+/// that it did not, though it was made and keeps its record.
+/// </param>
+public sealed record AgentStreamCall(string Id, string Tool, JsonObject Input, string Result, bool Ok)
 {
     /// <summary>
     /// Every text its input holds - each string value, at any depth, in the order written - unescaped, as the model meant
@@ -75,12 +79,19 @@ public static class AgentStreamCalls
     }
 
     /// <summary>
-    /// Every call of <paramref name="stream"/> that went through, in the order its answers came: each answer that says it
-    /// succeeded, paired by its id with the tool the call's start or the model's message named, whose input reads as a JSON
-    /// object. A call whose answer failed, never came or names no call the stream started is not among them.
+    /// Every call of <paramref name="stream"/> that went through, in the order its answers came: each of
+    /// <see cref="Answered"/> whose answer says it succeeded.
     /// </summary>
     /// <param name="stream">A stored stream, every attempt's events in order.</param>
-    public static IEnumerable<AgentStreamCall> Of(IEnumerable<AgentEvent> stream)
+    public static IEnumerable<AgentStreamCall> Of(IEnumerable<AgentEvent> stream) => Answered(stream).Where(call => call.Ok);
+
+    /// <summary>
+    /// Every call of <paramref name="stream"/> that was answered, in the order its answers came, whether the answer says it
+    /// succeeded or not: each answer paired by its id with the tool the call's start or the model's message named, whose
+    /// input reads as a JSON object. A call whose answer never came or names no call the stream started is not among them.
+    /// </summary>
+    /// <param name="stream">A stored stream, every attempt's events in order.</param>
+    public static IEnumerable<AgentStreamCall> Answered(IEnumerable<AgentEvent> stream)
     {
         ArgumentNullException.ThrowIfNull(stream);
 
@@ -107,8 +118,8 @@ public static class AgentStreamCalls
 
                     break;
 
-                case ToolCallFinished { Ok: true } finished when tools.TryGetValue(finished.Id, out var tool) && InputOf(finished.Input) is { } input:
-                    yield return new AgentStreamCall(finished.Id, tool, input, finished.Result);
+                case ToolCallFinished finished when tools.TryGetValue(finished.Id, out var tool) && InputOf(finished.Input) is { } input:
+                    yield return new AgentStreamCall(finished.Id, tool, input, finished.Result, finished.Ok);
                     break;
             }
         }

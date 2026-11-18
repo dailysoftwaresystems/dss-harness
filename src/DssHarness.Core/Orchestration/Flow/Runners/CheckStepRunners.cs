@@ -114,7 +114,9 @@ public sealed class AnchorCitationsStepRunner(IHarnessContextLoader contextLoade
 /// classes. What the record is judged against the runner gathers: the paths the agent changed - what the fold's own dry
 /// weighing of its worktree would write, remove or merge, and what the run's ledger of its folds says its earlier folds
 /// of the agent changed, so a site folded before a review is still the agent's work after it; every tool call of the
-/// agent's stored streams, by the one reading of a stream's calls (<see cref="Agents.AgentStreamCalls"/>); what its
+/// agent's stored streams, by the one reading of a stream's calls (<see cref="Agents.AgentStreamCalls"/>), and what each
+/// of their measure calls measured, by its own record in the directory of the step whose stream holds it
+/// (<see cref="ClassClosureMeasure"/>); what its
 /// worktree still declares, through the graph's view of its tree - synced where the step starts - or text; the arms the
 /// registry of its worktree declares, where an arm its work adds stands before the fold merges it in; and each home's
 /// touches since the base the step names, the item's own commits left out by the run's fold ledger. A dry weighing that
@@ -190,16 +192,27 @@ public sealed class ClassClosureStepRunner(
         ];
 
         // Every tool call of the agent's stored streams - each step of its own directory - by the one reading of a stream's
-        // calls: paired with its answer by its id, its tool by the runtime's name, whichever client made it.
+        // calls: paired with its answer by its id, its tool by the runtime's name, whichever client made it. Each measure
+        // call, whatever it answered, with what its own record - kept in the directory of the step whose stream holds it -
+        // says it measured.
         var calls = new Dictionary<string, Agents.AgentStreamCall>(StringComparer.Ordinal);
+        var measures = new Dictionary<string, ClassClosureMeasure>(StringComparer.Ordinal);
 
         if (fileSystem.DirectoryExists(layout.AgentStepsDirectory(agent)))
         {
             foreach (var step in fileSystem.EnumerateDirectories(layout.AgentStepsDirectory(agent)))
             {
-                foreach (var call in Agents.AgentStreamCalls.Of(store.ReadStepStream(step)))
+                foreach (var call in Agents.AgentStreamCalls.Answered(store.ReadStepStream(step)))
                 {
-                    calls[call.Id] = call;
+                    if (call.Ok)
+                    {
+                        calls[call.Id] = call;
+                    }
+
+                    if (call.Tool == Agents.AgentMeasureSupport.ToolName)
+                    {
+                        measures[call.Id] = ClassClosureMeasure.Of(fileSystem, step, call.Id);
+                    }
                 }
             }
         }
@@ -259,6 +272,7 @@ public sealed class ClassClosureStepRunner(
         var judged = ClassClosureRules.Judge(planned, entries, new ClassClosureProof(
             changed,
             calls,
+            measures,
             Declares,
             TestDeclared,
             arms,

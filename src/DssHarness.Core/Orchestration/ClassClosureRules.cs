@@ -240,10 +240,39 @@ public sealed record ClassHomeAudit(IReadOnlyList<string> Consolidated, IReadOnl
 }
 
 /// <summary>
-/// What a closing record is judged against, beside itself: the paths the agent changed, the calls its stored streams hold,
-/// what its worktree still declares, the arms its worktree's registry declares, and how often each home was touched in this
-/// run. A manual lane - a lane folded by hand, whose closing record is its <c>closure.json</c> - has no stored streams and
-/// no run, and says so by what it leaves null: what it leaves null is read as given, never taken for none.
+/// What one measure call of an item's stored streams measured, as the call's own record keeps it
+/// (<see cref="Agents.AgentMeasureSupport.RecordOf"/>) - the record the tool runtime writes as it answers the call, read
+/// from the directory of the step whose stream holds the call; never the stream's capped text of the answer, nor what the
+/// closing record says of it.
+/// </summary>
+/// <param name="Record">Where the call's record is (<see cref="Agents.AgentMeasureSupport.RecordFileOf"/>), as a problem names it where it cannot be read.</param>
+/// <param name="Measured">The cell the call measured and its result - passed, failed or unmeasured - as its record says them; null where the record cannot be read.</param>
+public sealed record ClassClosureMeasure(string Record, (string Cell, string Result)? Measured)
+{
+    /// <summary>
+    /// What the measure call <paramref name="callId"/>, held by the stream of the step kept at
+    /// <paramref name="stepDirectory"/>, measured, as its record says it: unread, and named by its path, where no record
+    /// that reads as one is there.
+    /// </summary>
+    /// <param name="fileSystem">The file system the step's records are read on.</param>
+    /// <param name="stepDirectory">The directory of the step whose stored stream holds the call.</param>
+    /// <param name="callId">The call's id, as the stream holds it.</param>
+    public static ClassClosureMeasure Of(FileSystem.IFileSystem fileSystem, string stepDirectory, string callId)
+        => new(
+            Agents.AgentMeasureSupport.RecordFileOf(stepDirectory, callId),
+            Agents.AgentMeasureSupport.RecordOf(fileSystem, stepDirectory, callId) is { } said
+                && ClassClosureReading.Text(said["cell"]) is { } cell
+                && ClassClosureReading.Text(said["result"]) is { } result
+                    ? (cell, result)
+                    : null);
+}
+
+/// <summary>
+/// What a closing record is judged against, beside itself: the paths the agent changed, the calls its stored streams hold
+/// and what each of their measure calls measured, what its worktree still declares, the arms its worktree's registry
+/// declares, and how often each home was touched in this run. A manual lane - a lane folded by hand, whose closing record
+/// is its <c>closure.json</c> - has no stored streams and no run, and says so by what it leaves null: what it leaves null is
+/// read as given, never taken for none.
 /// </summary>
 /// <param name="Changed">
 /// The paths the agent changed: what its fold would write, remove or merge, and what the run's earlier folds of it changed.
@@ -251,8 +280,12 @@ public sealed record ClassHomeAudit(IReadOnlyList<string> Consolidated, IReadOnl
 /// </param>
 /// <param name="Calls">
 /// Every tool call of the item's stored streams that went through, by the id a record cites - empty where they hold none,
-/// so a call cited is never read as made. Null for a manual lane, whose searches and measurements are read as given, their
-/// command lines.
+/// so a call cited is never read as made. Null for a manual lane, whose searches are read as given, their command lines.
+/// </param>
+/// <param name="Measures">
+/// Every measure call of the item's stored streams, by the id a record's <c>measuredBy</c> cites - answered passed, failed
+/// or unmeasured alike, each with what its own record says it measured - empty where they hold none, so a measurement cited
+/// is never read as made. Null for a manual lane, whose measurements are read as given, their command lines.
 /// </param>
 /// <param name="Declares">
 /// Whether a file of the agent's worktree still declares a symbol - the graph's view of its tree, or text where the graph
@@ -270,6 +303,7 @@ public sealed record ClassHomeAudit(IReadOnlyList<string> Consolidated, IReadOnl
 public sealed record ClassClosureProof(
     IReadOnlyList<string>? Changed,
     IReadOnlyDictionary<string, Agents.AgentStreamCall>? Calls,
+    IReadOnlyDictionary<string, ClassClosureMeasure>? Measures,
     Func<string, string, bool>? Declares,
     Func<string, bool>? TestDeclared,
     IReadOnlyList<(string Id, string Site)>? Arms,
@@ -290,6 +324,7 @@ public sealed record ClassClosureProof(
         => new(
             Changed: null,
             Calls: null,
+            Measures: null,
             Declares: null,
             TestDeclared: null,
             arms,
@@ -334,7 +369,8 @@ public sealed record ClassClosureJudged(
 /// says why it moved; every planned site is accounted for, a deleted site no longer declaring its symbol in the worktree
 /// and a site that reads its home among the paths the agent changed; every search was made - it cites the call that made
 /// it, a tool call of the item's stored streams one of whose input's texts holds its query - and every neighbour was
-/// measured - its measurement a <c>measure</c> call of the same streams, or reasoned where it says it was not; every test
+/// measured - its measurement a <c>measure</c> call of the same streams whose own record says it measured the neighbour's
+/// cell and answered its result (failed for failed-fixed), or reasoned where it says it was not; every test
 /// of the pin is declared in the worktree; where the worktree's configuration declares an arms registry, the arm is one of
 /// its arms and mutates the home's own file, or the record says why the class has none; the universe holds every axis the
 /// plan names, and the claim names every axis of it; and where the home was touched by other work, the record carries a
@@ -478,16 +514,33 @@ public static class ClassClosureRules
                 continue;
             }
 
-            if (proof.Calls is not { } calls)
+            if (proof.Measures is not { } measures)
             {
                 // A manual lane: the measurement is read as given, its command line.
                 continue;
             }
 
-            // The tool by the runtime's name, whichever client called it (AgentStreamCalls.ToolOf).
-            if (!calls.TryGetValue(measuredBy, out var cited) || cited.Tool != Agents.AgentMeasureSupport.ToolName)
+            // The streams' measure calls alone, by the runtime's name whichever client called them (AgentStreamCalls.ToolOf),
+            // whatever they answered.
+            if (!measures.TryGetValue(measuredBy, out var cited))
             {
                 problems.Add($"class '{entry.Class}': the neighbour '{cell}' is measured by the call '{measuredBy}', which is not a measure call of this item's stored streams");
+                continue;
+            }
+
+            // What the call measured is its own record's, never the builder's word for it: a call that measured another cell
+            // says nothing of this one, and one that answered otherwise than the record says did not show what it claims.
+            if (cited.Measured is not { } measured)
+            {
+                problems.Add($"class '{entry.Class}': the neighbour '{cell}' is measured by the call '{measuredBy}', whose record '{cited.Record}' cannot be read");
+            }
+            else if (!string.Equals(measured.Cell, cell, StringComparison.Ordinal))
+            {
+                problems.Add($"class '{entry.Class}': the neighbour '{cell}' is measured by the call '{measuredBy}', which measured the cell '{measured.Cell}'");
+            }
+            else if (!string.Equals(measured.Result, AnswerOf(result), StringComparison.Ordinal))
+            {
+                problems.Add($"class '{entry.Class}': the neighbour '{cell}' is '{result}' in the record, but the call '{measuredBy}' that measured it answered '{measured.Result}'");
             }
         }
 
@@ -545,6 +598,14 @@ public static class ClassClosureRules
 
         return problems;
     }
+
+    /// <summary>
+    /// What the measure call a neighbour cites answered, where the neighbour's result is true: <c>failed</c> for
+    /// <c>failed-fixed</c> - the measurement showed the failure, and the fix is the item's, after it - and every other result
+    /// as it is spelt, <c>passed</c> a call that answered passed.
+    /// </summary>
+    /// <param name="result">The neighbour's result, as the record spells it.</param>
+    private static string AnswerOf(string result) => result == "failed-fixed" ? "failed" : result;
 
     /// <summary>The audits one entry requires, and its home's touches and hotspots.</summary>
     private static void AuditsAndTouches(ClassClosureRecord entry, ClassClosureProof proof, List<string> audits, List<ClassClosureHotspot> hotspots, List<ClassClosureTouch> touches)

@@ -37,7 +37,7 @@ public sealed class WorkflowStepTypesTests
                 ("validate-plan", "PlanCheckRunner: PlanValidator with FlowRunPaths over IPathBudget.Check and CopyPathBudget"),
                 ("anchor-balance", "AnchorBalanceStepRunner: IAnchorBalanceService.CheckAsync, AnchorBalanceReport.HeldTo, AnchorReports.BalanceFindings"),
                 ("anchor-citations", "AnchorCitationsStepRunner: IAnchorCitationService.CheckAsync, AnchorCitationReport.HeldTo, AnchorCitationReports.Line"),
-                ("class-closure", "ClassClosureStepRunner: ClassClosureRules over IAgentService.FoldAsync (dry), FoldLedger, AgentStreamCalls, CodebaseGraphService.ReadOnlyAsync, ArmListingReader.DeclaredArmsAsync, IGitClient.CountTouchesAsync"),
+                ("class-closure", "ClassClosureStepRunner: ClassClosureRules over IAgentService.FoldAsync (dry), FoldLedger, AgentStreamCalls, AgentMeasureSupport.RecordOf, CodebaseGraphService.ReadOnlyAsync, ArmListingReader.DeclaredArmsAsync, IGitClient.CountTouchesAsync"),
                 ("ci-read", "CiReadStepRunner: ICiLegsService.CheckAsync over GhCiJobSource and GhProcess"),
                 ("ci-wait", "CiWaitStepRunner: ICiChecksService over GhCiJobSource and GhProcess, ICiLegsService.ClassifyRunAsync"),
                 ("commit", "CommitStepRunner: FoldLedger.Owed, CommitTemplate, IGitPublisher over IGitClient.RunWithinAsync and RunWithHooksAsync, IAgentIsolation.ForExecutionAsync"),

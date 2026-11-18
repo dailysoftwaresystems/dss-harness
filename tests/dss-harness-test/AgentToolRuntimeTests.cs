@@ -99,7 +99,8 @@ public sealed class AgentToolRuntimeTests : IDisposable
     /// variant, the filter and the cell said back with where the run's records and the call's are, so a record's
     /// <c>measuredBy</c> cites a call whose input the run's stored stream holds whole; what it answered is kept, masked,
     /// in the call's own records, read back by the id alone. A cell that could not be measured is a failed call carrying
-    /// the reason, which the agent names unmeasured; a call of another tool, or an id no measure call made, has no record.
+    /// the reason, which the agent names unmeasured; a call of another tool, or an id no measure call made, has no record,
+    /// and a record that names no cell reads as none.
     /// </summary>
     [Fact]
     public async Task TheRunsMeasureTool_IsOfferedToAGroundThatRunsCommands_AndItsCallAnswersWhatTheCellShowed()
@@ -129,6 +130,7 @@ public sealed class AgentToolRuntimeTests : IDisposable
         Assert.True(passed.Ok, passed.Text);
         Assert.Equal(new AgentMeasureCall("toolu_01:A", "windows", "debug", "Shape", "the good cell", records), asked);
         Assert.Equal(records, AgentMeasureSupport.RecordsOf(_step, "toolu_01:A"));
+        Assert.Equal(Path.Combine(records, AgentMeasureSupport.RecordFileName), AgentMeasureSupport.RecordFileOf(_step, "toolu_01:A"));
 
         var said = JsonNode.Parse(passed.Text)!;
 
@@ -166,6 +168,12 @@ public sealed class AgentToolRuntimeTests : IDisposable
         _ = await View(runtime, "nothing-here.txt");
         Assert.Null(AgentMeasureSupport.RecordOf(_harness.FileSystem, _step, "call_1"));
         Assert.Null(AgentMeasureSupport.RecordOf(_harness.FileSystem, _step, "toolu_never"));
+
+        // A record that names no cell reads as none: what a call measured is its cell and its result, both.
+        Directory.CreateDirectory(AgentMeasureSupport.RecordsOf(_step, "toolu_cellless"));
+        File.WriteAllText(AgentMeasureSupport.RecordFileOf(_step, "toolu_cellless"), """{"leg":"windows","result":"passed"}""" + "\n");
+
+        Assert.Null(AgentMeasureSupport.RecordOf(_harness.FileSystem, _step, "toolu_cellless"));
     }
 
     /// <summary>A call of a tool the step was not given is refused, and recorded as every denial is: a line, an event, its end.</summary>

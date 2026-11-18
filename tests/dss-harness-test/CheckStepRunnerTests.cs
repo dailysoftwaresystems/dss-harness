@@ -339,6 +339,7 @@ public sealed class CheckStepRunnerTests : IDisposable
                 new DssHarness.Core.Agents.ToolCallStarted("call-2", "measure", DssHarness.Core.Agents.AgentToolRunner.Harness),
                 new DssHarness.Core.Agents.ToolCallFinished("call-2", Ok: true, TimeSpan.Zero, """{"leg":"windows","cell":"turnover:x"}""", "passed"),
             ]);
+        WriteMeasure(layout, "builder", "impl-1", "call-2", "turnover:x", Measured("passed"));
 
         var sync = SyncKit.Service(kit.Harness);
         var agents = Substitute.For<DssHarness.Core.Orchestration.IAgentService>();
@@ -610,6 +611,7 @@ public sealed class CheckStepRunnerTests : IDisposable
                 new DssHarness.Core.Agents.ToolCallFinished("toolu_1", Ok: true, TimeSpan.Zero, asked, "src/Rate.cs"),
                 new DssHarness.Core.Agents.ToolCallFinished("toolu_2", Ok: true, TimeSpan.Zero, """{"leg":"windows","cell":"rate:x"}""", "passed"),
             ]);
+        WriteMeasure(kit.Layout, "builder", "impl-1", "toolu_2", "rate:x", Measured("passed"));
 
         var agents = Weighing("src/Home.cs");
         var result = await Closure(kit, agents).RunAsync(
@@ -915,11 +917,147 @@ public sealed class CheckStepRunnerTests : IDisposable
         Assert.True(ClassClosureRules.Judge([], [], RunProof(changed: [], calls: [])).Passed);
     }
 
-    /// <summary>A run's proof: the paths the agent changed, the calls its streams hold, what its worktree declares, no arms registry, a home audit asked of one touch by others and a hotspot at five.</summary>
-    private static ClassClosureProof RunProof(IReadOnlyList<string> changed, IReadOnlyList<DssHarness.Core.Agents.AgentStreamCall> calls, Func<string, string, bool>? declares = null)
+    /// <summary>
+    /// A neighbour measured by a call is held to what the call's own record says it measured, never to the closing record's
+    /// word for it: a call whose record cannot be read is refused, naming where the record is; a call that measured another
+    /// cell says nothing of this one; and a call that answered otherwise than the closing record says - failed or
+    /// unmeasured where it says passed, or passed where it says a failure was fixed - is refused, naming both. A neighbour
+    /// whose call measured its cell and answered its result passes, failed-fixed standing on a call that answered failed:
+    /// the measurement showed the failure, and the fix is the item's. A manual lane, whose measurements no stream holds,
+    /// reads them as given.
+    /// </summary>
+    [Fact]
+    public void ANeighbour_IsHeldToWhatItsMeasureCallsOwnRecordSaysItMeasured()
+    {
+        var entry = ClassClosureRecord.In(Entry(
+            "c-rate",
+            home: "src/Home.cs",
+            sites: [("src/Home.cs", "Home", "home")],
+            searches: [],
+            neighbours:
+            [
+                ("rate:a", "m-unread", "passed", ""),
+                ("rate:b", "m-other", "passed", ""),
+                ("rate:c", "m-failed", "passed", ""),
+                ("rate:d", "m-unmeasured", "passed", ""),
+                ("rate:e", "m-passed-e", "failed-fixed", ""),
+                ("rate:f", "m-passed-f", "passed", ""),
+                ("rate:g", "m-failed-g", "failed-fixed", ""),
+            ],
+            tests: [],
+            axes: ["format"],
+            claim: "The rate holds over every format"))!;
+        var unread = Path.Combine("steps", "impl-1", "measures", "m-unread", "measure.json");
+        var measures = new Dictionary<string, ClassClosureMeasure>(StringComparer.Ordinal)
+        {
+            ["m-unread"] = new(unread, null),
+            ["m-other"] = new("m-other.json", ("rate:z", "passed")),
+            ["m-failed"] = new("m-failed.json", ("rate:c", "failed")),
+            ["m-unmeasured"] = new("m-unmeasured.json", ("rate:d", "unmeasured")),
+            ["m-passed-e"] = new("m-passed-e.json", ("rate:e", "passed")),
+            ["m-passed-f"] = new("m-passed-f.json", ("rate:f", "passed")),
+            ["m-failed-g"] = new("m-failed-g.json", ("rate:g", "failed")),
+        };
+
+        Assert.Equal(
+            [
+                $"class 'c-rate': the neighbour 'rate:a' is measured by the call 'm-unread', whose record '{unread}' cannot be read",
+                "class 'c-rate': the neighbour 'rate:b' is measured by the call 'm-other', which measured the cell 'rate:z'",
+                "class 'c-rate': the neighbour 'rate:c' is 'passed' in the record, but the call 'm-failed' that measured it answered 'failed'",
+                "class 'c-rate': the neighbour 'rate:d' is 'passed' in the record, but the call 'm-unmeasured' that measured it answered 'unmeasured'",
+                "class 'c-rate': the neighbour 'rate:e' is 'failed-fixed' in the record, but the call 'm-passed-e' that measured it answered 'passed'",
+            ],
+            ClassClosureRules.Judge([], [entry], RunProof(changed: [], calls: [], measures: measures)).Problems);
+
+        // A manual lane's measurements are its command lines, read as given.
+        Assert.Empty(ClassClosureRules.Judge([], [entry], ClassClosureProof.Manual(arms: null)).Problems);
+    }
+
+    /// <summary>
+    /// The check reads what each measure call of the agent's stored streams measured from the call's own record, in the
+    /// directory of the step whose stream holds it - whatever the call answered, so a failed cell's call, which its stream
+    /// holds as one that did not succeed, is a measure call too - and never from the stream's text of the answer: a record
+    /// the call's own step does not hold is not read from another step's, and a call whose stream says passed is held to the
+    /// failure its record keeps. A neighbour whose call measured its cell and answered its result passes.
+    /// </summary>
+    [Fact]
+    public async Task TheClassClosureCheck_ReadsWhatEachMeasureCallMeasured_FromItsOwnRecord_InTheStepWhoseStreamHoldsIt()
+    {
+        var temp = new TempDirectory();
+        _made.Add(temp);
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        await kit.CreateAgentAsync("builder");
+
+        // The implementation's step measured x, passed; the rework's measured y and failed - its call answered as one that
+        // did not succeed - measured z, its stream's text saying passed where its record keeps a failure, and measured
+        // another cell than the one the record names. The record of the implementation's second call is kept only in the
+        // rework's step, whose stream does not hold it.
+        WriteStream(kit.Harness, kit.Layout, "builder", MeasureCalls(("toolu_1", true), ("toolu_3", true)), step: "impl-1");
+        WriteStream(kit.Harness, kit.Layout, "builder", MeasureCalls(("toolu_2", false), ("toolu_4", true), ("toolu_5", true)), step: "rework-1");
+        WriteMeasure(kit.Layout, "builder", "impl-1", "toolu_1", "rate:x", Measured("passed"));
+        WriteMeasure(kit.Layout, "builder", "rework-1", "toolu_2", "rate:y", Measured("failed"));
+        WriteMeasure(kit.Layout, "builder", "rework-1", "toolu_3", "rate:w", Measured("passed"));
+        WriteMeasure(kit.Layout, "builder", "rework-1", "toolu_4", "rate:z", Measured("failed"));
+        WriteMeasure(kit.Layout, "builder", "rework-1", "toolu_5", "rate:other", Measured("passed"));
+
+        var judged = await Closure(kit, Weighing("src/Home.cs")).RunAsync(
+            ClosureRun(
+                kit,
+                Class("c-rate", home: "src/Home.cs", symbol: "Home"),
+                Measuring(("rate:x", "toolu_1", "passed"), ("rate:y", "toolu_2", "failed-fixed"), ("rate:w", "toolu_3", "passed"), ("rate:z", "toolu_4", "passed"), ("rate:v", "toolu_5", "passed"))),
+            Token);
+
+        Assert.Equal(
+            [
+                $"class 'c-rate': the neighbour 'rate:w' is measured by the call 'toolu_3', whose record '{DssHarness.Core.Agents.AgentMeasureSupport.RecordFileOf(kit.Layout.AgentStepDirectory("builder", "impl-1"), "toolu_3")}' cannot be read",
+                "class 'c-rate': the neighbour 'rate:z' is 'passed' in the record, but the call 'toolu_4' that measured it answered 'failed'",
+                "class 'c-rate': the neighbour 'rate:v' is measured by the call 'toolu_5', which measured the cell 'rate:other'",
+            ],
+            [.. judged.Output!["problems"]!.AsArray().Select(problem => problem!.GetValue<string>())]);
+        Assert.Equal((false, true, ClassClosureExit.Findings), (judged.Output["passed"]!.GetValue<bool>(), judged.Red, judged.Exit));
+
+        // The neighbours whose calls measured their cells and answered their results pass, a fix claimed of the failure a
+        // measurement showed among them.
+        var passed = await Closure(kit, Weighing("src/Home.cs")).RunAsync(
+            ClosureRun(kit, Class("c-rate", home: "src/Home.cs", symbol: "Home"), Measuring(("rate:x", "toolu_1", "passed"), ("rate:y", "toolu_2", "failed-fixed"))),
+            Token);
+
+        Assert.Empty(passed.Output!["problems"]!.AsArray());
+        Assert.Equal((true, false, HarnessExit.Success), (passed.Output["passed"]!.GetValue<bool>(), passed.Red, passed.Exit));
+
+        static IReadOnlyList<DssHarness.Core.Agents.AgentEvent> MeasureCalls(params (string Id, bool Ok)[] calls)
+            => [.. calls.SelectMany(call => new DssHarness.Core.Agents.AgentEvent[]
+            {
+                new DssHarness.Core.Agents.ToolCallStarted(call.Id, DssHarness.Core.Agents.AgentMeasureSupport.ToolName, DssHarness.Core.Agents.AgentToolRunner.Harness),
+                new DssHarness.Core.Agents.ToolCallFinished(call.Id, call.Ok, TimeSpan.Zero, """{"leg":"windows","variant":"debug","filter":"Rate","cell":"rate"}""", "passed"),
+            })];
+
+        static JsonObject Measuring(params (string Cell, string MeasuredBy, string Result)[] neighbours)
+            => Entry(
+                "c-rate",
+                home: "src/Home.cs",
+                sites: [("src/Home.cs", "Home", "home")],
+                searches: [],
+                neighbours: [.. neighbours.Select(neighbour => (neighbour.Cell, neighbour.MeasuredBy, neighbour.Result, string.Empty))],
+                tests: [],
+                axes: ["format"],
+                claim: "The rate holds over every format");
+    }
+
+    /// <summary>
+    /// A run's proof: the paths the agent changed, the calls its streams hold and what each measure call of them measured
+    /// (none, where none are given), what its worktree declares, no arms registry, a home audit asked of one touch by others
+    /// and a hotspot at five.
+    /// </summary>
+    private static ClassClosureProof RunProof(
+        IReadOnlyList<string> changed,
+        IReadOnlyList<DssHarness.Core.Agents.AgentStreamCall> calls,
+        Func<string, string, bool>? declares = null,
+        IReadOnlyDictionary<string, ClassClosureMeasure>? measures = null)
         => new(
             changed,
             calls.ToDictionary(call => call.Id, StringComparer.Ordinal),
+            measures ?? new Dictionary<string, ClassClosureMeasure>(),
             declares,
             TestDeclared: null,
             Arms: null,
@@ -1033,15 +1171,38 @@ public sealed class CheckStepRunnerTests : IDisposable
         return entry;
     }
 
-    /// <summary>Writes a step's stored stream under the agent's own directory, one event a line.</summary>
-    private static void WriteStream(HarnessFactory harness, OrchestratorLayout layout, string agent, IReadOnlyList<DssHarness.Core.Agents.AgentEvent> events)
+    /// <summary>Writes the stored stream of the agent's step <paramref name="step"/> under its own directory, one event a line.</summary>
+    private static void WriteStream(HarnessFactory harness, OrchestratorLayout layout, string agent, IReadOnlyList<DssHarness.Core.Agents.AgentEvent> events, string step = "impl-1")
     {
-        Directory.CreateDirectory(layout.AgentStepDirectory(agent, "impl-1"));
+        Directory.CreateDirectory(layout.AgentStepDirectory(agent, step));
 
         var lines = events.Select(@event => System.Text.Json.JsonSerializer.SerializeToNode(@event, typeof(DssHarness.Core.Agents.AgentEvent), DssHarness.Core.FileSystem.JsonStateFile.LineOptions)!.ToJsonString(DssHarness.Core.FileSystem.JsonStateFile.LineOptions));
 
-        File.WriteAllLines(Path.Combine(layout.AgentStepDirectory(agent, "impl-1"), DssHarness.Core.Agents.StoredStream.FileName), lines);
+        File.WriteAllLines(Path.Combine(layout.AgentStepDirectory(agent, step), DssHarness.Core.Agents.StoredStream.FileName), lines);
     }
+
+    /// <summary>
+    /// Keeps what the measure call <paramref name="id"/> of the agent's step <paramref name="step"/> answered as the tool
+    /// runtime keeps it: the call said back with its answer (<see cref="DssHarness.Core.Agents.AgentMeasureSupport.Said"/>)
+    /// in the call's own record (<see cref="DssHarness.Core.Agents.AgentMeasureSupport.RecordFileOf"/>).
+    /// </summary>
+    private static void WriteMeasure(OrchestratorLayout layout, string agent, string step, string id, string cell, DssHarness.Core.Agents.AgentMeasureAnswer answer)
+    {
+        var directory = layout.AgentStepDirectory(agent, step);
+        var call = new DssHarness.Core.Agents.AgentMeasureCall(id, "windows", "debug", "Rate", cell, DssHarness.Core.Agents.AgentMeasureSupport.RecordsOf(directory, id));
+
+        Directory.CreateDirectory(call.Records);
+        File.WriteAllText(DssHarness.Core.Agents.AgentMeasureSupport.RecordFileOf(directory, id), DssHarness.Core.Agents.AgentMeasureSupport.Said(call, answer).ToJsonString() + "\n");
+    }
+
+    /// <summary>What a measure call answers that showed <paramref name="result"/>: passed, failed or unmeasured.</summary>
+    private static DssHarness.Core.Agents.AgentMeasureAnswer Measured(string result)
+        => result switch
+        {
+            "passed" => new(Measured: true, Passed: true, "passed", null, null),
+            "failed" => new(Measured: true, Passed: false, "failed", "the tests failed", null),
+            _ => new(Measured: false, Passed: false, string.Empty, null, "the leg was skipped"),
+        };
 
     private static (bool Passed, string Findings) Findings(FlowStepResult result)
         => (result.Output!["passed"]!.GetValue<bool>(), string.Join(" | ", result.Output!["findings"]!.AsArray().Select(line => line!.GetValue<string>())));

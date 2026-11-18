@@ -594,8 +594,9 @@ public sealed partial class AgentToolRuntime : IDisposable
     /// leg, variant, filter and cell said back with what they showed - the run's verdict and its detail where the cell
     /// measured, the reason where it could not be, and where the records are (<see cref="AgentMeasureSupport.Said"/>) - so
     /// the agent's record cites the id of a call whose input and answer the run's stored stream holds whole. What it
-    /// answered is kept, masked, in the call's own records (<see cref="AgentMeasureSupport.RecordsOf"/>), under the id
-    /// the stream records it by, beside the ledger of the run it made.
+    /// answered is kept, masked, in the call's own records (<see cref="AgentMeasureSupport.RecordFileOf"/>), under the id
+    /// the stream records it by, beside the ledger of the run it made: what a closure check reads of what the call measured,
+    /// never the stream's capped text of it.
     /// </summary>
     /// <param name="callId">The call's id, as the run's stored stream records it.</param>
     /// <param name="input">The call's input, its leg, variant, filter and cell among it.</param>
@@ -610,7 +611,7 @@ public sealed partial class AgentToolRuntime : IDisposable
         var said = AgentMeasureSupport.Said(asked, answer).ToJsonString();
 
         _host.FileSystem.CreateDirectory(records);
-        _host.FileSystem.WriteAllTextAtomic(Path.Combine(records, AgentMeasureSupport.RecordFileName), _run.Mask.Redact(said) + "\n");
+        _host.FileSystem.WriteAllTextAtomic(AgentMeasureSupport.RecordFileOf(_run.StepDirectory, callId), _run.Mask.Redact(said) + "\n");
 
         return answer.Measured && answer.Passed ? Answer.Done(said) : Answer.Failed(said);
     }

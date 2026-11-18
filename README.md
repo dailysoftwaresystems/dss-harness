@@ -677,7 +677,10 @@ its symbol in the worktree (the graph's view of it, synced where the check start
 site that reads its home among the paths the agent changed (what its fold would write and what its
 earlier folds of the run changed), every search a tool call of the item's stored streams one of
 whose input's texts holds its query, every neighbour measured by a `measure` call - whichever
-client called it - or reasoned why not, every test of the pin declared, the arm one of the
+client called it, whatever it answered - whose own record (`measures/<call id>/measure.json` of
+the step whose stream holds it, never the builder's word or the stream's capped text of the
+answer) can be read, names the neighbour's cell and answered its result (`failed` for
+`failed-fixed`), or reasoned why not, every test of the pin declared, the arm one of the
 registry the worktree holds and mutating the home's own file or a reason the class has nothing to
 mutate, the universe holding every planned axis and the claim naming each - and each home's
 touches since the run's start commit, the item's own commits left out: a home touched by other
@@ -2157,7 +2160,8 @@ where it does not, under the agents' isolation and the step's own record of what
 they showed: `passed` where the leg passed, `failed` where its build or its tests failed, and `unmeasured` with why
 for anything else (a leg refused by another run's lock, skipped, stopped, a filter that matched no test, a leg not
 declared), the verdict spelt as the ledger spells it, with the run's directory and the call's own records
-(`measures/<call id>/` of the step's directory: the ledger, and what the call answered); the call is a tool call of
+(`measures/<call id>/` of the step's directory: the ledger, and what the call answered, which is what the
+`class-closure` check reads of what it measured); the call is a tool call of
 the step's stored stream whose id a closure record's `measuredBy` cites. The leg
 steps `build`, `test`, `run` and `check-mutations`, which run their legs as the commands do, in the worktree of the agent
 they name with `in` or in the main checkout, each leg's verdict read on its own and its red legs answered alone - a leg

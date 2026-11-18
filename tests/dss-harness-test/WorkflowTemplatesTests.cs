@@ -775,11 +775,16 @@ public sealed class WorkflowTemplatesTests
         Assert.DoesNotContain(schema.GetProperty("required").EnumerateArray(), member => member.GetString() == "arms");
         Assert.False(schema.GetProperty("properties").TryGetProperty("arms", out _));
 
-        // The builders measure on declared legs alone, and name any other reference unmeasured.
+        // The builders measure on declared legs alone, and name any other reference unmeasured; a neighbour's result is
+        // what the call it cites answered for its cell, as the class-closure check holds it to that call's own record.
         foreach (var builds in new[] { "item-pipeline/prompts/implement.md", "item-pipeline/prompts/remedy.md" })
         {
             Assert.Contains(
                 "Only a leg this run's configuration declares is measured; a reference that is no declared leg - a tool, a service, another implementation - is named unmeasured, with the reason, and so is a cell the tool answers unmeasured.",
+                Prose.Words(WorkflowTemplates.TextOf(builds)!),
+                StringComparison.Ordinal);
+            Assert.Contains(
+                "Your record's `measuredBy` cites the id of the call that measured, and its `result` is what that call answered for that cell: `passed` where it passed, `failed-fixed` where it failed and you fixed it in this item.",
                 Prose.Words(WorkflowTemplates.TextOf(builds)!),
                 StringComparison.Ordinal);
         }

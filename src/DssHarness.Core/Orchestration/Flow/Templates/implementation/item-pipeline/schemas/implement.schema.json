@@ -329,7 +329,7 @@
                 },
                 "measuredBy": {
                   "type": "string",
-                  "description": "The id of the measure call that measured it; empty where it is unmeasured."
+                  "description": "The id of the measure call that measured it - one that measured this cell and answered this result, failed for failed-fixed; empty where it is unmeasured."
                 },
                 "result": {
                   "type": "string",

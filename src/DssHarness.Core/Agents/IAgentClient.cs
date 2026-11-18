@@ -1043,6 +1043,15 @@ public sealed record AgentMeasureSupport(Func<AgentMeasureCall, CancellationToke
     }
 
     /// <summary>
+    /// The file in the measure call <paramref name="callId"/>'s own records (<see cref="RecordsOf"/>) that keeps what it
+    /// answered (<see cref="RecordFileName"/>): where the tool runtime writes it, <see cref="RecordOf"/> reads it, and a
+    /// closure check names it where it cannot be read.
+    /// </summary>
+    /// <param name="stepDirectory">The step's own directory.</param>
+    /// <param name="callId">The call's id, as the run's stored stream records it.</param>
+    public static string RecordFileOf(string stepDirectory, string callId) => Path.Combine(RecordsOf(stepDirectory, callId), RecordFileName);
+
+    /// <summary>
     /// What <paramref name="call"/> answered, as the agent is given it and its records keep it: the call's leg, variant,
     /// filter and cell said back with its result (<see cref="AgentMeasureAnswer.Result"/>), the verdict, detail and reason
     /// where there are any, where the run's records are where a run was made, and where the call's own are.
@@ -1091,8 +1100,9 @@ public sealed record AgentMeasureSupport(Func<AgentMeasureCall, CancellationToke
     /// <summary>
     /// What the measure call <paramref name="callId"/> of the step kept at <paramref name="stepDirectory"/> answered, as
     /// its records keep it (<see cref="Said"/>, masked as the step's records are): the one reading of whether a call a
-    /// record cites is a measure call of the step's, and of what it showed, whatever client made it. Null where no measure
-    /// call of that id left a record there, or what it left does not read as one.
+    /// record cites is a measure call of the step's, and of what it showed - the cell it measured and its result - whatever
+    /// client made it. Null where no measure call of that id left a record there, or what it left does not read as one: no
+    /// cell, or a result no measure call answers.
     /// </summary>
     /// <param name="fileSystem">The file system the step's records are read on.</param>
     /// <param name="stepDirectory">The step's own directory.</param>
@@ -1101,7 +1111,7 @@ public sealed record AgentMeasureSupport(Func<AgentMeasureCall, CancellationToke
     {
         ArgumentNullException.ThrowIfNull(fileSystem);
 
-        var file = Path.Combine(RecordsOf(stepDirectory, callId), RecordFileName);
+        var file = RecordFileOf(stepDirectory, callId);
 
         if (!fileSystem.FileExists(file))
         {
@@ -1111,6 +1121,7 @@ public sealed record AgentMeasureSupport(Func<AgentMeasureCall, CancellationToke
         try
         {
             return System.Text.Json.Nodes.JsonNode.Parse(FileSystem.WholeFiles.ReadAllText(fileSystem, file)) is System.Text.Json.Nodes.JsonObject said
+                && said["cell"] is System.Text.Json.Nodes.JsonValue cell && cell.TryGetValue<string>(out _)
                 && said["result"] is System.Text.Json.Nodes.JsonValue result && result.TryGetValue<string>(out var word)
                 && AgentMeasureAnswer.Results.Contains(word, StringComparer.Ordinal)
                     ? said

@@ -294,7 +294,7 @@ public static class WorkflowStepTypes
             ],
             ["base"],
             "red",
-            "ClassClosureStepRunner: ClassClosureRules over IAgentService.FoldAsync (dry), FoldLedger, AgentStreamCalls, CodebaseGraphService.ReadOnlyAsync, ArmListingReader.DeclaredArmsAsync, IGitClient.CountTouchesAsync",
+            "ClassClosureStepRunner: ClassClosureRules over IAgentService.FoldAsync (dry), FoldLedger, AgentStreamCalls, AgentMeasureSupport.RecordOf, CodebaseGraphService.ReadOnlyAsync, ArmListingReader.DeclaredArmsAsync, IGitClient.CountTouchesAsync",
             ["read main", "read the agent's tree where in names one"],
             null,
             ClassClosureOutput),
