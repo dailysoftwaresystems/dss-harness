@@ -4524,6 +4524,14 @@ code-behind; a view is a section over its lines with the same done for `@functio
 `@using` they hold for the whole of their directory's subtree: an import of the `directory` form, which the linker
 applies to every file of the language under it, and to no file of another language or outside it.
 
+A Vue single-file component (`.vue`) is one implementation, `vue`: the component a type named by its file and
+exported `default`, so `import Foo from './Foo.vue'` binds to it; its `<script>` - TypeScript where
+`lang="ts"` - read by the JavaScript reader with the other lines blanked; its `<template>` read line by line, a
+component's tag - `<FooBar>` or `<foo-bar>` - an instantiates of a component of that name, a `v-on` or `@` attribute
+a call of the handler it names, a `v-bind`, `:` attribute or `{{ }}` a use of the name its expression begins with,
+and each class and id a use of the rule that styles it; and its `<style>` - scoped among them - read by the style
+sheet's reader, which the css implementation now answers for another language's file as the C# reader does.
+
 A sync (`ICodebaseGraphService.SyncAsync`) lists the main checkout by three calls of `IGitClient` that take no lock -
 `ListIndexAsync` (`ls-files --stage -v -z`, the one reading of the index the whole tool shares), `ListWorkingFilesAsync`
 (`status --porcelain=v2 -z --untracked-files=all --no-renames`) and `HashWorkingFilesAsync` (`hash-object`, its paths on

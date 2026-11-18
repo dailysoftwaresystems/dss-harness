@@ -42,6 +42,18 @@ public sealed partial class CssExtractor : ICodeGraphExtractor
     public FileExtract Extract(CodeFileInput input)
     {
         ArgumentNullException.ThrowIfNull(input);
+        return Read(Language, input);
+    }
+
+    /// <summary>
+    /// Reads a style sheet's text as another implementation's extract - a Vue component's style block among them - every
+    /// id prefixed by <paramref name="language"/>.
+    /// </summary>
+    /// <param name="language">The implementation the extract is part of: the prefix of every id.</param>
+    /// <param name="input">The sheet's text, at the lines it stands on in its own file.</param>
+    internal static FileExtract Read(string language, CodeFileInput input)
+    {
+        ArgumentNullException.ThrowIfNull(input);
 
         var sheet = new Sheet(input.Text);
         var nodes = new List<ExtractNode>();
@@ -49,7 +61,7 @@ public sealed partial class CssExtractor : ICodeGraphExtractor
         var imports = new List<ExtractImport>();
         var ids = new ExtractIds();
 
-        Sheet.Walk(input.Path, sheet, nodes, references, imports, ids, depth: 0, input.Lines.Count);
+        Sheet.Walk(language, input.Path, sheet, nodes, references, imports, ids, depth: 0, lineCount: input.Lines.Count);
 
         // What a reference is made from: the first node of the sheet holds what no rule does - a use or an inheritance
         // the text writes above any rule. A sheet that holds no node at all has no reference made from nothing.
@@ -69,7 +81,7 @@ public sealed partial class CssExtractor : ICodeGraphExtractor
     private sealed partial class Sheet(string text)
     {
         /// <summary>Walks the sheet from where it stands: rules and at-rules at this depth, to the close of the block around it.</summary>
-        public static void Walk(string file, Sheet sheet, List<ExtractNode> nodes, List<ExtractReference> references, List<ExtractImport> imports, ExtractIds ids, int depth, int lineCount)
+        public static void Walk(string language, string file, Sheet sheet, List<ExtractNode> nodes, List<ExtractReference> references, List<ExtractImport> imports, ExtractIds ids, int depth, int lineCount)
         {
             while (sheet.More())
             {
@@ -77,7 +89,7 @@ public sealed partial class CssExtractor : ICodeGraphExtractor
 
                 if (sheet.At())
                 {
-                    At(file, sheet, nodes, references, imports, ids, FileExtract.LineWithin(start, lineCount));
+                    At(language, file, sheet, nodes, references, imports, ids, FileExtract.LineWithin(start, lineCount));
                     continue;
                 }
 
@@ -90,7 +102,7 @@ public sealed partial class CssExtractor : ICodeGraphExtractor
                 // pseudo-class a selector writes is a selector still, told by the brace its rule opens.
                 if (sheet.Declaration(out var declared) is { } variable)
                 {
-                    Rule(file, ids, nodes, variable, FileExtract.LineWithin(start, lineCount), "constant");
+                    Rule(language, file, ids, nodes, variable, FileExtract.LineWithin(start, lineCount), "constant");
 
                     foreach (var used in Variables(declared!))
                     {
@@ -110,11 +122,11 @@ public sealed partial class CssExtractor : ICodeGraphExtractor
 
                 foreach (var part in Parts(selector))
                 {
-                    Rule(file, ids, nodes, part, FileExtract.LineWithin(start, lineCount), "rule");
+                    Rule(language, file, ids, nodes, part, FileExtract.LineWithin(start, lineCount), "rule");
                 }
 
                 // The block the selector opens: its declarations, its nested rules, and its close ending the rules it began.
-                Block(file, sheet, nodes, references, ids, depth + 1, lineCount);
+                Block(language, file, sheet, nodes, references, ids, depth + 1, lineCount);
 
                 for (var at = made; at < nodes.Count; at++)
                 {
@@ -127,13 +139,13 @@ public sealed partial class CssExtractor : ICodeGraphExtractor
         }
 
         /// <summary>The block of a rule, to its close: declarations with their values read for uses, and nested rules.</summary>
-        private static void Block(string file, Sheet sheet, List<ExtractNode> nodes, List<ExtractReference> references, ExtractIds ids, int depth, int lineCount)
+        private static void Block(string language, string file, Sheet sheet, List<ExtractNode> nodes, List<ExtractReference> references, ExtractIds ids, int depth, int lineCount)
         {
             while (sheet.More())
             {
                 if (sheet.At())
                 {
-                    At(file, sheet, nodes, references, imports: null, ids, FileExtract.LineWithin(sheet.Line, lineCount));
+                    At(language, file, sheet, nodes, references, imports: null, ids, FileExtract.LineWithin(sheet.Line, lineCount));
                     continue;
                 }
 
@@ -145,13 +157,13 @@ public sealed partial class CssExtractor : ICodeGraphExtractor
                 if (sheet.Declaration(out var value) is not { } name)
                 {
                     // A nested rule, read where the text holds none of a declaration's colon before its brace.
-                    Walk(file, sheet, nodes, references, [], ids, depth, lineCount);
+                    Walk(language, file, sheet, nodes, references, [], ids, depth, lineCount);
                     continue;
                 }
 
                 if (name.StartsWith("--", StringComparison.Ordinal) || name[0] is '$' or '@')
                 {
-                    Rule(file, ids, nodes, name, FileExtract.LineWithin(sheet.Line, lineCount), "constant");
+                    Rule(language, file, ids, nodes, name, FileExtract.LineWithin(sheet.Line, lineCount), "constant");
                 }
 
                 foreach (var used in Variables(value!))
@@ -162,7 +174,7 @@ public sealed partial class CssExtractor : ICodeGraphExtractor
         }
 
         /// <summary>One at-rule, by its word.</summary>
-        private static void At(string file, Sheet sheet, List<ExtractNode> nodes, List<ExtractReference> references, List<ExtractImport>? imports, ExtractIds ids, int line)
+        private static void At(string language, string file, Sheet sheet, List<ExtractNode> nodes, List<ExtractReference> references, List<ExtractImport>? imports, ExtractIds ids, int line)
         {
             switch (sheet.Word)
             {
@@ -188,7 +200,7 @@ public sealed partial class CssExtractor : ICodeGraphExtractor
                 case "keyframes":
                     if (sheet.Argument() is { } animation)
                     {
-                        Rule(file, ids, nodes, animation, line, "rule");
+                        Rule(language, file, ids, nodes, animation, line, "rule");
                     }
 
                     sheet.SkipBlock();
@@ -197,8 +209,8 @@ public sealed partial class CssExtractor : ICodeGraphExtractor
                 case "mixin":
                     if (sheet.Argument() is { } mixin)
                     {
-                        Rule(file, ids, nodes, mixin, line, "mixin");
-                        Block(file, sheet, nodes, references, ids, depth: 1, lineCount: int.MaxValue);
+                        Rule(language, file, ids, nodes, mixin, line, "mixin");
+                        Block(language, file, sheet, nodes, references, ids, depth: 1, lineCount: int.MaxValue);
                     }
                     else
                     {
@@ -223,14 +235,14 @@ public sealed partial class CssExtractor : ICodeGraphExtractor
         }
 
         /// <summary>The node of <paramref name="name"/>: one of the sheet's own, kept where it already stands.</summary>
-        private static void Rule(string file, ExtractIds ids, List<ExtractNode> nodes, string name, int line, string subKind)
+        private static void Rule(string language, string file, ExtractIds ids, List<ExtractNode> nodes, string name, int line, string subKind)
         {
-            if (nodes.Any(node => node.Id == $"css:{file}#{name}"))
+            if (nodes.Any(node => node.Id == $"{language}:{file}#{name}"))
             {
                 return;
             }
 
-            nodes.Add(new ExtractNode(ids.Next($"css:{file}#{name}"), CodeNodeKinds.Member, name, name, line, line, name) { SubKind = subKind });
+            nodes.Add(new ExtractNode(ids.Next($"{language}:{file}#{name}"), CodeNodeKinds.Member, name, name, line, line, name) { SubKind = subKind });
         }
         /// <summary>The simple parts of <paramref name="selector"/>: each class, id, placeholder and element name, and no pseudo-class, pseudo-element, attribute or combinator.</summary>
         internal static IEnumerable<string> Parts(string selector)
