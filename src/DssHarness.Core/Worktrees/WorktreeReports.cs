@@ -145,7 +145,11 @@ public static class WorktreeReports
                 continue;
             }
 
-            foreach (var line in Kept(host.Host, host.RepositoryPath, host.Copies, earlier: false))
+            // A host asked about its copies was asked beside where it keeps them (HostCopyLister): a place is known.
+            var repositoryPath = host.RepositoryPath
+                ?? throw new InvalidOperationException($"Host {host.Host} was asked about its copies with no place it keeps them named.");
+
+            foreach (var line in Kept(host.Host, repositoryPath, host.Copies, earlier: false))
             {
                 yield return line;
             }
@@ -166,7 +170,7 @@ public static class WorktreeReports
 
             foreach (var missing in host.Missing)
             {
-                yield return $"  {missing.Entry.Path}  recorded here, and not there: {Missing(missing, host.RepositoryPath)}";
+                yield return $"  {missing.Entry.Path}  recorded here, and not there: {Missing(missing, repositoryPath)}";
             }
         }
 
