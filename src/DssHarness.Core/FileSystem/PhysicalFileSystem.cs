@@ -388,7 +388,7 @@ public sealed class PhysicalFileSystem(IFilePermissions filePermissions) : IFile
                         break;
 
                     case JunctionKind.MountedVolume:
-                        throw new JunctionRemovalException(link, "a volume is mounted there, and it is never unmounted here", [.. removed]);
+                        throw new JunctionRemovalException(link, HeldDirectory.MountedThere, [.. removed]);
                 }
             }
             catch (IOException ex) when (ex is not JunctionRemovalException)

@@ -60,8 +60,12 @@ public interface IFileSystem
 
     /// <summary>
     /// Deletes a directory and everything under it, including files git has marked
-    /// read only, and never anything a link or junction under it leads to. No-op when absent.
+    /// read only, and never anything a link or junction under it leads to, nor anything on a volume mounted on a directory
+    /// in it, which is refused and never unmounted, on every system (<see cref="HeldDirectory.IsMountedOn"/>). No-op when
+    /// absent.
     /// </summary>
+    /// <exception cref="JunctionRemovalException">A volume is mounted on it, or on a directory in it; what was removed before stays removed.</exception>
+    /// <exception cref="IOException">An entry could not be removed; what was removed before it stays removed.</exception>
     void DeleteDirectory(string path);
 
     /// <summary>
@@ -74,7 +78,11 @@ public interface IFileSystem
     /// <param name="path">The directory; one that is itself a link is refused, and nothing it leads to removed.</param>
     /// <param name="keeping">The names of the entries directly in it that stay, as they are spelt there.</param>
     /// <param name="cancellationToken">Stops the removal between one entry and the next, at any depth.</param>
-    /// <exception cref="JunctionRemovalException">A volume is mounted on a directory in it; what was removed before stays removed.</exception>
+    /// <exception cref="JunctionRemovalException">
+    /// A volume is mounted on a directory in it, on any system - on Linux a bind mount of a directory on the same volume
+    /// among them (<see cref="HeldDirectory.IsMountedOn"/>) - which is never gone into nor unmounted; what was removed before
+    /// stays removed.
+    /// </exception>
     /// <exception cref="IOException">
     /// An entry could not be removed, or the directory is a link (<see cref="LinkOnTheWayException"/>); what was removed
     /// before stays removed.

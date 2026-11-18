@@ -254,11 +254,45 @@ public sealed class HeldDirectory : IDisposable
 
         using (below)
         {
+            RefuseAMount(below);
             below.Empty([], cancellationToken);
         }
 
         Native.Remove(_handle, Checked(name), directory: true, Child(name));
     }
+
+    /// <summary>
+    /// Whether a volume is mounted on the directory <paramref name="name"/> of this one, which a removal never goes into: on
+    /// Windows one is a reparse point, never held as a directory here, and is refused as itself when it is removed; on Linux
+    /// a directory the system marks the root of a mount, a bind mount of a directory on the same volume among them, or one
+    /// on another device where the system cannot say; on macOS one on another device.
+    /// </summary>
+    /// <param name="name">One name, a directory of this one.</param>
+    /// <exception cref="LinkOnTheWayException">It is a link.</exception>
+    /// <exception cref="DirectoryNotFoundException">It is not there, or it is a file.</exception>
+    /// <exception cref="IOException">What it is could not be read.</exception>
+    public bool IsMountedOn(string name)
+    {
+        using var below = Below(name, make: false);
+
+        return Native.IsMountedOn(_handle, below._handle, below.Path);
+    }
+
+    /// <summary>
+    /// Refuses to go into <paramref name="below"/>, a directory of this one a removal is about to empty, where a volume is
+    /// mounted on it (<see cref="IsMountedOn"/>): emptied, everything on that volume would go, and it is never unmounted.
+    /// </summary>
+    /// <exception cref="JunctionRemovalException">A volume is mounted on it; nothing of it has been removed.</exception>
+    private void RefuseAMount(HeldDirectory below)
+    {
+        if (Native.IsMountedOn(_handle, below._handle, below.Path))
+        {
+            throw new JunctionRemovalException(below.Path, MountedThere, []);
+        }
+    }
+
+    /// <summary>Why a removal does not go into a directory a volume is mounted on, as a refusal says it, on every system.</summary>
+    internal const string MountedThere = "a volume is mounted there, and it is never unmounted here";
 
     /// <summary>Removes everything in this directory, each entry as <see cref="DeleteDirectory(string)"/> removes it, and leaves it standing.</summary>
     public void Empty() => Empty([], CancellationToken.None);
@@ -496,4 +530,7 @@ internal interface IHeldNative
 
     /// <summary>Removes the entry <paramref name="name"/> of <paramref name="parent"/> as itself: an empty directory where <paramref name="directory"/>, else anything else.</summary>
     void Remove(SafeFileHandle parent, string name, bool directory, string path);
+
+    /// <summary>Whether a volume is mounted on <paramref name="child"/>, a directory held in <paramref name="parent"/> (<see cref="HeldDirectory.IsMountedOn"/>).</summary>
+    bool IsMountedOn(SafeFileHandle parent, SafeFileHandle child, string path);
 }

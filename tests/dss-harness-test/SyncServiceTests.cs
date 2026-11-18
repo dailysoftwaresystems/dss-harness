@@ -3513,8 +3513,8 @@ public sealed class SyncServiceTests
         var name = HostCopies.NameOf(temp.Combine(".harness-config", "worktrees"), worktree, StringComparison.OrdinalIgnoreCase);
         var copy = HostCopies.ForWorktree(Path.GetFullPath(SyncKit.CopyPath(temp)), name);
 
-        // Never made: the worktree that kept the copy under this name is gone.
-        var gone = temp.Combine("elsewhere", Path.GetFileName(worktree));
+        // Never made, in a directory that is there to look in: the worktree that kept the copy under this name is seen gone.
+        var gone = Path.Combine(Directory.CreateDirectory(temp.Combine("elsewhere")).FullName, Path.GetFileName(worktree));
 
         try
         {
@@ -3539,6 +3539,54 @@ public sealed class SyncServiceTests
             {
                 Assert.True(record.SameTree(worktree, Assert.Single(record.Of(context.Layout, name)).Tree));
             }
+        }
+        finally
+        {
+            SyncKit.DeleteIfPresent(copy);
+            SyncKit.DeleteIfPresent(worktree);
+        }
+    }
+
+    /// <summary>
+    /// A copy a worktree of the same name holds whose tree cannot be looked at - the directory it was in is not there
+    /// either, as on a drive that is not mounted - is never taken over: the sync, and its dry run alike, is refused, saying
+    /// why, nothing made and the record as it was, since that tree may still be there, syncing into it.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ACopyAWorktreeThatCannotBeLookedAtHolds_IsNeverTaken(bool dryRun)
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var (harness, service) = await PrepareAsync(temp, cancellationToken);
+        var worktree = Path.GetFullPath(Path.Combine(temp.Path, "..", "wt-" + Guid.NewGuid().ToString("N")[..8]));
+        var name = HostCopies.NameOf(temp.Combine(".harness-config", "worktrees"), worktree, StringComparison.OrdinalIgnoreCase);
+        var copy = HostCopies.ForWorktree(Path.GetFullPath(SyncKit.CopyPath(temp)), name);
+        var unmounted = temp.Combine("unmounted");
+        var unseen = Path.Combine(unmounted, Path.GetFileName(worktree));
+
+        try
+        {
+            await harness.RunGitAsync(temp.Path, ["worktree", "add", "--detach", worktree], cancellationToken);
+            var context = await harness.ContextLoader.LoadAsync(temp.Path, cancellationToken);
+            var record = new HostCopyRecord(harness.FileSystem, harness.Platform.PathComparison);
+            record.Claim(context.Layout, new HostCopyEntry(name, "ssh pi", copy, unseen));
+            var recorded = Path.Combine(context.Layout.HostCopiesDirectory, HostCopyRecord.FileName);
+            var before = await File.ReadAllBytesAsync(recorded, cancellationToken);
+
+            var refusal = await Assert.ThrowsAsync<HarnessException>(() => service.SyncAsync(
+                worktree, new RecordingTransport(SyncKit.Transport(harness), reports: HostId.Ssh("pi")), copy, new SyncOptions(DryRun: dryRun), cancellationToken));
+
+            Assert.Equal(HarnessExit.Refused, refusal.ExitCode);
+            Assert.Equal(
+                $"ssh pi: '{copy}' is the copy of the worktree at '{unseen}', which is kept under the same name, '{name}', and whether it "
+                + $"is gone cannot be told: '{unmounted}', which it was in, is not there either: a volume or a share it was on may not "
+                + "be mounted. A copy is taken over only from a tree seen to be gone: synced by both, each would replace the tree the "
+                + "other put there. Rename this worktree, or delete the other where it can be looked at. Nothing was changed.",
+                refusal.Message);
+            Assert.False(Directory.Exists(copy));
+            Assert.Equal(before, await File.ReadAllBytesAsync(recorded, cancellationToken));
         }
         finally
         {

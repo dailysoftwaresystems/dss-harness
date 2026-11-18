@@ -4436,14 +4436,20 @@ public sealed partial class HelpTests
             + "gone one's name, a live agent's among them, keeps its own copies. It is driven by that record, not by the legs: "
             + "every host the record names such a copy on is asked, one no declared leg runs on any more among them, each on a "
             + "line of its own named as the record spells the host, in place of the legs' lines; --legs narrows it to the hosts "
-            + "the selected legs can run on. Each copy goes as deleting its worktree would remove it, under the same lock: a "
+            + "the selected legs can run on. A tree is gone only where that is seen: its path is whole on this machine, nothing "
+            + "is at it, and the directory it was in - for an orchestrator's agent, the one its orchestrator's was in, once that "
+            + "is gone too - is there to look in. One that cannot be looked at - a path spelt for another system, a drive or a "
+            + "share that is not mounted, a directory this user may not look in - is never taken for gone: its copies stay "
+            + $"recorded, each kept, refused-locked ({HarnessExit.Refused}), its line saying why. Each copy goes as deleting its "
+            + "worktree would remove it, at the path the record names, under the same lock: a "
             + "copy the harness took over, or one nothing marks as its own, is forgotten and left where it is, one the host no "
             + $"longer keeps is forgotten, and one a run or a sweep holds is kept, refused-locked ({HarnessExit.Refused}), as is "
             + "one whose marker cannot be read. A host that cannot be reached is said on its line, unavailable, its copies kept "
             + $"recorded for a later clean, and the next host is asked all the same ({HarnessExit.Incomplete}); one no "
             + "configuration here declares any more can never be asked, so its copies are forgotten and left on it for you to "
             + "remove, as deleting a worktree forgets them. With --dry-run it says what each holds and what removing it would "
-            + "do, and removes and forgets nothing. Every line names the record, and so does the line the clean ends on - one "
+            + "do, measured at that same path - beside the repositoryPath it was kept beside, whatever the host's item or "
+            + "config.json name now - and removes and forgets nothing. Every line names the record, and so does the line the clean ends on - one "
             + $"saying it records none where it does. It cannot be given with --former-workers ({HarnessExit.UsageError}).",
             text,
             StringComparison.Ordinal);
@@ -4471,6 +4477,14 @@ public sealed partial class HelpTests
                 + "sync makes it again.",
             "The copies a gone worktree left are removed alone, told by their tree, never by the name, by clean "
                 + "--gone-copies ('help space').",
+            "For a name whose worktree is gone, it removes what any worktree of that name left, and never the copies of one "
+                + "that still exists, or of one that cannot be looked at here, which stay recorded and are said, refused "
+                + $"({HarnessExit.Refused}).",
+            "Each recorded copy is looked for where it was kept, as its removal acts on it: one kept beside an earlier "
+                + "repositoryPath, before the host's item or config.json named another, is asked about there, and listed beside "
+                + "it. A tree that cannot be looked at here - a path spelt for another system, a drive or a share that is not "
+                + "mounted, a directory this user may not look in - is never listed as gone: it is said with why, and nothing "
+                + "here removes or forgets its copies.",
             "With --hosts it also asks each declared host which worktree copies it keeps beside its repositoryPath, and "
                 + "how large each is, and sets them against that record",
             $"{HarnessExit.HostUnavailable} where a host cannot be reached. --json prints the listing as one JSON document.",
@@ -4538,8 +4552,10 @@ public sealed partial class HelpTests
             "On Windows, each directory junction in the worktree is removed first, as a link, never what it leads to: git leaves "
                 + "every junction, and the directories above it, while reporting the worktree removed.",
             $"One that cannot be removed stops the deletion before any file of it goes ({HarnessExit.CommandFailed}), and a volume "
-                + "mounted on a directory is never unmounted. Every git command the harness runs there reaches a path past 260 "
-                + "characters as any other (core.longpaths).",
+                + "mounted on a directory is never unmounted. On Linux and macOS a volume mounted on a directory in it - on Linux "
+                + "a bind mount of a directory among them - is never gone into: the deletion stops there "
+                + $"({HarnessExit.CommandFailed}), what went before it gone, still a worktree. Every git command the harness runs "
+                + "on Windows reaches a path past 260 characters as any other (core.longpaths).",
             "A directory under the root with no .git and no record of git's - what a removal that stopped part way leaves - is "
                 + $"refused ({HarnessExit.Refused}), naming --force; git worktree repair is named only while git still records a worktree there - "
                 + "at that path, or, after the checkout was moved by hand, at another place that holds none now.",
@@ -4562,16 +4578,23 @@ public sealed partial class HelpTests
 
         foreach (var said in new[]
         {
-            "Once every check has passed, the removal is the harness's own, every step of it reversible until the worktree's "
-                + "files are gone: git is asked once more what changed in it and whether it is locked, and a file changed or "
-                + $"added since the checks, beyond the changes being discarded, or a lock, refuses it ({HarnessExit.Refused}) with "
+            "Once every check has passed, the removal of one of git's linked worktrees is the harness's own, every step of it "
+                + "reversible until the worktree's files are gone: git is asked once more what changed in it and whether it is "
+                + "locked, and a file changed or added since the checks, beyond the changes being discarded - told by its path, "
+                + $"as git's status gives it - or a lock, refuses it ({HarnessExit.Refused}) with "
                 + "nothing removed; then everything in it but its .git file is deleted, by a deletion that reaches any path, "
                 + "however long, and only then is git asked to clear its record of it, the .git file going with the directory.",
             $"A removal that stops before git clears that record - a file another program holds ({HarnessExit.CommandFailed}), "
                 + $"or an interruption ({HarnessExit.Cancelled}) - leaves a worktree git still knows, its .git file and git's "
-                + "record of it there, and says so, naming 'git -C <path> checkout -- .', which puts back the files its commit "
-                + "holds, and the delete-worktree --force that finishes it. --force has git remove the worktree, and deletes "
-                + "whatever git left.",
+                + "record of it there, and says so, naming 'git -C <path> checkout -- .', which puts back the files its index "
+                + "holds, and, where it holds submodules, 'git -C <path> submodule update --init --recursive', which puts back "
+                + "theirs, the directory junctions it had removed, which nothing puts back, and the delete-worktree --force that "
+                + "finishes it. --force has git remove the worktree, and deletes whatever git left.",
+            "It has no lock and no record of git's. Once its checks pass, git is asked once more what changed in it and what "
+                + "was committed in it, and a file changed or added since, beyond the changes being discarded, or a commit made "
+                + $"since, refuses it ({HarnessExit.Refused}) with nothing removed; then everything in it but its own .git directory "
+                + "is deleted, and that last, its read-only object files with it, so one stopped part way is still a repository "
+                + "holding every commit made in it;",
             "The worktree of an orchestrator's live agent - one whose record says it is live and names that worktree - is "
                 + $"refused ({HarnessExit.Refused}), naming the delete-agent that deletes it with the agent, its evidence and "
                 + "transcripts kept; one whose record cannot be read is refused too, since whether the agent is live cannot be "

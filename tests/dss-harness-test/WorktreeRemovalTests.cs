@@ -860,7 +860,7 @@ public sealed class WorktreeRemovalTests
         Assert.Equal(
             "git could not remove worktree 'remains': error: could not lock the worktree's record. It stopped part way: its files are already gone, "
             + $"and its .git file and git's record of it are still there, so it is still a worktree: 'git -C {path} checkout -- .' puts back the files "
-            + $"its commit holds. Every check passed before removal began, so run '{ToolPackage.Command} delete-worktree remains --force' to finish deleting it.",
+            + $"its index holds. Every check passed before removal began, so run '{ToolPackage.Command} delete-worktree remains --force' to finish deleting it.",
             failed.Outcome.Message);
         Assert.Equal([".git"], Directory.EnumerateFileSystemEntries(path).Select(Path.GetFileName));
         Assert.True(Directory.Exists(gitDirectory));
@@ -900,7 +900,7 @@ public sealed class WorktreeRemovalTests
         Assert.Equal(HarnessExit.CommandFailed, failed.Outcome.ExitCode);
         Assert.Equal(
             $"Worktree 'stuck' was not deleted whole: {HeldReason.TrimEnd('.')}; git was not run. Some of its files may already be gone, and its .git "
-            + $"file and git's record of it are still there, so it is still a worktree: 'git -C {path} checkout -- .' puts back the files its commit "
+            + $"file and git's record of it are still there, so it is still a worktree: 'git -C {path} checkout -- .' puts back the files its index "
             + $"holds. Close whatever holds its files open; every check passed before removal began, so run '{ToolPackage.Command} delete-worktree "
             + "stuck --force' to finish deleting it.",
             failed.Outcome.Message);
@@ -1133,6 +1133,95 @@ public sealed class WorktreeRemovalTests
         Assert.True(outcome.Succeeded, outcome.Outcome.Message);
         Assert.False(Directory.Exists(path));
         Assert.Single(await harness.GitClient.ListWorktreesAsync(temp.Path, TestContext.Current.CancellationToken));
+    }
+
+    /// <summary>
+    /// A worktree holding a submodule whose repository is in its work tree, put in its index at a commit its superproject
+    /// does not record, is deleted with --discard-uncommitted: that change is waived by its path, as git's status gives it,
+    /// so the look just before its files go - which status spells by the path alone - finds nothing new, where it used to
+    /// refuse every time, saying it changed since it was checked, with the flag that was given named as the remedy.
+    /// </summary>
+    [Fact]
+    public async Task AnInTreeSubmoduleBeingDiscarded_IsToldByItsPath_SoTheSecondLookLetsItThrough()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = await PrepareAsync(temp);
+        var path = await CreateAsync(harness, temp, "insub");
+        var sub = Directory.CreateDirectory(Path.Combine(path, "sub")).FullName;
+        await harness.InitializeGitRepositoryAsync(sub, cancellationToken);
+        File.WriteAllText(Path.Combine(sub, "f.txt"), "f\n");
+        await harness.CommitAllAsync(sub, "inside", cancellationToken);
+
+        // Tagged, so its repository holds no commit found nowhere else: the change is all that would be lost.
+        await harness.RunGitAsync(sub, ["tag", "kept"], cancellationToken);
+        var commit = (await harness.RunGitAsync(sub, ["rev-parse", "HEAD"], cancellationToken)).StandardOutput.Trim();
+        await harness.RunGitAsync(path, ["update-index", "--add", "--cacheinfo", $"160000,{commit},sub"], cancellationToken);
+
+        var outcome = await harness.WorktreeService.DeleteAsync(
+            temp.Path, "insub", force: false, deleteEvidence: false, discardUncommitted: true, cancellationToken: cancellationToken);
+
+        Assert.True(outcome.Succeeded, outcome.Outcome.Message);
+        Assert.Equal(
+            [
+                path,
+                "discarded 1 uncommitted change(s): sub (a submodule whose repository is not among its superproject's modules, so its work "
+                    + "tree is never looked into)",
+            ],
+            outcome.Outcome.Details);
+        Assert.False(Directory.Exists(path));
+        Assert.Single(await harness.GitClient.ListWorktreesAsync(temp.Path, cancellationToken));
+    }
+
+    /// <summary>
+    /// A checked removal stopped as its files go, once its directory junctions went as links, says those junctions were
+    /// removed beside what is left: nothing puts a junction back - a checkout restores what the index holds - so a reader
+    /// told only that the checkout puts the files back would never learn the link to a shared cache is gone.
+    /// </summary>
+    [Fact]
+    public async Task ARemovalStoppedAsItsFilesGo_SaysTheJunctionsThatWentBeforeIt()
+    {
+        using var temp = new TempDirectory();
+        using var interruption = new CancellationTokenSource();
+        var harness = await PrepareAsync(temp);
+        var path = await CreateAsync(harness, temp, "joined");
+        var gitDirectory = await GitDirectoryAsync(harness, path);
+        var cache = Path.Combine(path, "node_modules");
+        var fileSystem = new StoppedAsItEmpties(harness.FileSystem, interruption, [cache]);
+        var service = new WorktreeService(harness.ContextLoader, harness.GitClient, fileSystem, harness.PathBudget, harness.Platform, harness.Output, harness.HostCopies, harness.Local(fileSystem), harness.RunLock, harness.ProcessContext)
+        {
+            InterruptionGrace = TimeSpan.Zero,
+        };
+
+        var outcome = await service.DeleteAsync(temp.Path, "joined", force: false, deleteEvidence: false, cancellationToken: interruption.Token);
+
+        Assert.Equal(HarnessExit.Cancelled, outcome.Outcome.ExitCode);
+        Assert.Equal(
+            "Deleting worktree 'joined' was stopped part way, before the interruption ended the command. Some of its files may already be "
+            + $"gone, and its .git file and git's record of it are still there, so it is still a worktree: 'git -C {path} checkout -- .' puts "
+            + "back the files its index holds. Close whatever holds its files open; every check passed before removal began, so run "
+            + $"'{ToolPackage.Command} delete-worktree joined --force' to finish deleting it. Its 1 directory junction(s) had been removed "
+            + $"first, as links: {cache}.",
+            outcome.Outcome.Message);
+        Assert.True(File.Exists(Path.Combine(path, ".git")));
+        Assert.True(Directory.Exists(gitDirectory));
+    }
+
+    /// <summary>
+    /// The real file system, except that removing the junctions under a directory answers <paramref name="junctions"/>, as
+    /// though each went as a link, and that emptying a directory is interrupted as it begins: it sends the interruption,
+    /// waits for the removal's own stop, and is stopped by it, as Ctrl+C meeting the deletion between two entries is.
+    /// </summary>
+    private sealed class StoppedAsItEmpties(IFileSystem inner, CancellationTokenSource interruption, IReadOnlyList<string> junctions) : PassThroughFileSystem(inner)
+    {
+        public override IReadOnlyList<string> RemoveJunctions(string path) => junctions;
+
+        public override void EmptyDirectory(string path, IReadOnlyCollection<string> keeping, CancellationToken cancellationToken = default)
+        {
+            interruption.Cancel();
+            Assert.True(SpinWait.SpinUntil(() => cancellationToken.IsCancellationRequested, TimeSpan.FromSeconds(30)), "the removal was never stopped");
+            base.EmptyDirectory(path, keeping, cancellationToken);
+        }
     }
 
     /// <summary>

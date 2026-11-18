@@ -875,9 +875,14 @@ public sealed class SyncService(
             {
                 throw new HarnessException(
                     HarnessExit.Refused,
-                    $"{transport.Host}: '{options.KeptIn ?? destinationRoot}' is the copy of the worktree at '{holder}', which is kept under "
-                    + $"the same name, '{name}', and still exists: synced by both, each would replace the tree the other "
-                    + "put there. Rename one of them, or delete the other. Nothing was changed.");
+                    holder.Look.Presence == TreePresence.There
+                        ? $"{transport.Host}: '{options.KeptIn ?? destinationRoot}' is the copy of the worktree at '{holder.Tree}', which is kept under "
+                            + $"the same name, '{name}', and still exists: synced by both, each would replace the tree the other "
+                            + "put there. Rename one of them, or delete the other. Nothing was changed."
+                        : $"{transport.Host}: '{options.KeptIn ?? destinationRoot}' is the copy of the worktree at '{holder.Tree}', which is kept under "
+                            + $"the same name, '{name}', and whether it is gone cannot be told: {holder.Look.Why.TrimEnd('.')}. A copy is "
+                            + "taken over only from a tree seen to be gone: synced by both, each would replace the tree the other put "
+                            + "there. Rename this worktree, or delete the other where it can be looked at. Nothing was changed.");
             }
         }
 

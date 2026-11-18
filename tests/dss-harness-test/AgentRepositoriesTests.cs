@@ -1,3 +1,4 @@
+using DssHarness.Core.FileSystem;
 using DssHarness.Core.Git;
 using DssHarness.Core.Hosts;
 using DssHarness.Core.Results;
@@ -561,6 +562,76 @@ public sealed class AgentRepositoriesTests
         Assert.Equal([path], deleted.Outcome.Details);
         Assert.False(Directory.Exists(path));
         Assert.Equal(string.Empty, (await harness.RunGitAsync(main, ["for-each-ref", "refs/harness/"], Token)).StandardOutput);
+    }
+
+    /// <summary>
+    /// An agent's repository is looked at once more just before its files go, as a linked worktree is: a file an agent still
+    /// running wrote once its checks had passed, or a commit it made then, which its own store would take with it, refuses
+    /// the deletion with nothing of it removed - where it used to be deleted straight after the checks, without a word.
+    /// </summary>
+    [Fact]
+    public async Task WhatCameSinceItsChecks_RefusesItsDeletion_WithNothingRemoved()
+    {
+        using var temp = new TempDirectory();
+        var (harness, main, path) = await InitializedAsync(temp);
+        var late = Path.Combine(path, "late.txt");
+
+        // Written as the last check runs, after everything that weighs its work has.
+        var written = new ActsAsHoldsAreAsked(harness.FileSystem, () => File.WriteAllText(late, "written by an agent still running\n"));
+
+        var refused = await Service(harness, written).DeleteAsync(main, "o1/a", force: false, deleteEvidence: false, cancellationToken: Token);
+
+        Assert.Equal(HarnessExit.Refused, refused.Outcome.ExitCode);
+        Assert.Equal(
+            "Worktree 'o1/a' was not deleted, because it has 1 uncommitted change(s) that would be lost: late.txt (fold-agent brings them "
+            + "into the main tree, or pass --discard-uncommitted to delete them with the worktree); fix that, or pass --force to delete it "
+            + "anyway. It changed since it was checked, and nothing of it was removed.",
+            refused.Outcome.Message);
+        Assert.True(File.Exists(late));
+        Assert.True(File.Exists(Path.Combine(path, "README.md")));
+
+        File.Delete(late);
+        var committed = new ActsAsHoldsAreAsked(harness.FileSystem, () =>
+        {
+            File.WriteAllText(late, "committed by an agent still running\n");
+            harness.CommitAllAsync(path, "late", Token).GetAwaiter().GetResult();
+        });
+
+        var refusedAgain = await Service(harness, committed).DeleteAsync(main, "o1/a", force: false, deleteEvidence: false, cancellationToken: Token);
+        var inside = (await harness.GitClient.ResolveCommitAsync(path, "HEAD", Token))!;
+
+        Assert.Equal(HarnessExit.Refused, refusedAgain.Outcome.ExitCode);
+        Assert.Equal(
+            $"Worktree 'o1/a' was not deleted, because 1 commit(s) up to {inside[..12]} were made in its own repository, and no ref of the main "
+            + $"checkout's reaches them (run 'git -C {main} fetch {path} HEAD' and branch FETCH_HEAD there, or push them); fix that, or pass "
+            + "--force to delete it anyway. It changed since it was checked, and nothing of it was removed.",
+            refusedAgain.Outcome.Message);
+        Assert.True(File.Exists(late));
+        Assert.True(Directory.Exists(Path.Combine(path, ".git")));
+    }
+
+    /// <summary>A deletion of worktrees on <paramref name="fileSystem"/>, everything else the harness's own.</summary>
+    private static WorktreeService Service(HarnessFactory harness, IFileSystem fileSystem)
+        => new(harness.ContextLoader, harness.GitClient, fileSystem, harness.PathBudget, harness.Platform, harness.Output, harness.HostCopies, harness.Local(fileSystem), harness.RunLock, harness.ProcessContext);
+
+    /// <summary>
+    /// The real file system, except that the first time a deletion asks what holds a tree - once its checks have passed,
+    /// just before the removal - <paramref name="act"/> runs, as an agent still at work would write meanwhile.
+    /// </summary>
+    private sealed class ActsAsHoldsAreAsked(IFileSystem inner, Action act) : PassThroughFileSystem(inner)
+    {
+        private bool _acted;
+
+        public override IReadOnlyList<HeldEntry> FindHeld(string path, CancellationToken cancellationToken = default)
+        {
+            if (!_acted)
+            {
+                _acted = true;
+                act();
+            }
+
+            return base.FindHeld(path, cancellationToken);
+        }
     }
 
     /// <summary>A repository run through init, its main checkout as git spells it, and an agent's repository made at o1/a below the worktrees root.</summary>

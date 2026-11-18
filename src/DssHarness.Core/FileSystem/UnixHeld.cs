@@ -64,6 +64,16 @@ internal sealed class UnixHeld : IHeldNative
 
     private static readonly int NotImplemented = OnMac ? 78 : 38;
 
+    /// <summary>The size of Linux's struct statx, the same on every architecture.</summary>
+    private const int StatxSize = 256;
+
+    /// <summary>AT_EMPTY_PATH and AT_SYMLINK_NOFOLLOW: statx asks of the descriptor itself, and follows nothing.</summary>
+    private const int EmptyPath = 0x1000;
+    private const int NoFollowLinks = 0x100;
+
+    /// <summary>STATX_ATTR_MOUNT_ROOT: the directory is the root of a mount.</summary>
+    private const ulong MountRootAttribute = 0x2000;
+
     /// <summary>The mode a file this process makes is given, its umask applied: read once, from a file made as the runtime makes one.</summary>
     private static readonly Lazy<UnixFileMode> NewFileMode = new(MadeFileMode);
 
@@ -259,6 +269,60 @@ internal sealed class UnixHeld : IHeldNative
             : Failed(error, path);
     }
 
+    /// <inheritdoc/>
+    /// <remarks>
+    /// On Linux by what the system marks the directory - the root of a mount, by <c>statx</c>'s <c>STATX_ATTR_MOUNT_ROOT</c>,
+    /// so a bind mount of a directory on the same volume is told too, and a btrfs subvolume, on another device and no
+    /// mount, is not; where the system cannot say (a kernel before 5.8, a C library with no <c>statx</c>), and on macOS, by
+    /// the device each is on, as <c>rm --one-file-system</c> tells one.
+    /// </remarks>
+    public bool IsMountedOn(SafeFileHandle parent, SafeFileHandle child, string path)
+    {
+        if (OperatingSystem.IsLinux() && MountRoot(child) is { } root)
+        {
+            return root;
+        }
+
+        return UnixFiles.DeviceOf(child, path) != UnixFiles.DeviceOf(parent, path);
+    }
+
+    /// <summary>
+    /// Whether the system marks the directory <paramref name="directory"/> holds the root of a mount; null where it cannot
+    /// say - no <c>statx</c> in the C library, or a kernel that does not keep the mark.
+    /// </summary>
+    private static bool? MountRoot(SafeFileHandle directory)
+    {
+        var added = false;
+        var status = new byte[StatxSize];
+
+        try
+        {
+            directory.DangerousAddRef(ref added);
+
+            if (Statx(Descriptor(directory), string.Empty, EmptyPath | NoFollowLinks, 0, status) != 0)
+            {
+                return null;
+            }
+        }
+        catch (EntryPointNotFoundException)
+        {
+            return null;
+        }
+        finally
+        {
+            if (added)
+            {
+                directory.DangerousRelease();
+            }
+        }
+
+        // struct statx: stx_attributes at 8, stx_attributes_mask - which marks this kernel keeps - at 56, in the machine's order.
+        var attributes = BitConverter.ToUInt64(status, 8);
+        var kept = BitConverter.ToUInt64(status, 56);
+
+        return (kept & MountRootAttribute) == 0 ? null : (attributes & MountRootAttribute) != 0;
+    }
+
     /// <summary>
     /// Renames, replacing nothing: by <c>renameat2</c> on Linux and <c>renameatx_np</c> on macOS; where the C library or
     /// the file system has neither, by looking first, so the one thing the instant between reaches is an entry of the same
@@ -390,6 +454,10 @@ internal sealed class UnixHeld : IHeldNative
     [DllImport("libc", EntryPoint = "renameat2", SetLastError = true)]
     [DefaultDllImportSearchPaths(DllImportSearchPath.SafeDirectories)]
     private static extern int Rename2(int fromDirectory, [MarshalAs(UnmanagedType.LPUTF8Str)] string from, int toDirectory, [MarshalAs(UnmanagedType.LPUTF8Str)] string to, uint flags);
+
+    [DllImport("libc", EntryPoint = "statx", SetLastError = true)]
+    [DefaultDllImportSearchPaths(DllImportSearchPath.SafeDirectories)]
+    private static extern int Statx(int directory, [MarshalAs(UnmanagedType.LPUTF8Str)] string path, int flags, uint mask, byte[] status);
 
     [DllImport("libc", EntryPoint = "renameatx_np", SetLastError = true)]
     [DefaultDllImportSearchPaths(DllImportSearchPath.SafeDirectories)]

@@ -15,7 +15,8 @@ namespace DssHarness.Core.Worktrees;
 /// <param name="Lines">One line per copy asked about: removed, not there, left in place, or not yet dealt with and why.</param>
 /// <param name="Unfinished">
 /// For each copy not yet dealt with, and so still recorded, the exit code its host, its lock or the record left it
-/// with: <see cref="HarnessExit.Refused"/> where a run holds it, or where it or the record was refused;
+/// with: <see cref="HarnessExit.Refused"/> where a run holds it, where it or the record was refused, or where whether its
+/// tree is gone cannot be told;
 /// <see cref="HarnessExit.HostUnavailable"/> where its host could not be asked; the code the host answered with
 /// where removing it failed there; and, where a mutation worker kept in it keeps it, the code of what became of
 /// them (<see cref="WorkersRemoval.Verdict"/>).
@@ -25,7 +26,8 @@ namespace DssHarness.Core.Worktrees;
 /// about stay recorded, and are not in <paramref name="Unfinished"/>.
 /// </param>
 /// <param name="LeftFor">
-/// Worktrees elsewhere, kept under the same name and still there, whose copies were left for them.
+/// Worktrees elsewhere, kept under the same name and still there, whose copies were left for them; one whose worktree
+/// cannot be looked at is said on its own line instead, and is unfinished.
 /// </param>
 public sealed record HostCopyRemoval(
     IReadOnlyList<string> Lines,
@@ -49,7 +51,9 @@ public interface IHostCopyRemover
 {
     /// <summary>
     /// Asks each host holding a copy of the worktree at <paramref name="tree"/> to remove it - and of any worktree
-    /// kept under the same name that is gone - never one of a worktree of that name that is still there.
+    /// kept under the same name that is seen to be gone - never one of a worktree of that name that is still there, and
+    /// never one whose worktree cannot be looked at (<see cref="HostCopyRecord.Look(string, string)"/>), which stays
+    /// recorded, refused, with a line saying why.
     /// </summary>
     /// <param name="context">The repository, from the command that deletes the worktree.</param>
     /// <param name="worktree">The name the worktree's copies are kept under.</param>
@@ -84,20 +88,22 @@ public interface IHostCopyRemover
     IReadOnlyList<LockRequest> RemovalLocks(HarnessContext context, string worktree, string tree, RunId runId);
 
     /// <summary>
-    /// The hosts this machine's record names a copy on of a tree gone from this machine, each once, spelt as the record
-    /// spells it, in the order the record holds them: every host <see cref="RemoveGoneAsync"/> has a copy to deal with on,
-    /// whether or not a leg declared now runs there.
+    /// The hosts this machine's record names a copy on of a tree not on this machine - seen to be gone, or that cannot be
+    /// looked at - each once, spelt as the record spells it, in the order the record holds them: every host
+    /// <see cref="RemoveGoneAsync"/> has a copy to deal with, or to say it keeps, on, whether or not a leg declared now runs
+    /// there.
     /// </summary>
     /// <param name="context">The repository.</param>
     /// <exception cref="HarnessException">The record of which hosts hold a copy cannot be read: refused.</exception>
     IReadOnlyList<string> HostsHoldingGone(HarnessContext context);
 
     /// <summary>
-    /// Asks <paramref name="host"/> to remove each copy this machine records it holding of a tree that is gone from this
-    /// machine - told by the tree the record names, never by the name the copy is kept under, so a copy of a worktree
-    /// still here is never reached, whatever other tree once had its name - each as deleting its worktree would remove
-    /// it, under the same lock; or, measuring only, says what each holds and what removing it would do, removing nothing
-    /// and forgetting nothing.
+    /// Asks <paramref name="host"/> to remove each copy this machine records it holding of a tree that is seen to be gone
+    /// from this machine - told by the tree the record names, never by the name the copy is kept under, so a copy of a
+    /// worktree still here is never reached, whatever other tree once had its name - each as deleting its worktree would
+    /// remove it, under the same lock, at the path the record names; or, measuring only, says what each holds there and what
+    /// removing it would do, removing nothing and forgetting nothing. A copy whose tree cannot be looked at
+    /// (<see cref="HostCopyRecord.Look(string, string)"/>) is neither: it stays recorded, refused, its line saying why.
     /// </summary>
     /// <param name="context">The repository, from the command that removes them.</param>
     /// <param name="host">The host whose copies are dealt with, spelt as the record spells it.</param>
@@ -187,9 +193,10 @@ public sealed class HostCopyRemover(
 
         foreach (var entry in _record.Of(context.Layout, worktree))
         {
-            // The same copies the removal deals with, no more: another worktree's, still there under the same name, is
-            // not this one's to remove, and one that is gone is, as the last thing that knows its copies are there.
-            if (!_record.SameTree(entry.Tree, tree) && _record.Exists(entry.Tree))
+            // The same copies the removal deals with, no more: another worktree's under the same name, there still or not
+            // to be told gone, is not this one's to remove, and one seen to be gone is, as the last thing that knows its
+            // copies are there.
+            if (!_record.SameTree(entry.Tree, tree) && _record.Look(entry).Presence != TreePresence.Gone)
             {
                 continue;
             }
@@ -221,7 +228,7 @@ public sealed class HostCopyRemover(
     {
         ArgumentNullException.ThrowIfNull(context);
 
-        return [.. Gone(context.Layout).Select(entry => entry.Host).Distinct(StringComparer.OrdinalIgnoreCase)];
+        return [.. NotThere(context.Layout).Select(entry => entry.Host).Distinct(StringComparer.OrdinalIgnoreCase)];
     }
 
     public Task<HostCopyRemoval> RemoveGoneAsync(
@@ -233,16 +240,17 @@ public sealed class HostCopyRemover(
         ArgumentNullException.ThrowIfNull(context);
         ArgumentException.ThrowIfNullOrWhiteSpace(host);
 
-        IReadOnlyList<HostCopyEntry> gone = [.. Gone(context.Layout).Where(entry => string.Equals(entry.Host, host, StringComparison.OrdinalIgnoreCase))];
+        IReadOnlyList<HostCopyEntry> gone = [.. NotThere(context.Layout).Where(entry => string.Equals(entry.Host, host, StringComparison.OrdinalIgnoreCase))];
 
         return DealWithEachAsync(context, gone, tree: null, treeConfig: null, measureOnly, cancellationToken);
     }
 
     /// <summary>
-    /// The copies the record holds of trees gone from this machine, told by the tree each is recorded of: a name a
-    /// worktree here bears now never reaches one.
+    /// The copies the record holds of trees that are not on this machine, told by the tree each is recorded of - a name a
+    /// worktree here bears now never reaches one: each seen to be gone, which the clean removes, and each whose tree cannot
+    /// be looked at, which it keeps recorded, saying why, and never removes.
     /// </summary>
-    private IEnumerable<HostCopyEntry> Gone(HarnessLayout layout) => _record.All(layout).Where(entry => !_record.Exists(entry.Tree));
+    private IEnumerable<HostCopyEntry> NotThere(HarnessLayout layout) => _record.All(layout).Where(entry => _record.Look(entry).Presence != TreePresence.There);
 
     /// <summary>
     /// Deals with each of <paramref name="entries"/>, one copy at a time: removes it where the harness made it, under the
@@ -252,9 +260,10 @@ public sealed class HostCopyRemover(
     /// <param name="context">The repository.</param>
     /// <param name="entries">The copies, as the record holds them.</param>
     /// <param name="tree">
-    /// The worktree being deleted, whose copies these are or of which a gone one kept under its name left them; or
-    /// <see langword="null"/> where each is the copy of a tree gone from this machine, said with whose it was, and left
-    /// where its tree is there again by the time its removal holds the lock.
+    /// The worktree being deleted, whose copies these are or of which another kept under its name left them; or
+    /// <see langword="null"/> where each is the copy of a tree not on this machine, said with whose it was. Any copy but the
+    /// deleted worktree's own is removed only where its tree is seen to be gone, then and again once its removal holds the
+    /// lock: one whose tree is there is left, and one whose tree cannot be looked at stays recorded, refused.
     /// </param>
     /// <param name="treeConfig">The configuration the worktree ran on, where there is one to reach a host through first.</param>
     /// <param name="measureOnly">Whether to say what each holds and would become, and change nothing.</param>
@@ -277,8 +286,9 @@ public sealed class HostCopyRemover(
         // interruption's, though the copy it stopped in was the last one recorded.
         var cut = false;
 
-        // What each host keeps beside its main copy, asked once a host, and only to measure.
-        var measured = new Dictionary<string, IReadOnlyList<HostCopyFound>>(StringComparer.OrdinalIgnoreCase);
+        // What each host keeps beside each copy of the main checkout a recorded copy was kept beside, asked once a place,
+        // and only to measure.
+        var measured = new Dictionary<string, IReadOnlyList<HostCopyFound>>(StringComparer.Ordinal);
 
         try
         {
@@ -286,12 +296,34 @@ public sealed class HostCopyRemover(
             {
                 cancellationToken.ThrowIfCancellationRequested();
 
-                // Another worktree's, kept under the same name somewhere else, and still there: not this one's to
-                // remove. One that is gone is, as the last thing that knows its copies are there.
-                if (tree is not null && !_record.SameTree(entry.Tree, tree) && _record.Exists(entry.Tree))
+                // Another tree's - kept under the same name somewhere else, or one found not here a moment ago - is dealt
+                // with only where it is seen to be gone, as the last thing that knows its copies are there. One there is
+                // not this removal's, and one whose tree cannot be looked at stays recorded, refused and said: a tree that
+                // cannot be seen may still be there, using its copies.
+                if (!Own(entry))
                 {
-                    leftFor.Add(entry.Tree);
-                    continue;
+                    var look = _record.Look(entry);
+
+                    if (look.Presence == TreePresence.There)
+                    {
+                        if (tree is null)
+                        {
+                            lines.Add($"{entry.Host}: left '{entry.Path}' in place: the worktree at '{entry.Tree}' is there again");
+                        }
+                        else
+                        {
+                            leftFor.Add(entry.Tree);
+                        }
+
+                        continue;
+                    }
+
+                    if (look.Presence == TreePresence.Untold)
+                    {
+                        lines.Add(Untold(entry.Host, entry, look));
+                        unfinished.Add(HarnessExit.Refused);
+                        continue;
+                    }
                 }
 
                 try
@@ -333,7 +365,7 @@ public sealed class HostCopyRemover(
             // A record is read, not trusted: it never has a directory removed that is not where a worktree's copy
             // is kept. The main checkout's copy, above all, is the host's repositoryPath itself, and a record
             // naming it - written by hand, or wrongly - would otherwise have deleting a worktree take it.
-            if (!IsWorktreeCopy(entry))
+            if (entry.KeptBeside() is null)
             {
                 return Forgotten(entry, $"{host}: '{entry.Path}' is not where a worktree's copy is kept, so nothing {Was("asked")} to remove it");
             }
@@ -384,9 +416,12 @@ public sealed class HostCopyRemover(
                     case { } now when !_record.SameTree(now.Tree, entry.Tree):
                         return ($"{host}: left '{entry.Path}' in place: the worktree at '{now.Tree}' has claimed it since", null);
 
-                    // Dealt with as a gone tree's: a tree made again at that place since it was found gone has it back.
-                    case { } now when tree is null && _record.Exists(now.Tree):
-                        return ($"{host}: left '{entry.Path}' in place: the worktree at '{now.Tree}' is there again", null);
+                    // Dealt with as a gone tree's: a tree made again at that place since it was found gone has it back, and
+                    // one that cannot be looked at now keeps it as one never seen gone does.
+                    case { } now when !Own(now) && _record.Look(now) is { Presence: not TreePresence.Gone } again:
+                        return again.Presence == TreePresence.There
+                            ? ($"{host}: left '{entry.Path}' in place: the worktree at '{now.Tree}' is there again", null)
+                            : (Untold(host.ToString(), entry, again), HarnessExit.Refused);
                 }
 
                 CopyRemoval removal;
@@ -472,17 +507,19 @@ public sealed class HostCopyRemover(
                     return Stays(host, entry, kept.Why, kept.Code);
                 }
 
-                if (!measured.TryGetValue(host.ToString(), out var copies))
+                // Beside the copy it was kept beside, as it is recorded - the very directory its removal acts on - whatever the
+                // host's item or config.json say of where the host keeps this machine's copies now: a copy recorded beside an
+                // earlier repositoryPath is still there, and the removal takes it.
+                var beside = entry.KeptBeside()!;
+                var key = $"{host}\n{beside}";
+
+                if (!measured.TryGetValue(key, out var copies))
                 {
-                    // Where the host keeps its copies for this machine, as every reader of them asks it: an item that cannot be
-                    // read leaves them unknown, said on this copy's line like any other reason it stays.
-                    measured[host.ToString()] = copies = await transport
-                        .ListCopiesAsync(HostCopies.RepositoryPathOf(through, host), cancellationToken)
-                        .ConfigureAwait(false);
+                    measured[key] = copies = await transport.ListCopiesAsync(beside, cancellationToken).ConfigureAwait(false);
                 }
 
                 // As the removal would deal with what it finds there, by what its marker says.
-                return copies.FirstOrDefault(copy => string.Equals(copy.Path, entry.Path, StringComparison.Ordinal)) switch
+                return copies.FirstOrDefault(entry.IsListedAs) switch
                 {
                     null => ($"{host}: would find nothing at '{entry.Path}' to remove, and forget it", null),
                     { Origin: CopyOrigin.Made } found => ($"{host}: would remove its copy at '{entry.Path}'{Whose(entry)}, {DiskSpace.Size(found.Bytes)}", null),
@@ -514,8 +551,7 @@ public sealed class HostCopyRemover(
         string Was(string done) => measureOnly ? $"would be {done}" : $"was {done}";
 
         // Whose a copy was, where it is not the worktree being deleted's own.
-        string Whose(HostCopyEntry entry)
-            => tree is not null && _record.SameTree(entry.Tree, tree) ? string.Empty : $", of the worktree that was at '{entry.Tree}'";
+        string Whose(HostCopyEntry entry) => Own(entry) ? string.Empty : $", of the worktree that was at '{entry.Tree}'";
 
         string Said(CopyRemoval removal, HostCopyEntry entry) => removal switch
         {
@@ -548,6 +584,14 @@ public sealed class HostCopyRemover(
         static (string, int?) Stays(HostId host, HostCopyEntry entry, string? why, int code)
             => ($"{host}: its copy at '{entry.Path}' stays, and is still recorded: {why?.TrimEnd('.') ?? "no reason was given"}", code);
 
+        // Whether an entry is the copy of the worktree being deleted itself, which goes whatever else bears its name.
+        bool Own(HostCopyEntry entry) => tree is not null && _record.SameTree(entry.Tree, tree);
+
+        // What is said of a copy whose tree cannot be looked at: it stays, refused, and is never read as a gone tree's.
+        static string Untold(string host, HostCopyEntry entry, TreeLook look)
+            => $"{host}: its copy at '{entry.Path}' stays, and is still recorded: whether the worktree at '{entry.Tree}' is gone cannot "
+                + $"be told - {look.Why.TrimEnd('.')} - and a copy is removed only for a tree seen to be gone";
+
         // What of the mutation workers kept in a copy keeps the copy, and the code that leaves the command with -
         // their removal's verdict's (WorkersRemoval.Verdict): one a sweep still running holds, which ends by waiting; one
         // that could not be removed, or told - each worded as a worktree's refusal words it (KeptCopyLine.Keeping); or a
@@ -566,8 +610,4 @@ public sealed class HostCopyRemover(
                 ? string.Empty
                 : $"; {ReportText.Counted(workers.Removed.Count, "mutation worker")} kept in it were removed before that, {DiskSpace.Size(workers.Bytes)}";
     }
-
-    /// <summary>Whether <paramref name="entry"/> names a path a worktree's copy is kept at: its own name, after the suffix.</summary>
-    private static bool IsWorktreeCopy(HostCopyEntry entry)
-        => entry.Path.TrimEnd('/', '\\').EndsWith(HostCopies.WorktreeSuffix + entry.Worktree, StringComparison.Ordinal);
 }

@@ -1210,6 +1210,52 @@ public sealed class PhysicalFileSystemTests
     }
 
     /// <summary>
+    /// On Linux and macOS a removal tells a directory a volume is mounted on - which it never goes into, so a mount in a tree
+    /// it deletes or empties keeps everything on it - from one of the volume it is in: the system's own mounts are such
+    /// directories, /proc on Linux and /dev on macOS, and a directory just made beside a file is none. Windows has its own
+    /// test: a mounted volume there is a reparse point, refused as itself by its removal.
+    /// </summary>
+    [Fact]
+    public void AVolumeMountedOnADirectory_IsToldFromADirectoryOfTheVolumeItIsIn()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "On Windows a volume mounted on a directory is a reparse point, never held as a directory.");
+
+        using var temp = new TempDirectory();
+        Directory.CreateDirectory(temp.Combine("child"));
+        using var system = Create().Hold("/", "/", make: false);
+        using var tree = Create().Hold(temp.Path, temp.Path, make: false);
+
+        Assert.True(system.IsMountedOn(OperatingSystem.IsLinux() ? "proc" : "dev"));
+        Assert.False(tree.IsMountedOn("child"));
+    }
+
+    /// <summary>
+    /// The device a file is on, as the runtime's own stat reads it - what tells a mounted volume from the directory it is
+    /// mounted in where the system marks no mount - is one for two files of one volume, and another for a file of the
+    /// system's own mount: read at any other place of the status, a time or a file's number, the two files would differ.
+    /// </summary>
+    [Fact]
+    public void TheDeviceAFileIsOn_IsItsVolumes()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            Assert.Skip("Windows numbers no device this way; its mounted volumes are reparse points.");
+            return;
+        }
+
+        using var temp = new TempDirectory();
+        var one = temp.WriteFile("one.txt", "one");
+        var two = temp.WriteFile(Path.Combine("child", "two.txt"), "two, longer");
+        var elsewhere = OperatingSystem.IsLinux() ? "/proc/self/status" : "/dev/null";
+        using var first = File.OpenHandle(one);
+        using var second = File.OpenHandle(two);
+        using var other = File.OpenHandle(elsewhere);
+
+        Assert.Equal(UnixFiles.DeviceOf(first, one), UnixFiles.DeviceOf(second, two));
+        Assert.NotEqual(UnixFiles.DeviceOf(first, one), UnixFiles.DeviceOf(other, elsewhere));
+    }
+
+    /// <summary>
     /// A walk of a tree never descends through a directory link: one leads out of the tree, to files
     /// it does not contain, and one leads back into it, round and round. Both are here - a link out,
     /// and a link to the tree's own root - and the walk lists the tree's own file and ends. The links

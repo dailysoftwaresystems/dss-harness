@@ -56,6 +56,17 @@ internal static class UnixFiles
     public static int? StatusOf(SafeFileHandle handle) => FStat(handle, out var status) == 0 ? status.Mode : null;
 
     /// <summary>
+    /// The device what <paramref name="handle"/> is open on is on, as the system numbers it (<c>st_dev</c>): two directories
+    /// on one volume answer alike, and a directory a volume is mounted on answers as that volume, never as the directory
+    /// it is in.
+    /// </summary>
+    /// <param name="handle">An open descriptor.</param>
+    /// <param name="path">What it is open on, as a fault names it.</param>
+    /// <exception cref="IOException">It could not be asked.</exception>
+    public static long DeviceOf(SafeFileHandle handle, string path)
+        => FStat(handle, out var status) == 0 ? status.Device : throw UnixHeld.Failed(Marshal.GetLastPInvokeError(), path);
+
+    /// <summary>
     /// Opens <paramref name="path"/> to read, its links followed, without ever waiting on a pipe: opened not to wait, then
     /// asked by its descriptor what it is - so a pipe put at the path between a look and the open is met here, never
     /// waited on - and refused where it is no regular file, before a byte is read. A directory is refused as the runtime
@@ -122,12 +133,28 @@ internal static class UnixFiles
         }
     }
 
-    /// <summary>The head of System.Native's FileStatus - its flags, then its mode - in room enough for the whole of it.</summary>
+    /// <summary>
+    /// The head of System.Native's FileStatus, as the runtime lays it out on every system it runs on - its flags, its mode,
+    /// its owner and group, then its size and its six times as 64-bit numbers, then its device - in room enough for the
+    /// whole of it.
+    /// </summary>
     [StructLayout(LayoutKind.Sequential, Size = 512)]
     private struct Status
     {
         public int Flags;
         public int Mode;
+        public uint Owner;
+        public uint Group;
+        public long Size;
+        public long AccessTime;
+        public long AccessTimeNanoseconds;
+        public long WriteTime;
+        public long WriteTimeNanoseconds;
+        public long ChangeTime;
+        public long ChangeTimeNanoseconds;
+        public long BirthTime;
+        public long BirthTimeNanoseconds;
+        public long Device;
     }
 
     [DllImport("libSystem.Native", EntryPoint = "SystemNative_FStat", SetLastError = true)]

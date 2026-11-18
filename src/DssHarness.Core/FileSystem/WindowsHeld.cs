@@ -297,7 +297,7 @@ internal sealed class WindowsHeld : IHeldNative
             // never done here. Only one who administers the machine mounts a volume, so what it names is read by its path.
             if (tag == WindowsJunctions.MountPointTag && (attributes & ReparsePointAttribute) != 0 && WindowsJunctions.NamesAVolume(new DirectoryInfo(path).LinkTarget))
             {
-                throw new JunctionRemovalException(path, "a volume is mounted there, and it is never unmounted here", []);
+                throw new JunctionRemovalException(path, HeldDirectory.MountedThere, []);
             }
 
             if (isDirectory != directory)
@@ -344,6 +344,13 @@ internal sealed class WindowsHeld : IHeldNative
             }
         }
     }
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// Never: a volume mounted on a directory is a reparse point, which is never held as a directory here - opened, it is
+    /// answered as a link - and its removal as an entry is refused (<see cref="Remove"/>), the volume never unmounted.
+    /// </remarks>
+    public bool IsMountedOn(SafeFileHandle parent, SafeFileHandle child, string path) => false;
 
     /// <summary>
     /// Renames what <paramref name="handle"/> holds to <paramref name="name"/> in the directory <paramref name="into"/> holds,

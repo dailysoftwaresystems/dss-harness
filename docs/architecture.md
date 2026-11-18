@@ -941,9 +941,12 @@ history of a repository nested inside one included.
   then stops at the first file it cannot delete - one something holds, or, on Windows, one whose
   path runs past 260 characters, as a build directory's do - leaving a directory no check can run
   on again. So once every check has passed the removal is the harness's own. The look git's
-  removal took before it deleted anything is taken once more (`WorktreeInspector.LookAgainAsync`):
-  a file changed or added since the checks, beyond the uncommitted changes `--discard-uncommitted`
-  discards, or a lock taken since, refuses, exit 13, with nothing of the worktree removed. Then each
+  removal took before it deleted anything is taken once more (`WorktreeInspector.LookAgainAsync`,
+  through `WorktreeService.RefusedSinceTheChecksAsync`): a file changed or added since the checks,
+  beyond the uncommitted changes `--discard-uncommitted` discards - each told by its path as git's
+  status gives it (`WorktreeChange.Path`), never by how a refusal names it, so a submodule named
+  with why it was never looked into is the same change the second look finds - or a lock taken
+  since, refuses, exit 13, with nothing of the worktree removed. Then each
   directory junction goes, as a link; then everything in the worktree but its `.git` file, through
   the file system's own deletion (`IFileSystem.EmptyDirectory`, which acts relative to directories
   it holds, so no path is too long for it); and only then is git asked to remove the worktree, with
@@ -973,13 +976,22 @@ history of a repository nested inside one included.
   too; taken first, one that cannot be removed stops the deletion with no file of the worktree
   gone, exit 20, naming it, what Windows said and the junctions removed before it. A volume
   mounted on a directory has a junction's tag and is never unmounted: it stops the deletion the
-  same way. A successful deletion names the junctions it removed.
+  same way. A successful deletion names the junctions it removed, and so does one that fails or is
+  stopped once they went, since nothing puts a junction back. On Linux and macOS a volume mounted on
+  a directory in the worktree is a plain directory there, which the file system's deletion tells
+  and never goes into (`HeldDirectory.IsMountedOn`): on Linux a directory the system marks the root
+  of a mount (`statx`'s `STATX_ATTR_MOUNT_ROOT`), a bind mount of a directory on the same volume
+  among them, or, where the system keeps no such mark, one on another device; on macOS one on
+  another device (`st_dev`, read by the runtime's own stat). It stops the deletion there, exit 20,
+  what went before it gone, as a file that cannot be deleted does.
 - When the deletion of its files fails part way all the same, as on a file something opened after
   that look, or is stopped, the worktree's `.git` file and git's record of it are still there, so
   it is still a worktree git knows: the command exits 20 (130 where it was stopped), says that some
   of its files may be gone, or that they are, and names `git -C <path> checkout -- .`, which puts
-  back the files its commit holds, and `delete-worktree <name> --force`, which finishes it and is
-  safe because every check passed before removal began. Where git then fails to clear the record,
+  back the files its index holds - and, where it holds submodules, whose directories and `.git`
+  files a checkout never makes again, `git -C <path> submodule update --init --recursive` - and
+  `delete-worktree <name> --force`, which finishes it and is safe because every check passed
+  before removal began. Where git then fails to clear the record,
   or reports the worktree removed while its directory is still there, what is gone and what is
   left is said as it is found (`WorktreeService.DescribeWhatRemains`), with the same `--force` to
   finish it. Run again without `--force`, the command names that same way for a directory
@@ -1003,7 +1015,10 @@ history of a repository nested inside one included.
   the main checkout's, refuse it, since its own store goes with it. The refusal names fold-agent
   for its changes and a fetch into the main checkout for its commits, never a branch or a stash,
   which would be made in the store being deleted. It has no lock and no record of git's, and git
-  no removal of its own for it: its directory is deleted (`WorktreeService.RemoveRepository`) -
+  no removal of its own for it. Once its checks pass it is looked at once more, as a linked
+  worktree is: git's status, and the commits made in it that no ref of the main checkout's reaches,
+  so a file an agent still running wrote since, or a commit it made, refuses it, exit 13, with
+  nothing removed. Then its directory is deleted (`WorktreeService.RemoveRepositoryAsync`) -
   everything in it but its own `.git` directory first, so one stopped part way is still a
   repository with every commit made in it, then the rest - its read-only object files with it and
   a link in it as a link, and then looked for; a deletion that cannot finish says what of it may be
@@ -3360,7 +3375,9 @@ entry's reparse tag on Windows (`WindowsHeld`) - so a link on the way, or one sw
 refused naming it (`LinkOnTheWayException`), and a link at the entry's own place is read as nothing, replaced or
 removed as itself. A write is a file made new in the held directory, then renamed over the one there, keeping its mode;
 a directory removed whole is emptied entry by entry relative to each held directory, a link among them removed as the
-link (every recursive removal the tool makes, `IFileSystem.DeleteDirectory` among them). A pull alone follows a link
+link, and a directory a volume is mounted on never gone into but refused (`HeldDirectory.IsMountedOn`,
+`JunctionRemovalException`) - on Windows a mount point, on Linux a mount's root by `statx`, a bind mount among them,
+and on macOS another device (every recursive removal the tool makes, `IFileSystem.DeleteDirectory` among them). A pull alone follows a link
 along the path it names, as it is spelt, and refuses one that leads into a place the isolation hides from every
 command, decided by where what it opened stands (`ISyncTransport.PullFileAsync`, `ListFilesAsync` given the hidden
 places of `IAgentIsolation.Hidden`, the one list the profiles hide, `IsolationHidden`); a host over ssh decides it
@@ -6478,10 +6495,18 @@ while a gate ran turned a green suite red, with four test processes live at once
   refused, 15 where its host is unreachable, 20 where the removal failed there - so whoever deleted
   it learns something of it is left; deleting the worktree again finishes the job, and for a name
   whose worktree is gone removes what any worktree of that name left, never the copies of one that
-  still exists. The copies a gone tree left are removed alone by `clean --gone-copies`
-  (`IHostCopyRemover.RemoveGoneAsync`), told by the tree the record names - a directory no longer on
-  this machine - never by the name they are kept under, which a worktree here, a live agent's among
-  them, may bear now, and whose deletion would take them with it. It is driven by the record, not by
+  still exists. Gone is one answer, asked everywhere a copy is removed, measured, listed or claimed
+  (`HostCopyRecord.Look`): a tree is gone only where that is seen - its path whole on this machine,
+  nothing at it, and the directory it was in (for an orchestrator's agent, the one its orchestrator's
+  was in, once that is gone too) there to look in. Anything else that is no tree there cannot be
+  told - a path spelt for the other system, as a checkout used from Windows and from WSL records
+  both, a directory it was in that is not there (a drive or a share not mounted), one this user may
+  not look in - and is never read as gone: its copies stay recorded, refused, exit 13, a line saying
+  why, a claim of one by a sync is refused as one of a tree still there is, and `list-worktree` says
+  it with why and never names the clean for it. The copies a gone tree left are removed alone by
+  `clean --gone-copies` (`IHostCopyRemover.RemoveGoneAsync`), told by the tree the record names -
+  a directory seen to be gone from this machine - never by the name they are kept under, which a
+  worktree here, a live agent's among them, may bear now, and whose deletion would take them with it. It is driven by the record, not by
   the legs (`CleanService.GoneCopiesAsync`): every host the record names such a copy on
   (`IHostCopyRemover.HostsHoldingGone`) - one no declared leg runs on any more among them - has a
   ledger line of its own, named as the record spells it, in place of the legs' lines, and `--legs`
@@ -6492,12 +6517,18 @@ while a gate ran turned a green suite red, with four test processes live at once
   the next host is asked all the same; one no configuration declares any more is never asked, and its
   copies are forgotten, as a deletion forgets them, since no later clean could reach them either.
   With `--dry-run` each is said with what it holds and what removing it would do, nothing removed or
-  forgotten; every line, and the line the clean ends on, names the record. `list-worktree`
+  forgotten, measured at the very path the removal acts on - beside the repositoryPath the record
+  says it was kept beside (`HostCopyEntry.KeptBeside`), whatever the host's item or config.json name
+  now, where a dry run that looked only beside today's found nothing and promised a removal of
+  nothing that the clean then made; every line, and the line the clean ends on, names the record. `list-worktree`
   shows that record: each worktree's copies, and the copies left by worktrees that are gone -
   removed by a tool that ran plain `git worktree remove`, say - with that clean, and, where a
   worktree here bears the gone one's name now (`RecordedTree.NameNowAt`), that worktree. With
   `--hosts` it asks each declared host which `<repositoryPath>.worktree-<name>` copies it keeps and
-  how large each is, from its home directory as a removal is, and sets them against the record, so
+  how large each is - beside where it keeps this machine's copies now, and beside each earlier
+  repositoryPath a recorded copy was kept beside (`HostCopiesAnswer.Earlier`), so a copy the clean
+  would remove is listed where it is - from its home directory as a removal is, and sets them
+  against the record, so
   a copy the record does not hold - made from another checkout or machine, or forgotten here - is
   found, said with the tree its marker says it was last made from and whether that tree is on this
   machine, as is a recorded one that is gone: a gone tree's, which the clean forgets, or a tree's
