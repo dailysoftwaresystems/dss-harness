@@ -268,7 +268,7 @@ internal sealed class CssReading
             case "extend":
                 foreach (var part in Selector(after, head.Stop, parents, 0).Parts)
                 {
-                    _references.Add((frame.Parent, CodeEdgeKinds.Inherits, part.Name, line, HtmlExtractor.Selector()));
+                    _references.Add((frame.Parent, CodeEdgeKinds.Inherits, part.Name, line, MarkupDialect.Selector));
                 }
 
                 return;
@@ -430,7 +430,7 @@ internal sealed class CssReading
 
             if (applied.Length > 0 && applied != "important" && !applied.Contains("#{", StringComparison.Ordinal) && !applied.Contains("@{", StringComparison.Ordinal))
             {
-                _references.Add((from, CodeEdgeKinds.Uses, $".{applied}", line, HtmlExtractor.Selector()));
+                _references.Add((from, CodeEdgeKinds.Uses, $".{applied}", line, MarkupDialect.Selector));
             }
         }
 
@@ -748,7 +748,7 @@ internal sealed class CssReading
 
         foreach (var extended in read.Extended)
         {
-            _references.Add((subject, CodeEdgeKinds.Inherits, extended, LineOf(head.Start), HtmlExtractor.Selector()));
+            _references.Add((subject, CodeEdgeKinds.Inherits, extended, LineOf(head.Start), MarkupDialect.Selector));
         }
 
         if (read.Interpolated)
@@ -778,12 +778,12 @@ internal sealed class CssReading
 
             foreach (var extended in read.Extended)
             {
-                _references.Add((frame.Parent, CodeEdgeKinds.Inherits, extended, line, HtmlExtractor.Selector()));
+                _references.Add((frame.Parent, CodeEdgeKinds.Inherits, extended, line, MarkupDialect.Selector));
             }
 
             if (read.Extended.Count == 0 && read.Parts.Count > 0)
             {
-                _references.Add((frame.Parent, CodeEdgeKinds.Uses, read.Parts[^1].Name, line, HtmlExtractor.Selector()));
+                _references.Add((frame.Parent, CodeEdgeKinds.Uses, read.Parts[^1].Name, line, MarkupDialect.Selector));
             }
         }
 
@@ -1172,7 +1172,7 @@ internal sealed class CssReading
         {
             if (_scan.IsName(at) && _scan.Text(at) is var composed && composed[0] is not ('$' or '@') && !composed.StartsWith("--", StringComparison.Ordinal))
             {
-                _references.Add((by, CodeEdgeKinds.Uses, $".{CssLexer.Unescaped(composed)}", _scan[at].Line, HtmlExtractor.Selector()));
+                _references.Add((by, CodeEdgeKinds.Uses, $".{CssLexer.Unescaped(composed)}", _scan[at].Line, MarkupDialect.Selector));
             }
         }
     }
