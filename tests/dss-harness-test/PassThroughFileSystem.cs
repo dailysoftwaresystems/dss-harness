@@ -33,6 +33,9 @@ internal class PassThroughFileSystem(IFileSystem inner) : IFileSystem
 
     public virtual void DeleteDirectory(string path) => inner.DeleteDirectory(path);
 
+    public virtual void EmptyDirectory(string path, IReadOnlyCollection<string> keeping, CancellationToken cancellationToken = default)
+        => inner.EmptyDirectory(path, keeping, cancellationToken);
+
     public virtual void MoveDirectory(string source, string destination) => inner.MoveDirectory(source, destination);
 
     public virtual bool IsLink(string path) => inner.IsLink(path);

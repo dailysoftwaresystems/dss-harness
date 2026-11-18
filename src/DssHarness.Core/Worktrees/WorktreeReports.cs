@@ -13,8 +13,11 @@ public static class WorktreeReports
 {
     private static readonly JsonSerializerOptions JsonOptions = ReportJson.Options;
 
-    /// <summary>The command that deletes a worktree, and deals with the copies left under its name.</summary>
-    private static string Delete(string name) => $"{ToolPackage.Command} {WorktreeService.DeleteCommand} {Shown(name)}";
+    /// <summary>
+    /// The command that removes the copies hosts keep of trees gone from this machine, told by their tree: never by the
+    /// name they are kept under, which a worktree here - a live agent's among them - may bear now.
+    /// </summary>
+    private static readonly string CleanGone = $"{ToolPackage.Command} {Runs.CleanService.CommandName} {Runs.CleanService.GoneCopiesOption}";
 
     /// <summary>
     /// The name a person types for the worktree whose copies are kept under <paramref name="name"/>: an orchestrator's
@@ -69,7 +72,7 @@ public static class WorktreeReports
 
         if (copies.Gone.Count > 0)
         {
-            said += $"; {ReportText.Counted(copies.Gone.Count, "worktree")} that are gone left copies on hosts, which '{Delete("<name>")}' deals with";
+            said += $"; {ReportText.Counted(copies.Gone.Count, "worktree")} that are gone left copies on hosts, which '{CleanGone}' removes";
         }
 
         if (copies.Hosts is { } hosts)
@@ -108,7 +111,7 @@ public static class WorktreeReports
 
         foreach (var tree in copies.Gone)
         {
-            yield return $"{Shown(tree.Name)}, gone from '{tree.Tree}': '{Delete(tree.Name)}' deals with the copies it left";
+            yield return $"{Shown(tree.Name)}, gone from '{tree.Tree}': '{CleanGone}' removes the copies it left{NameNow(tree)}";
 
             foreach (var copy in tree.Copies)
             {
@@ -136,7 +139,7 @@ public static class WorktreeReports
 
             foreach (var missing in host.Missing)
             {
-                yield return $"  {missing.Path}  recorded here, and not there: '{Delete(missing.Worktree)}' forgets it";
+                yield return $"  {missing.Entry.Path}  recorded here, and not there: {Missing(missing)}";
             }
         }
 
@@ -146,21 +149,52 @@ public static class WorktreeReports
         }
     }
 
-    /// <summary>What a found copy is to this machine, and what deleting its name would do with it.</summary>
+    /// <summary>What a found copy is to this machine, and what removing it here would do with it.</summary>
     private static string Standing(HostCopySeen copy) => copy.Standing switch
     {
         CopyStanding.Listed => Noted($"worktree '{Shown(copy.Found.Name)}'", copy.Found),
         CopyStanding.Elsewhere => Noted($"the worktree at '{copy.Tree}'", copy.Found),
-        CopyStanding.Gone => $"gone from '{copy.Tree}': '{Delete(copy.Found.Name)}' {WhatDeletingDoes(copy.Found)}",
-        _ => $"not recorded here, so deleting a worktree here never reaches it; {Origin(copy.Found)}",
+        CopyStanding.Gone => $"gone from '{copy.Tree}': '{CleanGone}' {WhatRemovingDoes(copy.Found)}",
+        _ => $"not recorded here, so nothing here reaches it; {Origin(copy.Found)}{MadeFrom(copy)}",
     };
+
+    /// <summary>
+    /// Where a copy the record does not hold was made from, as its marker says: a tree here, whose copy this machine
+    /// forgot, or one that is not - gone from here, or another machine's; nothing where the marker names none.
+    /// </summary>
+    private static string MadeFrom(HostCopySeen copy) => copy.Tree switch
+    {
+        null => string.Empty,
+        var tree when copy.TreeHere => $"; made from '{tree}', a tree on this machine",
+        var tree => $"; made from '{tree}', which is not here: gone from this machine, or another machine's",
+    };
+
+    /// <summary>
+    /// What forgets a copy recorded here that its host does not keep, by where its tree stands: a gone tree's is
+    /// forgotten by the clean that removes the copies gone trees left; a tree here makes its copy again at its next sync.
+    /// </summary>
+    private static string Missing(HostCopyMissing missing) => missing.Standing switch
+    {
+        CopyStanding.Gone => $"gone from '{missing.Entry.Tree}': '{CleanGone}' forgets it",
+        CopyStanding.Listed => $"the next sync of worktree '{Shown(missing.Entry.Worktree)}' there makes it again",
+        _ => $"the next sync of the worktree at '{missing.Entry.Tree}' there makes it again",
+    };
+
+    /// <summary>
+    /// What is said of a gone tree whose name a worktree here bears now: deleting that worktree would take the gone tree's
+    /// copies with it, which the clean removes without it.
+    /// </summary>
+    private static string NameNow(RecordedTree tree)
+        => tree.NameNowAt is { } at
+            ? $"; '{Shown(tree.Name)}' is now the worktree at '{at}', whose deletion would take them with it - the clean never reaches it"
+            : string.Empty;
 
     /// <summary><paramref name="said"/>, with what the copy's marker says where that is out of the ordinary.</summary>
     private static string Noted(string said, HostCopyFound copy)
         => copy.Origin == CopyOrigin.Made ? said : $"{said}; {Origin(copy)}";
 
-    /// <summary>What deleting the name a gone worktree's copy is kept under does with it, by what its marker says.</summary>
-    private static string WhatDeletingDoes(HostCopyFound copy) => copy.Origin switch
+    /// <summary>What removing a gone worktree's copy does with it, by what its marker says.</summary>
+    private static string WhatRemovingDoes(HostCopyFound copy) => copy.Origin switch
     {
         CopyOrigin.Made => "removes it",
         CopyOrigin.Unreadable => $"leaves it recorded, as {Origin(copy)}",
@@ -244,7 +278,12 @@ public static class WorktreeReports
 
             if (remedy)
             {
-                node["deletedBy"] = Delete(tree.Name);
+                node["deletedBy"] = CleanGone;
+
+                if (tree.NameNowAt is { } at)
+                {
+                    node["nameNowAt"] = at;
+                }
             }
 
             return (JsonNode)node;
@@ -275,12 +314,14 @@ public static class WorktreeReports
             ["problem"] = copy.Found.Problem,
             ["standing"] = JsonNamingPolicy.CamelCase.ConvertName(copy.Standing.ToString()),
             ["tree"] = copy.Tree,
+            ["treeHere"] = copy.Standing == CopyStanding.Unrecorded && copy.Tree is not null ? (bool?)copy.TreeHere : null,
         })]);
         node["missing"] = new JsonArray([.. host.Missing.Select(missing => (JsonNode)new JsonObject
         {
-            ["name"] = Shown(missing.Worktree),
-            ["path"] = missing.Path,
-            ["tree"] = missing.Tree,
+            ["name"] = Shown(missing.Entry.Worktree),
+            ["path"] = missing.Entry.Path,
+            ["tree"] = missing.Entry.Tree,
+            ["standing"] = JsonNamingPolicy.CamelCase.ConvertName(missing.Standing.ToString()),
         })]);
 
         return node;

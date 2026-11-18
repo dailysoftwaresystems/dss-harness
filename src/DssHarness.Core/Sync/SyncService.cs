@@ -1102,13 +1102,13 @@ public sealed class SyncService(
 
         if (adopting)
         {
-            await transport.MarkFinishedAsync(destinationRoot, reading, cancellationToken).ConfigureAwait(false);
+            await transport.MarkFinishedAsync(destinationRoot, reading, source.Read.Tree, cancellationToken).ConfigureAwait(false);
 
             _output.Info(CommandName, $"{transport.Host}: adopted '{destinationRoot}'");
         }
         else if (unfinished || held != reading)
         {
-            await transport.MarkFinishedAsync(destinationRoot, reading, cancellationToken).ConfigureAwait(false);
+            await transport.MarkFinishedAsync(destinationRoot, reading, source.Read.Tree, cancellationToken).ConfigureAwait(false);
         }
 
         return new SyncResult(transport.Host.ToString(), destinationRoot, plan, Verified: true, created);

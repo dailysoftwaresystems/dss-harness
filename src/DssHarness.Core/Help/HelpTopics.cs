@@ -2307,6 +2307,24 @@ public static class HelpTopics
         builder.AppendLine("deleted since, cannot be listed, the leg fails, saying so, once the workers beside the");
         builder.AppendLine("trees it knows are dealt with.");
         builder.AppendLine();
+        AppendWrapped(
+            builder,
+            $"clean {CleanService.GoneCopiesOption} removes only the copies hosts keep of worktrees gone from this machine, "
+            + "told by the tree this machine's record of host copies names - never by the name a copy is kept under, so a "
+            + "worktree here that bears a gone one's name, a live agent's among them, keeps its own copies. It is driven by "
+            + "that record, not by the legs: every host the record names such a copy on is asked, one no declared leg runs "
+            + "on any more among them, each on a line of its own named as the record spells the host, in place of the legs' "
+            + "lines; --legs narrows it to the hosts the selected legs can run on. Each copy goes as deleting its worktree "
+            + "would remove it, under the same lock: a copy the harness took over, or one nothing marks as its own, is "
+            + "forgotten and left where it is, one the host no longer keeps is forgotten, and one a run or a sweep holds is "
+            + $"kept, refused-locked ({HarnessExit.Refused}), as is one whose marker cannot be read. A host that cannot be "
+            + "reached is said on its line, unavailable, its copies kept recorded for a later clean, and the next host is "
+            + $"asked all the same ({HarnessExit.Incomplete}); one no configuration here declares any more can never be "
+            + "asked, so its copies are forgotten and left on it for you to remove, as deleting a worktree forgets them. "
+            + "With --dry-run it says what each holds and what removing it would do, and removes and forgets nothing. Every "
+            + "line names the record, and so does the line the clean ends on - one saying it records none where it does. "
+            + $"It cannot be given with {CleanService.FormerWorkersOption} ({HarnessExit.UsageError}).");
+        builder.AppendLine();
         builder.AppendLine($"  {ToolPackage.Command} clean --legs linux-arm64-debug,linux-arm64-release");
         builder.AppendLine($"  {ToolPackage.Command} clean --legs linux-arm64-debug --dry-run");
         builder.AppendLine();
@@ -2486,11 +2504,11 @@ public static class HelpTopics
         builder.AppendLine($"On Windows, without --force, a worktree something holds part of is refused ({HarnessExit.Refused})");
         builder.AppendLine("whole once every check has passed, with nothing removed, naming what is held: a");
         builder.AppendLine("directory that is a process's current directory, this command's own among them,");
-        builder.AppendLine("a file open without sharing its deletion, or one a program is running from. git's");
-        builder.AppendLine("removal would stop there part way, with the worktree's .git file and git's record");
-        builder.AppendLine("of it already gone. Close what holds it and run delete-worktree again, from outside");
-        builder.AppendLine("the worktree where it is this command's own. A watcher on a directory, as an editor");
-        builder.AppendLine("keeps, holds nothing; --force looks for nothing, and goes as far as it can.");
+        builder.AppendLine("a file open without sharing its deletion, or one a program is running from. The");
+        builder.AppendLine("removal would stop there part way, with some of the worktree's files already gone.");
+        builder.AppendLine("Close what holds it and run delete-worktree again, from outside the worktree where");
+        builder.AppendLine("it is this command's own. A watcher on a directory, as an editor keeps, holds");
+        builder.AppendLine("nothing; --force looks for nothing, and goes as far as it can.");
         builder.AppendLine();
         AppendWrapped(
             builder,
@@ -2515,16 +2533,35 @@ public static class HelpTopics
         builder.AppendLine();
         AppendWrapped(
             builder,
-            "On Windows, each directory junction in the worktree is removed first, as a link, never what it leads to: "
+            "Once every check has passed, the removal is the harness's own, every step of it reversible until the "
+            + "worktree's files are gone: git is asked once more what changed in it and whether it is locked, and a file "
+            + "changed or added since the checks, beyond the changes being discarded, or a lock, refuses it "
+            + $"({HarnessExit.Refused}) with nothing removed; then everything in it but its .git file is deleted, by a deletion "
+            + "that reaches any path, however long, and only then is git asked to clear its record of it, the .git file "
+            + "going with the directory. A removal that stops before git clears that record - a file another program "
+            + $"holds ({HarnessExit.CommandFailed}), or an interruption ({HarnessExit.Cancelled}) - leaves a worktree git still "
+            + "knows, its .git file and git's record of it there, and says so, naming 'git -C <path> checkout -- .', which "
+            + "puts back the files its commit holds, and the delete-worktree --force that finishes it. --force has git "
+            + "remove the worktree, and deletes whatever git left. "
+            + "On Windows, each directory junction in the worktree is removed first, as a link, never what it leads to: "
             + "git leaves every junction, and the directories above it, while reporting the worktree removed. One that "
-            + $"cannot be removed stops the deletion before git runs ({HarnessExit.CommandFailed}), and a volume mounted "
-            + "on a directory is never unmounted. A directory under the root with no .git and no record of git's - "
+            + $"cannot be removed stops the deletion before any file of it goes ({HarnessExit.CommandFailed}), and a volume mounted "
+            + "on a directory is never unmounted. Every git command the harness runs there reaches a path past 260 characters "
+            + "as any other (core.longpaths). A directory under the root with no .git and no record of git's - "
             + $"what a removal that stopped part way leaves - is refused ({HarnessExit.Refused}), naming --force; git "
             + "worktree repair is named only while git still records a worktree there - at that path, or, after the checkout was "
             + "moved by hand, at another place that holds none now.");
         builder.AppendLine();
-        builder.AppendLine("An interruption during the deletion can leave it partly done, on any platform;");
-        builder.AppendLine("running delete-worktree again with --force finishes it.");
+        builder.AppendLine("An interruption during the deletion can leave it partly done, on any platform, and");
+        builder.AppendLine("says what is left; running delete-worktree again with --force finishes it.");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            "The worktree of an orchestrator's live agent - one whose record says it is live and names that worktree - is "
+            + $"refused ({HarnessExit.Refused}), naming the delete-agent that deletes it with the agent, its evidence and "
+            + "transcripts kept; one whose record cannot be read is refused too, since whether the agent is live cannot be "
+            + "told. --force deletes the worktree anyway, leaving the agent's record naming a worktree that is gone. A closed "
+            + "or deleted agent's worktree is deleted as any other.");
         builder.AppendLine();
         builder.AppendLine("A worktree synced to a host has a copy there of its own, beside the main checkout's,");
         builder.AppendLine("and deleting the worktree asks each host that holds one to remove it, where the");
@@ -2542,17 +2579,22 @@ public static class HelpTopics
         builder.AppendLine($"be reached, {HarnessExit.CommandFailed} where removing it failed there; or {HarnessExit.Cancelled} when interrupted. Running");
         builder.AppendLine("delete-worktree again removes what it left. For a name whose worktree is gone, it");
         builder.AppendLine("removes what any worktree of that name left, and never the copies of one that still");
-        builder.AppendLine("exists.");
+        builder.AppendLine("exists. The copies a gone worktree left are removed alone, told by their tree, never");
+        builder.AppendLine($"by the name, by clean {CleanService.GoneCopiesOption} ('help space').");
         builder.AppendLine();
         AppendWrapped(
             builder,
             $"{WorktreeService.ListCommand} lists each worktree with the copies this machine records hosts keeping of it, and the "
-            + "copies left by worktrees that are gone - removed by hand, or by another tool - each with the "
-            + $"{WorktreeService.DeleteCommand} that deals with them. With --hosts it also asks each declared host which worktree "
+            + "copies left by worktrees that are gone - removed by hand, or by another tool - with the "
+            + $"clean {CleanService.GoneCopiesOption} that removes them by their tree, never a {WorktreeService.DeleteCommand} of "
+            + "their name, which a worktree here may bear now: where one does, a live agent's among them, the line says so, "
+            + "and that deleting it would take them too. With --hosts it also asks each declared host which worktree "
             + "copies it keeps beside its repositoryPath, and how large each is, and sets them against that record: "
             + "a copy of a worktree here, one left by a worktree that is gone, one the record does not hold - made "
-            + "from another checkout or machine, or forgotten here, which deleting a worktree never reaches - and one "
-            + "recorded that is not there. A host that cannot be asked is named, and the command fails with the "
+            + "from another checkout or machine, or forgotten here, which nothing here reaches, said with the tree its "
+            + "marker says it was made from and whether that tree is on this machine - and one recorded that is not "
+            + "there: a gone tree's, which the clean forgets, or a tree's here, whose next sync makes it again. A host that "
+            + "cannot be asked is named, and the command fails with the "
             + $"highest code among them, {HarnessExit.HostUnavailable} where a host cannot be reached. --json prints the "
             + $"listing as one JSON document. {StoppedDocument}");
 

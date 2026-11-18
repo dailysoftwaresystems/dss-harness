@@ -2145,10 +2145,12 @@ public sealed class HostCopiesTests
 
     /// <summary>
     /// Listing the worktrees sets the copies this machine records against the worktrees there are - a worktree's, a
-    /// tree's still here outside the worktrees root, and those a worktree that is gone left, with the deletion that deals
-    /// with them - and, asked, what each declared host keeps: a copy recorded, one the record does not hold, which no
-    /// deletion here reaches, and one recorded that is not there. A host that cannot be asked, and a copy on a host no
-    /// configuration here declares, are named, and the listing fails with the highest code a host was left with.
+    /// tree's still here outside the worktrees root, and those a worktree that is gone left, with the clean that removes
+    /// them by their tree, and, where a worktree here bears the gone one's name now, that deleting it would take them too
+    /// - and, asked, what each declared host keeps: a copy recorded, one the record does not hold, which nothing here
+    /// reaches, said with the tree its marker names and whether that tree is here, and one recorded that is not there,
+    /// with what forgets it by where its tree stands. A host that cannot be asked, and a copy on a host no configuration
+    /// here declares, are named, and the listing fails with the highest code a host was left with.
     /// </summary>
     [Fact]
     public async Task TheListing_SetsWhatEachHostKeeps_AgainstTheRecord()
@@ -2170,18 +2172,29 @@ public sealed class HostCopiesTests
         var lfprobe = temp.Combine("trees", "gone", "lfprobe");
         var gamma = temp.Combine("trees", "gone", "gamma");
         var old = temp.Combine("trees", "gone", "old");
+        var formerAlpha = temp.Combine("trees", "gone", "alpha");
+        var zetaTree = temp.Combine("trees", "gone", "zeta");
+        var delta = Tree(temp, "elsewhere", "delta");
 
-        foreach (var name in new[] { "alpha", "beta", "lfprobe", "zeta" })
+        foreach (var name in new[] { "alpha", "beta", "lfprobe" })
         {
             await Local(harness).CreateRootAsync(onPi + HostCopies.WorktreeSuffix + name, CopyMark.Complete, cancellationToken);
         }
 
+        // Two copies no record here holds, each finished by a sync that named its tree: one gone, one here.
+        await Local(harness).MarkFinishedAsync(onPi + ".worktree-zeta", new CopyReading(null, null, 0), zetaTree, cancellationToken);
+        await Local(harness).MarkFinishedAsync(onPi + ".worktree-eta", new CopyReading(null, null, 0), beta, cancellationToken);
+
         record.Claim(layout, new HostCopyEntry("alpha", Pi.ToString(), onPi + ".worktree-alpha", alpha));
+
+        // A gone tree that bore the name the worktree here bears now.
+        record.Claim(layout, new HostCopyEntry("alpha", Mac.ToString(), onMac + ".worktree-alpha", formerAlpha));
         record.Claim(layout, new HostCopyEntry("beta", Pi.ToString(), onPi + ".worktree-beta", beta));
         record.Claim(layout, new HostCopyEntry("lfprobe", Pi.ToString(), onPi + ".worktree-lfprobe", lfprobe));
         record.Claim(layout, new HostCopyEntry("lfprobe", Mac.ToString(), onMac + ".worktree-lfprobe", lfprobe + Path.DirectorySeparatorChar));
         record.Claim(layout, new HostCopyEntry("gamma", Pi.ToString(), onPi + ".worktree-gamma", gamma));
         record.Claim(layout, new HostCopyEntry("old", "ssh old", "/home/old/repo.worktree-old", old));
+        record.Claim(layout, new HostCopyEntry("delta", Pi.ToString(), onPi + ".worktree-delta", delta));
 
         var inspector = new RecordingInspector(host => host == Pi
             ? Answering(host)
@@ -2194,8 +2207,10 @@ public sealed class HostCopiesTests
         Assert.Equal([Mac, Pi], inspector.Inspected);
         Assert.Equal(["alpha"], listing.OfListed.Keys);
         Assert.Equal([(Pi.ToString(), onPi + ".worktree-alpha")], listing.OfListed["alpha"].Select(copy => (copy.Host, copy.Path)));
-        Assert.Equal([("beta", beta)], listing.Elsewhere.Select(tree => (tree.Name, tree.Tree)));
-        Assert.Equal([("gamma", gamma, 1), ("lfprobe", lfprobe, 2), ("old", old, 1)], listing.Gone.Select(tree => (tree.Name, tree.Tree, tree.Copies.Count)));
+        Assert.Equal([("beta", beta), ("delta", delta)], listing.Elsewhere.Select(tree => (tree.Name, tree.Tree)));
+        Assert.Equal(
+            [("alpha", formerAlpha, 1, worktrees[0].Path), ("gamma", gamma, 1, null), ("lfprobe", lfprobe, 2, null), ("old", old, 1, null)],
+            listing.Gone.Select(tree => (tree.Name, tree.Tree, tree.Copies.Count, tree.NameNowAt)));
 
         var mac = listing.Hosts![0];
         var pi = listing.Hosts[1];
@@ -2204,19 +2219,25 @@ public sealed class HostCopiesTests
         Assert.Empty(mac.Copies);
         Assert.Equal(HarnessExit.Success, pi.ExitCode);
         Assert.Equal(
-            [("alpha", CopyStanding.Listed), ("beta", CopyStanding.Elsewhere), ("lfprobe", CopyStanding.Gone), ("zeta", CopyStanding.Unrecorded)],
-            pi.Copies.Select(copy => (copy.Found.Name, copy.Standing)));
-        Assert.Equal(["gamma"], pi.Missing.Select(copy => copy.Worktree));
+            [
+                ("alpha", CopyStanding.Listed, alpha, false),
+                ("beta", CopyStanding.Elsewhere, beta, false),
+                ("eta", CopyStanding.Unrecorded, beta, true),
+                ("lfprobe", CopyStanding.Gone, lfprobe, false),
+                ("zeta", CopyStanding.Unrecorded, zetaTree, false),
+            ],
+            pi.Copies.Select(copy => (copy.Found.Name, copy.Standing, copy.Tree, copy.TreeHere)));
+        Assert.Equal([("gamma", CopyStanding.Gone), ("delta", CopyStanding.Elsewhere)], pi.Missing.Select(copy => (copy.Entry.Worktree, copy.Standing)));
         Assert.Equal(["ssh old"], listing.Undeclared.Select(copy => copy.Host));
         Assert.Equal(HarnessExit.HostUnavailable, listing.ExitCode);
 
         var report = WorktreeReports.List(worktrees, listing, json: false);
         string Size(string name) => DiskSpace.Size(pi.Copies.Single(copy => copy.Found.Name == name).Found.Bytes);
-        var zeta = pi.Copies.Single(copy => copy.Found.Name == "zeta").Found;
+        string Made(string name) => pi.Copies.Single(copy => copy.Found.Name == name).Found.CreatedUtc!;
 
         Assert.Equal(HarnessExit.HostUnavailable, report.ExitCode);
         Assert.Equal(
-            "1 worktree(s); 3 worktree(s) that are gone left copies on hosts, which 'dssharness delete-worktree <name>' deals with; "
+            "1 worktree(s); 4 worktree(s) that are gone left copies on hosts, which 'dssharness clean --gone-copies' removes; "
             + "1 of 2 host(s) could not be asked",
             report.Message);
         Assert.Equal(
@@ -2225,23 +2246,46 @@ public sealed class HostCopiesTests
                 $"  ssh pi: {onPi}.worktree-alpha",
                 $"beta, the worktree at '{beta}', outside the worktrees root",
                 $"  ssh pi: {onPi}.worktree-beta",
-                $"gamma, gone from '{gamma}': 'dssharness delete-worktree gamma' deals with the copies it left",
+                $"delta, the worktree at '{delta}', outside the worktrees root",
+                $"  ssh pi: {onPi}.worktree-delta",
+                $"alpha, gone from '{formerAlpha}': 'dssharness clean --gone-copies' removes the copies it left; 'alpha' is now the worktree at "
+                    + $"'{worktrees[0].Path}', whose deletion would take them with it - the clean never reaches it",
+                $"  ssh mac: {onMac}.worktree-alpha",
+                $"gamma, gone from '{gamma}': 'dssharness clean --gone-copies' removes the copies it left",
                 $"  ssh pi: {onPi}.worktree-gamma",
-                $"lfprobe, gone from '{lfprobe}': 'dssharness delete-worktree lfprobe' deals with the copies it left",
+                $"lfprobe, gone from '{lfprobe}': 'dssharness clean --gone-copies' removes the copies it left",
                 $"  ssh pi: {onPi}.worktree-lfprobe",
                 $"  ssh mac: {onMac}.worktree-lfprobe",
-                $"old, gone from '{old}': 'dssharness delete-worktree old' deals with the copies it left",
+                $"old, gone from '{old}': 'dssharness clean --gone-copies' removes the copies it left",
                 "  ssh old: /home/old/repo.worktree-old",
                 $"ssh mac: could not be asked about the copies beside '{onMac}': the host could not be reached: ssh said ssh: connect to host 192.0.2.10 port 22: Connection timed out",
-                $"ssh pi keeps 4 worktree copies beside '{onPi}', {DiskSpace.Size(pi.Copies.Sum(copy => copy.Found.Bytes))} in all",
+                $"ssh pi keeps 5 worktree copies beside '{onPi}', {DiskSpace.Size(pi.Copies.Sum(copy => copy.Found.Bytes))} in all",
                 $"  {onPi}.worktree-alpha  {Size("alpha")}  worktree 'alpha'",
                 $"  {onPi}.worktree-beta  {Size("beta")}  the worktree at '{beta}'",
-                $"  {onPi}.worktree-lfprobe  {Size("lfprobe")}  gone from '{lfprobe}': 'dssharness delete-worktree lfprobe' removes it",
-                $"  {onPi}.worktree-zeta  {Size("zeta")}  not recorded here, so deleting a worktree here never reaches it; made by the harness at {zeta.CreatedUtc}",
-                $"  {onPi}.worktree-gamma  recorded here, and not there: 'dssharness delete-worktree gamma' forgets it",
+                $"  {onPi}.worktree-eta  {Size("eta")}  not recorded here, so nothing here reaches it; made by the harness at {Made("eta")}; made from "
+                    + $"'{beta}', a tree on this machine",
+                $"  {onPi}.worktree-lfprobe  {Size("lfprobe")}  gone from '{lfprobe}': 'dssharness clean --gone-copies' removes it",
+                $"  {onPi}.worktree-zeta  {Size("zeta")}  not recorded here, so nothing here reaches it; made by the harness at {Made("zeta")}; made from "
+                    + $"'{zetaTree}', which is not here: gone from this machine, or another machine's",
+                $"  {onPi}.worktree-gamma  recorded here, and not there: gone from '{gamma}': 'dssharness clean --gone-copies' forgets it",
+                $"  {onPi}.worktree-delta  recorded here, and not there: the next sync of the worktree at '{delta}' there makes it again",
                 "ssh old: recorded as keeping '/home/old/repo.worktree-old', and no configuration here declares it, so it was not asked",
             ],
             report.Details);
+
+        // As data: the clean that removes a gone tree's copies, where its name is a worktree's now, and what each copy
+        // the record does not hold was made from.
+        using var document = JsonDocument.Parse(Assert.Single(WorktreeReports.List(worktrees, listing, json: true).Data!));
+        var formerly = document.RootElement.GetProperty("gone")[0];
+        var copies = document.RootElement.GetProperty("hosts")[1].GetProperty("copies");
+
+        Assert.Equal(("dssharness clean --gone-copies", worktrees[0].Path), (formerly.GetProperty("deletedBy").GetString(), formerly.GetProperty("nameNowAt").GetString()));
+        Assert.Equal((beta, true), (copies[2].GetProperty("tree").GetString(), copies[2].GetProperty("treeHere").GetBoolean()));
+        Assert.Equal((zetaTree, false), (copies[4].GetProperty("tree").GetString(), copies[4].GetProperty("treeHere").GetBoolean()));
+        Assert.Equal(JsonValueKind.Null, copies[0].GetProperty("treeHere").ValueKind);
+        Assert.Equal(
+            ["gone", "elsewhere"],
+            document.RootElement.GetProperty("hosts")[1].GetProperty("missing").EnumerateArray().Select(missing => missing.GetProperty("standing").GetString()));
     }
 
     /// <summary>
@@ -2266,9 +2310,96 @@ public sealed class HostCopiesTests
         Assert.Equal("no worktrees; asked 1 host(s)", report.Message);
         Assert.Contains("ssh pi keeps 1 worktree copy beside '/home/pi/repo', 1 KiB in all", report.Details ?? [], StringComparer.Ordinal);
         Assert.Contains(
-            $"  /home/pi/repo.worktree-lfprobe  1 KiB  gone from '/gone/lfprobe': 'dssharness delete-worktree lfprobe' {expected}",
+            $"  /home/pi/repo.worktree-lfprobe  1 KiB  gone from '/gone/lfprobe': 'dssharness clean --gone-copies' {expected}",
             report.Details ?? [],
             StringComparer.Ordinal);
+    }
+
+    /// <summary>
+    /// The copies of gone trees a host keeps are removed by the tree this machine's record names, never by name: a gone
+    /// tree's copy goes though a worktree here bears its name now - that worktree, not synced there, untouched - one of a
+    /// tree still here stays, one the host no longer keeps is forgotten, and another host's are not asked about. Measured
+    /// first, each is said with what removing it would do, and nothing is removed or forgotten. Every host the record names
+    /// such a copy on is named, one no configuration here declares included, whose copy - which no clean could ever reach
+    /// - is forgotten as deleting a worktree forgets it, left on the host and said.
+    /// </summary>
+    [Fact]
+    public async Task TheCopiesOfGoneTrees_AreRemovedByTheirTree_NeverByTheirName()
+    {
+        using var temp = new TempDirectory();
+        using var hosts = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = await PrepareAsync(temp, hosts.Path);
+        var context = await harness.ContextLoader.LoadAsync(temp.Path, cancellationToken);
+        var record = Record(harness);
+        var onPi = hosts.Combine("pi", "repo");
+        var onMac = hosts.Combine("mac", "repo");
+
+        // A live worktree of the name a gone tree's copy is kept under, never synced to the host.
+        var created = await harness.WorktreeService.CreateAsync(temp.Path, "alpha", useRandomName: false, cancellationToken);
+        Assert.True(created.Succeeded, created.Outcome.Message);
+
+        var formerAlpha = temp.Combine("trees", "gone", "alpha");
+        var beta = Tree(temp, "elsewhere", "beta");
+        var gamma = temp.Combine("trees", "gone", "gamma");
+        var delta = temp.Combine("trees", "gone", "delta");
+
+        foreach (var copy in new[] { onPi + ".worktree-alpha", onPi + ".worktree-beta", onMac + ".worktree-delta" })
+        {
+            await Local(harness).CreateRootAsync(copy, CopyMark.Complete, cancellationToken);
+            File.WriteAllText(Path.Combine(copy, "built.o"), "made by a build");
+        }
+
+        record.Claim(context.Layout, new HostCopyEntry("alpha", Pi.ToString(), onPi + ".worktree-alpha", formerAlpha));
+        record.Claim(context.Layout, new HostCopyEntry("beta", Pi.ToString(), onPi + ".worktree-beta", beta));
+        record.Claim(context.Layout, new HostCopyEntry("gamma", Pi.ToString(), onPi + ".worktree-gamma", gamma));
+        record.Claim(context.Layout, new HostCopyEntry("delta", Mac.ToString(), onMac + ".worktree-delta", delta));
+
+        // On a host no configuration here declares any more: the record still names it, and nothing can ask it.
+        record.Claim(context.Layout, new HostCopyEntry("old", "ssh retired", "/srv/repo.worktree-old", temp.Combine("trees", "gone", "old")));
+
+        var inspector = new RecordingInspector(Answering);
+        var remover = new HostCopyRemover(inspector, new LocalHosts(harness, harness.FileSystem), Lock(harness), harness.FileSystem, harness.Platform);
+        var size = DiskSpace.Size(harness.FileSystem.DirectorySize(onPi + ".worktree-alpha"));
+
+        Assert.Equal(["ssh pi", "ssh mac", "ssh retired"], remover.HostsHoldingGone(context));
+
+        var measured = await remover.RemoveGoneAsync(context, Pi.ToString(), measureOnly: true, cancellationToken);
+
+        Assert.Equal(HarnessExit.Success, measured.ExitCode);
+        Assert.Equal(
+            [
+                $"ssh pi: would remove its copy at '{onPi}.worktree-alpha', of the worktree that was at '{formerAlpha}', {size}",
+                $"ssh pi: would find nothing at '{onPi}.worktree-gamma' to remove, and forget it",
+            ],
+            measured.Lines);
+        Assert.True(Directory.Exists(onPi + ".worktree-alpha"));
+        Assert.Equal(5, record.All(context.Layout).Count);
+
+        var removed = await remover.RemoveGoneAsync(context, Pi.ToString(), measureOnly: false, cancellationToken);
+
+        Assert.Equal(HarnessExit.Success, removed.ExitCode);
+        Assert.Equal(
+            [
+                $"ssh pi: removed its copy at '{onPi}.worktree-alpha', of the worktree that was at '{formerAlpha}'",
+                $"ssh pi: found nothing at '{onPi}.worktree-gamma' to remove",
+            ],
+            removed.Lines);
+        Assert.False(Directory.Exists(onPi + ".worktree-alpha"));
+        Assert.True(Directory.Exists(onPi + ".worktree-beta"));
+        Assert.True(Directory.Exists(onMac + ".worktree-delta"));
+        Assert.True(Directory.Exists(created.Path));
+        Assert.Equal(["beta", "delta", "old"], record.All(context.Layout).Select(entry => entry.Worktree));
+        Assert.DoesNotContain(Mac, inspector.Inspected);
+
+        // A host nothing here declares cannot be asked, now or later: its copy is forgotten, and left on it for you.
+        var retired = await remover.RemoveGoneAsync(context, "ssh retired", measureOnly: false, cancellationToken);
+
+        Assert.Equal(
+            ["ssh retired: no configuration here declares it any more, so nothing was asked to remove its copy at '/srv/repo.worktree-old', which stays "
+                + "there for you to remove, and is no longer recorded"],
+            retired.Lines);
+        Assert.Equal(["ssh mac"], remover.HostsHoldingGone(context));
     }
 
     /// <summary>
@@ -2327,7 +2458,7 @@ public sealed class HostCopiesTests
         var lines = await CliRunner.RunAsync(["list-worktree", "-C", temp.Path], cancellationToken);
 
         Assert.Equal(HarnessExit.Success, lines.ExitCode);
-        Assert.Contains($"feature, gone from '{gone}': 'dssharness delete-worktree feature' deals with the copies it left", lines.StandardOutput, StringComparison.Ordinal);
+        Assert.Contains($"feature, gone from '{gone}': 'dssharness clean --gone-copies' removes the copies it left", lines.StandardOutput, StringComparison.Ordinal);
         Assert.Contains("  ssh pi: /home/pi/repo.worktree-feature", lines.StandardOutput, StringComparison.Ordinal);
 
         var json = await CliRunner.RunAsync(["list-worktree", "--json", "-C", temp.Path], cancellationToken);
@@ -2342,7 +2473,7 @@ public sealed class HostCopiesTests
         Assert.False(root.TryGetProperty("hosts", out _));
         Assert.Equal("feature", feature.GetProperty("name").GetString());
         Assert.Equal(gone, feature.GetProperty("tree").GetString());
-        Assert.Equal("dssharness delete-worktree feature", feature.GetProperty("deletedBy").GetString());
+        Assert.Equal("dssharness clean --gone-copies", feature.GetProperty("deletedBy").GetString());
         Assert.Equal("ssh pi", Assert.Single(feature.GetProperty("copies").EnumerateArray()).GetProperty("host").GetString());
     }
 

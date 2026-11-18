@@ -38,6 +38,13 @@ public sealed record CleanRequest(
     /// (<see cref="CleanService.FormerWorkersOption"/>), on each machine a selected leg runs on, and nothing else.
     /// </summary>
     public bool FormerWorkers { get; init; }
+
+    /// <summary>
+    /// Whether the clean removes the copies hosts keep of worktrees gone from this machine
+    /// (<see cref="CleanService.GoneCopiesOption"/>), told by the tree this machine's record names, on every host the
+    /// record names one on - or, where legs are named, those a named leg can run on - and nothing else.
+    /// </summary>
+    public bool GoneCopies { get; init; }
 }
 
 /// <summary>
@@ -87,7 +94,8 @@ public sealed class CleanService(
     IFileSystem fileSystem,
     IHostPlatform platform,
     IHarnessOutput output,
-    IRepositoryTrees trees) : IUseCase
+    IRepositoryTrees trees,
+    IHostCopyRemover hostCopies) : IUseCase
 {
     /// <summary>The command, as it is typed and as it reports.</summary>
     public const string CommandName = "clean";
@@ -101,7 +109,14 @@ public sealed class CleanService(
     /// </summary>
     public const string FormerWorkersOption = "--former-workers";
 
+    /// <summary>
+    /// The option that removes the copies hosts keep of worktrees gone from this machine, told by the tree this machine's
+    /// record names, and nothing else.
+    /// </summary>
+    public const string GoneCopiesOption = "--gone-copies";
+
     private readonly IHarnessContextLoader _contextLoader = contextLoader;
+    private readonly IHostCopyRemover _hostCopies = hostCopies;
     private readonly LegsService _legsService = legsService;
     private readonly RunLock _runLock = runLock;
     private readonly ISyncTransportFactory _transports = transports;
@@ -134,6 +149,23 @@ public sealed class CleanService(
         ArgumentNullException.ThrowIfNull(request);
 
         var context = await _contextLoader.LoadAsync(request.Directory, cancellationToken).ConfigureAwait(false);
+
+        // Each removes one thing and nothing else: asked for both, neither is the clean asked for.
+        if (request.FormerWorkers && request.GoneCopies)
+        {
+            return Stopped(
+                HarnessExit.UsageError,
+                $"{FormerWorkersOption} and {GoneCopiesOption} each remove one thing and nothing else: run the clean once for each.",
+                [],
+                context.Config.Defaults.DurationWarningFactor,
+                []);
+        }
+
+        // Driven by the record, never by the legs: a host keeps the copies a gone tree left whether or not a leg runs there.
+        if (request.GoneCopies)
+        {
+            return await GoneCopiesAsync(context, request, cancellationToken).ConfigureAwait(false);
+        }
 
         // What a copy of the tree needs of a host: no program starts there, so a host without the build's tools
         // still has its build directories removed.
@@ -394,6 +426,135 @@ public sealed class CleanService(
             : $"; {(dryRun ? string.Empty : "removed ")}{ReportText.Counted(removal.Removed.Count, "worker")} an earlier version kept beside "
                 + $"its trees, {DiskSpace.Size(removal.Bytes)}: {string.Join(", ", removal.Removed.Select(worker => $"'{worker.Path}'"))}";
     }
+
+    /// <summary>
+    /// Removes, or measures, the copies this machine's record holds of trees gone from this machine, driven by the record
+    /// and never by the legs: every host it names such a copy on - one no declared leg runs on any more among them - or,
+    /// with <c>--legs</c>, those of them a selected leg can run on. Each host has a line of its own, named as the record
+    /// spells it, and its copies are dealt with as deleting their worktree would deal with them
+    /// (<see cref="IHostCopyRemover.RemoveGoneAsync"/>), told by the tree the record names, never by the name a copy is kept
+    /// under; a host that cannot be reached keeps its copies recorded for a later clean, and the next host is asked all
+    /// the same. Every line, and the line the clean ends on, names the record.
+    /// </summary>
+    private async Task<LegRunResult> GoneCopiesAsync(HarnessContext context, CleanRequest request, CancellationToken cancellationToken)
+    {
+        var factor = context.Config.Defaults.DurationWarningFactor;
+        var record = HostCopyRecord.PathOf(context.Layout);
+        IReadOnlyList<string> hosts;
+
+        try
+        {
+            // Resolved first, so a leg nobody declared is refused before the record is read.
+            var selection = request.LegNames is null ? null : LegSelection.Resolve(context.Config, request.LegNames);
+
+            hosts = _hostCopies.HostsHoldingGone(context);
+
+            if (selection is not null)
+            {
+                var reached = selection.Legs
+                    .SelectMany(leg => LegPlacement.Candidates(context.Config, leg.Leg))
+                    .Select(host => host.ToString())
+                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+                hosts = [.. hosts.Where(reached.Contains)];
+            }
+        }
+        catch (HarnessException ex)
+        {
+            return Stopped(ex.ExitCode, $"{ex.Message.TrimEnd('.')}; no host was asked, and '{record}' is as it was", [], factor, []);
+        }
+
+        if (hosts.Count == 0)
+        {
+            var none = $"'{record}' records no copy of a worktree gone from this machine"
+                + (request.LegNames is null ? string.Empty : " on a host the selected legs run on");
+
+            return Stopped(HarnessExit.Success, none, [], factor, [none]);
+        }
+
+        var ledger = new LegLedger(_output, CommandName);
+        var unfinished = new List<string>();
+        var cancelled = false;
+
+        foreach (var host in hosts)
+        {
+            if (cancelled || cancellationToken.IsCancellationRequested)
+            {
+                cancelled = true;
+                unfinished.Add(host);
+                continue;
+            }
+
+            var started = Stopwatch.GetTimestamp();
+            var (verdict, detail, interrupted) = await GoneCopiesOnAsync(context, host, record, request.DryRun, cancellationToken).ConfigureAwait(false);
+
+            cancelled = interrupted;
+            ledger.Record(new LegEntry { Leg = host, Verdict = verdict, Detail = detail, Duration = Stopwatch.GetElapsedTime(started) });
+        }
+
+        var built = ledger.Build(factor);
+        var done = request.DryRun ? "measured" : "dealt with";
+
+        return new LegRunResult(
+            CommandName,
+            Run: null,
+            RunDirectory: null,
+            built,
+            built.ExitCodeGiven(cancelled, unfinished),
+            $"{done} the copies worktrees gone from this machine left on {ReportText.Counted(hosts.Count - unfinished.Count, "host")}, as '{record}' records them"
+                + (cancelled ? $"; interrupted, {ReportText.Counted(unfinished.Count, "host")} not asked, their copies still recorded" : string.Empty),
+            cancelled,
+            unfinished,
+            built.Render())
+        {
+            Cause = built.CauseGiven(cancelled, unfinished),
+        };
+    }
+
+    /// <summary>
+    /// What dealing with the copies of gone trees recorded on <paramref name="host"/> did, as its line says it: the verdict,
+    /// the detail naming the record, and whether an interruption stopped it.
+    /// </summary>
+    private async Task<(LegVerdict Verdict, string Detail, bool Interrupted)> GoneCopiesOnAsync(
+        HarnessContext context,
+        string host,
+        string record,
+        bool dryRun,
+        CancellationToken cancellationToken)
+    {
+        HostCopyRemoval removal;
+
+        try
+        {
+            removal = await _hostCopies.RemoveGoneAsync(context, host, dryRun, cancellationToken).ConfigureAwait(false);
+        }
+        catch (HarnessException ex)
+        {
+            return (GoneCopiesVerdict(ex.ExitCode), $"{ex.Message.TrimEnd('.')}, so no copy on it was {(dryRun ? "measured" : "removed")}, and '{record}' still records them", false);
+        }
+
+        var said = $"{(dryRun ? "measured" : "dealt with")} {ReportText.Counted(removal.Lines.Count, "copy")} worktrees gone from this machine left there, "
+            + $"as '{record}' records them: {string.Join("; ", removal.Lines)}";
+
+        if (removal.Interrupted)
+        {
+            said += "; stopped before every copy was asked about, and those not asked about stay recorded";
+        }
+
+        return (removal.Interrupted ? LegVerdict.Stopped : GoneCopiesVerdict(removal.ExitCode), said, removal.Interrupted);
+    }
+
+    /// <summary>
+    /// The verdict a host's line is given by the highest code its copies were left with: a copy a run or a sweep holds, or
+    /// that was refused, is kept for a later clean, refused-locked; a host that cannot be reached is unavailable, its copies
+    /// still recorded; a removal that failed there, failed.
+    /// </summary>
+    private static LegVerdict GoneCopiesVerdict(int exitCode) => exitCode switch
+    {
+        HarnessExit.Success => LegVerdict.Passed,
+        HarnessExit.Refused => LegVerdict.RefusedLocked,
+        var code => Verdicts.ForRefusal(code),
+    };
 
     /// <summary>
     /// Where the workers an earlier version kept beside <paramref name="tree"/> are, with the links to the directory they

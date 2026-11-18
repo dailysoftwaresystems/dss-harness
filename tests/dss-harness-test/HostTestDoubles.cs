@@ -383,6 +383,11 @@ internal sealed class NoHostCopies : IHostCopyRemover
         => Task.FromResult(HostCopyRemoval.None);
 
     public IReadOnlyList<LockRequest> RemovalLocks(HarnessContext context, string worktree, string tree, RunId runId) => [];
+
+    public IReadOnlyList<string> HostsHoldingGone(HarnessContext context) => [];
+
+    public Task<HostCopyRemoval> RemoveGoneAsync(HarnessContext context, string host, bool measureOnly, CancellationToken cancellationToken = default)
+        => Task.FromResult(HostCopyRemoval.None);
 }
 
 /// <summary>

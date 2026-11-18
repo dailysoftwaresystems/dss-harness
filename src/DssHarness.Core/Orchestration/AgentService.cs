@@ -2469,7 +2469,7 @@ public sealed class AgentService(
         if (target.Standing.Kind != Standing.Gone || (await LeftAsync(target).ConfigureAwait(false)).Count > 0)
         {
             removal = await _worktrees
-                .DeleteAsync(target.Context.Layout.MainCheckoutRoot, target.Address.Name, force: false, deleteEvidence: false, discardUncommitted: true, CancellationToken.None)
+                .DeleteAsync(target.Context.Layout.MainCheckoutRoot, target.Address.Name, force: false, deleteEvidence: false, discardUncommitted: true, asItsAgent: true, CancellationToken.None)
                 .ConfigureAwait(false);
 
             lines.Add($"{WorktreeService.DeleteCommand} {target.Address.Name}: {removal.Outcome.Message}");

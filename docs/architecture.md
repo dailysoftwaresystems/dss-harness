@@ -203,8 +203,9 @@ what it holds. On macOS, where the isolation keeps no process namespace, such a 
 isolated command's outlives its launch and goes on writing the places it was given; every file
 operation of the tool's over those places - a fold, a hand-over, evidence kept, a removal, a sync -
 acts relative to directories it holds (`UnfollowedFiles`, `HeldDirectory`), so a link it swaps in
-meanwhile reaches nothing of the tool's. git's own removal of a worktree (`git worktree remove`)
-walks the tree by path, and is where such a process still meets the tool's work. A process table that cannot be read - macOS's is read through `ps`, which a session
+meanwhile reaches nothing of the tool's. git's own removal of a worktree, which a forced
+`delete-worktree` still runs (`git worktree remove --force --force`), walks the tree by path, and is
+where such a process still meets the tool's work. A process table that cannot be read - macOS's is read through `ps`, which a session
 that has used up every process it may start leaves unable to start - takes nothing from the stop:
 the group is still asked and then killed by its id, which needs no table, the tree is still ended,
 and what went unreached is said in the result (`ProcessResult.Uncontained`), or, where the caller
@@ -818,6 +819,16 @@ no worktree of the agent's, nothing read; list-orchestrator's `--json` says each
 Without `--force`, every check runs before anything is touched. A refusal deletes nothing of the
 worktree, names everything it found on one line, each with its remedy, and exits 13:
 
+- **A live agent's worktree.** An address `orchestrator/agent` whose agent's record, read by the one
+  reader of those records (`OrchestrationStore`), is live - neither closed nor deleted - and names
+  its worktree at this very path, under the worktrees root it was made under, is refused before
+  anything else is asked, naming `delete-agent <orchestrator> <agent>`, which deletes the worktree
+  with the agent, its evidence and transcripts kept: deleted here, the agent would be left naming a
+  worktree that is gone. A record that cannot be read refuses as well, since whether the agent is
+  live cannot be told. A closed agent's worktree is not refused - delete-agent's own remedies name
+  `delete-worktree` for one whose removal did not finish - and `--force` deletes a live agent's
+  anyway, as delete-agent's remedies name it where the agent's repository cannot be worked on.
+  delete-agent's own deletion of the worktree is asked as the agent's (`asItsAgent`).
 - **Uncommitted changes.** A modified, staged or untracked file git does not ignore, or a
   changed submodule. Status runs with `--untracked-files=normal` and tells a submodule by its
   commit (`--ignore-submodules=dirty`, `GitOwnSettings`), so configuration can hide neither, and
@@ -880,7 +891,7 @@ worktree, names everything it found on one line, each with its remedy, and exits
   because an unreadable directory is not an empty one. A root resolving outside the worktree is
   ignored rather than refused, since the deletion was never going to touch it.
 - **Held, on Windows.** Looked at last, once every check above has passed: a worktree something
-  holds part of is refused on its own, since git's removal would stop part way on it.
+  holds part of is refused on its own, since its removal would stop part way on it.
   [Removal](#removal) says what holds one.
 - **A copy kept in it.** The workers kept in the worktree's `.mutations` (see *Mutation
   testing*) go before it, and are asked about before anything of it is removed or looked through
@@ -909,16 +920,24 @@ history of a repository nested inside one included.
 
 ### Removal
 
-- Checked, removal is plain `git worktree remove`. git's own check still catches a file changed
-  since ours, a file added unless `status.showUntrackedFiles` is `no`, or a lock; a worktree
-  holding submodules is removed with `--force`, which git requires for one, and so is one whose
-  uncommitted changes `--discard-uncommitted` discards, which git's check would refuse. That
-  skips even this check, though git still keeps a lock, which only a second `--force` overrides.
+- Checked, removal is reversible until the worktree's files are gone (`WorktreeService.RemoveCheckedAsync`).
+  git's own `git worktree remove` deletes the worktree's `.git` file and git's record of it first,
+  then stops at the first file it cannot delete - one something holds, or, on Windows, one whose
+  path runs past 260 characters, as a build directory's do - leaving a directory no check can run
+  on again. So once every check has passed the removal is the harness's own. The look git's
+  removal took before it deleted anything is taken once more (`WorktreeInspector.LookAgainAsync`):
+  a file changed or added since the checks, beyond the uncommitted changes `--discard-uncommitted`
+  discards, or a lock taken since, refuses, exit 13, with nothing of the worktree removed. Then each
+  directory junction goes, as a link; then everything in the worktree but its `.git` file, through
+  the file system's own deletion (`IFileSystem.EmptyDirectory`, which acts relative to directories
+  it holds, so no path is too long for it); and only then is git asked to remove the worktree, with
+  its record the one thing left for it to clear: `git worktree remove --force`, since the files git
+  would weigh are gone, though git still keeps a lock, which only a second `--force` overrides.
 - Checked, on Windows, every entry of the worktree is first opened as a deletion opens it, and let
-  go at once. git's removal stops at the first entry something holds - a directory that is a
+  go at once. The removal stops at the first entry something holds - a directory that is a
   process's current directory, a file open without sharing its deletion, a file a program is
-  running from - after it has deleted the worktree's `.git` file and git's record of it, and only
-  `--force` finishes it then. So a worktree something holds is refused whole, exit 13, with nothing
+  running from - with some of the worktree's files already gone. So a worktree something holds is
+  refused whole, exit 13, with nothing
   removed, naming what is held and saying what Windows said; where that is the command's own
   current directory, it says to run it from outside the worktree. What a deletion goes through
   holds nothing: a watcher on a directory, as an editor or a language server keeps, and a file open
@@ -932,18 +951,22 @@ history of a repository nested inside one included.
   keeps its directory from going, and is not found. Linux and macOS need no look, since neither an
   open file nor a current directory stops a deletion there.
 - Checked, on Windows, every directory junction in the worktree is then removed, as the link it
-  is, never what it leads to. git for Windows leaves every junction when it removes a worktree,
-  and every directory above one, while reporting the worktree removed - its `.git` file and its
-  record already deleted - measured with git 2.55.0.windows.5; symbolic links it removes itself,
-  so they are left to it. A junction that cannot be removed stops the deletion before git runs,
-  exit 20, naming it, what Windows said and the junctions removed before it. A volume mounted on a
-  directory has a junction's tag and is never unmounted: it stops the deletion the same way.
-  A successful deletion names the junctions it removed.
-- When git fails part way all the same, as on a file something opened after that look, or when
-  it reports the worktree removed while its directory is still there, its record and some files
-  may already be gone: the command deletes nothing more, exits 20 and says what is left, and
-  `delete-worktree <name> --force` finishes it, which is safe because every check passed before
-  removal began. Run again without `--force`, the command names that same way for a directory
+  is, never what it leads to, before any file of it goes. git for Windows leaves every junction
+  when it removes a worktree, and every directory above one, while reporting the worktree removed
+  - measured with git 2.55.0.windows.5 - and the file system's deletion removes one as a link
+  too; taken first, one that cannot be removed stops the deletion with no file of the worktree
+  gone, exit 20, naming it, what Windows said and the junctions removed before it. A volume
+  mounted on a directory has a junction's tag and is never unmounted: it stops the deletion the
+  same way. A successful deletion names the junctions it removed.
+- When the deletion of its files fails part way all the same, as on a file something opened after
+  that look, or is stopped, the worktree's `.git` file and git's record of it are still there, so
+  it is still a worktree git knows: the command exits 20 (130 where it was stopped), says that some
+  of its files may be gone, or that they are, and names `git -C <path> checkout -- .`, which puts
+  back the files its commit holds, and `delete-worktree <name> --force`, which finishes it and is
+  safe because every check passed before removal began. Where git then fails to clear the record,
+  or reports the worktree removed while its directory is still there, what is gone and what is
+  left is said as it is found (`WorktreeService.DescribeWhatRemains`), with the same `--force` to
+  finish it. Run again without `--force`, the command names that same way for a directory
   that holds no `.git` of its own and that git records no worktree at, which is what such a
   removal leaves; `git worktree repair` is named only while git still records a worktree there -
   at that path, or, after the checkout was moved by hand, at another place that holds none now -
@@ -964,10 +987,12 @@ history of a repository nested inside one included.
   the main checkout's, refuse it, since its own store goes with it. The refusal names fold-agent
   for its changes and a fetch into the main checkout for its commits, never a branch or a stash,
   which would be made in the store being deleted. It has no lock and no record of git's, and git
-  no removal of its own for it: its directory is deleted whole (`WorktreeService.RemoveRepository`),
-  its read-only object files with it and a link in it as a link, and then looked for; a deletion
-  that cannot finish says part of it may be gone and names `--force` to finish it, safe where every
-  check passed. Forced, it is deleted the same way, unchecked.
+  no removal of its own for it: its directory is deleted (`WorktreeService.RemoveRepository`) -
+  everything in it but its own `.git` directory first, so one stopped part way is still a
+  repository with every commit made in it, then the rest - its read-only object files with it and
+  a link in it as a link, and then looked for; a deletion that cannot finish says what of it may be
+  gone and names `--force` to finish it, safe where every check passed. Forced, it is deleted the
+  same way, unchecked.
 - The records of the commit a worktree stood on, `refs/harness/worktree-base/<address>` and
   `refs/harness/worktree-moving/<address>` (`WorktreeKeepalive`), are forgotten once its directory
   is gone, by this deletion or before it: left behind, they would keep that commit in the main
@@ -976,7 +1001,8 @@ history of a repository nested inside one included.
 An interruption stops the command cleanly only before its first destructive step. After that
 the deletion goes on, the command says at once that it is under way, and it waits up to two
 minutes for the deletion to finish, as does a host agent running it for another machine. Just
-before the two minutes are up, git is stopped and the command says what is left. The deletion
+before the two minutes are up, the deletion is stopped - the harness's own between one entry and
+the next, git where git is running - and the command says what is left. The deletion
 can be left partly done on any platform, and on Linux and macOS the interruption reaches git
 itself; running `delete-worktree <name> --force` then finishes it.
 
@@ -3076,7 +3102,10 @@ pinned for every later git of the tool's in it (`GitDirectoryPins`), so neither 
 settings (`GitOwnSettings.Apply`, through `GIT_CONFIG_PARAMETERS` and its own variables): no file-system monitor
 (`core.fsmonitor=false`), whose command a repository's configuration names; no hooks but where it runs them on purpose
 (`GitHooks`); no recursion into a submodule but for those (`GitOwnSettings.NoRecursion`, `submodule.recurse=false`); no
-object replaced (`GIT_NO_REPLACE_OBJECTS=1`); with `GIT_DIR`, `GIT_COMMON_DIR` and `GIT_WORK_TREE` from the pin where
+object replaced (`GIT_NO_REPLACE_OBJECTS=1`); on Windows, every path past 260 characters reached as any other
+(`GitOwnSettings.LongPaths`, `core.longpaths=true`), which git for Windows otherwise stops at part way - adding, listing
+the status of, or removing a worktree whose build holds one - given by the system git runs on, which the client is told
+by the platform, never asked again; with `GIT_DIR`, `GIT_COMMON_DIR` and `GIT_WORK_TREE` from the pin where
 there is one; and every comparison of a work tree (`GitOwnSettings.Comparisons`: status, diff, diff-files, diff-index)
 given `--ignore-submodules=dirty` on its command line where it names nothing of submodules (`GitOwnSettings.Arguments`,
 which refuses one asking to look into a submodule's work tree) - a submodule told by the commit its entry records
@@ -6327,13 +6356,31 @@ while a gate ran turned a green suite red, with four test processes live at once
   refused, 15 where its host is unreachable, 20 where the removal failed there - so whoever deleted
   it learns something of it is left; deleting the worktree again finishes the job, and for a name
   whose worktree is gone removes what any worktree of that name left, never the copies of one that
-  still exists. `list-worktree` shows that record: each worktree's copies, and the copies left by
-  worktrees that are gone - removed by a tool that ran plain `git worktree remove`, say - each with
-  the `delete-worktree` that deals with them. With `--hosts` it asks each declared host which
-  `<repositoryPath>.worktree-<name>` copies it keeps and how large each is, from its home directory
-  as a removal is, and sets them against the record, so a copy the record does not hold - made from
-  another checkout or machine, or forgotten here - is found, as is a recorded one that is gone. It
-  changes nothing on a host or in the record, so it takes no lock. On a host a leg was sent to,
+  still exists. The copies a gone tree left are removed alone by `clean --gone-copies`
+  (`IHostCopyRemover.RemoveGoneAsync`), told by the tree the record names - a directory no longer on
+  this machine - never by the name they are kept under, which a worktree here, a live agent's among
+  them, may bear now, and whose deletion would take them with it. It is driven by the record, not by
+  the legs (`CleanService.GoneCopiesAsync`): every host the record names such a copy on
+  (`IHostCopyRemover.HostsHoldingGone`) - one no declared leg runs on any more among them - has a
+  ledger line of its own, named as the record spells it, in place of the legs' lines, and `--legs`
+  narrows the hosts to those the selected legs can run on (`LegPlacement.Candidates`). Each copy goes
+  through the one removal a deletion's copies go through (`HostCopyRemover.DealWithEachAsync`) - the
+  same lock, the record read again under it, a copy whose tree is there again by then left; a host
+  that cannot be reached is `skipped-unavailable`, its copies still recorded for a later clean, and
+  the next host is asked all the same; one no configuration declares any more is never asked, and its
+  copies are forgotten, as a deletion forgets them, since no later clean could reach them either.
+  With `--dry-run` each is said with what it holds and what removing it would do, nothing removed or
+  forgotten; every line, and the line the clean ends on, names the record. `list-worktree`
+  shows that record: each worktree's copies, and the copies left by worktrees that are gone -
+  removed by a tool that ran plain `git worktree remove`, say - with that clean, and, where a
+  worktree here bears the gone one's name now (`RecordedTree.NameNowAt`), that worktree. With
+  `--hosts` it asks each declared host which `<repositoryPath>.worktree-<name>` copies it keeps and
+  how large each is, from its home directory as a removal is, and sets them against the record, so
+  a copy the record does not hold - made from another checkout or machine, or forgotten here - is
+  found, said with the tree its marker says it was last made from and whether that tree is on this
+  machine, as is a recorded one that is gone: a gone tree's, which the clean forgets, or a tree's
+  here, whose next sync makes it again (`HostCopyMissing`). It changes nothing on a host or in the
+  record, so it takes no lock. On a host a leg was sent to,
   the copy it was sent to is its tree, whatever worktree the leg names. The working tree being tested
   is transferred into its copy file by file, compared by content hash, so what the host holds is this
   tree including its uncommitted changes. Nothing is pushed and it is never
@@ -6700,15 +6747,18 @@ directory here cannot drift apart.
   named and how many of the paths it carries git calls changed; the marker a finished sync writes
   records both, and the run that read the tree, as `commit`, `uncommittedChanges` and `readBy`, the
   names a leg's `tree` gives them - also where nothing else of the copy changed, since what it holds
-  is then that run's reading. A copy a sync begins writing records none. A run's sync releases the
+  is then that run's reading - and, as `tree`, the tree it was read from as the machine that synced
+  it spells it, which a listing of the host's copies says of a copy no record names
+  (`HostCopyFound.Tree`); a build that sends no tree marks none. A copy a sync begins writing records
+  no reading, and keeps the tree it was last made from. A run's sync releases the
   copy before its legs take it, and another command's sync can run in between, so each leg asks the
   copy, under its own lock, whose reading it holds: another's ends the leg `inputs-moved`, `'<copy>'
   on <host> was synced again by run <id> after this run made it the tree it read, so it no longer
   holds that tree.`, with nothing of it run; and so does a copy gone, part made or unmarked by then,
   `'<copy>' on <host> no longer holds the tree this run read into it: it is not there, or no sync of
   this tool finished it.` - or, for one part made, what its marker says of it. A build from before
-  this one refuses a marker carrying a reading as unreadable, as it refuses any member it does not
-  know, so it reads no copy this one finished. Only going back to such a build meets that - a host
+  this one refuses a marker carrying a reading or a tree as unreadable, as it refuses any member it
+  does not know, so it reads no copy this one finished. Only going back to such a build meets that - a host
   is brought to the build of the machine that asks it, and one ahead of that machine is refused -
   and the remedy is to update again, never to delete the marker, which would leave the copy one to
   take over.

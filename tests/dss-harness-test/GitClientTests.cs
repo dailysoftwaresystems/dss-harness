@@ -2788,7 +2788,9 @@ public sealed class GitClientProtocolTests
         await git.RunAsync("/repo", ["status"], cancellationToken: TestContext.Current.CancellationToken);
 
         var environment = Assert.Single(requests).Environment;
-        var own = $"'core.fsmonitor=false' 'submodule.recurse=false' 'core.hooksPath={(OperatingSystem.IsWindows() ? @"\\.\NUL" : "/dev/null")}'";
+        var own = OperatingSystem.IsWindows()
+            ? @"'core.fsmonitor=false' 'submodule.recurse=false' 'core.hooksPath=\\.\NUL' 'core.longpaths=true'"
+            : "'core.fsmonitor=false' 'submodule.recurse=false' 'core.hooksPath=/dev/null'";
 
         Assert.Contains(GitOwnSettings.ParametersVariable, LocalNames);
         Assert.Contains(GitOwnSettings.NoReplaceVariable, LocalNames);
@@ -3161,7 +3163,32 @@ public sealed class GitClientProtocolTests
         Assert.Equal(("'core.fsmonitor=false' 'submodule.recurse=false'", (string?)null), (requests[1].Environment!["GIT_CONFIG_PARAMETERS"], requests[1].Environment!["GIT_DIR"]));
         Assert.Equal(("'core.fsmonitor=false'", (string?)null), (requests[2].Environment!["GIT_CONFIG_PARAMETERS"], requests[2].Environment!["GIT_DIR"]));
         Assert.All(requests, request => Assert.Equal("1", request.Environment!["GIT_NO_REPLACE_OBJECTS"]));
-        Assert.Equal(@"'core.fsmonitor=false' 'submodule.recurse=false' 'core.hooksPath=\\.\NUL'", GitOwnSettingsOn(PlatformId.Windows));
+        Assert.Equal(@"'core.fsmonitor=false' 'submodule.recurse=false' 'core.hooksPath=\\.\NUL' 'core.longpaths=true'", GitOwnSettingsOn(PlatformId.Windows));
+    }
+
+    /// <summary>
+    /// On Windows every git of the tool's reaches a path past 260 characters as it reaches any other - one that runs the
+    /// hooks as well - and on no other system is it told to, whose git needs no telling: git for Windows without it stops
+    /// part way through removing, adding or listing the status of a worktree whose build holds a path that long.
+    /// </summary>
+    [Fact]
+    public void EveryGitOfTheToolsOnWindows_ReachesLongPaths_AndNoOtherSystemsIsTold()
+    {
+        foreach (var hooksRun in new[] { false, true })
+        {
+            var windows = new Dictionary<string, string?>(StringComparer.Ordinal);
+            var linux = new Dictionary<string, string?>(StringComparer.Ordinal);
+            var macos = new Dictionary<string, string?>(StringComparer.Ordinal);
+            GitOwnSettings.Apply(windows, PlatformId.Windows, ["worktree", "remove", "--force", "/r/.worktrees/a"], hooksRun, "/r", pins: null);
+            GitOwnSettings.Apply(linux, PlatformId.Linux, ["worktree", "remove", "--force", "/r/.worktrees/a"], hooksRun, "/r", pins: null);
+            GitOwnSettings.Apply(macos, PlatformId.MacOs, ["worktree", "remove", "--force", "/r/.worktrees/a"], hooksRun, "/r", pins: null);
+
+            Assert.EndsWith($" '{GitOwnSettings.LongPaths}'", windows[GitOwnSettings.ParametersVariable], StringComparison.Ordinal);
+            Assert.DoesNotContain("core.longpaths", linux[GitOwnSettings.ParametersVariable], StringComparison.Ordinal);
+            Assert.DoesNotContain("core.longpaths", macos[GitOwnSettings.ParametersVariable], StringComparison.Ordinal);
+        }
+
+        Assert.Equal("core.longpaths=true", GitOwnSettings.LongPaths);
     }
 
     /// <summary>

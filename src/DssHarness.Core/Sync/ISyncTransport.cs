@@ -51,13 +51,18 @@ public interface ISyncTransport
     /// </summary>
     /// <param name="root">The copy's root.</param>
     /// <param name="reading">The reading the copy was made from, and the run that read it.</param>
+    /// <param name="tree">
+    /// The tree the copy was made from, as the machine that synced it spells it: recorded beside the reading, so a listing
+    /// of the host's copies tells which tree a copy is of where no record of that machine's names it; none where the build
+    /// asking sends none, as one from before the tree was carried does, and the marker then names none.
+    /// </param>
     /// <param name="cancellationToken">Stops the work.</param>
     /// <exception cref="Results.HarnessException">As <see cref="CreateRootAsync"/>.</exception>
     /// <remarks>
     /// One mark with the reading, rather than a mark and then the reading: between two, a copy marked finished would
     /// name the reading before this one.
     /// </remarks>
-    Task MarkFinishedAsync(string root, CopyReading reading, CancellationToken cancellationToken = default);
+    Task MarkFinishedAsync(string root, CopyReading reading, string? tree, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// What the harness has recorded about this copy. A directory it did not make is never taken

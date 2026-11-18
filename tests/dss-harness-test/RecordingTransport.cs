@@ -47,6 +47,9 @@ internal sealed class RecordingTransport(
     /// <summary>Each reading a finished copy was marked as holding, in order.</summary>
     public List<CopyReading> Readings { get; } = [];
 
+    /// <summary>The tree each finished copy was marked as made from, in order, beside <see cref="Readings"/>.</summary>
+    public List<string?> Trees { get; } = [];
+
     /// <summary>Every path deleted, in order.</summary>
     public List<string> Deleted { get; } = [];
 
@@ -95,11 +98,12 @@ internal sealed class RecordingTransport(
         return inner.CreateRootAsync(root, mark, cancellationToken);
     }
 
-    public Task MarkFinishedAsync(string root, CopyReading reading, CancellationToken cancellationToken = default)
+    public Task MarkFinishedAsync(string root, CopyReading reading, string? tree, CancellationToken cancellationToken = default)
     {
         Marked.Add(CopyMark.Complete);
         Readings.Add(reading);
-        return inner.MarkFinishedAsync(root, reading, cancellationToken);
+        Trees.Add(tree);
+        return inner.MarkFinishedAsync(root, reading, tree, cancellationToken);
     }
 
     public Task InitialiseRepositoryAsync(string root, string? objectFormat = null, CancellationToken cancellationToken = default)

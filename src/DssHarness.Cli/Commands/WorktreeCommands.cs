@@ -74,7 +74,7 @@ internal static class DeleteWorktreeCommand
 
     internal static Command Create()
     {
-        var command = new Command(Name, "Remove a worktree and everything under it, its copies on hosts, and the copies kept in each - the mutation workers in .mutations, and on this machine the leg copies in .legs; refuses one holding work that would be lost, a locked one, one whose evidence directories hold measurements, or one with a copy in it that a sweep or a run still holds, without --force.");
+        var command = new Command(Name, "Remove a worktree and everything under it, its copies on hosts, and the copies kept in each - the mutation workers in .mutations, and on this machine the leg copies in .legs; refuses one holding work that would be lost, a locked one, one whose evidence directories hold measurements, one with a copy in it that a sweep or a run still holds, or a live agent's, which delete-agent deletes, without --force.");
         command.Arguments.Add(NameArgument);
         command.Options.Add(ForceOption);
         command.Options.Add(DeleteEvidenceOption);
@@ -90,7 +90,7 @@ internal static class DeleteWorktreeCommand
                     context.ParseResult.GetValue(ForceOption),
                     context.ParseResult.GetValue(DeleteEvidenceOption),
                     context.ParseResult.GetValue(DiscardUncommittedOption),
-                    cancellationToken)
+                    cancellationToken: cancellationToken)
                 .ConfigureAwait(false);
 
             return result.Outcome;

@@ -477,7 +477,7 @@ public sealed class AgentRepositoriesTests
         File.WriteAllText(Path.Combine(path, "README.md"), "changed\n");
         await harness.RunGitAsync(main, ["update-ref", "refs/harness/worktree-moving/o1/a", "HEAD"], Token);
 
-        var deleted = await harness.WorktreeService.DeleteAsync(main, "o1/a", force: false, deleteEvidence: false, discardUncommitted: true, Token);
+        var deleted = await harness.WorktreeService.DeleteAsync(main, "o1/a", force: false, deleteEvidence: false, discardUncommitted: true, cancellationToken: Token);
 
         Assert.True(deleted.Succeeded, deleted.Outcome.Message);
         Assert.Equal("removed worktree 'o1/a'", deleted.Outcome.Message);

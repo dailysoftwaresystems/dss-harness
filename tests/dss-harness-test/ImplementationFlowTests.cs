@@ -848,6 +848,10 @@ public sealed class ImplementationFlowTests
         public void DeleteDirectory(string path) => inner.DeleteDirectory(path);
 
         /// <inheritdoc/>
+        public void EmptyDirectory(string path, IReadOnlyCollection<string> keeping, CancellationToken cancellationToken = default)
+            => inner.EmptyDirectory(path, keeping, cancellationToken);
+
+        /// <inheritdoc/>
         public void MoveDirectory(string source, string destination) => inner.MoveDirectory(source, destination);
 
         /// <inheritdoc/>
@@ -1361,7 +1365,7 @@ public sealed class ImplementationFlowTests
 
                     if (script.Worktrees is { } worktrees)
                     {
-                        await worktrees.DeleteAsync(place.Repository, WorktreeAddress.Nested(place.Run, deleted).Name, force: true, deleteEvidence: true, discardUncommitted: true, cancellationToken);
+                        await worktrees.DeleteAsync(place.Repository, WorktreeAddress.Nested(place.Run, deleted).Name, force: true, deleteEvidence: true, discardUncommitted: true, cancellationToken: cancellationToken);
                     }
 
                     if (store.ReadAgent(layout, deleted) is { } record)

@@ -1151,6 +1151,65 @@ public sealed class PhysicalFileSystemTests
     }
 
     /// <summary>
+    /// Emptying a directory deletes everything in it but the entries it is told to keep - a file and a directory of
+    /// that name, whatever they hold - read-only files and paths past 260 characters among what goes, and a link in it
+    /// as the link, never what it leads to; the directory itself stays. An absent directory is nothing to empty.
+    /// </summary>
+    [Fact]
+    public void EmptyDirectory_DeletesAllButWhatIsKept_LinksAsThemselves_AndPathsPastTheShortLimit()
+    {
+        using var temp = new TempDirectory();
+        using var outside = new TempDirectory();
+        var tree = temp.Combine("tree");
+        var canary = outside.WriteFile("canary.txt", "kept");
+        var kept = temp.WriteFile(Path.Combine("tree", ".git"), "gitdir: elsewhere");
+        var keptBelow = temp.WriteFile(Path.Combine("tree", "kept", "inside.txt"), "kept with its directory");
+        var readOnly = temp.WriteFile(Path.Combine("tree", "objects", "ab", "cdef"), "blob");
+        File.SetAttributes(readOnly, File.GetAttributes(readOnly) | FileAttributes.ReadOnly);
+        var deep = Path.Combine(tree, "build");
+
+        while (deep.Length <= 300)
+        {
+            deep = Path.Combine(deep, "a-directory-a-build-makes-deep-in-its-tree");
+        }
+
+        Directory.CreateDirectory(deep);
+        File.WriteAllText(Path.Combine(deep, "object.o"), "made by a build");
+        TestLinks.OrSkip(() => TestLinks.DirectoryLink(Path.Combine(tree, "out"), outside.Path));
+
+        Create().EmptyDirectory(tree, [".git", "kept"], TestContext.Current.CancellationToken);
+
+        Assert.Equal([".git", "kept"], Directory.EnumerateFileSystemEntries(tree).Select(Path.GetFileName).Order(StringComparer.Ordinal));
+        Assert.Equal("gitdir: elsewhere", File.ReadAllText(kept));
+        Assert.True(File.Exists(keptBelow));
+        Assert.True(File.Exists(canary));
+
+        Create().EmptyDirectory(temp.Combine("absent"), [], TestContext.Current.CancellationToken);
+
+        Assert.False(Directory.Exists(temp.Combine("absent")));
+    }
+
+    /// <summary>
+    /// Emptying a directory that is stopped deletes no further entry once it is: the interruption is met between one entry
+    /// and the next, and what is kept stays.
+    /// </summary>
+    [Fact]
+    public void EmptyDirectory_Stopped_DeletesNothingMore()
+    {
+        using var temp = new TempDirectory();
+        var tree = temp.Combine("tree");
+        temp.WriteFile(Path.Combine("tree", ".git"), "gitdir: elsewhere");
+        temp.WriteFile(Path.Combine("tree", "a.txt"), "a");
+        temp.WriteFile(Path.Combine("tree", "b.txt"), "b");
+        using var stopped = new CancellationTokenSource();
+        stopped.Cancel();
+
+        Assert.Throws<OperationCanceledException>(() => Create().EmptyDirectory(tree, [".git"], stopped.Token));
+
+        Assert.Equal([".git", "a.txt", "b.txt"], Directory.EnumerateFileSystemEntries(tree).Select(Path.GetFileName).Order(StringComparer.Ordinal));
+    }
+
+    /// <summary>
     /// A walk of a tree never descends through a directory link: one leads out of the tree, to files
     /// it does not contain, and one leads back into it, round and round. Both are here - a link out,
     /// and a link to the tree's own root - and the walk lists the tree's own file and ends. The links

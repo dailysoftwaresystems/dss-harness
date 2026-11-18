@@ -9,9 +9,10 @@ namespace DssHarness.Core.Git;
 /// through <c>GIT_CONFIG_PARAMETERS</c>, as git's own <c>-c</c> is and as git hands it on to every git it starts, once the
 /// inherited variables are gone; no replacement of an object by a ref under <c>refs/replace/</c>
 /// (<c>GIT_NO_REPLACE_OBJECTS</c>), so every object is read as it was written; every comparison of a work tree told a
-/// submodule's state by its commit alone, on its command line (<see cref="Arguments"/>); and, in a tree whose git
-/// directories were pinned before an agent's launch or an execution over its work (<see cref="GitDirectoryPins"/>) - a
-/// main checkout's as well as a linked worktree's - those directories, whatever the tree's own files say of them now.
+/// submodule's state by its commit alone, on its command line (<see cref="Arguments"/>); on Windows, every path past 260
+/// characters reached as any other is (<see cref="LongPaths"/>); and, in a tree whose git directories were pinned before
+/// an agent's launch or an execution over its work (<see cref="GitDirectoryPins"/>) - a main checkout's as well as a
+/// linked worktree's - those directories, whatever the tree's own files say of them now.
 /// </summary>
 /// <remarks>
 /// A submodule's repository is configuration of its own, and where it sits in a tree an isolated agent writes - a
@@ -37,6 +38,15 @@ public static class GitOwnSettings
     /// running its own git, with its own configuration - whatever the user's configuration asks.
     /// </summary>
     public const string NoRecursion = "submodule.recurse=false";
+
+    /// <summary>
+    /// The setting that has git for Windows reach a path past 260 characters as it reaches any other, as git on every
+    /// other system always does. A worktree's build directory holds paths that long, and without it git stops part way
+    /// at the first one: adding, listing the status of, or removing a worktree - a removal with its .git file and its
+    /// record already gone. Given on Windows alone (<see cref="Apply"/>), the one system whose git reads it, to every
+    /// git of the tool's, one that runs the hooks among them: it changes what git can reach, never what a command does.
+    /// </summary>
+    public const string LongPaths = "core.longpaths=true";
 
     /// <summary>
     /// How a comparison of the tool's tells a submodule's state: by the commit its HEAD names against the one its entry
@@ -88,7 +98,8 @@ public static class GitOwnSettings
     /// Sets in <paramref name="environment"/>, the inherited git variables already cleared, the tool's own settings for the
     /// command <paramref name="arguments"/> run - no file-system monitor and no object replaced; where <paramref name="hooksRun"/> is
     /// false, no recursion into a submodule, and no hook where the command is no question (<see cref="GitHooks.Off"/>), while a
-    /// command that runs the hooks, inside the isolation, runs as the user's configuration says - and the git directories pinned for
+    /// command that runs the hooks, inside the isolation, runs as the user's configuration says; on Windows, long paths
+    /// (<see cref="LongPaths"/>), whether it runs the hooks or not - and the git directories pinned for
     /// <paramref name="directory"/>, where it is the root of a tree an isolated agent works over: its own git directory,
     /// its common one and its work tree.
     /// </summary>
@@ -106,6 +117,11 @@ public static class GitOwnSettings
         IEnumerable<string> settings = hooksRun
             ? [NoMonitor]
             : [NoMonitor, NoRecursion, .. GitHooks.Off(system, arguments) is { } off ? [off] : Array.Empty<string>()];
+
+        if (system == PlatformId.Windows)
+        {
+            settings = [.. settings, LongPaths];
+        }
 
         // Each as git itself writes one there: in single quotes, which hold every other character as it is.
         environment[ParametersVariable] = string.Join(' ', settings.Select(setting => $"'{setting}'"));

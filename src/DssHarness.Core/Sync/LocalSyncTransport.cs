@@ -49,22 +49,24 @@ public sealed class LocalSyncTransport(
 
     /// <inheritdoc/>
     public Task CreateRootAsync(string root, CopyMark mark = CopyMark.Complete, CancellationToken cancellationToken = default)
-        => MarkAsync(root, mark, reading: null);
+        => MarkAsync(root, mark, reading: null, tree: null);
 
     /// <inheritdoc/>
-    public Task MarkFinishedAsync(string root, CopyReading reading, CancellationToken cancellationToken = default)
+    public Task MarkFinishedAsync(string root, CopyReading reading, string? tree, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(reading);
 
-        return MarkAsync(root, CopyMark.Complete, reading);
+        return MarkAsync(root, CopyMark.Complete, reading, tree);
     }
 
     /// <summary>
     /// Creates the copy's root where it is not there and writes its marker: <paramref name="mark"/>, holding
     /// <paramref name="reading"/> where it is given - and no reading where it is not, since a copy a sync began writing,
-    /// or marked without saying, holds no reading anybody can name.
+    /// or marked without saying, holds no reading anybody can name - and the tree it is of: the one a finished sync names
+    /// (<paramref name="tree"/>, none where the build asking sends none), and otherwise the one the marker named before,
+    /// since a copy whose sync has begun is of the tree it was last made from until that sync finishes.
     /// </summary>
-    private Task MarkAsync(string root, CopyMark mark, CopyReading? reading)
+    private Task MarkAsync(string root, CopyMark mark, CopyReading? reading, string? tree)
     {
         // None is not a mark a copy can carry: it says there is no marker at all, and encoding it
         // would write one claiming the copy was both taken over and finished — the most permissive
@@ -117,7 +119,8 @@ public sealed class LocalSyncTransport(
                     Unfinished: mark == CopyMark.Unfinished,
                     ReadBy: reading?.ReadBy,
                     Commit: reading?.Commit,
-                    UncommittedChanges: reading?.UncommittedChanges),
+                    UncommittedChanges: reading?.UncommittedChanges,
+                    Tree: reading is null ? before?.Tree : tree),
                 MarkerOptions);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
@@ -899,6 +902,7 @@ public sealed class LocalSyncTransport(
                 {
                     CreatedBy = marker.CreatedBy,
                     CreatedUtc = marker.CreatedUtc,
+                    Tree = marker.Tree,
                 },
             };
         }
@@ -1331,13 +1335,18 @@ public sealed class LocalSyncTransport(
     /// records, so its presence says the marker holds one. Each of the three spelt as a leg's <c>tree</c> spells it,
     /// and written only where set, so a copy marked without a reading carries none of them.
     /// </param>
+    /// <param name="Tree">
+    /// The tree the copy was last made from, as the machine whose sync finished it spells it: what a listing of the host's
+    /// copies says a copy is of where no record names it - a tree still on the machine asking, or one gone from it.
+    /// Written only where known, so a copy finished by a build from before it carries none.
+    /// </param>
     /// <remarks>
     /// Both strings are nullable because deserialising decides that, not this declaration: a file
     /// holding <c>{}</c> parses into a marker with neither, and that is one of the shapes that has
     /// to be told from a marker this tool wrote. Every marker it has ever written carries both.
     /// <para>
-    /// A build from before this one cannot read the marker of a copy this one finished: the reading it holds is a
-    /// member that build does not know, which it refuses as unreadable, as a build from before <c>Unfinished</c>
+    /// A build from before this one cannot read the marker of a copy this one finished: the reading and the tree it holds
+    /// are members that build does not know, which it refuses as unreadable, as a build from before <c>Unfinished</c>
     /// refuses an unfinished copy's. Only going back to such a build meets that - a host is brought to the build of
     /// the machine that asks it, and one ahead of that machine is refused - and the remedy is to update again, never
     /// to delete the marker, which would leave the copy one to take over.
@@ -1351,7 +1360,8 @@ public sealed class LocalSyncTransport(
         [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] bool Unfinished = false,
         [property: JsonPropertyName("readBy"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? ReadBy = null,
         [property: JsonPropertyName("commit"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Commit = null,
-        [property: JsonPropertyName("uncommittedChanges"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? UncommittedChanges = null);
+        [property: JsonPropertyName("uncommittedChanges"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? UncommittedChanges = null,
+        [property: JsonPropertyName("tree"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Tree = null);
 
     /// <summary>
     /// What the marker at <paramref name="root"/> says, or null where there is none.

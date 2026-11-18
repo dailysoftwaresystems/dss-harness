@@ -218,7 +218,17 @@ public sealed class HeldDirectory : IDisposable
     /// </summary>
     /// <param name="name">One name.</param>
     /// <exception cref="IOException">An entry could not be removed; what was removed before it stays removed.</exception>
-    public void DeleteDirectory(string name)
+    public void DeleteDirectory(string name) => DeleteDirectory(name, CancellationToken.None);
+
+    /// <summary>
+    /// <see cref="DeleteDirectory(string)"/>, stopped between one entry and the next where <paramref name="cancellationToken"/>
+    /// asks: what was removed before stays removed, and the rest stays.
+    /// </summary>
+    /// <param name="name">One name.</param>
+    /// <param name="cancellationToken">Stops the removal between entries.</param>
+    /// <exception cref="IOException">An entry could not be removed; what was removed before it stays removed.</exception>
+    /// <exception cref="OperationCanceledException">It was stopped; what was removed before stays removed.</exception>
+    public void DeleteDirectory(string name, CancellationToken cancellationToken)
     {
         switch (KindOf(name))
         {
@@ -244,20 +254,40 @@ public sealed class HeldDirectory : IDisposable
 
         using (below)
         {
-            below.Empty();
+            below.Empty([], cancellationToken);
         }
 
         Native.Remove(_handle, Checked(name), directory: true, Child(name));
     }
 
-    /// <summary>Removes everything in this directory, each entry as <see cref="DeleteDirectory"/> removes it, and leaves it standing.</summary>
-    public void Empty()
+    /// <summary>Removes everything in this directory, each entry as <see cref="DeleteDirectory(string)"/> removes it, and leaves it standing.</summary>
+    public void Empty() => Empty([], CancellationToken.None);
+
+    /// <summary>
+    /// Removes everything in this directory but the entries <paramref name="keeping"/> names, each as
+    /// <see cref="DeleteDirectory(string)"/> removes it, and leaves it standing with them; stopped between one entry and
+    /// the next, at any depth, where <paramref name="cancellationToken"/> asks.
+    /// </summary>
+    /// <param name="keeping">The names of the entries that stay, as they are spelt here.</param>
+    /// <param name="cancellationToken">Stops the removal between entries.</param>
+    /// <exception cref="IOException">An entry could not be removed; what was removed before it stays removed.</exception>
+    /// <exception cref="OperationCanceledException">It was stopped; what was removed before stays removed.</exception>
+    public void Empty(IReadOnlyCollection<string> keeping, CancellationToken cancellationToken)
     {
+        ArgumentNullException.ThrowIfNull(keeping);
+
         foreach (var entry in Entries())
         {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (keeping.Contains(entry.Name, StringComparer.Ordinal))
+            {
+                continue;
+            }
+
             if (entry.Kind == PathKind.Directory)
             {
-                DeleteDirectory(entry.Name);
+                DeleteDirectory(entry.Name, cancellationToken);
             }
             else
             {

@@ -2872,7 +2872,7 @@ public sealed class SyncServiceTests
 
             // As a sync finishes one: marked with the reading it holds.
             await transport.CreateRootAsync(copy, CopyMark.Unfinished, cancellationToken);
-            await transport.MarkFinishedAsync(copy, new CopyReading(RunId.New().Value, null, 0), cancellationToken);
+            await transport.MarkFinishedAsync(copy, new CopyReading(RunId.New().Value, null, 0), temp.Path, cancellationToken);
 
             Assert.Equal(CopyMark.Complete, await transport.ReadMarkAsync(copy, cancellationToken));
             Assert.DoesNotContain("unfinished", await File.ReadAllTextAsync(marker, cancellationToken), StringComparison.OrdinalIgnoreCase);
@@ -3602,14 +3602,14 @@ public sealed class SyncServiceTests
 
         try
         {
-            await transport.MarkFinishedAsync(copy, reading, cancellationToken);
+            await transport.MarkFinishedAsync(copy, reading, temp.Path, cancellationToken);
 
             var found = await transport.InspectAsync(copy, cancellationToken: cancellationToken);
 
             Assert.Equal(CopyMark.Complete, found.Mark);
             Assert.Equal(reading, found.Reading);
 
-            await transport.MarkFinishedAsync(copy, reading with { ReadBy = null, Commit = null }, cancellationToken);
+            await transport.MarkFinishedAsync(copy, reading with { ReadBy = null, Commit = null }, temp.Path, cancellationToken);
 
             Assert.Equal(new CopyReading(null, null, 2), (await transport.InspectAsync(copy, cancellationToken: cancellationToken)).Reading);
         }
@@ -3620,22 +3620,64 @@ public sealed class SyncServiceTests
     }
 
     /// <summary>
-    /// A create request reads the reading it records as it was spelt after the mark, and refuses one that arrived in
-    /// part, with a count that is no number, or beside a mark other than complete: the two ends are different builds.
+    /// The tree a finished copy was made from crosses to a host in the request that marks it, is kept in the copy's marker
+    /// as it was spelt - through a sync begun after it, which names none, as well - and comes back in the host's listing
+    /// of its copies, here as through its agent; a copy finished by a build that sends none names none.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task TheTreeACopyWasMadeFrom_IsMarked_AndListedBack(bool throughAnAgent)
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = new HarnessFactory();
+        ISyncTransport transport = throughAnAgent ? SyncKit.AgentHere(harness) : SyncKit.Transport(harness);
+        var main = temp.Combine("repo");
+        var copy = main + HostCopies.WorktreeSuffix + "feature";
+        var reading = new CopyReading(null, null, 0);
+        var tree = temp.Combine("work", ".worktrees", "feature");
+
+        async Task<string?> ListedAsync() => Assert.Single(await transport.ListCopiesAsync(main, cancellationToken)).Tree;
+
+        await transport.MarkFinishedAsync(copy, reading, tree, cancellationToken);
+
+        Assert.Equal(tree, await ListedAsync());
+
+        await transport.CreateRootAsync(copy, CopyMark.Unfinished, cancellationToken);
+
+        Assert.Equal(tree, await ListedAsync());
+
+        await transport.MarkFinishedAsync(copy, reading, tree: null, cancellationToken);
+
+        Assert.Null(await ListedAsync());
+    }
+
+    /// <summary>
+    /// A create request reads the reading it records as it was spelt after the mark, with the tree it was read from where
+    /// it names one - and none where it does not, as a build from before the tree was carried sends it - and refuses one
+    /// that arrived in part, with a count that is no number, beside a mark other than complete, or with more after the
+    /// tree: the two ends are different builds.
     /// </summary>
     [Fact]
     public void AReadingACreateRequestRecords_IsReadAsSpelt_AndOneInAnotherShapeIsRefused()
     {
+        var reading = new CopyReading("20261012-150233-1a2b3c4d", null, 3);
+        string[] withTree = ["/copy", "Complete", .. SyncServe.Recording(reading, "/work/repo/.worktrees/feature")];
+        string[] withoutTree = ["/copy", "Complete", .. SyncServe.Recording(reading, tree: null)];
+
         Assert.Null(SyncServe.ReadingIn(["/copy", "Complete"]));
-        Assert.Equal(
-            new CopyReading("20261012-150233-1a2b3c4d", null, 3),
-            SyncServe.ReadingIn(["/copy", "Complete", .. SyncServe.Recording(new CopyReading("20261012-150233-1a2b3c4d", null, 3))]));
+        Assert.Equal(reading, SyncServe.ReadingIn(withTree));
+        Assert.Equal("/work/repo/.worktrees/feature", SyncServe.TreeIn(withTree));
+        Assert.Equal(reading, SyncServe.ReadingIn(withoutTree));
+        Assert.Null(SyncServe.TreeIn(withoutTree));
 
         foreach (string[] arguments in new[]
         {
             new[] { "/copy", "Complete", "run", "commit" },
             ["/copy", "Complete", "run", "commit", "three"],
             ["/copy", "Unfinished", "run", "commit", "3"],
+            ["/copy", "Complete", "run", "commit", "3", "/tree", "more"],
         })
         {
             var refused = Assert.Throws<HarnessException>(() => SyncServe.ReadingIn(arguments));

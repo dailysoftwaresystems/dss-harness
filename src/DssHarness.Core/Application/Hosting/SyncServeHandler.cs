@@ -80,7 +80,7 @@ public sealed class SyncServeHandler(ISyncTransport transport, IAgentIsolation i
 
             case SyncServe.Create:
                 await (SyncServe.ReadingIn(arguments) is { } reading
-                        ? _transport.MarkFinishedAsync(root, reading, cancellationToken)
+                        ? _transport.MarkFinishedAsync(root, reading, SyncServe.TreeIn(arguments), cancellationToken)
                         : _transport.CreateRootAsync(root, SyncServe.MarkIn(arguments), cancellationToken))
                     .ConfigureAwait(false);
 

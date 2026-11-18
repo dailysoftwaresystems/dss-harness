@@ -783,6 +783,175 @@ public sealed class CleanServiceTests
     }
 
     /// <summary>
+    /// --gone-copies is driven by the record, never by the legs: every host the record names a gone tree's copy on is
+    /// asked - one no declared leg runs on included - each once, on a line of its own named as the record spells the host,
+    /// only to measure on a dry run; no leg has a line of its own, and each line, and the line the clean ends on, names the
+    /// record.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task GoneCopies_AreAskedOfEveryHostTheRecordNames_EachOnALineOfItsOwn(bool dryRun)
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var config = TwoLegs(harness);
+        const string OnPi = "ssh pi: removed its copy at '/home/pi/repo.worktree-old', of the worktree that was at '/gone/old'";
+        const string OnRetired = "ssh retired: removed its copy at '/srv/repo.worktree-older', of the worktree that was at '/gone/older'";
+        var remover = new GoneCopiesAnswered(["ssh pi", "ssh retired"], host => new HostCopyRemoval([host == "ssh pi" ? OnPi : OnRetired], [], false, []));
+        var record = await RecordAsync(temp, config);
+
+        var (outcome, legs) = await CleanEveryLegAsync(temp, harness, config, OnTheHost(), dryRun: dryRun, goneCopies: true, hostCopies: remover);
+        var done = dryRun ? "measured" : "dealt with";
+
+        Assert.Equal(HarnessExit.Success, outcome.ExitCode);
+        Assert.Equal($"{done} the copies worktrees gone from this machine left on 2 host(s), as '{record}' records them", outcome.Message);
+        Assert.Equal([("ssh pi", dryRun), ("ssh retired", dryRun)], remover.Asked);
+        Assert.Equal(
+            [
+                ("ssh pi", "passed", $"{done} 1 copy(ies) worktrees gone from this machine left there, as '{record}' records them: {OnPi}"),
+                ("ssh retired", "passed", $"{done} 1 copy(ies) worktrees gone from this machine left there, as '{record}' records them: {OnRetired}"),
+            ],
+            legs.Select(leg => (leg.GetProperty("leg").GetString(), leg.GetProperty("verdict").GetString(), leg.GetProperty("detail").GetString())));
+    }
+
+    /// <summary>
+    /// --legs narrows --gone-copies to the hosts the selected legs can run on, a host only another leg runs on left
+    /// unasked; where the record names no gone tree's copy on any host - or none on a selected leg's - the clean says so,
+    /// naming the record, and passes; and a leg nobody declared is refused before the record is read, no host asked.
+    /// </summary>
+    [Fact]
+    public async Task GoneCopies_AreNarrowedByTheLegsNamed_AndNoneRecordedIsSaid()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var config = TwoLegs(harness);
+        var record = await RecordAsync(temp, config);
+        var narrowed = new GoneCopiesAnswered(["ssh pi", "ssh retired"], _ => HostCopyRemoval.None);
+
+        var (_, onlyPi) = await CleanEveryLegAsync(temp, harness, config, OnTheHost(), legs: ["arm"], goneCopies: true, hostCopies: narrowed);
+
+        Assert.Equal([("ssh pi", false)], narrowed.Asked);
+        Assert.Equal(["ssh pi"], onlyPi.Select(leg => leg.GetProperty("leg").GetString()));
+
+        var elsewhere = new GoneCopiesAnswered(["ssh retired"], _ => throw new InvalidOperationException("no host is asked"));
+        var (none, noLine) = await CleanEveryLegAsync(temp, harness, config, OnTheHost(), legs: ["arm"], goneCopies: true, hostCopies: elsewhere);
+
+        Assert.Equal(
+            (HarnessExit.Success, $"'{record}' records no copy of a worktree gone from this machine on a host the selected legs run on"),
+            (none.ExitCode, none.Message));
+        Assert.Empty(noLine);
+
+        var (nothing, _) = await CleanEveryLegAsync(temp, harness, config, OnTheHost(), goneCopies: true, hostCopies: new GoneCopiesAnswered([], _ => throw new InvalidOperationException("no host is asked")));
+
+        Assert.Equal((HarnessExit.Success, $"'{record}' records no copy of a worktree gone from this machine"), (nothing.ExitCode, nothing.Message));
+
+        var unknown = await Service(temp, harness, config, OnTheHost(), hostCopies: new GoneCopiesAnswered([], _ => throw new InvalidOperationException("no host is asked"), unreadable: new HarnessException(HarnessExit.Refused, "read")))
+            .RunAsync(new CleanRequest(temp.Path, ["nobody"], Json: true) { GoneCopies = true }, TestContext.Current.CancellationToken);
+
+        Assert.Equal(HarnessExit.UsageError, unknown.ExitCode);
+        Assert.Equal(
+            $"--legs names 'nobody', which is neither a leg nor a leg set; declared legs: native, arm; no host was asked, and '{record}' is as it was",
+            unknown.Message);
+    }
+
+    /// <summary>
+    /// A gone tree's copy a run or a sweep holds is kept, and leaves its host's line refused-locked, exit 13; a host that
+    /// cannot be reached is unavailable, its copies kept recorded for a later clean, and the next host is asked all the
+    /// same; a host whose copies cannot be dealt with says so on its own line, naming the record; a record that cannot be
+    /// read asks no host; and asked with --former-workers as well, the clean is a usage error, said in the ledger's own
+    /// document.
+    /// </summary>
+    [Fact]
+    public async Task GoneCopies_KeptUnreachableOrUnread_SaySo_AndWithFormerWorkers_TheCleanIsAUsageError()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var config = TwoLegs(harness);
+        var record = await RecordAsync(temp, config);
+        const string Held = "ssh pi: its copy at '/home/pi/repo.worktree-old' stays, and is still recorded: a run still running holds it";
+        const string Unreached = "ssh pi: its copy at '/home/pi/repo.worktree-old' stays, and is still recorded: the host did not answer";
+        const string Removed = "ssh retired: removed its copy at '/srv/repo.worktree-older', of the worktree that was at '/gone/older'";
+
+        var (held, heldLines) = await CleanEveryLegAsync(
+            temp, harness, config, OnTheHost(), goneCopies: true, hostCopies: new GoneCopiesAnswered(["ssh pi"], _ => new HostCopyRemoval([Held], [HarnessExit.Refused], false, [])));
+
+        Assert.Equal(HarnessExit.Refused, held.ExitCode);
+        Assert.Equal(("refused-locked", $"dealt with 1 copy(ies) worktrees gone from this machine left there, as '{record}' records them: {Held}"), Line(Assert.Single(heldLines)));
+
+        var both = new GoneCopiesAnswered(
+            ["ssh pi", "ssh retired"],
+            host => host == "ssh pi" ? new HostCopyRemoval([Unreached], [HarnessExit.HostUnavailable], false, []) : new HostCopyRemoval([Removed], [], false, []));
+        var (unreached, unreachedLines) = await CleanEveryLegAsync(temp, harness, config, OnTheHost(), goneCopies: true, hostCopies: both);
+
+        Assert.Equal(HarnessExit.Incomplete, unreached.ExitCode);
+        Assert.Equal([("ssh pi", false), ("ssh retired", false)], both.Asked);
+        Assert.Equal(["skipped-unavailable", "passed"], unreachedLines.Select(line => line.GetProperty("verdict").GetString()));
+
+        var (_, refusedLines) = await CleanEveryLegAsync(
+            temp, harness, config, OnTheHost(), goneCopies: true, hostCopies: new GoneCopiesAnswered(["ssh pi"], _ => throw new HarnessException(HarnessExit.CommandFailed, "The host's answer could not be read.")));
+
+        Assert.Equal(
+            ("failed", $"The host's answer could not be read, so no copy on it was removed, and '{record}' still records them"),
+            Line(Assert.Single(refusedLines)));
+
+        var unread = await Service(temp, harness, config, OnTheHost(), hostCopies: new GoneCopiesAnswered([], _ => throw new InvalidOperationException("no host is asked"), unreadable: new HarnessException(HarnessExit.Refused, $"'{record}' cannot be read.")))
+            .RunAsync(new CleanRequest(temp.Path, null, Json: true) { GoneCopies = true }, TestContext.Current.CancellationToken);
+
+        Assert.Equal((HarnessExit.Refused, $"'{record}' cannot be read; no host was asked, and '{record}' is as it was"), (unread.ExitCode, unread.Message));
+
+        var formerToo = await Service(temp, harness, config, OnTheHost(), hostCopies: new GoneCopiesAnswered([], _ => HostCopyRemoval.None))
+            .RunAsync(new CleanRequest(temp.Path, null, Json: true) { FormerWorkers = true, GoneCopies = true }, TestContext.Current.CancellationToken);
+
+        Assert.Equal(HarnessExit.UsageError, formerToo.ExitCode);
+        Assert.Equal("--former-workers and --gone-copies each remove one thing and nothing else: run the clean once for each.", formerToo.Message);
+        using var document = JsonDocument.Parse(Assert.Single(formerToo.Data));
+        Assert.Empty(document.RootElement.GetProperty("legs").EnumerateArray());
+
+        static (string?, string?) Line(JsonElement line) => (line.GetProperty("verdict").GetString(), line.GetProperty("detail").GetString());
+    }
+
+    /// <summary>A leg on this machine and one on the host, the configuration's own.</summary>
+    private static HarnessConfig TwoLegs(HarnessFactory harness) => new()
+    {
+        BuildConfigs = { ["debug"] = new BuildConfiguration() },
+        Hosts = OneHostLeg().Hosts,
+        Legs =
+        {
+            ["native"] = new LegConfig { Os = harness.Platform.PlatformKey, Processor = harness.Platform.Processor, Config = "debug" },
+            ["arm"] = new LegConfig { Os = "linux", Processor = "arm64", Config = "debug", Ssh = HostName },
+        },
+    };
+
+    /// <summary>Where the record of host copies of the repository in <paramref name="temp"/> is.</summary>
+    private static async Task<string> RecordAsync(TempDirectory temp, HarnessConfig config)
+        => HostCopyRecord.PathOf((await HostDoubles.Loader(config, temp.Path).LoadAsync(temp.Path, TestContext.Current.CancellationToken)).Layout);
+
+    /// <summary>
+    /// A removal of gone trees' copies that names the hosts it is told to, answers each as it is told, and records each host
+    /// it was asked about; one given an unreadable record refuses to name any.
+    /// </summary>
+    private sealed class GoneCopiesAnswered(IReadOnlyList<string> hosts, Func<string, HostCopyRemoval> answer, HarnessException? unreadable = null) : IHostCopyRemover
+    {
+        /// <summary>Each host asked, and whether only to measure.</summary>
+        public List<(string Host, bool MeasureOnly)> Asked { get; } = [];
+
+        public Task<HostCopyRemoval> RemoveAsync(HarnessContext context, string worktree, string tree, HarnessConfig? treeConfig, CancellationToken cancellationToken = default)
+            => throw new InvalidOperationException("a clean deletes no worktree.");
+
+        public IReadOnlyList<LockRequest> RemovalLocks(HarnessContext context, string worktree, string tree, RunId runId)
+            => throw new InvalidOperationException("a clean deletes no worktree.");
+
+        public IReadOnlyList<string> HostsHoldingGone(HarnessContext context) => unreadable is null ? hosts : throw unreadable;
+
+        public Task<HostCopyRemoval> RemoveGoneAsync(HarnessContext context, string host, bool measureOnly, CancellationToken cancellationToken = default)
+        {
+            Asked.Add((host, measureOnly));
+            return Task.FromResult(answer(host));
+        }
+    }
+
+    /// <summary>
     /// --former-workers looks beside a machine's trees once, whichever of the selected legs run there: the first leg on
     /// each machine removes them, every other leg there names it, and a host is asked once.
     /// </summary>
@@ -1844,10 +2013,12 @@ public sealed class CleanServiceTests
         bool formerWorkers = false,
         string? mainCheckout = null,
         CancellationToken? cancellationToken = null,
-        HostId? here = null)
+        HostId? here = null,
+        bool goneCopies = false,
+        IHostCopyRemover? hostCopies = null)
     {
         var (outcome, cleaned) = await CleanEveryLegAsync(
-            temp, harness, config, inspector, runLock, hosts, dryRun, copyThere, transports, legs, fileSystem, trees, formerWorkers, mainCheckout, cancellationToken, here);
+            temp, harness, config, inspector, runLock, hosts, dryRun, copyThere, transports, legs, fileSystem, trees, formerWorkers, mainCheckout, cancellationToken, here, goneCopies, hostCopies);
 
         return (outcome, Assert.Single(cleaned));
     }
@@ -1869,12 +2040,14 @@ public sealed class CleanServiceTests
         bool formerWorkers = false,
         string? mainCheckout = null,
         CancellationToken? cancellationToken = null,
-        HostId? here = null)
+        HostId? here = null,
+        bool goneCopies = false,
+        IHostCopyRemover? hostCopies = null)
     {
-        var service = Service(temp, harness, config, inspector, runLock, hosts, copyThere, transports, fileSystem, trees, mainCheckout);
+        var service = Service(temp, harness, config, inspector, runLock, hosts, copyThere, transports, fileSystem, trees, mainCheckout, hostCopies);
 
         var outcome = await service.RunAsync(
-            new CleanRequest(temp.Path, legs, dryRun, Json: true, here) { FormerWorkers = formerWorkers },
+            new CleanRequest(temp.Path, legs, dryRun, Json: true, here) { FormerWorkers = formerWorkers, GoneCopies = goneCopies },
             cancellationToken ?? TestContext.Current.CancellationToken);
 
         using var document = JsonDocument.Parse(Assert.Single(outcome.Data));
@@ -1894,7 +2067,8 @@ public sealed class CleanServiceTests
         ISyncTransportFactory? transports = null,
         IFileSystem? fileSystem = null,
         IRepositoryTrees? trees = null,
-        string? mainCheckout = null)
+        string? mainCheckout = null,
+        IHostCopyRemover? hostCopies = null)
     {
         var loader = HostDoubles.Loader(config, temp.Path, mainCheckout);
 
@@ -1926,6 +2100,7 @@ public sealed class CleanServiceTests
             fileSystem ?? harness.FileSystem,
             harness.Platform,
             harness.Output,
-            trees ?? new KnownTrees());
+            trees ?? new KnownTrees(),
+            hostCopies ?? new NoHostCopies());
     }
 }

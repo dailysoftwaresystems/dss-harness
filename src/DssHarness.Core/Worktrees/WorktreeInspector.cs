@@ -225,6 +225,23 @@ internal sealed class WorktreeInspector(IGitClient gitClient, IFileSystem fileSy
     }
 
     /// <summary>
+    /// What has come since its checks to stop deleting the worktree at <paramref name="path"/> - each path git's status
+    /// lists, and its lock - asked once more just before its files are deleted: the look git's own removal took before it
+    /// deleted anything, which a removal that deletes the files itself, before git clears its record, takes here instead.
+    /// </summary>
+    /// <param name="path">The worktree, one of git's linked worktrees of this repository.</param>
+    /// <param name="administrativeDirectory">Its git directory, which holds its lock.</param>
+    /// <param name="cancellationToken">Stops the question.</param>
+    /// <returns>Its changes and its lock, spelt as <see cref="FindAsync"/> spells them; nothing else is asked again.</returns>
+    /// <exception cref="HarnessException">git could not answer (<see cref="HarnessExit.CommandFailed"/>).</exception>
+    public async Task<WorktreeFindings> LookAgainAsync(string path, string administrativeDirectory, CancellationToken cancellationToken)
+    {
+        var status = await _gitClient.GetStatusAsync(path, cancellationToken).ConfigureAwait(false);
+
+        return new WorktreeFindings([.. status.Select(entry => entry.Path.Quoted)], 0, null, [], ReadLockReason(administrativeDirectory), HoldsSubmodules: false);
+    }
+
+    /// <summary>
     /// git's record of a worktree at <paramref name="path"/>, or <see langword="null"/> when git records none there:
     /// found in git's own list, which names each worktree by the path it resolved, so the path is resolved the same
     /// way first.

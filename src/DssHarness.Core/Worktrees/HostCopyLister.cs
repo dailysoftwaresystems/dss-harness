@@ -12,7 +12,16 @@ namespace DssHarness.Core.Worktrees;
 /// <param name="Name">The name its copies are kept under.</param>
 /// <param name="Tree">The tree, as a full path.</param>
 /// <param name="Copies">Its copies, in the order they were recorded.</param>
-public sealed record RecordedTree(string Name, string Tree, IReadOnlyList<HostCopyEntry> Copies);
+public sealed record RecordedTree(string Name, string Tree, IReadOnlyList<HostCopyEntry> Copies)
+{
+    /// <summary>
+    /// For a tree that is gone, where a worktree here now bears the name its copies are kept under: that worktree's
+    /// directory. Deleting it would remove these copies too, as the copies of a gone worktree of its name; removing them
+    /// alone is <c>clean --gone-copies</c>'s, which tells them by their tree. <see langword="null"/> where no worktree here
+    /// bears it.
+    /// </summary>
+    public string? NameNowAt { get; init; }
+}
 
 /// <summary>Where a copy a host keeps stands with this machine's record.</summary>
 public enum CopyStanding
@@ -23,7 +32,10 @@ public enum CopyStanding
     /// <summary>Recorded as the copy of a tree still here, outside the worktrees root.</summary>
     Elsewhere,
 
-    /// <summary>Recorded as the copy of a tree that is gone: deleting the name it is kept under deals with it.</summary>
+    /// <summary>
+    /// Recorded as the copy of a tree that is gone: <c>clean --gone-copies</c> deals with it, told by that tree, never by
+    /// the name it is kept under, which a worktree here may bear now.
+    /// </summary>
     Gone,
 
     /// <summary>Not recorded here: made from another checkout or another machine, or forgotten here.</summary>
@@ -33,8 +45,26 @@ public enum CopyStanding
 /// <summary>One copy a host keeps, and where it stands with this machine's record.</summary>
 /// <param name="Found">What the host said of it.</param>
 /// <param name="Standing">Where it stands with the record.</param>
-/// <param name="Tree">The tree the record says it is of, where the record holds it.</param>
-public sealed record HostCopySeen(HostCopyFound Found, CopyStanding Standing, string? Tree);
+/// <param name="Tree">
+/// The tree the record says it is of, where the record holds it; where it does not, the tree its marker says it was
+/// last made from, where the marker names one.
+/// </param>
+public sealed record HostCopySeen(HostCopyFound Found, CopyStanding Standing, string? Tree)
+{
+    /// <summary>
+    /// For a copy the record does not hold whose marker names its tree: whether that tree is a directory on this machine -
+    /// a tree here, its copy forgotten here - rather than one gone from this machine, or another machine's.
+    /// </summary>
+    public bool TreeHere { get; init; }
+}
+
+/// <summary>A copy this machine records a host keeping that the host does not keep, and where its tree stands.</summary>
+/// <param name="Entry">The copy, as the record holds it.</param>
+/// <param name="Standing">
+/// Where the tree it is recorded of stands - a listed worktree, a tree still here outside the worktrees root, or one that
+/// is gone - which decides what forgets the entry.
+/// </param>
+public sealed record HostCopyMissing(HostCopyEntry Entry, CopyStanding Standing);
 
 /// <summary>What one declared host was asked about the worktree copies it keeps, and what it answered.</summary>
 /// <param name="Host">The host.</param>
@@ -44,8 +74,11 @@ public sealed record HostCopiesAnswer(HostId Host, string RepositoryPath)
     /// <summary>Every copy it keeps there, in the order of their names.</summary>
     public IReadOnlyList<HostCopySeen> Copies { get; init; } = [];
 
-    /// <summary>The copies recorded on it that it does not keep: deleting the name each is kept under forgets it.</summary>
-    public IReadOnlyList<HostCopyEntry> Missing { get; init; } = [];
+    /// <summary>
+    /// The copies recorded on it that it does not keep, each with where its tree stands: a gone tree's is forgotten by
+    /// <c>clean --gone-copies</c>, and the next sync of a tree still here makes its copy again.
+    /// </summary>
+    public IReadOnlyList<HostCopyMissing> Missing { get; init; } = [];
 
     /// <summary>Why it could not be asked, where it could not: what it keeps is then unknown.</summary>
     public string? Unasked { get; init; }
@@ -70,7 +103,10 @@ public sealed record HostCopyListing
     /// <summary>Trees still here, outside the worktrees root, with their copies.</summary>
     public IReadOnlyList<RecordedTree> Elsewhere { get; init; } = [];
 
-    /// <summary>Trees that are gone, with the copies they left: deleting the name each is kept under deals with them.</summary>
+    /// <summary>
+    /// Trees that are gone, with the copies they left: <c>clean --gone-copies</c> removes them, told by their tree, whatever
+    /// worktree here bears the name they are kept under now.
+    /// </summary>
     public IReadOnlyList<RecordedTree> Gone { get; init; } = [];
 
     /// <summary>What each declared host answered, or <see langword="null"/> where the hosts were not asked.</summary>
@@ -116,11 +152,12 @@ public interface IHostCopyLister : DssHarness.Core.Application.IUseCase
 
 /// <inheritdoc cref="IHostCopyLister"/>
 /// <remarks>
-/// The record is what deleting a worktree acts on, so a copy it holds is one <c>delete-worktree</c> deals with, and
-/// the name it is kept under is the name to give it. A copy a host keeps that the record does not hold was made from
-/// another checkout or another machine, or forgotten here, and deleting a worktree never reaches it: asking the hosts
-/// is how such a copy is found, and how a copy the record holds is found gone. Nothing here changes a host or the
-/// record, so no lock is taken.
+/// The record is what deleting a worktree acts on, so a copy it holds of a worktree here is one <c>delete-worktree</c>
+/// deals with, under the name it is kept under; one of a tree that is gone is <c>clean --gone-copies</c>'s, told by that
+/// tree, since the name may be a worktree's here now, which deleting would take with it. A copy a host keeps that the
+/// record does not hold was made from another checkout or another machine, or forgotten here, and nothing here reaches
+/// it: asking the hosts is how such a copy is found, with the tree its marker says it was made from, and how a copy the
+/// record holds is found gone. Nothing here changes a host or the record, so no lock is taken.
 /// </remarks>
 /// <param name="contextLoader">Finds the repository and its configuration.</param>
 /// <param name="inspector">Reaches a host, and makes sure the harness there can be asked.</param>
@@ -187,7 +224,14 @@ public sealed class HostCopyLister(
         {
             OfListed = ofListed,
             Elsewhere = [.. elsewhere.OrderBy(tree => tree.Name, StringComparer.Ordinal)],
-            Gone = [.. gone.OrderBy(tree => tree.Name, StringComparer.Ordinal)],
+
+            // A gone tree's name a worktree here bears now is said with it: deleting that worktree would take these too.
+            Gone =
+            [
+                .. gone
+                    .Select(tree => tree with { NameNowAt = NamedHere(worktrees, elsewhere, tree.Name) })
+                    .OrderBy(tree => tree.Name, StringComparer.Ordinal),
+            ],
         };
 
         if (!askHosts)
@@ -246,16 +290,39 @@ public sealed class HostCopyLister(
         return asked with
         {
             Copies = [.. found.Select(copy => Seen(copy, onHost.FirstOrDefault(entry => SamePath(entry, copy)), worktrees))],
-            Missing = [.. onHost.Where(entry => !found.Any(copy => SamePath(entry, copy)))],
+            Missing =
+            [
+                .. onHost
+                    .Where(entry => !found.Any(copy => SamePath(entry, copy)))
+                    .Select(entry => new HostCopyMissing(entry, StandingOf(entry.Tree, worktrees))),
+            ],
         };
     }
 
-    /// <summary>Where <paramref name="copy"/> stands with the record, which holds it as <paramref name="entry"/> or not at all.</summary>
+    /// <summary>
+    /// Where <paramref name="copy"/> stands with the record, which holds it as <paramref name="entry"/> or not at all: one
+    /// it does not hold is said with the tree its marker names, and whether that tree is here.
+    /// </summary>
     private HostCopySeen Seen(HostCopyFound copy, HostCopyEntry? entry, IReadOnlyList<WorktreeListing> worktrees)
-        => entry is null ? new HostCopySeen(copy, CopyStanding.Unrecorded, null)
-            : ListedAt(worktrees, entry.Tree) is not null ? new HostCopySeen(copy, CopyStanding.Listed, entry.Tree)
-            : _record.Exists(entry.Tree) ? new HostCopySeen(copy, CopyStanding.Elsewhere, entry.Tree)
-            : new HostCopySeen(copy, CopyStanding.Gone, entry.Tree);
+        => entry is null
+            ? new HostCopySeen(copy, CopyStanding.Unrecorded, copy.Tree) { TreeHere = copy.Tree is { Length: > 0 } made && _record.Exists(made) }
+            : new HostCopySeen(copy, StandingOf(entry.Tree, worktrees), entry.Tree);
+
+    /// <summary>Where a tree the record names stands: a listed worktree, a tree still here, or one that is gone.</summary>
+    private CopyStanding StandingOf(string tree, IReadOnlyList<WorktreeListing> worktrees)
+        => ListedAt(worktrees, tree) is not null ? CopyStanding.Listed
+            : _record.Exists(tree) ? CopyStanding.Elsewhere
+            : CopyStanding.Gone;
+
+    /// <summary>
+    /// The directory of the worktree here that bears <paramref name="name"/>, the name copies are kept under - a listed
+    /// worktree, or a tree still here outside the worktrees root whose copies are recorded under it - or
+    /// <see langword="null"/> where none does.
+    /// </summary>
+    private static string? NamedHere(IReadOnlyList<WorktreeListing> worktrees, IReadOnlyList<RecordedTree> elsewhere, string name)
+        => worktrees.FirstOrDefault(worktree => worktree.Path.Length > 0
+                && string.Equals(worktree.Name, WorktreeAddress.OfCopyName(name), StringComparison.Ordinal))?.Path
+            ?? elsewhere.FirstOrDefault(tree => string.Equals(tree.Name, name, StringComparison.Ordinal))?.Tree;
 
     /// <summary>The listed worktree at <paramref name="tree"/>, or <see langword="null"/> where none is.</summary>
     private WorktreeListing? ListedAt(IReadOnlyList<WorktreeListing> worktrees, string tree)
