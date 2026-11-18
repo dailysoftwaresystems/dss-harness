@@ -196,7 +196,7 @@ public static class WorkflowStepTypes
             ["read main", "write the agent's tree where its access is write"],
             "maxReasoningAgents"),
         new("build", [.. LegKeys, KeepGoingKey], [], "red", "BuildStepRunner: IBuildLegs over LegRunService, IAgentIsolation.ForExecutionAsync", ["run(tree)"], "maxParallelProcesses", LegsOutput(arms: false)),
-        new("test", [.. LegKeys, .. TestKeys, KeepGoingKey], ["filter", "exclude", "labels"], "red", "TestStepRunner: ITestLegs over LegRunService, IAgentIsolation.ForExecutionAsync", ["run(tree)"], "maxParallelProcesses", LegsOutput(arms: false)),
+        new("test", [.. LegKeys, .. TestKeys, KeepGoingKey], ["exclude", "labels", "affected", "noTests"], "red", "TestStepRunner: ITestLegs over LegRunService, IAgentIsolation.ForExecutionAsync", ["run(tree)"], "maxParallelProcesses", LegsOutput(arms: false)),
         new("run", [.. LegKeys, new("runner", "the predefined runner the step runs") { Required = true }, RunInputs, KeepGoingKey], ["inputs"], "red", "RunStepRunner: IRunnerLegs over LegRunService, HarnessConfig.WritingRunners, IAgentIsolation.ForExecutionAsync", ["run(tree)", "write(tree) where its runner says writesTree"], "maxParallelProcesses", LegsOutput(arms: false)),
         new(
             "check-mutations",
@@ -389,7 +389,7 @@ public static class WorkflowStepTypes
     /// is a single one, and a list of names where it is a list.
     /// </summary>
     public static IReadOnlyList<string> ListOrExpressionKeys { get; } =
-        ["writes", "within", "paths", "except", "stale", "merge", "rows", "allow.new", "allow.merge"];
+        ["writes", "filter", "within", "paths", "except", "stale", "merge", "rows", "allow.new", "allow.merge"];
 
     /// <summary>The <c>failOn</c> a <c>graphify-codebase</c> step fails under where its graph has files it could not read.</summary>
     public const string GraphIncomplete = "incomplete";
@@ -479,8 +479,10 @@ public static class WorkflowStepTypes
     /// <summary>The keys only a <c>test</c> takes, beyond the leg keys.</summary>
     private static IReadOnlyList<KeyDescription> TestKeys =>
     [
-        new("filter", "the tests it runs, in the leg's runner's own filter"),
+        new("filter", "the test units it runs, each a value its legs' runner's filter option takes - a test class, a test name, a ctest name pattern - written out, or an expression that yields them, read where the step starts: the tests any of them names run, the units joined by the test invocation's filterJoin where it declares one, each after a filterArg of its own where it does not; a filter that reads no unit runs no test, and the step ends skipped, saying so; absent, every test of its legs runs"),
         new("filterWhen", "an expression that says whether the filter is given: where it reads false, every test of the step's legs runs; absent, the filter is given"),
+        new("affected", "the key of the run's record of affected tests (affected-tests.json) the step keeps its filter's units under, a template: written whole before its legs run, the key's entry replaced - none where its filterWhen read false - and removed where the step is skipped by its when or runs for a work item a plan update takes back; run.affectedTests reads every entry's units, each once; given only beside filter"),
+        new("noTests", "why the step runs no test where its filter reads no unit, a template: its record says it as the step ends skipped; given only beside filter"),
         new("exclude", "tests it leaves out, by name"),
         new("labels", "labels it selects its tests by"),
         new("skipBuild", "skip the build and test what is there"),

@@ -1119,6 +1119,7 @@ public sealed class ConfigStoreTests
     [InlineData("""{ "runner": "ctest", "successPattern": "ok", "labelArg": "-R" }""", "test on windows, linux, macos: labelArg '-R' chooses tests by name to ctest, so --label would read a label as a name; declare '-L'")]
     [InlineData("""{ "runner": "ctest", "successPattern": "ok", "excludeArg": "-L" }""", "test on windows, linux, macos: excludeArg '-L' chooses tests to ctest, so --exclude would run only the tests it names; declare an option that leaves them out, such as '-LE'")]
     [InlineData("""{ "runner": "ctest", "successPattern": "ok", "excludeArg": "-LE", "excludeJoin": ";" }""", "test on windows, linux, macos: excludeJoin ';' joins nothing to ctest, which reads what it joins as one pattern holding ';', so joined exclusions would leave out no test; declare \"excludeJoin\": \"|\"")]
+    [InlineData("""{ "runner": "ctest", "successPattern": "ok", "filterArg": "-R", "filterJoin": ";" }""", "test on windows, linux, macos: filterJoin ';' joins nothing to ctest, which reads what it joins as one pattern holding ';', so joined filter units would choose no test; declare \"filterJoin\": \"|\"")]
     public void Load_RejectsATestInvocationThatCannotWork(string invocation, string expected)
     {
         var exception = LoadInvalid(

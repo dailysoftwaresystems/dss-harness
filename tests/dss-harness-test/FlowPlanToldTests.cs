@@ -357,7 +357,8 @@ public sealed class FlowPlanToldTests
             ["reuses"] = new JsonArray(new JsonObject { ["path"] = "file.txt", ["what"] = "the content" }),
             ["creates"] = new JsonArray(),
             ["replaces"] = new JsonArray(),
-            ["testFilter"] = "",
+            ["tests"] = new JsonArray("OneTests"),
+            ["noTests"] = "",
             ["classes"] = new JsonArray(),
             ["noClass"] = $"the {name} item decides nothing: it adds a file",
         };

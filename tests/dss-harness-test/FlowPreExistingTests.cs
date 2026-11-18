@@ -124,6 +124,9 @@ public sealed class FlowPreExistingTests
 
         public void Updates(FlowUpdatesFile updates)
             => inner?.Updates(updates);
+
+        public void AffectedTests(IReadOnlyList<FlowAffectedTests> entries)
+            => inner?.AffectedTests(entries);
     }
 
     /// <summary>Records that keep each detail the run's changes say, with the instance it is said of.</summary>
@@ -147,6 +150,10 @@ public sealed class FlowPreExistingTests
         }
 
         public void Updates(FlowUpdatesFile updates)
+        {
+        }
+
+        public void AffectedTests(IReadOnlyList<FlowAffectedTests> entries)
         {
         }
     }

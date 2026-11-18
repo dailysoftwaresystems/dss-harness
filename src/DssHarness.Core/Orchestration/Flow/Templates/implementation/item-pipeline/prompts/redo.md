@@ -22,9 +22,9 @@ An empty line means the change names nothing there.
 - The paths near your work that you must not touch: {input.item.forbiddenPaths}
 - What must hold when your work is finished, the item's definition of done as it now is, checked statement by
   statement before you report: {input.item.done}
-- The filter that names the tests your change affects: `{input.item.testFilter}`; the engine runs only those for this item
-  where the run's input affectedTests is on (`{input.affectedTests}`), and every test where it is off or the filter is
-  empty
+- The tests your change affects, one unit to an entry: {input.item.tests}; the engine tests this item on them alone,
+  with the units your answer's tests add
+- Where the item names no test, why its change affects none: {input.item.noTests}; the engine then tests it on none
 - How the engine runs the tests, leg by leg: {input.orient.tests}
 - The existing code this item reuses or extends, and for what: {input.item.reuses}
 - What this item creates from nothing, with why nothing that exists serves: {input.item.creates}

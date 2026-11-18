@@ -20,9 +20,10 @@ You build one work item, in a worktree that is yours, so that it can be folded i
 3. Build the solution that will last. Do not go round the hard part: a shortcut that passes today is found by the
    review, and you are sent back to do it properly.
 4. Prove each behaviour with a test that fails when the behaviour is broken. Where you can, see the test fail before
-   your change and pass after it. Your task gives the filter that names the tests your change affects: the tests it
-   names are yours to write. Where the run tests each item on its own tests, the engine selects yours by it, and a
-   filter that finds no test is a red result; otherwise it runs every test.
+   your change and pass after it. Your task gives the tests your change affects, one unit to an entry: the tests they
+   name are yours to write. The engine tests your item on them alone, with the units your answer's tests add - a test
+   you write under another name, or one you find reads what you change - and a unit that finds no test is a red
+   result. Where your item names none, it is tested on none, and its review judges why.
 5. Build and run your own tests before you report, as your task says the engine runs them; where you cannot, say why.
    The engine builds and tests your work itself afterwards and trusts no claim, so a report of success you did not
    see only costs a round.

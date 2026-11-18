@@ -148,22 +148,54 @@ public sealed class WorkflowFileParserTests
                 """));
     }
 
-    /// <summary>A test step's filterWhen is an expression key: read as written, never a template, and refused where its value is no single one.</summary>
+    /// <summary>
+    /// A test step's filterWhen is an expression key, read as written, never a template; its filter a list written out or
+    /// an expression that yields one; and its affected and noTests templates, read as written.
+    /// </summary>
     [Fact]
-    public void ATestStepsFilterWhen_IsAnExpressionKey()
+    public void ATestStepsFilterWhen_IsAnExpressionKey_AndItsFilterAListOrAnExpression()
     {
         var step = Parse("""
             name: x
             steps:
               - name: verify
                 type: test
-                filter: '{item.testFilter}'
-                filterWhen: "input.affectedTests == 'on'"
+                filter: 'union(item.tests, run.affectedTests)'
+                filterWhen: "input.finalTests == 'affected'"
+                affected: '{item.name}'
+                noTests: '{item.noTests}'
+              - name: listed
+                type: test
+                filter: [Parser, Lexer]
             """);
 
         Assert.NotNull(step);
-        Assert.Equal("input.affectedTests == 'on'", step!.Steps[0].FilterWhen);
-        Assert.Equal("{item.testFilter}", step.Steps[0].Filter);
+        Assert.Equal("input.finalTests == 'affected'", step!.Steps[0].FilterWhen);
+        Assert.Empty(step.Steps[0].Filter!.Written);
+        Assert.Equal("union(item.tests, run.affectedTests)", step.Steps[0].Filter!.Expression);
+        Assert.Equal("{item.name}", step.Steps[0].Affected);
+        Assert.Equal("{item.noTests}", step.Steps[0].NoTests);
+        Assert.Equal(["Parser", "Lexer"], step.Steps[1].Filter!.Written);
+        Assert.Null(step.Steps[1].Filter!.Expression);
+    }
+
+    /// <summary>
+    /// A test step's filter given empty is refused, as an empty list of any key is: no unit would run no test, and no
+    /// filter at all runs every test.
+    /// </summary>
+    [Fact]
+    public void ATestStepsFilterGivenEmpty_IsRefused()
+    {
+        Assert.Equal(
+            ["line 5, column 13: 'verify.filter' is given empty, which is never read as every test of its legs: name the units it runs, or leave the key out for every test of its legs."],
+            Problems(
+                """
+                name: x
+                steps:
+                  - name: verify
+                    type: test
+                    filter: []
+                """));
     }
 
     /// <summary>
@@ -1192,8 +1224,8 @@ public sealed class WorkflowFileParserTests
             [
                 "line 5, column 12: 'draft.agent' holds {input.agent}, and agent is no template: it is read as it is written, never filled; a reason step fills none of its keys.",
                 "line 8, column 18: 'draft.description' holds {plan.title}, and description is no template: it is read as it is written, never filled; a reason step fills none of its keys.",
-                "line 13, column 19: 'build.legs' holds {input.leg}, and legs is no template: it is read as it is written, never filled; a test step fills filter, exclude and labels.",
-                "line 16, column 13: 'build.on.step' holds {draft.next}, and on.step is no template: it is read as it is written, never filled; a test step fills filter, exclude and labels.",
+                "line 13, column 19: 'build.legs' holds {input.leg}, and legs is no template: it is read as it is written, never filled; a test step fills exclude, labels, affected and noTests.",
+                "line 16, column 13: 'build.on.step' holds {draft.next}, and on.step is no template: it is read as it is written, never filled; a test step fills exclude, labels, affected and noTests.",
                 "line 24, column 14: 'fold.within' holds {input.dir}, and within is no template: it is read as it is written, never filled; a fold step fills none of its keys.",
                 "line 27, column 17: 'fold.allow.settled' holds {input.settled}, and allow.settled is no template: it is read as it is written, never filled; a fold step fills none of its keys.",
             ],

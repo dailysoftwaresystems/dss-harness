@@ -677,10 +677,26 @@ obtained - a bar that could not be read among the reasons - the question says so
 advisor is named it says that plainly. The advisor takes no question a step's own agent asked, nor
 a `pause` step's that shows an upstream step's questions (they carry their recommendations), nor one
 the run's input answers, nor the budget's own, nor a kind its `kinds` leaves out. A `test` step's
-`filter` names the tests it runs; its `filterWhen` is an
-expression that switches it - where it reads false the step gives no filter and every test of its
-legs runs, as the shipped `verify` steps do where the run's input `affectedTests` is off, each item
-tested on its own tests only where the run turns it on (`--input affectedTests=on`).
+`filter` names the tests it runs, as units - a list written out, or an expression read where the
+step starts that yields one - each given to every leg's runner after the invocation's `filterArg`,
+all joined into one value by its `filterJoin` where it declares one (`|` for ctest, dotnet and dart,
+which `init` seeds, so the tests any unit names run) and each after a `filterArg` of its own where
+it does not, as `test --filter`, given more than once, gives them. A filter that reads no unit runs
+no test: the step ends skipped, saying why - its `noTests`, filled where it starts. Its
+`filterWhen` is an expression that switches the filter: where it reads false the step gives none
+and every test of its legs runs. Its `affected` keeps the units it runs in the run's record of
+affected tests (`.orchestrators/<run>/affected-tests.json`) under the key it fills, written whole
+before anything of the step runs, so a pause, a stop or a crash keeps them for the resume: a later
+step under the same key replaces the entry, a step that runs for a work item a plan update takes
+back removes it, and so does one its `when` skips. `run.affectedTests` reads every unit the record
+holds, each once, and `union(a, b, ...)` joins lists, each value once and a null read as none. The
+shipped implementation workflow tests each work item on its own units alone - those its plan names
+(`tests`) and those its builder's answer adds, `union(input.item.tests, implement.latest.tests)` -
+each item naming its tests or saying in `noTests` why its change affects none, which the plan check
+holds it to (P-C9): such an item runs no test, and its review judges the reason. The gate of each
+round runs `run.affectedTests`, the units of every item built in the run, where the run's input
+`finalTests` is `affected`, its default, and every test where it is `all`
+(`--input finalTests=all`).
 
 The models a step runs on are the configuration's, under `providers`: each provider is a company
 whose models the tool will reach - its API's address, its keys' names, its client - and each model's

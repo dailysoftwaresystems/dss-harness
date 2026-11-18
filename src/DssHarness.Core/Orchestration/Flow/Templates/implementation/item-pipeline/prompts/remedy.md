@@ -20,10 +20,12 @@ issue that was there before the run. What the diagnosis found:
 - The paths near your work that you must not touch: {input.item.forbiddenPaths}
 - What must hold when your work is finished, your item's definition of done, checked statement by statement before
   you report: {input.item.done}
-- The filter that names the tests your change affects: `{input.item.testFilter}`. The tests it names are yours to write
-  where they are not there yet. The engine runs only those for this item where the run's input affectedTests is on
-  (it is `{input.affectedTests}`), and every test where it is off or the filter is empty; every test runs once every
-  item of the round is built, either way.
+- The tests your change affects, one unit to an entry: {input.item.tests}. The tests they name are yours to write
+  where they are not there yet. The engine tests this item on them alone, with the units your answer's tests add - a
+  test you write under a name they do not hold, or one you find reads what you change - and the round's gate on the
+  units of every item built in the run.
+- Where the item names no test, why its change affects none: {input.item.noTests}. The engine then tests it on none,
+  and its review judges the reason; a test you find your change reaches goes in your answer's tests all the same.
 - The classes of the decisions your item changes, each with its invariant, its one home and its sites:
   {input.item.classes}
 - Where the item decides nothing of the kind, its reason: {input.item.noClass}

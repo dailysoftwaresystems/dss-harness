@@ -102,10 +102,10 @@ inputs:
   - name: backlog
     description: A tracked file of work to choose from, and where what the reviews and the audit left is written; empty, there is none.
     default: ''
-  - name: affectedTests
-    description: 'on: each work item is tested on the tests its change affects, the filter its plan names, and every test runs once every item of the round is built. off: every test runs for each item.'
-    options: ['on', 'off']
-    default: 'off'
+  - name: finalTests
+    description: 'What the gate of each round tests once every work item of the round is built. affected: the tests the run''s work affects - the units every item built in this run ran, its plan''s and those its builder added, each once - and none where no item names one. all: every test of every leg. Each item is tested on its own units alone either way.'
+    options: [affected, all]
+    default: affected
 steps:
   - name: orient
     type: orient
@@ -310,7 +310,7 @@ steps:
           failTo: recover
           orient: 'orient'
           planSummary: 'planning.plan.latest.summary'
-          affectedTests: 'input.affectedTests'
+          testsKey: '{item.name}'
       - name: round-checks
         dependsOn: [items]
         when: 'orient.anchors'
@@ -324,17 +324,23 @@ steps:
           - name: citations
             type: anchor-citations
             failOn: never
+      # The round's gate tests what the run's work affects: the units every work item built in this run kept in the
+      # run's record of affected tests (run.affectedTests) - the input finalTests set to all tests every test instead.
+      # Where no item names a unit, it runs no test and ends skipped, saying so.
       - name: gate
         type: test
         dependsOn: [items, round-checks]
         when: 'orient.hasLegs'
+        filter: 'run.affectedTests'
+        filterWhen: "input.finalTests == 'affected'"
+        noTests: 'no work item built in this run names a test its change affects'
         alone: true
         failOn: never
         onFailure: recover
       - name: mutations
         type: check-mutations
         dependsOn: [gate]
-        when: 'orient.hasLegs && orient.hasMutations && gate.passed'
+        when: 'orient.hasLegs && orient.hasMutations && (gate.passed ?? true)'
         pending: true
         alone: true
         failOn: never
@@ -568,9 +574,9 @@ recover:
         alternatives: 'false'
         failTo: pause
         orient: 'orient'
-        affectedTests: 'input.affectedTests'
         diagnose: 'diagnose.latest'
         failed: 'source.step'
+        testsKey: 'remedy {item.name} for {source.step}, visit {visit}'
     - name: publish
       type: push
       dependsOn: [remedies]

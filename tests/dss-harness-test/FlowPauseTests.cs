@@ -236,6 +236,9 @@ public sealed class FlowPauseTests
 
         public void Updates(FlowUpdatesFile updates)
             => inner?.Updates(updates);
+
+        public void AffectedTests(IReadOnlyList<FlowAffectedTests> entries)
+            => inner?.AffectedTests(entries);
     }
 
     /// <summary>The run's records, kept on disk in <paramref name="directory"/> as a session keeps them, on <paramref name="clock"/>.</summary>

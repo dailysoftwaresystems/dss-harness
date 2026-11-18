@@ -989,14 +989,31 @@ public sealed record WorkflowStep
     /// <summary>What a red verdict of a check does to the step: <c>red</c> or <c>never</c>.</summary>
     public string? FailOn { get; init; } = null;
 
-    /// <summary>The test filter a test step passes on, a template.</summary>
-    public string? Filter { get; init; } = null;
+    /// <summary>
+    /// The test units a test step runs - each a value its legs' runner's filter option takes - written out, or an
+    /// expression that yields them, read where the step starts: the tests any of them names run, and a filter that reads
+    /// none runs no test. Absent, every test of its legs runs.
+    /// </summary>
+    public FlowList? Filter { get; init; } = null;
 
     /// <summary>
     /// An expression that says whether the step's <see cref="Filter"/> is given: where it reads false the step gives no
     /// filter and every test of its legs runs; absent, the filter is given as written.
     /// </summary>
     public string? FilterWhen { get; init; } = null;
+
+    /// <summary>
+    /// The key of the run's record of affected tests (<c>affected-tests.json</c>) a test step keeps its filter's units
+    /// under, a template: written whole before the step's legs run, its entry replaced; removed where the step is
+    /// skipped by its <c>when</c>, and where it runs for a work item a plan update takes back.
+    /// </summary>
+    public string? Affected { get; init; } = null;
+
+    /// <summary>
+    /// Why a test step whose filter reads no unit runs no test, a template: the step ends skipped, its record saying
+    /// this.
+    /// </summary>
+    public string? NoTests { get; init; } = null;
 
     /// <summary>The tests a test step leaves out, by name, each a template.</summary>
     public IReadOnlyList<string> Exclude { get; init; } = [];

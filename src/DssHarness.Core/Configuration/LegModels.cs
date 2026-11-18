@@ -146,6 +146,21 @@ public sealed class TestInvocation
     public string? FilterArg { get; init; }
 
     /// <summary>
+    /// What joins several filter units - each a value <see cref="FilterArg"/> takes, a test class, a test name, a
+    /// name pattern - into the one value <see cref="FilterArg"/> is given: <c>|</c> for ctest, whose <c>-R</c> keeps only
+    /// the last it is given; for <c>dotnet test</c>, whose filter expression joins alternatives so; and for
+    /// <c>dart test</c>, which runs only a test every <c>--name</c> matches. Unset or empty, each unit is given a
+    /// <see cref="FilterArg"/> of its own; empty says so in an operating system's section over a join the shared one
+    /// declares.
+    /// </summary>
+    /// <remarks>
+    /// A run that names several units - <c>test --filter</c> given more than once, a workflow's test step given a list -
+    /// runs the tests any of them names. ctest is refused several units given apart, since it would keep the last, and
+    /// any join but <c>|</c>, which it reads as one pattern holding that join, choosing no test.
+    /// </remarks>
+    public string? FilterJoin { get; init; }
+
+    /// <summary>
     /// Argument introducing a test exclusion, such as <c>-LE</c> for ctest, so one <c>--exclude</c>
     /// option works everywhere; what <see cref="RemoteExcludes"/> leave out on a host's legs reaches
     /// the runner through it too. For ctest, one of its options that leave tests out: one that

@@ -152,8 +152,10 @@ public sealed class DefaultConfigFactoryTests
 
         // A test is chosen by name with -R, and by the label ctest groups it under with -L; a label is
         // left out with -LE, as the help for all three says, and several joined into one, which ctest
-        // otherwise reads as leaving out only a test that carries every one.
+        // otherwise reads as leaving out only a test that carries every one. Several filter units are
+        // joined the same way, since ctest keeps only the last -R.
         Assert.Equal("-R", project.Test?.All?.FilterArg);
+        Assert.Equal("|", project.Test?.All?.FilterJoin);
         Assert.Equal("-L", project.Test?.All?.LabelArg);
         Assert.Equal("-LE", project.Test?.All?.ExcludeArg);
         Assert.Equal("|", project.Test?.All?.ExcludeJoin);
@@ -198,6 +200,9 @@ public sealed class DefaultConfigFactoryTests
         Assert.Empty(project.DefaultToolchain);
         Assert.Equal("dotnet", project.Test?.All?.Runner);
         Assert.Equal("--filter", project.Test?.All?.FilterArg);
+
+        // A filter expression joins its alternatives by |, so the tests any of several units names run.
+        Assert.Equal("|", project.Test?.All?.FilterJoin);
     }
 
     [Fact]
@@ -206,6 +211,9 @@ public sealed class DefaultConfigFactoryTests
         var config = Create(new DetectedProject("dart", ".", "pubspec.yaml"));
 
         Assert.Equal("dart", Assert.Single(config.Projects).Test?.All?.Runner);
+
+        // dart runs only a test every --name matches, so several units reach it as one regular expression.
+        Assert.Equal(("--name", "|"), (config.Projects[0].Test?.All?.FilterArg, config.Projects[0].Test?.All?.FilterJoin));
     }
 
     [Theory]

@@ -12,9 +12,10 @@ internal static class TestCommand
 
     private static readonly Option<string[]> LegsOption = LegSelectionOption.Create();
 
-    private static readonly Option<string> FilterOption = new("--filter")
+    private static readonly Option<string[]> FilterOption = new("--filter")
     {
-        Description = "Run only tests the invocation's filterArg selects with this value.",
+        Description = "Run only tests the invocation's filterArg selects with these units: the tests any of them names, joined by its filterJoin where it declares one, each after a filterArg of its own where it does not.",
+        AllowMultipleArgumentsPerToken = true,
     };
 
     private static readonly Option<string[]> ExcludeOption = new("--exclude")
@@ -101,7 +102,7 @@ internal static class TestCommand
 
                         // Read once, for the legs run here and the hosts given theirs alike: which tests run is one
                         // choice, and a host told something else would report another suite under the same leg.
-                        Filter = arguments.GetValue(FilterOption),
+                        Filters = arguments.GetValue(FilterOption) ?? [],
                         Excludes = arguments.GetValue(ExcludeOption) ?? [],
                         Labels = arguments.GetValue(LabelOption) ?? [],
                         SkipBuild = arguments.GetValue(SkipBuildOption),

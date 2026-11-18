@@ -763,6 +763,58 @@ public sealed record PreExistingIssuesFile(
             : null;
 }
 
+/// <summary>
+/// The run's record of affected tests, <c>affected-tests.json</c>: the test units each test step that keeps them
+/// (<c>affected</c>) ran, under the key it names - an item's, in the shipped flow - written whole and atomically before
+/// the step's legs run, so a pause, a stop or a crash after it loses none. Created empty with the run; an entry is
+/// replaced each time a step keeps its units under its key again, and removed where the step is skipped by its
+/// <c>when</c> or runs for a work item a plan update takes back. <c>run.affectedTests</c> reads every entry's units.
+/// </summary>
+/// <param name="Schema">The file's schema; 1.</param>
+/// <param name="Run">The run's name.</param>
+/// <param name="UpdatedAt">When this record was written.</param>
+/// <param name="Entries">Each key's units, in the order each key was first written.</param>
+public sealed record FlowAffectedTestsFile(
+    int Schema,
+    string Run,
+    [property: JsonConverter(typeof(FlowTimeConverter))] DateTimeOffset UpdatedAt,
+    IReadOnlyList<FlowAffectedTests> Entries)
+{
+    /// <summary>What is wrong with this file; null when nothing is.</summary>
+    public string? Problem()
+        => Schema != 1 ? $"its schema is {Schema.ToString(CultureInfo.InvariantCulture)}, and this build reads 1"
+            : string.IsNullOrWhiteSpace(Run) ? "it names no run"
+            : Entries.Select(entry => entry.Problem()).FirstOrDefault(problem => problem is not null) is { } problem ? problem
+            : Entries.GroupBy(entry => entry.Key, StringComparer.Ordinal).FirstOrDefault(key => key.Count() > 1) is { } twice
+                ? $"it holds the key '{twice.Key}' twice, and a key holds one entry"
+            : null;
+
+    /// <summary>Every unit of every one of <paramref name="entries"/>, in their order, each once: what <c>run.affectedTests</c> reads.</summary>
+    /// <param name="entries">The entries of a record of affected tests, in their order.</param>
+    public static IReadOnlyList<string> UnitsOf(IEnumerable<FlowAffectedTests> entries)
+        => [.. (entries ?? throw new ArgumentNullException(nameof(entries))).SelectMany(entry => entry.Units).Distinct(StringComparer.Ordinal)];
+}
+
+/// <summary>One key's test units in the run's record of affected tests.</summary>
+/// <param name="Key">The key the step that kept them names - in the shipped flow, the work item's name.</param>
+/// <param name="Units">The units the step ran, each once, in the order its filter read them; none where it ran none.</param>
+/// <param name="By">The instance that kept them.</param>
+/// <param name="At">When it kept them.</param>
+public sealed record FlowAffectedTests(
+    string Key,
+    IReadOnlyList<string> Units,
+    string By,
+    [property: JsonConverter(typeof(FlowTimeConverter))] DateTimeOffset At)
+{
+    /// <summary>What is wrong with this entry; null when nothing is.</summary>
+    public string? Problem()
+        => string.IsNullOrWhiteSpace(Key) ? "an entry names no key"
+            : Units.Any(string.IsNullOrWhiteSpace) ? $"the entry '{Key}' holds a unit that is empty, or spaces alone"
+            : Units.Distinct(StringComparer.Ordinal).Count() != Units.Count ? $"the entry '{Key}' holds a unit twice"
+            : !FlowInstanceId.IsWellFormed(By) ? $"the entry '{Key}' names '{By}', which is not an instance id"
+            : null;
+}
+
 /// <summary>One issue the run found and left, with the proof of it.</summary>
 /// <param name="Id">The issue's id: <c>pe-&lt;n&gt;</c>, in the order added.</param>
 /// <param name="Title">What it is, in a line.</param>

@@ -95,8 +95,9 @@ public sealed class FlowStepTemplatesTests
     }
 
     /// <summary>
-    /// A key whose text cannot be filled is named with why, and nothing of the step is handed on; and a test's filter,
-    /// exclusion or label that fills to nothing is not given.
+    /// A key whose text cannot be filled is named with why, and nothing of the step is handed on; a test's exclusion or
+    /// label that fills to nothing is not given; its affected and noTests are filled as they read; and its filter, a
+    /// list the engine reads where the step starts, is handed on as written, never filled.
     /// </summary>
     [Fact]
     public void AKeyThatCannotBeFilled_IsNamed_AndOneFilledToNothingIsNotGiven()
@@ -104,9 +105,11 @@ public sealed class FlowStepTemplatesTests
         var step = Step("""
               - name: verify
                 type: test
-                filter: '{input.filter}'
+                filter: 'union(input.units, run.affectedTests)'
                 exclude: ['{input.skip}', slow]
                 labels: ['{input.label}']
+                affected: '{input.key}'
+                noTests: 'none: {input.reason}'
             """);
 
         Assert.Null(FlowStepTemplates.Fill(step, Unreadable, out var key, out var problem));
@@ -115,9 +118,10 @@ public sealed class FlowStepTemplatesTests
         var empty = FlowStepTemplates.Fill(step, Empty, out key, out problem)!;
 
         Assert.Equal((null, null), (key, problem));
-        Assert.Null(empty.Filter);
+        Assert.Equal("union(input.units, run.affectedTests)", empty.Filter!.Expression);
         Assert.Equal(["slow"], empty.Exclude);
         Assert.Empty(empty.Labels);
+        Assert.Equal((string.Empty, "none: {input.reason}"), (empty.Affected, empty.NoTests));
 
         static string? Unreadable(string template, out string? problem)
         {

@@ -7,6 +7,7 @@
     "claims",
     "closure",
     "arms",
+    "tests",
     "reuse",
     "newRows",
     "blocked",
@@ -376,6 +377,13 @@
     "arms": {
       "type": "array",
       "description": "The mutation arms this item's work declares, by id, as the registry will name them - the flat list of every class's arm, read by the item's own sweep after its checkpoint. Empty where the repository keeps no mutation arms or the work declares none.",
+      "items": {
+        "type": "string"
+      }
+    },
+    "tests": {
+      "type": "array",
+      "description": "Units, written as the item's tests are, that name tests your change affects beyond the item's own: a test you wrote under a name the item does not list, or one you found reads what you changed. The engine tests the item on its tests and these alone, and the round's gate on them as well. Every unit you have added for this item so far, restated in each answer, for the engine reads the newest. Empty where the item's tests name every test the change affects.",
       "items": {
         "type": "string"
       }

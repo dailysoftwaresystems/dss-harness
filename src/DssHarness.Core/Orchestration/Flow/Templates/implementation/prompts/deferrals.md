@@ -10,8 +10,8 @@ What is known to be red:
 
 {run.red}
 
-The gate of the last round, the whole of the repository's tests on the main tree. Passed: {rounds.gate.passed}. Red
-legs: {rounds.gate.red}
+The gate of the last round, on the main tree: the tests the run's work affects, or every test where the run's input
+finalTests says all (it is `{input.finalTests}`). Passed: {rounds.gate.passed}. Red legs: {rounds.gate.red}
 
 The plan of this run: {planning.plan.latest.summary}
 

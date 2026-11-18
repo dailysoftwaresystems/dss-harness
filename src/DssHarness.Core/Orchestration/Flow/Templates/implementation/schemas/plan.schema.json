@@ -171,7 +171,8 @@
         "reuses",
         "creates",
         "replaces",
-        "testFilter",
+        "tests",
+        "noTests",
         "classes",
         "noClass"
       ],
@@ -277,9 +278,16 @@
             }
           }
         },
-        "testFilter": {
+        "tests": {
+          "type": "array",
+          "description": "The units that name the tests this item's change affects, one unit to an entry - the test classes that test what it changes, the tests it writes among them; for a runner that selects tests by name, their names - each written in what every leg's test runner takes after its filter option, as the task lists them; it names only tests that are there or that the item writes. The engine tests the item on these alone, with any its builder adds, and the round's gate on those of every item built in the run. Empty only where noTests says why the item affects no test.",
+          "items": {
+            "type": "string"
+          }
+        },
+        "noTests": {
           "type": "string",
-          "description": "The filter that names the tests this item's change affects - the test classes that test what it changes, the tests it writes among them; for a runner that selects tests by name, their names - written in what each leg's test runner takes after its filter option, as the task lists them; it names only tests that are there or that the item writes. The engine tests the item on it alone where the run's input affectedTests is on, and every test runs once every item of the round is built. Empty is no filter: every test of each leg runs."
+          "description": "Where tests is empty, why the item's change affects no test: what makes its work a document, a comment or a file no test reads. The item is then tested on none, and its review judges the reason. Empty where tests is not."
         },
         "classes": {
           "type": "array",

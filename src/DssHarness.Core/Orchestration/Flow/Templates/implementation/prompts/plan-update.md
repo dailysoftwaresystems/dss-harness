@@ -33,8 +33,9 @@ is asked once for a round: where the items still do not pass, a person is asked 
 2. Read the code and the plan again where the change touches them. Whatever the change adds, search the repository
    for first, as for any plan, and keep each item's lists of what it reuses, creates and replaces true. Where the
    change asks for something that exists to be rebuilt, that rebuild is the work too: list it under the item's
-   `replaces`, and quote in the summary the words that ask for it. Write each test filter as for any plan, in what
-   each leg's test runner takes after its filter option; the legs, their runners and that option: {orient.tests}
+   `replaces`, and quote in the summary the words that ask for it. Write each item's tests as for any plan, one unit
+   to an entry in what each leg's test runner takes after its filter option, or say in noTests why its change affects
+   none; the legs, their runners and that option: {orient.tests}
 3. Change the plan where the change requires it, and nowhere else. What was approved and is not touched stays word
    for word, so that what passed still passes and whoever holds the old plan finds the new one familiar.
 4. Say what the change does to the scope, under `scope`, one piece for each work item it touches. Nothing you write
@@ -49,8 +50,8 @@ is asked once for a round: where the items still do not pass, a person is asked 
      once it is done again.
    - `removed`: an item the plan had, that is withdrawn. It is no longer in `items`. `item` is the item under the
      name it had, written for the step that takes it back: its instructions say what to take back; its definition of
-     done says what must hold afterwards; its owned paths are the paths that step may write; its test filter selects
-     the tests that show the rest still stands, or is empty, which runs every test - and names no test the undo
+     done says what must hold afterwards; its owned paths are the paths that step may write; its tests name the
+     tests that show the rest still stands, or its noTests says why none can - and it names no test the undo
      removes.
 
    Work that is done and that the change does not reach gets no piece. The field `changed` is never empty: it says

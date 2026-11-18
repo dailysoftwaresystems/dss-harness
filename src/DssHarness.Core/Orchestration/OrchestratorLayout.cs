@@ -44,6 +44,7 @@ namespace DssHarness.Core.Orchestration;
 /// updates.json                every plan update the run has taken, and what became of it
 /// folds.json                  the run's write-ahead ledger of its folds, and of each commit a commit step staged of them
 /// pre-existing-issues.json    each pre-existing issue the run listed
+/// affected-tests.json         the test units each test step that keeps them ran, under the key it names, written before its legs run
 /// events.jsonl                the run's events, one JSON object to a line
 /// report.md, report.json      the report of the run's last session
 /// inbox.json, stop.json       an answer, and a pause or a stop, handed to the engine running the run, until it takes them
@@ -122,6 +123,9 @@ public sealed record OrchestratorLayout(string Name, string Directory)
 
     /// <summary>The name of the file a run's pre-existing issues are kept in.</summary>
     public const string PreExistingIssuesFileName = "pre-existing-issues.json";
+
+    /// <summary>The name of the file a run's record of affected tests is kept in.</summary>
+    public const string AffectedTestsFileName = "affected-tests.json";
 
     /// <summary>The name of the file the orchestrator entry is frozen in, as it ran.</summary>
     public const string DefinitionFileName = "definition.json";
@@ -453,6 +457,9 @@ public sealed record OrchestratorLayout(string Name, string Directory)
 
     /// <summary>The issues the run found and left: each proven, with a title and a description.</summary>
     public string PreExistingIssuesFile => Path.Combine(Directory, PreExistingIssuesFileName);
+
+    /// <summary>The test units each test step that keeps them ran, under the key it names: what <c>run.affectedTests</c> reads.</summary>
+    public string AffectedTestsFile => Path.Combine(Directory, AffectedTestsFileName);
 
     /// <summary>The orchestrator entry as it ran, frozen: what a resume runs, never the file the command read.</summary>
     public string DefinitionFile => Path.Combine(Directory, DefinitionFileName);

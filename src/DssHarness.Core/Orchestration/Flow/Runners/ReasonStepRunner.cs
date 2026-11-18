@@ -468,7 +468,7 @@ public sealed class ReasonStepRunner(
                 {
                     Directory = tree,
                     LegNames = [call.Leg],
-                    Filter = call.Filter.Length > 0 ? call.Filter : null,
+                    Filters = call.Filter.Length > 0 ? [call.Filter] : [],
                     LocalCopy = workspace.Worktree is null,
                     Isolation = LegStepRunner.LegIsolationOf(isolation, context.Config, context.Layout.MainCheckoutRoot, tree),
                 },

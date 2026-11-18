@@ -4527,6 +4527,7 @@ public static class HelpTopics
                 ($"  {OrchestratorLayout.GraphDirectoryName}/{OrchestratorLayout.GraphSyncFileName}", "one line for each sync of the graph"),
                 ($"  {OrchestratorLayout.GraphDirectoryName}/{OrchestratorLayout.GraphViewsDirectoryName}/<agent>{OrchestratorLayout.GraphExtractExtension}", "an agent's view of the graph: what its worktree holds that the base does not"),
                 ($"  {OrchestratorLayout.PreExistingIssuesFileName}", "each pre-existing issue the run listed, proven"),
+                ($"  {OrchestratorLayout.AffectedTestsFileName}", "the run's record of affected tests: the units each test step that keeps them (affected) ran, under the key it filled, written before the step runs - which run.affectedTests reads"),
                 ($"  {OrchestratorLayout.EventsFileName}", "the run's history, one event to a line, written after the state it tells of"),
                 ($"  {OrchestratorLayout.ReportFileName}, {OrchestratorLayout.ReportJsonFileName}", "the report of the run's last session"),
                 ($"  {OrchestratorLayout.InboxFileName}, {OrchestratorLayout.StopFileName}", "an answer, and a pause or a stop, handed to the engine running the run"),
@@ -5670,10 +5671,16 @@ public static class HelpTopics
         builder.AppendLine("step can run one model at xhigh and another at max, where that is the highest it takes. Each");
         builder.AppendLine("model's level is checked against what that model takes when the definition is checked");
         builder.AppendLine("against the configuration's providers ('help agent-clients'), and validate-workflow says");
-        builder.AppendLine("every step's models and levels under the line that says it holds. A test step's filterWhen");
-        builder.AppendLine("is an expression that switches its filter: where it reads false the step gives no filter and");
-        builder.AppendLine("every test of its legs runs, as the shipped verify steps do where the run's input");
-        builder.AppendLine("affectedTests is off (on with --input affectedTests=on, each item tested on its own tests).");
+        builder.AppendLine("every step's models and levels under the line that says it holds. A test step's filter names");
+        builder.AppendLine("the tests it runs as units - a list, or an expression read where it starts - each given after");
+        builder.AppendLine("the invocation's filterArg, all joined into one value by its filterJoin where it declares");
+        builder.AppendLine("one; a filter that reads no unit runs no test, and the step ends skipped, saying its noTests.");
+        builder.AppendLine("Its filterWhen switches the filter: where it reads false every test of its legs runs, as the");
+        builder.AppendLine("shipped gate does where the run's input finalTests is all. Its affected keeps the units it");
+        builder.AppendLine("runs in the run's affected-tests.json under the key it fills, before the step runs: a later");
+        builder.AppendLine("step under that key replaces them, and one for a work item a plan update takes back, or one");
+        builder.AppendLine("its when skips, removes them. run.affectedTests reads every unit kept, each once: the shipped");
+        builder.AppendLine("verify steps test each item on its own units alone, and the gate on run.affectedTests.");
         builder.AppendLine();
         AppendWrapped(
             builder,
@@ -5762,7 +5769,8 @@ public static class HelpTopics
             + "plan, the home among the item's own paths and there in the tree where it exists, every site that changes the "
             + "item's too - patching some of a class's sites is never done - more than one site consolidated at the home, as one "
             + "site that is not the home is, each class searched by data its queries name again, its universe holding the axes "
-            + "the repository declares, and one home belonging to one item. A step given the pieces of a plan update (a scope that yields a list not empty) checks them "
+            + "the repository declares, and one home belonging to one item; and each item naming the tests its change affects in "
+            + "tests, one unit to an entry and none blank, or saying in noTests why it affects none - exactly one of the two. A step given the pieces of a plan update (a scope that yields a list not empty) checks them "
             + "with the items, each problem among the rest: each piece of one of the four kinds (added, changed, removed, told) "
             + "and its texts; an added or a changed piece's item an item of the list, a removed piece's of a work item's shape; "
             + "no two pieces naming one work item; a changed or a removed piece naming a work item the plan had before the "
@@ -6022,11 +6030,12 @@ public static class HelpTopics
         builder.AppendLine();
         AppendWrapped(
             builder,
-            $"An expression reads names joined by &&, ||, !, ==, != and ?? with ( ) to group, 'empty(x)' for whether a read holds nothing "
-            + "and 'any(list, test)' for whether any member meets a test written with 'it' for the member: every step, input and param it "
+            $"An expression reads names joined by &&, ||, !, ==, != and ?? with ( ) to group, 'empty(x)' for whether a read holds nothing, "
+            + "'any(list, test)' for whether any member meets a test written with 'it' for the member and 'union(list, list, ...)' for the "
+            + "lists joined, each value once in the order first read and a null read as none: every step, input and param it "
             + "names must be declared before it, every path it reads is typed by what holds it - a reason step's schema, the output a "
             + "built-in type answers, the engine's facts of a step, the run's own names - and every operator takes what it says: !, && and "
-            + "|| a boolean, == and != no list and no object, any a list and a test that yields a boolean. A when, an until and a blocking "
+            + "|| a boolean, == and != no list and no object, any a list and a test that yields a boolean, union lists. A when, an until and a blocking "
             + "yield a boolean, and a forEach and a key that takes a list a list; how the run stands without its always steps "
             + $"({string.Join(", ", WorkflowExpressions.RunStatuses.Select(status => $"run.{status}"))}) is read by an always step alone. A placeholder in braces - "
             + "'{step.member}' - in a template key reads the same names, typed the same way, as one in a prompt does; one in any other key "
@@ -6721,6 +6730,14 @@ public static class HelpTopics
         builder.AppendLine("where they stand: to each -LE's, and to the last -E's. An empty excludeJoin gives each");
         builder.AppendLine("its own excludeArg over a join the shared section declares.");
         builder.AppendLine();
+        builder.AppendLine("'test --filter' may be given more than once, each value a unit that names tests, and");
+        builder.AppendLine("the tests any unit names run. A runner that keeps only the last of an option given");
+        builder.AppendLine("twice, or runs only the tests every one matches - ctest's -R, dotnet's --filter,");
+        builder.AppendLine("dart's --name - declares filterJoin, and the units reach it as one value joined by");
+        builder.AppendLine("it: '|' for each of the three, which init seeds. A runner without one is given each");
+        builder.AppendLine("unit after a filterArg of its own, and an empty filterJoin does that over a join the");
+        builder.AppendLine("shared section declares. A workflow's test step gives its filter's units the same way.");
+        builder.AppendLine();
         AppendWrapped(
             builder,
             "A test invocation may name what a failed run keeps as evidence: keepOnFailure, paths relative to the "
@@ -6780,14 +6797,16 @@ public static class HelpTopics
         builder.AppendLine("args' own reach it beside them. A test preset's filters are read as the leg starts.");
         builder.AppendLine();
         builder.AppendLine("ctest is refused an option it would read otherwise: an exclusion beside another given");
-        builder.AppendLine("apart with no join; a filter beside a -R its args give; a filter or an exclusion beside");
+        builder.AppendLine("apart with no join; filter units given apart with no join; a filter beside a -R its");
+        builder.AppendLine("args give; a filter or an exclusion beside");
         builder.AppendLine("a test preset that sets the same filter itself; and any of the three beside");
         builder.AppendLine("--rerun-failed, beside --union in the args - but an exclusion by -E, which ctest still");
         builder.AppendLine("reads there unless the args or a preset choose tests by name too - or beside a test");
         builder.AppendLine("preset that takes a union or cannot be read. So is a selection ctest could only find");
         builder.AppendLine("empty, before anything is built for it: a value one option chooses tests by that");
         builder.AppendLine("another leaves out by the same part of a test - its name, or a label - where either is");
-        builder.AppendLine("given. With excludeArg '-LE', '--label x' is refused beside an exclusion 'x', given by");
+        builder.AppendLine("given - of several filter units, where it is so of every one. With excludeArg '-LE',");
+        builder.AppendLine("'--label x' is refused beside an exclusion 'x', given by");
         builder.AppendLine("--exclude or the remoteExcludes, and beside the args' '-LE x' where it is their");
         builder.AppendLine("only -LE and no test preset they name adds one. Values are judged as written: spelled");
         builder.AppendLine("the same, or plain text where the chosen one holds the other, since ctest finds a");
@@ -6802,8 +6821,9 @@ public static class HelpTopics
         builder.AppendLine();
         builder.AppendLine("When the file is read, ctest is also refused an invocation that would pass an option");
         builder.AppendLine("on as its opposite: a filterArg or a labelArg that leaves tests out, a labelArg that");
-        builder.AppendLine("chooses them by name, an excludeArg that chooses them, and an excludeJoin other than");
-        builder.AppendLine("'|', which ctest would read as part of one pattern that leaves out nothing.");
+        builder.AppendLine("chooses them by name, an excludeArg that chooses them, and an excludeJoin or a");
+        builder.AppendLine("filterJoin other than '|', which ctest would read as part of one pattern that leaves");
+        builder.AppendLine("out nothing, or chooses nothing.");
         builder.AppendLine();
         builder.AppendLine("The file is checked when it is read: unknown keys, a key written twice, and");
         builder.AppendLine("references to undeclared names are rejected, with every problem listed at once.");

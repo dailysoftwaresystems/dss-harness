@@ -709,6 +709,11 @@ public static class WorkflowValidator
                             WorksIn(entry, entry.Step.In);
                         }
 
+                        if (type.Type == "test")
+                        {
+                            TestRules(entry, where);
+                        }
+
                         break;
 
                     case "anchor-balance":
@@ -1143,12 +1148,6 @@ public static class WorkflowValidator
             if (step.When is not null)
             {
                 Expression(entry, step.When, "when");
-            }
-
-            if (step.Type == "test" && step.FilterWhen is { } filterWhen)
-            {
-                // As when is, with the same reads and the same refusals, and it must yield a boolean (V16-V19).
-                Expression(entry, filterWhen, "filterWhen");
             }
 
             foreach (var (kind, answer) in step.Answers)
@@ -1788,6 +1787,38 @@ public static class WorkflowValidator
             if (tier is not null && model is not null)
             {
                 _problems.Add($"{where} names a model and a tier: the model would be used and the tier never read");
+            }
+        }
+
+        /// <summary>
+        /// What a test step's keys say of its filter: given as an expression, it is read as when is, with the same reads
+        /// and refusals, and yields a list (V16-V19); its filterWhen is an expression that yields a boolean; and
+        /// filterWhen, affected and noTests each say what becomes of the filter, so a step that gives none takes none of
+        /// them - a key that loads is a key that is read.
+        /// </summary>
+        private void TestRules(Entry entry, string where)
+        {
+            var step = entry.Step;
+
+            if (step.Filter?.Expression is { } filter)
+            {
+                Expression(entry, filter, "filter");
+            }
+
+            if (step.FilterWhen is { } filterWhen)
+            {
+                Expression(entry, filterWhen, "filterWhen");
+            }
+
+            if (step.Filter is null)
+            {
+                foreach (var (key, given) in new[] { ("filterWhen", step.FilterWhen), ("affected", step.Affected), ("noTests", step.NoTests) })
+                {
+                    if (given is not null)
+                    {
+                        _problems.Add($"{where} says {key} and gives no filter: {key} says what becomes of the filter's units, and a step with no filter runs every test of its legs");
+                    }
+                }
             }
         }
 
@@ -4164,6 +4195,7 @@ public static class WorkflowValidator
             ["amend.scope"] = ("array", "a plan update is the pieces it holds"),
             ["questions"] = ("array", "the step shows each question it holds under its own"),
             ["writes"] = ("array", Listed),
+            ["filter"] = ("array", Listed),
             ["within"] = ("array", Listed),
             ["paths"] = ("array", Listed),
             ["except"] = ("array", Listed),

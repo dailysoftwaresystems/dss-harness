@@ -281,12 +281,47 @@ public sealed class FlowExpressionTests
     [InlineData("(!a) ?? b", "(!a) ?? b")]
     [InlineData("(a ?? b) == 'x'", "a ?? b == 'x'")]
     [InlineData("any(review.findings,it.severity!='low')", "any(review.findings, it.severity != 'low')")]
+    [InlineData("union(item.tests,implement.latest.tests , null)", "union(item.tests, implement.latest.tests, null)")]
     [InlineData("empty( x ) && {plan.title} == \"it's\"", "empty(x) && {plan.title} == \"it's\"")]
     [InlineData("a.b[2].c != 0.5 && d == null && e != true", "a.b[2].c != 0.5 && d == null && e != true")]
     public void AnExpression_IsWrittenBackAsItReads(string text, string written)
     {
         Assert.Equal(written, FlowExpression.Parse(text).Written);
         Assert.Equal(written, FlowExpression.Parse(written).Written);
+    }
+
+    /// <summary>
+    /// <c>union(list, ...)</c> joins lists: typed, each part must be a list or null - a list whose members are what any
+    /// part's may hold - and read, it yields each value once in the order first read, a null part read as none and any
+    /// other value unreadable, saying which part and what it was.
+    /// </summary>
+    [Fact]
+    public void UnionJoinsLists_EachValueOnce_AndRefusesWhatIsNoList()
+    {
+        static IReadOnlyList<string>? Kinds(string expression)
+            => FlowExpression.Parse(expression).TypeOf(path => Plan.GetValueOrDefault(path.Whole) ?? JsonSchemaSubset.Reading.Anything, _ => { }).Kinds;
+
+        Assert.IsType<FlowExpression.Union>(FlowExpression.Parse("union(plan.items, plan.items)"));
+        Assert.Equal(["union", "plan", "plan"], FlowExpression.Parse("union(plan.items, plan.meta)").Reads().Select(read => read.Root));
+        Assert.Equal(["array"], Kinds("union(plan.items, null)"));
+        Assert.Equal(
+            ["joins 'plan.title', which is a text, with union; union joins lists", "joins 'plan.count', which is a whole number, with union; union joins lists"],
+            Misuses("union(plan.items, plan.title, plan.count)"));
+        Assert.Empty(Misuses("union(plan.items, plan.maybe ?? null, unknown.anything)"));
+
+        var values = new Dictionary<string, JsonNode?>(StringComparer.Ordinal)
+        {
+            ["planned"] = JsonNode.Parse("""["Alpha", "Beta"]"""),
+            ["added"] = JsonNode.Parse("""["Beta", "Gamma", "Alpha"]"""),
+            ["none"] = null,
+            ["text"] = "Alpha",
+        };
+
+        Assert.Equal("""["Alpha","Beta","Gamma"]""", Evaluate("union(planned, none, added)", values).ToNode()!.ToJsonString());
+        Assert.Equal("[]", Evaluate("union(none)", values).ToNode()!.ToJsonString());
+        Assert.Equal(
+            "'text' is a text, and union joins lists",
+            Assert.Throws<UnresolvedReadException>(() => _ = Evaluate("union(planned, text)", values)).Message);
     }
 
     /// <summary>

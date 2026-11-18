@@ -1659,7 +1659,7 @@ public sealed class ReasonStepRunnerTests
 
         Assert.Equal(kit.Main, request.Directory);
         Assert.Equal(["windows"], request.LegNames);
-        Assert.Equal("TheShape", request.Filter);
+        Assert.Equal(["TheShape"], request.Filters);
         Assert.True(request.LocalCopy);
 
         // A configuration the leg does not build, and a leg that is not declared: unmeasured, with the reason, and nothing run.
@@ -1704,7 +1704,7 @@ public sealed class ReasonStepRunnerTests
 
         Assert.Equal(worktree, request.Directory);
         Assert.False(request.LocalCopy);
-        Assert.Null(request.Filter);
+        Assert.Empty(request.Filters);
     }
 
     /// <summary>A repository that declares no leg gives its reason steps no measure tool, for there is nothing to measure on.</summary>

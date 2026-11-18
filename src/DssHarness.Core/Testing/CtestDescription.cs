@@ -95,7 +95,7 @@ internal sealed class CtestDescription(IProcessRunner processes, IFileSystem fil
             var command = TestInvocationResolver.CommandFor(
                 invocation,
                 CoreCounts.Resolve(invocation.Cores, null, question.DefaultCores).Value,
-                filter: null,
+                filters: null,
                 question.Excludes,
                 question.Paths,
                 labels: null,

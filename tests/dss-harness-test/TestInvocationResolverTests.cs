@@ -206,7 +206,7 @@ public sealed class TestInvocationResolverTests
         var command = TestInvocationResolver.CommandFor(
             Invocation(args: args, coresArgs: ["-j", "{cores}"]),
             cores: 6,
-            filter: null,
+            filters: null,
             excludes: null);
 
         // Nothing is spliced in. Two '-j' options would leave the runner to pick one, and the
@@ -220,7 +220,7 @@ public sealed class TestInvocationResolverTests
         var command = TestInvocationResolver.CommandFor(
             Invocation(args: ["--output-on-failure"], coresArgs: ["-j", "{cores}"]),
             cores: 4,
-            filter: null,
+            filters: null,
             excludes: null);
 
         Assert.Equal(["--output-on-failure", "-j", "4"], command.Arguments);
@@ -234,7 +234,7 @@ public sealed class TestInvocationResolverTests
                 env: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { ["CTEST_OUTPUT_ON_FAILURE"] = "1" },
                 coresEnv: ["CTEST_PARALLEL_LEVEL"]),
             cores: 3,
-            filter: null,
+            filters: null,
             excludes: null);
 
         Assert.Equal("3", command.Environment["CTEST_PARALLEL_LEVEL"]);
@@ -252,7 +252,7 @@ public sealed class TestInvocationResolverTests
         var command = TestInvocationResolver.CommandFor(
             Invocation(args: ["test"], filterArg: "--name", excludeArg: "--exclude-tags", runner: "dart"),
             cores: 6,
-            filter: "parser",
+            filters: ["parser"],
             excludes: ["slow", "flaky"]);
 
         Assert.Equal(["test", "--name", "parser", "--exclude-tags", "slow", "--exclude-tags", "flaky"], command.Arguments);
@@ -278,7 +278,7 @@ public sealed class TestInvocationResolverTests
         var command = TestInvocationResolver.CommandFor(
             Invocation(args: args, excludeArg: "-LE", excludeJoin: "|"),
             cores: 6,
-            filter: null,
+            filters: null,
             excludes: excludes);
 
         Assert.Equal(expected, command.Arguments);
@@ -297,7 +297,7 @@ public sealed class TestInvocationResolverTests
     public void TwoExclusionsTheArgsGiveApart_TakeOneGivenBesideThem_AsCtestReadsThem(string excludeArg, string? join, string[]? expected)
     {
         TestCommand Command() => TestInvocationResolver.CommandFor(
-            Invocation(args: [excludeArg, "manual", excludeArg, "slow"], excludeArg: excludeArg, excludeJoin: join), cores: 6, filter: null, excludes: ["gpu"]);
+            Invocation(args: [excludeArg, "manual", excludeArg, "slow"], excludeArg: excludeArg, excludeJoin: join), cores: 6, filters: null, excludes: ["gpu"]);
 
         if (expected is not null)
         {
@@ -341,7 +341,7 @@ public sealed class TestInvocationResolverTests
         var invocation = Invocation(args: ["--preset", preset], excludeArg: excludeArg, excludeJoin: "|");
 
         TestCommand Command() => TestInvocationResolver.CommandFor(
-            invocation, cores: 6, filter: null, excludes: ["slow"], new LegPaths(temp.Path, temp.Combine("build")), fileSystem: FileSystem());
+            invocation, cores: 6, filters: null, excludes: ["slow"], new LegPaths(temp.Path, temp.Combine("build")), fileSystem: FileSystem());
 
         if (!refused)
         {
@@ -375,7 +375,7 @@ public sealed class TestInvocationResolverTests
         TestCommand Command() => TestInvocationResolver.CommandFor(
             Invocation(args: ["--preset", preset, .. args], excludeArg: "-LE", excludeJoin: "|"),
             cores: 6,
-            filter: null,
+            filters: null,
             excludes: ["slow", "gpu"],
             new LegPaths(temp.Path, temp.Combine("build")),
             fileSystem: FileSystem());
@@ -410,7 +410,7 @@ public sealed class TestInvocationResolverTests
         };
 
         TestCommand Command(string runner, string[] args, IFileSystem? fileSystem) => TestInvocationResolver.CommandFor(
-            Invocation(args: args, excludeArg: "-LE", runner: runner), cores: 6, filter: null, excludes: ["slow"], paths, fileSystem: fileSystem);
+            Invocation(args: args, excludeArg: "-LE", runner: runner), cores: 6, filters: null, excludes: ["slow"], paths, fileSystem: fileSystem);
 
         Assert.Throws<HarnessException>(() => Command("ctest", ["--preset=labels"], FileSystem()));
         Assert.Throws<HarnessException>(() => Command("ctest", ["--preset", "labels", "--preset", "plain"], FileSystem()));
@@ -449,7 +449,7 @@ public sealed class TestInvocationResolverTests
         WritePresets(temp);
 
         TestCommand Command() => TestInvocationResolver.CommandFor(
-            Invocation(args: args, filterArg: "-R"), cores: 6, filter: "parser", excludes: null, new LegPaths(temp.Path, temp.Combine("build")), fileSystem: FileSystem());
+            Invocation(args: args, filterArg: "-R"), cores: 6, filters: ["parser"], excludes: null, new LegPaths(temp.Path, temp.Combine("build")), fileSystem: FileSystem());
 
         if (!refused)
         {
@@ -488,7 +488,7 @@ public sealed class TestInvocationResolverTests
         var refusal = Assert.Throws<HarnessException>(() => TestInvocationResolver.CommandFor(
             Invocation(args: args, filterArg: "-R", excludeArg: "-LE", labelArg: "-L"),
             cores: 6,
-            filter: given == "filter" ? "parser" : null,
+            filters: given == "filter" ? ["parser"] : null,
             excludes: given == "exclusion" ? ["slow"] : null,
             new LegPaths(temp.Path, temp.Combine("build")),
             labels: given == "label" ? ["unit"] : null,
@@ -515,7 +515,7 @@ public sealed class TestInvocationResolverTests
         WritePresets(temp);
 
         TestCommand Command() => TestInvocationResolver.CommandFor(
-            Invocation(args: ["--preset", preset], excludeArg: "-LE"), cores: 6, filter: null, excludes: ["slow"], new LegPaths(temp.Path, temp.Combine("build")), fileSystem: FileSystem());
+            Invocation(args: ["--preset", preset], excludeArg: "-LE"), cores: 6, filters: null, excludes: ["slow"], new LegPaths(temp.Path, temp.Combine("build")), fileSystem: FileSystem());
 
         if (!refused)
         {
@@ -538,7 +538,7 @@ public sealed class TestInvocationResolverTests
         WritePresets(temp);
 
         var command = TestInvocationResolver.CommandFor(
-            Invocation(args: ["--preset", "labeled"], labelArg: "-L"), cores: 6, filter: null, excludes: null, new LegPaths(temp.Path, temp.Combine("build")), labels: ["unit"], fileSystem: FileSystem());
+            Invocation(args: ["--preset", "labeled"], labelArg: "-L"), cores: 6, filters: null, excludes: null, new LegPaths(temp.Path, temp.Combine("build")), labels: ["unit"], fileSystem: FileSystem());
 
         Assert.Equal(["--preset", "labeled", "-L", "unit"], command.Arguments);
     }
@@ -556,7 +556,7 @@ public sealed class TestInvocationResolverTests
         temp.WriteFile(Path.Combine("tests", "CMakePresets.json"), """{ "version": 6, "testPresets": [ { "name": "labels" } ] }""");
 
         var command = TestInvocationResolver.CommandFor(
-            Invocation(args: ["--preset", "labels"], excludeArg: "-LE", workingDirectory: "tests"), cores: 6, filter: null, excludes: ["slow"], new LegPaths(temp.Path, temp.Combine("build")), fileSystem: FileSystem());
+            Invocation(args: ["--preset", "labels"], excludeArg: "-LE", workingDirectory: "tests"), cores: 6, filters: null, excludes: ["slow"], new LegPaths(temp.Path, temp.Combine("build")), fileSystem: FileSystem());
 
         Assert.Equal(["--preset", "labels", "-LE", "slow"], command.Arguments);
     }
@@ -578,7 +578,7 @@ public sealed class TestInvocationResolverTests
         var command = TestInvocationResolver.CommandFor(
             Invocation(args: ["--preset", "ci"], excludeArg: "-LE", workingDirectory: @"\tests"),
             cores: 6,
-            filter: null,
+            filters: null,
             excludes: ["slow"],
             new LegPaths(drive + "repo", drive + @"repo\build"),
             fileSystem: new OnDrive(drive, temp.Path));
@@ -603,7 +603,7 @@ public sealed class TestInvocationResolverTests
         var command = TestInvocationResolver.CommandFor(
             Invocation(args: args, excludeArg: "-E"),
             cores: 6,
-            filter: null,
+            filters: null,
             excludes: ["slow"],
             new LegPaths(temp.Path, temp.Combine("build")),
             fileSystem: FileSystem());
@@ -629,7 +629,7 @@ public sealed class TestInvocationResolverTests
         var refusal = Assert.Throws<HarnessException>(() => TestInvocationResolver.CommandFor(
             Invocation(args: args, excludeArg: "-E"),
             cores: 6,
-            filter: null,
+            filters: null,
             excludes: ["slow"],
             new LegPaths(temp.Path, temp.Combine("build")),
             fileSystem: FileSystem()));
@@ -669,7 +669,7 @@ public sealed class TestInvocationResolverTests
         var refusal = Assert.Throws<HarnessException>(() => TestInvocationResolver.CommandFor(
             Invocation(args: args, filterArg: "-R", excludeArg: excludeArg, excludeJoin: "|", labelArg: "-L"),
             cores: 6,
-            filter,
+            Units(filter),
             excludes,
             new LegPaths(temp.Path, temp.Combine("build")),
             labels,
@@ -718,7 +718,7 @@ public sealed class TestInvocationResolverTests
         var command = TestInvocationResolver.CommandFor(
             Invocation(args: args, filterArg: "-R", excludeArg: excludeArg, excludeJoin: "|", labelArg: "-L", runner: runner),
             cores: 6,
-            filter,
+            Units(filter),
             excludes,
             new LegPaths(temp.Path, temp.Combine("build")),
             labels,
@@ -743,7 +743,7 @@ public sealed class TestInvocationResolverTests
     public void AFilterAnExclusionOrALabelOfNothing_IsRefused(string? filter, string[] excludes, string[] labels, string[] args)
     {
         var refusal = Assert.Throws<HarnessException>(() => TestInvocationResolver.CommandFor(
-            Invocation(args: args, filterArg: "-R", excludeArg: "-LE", excludeJoin: "|", labelArg: "-L"), cores: 6, filter: filter, excludes: excludes, labels: labels));
+            Invocation(args: args, filterArg: "-R", excludeArg: "-LE", excludeJoin: "|", labelArg: "-L"), cores: 6, filters: Units(filter), excludes: excludes, labels: labels));
 
         Assert.Equal(HarnessExit.UsageError, refusal.ExitCode);
         Assert.Contains("given empty, or as spaces alone", refusal.Message, StringComparison.Ordinal);
@@ -760,7 +760,7 @@ public sealed class TestInvocationResolverTests
     public void AnExclusionByNameTheArgsGive_TakesThoseGiven_WhereItStands(string[] args, string[] expected)
     {
         var command = TestInvocationResolver.CommandFor(
-            Invocation(args: args, excludeArg: "-E", excludeJoin: "|"), cores: 6, filter: null, excludes: ["slow"]);
+            Invocation(args: args, excludeArg: "-E", excludeJoin: "|"), cores: 6, filters: null, excludes: ["slow"]);
 
         Assert.Equal(expected, command.Arguments);
     }
@@ -775,7 +775,7 @@ public sealed class TestInvocationResolverTests
     public void AnotherRunnersExclusionsInItsArgs_AreJoinedWhereItSaysSo(string? join, string[] expected)
     {
         var command = TestInvocationResolver.CommandFor(
-            Invocation(args: ["test", "--exclude-tags", "manual"], excludeArg: "--exclude-tags", excludeJoin: join, runner: "dart"), cores: 6, filter: null, excludes: ["slow"]);
+            Invocation(args: ["test", "--exclude-tags", "manual"], excludeArg: "--exclude-tags", excludeJoin: join, runner: "dart"), cores: 6, filters: null, excludes: ["slow"]);
 
         Assert.Equal(expected, command.Arguments);
     }
@@ -866,11 +866,11 @@ public sealed class TestInvocationResolverTests
 
         if (passed is not null)
         {
-            Assert.Equal(passed, TestInvocationResolver.CommandFor(invocation, cores: 6, filter: null, excludes: excludes).Arguments);
+            Assert.Equal(passed, TestInvocationResolver.CommandFor(invocation, cores: 6, filters: null, excludes: excludes).Arguments);
             return;
         }
 
-        var refusal = Assert.Throws<HarnessException>(() => TestInvocationResolver.CommandFor(invocation, cores: 6, filter: null, excludes: excludes));
+        var refusal = Assert.Throws<HarnessException>(() => TestInvocationResolver.CommandFor(invocation, cores: 6, filters: null, excludes: excludes));
 
         Assert.Equal(HarnessExit.UsageError, refusal.ExitCode);
         Assert.Contains("\"excludeJoin\": \"|\"", refusal.Message, StringComparison.Ordinal);
@@ -891,11 +891,11 @@ public sealed class TestInvocationResolverTests
 
         if (!refused)
         {
-            Assert.Equal(["-E", "a", "-E", "b"], TestInvocationResolver.CommandFor(invocation, cores: 6, filter: null, excludes: ["a", "b"]).Arguments);
+            Assert.Equal(["-E", "a", "-E", "b"], TestInvocationResolver.CommandFor(invocation, cores: 6, filters: null, excludes: ["a", "b"]).Arguments);
             return;
         }
 
-        var refusal = Assert.Throws<HarnessException>(() => TestInvocationResolver.CommandFor(invocation, cores: 6, filter: null, excludes: ["a", "b"]));
+        var refusal = Assert.Throws<HarnessException>(() => TestInvocationResolver.CommandFor(invocation, cores: 6, filters: null, excludes: ["a", "b"]));
 
         Assert.Equal(HarnessExit.UsageError, refusal.ExitCode);
     }
@@ -915,17 +915,17 @@ public sealed class TestInvocationResolverTests
 
         Assert.Equal(
             ["--exclude-tags", "slow", "--exclude-tags", "gpu"],
-            TestInvocationResolver.CommandFor(TestInvocationResolver.Resolve(settings, PlatformNames.Linux), cores: 6, filter: null, excludes: ["slow", "gpu"]).Arguments);
+            TestInvocationResolver.CommandFor(TestInvocationResolver.Resolve(settings, PlatformNames.Linux), cores: 6, filters: null, excludes: ["slow", "gpu"]).Arguments);
         Assert.Equal(
             ["-LE", "slow|gpu"],
-            TestInvocationResolver.CommandFor(TestInvocationResolver.Resolve(settings, PlatformNames.Windows), cores: 6, filter: null, excludes: ["slow", "gpu"]).Arguments);
+            TestInvocationResolver.CommandFor(TestInvocationResolver.Resolve(settings, PlatformNames.Windows), cores: 6, filters: null, excludes: ["slow", "gpu"]).Arguments);
     }
 
     [Fact]
     public void AFilterWithNoFilterArg_IsRefused()
     {
         var refusal = Assert.Throws<HarnessException>(
-            () => TestInvocationResolver.CommandFor(Invocation(), cores: 6, filter: "parser", excludes: null));
+            () => TestInvocationResolver.CommandFor(Invocation(), cores: 6, filters: ["parser"], excludes: null));
 
         Assert.Equal(HarnessExit.UsageError, refusal.ExitCode);
         Assert.Contains("filterArg", refusal.Message, StringComparison.Ordinal);
@@ -941,9 +941,79 @@ public sealed class TestInvocationResolverTests
     [InlineData(new[] { "slow" }, new[] { "-LE", "slow" })]
     public void SeveralExclusions_AreJoinedIntoOne_WhereTheInvocationSaysHow(string[] excludes, string[] expected)
     {
-        var command = TestInvocationResolver.CommandFor(Invocation(excludeArg: "-LE", excludeJoin: "|"), cores: 6, filter: null, excludes: excludes);
+        var command = TestInvocationResolver.CommandFor(Invocation(excludeArg: "-LE", excludeJoin: "|"), cores: 6, filters: null, excludes: excludes);
 
         Assert.Equal(expected, command.Arguments);
+    }
+
+    /// <summary>
+    /// Several filter units reach a runner that declares filterJoin as one value joined by it, so the tests any of them
+    /// names run, and one unit as itself; a runner without one is given each after a filterArg of its own, an empty
+    /// filterJoin doing that over the join the shared section declares, which an operating system's own replaces as
+    /// every other field is; and ctest, which given -R twice keeps only the last, is refused several apart, naming the
+    /// join.
+    /// </summary>
+    [Fact]
+    public void SeveralFilterUnits_AreJoinedWhereTheInvocationSaysHow_AndGivenApartWhereItDoesNot()
+    {
+        Assert.Equal(
+            ["-R", "parser|lexer"],
+            TestInvocationResolver.CommandFor(Invocation(filterArg: "-R", filterJoin: "|"), cores: 6, filters: ["parser", "lexer"], excludes: null).Arguments);
+        Assert.Equal(
+            ["-R", "parser"],
+            TestInvocationResolver.CommandFor(Invocation(filterArg: "-R", filterJoin: "|"), cores: 6, filters: ["parser"], excludes: null).Arguments);
+        Assert.Equal(
+            ["--name", "parser", "--name", "lexer"],
+            TestInvocationResolver.CommandFor(Invocation(filterArg: "--name", runner: "run-suite"), cores: 6, filters: ["parser", "lexer"], excludes: null).Arguments);
+        Assert.Empty(TestInvocationResolver.CommandFor(Invocation(filterArg: "-R", filterJoin: "|"), cores: 6, filters: [], excludes: null).Arguments);
+
+        var settings = new TestConfig
+        {
+            All = new TestInvocation { Runner = "ctest", SuccessPattern = "tests passed", FilterArg = "-R", FilterJoin = "|" },
+            Linux = new TestInvocation { Runner = "run-suite", FilterArg = "--name", FilterJoin = string.Empty },
+            Macos = new TestInvocation { Runner = "run-suite", FilterArg = "--name", FilterJoin = "," },
+        };
+
+        Assert.Equal(
+            ["--name", "parser", "--name", "lexer"],
+            TestInvocationResolver.CommandFor(TestInvocationResolver.Resolve(settings, PlatformNames.Linux), cores: 6, filters: ["parser", "lexer"], excludes: null).Arguments);
+        Assert.Equal(
+            ["--name", "parser,lexer"],
+            TestInvocationResolver.CommandFor(TestInvocationResolver.Resolve(settings, PlatformNames.MacOs), cores: 6, filters: ["parser", "lexer"], excludes: null).Arguments);
+        Assert.Equal(
+            ["-R", "parser|lexer"],
+            TestInvocationResolver.CommandFor(TestInvocationResolver.Resolve(settings, PlatformNames.Windows), cores: 6, filters: ["parser", "lexer"], excludes: null).Arguments);
+
+        var refusal = Assert.Throws<HarnessException>(() => TestInvocationResolver.CommandFor(Invocation(filterArg: "-R"), cores: 6, filters: ["parser", "lexer"], excludes: null));
+
+        Assert.Equal(HarnessExit.UsageError, refusal.ExitCode);
+        Assert.Equal(
+            "2 filter units would reach ctest apart, each after -R, of which it keeps only the last - never the tests any of them names. Declare \"filterJoin\": \"|\" in the test settings, so they reach it as one regular expression.",
+            refusal.Message);
+        Assert.Equal(["-R", "parser"], TestInvocationResolver.CommandFor(Invocation(filterArg: "-R"), cores: 6, filters: ["parser"], excludes: null).Arguments);
+    }
+
+    /// <summary>
+    /// A filter of several units chooses the tests any of them names, so ctest is refused it as choosing none only where
+    /// every unit is left out, each by the exclusion that leaves it out; one unit left out beside one that is not runs.
+    /// </summary>
+    [Fact]
+    public void AFilterOfSeveralUnits_ChoosesNone_OnlyWhereEveryUnitIsLeftOut()
+    {
+        var invocation = Invocation(filterArg: "-R", filterJoin: "|", excludeArg: "-E", excludeJoin: "|");
+
+        Assert.Equal(
+            ["-R", "parser|lexer", "-E", "parser"],
+            TestInvocationResolver.CommandFor(invocation, cores: 6, filters: ["parser", "lexer"], excludes: ["parser"]).Arguments);
+
+        var refusal = Assert.Throws<HarnessException>(() => TestInvocationResolver.CommandFor(invocation, cores: 6, filters: ["parser", "lexer"], excludes: ["lexer", "parser"]));
+
+        Assert.Equal(HarnessExit.UsageError, refusal.ExitCode);
+        Assert.Equal(
+            "The filter 'parser|lexer', given with -R, chooses only tests whose name matches one of its units, and the exclusion 'parser', given with -E, "
+            + "leaves out every test 'parser' chooses, and the exclusion 'lexer', given with -E, leaves out every test 'lexer' chooses, so ctest would "
+            + "choose no test - and say so only once the leg had been built for it. Take one of them out.",
+            refusal.Message);
     }
 
     /// <summary>An operating system's own excludeJoin replaces the shared one, as every other field does.</summary>
@@ -964,7 +1034,7 @@ public sealed class TestInvocationResolverTests
     public void AnExclusionWithNoExcludeArg_IsRefused()
     {
         var refusal = Assert.Throws<HarnessException>(
-            () => TestInvocationResolver.CommandFor(Invocation(), cores: 6, filter: null, excludes: ["slow"]));
+            () => TestInvocationResolver.CommandFor(Invocation(), cores: 6, filters: null, excludes: ["slow"]));
 
         Assert.Equal(HarnessExit.UsageError, refusal.ExitCode);
         Assert.Contains("excludeArg", refusal.Message, StringComparison.Ordinal);
@@ -981,7 +1051,7 @@ public sealed class TestInvocationResolverTests
         var command = TestInvocationResolver.CommandFor(
             Invocation(filterArg: "-R", excludeArg: "-LE", labelArg: "-L"),
             cores: 6,
-            filter: "parser",
+            filters: ["parser"],
             excludes: ["slow"],
             labels: ["git-state", "fast"]);
 
@@ -992,7 +1062,7 @@ public sealed class TestInvocationResolverTests
     public void ALabelWithNoLabelArg_IsRefused()
     {
         var refusal = Assert.Throws<HarnessException>(
-            () => TestInvocationResolver.CommandFor(Invocation(), cores: 6, filter: null, excludes: null, labels: ["git-state"]));
+            () => TestInvocationResolver.CommandFor(Invocation(), cores: 6, filters: null, excludes: null, labels: ["git-state"]));
 
         Assert.Equal(HarnessExit.UsageError, refusal.ExitCode);
         Assert.Contains("labelArg", refusal.Message, StringComparison.Ordinal);
@@ -1000,19 +1070,19 @@ public sealed class TestInvocationResolverTests
 
     /// <summary>
     /// A host running one of a test run's legs is given every option that decides which tests run -
-    /// the filter, each exclusion and each label - so it runs the suite this machine was asked for; an
+    /// each unit of the filter, each exclusion and each label - so it runs the suite this machine was asked for; an
     /// empty one among them, for the host to refuse as this machine does rather than run every test.
     /// </summary>
     [Fact]
     public void AHostRunningALeg_IsGivenTheFilterTheExclusionsAndTheLabels()
     {
         Assert.Equal(
-            ["--filter", "auth", "--exclude", "slow", "--label", "git-state", "--label", "fast", "--no-build"],
-            TestService.RemoteArguments("auth", ["slow"], ["git-state", "fast"], skipBuild: true, time: false));
+            ["--filter", "auth", "--filter", "billing", "--exclude", "slow", "--label", "git-state", "--label", "fast", "--no-build"],
+            TestService.RemoteArguments(["auth", "billing"], ["slow"], ["git-state", "fast"], skipBuild: true, time: false));
         Assert.Equal(
             ["--filter", "", "--exclude", "", "--label", ""],
-            TestService.RemoteArguments("", [""], [""], skipBuild: false, time: false));
-        Assert.Empty(TestService.RemoteArguments(null, [], [], skipBuild: false, time: false));
+            TestService.RemoteArguments([""], [""], [""], skipBuild: false, time: false));
+        Assert.Empty(TestService.RemoteArguments([], [], [], skipBuild: false, time: false));
     }
 
     /// <summary>An operating system's own labelArg replaces the shared one, as every other field does.</summary>
@@ -1061,7 +1131,7 @@ public sealed class TestInvocationResolverTests
         var command = TestInvocationResolver.CommandFor(
             Invocation(args: ["--test-dir", "{buildDir}", "--no-tests=error"]),
             cores: 6,
-            filter: null,
+            filters: null,
             excludes: null,
             new LegPaths("/tree", "/tree/build/x86_64-gcc-debug"));
 
@@ -1078,14 +1148,14 @@ public sealed class TestInvocationResolverTests
         var paths = new LegPaths("/tree", "/tree/build/x86_64-gcc-debug");
 
         var declared = TestInvocationResolver.CommandFor(
-            Invocation(workingDirectory: "{buildDir}"), cores: 6, filter: null, excludes: null, paths);
+            Invocation(workingDirectory: "{buildDir}"), cores: 6, filters: null, excludes: null, paths);
 
         Assert.Equal("/tree/build/x86_64-gcc-debug", declared.WorkingDirectory);
 
         // Null rather than the tree root, so the caller keeps the one it already had: a test phase
         // written before this key existed ran at the tree root and still does.
         var silent = TestInvocationResolver.CommandFor(
-            Invocation(), cores: 6, filter: null, excludes: null, paths);
+            Invocation(), cores: 6, filters: null, excludes: null, paths);
 
         Assert.Null(silent.WorkingDirectory);
     }
@@ -1100,7 +1170,7 @@ public sealed class TestInvocationResolverTests
         var command = TestInvocationResolver.CommandFor(
             Invocation(workingDirectory: "tests/integration"),
             cores: 6,
-            filter: null,
+            filters: null,
             excludes: null,
             new LegPaths(Path.Combine("/tree"), "/tree/build/x86_64-gcc-debug"));
 
@@ -1125,12 +1195,12 @@ public sealed class TestInvocationResolverTests
             }),
         };
 
-        var filled = TestInvocationResolver.CommandFor(invocation, cores: 6, filter: null, excludes: null, built);
+        var filled = TestInvocationResolver.CommandFor(invocation, cores: 6, filters: null, excludes: null, built);
 
         Assert.Equal(["--cxx=/opt/gcc/bin/g++", "-j", "6", "--cc", "/opt/gcc/bin/gcc"], filled.Arguments);
         Assert.Equal("/opt/gcc/bin/g++.d", filled.WorkingDirectory);
 
-        var ahead = TestInvocationResolver.CommandFor(invocation, cores: 6, filter: null, excludes: null, built with { Compilers = LegCompilers.AheadOfTheBuild });
+        var ahead = TestInvocationResolver.CommandFor(invocation, cores: 6, filters: null, excludes: null, built with { Compilers = LegCompilers.AheadOfTheBuild });
 
         Assert.Equal(["--cxx={compiler_CXX}", "-j", "6", "--cc", "{compiler_C}"], ahead.Arguments);
         Assert.Equal(Path.Combine("/tree", "{compiler_CXX}.d"), ahead.WorkingDirectory);
@@ -1138,7 +1208,7 @@ public sealed class TestInvocationResolverTests
         var refused = Assert.Throws<HarnessException>(() => TestInvocationResolver.CommandFor(
             Invocation(workingDirectory: "{compiler_CXX}"),
             cores: 6,
-            filter: null,
+            filters: null,
             excludes: null,
             built with { Compilers = LegCompilers.None("project 'app' is built by dotnet, which identifies no compiler") }));
 
@@ -1156,7 +1226,7 @@ public sealed class TestInvocationResolverTests
         var command = TestInvocationResolver.CommandFor(
             Invocation(args: ["{buildDir}"], filterArg: "-R", coresArgs: ["-j", "{cores}"]),
             cores: 6,
-            filter: "{treeDir}",
+            filters: ["{treeDir}"],
             excludes: null,
             new LegPaths("/tree", "/tree/build/x86_64-gcc-debug"));
 
@@ -1172,7 +1242,7 @@ public sealed class TestInvocationResolverTests
     public void WithNoLegInHand_APlaceholderIsLeftAsWritten()
     {
         var command = TestInvocationResolver.CommandFor(
-            Invocation(args: ["--test-dir", "{buildDir}"]), cores: 6, filter: null, excludes: null);
+            Invocation(args: ["--test-dir", "{buildDir}"]), cores: 6, filters: null, excludes: null);
 
         Assert.Equal(["--test-dir", "{buildDir}"], command.Arguments);
     }
@@ -1187,7 +1257,8 @@ public sealed class TestInvocationResolverTests
         string? workingDirectory = null,
         string? labelArg = null,
         string? excludeJoin = null,
-        string runner = "ctest")
+        string runner = "ctest",
+        string? filterJoin = null)
         => new(
             runner,
             args ?? [],
@@ -1201,5 +1272,9 @@ public sealed class TestInvocationResolverTests
             env ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
             "tests passed",
             CountPattern: null,
-            workingDirectory);
+            workingDirectory,
+            FilterJoin: filterJoin);
+
+    /// <summary>A filter of one unit, as a case gives it, or none.</summary>
+    private static IReadOnlyList<string>? Units(string? filter) => filter is null ? null : [filter];
 }

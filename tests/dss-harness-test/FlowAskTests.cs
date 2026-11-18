@@ -314,6 +314,10 @@ public sealed class FlowAskTests
         public void Updates(FlowUpdatesFile updates)
         {
         }
+
+        public void AffectedTests(IReadOnlyList<FlowAffectedTests> entries)
+        {
+        }
     }
 
     /// <summary>

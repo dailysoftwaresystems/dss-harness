@@ -2669,6 +2669,27 @@ public sealed partial class CliEndToEndTests
     }
 
     /// <summary>
+    /// --filter is given once for each unit, every one reaching the run: a blank unit beside another is refused before
+    /// the leg builds, as one given alone is, however many follow it - none stands in for the others.
+    /// </summary>
+    [Fact]
+    public async Task EachFilterUnitGiven_ReachesTheRun_ABlankOneRefusedBesideTheRest()
+    {
+        using var temp = new TempDirectory();
+        var token = TestContext.Current.CancellationToken;
+
+        await ABuildThatFailsAsync(
+            temp,
+            new TestInvocation { Runner = "dotnet", Args = ["--version"], FilterArg = "--filter", FilterJoin = "|", SuccessPattern = @"^\d+\.\d+" },
+            token);
+
+        var test = await CliRunner.RunAsync(["test", "--legs", "native", "--filter", " ", "--filter", "Parser", "--filter", "Lexer", "-C", temp.Path], token);
+
+        Assert.True(test.ExitCode == HarnessExit.UsageError, $"exit {test.ExitCode}: {test.StandardError}");
+        Assert.Contains("A filter was given empty, or as spaces alone", test.StandardError, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// A leg testing a build it does not make names the compilers that build was configured with,
     /// read from what CMake answered then: its verdict is about binaries they produced.
     /// </summary>

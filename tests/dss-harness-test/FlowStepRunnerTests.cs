@@ -469,6 +469,8 @@ public sealed class FlowStepRunnerTests : IDisposable
             ["reuses"] = reuses is null ? new JsonArray() : new JsonArray(new JsonObject { ["path"] = reuses, ["what"] = "it" }),
             ["creates"] = new JsonArray(),
             ["replaces"] = new JsonArray(),
+            ["tests"] = new JsonArray("OneTests"),
+            ["noTests"] = "",
             ["classes"] = new JsonArray(),
             ["noClass"] = "the item decides nothing: it carries a document",
         };

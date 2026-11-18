@@ -55,7 +55,8 @@ The work is in the main tree, committed; `git diff {orient.startCommit} HEAD` sh
 
 {run.red}
 
-- The gate, the whole of the repository's tests on the main tree. Passed: {gate.passed}. Red legs:
+- The gate on the main tree: the tests the run's work affects, or every test where the run's input finalTests says
+  all (it is `{input.finalTests}`). Passed: {gate.passed}. Red legs:
 
 {gate.red}
 
@@ -84,15 +85,17 @@ Name it under unverified; it is a finding only where the line says the step fail
 
 ## The tests a work item names
 
-Each item names the filter that selects the tests its change affects - the test classes that test what it changes,
-the tests it writes among them - written in what each leg's test runner takes after its filter option. The engine
-tests an item on it alone where the run's input affectedTests is on, and on every test where it is off. The legs this run tests on, each with its runner, the option a filter is given through, and what the leg
-leaves out:
+Each item names the tests its change affects in tests, one unit to an entry - the test classes that test what it
+changes, the tests it writes among them - each written in what every leg's test runner takes after its filter option;
+or, where its change affects no test, leaves tests empty and says why in noTests. The engine tests an item on its
+units alone, with any its builder adds, and on none where it names none. The legs this run tests on, each with its
+runner, the option a filter is given through, and what the leg leaves out:
 
 {orient.tests}
 
-A filter may name only tests that are there or that the item writes, and none a leg leaves out. Empty is no filter:
-every test runs.
+A unit may name only tests that are there or that the item writes, and none a leg leaves out. An item whose change
+reaches code a test reads names that test: a noTests whose reason does not hold is a finding, and the work item
+that repairs it names the tests.
 
 ## What to return
 

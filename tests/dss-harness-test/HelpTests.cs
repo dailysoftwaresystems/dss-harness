@@ -3059,7 +3059,11 @@ public sealed partial class HelpTests
             "has been built; where it still finds none, the detail of a leg that did not pass says",
             "so, unless --no-tests=ignore keeps ctest quiet. A label beside labels the args or a",
             "When the file is read, ctest is also refused an invocation that would pass an option",
-            "'|', which ctest would read as part of one pattern that leaves out nothing.",
+            "filterJoin other than '|', which ctest would read as part of one pattern that leaves",
+            "'test --filter' may be given more than once, each value a unit that names tests, and",
+            "dart's --name - declares filterJoin, and the units reach it as one value joined by",
+            "shared section declares. A workflow's test step gives its filter's units the same way.",
+            "given - of several filter units, where it is so of every one. With excludeArg '-LE',",
         })
         {
             Assert.Contains(text, result.StandardOutput, StringComparison.Ordinal);
@@ -3168,6 +3172,34 @@ public sealed partial class HelpTests
                 + $"before anything runs ({HarnessExit.Refused.ToString(CultureInfo.InvariantCulture)}), and so is a run that builds "
                 + $"none of its legs ({HarnessExit.UsageError.ToString(CultureInfo.InvariantCulture)}). help legs lists each generator's way.",
             help,
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The workflows topic says how a test step's filter is read as units, joined by the invocation's filterJoin, skipped
+    /// where it reads none, switched by filterWhen and kept under its affected key for run.affectedTests, and what union
+    /// joins; the orchestrators topic names the run's record of affected tests among its files.
+    /// </summary>
+    [Fact]
+    public void WorkflowsTopic_SaysHowATestStepsUnitsAreRead_Kept_AndJoined()
+    {
+        var prose = Prose.Words(HelpText.Of("workflows").StandardOutput);
+
+        Assert.Contains(
+            "A test step's filter names the tests it runs as units - a list, or an expression read where it starts - each given after "
+                + "the invocation's filterArg, all joined into one value by its filterJoin where it declares one; a filter that reads no "
+                + "unit runs no test, and the step ends skipped, saying its noTests. Its filterWhen switches the filter: where it reads "
+                + "false every test of its legs runs, as the shipped gate does where the run's input finalTests is all. Its affected keeps "
+                + "the units it runs in the run's affected-tests.json under the key it fills, before the step runs: a later step under "
+                + "that key replaces them, and one for a work item a plan update takes back, or one its when skips, removes them. "
+                + "run.affectedTests reads every unit kept, each once: the shipped verify steps test each item on its own units alone, "
+                + "and the gate on run.affectedTests.",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains("'union(list, list, ...)' for the lists joined, each value once in the order first read and a null read as none", prose, StringComparison.Ordinal);
+        Assert.Contains(
+            Prose.Words($"{OrchestratorLayout.AffectedTestsFileName} the run's record of affected tests: the units each test step that keeps them (affected) ran"),
+            Prose.Words(HelpText.Of("orchestrators").StandardOutput),
             StringComparison.Ordinal);
     }
 
@@ -5631,7 +5663,8 @@ public sealed partial class HelpTests
                 + "plan, the home among the item's own paths and there in the tree where it exists, every site that changes the "
                 + "item's too - patching some of a class's sites is never done - more than one site consolidated at the home, as one "
                 + "site that is not the home is, each class searched by data its queries name again, its universe holding the axes "
-                + "the repository declares, and one home belonging to one item.",
+                + "the repository declares, and one home belonging to one item; and each item naming the tests its change affects in "
+                + "tests, one unit to an entry and none blank, or saying in noTests why it affects none - exactly one of the two.",
             prose,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -5728,7 +5761,7 @@ public sealed partial class HelpTests
         Assert.Contains(
             "every path it reads is typed by what holds it - a reason step's schema, the output a built-in type answers, the "
                 + "engine's facts of a step, the run's own names - and every operator takes what it says: !, && and || a boolean, == and != "
-                + "no list and no object, any a list and a test that yields a boolean. A when, an until and a blocking yield a boolean, and "
+                + "no list and no object, any a list and a test that yields a boolean, union lists. A when, an until and a blocking yield a boolean, and "
                 + "a forEach and a key that takes a list a list; how the run stands without its always steps "
                 + $"({string.Join(", ", WorkflowExpressions.RunStatuses.Select(status => $"run.{status}"))}) is read by an always step "
                 + "alone. A placeholder in braces - '{step.member}' - in a template key reads the same names, typed the same way, as one in "

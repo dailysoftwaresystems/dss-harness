@@ -15,8 +15,9 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// there in the main tree, something under one of the three, and a reason and a search for everything it creates. Each
 /// item also carries its classes - the decisions it changes, each with its one home, its sites, its searches and its
 /// universe - or says in <c>noClass</c> why it decides nothing, and the classes are held to what the tree and the
-/// item's own paths say of them (P-C1 to P-C8). Each breach is a problem of the plan, worded once here; none is a
-/// failure.
+/// item's own paths say of them (P-C1 to P-C8); and each names the tests its change affects, the units it is tested on
+/// alone, or says in <c>noTests</c> why it affects none (P-C9). Each breach is a problem of the plan, worded once here;
+/// none is a failure.
 /// </summary>
 /// <param name="fileSystem">Reads the main tree for the paths the items reuse and replace.</param>
 /// <param name="pathBudget">Reckons the paths of the worktree each item would get.</param>
@@ -266,6 +267,29 @@ public sealed class PlanValidator(IFileSystem fileSystem, IPathBudget pathBudget
         else if ((classes?.Count ?? 0) > 0 && noClass is not null)
         {
             problems.Add($"{where} gives both classes and noClass: noClass says why an item decides nothing, and this one has classes");
+        }
+
+        // P-C9: an item names the tests its change affects or says why it affects none - it is tested on those alone, so
+        // one without either would be tested on nothing, unsaid, and one with both says two things of one change.
+        var tests = Texts(item["tests"]);
+        var noTests = Text(item["noTests"]);
+
+        if (tests is null && item["tests"] is not null)
+        {
+            problems.Add($"{where} gives tests that are not a list of units: each entry names the tests of one unit, written as a leg's runner takes it after its filter option");
+        }
+        else if ((tests?.Count ?? 0) == 0 && noTests is null)
+        {
+            problems.Add($"{where} names no test and says no reason: an item is tested on the tests its change affects alone, so it names them in tests, or says in noTests why its change affects none - a document, a comment, a file no test reads");
+        }
+        else if ((tests?.Count ?? 0) > 0 && noTests is not null)
+        {
+            problems.Add($"{where} gives both tests and noTests: noTests says why an item's change affects no test, and this one names tests");
+        }
+
+        if ((tests ?? []).Any(string.IsNullOrWhiteSpace))
+        {
+            problems.Add($"{where} names a test unit that is empty, or spaces alone: a runner reads it as no filter at all, or as one that matches every test - name the tests, or take it out");
         }
 
         return new Item(name, owned, forbidden, item);

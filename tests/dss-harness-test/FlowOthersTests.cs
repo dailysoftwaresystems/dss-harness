@@ -749,6 +749,10 @@ public sealed class FlowOthersTests
         public void Updates(FlowUpdatesFile updates)
         {
         }
+
+        public void AffectedTests(IReadOnlyList<FlowAffectedTests> entries)
+        {
+        }
     }
 
     /// <summary>A graph step reads the main tree, and - where its <c>in</c> names an agent - that agent's tree too.</summary>

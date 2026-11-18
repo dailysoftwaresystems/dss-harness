@@ -214,7 +214,7 @@ public sealed class WorkflowStepTypesTests
             ["when", "filterWhen", "forEach", "repeat.until", "repeat.blocking", "repeat.leftover", "items", "scope", "questions", "preAnswer.when", "preAnswer.quote.text"],
             WorkflowStepTypes.ExpressionKeys);
         Assert.Equal(
-            ["writes", "within", "paths", "except", "stale", "merge", "rows", "allow.new", "allow.merge"],
+            ["writes", "filter", "within", "paths", "except", "stale", "merge", "rows", "allow.new", "allow.merge"],
             WorkflowStepTypes.ListOrExpressionKeys);
 
         var keys = new HashSet<string>(

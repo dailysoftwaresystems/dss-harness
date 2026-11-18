@@ -39,7 +39,7 @@ public static class WorkflowExpressions
     public static readonly IReadOnlyList<string> ReservedRoots =
     [
         "input", "param", "run", "carried", "previous", "source", "issue", "item", "it", "index", "iteration", "visit",
-        "recover", "skill", "recommendations", "text", "update", "piece", "status", "question", "empty", "any",
+        "recover", "skill", "recommendations", "text", "update", "piece", "status", "question", "empty", "any", "union",
         .. RunFacts,
     ];
 
@@ -67,9 +67,9 @@ public static class WorkflowExpressions
     };
 
     /// <summary>
-    /// The run's own values an expression reads after <c>run</c>: its name, and how it stands without its
-    /// <c>always</c> steps - its status, whether it is done, failed, paused or stopped, and how many failed steps were
-    /// passed over.
+    /// The run's own values an expression reads after <c>run</c>: its name, how it stands without its <c>always</c>
+    /// steps - its status, whether it is done, failed, paused or stopped, and how many failed steps were passed over -
+    /// and the test units its record of affected tests holds, every entry's, each once.
     /// </summary>
     public static IReadOnlyDictionary<string, JsonSchemaSubset.Reading> RunValues { get; } = new Dictionary<string, JsonSchemaSubset.Reading>(StringComparer.Ordinal)
     {
@@ -80,7 +80,14 @@ public static class WorkflowExpressions
         ["paused"] = JsonSchemaSubset.Reading.Of("boolean"),
         ["stopped"] = JsonSchemaSubset.Reading.Of("boolean"),
         ["passedOver"] = JsonSchemaSubset.Reading.Of("integer"),
+        [AffectedTests] = JsonSchemaSubset.Reading.ListOf(JsonSchemaSubset.Reading.Of("string")),
     };
+
+    /// <summary>
+    /// The run's value that reads its record of affected tests: every unit a test step kept under a key of it
+    /// (<c>affected</c>), in the order the entries were first written, each once.
+    /// </summary>
+    public const string AffectedTests = "affectedTests";
 
     /// <summary>
     /// The run's values that say how it stands without its <c>always</c> steps, which only an <c>always</c> step - or a

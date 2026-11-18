@@ -2115,10 +2115,21 @@ each read is: every path typed by what holds it (a reason step's schema through 
 the output a built-in type answers, which `WorkflowStepTypes` holds, the engine's facts of a step and
 the run's own names, which `WorkflowExpressions` holds), every operator held to what it takes
 (`FlowExpression`: `!`, `&&` and `||` a boolean, `==` and `!=` no list and no object, `any` a list
-and a test that yields a boolean, `??` and `empty(...)` anything) and every key to what it reads (a
-`when`, a test step's `filterWhen`, an `until` and a `blocking` a boolean, a `forEach` and a key that takes a list a list) - a value
-refused only where none its reading allows could be what is taken, so that one that may be null is
-the run's to read. How the run stands without its `always` steps (`run.status`, `run.done` and the
+and a test that yields a boolean, `union(...)` lists, a null among them read as none, `??` and `empty(...)` anything) and
+every key to what it reads (a `when`, a test step's `filterWhen`, an `until` and a `blocking` a boolean, a `forEach`, a
+test step's `filter` and a key that takes a list a list) - a value refused only where none its reading allows could be
+what is taken, so that one that may be null is the run's to read. A test step's `filterWhen`, `affected` and `noTests`
+are refused where it gives no filter, for each says what becomes of the filter's units. Where the step starts, the
+engine reads its units (`FlowCoordinator.UnitsAtStart`): the filter, each unit once, where its `filterWhen` reads true
+or it gives none; a blank unit, or a value that is no list of names, fails the step 12; where it keeps them
+(`affected`), the entry under the key it fills is written to the run's `affected-tests.json` (`FlowAffectedTestsFile`,
+through `IFlowRecords.AffectedTests`) before its runner is asked - replaced by a later step under that key, removed
+for a work item a plan update takes back and for a step its `when` skips - and `run.affectedTests` reads every
+entry's units, each once (`FlowAffectedTestsFile.UnitsOf`), restored at a resume from the record alone; and a filter
+that reads no unit ends the step skipped with its `noTests`, its runner never asked. The runner gives the units to
+`TestService` as a list (`TestRequest.Filters`), and `TestInvocationResolver.CommandFor` joins them by the
+invocation's `filterJoin` into one value after `filterArg` where it declares one and gives each its own `filterArg`
+where it does not - ctest refused several apart, and a join but `|`, as its exclusions are. How the run stands without its `always` steps (`run.status`, `run.done` and the
 rest) is read by an `always` step alone; a placeholder stands in a key that is a template and is
 refused in any other where the file is read; a pull request's `base` reads nothing but the run's
 inputs and `run.name`, one base for every pull request; and a prompt's own placeholders - a reason
@@ -2923,7 +2934,9 @@ are machine steps, each a thin adapter over the owner of its rule: `OrientRunner
 `OrchestrationRules.OpenAgents`, `TreeHolders`); `GraphifyCodebaseRunner` checks the graph's longest path against the
 run's directory and syncs the run's one codebase graph through `ICodebaseGraphService` (`Core.Codebase`, below);
 `PlanCheckRunner` holds the items its `items` yields to `PlanValidator`, whose path budget is
-`FlowRunPaths`'s with the deepest file an item owns, and which also holds each item to its classes (P-C1 to P-C8):
+`FlowRunPaths`'s with the deepest file an item owns, and which also holds each item to its classes (P-C1 to P-C8)
+and its tests (P-C9: the units its change affects in `tests`, none blank, or why it affects none in `noTests`, exactly
+one of the two):
 an item declares the classes of the decisions it changes or says in `noClass` why it decides none; a class id names
 one class in a plan; the home is among the item's own paths and there in the tree where it exists; every site that
 changes - `reads-home` or `deleted` - is the item's too, for patching some of a class's sites is never done; more
@@ -3814,8 +3827,8 @@ whose state the engine does not name, is refused rather than taken for one that 
 crash left beside its record - the engine's where its first line says so and why, as the engine
 writes every handoff of its own (`FlowHandoff.ByEngine`, read back by `FlowHandoffRecord.Of`), the
 agent's otherwise - reads each handoff back as it was handed, and refuses - naming the file - a record
-that names a handoff that is gone, and a missing `questions.json` or `pre-existing-issues.json`,
-never made again empty. A handoff an attempt still held when it was cut off - an agent's account no
+that names a handoff that is gone, and a missing `questions.json`, `pre-existing-issues.json` or
+`affected-tests.json`, never made again empty. A handoff an attempt still held when it was cut off - an agent's account no
 prompt holds yet, stopped or running - is given to the next attempt; neither a later pause whose turn
 gives none nor the resume writes the engine's over it.
 

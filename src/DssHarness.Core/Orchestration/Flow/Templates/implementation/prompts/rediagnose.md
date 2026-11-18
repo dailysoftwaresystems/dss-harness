@@ -34,8 +34,9 @@ Where a line says that a step left no output, that thing was not read or did not
 3. Decide the course by what you found, and never set out again a remedy or a retry that already failed for the same
    cause:
    - **fix**: work items that put it right this time - at most four, each sized to one builder's cycle, with the
-     paths it owns, the test filter that shows the failure is gone, and its definition of done, of which the first
-     statement is that `{source.step}` would now pass; no file under two items;
+     paths it owns, the tests that show the failure is gone - or, where no test can, why in noTests - and its
+     definition of done, of which the first statement is that `{source.step}` would now pass; no file under two
+     items;
    - **retry**: only where you can say what is different now, so that running the step again will pass;
    - **person**: where only a person can give what is needed, or every remedy the evidence supports was tried and
      failed. Give the choices, at least two, each with what it leads to; recommend none: the run's advisor does.

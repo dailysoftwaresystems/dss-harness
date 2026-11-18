@@ -54,7 +54,8 @@ out:
 
 {orient.tests}
 
-Each item's filter must mean the same tests on every leg, and name only tests that are there or that the item writes.
+Each unit of an item's tests must mean the same tests on every leg, and name only tests that are there or that the item
+writes; an item that names none says in noTests why its change affects no test, and that reason must hold.
 
 ## The universe this repository declares
 

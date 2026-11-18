@@ -75,17 +75,27 @@ public static class TestInvocationResolver
     /// is ctest and ctest would read them otherwise. Each of ctest's options chooses tests or leaves them out, by name
     /// or by label, and one declared for another purpose does the opposite of what was asked without a word: an
     /// excludeArg of -L runs only the tests --exclude names. And ctest reads a joined value as one regular expression,
-    /// so a join other than '|' leaves out nothing: measured with ctest 4.3.2, -LE "slow;gpu" ran every test.
+    /// so a join other than '|' leaves out nothing, and chooses nothing: measured with ctest 4.3.2, -LE "slow;gpu" ran
+    /// every test.
     /// </summary>
     /// <param name="invocation">The invocation, merged for one operating system.</param>
     public static IEnumerable<string> Misread(ResolvedTestInvocation invocation)
     {
         ArgumentNullException.ThrowIfNull(invocation);
 
-        if (Ctest.SelectionOf(invocation.Runner, invocation.FilterArg) is { Excludes: true })
+        if (Ctest.SelectionOf(invocation.Runner, invocation.FilterArg) is { } filter)
         {
-            yield return $"filterArg '{invocation.FilterArg}' leaves tests out to ctest, so --filter would run every test but "
-                + $"those it names; declare an option that chooses them, such as '{Ctest.FilterArg}'";
+            if (filter.Excludes)
+            {
+                yield return $"filterArg '{invocation.FilterArg}' leaves tests out to ctest, so --filter would run every test but "
+                    + $"those it names; declare an option that chooses them, such as '{Ctest.FilterArg}'";
+            }
+
+            if (invocation.FilterJoin is { Length: > 0 } join && !string.Equals(join, Ctest.FilterJoin, StringComparison.Ordinal))
+            {
+                yield return $"filterJoin '{join}' joins nothing to ctest, which reads what it joins as one pattern holding "
+                    + $"'{join}', so joined filter units would choose no test; declare \"filterJoin\": \"{Ctest.FilterJoin}\"";
+            }
         }
 
         if (Ctest.SelectionOf(invocation.Runner, invocation.LabelArg) is { } label && (label.Excludes || label.Reads != Ctest.Part.Label))
@@ -114,13 +124,16 @@ public static class TestInvocationResolver
     }
 
     /// <summary>
-    /// The command line for a resolved invocation, with a filter and exclusions spliced in - the caller's,
+    /// The command line for a resolved invocation, with the filter's units and exclusions spliced in - the caller's,
     /// and on a leg a host runs the invocation's remoteExcludes beside them - and the core count handed
     /// over explicitly.
     /// </summary>
     /// <param name="invocation">The resolved invocation.</param>
     /// <param name="cores">The core count this leg runs with.</param>
-    /// <param name="filter">A filter the caller asked for, or null.</param>
+    /// <param name="filters">
+    /// The filter units the caller asked for - each a value the invocation's filterArg takes - or none: joined into one
+    /// value by its filterJoin where it declares one, each given a filterArg of its own where it does not.
+    /// </param>
     /// <param name="excludes">Exclusions to give the runner: the caller's, and any remoteExcludes beside them.</param>
     /// <param name="paths">
     /// The directories this leg runs against, which the arguments and the working directory may
@@ -136,8 +149,9 @@ public static class TestInvocationResolver
     /// invocation's own arguments still wins, decided by the runner itself, where a spliced-in
     /// option would contradict it and the runner would pick one without saying which.
     /// <para>
-    /// The filter chooses the tests to run, each exclusion leaves its tests out and each label is one
-    /// more the tests to run must carry, whatever else the invocation chooses them by. ctest reads each
+    /// The filter chooses the tests to run - those any of its units names - each exclusion leaves its tests out and each
+    /// label is one more the tests to run must carry, whatever else the invocation chooses them by. Several units reach
+    /// ctest only joined, since given -R twice it keeps the last. ctest reads each
     /// of its options that choose tests beside another of the same kind - given twice, or set by a test
     /// preset - keeping only the last where it names tests, and taking only a test every one matches
     /// where it names labels. So exclusions are added to the args' own where they stand (see
@@ -154,7 +168,7 @@ public static class TestInvocationResolver
     public static TestCommand CommandFor(
         ResolvedTestInvocation invocation,
         int cores,
-        string? filter,
+        IReadOnlyList<string>? filters,
         IReadOnlyList<string>? excludes,
         LegPaths? paths = null,
         IReadOnlyList<string>? labels = null,
@@ -167,14 +181,14 @@ public static class TestInvocationResolver
         // A test preset the args name, read from the directory ctest starts in where an option beside it asks.
         var preset = new PresetBeside(invocation, fileSystem, paths, workingDirectory);
 
-        RefuseBlank(filter is null ? [] : [filter], "A filter");
+        RefuseBlank(filters ?? [], "A filter");
         RefuseBlank(excludes ?? [], "An exclusion");
         RefuseBlank(labels ?? [], "A label");
 
         var (args, exclusions) = Excluding(invocation, excludes ?? [], preset);
         var arguments = new List<string>(args);
 
-        if (filter is not null)
+        if (filters is { Count: > 0 })
         {
             if (string.IsNullOrWhiteSpace(invocation.FilterArg))
             {
@@ -185,6 +199,7 @@ public static class TestInvocationResolver
             }
 
             var option = Ctest.SelectionOf(invocation.Runner, invocation.FilterArg);
+            var join = invocation.FilterJoin is { Length: > 0 } declared ? declared : null;
 
             RefuseBeside(invocation, preset, option, "A filter", sameFilterRefuses: true);
 
@@ -197,8 +212,20 @@ public static class TestInvocationResolver
                     + "take theirs out.");
             }
 
-            arguments.Add(invocation.FilterArg);
-            arguments.Add(filter);
+            if (filters.Count > 1 && join is null && option is not null)
+            {
+                throw new HarnessException(
+                    HarnessExit.UsageError,
+                    $"{filters.Count} filter units would reach ctest apart, each after {invocation.FilterArg}, of which it "
+                    + $"{Twice(option)} - never the tests any of them names. Declare \"filterJoin\": \"{Ctest.FilterJoin}\" in the "
+                    + "test settings, so they reach it as one regular expression.");
+            }
+
+            foreach (var value in join is null ? filters : [string.Join(join, filters)])
+            {
+                arguments.Add(invocation.FilterArg);
+                arguments.Add(value);
+            }
         }
 
         foreach (var exclude in exclusions)
@@ -227,7 +254,7 @@ public static class TestInvocationResolver
             }
         }
 
-        RefuseChoosingNone(invocation, filter, excludes ?? [], labels ?? [], preset);
+        RefuseChoosingNone(invocation, filters ?? [], excludes ?? [], labels ?? [], preset);
 
         // Through CoreCounts rather than spelled again here. A second implementation of the same
         // rule is how an explicit '-j 2' in args ends up beside a spliced '-j 6', with the runner
@@ -331,7 +358,8 @@ public static class TestInvocationResolver
     /// A value counts where ctest is bound to read it, and an empty one it reads as not given. Of the options
     /// choosing tests, every value of one it reads each of - a label - and the last of one it keeps only the last
     /// of; a label given counts as the one more a test must carry it is, the file's reader holding labelArg to an
-    /// option that chooses tests by label. Of those leaving tests out, every exclusion given, since each leaves its
+    /// option that chooses tests by label. The filter given is one value, its units joined: it chooses the tests any
+    /// of them names, and so chooses none only where every unit is left out. Of those leaving tests out, every exclusion given, since each leaves its
     /// tests out whatever else does (see <see cref="Excluding"/>); the last value the args give -E; and the value
     /// they give -LE where it is their only one and the test preset they name, if any, was read and adds none,
     /// since ctest leaves out only a test every one matches. Beside --union or --rerun-failed ctest reads the
@@ -343,7 +371,7 @@ public static class TestInvocationResolver
     /// </remarks>
     private static void RefuseChoosingNone(
         ResolvedTestInvocation invocation,
-        string? filter,
+        IReadOnlyList<string> filters,
         IReadOnlyList<string> excludes,
         IReadOnlyList<string> labels,
         PresetBeside preset)
@@ -356,9 +384,10 @@ public static class TestInvocationResolver
         var chosen = new List<Choice>();
         var leftOut = new List<Choice>();
 
-        if (filter is not null && Ctest.SelectionOf(invocation.Runner, invocation.FilterArg) is { Excludes: false } filterOption)
+        if (filters.Count > 0 && Ctest.SelectionOf(invocation.Runner, invocation.FilterArg) is { Excludes: false } filterOption)
         {
-            chosen.Add(new Choice(filterOption, invocation.FilterArg!, filter, "filter"));
+            // One value, its units joined - several reach ctest no other way - choosing what any unit names.
+            chosen.Add(new Choice(filterOption, invocation.FilterArg!, string.Join(invocation.FilterJoin ?? string.Empty, filters), "filter") { Units = filters });
         }
 
         if (Ctest.SelectionOf(invocation.Runner, invocation.LabelArg) is { Excludes: false, Narrows: true } labelOption)
@@ -391,13 +420,24 @@ public static class TestInvocationResolver
 
         foreach (var choice in chosen)
         {
-            if (leftOut.FirstOrDefault(exclusion => !(choice.FromArgs && exclusion.FromArgs)
-                && exclusion.Option.Reads == choice.Option.Reads
-                && Ctest.Covers(choice.Value, exclusion.Value)) is { } exclusion)
+            // A value of several units chooses what any of them names: it chooses none only where each is left out.
+            var units = choice.Units ?? [choice.Value];
+            var covered = units
+                .Select(unit => (Unit: unit, By: leftOut.FirstOrDefault(exclusion => !(choice.FromArgs && exclusion.FromArgs)
+                    && exclusion.Option.Reads == choice.Option.Reads
+                    && Ctest.Covers(unit, exclusion.Value))))
+                .ToList();
+
+            if (covered.Any(unit => unit.By is null))
             {
-                var within = string.Equals(choice.Value, exclusion.Value, StringComparison.Ordinal)
+                continue;
+            }
+
+            if (covered is [var (only, exclusion)])
+            {
+                var within = string.Equals(only, exclusion!.Value, StringComparison.Ordinal)
                     ? string.Empty
-                    : $", since ctest finds '{exclusion.Value}' in all '{choice.Value}' matches";
+                    : $", since ctest finds '{exclusion.Value}' in all '{only}' matches";
 
                 throw new HarnessException(
                     HarnessExit.UsageError,
@@ -405,6 +445,12 @@ public static class TestInvocationResolver
                     + $"leaves every one of them out{within}, so ctest would choose no test - and say so only once the leg had "
                     + "been built for it. Take one of them out.");
             }
+
+            throw new HarnessException(
+                HarnessExit.UsageError,
+                $"{choice.Said(start: true)} chooses only tests {Matching(choice.Option, "one of its units")}, and "
+                + string.Join(", and ", covered.Select(unit => $"{unit.By!.Said(start: false)} leaves out every test '{unit.Unit}' chooses"))
+                + ", so ctest would choose no test - and say so only once the leg had been built for it. Take one of them out.");
         }
     }
 
@@ -412,9 +458,9 @@ public static class TestInvocationResolver
     private static string Twice(Ctest.Selection option)
         => option.Narrows ? "reads each as one more that a test must match" : "keeps only the last";
 
-    /// <summary>Which tests one of ctest's options chooses with a value, to end a sentence that names it.</summary>
-    private static string Matching(Ctest.Selection option)
-        => option.Reads == Ctest.Part.Label ? "carrying a label that matches it" : "whose name matches it";
+    /// <summary>Which tests one of ctest's options chooses with <paramref name="value"/>, to end a sentence that names it.</summary>
+    private static string Matching(Ctest.Selection option, string value = "it")
+        => option.Reads == Ctest.Part.Label ? $"carrying a label that matches {value}" : $"whose name matches {value}";
 
     /// <summary>
     /// The exclusions <paramref name="invocation"/>'s own args apply: each value they give its exclusion option, in
@@ -609,6 +655,9 @@ public static class TestInvocationResolver
     /// <param name="Given">What was given as it - the filter, a label or an exclusion - or null for the args' own.</param>
     private sealed record Choice(Ctest.Selection Option, string Spelled, string Value, string? Given)
     {
+        /// <summary>The filter's units the value joins, each one choice of its own; null for a value that is one.</summary>
+        public IReadOnlyList<string>? Units { get; init; }
+
         /// <summary>A value the args give <paramref name="option"/>, spelled as the option first is.</summary>
         public static Choice InArgs(Ctest.Selection option, string value) => new(option, option.Spellings[0], value, Given: null);
 
@@ -724,7 +773,8 @@ public static class TestInvocationResolver
             platform?.RemoteExcludes ?? all?.RemoteExcludes ?? [],
             platform?.SetUp ?? all?.SetUp ?? [],
             platform?.KeepOnFailure ?? all?.KeepOnFailure ?? [],
-            platform?.KeepOnFailureCapBytes ?? all?.KeepOnFailureCapBytes);
+            platform?.KeepOnFailureCapBytes ?? all?.KeepOnFailureCapBytes,
+            FilterJoin: platform?.FilterJoin ?? all?.FilterJoin);
 }
 
 /// <summary>One test invocation, with every field decided.</summary>
@@ -746,6 +796,7 @@ public static class TestInvocationResolver
 /// <param name="SetUp">The set-ups a leg running it brings up around its work, where the run is asked to set up.</param>
 /// <param name="KeepOnFailure">What a run keeping evidence copies out of the build directory when it does not pass.</param>
 /// <param name="KeepOnFailureCapBytes">The most to keep in all, in bytes, or null for the default cap.</param>
+/// <param name="FilterJoin">What joins several filter units into one value after <paramref name="FilterArg"/>; null or empty to give each its own.</param>
 public sealed record ResolvedTestInvocation(
     string Runner,
     IReadOnlyList<string> Args,
@@ -764,7 +815,8 @@ public sealed record ResolvedTestInvocation(
     IReadOnlyList<string>? RemoteExcludes = null,
     IReadOnlyList<SetUpUse>? SetUp = null,
     IReadOnlyList<string>? KeepOnFailure = null,
-    long? KeepOnFailureCapBytes = null);
+    long? KeepOnFailureCapBytes = null,
+    string? FilterJoin = null);
 
 /// <summary>A test invocation ready to start.</summary>
 /// <param name="Program">The runner to start.</param>

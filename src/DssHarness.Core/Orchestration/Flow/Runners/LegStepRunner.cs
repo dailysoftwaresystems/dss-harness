@@ -329,8 +329,9 @@ public sealed class BuildStepRunner(IHarnessContextLoader contextLoader, IHostPl
 
 /// <summary>
 /// The <c>test</c> step: its legs built, unless it says <c>skipBuild</c>, and tested through <see cref="ITestLegs"/>, as
-/// the <c>test</c> command does - with the filter, exclusions and labels its keys filled to, each left out where it
-/// filled to nothing.
+/// the <c>test</c> command does - with the filter's units the engine read where the step started (an expression's list in
+/// the place of the expression; none where its filterWhen read false), and the exclusions and labels its keys filled to,
+/// each left out where it filled to nothing.
 /// </summary>
 /// <param name="contextLoader">Finds the repository and its configuration.</param>
 /// <param name="platform">This machine.</param>
@@ -352,7 +353,7 @@ public sealed class TestStepRunner(IHarnessContextLoader contextLoader, IHostPla
             {
                 Directory = tree,
                 LegNames = LegsOf(run.Step),
-                Filter = run.Step.Filter,
+                Filters = run.Step.Filter?.Written ?? [],
                 Excludes = run.Step.Exclude,
                 Labels = run.Step.Labels,
                 SkipBuild = run.Step.SkipBuild == true,

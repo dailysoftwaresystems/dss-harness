@@ -155,6 +155,11 @@ public sealed class FlowPlanPiecesTests
         /// <summary>Every instance asked, in the order the coordinator started it.</summary>
         public List<string> Started { get; } = [];
 
+        private readonly Dictionary<string, FlowStepRun> _asked = new(StringComparer.Ordinal);
+
+        /// <summary>What <paramref name="instance"/> was last asked with: the step as it ran.</summary>
+        public FlowStepRun Asked(string instance) => _asked[instance];
+
         /// <summary>Waits until the coordinator has asked for <paramref name="instance"/> once.</summary>
         public Task StartedAsync(string instance)
         {
@@ -229,6 +234,7 @@ public sealed class FlowPlanPiecesTests
             }
 
             Started.Add(run.Instance);
+            _asked[run.Instance] = run;
 
             if (_scripts.TryGetValue(run.Step.Name, out var script))
             {
@@ -2099,6 +2105,115 @@ public sealed class FlowPlanPiecesTests
                     "  - removed 'gone': carried by no instance, nothing was built and nothing is undone",
                 ],
                 File.ReadAllLines(layout.ReportFile).Where(line => line.StartsWith("  - added", StringComparison.Ordinal) || line.StartsWith("  - removed", StringComparison.Ordinal)));
+        }
+    }
+
+    /// <summary>
+    /// The flow of <see cref="Flow"/> whose work items are each tested once their builder has answered, on their own units
+    /// alone - the item's and those its builder's newest answer adds - kept under the item's name in the run's record of
+    /// affected tests, with the reason it runs none where it names none.
+    /// </summary>
+    private static readonly string TestedFlow = Flow
+        .Replace("dependsOn: [build]", "dependsOn: [verify]", StringComparison.Ordinal)
+        .Replace("          - name: probe", """
+                  - name: verify
+                    type: test
+                    dependsOn: [build]
+                    filter: 'union(item.tests, build.latest.tests)'
+                    affected: '{item.name}'
+                    noTests: '{item.noTests}'
+                  - name: probe
+        """, StringComparison.Ordinal);
+
+    /// <summary>A work item of the plan, tested on <paramref name="units"/>.</summary>
+    private static JsonObject Tested(string name, params string[] units)
+    {
+        var item = Item(name);
+        item["tests"] = new JsonArray([.. units.Select(unit => (JsonNode?)unit)]);
+        item["noTests"] = "";
+        return item;
+    }
+
+    /// <summary>The run's record of affected tests as it stands on disk, each key's units on a line of its own, by key.</summary>
+    private static IReadOnlyList<string> AffectedOf(HarnessFactory harness, OrchestratorLayout layout)
+        => [.. harness.OrchestrationStore.ReadAffectedTests(layout)!.Entries.Select(entry => $"{entry.Key}: {string.Join(", ", entry.Units)} (by {entry.By})").Order(StringComparer.Ordinal)];
+
+    /// <summary>
+    /// A work item's test step keeps the units it runs under the item's name in the run's record of affected tests,
+    /// written before its runner is asked: the record is on disk as the step starts. A redo of the item - a changed piece
+    /// visited again - replaces the entry with the new visit's units, and an undo - a removed piece - takes it out, while
+    /// another item's entry stands; and the units kept come back whole at a resume, so a write after it loses none.
+    /// </summary>
+    [Fact]
+    public async Task AnItemsUnits_AreKeptBeforeItsTestRuns_ReplacedByItsRedo_RemovedByItsUndo_AndKeptAcrossAResume()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse(TestedFlow);
+        var (harness, layout, records) = Records("r1", temp.Path, definition);
+        var seen = new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal);
+        var again = Tested("one", "AgainTests");
+        again["title"] = "The one item, done differently";
+        var updates = 0;
+        var runner = new FakeRunner()
+            .On("plan", _ => FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Concluded(Tested("one", "OneTests"), Tested("two", "TwoTests"))))
+            .On("item-check", run => FlowStepResult.Ended(passed: true, HarnessExit.Success, output: new JsonObject
+            {
+                ["ok"] = true,
+                ["problems"] = new JsonArray(),
+                ["items"] = run.Read!["items"]!.ToNode()!.DeepClone(),
+            }))
+            .On("build", _ => FlowStepResult.Ended(passed: true, HarnessExit.Success, output: new JsonObject { ["tests"] = new JsonArray("BuiltTests") }))
+            .On("rebuild", _ => FlowStepResult.Ended(passed: true, HarnessExit.Success, output: new JsonObject { ["tests"] = new JsonArray() }))
+            .On("withdraw", _ => FlowStepResult.Ended(passed: true, HarnessExit.Success, output: new JsonObject { ["tests"] = new JsonArray() }))
+            .On("verify", run =>
+            {
+                seen[run.Instance] = AffectedOf(harness, layout);
+                return FlowStepResult.Ended(passed: true, HarnessExit.Success);
+            })
+            .On("planupdate", _ => Interlocked.Increment(ref updates) == 1
+                ? FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Concluded(new JsonArray(Piece("changed", again.DeepClone(), "the one item is done differently")), again.DeepClone(), Tested("two", "TwoTests")))
+                : FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Concluded(new JsonArray(Piece("removed", again.DeepClone(), "the one item is taken back")), Tested("two", "TwoTests"))));
+
+        using (records)
+        {
+            var coordinator = CoordinatorOf(definition, runner, records, harness, layout);
+
+            // To both items' probes: each item's test step ran on its own units, each kept before its runner was asked.
+            _ = await coordinator.RunAsync(Token);
+            Assert.True(coordinator.TryAnswer(coordinator.OpenQuestions.Single().Id, "go", null, out _));
+            _ = await coordinator.RunAsync(Token);
+
+            Assert.Equal(["rounds.items[0].probe", "rounds.items[1].probe"], coordinator.OpenQuestions.Select(question => question.Instance).Order(StringComparer.Ordinal));
+            Assert.Equal(["OneTests", "BuiltTests"], runner.Asked("rounds.items[0].verify").Step.Filter!.Written);
+            Assert.Contains("one: OneTests, BuiltTests (by rounds.items[0].verify)", seen["rounds.items[0].verify"]);
+            Assert.Contains("two: TwoTests, BuiltTests (by rounds.items[1].verify)", seen["rounds.items[1].verify"]);
+            Assert.Equal(["one: OneTests, BuiltTests (by rounds.items[0].verify)", "two: TwoTests, BuiltTests (by rounds.items[1].verify)"], AffectedOf(harness, layout));
+        }
+
+        var (_, _, resumedRecords) = Records("r1", temp.Path, definition);
+
+        using (resumedRecords)
+        {
+            var resumed = CoordinatorOf(definition, runner, resumedRecords, harness, layout, ResumeOf(harness, layout, definition));
+
+            // A redo of the first item, in a session that took the run up: the entry under its name is the new visit's,
+            // and the second item's, which only the resume could have kept, stands beside it.
+            Assert.True(FlowHandedOver.Taken == resumed.AmendmentHandedOver("the one item is different", "amend-orchestrator-request", out var problem), problem ?? "taken");
+            Assert.True(resumed.TryAnswer(resumed.OpenQuestions.Single(question => question.Instance == "rounds.items[0].probe").Id, "go", null, out _));
+            _ = await resumed.RunAsync(Token).WaitAsync(Bound, Token);
+
+            var redo = Assert.Single(seen.Keys, instance => instance is not "rounds.items[0].verify" and not "rounds.items[1].verify");
+            Assert.Equal(["AgainTests"], runner.Asked(redo).Step.Filter!.Written);
+            Assert.Equal([$"one: AgainTests (by {redo})", "two: TwoTests, BuiltTests (by rounds.items[1].verify)"], AffectedOf(harness, layout));
+
+            // An undo of it takes its entry out, the units it runs to show the rest stands run all the same.
+            Assert.True(FlowHandedOver.Taken == resumed.AmendmentHandedOver("leave the one item out", "amend-orchestrator-request", out problem), problem ?? "taken");
+            Assert.True(resumed.TryAnswer(resumed.OpenQuestions.Single(question => question.Instance == redo.Replace(".verify", ".probe", StringComparison.Ordinal)).Id, "go", null, out _));
+            _ = await resumed.RunAsync(Token).WaitAsync(Bound, Token);
+
+            var undo = Assert.Single(seen.Keys, instance => instance is not "rounds.items[0].verify" and not "rounds.items[1].verify" && instance != redo);
+            Assert.Equal(["AgainTests"], runner.Asked(undo).Step.Filter!.Written);
+            Assert.Equal(["two: TwoTests, BuiltTests (by rounds.items[1].verify)"], AffectedOf(harness, layout));
         }
     }
 

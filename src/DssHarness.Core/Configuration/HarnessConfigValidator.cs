@@ -2236,7 +2236,7 @@ public static partial class HarnessConfigValidator
 
         try
         {
-            _ = TestInvocationResolver.CommandFor(invocation, cores: 1, filter: null, excludes: invocation.RemoteExcludes);
+            _ = TestInvocationResolver.CommandFor(invocation, cores: 1, filters: null, excludes: invocation.RemoteExcludes);
 
             return null;
         }

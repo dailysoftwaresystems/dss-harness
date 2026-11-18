@@ -132,6 +132,10 @@ public sealed class FlowAdviceTests
         public void Updates(FlowUpdatesFile updates)
         {
         }
+
+        public void AffectedTests(IReadOnlyList<FlowAffectedTests> entries)
+        {
+        }
     }
 
     private static WorkflowDefinition Advised(string? kinds = null, string? budget = null)

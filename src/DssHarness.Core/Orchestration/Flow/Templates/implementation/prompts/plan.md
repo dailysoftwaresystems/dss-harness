@@ -47,21 +47,23 @@ Where a line says that a step left no output, that thing was not read or did not
 
 ## How the tests are run
 
-Each item names the filter that selects the tests its change affects: the test classes that test what the item
-changes, the tests it writes among them - or, for a runner that selects tests by name, those tests' names. Write
+Each item names the tests its change affects, in tests, one unit to an entry: the test classes that test what the
+item changes, the tests it writes among them - or, for a runner that selects tests by name, those tests' names. Write
 test classes, not the classes the item changes: a runner selects tests, and which tests reach a class is not known
-from the class. The engine tests each item on its filter alone where the run's input affectedTests is on (it is
-`{input.affectedTests}`), and every test runs once every item of the round is built; where it is off, every test runs
-for each item, and the filter is kept for a run that turns it on. The legs this run tests on, each with its test
-runner as the repository's settings give it, the option a filter is given through, and what the leg leaves out:
+from the class. The engine tests each item on its units alone - with any its builder adds as it works - and the gate
+of each round on the units of every item built in the run, or on every test where the run's input finalTests says all
+(it is `{input.finalTests}`). An item whose change affects no test leaves tests empty and says in noTests why: what
+makes its work a document, a comment or a file no test reads. It is tested on none, and its review judges the reason.
+The legs this run tests on, each with its test runner as the repository's settings give it, the option a filter is
+given through, and what the leg leaves out:
 
 {orient.tests}
 
-The filter is given to the runner after that option, as one argument, exactly as you write it: write it in what that
-option takes for that runner. One filter is given to every leg the item is tested on, so it has to mean the same tests
-to each. It may name only tests that are there or that the item writes. One that a leg's own exclusions leave nothing
-of is refused before anything is built, and a person is asked. Left empty, there is no filter: every test runs for the
-item.
+Each unit is given to the runner after that option exactly as you write it - the units joined into one argument where
+the leg's settings join them, each after an option of its own where they do not: write each in what that option takes
+for that runner. The units are given to every leg the item is tested on, so each has to mean the same tests to each
+leg. A unit may name only tests that are there or that the item writes. One that a leg's own exclusions leave nothing
+of is refused before anything is built, and a person is asked.
 
 ## How recommendations are made in this repository
 
@@ -115,7 +117,7 @@ and says why in noClass.
    part of its item cannot be done says so, and a person is asked before anything of the item is folded.
 6. For each item write: instructions a builder with none of this conversation can follow; its definition of done, as
    statements a check can answer one by one - each behaviour, the test that pins it, and what is true of the tree
-   when the builder reports; the paths it owns and the paths it must not touch; its test filter; what it reuses, by
+   when the builder reports; the paths it owns and the paths it must not touch; its tests, or why it affects none; what it reuses, by
    path and for what; what it creates, with why nothing that exists serves and where you searched; and what it
    replaces because the request asked, by path, with what becomes of the old one.
 

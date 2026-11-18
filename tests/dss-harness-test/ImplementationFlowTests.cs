@@ -508,6 +508,13 @@ public sealed class ImplementationFlowTests
             => _queued[definition] = new Queue<AgentRunResult>(answers);
 
         /// <summary>
+        /// What one agent answers, where a test sets it: asked of each request before the queue and the standard answer,
+        /// its null falling through to them - so a test answers the builders of two items that run side by side each by
+        /// what its own prompt holds, whatever order they are asked in.
+        /// </summary>
+        public Func<AgentStepRequest, AgentRunResult?>? Answer { get; set; }
+
+        /// <summary>
         /// Holds every agent of <paramref name="definition"/> - or those <paramref name="when"/> names - until the hold is
         /// opened: an agent whose work a test spans a question with, answered by its standard answer once opened.
         /// </summary>
@@ -542,7 +549,7 @@ public sealed class ImplementationFlowTests
 
             var result = held is { } waiting
                 ? await HeldAnswerAsync(waiting, step, cancellationToken)
-                : _queued.TryGetValue(step.AgentDefinition ?? string.Empty, out var queued) && queued.Count > 0 ? queued.Dequeue() : Standard(step);
+                : Answer?.Invoke(step) ?? (_queued.TryGetValue(step.AgentDefinition ?? string.Empty, out var queued) && queued.Count > 0 ? queued.Dequeue() : Standard(step));
 
             if (Events is { } says)
             {
@@ -984,8 +991,11 @@ public sealed class ImplementationFlowTests
             ["preExisting"] = new JsonArray(),
         };
 
-    /// <summary>One work item, on the paths it owns, reusing the tool the tree holds - replacing what a test names, where it does.</summary>
-    private static JsonObject One(string name = "one", string owned = "src/one/**", string reuses = "src/tool.cs", string? replaces = null)
+    /// <summary>
+    /// One work item, on the paths it owns, reusing the tool the tree holds - replacing what a test names, where it does -
+    /// and tested on its own unit, or on the units a test gives, or on none where a test gives the reason.
+    /// </summary>
+    private static JsonObject One(string name = "one", string owned = "src/one/**", string reuses = "src/tool.cs", string? replaces = null, string[]? tests = null, string? noTests = null)
         => new()
         {
             ["name"] = name,
@@ -997,7 +1007,8 @@ public sealed class ImplementationFlowTests
             ["reuses"] = new JsonArray(new JsonObject { ["path"] = reuses, ["what"] = "the tool" }),
             ["creates"] = new JsonArray(),
             ["replaces"] = replaces is null ? new JsonArray() : new JsonArray(new JsonObject { ["path"] = replaces, ["what"] = "the report, built again" }),
-            ["testFilter"] = "",
+            ["tests"] = new JsonArray([.. (tests ?? (noTests is null ? ["ReportTests"] : [])).Select(unit => (JsonNode?)unit)]),
+            ["noTests"] = noTests ?? "",
             ["classes"] = new JsonArray(),
             ["noClass"] = "the item decides nothing: the report is a document",
         };
@@ -1013,8 +1024,8 @@ public sealed class ImplementationFlowTests
             ["preExisting"] = new JsonArray(),
         };
 
-    /// <summary>An implementer's report: everything done, nothing blocked, nothing new to the registry - with what it declines and what it cannot do where a test gives them.</summary>
-    private static JsonObject Implement(IReadOnlyList<JsonObject>? blocked = null, IReadOnlyList<JsonObject>? declined = null)
+    /// <summary>An implementer's report: everything done, nothing blocked, nothing new to the registry - with what it declines, what it cannot do and the test units it adds where a test gives them.</summary>
+    private static JsonObject Implement(IReadOnlyList<JsonObject>? blocked = null, IReadOnlyList<JsonObject>? declined = null, IReadOnlyList<string>? tests = null)
         => new()
         {
             ["summary"] = "Built the item.",
@@ -1022,6 +1033,7 @@ public sealed class ImplementationFlowTests
             ["claims"] = new JsonObject { ["built"] = "src/one/one.cs", ["tested"] = "nothing run: the repository keeps no legs" },
             ["closure"] = new JsonArray(),
             ["arms"] = new JsonArray(),
+            ["tests"] = new JsonArray([.. (tests ?? []).Select(unit => (JsonNode?)unit)]),
             ["reuse"] = "",
             ["newRows"] = new JsonArray(),
             ["blocked"] = new JsonArray([.. blocked ?? []]),
@@ -1136,7 +1148,8 @@ public sealed class ImplementationFlowTests
             ["reuses"] = new JsonArray(new JsonObject { ["path"] = "src/tool.cs", ["what"] = "the tool" }),
             ["creates"] = new JsonArray(),
             ["replaces"] = new JsonArray(),
-            ["testFilter"] = "",
+            ["tests"] = new JsonArray("WorkflowJobTests"),
+            ["noTests"] = "",
             ["classes"] = new JsonArray(),
             ["noClass"] = "the remedy decides nothing: it names a job",
         };
@@ -2094,6 +2107,67 @@ public sealed class ImplementationFlowTests
     /// <summary>The recovery and the verify loop: handlers, menders, remedies built as items are, and a red baseline told to the prioritiser. A class of its own, so the shards spread the flow's batteries: each test runs a whole run for minutes on the slow runners.</summary>
     public sealed class RecoveryAndVerify
     {
+        /// <summary>
+        /// Each work item is tested on the tests its change affects alone: the units its plan names with those its
+        /// builder's answer adds, kept under its name in the run's record of affected tests; an item that names none
+        /// runs no test - its verify skipped, saying the reason - and its review is asked to judge the reason. The round's
+        /// gate runs the units of every item built in the run, each once, where the run's input finalTests is affected,
+        /// its default, and every test where it is all.
+        /// </summary>
+        [Theory]
+        [InlineData(null)]
+        [InlineData("all")]
+        public async Task EachItem_IsTestedOnItsOwnUnits_ANoTestsItemOnNone_AndTheGateOnTheirUnion_OrOnEveryTest(string? finalTests)
+        {
+            using var temp = new TempDirectory();
+            var kit = await PrepareAsync(
+                temp,
+                ground: new Ground(Legs: true),
+                script: agents =>
+                {
+                    agents.Queue("planner", Completed(Plan(One(tests: ["ReportTests"]), One("notes", "docs/notes/**", noTests: "it carries the report's notes, which no test reads"))));
+                    agents.Answer = step => step.AgentDefinition == "implementer" && step.Prompt.Contains("src/one/**", StringComparison.Ordinal)
+                        ? Completed(Implement(tests: ["FrameTests", "ReportTests"]))
+                        : null;
+                });
+
+            var end = finalTests is null
+                ? await StartAsync(kit, "request=Ship the orders report.", "preapproved=yes")
+                : await StartAsync(kit, "request=Ship the orders report.", "preapproved=yes", $"finalTests={finalTests}");
+
+            Assert.True(HarnessExit.Success == end.ExitCode, $"{end.Message} | {Shown(kit)}");
+
+            // The first item ran its own units and its builder's, each once; the notes item ran none.
+            var tests = kit.Steps.Of("test");
+            var verify = Assert.Single(tests, run => run.Step.Name == "verify");
+            Assert.Equal(["ReportTests", "FrameTests"], verify.Step.Filter!.Written);
+            Assert.Equal("one", verify.Step.Affected);
+
+            var notes = Assert.Single(kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf())!.Steps, step => step.Step.EndsWith(".verify", StringComparison.Ordinal) && step.State == nameof(FlowInstanceState.Skipped));
+            Assert.Equal("its filter names no test: it carries the report's notes, which no test reads", notes.SkippedBecause);
+
+            // Its review is asked to judge the reason, and its scope to keep the review of tests.
+            Assert.Contains(kit.Agents.Of("reviewer-correctness"), step => step.Prompt.Contains("this item runs no tests: it carries the report's notes, which no test reads", StringComparison.Ordinal));
+            Assert.Contains(kit.Agents.Of("review-scope"), step => step.Prompt.Contains("the reason it gives, which the review of tests judges: it carries the report's notes, which no test reads", StringComparison.Ordinal));
+
+            // The run's record holds each item's units under its name.
+            Assert.Equal(
+                ["notes: ", "one: ReportTests, FrameTests"],
+                kit.Harness.OrchestrationStore.ReadAffectedTests(kit.RunOf())!.Entries.Select(entry => $"{entry.Key}: {string.Join(", ", entry.Units)}").Order(StringComparer.Ordinal));
+
+            // The gate ran the union of every built item's units - or every test, where the run asked for all.
+            var gate = Assert.Single(tests, run => run.Step.Name == "gate");
+
+            if (finalTests is null)
+            {
+                Assert.Equal(["ReportTests", "FrameTests"], gate.Step.Filter!.Written);
+            }
+            else
+            {
+                Assert.Null(gate.Step.Filter);
+            }
+        }
+
         /// <summary>
         /// The item's handlers: a test that ends red goes to the item's builder on its mend prompt, and the test runs
         /// again; a fold refused for a path its within leaves out is answered fail by its own configuration and goes to

@@ -9,6 +9,7 @@ namespace DssHarness.Tests;
 /// the tree where it exists; every site that must change is the item's too, for patching some of a class's sites is
 /// never done; more than one site means consolidate, as one site that is not the home does; a class is searched by
 /// data it can name again, and its universe holds the axes the repository declares; and one home belongs to one item.
+/// And of its tests (P-C9): an item names the units of the tests its change affects, or says why it affects none.
 /// Each rule is red with itself removed, held by the reverts this file's twin methods name.
 /// </summary>
 public sealed class PlanValidatorTests : IDisposable
@@ -57,8 +58,11 @@ public sealed class PlanValidatorTests : IDisposable
             .Check(items, await harness.ContextLoader.LoadAsync(repository.Path, Token), "r1", Flow);
     }
 
-    /// <summary>A work item that owns <paramref name="owned"/> and changes the classes given, or says why it changes none.</summary>
-    private static JsonObject Item(string name = "one", string owned = "src/one/**", JsonObject[]? classes = null, string? noClass = null)
+    /// <summary>
+    /// A work item that owns <paramref name="owned"/> and changes the classes given, or says why it changes none; tested on
+    /// the units given, or on one of its own where none are given and no reason says why it runs none.
+    /// </summary>
+    private static JsonObject Item(string name = "one", string owned = "src/one/**", JsonObject[]? classes = null, string? noClass = null, string[]? tests = null, string? noTests = null)
     {
         var item = new JsonObject
         {
@@ -71,7 +75,8 @@ public sealed class PlanValidatorTests : IDisposable
             ["reuses"] = new JsonArray(new JsonObject { ["path"] = "file.txt", ["what"] = "the tool" }),
             ["creates"] = new JsonArray(),
             ["replaces"] = new JsonArray(),
-            ["testFilter"] = "",
+            ["tests"] = new JsonArray([.. (tests ?? (noTests is null ? ["OneTests"] : [])).Select(unit => (JsonNode?)unit)]),
+            ["noTests"] = noTests ?? "",
         };
 
         item["classes"] = new JsonArray([.. classes ?? []]);
@@ -143,6 +148,37 @@ public sealed class PlanValidatorTests : IDisposable
                 "work item 'two' gives both classes and noClass: noClass says why an item decides nothing, and this one has classes",
             ],
             await CheckAsync(repository, neither, both));
+    }
+
+    /// <summary>
+    /// P-C9: an item names the tests its change affects or says why it affects none - one without either would be tested on
+    /// nothing, unsaid, and one with both says two things; a unit that is blank, or tests that are no list of units, are
+    /// problems too. An item that names its units, or gives a reason alone, is sound.
+    /// </summary>
+    [Fact]
+    public async Task AnItemWithoutTestsAndAReason_IsAProblem_AsIsOneWithBoth_OrABlankUnit()
+    {
+        var (_, repository) = await RepositoryAsync();
+        var neither = Item(tests: []);
+        neither.Remove("noTests");
+        var absent = Item("two", "src/two/**");
+        absent.Remove("tests");
+        absent.Remove("noTests");
+        var both = Item("three", "src/three/**", tests: ["ThreeTests"], noTests: "it carries a document");
+        var blank = Item("four", "src/four/**", tests: ["FourTests", " "]);
+        var shapeless = Item("five", "src/five/**");
+        shapeless["tests"] = "FiveTests";
+
+        Assert.Equal(
+            [
+                "work item 'one' names no test and says no reason: an item is tested on the tests its change affects alone, so it names them in tests, or says in noTests why its change affects none - a document, a comment, a file no test reads",
+                "work item 'two' names no test and says no reason: an item is tested on the tests its change affects alone, so it names them in tests, or says in noTests why its change affects none - a document, a comment, a file no test reads",
+                "work item 'three' gives both tests and noTests: noTests says why an item's change affects no test, and this one names tests",
+                "work item 'four' names a test unit that is empty, or spaces alone: a runner reads it as no filter at all, or as one that matches every test - name the tests, or take it out",
+                "work item 'five' gives tests that are not a list of units: each entry names the tests of one unit, written as a leg's runner takes it after its filter option",
+            ],
+            await CheckAsync(repository, neither, absent, both, blank, shapeless));
+        Assert.Empty(await CheckAsync(repository, Item(tests: ["OneTests", "OtherTests"]), Item("two", "src/two/**", noTests: "it carries a document")));
     }
 
     /// <summary>P-C2: a class id is used once in a plan, for findings, records and the ledger name a class by it.</summary>

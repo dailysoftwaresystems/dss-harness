@@ -29,6 +29,12 @@ internal static class Ctest
     /// </summary>
     public const string ExcludeJoin = "|";
 
+    /// <summary>
+    /// What joins regular expressions into one that matches what any of them does: several filter units, given to ctest
+    /// as one, each choose their tests - given apart, -R keeps only the last.
+    /// </summary>
+    public const string FilterJoin = "|";
+
     /// <summary>The option naming a test preset.</summary>
     private const string PresetArg = "--preset";
 

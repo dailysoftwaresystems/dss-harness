@@ -1244,13 +1244,17 @@ public static class WorkflowFileParser
             case "test":
                 step = step with
                 {
-                    Filter = ScalarIn(keys, $"{where}.filter", problems),
+                    Filter = FlowListIn(keys, $"{where}.filter", problems),
                     FilterWhen = ScalarIn(keys, $"{where}.filterWhen", problems),
+                    Affected = ScalarIn(keys, $"{where}.affected", problems),
+                    NoTests = ScalarIn(keys, $"{where}.noTests", problems),
                     Exclude = StringListIn(keys, $"{where}.exclude", problems) ?? [],
                     Labels = StringListIn(keys, $"{where}.labels", problems) ?? [],
                     SkipBuild = BooleanIn(keys, $"{where}.skipBuild", problems),
                     KeepGoing = BooleanIn(keys, $"{where}.keepGoing", problems),
                 };
+
+                RefuseGivenEmpty(keys, $"{where}.filter", "name the units it runs", "every test of its legs", problems);
                 break;
 
             case "run":
