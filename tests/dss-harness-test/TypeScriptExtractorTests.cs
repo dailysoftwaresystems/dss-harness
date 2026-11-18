@@ -184,9 +184,46 @@ public sealed class TypeScriptExtractorTests : CodeGraphExtractorContractTests<T
         });
         """;
 
+    private const string Reads = """
+        export const GREETING = 'hello world';
+
+        export enum Kind {
+            One = 'one',
+        }
+
+        export class Reader {
+            private own = 0;
+
+            take(table: { count: number }): string {
+                const local = 4;
+                this.own += local + table.count;
+                return GREETING + ' padding ' + `${Kind.One} part`;
+            }
+        }
+        """;
+
     /// <inheritdoc/>
     public override IReadOnlyList<CodeGraphFixture> Fixtures { get; } =
     [
+        new("src/reads.ts", Reads)
+        {
+            Nodes =
+            [
+                new("typescript:src/reads.ts.GREETING", CodeNodeKinds.Member, (1, 1)),
+                new("typescript:src/reads.ts.Kind", CodeNodeKinds.Type, (3, 5)),
+                new("typescript:src/reads.ts.Kind.One", CodeNodeKinds.Member, (4, 4)),
+                new("typescript:src/reads.ts.Reader", CodeNodeKinds.Type, (7, 15)),
+                new("typescript:src/reads.ts.Reader.own", CodeNodeKinds.Member, (8, 8)),
+                new("typescript:src/reads.ts.Reader.take", CodeNodeKinds.Member, (10, 14)),
+            ],
+            Edges =
+            [
+                // A field read through this, a constant read bare, and an enum member read inside a template's hole.
+                new("typescript:src/reads.ts.Reader.take", "typescript:src/reads.ts.Reader.own", CodeEdgeKinds.Uses, 12, CodeConfidences.Exact),
+                new("typescript:src/reads.ts.Reader.take", "typescript:src/reads.ts.GREETING", CodeEdgeKinds.Uses, 13, CodeConfidences.Exact),
+                new("typescript:src/reads.ts.Reader.take", "typescript:src/reads.ts.Kind.One", CodeEdgeKinds.Uses, 13, CodeConfidences.Exact),
+            ],
+        },
         new("src/shapes.ts", Shapes)
         {
             Nodes =
@@ -515,7 +552,9 @@ public sealed class TypeScriptExtractorTests : CodeGraphExtractorContractTests<T
         Assert.Equal([("id", "function"), ("wide", "function"), ("after", "function")], tsx.Nodes.Select(node => (node.Name, node.SubKind!)));
         Assert.Equal(["show"], tsx.References.Select(reference => reference.Name));
         Assert.Equal([("cast", "constant"), ("after", "function")], ts.Nodes.Select(node => (node.Name, node.SubKind!)));
-        Assert.Equal(["go"], ts.References.Select(reference => reference.Name));
+
+        // The angle's cast names its type, and the value it casts is read: a use of each, beside the call after them.
+        Assert.Equal(["Shape", "value", "go"], ts.References.Select(reference => reference.Name));
     }
 
     /// <summary>

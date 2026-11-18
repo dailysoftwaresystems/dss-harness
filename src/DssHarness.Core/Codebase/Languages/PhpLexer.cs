@@ -412,6 +412,19 @@ internal static class PhpLexer
                     literals.OpenCode(character == '{' ? index + 1 : index + 2);
                     index += character == '{' ? 1 : 2;
                 }
+                else if (top != '\'' && character == '$' && index + 1 < stop && StartsName(text[index + 1]))
+                {
+                    // A bare $name: a run of code of its own, a variable the string reads.
+                    var name = index + 1;
+
+                    while (name < stop && InName(text[name]))
+                    {
+                        name++;
+                    }
+
+                    Interpolated(start, index + 1, name);
+                    index = name;
+                }
                 else if (top != '\0' && character == top)
                 {
                     literals.CloseLiteral();

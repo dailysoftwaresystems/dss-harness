@@ -676,9 +676,42 @@ public sealed class CExtractorTests : CodeGraphExtractorContractTests<CExtractor
     private static IEnumerable<string> Calls(FileExtract extract, string from)
         => extract.References.Where(reference => reference.From == from && reference.Kind == CodeEdgeKinds.Calls).Select(reference => reference.Name);
 
+    private const string Reads = """
+        /* One table of the reads. */
+        const char *greeting = "hello world";
+
+        static int count = 0;
+
+        enum Kind { One, Two };
+
+        int take(int local)
+        {
+            int own = 4;
+            count += local + own;
+            enum Kind which = One;
+            switch (which)
+            {
+            case One:
+                count += 1;
+            }
+            return greeting == " padding " ? count : 0;
+        }
+        """;
+
     /// <inheritdoc/>
     public override IReadOnlyList<CodeGraphFixture> Fixtures { get; } =
     [
+        new("src/reads.c", Reads)
+        {
+            Edges =
+            [
+                // A file-scope variable read bare, an enum's member in a case, and a pointer's value compared.
+                new("c:take", "c:src/reads.c:count", CodeEdgeKinds.Uses, 11, CodeConfidences.Exact),
+                new("c:take", "c:One", CodeEdgeKinds.Uses, 12, CodeConfidences.Unique),
+                new("c:take", "c:One", CodeEdgeKinds.Uses, 15, CodeConfidences.Unique),
+                new("c:take", "c:greeting", CodeEdgeKinds.Uses, 18, CodeConfidences.Unique),
+            ],
+        },
         new("src/lex.h", LexHeader)
         {
             Nodes =

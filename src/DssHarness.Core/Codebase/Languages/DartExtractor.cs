@@ -13,7 +13,7 @@ public sealed class DartExtractor : ICodeGraphExtractor
     public string Language => "dart";
 
     /// <inheritdoc/>
-    public int Version => 1;
+    public int Version => 2;
 
     /// <inheritdoc/>
     public CodeGraphClaims Claims { get; } = CodeGraphClaims.OfExtensions(".dart");
@@ -23,7 +23,7 @@ public sealed class DartExtractor : ICodeGraphExtractor
 
     /// <inheritdoc/>
     public CodeGraphExtractorHelp Help { get; } = new(
-        "Dart (.dart), through the structural scanner C and C++ are read by: every class, mixin, extension, extension type, enum, typedef, function, getter, setter, operator, field and constructor with its signature, summary and body; imports, exports and parts, a library and its parts one scope whose private names no importer sees; base lists and @override; each call with what its receiver is where the file says; test, testWidgets and group calls in test files",
+        "Dart (.dart), through the structural scanner C and C++ are read by: every class, mixin, extension, extension type, enum, typedef, function, getter, setter, operator, field and constructor with its signature, summary and body; imports, exports and parts, a library and its parts one scope whose private names no importer sees; base lists and @override; each call with what its receiver is where the file says; each member a member reads or writes without calling it, and each string literal the file holds, by its value and its line; test, testWidgets and group calls in test files",
         [
             "types inferred: a call on a value whose type the file does not write - a local given a call's result, a closure's parameter, a getter of a type another library declares - is bound by its name alone; one on a value declared dynamic is marked dynamic",
             "an extension member chosen by the type of its receiver where the file does not write that type: bound by its name alone; one reached only through a deferred import is taken as applying",

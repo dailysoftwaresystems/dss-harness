@@ -44,7 +44,7 @@ public sealed class CSharpExtractor : ICodeGraphExtractor
     public string Language => "csharp";
 
     /// <inheritdoc/>
-    public int Version => 1;
+    public int Version => 2;
 
     /// <inheritdoc/>
     public CodeGraphClaims Claims { get; } = CodeGraphClaims.OfExtensions(".cs");
@@ -54,13 +54,14 @@ public sealed class CSharpExtractor : ICodeGraphExtractor
 
     /// <inheritdoc/>
     public CodeGraphExtractorHelp Help { get; } = new(
-        "C# (.cs), through the compiler's own parser and its syntax alone, nothing built: every namespace, type and member with its signature, summary and body; usings, base lists, overrides and test attributes; each call with what its receiver is where the file says",
+        "C# (.cs), through the compiler's own parser and its syntax alone, nothing built: every namespace, type and member with its signature, summary and body; usings, base lists, overrides and test attributes; each call with what its receiver is where the file says; each member a member reads or writes without calling it - a field, a property, a constant, an enum member, and any name a nameof names - and each string literal the file holds, by its value and its line",
         [
             "code under a preprocessor branch the parse does not take: it defines no symbol, so code under #if DEBUG is out",
             "the type of a value no declaration says - a var given a call's result, a lambda's parameter: a call on it is linked by its name alone",
             "local functions and lambdas as nodes of their own: what they call, the member they are written in calls",
             "a call on a dynamic value, a member named by a string to reflection, Activator.CreateInstance and a delegate's invocation: marked dynamic, and not linked",
             "a generic extension method on a type parameter with no constraint, found by its name alone; a constructor's base(...) in a part of a partial class whose base list is in another file",
+            "a read of a member through a value no declaration types, linked by the member's name alone; a read of another file's field or property whose name its type's members also carry, linked to each of them",
             "code a source generator writes while the project builds, which is in no file of the tree",
             "two types of one name in two projects - a Program in each - which are one node, as a partial type's parts are; a record's positional property as an override of its base's",
         ]);
@@ -124,7 +125,34 @@ public sealed class CSharpExtractor : ICodeGraphExtractor
         private readonly List<ExtractImport> _imports = [];
         private readonly List<ExtractReference> _references = [];
         private readonly List<ExtractDynamic> _dynamic = [];
+        private readonly List<ExtractLiteral> _literals = [];
         private readonly ExtractIds _ids = new();
+
+        /// <summary>How many string literals the file holds past the most an extract keeps.</summary>
+        private int _literalsBeyond;
+
+        /// <summary>
+        /// One string literal of the file, kept with its line where it is data a search asks for: of at least
+        /// <see cref="FileExtract.LeastLiteral"/> characters, and among the first <see cref="FileExtract.MostLiterals"/> -
+        /// its line endings read as one newline, so a checkout's own way of writing them moves no answer.
+        /// </summary>
+        private void Literal(string value, int line)
+        {
+            value = value.Replace("\r\n", "\n", StringComparison.Ordinal).Replace("\r", "\n", StringComparison.Ordinal);
+
+            if (value.Length < FileExtract.LeastLiteral)
+            {
+                return;
+            }
+
+            if (_literals.Count == FileExtract.MostLiterals)
+            {
+                _literalsBeyond++;
+                return;
+            }
+
+            _literals.Add(new ExtractLiteral(ExtractText.Whole(value), line));
+        }
 
         /// <summary>The index in the nodes of each namespace's and type's first node, by its id, kind and parent: where a later part of it runs on.</summary>
         private readonly Dictionary<(string Id, string Kind, string? Parent), int> _parts = [];
@@ -160,6 +188,8 @@ public sealed class CSharpExtractor : ICodeGraphExtractor
                 References = _references,
                 Generated = Generated(),
                 Dynamic = _dynamic,
+                Literals = _literals.Count == 0 ? null : _literals,
+                LiteralsBeyond = _literalsBeyond,
             };
         }
 
@@ -782,8 +812,105 @@ public sealed class CSharpExtractor : ICodeGraphExtractor
                     case RecursivePatternSyntax pattern:
                         Mention(from, pattern.Type, typeParameters);
                         break;
+
+                    // A member read or written without a call of it - x.Y - and x?.Y: a use of the member, qualified by
+                    // what its receiver is where the file says. A member of an invoked access is the call's, not a use.
+                    case MemberAccessExpressionSyntax access when access.IsKind(SyntaxKind.SimpleMemberAccessExpression) && access.Parent is not InvocationExpressionSyntax:
+                        Used(from, access.Name, access.Expression, known);
+                        break;
+
+                    case MemberBindingExpressionSyntax binding when binding.Parent is not InvocationExpressionSyntax
+                        && binding.Ancestors().OfType<ConditionalAccessExpressionSyntax>().FirstOrDefault(holder => holder.WhenNotNull.Span.Contains(binding.Span)) is { } conditional:
+                        Used(from, binding.Name, conditional.Expression, known);
+                        break;
+
+                    case IdentifierNameSyntax read when Readable(read, known, functions, typeParameters):
+                        _references.Add(new ExtractReference(from.Id, CodeEdgeKinds.Uses, read.Identifier.ValueText, Line(read.SpanStart)));
+                        break;
+
+                    case LiteralExpressionSyntax literal when literal.IsKind(SyntaxKind.StringLiteralExpression):
+                        Literal(literal.Token.ValueText, Line(literal.SpanStart));
+                        break;
+
+                    // An interpolated string's constant parts are its literal parts; its holes are code, read as code.
+                    case InterpolatedStringExpressionSyntax interpolated:
+                        foreach (var part in interpolated.Contents.OfType<InterpolatedStringTextSyntax>())
+                        {
+                            Literal(part.TextToken.ValueText, Line(part.SpanStart));
+                        }
+
+                        break;
                 }
             }
+        }
+
+        /// <summary>A member read or written without a call of it: a use of the member by its name, qualified by what its receiver is where the file says.</summary>
+        private void Used(ExtractNode from, SimpleNameSyntax name, ExpressionSyntax? receiver, Known known)
+        {
+            var member = name.Identifier.ValueText;
+
+            if (member.Length == 0)
+            {
+                return;
+            }
+
+            _references.Add(new ExtractReference(from.Id, CodeEdgeKinds.Uses, member, Line(name.SpanStart)) { Qualifier = Receiver(receiver, known) });
+        }
+
+        /// <summary>
+        /// Whether <paramref name="read"/> names a value the member reads by the name alone: not a call's callee, not a
+        /// member of a receiver, not part of a written type or base, and none of its own locals, parameters, local
+        /// functions or type parameters - the syntax alone cannot tell a field of another type from a value the language
+        /// itself holds, and a use of either is what the graph wants, resolved or not.
+        /// </summary>
+        private static bool Readable(IdentifierNameSyntax read, Known known, IReadOnlySet<string> functions, IReadOnlySet<string> typeParameters)
+        {
+            var name = read.Identifier.ValueText;
+
+            // The right operand of an as or an is is a type the Mention cases read, not a value.
+            if (read.Parent is BinaryExpressionSyntax asOrIs && (asOrIs.IsKind(SyntaxKind.AsExpression) || asOrIs.IsKind(SyntaxKind.IsExpression)) && ReferenceEquals(asOrIs.Right, read))
+            {
+                return false;
+            }
+
+            return name.Length > 0
+                && name != "value"
+                && !typeParameters.Contains(name)
+                && !functions.Contains(name)
+                && !known.Locals.ContainsKey(name)
+                && read.Parent is not InvocationExpressionSyntax
+                    and not MemberAccessExpressionSyntax
+                    and not MemberBindingExpressionSyntax
+                    and not QualifiedNameSyntax
+                    and not AliasQualifiedNameSyntax
+                    and not VariableDeclarationSyntax
+                    and not ForEachStatementSyntax
+                    and not CatchDeclarationSyntax
+                    and not DeclarationExpressionSyntax
+                    and not TypeOfExpressionSyntax
+                    and not CastExpressionSyntax
+                    and not DeclarationPatternSyntax
+                    and not TypePatternSyntax
+                    and not RecursivePatternSyntax
+                    and not AttributeSyntax
+                    and not BaseListSyntax
+                    and not SimpleBaseTypeSyntax
+                    and not PrimaryConstructorBaseTypeSyntax
+                    and not ObjectCreationExpressionSyntax
+                    and not ImplicitObjectCreationExpressionSyntax
+                    and not ArrayTypeSyntax
+                    and not NullableTypeSyntax
+                    and not PointerTypeSyntax
+                    and not TupleTypeSyntax
+                    and not GenericNameSyntax
+                    and not TypeArgumentListSyntax
+                    and not TupleElementSyntax
+                    and not TypeConstraintSyntax
+                    and not RefTypeSyntax
+                    and not ScopedTypeSyntax
+                    and not FunctionPointerTypeSyntax
+                    and not ParameterSyntax
+                    and not ArgumentSyntax { NameColon: not null };
         }
 
         /// <summary>One invocation: a call by its name, its argument count and its receiver, or a mark where it cannot be bound.</summary>

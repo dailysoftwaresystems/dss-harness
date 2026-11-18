@@ -53,7 +53,7 @@ public static class CodeGraphLinker
     /// revision that made it (<see cref="CodeGraphSymbolsFile.Linker"/>), so a graph linked by another one is linked again
     /// though no file changed, and no file is read again.
     /// </summary>
-    public const int Revision = 7;
+    public const int Revision = 8;
 
     /// <summary>Links <paramref name="files"/>, one tree's every file, into its symbols and edges.</summary>
     /// <param name="files">Every file the graph keeps, each once: those whose declarations are kept with their extracts.</param>
@@ -522,13 +522,13 @@ public static class CodeGraphLinker
                         _resolved.Add((file, at));
                     }
 
-                    Take(from, kept, stage, bases);
+                    Take(from, kept, stage, bases, reference);
                 }
             }
         }
 
         /// <summary>Takes what one reference found: the bases it found, and, past the first pass, its edges and counts.</summary>
-        private void Take(Declaration from, Finding finding, Stage stage, Dictionary<string, List<string[]>>? bases)
+        private void Take(Declaration from, Finding finding, Stage stage, Dictionary<string, List<string[]>>? bases, ExtractReference reference)
         {
             // A mixin's findings are a rank of their own, nearer than every base named before it; an implemented base's join
             // the rank before the last, an inherited one's the last - each empty while the type names none - as BaseRanksOf
@@ -562,6 +562,15 @@ public static class CodeGraphLinker
             }
 
             _edges.AddRange(finding.Edges);
+
+            // A use that names nothing the repository declares is the common case - a member of a type the repository
+            // does not hold, a value of the language's own - and says nothing of how sure the graph is of what it does
+            // declare: a use is recall, never a doubt, so its findings count nowhere the unsureness of a node or a file
+            // is read from.
+            if (reference.Kind == CodeEdgeKinds.Uses)
+            {
+                return;
+            }
 
             if (finding.Counted == Finding.External)
             {
@@ -1930,6 +1939,7 @@ public static class CodeGraphLinker
         => reference.Kind switch
         {
             CodeEdgeKinds.Calls => (target.Node.Kind == CodeNodeKinds.Member && target.Node.TakesArity(reference.Arity)) || target.Node.Kind == CodeNodeKinds.Type,
+            CodeEdgeKinds.Uses => target.Node.Kind is CodeNodeKinds.Member or CodeNodeKinds.Type,
             CodeEdgeKinds.Overrides => target.Node is { Kind: CodeNodeKinds.Member, Extends: null } && target.Node.TakesArity(reference.Arity),
             CodeEdgeKinds.ProjectReference => target.Node.Kind == CodeNodeKinds.Project,
             _ => target.Node.Kind == CodeNodeKinds.Type,

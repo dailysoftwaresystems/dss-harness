@@ -519,8 +519,10 @@ public sealed class CodebaseGraphTool(
                     continue;
                 }
 
-                // Every edge of the kind decides whether the graph is sure of the answer: no page's bound hides one.
-                unsure |= kept.Any(edge => string.Equals(edge.Confidence, CodeConfidences.Candidates, StringComparison.Ordinal) || _queries.Unsure(edge.Card.Id));
+                // Every edge of the kind decides whether the graph is sure of the answer: no page's bound hides one. A use
+                // is recall, never a doubt - its candidates say nothing of how sure the graph is of what it declares.
+                var doubt = group is not "users" and not "uses";
+                unsure |= kept.Any(edge => doubt && (string.Equals(edge.Confidence, CodeConfidences.Candidates, StringComparison.Ordinal) || _queries.Unsure(edge.Card.Id)));
                 sections.Add(Section($"{group} ({kept.Count}):", [.. kept.Select(edge => new GraphEntry("  " + EdgeLine(edge)))], NodeLinesAKind));
             }
 

@@ -1459,6 +1459,27 @@ public sealed partial class CodebaseGraphToolTests
         Assert.Same(before, tool.Queries);
     }
 
+    /// <summary>
+    /// A file whose uses are nearly all candidates - a member two types declare, read through a value of each - is not
+    /// unsure: a use is recall, never a doubt, so a candidates use counts nowhere the file's unsureness is read from.
+    /// </summary>
+    [Fact]
+    public async Task AFileOfMostlyCandidateUses_IsNotUnsure()
+    {
+        using var tree = await TreeAsync(
+            ("src/Twin.cs", "namespace Demo;\n\npublic class Left\n{\n    public int one;\n}\n\npublic class Right\n{\n    public int one;\n}\n\npublic class Reader\n{\n    public int Take()\n    {\n        return one;\n    }\n}\n"));
+        var queries = await QueriesAsync(tree);
+
+        var take = ((GraphResolve.Found)queries.Resolve("Demo.Reader.Take")).Card;
+
+        // A bare `one`, read where two types declare it: a use of both, candidates.
+        Assert.Contains(queries.Edges(take.Id).Uses, edge => string.Equals(edge.Confidence, CodeConfidences.Candidates, StringComparison.Ordinal));
+        Assert.Null(queries.UnsureOfFile("src/Twin.cs"));
+
+        var node = await AskAsync(Tool(tree, queries), """{"op":"node","symbol":"Take"}""");
+
+        Assert.DoesNotContain("text:", node.Text, StringComparison.Ordinal);
+    }
     /// <summary>A C# file of 222 lines, past the narrowing's bound.</summary>
     private static readonly string BigFile = string.Join("\n", ["namespace Demo;", string.Empty, .. Enumerable.Range(1, 220).Select(at => $"// line {at} of the big file")]) + "\n";
 

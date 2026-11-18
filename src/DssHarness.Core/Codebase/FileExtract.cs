@@ -53,6 +53,24 @@ public sealed record FileExtract(IReadOnlyList<ExtractNode> Nodes)
     public IReadOnlyList<ExtractDynamic> Dynamic { get; init; } = [];
 
     /// <summary>
+    /// The string literals the file holds, of at least <see cref="LeastLiteral"/> characters, each with its line: the
+    /// values the data of the code is written in - what a search of the graph may ask for by its value - interpolated and
+    /// template strings giving their constant parts. At most <see cref="MostLiterals"/> of them are kept, the rest
+    /// counted in <see cref="LiteralsBeyond"/>; <see langword="null"/> where the file holds none.
+    /// </summary>
+    public IReadOnlyList<ExtractLiteral>? Literals { get; init; }
+
+    /// <summary>How many string literals the file holds past the <see cref="MostLiterals"/> it keeps.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public int LiteralsBeyond { get; init; }
+
+    /// <summary>The shortest a kept string literal is, in characters: a shorter one is not data a search asks for.</summary>
+    public const int LeastLiteral = 3;
+
+    /// <summary>The most string literals an extract keeps of one file; the rest are counted, not kept.</summary>
+    public const int MostLiterals = 2000;
+
+    /// <summary>
     /// What is wrong with this extract of a file of <paramref name="lineCount"/> lines made by
     /// <paramref name="language"/>; <see langword="null"/> where nothing is. The shape alone: a node's digest is checked
     /// against the file's lines where the lines are at hand.
@@ -139,6 +157,12 @@ public sealed record FileExtract(IReadOnlyList<ExtractNode> Nodes)
             ?? (Dynamic ?? []).Select(dynamic => dynamic is null || string.IsNullOrWhiteSpace(dynamic.Why) ? "it marks a line dynamic and not why"
                 : !Within(dynamic.Line, lineCount) ? $"it marks line {dynamic.Line.ToString(CultureInfo.InvariantCulture)} dynamic, outside its {lineCount.ToString(CultureInfo.InvariantCulture)} lines"
                 : null).FirstOrDefault(found => found is not null)
+            ?? (Literals ?? []).Select(literal => literal is null ? "it holds a literal that is null"
+                : string.IsNullOrEmpty(literal.Value) || literal.Value.Length < LeastLiteral ? $"its literal '{literal.Value}' is shorter than {LeastLiteral.ToString(CultureInfo.InvariantCulture)} characters, and no literal is kept that short"
+                : !Within(literal.Line, lineCount) ? $"its literal '{literal.Value}' is on line {literal.Line.ToString(CultureInfo.InvariantCulture)}, outside its {lineCount.ToString(CultureInfo.InvariantCulture)} lines"
+                : null).FirstOrDefault(found => found is not null)
+            ?? (Literals is { Count: > MostLiterals } ? $"it keeps {Literals.Count.ToString(CultureInfo.InvariantCulture)} literals, past the {MostLiterals.ToString(CultureInfo.InvariantCulture)} an extract keeps" : null)
+            ?? (LiteralsBeyond < 0 ? "it counts fewer than no literals past its own" : null)
             ?? (Texts().FirstOrDefault(text => !IsWhole(text)) is { } cut ? $"it holds text that is no whole UTF-16, a surrogate cut from its pair: '{cut}'" : null);
     }
 
@@ -204,6 +228,7 @@ public sealed record FileExtract(IReadOnlyList<ExtractNode> Nodes)
             .Concat((AddressRoots ?? []).SelectMany(root => (string?[])[root.Prefix, root.Directory]))
             .Concat((References ?? []).SelectMany(reference => (string?[])[reference.From, reference.Kind, reference.Name, reference.Qualifier?.Kind, reference.Qualifier?.Name]))
             .Concat((Dynamic ?? []).Select(dynamic => dynamic.Why))
+            .Concat((Literals ?? []).Select(literal => literal.Value))
             .Append(Generated)
             .OfType<string>();
 
@@ -519,3 +544,8 @@ public static class CodeQualifierKinds
 /// <param name="Line">The line.</param>
 /// <param name="Why">What it saw: a call a macro writes, a member named by a string to reflection, a call through a pointer, a file that stops parsing there.</param>
 public sealed record ExtractDynamic(int Line, string Why);
+
+/// <summary>One string literal a file holds, by its value and its line.</summary>
+/// <param name="Value">The literal's value as the code writes it between its quotes, an interpolated or template string's constant parts joined.</param>
+/// <param name="Line">Its first line.</param>
+public sealed record ExtractLiteral(string Value, int Line);

@@ -1,0 +1,1 @@
+{"nodes":[{"id":"javascript:lib/util.cjs.make","kind":"member","name":"make","qualified":"lib/util.cjs.make","start":1,"end":3,"signature":"function make(a, b)","subKind":"function","scope":"lib/util.cjs","bodyStart":1,"modifiers":[],"minArity":0}],"scopes":[{"name":"lib/util.cjs","open":true}],"imports":[],"addressRoots":[],"references":[],"dynamic":[]}

@@ -88,6 +88,8 @@ public sealed record GraphEdge(GraphCard Card, string Confidence);
 /// <param name="Implementations">The types that implement it, and the members that answer it for a type.</param>
 /// <param name="Overrides">The members it overrides, and those that override it.</param>
 /// <param name="References">The types it names or makes, and what names or makes it.</param>
+/// <param name="Users">The members that read or write it without calling it.</param>
+/// <param name="Uses">The members it reads or writes without calling them.</param>
 /// <param name="Tests">The tests that exercise it.</param>
 /// <param name="Includes">What it imports or names as a project, and what imports or names it.</param>
 public sealed record GraphEdges(
@@ -98,6 +100,8 @@ public sealed record GraphEdges(
     IReadOnlyList<GraphEdge> Implementations,
     IReadOnlyList<GraphEdge> Overrides,
     IReadOnlyList<GraphEdge> References,
+    IReadOnlyList<GraphEdge> Users,
+    IReadOnlyList<GraphEdge> Uses,
     IReadOnlyList<GraphEdge> Tests,
     IReadOnlyList<GraphEdge> Includes)
 {
@@ -111,6 +115,8 @@ public sealed record GraphEdges(
         ("implementations", Implementations),
         ("overrides", Overrides),
         ("references", References),
+        ("users", Users),
+        ("uses", Uses),
         ("tests", Tests),
         ("includes", Includes),
     ];

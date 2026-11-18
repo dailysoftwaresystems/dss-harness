@@ -13,7 +13,7 @@ public sealed class JavaScriptExtractor : ICodeGraphExtractor
     public string Language => "javascript";
 
     /// <inheritdoc/>
-    public int Version => 1;
+    public int Version => 2;
 
     /// <inheritdoc/>
     public CodeGraphClaims Claims { get; } = CodeGraphClaims.OfExtensions(".js", ".mjs", ".cjs", ".jsx");
@@ -23,7 +23,7 @@ public sealed class JavaScriptExtractor : ICodeGraphExtractor
 
     /// <inheritdoc/>
     public CodeGraphExtractorHelp Help { get; } = new(
-        "JavaScript (.js, .mjs, .cjs, .jsx), through the structural scanner C, C++ and Dart are read by: every class, function, variable - a function, an arrow or a class bound to one read as one - method, accessor and field with its signature, summary and body; ECMAScript's and CommonJS's imports and exports, each tried as Node tries it, a module one scope whose own names no importer sees; extends; each call with what its receiver is where the file says, a JSX element's component among them; describe, it and test calls in test files",
+        "JavaScript (.js, .mjs, .cjs, .jsx), through the structural scanner C, C++ and Dart are read by: every class, function, variable - a function, an arrow or a class bound to one read as one - method, accessor and field with its signature, summary and body; ECMAScript's and CommonJS's imports and exports, each tried as Node tries it, a module one scope whose own names no importer sees; extends; each call with what its receiver is where the file says, a JSX element's component among them; each member a member reads or writes without calling it, and each string literal the file holds, by its value and its line; describe, it and test calls in test files",
         JsHelp.Unseen);
 
     /// <inheritdoc/>

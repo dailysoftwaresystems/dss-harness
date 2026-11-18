@@ -72,6 +72,9 @@ public static class CodeEdgeKinds
     /// <summary>A member or a type to a type it names.</summary>
     public const string References = "references";
 
+    /// <summary>A member to a member it reads or writes without calling it: a field, a property, a constant or an enum member, and a name a <c>nameof</c> names.</summary>
+    public const string Uses = "uses";
+
     /// <summary>A declaration with no body to the one with a body and the same qualified name: derived when linking.</summary>
     public const string Declares = "declares";
 
@@ -82,7 +85,7 @@ public static class CodeEdgeKinds
     public const string ProjectReference = "projectReference";
 
     /// <summary>The kinds an implementation's references may ask for: what a reference to resolve can be, before linking makes it an edge.</summary>
-    public static IReadOnlyList<string> Referenced { get; } = [Inherits, Implements, MixesIn, Overrides, Calls, Instantiates, References, ProjectReference];
+    public static IReadOnlyList<string> Referenced { get; } = [Inherits, Implements, MixesIn, Overrides, Calls, Instantiates, References, Uses, ProjectReference];
 
     /// <summary>Every kind an edge of a graph may be, with what it means as help says it: the one list of both.</summary>
     public static IReadOnlyList<(string Kind, string Meaning)> Described { get; } =
@@ -97,6 +100,7 @@ public static class CodeEdgeKinds
         (Dispatches, "an interface's member to each member that answers it for a type"),
         (Instantiates, "a member to a type it makes"),
         (References, "a member or a type to a type it names"),
+        (Uses, "a member to a member it reads or writes without calling it"),
         (Declares, "a declaration with no body to the one with a body"),
         (Tests, "a test to a member it calls directly"),
         (ProjectReference, "a project to a project it names"),

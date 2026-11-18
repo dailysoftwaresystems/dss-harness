@@ -230,4 +230,68 @@ internal sealed record InterpolatedText(
     ScannedText Scan,
     IReadOnlyDictionary<int, List<(int Start, int End)>> Interpolations,
     CodeLineIndex Lines,
-    IReadOnlyDictionary<int, List<(int Start, int End)>>? Elements = null);
+    IReadOnlyDictionary<int, List<(int Start, int End)>>? Elements = null)
+{
+    /// <summary>
+    /// The constant parts of the string token <paramref name="token"/>, its quotes with it: a plain string's whole
+    /// value, a template's parts between its holes - the code a hole holds is read as code where its spans are
+    /// re-scanned. A hole's sigil (<c>${</c>, <c>{$</c>, a bare <c>$name</c>) and its closing brace are the hole's, not
+    /// a part's; a string written with an escape is left out: its value is not its text between the quotes.
+    /// </summary>
+    public IEnumerable<string> LiteralParts(ScanToken token)
+    {
+        var source = Scan.Source;
+        var end = token.Start + token.Length - 1;
+
+        if (end <= token.Start)
+        {
+            yield break;
+        }
+
+        if (!Interpolations.TryGetValue(token.Start, out var spans))
+        {
+            var plain = source[(token.Start + 1)..end];
+
+            if (!plain.Contains('\\', StringComparison.Ordinal))
+            {
+                yield return plain;
+            }
+
+            yield break;
+        }
+
+        var at = token.Start + 1;
+
+        foreach (var span in spans)
+        {
+            var hole = span.Start;
+
+            while (hole > at && (source[hole - 1] == '$' || source[hole - 1] == '{'))
+            {
+                hole--;
+            }
+
+            if (hole > at)
+            {
+                var part = source[at..hole];
+
+                if (!part.Contains('\\', StringComparison.Ordinal))
+                {
+                    yield return part;
+                }
+            }
+
+            at = span.End < end && source[span.End] == '}' ? span.End + 1 : span.End;
+        }
+
+        if (end > at)
+        {
+            var last = source[at..end];
+
+            if (!last.Contains('\\', StringComparison.Ordinal))
+            {
+                yield return last;
+            }
+        }
+    }
+}

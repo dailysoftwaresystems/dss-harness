@@ -171,9 +171,46 @@ public sealed class DartExtractorTests : CodeGraphExtractorContractTests<DartExt
         }
         """;
 
+    private const string Reads = """
+        const String greeting = 'hello world';
+
+        enum Kind { one, two }
+
+        class Reader {
+            int own = 0;
+
+            int take() {
+                const local = 4;
+                own += local;
+                final which = Kind.one;
+                return '$greeting padding ${which.name} part'.length;
+            }
+        }
+        """;
+
     /// <inheritdoc/>
     public override IReadOnlyList<CodeGraphFixture> Fixtures { get; } =
     [
+        new("src/reads.dart", Reads)
+        {
+            Nodes =
+            [
+                new("dart:src/reads.dart.greeting", CodeNodeKinds.Member, (1, 1)),
+                new("dart:src/reads.dart.Kind", CodeNodeKinds.Type, (3, 3)),
+                new("dart:src/reads.dart.Kind.one", CodeNodeKinds.Member, (3, 3)),
+                new("dart:src/reads.dart.Kind.two", CodeNodeKinds.Member, (3, 3)),
+                new("dart:src/reads.dart.Reader", CodeNodeKinds.Type, (5, 14)),
+                new("dart:src/reads.dart.Reader.own", CodeNodeKinds.Member, (6, 6)),
+                new("dart:src/reads.dart.Reader.take", CodeNodeKinds.Member, (8, 13)),
+            ],
+            Edges =
+            [
+                // A field read bare, an enum value read through its enum, and a constant read inside a string's $ hole.
+                new("dart:src/reads.dart.Reader.take", "dart:src/reads.dart.Reader.own", CodeEdgeKinds.Uses, 10, CodeConfidences.Exact),
+                new("dart:src/reads.dart.Reader.take", "dart:src/reads.dart.Kind.one", CodeEdgeKinds.Uses, 11, CodeConfidences.Exact),
+                new("dart:src/reads.dart.Reader.take", "dart:src/reads.dart.greeting", CodeEdgeKinds.Uses, 12, CodeConfidences.Exact),
+            ],
+        },
         new("lib/shapes.dart", Shapes)
         {
             Nodes =

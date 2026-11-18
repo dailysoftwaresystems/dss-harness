@@ -128,6 +128,39 @@ public sealed class CSharpExtractorTests : CodeGraphExtractorContractTests<CShar
         global using Figure = Shapes.Shape;
         """;
 
+    private const string Reads = """
+        namespace Reads;
+
+        /// <summary>What a shape is to the report.</summary>
+        public enum Kind
+        {
+            One,
+            Two,
+        }
+
+        public static class Table
+        {
+            public const string Greeting = "hello world";
+
+            public static int Count;
+        }
+
+        public class Reader
+        {
+            private int own;
+
+            public int Take()
+            {
+                var local = 4;
+                Table.Count = local + own;
+                Kind chosen = Kind.One;
+                string named = nameof(Reader);
+                var text = Table.Greeting + " padding " + $"a {Table.Count} part";
+                return text.Length + (int)chosen;
+            }
+        }
+        """;
+
     private const string Tests = """
         using Xunit;
 
@@ -261,6 +294,38 @@ public sealed class CSharpExtractorTests : CodeGraphExtractorContractTests<CShar
     /// <inheritdoc/>
     public override IReadOnlyList<CodeGraphFixture> Fixtures { get; } =
     [
+        new("src/Reads.cs", Reads)
+        {
+            Nodes =
+            [
+                new("csharp:Reads", CodeNodeKinds.Namespace, (1, 30)),
+                new("csharp:Reads.Kind", CodeNodeKinds.Type, (4, 8)),
+                new("csharp:Reads.Kind.One", CodeNodeKinds.Member, (6, 6)),
+                new("csharp:Reads.Kind.Two", CodeNodeKinds.Member, (7, 7)),
+                new("csharp:Reads.Table", CodeNodeKinds.Type, (10, 15)),
+                new("csharp:Reads.Table.Greeting", CodeNodeKinds.Member, (12, 12)),
+                new("csharp:Reads.Table.Count", CodeNodeKinds.Member, (14, 14)),
+                new("csharp:Reads.Reader", CodeNodeKinds.Type, (17, 30)),
+                new("csharp:Reads.Reader.own", CodeNodeKinds.Member, (19, 19)),
+                new("csharp:Reads.Reader.Take()", CodeNodeKinds.Member, (21, 29)),
+            ],
+            Edges =
+            [
+                // A static field written through its type, and the type's own field read bare: uses, exact.
+                new("csharp:Reads.Reader.Take()", "csharp:Reads.Table.Count", CodeEdgeKinds.Uses, 24, CodeConfidences.Exact),
+                new("csharp:Reads.Reader.Take()", "csharp:Reads.Reader.own", CodeEdgeKinds.Uses, 24, CodeConfidences.Exact),
+
+                // An enum member read through its enum.
+                new("csharp:Reads.Reader.Take()", "csharp:Reads.Kind.One", CodeEdgeKinds.Uses, 25, CodeConfidences.Exact),
+
+                // A nameof names without reading: a use of what it names, here the type itself.
+                new("csharp:Reads.Reader.Take()", "csharp:Reads.Reader", CodeEdgeKinds.Uses, 26, CodeConfidences.Exact),
+
+                // A constant read through its type, and one inside an interpolation's hole.
+                new("csharp:Reads.Reader.Take()", "csharp:Reads.Table.Greeting", CodeEdgeKinds.Uses, 27, CodeConfidences.Exact),
+                new("csharp:Reads.Reader.Take()", "csharp:Reads.Table.Count", CodeEdgeKinds.Uses, 27, CodeConfidences.Exact),
+            ],
+        },
         new("src/Shapes/Extras.cs", Extras)
         {
             Nodes =
@@ -725,6 +790,7 @@ public sealed class CSharpExtractorTests : CodeGraphExtractorContractTests<CShar
                 ("csharp:Derived", CodeEdgeKinds.Inherits, "Parent"),
                 ("csharp:Derived", CodeEdgeKinds.Implements, "IFace"),
                 ("csharp:Derived.ToString()", CodeEdgeKinds.Overrides, "ToString"),
+                ("csharp:Derived.ToString()", CodeEdgeKinds.Uses, "Empty"),
                 ("csharp:Derived.Count", CodeEdgeKinds.Overrides, "Count"),
                 ("csharp:Rec", CodeEdgeKinds.Inherits, "Parent"),
                 ("csharp:Rec", CodeEdgeKinds.Calls, "Parent"),
@@ -1026,6 +1092,42 @@ public sealed class CSharpExtractorTests : CodeGraphExtractorContractTests<CShar
     [InlineData("[Obsolete]", false)]
     public void ATestFrameworksAttribute_MarksATest(string attributes, bool test)
         => Assert.Equal(test, Extractor.Extract(new CodeFileInput("T.cs", $"class T {{ {attributes} void Run(int at) {{ }} }}")).Nodes.Single(node => node.Id == "csharp:T.Run(int)").Test);
+
+    /// <summary>
+    /// The file's string literals are kept by their value and their line - a constant's, a plain string's, an interpolated
+    /// string's constant parts, its holes read as code - and one shorter than three characters, or past the most an
+    /// extract keeps, is held by none.
+    /// </summary>
+    [Fact]
+    public void TheFilesStringLiterals_AreKeptByValueAndLine()
+    {
+        var extract = Extractor.Extract(new CodeFileInput("src/Reads.cs", Reads));
+
+        Assert.Equal(
+            [
+                (12, "hello world"),
+                (27, " padding "),
+                (27, " part"),
+            ],
+            (extract.Literals ?? []).Select(literal => (literal.Line, literal.Value)));
+        Assert.Equal(0, extract.LiteralsBeyond);
+        Assert.Null(extract.Problem("csharp", CodeFileText.Lines(Reads).Count));
+    }
+
+    /// <summary>
+    /// A use of a name the repository declares nowhere is left with no edge and no count: a use is recall, never a doubt.
+    /// </summary>
+    [Fact]
+    public void AUseOfANameNowhereDeclared_HoldsNoEdge_AndDoubtsNothing()
+    {
+        var extract = Extractor.Extract(new CodeFileInput("src/Reads.cs", Reads));
+        var linked = CodeGraphLinker.Link([new CodeGraphFile("src/Reads.cs", "csharp", extract)]);
+
+        // text.Length names a member the file does not declare: no edge, and neither an external nor an unresolved count.
+        Assert.DoesNotContain(linked.Edges, edge => edge.To.EndsWith(".Length", StringComparison.Ordinal));
+        Assert.Equal(0, linked.External.GetValueOrDefault("csharp:Reads.Reader.Take()"));
+        Assert.Equal(0, linked.Unresolved.GetValueOrDefault("csharp:Reads.Reader.Take()"));
+    }
 
     /// <summary>
     /// Two parts of one partial type, or two blocks of one namespace, in one file are one node over the lines from the

@@ -172,6 +172,19 @@ internal static class DartLexer
                     at += 2;
                     literals.OpenCode(at);
                 }
+                else if (!top.Raw && character == '$' && at + 1 < end && IsNameStart(text[at + 1]))
+                {
+                    // A bare $name: a run of code of its own, a value the string reads.
+                    var name = at + 1;
+
+                    while (name < end && IsNamePart(text[name]))
+                    {
+                        name++;
+                    }
+
+                    Interpolated(start, at + 1, name);
+                    at = name;
+                }
                 else if (character == top.Mark && (!top.Triple || (at + 2 < end && text[at + 1] == character && text[at + 2] == character)))
                 {
                     literals.CloseLiteral();

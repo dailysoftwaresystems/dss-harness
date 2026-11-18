@@ -220,9 +220,61 @@ public sealed class PhpExtractorTests : CodeGraphExtractorContractTests<PhpExtra
         """;
 
 
+    private const string Reads = """
+        <?php
+        namespace Reads;
+
+        class Table
+        {
+            public const GREETING = 'hello world';
+
+            public static int $count = 0;
+        }
+
+        enum Kind
+        {
+            case One;
+        }
+
+        class Reader
+        {
+            private int $own = 0;
+
+            public function take(): int
+            {
+                $local = 4;
+                Table::$count += $local + $this->own;
+                $which = Kind::One;
+                return strlen(Table::GREETING . ' padding ' . "{$which->name} part");
+            }
+        }
+        """;
+
     /// <inheritdoc/>
     public override IReadOnlyList<CodeGraphFixture> Fixtures { get; } =
     [
+        new("src/reads.php", Reads)
+        {
+            Nodes =
+            [
+                new("php:Reads", CodeNodeKinds.Namespace, (2, 27)),
+                new("php:Reads.Table", CodeNodeKinds.Type, (4, 9)),
+                new("php:Reads.Table.GREETING", CodeNodeKinds.Member, (6, 6)),
+                new("php:Reads.Table.$count", CodeNodeKinds.Member, (8, 8)),
+                new("php:Reads.Kind", CodeNodeKinds.Type, (11, 14)),
+                new("php:Reads.Kind.One", CodeNodeKinds.Member, (13, 13)),
+                new("php:Reads.Reader", CodeNodeKinds.Type, (16, 27)),
+                new("php:Reads.Reader.$own", CodeNodeKinds.Member, (18, 18)),
+                new("php:Reads.Reader.take", CodeNodeKinds.Member, (20, 26)),
+            ],
+            Edges =
+            [
+                // A property read through $this - declared with its $ - a constant read through its class, and an enum case.
+                new("php:Reads.Reader.take", "php:Reads.Reader.$own", CodeEdgeKinds.Uses, 23, CodeConfidences.Exact),
+                new("php:Reads.Reader.take", "php:Reads.Table.GREETING", CodeEdgeKinds.Uses, 25, CodeConfidences.Exact),
+                new("php:Reads.Reader.take", "php:Reads.Kind.One", CodeEdgeKinds.Uses, 24, CodeConfidences.Exact),
+            ],
+        },
         new("src/Models/User.php", User)
         {
             Nodes =
@@ -1044,7 +1096,9 @@ public sealed class PhpExtractorTests : CodeGraphExtractorContractTests<PhpExtra
             """);
 
         Assert.Equal(["first", "second"], Calls(extract, "php:H.$a"));
-        Assert.Equal([("m", "value", null), ("n", "value", null)], extract.References.Where(reference => reference.From == "php:H.go").Select(reference => (reference.Name, reference.Qualifier?.Kind, reference.Qualifier?.Name)));
+
+        // The call of m on Foo::$bar's value is a value's; the static property read before it is a use of $bar through Foo.
+        Assert.Equal([("$bar", "type", "Foo"), ("m", "value", null), ("n", "value", null)], extract.References.Where(reference => reference.From == "php:H.go").Select(reference => (reference.Name, reference.Qualifier?.Kind, reference.Qualifier?.Name)));
         Assert.Empty(extract.Dynamic);
     }
 
@@ -1082,7 +1136,10 @@ public sealed class PhpExtractorTests : CodeGraphExtractorContractTests<PhpExtra
 
         Assert.Empty(namespaces.Nodes);
         Assert.Empty(mixed.Nodes);
-        Assert.Equal(CodeQualifierKinds.Value, Assert.Single(chain.References).Qualifier?.Kind);
+
+        // The call is one; every member the chain reads is a use of it, in a time of the chain's length.
+        Assert.Equal(CodeQualifierKinds.Value, Assert.Single(chain.References, reference => reference.Kind == CodeEdgeKinds.Calls).Qualifier?.Kind);
+        Assert.Equal(200_000, chain.References.Count(reference => reference.Kind == CodeEdgeKinds.Uses && reference.Name == "$a"));
     }
 
     private static FileExtract Read(string path, string text) => new PhpExtractor().Extract(new CodeFileInput(path, text));

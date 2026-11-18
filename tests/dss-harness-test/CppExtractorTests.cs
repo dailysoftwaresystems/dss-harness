@@ -866,9 +866,41 @@ public sealed class CppExtractorTests : CodeGraphExtractorContractTests<CppExtra
         public int GetHashCode(ExtractImport obj) => obj.Target.GetHashCode(StringComparison.Ordinal);
     }
 
+    private const string Reads = """
+        namespace reads {
+
+        const char *const greeting = "hello world";
+
+        struct Table {
+            static constexpr int count = 0;
+        };
+
+        enum class Kind { One, Two };
+
+        int take(int local)
+        {
+            int own = 4;
+            Table::count += local + own;
+            Kind which = Kind::One;
+            return greeting == " padding " ? Table::count : 0;
+        }
+
+        }
+        """;
+
     /// <inheritdoc/>
     public override IReadOnlyList<CodeGraphFixture> Fixtures { get; } =
     [
+        new("src/reads.cpp", Reads)
+        {
+            Edges =
+            [
+                // A static read through its struct, and an enum member read through its enum.
+                new("cpp:reads.take(int)", "cpp:reads.Table.count", CodeEdgeKinds.Uses, 14, CodeConfidences.Exact),
+                new("cpp:reads.take(int)", "cpp:reads.Kind.One", CodeEdgeKinds.Uses, 15, CodeConfidences.Exact),
+                new("cpp:reads.take(int)", "cpp:reads.greeting", CodeEdgeKinds.Uses, 16, CodeConfidences.Exact),
+            ],
+        },
         new("include/shapes/shape.hpp", ShapeHeader)
         {
             Nodes =

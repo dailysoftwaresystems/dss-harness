@@ -2800,6 +2800,12 @@ internal sealed class JsReading
 
             if (token.Kind == ScanTokenKind.Text)
             {
+                // The literal's constant parts - a template's holes are code, read as code - are its data.
+                foreach (var value in text.LiteralParts(token))
+                {
+                    _extract.Literal(value, token.Line);
+                }
+
                 if (text.Interpolations.TryGetValue(token.Start, out var spans) && ScanFrame.ReadsDeeper(_extract, depth, token.Line, Nesting))
                 {
                     foreach (var (spanStart, spanEnd) in spans)
@@ -2954,6 +2960,7 @@ internal sealed class JsReading
 
             if ((ScanCalls.At(scan, at, member ? _memberCalls : _calls) ?? Optional(scan, at)) is not { } call)
             {
+                Used(scan, previous, member, From, locals, word, line, next);
                 continue;
             }
 
@@ -3150,6 +3157,37 @@ internal sealed class JsReading
         locals.Types[word] = null;
     }
 
+    /// <summary>The words TypeScript writes as types of their own where they stand bare: not names a member reads.</summary>
+    private static readonly HashSet<string> BareTypeWords = new(StringComparer.Ordinal)
+    {
+        "string", "number", "boolean", "any", "unknown", "never", "void", "object", "symbol", "bigint", "readonly", "keyof",
+    };
+
+    /// <summary>
+    /// A member read or written without a call of it - <c>x.y</c>, <c>x?.y</c> - or a bare name the code reads: a use of
+    /// the member by its name, qualified by what its receiver is where the file says. A local, a parameter, a function
+    /// value or a word of the language is its own or none, and no use; a name an object literal or an annotation writes
+    /// before a colon is a key, not a read.
+    /// </summary>
+    private void Used(ScannedText scan, int previous, bool member, Func<string> key, Locals locals, string word, int line, int next)
+    {
+        if (member)
+        {
+            _extract.Reference(key(), CodeEdgeKinds.Uses, word, line, qualifier: Receiver(scan, previous, locals, out _, most: 8));
+            return;
+        }
+
+        if ((scan.Is(next, ":") && !scan.Is(previous, "case")) || scan.Is(next, ".") || scan.Is(next, "?.") || scan.Is(next, "[")
+            || BareTypeWords.Contains(word)
+            || locals.Types.ContainsKey(word) || locals.Functions.Contains(word) || locals.LocalFunctions.Contains(word) || NoCalls.Contains(word))
+        {
+            return;
+        }
+
+        var (name, qualified) = Callee(word);
+        _extract.Reference(key(), CodeEdgeKinds.Uses, name, line, qualifier: qualified);
+    }
+
     /// <summary>
     /// A call of <paramref name="word"/> on what stands before the <c>.</c> or <c>?.</c> at <paramref name="dot"/>: a
     /// reference qualified by that receiver - none of an arity where <paramref name="call"/> is a tagged template's; one
@@ -3194,7 +3232,7 @@ internal sealed class JsReading
     /// type a local is declared with or made of, an import's prefix, a type's name, a value by its name, or a type a
     /// <c>new</c> makes - <paramref name="anyValue"/> the local's name where it is typed <c>any</c>.
     /// </summary>
-    private ExtractQualifier Receiver(ScannedText scan, int dot, Locals locals, out string? anyValue)
+    private ExtractQualifier Receiver(ScannedText scan, int dot, Locals locals, out string? anyValue, int most = int.MaxValue)
     {
         anyValue = null;
         var names = new List<string>();
@@ -3203,6 +3241,11 @@ internal sealed class JsReading
 
         while (scan.IsName(at))
         {
+            if (names.Count == most)
+            {
+                return new ExtractQualifier(CodeQualifierKinds.Value);
+            }
+
             names.Add(scan.Text(at));
             first = at;
             var before = scan.Previous(at);

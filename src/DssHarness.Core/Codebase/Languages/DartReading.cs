@@ -1695,6 +1695,12 @@ internal sealed class DartReading
 
             if (token.Kind == ScanTokenKind.Text)
             {
+                // The literal's constant parts - an interpolation's holes are code, read as code - are its data.
+                foreach (var value in text.LiteralParts(token))
+                {
+                    _extract.Literal(value, token.Line);
+                }
+
                 if (text.Interpolations.TryGetValue(token.Start, out var spans) && ScanFrame.ReadsDeeper(_extract, depth, token.Line, Nesting))
                 {
                     foreach (var (spanStart, spanEnd) in spans)
@@ -1753,6 +1759,7 @@ internal sealed class DartReading
 
             if (ScanCalls.At(scan, at, IsMember(scan, scan.Previous(at)) ? DartMemberCalls : DartCalls) is not { } call)
             {
+                Used(scan, at, key, locals, word, line);
                 continue;
             }
 
@@ -1809,6 +1816,32 @@ internal sealed class DartReading
 
             _extract.Reference(key, CodeEdgeKinds.Calls, word, line, call.Arity);
         }
+    }
+
+    /// <summary>
+    /// A member read or written without a call of it - <c>x.y</c>, <c>x?.y</c>, a cascade - or a bare name the code
+    /// reads: a use of the member by its name, qualified by what its receiver is where the file says. A local, a
+    /// parameter, a function value or a word of the language is its own or none, and no use; a name a named argument or
+    /// a map writes before a colon is a key, not a read.
+    /// </summary>
+    private void Used(ScannedText scan, int at, string key, Locals locals, string word, int line)
+    {
+        var previous = scan.Previous(at);
+
+        if (IsMember(scan, previous))
+        {
+            _extract.Reference(key, CodeEdgeKinds.Uses, word, line, qualifier: Receiver(scan, previous, locals, out _, most: 8));
+            return;
+        }
+
+        if ((scan.Is(scan.Next(at), ":") && !scan.Is(previous, "case")) || scan.Is(scan.Next(at), ".") || scan.Is(scan.Next(at), "?.") || scan.Is(scan.Next(at), "..") || scan.Is(scan.Next(at), "?..")
+            || word == "_" || NoTypes.Contains(word) || Builtins.Contains(word)
+            || locals.Types.ContainsKey(word) || locals.Functions.Contains(word) || locals.LocalFunctions.Contains(word) || NoCalls.Contains(word))
+        {
+            return;
+        }
+
+        _extract.Reference(key, CodeEdgeKinds.Uses, word, line);
     }
 
     /// <summary>
@@ -1888,7 +1921,7 @@ internal sealed class DartReading
     /// an import's prefix, the type a local is declared with, a type a constructor's call makes, a type's name, or a
     /// value by its name - <paramref name="dynamic"/> the local's name where it is declared <c>dynamic</c>.
     /// </summary>
-    private ExtractQualifier Receiver(ScannedText scan, int dot, Locals locals, out string? dynamic)
+    private ExtractQualifier Receiver(ScannedText scan, int dot, Locals locals, out string? dynamic, int most = int.MaxValue)
     {
         dynamic = null;
         var names = new List<string>();
@@ -1897,6 +1930,11 @@ internal sealed class DartReading
 
         while (true)
         {
+            if (names.Count == most)
+            {
+                return new ExtractQualifier(CodeQualifierKinds.Value);
+            }
+
             if (scan.Is(at, ">") && ScanCalls.TypeArgumentsStart(scan, at, DartTypes) is var less and >= 0 && scan.IsName(scan.Previous(less)))
             {
                 at = scan.Previous(less);

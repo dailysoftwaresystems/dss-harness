@@ -12,7 +12,7 @@ public sealed class CExtractor : ICodeGraphExtractor
     public string Language => "c";
 
     /// <inheritdoc/>
-    public int Version => 1;
+    public int Version => 2;
 
     /// <inheritdoc/>
     public CodeGraphClaims Claims { get; } = new([], [new(".c"), new(".h", probe => !CFamilyReading.HasCppMark(probe))]);
@@ -22,7 +22,7 @@ public sealed class CExtractor : ICodeGraphExtractor
 
     /// <inheritdoc/>
     public CodeGraphExtractorHelp Help { get; } = new(
-        "C (.c, and .h with no mark of C++), through a structural scanner of the tool's own: every function (one defined in the old style too, its parameters declared after their list), prototype, struct, union, enum, typedef, variable and macro with its signature, summary and body; #includes; each call by its name and arity",
+        "C (.c, and .h with no mark of C++), through a structural scanner of the tool's own: every function (one defined in the old style too, its parameters declared after their list), prototype, struct, union, enum, typedef, variable and macro with its signature, summary and body; #includes; each call by its name and arity; each member a member reads or writes without calling it, and each string literal the file holds, by its value and its line",
         [
             "macros expanded: a declaration a macro writes is not seen; a macro standing in the place of one or between its specifiers and the rest of it, a call of what a macro's parameter stands for, and a call of a function-like macro - one the file defines, or one named in capitals as macros are - are marked dynamic, the last still linked to the macro by its name",
             "which branch of an #if is taken: every branch is read, so a function defined under each of two conditions is two nodes of one name, each marked conditional - a function or a type whose head is written under each and whose body is one is read by its first head, the heads the other branches write none of its body, and a bracket one branch leaves open and no other does is read as holding nothing, marked dynamic",

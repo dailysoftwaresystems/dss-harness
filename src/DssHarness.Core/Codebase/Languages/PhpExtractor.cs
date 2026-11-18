@@ -14,7 +14,7 @@ public sealed class PhpExtractor : ICodeGraphExtractor
     public string Language => "php";
 
     /// <inheritdoc/>
-    public int Version => 1;
+    public int Version => 2;
 
     /// <inheritdoc/>
     public CodeGraphClaims Claims { get; } = CodeGraphClaims.OfExtensions(".php", ".phtml");
@@ -24,7 +24,7 @@ public sealed class PhpExtractor : ICodeGraphExtractor
 
     /// <inheritdoc/>
     public CodeGraphExtractorHelp Help { get; } = new(
-        "PHP (.php, .phtml), through the structural scanner C, C++, Dart and JavaScript are read by: its code between <?php or <?= and ?>; every namespace, class, interface, trait, enum, function, method, constructor and promoted property, property, constant and enum case with its signature, summary and body, a namespace App\\Models the scope App.Models; use declarations, each name a reference writes written out to the one it stands for, and the files require and include name; extends, implements and a trait's use; each call with what its receiver is where the file says, a function's looked for in its namespace and then the global one; PHPUnit's test methods, and Pest's test, it and describe calls in files under tests/ or test/",
+        "PHP (.php, .phtml), through the structural scanner C, C++, Dart and JavaScript are read by: its code between <?php or <?= and ?>; every namespace, class, interface, trait, enum, function, method, constructor and promoted property, property, constant and enum case with its signature, summary and body, a namespace App\\Models the scope App.Models; use declarations, each name a reference writes written out to the one it stands for, and the files require and include name; extends, implements and a trait's use; each call with what its receiver is where the file says, a function's looked for in its namespace and then the global one; each member a member reads or writes without calling it, and each string literal the file holds, by its value and its line; PHPUnit's test methods, and Pest's test, it and describe calls in files under tests/ or test/",
         [
             "types inferred: a call on a value whose type the file does not write - a local given a call's result, a property a docblock alone types, a method's result - is bound by its name alone",
             "a class a string names - to the autoloader, a container, class_exists - a callable written as a string or an array, and a member only a magic method answers (__call, __callStatic, __get): not seen as a reference",

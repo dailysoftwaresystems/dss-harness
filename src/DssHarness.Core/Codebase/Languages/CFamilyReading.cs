@@ -1973,6 +1973,18 @@ internal sealed class CFamilyReading
         {
             if (scan[at].Kind != ScanTokenKind.Name)
             {
+                if (scan[at].Kind == ScanTokenKind.Text && scan[at].Start + scan[at].Length - 1 is var end && end > scan[at].Start)
+                {
+                    // The string's value between its quotes is its data; a string written with an escape is left out, its
+                    // value not its text between the quotes.
+                    var value = scan.Source[(scan[at].Start + 1)..end];
+
+                    if (!value.Contains('\\', StringComparison.Ordinal))
+                    {
+                        _extract.Literal(value, scan[at].Line);
+                    }
+                }
+
                 if (scan.Is(at, "(") && scan.Next(at) is var star && scan.Is(star, "*") && scan.IsName(scan.Next(star)) && scan.Is(scan.Next(scan.Next(star)), ")")
                     && scan.Is(scan.Next(scan.Next(scan.Next(star))), "(") && !Declares(scan, scan.Previous(at), close: -1))
                 {
@@ -2009,6 +2021,7 @@ internal sealed class CFamilyReading
 
             if (ScanCalls.At(scan, at, _calls) is not { } call)
             {
+                Used(scan, at, key, locals);
                 continue;
             }
 
@@ -2074,6 +2087,43 @@ internal sealed class CFamilyReading
 
             _extract.Reference(key, CodeEdgeKinds.Calls, word, line, call.Arity);
         }
+    }
+
+    /// <summary>
+    /// A member read or written without a call of it - <c>s.field</c>, <c>p-&gt;field</c>, <c>Enum::member</c> - or a bare
+    /// name the code reads: a use of the member by its name, qualified by what its receiver is where the file says. A
+    /// local, a word of the language or a label is none; a name a <c>case</c> writes before its colon is a constant the
+    /// code reads, and is.
+    /// </summary>
+    private void Used(ScannedText scan, int at, string key, Dictionary<string, string?> locals)
+    {
+        var word = scan.Text(at);
+        var previous = scan.Previous(at);
+        var line = scan[at].Line;
+
+        if (scan.Is(previous, ".") || scan.Is(previous, "->"))
+        {
+            _extract.Reference(key, CodeEdgeKinds.Uses, word, line, qualifier: Receiver(scan, previous, locals, most: 8));
+            return;
+        }
+
+        if (_cpp && scan.Is(previous, "::"))
+        {
+            _extract.Reference(key, CodeEdgeKinds.Uses, word, line, qualifier: Qualifier(scan, previous) is { } scope ? new ExtractQualifier(CodeQualifierKinds.Named, scope) : null);
+            return;
+        }
+
+        if (locals.ContainsKey(word) || _keywords.Contains(word) || StatementWords.Contains(word) || Builtins.Contains(word) || scan.Is(scan.Next(at), ".") || scan.Is(scan.Next(at), "->"))
+        {
+            return;
+        }
+
+        if (scan.Is(scan.Next(at), ":") && !scan.Is(previous, "case"))
+        {
+            return;
+        }
+
+        _extract.Reference(key, CodeEdgeKinds.Uses, word, line);
     }
 
     /// <summary>
@@ -2310,7 +2360,7 @@ internal sealed class CFamilyReading
     }
 
     /// <summary>What a call on the receiver before <paramref name="dot"/> is qualified by: <c>this</c>, the type a value is declared with, or the value itself.</summary>
-    private static ExtractQualifier Receiver(ScannedText scan, int dot, Dictionary<string, string?> locals)
+    private static ExtractQualifier Receiver(ScannedText scan, int dot, Dictionary<string, string?> locals, int most = int.MaxValue)
     {
         var names = new List<string>();
         var at = scan.Previous(dot);
@@ -2318,6 +2368,11 @@ internal sealed class CFamilyReading
 
         while (scan.IsName(at))
         {
+            if (names.Count == most)
+            {
+                return new ExtractQualifier(CodeQualifierKinds.Value);
+            }
+
             names.Add(scan.Text(at));
             first = at;
             var before = scan.Previous(at);

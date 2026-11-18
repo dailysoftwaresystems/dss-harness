@@ -220,9 +220,44 @@ public sealed class JavaScriptExtractorTests : CodeGraphExtractorContractTests<J
 
     internal const string Minified = "function a(){b()}function b(){}";
 
+    private const string Reads = """
+        export const GREETING = 'hello world';
+
+        const KIND = 'one';
+
+        export class Reader {
+            constructor() {
+                this.own = 0;
+            }
+
+            take(table) {
+                const local = 4;
+                this.own += local + table.count;
+                return GREETING + ' padding ' + `${KIND} part`;
+            }
+        }
+        """;
+
     /// <inheritdoc/>
     public override IReadOnlyList<CodeGraphFixture> Fixtures { get; } =
     [
+        new("src/reads.js", Reads)
+        {
+            Nodes =
+            [
+                new("javascript:src/reads.js.GREETING", CodeNodeKinds.Member, (1, 1)),
+                new("javascript:src/reads.js.KIND", CodeNodeKinds.Member, (3, 3)),
+                new("javascript:src/reads.js.Reader", CodeNodeKinds.Type, (5, 15)),
+                new("javascript:src/reads.js.Reader.constructor", CodeNodeKinds.Member, (6, 8)),
+                new("javascript:src/reads.js.Reader.take", CodeNodeKinds.Member, (10, 14)),
+            ],
+            Edges =
+            [
+                // A module's own constant, read bare, and one read inside a template's hole.
+                new("javascript:src/reads.js.Reader.take", "javascript:src/reads.js.GREETING", CodeEdgeKinds.Uses, 13, CodeConfidences.Exact),
+                new("javascript:src/reads.js.Reader.take", "javascript:src/reads.js.KIND", CodeEdgeKinds.Uses, 13, CodeConfidences.Exact),
+            ],
+        },
         new("src/shapes.mjs", Shapes)
         {
             Nodes =
@@ -536,7 +571,6 @@ public sealed class JavaScriptExtractorTests : CodeGraphExtractorContractTests<J
         Assert.Equal([("go", "all"), ("one", null), ("two", "second")], extract.References.Select(reference => (reference.Name, reference.Qualifier?.Name)));
 
         var again = Read("lib/r.js", "module.exports = require('./impl');");
-
         Assert.True(Assert.Single(again.Imports, import => !import.Fallback).Export);
     }
 
@@ -572,7 +606,7 @@ public sealed class JavaScriptExtractorTests : CodeGraphExtractorContractTests<J
         Assert.Equal(
             [("Maker", "lib/u.js", "make"), ("build", null, "")],
             extract.Nodes.Where(node => node.Name is "Maker" or "build").Select(node => (node.Name, node.SeenIn, string.Join(',', node.Exports ?? []))));
-        Assert.Equal([("make", null), ("default", "run")], extract.References.Select(reference => (reference.Name, reference.Qualifier?.Name)));
+        Assert.Equal([("make", null), ("module", null), ("default", "run")], extract.References.Select(reference => (reference.Name, reference.Qualifier?.Name)));
         Assert.Empty(extract.Dynamic);
     }
 
@@ -621,7 +655,9 @@ public sealed class JavaScriptExtractorTests : CodeGraphExtractorContractTests<J
         var exported = Read("lib/o.js", "module.exports = { async f() {}, *g() {}, get x() { return 1; }, [k]() { run(); } };");
 
         Assert.Equal(["f", "g", "x"], exported.Nodes.Where(node => node.Kind == CodeNodeKinds.Member && node.Name != "(module)").Select(node => node.Name));
-        Assert.Equal(["run"], exported.References.Select(reference => reference.Name));
+
+        // The computed key k is read to name the method: a use, beside the call the method's body makes.
+        Assert.Equal(["k", "run"], exported.References.Select(reference => reference.Name));
     }
 
     /// <summary>

@@ -1230,6 +1230,12 @@ internal sealed class PhpReading
 
             if (token.Kind == ScanTokenKind.Text)
             {
+                // The literal's constant parts - an interpolation's holes are code, read as code - are its data.
+                foreach (var value in text.LiteralParts(token))
+                {
+                    _extract.Literal(value, token.Line);
+                }
+
                 if (text.Interpolations.TryGetValue(token.Start, out var spans) && ScanFrame.ReadsDeeper(_extract, depth, token.Line, Nesting))
                 {
                     foreach (var (spanStart, spanEnd) in spans)
@@ -1324,6 +1330,10 @@ internal sealed class PhpReading
                 {
                     Mention(From(), CodeEdgeKinds.References, named, line);
                 }
+                else
+                {
+                    Used(scan, at, previous, member, From, locals, line);
+                }
 
                 continue;
             }
@@ -1373,6 +1383,75 @@ internal sealed class PhpReading
 
             Function(From(), word, line, call.Arity);
         }
+    }
+
+    /// <summary>
+    /// A member read or written without a call of it - <c>$o-&gt;p</c>, <c>Color::Red</c> - or a bare name the code reads,
+    /// a constant: a use of the member by its name, qualified by what its receiver is where the file says. A variable, a
+    /// word of the language, a name a <c>use</c> or a <c>namespace</c> declares, or one the code writes before a colon
+    /// or after a <c>::</c> is none.
+    /// </summary>
+    private void Used(ScannedText scan, int at, int accessor, bool member, Func<string> key, Locals locals, int line)
+    {
+        var word = scan.Text(at);
+
+        if (NoCalls.Contains(word) || (IsVariable(scan, at) && !member))
+        {
+            return;
+        }
+
+        if (member)
+        {
+            // A property of an instance is declared with its $; a constant or an enum case of a class is not.
+            var name = scan.Is(accessor, "->") && word.Length > 0 && word[0] != '$' ? "$" + word : word;
+
+            if (IsVariable(scan, at) && !scan.Is(accessor, "::"))
+            {
+                return;
+            }
+
+            var before = scan.Previous(accessor);
+
+            if (!scan.Is(accessor, "::"))
+            {
+                _extract.Reference(key(), CodeEdgeKinds.Uses, name, line, qualifier: Receiver(scan, accessor, locals, most: 8));
+                return;
+            }
+
+            if (IsWord(scan, before, "self") || IsWord(scan, before, "static") || IsWord(scan, before, "$this"))
+            {
+                _extract.Reference(key(), CodeEdgeKinds.Uses, name, line, qualifier: new ExtractQualifier(CodeQualifierKinds.This));
+            }
+            else if (IsWord(scan, before, "parent"))
+            {
+                _extract.Reference(key(), CodeEdgeKinds.Uses, name, line, qualifier: new ExtractQualifier(CodeQualifierKinds.Base));
+            }
+            else if (scan.IsName(before) && !IsVariable(scan, before) && !NoCalls.Contains(scan.Text(before)) && ClassName(scan.Text(before)) is { } type)
+            {
+                _extract.Reference(key(), CodeEdgeKinds.Uses, name, line, qualifier: new ExtractQualifier(CodeQualifierKinds.Type, type));
+            }
+            else
+            {
+                _extract.Reference(key(), CodeEdgeKinds.Uses, name, line, qualifier: new ExtractQualifier(CodeQualifierKinds.Value));
+            }
+
+            return;
+        }
+
+        if ((scan.Is(scan.Next(at), ":") && !IsWord(scan, scan.Previous(at), "case")) || scan.Is(scan.Next(at), "::") || scan.Is(scan.Previous(at), ":") || scan.Is(scan.Previous(at), "?")
+            || scan.Is(scan.Previous(at), "\\") || IsWord(scan, scan.Previous(at), "use") || IsWord(scan, scan.Previous(at), "namespace")
+            || locals.Types.ContainsKey(word))
+        {
+            return;
+        }
+
+        // A type a parameter declares before the variable it types is a reference the type's own reading names, not a use.
+        if (scan.IsName(scan.Next(at)) && IsVariable(scan, scan.Next(at)))
+        {
+            return;
+        }
+
+        _extract.Reference(key(), CodeEdgeKinds.Uses, word, line);
     }
 
     /// <summary>
@@ -1509,9 +1588,10 @@ internal sealed class PhpReading
     /// <summary>
     /// What a call on the receiver before the arrow at <paramref name="arrow"/> is qualified by: <c>$this</c>; a chain of
     /// its properties, by their names; the class a variable is of where the code says; a value by no name the code types,
-    /// else.
+    /// else. A receiver whose chain is longer than <paramref name="most"/> names is a value by no name the code types -
+    /// a use of one member of a long chain is not made to crawl the whole of it.
     /// </summary>
-    private static ExtractQualifier Receiver(ScannedText scan, int arrow, Locals locals)
+    private static ExtractQualifier Receiver(ScannedText scan, int arrow, Locals locals, int most = int.MaxValue)
     {
         // Read from its end, last first, and turned once it is read.
         var names = new List<string>();
@@ -1519,6 +1599,11 @@ internal sealed class PhpReading
 
         while (scan.IsName(at))
         {
+            if (names.Count == most)
+            {
+                return new ExtractQualifier(CodeQualifierKinds.Value);
+            }
+
             var before = scan.Previous(at);
 
             if (IsVariable(scan, at))

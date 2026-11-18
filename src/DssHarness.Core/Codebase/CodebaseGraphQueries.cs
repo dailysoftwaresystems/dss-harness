@@ -31,6 +31,7 @@ public sealed class CodebaseGraphQueries
     private readonly IReadOnlyDictionary<(string Kind, GraphSide Side), int> _percentile;
     private readonly IReadOnlyDictionary<string, FileExtract?> _extracts;
     private readonly IReadOnlySet<string> _testFiles;
+    private readonly ILookup<string, (string Path, int Line)> _literals;
     private readonly ConcurrentDictionary<string, GraphCard> _cards = new(StringComparer.Ordinal);
 
     /// <summary>Every path the view holds, by its spelling in any case: made once, where a file system that finds a name in any case first asks.</summary>
@@ -130,6 +131,7 @@ public sealed class CodebaseGraphQueries
         _out = symbols.Edges.ToLookup(edge => edge.From, StringComparer.Ordinal);
         _in = symbols.Edges.ToLookup(edge => edge.To, StringComparer.Ordinal);
         _percentile = Percentiles(symbols.Edges, kept.Count);
+        _literals = extracts.SelectMany(file => (file.Value?.Literals ?? []).Select(literal => (file.Key, literal))).ToLookup(entry => entry.literal.Value, entry => (entry.Key, entry.literal.Line), StringComparer.Ordinal);
     }
 
     /// <summary>The view answered from: <c>base</c>, or an agent's name.</summary>
@@ -218,6 +220,19 @@ public sealed class CodebaseGraphQueries
 
     /// <summary>The files, by path, whose extract the view no longer holds - one that does not read, or no longer declares what the link names - their declarations in no answer.</summary>
     public IReadOnlyList<string> Unheld { get; }
+
+    /// <summary>
+    /// Every place the tree holds a string literal of the value <paramref name="value"/>: its file and its line. A
+    /// literal is data the code is written in, not a node - no edge reaches it - so it is looked up by its value alone;
+    /// the node its line is declared in is <see cref="AtLine(string, int)"/> to ask of.
+    /// </summary>
+    /// <param name="value">The literal's value, as the code writes it between its quotes.</param>
+    public IReadOnlyList<(string Path, int Line)> LiteralsOf(string value)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(value);
+
+        return [.. _literals[value].OrderBy(place => place.Path, StringComparer.Ordinal).ThenBy(place => place.Line)];
+    }
 
     /// <summary>
     /// The path the view holds <paramref name="path"/> at - as given, or with its backslashes read as separators, as a path
@@ -426,6 +441,8 @@ public sealed class CodebaseGraphQueries
             [.. Group(GraphSide.In, CodeEdgeKinds.Implements), .. Group(GraphSide.Out, CodeEdgeKinds.Dispatches)],
             [.. Group(GraphSide.Out, CodeEdgeKinds.Overrides), .. Group(GraphSide.In, CodeEdgeKinds.Overrides)],
             [.. Group(GraphSide.Out, CodeEdgeKinds.References), .. Group(GraphSide.Out, CodeEdgeKinds.Instantiates), .. Group(GraphSide.In, CodeEdgeKinds.References), .. Group(GraphSide.In, CodeEdgeKinds.Instantiates)],
+            Group(GraphSide.In, CodeEdgeKinds.Uses),
+            Group(GraphSide.Out, CodeEdgeKinds.Uses),
             Group(GraphSide.In, CodeEdgeKinds.Tests),
             [.. Group(GraphSide.Out, CodeEdgeKinds.Imports), .. Group(GraphSide.Out, CodeEdgeKinds.ProjectReference), .. Group(GraphSide.In, CodeEdgeKinds.Imports), .. Group(GraphSide.In, CodeEdgeKinds.ProjectReference)]);
     }
@@ -650,7 +667,9 @@ public sealed class CodebaseGraphQueries
             foreach (var edge in _out[id])
             {
                 if (string.Equals(edge.Kind, CodeEdgeKinds.Contains, StringComparison.Ordinal)
-                    || string.Equals(edge.Kind, CodeEdgeKinds.Declares, StringComparison.Ordinal))
+                    || string.Equals(edge.Kind, CodeEdgeKinds.Declares, StringComparison.Ordinal)
+                    // A use is recall, never a doubt: its confidence says nothing of how sure the graph is of what it declares.
+                    || string.Equals(edge.Kind, CodeEdgeKinds.Uses, StringComparison.Ordinal))
                 {
                     continue;
                 }

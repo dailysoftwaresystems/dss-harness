@@ -4297,9 +4297,17 @@ is an implementation of one contract, `ICodeGraphExtractor` - its `Language`, it
 language-neutral `FileExtract`: nodes - a value's type (`ValueType`), the type an extension extends (`Extends`) and
 the scope whose declarations alone see it (`SeenIn`) among what they say - the scopes they are put in (open to
 other files or closed: what a closed one declares, and the type or scope it is the scope of, its file's alone), imports by scope, relative path, address or path ending, with their prefixes and filters, an import that stands in for the one before it (`Fallback`), an export (`Export`) and an import of a file whose imports this one shares (`Shares`),
-address roots, references by name with their qualifiers, and four marks - a prototype, a test, generated code with
-why, and each line it saw something it cannot bind or stopped reading at (`dynamic`) - of which the linker reads the
-first two. An implementation is registered by being written: the one scan of the core (`CoreImplementations<T>`, which
+address roots, references by name with their qualifiers, the string literals the file holds - each of at least
+`FileExtract.LeastLiteral` characters with its line, at most `FileExtract.MostLiterals` kept and the rest counted, an
+interpolated or template string's constant parts, its holes read as code - and four marks - a prototype, a test,
+generated code with why, and each line it saw something it cannot bind or stopped reading at (`dynamic`) - of which
+the linker reads the first two. Beside the calls, every reader of C#, JavaScript, TypeScript, PHP, Dart, C and C++
+gives each member a member reads or writes without calling it - a field, a property, a constant, an enum member, any
+name a `nameof` names - as a `uses` reference, qualified as its receiver is where the file says, and a use that names
+nothing the repository declares is the common case and counts nowhere: a use is recall, never a doubt, so it makes
+neither a node `unsure` nor a file's unsureness. A use is looked for as a member of any arity or a type (the same
+steps as a call), and `query-codebase-graph`'s `node` answers a node's `users` and `uses` groups beside its callers
+and callees. An implementation is registered by being written: the one scan of the core (`CoreImplementations<T>`, which
 `CodeGraphExtractors.Implementations` reads) finds each, `AddDssHarness` registers each type of it
 (`AddCoreImplementationsOf<T>`), and the registry built from them refuses two of one name, two claims of one exact name or extension of which either gives no
 content test, no fallback or two, a fallback that claims a name or an extension, a claimed name no file can bear or

@@ -13,7 +13,7 @@ public sealed class CppExtractor : ICodeGraphExtractor
     public string Language => "cpp";
 
     /// <inheritdoc/>
-    public int Version => 1;
+    public int Version => 2;
 
     /// <inheritdoc/>
     public CodeGraphClaims Claims { get; } = new(
@@ -28,7 +28,7 @@ public sealed class CppExtractor : ICodeGraphExtractor
 
     /// <inheritdoc/>
     public CodeGraphExtractorHelp Help { get; } = new(
-        "C++ (.cc, .cpp, .cxx, .hpp, .hh, .hxx, .ipp, .inl, and .h with a mark of C++), through the structural scanner C is read by: every namespace, class, member, function, prototype, alias, variable and macro with its signature, summary and body; #includes and usings; base lists and overrides; each call with what its receiver is where the file says",
+        "C++ (.cc, .cpp, .cxx, .hpp, .hh, .hxx, .ipp, .inl, and .h with a mark of C++), through the structural scanner C is read by: every namespace, class, member, function, prototype, alias, variable and macro with its signature, summary and body; #includes and usings; base lists and overrides; each call with what its receiver is where the file says; each member a member reads or writes without calling it, and each string literal the file holds, by its value and its line",
         [
             "macros expanded and templates instantiated: a declaration a macro writes is not seen; a macro standing in the place of one or between its specifiers and the rest of it, a call of what a macro's parameter stands for, and a call of a function-like macro - one the file defines, or one named in capitals as macros are - are marked dynamic, the last still linked to the macro by its name",
             "which branch of an #if is taken: every branch is read, so a function defined under each of two conditions is two nodes of one name, each marked conditional - a function, a type, a namespace or a linkage block whose head is written under each and whose body is one is read by its first head, the heads the other branches write none of its body, and a bracket one branch leaves open and no other does is read as holding nothing, marked dynamic",
