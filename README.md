@@ -324,7 +324,7 @@ is enforced by tests that read the built command line itself. The
 .side-tasks/<task>/                          ignored; one side-task: its task.json, stored stream, transcript, denials and web, its conversation where its client stores one, and its own codebase graph (graph/, its map and each call of the graph tool) where it was given one; <task>.owner.json beside it while a side-task holds it open
 .m/                                          contents ignored, .gitkeep tracked; the tree's mutation workers, in every tree, never sent to a host by sync ('dssharness help mutations')
 .m/<key><mark>-<n>/                          ignored; a worker, a repository of its own, building in build/<key>, and its claim beside it
-.mutations/                                  ignored whole, with no placeholder; where an earlier version kept the tree's mutation workers, never made again: never sent to a host by sync nor deleted by one, and what is left there removed by clean --former-workers, or with the tree
+.mutations/                                  ignored whole, with no placeholder, an empty one left there removed by init; where an earlier version kept the tree's mutation workers, never made again: never sent to a host by sync nor deleted by one, and what is left there removed by clean --former-workers, or with the tree
 .legs/                                       contents ignored, .gitkeep tracked; the copies of the tree its legs work in, in every tree, never sent to a host by sync
 .harness-config/runs/                        ignored; one directory of records per run, in the tree that ran it
 .harness-config/lock.json                    ignored; records in-progress runs

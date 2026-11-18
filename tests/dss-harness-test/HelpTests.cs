@@ -4044,13 +4044,15 @@ public sealed partial class HelpTests
             ".m/ contents ignored, .gitkeep tracked; the tree's mutation workers, in every tree, never sent to a host by "
                 + "sync ('dssharness help mutations')",
             ".m/<key><mark>-<n>/ ignored; a worker, a repository of its own, building in build/<key>, and its claim beside it",
-            ".mutations/ ignored whole, with no placeholder; where an earlier version kept the tree's mutation workers, never made "
-                + "again: never sent to a host by sync nor deleted by one, and what is left there removed by clean --former-workers, "
-                + "or with the tree",
+            ".mutations/ ignored whole, with no placeholder, an empty one left there removed by init; where an earlier version "
+                + "kept the tree's mutation workers, never made again: never sent to a host by sync nor deleted by one, and what is "
+                + "left there removed by clean --former-workers, or with the tree",
             ".mutations, where an earlier version kept the tree's mutation workers before they moved to .m, keeps its rule in the "
                 + "block for ever - the directory ignored whole, with no placeholder, since nothing is made there again - so what "
                 + "that version left there, each worker a repository of its own, never reads as work to commit; sync withholds it "
-                + "by name too, and no agent writes there. clean --former-workers removes what is left there, as does whatever "
+                + "by name too, and no agent writes there. The placeholder that version's init wrote there, still empty, init "
+                + "removes, the directory with it where nothing else is left, for the repository to commit its removal; one "
+                + "holding anything is left, and said. clean --former-workers removes what is left there, as does whatever "
                 + "removes the tree.",
             ".legs/ contents ignored, .gitkeep tracked; the copies of the tree its legs work in, in every tree, never sent to a "
                 + "host by sync",

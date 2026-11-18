@@ -648,7 +648,10 @@ made (`HarnessLayout.FormerMutationsDirectoryName`, the one entry of `HarnessLay
 `init` writes `/.mutations/` into the managed block - the directory ignored whole, with no placeholder,
 since nothing is made there again - so the former workers that version left there, each a repository
 of its own, never read as untracked repositories in `git status`, as they would the day the block
-dropped its rule; the never-transfer floor holds it, so no sync sends it or deletes it in a host's
+dropped its rule; the placeholder that version's `init` wrote there, still empty, `init` removes
+(`InitService.RetireFormerPlaceholder`), the directory with it where nothing else is left, for the
+repository to commit its removal - kept, it would make the directory again in every clone and
+worktree - and one holding anything is the repository's own, left and said; the never-transfer floor holds it, so no sync sends it or deletes it in a host's
 copy; it is among the tool's state (`HarnessLayout.StatePaths`), so no agent writes there and no
 graph lists it; and `clean --former-workers`, and whatever removes the tree, removes what is left
 there.

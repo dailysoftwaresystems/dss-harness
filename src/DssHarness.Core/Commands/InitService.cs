@@ -281,6 +281,13 @@ public sealed class InitService(
             EnsurePlaceholderDirectory(root, directory, actions);
         }
 
+        // A slot the layout no longer makes keeps no placeholder: the one an earlier version wrote there would keep the
+        // directory in every clone and every worktree for ever, with nothing to hold.
+        foreach (var slot in HarnessLayout.FormerRootSlots)
+        {
+            RetireFormerPlaceholder(root, Path.Combine(root, slot), actions);
+        }
+
         // The implementation workflow's own files, where the configuration declares it - the one init creates does: the
         // whole set where the repository has no definition of it yet, and where it has one, only the missing shipped files
         // that definition names; each one there is kept, whatever it holds, so an init that stopped part way is finished
@@ -552,6 +559,38 @@ public sealed class InitService(
 
         _fileSystem.WriteAllTextAtomic(placeholder, string.Empty);
         actions.Add($"created {Describe(root, placeholder)}");
+    }
+
+    /// <summary>
+    /// Removes the placeholder an earlier version wrote in the slot at <paramref name="path"/>, one the layout no longer
+    /// makes (<see cref="HarnessLayout.FormerRootSlots"/>): its rule ignores the directory whole, so nothing else there is
+    /// tracked, and the repository commits the placeholder's removal as it commits what init writes. Only the empty file
+    /// init wrote goes; one holding anything is the repository's own, left and said. The directory goes with it where
+    /// nothing else is left there - what that version left there, its workers among them, keeps it until it is removed.
+    /// Nothing is removed through a link, as nothing is written through one.
+    /// </summary>
+    private void RetireFormerPlaceholder(string root, string path, List<string> actions)
+    {
+        var placeholder = Path.Combine(path, HarnessLayout.GitKeepFileName);
+
+        if (!_fileSystem.DirectoryExists(path) || _fileSystem.IsLink(path) || !_fileSystem.FileExists(placeholder))
+        {
+            return;
+        }
+
+        if (_fileSystem.ReadAllText(placeholder).Length > 0)
+        {
+            actions.Add($"note    {Describe(root, placeholder)} was left: it holds more than the placeholder an earlier version wrote in a slot no longer made");
+            return;
+        }
+
+        _fileSystem.DeleteFile(placeholder);
+        actions.Add($"removed {Describe(root, placeholder)} (the placeholder of a slot no longer made, ignored whole now: commit its removal)");
+
+        if (!_fileSystem.EnumerateFiles(path, recursive: false).Any() && !_fileSystem.EnumerateDirectories(path).Any())
+        {
+            _fileSystem.DeleteDirectory(path);
+        }
     }
 
     /// <summary>

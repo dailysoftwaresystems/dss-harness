@@ -902,7 +902,8 @@ public sealed class InitServiceTests
     /// The slot an earlier version kept mutation workers in keeps its rule in the block for ever: init ignores .mutations
     /// whole and makes nothing there - no placeholder, no directory - so the workers that version left there, each a
     /// repository of its own, and their claims, never read as untracked work in git status, as they would the day the
-    /// block dropped its rule; and a placeholder that version's init made, which the repository committed, stays as it is.
+    /// block dropped its rule; and the placeholder that version's init made, which the repository committed, is removed
+    /// for the repository to commit its removal, the directory kept while the workers are there.
     /// </summary>
     [Fact]
     public async Task TheSlotAnEarlierVersionKeptWorkersIn_IsIgnoredWhole_AndNothingIsMadeThere()
@@ -934,11 +935,53 @@ public sealed class InitServiceTests
         var status = await harness.RunGitAsync(temp.Path, ["status", "--porcelain", "--untracked-files=all"], token);
 
         Assert.True(again.Succeeded);
-        Assert.Equal(string.Empty, status.StandardOutput.Trim());
+        Assert.Equal($" D {Former}/{HarnessLayout.GitKeepFileName}", status.StandardOutput.TrimEnd());
         Assert.True(await IsIgnoredAsync(harness, temp.Path, $"{Former}/357e24cw-1/src/main.c", token), "a former worker's file is not ignored");
         Assert.True(await IsIgnoredAsync(harness, temp.Path, $"{Former}/357e24cw-1{MutationWorkers.ClaimSuffix}", token), "a former worker's claim is not ignored");
-        Assert.Contains($"{Former}/{HarnessLayout.GitKeepFileName}", (await harness.RunGitAsync(temp.Path, ["ls-files"], token)).OutputLines);
-        Assert.DoesNotContain(again.Details ?? [], line => line.Contains($"'{Former}", StringComparison.Ordinal));
+        Assert.Contains(
+            $"removed {Former}/{HarnessLayout.GitKeepFileName} (the placeholder of a slot no longer made, ignored whole now: commit its removal)",
+            again.Details ?? []);
+        Assert.True(File.Exists(temp.Combine(Former, "357e24cw-1", "src", "main.c")), "init removed a former worker");
+        Assert.True(File.Exists(temp.Combine(Former, "357e24cw-1" + MutationWorkers.ClaimSuffix)), "init removed a former worker's claim");
+    }
+
+    /// <summary>
+    /// The placeholder an earlier version's init wrote in the slot it kept mutation workers in goes with its directory
+    /// where nothing else is there, the repository committing its removal - and a placeholder holding anything is the
+    /// repository's own, left and said.
+    /// </summary>
+    [Theory]
+    [InlineData("")]
+    [InlineData("kept by hand")]
+    public async Task ThePlaceholderAnEarlierVersionWroteInTheFormerSlot_IsRemovedWithIt_UnlessItHoldsAnything(string held)
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var token = TestContext.Current.CancellationToken;
+        const string Former = HarnessLayout.FormerMutationsDirectoryName;
+        var placeholder = $"{Former}/{HarnessLayout.GitKeepFileName}";
+
+        await harness.InitializeGitRepositoryAsync(temp.Path, token);
+        temp.WriteFile(Path.Combine(Former, HarnessLayout.GitKeepFileName), held);
+        await harness.RunGitAsync(temp.Path, ["add", "--force", placeholder], token);
+        await harness.CommitAllAsync(temp.Path, "an earlier version's placeholder", token);
+
+        var outcome = await harness.InitService.InitializeAsync(temp.Path, token);
+
+        Assert.True(outcome.Succeeded);
+
+        if (held.Length == 0)
+        {
+            Assert.False(Directory.Exists(temp.Combine(Former)), "the slot no longer made was left with nothing in it");
+            Assert.Contains($"removed {placeholder} (the placeholder of a slot no longer made, ignored whole now: commit its removal)", outcome.Details ?? []);
+        }
+        else
+        {
+            Assert.Equal(held, File.ReadAllText(temp.Combine(Former, HarnessLayout.GitKeepFileName)));
+            Assert.Contains(
+                $"note    {placeholder} was left: it holds more than the placeholder an earlier version wrote in a slot no longer made",
+                outcome.Details ?? []);
+        }
     }
 
     [Fact]

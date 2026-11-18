@@ -6469,7 +6469,8 @@ public static class HelpTopics
         ($"{HarnessLayout.MutationsDirectoryName}/<key><mark>-<n>/",
             $"ignored; a worker, a repository of its own, building in {VariantKey.BuildRootName}/<key>, and its claim beside it"),
         ($"{HarnessLayout.FormerMutationsDirectoryName}/",
-            "ignored whole, with no placeholder; where an earlier version kept the tree's mutation workers, never made again: "
+            "ignored whole, with no placeholder, an empty one left there removed by init; where an earlier version kept the "
+            + "tree's mutation workers, never made again: "
             + "never sent to a host by sync nor deleted by one, and what is left there removed by clean --former-workers, or "
             + "with the tree"),
         ($"{HarnessLayout.LegsDirectoryName}/",
@@ -6546,7 +6547,9 @@ public static class HelpTopics
             + $"they moved to {HarnessLayout.MutationsDirectoryName}, keeps its rule in the block for ever - the directory ignored "
             + "whole, with no placeholder, since nothing is made there again - so what that version left there, each worker a "
             + "repository of its own, never reads as work to commit; sync withholds it by name too, and no agent writes "
-            + "there. clean --former-workers removes what is left there, as does whatever removes the tree.");
+            + "there. The placeholder that version's init wrote there, still empty, init removes, the directory with it where "
+            + "nothing else is left, for the repository to commit its removal; one holding anything is left, and said. "
+            + "clean --former-workers removes what is left there, as does whatever removes the tree.");
         builder.AppendLine();
         builder.AppendLine("A block an earlier build wrote under the markers of the tool's former name");
         builder.AppendLine($"('{GitIgnoreManager.RetiredBeginMarker}') is the managed block too: init");
