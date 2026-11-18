@@ -10893,24 +10893,27 @@ public sealed class FlowCoordinator
     }
 
     /// <summary>
-    /// The visit that ended done last among <paramref name="instance"/> itself and the visits in its scope of the
-    /// steps that go on with its work (<c>resume</c>): whose output the work's <c>latest</c> reads. Where two ended
-    /// at one time, the newer-drawn visit is the one that spoke last. Where none of them ended done, the visit
-    /// itself, whatever its state.
+    /// The visit that ended done last among <paramref name="instance"/> itself and the visits of the steps that go on
+    /// with its work (<c>resume</c>), directly or through another that does, wherever they are declared: whose output
+    /// the work's <c>latest</c> reads. Where two ended at one time, the newer-drawn visit is the one that spoke last.
+    /// Where none of them ended done, the visit itself, whatever its state.
     /// </summary>
+    /// <remarks>
+    /// A visit goes on with this one's work where its resume, resolved as the engine resolves whose conversation it takes
+    /// on (<see cref="DeclaredOf"/>, in its own scope or one around it), reaches this visit - so a step inside a group, or
+    /// inside a loop's iteration, that resumes a step around it is one of them. Counting only the steps declared beside
+    /// this one left out a builder's rework and mend inside a review loop, and every read of the builder's latest answer
+    /// after them - the tests its reverify ran, the closing record its class-closure judged, the rows its refold let in -
+    /// read the answer given before them.
+    /// </remarks>
     private FlowInstance EndedDoneLastOf(FlowInstance instance)
     {
-        if (instance.DeclaredScope is not { } scope)
+        if (instance.DeclaredScope is null)
         {
             return instance;
         }
 
-        var chain = new List<FlowInstance> { instance };
-
-        foreach (var goesOnWith in DeclarationsOf(scope).Where(declared => declared.Resume is { } resumed && string.Equals(resumed, instance.Step.Name, StringComparison.Ordinal)))
-        {
-            chain.AddRange(_created.Where(visit => ReferenceEquals(visit.Step, goesOnWith) && ReferenceEquals(visit.DeclaredScope, scope)));
-        }
+        var chain = _created.Where(visit => ReferenceEquals(visit, instance) || GoesOnWith(visit, instance)).ToList();
 
         return chain
             .Where(visit => visit.State == FlowInstanceState.Done && visit.FinishedAt is not null)
@@ -10920,6 +10923,42 @@ public sealed class FlowCoordinator
                     ? other
                     : newest)
             ?? instance;
+    }
+
+    /// <summary>
+    /// Whether <paramref name="visit"/> goes on with <paramref name="instance"/>'s work: a visit of a step that resumes
+    /// itself, of the same declaration in the same scope - its earlier and later visits - or one whose resume, followed
+    /// through each step it names in turn as <see cref="WorkingOf"/> follows it, reaches <paramref name="instance"/>.
+    /// </summary>
+    private static bool GoesOnWith(FlowInstance visit, FlowInstance instance)
+    {
+        if (visit.Step is not { Type: "reason", Resume: { } } step)
+        {
+            return false;
+        }
+
+        if (string.Equals(step.Resume, step.Name, StringComparison.Ordinal))
+        {
+            return ReferenceEquals(step, instance.Step) && ReferenceEquals(visit.DeclaredScope, instance.DeclaredScope);
+        }
+
+        var at = visit;
+        var seen = new HashSet<FlowInstance>(ReferenceEqualityComparer.Instance);
+
+        while (at.Step is { Type: "reason", Resume: { } resumed } resuming
+            && !string.Equals(resumed, resuming.Name, StringComparison.Ordinal)
+            && seen.Add(at)
+            && DeclaredOf(at, resumed, "reason") is { } found)
+        {
+            if (ReferenceEquals(found, instance))
+            {
+                return true;
+            }
+
+            at = found;
+        }
+
+        return false;
     }
 
     /// <summary>

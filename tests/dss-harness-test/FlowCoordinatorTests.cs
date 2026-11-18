@@ -3627,6 +3627,59 @@ public sealed class FlowCoordinatorTests
         Assert.Equal(FlowInstanceState.Done, coordinator.Instances["after"].State);
     }
 
+    /// <summary>
+    /// A step's latest output is the newest of its own and of every step that goes on with its work, wherever that step
+    /// is declared: one inside a group, or a group within a loop's iteration, resolves its resume to the step around it
+    /// as the engine resolves whose conversation it takes on, so a read of the step - inside the group, in the loop's
+    /// until, and after the loop - reads what the step that went on with it said last, never the step's own first answer.
+    /// </summary>
+    [Fact]
+    public async Task AStepsLatest_ReadsTheNewestOfTheStepsThatGoOnWithItsWork_DeclaredInGroupsAroundAnywhere()
+    {
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: think
+                type: reason
+                prompt: work.md
+                outputs: work.json
+              - name: fix
+                dependsOn: [think]
+                repeat:
+                  until: 'think.latest.n == 3'
+                  maxIterations: 3
+                steps:
+                  - name: revise
+                    steps:
+                      - name: again
+                        type: reason
+                        resume: think
+                        prompt: work.md
+                        outputs: work.json
+                      - name: seen
+                        type: orient
+                        dependsOn: [again]
+                        when: 'think.latest.n == again.n'
+              - name: after
+                type: orient
+                dependsOn: [fix]
+                when: 'think.latest.n == 3'
+            """);
+        var said = 1;
+        var runner = new FakeRunner()
+            .On("think", FlowStepResult.Ended(passed: true, HarnessExit.Success, output: Output("""{"n": 1}""")))
+            .On("again", _ => FlowStepResult.Ended(passed: true, HarnessExit.Success, output: new JsonObject { ["n"] = ++said }));
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+
+        var end = await coordinator.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+        Assert.Equal(FlowRunStatus.Done, end.Status);
+
+        // The loop ends on the second iteration's answer, which only the step that went on with the work gave.
+        Assert.Equal(["think", "fix#1.revise.again", "fix#1.revise.seen", "fix#2.revise.again", "fix#2.revise.seen", "after"], runner.Started);
+        Assert.Equal(FlowInstanceState.Done, coordinator.Instances["after"].State);
+    }
+
     /// <summary>An answer must name an open question and be one it takes: anything else is refused, and the question stays open.</summary>
     [Fact]
     public async Task AnAnswerNotAmongTheOptions_IsRefused_AndTheQuestionStaysOpen()

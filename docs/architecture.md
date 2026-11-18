@@ -3579,7 +3579,9 @@ nothing and is counted ended by the status, by the engine's own rule (`FlowInsta
 `whenAddScope` names - under its name, with its dependencies and its `when` (`FlowCoordinator.DrawWorkItemPlace`) - the
 other two alternatives skipped in its instance, saying why; a read of the add step (`{add.latest}`) or a resume of it
 follows whichever ran (`FlowCoordinator.EndedDoneLastOf`, which `<step>.latest` reads for every step that goes on with
-another's work). The steps of the group read `{piece.kind}`, `{piece.changed}`, `{piece.keep}`, `{piece.undo}`,
+another's work: the newest answer among the step and every visit whose `resume`, resolved in its own scope or one
+around it as its conversation is, reaches it, directly or through another step that does - wherever that step is
+declared, so a builder's rework inside a review loop is among the steps that go on with its implement step). The steps of the group read `{piece.kind}`, `{piece.changed}`, `{piece.keep}`, `{piece.undo}`,
 `{piece.instead}` and `{piece.before}` (`FlowCoordinator.PieceValues`, `BeforeOf` - the engine's account, from its own
 records, of the instance that carried the item before); in an instance no update made, the kind is `added` and the texts
 are empty. `PlanValidator.CheckPieces` checks the pieces with the items where a `validate-plan` step's `scope` names

@@ -2169,6 +2169,40 @@ public sealed class ImplementationFlowTests
         }
 
         /// <summary>
+        /// A unit the builder's rework adds is tested where the rework is: the reverify after it runs the item's units with
+        /// every unit its builder's newest answer names - the rework's, which goes on with the implement step's work from
+        /// inside the review loop, read as that step's latest - and the run's record and the gate keep it as well, where a
+        /// read of the implement step's own first answer would have left it out of all three.
+        /// </summary>
+        [Fact]
+        public async Task AUnitTheReworkAdds_IsRunByTheReverifyAfterIt_AndKeptForTheGate()
+        {
+            using var temp = new TempDirectory();
+            var kit = await PrepareAsync(
+                temp,
+                ground: new Ground(Legs: true),
+                script: agents =>
+                {
+                    agents.Queue("planner", Completed(Plan(One(tests: ["ReportTests"]))));
+                    agents.Queue("implementer", Completed(Implement(tests: ["ReportTests"])), Completed(Implement(tests: ["ReportTests", "FrameTests"])));
+                    agents.Queue("reviewer-correctness", Completed(Review(Finding())), Completed(Review()));
+                });
+
+            var end = await StartAsync(kit, "request=Ship the orders report.", "preapproved=yes");
+
+            Assert.True(HarnessExit.Success == end.ExitCode, $"{end.Message} | {Shown(kit)}");
+
+            var tests = kit.Steps.Of("test");
+
+            Assert.Equal(["ReportTests"], Assert.Single(tests, run => run.Step.Name == "verify").Step.Filter!.Written);
+            Assert.Equal(["ReportTests", "FrameTests"], Assert.Single(tests, run => run.Step.Name == "reverify").Step.Filter!.Written);
+            Assert.Equal(
+                ["one: ReportTests, FrameTests"],
+                kit.Harness.OrchestrationStore.ReadAffectedTests(kit.RunOf())!.Entries.Select(entry => $"{entry.Key}: {string.Join(", ", entry.Units)}"));
+            Assert.Equal(["ReportTests", "FrameTests"], Assert.Single(tests, run => run.Step.Name == "gate").Step.Filter!.Written);
+        }
+
+        /// <summary>
         /// The item's handlers: a test that ends red goes to the item's builder on its mend prompt, and the test runs
         /// again; a fold refused for a path its within leaves out is answered fail by its own configuration and goes to
         /// the builder's reconciler - the agent caught up with the tree, then settled on its reconcile prompt - before
