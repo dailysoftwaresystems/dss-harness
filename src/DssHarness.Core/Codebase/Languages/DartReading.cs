@@ -2277,7 +2277,8 @@ internal sealed class DartReading
 
     /// <summary>
     /// A local the body declares at <paramref name="at"/>, where it declares one: after <c>var</c>, <c>final</c>,
-    /// <c>const</c> or <c>late</c> - its type what its initializer makes - or after a type, which it is declared with.
+    /// <c>const</c> or <c>late</c> - its type what its initializer makes - or after a type, which it is declared with; and
+    /// each later declarator of its declaration.
     /// </summary>
     private void Local(ScannedText scan, int at, Locals locals)
     {
@@ -2290,20 +2291,42 @@ internal sealed class DartReading
         }
 
         var previous = scan.Previous(at);
+        var inferred = scan.Is(previous, "var") || scan.Is(previous, "final") || scan.Is(previous, "const") || scan.Is(previous, "late");
 
-        if (scan.Is(previous, "var") || scan.Is(previous, "final") || scan.Is(previous, "const") || scan.Is(previous, "late"))
+        if (inferred)
         {
             locals.Types[word] = scan.Is(next, "=") ? Made(scan, scan.Next(next), scan.StatementEnd(next, scan.Count)) : null;
-            return;
         }
-
-        if (TypeBefore(scan, previous, nullableToo: !scan.Is(next, ":")) is { } typed)
+        else if (TypeBefore(scan, previous, nullableToo: !scan.Is(next, ":")) is { } typed)
         {
             locals.Types[word] = typed.Type;
 
             if (typed.Function)
             {
                 locals.Functions.Add(word);
+            }
+        }
+        else
+        {
+            return;
+        }
+
+        // A declaration's later declarators - final a = 1, b = 2 - are locals of it too: of its type, or of what each one's
+        // value makes where it is inferred.
+        if (!(scan.Is(next, "=") || scan.Is(next, ",") || scan.Is(next, ";")))
+        {
+            return;
+        }
+
+        foreach (var later in ScanCalls.LaterDeclarators(scan, at, scan.Count, lineEnds: false))
+        {
+            var after = scan.Next(later);
+
+            if (scan.IsName(later) && !Reserved.Contains(scan.Text(later)) && (scan.Is(after, "=") || scan.Is(after, ",") || scan.Is(after, ";")))
+            {
+                locals.Types[scan.Text(later)] = !inferred ? locals.Types[word]
+                    : scan.Is(after, "=") ? Made(scan, scan.Next(after), scan.StatementEnd(after, scan.Count))
+                    : null;
             }
         }
     }

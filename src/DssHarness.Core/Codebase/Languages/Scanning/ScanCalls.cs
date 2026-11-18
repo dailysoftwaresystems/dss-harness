@@ -306,6 +306,49 @@ internal static class ScanCalls
     }
 
     /// <summary>
+    /// Where each later declarator of the declaration whose first declarator begins at <paramref name="first"/> begins -
+    /// the token after each comma at the declaration's own level, <c>b</c> and <c>*c</c> of <c>int a = 1, b, *c;</c> -
+    /// up to the statement's end, the closer of what holds it or <paramref name="end"/>; where <paramref name="lineEnds"/>,
+    /// as a line break may end JavaScript's statement, up to a line the declaration does not go on to with a comma. What
+    /// begins there is the reader's to read: a declarator's name, or a pattern or a type's commas where it is none.
+    /// </summary>
+    /// <param name="scan">The text.</param>
+    /// <param name="first">The index of the first declarator's first token: its name, or the pattern it opens.</param>
+    /// <param name="end">The index the declaration ends before at the latest.</param>
+    /// <param name="lineEnds">Whether a line break the declaration does not go on past with a comma ends it.</param>
+    public static List<int> LaterDeclarators(ScannedText scan, int first, int end, bool lineEnds)
+    {
+        var starts = new List<int>();
+        var last = first;
+
+        for (var at = first; at >= 0 && at < end && !scan.EndsStatement(at) && !scan.Is(at, ")") && !scan.Is(at, "]") && !scan.Is(at, "}"); at = scan.Next(at))
+        {
+            if (lineEnds && at != first && scan[at].Line > scan[last].EndLine && !scan.Is(last, ",") && !scan.Is(at, ","))
+            {
+                break;
+            }
+
+            if (scan.Opens(at))
+            {
+                if (scan.Match(at) is not (var close and > 0))
+                {
+                    break;
+                }
+
+                at = close;
+            }
+            else if (scan.Is(at, ",") && scan.Next(at) < end)
+            {
+                starts.Add(scan.Next(at));
+            }
+
+            last = at;
+        }
+
+        return starts;
+    }
+
+    /// <summary>
     /// The index of the last token of what begins at <paramref name="at"/> as one piece within <paramref name="end"/> -
     /// a group, or a type's arguments after a name - and <paramref name="at"/> itself where neither begins there.
     /// </summary>

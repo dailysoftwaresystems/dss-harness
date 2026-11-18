@@ -994,6 +994,51 @@ public sealed class DartExtractorTests : CodeGraphExtractorContractTests<DartExt
             extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Uses).Select(reference => (reference.From, reference.Name, reference.Line, $"{reference.Qualifier?.Kind} {reference.Qualifier?.Name}".Trim())));
     }
 
+    /// <summary>
+    /// A call's receiver of <see cref="FileExtract.MostReceiverNames"/> names is read by them all, and one of more is a
+    /// value of no name the code types; and an import whose string its line leaves open names nothing.
+    /// </summary>
+    [Fact]
+    public void AReceiverOfMoreNamesThanTheMost_IsAValueOfNoName_AndAnImportLeftOpenNamesNothing()
+    {
+        var extract = Read("lib/run.dart", """
+            import 'open.dart
+            import 'closed.dart';
+
+            void run() {
+              a.b.c.d.e.f.g.h.go();
+              a.b.c.d.e.f.g.h.i.go();
+            }
+            """);
+
+        Assert.Equal(
+            [(5, "value a.b.c.d.e.f.g.h"), (6, "value")],
+            extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Calls).Select(reference => (reference.Line, $"{reference.Qualifier?.Kind} {reference.Qualifier?.Name}".Trim())));
+        Assert.Equal([("closed.dart", 2)], extract.Imports.Select(import => (import.Target, import.Line)));
+    }
+
+    /// <summary>
+    /// Every declarator of a declaration declares a local - <c>final a = 1, b = 2</c>, a typed one's and a <c>for</c>'s
+    /// among them - and none is a use, nor is a type argument's name a declarator's; what their values read is a use.
+    /// </summary>
+    [Fact]
+    public void EachDeclaratorOfADeclaration_IsALocal_AndNoUse()
+    {
+        var extract = Read("lib/sum.dart", """
+            int sum() {
+              final a = 1, b = total;
+              int c = 0, d = 2;
+              var m = <String, int>{}, n = first;
+              for (var i = 0, j = limit; i < j; i++) {}
+              return a + b + c + d + m.length + n;
+            }
+            """);
+
+        Assert.Equal(
+            [("total", 2), ("first", 4), ("limit", 5), ("length", 6)],
+            extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Uses).Select(reference => (reference.Name, reference.Line)));
+    }
+
     private static FileExtract Read(string path, string text) => new DartExtractor().Extract(new CodeFileInput(path, text));
 
     private static ExtractNode Node(FileExtract extract, string id) => Assert.Single(extract.Nodes, node => node.Id == id);

@@ -4311,11 +4311,12 @@ reader of C#, JavaScript, TypeScript, PHP, Dart, C and C++ gives each member a m
 it - a field, a property, a constant, an enum member, any name a `nameof` names, the first name of a receiver's chain
 where the reader takes it for a value, a conditional's branches - as a `uses` reference, qualified as its receiver is
 where the file says, a chain no longer than `FileExtract.MostReceiverNames` names; a declaration is no use - a type it
-is written with, a macro's parameter, a function pointer's own parameters, a structured binding, a discard - nor is a
-type or a namespace a member is reached through. A use that names nothing the repository declares is the common case
-and counts nowhere: a use is recall, never a doubt, so it makes neither a node `unsure` nor a file's unsureness. A use
-is looked for as a member of any arity or a type (the same steps as a call), and `query-codebase-graph`'s `node`
-answers a node's `users` and `uses` groups beside its callers and callees.
+is written with, a TypeScript local's annotation (whose types it references), each declarator of `int a = 1, b`, a
+macro's parameter, a function pointer's own parameters, a structured binding, a discard - nor is a type or a namespace
+a member is reached through. A use that names nothing the repository declares is the common case and counts nowhere:
+a use is recall, never a doubt, so it makes neither a node `unsure` nor a file's unsureness. A use is looked for as a
+member of any arity or a type (the same steps as a call), and `query-codebase-graph`'s `node` answers a node's `users`
+and `uses` groups beside its callers and callees.
 
 The data a repository's code is configured by is read too, every data file's nodes made by one owner (`DataNodes`):
 a key a member node of SubKind `key`, an element one of SubKind `element`, each counted against `FileExtract.MostKeys`

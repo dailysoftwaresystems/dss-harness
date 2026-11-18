@@ -1249,6 +1249,30 @@ public sealed class PhpExtractorTests : CodeGraphExtractorContractTests<PhpExtra
             extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Uses).Select(reference => (reference.From, reference.Name, reference.Line, $"{reference.Qualifier?.Kind} {reference.Qualifier?.Name}".Trim())));
     }
 
+    /// <summary>
+    /// A call's receiver of <see cref="FileExtract.MostReceiverNames"/> names is read by them all, and one of more is a
+    /// value of no name the code types - a long chain is not crawled whole.
+    /// </summary>
+    [Fact]
+    public void AReceiverOfMoreNamesThanTheMost_IsAValueOfNoName()
+    {
+        var extract = Read("src/Run.php", """
+            <?php
+            class Run
+            {
+                function run()
+                {
+                    $this->b->c->d->e->f->g->h->go();
+                    $this->b->c->d->e->f->g->h->i->go();
+                }
+            }
+            """);
+
+        Assert.Equal(
+            [(6, "value $b.$c.$d.$e.$f.$g.$h"), (7, "value")],
+            extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Calls).Select(reference => (reference.Line, $"{reference.Qualifier?.Kind} {reference.Qualifier?.Name}".Trim())));
+    }
+
     private static FileExtract Read(string path, string text) => new PhpExtractor().Extract(new CodeFileInput(path, text));
 
     private static ExtractNode Node(FileExtract extract, string id) => Assert.Single(extract.Nodes, node => node.Id == id);

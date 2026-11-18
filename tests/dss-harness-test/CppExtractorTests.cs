@@ -898,6 +898,26 @@ public sealed class CppExtractorTests : CodeGraphExtractorContractTests<CppExtra
             extract.References.Select(reference => (reference.From, reference.Kind, reference.Name, reference.Line)));
     }
 
+    /// <summary>
+    /// A call's receiver of <see cref="FileExtract.MostReceiverNames"/> names is read by them all, and one of more is a
+    /// value of no name the code types - a long chain is not crawled whole.
+    /// </summary>
+    [Fact]
+    public void AReceiverOfMoreNamesThanTheMost_IsAValueOfNoName()
+    {
+        var extract = Read("src/t.cpp", """
+            void run()
+            {
+                a.b.c.d.e.f.g.h.go();
+                a.b.c.d.e.f.g.h.i.go();
+            }
+            """);
+
+        Assert.Equal(
+            [(3, "value a.b.c.d.e.f.g.h"), (4, "value")],
+            extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Calls).Select(reference => (reference.Line, $"{reference.Qualifier?.Kind} {reference.Qualifier?.Name}".Trim())));
+    }
+
     private static FileExtract Read(string path, string text) => new CppExtractor().Extract(new CodeFileInput(path, text));
 
     private static ExtractNode Node(FileExtract extract, string id) => Assert.Single(extract.Nodes, node => node.Id == id);

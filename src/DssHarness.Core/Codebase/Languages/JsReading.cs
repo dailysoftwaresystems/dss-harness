@@ -2810,6 +2810,9 @@ internal sealed class JsReading
 
         public HashSet<string> LocalFunctions { get; } = new(StringComparer.Ordinal);
 
+        /// <summary>Where each declarator the body declares with an annotation stands - its name's index - and where its annotation's type ends.</summary>
+        public Dictionary<int, int> Annotated { get; } = [];
+
         public void Add(Parameters parameters)
         {
             foreach (var (name, type) in parameters.Locals)
@@ -2958,15 +2961,23 @@ internal sealed class JsReading
                         continue;
 
                     case "const" or "let" or "var" when scan.Opens(next):
-                        foreach (var bound in PatternNames(scan, next))
-                        {
-                            locals.Types[bound] = null;
-                        }
-
+                        Local(scan, next, to, locals);
                         continue;
                 }
 
                 Local(scan, at, to, locals);
+
+                // A declarator's annotation - const a: Foo, b: Bar<T> - names types, no value the code reads.
+                if (locals.Annotated.Remove(at, out var annotated))
+                {
+                    if (scan == _scan)
+                    {
+                        TypeReferences(From(), scan.Next(next), annotated);
+                    }
+
+                    at = Math.Max(at, annotated - 1);
+                    continue;
+                }
 
                 if (scan.Is(next, "=>"))
                 {
@@ -3162,8 +3173,7 @@ internal sealed class JsReading
 
     /// <summary>
     /// A local the body declares at <paramref name="at"/>, where it declares one after <c>const</c>, <c>let</c> or
-    /// <c>var</c>: of the type its annotation names, or its value makes; a local function where a function or an arrow is
-    /// its value.
+    /// <c>var</c>, and each later declarator of its declaration - <c>const a = 1, b = 2</c>, a pattern among them.
     /// </summary>
     private void Local(ScannedText scan, int at, int to, Locals locals)
     {
@@ -3174,6 +3184,45 @@ internal sealed class JsReading
             return;
         }
 
+        if (scan.IsName(at))
+        {
+            Declared(scan, at, to, locals);
+        }
+        else
+        {
+            foreach (var bound in PatternNames(scan, at))
+            {
+                locals.Types[bound] = null;
+            }
+        }
+
+        foreach (var later in ScanCalls.LaterDeclarators(scan, at, Math.Min(to, scan.Count), lineEnds: true))
+        {
+            var after = scan.Next(later);
+
+            if (scan.Opens(later))
+            {
+                foreach (var bound in PatternNames(scan, later))
+                {
+                    locals.Types[bound] = null;
+                }
+            }
+            else if (scan.IsName(later) && !Reserved.Contains(scan.Text(later))
+                && (scan.Is(after, "=") || scan.Is(after, ",") || scan.Is(after, ":") || scan.EndsStatement(after) || after >= Math.Min(to, scan.Count) || scan[after].Line > scan[later].EndLine
+                    || scan.Is(after, ")") || scan.Is(after, "}")))
+            {
+                Declared(scan, later, to, locals);
+            }
+        }
+    }
+
+    /// <summary>
+    /// The local a declarator declares at <paramref name="at"/>: of the type its annotation names - where the annotation
+    /// ends kept, so the code read skips it - or its value makes; a local function where a function or an arrow is its
+    /// value.
+    /// </summary>
+    private void Declared(ScannedText scan, int at, int to, Locals locals)
+    {
         var word = scan.Text(at);
         var next = scan.Next(at);
 
@@ -3181,6 +3230,7 @@ internal sealed class JsReading
         {
             var typeEnd = TypeEnd(scan, scan.Next(next), to);
             locals.Types[word] = TypeKey(scan, scan.Next(next), typeEnd);
+            locals.Annotated[at] = typeEnd;
 
             if (IsFunctionType(scan, scan.Next(next), typeEnd))
             {

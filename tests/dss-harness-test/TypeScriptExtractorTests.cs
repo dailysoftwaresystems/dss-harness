@@ -684,6 +684,27 @@ public sealed class TypeScriptExtractorTests : CodeGraphExtractorContractTests<T
             extract.References.Select(reference => (reference.From, reference.Kind, reference.Name, reference.Line)));
     }
 
+    /// <summary>
+    /// Every declarator of a declaration declares a local, an annotated one's among them, and none is a use; a local's
+    /// annotation names the types it writes, no value the code reads - a name a type argument writes after a comma among
+    /// them.
+    /// </summary>
+    [Fact]
+    public void EachAnnotatedDeclarator_IsALocal_ItsAnnotationTypesNoUses()
+    {
+        var extract = Read("src/sum.ts", """
+            export function sum(): number {
+              const a: Foo = 1, b: Map<string, Bar> = new Map(), c = total;
+              let d: Baz;
+              return a + b.size + c;
+            }
+            """);
+
+        Assert.Equal(
+            [(CodeEdgeKinds.References, "Foo", 2), (CodeEdgeKinds.References, "Bar", 2), (CodeEdgeKinds.Uses, "total", 2), (CodeEdgeKinds.References, "Baz", 3), (CodeEdgeKinds.Uses, "size", 4)],
+            extract.References.Select(reference => (reference.Kind, reference.Name, reference.Line)));
+    }
+
     private static FileExtract Read(string path, string text) => new TypeScriptExtractor().Extract(new CodeFileInput(path, text));
 
     private static ExtractNode Node(FileExtract extract, string id) => Assert.Single(extract.Nodes, node => node.Id == id);

@@ -2271,7 +2271,7 @@ internal sealed class CFamilyReading
     /// <summary>
     /// The variable a body declares at <paramref name="at"/>, where it declares one: its name bound to the type it is
     /// declared with - written before it, or made by <c>new</c> or a type's name after <c>auto</c> - and a function
-    /// pointer's name among <paramref name="pointers"/>.
+    /// pointer's name among <paramref name="pointers"/>; and each later declarator of a statement's declaration.
     /// </summary>
     private void Local(ScannedText scan, int at, Dictionary<string, string?> locals, HashSet<string> pointers)
     {
@@ -2319,7 +2319,8 @@ internal sealed class CFamilyReading
         // A type begins a statement, its specifiers before it - no value an operator joins, as a * b and a && b are - and
         // what follows the name is what the place it begins in declares with: a condition's variable is given its value.
         var valued = (scan.Is(next, "=") && !scan.Is(scan.Next(next), "=")) || scan.Is(next, "{");
-        var declares = Begins(scan, typeStart) switch
+        var opening = Begins(scan, typeStart);
+        var declares = opening switch
         {
             Opening.Statement => valued || scan.Is(next, ";") || scan.Is(next, "(") || scan.Is(next, ",") || scan.Is(next, "["),
             Opening.For => valued || scan.Is(next, ";") || scan.Is(next, "(") || scan.Is(next, ",") || scan.Is(next, "[") || scan.Is(next, ":"),
@@ -2339,14 +2340,37 @@ internal sealed class CFamilyReading
             made = scan.Is(made, "new") ? scan.Next(made) : made;
             var (chain, past) = Chain(scan, made, scan.Count, CppCodeTypes);
             locals[name] = chain is not null && (scan.Is(past, "(") || scan.Is(past, "{")) ? chain : null;
-            return;
+        }
+        else
+        {
+            locals[name] = TypeKey(scan, typeStart, typeEnd, CppCodeTypes);
+
+            if (IsFunctionObject(scan, typeStart, typeEnd))
+            {
+                pointers.Add(name);
+            }
         }
 
-        locals[name] = TypeKey(scan, typeStart, typeEnd, CppCodeTypes);
-
-        if (IsFunctionObject(scan, typeStart, typeEnd))
+        // A statement's later declarators - int a = 1, *b, c[2] - are variables of the same declaration, of its type.
+        if (opening is Opening.Statement or Opening.For)
         {
-            pointers.Add(name);
+            foreach (var later in ScanCalls.LaterDeclarators(scan, at, scan.Count, lineEnds: false))
+            {
+                var declarator = later;
+
+                while (scan.Is(declarator, "*") || scan.Is(declarator, "&") || scan.Is(declarator, "&&"))
+                {
+                    declarator = scan.Next(declarator);
+                }
+
+                var after = scan.Next(declarator);
+
+                if (scan.IsName(declarator) && !_keywords.Contains(scan.Text(declarator))
+                    && (scan.Is(after, "=") || scan.Is(after, ",") || scan.EndsStatement(after) || scan.Is(after, "[") || scan.Is(after, "(") || scan.Is(after, "{")))
+                {
+                    locals[scan.Text(declarator)] = locals[name];
+                }
+            }
         }
     }
 

@@ -665,8 +665,9 @@ public sealed class CExtractorTests : CodeGraphExtractorContractTests<CExtractor
 
     /// <summary>
     /// A string's value is what C reads of it, each kept with its line and the node whose code holds it: a prefixed one's
-    /// without its prefix, its escapes decoded - a run of byte escapes read as UTF-8, a backslash before a line break
-    /// joining the lines - and a character constant, <c>'RIFF'</c> among them, no string at all.
+    /// without its prefix, its escapes decoded - a run of byte escapes read as UTF-8, a wide string's hex escape a
+    /// character's code, a backslash before a line break joining the lines - and a character constant, <c>'RIFF'</c> among
+    /// them, no string at all.
     /// </summary>
     [Fact]
     public void AStringsValue_IsWhatCReadsOfIt_APrefixedOnesAndOneWithEscapesAmongThem()
@@ -674,6 +675,7 @@ public sealed class CExtractorTests : CodeGraphExtractorContractTests<CExtractor
         var extract = Read("src/t.c", """
             const wchar_t *title = L"Main Window";
             const char *bytes = u8"abc def";
+            const wchar_t *smile = L"smile \x263A";
 
             int main(void)
             {
@@ -690,10 +692,11 @@ public sealed class CExtractorTests : CodeGraphExtractorContractTests<CExtractor
             [
                 new ExtractLiteral("Main Window", 1) { Node = "c:title" },
                 new ExtractLiteral("abc def", 2) { Node = "c:bytes" },
-                new ExtractLiteral("could not open %s\n", 6) { Node = "c:main" },
-                new ExtractLiteral("tab\there", 6) { Node = "c:main" },
-                new ExtractLiteral("caf\u00e9 ABC", 7) { Node = "c:main" },
-                new ExtractLiteral("one two", 8) { Node = "c:main" },
+                new ExtractLiteral("smile \u263a", 3) { Node = "c:smile" },
+                new ExtractLiteral("could not open %s\n", 7) { Node = "c:main" },
+                new ExtractLiteral("tab\there", 7) { Node = "c:main" },
+                new ExtractLiteral("caf\u00e9 ABC", 8) { Node = "c:main" },
+                new ExtractLiteral("one two", 9) { Node = "c:main" },
             ],
             extract.Literals);
     }
@@ -734,6 +737,27 @@ public sealed class CExtractorTests : CodeGraphExtractorContractTests<CExtractor
                 ("c:take", "COUNT", 18, ""), ("c:take", "LIMIT", 18, ""),
             ],
             extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Uses).Select(reference => (reference.From, reference.Name, reference.Line, $"{reference.Qualifier?.Kind} {reference.Qualifier?.Name}".Trim())));
+    }
+
+    /// <summary>
+    /// Every declarator of a declaration declares a variable - <c>int a = 1, *b, c[2]</c>, a <c>for</c>'s among them - and
+    /// none is a use, while what their values read is.
+    /// </summary>
+    [Fact]
+    public void EachDeclaratorOfADeclaration_IsAVariable_AndNoUse()
+    {
+        var extract = Read("src/t.c", """
+            int sum(void)
+            {
+                int a = 1, *b = &total, c[2] = { first, second };
+                for (int i = 0, j = LIMIT; i < j; i++) { }
+                return a + *b + c[0];
+            }
+            """);
+
+        Assert.Equal(
+            [("total", 3), ("first", 3), ("second", 3), ("LIMIT", 4)],
+            extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Uses).Select(reference => (reference.Name, reference.Line)));
     }
 
     private static FileExtract Read(string path, string text) => new CExtractor().Extract(new CodeFileInput(path, text));

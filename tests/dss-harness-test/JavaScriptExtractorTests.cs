@@ -985,7 +985,7 @@ public sealed class JavaScriptExtractorTests : CodeGraphExtractorContractTests<J
             import { config } from './config';
 
             export function Price({ amount }, label = 'parameter default') {
-              const re = /a\/b"c/g;
+              const re = /a\/b"c/g, plain = /plain text/;
               const tab = 'a\tb \u{41}\x42C';
               const total = `USD $${amount} due`;
               const view = <Badge title="Tom &amp; Jerry &#33;" kind='second'>{label} text</Badge>;
@@ -1012,6 +1012,54 @@ public sealed class JavaScriptExtractorTests : CodeGraphExtractorContractTests<J
         Assert.Equal(
             [("config", 9, ""), ("port", 9, "value config"), ("isBig", 12, ""), ("LIMIT", 12, ""), ("SMALL", 12, ""), ("value", 13, "")],
             extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Uses).Select(reference => (reference.Name, reference.Line, $"{reference.Qualifier?.Kind} {reference.Qualifier?.Name}".Trim())));
+    }
+
+    /// <summary>
+    /// A call's receiver of <see cref="FileExtract.MostReceiverNames"/> names is read by them all, and one of more is a
+    /// value of no name the code types; and an import whose string its line leaves open names nothing.
+    /// </summary>
+    [Fact]
+    public void AReceiverOfMoreNamesThanTheMost_IsAValueOfNoName_AndAnImportLeftOpenNamesNothing()
+    {
+        var extract = Read("src/run.js", """
+            import open from './open
+            import closed from './closed';
+
+            export function run() {
+              a.b.c.d.e.f.g.h.go();
+              a.b.c.d.e.f.g.h.i.go();
+            }
+            """);
+
+        Assert.Equal(
+            [(5, "value a.b.c.d.e.f.g.h"), (6, "value")],
+            extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Calls).Select(reference => (reference.Line, $"{reference.Qualifier?.Kind} {reference.Qualifier?.Name}".Trim())));
+        Assert.Equal([2], extract.Imports.Select(import => import.Line).Distinct());
+    }
+
+    /// <summary>
+    /// Every declarator of a declaration declares a local - <c>const a = 1, b = 2</c>, one on the next line after a comma,
+    /// a pattern and a <c>for</c>'s among them - and none is a use, while a line the declaration does not go on to with a
+    /// comma is code of its own.
+    /// </summary>
+    [Fact]
+    public void EachDeclaratorOfADeclaration_IsALocal_AndNoUse()
+    {
+        var extract = Read("src/sum.js", """
+            export function sum() {
+              const a = 1, b = total;
+              let c = 0, d = first
+              use(p, q)
+              const e = 2,
+                { f, g } = second;
+              for (let i = 0, j = limit; i < j; i++) {}
+              return a + b + c + d + e + f + g;
+            }
+            """);
+
+        Assert.Equal(
+            [("total", 2), ("first", 3), ("p", 4), ("q", 4), ("second", 6), ("limit", 7)],
+            extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Uses).Select(reference => (reference.Name, reference.Line)));
     }
 
     private static FileExtract Read(string path, string text) => new JavaScriptExtractor().Extract(new CodeFileInput(path, text));
