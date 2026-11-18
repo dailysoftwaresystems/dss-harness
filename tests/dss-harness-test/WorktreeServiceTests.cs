@@ -502,9 +502,10 @@ public sealed class WorktreeServiceTests
 
     /// <summary>
     /// Deleting a worktree removes the mutation workers kept in it, of whichever variant and its self-test's among
-    /// them, and says so; another worktree's are never touched. A directory in its slot under a worker's name that
-    /// nothing says the harness made goes with the worktree, as everything else the worktree holds, and is said; one an
-    /// earlier version of this tool kept beside the worktree is known to nothing here, and stays.
+    /// them, and those an earlier version kept in its .mutations, and says so; another worktree's are never touched. A
+    /// directory in its slot under a worker's name that nothing says the harness made goes with the worktree, as
+    /// everything else the worktree holds, and is said; one an earlier version of this tool kept beside the worktree is
+    /// known to nothing here, and stays.
     /// </summary>
     [Fact]
     public async Task DeleteAsync_RemovesTheMutationWorkersKeptInTheWorktree_AndNoneKeptBesideIt()
@@ -521,7 +522,8 @@ public sealed class WorktreeServiceTests
         var swept = await WorkerAsync(harness, Slot(created.Path, "357e24cw-1"), cancellationToken);
         var anothers = await WorkerAsync(harness, Slot(other.Path, "357e24cw-1"), cancellationToken);
         var old = await WorkerAsync(harness, created.Path + ".mutation-357e24cw-1", cancellationToken);
-        var held = harness.FileSystem.DirectorySize(selfTest) + harness.FileSystem.DirectorySize(swept);
+        var former = await WorkerAsync(harness, HarnessLayout.InSlot(created.Path, HarnessLayout.FormerMutationsDirectoryName, "357e24cw-2"), cancellationToken);
+        var held = harness.FileSystem.DirectorySize(selfTest) + harness.FileSystem.DirectorySize(swept) + harness.FileSystem.DirectorySize(former);
 
         // A directory under a worker's name that no sync made; and a claim a sweep died holding, which holds nothing.
         var somebodys = Slot(created.Path, "357e24cw-3");
@@ -541,11 +543,12 @@ public sealed class WorktreeServiceTests
         Assert.False(Directory.Exists(swept));
         Assert.False(File.Exists(swept + MutationWorkers.ClaimSuffix), "a dead sweep's claim goes with the worker it claimed");
         Assert.False(Directory.Exists(somebodys));
+        Assert.False(Directory.Exists(former), "a worker an earlier version kept in the worktree's .mutations is left behind");
         Assert.True(Directory.Exists(anothers));
         Assert.True(Directory.Exists(old), "a worker an earlier version kept beside the worktree is a person's to delete");
         Assert.Equal(
             [
-                $"removed 2 mutation worker(s) kept in it, {DiskSpace.Size(held)}: '{selfTest}', '{swept}'",
+                $"removed 3 mutation worker(s) kept in it, {DiskSpace.Size(held)}: '{selfTest}', '{swept}', '{former}'",
                 $"'{somebodys}', named as a mutation worker though nothing says the harness made it, went with it",
             ],
             (outcome.Outcome.Details ?? []).Where(line => line.Contains("mutation worker", StringComparison.Ordinal)));

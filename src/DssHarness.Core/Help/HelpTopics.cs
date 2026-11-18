@@ -1214,16 +1214,21 @@ public static class HelpTopics
             $"Each leg is swept in worker copies of its tree, kept in it as <tree>/{HarnessLayout.MutationsDirectoryName}/<key>{WorkerFamily.OwnMark}-<n>, numbered "
             + "from 1: as many as workers, never more than the leg has arms to drive, and one in a WSL distribution. The key "
             + $"is the first {VariantKey.CopyKeyLength} hexadecimal digits of the SHA-256 of the leg's variant, as its build "
-            + $"directory is named: its first worker adds {ReportText.Counted(WorkerFamily.AddedToItsTreesPath, "character")} to its tree's path "
+            + $"directory is named, and a worker builds in <worker>/{VariantKey.BuildRootName}/<key>, never in the directory "
+            + "the variant's name gives the tree's own build: its first worker adds "
+            + $"{ReportText.Counted(WorkerFamily.AddedToItsTreesPath, "character")} to its tree's path, and its build directory "
+            + $"{ReportText.Counted(1 + VariantKey.BuildRootName.Length + 1 + VariantKey.CopyKeyLength, "character")} below that, "
             + "whatever the variant is called, since a worker is built as deep as the tree and a machine whose paths are bounded "
-            + "has no more to spare, and the lines of a sweep and of a clean say which leg a worker is. Each is a repository "
+            + "has no more to spare. Which variant a worker builds is what its build records, and a build of one variant where "
+            + "that record names another - two whose names come to one key share their workers - starts from clean; the lines "
+            + "of a sweep and of a clean say which leg, and which variant, a worker is. Each is a repository "
             + $"of its own, as every copy a sync makes is, and init keeps {HarnessLayout.MutationsDirectoryName} in git and "
             + "everything made in it out: a sweep in a tree where git does not ignore what it would make there is refused "
             + $"({HarnessExit.Refused}), naming init, with nothing made - asked on the machine that makes the workers, so a "
             + "host answers for its own copy. Before every "
             + "sweep each is synced again from one reading of the tree, by content - so its build stays warm, and a site a "
             + "killed sweep left mutated is put back - and built whole before it drives an arm: that sync withholds the "
-            + "worker's own build directory itself, whatever sync.neverTransfer says, and sync.maxDeleteFraction judges "
+            + $"worker's own build directory, {VariantKey.BuildRootName}/<key>, itself, whatever sync.neverTransfer says, and sync.maxDeleteFraction judges "
             + "only what mirrors the tree the sweep read. Of the tree itself a sweep "
             + $"reads every file and writes none: its workers, and the claims on them, are in {HarnessLayout.MutationsDirectoryName}, "
             + $"and its run's records in {HarnessLayout.DirectoryName}, as every run's are. On this machine a sweep makes no copy "
@@ -1268,11 +1273,13 @@ public static class HelpTopics
             + "with the worktree, or the host's copy, as everything else in it does, and is said. No copy of a tree carries "
             + "its workers, and a sync into a host's "
             + "copy never deletes that copy's own. Workers an earlier version of this tool kept beside a tree, as "
-            + "<tree>.mutation-<key><mark>-<n>, are no workers to a sweep: nothing counts one, and clean --former-workers "
-            + "alone removes them - beside each tree of the repository on each machine a selected leg runs on, here and on "
-            + "hosts, and beside each one deleted since, a dry run listing each with its size - keeping one a sweep of that "
-            + "version still claims by the claim "
-            + "file beside it. Each holds a .git of its own that git records no worktree at, so until then one below the "
+            + $"<tree>.mutation-<key><mark>-<n>, or in it, as <tree>/{HarnessLayout.FormerMutationsDirectoryName}/<key><mark>-<n> - "
+            + $"which init keeps out of git whole, with no placeholder, and no sync sends or deletes - are no workers to a "
+            + "sweep: nothing counts one, and clean --former-workers removes them - beside and in each tree of the repository "
+            + "on each machine a selected leg runs on, here and on hosts, and beside each one deleted since, a dry run listing "
+            + "each with its size - keeping one a sweep of that version still claims by the claim file beside it; those in a "
+            + "worktree, or a host's copy, also go with it as its workers do. Each beside a tree holds a .git of its own that "
+            + "git records no worktree at, so until then one below the "
             + "worktrees root is said as any such directory: list-worktree warns of it, and delete-orchestrator, and "
             + $"delete-worktree of an orchestrator's directory with or without --force, refuse ({HarnessExit.Refused}) while one "
             + "is below it.");
@@ -2387,16 +2394,18 @@ public static class HelpTopics
         builder.AppendLine("kept and said - on a host, the copy a sweep works in there among them, with its");
         builder.AppendLine("workers. A host holding no copy of the tree holds nothing of it to remove.");
         builder.AppendLine();
-        builder.AppendLine($"clean {CleanService.FormerWorkersOption} removes only the workers an earlier version of this tool");
-        builder.AppendLine("kept beside the repository's trees, as <tree>.mutation-<key><mark>-<n>, once a machine:");
-        builder.AppendLine("here beside the main checkout, every worktree, and each worktree deleted since in the");
-        builder.AppendLine("worktrees root; on each host a selected leg runs on, asked of it from its home, beside");
-        builder.AppendLine("its copy of the main checkout and each worktree's copy beside it, there still or removed");
-        builder.AppendLine("since, whatever copy the host holds. With --dry-run it lists each with its size. One a");
-        builder.AppendLine("sweep of that version still claims, by the claim file beside it, is kept,");
-        builder.AppendLine("refused-locked; one no sync made is said and left. Where the worktrees, or those");
-        builder.AppendLine("deleted since, cannot be listed, the leg fails, saying so, once the workers beside the");
-        builder.AppendLine("trees it knows are dealt with.");
+        AppendWrapped(
+            builder,
+            $"clean {CleanService.FormerWorkersOption} removes only the workers an earlier version of this tool kept beside the "
+            + "repository's trees, as <tree>.mutation-<key><mark>-<n>, or in them, as "
+            + $"<tree>/{HarnessLayout.FormerMutationsDirectoryName}/<key><mark>-<n>, once a machine: here beside and in the main "
+            + "checkout and every worktree, and beside each worktree deleted since in the worktrees root; on each host a "
+            + "selected leg runs on, asked of it from its home, beside and in its copy of the main checkout and each "
+            + "worktree's copy beside it, and beside each removed since, whatever copy the host holds - and in the copies "
+            + $"each of those trees keeps in its {HarnessLayout.LegsDirectoryName}. With --dry-run it lists each with its size. "
+            + "One a sweep of that version still claims, by the claim file beside it, is kept, refused-locked; one no sync "
+            + "made is said and left. Where the worktrees, or those deleted since, cannot be listed, the leg fails, saying "
+            + "so, once the workers of the trees it knows are dealt with.");
         builder.AppendLine();
         AppendWrapped(
             builder,
@@ -2604,7 +2613,8 @@ public static class HelpTopics
         AppendWrapped(
             builder,
             "The copies kept in a worktree go before it, of its two families: the mutation workers its sweeps made "
-            + $"('help mutations'), in {HarnessLayout.MutationsDirectoryName}, and the copies of it its legs work in "
+            + $"('help mutations'), in {HarnessLayout.MutationsDirectoryName} - and in {HarnessLayout.FormerMutationsDirectoryName}, "
+            + "where an earlier version kept them - and the copies of it its legs work in "
             + $"('help legs'), in {HarnessLayout.LegsDirectoryName} - never sent to any host, so only this machine holds "
             + "them. They are asked about before anything "
             + $"of it is removed or looked through: one a sweep still running holds - or a run holds a leg copy - keeps the "
@@ -3732,7 +3742,7 @@ public static class HelpTopics
             + "test commands, a runner's steps, a sweep's arms - is held inside it, its own profile from the leg's ground, "
             + "built as a launch's is: the machine read-only; every credential slot of the main checkout, every Claude "
             + "Code directory and every place the user keeps credentials in hidden; the tree the leg works in - the step's tree or its copy under .legs - a sweep's "
-            + "workers under .mutations, the build directory of the leg's run of each runner action it runs, its own and a "
+            + $"workers under {HarnessLayout.MutationsDirectoryName}, the build directory of the leg's run of each runner action it runs, its own and a "
             + "run check's ({actionBuild}, each step's {stepBuild} in it), a temporary directory of its own and the declared "
             + "tool caches written, and inside them git's code-running files, the configuration directory - but those build "
             + "directories, under it - and the tool's state written by nobody. The run's "
@@ -4850,7 +4860,8 @@ public static class HelpTopics
         AppendWrapped(
             builder,
             "Seeding. create-agent hands the agent the main tree's uncommitted state - every path git status lists, off the "
-            + "worktrees root, .git, .orchestrators, .mutations, .legs and .side-tasks: each changed file copied into its worktree, each deletion made there - and "
+            + $"worktrees root, .git, .orchestrators, {HarnessLayout.MutationsDirectoryName}, .legs and .side-tasks - and "
+            + $"{HarnessLayout.FormerMutationsDirectoryName}, where an earlier version kept its mutation workers: each changed file copied into its worktree, each deletion made there - and "
             + "records what it was handed, each file with its digest. An untracked directory git will not look into, a repository "
             + "of its own, is named and not handed; --empty hands it nothing. A symbolic link among it is refused before the "
             + "worktree is made, so nothing is left behind. seed-agent does it again, refused over changes of the agent's own - a "
@@ -6456,7 +6467,11 @@ public static class HelpTopics
             $"contents ignored, {HarnessLayout.GitKeepFileName} tracked; the tree's mutation workers, in every tree, never "
             + $"sent to a host by sync ('{ToolPackage.Command} help mutations')"),
         ($"{HarnessLayout.MutationsDirectoryName}/<key><mark>-<n>/",
-            "ignored; a worker, a repository of its own, and its claim beside it"),
+            $"ignored; a worker, a repository of its own, building in {VariantKey.BuildRootName}/<key>, and its claim beside it"),
+        ($"{HarnessLayout.FormerMutationsDirectoryName}/",
+            "ignored whole, with no placeholder; where an earlier version kept the tree's mutation workers, never made again: "
+            + "never sent to a host by sync nor deleted by one, and what is left there removed by clean --former-workers, or "
+            + "with the tree"),
         ($"{HarnessLayout.LegsDirectoryName}/",
             $"contents ignored, {HarnessLayout.GitKeepFileName} tracked; the copies of the tree its legs work in, in every "
             + "tree, never sent to a host by sync"),
@@ -6525,6 +6540,13 @@ public static class HelpTopics
         builder.AppendLine("whole copy of the tree, so a program of the repository's own that walks the tree");
         builder.AppendLine("from its root - a census, a guard over every file - must leave out what the block");
         builder.AppendLine("ignores, as git does, or it reads every file once more for each copy kept there.");
+        AppendWrapped(
+            builder,
+            $"{HarnessLayout.FormerMutationsDirectoryName}, where an earlier version kept the tree's mutation workers before "
+            + $"they moved to {HarnessLayout.MutationsDirectoryName}, keeps its rule in the block for ever - the directory ignored "
+            + "whole, with no placeholder, since nothing is made there again - so what that version left there, each worker a "
+            + "repository of its own, never reads as work to commit; sync withholds it by name too, and no agent writes "
+            + "there. clean --former-workers removes what is left there, as does whatever removes the tree.");
         builder.AppendLine();
         builder.AppendLine("A block an earlier build wrote under the markers of the tool's former name");
         builder.AppendLine($"('{GitIgnoreManager.RetiredBeginMarker}') is the managed block too: init");
@@ -6539,7 +6561,7 @@ public static class HelpTopics
         builder.AppendLine("Ignored state lives in the main checkout. A worktree receives the tracked part of");
         builder.AppendLine(".harness-config through git but never the ignored part, so connection data and the");
         builder.AppendLine("run lock resolve back to the originating checkout. A run's records are an");
-        builder.AppendLine("exception, and so are a tree's .mutations and .legs: each belongs to the tree that");
+        builder.AppendLine($"exception, and so are a tree's {HarnessLayout.MutationsDirectoryName} and {HarnessLayout.LegsDirectoryName}: each belongs to the tree that");
         builder.AppendLine("ran or made it, so a run started inside a worktree writes its records there, and");
         builder.AppendLine("build, test, run and check-mutations name the directory in");
         builder.AppendLine("their output and as runDirectory in --json. Each leg that kept records has a line of");
@@ -6709,6 +6731,9 @@ public static class HelpTopics
         builder.AppendLine("what to rebuild. It starts from clean only where one of these holds, and the");
         builder.AppendLine("leg's line says which, as 'rebuilt from clean:':");
         builder.AppendLine();
+        builder.AppendLine("  - another variant built there last, as its record says: a mutation worker builds");
+        builder.AppendLine($"    in {VariantKey.BuildRootName}/<key>, named by its variant's key, which two variants' names can");
+        builder.AppendLine("    come to alike ('help mutations')");
         builder.AppendLine("  - the build before it cannot be trusted: a phase spanned a clock step, the inputs");
         builder.AppendLine("    moved while it ran, something else used the directory, or an input could not");
         builder.AppendLine("    be read");

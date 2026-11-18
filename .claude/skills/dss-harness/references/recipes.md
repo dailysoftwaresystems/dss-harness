@@ -112,7 +112,7 @@ lowercase); add sentence assertions of your own with `Prose.Words`. Update the R
 ## 7. Records a command writes
 
 A run's records live in `.harness-config/runs/<run id>/` of the tree that ran it (`HarnessLayout`); other records
-have their own fixed place (`mutation-record`, `host-copies`, `.orchestrators`, `.legs`, `.mutations`). A command that
+have their own fixed place (`mutation-record`, `host-copies`, `.orchestrators`, `.legs`, `.m`). A command that
 writes records or logs **names where they landed on every exit**, early and refused ones included: `run <id>` first
 (`RunLine`), `logs: <dir>` and each leg's records in text, `runId`, `runDirectory`, `records` and `logs` in `--json`,
 paths shown through `IHarnessOutput.Shown` so a host writes its own home as `~`. Add a test like

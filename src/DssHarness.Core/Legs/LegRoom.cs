@@ -369,7 +369,7 @@ public static class LegRoom
             IReadOnlyList<(string Tree, string Build)> siblings =
                 [.. (trees.GetValueOrDefault(host)?.Trees ?? []).Select(tree => (tree.Name, variant.DirectoryOn(host, tree.Root)))];
 
-            return (main, built, sweeps ? variant.DirectoryOn(host, MutationWorkers.PathOf(own, variant, 1)) : built, siblings);
+            return (main, built, sweeps ? MutationWorkers.Of(own, variant).BuildDirectoryOf(1) : built, siblings);
         }
         catch (HarnessException)
         {

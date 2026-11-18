@@ -313,14 +313,15 @@ public sealed class CodebaseGraphServiceTests
         graph.Write(".harness-config/runner/.secrets/token", "secret\n");
         await graph.CommitAsync(force: ".harness-config/runner/.secrets/token");
         graph.Write(".harness-config/sshItems/host/id", "key\n");
-        graph.Write(".mutations/worker/a.toy", "class Worker\n");
+        graph.Write(".m/worker/a.toy", "class Worker\n");
+        graph.Write(".mutations/former/b.toy", "class FormerWorker\n");
         graph.Write("debug.log", "noise\n");
 
         var synced = await graph.SyncAsync();
 
         Assert.Equal([".gitignore", "README.md"], graph.Manifest().Files.Keys);
         Assert.False(synced.Dirty);
-        Assert.DoesNotContain(graph.Symbols().Nodes, node => node.Id == "toy:Worker");
+        Assert.DoesNotContain(graph.Symbols().Nodes, node => node.Id is "toy:Worker" or "toy:FormerWorker");
     }
 
     /// <summary>

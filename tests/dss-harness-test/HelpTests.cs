@@ -1256,7 +1256,7 @@ public sealed partial class HelpTests
             "is held inside it, its own profile from the leg's ground, built as a launch's is: the machine read-only; every "
                 + "credential slot of the main checkout, every Claude Code directory and every place the user keeps credentials in "
                 + "hidden; the tree the leg works in - "
-                + "the step's tree or its copy under .legs - a sweep's workers under .mutations, the build directory of the leg's "
+                + "the step's tree or its copy under .legs - a sweep's workers under .m, the build directory of the leg's "
                 + "run of each runner action it runs, its own and a run check's ({actionBuild}, each step's {stepBuild} in it), a "
                 + "temporary directory of its own and the declared tool caches written, and inside them git's code-running files, "
                 + "the configuration directory - but those build directories, under it - and the tool's state written by nobody.",
@@ -2318,28 +2318,35 @@ public sealed partial class HelpTests
             $"an unknown one is refused ({HarnessExit.UsageError}) - once the registry itself can be swept: its own problems are listed "
             + "first, every one of them, whatever --arms names.",
             "ARMS, below the table, names each arm selected that did not pass, and why;",
-            "Each leg is swept in worker copies of its tree, kept in it as <tree>/.mutations/<key>w-<n>, numbered from 1:",
-            "directory is named: its first worker adds 22 character(s) to its tree's path whatever the variant is called,",
-            "Each is a repository of its own, as every copy a sync makes is, and init keeps .mutations in git and everything made in "
+            "Each leg is swept in worker copies of its tree, kept in it as <tree>/.m/<key>w-<n>, numbered from 1:",
+            "directory is named, and a worker builds in <worker>/build/<key>, never in the directory the variant's name gives the "
+            + "tree's own build: its first worker adds 14 character(s) to its tree's path, and its build directory 14 character(s) "
+            + "below that, whatever the variant is called,",
+            "Which variant a worker builds is what its build records, and a build of one variant where that record names another - "
+            + "two whose names come to one key share their workers - starts from clean; the lines of a sweep and of a clean say which "
+            + "leg, and which variant, a worker is.",
+            "Each is a repository of its own, as every copy a sync makes is, and init keeps .m in git and everything made in "
             + $"it out: a sweep in a tree where git does not ignore what it would make there is refused ({HarnessExit.Refused}), naming "
             + "init, with nothing made - asked on the machine that makes the workers, so a host answers for its own copy.",
-            "A worker is claimed while a sweep uses it, in <worker>.claim.json beside it in .mutations,",
+            "A worker is claimed while a sweep uses it, in <worker>.claim.json beside it in .m,",
             "a worker a sweep still running holds keeps its worktree, or its host's copy, until the sweep has ended, and one that "
             + "cannot be removed keeps it as a failure until that is put right - or --force deletes the worktree with that worker in it. "
             + "A directory there under a worker's name that no sync made goes with the worktree, or the host's copy, as everything "
             + "else in it does, and is said. No copy of a tree carries its workers, and a sync into a host's copy never deletes that "
-            + "copy's own. Workers an earlier version of this tool kept beside a tree, as <tree>.mutation-<key><mark>-<n>, are no "
-            + "workers to a sweep: nothing counts one, and clean --former-workers alone removes them - beside each tree of the "
-            + "repository on each machine a selected leg runs on, here and on hosts, and beside each one deleted since, a dry run "
-            + "listing each with its size - keeping one a sweep of that version still claims by the claim file beside it. Each holds a .git of its own that git records "
-            + "no worktree at, so until then one below the worktrees root is said as any such directory: "
+            + "copy's own. Workers an earlier version of this tool kept beside a tree, as <tree>.mutation-<key><mark>-<n>, or in "
+            + "it, as <tree>/.mutations/<key><mark>-<n> - which init keeps out of git whole, with no placeholder, and no sync sends "
+            + "or deletes - are no workers to a sweep: nothing counts one, and clean --former-workers removes them - beside and in "
+            + "each tree of the repository on each machine a selected leg runs on, here and on hosts, and beside each one deleted "
+            + "since, a dry run listing each with its size - keeping one a sweep of that version still claims by the claim file "
+            + "beside it; those in a worktree, or a host's copy, also go with it as its workers do. Each beside a tree holds a .git "
+            + "of its own that git records no worktree at, so until then one below the worktrees root is said as any such directory: "
             + "list-worktree warns of it, and delete-orchestrator, and delete-worktree of an orchestrator's directory with or "
             + $"without --force, refuse ({HarnessExit.Refused}) while one is below it.",
-            "built whole before it drives an arm: that sync withholds the worker's own build directory itself, "
+            "built whole before it drives an arm: that sync withholds the worker's own build directory, build/<key>, itself, "
             + "whatever sync.neverTransfer says, and sync.maxDeleteFraction judges only what mirrors the tree the sweep read. "
             + "Of the tree itself a sweep reads every file and writes none: its workers, and "
-            + "the claims on them, are in .mutations, and its run's records in .harness-config, as every run's are.",
-            "Its workers are kept in the leg's own tree, as a sweep's are, in a family of their own - <tree>/.mutations/<key>s-<n>,",
+            + "the claims on them, are in .m, and its run's records in .harness-config, as every run's are.",
+            "Its workers are kept in the leg's own tree, as a sweep's are, in a family of their own - <tree>/.m/<key>s-<n>,",
             "What the sweep timed across a clock step or a host sleep is said on the leg's line, among why its timings are suspect, and "
             + "changes no verdict: an arm's run and the unmutated run that bounds it, however each ended, and what each of its builds says "
             + "of its own - a worker's rebuilt from clean with it.",
@@ -3540,7 +3547,7 @@ public sealed partial class HelpTests
     [Theory]
     [InlineData("list-orchestrator", "--json Print the listing as one JSON document.")]
     [InlineData("fold-agent", "--json Print the outcome as one JSON document, the whole of standard output:")]
-    [InlineData("delete-worktree", "and the copies kept in each - the mutation workers in .mutations, and on this machine the leg copies in .legs;")]
+    [InlineData("delete-worktree", "and the copies kept in each - the mutation workers in .m and those an earlier version kept in .mutations, and on this machine the leg copies in .legs;")]
     [InlineData("clean", "and the copies of its tree it works in on this machine (.legs), wherever the leg runs,")]
     [InlineData("clean", "remove nothing, and exit as the clean would: 13 where a run holds the leg, a sweep its workers or a run its copy.")]
     public async Task EachCommandsOwnHelp_SaysWhatItDoesToCopies_AndWhatItsJsonPrints(string command, string expected)
@@ -4034,13 +4041,22 @@ public sealed partial class HelpTests
             ".worktrees/ contents ignored, .gitkeep tracked; the worktrees, at worktrees.root, which init writes as this",
             ".orchestrators/ contents ignored, .gitkeep tracked; what each orchestrator and its agents keep, in the main checkout, "
                 + "and never sent to a host by sync",
-            ".mutations/ contents ignored, .gitkeep tracked; the tree's mutation workers, in every tree, never sent to a host by "
+            ".m/ contents ignored, .gitkeep tracked; the tree's mutation workers, in every tree, never sent to a host by "
                 + "sync ('dssharness help mutations')",
+            ".m/<key><mark>-<n>/ ignored; a worker, a repository of its own, building in build/<key>, and its claim beside it",
+            ".mutations/ ignored whole, with no placeholder; where an earlier version kept the tree's mutation workers, never made "
+                + "again: never sent to a host by sync nor deleted by one, and what is left there removed by clean --former-workers, "
+                + "or with the tree",
+            ".mutations, where an earlier version kept the tree's mutation workers before they moved to .m, keeps its rule in the "
+                + "block for ever - the directory ignored whole, with no placeholder, since nothing is made there again - so what "
+                + "that version left there, each worker a repository of its own, never reads as work to commit; sync withholds it "
+                + "by name too, and no agent writes there. clean --former-workers removes what is left there, as does whatever "
+                + "removes the tree.",
             ".legs/ contents ignored, .gitkeep tracked; the copies of the tree its legs work in, in every tree, never sent to a "
                 + "host by sync",
             ".side-tasks/ contents ignored, .gitkeep tracked; the side-tasks' records, in the main checkout, and never sent to a host "
                 + "by sync ('dssharness help side-tasks')",
-            "The worktrees root, the orchestrators directory, .mutations, .legs and .side-tasks are kept in git by their placeholders, so each "
+            "The worktrees root, the orchestrators directory, .m, .legs and .side-tasks are kept in git by their placeholders, so each "
                 + "reads as not ignored itself while everything made in it is, and none can be a link: init names one it finds, and "
                 + "writes nothing through it. Sync withholds each by name. Each copy in them is a whole copy of the tree, so a "
                 + "program of the repository's own that walks the tree from its root - a census, a guard over every file - must "
@@ -4109,7 +4125,8 @@ public sealed partial class HelpTests
 
         Assert.Contains(
             "The copies kept in a worktree go before it, of its two families: the mutation workers its sweeps made "
-            + "('help mutations'), in .mutations, and the copies of it its legs work in ('help legs'), in .legs - never "
+            + "('help mutations'), in .m - and in .mutations, where an earlier version kept them - and the copies of it its legs "
+            + "work in ('help legs'), in .legs - never "
             + "sent to any host, so only this machine holds them. They are asked about before anything of it is removed or "
             + $"looked through: one a sweep still running holds - or a run holds a leg copy - keeps the worktree ({HarnessExit.Refused}), and one that cannot "
             + $"be removed, or told for the harness's, keeps it as a failure ({HarnessExit.CommandFailed}), as workers that cannot be looked "

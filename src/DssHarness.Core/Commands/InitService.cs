@@ -93,6 +93,12 @@ public sealed class InitService(
             // placeholder kept in each (see the remarks above).
             .. HarnessLayout.RootSlots(worktrees.Root).SelectMany(slot => Slot(slot, keep)),
 
+            // Where an earlier version kept what a slot above keeps now: the directory whole, and no placeholder, since
+            // nothing is made there again. What that version left there - mutation workers, each a repository of its own -
+            // stays on disk until clean --former-workers removes it, and with this rule gone would read as untracked
+            // repositories in git status.
+            .. HarnessLayout.FormerRootSlots.Select(slot => new ManagedIgnoreRule($"/{slot}/", [$"{slot}/{any}", $"{slot}/{folder}/{any}"], Ignores: true)),
+
             // The credential slots, from the layout's one list of them: one directory per host, each
             // holding an address, a user and a key; the values actions read, beside the tracked action
             // files; and the agent clients' keys, beside the tracked workflows. Nothing under any may

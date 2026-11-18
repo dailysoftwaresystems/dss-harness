@@ -673,7 +673,7 @@ internal sealed class MutationLegRunner(
         private async Task<IReadOnlyDictionary<string, ArmKey>> KeysAsync(int number, IWorkerGraph graph, CancellationToken cancellationToken)
         {
             var worker = Worker(number);
-            var buildDirectory = _leg.Variant.DirectoryUnder(worker);
+            var buildDirectory = WorkerBuild(number);
             var driven = _subject.Arms.Driven;
 
             _work.Progress($"worker {number}: reading what each arm is judged on from its build");
@@ -873,7 +873,7 @@ internal sealed class MutationLegRunner(
                 .Select(number =>
                 {
                     var worker = Worker(number);
-                    var build = _leg.Variant.DirectoryUnder(worker);
+                    var build = WorkerBuild(number);
 
                     return WorkerRoom.Need(
                         copy,
@@ -900,18 +900,18 @@ internal sealed class MutationLegRunner(
         {
             var worker = Worker(number);
 
-            return CopyPathBudget.Check(_runner._pathBudget, _config.Worktrees, worker, _leg.Variant, Reserve, GivenBelow(worker));
+            return CopyPathBudget.Check(_runner._pathBudget, _config.Worktrees, worker, WorkerBuild(number), Reserve, GivenBelow(worker));
         }
 
         /// <summary>The longest path a build of the subject's project makes below its build directory: the subject's own, or <c>worktrees.pathBudgetReserve</c>.</summary>
         private int Reserve => _subject.PathReserve ?? _config.Worktrees.PathBudgetReserve;
 
         /// <summary>
-        /// The longest path <paramref name="worker"/>'s build makes below it: its build directory, the separator before it
-        /// counted - what a worktree's check counts for the longest variant this machine builds - and below that the
-        /// longest path a build of the project makes.
+        /// The longest path worker <paramref name="number"/>'s build makes below it: its build directory, the separator
+        /// before it counted - what a worktree's check counts for the longest variant this machine builds - and below that
+        /// the longest path a build of the project makes.
         /// </summary>
-        private int BuildBelow(string worker) => CopyPathBudget.BuildBelow(worker, _leg.Variant, Reserve);
+        private int BuildBelow(int number) => CopyPathBudget.BuildBelow(Worker(number), WorkerBuild(number), Reserve);
 
         /// <summary>
         /// The longest path below <paramref name="worker"/> among the dependency sources it is given, the separator
@@ -933,18 +933,12 @@ internal sealed class MutationLegRunner(
         private string TooLong(int number)
         {
             var budget = Budget(number);
-            var reckoned = GivenBelow(Worker(number)) > BuildBelow(Worker(number)) ? "as the longest path among the dependency sources it is given and worktrees.pathBudgetMargin reckon them"
+            var reckoned = GivenBelow(Worker(number)) > BuildBelow(number) ? "as the longest path among the dependency sources it is given and worktrees.pathBudgetMargin reckon them"
                 : _subject.PathReserve is { } reserve ? $"as the {reserve} its project's build makes below its build directory and worktrees.pathBudgetMargin reckon them"
                 : "as worktrees.pathBudgetReserve and pathBudgetMargin reckon them";
 
-            // Where the tree fitted a worker an earlier version of this tool kept beside it, and fits none kept in it, the
-            // characters a worker kept in it adds are why, and said; anywhere else they are not, and nothing is said of them.
-            var deeper = budget.Limit is { } limit && budget.RequiredLength - WorkerFamily.DeeperThanBeside < limit
-                ? $", {ReportText.Counted(WorkerFamily.DeeperThanBeside, "character")} deeper than a worker an earlier version of this tool kept beside the tree"
-                : string.Empty;
-
-            return $"worker {number} would be kept at '{Worker(number)}', in the tree's {HarnessLayout.MutationsDirectoryName}{deeper}, "
-                + $"where its build needs paths of {budget.RequiredLength} "
+            return $"worker {number} would be kept at '{Worker(number)}', in the tree's {HarnessLayout.MutationsDirectoryName}, "
+                + $"and build {_leg.Variant.DirectoryName} in '{WorkerBuild(number)}', where its build needs paths of {budget.RequiredLength} "
                 + $"characters, {reckoned}, and every path must stay under {budget.Limit}: keep the tree at a shorter path, or set "
                 + "worktrees.pathLimit where every tool its build runs takes longer ones";
         }
@@ -1150,8 +1144,8 @@ internal sealed class MutationLegRunner(
                     return null;
                 }
 
-                _work.Progress($"worker {number}: making '{worker}' the tree as it was read");
-                await _runner._copies.SyncAsync(_reading, worker, _leg.Variant, cancellationToken).ConfigureAwait(false);
+                _work.Progress($"worker {number}: making '{worker}' the tree as it was read, for {_leg.Variant.DirectoryName}");
+                await _runner._copies.SyncAsync(_reading, worker, cancellationToken).ConfigureAwait(false);
 
                 // What it keeps of dependency sources is made what this sweep read, as its copy of the tree was: each given
                 // again by content, and what an earlier sweep left of one no longer given removed.
@@ -1162,7 +1156,7 @@ internal sealed class MutationLegRunner(
 
                 await _runner._copies.SyncFetchedAsync(_fetched, worker, cancellationToken).ConfigureAwait(false);
 
-                _work.Progress($"worker {number}: building it whole");
+                _work.Progress($"worker {number}: building {_leg.Variant.DirectoryName} whole, in '{WorkerBuild(number)}'");
                 var request = Request(number, worker, _records.Named(MutationRecords.WorkersDirectory, $"{number}"), _subject.Project);
                 var baseline = Noted($"worker {number}'s build of the unmutated tree", await _runner._builder.BuildAsync(_config, request, cancellationToken).ConfigureAwait(false));
 
@@ -1316,7 +1310,7 @@ internal sealed class MutationLegRunner(
             CancellationToken cancellationToken)
         {
             var worker = Worker(number);
-            var buildDirectory = _leg.Variant.DirectoryUnder(worker);
+            var buildDirectory = WorkerBuild(number);
             var named = _records.Named(MutationRecords.ArmsDirectory, arm.Id);
             List<SiteState> sites;
             (ArmPreflight Preflight, byte[]? Control, string? Diagnostic, IReadOnlyList<string> Builds, IReadOnlyList<string> Outputs) flight;
@@ -1601,7 +1595,7 @@ internal sealed class MutationLegRunner(
         private async Task<PristineOutcome> RunControlAsync(int number, string runner, IWorkerGraph graph, CancellationToken cancellationToken)
         {
             var worker = Worker(number);
-            var buildDirectory = _leg.Variant.DirectoryUnder(worker);
+            var buildDirectory = WorkerBuild(number);
             var records = _records.Under(MutationRecords.ControlsDirectory, runner);
             var named = _records.Named(MutationRecords.ControlsDirectory, runner);
             var program = graph.ProgramOf(runner);
@@ -1751,7 +1745,8 @@ internal sealed class MutationLegRunner(
                 return new ArmBuild(
                     ReachedVerdict.Of(
                         LegVerdict.Unmeasured,
-                        $"ninja's log in '{buildDirectory}' could not be read {(before is null ? "before" : "after")} the build, so nothing witnessed "
+                        $"ninja's log in '{buildDirectory}', the worker's build of {_leg.Variant.DirectoryName}, could not be read "
+                        + $"{(before is null ? "before" : "after")} the build, so nothing witnessed "
                         + "that each object depending on the site was rebuilt"),
                     [],
                     []);
@@ -1855,6 +1850,7 @@ internal sealed class MutationLegRunner(
             {
                 Leg = named,
                 TreeRoot = worker,
+                BuildDirectory = WorkerBuild(number),
                 UnsetFirst = FetchedSources.Unset,
             };
 
@@ -1891,6 +1887,9 @@ internal sealed class MutationLegRunner(
 
         /// <summary>Worker <paramref name="number"/>'s copy.</summary>
         private string Worker(int number) => _subject.Workers.PathOf(number);
+
+        /// <summary>The directory worker <paramref name="number"/> builds the leg's variant in (<see cref="WorkerFamily.BuildDirectoryOf"/>).</summary>
+        private string WorkerBuild(int number) => _subject.Workers.BuildDirectoryOf(number);
 
         /// <summary>Whether this is the sweep's first ask of its machine, the one ask that settles.</summary>
         private bool First() => Interlocked.Exchange(ref _asked, 1) == 0;

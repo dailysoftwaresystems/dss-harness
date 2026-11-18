@@ -125,8 +125,8 @@ public sealed class DryRunsTests
         var planned = CommandOutcome.Ok("dry run: deleting agent 'a' of 'o' folds 12 path(s), removes 0 and applies 3 row(s)", ["  a line"]);
         var somebodys = KeptCopyLine.Said(@"left 'C:\src\repo\.worktrees\o\a\.legs\357e24c', named as a leg copy kept in it: nothing says the harness made it");
         var held = KeptCopyLine.Held(
-            @"C:\src\repo\.worktrees\o\a\.mutations\x86_64-gcc-debug-1",
-            @"left the mutation worker 'C:\src\repo\.worktrees\o\a\.mutations\x86_64-gcc-debug-1' kept in it: a sweep still running holds it: pid 4242");
+            @"C:\src\repo\.worktrees\o\a\.m\357e24cw-1",
+            @"left the mutation worker 'C:\src\repo\.worktrees\o\a\.m\357e24cw-1' kept in it: a sweep still running holds it: pid 4242");
 
         var said = new TreeHeld([], null, null, [somebodys]);
         var holding = new TreeHeld([TreeHolder.OfKeptCopy(held, entry: null, standing: null, ahead: null)], null, null, [somebodys, held]);
@@ -154,7 +154,7 @@ public sealed class DryRunsTests
     [Fact]
     public void WhatACopyWasLeftAs_IsWeighedInOnePlace_AndAValueThisBuildDoesNotKnowIsRefused()
     {
-        var path = @"C:\src\repo\.worktrees\o\a\.mutations\x86_64-gcc-debug-1";
+        var path = @"C:\src\repo\.worktrees\o\a\.m\357e24cw-1";
         var claim = new LogOwner("this-machine", 4242, "20261012-151500-ab12cd34", DateTimeOffset.Parse("2026-10-12T15:15:00Z", System.Globalization.CultureInfo.InvariantCulture));
 
         foreach (var left in Enum.GetValues<WorkerLeftAs>())
@@ -191,7 +191,7 @@ public sealed class DryRunsTests
     [Fact]
     public void AClaimIsCarriedOnlyByACopyLeftHeld_AsMadeAndAsAHostsAnswerIsRead()
     {
-        var path = @"C:\src\repo\.worktrees\o\a\.mutations\x86_64-gcc-debug-1";
+        var path = @"C:\src\repo\.worktrees\o\a\.m\357e24cw-1";
         var claim = new LogOwner("this-machine", 4242, "20261012-151500-ab12cd34", DateTimeOffset.Parse("2026-10-12T15:15:00Z", System.Globalization.CultureInfo.InvariantCulture));
 
         Assert.Equal(claim, new WorkerLeft(path, "held", WorkerLeftAs.Held, claim).Claim);
@@ -218,7 +218,7 @@ public sealed class DryRunsTests
     {
         const string Again = "'dssharness delete-worktree o/a'";
         var legCopy = @"C:\src\repo\.worktrees\o\a\.legs\357e24c";
-        var worker = @"C:\src\repo\.worktrees\o\a\.mutations\x86_64-gcc-debug-1";
+        var worker = @"C:\src\repo\.worktrees\o\a\.m\357e24cw-1";
 
         var leg = KeptCopyLine.Left(new WorkerLeft(legCopy, "nothing says the harness made it.", WorkerLeftAs.Somebodys), LegCopies.Member, Again);
         var mutation = KeptCopyLine.Left(new WorkerLeft(worker, "nothing says the harness made it.", WorkerLeftAs.Somebodys), MutationWorkers.Member, Again);
@@ -238,7 +238,7 @@ public sealed class DryRunsTests
     public void WhatKeepsATreeOfACopyLeftInIt_IsWordedInOnePlace_ForEveryFamily()
     {
         var legCopy = @"C:\src\repo\.worktrees\o\a\.legs\357e24c";
-        var worker = @"C:\src\repo\.worktrees\o\a\.mutations\x86_64-gcc-debug-1";
+        var worker = @"C:\src\repo\.worktrees\o\a\.m\357e24cw-1";
 
         Assert.Equal(
             $"a leg copy kept in it is in use - '{legCopy}': a run still running holds it: pid 7",
@@ -260,7 +260,7 @@ public sealed class DryRunsTests
     [Fact]
     public void AClaimOnACopyNotLeftHeld_IsRefusedHoweverOneIsMade_InTheToolsOwnWords()
     {
-        var path = @"C:\src\repo\.worktrees\o\a\.mutations\x86_64-gcc-debug-1";
+        var path = @"C:\src\repo\.worktrees\o\a\.m\357e24cw-1";
         var claim = new LogOwner("this-machine", 4242, "20261012-151500-ab12cd34", DateTimeOffset.Parse("2026-10-12T15:15:00Z", System.Globalization.CultureInfo.InvariantCulture));
         var said = $"A claim is carried by '{path}', which was not left held: only a copy left held is held by a claim.";
 
@@ -317,7 +317,7 @@ public sealed class DryRunsTests
         var consent = CommandOutcome.Ok("dry run: ... 1 cell(s) of its rows do not keep their stored text word for word ...", ["to do it: '...'"]);
         var refused = CommandOutcome.Refused("the refusal", ["  a line"]);
         var stops = new TreeHeld([], null, null, [Unlooked()]);
-        var held = KeptCopyLine.Held(@"C:\src\repo\.worktrees\o\a\.mutations\x86_64-gcc-debug-1", "left the mutation worker ... a sweep still running holds it: pid 4242");
+        var held = KeptCopyLine.Held(@"C:\src\repo\.worktrees\o\a\.m\357e24cw-1", "left the mutation worker ... a sweep still running holds it: pid 4242");
 
         var sound = DryRuns.Answer(planned, RequestStanding.Sound, stops);
 

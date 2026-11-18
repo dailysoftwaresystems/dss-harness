@@ -1984,7 +1984,7 @@ public sealed partial class CliEndToEndTests
             using var document = JsonDocument.Parse(result.StandardOutput);
             var line = Assert.Single(document.RootElement.GetProperty("legs").EnumerateArray());
 
-            Assert.StartsWith("removed 1 worker(s) an earlier version kept beside its trees, ", line.GetProperty("detail").GetString(), StringComparison.Ordinal);
+            Assert.StartsWith("removed 1 worker(s) an earlier version kept beside or in its trees, ", line.GetProperty("detail").GetString(), StringComparison.Ordinal);
             Assert.False(Directory.Exists(former));
             Assert.True(File.Exists(Path.Combine(directory, "obj", "a.o")));
         }

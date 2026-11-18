@@ -238,8 +238,8 @@ public interface ISyncTransport
 
     /// <summary>
     /// Removes the mutation workers kept in the tree at <paramref name="root"/> - each a copy of it a sweep made, of
-    /// whichever variant, at <c>&lt;root&gt;/.mutations/&lt;name&gt;-&lt;n&gt;</c> - with what an unfinished removal of one
-    /// left aside. A worker a sweep still running holds is left, as is one whose removal stops at something held, and a
+    /// whichever variant, at <c>&lt;root&gt;/.m/&lt;name&gt;-&lt;n&gt;</c>, or at <c>&lt;root&gt;/.mutations/&lt;name&gt;-&lt;n&gt;</c>
+    /// where an earlier version kept it - with what an unfinished removal of one left aside. A worker a sweep still running holds is left, as is one whose removal stops at something held, and a
     /// directory nothing says the harness made; each is answered for. A tree that is not there holds none.
     /// </summary>
     /// <param name="root">The tree the workers copy: a host's copy, or a tree on this machine.</param>
@@ -250,9 +250,10 @@ public interface ISyncTransport
     /// <summary>
     /// Removes the mutation workers an earlier version of this tool kept beside the copies of a repository kept together -
     /// beside the main checkout's copy at <paramref name="repositoryPath"/> and each worktree's copy beside it
-    /// (<c>&lt;repositoryPath&gt;.worktree-&lt;name&gt;</c>), whether that copy is there still or was removed since - with
-    /// what an unfinished removal of one left aside; a worker that version's sweep still claims is left, and answered for.
-    /// None where the directory the copies are kept in is not there.
+    /// (<c>&lt;repositoryPath&gt;.worktree-&lt;name&gt;</c>), whether that copy is there still or was removed since - or in
+    /// one there still, and in each copy in its .legs, in their <see cref="Repository.HarnessLayout.FormerMutationsDirectoryName"/>,
+    /// with what an unfinished removal of one left aside; a worker that version's sweep still claims is left, and answered
+    /// for. None where the directory the copies are kept in is not there.
     /// </summary>
     /// <param name="repositoryPath">Where the main checkout's copy is kept, as the configuration declares it.</param>
     /// <param name="measureOnly">Whether to say what would be removed, and remove nothing.</param>

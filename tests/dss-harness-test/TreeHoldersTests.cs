@@ -929,7 +929,7 @@ public sealed class TreeHoldersTests
 
         Assert.Contains(
             "The run lock knows a tree on this machine by where it leads, every link followed, so worktrees kept on another disk "
-                + "through a worktrees root that is a link, and copies kept through a `.legs` or `.mutations` that is one, are held, and "
+                + "through a worktrees root that is a link, and copies kept through a `.legs` or `.m` that is one, are held, and "
                 + "asked about, as one tree however a command spells them - a build before this one's too, since the lock keeps each "
                 + "tree as its run spelled it.",
             readme,
@@ -961,7 +961,7 @@ public sealed class TreeHoldersTests
         Assert.Contains(
             $"taken with everything kept inside the copy (`{nameof(RunLock)}.{nameof(RunLock.RemovalCommand)}`, on "
                 + $"`{nameof(HostCopyRemover)}.{nameof(HostCopyRemover.RemovalLock)}`), so a sweep this machine runs there - its key in the "
-                + "copy's `.mutations` - keeps the copy as a run in it does, and the dry run of a deletion names it as one, while no sweep "
+                + "copy's `.m` - keeps the copy as a run in it does, and the dry run of a deletion names it as one, while no sweep "
                 + "takes a key there once the removal holds the copy;",
             architecture,
             StringComparison.Ordinal);

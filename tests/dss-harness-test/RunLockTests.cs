@@ -746,7 +746,7 @@ public sealed class RunLockTests
 
     /// <summary>
     /// A removal of a host's copy takes it with everything kept inside it: a sweep holding its key there - one more copy
-    /// in the copy's <c>.mutations</c> - is in the way of removing that copy, on that host only, and of nothing beside it
+    /// in the copy's <c>.m</c> - is in the way of removing that copy, on that host only, and of nothing beside it
     /// whose name only begins the same; while a sync or a build of the copy, which a sweep never holds off, still takes it.
     /// </summary>
     [Fact]
@@ -757,7 +757,7 @@ public sealed class RunLockTests
         var runLock = new RunLock(factory.FileSystem, factory.Output, factory.Identity);
         var layout = Layout(temp);
         var copy = "/home/pi/repo--wt--o1--ag";
-        var sweep = new LockRequest { Host = "ssh pi", Tree = copy + "/.mutations/357e24c", Scope = LockScope.TreeExclusive, RunId = RunId.New(), Command = "check-mutations" };
+        var sweep = new LockRequest { Host = "ssh pi", Tree = copy + "/.m/357e24c", Scope = LockScope.TreeExclusive, RunId = RunId.New(), Command = "check-mutations" };
 
         await using var swept = await runLock.AcquireAsync(layout, sweep, TestContext.Current.CancellationToken);
 
@@ -825,7 +825,7 @@ public sealed class RunLockTests
     /// <summary>
     /// A removal's entry - a host's copy taken whole by its removal - holds off whatever is asked inside the copy while it
     /// stands, as a removal asked is held off by whatever is held inside it: a sweep cannot take its key in the copy's
-    /// <c>.mutations</c>, and is named the removal; on that host only, and nothing beside the copy whose name only begins
+    /// <c>.m</c>, and is named the removal; on that host only, and nothing beside the copy whose name only begins
     /// the same; and a copy taken whole by anything but a removal - a sync - holds off nothing kept inside it.
     /// </summary>
     [Fact]
@@ -836,7 +836,7 @@ public sealed class RunLockTests
         var runLock = new RunLock(factory.FileSystem, factory.Output, factory.Identity);
         var layout = Layout(temp);
         var copy = "/home/pi/repo" + HostCopies.WorktreeSuffix + "o1--ag";
-        var sweep = new LockRequest { Host = "ssh pi", Tree = copy + "/.mutations/357e24c", Scope = LockScope.TreeExclusive, RunId = RunId.New(), Command = "check-mutations" };
+        var sweep = new LockRequest { Host = "ssh pi", Tree = copy + "/.m/357e24c", Scope = LockScope.TreeExclusive, RunId = RunId.New(), Command = "check-mutations" };
 
         await using (var removing = await runLock.AcquireAsync(layout, HostCopyRemover.RemovalLock(HostId.Ssh("pi"), copy, RunId.New()), TestContext.Current.CancellationToken))
         {
@@ -850,7 +850,7 @@ public sealed class RunLockTests
             Assert.Equal(removing.Entry, Assert.Single(runLock.Holders(layout, [sweep])).Entry);
 
             await using (await runLock.AcquireAsync(layout, sweep with { Host = "ssh other" }, TestContext.Current.CancellationToken))
-            await using (await runLock.AcquireAsync(layout, sweep with { Tree = copy + "-2/.mutations/357e24c" }, TestContext.Current.CancellationToken))
+            await using (await runLock.AcquireAsync(layout, sweep with { Tree = copy + "-2/.m/357e24c" }, TestContext.Current.CancellationToken))
             {
             }
         }

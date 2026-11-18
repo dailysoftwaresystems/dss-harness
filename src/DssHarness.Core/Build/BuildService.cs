@@ -28,6 +28,21 @@ public sealed record BuildRequest(
     string RunDirectory,
     bool Time = false)
 {
+    /// <summary>The directory given to <see cref="BuildDirectory"/>, or <see langword="null"/> for the variant's own.</summary>
+    private readonly string? _buildDirectory;
+
+    /// <summary>
+    /// The directory the build is made in: the variant's own below the tree (<see cref="VariantKey.DirectoryUnder"/>), unless
+    /// whoever asks gives another - a mutation worker builds in one named by its variant's key
+    /// (<see cref="Mutations.WorkerFamily.BuildDirectoryOf"/>), where the build's record says which variant built there.
+    /// Read after <see cref="TreeRoot"/>, so a request made for one tree and given another builds in the other's.
+    /// </summary>
+    public string BuildDirectory
+    {
+        get => _buildDirectory ?? Variant.DirectoryUnder(TreeRoot);
+        init => _buildDirectory = value;
+    }
+
     /// <inheritdoc cref="Hosts.HostReport.ProgramDirectories"/>
     public ProgramDirectories ProgramDirectories { get; init; } = ProgramDirectories.None;
 
@@ -207,7 +222,7 @@ public sealed class BuildService(
         // before anything ran, and a copy's can give its tool no way the tree's gave it.
         KeepGoing.RequireFor(config, request, adapter);
 
-        var buildDirectory = request.Variant.DirectoryUnder(request.TreeRoot);
+        var buildDirectory = request.BuildDirectory;
         var overlay = request.Variant.Overlay(config, request.Project);
 
         // Made once, and read by everything that asks which compiler this build uses: the guard, every
@@ -216,27 +231,37 @@ public sealed class BuildService(
         // had configured with another be reused, the leg passing on a compiler nobody chose.
         var environment = BuildAdapters.EnvironmentFor(overlay, request);
 
+        // A directory another variant last built in is that variant's, whatever else it holds: a mutation worker builds in
+        // one named by its variant's key, which two variants' names can come to alike. Started from clean, and asked before
+        // the guard, which would otherwise refuse it for the compiler or the build type the other variant chose - or keep
+        // it, and judge this variant on the other's objects.
+        var another = AnotherVariant(request, buildDirectory);
+
         // Before configuring, not after: a directory configured from another worktree watches that
         // tree's sources, which produced both a false refusal and a silent wrong answer. Compared
         // against the directory the build is actually configured from, which is the project's own
         // path below the tree root and not the tree root itself.
-        _buildDirectoryGuard.Check(
-            buildDirectory,
-            Path.Combine(request.TreeRoot, request.Project.Path),
-            CompilerValue.For(CompilerValue.C, overlay.CacheVars, environment),
-            CompilerValue.For(CompilerValue.Cxx, overlay.CacheVars, environment),
-            adapter.BuildTypeOf(config, request.Variant.Config),
-            PathSearch.For(environment, request.ProgramDirectories));
+        if (another is null)
+        {
+            _buildDirectoryGuard.Check(
+                buildDirectory,
+                Path.Combine(request.TreeRoot, request.Project.Path),
+                CompilerValue.For(CompilerValue.C, overlay.CacheVars, environment),
+                CompilerValue.For(CompilerValue.Cxx, overlay.CacheVars, environment),
+                adapter.BuildTypeOf(config, request.Variant.Config),
+                PathSearch.For(environment, request.ProgramDirectories));
+        }
 
         // Listed once, for the decision below and for the guards after it: the tracked files that can
         // affect this build, or why they could not be listed.
         var (watched, unmeasurable) = await TrackedInputsAsync(request, cancellationToken).ConfigureAwait(false);
 
-        // A compiler changed since CMake identified it comes first: no record of the tree can answer
-        // for it, since CMake never identifies a cached compiler again.
-        var replaced = adapter is CMakeAdapter
-            ? await CompilerReplacedAsync(request, buildDirectory, environment, cancellationToken).ConfigureAwait(false)
-            : null;
+        // Another variant's directory comes first, and then a compiler changed since CMake identified it:
+        // no record of the tree can answer for it, since CMake never identifies a cached compiler again.
+        var replaced = another
+            ?? (adapter is CMakeAdapter
+                ? await CompilerReplacedAsync(request, buildDirectory, environment, cancellationToken).ConfigureAwait(false)
+                : null);
 
         var (rebuilt, taken) = replaced is not null
             ? (replaced, null)
@@ -969,6 +994,22 @@ public sealed class BuildService(
     /// authoritative.
     /// </para>
     /// </remarks>
+    /// <summary>
+    /// Why <paramref name="buildDirectory"/> starts from clean because the build that last ran there recorded another
+    /// variant than <paramref name="request"/>'s (<see cref="BuildRecord.Variant"/>), or <see langword="null"/> where it
+    /// recorded this one, or none.
+    /// </summary>
+    /// <remarks>
+    /// A tree's own build directory is named by its variant, and its record names that variant always. A mutation
+    /// worker's is named by the variant's key (<see cref="Mutations.WorkerFamily.BuildDirectoryOf"/>), which two variants
+    /// of one tree whose names come to one key share: the record is then what says whose its objects are.
+    /// </remarks>
+    private string? AnotherVariant(BuildRequest request, string buildDirectory)
+        => BuildRecord.VariantIn(_fileSystem, buildDirectory) is { } built
+            && !string.Equals(built, request.Variant.DirectoryName, StringComparison.Ordinal)
+            ? $"another variant's build: the last build here was of '{built}', and this one is of '{request.Variant.DirectoryName}'"
+            : null;
+
     private async Task<(string? Rebuilt, InputSnapshot? Taken)> DecideCleanRebuildAsync(
         BuildRequest request,
         string buildDirectory,

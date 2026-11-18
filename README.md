@@ -66,7 +66,7 @@ detected it seeds no legs, and `legs` fails until some are declared.
 | `init [--install-tools]` | Create `.harness-config` in the tree it runs in, a worktree's included, seed `config.json`, add ignore rules; installs tools only when asked |
 | `verify-git` | Check git is installed and this is a repository |
 | `create-worktree <name>` | Create a worktree (`--random` generates the name) |
-| `delete-worktree <name> [--force]` | Remove a worktree and everything under it, its copies on hosts, and the copies kept in each - the mutation workers in `.mutations`, and on this machine the leg copies in `.legs`; refuses one holding work that would be lost, a locked one, one whose evidence directories hold measurements, one with a copy in it that a sweep or a run still holds or that cannot be removed, or an orchestrator's live agent's, which `delete-agent` deletes with the agent, without `--force`; an agent's repository of its own is deleted whole, the commits made in it that no ref of the main checkout's reaches counted as work that would be lost; once the checks pass, the removal is reversible until the files are gone - git is asked once more what changed, everything but the worktree's `.git` file is deleted by a deletion that reaches any path however long, and only then does git clear its record, so one that stops part way is still a worktree, `git checkout -- .` putting its files back and `--force` finishing it |
+| `delete-worktree <name> [--force]` | Remove a worktree and everything under it, its copies on hosts, and the copies kept in each - the mutation workers in `.m` and those an earlier version kept in `.mutations`, and on this machine the leg copies in `.legs`; refuses one holding work that would be lost, a locked one, one whose evidence directories hold measurements, one with a copy in it that a sweep or a run still holds or that cannot be removed, or an orchestrator's live agent's, which `delete-agent` deletes with the agent, without `--force`; an agent's repository of its own is deleted whole, the commits made in it that no ref of the main checkout's reaches counted as work that would be lost; once the checks pass, the removal is reversible until the files are gone - git is asked once more what changed, everything but the worktree's `.git` file is deleted by a deletion that reaches any path however long, and only then does git clear its record, so one that stops part way is still a worktree, `git checkout -- .` putting its files back and `--force` finishing it |
 | `list-worktree [--hosts] [--json]` | List existing worktrees with the commit each was made from, the copies hosts keep of them, and the copies left by worktrees that are gone, with the `clean --gone-copies` that removes them by their tree - and, where a worktree here bears a gone one's name now, that worktree; `--hosts` also asks each host what it keeps, and how large each copy is, a copy no record here holds said with the tree its marker says it was made from; `--json` says of each whether it is one of git's linked worktrees (`"kind": "worktree"`) or an agent's repository of its own (`"kind": "repository"`) |
 | `create-orchestrator <o> --model <id> [--parallel N]` | Create an orchestrator under `.orchestrators`; `--parallel` (4 unless given) is the most agents with a worktree at once |
 | `create-agent <o> <a> --model <id> [--empty \| --no-worktree]` | Create an agent: its record, its worktree at `<worktrees.root>/<o>/<a>` - a git repository of its own that borrows the main checkout's objects, not one of git's linked worktrees, so `git worktree list` in the main checkout does not show it and nothing done in it reaches the main checkout's refs or objects - and its seed, the main tree's uncommitted state handed to it; `--no-worktree` makes the engine's own kind, a record and two directories that read the main tree and record no session - a person has no use for one by hand |
@@ -112,7 +112,7 @@ detected it seeds no legs, and `legs` fails until some are declared.
 | `check-mutations [--legs a,b] [--arms a,b] [--self-test] [--list] [--pending]` | Prove each selected leg's tests can fail: in worker copies of its tree, mutate each arm the registry declares, build it, witness every object depending on the site rebuilt, run its test binary whole and judge what reddened; `--self-test` sweeps the fixture the tool carries instead, through each leg's toolchain; `--list` says, without sweeping, each arm's last verdict on each leg and whether anything it was judged on has moved - of what a test binary reads at run time, only the files `mutations.runReads` names for its runner; `--pending` sweeps only the arms with no passed that still holds, and with nothing pending passes, sweeping nothing (`help mutations`) |
 | `stop-run <run> [--now] [--json]` | Stop a `build`, `test`, `run` or `check-mutations` run from another terminal, typed in the tree that ran it: asked of its dispatcher, which stops every leg where it stands as an interrupt does and writes its ledger, and waited for 60 s - said stopped only where its dispatcher took the stop; `--now` ends the dispatcher's process where it stands, with all it started - only on this machine, and only the process its owner file names by its start. On Windows a dispatcher that ends in any way, a kill among them, ends its local legs with it |
 | `query-codebase-graph <run> (--find <query> \| --node <symbol> \| --related <symbol> --relation <relation> [--depth <n>] \| --outline [<path or symbol>] \| --body <symbol>...) [--agent <agent>] [--json]` | Read a run's codebase graph by hand: one of the `graph` tool's read operations on the base or an agent's view, printing the answer an agent would be given - each node with its handle and `path:start-end #hash` - or with `--json` the same in one document. It reads only: no sync, no lock, nothing written; a view not made yet is said and the base answered; 13 where the run has no graph |
-| `clean [--legs a,b] [--dry-run] [--former-workers \| --gone-copies]` | Remove each selected leg's build directory, the mutation workers its sweeps and self-tests keep in its tree, and the copies of its tree it works in (`.legs`), wherever the leg runs, so a full disk can be freed; `--dry-run` says what each holds and exits as the clean would; `--former-workers` removes only the workers an earlier version kept beside the repository's trees, here and on each host; `--gone-copies` removes only the copies hosts keep of worktrees gone from this machine, told by the tree this machine's record names and never by name - a worktree here bearing a gone one's name, a live agent's among them, keeps its own - on every host that record names one on, whether or not a leg runs there, a line for each host (`--legs` narrows it to the hosts the selected legs can run on; a host that cannot be reached keeps its copies recorded for a later clean) (`help space`) |
+| `clean [--legs a,b] [--dry-run] [--former-workers \| --gone-copies]` | Remove each selected leg's build directory, the mutation workers its sweeps and self-tests keep in its tree, and the copies of its tree it works in (`.legs`), wherever the leg runs, so a full disk can be freed; `--dry-run` says what each holds and exits as the clean would; `--former-workers` removes only the workers an earlier version kept beside the repository's trees or in their `.mutations`, here and on each host; `--gone-copies` removes only the copies hosts keep of worktrees gone from this machine, told by the tree this machine's record names and never by name - a worktree here bearing a gone one's name, a live agent's among them, keeps its own - on every host that record names one on, whether or not a leg runs there, a line for each host (`--legs` narrows it to the hosts the selected legs can run on; a host that cannot be reached keeps its copies recorded for a later clean) (`help space`) |
 | `up <name> [--input name=value] [--json]` | Bring a set-up up on this machine: run the `up` command line `setUp` declares for it, at the root of the tree - a program and its arguments, no shell, a line per platform where they differ, its declared inputs filled in with what `--input` gives over their defaults (`help setups`) |
 | `down <name> [--input name=value] [--json]` | Bring a set-up down: run its `down` command line there, with the values it was brought up with; refused (13) while a leg of a run on this machine still uses it in that tree - in any of the repository's, for one the machine shares - whose last leg brings it down |
 | `host-exec --ssh <name> \| --wsl [<distro>] -- <command>` | Run a DssHarness command on an ssh host or in a WSL distribution |
@@ -322,8 +322,9 @@ is enforced by tests that read the built command line itself. The
 .orchestrators/key-spend.jsonl               ignored; what each key spent, by its name and never its value: a line for each key and model of each entry of a step's order or of a side-task's turn that ran, its lines older than seven days dropped when it is next written, read where balanceKeyUsage chooses a key ('dssharness help agent-clients')
 .side-tasks/                                 contents ignored, .gitkeep tracked; the side-tasks' records, in the main checkout, and never sent to a host by sync ('dssharness help side-tasks')
 .side-tasks/<task>/                          ignored; one side-task: its task.json, stored stream, transcript, denials and web, its conversation where its client stores one, and its own codebase graph (graph/, its map and each call of the graph tool) where it was given one; <task>.owner.json beside it while a side-task holds it open
-.mutations/                                  contents ignored, .gitkeep tracked; the tree's mutation workers, in every tree, never sent to a host by sync ('dssharness help mutations')
-.mutations/<key><mark>-<n>/                  ignored; a worker, a repository of its own, and its claim beside it
+.m/                                          contents ignored, .gitkeep tracked; the tree's mutation workers, in every tree, never sent to a host by sync ('dssharness help mutations')
+.m/<key><mark>-<n>/                          ignored; a worker, a repository of its own, building in build/<key>, and its claim beside it
+.mutations/                                  ignored whole, with no placeholder; where an earlier version kept the tree's mutation workers, never made again: never sent to a host by sync nor deleted by one, and what is left there removed by clean --former-workers, or with the tree
 .legs/                                       contents ignored, .gitkeep tracked; the copies of the tree its legs work in, in every tree, never sent to a host by sync
 .harness-config/runs/                        ignored; one directory of records per run, in the tree that ran it
 .harness-config/lock.json                    ignored; records in-progress runs
@@ -342,22 +343,28 @@ configuration that names none keeps worktrees under `.harness-config/worktrees`,
 A sweep keeps its workers in the tree it sweeps, and a leg that works in a copy keeps it in its
 tree's `.legs`; either is refused (exit 13), nothing made, in a tree whose git does not ignore
 that slot: run `init` once in each repository and commit what it writes - each agent's branch
-needs that commit before it can sweep or have a leg work in a copy. Workers an earlier version kept
-beside a tree, `<tree>.mutation-*`, on this machine and on every host, are no workers to a sweep:
-`clean --former-workers --dry-run` lists them with their sizes, beside each tree of the repository
-here and on each host a selected leg runs on, and beside each one deleted since, and
-`clean --former-workers` removes them - one a
-sweep of that version still claims is kept. Until then `list-worktree` warns of one beside a
+needs that commit before it can sweep or have a leg work in a copy. A worker is
+`<tree>/.m/<key><mark>-<n>`, the key 7 hexadecimal digits of its variant's name, and builds in its
+own `build/<key>`, never in the directory the variant's name gives the tree's own build, so a worker
+adds the same few characters to the tree's path whatever the variant is called; its build records
+which variant it built, and the lines of a sweep and of a `clean` name it. Workers an earlier
+version kept beside a tree, `<tree>.mutation-*`, or in it, `<tree>/.mutations/*`, on this machine
+and on every host, are no workers to a sweep: `init` keeps `.mutations` out of git whole, with no
+placeholder, and no sync sends or deletes it; `clean --former-workers --dry-run` lists them with
+their sizes, beside and in each tree of the repository here and on each host a selected leg runs
+on, and beside each one deleted since, and `clean --former-workers` removes them - one a
+sweep of that version still claims is kept - as deleting a worktree, or a host's copy, removes
+those in it. Until then `list-worktree` warns of one beside a
 worktree, and `delete-orchestrator` is refused (13) while one is beside an agent's worktree. Each
 worker's build is made once again.
 
 Secrets and the run lock live only in the main checkout. A worktree receives the tracked
 part of `.harness-config` through git but never the ignored part, so both resolve back to
 the originating checkout. What a tree makes for itself - its runs' records, its mutation
-workers in `.mutations`, its legs' copies in `.legs` - is ignored too, and kept in that tree.
+workers in `.m`, its legs' copies in `.legs` - is ignored too, and kept in that tree.
 The run lock knows a tree on this machine by where it leads, every link followed, so
 worktrees kept on another disk through a worktrees root that is a link, and copies kept
-through a `.legs` or `.mutations` that is one, are held, and asked about, as one tree however
+through a `.legs` or `.m` that is one, are held, and asked about, as one tree however
 a command spells them - a build before this one's too, since the lock keeps each tree as its
 run spelled it.
 
@@ -1359,7 +1366,7 @@ profile from the leg's ground (`ExecutionGrounds.OfLeg`), built as a launch's is
 read-only; every credential slot of the main checkout, every Claude Code directory and every place the
 user keeps credentials in hidden;
 the tree the leg works in - the step's tree or its copy under `.legs` - a sweep's workers under
-`.mutations`, the build directory of the leg's run of each runner action it runs, its own and a run
+`.m`, the build directory of the leg's run of each runner action it runs, its own and a run
 check's (`{actionBuild}`, each step's `{stepBuild}` in it; `LegWorkload.WritesIn`), a temporary
 directory of its own and the declared tool caches written, and inside them git's code-running files,
 the configuration directory - but those build directories, under it - and the tool's state written by

@@ -13,17 +13,18 @@ namespace DssHarness.Core.Mutations;
 
 /// <summary>
 /// One family of the mutation workers kept in a tree: those a sweep of one variant keeps there, or those a self-test
-/// of that variant does - each <c>&lt;tree&gt;/.mutations/&lt;key&gt;&lt;mark&gt;-&lt;n&gt;</c>, numbered from 1: the
-/// key its variant's (<see cref="VariantKey.CopyKey"/>), the mark <see cref="OwnMark"/> for the variant's own workers
-/// and <see cref="SelfTestMark"/> for its self-test's.
+/// of that variant does - each <c>&lt;tree&gt;/.m/&lt;key&gt;&lt;mark&gt;-&lt;n&gt;</c>, numbered from 1: the key its
+/// variant's (<see cref="VariantKey.CopyKey"/>), the mark <see cref="OwnMark"/> for the variant's own workers and
+/// <see cref="SelfTestMark"/> for its self-test's - each building its variant in <c>&lt;worker&gt;/build/&lt;key&gt;</c>
+/// (<see cref="BuildDirectoryOf"/>).
 /// </summary>
 /// <remarks>
-/// A key, never the variant's name: a worker is a second tree, built as deep as the first, so on a machine whose paths
-/// are bounded every character its name adds is one the tree's own path must leave free. Spelt out, a variant's name
-/// stood in a worker's path twice - in its name, and in the build directory within it - and a repository whose path
-/// budget is reckoned to the character had room for neither. A worker's name adds the same few characters whatever
-/// its variant is called, and which leg a worker is the lines of the sweep that makes it, and of the clean that
-/// removes it, say.
+/// A key, never the variant's name, in the worker's name and in its build directory alike: a worker is a second tree,
+/// built as deep as the first, so on a machine whose paths are bounded every character its path adds is one the tree's
+/// own path must leave free. Spelt out, a variant's name stood in a worker's path twice - in its name, and in the build
+/// directory within it - and a consumer's mutant path came to 277 characters. A worker's path adds the same few
+/// characters whatever its variant is called; which variant a worker builds its build's own record names
+/// (<see cref="BuildRecord.Variant"/>), and the lines of the sweep that makes it, and of the clean that removes it, say.
 /// </remarks>
 public sealed record WorkerFamily
 {
@@ -54,17 +55,15 @@ public sealed record WorkerFamily
 
     /// <summary>
     /// How many characters the first worker of a family adds to its tree's path: the separator, the slot, the separator,
-    /// the family's name, and <c>-1</c>. Kept in the tree, a worker is <see cref="DeeperThanBeside"/> characters longer
-    /// than one kept beside it was.
+    /// the key, the family's mark, and <c>-1</c>.
     /// </summary>
+    /// <remarks>
+    /// With its build directory named by the key too (<see cref="BuildDirectoryOf"/>), a worker's build is shallower than
+    /// one either layout of an earlier version kept - beside the tree, <c>&lt;tree&gt;.mutation-&lt;key&gt;&lt;mark&gt;-&lt;n&gt;</c>,
+    /// or in its <see cref="HarnessLayout.FormerMutationsDirectoryName"/> - built in the directory the variant's name gave
+    /// it, whatever the variant is called: a tree that fitted such a worker within the path limit fits one now.
+    /// </remarks>
     public static int AddedToItsTreesPath { get; } = 1 + HarnessLayout.MutationsDirectoryName.Length + 1 + VariantKey.CopyKeyLength + 1 + "-1".Length;
-
-    /// <summary>
-    /// How many characters deeper a worker is kept than one an earlier version of this tool kept beside its tree, as
-    /// <c>&lt;tree&gt;.mutation-&lt;key&gt;&lt;mark&gt;-&lt;n&gt;</c>: what a tree that fitted such a worker within the
-    /// path limit, and fits no worker kept in it, lacks.
-    /// </summary>
-    public static int DeeperThanBeside { get; } = AddedToItsTreesPath - (MutationWorkers.FormerFamily.Length + VariantKey.CopyKeyLength + 1 + "-1".Length);
 
     /// <summary>What every worker of the family is named after: its path, before the hyphen and the worker's number.</summary>
     public string Root => HarnessLayout.InSlot(TreeRoot, HarnessLayout.MutationsDirectoryName, Name);
@@ -83,6 +82,24 @@ public sealed record WorkerFamily
 
         return Root + "-" + number.ToString(CultureInfo.InvariantCulture);
     }
+
+    /// <summary>
+    /// The directory worker <paramref name="number"/> of the family builds its variant in: <c>&lt;worker&gt;/build/&lt;key&gt;</c>,
+    /// joined as the worker's own path is spelt - the family's key, which the worker's name already holds, never the
+    /// variant's name the tree's own build directory is named by. The one derivation of a worker's build directory, for
+    /// its sweep's builds, its arms' runs, the room and the path limit it is reckoned by, and the sync that withholds it.
+    /// </summary>
+    /// <param name="number">The worker's number, from 1.</param>
+    /// <remarks>
+    /// Two variants of one tree whose names come to one key share it, as they share their workers: each build records the
+    /// variant it built (<see cref="BuildRecord.Variant"/>), and one of another variant than the record names starts from
+    /// clean, so neither is judged on the other's objects.
+    /// </remarks>
+    public string BuildDirectoryOf(int number) => BuildDirectoryIn(PathOf(number));
+
+    /// <summary>The directory the family's worker kept at <paramref name="worker"/> builds in: <see cref="BuildDirectoryOf"/>.</summary>
+    /// <param name="worker">One of the family's workers, as <see cref="PathOf"/> spells it.</param>
+    internal string BuildDirectoryIn(string worker) => HarnessLayout.InSlot(worker, VariantKey.BuildRootName, Key);
 
     /// <summary>
     /// The family of <paramref name="treeRoot"/> whose workers are kept under <paramref name="name"/>, or
@@ -130,8 +147,9 @@ public sealed record WorkerFamily
 /// </summary>
 /// <remarks>
 /// <para>
-/// A worker is <c>&lt;tree&gt;/.mutations/&lt;key&gt;w-&lt;n&gt;</c>, numbered from 1, its build directory the
-/// variant's own within it, as the leg's is within the tree; a repository of its own, as every copy a sync makes is, so
+/// A worker is <c>&lt;tree&gt;/.m/&lt;key&gt;w-&lt;n&gt;</c>, numbered from 1, building its variant in
+/// <c>&lt;worker&gt;/build/&lt;key&gt;</c> (<see cref="WorkerFamily.BuildDirectoryOf"/>), where the leg builds in the
+/// directory its variant's name gives it within the tree; a repository of its own, as every copy a sync makes is, so
 /// git and the harness answer there for the worker, never for the tree around it. It stays between sweeps, synced again
 /// by content before each, so its build is warm: the sweep reads the tree's own files and writes none of them, and builds
 /// and mutates in its workers alone. A self-test's workers are kept the same way, in a family of their own
@@ -145,9 +163,11 @@ public sealed record WorkerFamily
 /// </para>
 /// <para>
 /// The workers go with their tree: whatever removes a worktree, or a host's copy of one, removes the workers kept in it
-/// first, and leaves the tree where a sweep still running holds one of them. Workers an earlier version of this tool
-/// kept beside a tree (<see cref="FormerFamily"/>) are counted by nothing here, and removed by <c>clean --former-workers</c>
-/// alone, which a claim that version's sweep still holds keeps one from.
+/// first - those an earlier version kept in its <see cref="HarnessLayout.FormerMutationsDirectoryName"/> with them - and
+/// leaves the tree where a sweep still running holds one of them. Former workers - those an earlier version of this tool
+/// kept beside a tree (<see cref="FormerFamily"/>), or in the tree's <see cref="HarnessLayout.FormerMutationsDirectoryName"/>
+/// - are counted by nothing here, and removed by <c>clean --former-workers</c>, which a claim that version's sweep still
+/// holds keeps one from.
 /// </para>
 /// </remarks>
 public static class MutationWorkers
@@ -216,6 +236,23 @@ public static class MutationWorkers
     /// <param name="variant">The leg's variant.</param>
     /// <param name="number">The worker's number, from 1.</param>
     public static string PathOf(string treeRoot, VariantKey variant, int number) => Of(treeRoot, variant).PathOf(number);
+
+    /// <summary>
+    /// The directory the worker kept at <paramref name="worker"/> builds in, read from the worker's own name
+    /// (<see cref="WorkerFamily.BuildDirectoryOf"/>): for whatever is handed a worker's copy and not its family.
+    /// </summary>
+    /// <param name="worker">The worker's copy, as its family spells it (<see cref="WorkerFamily.PathOf"/>).</param>
+    /// <exception cref="ArgumentException"><paramref name="worker"/> is named as no worker.</exception>
+    public static string BuildDirectoryOf(string worker)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(worker);
+
+        var copy = worker.TrimEnd('/', '\\');
+
+        return Named(string.Empty, copy[(copy.LastIndexOfAny(['/', '\\']) + 1)..]) is { } named
+            ? named.Family.BuildDirectoryIn(copy)
+            : throw new ArgumentException($"'{worker}' is named as no mutation worker: <key><mark>-<n>.", nameof(worker));
+    }
 
     /// <summary>
     /// The family and the number of the worker kept under <paramref name="name"/> in a tree's slot for workers, or

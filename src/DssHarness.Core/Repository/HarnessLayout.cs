@@ -178,9 +178,24 @@ public sealed record HarnessLayout(string RepositoryRoot, string MainCheckoutRoo
 
     /// <summary>
     /// The directory at the root of a tree where its mutation workers are kept: each a copy of the tree a sweep of one of
-    /// its legs made, <c>&lt;tree&gt;/.mutations/&lt;key&gt;&lt;mark&gt;-&lt;n&gt;</c>, which goes with the tree.
+    /// its legs made, <c>&lt;tree&gt;/.m/&lt;key&gt;&lt;mark&gt;-&lt;n&gt;</c>, which goes with the tree.
     /// </summary>
-    public const string MutationsDirectoryName = ".mutations";
+    /// <remarks>
+    /// Two characters: a worker is a second tree, built as deep as the first, so on a machine whose paths are bounded
+    /// every character its path adds is one the tree's own path must leave free. A consumer's mutant path, kept under
+    /// <see cref="FormerMutationsDirectoryName"/> and built in a directory named by the variant, came to 277 characters.
+    /// </remarks>
+    public const string MutationsDirectoryName = ".m";
+
+    /// <summary>
+    /// The directory at the root of a tree where an earlier version of this tool kept the tree's mutation workers,
+    /// <c>&lt;tree&gt;/.mutations/&lt;key&gt;&lt;mark&gt;-&lt;n&gt;</c>: read for ever, and never made. What that version left
+    /// there are former workers, each a repository of its own: <c>init</c> keeps the directory out of git whole, so none
+    /// reads as untracked work; no sync carries it or deletes it in a copy; no agent writes there; and
+    /// <c>clean --former-workers</c>, and whatever removes a tree, removes the workers in it, a claim that version's sweep
+    /// still holds keeping one.
+    /// </summary>
+    public const string FormerMutationsDirectoryName = ".mutations";
 
     /// <summary>
     /// The directory at the root of a tree where the tree's own copies are kept,
@@ -217,6 +232,14 @@ public sealed record HarnessLayout(string RepositoryRoot, string MainCheckoutRoo
     /// the day it is added.
     /// </summary>
     public static IReadOnlyList<string> NamedRootSlots { get; } = [OrchestratorsDirectoryName, MutationsDirectoryName, LegsDirectoryName, SideTasksDirectoryName];
+
+    /// <summary>
+    /// The directories at the root of a tree an earlier version of this tool kept copies in, under a name the layout no
+    /// longer makes (<see cref="FormerMutationsDirectoryName"/>): never a root slot - no placeholder, nothing made there -
+    /// and still the tool's own wherever a tree holds one. <c>init</c> keeps each out of git whole, the never-transfer
+    /// floor holds each, and each is among the tool's state (<see cref="StatePaths"/>).
+    /// </summary>
+    public static IReadOnlyList<string> FormerRootSlots { get; } = [FormerMutationsDirectoryName];
 
     /// <summary>
     /// The credential slots that hold connection data, relative to the harness directory: one
@@ -262,7 +285,8 @@ public sealed record HarnessLayout(string RepositoryRoot, string MainCheckoutRoo
 
     /// <summary>
     /// Where the tool's own state is, relative to a tree's root with forward separators: the root
-    /// slots (<see cref="RootSlots"/>) and what it keeps under the harness directory - its runs,
+    /// slots (<see cref="RootSlots"/>), the former ones (<see cref="FormerRootSlots"/>), and what it keeps under the
+    /// harness directory - its runs,
     /// its hosts' copies record, its mutation record, a worker's dependency sources, the run lock
     /// and a synced copy's marker. One list, from the names this layout already holds, so whatever
     /// refuses a write to the tool's own state reads the layout and not a list of its own: a place
@@ -277,6 +301,7 @@ public sealed record HarnessLayout(string RepositoryRoot, string MainCheckoutRoo
         return
         [
             .. RootSlots(worktreesRoot),
+            .. FormerRootSlots,
             RunsDirectoryRelative,
             HostCopiesDirectoryRelative,
             MutationRecordDirectoryRelative,
@@ -312,7 +337,10 @@ public sealed record HarnessLayout(string RepositoryRoot, string MainCheckoutRoo
     /// tree another machine keeps names its copies as that machine spells a path.
     /// </summary>
     /// <param name="tree">The tree, as the machine that keeps it spells it.</param>
-    /// <param name="slot">The slot: <see cref="MutationsDirectoryName"/> or <see cref="LegsDirectoryName"/>.</param>
+    /// <param name="slot">
+    /// The slot: <see cref="MutationsDirectoryName"/> or <see cref="LegsDirectoryName"/> - or the build root of a mutation
+    /// worker, whose build directory is joined as a copy in a slot is (<see cref="Mutations.WorkerFamily.BuildDirectoryOf"/>).
+    /// </param>
     /// <param name="name">The name the copy is kept under there.</param>
     public static string InSlot(string tree, string slot, string name)
     {

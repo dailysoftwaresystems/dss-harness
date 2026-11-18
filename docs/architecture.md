@@ -614,7 +614,7 @@ worktrees where nothing withholds or ignores them, and an entry would protect no
 **The root is kept in git by a placeholder, and everything made in it is ignored.** `init` writes
 `/<root>/*` and `!/<root>/.gitkeep` for it and creates the placeholder, as it does for the
 orchestrators directory, `.orchestrators`, for the side-tasks' records, `.side-tasks`, for the slots
-every tree keeps its own copies in, `.mutations` for a sweep's workers and `.legs` for the copies its
+every tree keeps its own copies in, `.m` for a sweep's workers and `.legs` for the copies its
 legs work in - the layout's one list of them, `HarnessLayout.RootSlots` - and for the harness
 directories a person fills by hand
 — the credential slots `sshItems`, `wslDistros`, `runner/.env`, `runner/.secrets` and
@@ -629,16 +629,29 @@ accepted now: a directory holding a tracked file never reads as ignored itself, 
 check-ignore <root>` answers *not ignored* while every worktree inside it is ignored, and the root
 can no longer be kept on another disk through a link, which git would list as an untracked entry
 and keep nothing behind; `init` names such a link and writes nothing through it. Sync does not
-depend on either answer: it withholds the configured root, `.orchestrators`, `.mutations`, `.legs`
+depend on either answer: it withholds the configured root, `.orchestrators`, `.m`, `.legs`
 and `.side-tasks` by name, whatever git says, and never deletes them in a copy, and its guard against a
 withheld path that stopped being ignored takes each placeholder, untracked until it is committed,
 as the harness's own - any other untracked file there still refuses, named as the worktrees root,
 or the slot whose ignore rule init writes, it is. The root may not be `.git`, `.orchestrators`,
-`.mutations`, `.legs` or `.side-tasks`, or inside any of them - the never-transfer floor, built from
-the layout's root slots (`HarnessLayout.NamedRootSlots`), so a slot the layout gains joins it. Each copy kept in `.mutations` or `.legs` is a whole
+`.m`, `.legs`, `.side-tasks` or `.mutations`, or inside any of them - the never-transfer floor, built from
+the layout's root slots (`HarnessLayout.NamedRootSlots`) and the former ones
+(`HarnessLayout.FormerRootSlots`), so a slot the layout gains joins it. Each copy kept in `.m` or `.legs` is a whole
 copy of the tree, so a repository's own program that walks the tree from its root must leave out
 what the managed block ignores, as git does - `help layout` says so - or it reads every file again
 for each copy kept there.
+
+**A slot the layout no longer makes keeps its rule.** An earlier version kept a tree's mutation
+workers in `.mutations`; the slot is `.m` now, two characters, as every character a worker's path adds
+is one the tree's own path must leave free (see *Workers*). The old name is read for ever and never
+made (`HarnessLayout.FormerMutationsDirectoryName`, the one entry of `HarnessLayout.FormerRootSlots`):
+`init` writes `/.mutations/` into the managed block - the directory ignored whole, with no placeholder,
+since nothing is made there again - so the former workers that version left there, each a repository
+of its own, never read as untracked repositories in `git status`, as they would the day the block
+dropped its rule; the never-transfer floor holds it, so no sync sends it or deletes it in a host's
+copy; it is among the tool's state (`HarnessLayout.StatePaths`), so no agent writes there and no
+graph lists it; and `clean --former-workers`, and whatever removes the tree, removes what is left
+there.
 
 `init` leaves hand-written `.gitignore` rules alone, so a repository that already ignored one of
 these paths by hand keeps its rule beside the managed one. A block an earlier build wrote under the
@@ -893,8 +906,8 @@ worktree, names everything it found on one line, each with its remedy, and exits
 - **Held, on Windows.** Looked at last, once every check above has passed: a worktree something
   holds part of is refused on its own, since its removal would stop part way on it.
   [Removal](#removal) says what holds one.
-- **A copy kept in it.** The workers kept in the worktree's `.mutations` (see *Mutation
-  testing*) go before it, and are asked about before anything of it is removed or looked through
+- **A copy kept in it.** The workers kept in the worktree's `.m` (see *Mutation testing*) - and
+  those an earlier version kept in its `.mutations` - go before it, and are asked about before anything of it is removed or looked through
   for what holds it: one a sweep still running holds keeps the worktree, exit 13, and one that
   cannot be removed, or told for the harness's - its marker cannot be read - keeps it as a failure,
   exit 20, as workers that cannot be looked for do; nothing is removed. A sweep that takes one
@@ -1154,7 +1167,7 @@ delete-orchestrator refuses that orchestrator and changes nothing. As across the
 ### Seeding and folding
 
 The seed is the main tree's uncommitted state handed to the agent when it is made - every path git status lists,
-less `TreeFloor`: `.git`, `.orchestrators`, `.mutations`, `.legs`, `.side-tasks` and the worktrees root, asserted where the copying
+less `TreeFloor`: `.git`, `.orchestrators`, `.m`, `.legs`, `.side-tasks`, `.mutations` and the worktrees root, asserted where the copying
 happens rather than left
 to ignore rules a repository can edit away - each changed file copied into its worktree, with the copy's SHA-256 and,
 where the platform has one, its execute bit, and each deletion made there too and recorded as absent. `seed.json` is
@@ -6100,7 +6113,7 @@ ordered.
 The watch goes only as deep as the inputs: each directory holding one is watched for its
 own files only, and each directory above one - the root among them - for the names of the
 directories in it alone. A directory tracked for a placeholder, as init keeps the
-worktrees root, `.orchestrators`, `.mutations`, `.legs` and `.side-tasks`, costs one shallow watch, and
+worktrees root, `.orchestrators`, `.m`, `.legs` and `.side-tasks`, costs one shallow watch, and
 other trees building below it - an agent's worktree, a sweep's worker, a leg's copy - are
 never heard. Measured: watched all the way down, an agent's build below the
 worktrees root overflowed the operating system's buffer, and a run in the main tree that
@@ -6220,7 +6233,11 @@ it. So:
   changed since is dated no later than the newest file that build left, the variant is
   rebuilt from clean and the ledger says why, naming the file and both dates; so is a
   directory that holds files and no record, as a clean start stopped part way through its
-  delete can leave one, since nothing says what they were built from. The newest
+  delete can leave one, since nothing says what they were built from; and, first of all, one
+  whose record names another variant than the build's - its second line, which every version
+  has written - since a mutation worker builds in a directory named by its variant's key, which
+  two variants' names can come to alike: started from clean before the directory's guard reads
+  what the other variant configured, which it would refuse, or keep. The newest
   file, not the declared outputs or the record: a step forward and back inside one phase
   measures no drift, and an object compiled in it is dated ahead of the binary linked
   after. What the build left, not the directory as it stands: a test run writes there
@@ -6387,7 +6404,7 @@ while a gate ran turned a green suite red, with four test processes live at once
   declares is not asked, and its copy is forgotten, named. Each copy is removed under the lock a leg
   this machine runs there takes, taken with everything kept inside the copy (`RunLock.RemovalCommand`,
   on `HostCopyRemover.RemovalLock`), so a sweep this machine runs there - its key in the copy's
-  `.mutations` - keeps the copy as a run in it does, and the dry run of a deletion names it as one,
+  `.m` - keeps the copy as a run in it does, and the dry run of a deletion names it as one,
   while no sweep takes a key there once the removal holds the copy;
   the record is read again once the lock is held, so a copy another worktree
   of the name has claimed since is left for it; it is forgotten before that lock is let go, and its
@@ -6526,7 +6543,7 @@ tree exclusively, since it rewrites files every variant reads. Building or testi
 the tree shared and its own variant exclusively, so variants build side by side but never
 while their sources are being replaced. A lock is released only by the run that took it.
 A sweep of a leg's mutation arms builds in workers of its own, never in the tree, and takes
-their key exclusively instead - spelt as one more copy in the tree's `.mutations`, which no copy is - so
+their key exclusively instead - spelt as one more copy in the tree's `.m`, which no copy is - so
 it meets another sweep of the leg's variant and a `clean` of its workers, and never a build,
 test or sync of the leg (see *Mutation testing*). A leg that works in a copy of its tree holds
 only the copy: its sync takes `'<tree>/.legs/<key>' on local` whole, and it then holds that copy
@@ -6544,7 +6561,7 @@ reads the folded tree.
   reading. An entry keeps its tree as its run spelled it, so a build before this one, which
   compares trees as spelled, still meets what it spelled alike, and this one meets whatever it
   spelled: a worktree kept on another disk through a worktrees root that is a link, or a copy kept
-  through a `.legs` or `.mutations` that is one (`init` allows it), is spelled through the link from
+  through a `.legs` or `.m` that is one (`init` allows it), is spelled through the link from
   the main checkout and as git resolves it by a run inside it; compared as spelled, a deletion, a
   clean or a sync asking for a copy one way missed a run holding it the other, and removed or
   replaced it under that run. A request whose links cannot be followed is refused before anything
@@ -6864,7 +6881,7 @@ directory here cannot drift apart.
   same directory, and only one of them deleted somebody's files; the marker is the only thing left
   that can say so.
 - **What survives an adoption is narrower than it looks.** Its `.git` and so every commit, branch
-  and tag in it, its `.orchestrators`, `.mutations`, `.legs` and `.side-tasks`, the rest of `.harness-config` save
+  and tag in it, its `.orchestrators`, `.m`, `.legs`, `.side-tasks` and `.mutations`, the rest of `.harness-config` save
   the runner's actions, the worktrees root and whatever `sync.neverTransfer` names are protected
   from the deletion — though `config.json` and the actions there are replaced with this tree's,
   and its git HEAD is moved, detached, to this tree's commit where it names another, both of which the refusal says. The ignore list is *not* read from that host: it is this tree's, listed by asking
@@ -7000,7 +7017,7 @@ directory here cannot drift apart.
   compiling, a deleted test keeps running, and a renamed file exists twice, so the leg's verdict
   describes a tree that no longer exists.
 - **The never-transfer floor is also a never-delete floor.** `.git`, `.orchestrators`,
-  `.mutations`, `.legs`, `.side-tasks`, the worktrees root, everything under `sync.neverTransfer`, and all of
+  `.m`, `.legs`, `.side-tasks`, `.mutations`, the worktrees root, everything under `sync.neverTransfer`, and all of
   `.harness-config` but `config.json` and the runner's actions are neither written nor deleted. A
   path the harness will not write is one it cannot know the source lacks, so deleting it would
   remove the host's own state rather than a file the source gave up — including the build
@@ -7571,7 +7588,7 @@ arm's target, proves every object that depends on the site was rebuilt, runs the
 whole, judges what reddened against the declaration as an exact set, and puts the site back,
 checked by its hash. A BUILD-RED arm must instead stop the build at an object that depends on its
 site, and its paired positive control must build. All of it happens in worker copies of the leg's
-tree, kept in the tree's `.mutations`, never in the tree's own files, which a sweep only ever
+tree, kept in the tree's `.m`, never in the tree's own files, which a sweep only ever
 reads. A leg's verdict is the worst of its own -
 its workers' builds and its test binaries' controls - and its arms' (see *Verdict vocabulary*).
 
@@ -7744,7 +7761,7 @@ them all.
 
 ### Workers
 
-A leg's workers are copies of its tree kept in it, `<tree>/.mutations/<key>w-<n>`, a family
+A leg's workers are copies of its tree kept in it, `<tree>/.m/<key>w-<n>`, a family
 of copies of their own in the slot `init` keeps for them: in git by its placeholder, with
 everything made in it ignored, withheld by every sync and never deleted in a copy, and passed
 over by every reader of a tree - the reading a sync or a sweep makes, the input watch, the count
@@ -7752,35 +7769,49 @@ of uncommitted changes, what `clean` measures, and a fold's weighing of an agent
 repository of its own, as every copy a sync makes is, its HEAD the tree's and its index what the
 sync carried, so git and the harness asked in a worker answer for the worker, never for the tree
 around it. A sweep, or a self-test, in a tree whose git does not ignore what it would make in
-`.mutations` - a branch whose rules predate `init`'s - is refused, exit 13, naming `init`, with
+`.m` - a branch whose rules predate `init`'s - is refused, exit 13, naming `init`, with
 nothing made: asked on the machine that makes the workers, so a host answers for its own copy. The key is the first 7 hexadecimal digits of the SHA-256 of the leg's
 variant, as its build directory is named, so the machine that dispatches a leg and the host that
-sweeps it name its workers alike - and a key, never the variant's name. A worker is a second tree,
-built as deep as the first, so where paths are bounded every character its name adds is one the
-tree's own path must leave free; spelt out, a variant's name stood in a worker's path twice, in
-its name and in the build directory within it, and a repository whose path budget is reckoned to
-the character had room for neither. Its first worker adds twenty-two characters to the tree's path
-whatever its variant is called - two more than one kept beside the tree did, the slot's separators -
-and the lines of a sweep and of a `clean` say which leg a worker is. Two variants of one
-tree whose names came to one key would share their workers and their lock, and neither would be
-judged on the other's: each sweep syncs a worker again by content and builds in its own variant's
-directory within it. Workers an earlier version of this tool kept beside a tree,
-`<tree>.mutation-<key><mark>-<n>` (`MutationWorkers.FormerFamily`), are no workers to a sweep:
-nothing counts them, and `clean --former-workers` alone removes them - beside each tree of the
-repository on each machine a selected leg runs on, once a machine, and beside each tree deleted
-since, whose workers show its name (`LocalSyncTransport.FormerWorkerTrees`). Here that is the main
-checkout and every worktree git records (`IRepositoryTrees.HereAsync`), and the worktrees root and
-each directory of it, which hold the repository's worktrees alone; each tree once, by where its
-workers are with the links to that directory followed, so two spellings of one are one. On a host
-it is asked of the host from its home (`ISyncTransport.RemoveFormerWorkersBesideCopiesAsync`),
-beside its copy of the main checkout and each worktree copy beside it, under that copy's name or a
-worktree copy's, there still or removed since - whatever copy the host holds, none even. Each goes
-as workers kept in a tree are removed (`LocalSyncTransport.RemoveFormerWorkersAsync`, the one
-removal of copies kept together): by its marker, a dry run listing each with its size, one that
-version's sweep still claims kept by the claim file beside it, refused-locked, and one no sync made
-said and left. Where the worktrees, or the trees deleted since, cannot be listed, those beside the
-trees that are known are dealt with and the leg fails, saying so; a leg's copy of a tree is no tree
-any version kept one beside.
+sweeps it name its workers alike - and a key, never the variant's name, in the worker's name and
+in its build directory alike: a worker builds in `<worker>/build/<key>`
+(`WorkerFamily.BuildDirectoryOf`, the one derivation of it for the sweep's builds, its arms' runs, the
+room and the path limit it is reckoned by, and the sync that withholds it), never in the directory
+the variant's name gives the tree's own build, which a leg's copy in `.legs` keeps. A worker is a
+second tree, built as deep as the first, so where paths are bounded every character its path adds
+is one the tree's own path must leave free; spelt out, a variant's name stood in a worker's path
+twice, in its name and in the build directory within it, and a consumer's mutant path, kept in the
+slot's earlier name, came to 277 characters. Its first worker adds fourteen characters to the
+tree's path whatever its variant is called, and its build directory fourteen below that - shallower
+than a worker either earlier layout kept, beside the tree or in its `.mutations`, building in the
+directory the variant's name gave it, whatever the variant is called (`WorkerFamily.AddedToItsTreesPath`).
+Which variant a worker builds is what its build records (`BuildRecord.Variant`, the line the
+record has always held), and the lines of a sweep and of a `clean` say which leg, and which
+variant, a worker is. Two variants of one tree whose names came to one key would share their
+workers, the build directory in each, and their lock, and neither would be judged on the other's:
+each sweep syncs a worker again by content, and a build of one where the record names the other
+starts from clean, before the build directory's guard reads anything the other configured
+(`BuildService`, "another variant's build"). Workers an earlier version of this tool kept beside a
+tree, `<tree>.mutation-<key><mark>-<n>` (`MutationWorkers.FormerFamily`), or in it,
+`<tree>/.mutations/<key><mark>-<n>` (`HarnessLayout.FormerMutationsDirectoryName`), are no workers
+to a sweep: nothing counts them, and `clean --former-workers` removes them - beside and in each
+tree of the repository on each machine a selected leg runs on, once a machine, in the copies each
+keeps in its `.legs`, and beside each tree deleted since, whose workers show its name
+(`LocalSyncTransport.FormerWorkerTrees`). Here that is the main checkout and every worktree git
+records (`IRepositoryTrees.HereAsync`), and the worktrees root and each directory of it, which hold
+the repository's worktrees alone; each tree once, by where its workers are with the links to that
+directory followed, so two spellings of one are one. On a host it is asked of the host from its
+home (`ISyncTransport.RemoveFormerWorkersBesideCopiesAsync`), beside and in its copy of the main
+checkout and each worktree copy beside it, and beside each removed since, under that copy's name or
+a worktree copy's - whatever copy the host holds, none even. Each goes as workers kept in a tree are
+removed (`LocalSyncTransport.RemoveFormerWorkersAsync`, through the one removal of copies kept
+together, every place listed before any goes): by its marker, a dry run listing each with its size,
+one that version's sweep still claims kept by the claim file beside it, refused-locked, and one no
+sync made said and left. Where the worktrees, or the trees deleted since, cannot be listed, those of
+the trees that are known are dealt with and the leg fails, saying so; a leg's copy of a tree is no
+tree any version kept one beside. Those in a tree also go with it: whatever removes a worktree, or
+a host's copy of one, removes the workers in its `.mutations` with those in its `.m`
+(`LocalSyncTransport.RemoveWorkersInTreeAsync`), a claim that version's sweep still holds keeping
+the tree.
 Until then, one below an orchestrator's directory is said as any
 directory there holding a `.git` of its own that git records no worktree at, and keeps the
 orchestrator from being deleted until it is gone; one beside a host's worktree copy is spelt as no
@@ -7792,14 +7823,14 @@ reading, so every arm measures the same tree however long the sweep takes, and a
 meanwhile reaches none of them. A worker stays between sweeps and is synced again by content - so
 its build directory stays warm, and a site a killed sweep left mutated is put back - and built
 whole as the leg builds before it drives an arm. That sync withholds the worker's own build
-directory itself, whatever `sync.neverTransfer` says: the sweep made what is in it, no spelling of
+directory, `build/<key>`, itself, whatever `sync.neverTransfer` says: the sweep made what is in it, no spelling of
 a configuration should decide whether a sweep may run, and `sync.maxDeleteFraction` judges only
 what mirrors the tree the sweep read - a genuinely wrong source tree is still refused by it, with a
 remedy a reader who typed `check-mutations` can take. It withholds that directory, the one the
 leg's variant builds in under `build/`, and no more: a file the tree carries elsewhere under
 `build/` - a toolchain file it tracks - is carried and verified in the worker as any other, and
 one the tree keeps inside that directory is not carried at all. A worker is claimed while
-a sweep uses it, in `<worker>.claim.json` beside it in `.mutations`, by the claim a run takes on its log directory,
+a sweep uses it, in `<worker>.claim.json` beside it in `.m`, by the claim a run takes on its log directory,
 which never makes the copy it claims: the sync that makes a copy refuses a directory it did not
 make. A claim whose sweep died is released and said; the copy it held is synced again, as every
 worker is before it drives an arm.
@@ -8278,7 +8309,7 @@ The fixture is written where this tool keeps its own data (see *Heavy legs share
 `<user data>/dssharness/mutation-fixture`, each file only where it differs and under a lock every
 process on the machine takes: one fixture for every repository on the machine. Its workers are
 kept apart from it, in the tree of the leg self-tested, in a family of their own -
-`<tree>/.mutations/<key>s-<n>`, a few megabytes each, each a repository of its own holding the
+`<tree>/.m/<key>s-<n>`, a few megabytes each, each a repository of its own holding the
 fixture's files, so what git tracks there is the fixture and never the tree around it. Kept beside
 the fixture they were every repository's at once, one's toolchain refusing the build directory
 another's had made, with nothing to remove them; in the leg's tree they are that repository's, counted by its room,

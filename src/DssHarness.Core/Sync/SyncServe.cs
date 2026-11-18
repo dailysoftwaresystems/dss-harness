@@ -353,7 +353,7 @@ public static class SyncServe
 
     /// <summary>
     /// Removes the workers an earlier version kept beside the copies of a repository kept together, there still or
-    /// removed since, the main checkout's copy its root names: <c>remove-former-workers &lt;repositoryPath&gt;</c>, and
+    /// removed since, or in those there still, the main checkout's copy its root names: <c>remove-former-workers &lt;repositoryPath&gt;</c>, and
     /// <see cref="MeasureOnly"/> after it to say what would go and remove nothing.
     /// </summary>
     public const string RemoveFormerWorkers = "remove-former-workers";

@@ -166,7 +166,7 @@ public sealed class RemoteSyncTransport(
                 .ConfigureAwait(false))?.Workers
             ?? throw new HarnessException(
                 HarnessExit.HostUnavailable,
-                $"{Host} did not answer which workers an earlier version kept beside its copies of '{repositoryPath}' it removed.");
+                $"{Host} did not answer which workers an earlier version kept beside or in its copies of '{repositoryPath}' it removed.");
 
     /// <inheritdoc/>
     public async Task<SyncManifest> ReadManifestAsync(
@@ -519,7 +519,7 @@ public sealed class RemoteSyncTransport(
         var parent = Up(root.Replace('\\', '/').TrimEnd('/'));
         var slot = parent[(parent.LastIndexOf('/') + 1)..];
 
-        return slot is HarnessLayout.LegsDirectoryName or HarnessLayout.MutationsDirectoryName ? Up(parent) : parent;
+        return slot is HarnessLayout.LegsDirectoryName or HarnessLayout.MutationsDirectoryName or HarnessLayout.FormerMutationsDirectoryName ? Up(parent) : parent;
 
         static string Up(string path) => path.LastIndexOf('/') is var slash and > 0 ? path[..slash] : path;
     }

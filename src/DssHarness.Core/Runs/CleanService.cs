@@ -34,8 +34,9 @@ public sealed record CleanRequest(
     HostId? Here = null)
 {
     /// <summary>
-    /// Whether the clean removes the workers an earlier version of this tool kept beside the repository's trees
-    /// (<see cref="CleanService.FormerWorkersOption"/>), on each machine a selected leg runs on, and nothing else.
+    /// Whether the clean removes the workers an earlier version of this tool kept beside the repository's trees, or in
+    /// their <see cref="HarnessLayout.FormerMutationsDirectoryName"/> (<see cref="CleanService.FormerWorkersOption"/>), on
+    /// each machine a selected leg runs on, and nothing else.
     /// </summary>
     public bool FormerWorkers { get; init; }
 
@@ -104,8 +105,9 @@ public sealed class CleanService(
     public const string DryRunOption = "--dry-run";
 
     /// <summary>
-    /// The option that removes the workers an earlier version of this tool kept beside the repository's trees, and
-    /// nothing else, passed on to a host as it was given here.
+    /// The option that removes the workers an earlier version of this tool kept beside the repository's trees, or in
+    /// their <see cref="HarnessLayout.FormerMutationsDirectoryName"/>, and nothing else, passed on to a host as it was
+    /// given here.
     /// </summary>
     public const string FormerWorkersOption = "--former-workers";
 
@@ -315,11 +317,12 @@ public sealed class CleanService(
 
     /// <summary>
     /// Removes, or measures, the workers an earlier version of this tool kept beside each tree of the repository on the
-    /// machine <paramref name="leg"/> runs on, once a machine, by the first leg that runs there: here, beside the main
-    /// checkout, every worktree git records, and each worktree gone since that workers were left beside; on a host, asked
-    /// of it from its home, beside its copy of the main checkout and each worktree's copy beside it, there still or
-    /// removed since. No version kept one beside a leg's copy of a tree, so none is looked for there; where the trees
-    /// cannot all be listed, those beside the trees that are known go, and the leg fails, saying why.
+    /// machine <paramref name="leg"/> runs on, or in its <see cref="HarnessLayout.FormerMutationsDirectoryName"/>, once a
+    /// machine, by the first leg that runs there: here, beside and in the main checkout and every worktree git records,
+    /// and beside each worktree gone since that workers were left beside; on a host, asked of it from its home, beside and
+    /// in its copy of the main checkout and each worktree's copy beside it, and beside each removed since. No version kept
+    /// one beside a leg's copy of a tree, so none is looked for there, and those kept in one go with its tree's; where the
+    /// trees cannot all be listed, those of the trees that are known go, and the leg fails, saying why.
     /// </summary>
     private async Task<LegEntry> FormerWorkersAsync(
         HarnessContext context,
@@ -402,7 +405,7 @@ public sealed class CleanService(
         var said = new List<string>
         {
             removal.Removed.Count == 0
-                ? $"no worker an earlier version kept beside {looked} is there"
+                ? $"no worker an earlier version kept beside or in {looked} is there"
                 : Removed(removal, request.DryRun).TrimStart(';', ' '),
         };
 
@@ -423,7 +426,7 @@ public sealed class CleanService(
         // What went, or would go, after what is said before it; nothing where nothing does.
         static string Removed(WorkersRemoval removal, bool dryRun) => removal.Removed.Count == 0
             ? string.Empty
-            : $"; {(dryRun ? string.Empty : "removed ")}{ReportText.Counted(removal.Removed.Count, "worker")} an earlier version kept beside "
+            : $"; {(dryRun ? string.Empty : "removed ")}{ReportText.Counted(removal.Removed.Count, "worker")} an earlier version kept beside or in "
                 + $"its trees, {DiskSpace.Size(removal.Bytes)}: {string.Join(", ", removal.Removed.Select(worker => $"'{worker.Path}'"))}";
     }
 
@@ -703,6 +706,13 @@ public sealed class CleanService(
             return null;
         }
 
+        // Which variant each key no leg here builds is, as the builds of its workers recorded it, read before anything of
+        // them goes: a key alone names nothing a reader knows.
+        var variants = VariantsOf(workers.Where(worker => !string.Equals(worker.Family.Key, own, StringComparison.Ordinal)));
+
+        string NoLegs(string key) => variants.GetValueOrDefault(key) is { } variant ? $"of {variant}, which no leg here builds" : "of a variant no leg here builds";
+        string Shown(WorkerCopy worker) => variants.GetValueOrDefault(worker.Family.Key) is { } variant ? $"'{worker.Path}' ({variant})" : $"'{worker.Path}'";
+
         // A directory under a worker's name that no sync made is somebody's: said, and never removed.
         var made = workers.Where(worker => worker.Made).ToList();
         var left = workers
@@ -728,7 +738,7 @@ public sealed class CleanService(
                     {
                         held.Add(string.Equals(swept.Key, own, StringComparison.Ordinal)
                             ? $"its mutation workers were left, as a sweep of the leg holds them: {holder}"
-                            : $"the mutation workers keyed '{swept.Key}', of a variant no leg here builds, were left, as a sweep holds them: {holder}");
+                            : $"the mutation workers keyed '{swept.Key}', {NoLegs(swept.Key)}, were left, as a sweep holds them: {holder}");
                     }
 
                     foreach (var worker in swept.Where(worker => _workers.HeldBy(worker.Path) is not null))
@@ -740,7 +750,7 @@ public sealed class CleanService(
                 return new WorkersCleaned(
                     ReachedVerdict.Of(
                         Verdicts.Worst([LegVerdict.Passed, held.Count > 0 ? LegVerdict.RefusedLocked : LegVerdict.Passed]),
-                        string.Join("; ", held.Append(MeasuredWorkers(workers, asides)).Where(part => part.Length > 0))),
+                        string.Join("; ", held.Append(MeasuredWorkers(workers, asides, Shown)).Where(part => part.Length > 0))),
                     workers.Sum(worker => worker.Bytes) + asides.Sum(_fileSystem.DirectorySize));
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
@@ -796,7 +806,7 @@ public sealed class CleanService(
                 {
                     kept.Add(string.Equals(swept.Key, own, StringComparison.Ordinal)
                         ? $"its mutation workers were left, as a sweep of the leg holds them: {holder}"
-                        : $"the mutation workers keyed '{swept.Key}', of a variant no leg here builds, were left, as a sweep holds them: {holder}");
+                        : $"the mutation workers keyed '{swept.Key}', {NoLegs(swept.Key)}, were left, as a sweep holds them: {holder}");
                 }
             }
 
@@ -825,7 +835,7 @@ public sealed class CleanService(
             said.Add(
                 $"removed {ReportText.Counted(gone.Count, "mutation worker")}, {DiskSpace.Size(removed)}"
                 + (asidesGone > 0 ? " with what an earlier removal of them left aside" : string.Empty)
-                + $": {string.Join(", ", gone.Select(worker => $"'{worker.Path}'"))}");
+                + $": {string.Join(", ", gone.Select(Shown))}");
         }
         else if (asidesGone > 0)
         {
@@ -1036,13 +1046,16 @@ public sealed class CleanService(
             .Where(key => !string.Equals(key, leg.Variant.CopyKey, StringComparison.Ordinal))
             .ToHashSet(StringComparer.Ordinal);
 
-    /// <summary>What a dry run says of the leg's workers: what each holds, and what an earlier removal left aside.</summary>
-    private string MeasuredWorkers(IReadOnlyList<WorkerCopy> workers, IReadOnlyList<string> asides)
+    /// <summary>
+    /// What a dry run says of the leg's workers: what each holds, each where it is as <paramref name="shown"/> says it, and
+    /// what an earlier removal left aside.
+    /// </summary>
+    private string MeasuredWorkers(IReadOnlyList<WorkerCopy> workers, IReadOnlyList<string> asides, Func<WorkerCopy, string> shown)
     {
         var said = workers
             .Select(worker => worker.Made
-                ? $"{DiskSpace.Size(worker.Bytes)} in '{worker.Path}'"
-                : $"{DiskSpace.Size(worker.Bytes)} in '{worker.Path}', which a clean leaves: {WorktreeReports.Origin(worker.Found)}")
+                ? $"{DiskSpace.Size(worker.Bytes)} in {shown(worker)}"
+                : $"{DiskSpace.Size(worker.Bytes)} in {shown(worker)}, which a clean leaves: {WorktreeReports.Origin(worker.Found)}")
             .ToList();
 
         if (asides.Count > 0)
@@ -1054,6 +1067,19 @@ public sealed class CleanService(
             ? $"{ReportText.Counted(workers.Count, "mutation worker")}: {string.Join(", ", said)}"
             : $"no mutation worker, and {said.Single()}";
     }
+
+    /// <summary>
+    /// The variant the builds of <paramref name="workers"/> recorded (<see cref="BuildRecord.Variant"/>), by their family's
+    /// key: the first a worker of the key recorded, or none where none did - a worker made and never built, or one whose
+    /// record cannot be read.
+    /// </summary>
+    private Dictionary<string, string?> VariantsOf(IEnumerable<WorkerCopy> workers)
+        => workers
+            .GroupBy(worker => worker.Family.Key, StringComparer.Ordinal)
+            .ToDictionary(
+                family => family.Key,
+                family => family.Select(worker => BuildRecord.VariantIn(_fileSystem, worker.Family.BuildDirectoryOf(worker.Number))).FirstOrDefault(variant => variant is not null),
+                StringComparer.Ordinal);
 
     private static string Unmeasured(string? why) => $"the room on its filesystem could not be measured: {why}";
 

@@ -499,7 +499,7 @@ public static class LegRunPlan
         foreach (var leg in placed.Where(leg => leg.LocalCopy))
         {
             var settings = context.Config.Worktrees;
-            var reckoned = CopyPathBudget.Check(budget, settings, leg.HostTreeRoot, leg.Variant, settings.PathBudgetReserve);
+            var reckoned = CopyPathBudget.Check(budget, settings, leg.HostTreeRoot, leg.Variant.DirectoryUnder(leg.HostTreeRoot), settings.PathBudgetReserve);
 
             if (!reckoned.IsWithinBudget && reckoned.Limit is { } limit)
             {

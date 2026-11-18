@@ -1341,7 +1341,7 @@ public sealed class HostCopiesTests
         var worktrees = await transport.ListCopiesAsync(tree, cancellationToken);
 
         Assert.Equal(["357e24cw-1", "357e24cw-2"], workers.Select(copy => copy.Name));
-        Assert.Equal([Path.Combine(tree, ".mutations", "357e24cw-1"), Path.Combine(tree, ".mutations", "357e24cw-2")], workers.Select(copy => copy.Path));
+        Assert.Equal([Path.Combine(tree, ".m", "357e24cw-1"), Path.Combine(tree, ".m", "357e24cw-2")], workers.Select(copy => copy.Path));
         Assert.All(workers, copy => Assert.Equal(CopyOrigin.Made, copy.Origin));
         Assert.Equal(["alpha"], worktrees.Select(copy => copy.Name));
         Assert.Empty(await transport.ListInSlotAsync(hosts.Combine("src", "other"), HarnessLayout.MutationsDirectoryName, _ => true, cancellationToken));

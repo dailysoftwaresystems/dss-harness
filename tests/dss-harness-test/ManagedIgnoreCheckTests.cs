@@ -211,7 +211,7 @@ public sealed class ManagedIgnoreCheckTests
             [
                 $"{WorktreeSettings.SeededRoot}/.gitkeep",
                 ".orchestrators/.gitkeep",
-                ".mutations/.gitkeep",
+                ".m/.gitkeep",
                 ".legs/.gitkeep",
                 ".side-tasks/.gitkeep",
                 ".harness-config/sshItems/.gitkeep",

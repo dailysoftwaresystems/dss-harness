@@ -360,9 +360,9 @@ public sealed class FlowSessions(OrchestrationStore store, IFileSystem fileSyste
 /// <summary>
 /// The path budget at a run's start: the longest worktree path the run makes - counted with what the worktree's own
 /// check counts below it (<see cref="WorktreeRoom"/>), so a run that passes here never fails on a worktree it needs, and
-/// with each <c>.legs/&lt;key&gt;</c> copy its legs work in and each <c>.mutations/&lt;key&gt;&lt;mark&gt;-&lt;n&gt;</c>
-/// worker its sweeps keep, each with its variant's build below it as a copy's own check counts it
-/// (<see cref="CopyPathBudget"/>) - stays within this machine's path limit, with the margin to spare. A copy whose build
+/// with each <c>.legs/&lt;key&gt;</c> copy its legs work in, with its variant's build below it, and each
+/// <c>.m/&lt;key&gt;&lt;mark&gt;-&lt;n&gt;</c> worker its sweeps keep, with its <c>build/&lt;key&gt;</c> below it, as a
+/// copy's own check counts each (<see cref="CopyPathBudget"/>) - stays within this machine's path limit, with the margin to spare. A copy whose build
 /// passes the limit fails as compile errors in files nobody touched, so it is asked before the run makes one.
 /// </summary>
 public static class FlowRunPaths
@@ -379,7 +379,7 @@ public static class FlowRunPaths
     /// <param name="worktreesRoot">Where the run's agents' worktrees are made.</param>
     /// <param name="agentName">The longest agent name the run makes.</param>
     /// <param name="copied">Each variant a leg of the run builds in a copy, <c>.legs/&lt;key&gt;</c> below its tree.</param>
-    /// <param name="swept">Each variant a sweep of the run keeps workers of, <c>.mutations/&lt;key&gt;&lt;mark&gt;-&lt;n&gt;</c> below its tree.</param>
+    /// <param name="swept">Each variant a sweep of the run keeps workers of, <c>.m/&lt;key&gt;&lt;mark&gt;-&lt;n&gt;</c> below its tree.</param>
     /// <param name="written">
     /// The longest path, relative to the tree, of a file the tree holds - one the repository tracks
     /// (<see cref="WorktreeRoom.ForFilesAsync"/>), or one a work item says it writes - in the tree and in every copy and
@@ -408,19 +408,24 @@ public static class FlowRunPaths
         var tree = Path.Combine(worktreesRoot, agentName);
 
         // The longest thing kept inside a tree the run works in, below the tree: a file it holds, the build a leg of this
-        // machine makes in the tree itself, or a copy a leg works in or a mutation worker - each with its variant's
-        // build directory below it and the build below that, or the file, which a copy holds as the tree does.
+        // machine makes in the tree itself, or a copy a leg works in or a mutation worker - each with its build directory
+        // below it, its variant's own or the worker's build/<key>, and the build below that, or the file, which a copy
+        // holds as the tree does.
         var file = written;
         var inside = Math.Max(file, builds);
 
         foreach (var variant in copied)
         {
-            inside = Math.Max(inside, Below(tree, LegCopies.PathOf(tree, variant), variant, settings.PathBudgetReserve, file));
+            var copy = LegCopies.PathOf(tree, variant);
+
+            inside = Math.Max(inside, Below(tree, copy, variant.DirectoryUnder(copy), settings.PathBudgetReserve, file));
         }
 
         foreach (var variant in swept)
         {
-            inside = Math.Max(inside, Below(tree, MutationWorkers.PathOf(tree, variant, 1), variant, settings.PathBudgetReserve, file));
+            var workers = MutationWorkers.Of(tree, variant);
+
+            inside = Math.Max(inside, Below(tree, workers.PathOf(1), workers.BuildDirectoryOf(1), settings.PathBudgetReserve, file));
         }
 
         return budget.Check(tree, inside, settings.PathBudgetMargin, settings.PathLimit);
@@ -496,10 +501,11 @@ public static class FlowRunPaths
 
     /// <summary>
     /// What a copy or a worker inside <paramref name="tree"/> adds below it: its own path, and the deeper of its
-    /// variant's build directory with the build below that, and <paramref name="file"/>, a work item's file in it.
+    /// build directory - its variant's own in a copy, the one named by its variant's key in a worker - with the build
+    /// below that, and <paramref name="file"/>, a work item's file in it.
     /// </summary>
-    private static int Below(string tree, string copy, VariantKey variant, int reserve, int file)
-        => copy.Length - Path.TrimEndingDirectorySeparator(tree).Length + Math.Max(CopyPathBudget.BuildBelow(copy, variant, reserve), file);
+    private static int Below(string tree, string copy, string buildDirectory, int reserve, int file)
+        => copy.Length - Path.TrimEndingDirectorySeparator(tree).Length + Math.Max(CopyPathBudget.BuildBelow(copy, buildDirectory, reserve), file);
 
     /// <summary>The legs <paramref name="step"/> may name: those its <c>legs</c> names, leg sets read out; every declared leg where it names none.</summary>
     private static IEnumerable<LegConfig> LegsOf(WorkflowStep step, HarnessConfig config)

@@ -827,7 +827,7 @@ public sealed class AgentDeletionTests
 
     /// <summary>
     /// A sweep this machine runs on a host holds its key in the host's copy of the worktree - one more copy in that copy's
-    /// .mutations - and removing the copy takes everything in it: the dry run names the sweep on a <c>held now:</c> line
+    /// .m - and removing the copy takes everything in it: the dry run names the sweep on a <c>held now:</c> line
     /// and is unfinished, exit 21, as its --apply is, which closes the agent and leaves the copy recorded without asking
     /// the host to remove a copy the sweep works in. With <c>--json</c> the sweep is in <c>heldNow</c>, holding a copy.
     /// </summary>

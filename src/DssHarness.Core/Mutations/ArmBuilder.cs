@@ -134,7 +134,7 @@ internal sealed class ArmBuilder(
         ArgumentNullException.ThrowIfNull(config);
         ArgumentNullException.ThrowIfNull(request);
 
-        var buildDirectory = request.Variant.DirectoryUnder(request.TreeRoot);
+        var buildDirectory = request.BuildDirectory;
         var environment = BuildAdapters.EnvironmentFor(request.Variant.Overlay(config, request.Project), request);
         var program = _buildDirectoryGuard.Read(buildDirectory)?.MakeProgram;
         var records = await NinjaRebuildGraph

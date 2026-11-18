@@ -126,7 +126,7 @@ public sealed class RunLock(IFileSystem fileSystem, IHarnessOutput output, IProc
     /// <summary>
     /// The command a removal takes its tree under: a tree taken whole under it is to be removed with everything kept inside
     /// it, so asked for, it is held off by an entry on its host for anything inside it - a sweep's key in a host's copy,
-    /// kept in its <c>.mutations</c> - and its entry standing holds off whatever is asked inside it, as an entry for the
+    /// kept in its <c>.m</c> - and its entry standing holds off whatever is asked inside it, as an entry for the
     /// tree itself does. Told by the command every removal of a worktree's copies is recorded under, by this build and by
     /// the builds before it, never by a field of its own, which a build before this one would refuse the lock file over.
     /// </summary>

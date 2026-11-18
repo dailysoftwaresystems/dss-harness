@@ -17,7 +17,7 @@ internal static class CleanCommand
 
     private static readonly Option<bool> FormerWorkersOption = new(CleanService.FormerWorkersOption)
     {
-        Description = "Remove only the mutation workers an earlier version of this tool kept beside the repository's trees, as <tree>.mutation-<key><mark>-<n>, on each machine a selected leg runs on - with --dry-run, list them with their sizes. One a sweep of that version still claims is kept, refused-locked.",
+        Description = "Remove only the mutation workers an earlier version of this tool kept beside the repository's trees, as <tree>.mutation-<key><mark>-<n>, or in them, as <tree>/.mutations/<key><mark>-<n>, on each machine a selected leg runs on - with --dry-run, list them with their sizes. One a sweep of that version still claims is kept, refused-locked.",
     };
 
     private static readonly Option<bool> GoneCopiesOption = new(CleanService.GoneCopiesOption)

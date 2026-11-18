@@ -843,10 +843,10 @@ public sealed class LegsServiceTests
 
         var asked = fixture.Inspector.RoomAsked.Single(entry => entry.Host == HostId.Ssh("pi")).Room;
 
-        // The leg's own build, and its first worker's, in its copy; the host's copy's build of the variant is asked only as
-        // what a build of it came to there.
+        // The leg's own build, and its first worker's - named by the variant's key, as the worker is - in its copy; the
+        // host's copy's build of the variant is asked only as what a build of it came to there.
         Assert.Contains(asked.Builds, build => Regex.IsMatch(build, @"^/home/pi/repo/\.legs/[0-9a-f]{7}/build/arm64-none-debug$"));
-        Assert.Contains(asked.Builds, build => Regex.IsMatch(build, @"^/home/pi/repo/\.legs/[0-9a-f]{7}/\.mutations/[0-9a-f]{7}w-1/build/arm64-none-debug$"));
+        Assert.Contains(asked.Builds, build => Regex.IsMatch(build, @"^/home/pi/repo/\.legs/[0-9a-f]{7}/\.m/(?<key>[0-9a-f]{7})w-1/build/\k<key>$"));
     }
 
     /// <summary>
@@ -885,7 +885,7 @@ public sealed class LegsServiceTests
     public async Task ASweep_IsPlacedByTheRoomItsFirstWorkersBuildStillNeeds()
     {
         // Kept in the copy of its own the sweep works in on the host, in the .legs of the host's copy.
-        const string Worker = "/home/pi/repo/.legs/aa1fa54/.mutations/aa1fa54w-1/build/arm64-none-debug";
+        const string Worker = "/home/pi/repo/.legs/aa1fa54/.m/aa1fa54w-1/build/aa1fa54";
 
         var fixture = Create(
             new() { ["arm"] = new LegConfig { Os = "linux", Processor = "arm64", Config = "debug", Ssh = "pi", BuildSpaceGiB = 6 } },

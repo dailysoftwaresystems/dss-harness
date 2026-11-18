@@ -738,6 +738,8 @@ public sealed class ConfigStoreTests
     [InlineData(".Orchestrators")]
     [InlineData(".git")]
     [InlineData(".git/worktrees")]
+    [InlineData(".m")]
+    [InlineData(".m/trees")]
     [InlineData(".mutations")]
     [InlineData(".mutations/trees")]
     [InlineData(".legs")]

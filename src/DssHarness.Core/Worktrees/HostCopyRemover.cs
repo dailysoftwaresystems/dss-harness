@@ -154,7 +154,7 @@ public sealed class HostCopyRemover(
     /// <summary>
     /// The lock a copy's removal takes: the copy whole, on the host that holds it, with everything kept inside it
     /// (<see cref="RunLock.RemovalCommand"/>) - which a run holding it, building in it or replacing it, is named by, and so
-    /// is a sweep this machine runs there, holding its key in the copy's <c>.mutations</c>, while no sweep can take one there
+    /// is a sweep this machine runs there, holding its key in the copy's <c>.m</c>, while no sweep can take one there
     /// once the removal holds it - and which the removal and the question a dry run asks of it both spell.
     /// </summary>
     /// <param name="host">The host holding the copy.</param>
