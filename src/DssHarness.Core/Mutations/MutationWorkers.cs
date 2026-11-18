@@ -102,6 +102,13 @@ public sealed record WorkerFamily
     internal string BuildDirectoryIn(string worker) => HarnessLayout.InSlot(worker, VariantKey.BuildRootName, Key);
 
     /// <summary>
+    /// How many characters a worker's build directory adds to the worker's own path (<see cref="BuildDirectoryIn"/>): the
+    /// separator, the build root, the separator, and the key - whatever the variant is called, as
+    /// <see cref="AddedToItsTreesPath"/> is the worker's own.
+    /// </summary>
+    public static int BuildBelowItsWorker { get; } = 1 + VariantKey.BuildRootName.Length + 1 + VariantKey.CopyKeyLength;
+
+    /// <summary>
     /// The family of <paramref name="treeRoot"/> whose workers are kept under <paramref name="name"/>, or
     /// <see langword="null"/> where it is spelt as no family's: a key and one of the two marks, and nothing else, so a
     /// family's name is spelt one way.

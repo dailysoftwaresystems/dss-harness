@@ -984,6 +984,36 @@ public sealed class InitServiceTests
         }
     }
 
+    /// <summary>
+    /// Where the slot an earlier version kept mutation workers in is a link, init removes nothing through it, as it writes
+    /// nothing through one: an empty placeholder where the link leads is wherever it leads, and not the repository's to
+    /// retire - it and its directory stay, the link with them, and nothing is said of them.
+    /// </summary>
+    [Fact]
+    public async Task TheFormerSlot_WhereItIsALink_HasNothingRemovedThroughIt()
+    {
+        using var temp = new TempDirectory();
+        using var elsewhere = new TempDirectory();
+        var harness = new HarnessFactory();
+        var token = TestContext.Current.CancellationToken;
+        const string Former = HarnessLayout.FormerMutationsDirectoryName;
+        var linked = temp.Combine(Former);
+        var target = elsewhere.Combine("slot");
+
+        await harness.InitializeGitRepositoryAsync(temp.Path, token);
+        elsewhere.WriteFile(Path.Combine("slot", HarnessLayout.GitKeepFileName), string.Empty);
+        TestLinks.OrSkip(() => TestLinks.DirectoryLink(linked, target));
+
+        var outcome = await harness.InitService.InitializeAsync(temp.Path, token);
+
+        Assert.True(outcome.Succeeded);
+        Assert.True(File.Exists(Path.Combine(target, HarnessLayout.GitKeepFileName)), "init removed the placeholder where the link leads");
+        Assert.Equal(string.Empty, File.ReadAllText(Path.Combine(target, HarnessLayout.GitKeepFileName)));
+        Assert.True(Directory.Exists(target), "init removed the directory the link leads to");
+        Assert.NotNull(new DirectoryInfo(linked).LinkTarget);
+        Assert.DoesNotContain(outcome.Details ?? [], line => line.Contains($"{Former}/{HarnessLayout.GitKeepFileName}", StringComparison.Ordinal));
+    }
+
     [Fact]
     public async Task AFreshlyInitialisedRepository_IsNotRefusedBySync_BeforeItsPlaceholdersAreCommitted()
     {

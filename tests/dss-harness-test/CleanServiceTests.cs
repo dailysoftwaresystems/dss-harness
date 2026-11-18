@@ -849,6 +849,88 @@ public sealed class CleanServiceTests
     }
 
     /// <summary>
+    /// A host asked to remove its former workers lists every place of every copy before any goes: where the .legs of a
+    /// worktree's copy cannot be looked in, the removal fails naming it, and the worker beside the main copy is still
+    /// there - a host answers a failure alone, so one that went before it would be one nothing said went.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task FormerWorkers_OnAHost_WhereAPlaceOfACopyCannotBeLookedIn_NoneGo(bool denied)
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var mine = temp.Path + MutationWorkers.FormerFamily + "357e24cw-1";
+        var copy = temp.Path + HostCopies.WorktreeSuffix + "feature";
+        var legs = Path.Combine(copy, HarnessLayout.LegsDirectoryName);
+
+        try
+        {
+            await SyncKit.Transport(harness).CreateRootAsync(mine, CopyMark.Complete, TestContext.Current.CancellationToken);
+            Directory.CreateDirectory(legs);
+
+            var transport = SyncKit.Transport(harness, new CannotList(harness.FileSystem, legs, denied));
+            var failure = await Assert.ThrowsAsync<HarnessException>(
+                () => transport.RemoveFormerWorkersBesideCopiesAsync(temp.Path, cancellationToken: TestContext.Current.CancellationToken));
+
+            Assert.Equal((HarnessExit.CommandFailed, $"'{legs}' could not be looked in: the disk would not say"), (failure.ExitCode, failure.Message));
+            Assert.True(Directory.Exists(mine), "a former worker went before every place was listed");
+        }
+        finally
+        {
+            foreach (var path in new[] { mine, copy }.Where(Directory.Exists))
+            {
+                Directory.Delete(path, recursive: true);
+            }
+        }
+    }
+
+    /// <summary>
+    /// --former-workers here lists every place of every tree before any worker goes: where a worktree's .legs cannot be
+    /// looked in, the leg fails naming it and nothing else, and the worker beside the leg's own tree is still there -
+    /// never one tree's workers removed and the trees after the one that failed left unvisited.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task FormerWorkers_WhereAPlaceOfATreeCannotBeLookedIn_NoneGo_AndTheLegFailsNamingIt(bool denied)
+    {
+        using var temp = new TempDirectory();
+        using var worktree = new TempDirectory();
+        var harness = new HarnessFactory();
+        var config = OneLocalLeg(harness);
+        var mine = temp.Path + MutationWorkers.FormerFamily + "357e24cw-1";
+        var legs = Path.Combine(worktree.Path, HarnessLayout.LegsDirectoryName);
+
+        try
+        {
+            await SyncKit.Transport(harness).CreateRootAsync(mine, CopyMark.Complete, TestContext.Current.CancellationToken);
+            Directory.CreateDirectory(legs);
+
+            var (outcome, leg) = await CleanAsync(
+                temp,
+                harness,
+                config,
+                fileSystem: new CannotList(harness.FileSystem, legs, denied),
+                trees: new KnownTrees { Beside = host => host == HostId.Local ? [new RepositoryTree(worktree.Path, "worktree w")] : [] },
+                formerWorkers: true);
+
+            Assert.Equal(Verdicts.ExitCodeFor(LegVerdict.Failed), outcome.ExitCode);
+            Assert.Equal(
+                ("failed", $"'{legs}' could not be looked in: the disk would not say"),
+                (leg.GetProperty("verdict").GetString(), leg.GetProperty("detail").GetString()));
+            Assert.True(Directory.Exists(mine), "a former worker went before every place was listed");
+        }
+        finally
+        {
+            if (Directory.Exists(mine))
+            {
+                Directory.Delete(mine, recursive: true);
+            }
+        }
+    }
+
+    /// <summary>
     /// --gone-copies is driven by the record, never by the legs: every host the record names a gone tree's copy on is
     /// asked - one no declared leg runs on included - each once, on a line of its own named as the record spells the host,
     /// only to measure on a dry run; no leg has a line of its own, and each line, and the line the clean ends on, names the

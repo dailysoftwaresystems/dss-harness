@@ -951,14 +951,33 @@ public sealed class BuildService(
     }
 
     /// <summary>
+    /// Why <paramref name="buildDirectory"/> starts from clean because the build that last ran there recorded another
+    /// variant than <paramref name="request"/>'s (<see cref="BuildRecord.Variant"/>), or <see langword="null"/> where it
+    /// recorded this one, or none.
+    /// </summary>
+    /// <remarks>
+    /// A tree's own build directory is named by its variant, and its record names that variant always. A mutation
+    /// worker's is named by the variant's key (<see cref="Mutations.WorkerFamily.BuildDirectoryOf"/>), which two variants
+    /// of one tree whose names come to one key share: the record is then what says whose its objects are.
+    /// </remarks>
+    private string? AnotherVariant(BuildRequest request, string buildDirectory)
+        => BuildRecord.VariantIn(_fileSystem, buildDirectory) is { } built
+            && !string.Equals(built, request.Variant.DirectoryName, StringComparison.Ordinal)
+            ? $"another variant's build: the last build here was of '{built}', and this one is of '{request.Variant.DirectoryName}'"
+            : null;
+
+    /// <summary>
     /// Whether this variant must be rebuilt from clean, and why; with the snapshot of its inputs the
     /// decision took, where it took one, for the guards to open with where the directory is kept.
     /// </summary>
     /// <remarks>
     /// Ninja, Make and MSBuild decide what is stale by ordering timestamps, which a stepped clock
     /// defeats without a word: an object stamped during a forward step looks newer than a source
-    /// edited just after it. Seven conditions rebuild the variant from clean, and the ledger names
-    /// which.
+    /// edited just after it. Seven conditions rebuild the variant from clean here, and the ledger
+    /// names which. Two more are asked before this is, and this is not asked where either holds, since
+    /// no record of the tree answers for them: the last build in the directory was of another variant
+    /// (<see cref="AnotherVariant"/>), whose objects are that variant's whatever the tree did; and a
+    /// compiler CMake identified is not what is at its path now (<see cref="CompilerReplacedAsync"/>).
     /// <para>
     /// Two are answers. The previous build was marked unordered: a phase spanned a clock step, an
     /// input could not be read as it began, its inputs moved while it ran, or something else may have
@@ -1004,22 +1023,6 @@ public sealed class BuildService(
     /// authoritative.
     /// </para>
     /// </remarks>
-    /// <summary>
-    /// Why <paramref name="buildDirectory"/> starts from clean because the build that last ran there recorded another
-    /// variant than <paramref name="request"/>'s (<see cref="BuildRecord.Variant"/>), or <see langword="null"/> where it
-    /// recorded this one, or none.
-    /// </summary>
-    /// <remarks>
-    /// A tree's own build directory is named by its variant, and its record names that variant always. A mutation
-    /// worker's is named by the variant's key (<see cref="Mutations.WorkerFamily.BuildDirectoryOf"/>), which two variants
-    /// of one tree whose names come to one key share: the record is then what says whose its objects are.
-    /// </remarks>
-    private string? AnotherVariant(BuildRequest request, string buildDirectory)
-        => BuildRecord.VariantIn(_fileSystem, buildDirectory) is { } built
-            && !string.Equals(built, request.Variant.DirectoryName, StringComparison.Ordinal)
-            ? $"another variant's build: the last build here was of '{built}', and this one is of '{request.Variant.DirectoryName}'"
-            : null;
-
     private async Task<(string? Rebuilt, InputSnapshot? Taken)> DecideCleanRebuildAsync(
         BuildRequest request,
         string buildDirectory,

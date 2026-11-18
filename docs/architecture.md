@@ -7908,9 +7908,10 @@ second tree, built as deep as the first, so where paths are bounded every charac
 is one the tree's own path must leave free; spelt out, a variant's name stood in a worker's path
 twice, in its name and in the build directory within it, and a consumer's mutant path, kept in the
 slot's earlier name, came to 277 characters. Its first worker adds fourteen characters to the
-tree's path whatever its variant is called, and its build directory fourteen below that - shallower
-than a worker either earlier layout kept, beside the tree or in its `.mutations`, building in the
-directory the variant's name gave it, whatever the variant is called (`WorkerFamily.AddedToItsTreesPath`).
+tree's path whatever its variant is called (`WorkerFamily.AddedToItsTreesPath`), and its build
+directory fourteen below that (`WorkerFamily.BuildBelowItsWorker`) - shallower than a worker either
+earlier layout kept, beside the tree or in its `.mutations`, building in the directory the
+variant's name gave it, whatever the variant is called.
 Which variant a worker builds is what its build records (`BuildRecord.Variant`, the line the
 record has always held), and the lines of a sweep and of a `clean` say which leg, and which
 variant, a worker is. Two variants of one tree whose names came to one key would share their
@@ -7931,11 +7932,14 @@ home (`ISyncTransport.RemoveFormerWorkersBesideCopiesAsync`), beside and in its 
 checkout and each worktree copy beside it, and beside each removed since, under that copy's name or
 a worktree copy's - whatever copy the host holds, none even. Each goes as workers kept in a tree are
 removed (`LocalSyncTransport.RemoveFormerWorkersAsync`, through the one removal of copies kept
-together, every place listed before any goes): by its marker, a dry run listing each with its size,
-one that version's sweep still claims kept by the claim file beside it, refused-locked, and one no
-sync made said and left. Where the worktrees, or the trees deleted since, cannot be listed, those of
-the trees that are known are dealt with and the leg fails, saying so; a leg's copy of a tree is no
-tree any version kept one beside. Those in a tree also go with it: whatever removes a worktree, or
+together): by its marker, a dry run listing each with its size, one that version's sweep still
+claims kept by the claim file beside it, refused-locked, and one no sync made said and left. Every
+place of every tree - beside it, its `.mutations`, and that of each copy in its `.legs` - is listed
+before any worker goes, in that one removal, so a place that cannot be looked in has removed
+nothing, and the leg fails naming it: a host answers a failure alone, and one met in a later tree
+after an earlier tree's workers went would leave what went unsaid. Where the worktrees, or the
+trees deleted since, cannot be listed, those of the trees that are known are dealt with and the leg
+fails, saying so; a leg's copy of a tree is no tree any version kept one beside. Those in a tree also go with it: whatever removes a worktree, or
 a host's copy of one, removes the workers in its `.mutations` with those in its `.m`
 (`LocalSyncTransport.RemoveWorkersInTreeAsync`), a claim that version's sweep still holds keeping
 the tree.
@@ -7982,8 +7986,11 @@ The workers go with their tree, kept in it. `clean` removes a leg's with its bui
 *Disk space*). `delete-worktree`, and so `delete-agent`, removes the workers kept in the worktree
 before the worktree itself, and each host removes those kept in its copy before the copy
 (`remove-workers`, served as every sync operation is): each worker a sync made, of whichever
-variant, with what an unfinished removal left aside - looked for in the tree's own slot alone, and
-only what is named as a worker's there. Each worker answers
+variant, with what an unfinished removal left aside - looked for in its `.m`, and in the
+`.mutations` an earlier version kept them in, and only what is named as a worker's there; a host
+looks in those of each copy a sync made in its copy's `.legs` too. Every place is listed before any
+worker goes, in one removal, so one that cannot be looked in has removed nothing and fails naming
+it - a host answers a failure alone. Each worker answers
 for itself: one that cannot be removed is left, saying why, and the others still go; one gone by
 the time it is reached was somebody else's to count; and a removal that is stopped answers with
 what it had done. A worker a sweep still running holds says its tree is in use: the worktree is

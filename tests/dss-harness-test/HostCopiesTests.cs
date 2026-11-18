@@ -1957,6 +1957,36 @@ public sealed class HostCopiesTests
     }
 
     /// <summary>
+    /// Everything is listed before anything goes in the copies kept in the tree's .legs too: where the slot of such a copy
+    /// will not be read, the removal fails naming it, and the tree's own worker is still there - a host answers a failure
+    /// alone, so a worker that went before it would be one nothing said went.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ARemovalThatCannotListTheSlotOfACopyInTheTreesLegs_HasRemovedNothing_AndNamesWhereItLooked(bool denied)
+    {
+        using var hosts = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = new HarnessFactory();
+        var tree = hosts.Combine("repo");
+        var copy = HarnessLayout.InSlot(tree, HarnessLayout.LegsDirectoryName, "357e24c");
+        var own = Worker(tree, "357e24cw-1");
+        var slot = Path.Combine(copy, HarnessLayout.MutationsDirectoryName);
+
+        await Local(harness).CreateRootAsync(tree, CopyMark.Complete, cancellationToken);
+        await Local(harness).CreateRootAsync(copy, CopyMark.Complete, cancellationToken);
+        await Local(harness).CreateRootAsync(own, CopyMark.Complete, cancellationToken);
+        Directory.CreateDirectory(slot);
+
+        var failure = await Assert.ThrowsAsync<HarnessException>(
+            () => Local(harness, new CannotList(harness.FileSystem, slot, denied)).RemoveWorkersAsync(tree, cancellationToken: cancellationToken));
+
+        Assert.Equal((HarnessExit.CommandFailed, $"'{slot}' could not be looked in: the disk would not say"), (failure.ExitCode, failure.Message));
+        Assert.True(Directory.Exists(own), "a worker went before every place was listed");
+    }
+
+    /// <summary>
     /// A host whose workers cannot be listed - the slot of its copy they are kept in will not be read - keeps its copy,
     /// still recorded, saying why, as any other failure there does: the deletion still says what it did.
     /// </summary>
@@ -2973,7 +3003,7 @@ public sealed class HostCopiesTests
         File.WriteAllText(Path.Combine(Directory.CreateDirectory(aside).FullName, "part.o"), "what a removal left");
 
         var claims = new Claims { Held = { [held] = "run 20261007-101500-abcd, process 4242 on this machine" } };
-        var removed = await Local(harness, claims: claims).RemoveFormerWorkersAsync(tree, cancellationToken: cancellationToken);
+        var removed = await Local(harness, claims: claims).RemoveFormerWorkersAsync([tree], cancellationToken: cancellationToken);
 
         Assert.Equal([free, aside], removed.Removed.Select(worker => worker.Path));
         Assert.Equal(

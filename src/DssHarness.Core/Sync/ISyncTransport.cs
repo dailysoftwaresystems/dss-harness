@@ -258,7 +258,10 @@ public interface ISyncTransport
     /// <param name="repositoryPath">Where the main checkout's copy is kept, as the configuration declares it.</param>
     /// <param name="measureOnly">Whether to say what would be removed, and remove nothing.</param>
     /// <param name="cancellationToken">Stops the removal between workers.</param>
-    /// <exception cref="HarnessException">The directory the copies are kept in could not be looked in; nothing was removed.</exception>
+    /// <exception cref="HarnessException">
+    /// The directory the copies are kept in, the .legs of one, or a place former workers are kept in could not be looked
+    /// in; nothing was removed.
+    /// </exception>
     Task<WorkersRemoval> RemoveFormerWorkersBesideCopiesAsync(string repositoryPath, bool measureOnly = false, CancellationToken cancellationToken = default);
 
     /// <summary>

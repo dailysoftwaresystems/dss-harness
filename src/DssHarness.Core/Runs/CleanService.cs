@@ -322,7 +322,9 @@ public sealed class CleanService(
     /// and beside each worktree gone since that workers were left beside; on a host, asked of it from its home, beside and
     /// in its copy of the main checkout and each worktree's copy beside it, and beside each removed since. No version kept
     /// one beside a leg's copy of a tree, so none is looked for there, and those kept in one go with its tree's; where the
-    /// trees cannot all be listed, those of the trees that are known go, and the leg fails, saying why.
+    /// trees cannot all be listed, those of the trees that are known go, and the leg fails, saying why. Every place of
+    /// every tree is listed before any worker goes, in one removal, so where one cannot be looked in - a tree's .legs, a
+    /// slot - none goes, and the leg fails naming it.
     /// </summary>
     private async Task<LegEntry> FormerWorkersAsync(
         HarnessContext context,
@@ -361,7 +363,8 @@ public sealed class CleanService(
             {
                 // The leg's own tree first: known where the others cannot be listed. Then each tree gone since that workers
                 // were left beside. Each where its workers are, once: one tree reached by two spellings - a link along the
-                // way, a separator spelt otherwise - would have its workers measured twice.
+                // way, a separator spelt otherwise - would have its workers measured twice. All in one removal, which lists
+                // every place of every tree before any worker goes.
                 var found = await _trees.HereAsync(context, request.Here, cancellationToken).ConfigureAwait(false);
                 var known = found.Trees.Where(tree => !tree.LegCopy).Select(tree => tree.Root).Prepend(leg.TreeRoot).DistinctBy(WorkersOf, _platform.PathComparer()).ToList();
                 IReadOnlyList<string> gone;
@@ -382,31 +385,24 @@ public sealed class CleanService(
                 }
 
                 looked = ReportText.Listed([.. known.Select(tree => $"'{tree}'")]);
-
-                foreach (var tree in known.Concat(gone).DistinctBy(WorkersOf, _platform.PathComparer()))
-                {
-                    removal = removal.And(await _localTransport.RemoveFormerWorkersAsync(tree, request.DryRun, cancellationToken).ConfigureAwait(false));
-
-                    if (removal.Interrupted)
-                    {
-                        break;
-                    }
-                }
+                removal = await _localTransport
+                    .RemoveFormerWorkersAsync([.. known.Concat(gone).DistinctBy(WorkersOf, _platform.PathComparer())], request.DryRun, cancellationToken)
+                    .ConfigureAwait(false);
             }
         }
         catch (HarnessException ex) when (ex.ExitCode == HarnessExit.CommandFailed)
         {
-            return leg.Entry(LegVerdict.Failed, $"{ex.Message.TrimEnd('.')}{Removed(removal, request.DryRun)}") with
-            {
-                Space = WorkersAlone(leg.BuildDirectory) with { WorkerBytes = removal.Bytes },
-            };
+            // Raised before any worker went, here and on a host alike: the removal lists every place first, and a place
+            // that cannot be looked in stops it there, so it has nothing removed to say.
+            return leg.Entry(LegVerdict.Failed, ex.Message.TrimEnd('.')) with { Space = WorkersAlone(leg.BuildDirectory) };
         }
 
         var said = new List<string>
         {
             removal.Removed.Count == 0
                 ? $"no worker an earlier version kept beside or in {looked} is there"
-                : Removed(removal, request.DryRun).TrimStart(';', ' '),
+                : $"{(request.DryRun ? string.Empty : "removed ")}{ReportText.Counted(removal.Removed.Count, "worker")} an earlier version kept "
+                    + $"beside or in its trees, {DiskSpace.Size(removal.Bytes)}: {string.Join(", ", removal.Removed.Select(worker => $"'{worker.Path}'"))}",
         };
 
         said.AddRange(removal.Left.Select(worker => worker.Told()));
@@ -422,12 +418,6 @@ public sealed class CleanService(
         {
             Space = WorkersAlone(leg.BuildDirectory) with { WorkerBytes = removal.Bytes },
         };
-
-        // What went, or would go, after what is said before it; nothing where nothing does.
-        static string Removed(WorkersRemoval removal, bool dryRun) => removal.Removed.Count == 0
-            ? string.Empty
-            : $"; {(dryRun ? string.Empty : "removed ")}{ReportText.Counted(removal.Removed.Count, "worker")} an earlier version kept beside or in "
-                + $"its trees, {DiskSpace.Size(removal.Bytes)}: {string.Join(", ", removal.Removed.Select(worker => $"'{worker.Path}'"))}";
     }
 
     /// <summary>

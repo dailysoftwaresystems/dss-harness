@@ -66,7 +66,9 @@ public sealed class MutationWorkersTests
     /// A worker adds fourteen characters to its tree's path whatever its variant is called, a self-test's as its own, and
     /// builds in its own build/&lt;key&gt;, fourteen more: the key, never the variant's name, in its name and in its build
     /// directory alike - so a repository whose path budget is reckoned to the character holds a worker of each of its
-    /// variants at one length. Help says the number from the code.
+    /// variants at one length. Help reads both numbers from the family (<see cref="WorkerFamily.AddedToItsTreesPath"/>,
+    /// <see cref="WorkerFamily.BuildBelowItsWorker"/>), each held here to the paths the family spells, so a layout changed
+    /// under them is never said by the old numbers.
     /// </summary>
     [Theory]
     [InlineData("mingw-gcc", "debug")]
@@ -78,21 +80,25 @@ public sealed class MutationWorkersTests
         const string tree = "C:/Source/SomeCompany/consumer-project";
         var variant = new VariantKey("x86_64", toolchain, config, null);
         var workers = MutationWorkers.Of(tree, variant);
+        var selfTest = MutationWorkers.Of(tree, variant, selfTest: true);
         var worker = workers.PathOf(1);
 
         Assert.Equal(38, tree.Length);
         Assert.Equal(14, WorkerFamily.AddedToItsTreesPath);
-        Assert.Equal(tree.Length + 14, worker.Length);
-        Assert.Equal(tree.Length + 14, MutationWorkers.Of(tree, variant, selfTest: true).PathOf(9).Length);
+        Assert.Equal(14, WorkerFamily.BuildBelowItsWorker);
+        Assert.Equal(tree.Length + WorkerFamily.AddedToItsTreesPath, worker.Length);
+        Assert.Equal(tree.Length + WorkerFamily.AddedToItsTreesPath, selfTest.PathOf(9).Length);
         Assert.Equal($"{worker}/build/{variant.CopyKey}", workers.BuildDirectoryOf(1));
+        Assert.Equal(WorkerFamily.BuildBelowItsWorker, workers.BuildDirectoryOf(1).Length - workers.PathOf(1).Length);
+        Assert.Equal(WorkerFamily.BuildBelowItsWorker, selfTest.BuildDirectoryOf(9).Length - selfTest.PathOf(9).Length);
 
         // What a sweep reckons a worker by: its build directory below it, the separator before it counted, and the reserve.
         var below = workers.BuildDirectoryOf(1).Length - worker.Length + 168;
         var budget = new PathBudget(new HostPlatform()).Check(worker, below, 1, 260);
 
-        Assert.Equal(14 + 168, below);
+        Assert.Equal(WorkerFamily.BuildBelowItsWorker + 168, below);
         Assert.True(budget.IsWithinBudget);
-        Assert.Equal(tree.Length + 14 + 14 + 168 + 1 + 1, budget.RequiredLength);
+        Assert.Equal(tree.Length + WorkerFamily.AddedToItsTreesPath + WorkerFamily.BuildBelowItsWorker + 168 + 1 + 1, budget.RequiredLength);
     }
 
     /// <summary>

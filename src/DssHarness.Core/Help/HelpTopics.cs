@@ -1217,7 +1217,7 @@ public static class HelpTopics
             + $"directory is named, and a worker builds in <worker>/{VariantKey.BuildRootName}/<key>, never in the directory "
             + "the variant's name gives the tree's own build: its first worker adds "
             + $"{ReportText.Counted(WorkerFamily.AddedToItsTreesPath, "character")} to its tree's path, and its build directory "
-            + $"{ReportText.Counted(1 + VariantKey.BuildRootName.Length + 1 + VariantKey.CopyKeyLength, "character")} below that, "
+            + $"{ReportText.Counted(WorkerFamily.BuildBelowItsWorker, "character")} below that, "
             + "whatever the variant is called, since a worker is built as deep as the tree and a machine whose paths are bounded "
             + "has no more to spare. Which variant a worker builds is what its build records, and a build of one variant where "
             + "that record names another - two whose names come to one key share their workers - starts from clean; the lines "
