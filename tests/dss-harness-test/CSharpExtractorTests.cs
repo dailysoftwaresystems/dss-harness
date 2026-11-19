@@ -1,5 +1,7 @@
+using System.Globalization;
 using DssHarness.Core.Codebase;
 using DssHarness.Core.Codebase.Languages;
+using DssHarness.Core.Walks;
 
 namespace DssHarness.Tests;
 
@@ -550,9 +552,9 @@ public sealed class CSharpExtractorTests : CodeGraphExtractorContractTests<CShar
     /// <summary>
     /// A call is its name, its arguments and what its receiver is: <c>this</c>, <c>base</c>, the type a variable,
     /// parameter, field or property is declared with, a name written as a type's is; else a value of no said type - by
-    /// its name where it is one, a field's chain of members by their names - and never an unqualified call, which is looked
-    /// for in the scopes it is written in. A local function, <c>nameof</c> and a value of a type parameter's type are no
-    /// call of a declared member.
+    /// its name where it is one, a field's chain of members by their names, as the extract writes them - and never an
+    /// unqualified call, which is looked for in the scopes it is written in. A local function, <c>nameof</c> and a value
+    /// of a type parameter's type are no call of a declared member.
     /// </summary>
     [Fact]
     public void ACall_IsQualifiedByWhatItsReceiverIs_WhereTheFileSays()
@@ -597,8 +599,9 @@ public sealed class CSharpExtractorTests : CodeGraphExtractorContractTests<CShar
             }
             """;
 
-        var calls = Extractor.Extract(new CodeFileInput("Box.cs", Text)).References.Where(reference => reference.Kind == CodeEdgeKinds.Calls)
-            .Select(reference => (reference.Name, reference.Arity, reference.Qualifier?.Kind, reference.Qualifier?.Name)).ToList();
+        var extract = Extractor.Extract(new CodeFileInput("Box.cs", Text));
+        var calls = extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Calls)
+            .Select(reference => (reference.Name, reference.Arity, reference.Qualifier?.Kind, extract.Written(reference.Qualifier))).ToList();
 
         Assert.Equal(
             [
@@ -1175,8 +1178,8 @@ public sealed class CSharpExtractorTests : CodeGraphExtractorContractTests<CShar
     /// A use is of a value the code reads: a named argument's value and not its name, an initializer's and a <c>with</c>'s
     /// members and a property pattern's as their type's, no anonymous type's name, no discard and no primary constructor's
     /// parameter; <c>this.x</c> is the type's own; a receiver's first name is read where it is a field or a value of no
-    /// capital, a type's name not; and a chain past <see cref="FileExtract.MostReceiverNames"/> names is a value of no
-    /// type the file says, read no further.
+    /// capital, a type's name not; and a chain is read whole, each name's use made before the next's and qualified by the
+    /// names before it.
     /// </summary>
     [Fact]
     public void AUseIsOfAValueTheCodeReads_QualifiedAsWhatHoldsIt()
@@ -1209,9 +1212,9 @@ public sealed class CSharpExtractorTests : CodeGraphExtractorContractTests<CShar
         Assert.Equal(
             [
                 (Make, "DefaultTimeout", 11, ""), (Make, "Total", 12, "type Order"), (Make, "Total", 13, "type Order"), (Make, "Count", 15, "type List`1"), (Make, "_items", 15, ""),
-                (Make, "count", 16, "this"), (Make, "Name", 17, "type Board"), (Make, "j", 18, "value"), (Make, "i", 18, "value a.b.c.d.e.f.g.h"), (Make, "h", 18, "value a.b.c.d.e.f.g"),
-                (Make, "g", 18, "value a.b.c.d.e.f"), (Make, "f", 18, "value a.b.c.d.e"), (Make, "e", 18, "value a.b.c.d"), (Make, "d", 18, "value a.b.c"), (Make, "c", 18, "value a.b"),
-                (Make, "b", 18, "value a"), (Make, "a", 18, ""),
+                (Make, "count", 16, "this"), (Make, "Name", 17, "type Board"), (Make, "b", 18, "value a"), (Make, "c", 18, "value a.b"), (Make, "d", 18, "value a.b.c"),
+                (Make, "e", 18, "value a.b.c.d"), (Make, "f", 18, "value a.b.c.d.e"), (Make, "g", 18, "value a.b.c.d.e.f"), (Make, "h", 18, "value a.b.c.d.e.f.g"),
+                (Make, "i", 18, "value a.b.c.d.e.f.g.h"), (Make, "j", 18, "value a.b.c.d.e.f.g.h.i"), (Make, "a", 18, ""),
             ],
             Uses(extract));
     }
@@ -1233,12 +1236,11 @@ public sealed class CSharpExtractorTests : CodeGraphExtractorContractTests<CShar
 
     /// <summary>
     /// A property pattern's path is read from the tested type - its first member, a capital beginning it, the type's - and
-    /// a <c>base</c> read is the base type's; a path, or a chain from a <c>dynamic</c> root, of more than
-    /// <see cref="FileExtract.MostReceiverNames"/> names is read no further: its first name no member of the tested type,
-    /// and a call on it no call through the dynamic value.
+    /// a <c>base</c> read is the base type's; a path, and a chain from a <c>dynamic</c> root, is read whole however many
+    /// names it holds: its first name a member of the tested type, and a call on it marked dynamic.
     /// </summary>
     [Fact]
-    public void APatternsPathAndADynamicRoot_AreReadNoFurtherThanTheMostNames()
+    public void APatternsPathAndADynamicRoot_AreReadWholeHoweverLong()
     {
         var extract = Extractor.Extract(new CodeFileInput("src/Probe.cs", """
             namespace App;
@@ -1257,17 +1259,55 @@ public sealed class CSharpExtractorTests : CodeGraphExtractorContractTests<CShar
             }
             """));
 
-        Assert.Equal([7], extract.Dynamic.Select(dynamic => dynamic.Line));
+        Assert.Equal([7, 8], extract.Dynamic.Select(dynamic => dynamic.Line));
+        Assert.DoesNotContain(extract.References, reference => reference.Kind == CodeEdgeKinds.Calls);
         Assert.Equal(
-            [(8, "value")],
-            extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Calls).Select(reference => (reference.Line, $"{reference.Qualifier?.Kind} {reference.Qualifier?.Name}".Trim())));
-        Assert.Equal(
-            [("Name", 9, "value"), ("Owner", 9, "type Board"), ("a", 10, "type Board"), ("a", 11, ""), ("Count", 12, "base")],
+            [("Name", 9, "value"), ("Owner", 9, "type Board"), ("a", 10, "type Board"), ("a", 11, "type Board"), ("Count", 12, "base")],
             Uses(extract).Where(use => use.Line >= 9 && use.Name is "Owner" or "Name" or "a" or "Count").Select(use => (use.Name, use.Line, use.Qualifier)));
     }
 
+    /// <summary>
+    /// A chain of sixty names after its first is a use of each and a call, each name's made before the next's: the use of
+    /// the name after the first qualified by the first by its name, and the sixty after it - the call's last - each a link
+    /// to the use of the name before it, so each writes every name before its own and none writes them again.
+    /// </summary>
+    [Fact]
+    public void AChainOfSixtyNames_IsSixtyLinks_EachToTheUseOfTheNameBeforeIt()
+    {
+        var names = Enumerable.Range(0, 61).Select(index => $"n{index}").ToList();
+        var extract = Extractor.Extract(new CodeFileInput("src/Long.cs", $"class Long {{ void Run() {{ {string.Join('.', names)}.Go(); }} }}"));
+        var references = extract.References;
+
+        // The first name's own use comes last, once the chain it begins is read.
+        Assert.Equal([.. names.Skip(1), "Go", "n0"], references.Select(reference => reference.Name));
+        Assert.Equal([.. Enumerable.Range(1, 61).Select(count => string.Join('.', names.Take(count))), null], references.Select(reference => extract.Written(reference.Qualifier)));
+        Assert.Equal(new ExtractQualifier(CodeQualifierKinds.Value, "n0"), references[0].Qualifier);
+        Assert.Equal(
+            Enumerable.Range(0, 60).Select(link => new ExtractQualifier(CodeQualifierKinds.Value) { Link = link }),
+            references.Skip(1).Take(60).Select(reference => reference.Qualifier));
+        Assert.Null(extract.Problem("csharp", 1));
+    }
+
+    /// <summary>
+    /// A chain of a hundred thousand names is read on a loop of the reader's own, in a child given a small stack: a chain
+    /// read by recursion would overflow it, and end the child.
+    /// </summary>
+    [Fact]
+    public async Task AChainOfAHundredThousandNames_IsReadWhole()
+        => Assert.Equal(new ChildRunAnswer(0, "100001 n1.n2.n3", ""), await ChildRun.MethodAsync(typeof(CSharpExtractorTests), nameof(HundredThousandNames), TestContext.Current.CancellationToken));
+
+    /// <summary>The child of <see cref="AChainOfAHundredThousandNames_IsReadWhole"/>: how many uses and calls its chain is - a use of each name and the call - and what the fourth name's use is qualified by.</summary>
+    internal static string HundredThousandNames() => SmallStack.Run(() =>
+    {
+        var text = $"class Long {{ void Run() {{ {string.Join('.', Enumerable.Range(1, 100_000).Select(index => $"n{index}"))}.Go(); }} }}";
+        var extract = new CSharpExtractor().Extract(new CodeFileInput("src/Long.cs", text));
+        var fourth = extract.References.Single(reference => reference.Name == "n4");
+
+        return string.Create(CultureInfo.InvariantCulture, $"{extract.References.Count(reference => reference.Kind is CodeEdgeKinds.Uses or CodeEdgeKinds.Calls)} {extract.Written(fourth.Qualifier)}");
+    });
+
     private static IEnumerable<(string From, string Name, int Line, string Qualifier)> Uses(FileExtract extract)
-        => extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Uses).Select(reference => (reference.From, reference.Name, reference.Line, $"{reference.Qualifier?.Kind} {reference.Qualifier?.Name}".Trim()));
+        => extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Uses).Select(reference => (reference.From, reference.Name, reference.Line, $"{reference.Qualifier?.Kind} {extract.Written(reference.Qualifier)}".Trim()));
 
     /// <summary>
     /// A use of a name the repository declares nowhere is left with no edge and no count: a use is recall, never a doubt.
@@ -1371,4 +1411,206 @@ public sealed class CSharpExtractorTests : CodeGraphExtractorContractTests<CShar
 
         Assert.Empty(Directory.EnumerateFiles(parser, "*.resources.dll", SearchOption.AllDirectories));
     }
+
+    /// <summary>
+    /// A variable is seen where C# scopes it, and hides a field of its name there alone: a block's local within its
+    /// block, an if's pattern variable on through the statements the if stands among, a while's and a loop's within
+    /// their statement, a lambda's parameter within the lambda, a local function within its block.
+    /// </summary>
+    [Fact]
+    public void AVariable_IsSeenWhereCSharpScopesIt()
+    {
+        const string Text = """
+            class Board
+            {
+                private Cell first;
+
+                void Plan(object thing)
+                {
+                    {
+                        Piece first = new Piece();
+                        first.Move();
+                    }
+
+                    first.Clear();
+                    if (thing is Piece found) { }
+                    found.Show();
+                    while (thing is Piece seen) { seen.Turn(); }
+                    seen.Show();
+                    foreach (Piece each in Pieces()) { each.Go(); }
+                    each.Go();
+                    var spin = (Piece first) => first.Spin();
+                    first.Spin();
+                    { void Inner() { } Inner(); }
+                    Inner();
+                }
+            }
+            """;
+
+        var extract = Extractor.Extract(new CodeFileInput("Board.cs", Text));
+
+        Assert.Equal(
+            [
+                ("Move", 9, CodeQualifierKinds.Type, "Piece"), ("Clear", 12, CodeQualifierKinds.Type, "Cell"), ("Show", 14, CodeQualifierKinds.Type, "Piece"),
+                ("Turn", 15, CodeQualifierKinds.Type, "Piece"), ("Show", 16, CodeQualifierKinds.Value, "seen"), ("Pieces", 17, null, null), ("Go", 17, CodeQualifierKinds.Type, "Piece"),
+                ("Go", 18, CodeQualifierKinds.Value, "each"), ("Spin", 19, CodeQualifierKinds.Type, "Piece"), ("Spin", 20, CodeQualifierKinds.Type, "Cell"), ("Inner", 22, null, null),
+            ],
+            extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Calls).Select(reference => (reference.Name, reference.Line, reference.Qualifier?.Kind, extract.Written(reference.Qualifier))));
+    }
+
+    /// <summary>
+    /// A member assigned through a name - <c>Checkout.IsEnabled = true</c>, an event's handler added - is a use of the
+    /// name too, as a control a markup file declares is reached: the use links to the field the markup's element is.
+    /// </summary>
+    [Fact]
+    public void AMemberAssignedThroughAName_IsAUseOfTheName_ThatReachesAMarkupsField()
+    {
+        const string Xaml = """
+            <UserControl x:Class="Shop.Cart"
+                xmlns="http://schemas.microsoft.com/winfx/2009/xaml"
+                xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml">
+              <Button x:Name="Checkout" />
+            </UserControl>
+            """;
+        const string CodeBehind = """
+            namespace Shop;
+
+            public partial class Cart
+            {
+                public void Wire()
+                {
+                    Checkout.IsEnabled = true;
+                    Checkout.Click += Pay;
+                }
+
+                private void Pay(object sender, object args)
+                {
+                }
+            }
+            """;
+
+        var markup = new XmlExtractor().Extract(new CodeFileInput("Views/Cart.xaml", Xaml));
+        var code = Extractor.Extract(new CodeFileInput("Views/Cart.xaml.cs", CodeBehind));
+        var linked = CodeGraphLinker.Link([new CodeGraphFile("Views/Cart.xaml", "xml", markup), new CodeGraphFile("Views/Cart.xaml.cs", "csharp", code)]);
+
+        Assert.Equal(
+            [("IsEnabled", 7, "named Checkout"), ("Checkout", 7, ""), ("Click", 8, "named Checkout"), ("Checkout", 8, ""), ("Pay", 8, "")],
+            Uses(code).Select(use => (use.Name, use.Line, use.Qualifier)));
+        Assert.Equal(
+            [new CodeEdge("csharp:Shop.Cart.Wire()", "xml:Shop.Cart.Checkout", CodeEdgeKinds.Uses, 7, CodeConfidences.Exact), new CodeEdge("csharp:Shop.Cart.Wire()", "xml:Shop.Cart.Checkout", CodeEdgeKinds.Uses, 8, CodeConfidences.Exact)],
+            linked.Edges.Where(edge => edge.From == "csharp:Shop.Cart.Wire()" && edge.To.StartsWith("xml:", StringComparison.Ordinal)));
+    }
+
+    /// <summary>
+    /// A method nested three thousand levels deep - blocks in blocks, parentheses in parentheses - is parsed on a thread
+    /// whose stack holds its depth and read whole, in a child given a small stack: a parse on that stack would overflow
+    /// it, and end the child.
+    /// </summary>
+    [Fact]
+    public async Task AMethodNestedThreeThousandDeep_IsExtracted()
+        => Assert.Equal(new ChildRunAnswer(0, "csharp:C csharp:C.M() calls Of named Value", ""), await ChildRun.MethodAsync(typeof(CSharpExtractorTests), nameof(ThreeThousandDeep), TestContext.Current.CancellationToken));
+
+    /// <summary>The child of <see cref="AMethodNestedThreeThousandDeep_IsExtracted"/>: the nodes read, and the call the innermost block makes.</summary>
+    internal static string ThreeThousandDeep() => SmallStack.Run(() =>
+    {
+        const int Depth = 3_000;
+        var text = $"class C\n{{\n    int M()\n    {{\n{new string('{', Depth)} return Value.Of({new string('(', Depth)}1{new string(')', Depth)}); {new string('}', Depth)}\n    }}\n}}\n";
+        var extract = new CSharpExtractor().Extract(new CodeFileInput("src/Deep.cs", text));
+        var call = extract.References.Single(reference => reference.Kind == CodeEdgeKinds.Calls);
+
+        return $"{string.Join(' ', extract.Nodes.Select(node => node.Id))} {call.Kind} {call.Name} {call.Qualifier!.Kind} {extract.Written(call.Qualifier)}";
+    });
+
+    /// <summary>
+    /// An extract is never empty without its reason: a file nested deeper than the stack one thread can be given holds -
+    /// its depth's stack past what a .NET thread's is counted in - is marked dynamic at the line it nests deepest at, with
+    /// how deep it nests and why no thread parses it; nothing is read of it, and nothing is said of it but that.
+    /// </summary>
+    [Fact]
+    public void AnExtractIsNeverEmptyWithoutItsReason()
+    {
+        const int Braces = 600_000;
+        var text = $"class C\n{{\n    void M()\n    {{\n{new string('{', Braces)}\n";
+        var extract = Extractor.Extract(new CodeFileInput("src/Deep.cs", text));
+        const long Depth = Braces + 2;
+
+        Assert.Empty(extract.Nodes);
+        Assert.Empty(extract.References);
+        Assert.Equal(
+            [
+                new ExtractDynamic(5, string.Create(CultureInfo.InvariantCulture, $"the file nests {Depth} levels deep here, which no thread can be given the stack to parse (a call {Depth} levels deep, of {CSharpExtractor.FrameBytes} bytes a level, needs {(Depth * CSharpExtractor.FrameBytes) + DeepCalls.SizedBaseBytes} bytes of stack, and a .NET thread's stack is given as an int count of bytes, at most {int.MaxValue}: no one thread can hold it)")),
+            ],
+            extract.Dynamic);
+    }
+
+    /// <summary>
+    /// Namespaces and types nested four thousand deep are declared whole, on a stack of the reader's own, in a child given a
+    /// small stack: a declaration read by recursion would overflow it, and end the child.
+    /// </summary>
+    [Fact]
+    public async Task DeclarationsNestedFourThousandDeep_AreDeclaredWhole()
+        => Assert.Equal(new ChildRunAnswer(0, "4000 7999", ""), await ChildRun.MethodAsync(typeof(CSharpExtractorTests), nameof(FourThousandDeclarations), TestContext.Current.CancellationToken));
+
+    /// <summary>The child of <see cref="DeclarationsNestedFourThousandDeep_AreDeclaredWhole"/>: how many nodes are read, and how long the innermost's qualified name is.</summary>
+    internal static string FourThousandDeclarations() => SmallStack.Run(() =>
+    {
+        const int Half = 2_000;
+        var text = string.Concat(Enumerable.Repeat("namespace N { ", Half)) + string.Concat(Enumerable.Repeat("class C { ", Half)) + new string('}', 2 * Half);
+        var extract = new CSharpExtractor().Extract(new CodeFileInput("src/Nested.cs", text));
+
+        return string.Create(CultureInfo.InvariantCulture, $"{extract.Nodes.Count} {extract.Nodes[^1].Qualified.Length}");
+    });
+
+    /// <summary>
+    /// A type nested in type arguments ten thousand deep is a reference to each, read on a stack of the reader's own, in a
+    /// child given a small stack: types mentioned by recursion would overflow it, and end the child.
+    /// </summary>
+    [Fact]
+    public async Task ATypeNestedTenThousandDeep_IsAReferenceToEach()
+        => Assert.Equal(new ChildRunAnswer(0, "10000", ""), await ChildRun.MethodAsync(typeof(CSharpExtractorTests), nameof(TenThousandTypeArguments), TestContext.Current.CancellationToken));
+
+    /// <summary>The child of <see cref="ATypeNestedTenThousandDeep_IsAReferenceToEach"/>: how many references to the generic type are made.</summary>
+    internal static string TenThousandTypeArguments() => SmallStack.Run(() =>
+    {
+        const int Depth = 10_000;
+        var text = $"class Holder {{ {string.Concat(Enumerable.Repeat("List<", Depth))}Item{new string('>', Depth)} held; }}";
+        var extract = new CSharpExtractor().Extract(new CodeFileInput("src/Holder.cs", text));
+
+        return extract.References.Count(reference => reference.Name == "List`1").ToString(CultureInfo.InvariantCulture);
+    });
+
+    /// <summary>
+    /// A summary nested ten thousand elements deep reads as its text, read on a stack of the reader's own, in a child given
+    /// a small stack: its elements read by recursion would overflow it, and end the child.
+    /// </summary>
+    [Fact]
+    public async Task ASummaryNestedTenThousandDeep_ReadsAsItsText()
+        => Assert.Equal(new ChildRunAnswer(0, "Deep down.", ""), await ChildRun.MethodAsync(typeof(CSharpExtractorTests), nameof(TenThousandElements), TestContext.Current.CancellationToken));
+
+    /// <summary>The child of <see cref="ASummaryNestedTenThousandDeep_ReadsAsItsText"/>: the summary the type's node holds.</summary>
+    internal static string TenThousandElements() => SmallStack.Run(() =>
+    {
+        const int Depth = 10_000;
+        var text = $"/// <summary>{string.Concat(Enumerable.Repeat("<b>", Depth))}Deep down.{string.Concat(Enumerable.Repeat("</b>", Depth))}</summary>\nclass Deep {{ }}\n";
+        var extract = new CSharpExtractor().Extract(new CodeFileInput("src/Deep.cs", text));
+
+        return extract.Nodes.Single().Summary ?? "none";
+    });
+
+    /// <summary>
+    /// A name of twenty thousand parts a using imports is written whole, read on a loop of the reader's own, in a child
+    /// given a small stack: a name written by recursion would overflow it, and end the child.
+    /// </summary>
+    [Fact]
+    public async Task ANameOfTwentyThousandParts_IsWrittenWhole()
+        => Assert.Equal(new ChildRunAnswer(0, "39999", ""), await ChildRun.MethodAsync(typeof(CSharpExtractorTests), nameof(TwentyThousandParts), TestContext.Current.CancellationToken));
+
+    /// <summary>The child of <see cref="ANameOfTwentyThousandParts_IsWrittenWhole"/>: how long the import's target is.</summary>
+    internal static string TwentyThousandParts() => SmallStack.Run(() =>
+    {
+        var text = $"using {string.Join('.', Enumerable.Repeat("N", 20_000))};\n";
+        var extract = new CSharpExtractor().Extract(new CodeFileInput("src/Using.cs", text));
+
+        return extract.Imports.Single().Target.Length.ToString(CultureInfo.InvariantCulture);
+    });
 }
