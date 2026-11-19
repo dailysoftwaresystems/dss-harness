@@ -1,5 +1,5 @@
 using DssHarness.Core.Platform;
-using System.Threading.Channels;
+using DssHarness.Core.Waiting;
 
 namespace DssHarness.Core.Output;
 
@@ -10,20 +10,19 @@ namespace DssHarness.Core.Output;
 /// <remarks>
 /// Every event is stamped, under one lock, with the operation it belongs to and the sequence and time it happened -
 /// the stamp is the publisher's, never the maker's, so no event can invent its place. The console's sink is called
-/// under that same lock, as today's writer is, so lines keep their order on the terminal. Any other sink is fed from a
-/// bounded queue drained by a task of its own, in sequence order: where the queue is full an event is dropped and
-/// counted, and the sink is told so by <see cref="EventsDropped"/> where the gap was - after the last event it was
-/// given before it and before the first after it, stamped with this operation and the sequence and time of the last
-/// event it stands for - so a slow sink never holds a writer and never mistakes silence for completeness. What is
-/// dropped once the queue is closed is told when the sink has been given the rest.
+/// under that same lock, as today's writer is, so lines keep their order on the terminal. Any other sink is given every
+/// event, in sequence order, by a task of its own, so a slow sink never holds a writer: what it has not yet been given
+/// waits in memory up to <see cref="HeldInMemory"/> events, and past that in the operation's event file
+/// (<see cref="EventSpill"/>), read back in order as the sink takes it - none is ever dropped. Disposing waits for the
+/// sink to be given the last of them, however long it takes, said every five minutes.
 /// </remarks>
 public sealed class EventHarnessOutput : IHarnessOutput, IDisposable
 {
-    /// <summary>How many events a sink that is not the console may lag behind, at most.</summary>
-    public const int QueueLimit = 4096;
-
-    /// <summary>How long disposing waits for a lagging sink, at most, where its output was given no other limit.</summary>
-    public static readonly TimeSpan DrainLimit = TimeSpan.FromSeconds(5);
+    /// <summary>
+    /// How many events wait in memory for a sink that is not the console before the rest wait in the operation's event
+    /// file: a page of waiting, not a bound, since every event past it waits on disk and is given in its turn.
+    /// </summary>
+    public const int HeldInMemory = 4096;
 
     private readonly TextRunEvents? _console;
     private readonly IRunEvents _sink;
@@ -32,24 +31,29 @@ public sealed class EventHarnessOutput : IHarnessOutput, IDisposable
     private readonly OperationId? _parent;
     private readonly bool _verbose;
     private readonly TimeProvider _clock;
-    private readonly TimeSpan _drainLimit;
     private readonly Lock _gate = new();
-    private readonly Channel<Queued>? _queued;
+
+    /// <summary>The events a queued sink has not been given, in memory, oldest first: every one older than any that waits on disk.</summary>
+    private readonly Queue<RunEvent>? _held;
+
+    /// <summary>One count for each event that waits, and one for the close: what the task that feeds the sink waits on.</summary>
+    private readonly SemaphoreSlim? _ready;
+
+    /// <summary>Makes the event file the first time an event waits there.</summary>
+    private readonly Func<EventSpill>? _spillMade;
+
     private readonly Task? _draining;
+    private EventSpill? _spill;
     private long _sequence;
 
-    /// <summary>How many events were dropped since the last one the queue took, the last of them at <see cref="_lastDropped"/>.</summary>
-    private int _dropped;
-
-    /// <summary>The sequence and time of the last event dropped, which the notice of the gap is stamped with.</summary>
-    private (long Sequence, DateTimeOffset At) _lastDropped;
+    /// <summary>Whether the output has been closed: the sink is given what waits, and then the last of it.</summary>
+    private bool _closed;
 
     /// <summary>Whether the sink has been told the last of what this output will ever tell it.</summary>
     private bool _drained;
 
     private bool _sinkDetached;
     private Exception? _sinkFault;
-    private bool _abandoned;
 
     /// <summary>
     /// The output of an operation whose sink is the console: lines as they have always been written, called under the
@@ -69,19 +73,21 @@ public sealed class EventHarnessOutput : IHarnessOutput, IDisposable
         _parent = parent;
         _verbose = console.Verbose;
         _clock = TimeProvider.System;
-        _drainLimit = DrainLimit;
     }
 
     /// <summary>
-    /// The output of an operation whose sink is not the console: a front end of its own, fed from a bounded queue by a
-    /// task that never holds a writer.
+    /// The output of an operation whose sink is not the console: a front end of its own, given every event by a task that
+    /// never holds a writer.
     /// </summary>
     /// <param name="sink">The front end's sink, called serially in sequence order.</param>
     /// <param name="operation">The operation every event is stamped with.</param>
     /// <param name="parent">The operation this one belongs to, where there is one.</param>
     /// <param name="clock">When events happen.</param>
-    /// <param name="drainLimit">How long disposing waits for the sink to be given what is queued, at most; <see cref="DrainLimit"/> where not given.</param>
-    public EventHarnessOutput(IRunEvents sink, OperationId operation, OperationId? parent = null, TimeProvider? clock = null, TimeSpan? drainLimit = null)
+    /// <param name="spill">
+    /// Where events the sink lags behind wait past <see cref="HeldInMemory"/>: the operation's event file, made the first
+    /// time one waits there; one in this machine's temporary directory, removed with the output, where none is given.
+    /// </param>
+    public EventHarnessOutput(IRunEvents sink, OperationId operation, OperationId? parent = null, TimeProvider? clock = null, Func<EventSpill>? spill = null)
     {
         ArgumentNullException.ThrowIfNull(sink);
 
@@ -90,9 +96,10 @@ public sealed class EventHarnessOutput : IHarnessOutput, IDisposable
         _operation = operation;
         _parent = parent;
         _clock = clock ?? TimeProvider.System;
-        _drainLimit = drainLimit ?? DrainLimit;
-        _queued = Channel.CreateBounded<Queued>(new BoundedChannelOptions(QueueLimit) { SingleReader = true });
-        _draining = Task.Run(() => DrainAsync(_queued.Reader, sink));
+        _held = new Queue<RunEvent>();
+        _ready = new SemaphoreSlim(0);
+        _spillMade = spill ?? (() => EventSpill.Temporary(operation));
+        _draining = Task.Run(() => DrainAsync(sink));
     }
 
     /// <summary>The operation every event this output publishes is stamped with; <see langword="null"/> where it was given none.</summary>
@@ -124,16 +131,16 @@ public sealed class EventHarnessOutput : IHarnessOutput, IDisposable
     }
 
     /// <summary>
-    /// Whether disposing gave up on the sink: it had not been given everything queued within the drain limit, and was
-    /// called no more - what it had not been given by then never reaches it.
+    /// How many events wait for the sink set down for the operation's event file (<see cref="EventSpill"/>) rather than
+    /// held in memory, at this moment: none while the sink keeps up.
     /// </summary>
-    public bool Abandoned
+    public long WaitingOnDisk
     {
         get
         {
             lock (_gate)
             {
-                return _abandoned;
+                return _spill?.Waiting ?? 0;
             }
         }
     }
@@ -167,18 +174,19 @@ public sealed class EventHarnessOutput : IHarnessOutput, IDisposable
                 return;
             }
 
-            // A sink that is not the console is never held by a writer: its events wait in a bounded queue, taken in
-            // the same order they were stamped, and where that is full they are dropped and counted - the gap carried
-            // by the next one the queue takes, to be told just before it, where it was.
-            if (_queued!.Writer.TryWrite(new Queued(stamped, Gap())))
+            // A sink that is not the console is never held by a writer: its events wait, in the order they were stamped,
+            // in memory while few wait, and past that on disk - every one after the first that waits there going there
+            // too, so the order holds - and the task that feeds the sink takes them as it can.
+            if ((_spill?.Waiting ?? 0) == 0 && _held!.Count < HeldInMemory)
             {
-                _dropped = 0;
+                _held.Enqueue(stamped);
             }
             else
             {
-                _dropped++;
-                _lastDropped = (stamped.Sequence, stamped.At);
+                (_spill ??= _spillMade!()).Add(stamped);
             }
+
+            _ready!.Release();
         }
     }
 
@@ -214,79 +222,83 @@ public sealed class EventHarnessOutput : IHarnessOutput, IDisposable
 
     /// <inheritdoc/>
     /// <remarks>
-    /// Closes the queue and waits, for the drain limit at most, for the sink to be given what is in it and what was
-    /// dropped meanwhile; a sink still behind then is abandoned (<see cref="Abandoned"/>) and called no more.
+    /// Closes the output and waits for the sink to be given every event that waits, from memory and from the event file,
+    /// however long that takes - said every five minutes to whoever the operation tells its waits to - and then removes
+    /// the event file.
     /// </remarks>
     public void Dispose()
     {
-        if (_queued is null || _draining is null)
+        if (_draining is null)
         {
             return;
         }
 
         Complete();
 
-        if (!_draining.Wait(_drainLimit))
-        {
-            lock (_gate)
+        var draining = _draining;
+        _ = Waits.ForAsync(
+            async _ =>
             {
-                _abandoned = true;
-                _sinkDetached = true;
-            }
+                await draining.ConfigureAwait(false);
+                return true;
+            },
+            new WaitWatch("the front end to be given the operation's last events", Waits.Told, null, _clock),
+            CancellationToken.None).GetAwaiter().GetResult();
+
+        lock (_gate)
+        {
+            _spill?.Dispose();
         }
     }
 
     /// <summary>
-    /// Closes the queue: what is in it is still given to the sink, and what is published from here until the sink has
-    /// been given it is dropped and counted, and told after it.
+    /// Closes the output: what waits is still given to the sink, and what is published from here until the sink has been
+    /// given it is given after it; once the sink has been told the last of it, a publish is refused.
     /// </summary>
-    internal void Complete() => _queued?.Writer.TryComplete();
+    internal void Complete()
+    {
+        lock (_gate)
+        {
+            if (_ready is null || _closed)
+            {
+                return;
+            }
+
+            _closed = true;
+            _ready.Release();
+        }
+    }
 
     private void Text(LineKind kind, string command, string message) => Publish(new TextLine(kind, command, message));
 
-    /// <summary>
-    /// The gap the events dropped since the last one the queue took leave, where any were: stamped with this operation and
-    /// with the sequence and time of the last of them, so it falls in sequence order where they did. Asked under the lock.
-    /// </summary>
-    private EventsDropped? Gap()
-        => _dropped == 0
-            ? null
-            : new EventsDropped(_dropped)
-            {
-                Operation = _operation,
-                Parent = _parent,
-                Sequence = _lastDropped.Sequence,
-                At = _lastDropped.At,
-            };
-
-    /// <summary>Feeds the sink from the queue, in order, for as long as the operation runs, and then what was dropped last.</summary>
-    private async Task DrainAsync(ChannelReader<Queued> reader, IRunEvents sink)
+    /// <summary>Feeds the sink every event in order, from memory and then from the event file, until the output is closed and nothing waits.</summary>
+    private async Task DrainAsync(IRunEvents sink)
     {
-        await foreach (var (@event, gap) in reader.ReadAllAsync().ConfigureAwait(false))
+        while (true)
         {
-            if (gap is not null)
+            await _ready!.WaitAsync().ConfigureAwait(false);
+
+            RunEvent? next;
+
+            lock (_gate)
             {
-                // Told where the gap was: after what the sink was given before it, before what it is given next.
-                EmitTo(sink, gap);
+                // Memory first: every event there is older than any that waits on disk.
+                next = _held!.Count > 0 ? _held.Dequeue() : _spill is { Waiting: > 0 } spill ? spill.Take() : null;
+
+                if (next is null)
+                {
+                    // The close's own count, with nothing left: nothing is given after this.
+                    if (_closed)
+                    {
+                        _drained = true;
+                        return;
+                    }
+
+                    continue;
+                }
             }
 
-            EmitTo(sink, @event);
-        }
-
-        EventsDropped? last;
-
-        lock (_gate)
-        {
-            // What no event the queue took carries - dropped at its end, or once it was closed - is told last, and
-            // nothing is published to the sink after it.
-            last = Gap();
-            _dropped = 0;
-            _drained = true;
-        }
-
-        if (last is not null)
-        {
-            EmitTo(sink, last);
+            EmitTo(sink, next);
         }
     }
 
@@ -316,9 +328,6 @@ public sealed class EventHarnessOutput : IHarnessOutput, IDisposable
             }
         }
     }
-
-    /// <summary>An event waiting for the sink, with the gap that comes before it where events were dropped there.</summary>
-    private readonly record struct Queued(RunEvent Event, EventsDropped? Gap);
 
     /// <summary>The scope of a sink the document redirection says nothing to.</summary>
     private static readonly IDisposable NoScope = new EmptyScope();

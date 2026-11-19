@@ -9,6 +9,7 @@ using DssHarness.Core.Output;
 using DssHarness.Core.Platform;
 using DssHarness.Core.Processes;
 using DssHarness.Core.Results;
+using DssHarness.Core.Waiting;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace DssHarness.Core.Application;
@@ -134,8 +135,10 @@ public sealed class CommandSession : IAsyncDisposable
                 {
                     var scope = new CommandScope(_services, resolved.Directory!, Run);
 
-                    // A commit a line names is shown as git abbreviates it in the repository the operation works in.
+                    // A commit a line names is shown as git abbreviates it in the repository the operation works in, and a
+                    // wait deep below the body - a machine-wide file's update, a child's end - is said as the body's lines are.
                     using var commits = CommitIds.Use(Commits(resolved.Directory!));
+                    using var telling = Waits.TellingTo(told => _output.Info(_options.Command, told.Line()));
                     var outcome = await body(scope, cancellationToken).ConfigureAwait(false);
 
                     if (await EndedDefectiveAsync().ConfigureAwait(false))

@@ -33,6 +33,37 @@ public static class Waits
     /// <summary>What a wait on a holder says, after the holder's name, as it finds the holder ended.</summary>
     private const string HolderEnded = "the holder has ended";
 
+    /// <summary>The running operation's teller, where its session gave one (<see cref="TellingTo"/>).</summary>
+    private static readonly AsyncLocal<Action<WaitTold>?> Teller = new();
+
+    /// <summary>
+    /// Who a wait that no caller could hand a teller of its own is told to - one deep below every caller that could tell,
+    /// a machine-wide file's update, a child's end, a front end's last events: the running operation's teller, where its
+    /// session gave one (<see cref="TellingTo"/>), so the wait is said where the operation says everything else; and
+    /// nobody outside every operation. A wait whose caller can tell gives its own (<see cref="WaitWatch.Tell"/>).
+    /// </summary>
+    public static Action<WaitTold> Told => Teller.Value ?? Nobody;
+
+    /// <summary>
+    /// Makes <paramref name="tell"/> the running operation's teller (<see cref="Told"/>) until the answer is disposed,
+    /// which puts back the one before: what an operation's session gives, as the operation begins.
+    /// </summary>
+    /// <param name="tell">Told where each such wait stands, in the one form <see cref="WaitTold.Line"/> gives.</param>
+    public static IDisposable TellingTo(Action<WaitTold> tell)
+    {
+        ArgumentNullException.ThrowIfNull(tell);
+
+        var before = Teller.Value;
+        Teller.Value = tell;
+
+        return new TellerRestored(before);
+    }
+
+    /// <summary>Tells nobody: a wait outside every operation, which has no one to say it to.</summary>
+    private static void Nobody(WaitTold told)
+    {
+    }
+
     /// <summary>
     /// <paramref name="wanted"/>, or what is <paramref name="left"/> of the time allowed where that is less - never below
     /// nothing, since time passes between the look that found some left and the wait.
@@ -224,6 +255,20 @@ public static class Waits
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             return new WaitEnd<bool>(WaitEndKind.Cancelled, false, clock.GetElapsedTime(started));
+        }
+    }
+
+    /// <summary>Puts back the teller kept before, once.</summary>
+    private sealed class TellerRestored(Action<WaitTold>? before) : IDisposable
+    {
+        private int _done;
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _done, 1) == 0)
+            {
+                Teller.Value = before;
+            }
         }
     }
 }
