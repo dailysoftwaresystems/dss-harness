@@ -1,6 +1,7 @@
 using System.Buffers;
 using System.Text;
 using System.Text.RegularExpressions;
+using DssHarness.Core.Text;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
@@ -26,7 +27,7 @@ namespace DssHarness.Core.Codebase.Languages;
 /// <c>&lt;partial name=</c> an <c>instantiates</c>, as is an <c>Html.Partial("x")</c> and its kin its code calls. The C#
 /// is embedded as every markup embeds code (<see cref="EmbeddedCode"/>).
 /// </summary>
-public sealed partial class RazorExtractor : ICodeGraphExtractor
+public sealed class RazorExtractor : ICodeGraphExtractor
 {
     /// <summary>The names of the files whose <c>@using</c> reaches a whole directory's subtree.</summary>
     private static readonly HashSet<string> Imports = new(StringComparer.OrdinalIgnoreCase) { "_ViewImports.cshtml", "_Imports.razor" };
@@ -79,7 +80,7 @@ public sealed partial class RazorExtractor : ICodeGraphExtractor
         var scope = razor.Directives.FirstOrDefault(directive => directive.Name == "namespace" && directive.Rest.Length > 0)?.Rest ?? FolderNamespace(input.Path);
 
         // A generic component's class is named as the C# reader names a generic one: by its count of type parameters.
-        var typeParameters = razor.Directives.Where(directive => directive.Name == "typeparam").Select(directive => TypeParameter().Match(directive.Rest)).Where(match => match.Success).ToList();
+        var typeParameters = razor.Directives.Where(directive => directive.Name == "typeparam").Select(directive => TypeParameter.Match(directive.Rest)).Where(match => match.Success).ToList();
         var qualified = ExtractText.Qualify(scope, typeParameters.Count > 0 ? $"{className}`{typeParameters.Count}" : className);
 
         // The head of the extract, which the markup's references and its code's are made from: a component's type, a view's section.
@@ -343,7 +344,7 @@ public sealed partial class RazorExtractor : ICodeGraphExtractor
 
             if (directive.Name switch
             {
-                "inject" when Injected().Match(written) is { Success: true } injected => $"{injected.Groups["type"].Value} {injected.Groups["name"].Value} {{ get; }}",
+                "inject" when Injected.Match(written) is { Success: true } injected => $"{injected.Groups["type"].Value} {injected.Groups["name"].Value} {{ get; }}",
                 "model" when written.Length > 0 => $"{written} Model {{ get; }}",
                 "inherits" or "implements" when written.Length > 0 => $"}} partial class {named} : {written} {{",
                 "attribute" when written.Length > 0 => $"}} {written} partial class {named} {{",
@@ -1288,10 +1289,8 @@ public sealed partial class RazorExtractor : ICodeGraphExtractor
     }
 
     /// <summary>An <c>@inject</c>'s rest: a type and the name it is given.</summary>
-    [GeneratedRegex(@"^(?<type>.+?)\s+(?<name>[A-Za-z_][A-Za-z0-9_]*)$", RegexOptions.CultureInvariant)]
-    private static partial Regex Injected();
+    private static readonly Regex Injected = LinearRegex.Compile(@"^(?<type>.+?)\s+(?<name>[A-Za-z_][A-Za-z0-9_]*)$");
 
     /// <summary>A <c>@typeparam</c>'s rest: the parameter's name and the constraints its <c>where</c> gives.</summary>
-    [GeneratedRegex(@"^(?<name>[A-Za-z_][A-Za-z0-9_]*)(?<where>\s+where\s+.*)?$", RegexOptions.CultureInvariant)]
-    private static partial Regex TypeParameter();
+    private static readonly Regex TypeParameter = LinearRegex.Compile(@"^(?<name>[A-Za-z_][A-Za-z0-9_]*)(?<where>\s+where\s+.*)?$");
 }

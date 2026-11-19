@@ -1118,6 +1118,24 @@ public sealed class JavaScriptExtractorTests : CodeGraphExtractorContractTests<J
     }
 
     /// <summary>
+    /// Every literal that holds a character is kept, however short - a one-letter one too, an empty one none - and each
+    /// value once, however many times the file writes it: ten thousand of one value are one literal of ten thousand places,
+    /// each its own line. A floor of three characters dropped the one letter; a literal kept a place at a time held the
+    /// value ten thousand times.
+    /// </summary>
+    [Fact]
+    public void EveryNonEmptyLiteral_IsKeptOnce()
+    {
+        var text = "const one = 'a';\nconst none = '';\n" + string.Concat(Enumerable.Repeat("use('same');\n", 10_000));
+        var extract = Read("src/many.js", text);
+
+        Assert.Equal(["a", "same"], (extract.Literals ?? []).Select(literal => literal.Value));
+        Assert.Equal([1], extract.Literals![0].Places.Select(place => place.Line));
+        Assert.Equal(Enumerable.Range(3, 10_000), extract.Literals[1].Places.Select(place => place.Line));
+        Assert.Null(extract.Problem("javascript", CodeFileText.Lines(text).Count));
+    }
+
+    /// <summary>
     /// A call's receiver of any count of names is read by them all; and an import whose string its line leaves open
     /// names nothing.
     /// </summary>

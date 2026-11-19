@@ -49,7 +49,6 @@ public sealed class YamlExtractor : ICodeGraphExtractor
             "a merge key at a file's top, which no node holds: what it merges is reached by its keys' names alone",
             "a key that is no scalar - a list or a mapping written as a key: no node of it",
             "what follows the point a file stops reading as YAML - a template's {{ }} among it: what came before is read, the line it stops at marked dynamic",
-            "a key's value past the cut of a summary",
             "a uses: that names an action or a workflow of a marketplace or of another repository by its owner: no import of it",
         ]);
 

@@ -1098,8 +1098,7 @@ public sealed class CSharpExtractorTests : CodeGraphExtractorContractTests<CShar
 
     /// <summary>
     /// The file's string literals are kept by their value and their line - a constant's, a plain string's, an interpolated
-    /// string's constant parts, its holes read as code - and one shorter than three characters, or past the most an
-    /// extract keeps, is held by none.
+    /// string's constant parts, its holes read as code - each that holds a character, however short.
     /// </summary>
     [Fact]
     public void TheFilesStringLiterals_AreKeptByValueAndLine()
@@ -1110,6 +1109,7 @@ public sealed class CSharpExtractorTests : CodeGraphExtractorContractTests<CShar
             [
                 (12, "hello world"),
                 (27, " padding "),
+                (27, "a "),
                 (27, " part"),
             ],
             LiteralRow.Of(extract).Select(literal => (literal.Line, literal.Value)));

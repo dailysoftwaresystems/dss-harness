@@ -2219,7 +2219,7 @@ internal sealed class CssReading
         return cased.ToString();
     }
 
-    /// <summary>The head's signature: its tokens on one line, cut to a signature's length.</summary>
+    /// <summary>The head's signature: its tokens on one line, whole.</summary>
     private string Signature(Head head) => _scan.Signature(head.Start, head.Stop);
 
     /// <summary>The parts of the tokens from <paramref name="from"/> to <paramref name="to"/> its commas part, outside its brackets.</summary>

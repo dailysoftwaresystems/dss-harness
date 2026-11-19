@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using DssHarness.Core.Text;
 using System.Xml;
 
 namespace DssHarness.Core.Codebase.Languages;
@@ -18,7 +19,7 @@ namespace DssHarness.Core.Codebase.Languages;
 /// however deep; a file with a DTD is refused, nothing in it read; where a file stops reading as XML, what was read before
 /// is kept and the line it stops at is marked dynamic, with the reader's reason.
 /// </summary>
-public sealed partial class XmlExtractor : ICodeGraphExtractor
+public sealed class XmlExtractor : ICodeGraphExtractor
 {
     /// <summary>The attributes an element is named by, in the order they are looked for.</summary>
     private static readonly string[] Named = ["name", "key", "id"];
@@ -46,7 +47,6 @@ public sealed partial class XmlExtractor : ICodeGraphExtractor
             "a key that is no .resx's data, .props's property or .config's appSettings or connectionStrings entry - an <add key> of a custom configuration section among them: an element node, which the keys' join does not reach",
             "an element a XAML view names by Name alone, without the x: prefix, and an x:Name of a view with no x:Class: an element node, which no code reaches",
             "an Import Project= of any file but a .props or a .targets: no import",
-            "an element's text past the cut of a summary",
         ]);
 
     /// <inheritdoc/>
@@ -156,12 +156,11 @@ public sealed partial class XmlExtractor : ICodeGraphExtractor
 
         return refusesDtd && lines.Count > 0 && lines[line - 1].Contains("<!DOCTYPE", StringComparison.Ordinal)
             ? "the file declares a DTD, which is never read, and nothing after it is read"
-            : $"the file stops reading as XML here ({Place().Replace(exception.Message, string.Empty).Trim().TrimEnd('.')}), and nothing after it is read";
+            : $"the file stops reading as XML here ({Place.Replace(exception.Message, string.Empty).Trim().TrimEnd('.')}), and nothing after it is read";
     }
 
     /// <summary>The place a reader of XML writes at the end of its message.</summary>
-    [GeneratedRegex(@"\s*Line \d+, position \d+\.?\s*$", RegexOptions.CultureInvariant)]
-    private static partial Regex Place();
+    private static readonly Regex Place = LinearRegex.Compile(@"\s*Line \d+, position \d+\.?\s*$");
 
     /// <summary>
     /// The element the reader stands on, opened: its node where it is one - the root's section or a XAML view's type, a key,

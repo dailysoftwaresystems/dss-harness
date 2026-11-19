@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using DssHarness.Core.Codebase;
+using DssHarness.Core.Codebase.Languages;
 
 namespace DssHarness.Tests;
 
@@ -2970,6 +2971,186 @@ public sealed class CodeGraphLinkerTests
             Assert.All(found, edge => Assert.Equal(CodeConfidences.Candidates, edge.Confidence));
         }
     }
+
+    /// <summary>
+    /// A chain of sixty names after its first and a call on its end, as the C# reader writes it - each name's use a link to
+    /// the use of the name before it - resolves every link exact, though every type holds a value and a method of the same
+    /// names: each use to the value of the type the name before it is, the call to the method of the last type. A chain cut
+    /// short past MostReceiverNames names was a value of no type past them, each name after found by its name alone among
+    /// the sixty-one that declare it.
+    /// </summary>
+    [Fact]
+    public void ASixtyCallChain_ResolvesEveryLink()
+    {
+        var types = string.Concat(Enumerable.Range(0, 61).Select(at => $"class T{at} {{ public T{at + 1} next; public void Run() {{ }} }}\n"));
+        var text = $"namespace app;\n{types}class Use {{ T0 head; void Go() {{ head{string.Concat(Enumerable.Repeat(".next", 60))}.Run(); }} }}\n";
+        var linked = Link(new CodeGraphFile("src/Chain.cs", "csharp", new CSharpExtractor().Extract(new CodeFileInput("src/Chain.cs", text))));
+
+        static IEnumerable<(string To, string Kind, string Confidence)> Ordered(IEnumerable<(string To, string Kind, string Confidence)> edges)
+            => edges.OrderBy(edge => edge.To, StringComparer.Ordinal).ThenBy(edge => edge.Kind, StringComparer.Ordinal);
+
+        Assert.Equal(
+            Ordered(
+            [
+                .. Enumerable.Range(0, 60).Select(at => ($"csharp:app.T{at}.next", CodeEdgeKinds.Uses, CodeConfidences.Exact)),
+                ("csharp:app.T60.Run()", CodeEdgeKinds.Calls, CodeConfidences.Exact),
+                ("csharp:app.Use.head", CodeEdgeKinds.Uses, CodeConfidences.Exact),
+            ]),
+            Ordered(linked.Edges.Where(edge => edge is { From: "csharp:app.Use.Go()", Kind: CodeEdgeKinds.Uses or CodeEdgeKinds.Calls }).Select(edge => (edge.To, edge.Kind, edge.Confidence))));
+    }
+
+    /// <summary>
+    /// A chain is stepped a link at a time, each once: the use of each name and the call on its end read the links before
+    /// them once, a second statement that writes the same chain from the same declaration steps none of it again, and
+    /// another declaration that writes it steps it for itself - three links twice, counted. A chain read again from its
+    /// first name for each reference made on it, or kept for each reference rather than for what it says, steps more.
+    /// </summary>
+    [Fact]
+    public void ASharedPrefix_IsResolvedOnce()
+    {
+        var linked = Link(File("use.t",
+            [
+                Type("app.H"), Value("app.H.a", "A"), Type("app.A"), Value("app.A.b", "B"), Type("app.B"), Value("app.B.c", "C"),
+                Type("app.C"), Member("app.C.Run", 0), Member("app.C.Stop", 0),
+                Type("app.Use"), Value("app.Use.head", "H"), Member("app.Use.Go", 0), Member("app.Use.Other", 0),
+            ],
+            [.. ChainStatement("app.Use.Go", 1, 0, "Run"), .. ChainStatement("app.Use.Go", 2, 4, "Stop"), .. ChainStatement("app.Use.Other", 3, 8, "Run")],
+            [Open("app")]));
+
+        Assert.Equal(6, linked.ChainLinks);
+        Assert.Equal(
+            [
+                ("t:app.Use.Go", "t:app.H.a", CodeEdgeKinds.Uses, 1), ("t:app.Use.Go", "t:app.A.b", CodeEdgeKinds.Uses, 1), ("t:app.Use.Go", "t:app.B.c", CodeEdgeKinds.Uses, 1),
+                ("t:app.Use.Go", "t:app.C.Run", CodeEdgeKinds.Calls, 1),
+                ("t:app.Use.Go", "t:app.H.a", CodeEdgeKinds.Uses, 2), ("t:app.Use.Go", "t:app.A.b", CodeEdgeKinds.Uses, 2), ("t:app.Use.Go", "t:app.B.c", CodeEdgeKinds.Uses, 2),
+                ("t:app.Use.Go", "t:app.C.Stop", CodeEdgeKinds.Calls, 2),
+                ("t:app.Use.Other", "t:app.H.a", CodeEdgeKinds.Uses, 3), ("t:app.Use.Other", "t:app.A.b", CodeEdgeKinds.Uses, 3), ("t:app.Use.Other", "t:app.B.c", CodeEdgeKinds.Uses, 3),
+                ("t:app.Use.Other", "t:app.C.Run", CodeEdgeKinds.Calls, 3),
+            ],
+            linked.Edges.Where(edge => edge.Kind is CodeEdgeKinds.Uses or CodeEdgeKinds.Calls && edge.Confidence == CodeConfidences.Exact).Select(edge => (edge.From, edge.To, edge.Kind, edge.Line)));
+        Assert.Empty(linked.External);
+    }
+
+    /// <summary>
+    /// A link made again finds again each reference made through a chain's link that a change moved - the use of each name
+    /// after it and the call on its end, which read it through the links before them - and none before it: the value whose
+    /// type changed is the second name's, so the use of the first name keeps what it found. A reference that kept only the
+    /// keys it read itself would keep the call on the type it named before.
+    /// </summary>
+    [Fact]
+    public void ALinkMadeAgain_FindsAgainWhatReadAMovedLinkOfAChain()
+    {
+        static CodeGraphFile Types(string typeOfB) => File("types.t",
+            [
+                Type("app.A"), Value("app.A.b", typeOfB), Type("app.B"), Value("app.B.c", "C"), Type("app.D"), Value("app.D.c", "E"),
+                Type("app.C"), Member("app.C.Run", 0), Type("app.E"), Member("app.E.Run", 0),
+            ],
+            scopes: [Open("app")]);
+
+        var use = File("use.t",
+            [Type("app.H"), Value("app.H.a", "A"), Type("app.Use"), Value("app.Use.head", "H"), Member("app.Use.Go", 0)],
+            [.. ChainStatement("app.Use.Go", 1, 0, "Run")],
+            [Open("app")]);
+
+        var again = Again([use, Types("B")], [use, Types("D")]);
+
+        Assert.Contains(Edge("t:app.Use.Go", "t:app.D.c", CodeEdgeKinds.Uses, CodeConfidences.Exact), again.Edges);
+        Assert.Contains(Edge("t:app.Use.Go", "t:app.E.Run", CodeEdgeKinds.Calls, CodeConfidences.Exact), again.Edges);
+        Assert.Equal(3, again.References);
+    }
+
+    /// <summary>
+    /// A base named through the bases of the type that names it, forty levels up: each type inherits the type nested in
+    /// the one the type before it inherits - T2 inherits T1.N, which T1's base T0 declares - so each level's base is known
+    /// only once the level before it is, and the forty-first type's base is found in the forty-first round of the bases.
+    /// Two passes of the bases found the second level's and none past it.
+    /// </summary>
+    [Fact]
+    public void ABaseFortyLevelsUp_IsResolved()
+    {
+        static string Nested(int depth) => "app.T0" + string.Concat(Enumerable.Repeat(".N", depth));
+
+        var linked = Link(File("deep.t",
+            [.. Enumerable.Range(0, 41).Select(depth => Type(Nested(depth))), .. Enumerable.Range(1, 41).Select(level => Type($"app.T{level}"))],
+            [
+                Ref("app.T1", CodeEdgeKinds.Inherits, "T0"),
+                .. Enumerable.Range(2, 40).Select(level => Ref($"app.T{level}", CodeEdgeKinds.Inherits, "N") with { Line = level, Qualifier = Named($"T{level - 1}") }),
+            ],
+            [Open("app")]));
+
+        Assert.Equal(
+            [.. Enumerable.Range(1, 41).Select(level => ($"t:app.T{level}", $"t:{Nested(level - 1)}", CodeConfidences.Exact)).OrderBy(edge => edge.Item1, StringComparer.Ordinal)],
+            linked.Edges.Where(edge => edge.Kind == CodeEdgeKinds.Inherits).Select(edge => (edge.From, edge.To, edge.Confidence)).OrderBy(edge => edge.From, StringComparer.Ordinal));
+        Assert.Empty(linked.External);
+    }
+
+    /// <summary>
+    /// Rounds of the bases that come round end at the revisit: a nested type's base is found through the bases of the type
+    /// it is nested in, and that type's base through the nested type's, so each round undoes what the one before found,
+    /// until a round finds the bases a round before it found, which no further round leaves - and the link ends there, as
+    /// that round found them. Two types that inherit each other end alike, a call through them to a name neither holds
+    /// counted external. A loop of rounds that ended only where a round found what the one before did would not end.
+    /// </summary>
+    [Fact]
+    public void ACyclicHierarchy_EndsAtTheRevisit()
+    {
+        var linked = Link(File("ring.t",
+            [
+                Type("app.N"), Type("app.N.K"), Type("app.N.K.N"), Type("app.Outer"), Type("app.Outer.C"),
+                Type("app.A"), Member("app.A.Go", 0) with { Parent = "t:app.A" }, Type("app.B"),
+            ],
+            [
+                Ref("app.Outer.C", CodeEdgeKinds.Inherits, "N"),
+                Ref("app.Outer", CodeEdgeKinds.Inherits, "K") with { Line = 2, Qualifier = Named("app.Outer.C") },
+                Ref("app.A", CodeEdgeKinds.Inherits, "B") with { Line = 3 },
+                Ref("app.B", CodeEdgeKinds.Inherits, "A") with { Line = 4 },
+                Call("app.A.Go", "Missing", 0, new ExtractQualifier(CodeQualifierKinds.This)) with { Line = 5 },
+            ],
+            [Open("app")]));
+
+        // The rounds: C : N, then Outer : N.K through it, then C : N.K.N through Outer's, then Outer : none through C's,
+        // then C : N again - the first round's bases, where the link ends.
+        Assert.Equal(
+            [("t:app.A", "t:app.B"), ("t:app.B", "t:app.A"), ("t:app.Outer.C", "t:app.N")],
+            linked.Edges.Where(edge => edge.Kind == CodeEdgeKinds.Inherits).Select(edge => (edge.From, edge.To)).OrderBy(edge => edge.From, StringComparer.Ordinal));
+        Assert.Equal(1, linked.External["t:app.Outer"]);
+        Assert.Equal(1, linked.External["t:app.A.Go"]);
+    }
+
+    /// <summary>
+    /// Exports twenty thousand files deep are followed on the walk's own stack, in a child given a small stack: an import
+    /// of the first file sees what the last one declares, through its prefix. A walk that recursed once an export would
+    /// overflow it, and end the child.
+    /// </summary>
+    [Fact]
+    public async Task ExportsTwentyThousandFilesDeep_AreFollowedOnTheWalksOwnStack()
+        => Assert.Equal(new ChildRunAnswer(0, $"t:Run {CodeConfidences.Exact}", ""), await ChildRun.MethodAsync(typeof(CodeGraphLinkerTests), nameof(TwentyThousandExports), TestContext.Current.CancellationToken));
+
+    /// <summary>The child of <see cref="ExportsTwentyThousandFilesDeep_AreFollowedOnTheWalksOwnStack"/>: what the call through the first file's prefix found, and how sure.</summary>
+    internal static string TwentyThousandExports() => SmallStack.Run(() =>
+    {
+        var linked = CodeGraphLinker.Link(
+        [
+            .. Enumerable.Range(0, 20_000).Select(at => File($"f{at}.t", [], imports: [Import(CodeImportForms.Relative, $"f{at + 1}.t") with { Export = true }])),
+            File("f20000.t", [Member("Run", 0)]),
+            File("use.t", [Member("Go", 0)], [Call("Go", "Run", 0, Prefix("p"))], imports: [Import(CodeImportForms.Relative, "f0.t") with { Prefix = "p" }]),
+        ]);
+
+        return string.Join(' ', linked.Edges.Where(edge => edge is { From: "t:Go", Kind: CodeEdgeKinds.Calls }).Select(edge => $"{edge.To} {edge.Confidence}"));
+    });
+
+    /// <summary>
+    /// The references a reader writes for <c>head.a.b.c.call()</c> in <paramref name="from"/> on <paramref name="line"/>,
+    /// its first at <paramref name="first"/> among its file's: a use of each name after the first - the first qualified by
+    /// <c>head</c>, each next a link to the use before it - and the call, a link to the last.
+    /// </summary>
+    private static IEnumerable<ExtractReference> ChainStatement(string from, int line, int first, string call) =>
+    [
+        new ExtractReference($"t:{from}", CodeEdgeKinds.Uses, "a", line) { Qualifier = new ExtractQualifier(CodeQualifierKinds.Value, "head") },
+        new ExtractReference($"t:{from}", CodeEdgeKinds.Uses, "b", line) { Qualifier = new ExtractQualifier(CodeQualifierKinds.Value) { Link = first } },
+        new ExtractReference($"t:{from}", CodeEdgeKinds.Uses, "c", line) { Qualifier = new ExtractQualifier(CodeQualifierKinds.Value) { Link = first + 1 } },
+        Call(from, call, 0, new ExtractQualifier(CodeQualifierKinds.Value) { Link = first + 2 }) with { Line = line },
+    ];
 
     private static CodeGraphLinked Link(params CodeGraphFile[] files) => CodeGraphLinker.Link(files);
 

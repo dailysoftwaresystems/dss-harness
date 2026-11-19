@@ -81,7 +81,8 @@ public sealed class MsbuildExtractorTests : CodeGraphExtractorContractTests<Msbu
 
     /// <summary>
     /// A project is named by its file name, so a solution and the project it is named after are two; its header is its
-    /// root element's line, and its summary the first sentence of its <c>Description</c>. A reference by a wildcard names
+    /// root element's line, and its summary the first sentence of its <c>Description</c>, whose key's summary is its whole
+    /// value. A reference by a wildcard names
     /// no project, each project of a list is named, and each <c>$(Name)</c> the file writes - into an attribute as into
     /// an element - is a use of the key of that name.
     /// </summary>
@@ -94,7 +95,7 @@ public sealed class MsbuildExtractorTests : CodeGraphExtractorContractTests<Msbu
 
         var project = shapes.Nodes[0];
         Assert.Equal(("Shapes.csproj", "src/Shapes/Shapes.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\">", "Shapes on a plane."), (project.Name, project.Qualified, project.Signature, project.Summary));
-        Assert.Equal([("msbuild:src/Shapes/Shapes.csproj#Description", "Shapes on a plane.")], shapes.Nodes.Skip(1).Select(node => (node.Id, node.Summary)));
+        Assert.Equal([("msbuild:src/Shapes/Shapes.csproj#Description", "Shapes on a plane. Drawn and measured.")], shapes.Nodes.Skip(1).Select(node => (node.Id, node.Summary)));
         Assert.Equal(
             [
                 ("Geometry.csproj", CodeEdgeKinds.ProjectReference, 8),

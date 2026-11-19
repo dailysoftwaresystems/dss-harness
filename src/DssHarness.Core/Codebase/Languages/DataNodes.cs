@@ -7,8 +7,8 @@ namespace DssHarness.Core.Codebase.Languages;
 /// <see cref="CodeSubKinds.Element"/>, and what the file repeats by reference - a YAML alias, a merge key - a reference to
 /// the node it repeats, read once where it is written (<see cref="CodeQualifierKinds.Own"/>). Every key, container and
 /// element the file holds is a node, however many and however deep, a walk of them followed on a stack of its own; every
-/// text fitted to the model's bounds, a summary and a signature flattened onto one line and cut
-/// (<see cref="ExtractText"/>), so no data file's extract is one the core refuses.
+/// summary and signature on one line and whole (<see cref="ExtractText"/>), so no data file's extract is one the core
+/// refuses.
 /// </summary>
 /// <param name="language">The implementation's name, which prefixes every id.</param>
 /// <param name="file">The file's path, relative to the tree with forward separators.</param>
@@ -92,7 +92,7 @@ internal sealed class DataNodes(string language, string file, int lineCount)
 
     /// <summary>
     /// Sets the summary of the node <paramref name="id"/> made from <paramref name="value"/>, where it has none: the text an
-    /// element holds, first, flattened and cut.
+    /// element holds, first, on one line and whole.
     /// </summary>
     public void Summarize(string id, string value)
     {
@@ -222,8 +222,8 @@ internal sealed class DataNodes(string language, string file, int lineCount)
         return CodeKeyPaths.Of(places.Select(place => (place.Written, place.Bracketed)));
     }
 
-    /// <summary><paramref name="value"/> as a node's summary: on one line, cut; <see langword="null"/> where nothing is left of it.</summary>
-    private static string? SummaryOf(string value) => ExtractText.Flat(value) is { Length: > 0 } flat ? ExtractText.Summary(flat) : null;
+    /// <summary><paramref name="value"/> as a node's summary: on one line, whole (<see cref="ExtractText.Value"/>); <see langword="null"/> where nothing is left of it.</summary>
+    private static string? SummaryOf(string value) => ExtractText.Value(value);
 
     private string Add(ExtractNode node)
     {

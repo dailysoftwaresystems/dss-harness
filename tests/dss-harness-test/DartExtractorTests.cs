@@ -992,6 +992,7 @@ public sealed class DartExtractorTests : CodeGraphExtractorContractTests<DartExt
                 new LiteralRow("It's done", 4, "dart:lib/t.dart.done"),
                 new LiteralRow("\U0001F600 and AB", 5, "dart:lib/t.dart.codes"),
                 new LiteralRow("item ", 6, "dart:lib/t.dart.show"),
+                new LiteralRow(": ", 6, "dart:lib/t.dart.show"),
                 new LiteralRow(" left\nnow", 6, "dart:lib/t.dart.show"),
             ],
             LiteralRow.Of(extract));
@@ -1190,7 +1191,7 @@ public sealed class DartExtractorTests : CodeGraphExtractorContractTests<DartExt
                 ("red", "named Color", 3), ("kOne", "", 6), ("kTwo", "", 7), ("green", "named Color", 8), ("pairs", "", 11),
             ],
             extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Uses).Select(reference => (reference.Name, $"{reference.Qualifier?.Kind} {extract.Written(reference.Qualifier)}".Trim(), reference.Line)));
-        Assert.Equal(["red", "one", "admin role", "admin", "two"], LiteralRow.Of(extract).Select(literal => literal.Value));
+        Assert.Equal(["red", "one", "admin role", "admin", "two", " ", " ", " "], LiteralRow.Of(extract).Select(literal => literal.Value));
     }
 
     /// <summary>A label a <c>break</c> or a <c>continue</c> names is a jump's target and no use, while what the loop reads is one.</summary>

@@ -346,6 +346,43 @@ public sealed class RazorExtractorTests : CodeGraphExtractorContractTests<RazorE
     }
 
     /// <summary>
+    /// A component and its code-behind are one type, though the tree's path gives the component a namespace the partial
+    /// does not write: the markup reaches what the code-behind declares, and the code-behind what the markup's
+    /// <c>@code</c> declares, each exact; and a link made again once the code-behind is added finds the markup's use again,
+    /// the whole link of the two.
+    /// </summary>
+    [Fact]
+    public void AComponentAndItsCodeBehind_ReachEachOthersMembers()
+    {
+        var component = new CodeGraphFile("src/Shop/Pages/Cart.razor", "razor", Read("src/Shop/Pages/Cart.razor", "<p>@Total</p>\n@code {\n    void Built() { }\n}\n"));
+        var codeBehind = new CodeGraphFile("src/Shop/Pages/Cart.razor.cs", "csharp", new CSharpExtractor().Extract(new CodeFileInput(
+            "src/Shop/Pages/Cart.razor.cs",
+            "namespace Shop.Pages;\npublic partial class Cart\n{\n    public int Total { get; set; }\n    void Go() { Built(); }\n}\n")));
+
+        var linked = CodeGraphLinker.Link([component, codeBehind]);
+        var again = CodeGraphLinker.Relink(CodeGraphLinker.Link([component]), [component, codeBehind]);
+
+        Assert.Contains(new CodeEdge("razor:src.Shop.Pages.Cart", "csharp:Shop.Pages.Cart.Total", CodeEdgeKinds.Uses, 1, CodeConfidences.Exact), linked.Edges);
+        Assert.Contains(new CodeEdge("csharp:Shop.Pages.Cart.Go()", "razor:src.Shop.Pages.Cart.Built()", CodeEdgeKinds.Calls, 5, CodeConfidences.Exact), linked.Edges);
+        Assert.Equal(linked.Edges, again.Edges);
+    }
+
+    /// <summary>
+    /// An <c>_Imports.razor</c>'s <c>@namespace</c> is its directory's subtree's as its <c>@using</c>s are: an import of
+    /// the directory form, so a file under it sees what that namespace declares; a component's own <c>@namespace</c> is
+    /// its own and imports nothing.
+    /// </summary>
+    [Fact]
+    public void AnImportsFilesNamespace_IsAnImportOfTheDirectoryForm()
+    {
+        var imports = Read("Pages/_Imports.razor", "@namespace Shop.Pages\n@using Shop.Models\n");
+        var component = Read("Pages/Cart.razor", "@namespace Shop.Pages\n<p>Cart</p>\n");
+
+        Assert.Equal([(CodeImportForms.Directory, "Shop.Pages", 1), (CodeImportForms.Directory, "Shop.Models", 2)], imports.Imports.Select(import => (import.Form, import.Target, import.Line)));
+        Assert.DoesNotContain(component.Imports, import => import.Target == "Shop.Pages");
+    }
+
+    /// <summary>
     /// A name the markup's own C# declares where an attribute stands is the markup's, no member of the component: an
     /// <c>@foreach</c>'s item inside its block and a member past it, a <c>@{ }</c> block's local from where it is declared
     /// and a member before it, a pattern's variable inside its <c>@if</c>, an arrow function's parameter in its own value -

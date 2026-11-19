@@ -47,8 +47,11 @@ namespace DssHarness.Core.Codebase;
 /// </para>
 /// <para>
 /// A chain of names written as links (<see cref="ExtractQualifier.Link"/>) is read a link at a time, each link's chain
-/// answered once for each declaration that reads through it (<see cref="Memo{TKey, TAnswer}"/>), so a chain of any
-/// length costs a step a link, and every reference made on it reads the links before it once.
+/// answered once for each declaration that reads through it (<see cref="Memo{TKey, TAnswer}"/>) and each link stepped once
+/// for each declaration, chain before it and name - so a chain of any length costs a step a link, every reference made on
+/// it reads the links before it once, and a chain several statements write alike is stepped once. What a link read is kept
+/// once (<see cref="KeptReads"/>), the reads of the link before it read through whole, so a chain of n links keeps n links'
+/// reads however many of its references read it.
 /// </para>
 /// <para>
 /// <c>dispatches</c>, <c>declares</c>, <c>tests</c> and <c>partOf</c> are derived after, from the <c>implements</c> edges and
@@ -177,8 +180,44 @@ public static class CodeGraphLinker
     /// <summary>One reference's finding: its edges, whether it named nothing, and every key it read.</summary>
     /// <param name="Edges">The edges it makes.</param>
     /// <param name="External">Whether it named nothing the repository declares, so it makes none and is counted external.</param>
-    /// <param name="Reads">Every key its finding read, as <see cref="LinkKeys"/> numbers it.</param>
-    internal sealed record Finding(IReadOnlyList<CodeEdge> Edges, bool External, int[] Reads);
+    /// <param name="Reads">Every key its finding read.</param>
+    internal sealed record Finding(IReadOnlyList<CodeEdge> Edges, bool External, KeptReads Reads);
+
+    /// <summary>
+    /// What a finding read, kept so that a part many findings read is kept once: the keys read directly, as
+    /// <see cref="LinkKeys"/> numbers them, and the reads read through whole - a chain's link's, its own keys and the reads
+    /// of the link before it - so a chain of n links keeps each link's keys once, however many of its references read it.
+    /// </summary>
+    /// <param name="keys">The keys read directly.</param>
+    /// <param name="through">The reads read through, each whole.</param>
+    internal sealed class KeptReads(int[] keys, KeptReads[] through)
+    {
+        /// <summary>No read at all.</summary>
+        public static KeptReads None { get; } = new([], []);
+
+        /// <summary>The keys read directly.</summary>
+        public int[] Keys { get; } = keys;
+
+        /// <summary>The reads read through, each whole.</summary>
+        public KeptReads[] Through { get; } = through;
+    }
+
+    /// <summary>
+    /// Whether reads read any of <paramref name="keys"/>: each part that findings share looked at once, on the memo's own
+    /// stack however long the chain of parts.
+    /// </summary>
+    /// <param name="keys">The keys looked for.</param>
+    internal sealed class ReadHits(HashSet<int> keys)
+    {
+        private readonly Memo<KeptReads, bool> _hits = new(
+            reads => reads.Through,
+            (reads, through) => through.Any(hit => hit) || reads.Keys.Any(keys.Contains),
+            _ => false,
+            ReferenceEqualityComparer.Instance);
+
+        /// <summary>Whether <paramref name="reads"/> read any of the keys, directly or through any part.</summary>
+        public bool Of(KeptReads reads) => reads.Keys.Any(keys.Contains) || reads.Through.Any(_hits.Of);
+    }
 
     /// <summary>
     /// What one file's references found: its bases' references in each round of the bases (<see cref="Linking.Link"/>),
@@ -301,7 +340,7 @@ public static class CodeGraphLinker
         private readonly Dictionary<string, List<string>> _byFileName = new(StringComparer.Ordinal);
 
         /// <summary>The files each import of each file names, once found, with what finding them read.</summary>
-        private readonly Dictionary<CodeGraphFile, Dictionary<ExtractImport, (IReadOnlyList<string> Value, int[] Reads)>> _imported = new(ReferenceEqualityComparer.Instance);
+        private readonly Dictionary<CodeGraphFile, Dictionary<ExtractImport, (IReadOnlyList<string> Value, KeptReads Reads)>> _imported = new(ReferenceEqualityComparer.Instance);
         private readonly List<Declaration> _declarations = [];
 
         /// <summary>Each file's declarations by id: the one a reference of that file is made from.</summary>
@@ -360,22 +399,22 @@ public static class CodeGraphLinker
         private readonly Dictionary<CodeGraphFile, IReadOnlyList<string>> _tops = new(ReferenceEqualityComparer.Instance);
 
         /// <summary>The containers a written name was found to be, from one file and scope: a name such as a type no file declares is looked for once.</summary>
-        private readonly Dictionary<(string Path, string? Scope, string Written), (IReadOnlyList<Declaration> Value, int[] Reads)> _containersFound = [];
+        private readonly Dictionary<(string Path, string? Scope, string Written), (IReadOnlyList<Declaration> Value, KeptReads Reads)> _containersFound = [];
 
         /// <summary>Every type's and scope's qualified name by the run of a name's characters it ends with, in ordinal order: where an ending is looked for.</summary>
         private readonly Dictionary<string, List<string>> _byTrailing = new(StringComparer.Ordinal);
 
         /// <summary>The containers each written name ends, as the last way a qualifier is found: looked for once.</summary>
-        private readonly Dictionary<string, (IReadOnlyList<Declaration> Value, int[] Reads)> _endings = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, (IReadOnlyList<Declaration> Value, KeptReads Reads)> _endings = new(StringComparer.Ordinal);
 
         /// <summary>What each file imported by path makes visible of each name, its exports followed: found once, every later finding reading it again.</summary>
-        private readonly Dictionary<(string Path, string Name, bool Suffixed), (IReadOnlyList<Declaration> Value, int[] Reads)> _visible = [];
+        private readonly Dictionary<(string Path, string Name, bool Suffixed), (IReadOnlyList<Declaration> Value, KeptReads Reads)> _visible = [];
 
         /// <summary>Every member declared to extend a type, by its name: what a call a type does not hold may be.</summary>
         private readonly Dictionary<string, List<Declaration>> _extensions = new(StringComparer.Ordinal);
 
         /// <summary>The types each extension extends, by id, as its own file names the type: found once.</summary>
-        private readonly Dictionary<Declaration, (IReadOnlyList<string> Value, int[] Reads)> _extended = new(ReferenceEqualityComparer.Instance);
+        private readonly Dictionary<Declaration, (IReadOnlyList<string> Value, KeptReads Reads)> _extended = new(ReferenceEqualityComparer.Instance);
 
         /// <summary>What each file's references found, by the file.</summary>
         private readonly Dictionary<CodeGraphFile, FileFound> _found = new(ReferenceEqualityComparer.Instance);
@@ -392,13 +431,16 @@ public static class CodeGraphLinker
         /// </summary>
         private Dictionary<string, List<string[]>> _bases = new(StringComparer.Ordinal);
 
-        /// <summary>Every key the finding under way has read; null outside one.</summary>
-        private HashSet<int>? _reads;
+        /// <summary>What the finding under way has read; null outside one.</summary>
+        private Reading? _reads;
 
         /// <summary>What each chain a link ends comes to, from each declaration that reads through it (<see cref="ChainTo"/>).</summary>
         private Memo<ChainKey, ChainAnswer> _chains;
 
-        /// <summary>How many links of chains were read, each once for each declaration that reads through it.</summary>
+        /// <summary>Each link of a chain stepped, by its declaration, the chain before it and its names (<see cref="NewChains"/>).</summary>
+        private readonly Dictionary<ChainLink, ChainAnswer> _chainSteps = new(ChainLink.Comparer);
+
+        /// <summary>How many links of chains were stepped (<see cref="CodeGraphLinked.ChainLinks"/>).</summary>
         private int _chainLinks;
 
         /// <summary>The parts each type's files join to it though their qualified names differ (<see cref="CodeBehinds"/>), by the type's id: each of the other side, by id.</summary>
@@ -665,9 +707,9 @@ public static class CodeGraphLinker
 
             // What moved between the bases the round before was given and those this one is, in this link; and between those
             // this round was given in the link this is made from and now, where that link ran this round.
-            HashSet<int> moved = round == 0 ? [] : [.. Moved(round == 1 ? none : rounds[round - 2], given)];
-            HashSet<int>? since = _previous is { } previous && round < previous.Rounds.Count
-                ? [.. changed, .. Moved(round == 0 ? none : previous.Rounds[round - 1], given)]
+            var moved = new ReadHits(round == 0 ? [] : [.. Moved(round == 1 ? none : rounds[round - 2], given)]);
+            var since = _previous is { } previous && round < previous.Rounds.Count
+                ? new ReadHits([.. changed, .. Moved(round == 0 ? none : previous.Rounds[round - 1], given)])
                 : null;
 
             _bases = given;
@@ -691,9 +733,9 @@ public static class CodeGraphLinker
                     }
 
                     var from = owners[reference.From];
-                    var kept = since is not null && found.Round(round, at) is { } before && !before.Reads.Any(since.Contains) ? before : null;
+                    var kept = since is not null && found.Round(round, at) is { } before && !since.Of(before.Reads) ? before : null;
 
-                    if (kept is null && round > 0 && found.Round(round - 1, at) is { } last && !last.Reads.Any(moved.Contains))
+                    if (kept is null && round > 0 && found.Round(round - 1, at) is { } last && !moved.Of(last.Reads))
                     {
                         kept = last;
                     }
@@ -740,6 +782,8 @@ public static class CodeGraphLinker
         /// </summary>
         private void Others(List<CodeGraphFile> files, HashSet<int> changed)
         {
+            var hits = new ReadHits(changed);
+
             foreach (var file in files)
             {
                 var references = file.Extract!.References;
@@ -758,7 +802,7 @@ public static class CodeGraphLinker
                     var from = owners[reference.From];
                     var kept = found.Others[at];
 
-                    if (kept is null || kept.Reads.Any(changed.Contains))
+                    if (kept is null || hits.Of(kept.Reads))
                     {
                         kept = Find(from, reference, file, at);
                         found.SetOther(at, kept);
@@ -828,6 +872,7 @@ public static class CodeGraphLinker
             _containersFound.Clear();
             _extended.Clear();
             _chains = NewChains();
+            _chainSteps.Clear();
         }
 
         /// <summary>Every declaration's <c>contains</c> edge, from what it is declared inside: its parent node, or its file.</summary>
@@ -843,7 +888,7 @@ public static class CodeGraphLinker
         private Finding Find(Declaration from, ExtractReference reference, CodeGraphFile file, int at)
         {
             var outer = _reads;
-            _reads = [];
+            _reads = new Reading();
 
             try
             {
@@ -852,7 +897,7 @@ public static class CodeGraphLinker
 
                 if (found.Count == 0)
                 {
-                    return new Finding([], External: true, [.. _reads]);
+                    return new Finding([], External: true, _reads.Kept());
                 }
 
                 var sure = found.Count == 1 ? confidence : CodeConfidences.Candidates;
@@ -865,7 +910,7 @@ public static class CodeGraphLinker
                         reference.Line,
                         sure))],
                     External: false,
-                    [.. _reads]);
+                    _reads.Kept());
             }
             finally
             {
@@ -1361,38 +1406,54 @@ public static class CodeGraphLinker
         /// <summary>
         /// What the chain the reference at <paramref name="place"/> ends - its qualifier's names, then its own - comes to from
         /// where <paramref name="from"/> stands: answered once, link by link on the memo's own stack, never a call into
-        /// itself however long the chain; the finding under way reads what answering it read.
+        /// itself however long the chain; the finding under way reads what answering it read, through the link's reads whole.
         /// </summary>
         private Chained ChainTo(Declaration from, ReferenceAt place)
         {
             var answer = _chains.Of(new ChainKey(from, place));
-            _reads?.UnionWith(answer.Reads);
+            _reads?.Through.Add(answer.Reads);
             return answer.State;
         }
 
-        /// <summary>A memo of the chains links end, emptied whenever the bases they were read through are not the ones known now.</summary>
+        /// <summary>
+        /// A memo of the chains links end, emptied whenever the bases they were read through are not the ones known now. A
+        /// link is stepped once for each declaration, chain before it and name: two chains a declaration writes alike - the
+        /// same names on the same first name - are one chain, however many statements write it, each link read once.
+        /// </summary>
         private Memo<ChainKey, ChainAnswer> NewChains() => new(
             key => key.Place.File.Extract!.References[key.Place.At].Qualifier is { Link: { } link } ? [key with { Place = key.Place with { At = link } }] : [],
             (key, before) =>
             {
+                var reference = key.Place.File.Extract!.References[key.Place.At];
+                var prefix = before.Count > 0 ? before[0] : null;
+                var link = new ChainLink(key.From, prefix, prefix is null ? reference.Qualifier?.Name : null, reference.Name);
+
+                if (_chainSteps.TryGetValue(link, out var stepped))
+                {
+                    return stepped;
+                }
+
                 var outer = _reads;
-                var reads = _reads = [];
+                var reads = _reads = new Reading();
 
                 try
                 {
-                    var reference = key.Place.File.Extract!.References[key.Place.At];
-                    var prefix = before.Count > 0 ? before[0] : null;
-                    var state = Step(key.From, prefix?.State ?? (reference.Qualifier?.Name is { } written ? Fold(key.From, written) : Chained.None), reference.Name);
+                    var state = Step(key.From, prefix?.State ?? (link.Head is { } written ? Fold(key.From, written) : Chained.None), reference.Name);
                     _chainLinks++;
 
-                    return new ChainAnswer(state, [.. reads, .. prefix?.Reads ?? []]);
+                    if (prefix is not null)
+                    {
+                        reads.Through.Add(prefix.Reads);
+                    }
+
+                    return _chainSteps[link] = new ChainAnswer(state, reads.Kept());
                 }
                 finally
                 {
                     _reads = outer;
                 }
             },
-            _ => new ChainAnswer(Chained.None, []),
+            _ => new ChainAnswer(Chained.None, KeptReads.None),
             ChainKey.Comparer);
 
         /// <summary>What the chain of names <paramref name="written"/> comes to from where <paramref name="from"/> stands, a name at a time.</summary>
@@ -1639,8 +1700,59 @@ public static class CodeGraphLinker
             }
         }
 
-        /// <summary>What a chain a link ends comes to, with every key reading it read.</summary>
-        private sealed record ChainAnswer(Chained State, int[] Reads);
+        /// <summary>What a chain a link ends comes to, with everything reading it read.</summary>
+        private sealed record ChainAnswer(Chained State, KeptReads Reads);
+
+        /// <summary>
+        /// One link of a chain as a declaration reads it: the declaration, what the chain before the link came to - none for
+        /// the first link - the names the first link's qualifier writes, and the link's own name. Two are one where they are
+        /// of the very declaration and the very answer before, and of the same names.
+        /// </summary>
+        private readonly record struct ChainLink(Declaration From, ChainAnswer? Prefix, string? Head, string Name)
+        {
+            public static IEqualityComparer<ChainLink> Comparer { get; } = new ByIdentity();
+
+            private sealed class ByIdentity : IEqualityComparer<ChainLink>
+            {
+                public bool Equals(ChainLink x, ChainLink y)
+                    => ReferenceEquals(x.From, y.From) && ReferenceEquals(x.Prefix, y.Prefix)
+                    && string.Equals(x.Head, y.Head, StringComparison.Ordinal) && string.Equals(x.Name, y.Name, StringComparison.Ordinal);
+
+                public int GetHashCode(ChainLink link)
+                    => HashCode.Combine(
+                        RuntimeHelpers.GetHashCode(link.From),
+                        link.Prefix is null ? 0 : RuntimeHelpers.GetHashCode(link.Prefix),
+                        link.Head is null ? 0 : StringComparer.Ordinal.GetHashCode(link.Head),
+                        StringComparer.Ordinal.GetHashCode(link.Name));
+            }
+        }
+
+        /// <summary>What the finding under way has read so far: keys directly, and reads it read through whole.</summary>
+        private sealed class Reading
+        {
+            /// <summary>The keys read directly.</summary>
+            public HashSet<int> Keys { get; } = [];
+
+            /// <summary>The reads read through whole, each once.</summary>
+            public HashSet<KeptReads> Through { get; } = new(ReferenceEqualityComparer.Instance);
+
+            /// <summary>Reads what <paramref name="reads"/> read.</summary>
+            public void Take(KeptReads reads)
+            {
+                Keys.UnionWith(reads.Keys);
+                Through.UnionWith(reads.Through);
+            }
+
+            /// <summary>Reads what <paramref name="reading"/> has read.</summary>
+            public void Take(Reading reading)
+            {
+                Keys.UnionWith(reading.Keys);
+                Through.UnionWith(reading.Through);
+            }
+
+            /// <summary>What was read, kept.</summary>
+            public KeptReads Kept() => new([.. Keys], [.. Through]);
+        }
 
         /// <summary>What a chain of names has come to so far (<see cref="Values"/>).</summary>
         private enum ChainedKind
@@ -2582,7 +2694,7 @@ public static class CodeGraphLinker
         }
 
         /// <summary>Says that the finding under way read the key <paramref name="text"/> of <paramref name="kind"/>.</summary>
-        private void Touch(Read kind, string text) => _reads?.Add(_keys.Of((int)kind, text));
+        private void Touch(Read kind, string text) => _reads?.Keys.Add(_keys.Of((int)kind, text));
 
         // What a finding reads of the tree, each through the one way it is read, which says the key it read: no index is
         // looked in otherwise while a reference is found - only where a whole link derives its edges after, once.
@@ -2705,28 +2817,28 @@ public static class CodeGraphLinker
         /// What <paramref name="cache"/> holds for <paramref name="key"/>, made once by <paramref name="make"/>: the finding
         /// under way reads what making it read, whether it made it or found it made.
         /// </summary>
-        private T Cached<TKey, T>(Dictionary<TKey, (T Value, int[] Reads)> cache, TKey key, Func<T> make)
+        private T Cached<TKey, T>(Dictionary<TKey, (T Value, KeptReads Reads)> cache, TKey key, Func<T> make)
             where TKey : notnull
         {
             if (cache.TryGetValue(key, out var known))
             {
-                _reads?.UnionWith(known.Reads);
+                _reads?.Take(known.Reads);
                 return known.Value;
             }
 
             var outer = _reads;
-            var reads = _reads = [];
+            var reads = _reads = new Reading();
 
             try
             {
                 var value = make();
-                cache[key] = (value, [.. reads]);
+                cache[key] = (value, reads.Kept());
                 return value;
             }
             finally
             {
                 _reads = outer;
-                outer?.UnionWith(reads);
+                outer?.Take(reads);
             }
         }
 
@@ -3172,8 +3284,9 @@ public sealed record CodeGraphLinked(
     internal CodeGraphLinker.LinkMemory? Memory { get; init; }
 
     /// <summary>
-    /// How many links of chains of names the link read (<see cref="ExtractQualifier.Link"/>): each once for each
-    /// declaration that reads through it, and again for each round of the bases that might move what it comes to.
+    /// How many links of chains of names the link stepped (<see cref="ExtractQualifier.Link"/>): each once for each
+    /// declaration, chain before it and name - two statements that write one chain step it once - and again for each round
+    /// of the bases that might move what it comes to.
     /// </summary>
     internal int ChainLinks { get; init; }
 }

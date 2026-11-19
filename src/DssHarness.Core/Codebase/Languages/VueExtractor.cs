@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using DssHarness.Core.Text;
 
 namespace DssHarness.Core.Codebase.Languages;
 
@@ -24,7 +25,7 @@ namespace DssHarness.Core.Codebase.Languages;
 /// classes the name it gives binds, <c>$style</c> where it gives none (<see cref="Bound"/>), any other as the page's. The
 /// script and styles are embedded as every markup embeds code (<see cref="EmbeddedCode"/>).
 /// </summary>
-public sealed partial class VueExtractor : ICodeGraphExtractor
+public sealed class VueExtractor : ICodeGraphExtractor
 {
     /// <summary>The name the script's default export is declared by where its expression names none.</summary>
     private const string Default = "default";
@@ -184,7 +185,7 @@ public sealed partial class VueExtractor : ICodeGraphExtractor
                 var (textStart, textEnd) = texts[nextText];
                 declared.Leave(textStart);
 
-                foreach (Match mustache in Mustaches().Matches(markup.Text[textStart..textEnd]))
+                foreach (Match mustache in Mustaches.Matches(markup.Text[textStart..textEnd]))
                 {
                     if (mustache.Groups["code"] is { Value.Length: > 0 } code && !string.IsNullOrWhiteSpace(code.Value))
                     {
@@ -296,8 +297,8 @@ public sealed partial class VueExtractor : ICodeGraphExtractor
     /// anything else statements the event runs, its value <c>$event</c>.
     /// </summary>
     private static string Handler(string value)
-        => MemberPath().IsMatch(value) ? $"((...args) => {value}(...args));"
-            : FunctionExpression().IsMatch(value) ? $"({value});"
+        => MemberPath.IsMatch(value) ? $"((...args) => {value}(...args));"
+            : FunctionExpression.IsMatch(value) ? $"({value});"
             : $"(function ($event) {{ {value} }});";
 
     /// <summary>
@@ -352,14 +353,11 @@ public sealed partial class VueExtractor : ICodeGraphExtractor
     }
 
     /// <summary>A <c>{{ }}</c> a template's text holds, over lines or on one.</summary>
-    [GeneratedRegex(@"\{\{(?<code>.*?)\}\}", RegexOptions.CultureInvariant | RegexOptions.Singleline)]
-    private static partial Regex Mustaches();
+    private static readonly Regex Mustaches = LinearRegex.Compile(@"\{\{(?<code>.*?)\}\}", RegexOptions.Singleline);
 
     /// <summary>A member path, as Vue's compiler tells a handler a <c>v-on</c> names from code it runs: names, each after a dot, an optional chain's <c>?.</c> or between brackets.</summary>
-    [GeneratedRegex(@"^\s*[A-Za-z_$][\w$]*(?:\??\.[A-Za-z_$][\w$]*|\['[^']*?'\]|\[""[^""]*?""\]|\[\d+\]|\[[A-Za-z_$][\w$]*\])*\s*$", RegexOptions.CultureInvariant)]
-    private static partial Regex MemberPath();
+    private static readonly Regex MemberPath = LinearRegex.Compile(@"^\s*[A-Za-z_$][\w$]*(?:\??\.[A-Za-z_$][\w$]*|\['[^']*?'\]|\[""[^""]*?""\]|\[\d+\]|\[[A-Za-z_$][\w$]*\])*\s*$");
 
     /// <summary>A function expression, as Vue's compiler tells one a <c>v-on</c> gives: an arrow's head, or a <c>function</c>'s.</summary>
-    [GeneratedRegex(@"^\s*(?:async\s*)?(?:\([^)]*?\)|[\w$]+)\s*(?::[^=]+)?=>|^\s*(?:async\s+)?function(?:\s+[\w$]+)?\s*\(", RegexOptions.CultureInvariant)]
-    private static partial Regex FunctionExpression();
+    private static readonly Regex FunctionExpression = LinearRegex.Compile(@"^\s*(?:async\s*)?(?:\([^)]*?\)|[\w$]+)\s*(?::[^=]+)?=>|^\s*(?:async\s+)?function(?:\s+[\w$]+)?\s*\(");
 }

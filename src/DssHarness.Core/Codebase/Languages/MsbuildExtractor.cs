@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using DssHarness.Core.Text;
 using System.Xml;
 
 namespace DssHarness.Core.Codebase.Languages;
@@ -17,7 +18,7 @@ namespace DssHarness.Core.Codebase.Languages;
 /// an import of the file it names. The file is read as XML as far as it parses, a comment never, the line it stops at
 /// marked dynamic with the reader's reason; nothing MSBuild evaluates is evaluated.
 /// </summary>
-public sealed partial class MsbuildExtractor : ICodeGraphExtractor
+public sealed class MsbuildExtractor : ICodeGraphExtractor
 {
     /// <summary>The language whose keys a <c>$(Name)</c> names where the project declares no property of the name it reads: the xml extractor's, which reads a <c>.props</c>'s properties.</summary>
     private const string XmlKeys = "xml";
@@ -85,7 +86,7 @@ public sealed partial class MsbuildExtractor : ICodeGraphExtractor
         {
             var inOrder = elements.Count > 1 && elements[1] is "PropertyGroup" or "Import" or "ImportGroup";
 
-            foreach (var match in Used().EnumerateMatches(text.AsSpan(start, end - start)))
+            foreach (var match in Used.EnumerateMatches(text.AsSpan(start, end - start)))
             {
                 // The match is $( the name ), its name what its brackets hold.
                 var name = text.Substring(start + match.Index + 2, match.Length - 3);
@@ -123,10 +124,10 @@ public sealed partial class MsbuildExtractor : ICodeGraphExtractor
                     summary ??= ExtractText.Flat(reader.Value) is { Length: > 0 } described ? ExtractText.Summary(described) : null;
                 }
 
-                // A property's value is its key's summary: its text, flattened and cut.
-                if (reader.NodeType == XmlNodeType.Text && property is not null && properties[^1].Summary is null && ExtractText.Flat(reader.Value) is { Length: > 0 } value)
+                // A property's value is its key's summary: its text on one line, whole.
+                if (reader.NodeType == XmlNodeType.Text && property is not null && properties[^1].Summary is null && ExtractText.Value(reader.Value) is { } value)
                 {
-                    properties[^1] = properties[^1] with { Summary = ExtractText.Summary(value) };
+                    properties[^1] = properties[^1] with { Summary = value };
                 }
 
                 describing = false;
@@ -299,8 +300,7 @@ public sealed partial class MsbuildExtractor : ICodeGraphExtractor
     }
 
     /// <summary>A <c>$(Name)</c> as MSBuild writes it: a property's name, never a property expression's opening bracket.</summary>
-    [GeneratedRegex(@"\$\([A-Za-z_][A-Za-z0-9_.\-]*\)", RegexOptions.CultureInvariant)]
-    private static partial Regex Used();
+    private static readonly Regex Used = LinearRegex.Compile(@"\$\([A-Za-z_][A-Za-z0-9_.\-]*\)");
 
     /// <summary>The file name of the project <paramref name="path"/> names, as its node is named; <see langword="null"/> where it names none, or names it by a wildcard.</summary>
     private static string? ProjectName(string path)

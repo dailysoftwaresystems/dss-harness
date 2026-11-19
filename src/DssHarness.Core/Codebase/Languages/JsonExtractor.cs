@@ -32,7 +32,6 @@ public sealed class JsonExtractor : ICodeGraphExtractor
         "JSON data files (.json, .jsonc, .json5, comments and trailing commas allowed): each scalar key anywhere in the file, however deep, as a key node named by its path (an item by its place, [0]; a name empty or of white space in brackets, [\"\"]) with its value as its summary, each member that holds others as a section over its lines inside the one that holds it, and a $schema or a $ref naming another file by a relative path - its # pointer left out - as an import of it",
         [
             "what JSON5 writes that JSON does not - an unquoted name, a single-quoted string, a hexadecimal number: where the reader stops, nothing in it is read, the line it stops at marked dynamic with the reader's reason",
-            "a key's value past the cut of a summary",
             "a $ref of a pointer into this file, of an address with a scheme (https:, urn:) or of a rooted path: no import",
             "the named manifests - package.json, tsconfig.json, jsconfig.json, composer.json - which their own extractors read",
         ]);

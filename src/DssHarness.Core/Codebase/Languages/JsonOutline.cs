@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using DssHarness.Core.Json;
 
 namespace DssHarness.Core.Codebase.Languages;
 
@@ -59,13 +60,11 @@ internal static class JsonOutline
         var skipped = text.StartsWith('﻿') ? 1 : 0;
         var bytes = Encoding.UTF8.GetBytes(text[skipped..]);
         var positions = new Positions(bytes, CodeFileText.LineIndex(text), skipped);
-        var reader = new Utf8JsonReader(bytes, new JsonReaderOptions
+        // As deep as the file nests (JsonDepth): the values are read on a stack of the reader's own, not the call's.
+        var reader = new Utf8JsonReader(bytes, JsonDepth.Reader with
         {
             CommentHandling = lenient ? JsonCommentHandling.Skip : JsonCommentHandling.Disallow,
             AllowTrailingCommas = lenient,
-
-            // As deep as the file nests: the values are read on a stack of the reader's own, not the call's.
-            MaxDepth = int.MaxValue,
         });
 
         stop = null;

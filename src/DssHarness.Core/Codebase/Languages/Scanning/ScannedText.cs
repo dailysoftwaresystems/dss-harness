@@ -90,7 +90,7 @@ internal sealed class ScannedText
     public string Text(int first, int end)
         => first < end ? Source[Tokens[first].Start..Tokens[end - 1].End] : string.Empty;
 
-    /// <summary>The tokens from <paramref name="start"/> to the one before <paramref name="end"/> as a node's signature: spelled on one line, and cut to a signature's length.</summary>
+    /// <summary>The tokens from <paramref name="start"/> to the one before <paramref name="end"/> as a node's signature: spelled on one line, whole.</summary>
     public string Signature(int start, int end) => ExtractText.Signature(ExtractText.Flat(Spelled(start, end)));
 
     /// <summary>The index of the token before <paramref name="past"/>, within the text.</summary>

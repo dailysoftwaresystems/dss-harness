@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using DssHarness.Core.Text;
 
 namespace DssHarness.Core.Codebase.Languages;
 
@@ -12,7 +13,7 @@ namespace DssHarness.Core.Codebase.Languages;
 /// graph reads. What that code calls, uses and declares is never the dialect's to say but its language's reader's: each
 /// markup's reader gives it the code as its framework compiles the value (<see cref="EmbeddedCode.Script"/>).
 /// </summary>
-internal sealed partial class MarkupDialect
+internal sealed class MarkupDialect
 {
     private readonly Func<MarkupElement, (string Name, ExtractQualifier? Qualifier)?> _component;
     private readonly Func<MarkupAttribute, MarkupRole> _role;
@@ -124,7 +125,7 @@ internal sealed partial class MarkupDialect
     /// </summary>
     internal static (string Aliases, string List, int ListAt)? Loop(string value)
     {
-        if (Looped().Match(value) is not { Success: true } loop)
+        if (Looped.Match(value) is not { Success: true } loop)
         {
             return null;
         }
@@ -233,8 +234,7 @@ internal sealed partial class MarkupDialect
     }
 
     /// <summary>A loop's value as Vue's compiler reads it: its aliases, <c>in</c> or <c>of</c>, and the expression of the list it walks.</summary>
-    [GeneratedRegex(@"^\s*(?<alias>[\s\S]*?)\s+(?:in|of)\s+(?<list>\S[\s\S]*)$", RegexOptions.CultureInvariant)]
-    private static partial Regex Looped();
+    private static readonly Regex Looped = LinearRegex.Compile(@"^\s*(?<alias>[\s\S]*?)\s+(?:in|of)\s+(?<list>\S[\s\S]*)$");
 }
 
 /// <summary>What an attribute's value is to the markup that writes it.</summary>

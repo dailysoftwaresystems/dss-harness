@@ -3,9 +3,10 @@ using System.Text;
 namespace DssHarness.Core.Codebase.Languages;
 
 /// <summary>
-/// How every implementation gives a node its text: a signature on one line, whole however long the header runs, and a
-/// summary - the first sentence of what the code says of itself, whole, which its meaning alone bounds. One place, so
-/// every language says them alike; what serves them gives one wider than a page in pieces.
+/// How every implementation gives a node its text: a signature on one line, whole however long the header runs, a
+/// summary - the first sentence of what the code says of itself, whole, which its meaning alone bounds - and a data key's
+/// value, whole on one line. One place, so every language says them alike; what serves them gives one wider than a page
+/// in pieces.
 /// </summary>
 internal static class ExtractText
 {
@@ -60,6 +61,13 @@ internal static class ExtractText
     }
 
     /// <summary>
+    /// <paramref name="value"/>, what a data file holds at a key, as the key's summary: on one line, whole - a value is no
+    /// prose, so no sentence of it ends it; <see langword="null"/> where nothing is left of it.
+    /// </summary>
+    /// <param name="value">The value, as the file holds it.</param>
+    public static string? Value(string value) => Flat(value) is { Length: > 0 } flat ? Whole(flat) : null;
+
+    /// <summary>
     /// <paramref name="text"/> as whole UTF-16, as a record holds it: each surrogate apart from its pair - a file cut inside
     /// a character - the replacement character.
     /// </summary>
@@ -77,7 +85,7 @@ internal static class ExtractText
 
         for (; apart >= 0; apart = FileExtract.Apart(text, apart + 1))
         {
-            whole[apart] = '�';
+            whole[apart] = '\uFFFD';
         }
 
         return new string(whole);

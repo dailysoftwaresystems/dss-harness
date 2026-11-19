@@ -155,8 +155,8 @@ public sealed class MarkdownExtractor : ICodeGraphExtractor
     }
 
     /// <summary>
-    /// The first sentence of a section's first paragraph of text: its lines up to a blank line, a heading or a fence, on
-    /// one line - whole, however many lines the sentence runs over; none where the section opens with no text.
+    /// The first sentence of a section's first paragraph of text: its lines up to a blank line, a heading, a fence or a
+    /// rule, on one line - whole, however many lines the sentence runs over; none where the section opens with no text.
     /// </summary>
     private static string? SummaryOf(IReadOnlyList<string> lines, int start, int end)
     {
@@ -166,13 +166,15 @@ public sealed class MarkdownExtractor : ICodeGraphExtractor
         {
             var text = lines[line - 1].Trim();
 
-            if (paragraph.Length == 0 && (text.Length == 0 || IsUnderline(text)))
+            // Blank lines and rules before the text are no text of it.
+            if (paragraph.Length == 0 && (text.Length == 0 || IsUnderline(text) || Rule.IsMatch(text)))
             {
                 continue;
             }
 
-            // What follows is a heading of its own, or code, or the paragraph's end: the section's text, if any, is before it.
-            if (text.Length == 0 || Atx.IsMatch(text) || FenceOf(text) is not null || (line < end && IsUnderline(lines[line]) && IsSetextTitle(lines[line - 1])))
+            // What follows is a heading of its own, or code, or a rule, or the paragraph's end: the section's text, if any,
+            // is before it.
+            if (text.Length == 0 || Rule.IsMatch(text) || Atx.IsMatch(text) || FenceOf(text) is not null || (line < end && IsUnderline(lines[line]) && IsSetextTitle(lines[line - 1])))
             {
                 break;
             }
