@@ -654,7 +654,7 @@ public sealed class RunnerLegs(
     /// <param name="built">Whether this run built the leg.</param>
     /// <param name="along">The runners whose checks led here, the leg's own runner first.</param>
     /// <param name="cancellationToken">Stops the run.</param>
-    private static async Task<RunOutcome> ConfirmAsync(
+    internal static async Task<RunOutcome> ConfirmAsync(
         IRunnerRunService runners,
         CMakeToolchainReader toolchains,
         HarnessConfig config,

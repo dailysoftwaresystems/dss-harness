@@ -1,11 +1,14 @@
 using DssHarness.Core.Application;
 using DssHarness.Core.Application.Legs;
+using DssHarness.Core.Build;
 using DssHarness.Core.Composition;
 using DssHarness.Core.Configuration;
 using DssHarness.Core.Execution;
+using DssHarness.Core.FileSystem;
 using DssHarness.Core.Hosts;
 using DssHarness.Core.Orchestration.Flow;
 using DssHarness.Core.Output;
+using DssHarness.Core.Platform;
 using DssHarness.Core.Repository;
 using DssHarness.Core.Results;
 using DssHarness.Core.Runners;
@@ -18,7 +21,7 @@ namespace DssHarness.Tests;
 /// run's use case, in process: every refusal it makes before any leg is placed or any host is measured - a runner
 /// nobody declared, a manual step of a runner with no action, a runner or a run check that writes the tree where a leg
 /// would work in a copy, --local-copy with --in-place, and an input with no value or one it refuses - each with nothing
-/// run and no run kept.
+/// run and no run kept; and the run checks a leg's run gives its checks' runners, to any depth.
 /// </summary>
 public sealed class RunnerLegsTests
 {
@@ -569,6 +572,82 @@ public sealed class RunnerLegsTests
     /// A repository with a leg this machine runs in a copy of its own, a leg pinned to a host, a runner that writes the
     /// tree and one that does not - which a run check of the writing one checks, where asked.
     /// </summary>
+    /// <summary>
+    /// A run check's runner that carries checks of its own runs them at the leg, to any depth - three deep here, each
+    /// check's runner run inside the one before it, on the leg, as built as the leg's own run left it - and a chain that
+    /// leads back to a runner it is confirming for is refused, naming the chain, before that runner runs again.
+    /// </summary>
+    [Fact]
+    public async Task ARunChecksOwnChecks_RunAtTheLegToAnyDepth_AndAChainBackToOneItConfirmsFor_IsRefused()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var config = Config(harness);
+
+        foreach (var name in new[] { "a", "b", "c", "d", "e" })
+        {
+            config.PredefinedRunners[name] = new RunnerConfig { Phases = [new RunnerPhase { Name = "look", Command = ["dotnet", "--version"] }] };
+        }
+
+        var leg = config.Legs["native"];
+        var variant = VariantKey.For(config, leg, harness.Platform.PlatformKey);
+        var host = new HostReport { Host = HostId.Local, Os = harness.Platform.PlatformKey, Processor = harness.Platform.Processor };
+        var work = new LegWork(
+            new PlacedLeg("native", leg, host, null, variant, temp.Path, temp.Path, variant.DirectoryUnder(temp.Path), new LocalHostConfig(), Emulated: false),
+            new HarnessContext(new HarnessLayout(temp.Path, temp.Path), config),
+            RunId.New(),
+            temp.Combine("runs", "r1"),
+            Time: false);
+        var runs = new ChainedRuns(new Dictionary<string, string>(StringComparer.Ordinal) { ["a"] = "b", ["b"] = "c", ["d"] = "e", ["e"] = "d" });
+        var toolchains = new CMakeToolchainReader(new PhysicalFileSystem(FilePermissionsFactory.Create()));
+
+        var confirmed = await RunnerLegs.ConfirmAsync(runs, toolchains, config, work, "a", built: true, ["probe"], Token);
+
+        Assert.True(confirmed.Success);
+        Assert.Equal(["a", "b", "c"], runs.Ran.Select(request => request.RunnerName));
+        Assert.All(runs.Ran, request => Assert.Equal(("native", true, temp.Path), (request.Leg, request.Built, request.TreeRoot)));
+
+        runs.Ran.Clear();
+        var refused = await Assert.ThrowsAsync<HarnessException>(() => RunnerLegs.ConfirmAsync(runs, toolchains, config, work, "d", built: true, ["probe"], Token));
+
+        Assert.Equal(HarnessExit.Refused, refused.ExitCode);
+        Assert.Equal(
+            "a run check leads back to predefined runner 'd' through 'probe' -> 'd' -> 'e', so it would confirm itself; nothing it gates is excused",
+            refused.Message);
+        Assert.Equal(["d", "e"], runs.Ran.Select(request => request.RunnerName));
+    }
+
+    /// <summary>
+    /// Runs a runner as a run of it whose check names <paramref name="checks"/>' runner for it would: the check run, through
+    /// the request's own way to run it, before the run answers - each request kept, in the order the runs began.
+    /// </summary>
+    private sealed class ChainedRuns(IReadOnlyDictionary<string, string> checks) : IRunnerRunService
+    {
+        public List<RunnerRunRequest> Ran { get; } = [];
+
+        public async Task<RunnerLegResult> RunAsync(HarnessConfig config, RunnerRunRequest request, CancellationToken cancellationToken = default)
+        {
+            Ran.Add(request);
+
+            var outcome = checks.TryGetValue(request.RunnerName, out var check)
+                ? await request.InvokeRunner!(check, cancellationToken)
+                : RunOutcome.Ok($"{request.RunnerName} ran");
+
+            return new RunnerLegResult(
+                ReachedVerdict.Of(LegVerdict.Passed),
+                outcome,
+                new LegEntry { Leg = request.Leg, Verdict = LegVerdict.Passed },
+                [],
+                new Dictionary<string, RunOutcome>(StringComparer.Ordinal),
+                ExpectedException: null,
+                Gate: null,
+                PerformedActions: []);
+        }
+
+        public Task VetAsync(HarnessConfig config, RunnerRunRequest request, CancellationToken cancellationToken = default)
+            => throw new NotSupportedException("a check's run is never vetted before admission");
+    }
+
     private static HarnessConfig Config(HarnessFactory harness, bool checkedByFormat = false)
     {
         var platform = harness.Platform;
