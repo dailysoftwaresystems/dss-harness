@@ -93,7 +93,7 @@ public sealed partial class HelpTests
         // The orchestrators topic lists where a run's and a step's web records are.
         var layout = HelpText.Of("orchestrators").StandardOutput;
 
-        foreach (var file in new[] { $"<step>/{DssHarness.Core.Agents.AgentCallRecords.WebFileName}", $"<step>/{DssHarness.Core.Agents.AgentCallRecords.DenialsFileName}", $"<step>/{DssHarness.Core.Agents.AgentCallRecords.ToolResultsDirectoryName}/<id>.txt", $"{OrchestratorLayout.WebDirectoryName}/{OrchestratorLayout.WebSearchesFileName}", $"../{OrchestratorLayout.WebIndexesDirectoryName}/<source>/" })
+        foreach (var file in new[] { $"<step>/{DssHarness.Core.Agents.AgentCallRecords.WebFileName}", $"<step>/{DssHarness.Core.Agents.AgentCallRecords.DenialsFileName}", $"<step>/{DssHarness.Core.Agents.AgentCallRecords.ToolResultsDirectoryName}/{DssHarness.Core.Pages.PageKey.CallPrefix}<digest>.txt", $"{OrchestratorLayout.WebDirectoryName}/{OrchestratorLayout.WebSearchesFileName}", $"../{OrchestratorLayout.WebIndexesDirectoryName}/<source>/" })
         {
             Assert.Contains($"  {file}", layout, StringComparison.Ordinal);
         }

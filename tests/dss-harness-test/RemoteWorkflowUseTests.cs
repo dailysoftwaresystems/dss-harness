@@ -2234,7 +2234,7 @@ public sealed class RemoteWorkflowUseTests
                 "workflowSources.allow names 'elsewhere.example/acme/*', under the host 'elsewhere.example', which workflowSources.hosts does not name: a host beyond github.com is reached only with the credential its entry there names",
                 "workflowSources.hosts names 'ghe', which is no host: a host is named as its own name is, dotted, with no path in it",
                 "workflowSources.hosts.ghe names no credential; a host beyond github.com is reached with the one credential named here, \"credential\": {\"from\": \"env\", \"name\": \"<VARIABLE>\"}, and never with the machine's own tokens",
-                "workflowSources.hosts names 'github.com', which needs no entry: the machine's own gh login reaches it",
+                "workflowSources.hosts names 'github.com', which needs no entry: git reaches it with the helpers its own configuration names, the machine's own login",
                 "workflowSources.hosts.ghe.acme.internal.credential.from is 'file'; a host's credential is read from an environment variable, env",
                 "workflowSources.hosts.other.acme.internal.credential names no environment variable; a host's credential is an environment variable, named here",
                 "workflowSources.pin is 'branch'; it is one of tag-or-commit, commit, any",

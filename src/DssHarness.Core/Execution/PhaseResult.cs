@@ -96,12 +96,6 @@ public sealed record PhaseResult(
     public bool Passed => Stopped == PhaseStop.None && ExitCode == 0 && Witnessed != false && MissingOutputs.Count == 0;
 
     /// <summary>
-    /// Retired: a phase is shown by the last of its lines that fit a page (<see cref="TailRoom"/>), never by a number of
-    /// them. Kept only for the check step that still cuts its own tail by it, until that step reads its tail the same way.
-    /// </summary>
-    public const int TailLines = 50;
-
-    /// <summary>
     /// The characters the last lines a phase is shown by may take, each with its ending: a page of a tool's answer
     /// (<see cref="Pages.PageRoom"/>), the one owner of how much one look gives - what a reader is shown first, never what
     /// there is: the whole output is in <see cref="LogFile"/>, read by page.

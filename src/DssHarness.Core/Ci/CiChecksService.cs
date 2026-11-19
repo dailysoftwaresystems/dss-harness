@@ -164,13 +164,6 @@ public sealed class CiChecksService(
     IHarnessOutput output,
     TimeProvider clock) : ICiChecksService
 {
-    /// <summary>
-    /// How many reads running once ended the wait on their failure. The wait no longer counts them: a read is made again
-    /// for as long as its failure can change (<see cref="Retrying"/>). Kept only for the words that still name it, until
-    /// they say the new rule.
-    /// </summary>
-    public const int FailedReadsInARow = 3;
-
     public async Task<CiChecksReading> WaitAsync(string startDirectory, CiChecksRequest request, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);

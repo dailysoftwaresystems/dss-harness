@@ -628,7 +628,7 @@ public static partial class HarnessConfigValidator
 
             if (host.Equals(WorkflowSourceRules.GitHub, StringComparison.OrdinalIgnoreCase))
             {
-                problems.Add($"workflowSources.hosts names '{WorkflowSourceRules.GitHub}', which needs no entry: the machine's own gh login reaches it");
+                problems.Add($"workflowSources.hosts names '{WorkflowSourceRules.GitHub}', which needs no entry: git reaches it with the helpers its own configuration names, the machine's own login");
             }
 
             if (named?.Credential is { } credential)

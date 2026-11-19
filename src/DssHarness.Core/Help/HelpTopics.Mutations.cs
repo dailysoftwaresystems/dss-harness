@@ -313,7 +313,7 @@ public static partial class HelpTopics
             "So a test that is green under ctest for what ctest sets up around it can be red in its binary's unmutated "
             + "run, which stops every arm of that binary, each arm's line naming the run's log. Where the leg's tests run "
             + "through ctest, the binary's line then names what ctest registers for the red cases that a sweep does not "
-            + "apply, read from ctest's own description (ctest --show-only=json-v1), bounded by two minutes; what ctest "
+            + "apply, read from ctest's own description (ctest --show-only=json-v1), waited for to its end and said every five minutes it lasts; what ctest "
             + "could not say is said as that and changes no verdict, and where the leg's tests run through no ctest "
             + "nothing is asked. A sweep starts the binary itself, never through ctest, and runs no fixture.");
         builder.AppendLine();

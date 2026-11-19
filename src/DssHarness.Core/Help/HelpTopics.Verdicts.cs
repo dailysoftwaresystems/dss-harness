@@ -103,7 +103,7 @@ public static partial class HelpTopics
             $"A run is stopped with Ctrl+C where it was typed, and from another terminal with '{RunStopService.CommandName} <run id>' typed in "
             + $"the tree that ran it: its dispatcher looks for the stop every {StopCadence.PollEvery.TotalSeconds.ToString(CultureInfo.InvariantCulture)} s "
             + $"and stops as an interrupt stops it - each leg stopped where it stands, its ledger written with what was reached, exit {HarnessExit.Cancelled} "
-            + $"- and {RunStopService.CommandName} waits {RunStopService.StopWait.TotalSeconds.ToString(CultureInfo.InvariantCulture)} s for it, saying "
+            + $"- and {RunStopService.CommandName} waits for it while it lives, said every five minutes, saying "
             + $"the run stopped only where its dispatcher took the stop: one that ended on its own first is nothing it stopped ({HarnessExit.Refused}). "
             + "--now ends the dispatcher's process where it stands, with all it started, and its ledger is never written. A second Ctrl+C is the "
             + "hard stop: the dispatcher ends where it stands, as a kill ends it, and its ledger is never written. On Windows every phase "

@@ -1,5 +1,4 @@
 using System.CommandLine;
-using System.Globalization;
 using DssHarness.Core.Runs;
 
 namespace DssHarness.Cli.Commands;
@@ -28,7 +27,7 @@ internal static class StopRunCommand
     {
         var command = new Command(
             Name,
-            $"Stop a build, test, run or check-mutations run from another terminal: asked of its dispatcher, which stops every leg where it stands as an interrupt does and writes its ledger, and waited for {RunStopService.StopWait.TotalSeconds.ToString(CultureInfo.InvariantCulture)} s. --now ends the dispatcher's process where it stands.");
+            $"Stop a build, test, run or check-mutations run from another terminal: asked of its dispatcher, which stops every leg where it stands as an interrupt does and writes its ledger, and waited for while it lives, said every five minutes. --now ends the dispatcher's process where it stands.");
 
         command.Arguments.Add(RunArgument);
         command.Options.Add(NowOption);

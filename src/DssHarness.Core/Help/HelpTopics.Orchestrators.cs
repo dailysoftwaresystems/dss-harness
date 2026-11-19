@@ -76,7 +76,7 @@ public static partial class HelpTopics
                 ($"  <step>/{OrchestratorLayout.StepWorkingSetFileName}", "a reason step that has a codebase graph: the nodes it edited, served, read and found, which seed the packs of the steps after it ('help codebase-graph')"),
                 ($"  <step>/{Agents.AgentCallRecords.WebFileName}", "a step whose agent asks the web: each address its web_fetch and web_search decided before it was asked, what each answered, and each search source's part ('help web-search'); written by every client whose step has the web"),
                 ($"  <step>/{Agents.AgentCallRecords.DenialsFileName}", "a step whose agent's calls the engine decides, on every client: each call the policy refused, with its rule"),
-                ($"  <step>/{Agents.AgentCallRecords.ToolResultsDirectoryName}/<id>.txt", "a step whose agent's calls the engine decides, on every client: an answer longer than the cap, whole"),
+                ($"  <step>/{Agents.AgentCallRecords.ToolResultsDirectoryName}/{Pages.PageKey.CallPrefix}<digest>.txt", "a step whose agent's calls the engine decides, on every client: an answer longer than a page, whole, named by the digest of the call's id, which read_result gives a page at a time"),
                 ($"  {OrchestratorLayout.WebDirectoryName}/{OrchestratorLayout.WebSearchesFileName}", "the run's web search: what each source's lookups found, once for the run, and each query a source answered, which the same query again is answered from; written by every client whose step searches"),
                 ($"  {OrchestratorLayout.GraphDirectoryName}/{OrchestratorLayout.GraphManifestFileName}", "the run's codebase graph: the main checkout's manifest, every file it keeps with its blob, state and extract ('help codebase-graph')"),
                 ($"  {OrchestratorLayout.GraphDirectoryName}/{OrchestratorLayout.GraphSymbolsFileName}", "the graph's link result: every node and edge, with the digest of the manifest it was made from"),
@@ -343,10 +343,9 @@ public static partial class HelpTopics
             + "silently; it is not a --force, nothing is left out that nobody named, and one naming a path the refresh would not "
             + $"have refused is refused, nothing copied. {RefreshRequest.StaleOption} <path>, once for each, says its copy is not the agent's "
             + "work and hands it the main tree's - taken only where the agent's copy, as git would store it, is a blob the main "
-            + "tree's history held at that path, among the last 512 commits that changed it, and refused "
+            + "tree's history held at that path, in any commit of its whole history that changed it, and refused "
             + "otherwise, nothing copied, as is one naming a path the agent holds no file at. The refusal over the agent's changes "
-            + "names each such copy with the commit whose bytes it holds, and the arguments that hand them; it says too where the "
-            + "search stopped short of the main tree's history. It reaches a path the main tree did not move as well - a copy put "
+            + "names each such copy with the commit whose bytes it holds, and the arguments that hand them. It reaches a path the main tree did not move as well - a copy put "
             + "back by hand to an older version - and one naming a path the agent holds as the main tree does is let stand. A path "
             + "the agent changed that the main tree moved too, each holding a file there, is weighed in full as a fold weighs one: "
             + "the refusal says beside it what a three-way merge of the two gives - from what the agent last shared, or its base - "
@@ -517,7 +516,7 @@ public static partial class HelpTopics
             + $"{HarnessExit.UsageError}, and a {FoldAllowances.MergeOption} naming an anchor registry or the arm registry is refused. "
             + "Never merged, whatever is named: a deletion against a change, a path both trees made, a version that is a link "
             + "or is reached through one, a file git reads as "
-            + "binary or will not merge, one whose merge attribute asks for another merge, a file above 16 MiB, and an anchor "
+            + "binary or will not merge, one whose merge attribute asks for another merge, and an anchor "
             + "registry; nor is the arm registry ever merged by line. The arm registry (mutations.registry) both trees changed is "
             + "merged by arm, unasked - each arm, and each section's heading (the comments a blank line parts from the row below "
             + "them), from the side that alone added, removed or changed it, each version as its tree "

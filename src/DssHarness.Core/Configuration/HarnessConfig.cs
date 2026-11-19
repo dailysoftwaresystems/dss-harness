@@ -178,7 +178,7 @@ public sealed class HarnessConfig
 
     /// <summary>
     /// Patterns whose every match on a line is pulled out of a build's output when <c>build --time</c>
-    /// runs - a line at a time, every mark of a phase recorded - so timings come from what the build
+    /// runs - a line at a time, every mark written to the phase's timing record as it is found - so timings come from what the build
     /// itself reported rather than from the harness guessing which part of the wall clock was the
     /// build. Configured with none, <c>--time</c> measures the phases itself.
     /// </summary>

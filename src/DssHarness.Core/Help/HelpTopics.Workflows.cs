@@ -494,8 +494,11 @@ public static partial class HelpTopics
             + $"check {CiExit.LegRed}), and under never it is done, its passed false. Every read of the forge is given the "
             + $"step's timeoutMinutes where it says one, else {ReportText.Limit(GhProcess.Limit)}, and never outlasts the step's attempt, "
             + $"which ends a read in flight with it: a ci-read's read past its limit ends the step incomplete ({HarnessExit.Incomplete}), "
-            + "which runs it again; a ci-wait reads again at its next poll where a read failed or passed its limit, saying each, "
-            + $"and ends with that read's code only where {CiChecksService.FailedReadsInARow} did running or its wait is spent.");
+            + "which runs it again; a ci-wait reads again where a read failed or passed its limit, saying each, for as long as "
+            + "its failure can change - a dropped network, a server error and a rate limit however often they come, another "
+            + "failure while it is new - and ends with that read's code where the same failure comes again, at once where no "
+            + "read changes it (the forge refusing the credential, or saying what was asked is not there), or where its wait "
+            + "is spent.");
         builder.AppendLine();
         AppendWrapped(
             builder,

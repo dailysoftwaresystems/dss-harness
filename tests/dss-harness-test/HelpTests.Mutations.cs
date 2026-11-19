@@ -289,7 +289,7 @@ public sealed partial class HelpTests
             + "RUN_SERIAL; not TIMEOUT",
             "Where the leg's tests run "
             + "through ctest, the binary's line then names what ctest registers for the red cases that a sweep does not "
-            + "apply, read from ctest's own description (ctest --show-only=json-v1), bounded by two minutes",
+            + "apply, read from ctest's own description (ctest --show-only=json-v1), waited for to its end and said every five minutes it lasts",
             "A sweep starts the binary itself, never through ctest, and runs no fixture.",
             "A mutated build is a build of its own.",
             "and each control that did not pass is beneath the leg as controls: "

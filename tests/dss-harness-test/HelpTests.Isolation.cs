@@ -124,7 +124,7 @@ public sealed partial class HelpTests
                 + "going to the HOME the command or the string sets, cd - back to the OLDPWD the string sets or a place a move of the string's left, "
                 + "and one whose place this does not know - cd - with neither, a CDPATH, OLDPWD or HOME the string computes - denied - from every "
                 + "place the command reached before it, a command after && standing only where the one before it held and one after || only where "
-                + "it failed, up to 64 distinct places, past which the command is denied.",
+                + "it failed, to every place it reaches, however many, none denied for their number.",
             prose,
             StringComparison.Ordinal);
         Assert.Contains("No agent starts while this tool itself runs elevated: its step is recorded never started, saying so, before any client is taken.", prose, StringComparison.Ordinal);

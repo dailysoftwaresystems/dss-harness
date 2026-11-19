@@ -1,5 +1,4 @@
 using System.CommandLine;
-using System.Globalization;
 using DssHarness.Core.Orchestration.Flow;
 
 namespace DssHarness.Cli.Commands;
@@ -11,7 +10,7 @@ internal static class WorkflowCacheCommands
 
     private static readonly Option<int> UnusedDaysOption = new("--unused-days")
     {
-        Description = $"Prune the entries no run used, and none was fetched, for this many days (0 to {WorkflowCache.MostUnusedDays.ToString("N0", CultureInfo.InvariantCulture)}), the resolutions that named them, and the blobs no entry left holds.",
+        Description = $"Prune the entries no run used, and none was fetched, for this many days (0 or more), the resolutions that named them, and the blobs no entry left holds.",
         Required = true,
     };
 

@@ -3891,12 +3891,6 @@ public sealed partial class AgentPolicy
     }
 
     /// <summary>
-    /// Retired: a string's moves are followed to every place they reach, however many, and no command is denied for their
-    /// number. Kept while a help sentence of another area still names it.
-    /// </summary>
-    public const int MaxPlaces = 64;
-
-    /// <summary>
     /// Whether <paramref name="word"/> names a place no action reaches (<see cref="Unreachable"/>) - a credential slot, a
     /// Claude Code directory, a place the user keeps credentials in - a path beneath one, or a directory that holds one, resolved as a tool's path resolves against each place the command may stand in: every
     /// path the word may name (<see cref="CommandAnalysis.PathsNamed"/>) - itself, a redirect's file or text among them,

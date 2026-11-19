@@ -96,7 +96,7 @@ public static class WorkflowSourceRules
     /// <summary>Every <c>offline</c>, in the order a refusal lists them.</summary>
     public static IReadOnlyList<string> Offlines { get; } = [OfflineRefuse, OfflineLastResolved];
 
-    /// <summary>The host every remote source names where it names none: github.com, reached with the machine's own gh login.</summary>
+    /// <summary>The host every remote source names where it names none: github.com, reached as git reaches it, with the helpers its configuration names.</summary>
     public const string GitHub = "github.com";
 
     /// <summary>The <c>pin</c> that holds: the file's, or <see cref="PinTagOrCommit"/> where it says none.</summary>

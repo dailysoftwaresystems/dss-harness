@@ -479,8 +479,8 @@ public sealed class CiWaitStepRunner(
         // only where they are green; a red one is red all the same.
         var accepted = run.Answers.Count > 0 && run.Answers[^1].Answer == "accept";
         // Each read of the forge is given the step's time limit where it says one, else gh's own: one past it is read
-        // again at the next poll, until CiChecksService.FailedReadsInARow fail running or the wait is spent; and a read
-        // never outlasts the attempt, whose limit ends one in flight with it.
+        // again for as long as its failure can change, until the wait is spent; and a read never outlasts the attempt,
+        // whose limit ends one in flight with it.
         var step = run.Step;
         var request = new CiChecksRequest(commit, Type)
         {

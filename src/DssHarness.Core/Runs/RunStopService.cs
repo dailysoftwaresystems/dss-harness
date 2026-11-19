@@ -38,13 +38,6 @@ public sealed class RunStopService(
     /// <summary>The command's name.</summary>
     public const string CommandName = "stop-run";
 
-    /// <summary>
-    /// How long a dispatcher was once given to stop: no wait of this command's is bounded by it. A dispatcher asked to stop
-    /// is waited for while it lives, and one ended where it stands until it has gone, each said every five minutes it
-    /// lasts and ended only by the caller's interrupt. Kept for the descriptions outside this command that still name it.
-    /// </summary>
-    public static readonly TimeSpan StopWait = TimeSpan.FromSeconds(60);
-
     private readonly IHarnessContextLoader _contextLoader = contextLoader;
     private readonly LogOwnership _logOwnership = logOwnership;
     private readonly RunStops _stops = stops;

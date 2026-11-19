@@ -43,9 +43,8 @@ public static partial class HelpTopics
             Agents.Runtime.AgentTools.All(defaults).Select(tool => $"{tool.Name} ({tool.Needs.ToString().ToLowerInvariant()}{(tool.Barrier ? ", alone in its turn" : string.Empty)})"));
 
         return "The tool runtime is the harness's own tools, built for the API clients to give their agents in place of a "
-            + "client's own - the claude-api and glm clients below - and serving the claude-code client the web's through "
-            + "the engine's tool server, and its file tools there too where Claude Code's own process runs apart from the "
-            + "isolation, each under the "
+            + "client's own - the claude-api and glm clients below - and serving the claude-code client every one of them "
+            + "through the engine's tool server, each under the "
             + $"capability that gives it: {tools}. The run's reporter is given "
             + $"{string.Join(", ", Agents.Runtime.AgentTools.All(defaults).Where(tool => Agents.Policy.AgentPolicyGround.ReporterCapabilities.Contains(tool.Needs)).Select(tool => tool.Name))}, "
             + "those that read, and no other. Each call is decided before it runs and recorded: a tool the step was not given, or "

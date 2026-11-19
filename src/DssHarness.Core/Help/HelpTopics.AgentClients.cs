@@ -320,7 +320,7 @@ public static partial class HelpTopics
         builder.AppendLine("move of the string's left, and one whose place this does not know - cd - with neither, a");
         builder.AppendLine("CDPATH, OLDPWD or HOME the string computes - denied - from every place the command");
         builder.AppendLine("reached before it, a command after && standing only where the one before it held and one");
-        builder.AppendLine($"after || only where it failed, up to {Agents.Policy.AgentPolicy.MaxPlaces} distinct places, past which the command is denied.");
+        builder.AppendLine("after || only where it failed, to every place it reaches, however many, none denied for their number.");
         AppendWrapped(builder, ShellReadingProse());
         builder.AppendLine("The protected paths (agentPolicy.protectedPaths, true where nothing is said) are the");
         builder.AppendLine("writes Claude Code guards, refused on every client so a role is not stopped on one where");
@@ -360,8 +360,7 @@ public static partial class HelpTopics
         builder.AppendLine("call it denies it, never allows: nothing runs while the host that would answer is");
         builder.AppendLine("silent or gone. The policy is built and holds every action behind it; the claude-code");
         builder.AppendLine("client below asks it of every call, the tool runtime below decides by it each call it");
-        builder.AppendLine("runs - the web's of the claude-code client, and its file tools' where Claude Code's own");
-        builder.AppendLine("process runs apart from the isolation, served through the engine's tool server, and");
+        builder.AppendLine("runs - every call of the claude-code client's tools, served through the engine's tool server, and");
         builder.AppendLine("every call of the API clients, the claude-api and glm clients below - for every agent a");
         builder.AppendLine("command of this tool runs: a run's reasoning steps, its advisor and its reporter, and a");
         builder.AppendLine("side-task.");

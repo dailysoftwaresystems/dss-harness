@@ -38,7 +38,7 @@ namespace DssHarness.Core.Orchestration;
 /// &lt;step&gt;/targets/&lt;agent&gt;/     a refresh or a rebase of others: one target's fold.json
 /// &lt;step&gt;/web.jsonl            a step whose agent asks the web: each address and each search source asked, decided before it was asked and what it answered; written by every client whose step has the web
 /// &lt;step&gt;/denials.jsonl        a step whose agent's calls the engine decides, on every client: each call the policy refused, with its rule
-/// &lt;step&gt;/tool-results/&lt;id&gt;.txt   a step whose agent's calls the engine decides, on every client: an answer longer than the cap, whole
+/// &lt;step&gt;/tool-results/call-&lt;digest&gt;.txt   a step whose agent's calls the engine decides, on every client: an answer longer than a page, whole, named by the digest of the call's id, which read_result gives a page at a time
 /// &lt;step&gt;/children/&lt;id&gt;.json   in either kind of step's directory, on Linux and macOS: a session a contained child of the step leads while it runs, or the process group a phase of its legs - a set-up's up line apart - its keepAwake command or what carries a leg to a host leads while anything is in it
 /// flow.json                   a run's state, whole: the truth a resume goes on from
 /// workflow.json               a run's status, for a person and a client to read

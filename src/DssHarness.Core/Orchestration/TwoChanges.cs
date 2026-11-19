@@ -437,18 +437,6 @@ public sealed record MergedPath(string Path, MergedFile Merged, bool Executable,
 /// <param name="keeping">Whether bytes found in that history are kept, so they are looked for once: true of a command that writes.</param>
 internal sealed class TwoChanges(IGitClient git, IFileSystem files, ISyncService sync, SharedCopies kept, string main, bool keeping)
 {
-    /// <summary>
-    /// Retired: no size stops a merge, nor the keeping of the bytes a seed records. Kept only while the help sentence that
-    /// still names it is rewritten by its owner; nothing here reads it.
-    /// </summary>
-    public const long MostBytes = 16 * 1024 * 1024;
-
-    /// <summary>
-    /// Retired: the main tree's whole history is read for the bytes a seed records, and for a stale copy. Kept only while
-    /// the help sentence that still names it is rewritten by its owner; nothing here reads it.
-    /// </summary>
-    public const int MostCommits = 512;
-
     /// <summary>What the main tree's side is called, in a conflict's markers and in a sentence.</summary>
     public const string Ours = "the main tree";
 

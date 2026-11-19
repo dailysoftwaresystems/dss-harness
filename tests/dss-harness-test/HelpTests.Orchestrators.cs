@@ -137,10 +137,9 @@ public sealed partial class HelpTests
         Assert.Contains("      [--stale <path>]... [--merge <path>]... [--apply]", result.StandardOutput, StringComparison.Ordinal);
         Assert.Contains(
             "--stale <path>, once for each, says its copy is not the agent's work and hands it the main tree's - taken only where the agent's copy, "
-            + $"as git would store it, is a blob the main tree's history held at that path, among the last {TwoChanges.MostCommits} commits that "
+            + "as git would store it, is a blob the main tree's history held at that path, in any commit of its whole history that "
             + "changed it, and refused otherwise, nothing copied, as is one naming a path the agent holds no file at. The refusal over the agent's "
-            + "changes names each such copy with the commit whose bytes it holds, and the arguments that hand them; it says too where the search "
-            + "stopped short of the main tree's history. It reaches a path the main tree did not move as well - a copy put back by hand to an older "
+            + "changes names each such copy with the commit whose bytes it holds, and the arguments that hand them. It reaches a path the main tree did not move as well - a copy put back by hand to an older "
             + "version - and one naming a path the agent holds as the main tree does is let stand.",
             text,
             StringComparison.Ordinal);
@@ -381,7 +380,7 @@ public sealed partial class HelpTests
         Assert.Contains(
             "Never merged, whatever is named: a deletion against a change, a path both trees made, a version that is a link or is reached through "
             + "one, a file git reads as binary or will not merge, one "
-            + $"whose merge attribute asks for another merge, a file above {DiskSpace.Size(TwoChanges.MostBytes)}, and an anchor registry; nor is the "
+            + "whose merge attribute asks for another merge, and an anchor registry; nor is the "
             + "arm registry ever merged by line.",
             text,
             StringComparison.Ordinal);

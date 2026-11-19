@@ -135,8 +135,8 @@ public sealed class WorkflowCache
     public const int BlobsPerHold = 256;
 
     /// <summary>
-    /// Retired: a pruning takes any number of days, its cut-off clamped at the clock's start. Kept only while the command
-    /// line's description that still names it is rewritten by its owner; nothing here reads it.
+    /// Retired: a pruning takes any number of days, its cut-off clamped at the clock's start. Kept only while the README's
+    /// sentence, and the test that holds the README to it, still name it; nothing here reads it.
     /// </summary>
     public const int MostUnusedDays = 36_500;
 

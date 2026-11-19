@@ -359,7 +359,7 @@ public sealed class CtestEntriesTests
 /// <summary>
 /// The reader that asks ctest what it registers for a red control's cases: it asks only where the leg's tests run
 /// through ctest, with the command the test command of the same settings makes and the description option appended,
-/// started where that command starts and bounded by two minutes - and it owns no rule of the match, which
+/// started where that command starts and waited for to its end, said while it lasts - and it owns no rule of the match, which
 /// <see cref="CtestEntries"/> reads from the answer.
 /// </summary>
 public sealed class CtestDescriptionTests
