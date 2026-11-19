@@ -9,8 +9,8 @@ namespace DssHarness.Core.Codebase.Languages.Scanning;
 /// </summary>
 /// <remarks>
 /// <para>
-/// A walk reads its tokens one declaration at a time, as <see cref="ScanFrame.Walk"/> does: its reading of one answers
-/// where the next begins - always past it, since one that reads nothing is passed over a token at a time.
+/// A walk reads its tokens one declaration at a time: its reading of one answers where the next begins - always past it,
+/// since one that reads nothing is passed over a token at a time.
 /// </para>
 /// <para>
 /// What a reading does after it begins a walk is done before that walk is read. What must be done before a walk's first

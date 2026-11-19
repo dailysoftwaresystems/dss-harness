@@ -57,13 +57,6 @@ public sealed record FileExtract(IReadOnlyList<ExtractNode> Nodes)
     public IReadOnlyList<ExtractLiteral>? Literals { get; init; }
 
     /// <summary>
-    /// The most names of a receiver's chain - <c>a.b.c</c> - every implementation reads a reference's qualifier from: a
-    /// longer chain is a value of no type the file says, and is read no further, so a use of each member of a long chain
-    /// costs no walk of the whole of it.
-    /// </summary>
-    public const int MostReceiverNames = 8;
-
-    /// <summary>
     /// What is wrong with this extract of a file of <paramref name="lineCount"/> lines made by
     /// <paramref name="language"/>; <see langword="null"/> where nothing is. The shape alone: a node's digest is checked
     /// against the file's lines where the lines are at hand.
@@ -758,7 +751,8 @@ public sealed record ExtractReference(string From, string Kind, string Name, int
             : !FileExtract.Within(Line, lineCount) ? string.Create(CultureInfo.InvariantCulture, $"it is on line {Line}, outside the file's {lineCount}")
             : Arity is < 0 ? "its arity is below zero"
             : Qualifier is { } qualifier && !CodeQualifierKinds.All.Contains(qualifier.Kind, StringComparer.Ordinal) ? $"its qualifier's kind is '{qualifier.Kind}', which is none of {string.Join(", ", CodeQualifierKinds.All)}"
-            : Qualifier is { Kind: CodeQualifierKinds.Named or CodeQualifierKinds.Type or CodeQualifierKinds.Prefix or CodeQualifierKinds.Own or CodeQualifierKinds.Module } named && string.IsNullOrWhiteSpace(named.Name) ? "its qualifier names nothing"
+            : Qualifier is { Kind: CodeQualifierKinds.Named or CodeQualifierKinds.Type or CodeQualifierKinds.Prefix or CodeQualifierKinds.Own or CodeQualifierKinds.Module } named && string.IsNullOrWhiteSpace(named.Name)
+                && named is not { Kind: CodeQualifierKinds.Named, Name: null, Link: not null } ? "its qualifier names nothing"
             : Qualifier is { Kind: CodeQualifierKinds.Value or CodeQualifierKinds.Scope or CodeQualifierKinds.Key, Name: { } value } && string.IsNullOrWhiteSpace(value) ? "its qualifier's name is empty"
             : null;
 }

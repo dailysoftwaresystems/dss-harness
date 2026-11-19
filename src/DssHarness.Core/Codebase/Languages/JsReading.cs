@@ -3615,7 +3615,7 @@ internal sealed class JsReading
                 // Each hole's code a run of its own, read first; the element's components once they are, then the rest.
                 if (text.Interpolations.TryGetValue(token.Start, out var spans) && spans.Count > 0)
                 {
-                    var holes = spans.Select(span => JsLexer.Scan(scan.Source, span.Start, span.End, text.Lines, _markup)).ToList();
+                    var holes = spans.Select(span => JsLexer.Scan(scan.Source, span.Start, span.End, text.Lines, _markup, text.Closes)).ToList();
 
                     for (var hole = holes.Count - 1; hole >= 0; hole--)
                     {

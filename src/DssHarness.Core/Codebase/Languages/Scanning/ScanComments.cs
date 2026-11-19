@@ -9,9 +9,6 @@ namespace DssHarness.Core.Codebase.Languages.Scanning;
 /// </summary>
 internal static class ScanComments
 {
-    /// <summary>How many of a file's first lines a generator's mark is looked for in.</summary>
-    private const int GeneratedLines = 30;
-
     /// <summary>The marks a line of C's comments begins with.</summary>
     private static readonly char[] SlashMarks = ['/', '*', '!', '<'];
 
@@ -66,14 +63,17 @@ internal static class ScanComments
     }
 
     /// <summary>
-    /// Why the text is generated code: what a comment among its first <see cref="GeneratedLines"/> lines says, as a
-    /// generator writes - <c>DO NOT EDIT</c>, <c>DO NOT MODIFY BY HAND</c> (Dart's builders) or <c>@generated</c>;
-    /// <see langword="null"/> where none does.
+    /// Why the text is generated code: what a comment of its leading run - every comment before its first token of code,
+    /// however many lines they run over, as the generators' own conventions place the mark - says, as a generator writes:
+    /// <c>DO NOT EDIT</c>, <c>DO NOT MODIFY BY HAND</c> (Dart's builders) or <c>@generated</c>; <see langword="null"/>
+    /// where none does.
     /// </summary>
     /// <param name="scan">The text.</param>
     public static string? Generated(ScannedText scan)
     {
-        foreach (var comment in scan.Comments.TakeWhile(comment => comment.Line <= GeneratedLines))
+        var code = scan.Count > 0 ? scan[0].Start : int.MaxValue;
+
+        foreach (var comment in scan.Comments.TakeWhile(comment => comment.Start < code))
         {
             var text = scan.Source.AsSpan(comment.Start, comment.Length);
 

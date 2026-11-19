@@ -48,7 +48,7 @@ public static partial class HelpTopics
         {
             var claims = extractor.Claims.Fallback
                 ? "every file no other claims"
-                : string.Join(", ", extractor.Claims.Names.Concat(extractor.Claims.Extensions).Select(claim => claim.Value + (claim.ContentTest is null ? string.Empty : " (by a test of its first characters)")));
+                : string.Join(", ", extractor.Claims.Names.Concat(extractor.Claims.Extensions).Select(claim => claim.Value + (claim.ContentTest is null ? string.Empty : " (by a test of its text)")));
 
             builder.AppendLine($"  {extractor.Language} (version {extractor.Version.ToString(CultureInfo.InvariantCulture)}; {claims})");
             AppendWrapped(builder, $"    reads {extractor.Help.Reads}.");

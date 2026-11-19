@@ -1772,64 +1772,23 @@ internal sealed class DartReading
     }
 
     /// <summary>
-    /// One run of code <see cref="Calls"/> reads: its text - an interpolation's scanned once it is reached - where the
-    /// reading of it stands and where it ends, the node it is the calls of, what it binds, and what it reads in a way of its
-    /// own where it reaches it, each by where it begins and with where it ends: the types a closure's or a local
+    /// One run of code <see cref="Calls"/> reads (<see cref="ScanRun{TKey, TLocals}"/>), with what it reads in a way of
+    /// its own where it reaches it, each by where it begins and with where it ends: the types a closure's or a local
     /// function's parameters are written with, and the patterns a switch expression's arms match by.
     /// </summary>
-    private sealed class CodeRun
+    private sealed class CodeRun : ScanRun<string, Locals>
     {
-        private readonly Func<InterpolatedText>? _scanned;
-        private InterpolatedText? _text;
-        private int _to;
-
         /// <summary>A run of <paramref name="text"/> from <paramref name="from"/> to <paramref name="to"/>.</summary>
         public CodeRun(InterpolatedText text, int from, int to, string key, Locals locals)
+            : base(text, from, to, key, locals)
         {
-            _text = text;
-            _to = to;
-            At = from;
-            Key = key;
-            Locals = locals;
         }
 
         /// <summary>A run of the whole of the text <paramref name="scanned"/> scans, once it is reached.</summary>
         public CodeRun(Func<InterpolatedText> scanned, string key, Locals locals)
+            : base(scanned, key, locals)
         {
-            _scanned = scanned;
-            Key = key;
-            Locals = locals;
         }
-
-        public InterpolatedText Text
-        {
-            get
-            {
-                if (_text is null)
-                {
-                    _text = _scanned!();
-                    _to = _text.Scan.Count;
-                }
-
-                return _text;
-            }
-        }
-
-        /// <summary>Where it ends: its text's end, for an interpolation's, once it is scanned.</summary>
-        public int To
-        {
-            get
-            {
-                _ = Text;
-                return _to;
-            }
-        }
-
-        public int At { get; set; }
-
-        public string Key { get; }
-
-        public Locals Locals { get; }
 
         public Dictionary<int, int> Typed { get; } = [];
 
@@ -1880,7 +1839,7 @@ internal sealed class DartReading
                 for (var index = spans.Count - 1; index >= 0; index--)
                 {
                     var (spanStart, spanEnd) = spans[index];
-                    runs.Push(new CodeRun(() => DartLexer.Scan(scan.Source, spanStart, spanEnd, text.Lines), key, locals));
+                    runs.Push(new CodeRun(() => DartLexer.Scan(scan.Source, spanStart, spanEnd, text.Lines, text.Closes), key, locals));
                 }
             }
 

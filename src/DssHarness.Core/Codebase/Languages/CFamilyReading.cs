@@ -209,7 +209,7 @@ internal sealed class CFamilyReading
     }
 
     /// <summary>
-    /// Whether <paramref name="probe"/>, a file's first characters, holds in its code a mark only C++ writes: <c>class</c>,
+    /// Whether <paramref name="probe"/>, a file's text as its claim is tested, holds in its code a mark only C++ writes: <c>class</c>,
     /// <c>namespace</c>, <c>template</c>, an access label, <c>::</c> before a name, or an <c>#include</c> of a standard
     /// header with no extension (<c>&lt;vector&gt;</c>, <c>&lt;cstdio&gt;</c>) - an attribute's contents and what a
     /// conditional on <c>__cplusplus</c> holds, which a C header writes for C++'s includers, left out.
