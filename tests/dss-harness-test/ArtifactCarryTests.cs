@@ -84,6 +84,29 @@ public sealed class ArtifactCarryTests
     }
 
     /// <summary>
+    /// An action grouped sixty directories deep keeps its run's artifacts where they are found: the walk goes each
+    /// directory once, on a stack of its own, with no depth it stops at. Held to thirty two, a run whose action was
+    /// grouped deeper was refused as one that kept nothing.
+    /// </summary>
+    [Fact]
+    public async Task ArtifactsSixtyDeep_AreFound()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var (_, service) = await PrepareAsync(temp, cancellationToken);
+        var action = string.Join('/', [.. Enumerable.Repeat("g", 59), "probe"]);
+        var kept = Path.Combine(temp.Path, HarnessLayout.ActionArtifactsRelative(action, RunId, Leg), "pack");
+
+        Directory.CreateDirectory(kept);
+        await File.WriteAllTextAsync(Path.Combine(kept, "payload.txt"), "carried", cancellationToken);
+
+        var outcome = await service.SyncHostsAsync(temp.Path, null, new SyncOptions { Artifact = RunId }, [], cancellationToken);
+
+        Assert.Equal(HarnessExit.Success, outcome.ExitCode);
+        Assert.DoesNotContain("has kept anything", outcome.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// One direction or the other. Asked for both, which one this runs in is undecided, and picking
     /// either would be picking for the reader.
     /// </summary>
