@@ -126,7 +126,7 @@ public sealed class RemoteWorkflowUseTests
         var (remote, _, fetcher, _) = Fixture(temp);
         var source = new WorkflowRemoteSource("github.com", "dailysoftwaresystems", "shared", Yml, @ref);
 
-        var refused = await Assert.ThrowsAsync<HarnessException>(() => fetcher.ResolveAsync(source, Allowed(), temp.Path, NoVariables, recorded: null, Token));
+        var refused = await Assert.ThrowsAsync<HarnessException>(() => fetcher.ResolveAsync(source, Allowed(), NoVariables, recorded: null, Token));
 
         Assert.Equal(HarnessExit.Refused, refused.ExitCode);
         Assert.Equal($"'{source.Spelled}' names '{@ref}' is no ref git takes: {why}; nothing was asked of the forge", refused.Message);
@@ -151,7 +151,7 @@ public sealed class RemoteWorkflowUseTests
         var commit = await remote.CommitAsync(("security-review.yml", Definition), ("prompts/review.md", Prompt));
         await remote.TagAsync("v1", commit);
 
-        var resolved = await fetcher.ResolveAsync(Parsed(), Allowed(), temp.Path, NoVariables, recorded: null, Token);
+        var resolved = await fetcher.ResolveAsync(Parsed(), Allowed(), NoVariables, recorded: null, Token);
 
         Assert.Equal((commit, Definition, false, false), (resolved.Commit, resolved.Definition, resolved.Moving, resolved.FromLastResolved));
         Assert.Equal(["ls-remote", "fetch refs/tags/v1", "fetch by id", "fetch by id"], remote.Asked);
@@ -175,7 +175,7 @@ public sealed class RemoteWorkflowUseTests
         // The same tag again: one call re-resolves it - a tag needs that, at every run's start - and the cache answers
         // the commit it holds, with nothing fetched.
         remote.Clear();
-        var again = await fetcher.ResolveAsync(Parsed(), Allowed(), temp.Path, NoVariables, recorded: null, Token);
+        var again = await fetcher.ResolveAsync(Parsed(), Allowed(), NoVariables, recorded: null, Token);
 
         Assert.Equal((commit, Definition, false, false), (again.Commit, again.Definition, again.Moving, again.FromLastResolved));
         Assert.Equal(["ls-remote"], remote.Asked);
@@ -194,7 +194,7 @@ public sealed class RemoteWorkflowUseTests
         var commit = await remote.CommitAsync(("security-review.yml", Definition));
         _ = await remote.AnnotatedTagAsync("v1", commit, "commit");
 
-        var resolved = await fetcher.ResolveAsync(Parsed(), Allowed(), temp.Path, NoVariables, recorded: null, Token);
+        var resolved = await fetcher.ResolveAsync(Parsed(), Allowed(), NoVariables, recorded: null, Token);
 
         Assert.Equal(commit, resolved.Commit);
         Assert.Equal(commit, Assert.Single(cache.List().Entries).Entry.Commit);
@@ -204,7 +204,7 @@ public sealed class RemoteWorkflowUseTests
         var tree = await remote.TreeOfAsync(commit);
         _ = await remote.AnnotatedTagAsync("v2", tree, "tree");
 
-        var ofATree = await Assert.ThrowsAsync<HarnessException>(() => Over(cache, remote).ResolveAsync(Parsed() with { Ref = "v2" }, Allowed(), temp.Path, NoVariables, recorded: null, Token));
+        var ofATree = await Assert.ThrowsAsync<HarnessException>(() => Over(cache, remote).ResolveAsync(Parsed() with { Ref = "v2" }, Allowed(), NoVariables, recorded: null, Token));
 
         Assert.Equal(HarnessExit.Refused, ofATree.ExitCode);
         Assert.Equal(
@@ -226,7 +226,7 @@ public sealed class RemoteWorkflowUseTests
         await remote.TagAsync("v1", commit);
         remote.BlobsRead = (_, read) => [.. read.Select(_ => (byte[]?)Encoding.UTF8.GetBytes("something else entirely\n"))];
 
-        var refused = await Assert.ThrowsAsync<HarnessException>(() => fetcher.ResolveAsync(Parsed(), Allowed(), temp.Path, NoVariables, recorded: null, Token));
+        var refused = await Assert.ThrowsAsync<HarnessException>(() => fetcher.ResolveAsync(Parsed(), Allowed(), NoVariables, recorded: null, Token));
 
         Assert.Equal(HarnessExit.Refused, refused.ExitCode);
         Assert.Equal(
@@ -249,7 +249,7 @@ public sealed class RemoteWorkflowUseTests
         var commit = await remote.CommitAsync(("security-reviews.yml", Definition), ("prompts/review.md", Prompt));
         await remote.TagAsync("v1", commit);
 
-        var refused = await Assert.ThrowsAsync<HarnessException>(() => fetcher.ResolveAsync(Parsed(), Allowed(), temp.Path, NoVariables, recorded: null, Token));
+        var refused = await Assert.ThrowsAsync<HarnessException>(() => fetcher.ResolveAsync(Parsed(), Allowed(), NoVariables, recorded: null, Token));
 
         Assert.Equal(HarnessExit.Refused, refused.ExitCode);
         Assert.Equal(
@@ -278,7 +278,7 @@ public sealed class RemoteWorkflowUseTests
         var commit = await remote.CommitAsync(("security-review.yml", Definition), (path, Prompt));
         await remote.TagAsync("v1", commit);
 
-        var refused = await Assert.ThrowsAsync<HarnessException>(() => fetcher.ResolveAsync(Parsed(), Allowed(), temp.Path, NoVariables, recorded: null, Token));
+        var refused = await Assert.ThrowsAsync<HarnessException>(() => fetcher.ResolveAsync(Parsed(), Allowed(), NoVariables, recorded: null, Token));
 
         Assert.Equal(HarnessExit.Refused, refused.ExitCode);
         Assert.Equal($"'{Source}' resolved to the commit '{commit}', whose directory '{Directory}' holds a path no workflow's may: {problem}. Nothing was fetched", refused.Message);
@@ -298,7 +298,7 @@ public sealed class RemoteWorkflowUseTests
         var linked = await remote.CommitAsync([Tracked.Text("security-review.yml", Definition), Tracked.Link("prompts", "../shared-prompts")]);
         await remote.TagAsync("v1", linked);
 
-        var link = await Assert.ThrowsAsync<HarnessException>(() => fetcher.ResolveAsync(Parsed(), Allowed(), temp.Path, NoVariables, recorded: null, Token));
+        var link = await Assert.ThrowsAsync<HarnessException>(() => fetcher.ResolveAsync(Parsed(), Allowed(), NoVariables, recorded: null, Token));
 
         Assert.Equal(
             $"'{Source}' resolved to the commit '{linked}', whose '{Directory}/prompts' is a symbolic link: a workflow's files are its directory's own, and a link is followed nowhere. Nothing was fetched",
@@ -307,7 +307,7 @@ public sealed class RemoteWorkflowUseTests
         var vendored = await remote.CommitAsync([Tracked.Text("security-review.yml", Definition), Tracked.Submodule("vendor", Unheld)]);
         await remote.TagAsync("v1", vendored);
 
-        var submodule = await Assert.ThrowsAsync<HarnessException>(() => fetcher.ResolveAsync(Parsed(), Allowed(), temp.Path, NoVariables, recorded: null, Token));
+        var submodule = await Assert.ThrowsAsync<HarnessException>(() => fetcher.ResolveAsync(Parsed(), Allowed(), NoVariables, recorded: null, Token));
 
         Assert.Equal(
             $"'{Source}' resolved to the commit '{vendored}', whose '{Directory}/vendor' is a submodule: a workflow's files are its directory's own, and another repository's are not fetched with them. Nothing was fetched",
@@ -331,7 +331,7 @@ public sealed class RemoteWorkflowUseTests
         var (remote, cache, fetcher, _) = Fixture(temp);
         remote.Instead = arguments => arguments.Contains("ls-remote") ? new GitCommandResult(0, $"{line}\n", string.Empty, false) : null;
 
-        var failed = await Assert.ThrowsAsync<HarnessException>(() => fetcher.ResolveAsync(Parsed(), Allowed(), temp.Path, NoVariables, recorded: null, Token));
+        var failed = await Assert.ThrowsAsync<HarnessException>(() => fetcher.ResolveAsync(Parsed(), Allowed(), NoVariables, recorded: null, Token));
 
         Assert.Equal(HarnessExit.CommandFailed, failed.ExitCode);
         Assert.Equal($"'{Source}' could not be resolved: git answered the refs it listed with what does not read as one ('{line}' names no object and ref); nothing was cached", failed.Message);
@@ -351,7 +351,7 @@ public sealed class RemoteWorkflowUseTests
         var commit = await remote.CommitAsync(("security-review.yml", Definition));
         await remote.TagAsync("v1", commit);
 
-        var refused = await Assert.ThrowsAsync<HarnessException>(() => fetcher.ResolveAsync(Parsed(), null, temp.Path, NoVariables, recorded: null, Token));
+        var refused = await Assert.ThrowsAsync<HarnessException>(() => fetcher.ResolveAsync(Parsed(), null, NoVariables, recorded: null, Token));
 
         Assert.Equal(HarnessExit.Refused, refused.ExitCode);
         Assert.Equal(
@@ -359,7 +359,7 @@ public sealed class RemoteWorkflowUseTests
             refused.Message);
         Assert.Empty(remote.Runs);
 
-        var resolved = await fetcher.ResolveAsync(Parsed(), Allowed(), temp.Path, NoVariables, recorded: null, Token);
+        var resolved = await fetcher.ResolveAsync(Parsed(), Allowed(), NoVariables, recorded: null, Token);
 
         Assert.Equal(commit, resolved.Commit);
 
@@ -386,7 +386,7 @@ public sealed class RemoteWorkflowUseTests
         var commit = await remote.CommitAsync(("security-review.yml", Definition));
         await remote.BranchAsync("main", commit);
 
-        var refused = await Assert.ThrowsAsync<HarnessException>(() => fetcher.ResolveAsync(Parsed(), Allowed(), temp.Path, NoVariables, recorded: null, Token));
+        var refused = await Assert.ThrowsAsync<HarnessException>(() => fetcher.ResolveAsync(Parsed(), Allowed(), NoVariables, recorded: null, Token));
 
         Assert.Equal(HarnessExit.Refused, refused.ExitCode);
         Assert.Equal(
@@ -396,7 +396,7 @@ public sealed class RemoteWorkflowUseTests
 
         remote.Clear();
         var pinnedToACommit = await Assert.ThrowsAsync<HarnessException>(
-            () => fetcher.ResolveAsync(Parsed(), new WorkflowSourcesConfig { Allow = ["dailysoftwaresystems/*"], Pin = "commit" }, temp.Path, NoVariables, recorded: null, Token));
+            () => fetcher.ResolveAsync(Parsed(), new WorkflowSourcesConfig { Allow = ["dailysoftwaresystems/*"], Pin = "commit" }, NoVariables, recorded: null, Token));
 
         Assert.Equal(
             $"'{Source}' names the ref 'v1', which is no full commit SHA; workflowSources.pin is commit, which takes a full commit SHA only - a tag or a branch moves, and a commit is what it is",
@@ -408,7 +408,6 @@ public sealed class RemoteWorkflowUseTests
         var any = await fetcher.ResolveAsync(
             Parsed(),
             new WorkflowSourcesConfig { Allow = ["dailysoftwaresystems/*"], Pin = "any" },
-            temp.Path,
             NoVariables,
             recorded: null,
             Token);
@@ -424,7 +423,6 @@ public sealed class RemoteWorkflowUseTests
         var neither = await Assert.ThrowsAsync<HarnessException>(() => fetcher.ResolveAsync(
             Parsed() with { Ref = "nowhere" },
             new WorkflowSourcesConfig { Allow = ["dailysoftwaresystems/*"], Pin = "any" },
-            temp.Path,
             NoVariables,
             recorded: null,
             Token));
@@ -445,7 +443,6 @@ public sealed class RemoteWorkflowUseTests
         var refused = await Assert.ThrowsAsync<HarnessException>(() => fetcher.ResolveAsync(
             Parsed(),
             new WorkflowSourcesConfig { Allow = ["dailysoftwaresystems/*"], Offline = "last-resolved", Pin = "any" },
-            temp.Path,
             NoVariables,
             recorded: null,
             Token));
@@ -475,7 +472,7 @@ public sealed class RemoteWorkflowUseTests
         var commit = await remote.CommitAsync(("security-review.yml", Definition));
         await remote.BranchAsync("main", commit);
 
-        var resolved = await fetcher.ResolveAsync(Parsed() with { Ref = commit }, commitOnly, temp.Path, NoVariables, recorded: null, Token);
+        var resolved = await fetcher.ResolveAsync(Parsed() with { Ref = commit }, commitOnly, NoVariables, recorded: null, Token);
 
         Assert.Equal(commit, resolved.Commit);
         Assert.Equal(["fetch every ref", "fetch by id", "fetch by id"], remote.Asked);
@@ -486,7 +483,7 @@ public sealed class RemoteWorkflowUseTests
         await remote.BranchAsync("feature/x", commit);
         remote.Clear();
 
-        var refused = await Assert.ThrowsAsync<HarnessException>(() => fetcher.ResolveAsync(Parsed() with { Ref = imposter }, commitOnly, temp.Path, NoVariables, recorded: null, Token));
+        var refused = await Assert.ThrowsAsync<HarnessException>(() => fetcher.ResolveAsync(Parsed() with { Ref = imposter }, commitOnly, NoVariables, recorded: null, Token));
 
         Assert.Equal(HarnessExit.Refused, refused.ExitCode);
         Assert.Equal(
@@ -510,12 +507,12 @@ public sealed class RemoteWorkflowUseTests
         var commit = await remote.CommitAsync(("security-review.yml", Definition), ("prompts/review.md", Prompt));
         await remote.TagAsync("v1", commit);
 
-        _ = await online.ResolveAsync(Parsed(), Allowed(), temp.Path, NoVariables, recorded: null, Token);
+        _ = await online.ResolveAsync(Parsed(), Allowed(), NoVariables, recorded: null, Token);
 
         // The network is not there any more: the tag cannot be resolved, and the failure says what git said and what the
         // configuration would have stand in, with the code git's words for no connection are raised with.
         remote.Offline = true;
-        var refused = await Assert.ThrowsAsync<HarnessException>(() => online.ResolveAsync(Parsed(), Allowed(), temp.Path, NoVariables, recorded: null, Token));
+        var refused = await Assert.ThrowsAsync<HarnessException>(() => online.ResolveAsync(Parsed(), Allowed(), NoVariables, recorded: null, Token));
 
         Assert.Equal(HarnessExit.CommandFailed, refused.ExitCode);
         Assert.False(WorkflowResolution.RefusesTheSource(refused));
@@ -525,7 +522,6 @@ public sealed class RemoteWorkflowUseTests
         var stood = await online.ResolveAsync(
             Parsed(),
             new WorkflowSourcesConfig { Allow = ["dailysoftwaresystems/*"], Offline = "last-resolved" },
-            temp.Path,
             NoVariables,
             recorded: null,
             Token);
@@ -541,7 +537,6 @@ public sealed class RemoteWorkflowUseTests
         var none = await Assert.ThrowsAsync<HarnessException>(() => online.ResolveAsync(
             Parsed() with { Ref = "v2" },
             new WorkflowSourcesConfig { Allow = ["dailysoftwaresystems/*"], Offline = "last-resolved" },
-            temp.Path,
             NoVariables,
             recorded: null,
             Token));
@@ -564,7 +559,7 @@ public sealed class RemoteWorkflowUseTests
         await remote.BranchAsync("v1", commit);
 
         // Resolved once as a branch, the pin then allowing one.
-        var moving = await fetcher.ResolveAsync(Parsed(), new WorkflowSourcesConfig { Allow = ["dailysoftwaresystems/*"], Pin = "any" }, temp.Path, NoVariables, recorded: null, Token);
+        var moving = await fetcher.ResolveAsync(Parsed(), new WorkflowSourcesConfig { Allow = ["dailysoftwaresystems/*"], Pin = "any" }, NoVariables, recorded: null, Token);
 
         Assert.True(moving.Moving);
         warned.Clear();
@@ -574,7 +569,6 @@ public sealed class RemoteWorkflowUseTests
         var refused = await Assert.ThrowsAsync<HarnessException>(() => fetcher.ResolveAsync(
             Parsed(),
             new WorkflowSourcesConfig { Allow = ["dailysoftwaresystems/*"], Offline = "last-resolved" },
-            temp.Path,
             NoVariables,
             recorded: null,
             Token));
@@ -603,25 +597,25 @@ public sealed class RemoteWorkflowUseTests
 
         // v1 resolves to the first commit, then - moved - to the second, a day later.
         await remote.TagAsync("v1", commit);
-        _ = await fetcher.ResolveAsync(Parsed(), lastResolved, temp.Path, NoVariables, recorded: null, Token);
+        _ = await fetcher.ResolveAsync(Parsed(), lastResolved, NoVariables, recorded: null, Token);
         clock.Advance(TimeSpan.FromDays(1));
         await remote.TagAsync("v1", moved);
-        _ = await fetcher.ResolveAsync(Parsed(), lastResolved, temp.Path, NoVariables, recorded: null, Token);
+        _ = await fetcher.ResolveAsync(Parsed(), lastResolved, NoVariables, recorded: null, Token);
 
         remote.Offline = true;
-        Assert.Equal(moved, (await fetcher.ResolveAsync(Parsed(), lastResolved, temp.Path, NoVariables, recorded: null, Token)).Commit);
+        Assert.Equal(moved, (await fetcher.ResolveAsync(Parsed(), lastResolved, NoVariables, recorded: null, Token)).Commit);
 
         // Moved back to the first commit, which the cache holds: no fetch, and still the newest resolution.
         remote.Offline = false;
         clock.Advance(TimeSpan.FromDays(1));
         await remote.TagAsync("v1", commit);
         remote.Clear();
-        _ = await fetcher.ResolveAsync(Parsed(), lastResolved, temp.Path, NoVariables, recorded: null, Token);
+        _ = await fetcher.ResolveAsync(Parsed(), lastResolved, NoVariables, recorded: null, Token);
 
         Assert.Equal(["ls-remote"], remote.Asked);
 
         remote.Offline = true;
-        Assert.Equal(commit, (await fetcher.ResolveAsync(Parsed(), lastResolved, temp.Path, NoVariables, recorded: null, Token)).Commit);
+        Assert.Equal(commit, (await fetcher.ResolveAsync(Parsed(), lastResolved, NoVariables, recorded: null, Token)).Commit);
         Assert.Equal(clock.GetUtcNow(), cache.LastResolved("github.com", "dailysoftwaresystems", "shared", Directory, "v1")!.ResolvedAt);
     }
 
@@ -641,10 +635,10 @@ public sealed class RemoteWorkflowUseTests
         var lastResolved = new WorkflowSourcesConfig { Allow = ["dailysoftwaresystems/*"], Offline = "last-resolved" };
         var commit = await remote.CommitAsync(("security-review.yml", Definition));
         await remote.TagAsync("v1", commit);
-        _ = await fetcher.ResolveAsync(Parsed(), lastResolved, temp.Path, NoVariables, recorded: null, Token);
+        _ = await fetcher.ResolveAsync(Parsed(), lastResolved, NoVariables, recorded: null, Token);
 
         remote.Instead = _ => new GitCommandResult(128, string.Empty, said + "\n", false);
-        var refused = await Assert.ThrowsAsync<HarnessException>(() => fetcher.ResolveAsync(Parsed(), lastResolved, temp.Path, NoVariables, recorded: null, Token));
+        var refused = await Assert.ThrowsAsync<HarnessException>(() => fetcher.ResolveAsync(Parsed(), lastResolved, NoVariables, recorded: null, Token));
 
         Assert.Equal(HarnessExit.Refused, refused.ExitCode);
         Assert.Equal(
@@ -666,10 +660,10 @@ public sealed class RemoteWorkflowUseTests
         var commit = await remote.CommitAsync(("security-review.yml", Definition));
         await remote.TagAsync("v1", commit);
         await remote.BranchAsync("main", commit);
-        _ = await fetcher.ResolveAsync(Parsed(), lastResolved, temp.Path, NoVariables, recorded: null, Token);
+        _ = await fetcher.ResolveAsync(Parsed(), lastResolved, NoVariables, recorded: null, Token);
 
         await remote.DeleteTagAsync("v1");
-        var refused = await Assert.ThrowsAsync<HarnessException>(() => fetcher.ResolveAsync(Parsed(), lastResolved, temp.Path, NoVariables, recorded: null, Token));
+        var refused = await Assert.ThrowsAsync<HarnessException>(() => fetcher.ResolveAsync(Parsed(), lastResolved, NoVariables, recorded: null, Token));
 
         Assert.Equal(
             $"'{Source}' names the ref 'v1', which is no tag of 'dailysoftwaresystems/shared'; workflowSources.pin is tag-or-commit, which takes a tag or a full commit SHA - a branch moves, and what a run ran must be what it said",
@@ -691,12 +685,12 @@ public sealed class RemoteWorkflowUseTests
         var commit = await remote.CommitAsync(("security-review.yml", Definition), ("prompts/review.md", Prompt));
         await remote.TagAsync("v1", commit);
 
-        var first = await fetcher.ResolveAsync(Parsed(), Allowed(), temp.Path, NoVariables, recorded: null, Token);
+        var first = await fetcher.ResolveAsync(Parsed(), Allowed(), NoVariables, recorded: null, Token);
         var blob = cache.BlobFile(first.Entry.Files.Single(file => file.Path == changed).Blob);
         await File.WriteAllTextAsync(blob, "changed on disk\n", Token);
         remote.Clear();
 
-        var again = await fetcher.ResolveAsync(Parsed(), Allowed(), temp.Path, NoVariables, recorded: null, Token);
+        var again = await fetcher.ResolveAsync(Parsed(), Allowed(), NoVariables, recorded: null, Token);
 
         Assert.Equal((commit, Definition), (again.Commit, again.Definition));
         Assert.Equal(["ls-remote", "fetch refs/tags/v1", "fetch by id", "fetch by id"], remote.Asked);
@@ -717,13 +711,13 @@ public sealed class RemoteWorkflowUseTests
         await remote.BranchAsync("main", commit);
         await remote.TagAsync("v1", commit);
 
-        _ = await fetcher.ResolveAsync(Parsed(), Allowed(), temp.Path, NoVariables, recorded: null, Token);
+        _ = await fetcher.ResolveAsync(Parsed(), Allowed(), NoVariables, recorded: null, Token);
 
         // The tag has moved since the run began: it names another commit now.
         await remote.TagAsync("v1", await remote.CommitAsync(("security-review.yml", "name: security-review\nsteps: []\n")));
         remote.Clear();
 
-        var resolved = await fetcher.ResolveAsync(Parsed(), Allowed(), temp.Path, NoVariables, recorded: new WorkflowRecordedUse(commit), Token);
+        var resolved = await fetcher.ResolveAsync(Parsed(), Allowed(), NoVariables, recorded: new WorkflowRecordedUse(commit), Token);
 
         Assert.Equal(commit, resolved.Commit);
         Assert.Empty(remote.Runs);
@@ -732,7 +726,7 @@ public sealed class RemoteWorkflowUseTests
         // any commit named by its SHA is, and the refs are never listed.
         System.IO.Directory.Delete(cache.Directory, recursive: true);
 
-        var refetched = await fetcher.ResolveAsync(Parsed(), Allowed(), temp.Path, NoVariables, recorded: new WorkflowRecordedUse(commit), Token);
+        var refetched = await fetcher.ResolveAsync(Parsed(), Allowed(), NoVariables, recorded: new WorkflowRecordedUse(commit), Token);
 
         Assert.Equal((commit, Definition), (refetched.Commit, refetched.Definition));
         Assert.Equal(["fetch every ref", "fetch by id", "fetch by id"], remote.Asked);
@@ -753,7 +747,7 @@ public sealed class RemoteWorkflowUseTests
         static string? Agent(string name) => name == AgentChildEnvironment.AgentMarker ? "1" : null;
         var commit = await remote.CommitAsync(("security-review.yml", Definition), ("prompts/review.md", Prompt));
         await remote.TagAsync("v1", commit);
-        var began = await fetcher.ResolveAsync(Parsed(), Allowed(), temp.Path, NoVariables, recorded: null, Token);
+        var began = await fetcher.ResolveAsync(Parsed(), Allowed(), NoVariables, recorded: null, Token);
         var run = new DssHarness.Core.Orchestration.OrchestratorLayout("r1", temp.Combine(".orchestrators", "r1"));
         var kept = WorkflowCache.OfRun(harness.FileSystem, run);
         kept.Keep([began]);
@@ -764,8 +758,8 @@ public sealed class RemoteWorkflowUseTests
         remote.Offline = true;
         remote.Clear();
 
-        var person = await fetcher.ResolveAsync(Parsed(), Allowed(), temp.Path, NoVariables, recorded: new WorkflowRecordedUse(commit, kept), Token);
-        var agent = await fetcher.ResolveAsync(Parsed(), Allowed(), temp.Path, Agent, recorded: new WorkflowRecordedUse(commit, kept), Token);
+        var person = await fetcher.ResolveAsync(Parsed(), Allowed(), NoVariables, recorded: new WorkflowRecordedUse(commit, kept), Token);
+        var agent = await fetcher.ResolveAsync(Parsed(), Allowed(), Agent, recorded: new WorkflowRecordedUse(commit, kept), Token);
 
         Assert.Equal((commit, Definition, Prompt), (person.Commit, person.Definition, person.Text(PromptPath)));
         Assert.Equal((commit, Definition, Prompt), (agent.Commit, agent.Definition, agent.Text(PromptPath)));
@@ -777,7 +771,7 @@ public sealed class RemoteWorkflowUseTests
         // A blob of the copy gone: the copy does not hold it whole, and the cache - pruned - and then the remote are asked.
         File.Delete(kept.BlobFile(WorkflowCache.BlobSha(Prompt)));
 
-        var unreached = await Assert.ThrowsAsync<HarnessException>(() => fetcher.ResolveAsync(Parsed(), Allowed(), temp.Path, NoVariables, recorded: new WorkflowRecordedUse(commit, kept), Token));
+        var unreached = await Assert.ThrowsAsync<HarnessException>(() => fetcher.ResolveAsync(Parsed(), Allowed(), NoVariables, recorded: new WorkflowRecordedUse(commit, kept), Token));
 
         Assert.Equal(HarnessExit.CommandFailed, unreached.ExitCode);
         Assert.Equal(["fetch every ref"], remote.Asked);
@@ -803,7 +797,6 @@ public sealed class RemoteWorkflowUseTests
         var resolved = await fetcher.ResolveAsync(
             WorkflowRemote.Source($"{host}/acme/shared/workflows/security-review/security-review.yml@v1")!,
             Hosted(host),
-            temp.Path,
             name => name == "GHE_TOKEN" ? "the-token" : null,
             recorded: null,
             Token);
@@ -835,7 +828,7 @@ public sealed class RemoteWorkflowUseTests
         var commit = await remote.CommitAsync(("security-review.yml", Definition));
         await remote.TagAsync("v1", commit);
 
-        _ = await fetcher.ResolveAsync(Parsed(), Allowed(), temp.Path, NoVariables, recorded: null, Token);
+        _ = await fetcher.ResolveAsync(Parsed(), Allowed(), NoVariables, recorded: null, Token);
 
         Assert.NotEmpty(remote.Runs);
         Assert.All(remote.Runs, run =>
@@ -855,7 +848,7 @@ public sealed class RemoteWorkflowUseTests
         using var temp = new TempDirectory();
         var (remote, _, fetcher, _) = Fixture(temp);
 
-        var unset = await Assert.ThrowsAsync<HarnessException>(() => fetcher.ResolveAsync(WorkflowRemote.Source(GhesSource)!, Hosted("ghe.acme.internal"), temp.Path, NoVariables, recorded: null, Token));
+        var unset = await Assert.ThrowsAsync<HarnessException>(() => fetcher.ResolveAsync(WorkflowRemote.Source(GhesSource)!, Hosted("ghe.acme.internal"), NoVariables, recorded: null, Token));
 
         Assert.Equal(HarnessExit.Refused, unset.ExitCode);
         Assert.Equal(
@@ -869,7 +862,6 @@ public sealed class RemoteWorkflowUseTests
                 Allow = ["ghe.acme.internal/acme/*"],
                 Hosts = new Dictionary<string, WorkflowHostConfig>(StringComparer.OrdinalIgnoreCase) { ["ghe.acme.internal"] = new() },
             },
-            temp.Path,
             name => name == "GH_ENTERPRISE_TOKEN" ? "the-machines-own" : null,
             recorded: null,
             Token));
@@ -895,7 +887,7 @@ public sealed class RemoteWorkflowUseTests
         var commit = await remote.CommitAsync(("security-review.yml", withMark), ("prompts/review.md", latin1));
         await remote.TagAsync("v1", commit);
 
-        var resolved = await fetcher.ResolveAsync(Parsed(), Allowed(), temp.Path, NoVariables, recorded: null, Token);
+        var resolved = await fetcher.ResolveAsync(Parsed(), Allowed(), NoVariables, recorded: null, Token);
 
         Assert.Equal(Definition, resolved.Definition);
         Assert.Equal(withMark, cache.ReadBytes(resolved.Entry, Yml));
@@ -908,7 +900,7 @@ public sealed class RemoteWorkflowUseTests
 
         // Read again from the cache, nothing is fetched and nothing reads as changed on disk.
         remote.Clear();
-        var again = await fetcher.ResolveAsync(Parsed(), Allowed(), temp.Path, NoVariables, recorded: null, Token);
+        var again = await fetcher.ResolveAsync(Parsed(), Allowed(), NoVariables, recorded: null, Token);
 
         Assert.Equal(Definition, again.Definition);
         Assert.Equal(["ls-remote"], remote.Asked);
@@ -929,7 +921,7 @@ public sealed class RemoteWorkflowUseTests
         var (remote, cache, fetcher, warned) = Fixture(temp, clock);
         static string? Agent(string name) => name == AgentChildEnvironment.AgentMarker ? "1" : null;
 
-        var unfetched = await Assert.ThrowsAsync<HarnessException>(() => fetcher.ResolveAsync(Parsed(), Allowed(), temp.Path, Agent, recorded: null, Token));
+        var unfetched = await Assert.ThrowsAsync<HarnessException>(() => fetcher.ResolveAsync(Parsed(), Allowed(), Agent, recorded: null, Token));
 
         Assert.Equal(HarnessExit.Refused, unfetched.ExitCode);
         Assert.Equal(
@@ -940,12 +932,12 @@ public sealed class RemoteWorkflowUseTests
 
         var commit = await remote.CommitAsync(("security-review.yml", Definition));
         await remote.TagAsync("v1", commit);
-        _ = await fetcher.ResolveAsync(Parsed(), Allowed(), temp.Path, NoVariables, recorded: null, Token);
+        _ = await fetcher.ResolveAsync(Parsed(), Allowed(), NoVariables, recorded: null, Token);
         var written = Snapshot(cache.Directory);
         remote.Clear();
         clock.Advance(TimeSpan.FromDays(3));
 
-        var resolved = await fetcher.ResolveAsync(Parsed(), Allowed(), temp.Path, Agent, recorded: null, Token);
+        var resolved = await fetcher.ResolveAsync(Parsed(), Allowed(), Agent, recorded: null, Token);
 
         Assert.Equal((commit, Definition), (resolved.Commit, resolved.Definition));
         Assert.Empty(remote.Runs);
@@ -955,7 +947,7 @@ public sealed class RemoteWorkflowUseTests
             warned);
 
         // A commit the cache does not hold, named by its SHA: refused, and still nothing asked.
-        var sha = await Assert.ThrowsAsync<HarnessException>(() => fetcher.ResolveAsync(Parsed() with { Ref = Unheld }, Allowed(), temp.Path, Agent, recorded: null, Token));
+        var sha = await Assert.ThrowsAsync<HarnessException>(() => fetcher.ResolveAsync(Parsed() with { Ref = Unheld }, Allowed(), Agent, recorded: null, Token));
 
         Assert.Equal(
             $"'dailysoftwaresystems/shared/workflows/security-review/security-review.yml@{Unheld}' is not in the workflow cache as this command needs it (it holds no entry for the commit '{Unheld}'), and this command reads the cache alone, taken for an agent's: it carries DSSHARNESS_UNDER_AGENT, the mark every agent's child is given, whatever the mark holds; {FilledFromAShell}",
@@ -1070,7 +1062,7 @@ public sealed class RemoteWorkflowUseTests
         var root = temp.Combine("workflow-cache");
         var commit = await remote.CommitAsync(("security-review.yml", Outer), ("inner/inner.yml", Inner), ("inner/prompts/check.md", Check));
         await remote.TagAsync("v1", commit);
-        var resolution = await fetcher.ResolveAsync(Parsed(), Allowed(), temp.Path, NoVariables, recorded: null, Token);
+        var resolution = await fetcher.ResolveAsync(Parsed(), Allowed(), NoVariables, recorded: null, Token);
         var local = new List<string>();
 
         var (definition, problems, _) = await WorkflowResolver.ResolveAsync(
@@ -1192,10 +1184,10 @@ public sealed class RemoteWorkflowUseTests
         // The stale entry, at the moved commit, used forty days ago; the kept one used yesterday. The yml is one blob
         // both hold.
         await remote.TagAsync("v0", moved);
-        _ = await fetcher.ResolveAsync(Parsed() with { Ref = "v0" }, Allowed(), temp.Path, NoVariables, recorded: null, Token);
+        _ = await fetcher.ResolveAsync(Parsed() with { Ref = "v0" }, Allowed(), NoVariables, recorded: null, Token);
         clock.Advance(TimeSpan.FromDays(39));
         await remote.TagAsync("v1", commit);
-        var kept = await fetcher.ResolveAsync(Parsed(), Allowed(), temp.Path, NoVariables, recorded: null, Token);
+        var kept = await fetcher.ResolveAsync(Parsed(), Allowed(), NoVariables, recorded: null, Token);
         clock.Advance(TimeSpan.FromDays(1));
 
         var pruning = cache.Prune(30, clock.GetUtcNow());
@@ -1227,7 +1219,7 @@ public sealed class RemoteWorkflowUseTests
         var fetcher = new WorkflowRemoteFetcher(remote.Git, Physical(), cache, Person(), clock: clock, address: remote.AddressOf);
         var commit = await remote.CommitAsync(("security-review.yml", Definition));
         await remote.TagAsync("v1", commit);
-        _ = await fetcher.ResolveAsync(Parsed(), Allowed(), temp.Path, NoVariables, recorded: null, Token);
+        _ = await fetcher.ResolveAsync(Parsed(), Allowed(), NoVariables, recorded: null, Token);
         clock.Advance(TimeSpan.FromDays(31));
 
         var stuck = cache.Prune(30, clock.GetUtcNow());
@@ -1269,7 +1261,7 @@ public sealed class RemoteWorkflowUseTests
         var (remote, cache, fetcher, warned) = Fixture(temp);
         var commit = await remote.CommitAsync(("security-review.yml", Definition));
         await remote.TagAsync("v1", commit);
-        _ = await fetcher.ResolveAsync(Parsed(), Allowed(), temp.Path, NoVariables, recorded: null, Token);
+        _ = await fetcher.ResolveAsync(Parsed(), Allowed(), NoVariables, recorded: null, Token);
 
         var file = System.IO.Directory.EnumerateFiles(Path.Combine(cache.Directory, "entries")).Single();
         await File.WriteAllTextAsync(file, (await File.ReadAllTextAsync(file, Token)).Replace(WorkflowCache.BlobSha(Definition), "../../escape", StringComparison.Ordinal), Token);
@@ -1281,7 +1273,7 @@ public sealed class RemoteWorkflowUseTests
         Assert.Equal($"the workflow cache's entry '{file}' names the blob '../../escape', which is no 40 hex characters; it was not read, and a resolution of it fetches it again", refused.Message);
         Assert.Equal([file], cache.List().Unread.Select(unread => unread.File));
 
-        var again = await fetcher.ResolveAsync(Parsed(), Allowed(), temp.Path, NoVariables, recorded: null, Token);
+        var again = await fetcher.ResolveAsync(Parsed(), Allowed(), NoVariables, recorded: null, Token);
 
         Assert.Equal(Definition, again.Definition);
         Assert.Equal($"{WorkflowRemoteFetcher.Said}: '{Source}': {refused.Message}", Assert.Single(warned));
@@ -1326,7 +1318,7 @@ public sealed class RemoteWorkflowUseTests
         var (remote, cache, fetcher, _) = Fixture(temp);
         var commit = await remote.CommitAsync(("security-review.yml", Definition), ("prompts/review.md", Prompt));
         await remote.TagAsync("v1", commit);
-        var resolved = await fetcher.ResolveAsync(Parsed(), Allowed(), temp.Path, NoVariables, recorded: null, Token);
+        var resolved = await fetcher.ResolveAsync(Parsed(), Allowed(), NoVariables, recorded: null, Token);
         var name = WorkflowRemote.Name(resolved.Source, resolved.Commit);
         var files = new WorkflowNamedFiles(harness.FileSystem, StringComparison.Ordinal, cache);
         var layout = new HarnessLayout(temp.Path, temp.Path);
@@ -1674,7 +1666,7 @@ public sealed class RemoteWorkflowUseTests
         var remote = new Remote(temp.Combine("remotes"));
         await remote.TagAsync("v1", await remote.CommitAsync(("security-review.yml", Definition), ("prompts/review.md", Prompt)));
 
-        var resolved = await Over(cache, remote).ResolveAsync(Parsed(), Allowed(), temp.Path, NoVariables, recorded: null, Token);
+        var resolved = await Over(cache, remote).ResolveAsync(Parsed(), Allowed(), NoVariables, recorded: null, Token);
 
         Assert.True(fileSystem.Happened);
         Assert.Equal((0, 1, true), (pruned!.Entries, pruned.Blobs, pruned.Whole));
@@ -1694,7 +1686,7 @@ public sealed class RemoteWorkflowUseTests
         var (remote, cache, fetcher, _) = Fixture(temp, clock);
         var root = cache.Directory;
         await remote.TagAsync("v1", await remote.CommitAsync(("security-review.yml", Definition), ("prompts/review.md", Prompt)));
-        var used = await fetcher.ResolveAsync(Parsed(), Allowed(), temp.Path, NoVariables, recorded: null, Token);
+        var used = await fetcher.ResolveAsync(Parsed(), Allowed(), NoVariables, recorded: null, Token);
         clock.Advance(TimeSpan.FromDays(31));
 
         var fileSystem = new Meanwhile(
@@ -1724,7 +1716,7 @@ public sealed class RemoteWorkflowUseTests
         var commit = await remote.CommitAsync(("security-review.yml", Definition), ("prompts/review.md", Prompt));
         await remote.TagAsync("v0", moved);
         await remote.TagAsync("v1", commit);
-        _ = await fetcher.ResolveAsync(Parsed() with { Ref = "v0" }, Allowed(), temp.Path, NoVariables, recorded: null, Token);
+        _ = await fetcher.ResolveAsync(Parsed() with { Ref = "v0" }, Allowed(), NoVariables, recorded: null, Token);
         clock.Advance(TimeSpan.FromDays(31));
         WorkflowRemoteResolution? fetched = null;
 
@@ -1732,7 +1724,7 @@ public sealed class RemoteWorkflowUseTests
         var fileSystem = new Meanwhile(
             Physical(),
             (done, path) => done == Meanwhile.Listed && path == Path.Combine(root, "blobs"),
-            () => fetched = Task.Run(() => fetcher.ResolveAsync(Parsed(), Allowed(), temp.Path, NoVariables, recorded: null, Token), Token).GetAwaiter().GetResult());
+            () => fetched = Task.Run(() => fetcher.ResolveAsync(Parsed(), Allowed(), NoVariables, recorded: null, Token), Token).GetAwaiter().GetResult());
 
         var pruning = new WorkflowCache(fileSystem, root).Prune(30, clock.GetUtcNow());
 
@@ -1755,7 +1747,7 @@ public sealed class RemoteWorkflowUseTests
         var root = cache.Directory;
         var commit = await remote.CommitAsync(("security-review.yml", Definition));
         await remote.TagAsync("v1", commit);
-        _ = await fetcher.ResolveAsync(Parsed(), Allowed(), temp.Path, NoVariables, recorded: null, Token);
+        _ = await fetcher.ResolveAsync(Parsed(), Allowed(), NoVariables, recorded: null, Token);
         var entry = System.IO.Directory.EnumerateFiles(Path.Combine(root, "entries")).Single();
         var fileSystem = new Meanwhile(
             Physical(),
@@ -1767,7 +1759,7 @@ public sealed class RemoteWorkflowUseTests
         var reading = new WorkflowCache(fileSystem, root);
         remote.Clear();
 
-        var resolved = await new WorkflowRemoteFetcher(remote.Git, Physical(), reading, Person(), output, new ManualClock(), remote.AddressOf).ResolveAsync(Parsed(), Allowed(), temp.Path, NoVariables, recorded: null, Token);
+        var resolved = await new WorkflowRemoteFetcher(remote.Git, Physical(), reading, Person(), output, new ManualClock(), remote.AddressOf).ResolveAsync(Parsed(), Allowed(), NoVariables, recorded: null, Token);
 
         Assert.True(fileSystem.Happened);
         Assert.Equal(Definition, resolved.Definition);
@@ -1787,7 +1779,6 @@ public sealed class RemoteWorkflowUseTests
         var stood = await new WorkflowRemoteFetcher(remote.Git, Physical(), new WorkflowCache(offline, root), Person(), output, new ManualClock(), remote.AddressOf).ResolveAsync(
             Parsed(),
             new WorkflowSourcesConfig { Allow = ["dailysoftwaresystems/*"], Offline = "last-resolved" },
-            temp.Path,
             NoVariables,
             recorded: null,
             Token);
@@ -1855,7 +1846,7 @@ public sealed class RemoteWorkflowUseTests
                 null);
 
         var underTheEngine = Over(cache, remote, Ancestry(UnderTheEngine));
-        var unfetched = await Assert.ThrowsAsync<HarnessException>(() => underTheEngine.ResolveAsync(Parsed(), Allowed(), temp.Path, NoVariables, recorded: null, Token));
+        var unfetched = await Assert.ThrowsAsync<HarnessException>(() => underTheEngine.ResolveAsync(Parsed(), Allowed(), NoVariables, recorded: null, Token));
 
         Assert.Equal(HarnessExit.Refused, unfetched.ExitCode);
         Assert.Equal(
@@ -1867,7 +1858,7 @@ public sealed class RemoteWorkflowUseTests
             cache,
             remote,
             Ancestry(current => new ProcessTableReading([new SampledProcess(current, null, "dssharness", null, null)], "the process table came back empty, which no running machine's is")));
-        var unread = await Assert.ThrowsAsync<HarnessException>(() => blind.ResolveAsync(Parsed(), Allowed(), temp.Path, NoVariables, recorded: null, Token));
+        var unread = await Assert.ThrowsAsync<HarnessException>(() => blind.ResolveAsync(Parsed(), Allowed(), NoVariables, recorded: null, Token));
 
         Assert.Equal(HarnessExit.Refused, unread.ExitCode);
         Assert.Equal(
@@ -1876,11 +1867,11 @@ public sealed class RemoteWorkflowUseTests
         Assert.Empty(remote.Runs);
 
         // A person's command fetches it; the agent's then reads it, asking and writing nothing.
-        _ = await fetcher.ResolveAsync(Parsed(), Allowed(), temp.Path, NoVariables, recorded: null, Token);
+        _ = await fetcher.ResolveAsync(Parsed(), Allowed(), NoVariables, recorded: null, Token);
         var written = Snapshot(cache.Directory);
         remote.Clear();
 
-        var resolved = await underTheEngine.ResolveAsync(Parsed(), Allowed(), temp.Path, NoVariables, recorded: null, Token);
+        var resolved = await underTheEngine.ResolveAsync(Parsed(), Allowed(), NoVariables, recorded: null, Token);
 
         Assert.Equal((commit, Definition), (resolved.Commit, resolved.Definition));
         Assert.Empty(remote.Runs);
@@ -1902,7 +1893,7 @@ public sealed class RemoteWorkflowUseTests
         var lastResolved = new WorkflowSourcesConfig { Allow = ["dailysoftwaresystems/*"], Offline = "last-resolved" };
         var commit = await remote.CommitAsync(("security-review.yml", Definition), ("prompts/review.md", Prompt));
         await remote.TagAsync("v1", commit);
-        _ = await fetcher.ResolveAsync(Parsed(), Allowed(), temp.Path, NoVariables, recorded: null, Token);
+        _ = await fetcher.ResolveAsync(Parsed(), Allowed(), NoVariables, recorded: null, Token);
         var root = cache.Directory;
         var entry = System.IO.Directory.EnumerateFiles(Path.Combine(root, "entries")).Single();
         var blob = cache.BlobFile(WorkflowCache.BlobSha(Prompt));
@@ -1918,7 +1909,7 @@ public sealed class RemoteWorkflowUseTests
             remote.Offline = false;
             remote.Clear();
 
-            var underAnAgent = await Assert.ThrowsAsync<HarnessException>(() => over.ResolveAsync(Parsed(), Allowed(), temp.Path, Agent, recorded: null, Token));
+            var underAnAgent = await Assert.ThrowsAsync<HarnessException>(() => over.ResolveAsync(Parsed(), Allowed(), Agent, recorded: null, Token));
 
             Assert.Equal((WorkflowCache.FailedExit, why), (underAnAgent.ExitCode, underAnAgent.Message));
             Assert.False(WorkflowResolution.RefusesTheSource(underAnAgent));
@@ -1926,7 +1917,7 @@ public sealed class RemoteWorkflowUseTests
 
             remote.Offline = true;
 
-            var offline = await Assert.ThrowsAsync<HarnessException>(() => over.ResolveAsync(Parsed(), lastResolved, temp.Path, NoVariables, recorded: null, Token));
+            var offline = await Assert.ThrowsAsync<HarnessException>(() => over.ResolveAsync(Parsed(), lastResolved, NoVariables, recorded: null, Token));
 
             Assert.Equal(WorkflowCache.FailedExit, offline.ExitCode);
             Assert.StartsWith(NotReached, offline.Message, StringComparison.Ordinal);
@@ -1936,7 +1927,7 @@ public sealed class RemoteWorkflowUseTests
         // A blob gone leaves the entry not whole: the cache does not hold the workflow, and the refusal says which file.
         File.Delete(blob);
 
-        var gone = await Assert.ThrowsAsync<HarnessException>(() => fetcher.ResolveAsync(Parsed(), Allowed(), temp.Path, Agent, recorded: null, Token));
+        var gone = await Assert.ThrowsAsync<HarnessException>(() => fetcher.ResolveAsync(Parsed(), Allowed(), Agent, recorded: null, Token));
 
         Assert.Equal(
             (HarnessExit.Refused, $"'{Source}' is not in the workflow cache as this command needs it (its files of the commit '{commit}' are not whole: the workflow cache's '{blob}', the file '{PromptPath}' of the entry for 'github.com/dailysoftwaresystems/shared' at '{commit}', is not there; a resolution of it fetches it again), and this command reads the cache alone, taken for an agent's: it carries DSSHARNESS_UNDER_AGENT, the mark every agent's child is given, whatever the mark holds; {FilledFromAShell}"),
@@ -1956,7 +1947,7 @@ public sealed class RemoteWorkflowUseTests
         var clock = new ManualClock();
         var (remote, cache, fetcher, _) = Fixture(temp, clock);
         await remote.TagAsync("v1", await remote.CommitAsync(("security-review.yml", Definition), ("prompts/review.md", Prompt)));
-        var resolved = await fetcher.ResolveAsync(Parsed(), Allowed(), temp.Path, NoVariables, recorded: null, Token);
+        var resolved = await fetcher.ResolveAsync(Parsed(), Allowed(), NoVariables, recorded: null, Token);
         var run = new DssHarness.Core.Orchestration.OrchestratorLayout("r1", temp.Combine(".orchestrators", "r1"));
         var kept = WorkflowCache.OfRun(harness.FileSystem, run);
 
@@ -2099,7 +2090,7 @@ public sealed class RemoteWorkflowUseTests
         var commit = await remote.CommitAsync([Tracked.Text("security-review.yml", Definition), .. Enumerable.Range(0, Notes).Select(at => Tracked.Text(Note(at), Said(at)))]);
         await remote.TagAsync("v1", commit);
 
-        var resolved = await fetcher.ResolveAsync(Parsed(), Allowed(), temp.Path, NoVariables, recorded: null, Token);
+        var resolved = await fetcher.ResolveAsync(Parsed(), Allowed(), NoVariables, recorded: null, Token);
         var entry = Assert.Single(cache.List().Entries).Entry;
 
         Assert.Equal((commit, Notes + 1, Notes + 1), (resolved.Commit, resolved.Files.Count, entry.Files.Count));
@@ -2123,7 +2114,7 @@ public sealed class RemoteWorkflowUseTests
         // The first ninety-nine tags, in the order git names them, stand at the trunk; the hundredth alone at the side line.
         await remote.RefsAsync([.. Enumerable.Range(1, 99).Select(at => ($"refs/tags/t{at.ToString("D3", CultureInfo.InvariantCulture)}", trunk)), ("refs/tags/t100", side)]);
 
-        var resolved = await fetcher.ResolveAsync(Parsed() with { Ref = side }, commitOnly, temp.Path, NoVariables, recorded: null, Token);
+        var resolved = await fetcher.ResolveAsync(Parsed() with { Ref = side }, commitOnly, NoVariables, recorded: null, Token);
 
         Assert.Equal((side, Prompt), (resolved.Commit, resolved.Text(PromptPath)));
         Assert.Equal(["fetch every ref", "fetch by id", "fetch by id"], remote.Asked);
@@ -2132,7 +2123,7 @@ public sealed class RemoteWorkflowUseTests
         var dangling = await remote.CommitAsync([Tracked.Text("security-review.yml", Definition)], parent: side);
         remote.Clear();
 
-        var refused = await Assert.ThrowsAsync<HarnessException>(() => fetcher.ResolveAsync(Parsed() with { Ref = dangling }, commitOnly, temp.Path, NoVariables, recorded: null, Token));
+        var refused = await Assert.ThrowsAsync<HarnessException>(() => fetcher.ResolveAsync(Parsed() with { Ref = dangling }, commitOnly, NoVariables, recorded: null, Token));
 
         Assert.Equal(HarnessExit.Refused, refused.ExitCode);
         Assert.Equal(
@@ -2158,7 +2149,7 @@ public sealed class RemoteWorkflowUseTests
 
         _ = await remote.AnnotatedTagAsync("v1", tagged, "tag");
 
-        var resolved = await fetcher.ResolveAsync(Parsed(), Allowed(), temp.Path, NoVariables, recorded: null, Token);
+        var resolved = await fetcher.ResolveAsync(Parsed(), Allowed(), NoVariables, recorded: null, Token);
 
         Assert.Equal((commit, Definition), (resolved.Commit, resolved.Definition));
         Assert.Equal(commit, Assert.Single(cache.List().Entries).Entry.Commit);
@@ -2181,7 +2172,7 @@ public sealed class RemoteWorkflowUseTests
         Assert.Equal(last, refs["refs/tags/v200"].Object);
 
         remote.Clear();
-        var resolved = await fetcher.ResolveAsync(Parsed() with { Ref = "v200" }, Allowed(), temp.Path, NoVariables, recorded: null, Token);
+        var resolved = await fetcher.ResolveAsync(Parsed() with { Ref = "v200" }, Allowed(), NoVariables, recorded: null, Token);
 
         Assert.Equal((last, Definition), (resolved.Commit, resolved.Definition));
         Assert.Equal(["ls-remote", "fetch refs/tags/v200", "fetch by id", "fetch by id"], remote.Asked);
@@ -2205,7 +2196,7 @@ public sealed class RemoteWorkflowUseTests
         ]);
         await remote.TagAsync("v1", commit);
 
-        var resolved = await fetcher.ResolveAsync(Parsed(), Allowed(), temp.Path, NoVariables, recorded: null, Token);
+        var resolved = await fetcher.ResolveAsync(Parsed(), Allowed(), NoVariables, recorded: null, Token);
         var entry = Assert.Single(cache.List().Entries).Entry;
 
         Assert.Equal((commit, 100_002, 100_002), (resolved.Commit, resolved.Files.Count, entry.Files.Count));

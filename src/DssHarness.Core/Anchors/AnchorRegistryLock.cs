@@ -63,17 +63,6 @@ public static class AnchorRegistryReading
             () => registries.All.Select(registry => (registry, registry.ReadText(fileSystem))).ToList(),
             cancellationToken);
     }
-
-    /// <summary>
-    /// <see cref="ReadTogetherAsync"/>, waited for on the caller's thread and ended by nothing but the lock's own bound: it
-    /// stays only while another file reads through it, and goes once that file reads through <see cref="ReadTogetherAsync"/>.
-    /// </summary>
-    /// <exception cref="HarnessException">As <see cref="ReadTogetherAsync"/> says.</exception>
-    public static IReadOnlyList<(AnchorRegistry Registry, string? Text)> ReadTogether(
-        this IAnchorRegistryLock registryLock,
-        AnchorRegistries registries,
-        IFileSystem fileSystem)
-        => registryLock.ReadTogetherAsync(registries, fileSystem, CancellationToken.None).GetAwaiter().GetResult();
 }
 
 /// <inheritdoc cref="IAnchorRegistryLock"/>

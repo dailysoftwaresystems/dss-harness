@@ -143,10 +143,6 @@ public sealed class WorkflowRemoteFetcher(
     /// </summary>
     /// <param name="source">The source a step's <c>use:</c> names, parsed.</param>
     /// <param name="settings">The repository's <c>workflowSources</c>; null where the file holds none.</param>
-    /// <param name="workingDirectory">
-    /// The tree the use is resolved for. git is run in a directory of the fetch's own, so no configuration of the tree's
-    /// own - an address rewritten, a helper named - decides what is fetched or who it is fetched as.
-    /// </param>
     /// <param name="environment">Reads this process's environment: a host's credential, and the mark of an agent's command.</param>
     /// <param name="recorded">What this run's own record holds for the source - its commit, and the run's own copy - where one does; null else.</param>
     /// <param name="cancellationToken">Stops the fetch.</param>
@@ -164,13 +160,11 @@ public sealed class WorkflowRemoteFetcher(
     public async Task<WorkflowRemoteResolution> ResolveAsync(
         WorkflowRemoteSource source,
         WorkflowSourcesConfig? settings,
-        string workingDirectory,
         Func<string, string?> environment,
         WorkflowRecordedUse? recorded,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(source);
-        ArgumentNullException.ThrowIfNull(workingDirectory);
         ArgumentNullException.ThrowIfNull(environment);
 
         if (WorkflowRemote.RefProblem(source.Ref) is { } badRef)

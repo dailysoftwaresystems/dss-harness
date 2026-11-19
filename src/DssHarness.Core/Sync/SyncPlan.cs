@@ -120,7 +120,7 @@ public sealed record SyncPlan(
     /// and where the whole list is (<see cref="Names.Lines"/>), so a refusal over thirty thousand overwrites names what
     /// its message holds and sends its reader to the rest - never twenty of them and a count.
     /// </summary>
-    /// <param name="whole">Where the whole list is, as the line after the names says it: <c>the list --dry-run prints</c>.</param>
+    /// <param name="whole">Where the whole list is, as the line after the names says it: <see cref="DryRunList"/>.</param>
     /// <param name="room">The characters the lines named take; <see cref="int.MaxValue"/> names every one.</param>
     /// <param name="links">
     /// Links the copy holds, which no plan can speak for: a link is in no entry, so a file written
@@ -248,7 +248,7 @@ public sealed record SyncPlan(
         var deleted = Deletes.Order(StringComparer.Ordinal).ToList();
         var named = reader == SyncBoundReader.Sweep
             ? Names.Line(deleted, "this refusal", room: int.MaxValue)
-            : Names.Line(deleted, "the list --dry-run prints");
+            : Names.Line(deleted, DryRunList);
         var needed = (Math.Ceiling(share * 100) / 100).ToString("0.##", CultureInfo.InvariantCulture);
 
         return $"This sync would delete {Deletes.Count} of the {ReportText.Counted(destination.Entries.Count, "file")} in "

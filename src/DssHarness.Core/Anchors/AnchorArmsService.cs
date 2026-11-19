@@ -113,7 +113,7 @@ public sealed partial class AnchorArmsService : IAnchorArmsService
         var rows = 0;
 
         // Both anchor registries read as one moment, under their lock, as every reader of both reads them.
-        foreach (var (registry, text) in _registryLock.ReadTogether(registries, _fileSystem))
+        foreach (var (registry, text) in await _registryLock.ReadTogetherAsync(registries, _fileSystem, cancellationToken).ConfigureAwait(false))
         {
             if (text is null)
             {

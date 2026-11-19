@@ -194,7 +194,6 @@ public sealed class WorkflowValidationService(
             var resolution = await remotes.ResolveAsync(
                 WorkflowRemote.Source(source) ?? throw new HarnessException(HarnessExit.UsageError, $"'{source}' is no remote workflow source"),
                 context.Config.WorkflowSources,
-                context.Layout.MainCheckoutRoot,
                 Environment.GetEnvironmentVariable,
                 recordedUse?.Invoke(source),
                 cancellationToken).ConfigureAwait(false);
