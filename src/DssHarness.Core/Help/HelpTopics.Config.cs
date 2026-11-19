@@ -131,9 +131,11 @@ public static partial class HelpTopics
         builder.AppendLine("                 where nothing is said) and");
         builder.AppendLine("                 protectedPaths (true too), the switches of the rule sets 'help");
         builder.AppendLine("                 agent-clients' names; keepEnvironment, the secret-shaped names a");
-        builder.AppendLine($"                 command an agent runs keeps; commandTimeoutSeconds ({Agents.AgentCommandSettings.DefaultTimeoutSeconds}) and");
-        builder.AppendLine($"                 maxCommandTimeoutSeconds ({Agents.AgentCommandSettings.DefaultMaxTimeoutSeconds}), how long one runs where its call");
-        builder.AppendLine($"                 names no time, and the most it may name, {Agents.AgentCommandSettings.MostTimeoutSeconds} at most;");
+        builder.AppendLine("                 command an agent runs keeps; commandTimeoutSeconds, how long one runs");
+        builder.AppendLine("                 where its call names no time - left out, until it ends, stopped where");
+        builder.AppendLine("                 it prints nothing for the step's stallSeconds and by the step's own");
+        builder.AppendLine($"                 bounds - and a call names any time to {Agents.AgentCommandSettings.MostTimeoutSeconds} s; maxCommandTimeoutSeconds");
+        builder.AppendLine("                 is retired, and refused;");
         builder.AppendLine($"                 isolation, {string.Join(" or ", Agents.Isolation.AgentIsolationMode.Modes)} ({Agents.Isolation.AgentIsolationMode.Required} where nothing is");
         builder.AppendLine("                 said), whether an agent that may run a command starts where this");
         builder.AppendLine("                 machine cannot isolate its commands; hiddenPlaces, more places the");
@@ -149,12 +151,11 @@ public static partial class HelpTopics
             "  agentWebSearch ");
         AppendWrapped(
             builder,
-            "what an agent is given of the work it goes on with, each bound a positive number at its default where it is "
-            + $"left out: continuation, the continuation record's - recordChars ({Agents.AgentContinuationBounds.DefaultRecordChars}), "
-            + $"stepChars ({Agents.AgentContinuationBounds.DefaultStepChars}), paths ({Agents.AgentContinuationBounds.DefaultPaths}), "
-            + $"lastIterations ({Agents.AgentContinuationBounds.DefaultLastIterations}) and iterationChars ({Agents.AgentContinuationBounds.DefaultIterationChars}); "
-            + $"compaction, the engine's compaction's - reducedChars ({Agents.AgentCompactionBounds.DefaultReducedChars}) and "
-            + $"callInputChars ({Agents.AgentCompactionBounds.DefaultCallInputChars}) ('help agent-clients')",
+            "what an agent is given of the work it goes on with: compaction, the engine's compaction's - "
+            + $"reducedChars ({Agents.AgentCompactionBounds.DefaultReducedChars}) and callInputChars ({Agents.AgentCompactionBounds.DefaultCallInputChars}), "
+            + "each a positive number at its default where it is left out ('help agent-clients'); continuation, which once bounded "
+            + "the continuation record, is retired and refused - the record holds every step, every changed path and every "
+            + "iteration, nothing of it cut, its pages read by read_result",
             "  agentContext   ");
         builder.AppendLine();
         builder.AppendLine("A list whose absence means every one of what it names, or a set the tool chooses, is");

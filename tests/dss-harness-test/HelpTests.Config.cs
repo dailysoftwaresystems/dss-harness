@@ -54,12 +54,11 @@ public sealed partial class HelpTests
 
         // The agent's context is a top-level section of its own, every default the one constant the code holds.
         Assert.Contains(
-            "agentContext what an agent is given of the work it goes on with, each bound a positive number at its default where "
-                + "it is left out: continuation, the continuation record's - "
-                + $"recordChars ({DssHarness.Core.Agents.AgentContinuationBounds.DefaultRecordChars}), stepChars ({DssHarness.Core.Agents.AgentContinuationBounds.DefaultStepChars}), "
-                + $"paths ({DssHarness.Core.Agents.AgentContinuationBounds.DefaultPaths}), lastIterations ({DssHarness.Core.Agents.AgentContinuationBounds.DefaultLastIterations}) and "
-                + $"iterationChars ({DssHarness.Core.Agents.AgentContinuationBounds.DefaultIterationChars}); compaction, the engine's compaction's - "
-                + $"reducedChars ({DssHarness.Core.Agents.AgentCompactionBounds.DefaultReducedChars}) and callInputChars ({DssHarness.Core.Agents.AgentCompactionBounds.DefaultCallInputChars}) ('help agent-clients')",
+            "agentContext what an agent is given of the work it goes on with: compaction, the engine's compaction's - "
+                + $"reducedChars ({DssHarness.Core.Agents.AgentCompactionBounds.DefaultReducedChars}) and callInputChars ({DssHarness.Core.Agents.AgentCompactionBounds.DefaultCallInputChars}), "
+                + "each a positive number at its default where it is left out ('help agent-clients'); continuation, which once bounded "
+                + "the continuation record, is retired and refused - the record holds every step, every changed path and every "
+                + "iteration, nothing of it cut, its pages read by read_result",
             config,
             StringComparison.Ordinal);
 
@@ -70,8 +69,9 @@ public sealed partial class HelpTests
                 + "result a search gives - a search source's own requests are held to the Web(...) rules alone (left out, any "
                 + "address); worktreeRules (true where nothing is said) and protectedPaths (true too), the switches of the rule sets "
                 + "'help agent-clients' names; keepEnvironment, the secret-shaped names a command an agent runs keeps; "
-                + "commandTimeoutSeconds (120) and maxCommandTimeoutSeconds (3600), how long one runs where its call names no time, "
-                + "and the most it may name, 2147483 at most; isolation, required or preferred (required where nothing is said), whether "
+                + "commandTimeoutSeconds, how long one runs where its call names no time - left out, until it ends, stopped where it "
+                + "prints nothing for the step's stallSeconds and by the step's own bounds - and a call names any time to 2147483 s; "
+                + "maxCommandTimeoutSeconds is retired, and refused; isolation, required or preferred (required where nothing is said), whether "
                 + "an agent that may run a command starts where this machine cannot isolate its commands; hiddenPlaces, more places "
                 + "the user keeps credentials in, each a whole path or one under ~/, hidden beside the declared ones, which it never "
                 + "takes away ('help agent-clients')",
