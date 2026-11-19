@@ -277,9 +277,11 @@ public sealed class ClaudeCodeUpdateServiceTests
             Token);
         var told = harness.StandardOutput.ToString().Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
+        var install = kit.Runner.Requests.Single(request => request.Arguments.Contains("install", StringComparer.Ordinal));
+
         Assert.True(answer.Ready, answer.Message);
         Assert.Equal(
-            [.. new[] { 5, 10, 15, 20 }.Select(minutes => $"run-side-task: has waited {minutes}m00s for {ClaudeCodeUpdateService.ChangeSubject}")],
+            [.. new[] { 5, 10, 15, 20 }.Select(minutes => $"run-side-task: has waited {minutes}m00s for {ProgramUpdate.ChangeSubject(install.FileName)}")],
             told);
     }
 

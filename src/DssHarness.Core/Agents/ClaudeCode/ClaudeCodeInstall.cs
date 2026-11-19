@@ -59,7 +59,7 @@ public sealed record ClaudeCodeVersion(SemanticVersion? Version, string? Problem
 /// </summary>
 /// <param name="fileSystem">Reads the package's files, and follows the links a running program was started through.</param>
 /// <param name="processRunner">Asks the program's own version.</param>
-/// <param name="time">Measures each wait as it is told (<see cref="ClaudeCodeWaits"/>); the system's clock where none is given.</param>
+/// <param name="time">Measures each wait as it is told (<see cref="ProgramWait"/>); the system's clock where none is given.</param>
 public sealed class ClaudeCodeInstall(IFileSystem fileSystem, IProcessRunner processRunner, TimeProvider? time = null)
 {
     /// <summary>The package npm installs, by its own name.</summary>
@@ -180,10 +180,10 @@ public sealed class ClaudeCodeInstall(IFileSystem fileSystem, IProcessRunner pro
 
         try
         {
-            asked = await ClaudeCodeWaits.ToItsEndAsync(
+            asked = await ProgramWait.ToItsEndAsync(
                     token => _processRunner.RunAsync(new ProcessRequest { FileName = program, Arguments = ["--version"], Environment = EveryStart }, token),
                     $"'{program}' to answer its --version",
-                    tell,
+                    tell ?? (_ => { }),
                     _time,
                     cancellationToken)
                 .ConfigureAwait(false);
@@ -290,7 +290,7 @@ public sealed class ClaudeCodeInstall(IFileSystem fileSystem, IProcessRunner pro
 
     /// <summary>
     /// <paramref name="paths"/> each made whole with every link along it followed, once each and in order, off the
-    /// caller's thread, and waited for to the end (<see cref="ClaudeCodeWaits"/>): each path with where it leads - null
+    /// caller's thread, and waited for to the end (<see cref="ProgramWait"/>): each path with where it leads - null
     /// where it names no path this machine reads. A following the caller's stop left behind is left to end on its own,
     /// for a call into the file system cannot be cut.
     /// </summary>
@@ -309,7 +309,7 @@ public sealed class ClaudeCodeInstall(IFileSystem fileSystem, IProcessRunner pro
             },
             CancellationToken.None);
 
-        await ClaudeCodeWaits.ToItsEndAsync(token => following.WaitAsync(token), FollowingSubject, tell, _time, cancellationToken).ConfigureAwait(false);
+        await ProgramWait.ToItsEndAsync(token => following.WaitAsync(token), FollowingSubject, tell ?? (_ => { }), _time, cancellationToken).ConfigureAwait(false);
 
         return new Dictionary<string, string?>(followed, StringComparer.Ordinal);
     }

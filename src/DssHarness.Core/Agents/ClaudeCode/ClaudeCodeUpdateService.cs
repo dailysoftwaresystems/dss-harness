@@ -135,9 +135,6 @@ public sealed class ClaudeCodeUpdateService(
     private readonly TimeProvider _clock = clock ?? TimeProvider.System;
     private readonly Output.IHarnessOutput? _output = output;
 
-    /// <summary>What a wait of the change is told as: the command that runs, to its end.</summary>
-    public static string ChangeSubject => $"'{InstallCommand()}' to end";
-
     /// <summary>How each wait of the making ready <paramref name="asker"/> asked for is told: a line of its command.</summary>
     private Action<Waiting.WaitTold> Tell(ClaudeCodeAsker asker) => told => _output?.Info(asker.Command, told.Line());
 
@@ -358,26 +355,23 @@ public sealed class ClaudeCodeUpdateService(
         // What npm holds since is read from the root npm names since, as the root before was: the package and then
         // its program, whether the change ran or not - a change that failed part way can leave half an installation.
         ClaudeCodePackage? since = null;
-        var moved = await ClaudeCodeWaits.ToItsEndAsync(
-                _ => _updates.ChangeAsync(
-                    hold,
-                    change,
-                    NpmClient.RootRequest(npm),
-                    listing =>
+        var moved = await _updates.ChangeAsync(
+                hold,
+                change,
+                NpmClient.RootRequest(npm),
+                listing =>
+                {
+                    if (listing.Trim() is not { Length: > 0 } rootSince)
                     {
-                        if (listing.Trim() is not { Length: > 0 } rootSince)
-                        {
-                            return ListedRelease.Unreadable;
-                        }
+                        return ListedRelease.Unreadable;
+                    }
 
-                        since = _install.Read(rootSince, Needed);
+                    since = _install.Read(rootSince, Needed);
 
-                        return since.Problem is not null ? ListedRelease.Unreadable : ListedRelease.Read(since.Version?.ToString());
-                    }),
-                ChangeSubject,
+                    return since.Problem is not null ? ListedRelease.Unreadable : ListedRelease.Read(since.Version?.ToString());
+                },
                 tell,
-                _clock,
-                CancellationToken.None)
+                _clock)
             .ConfigureAwait(false);
         var answeredSince = since is { Program: { } sinceProgram, Problem: null }
             ? await _install.VersionAsync(sinceProgram, tell, CancellationToken.None).ConfigureAwait(false)

@@ -23,7 +23,7 @@ namespace DssHarness.Core.Agents.ClaudeCode;
 /// <param name="filePermissions">Says whether a file the PATH names is one this machine starts, as the runner asks it.</param>
 /// <param name="platform">The system this is.</param>
 /// <param name="environment">Reads an environment variable - the PATH; the process's own where none is given.</param>
-/// <param name="clock">Measures each question of npm and node as it is waited for and told (<see cref="ClaudeCodeWaits"/>); the system's clock where none is given.</param>
+/// <param name="clock">Measures each question of npm and node as it is waited for and told (<see cref="ProgramWait"/>); the system's clock where none is given.</param>
 public sealed class NpmClient(
     IProcessRunner processRunner,
     IFileSystem fileSystem,
@@ -165,7 +165,7 @@ public sealed class NpmClient(
 
         try
         {
-            asked = await ClaudeCodeWaits.ToItsEndAsync(token => _processRunner.RunAsync(RootRequest(npm), token), RootSubject, tell, _clock, cancellationToken).ConfigureAwait(false);
+            asked = await ProgramWait.ToItsEndAsync(token => _processRunner.RunAsync(RootRequest(npm), token), RootSubject, tell ?? (_ => { }), _clock, cancellationToken).ConfigureAwait(false);
         }
         catch (ProgramStartException ex)
         {
@@ -201,10 +201,10 @@ public sealed class NpmClient(
     {
         try
         {
-            var asked = await ClaudeCodeWaits.ToItsEndAsync(
+            var asked = await ProgramWait.ToItsEndAsync(
                     token => _processRunner.RunAsync(new ProcessRequest { FileName = program, Arguments = arguments }, token),
                     $"'{program}' to say npm's prefix",
-                    tell,
+                    tell ?? (_ => { }),
                     _clock,
                     cancellationToken)
                 .ConfigureAwait(false);

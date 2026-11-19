@@ -188,6 +188,10 @@ public sealed class ProgramUpdate(IProcessRunner processRunner, IHostPlatform pl
         return MachineWideMutex.NameFor(LockKind, [place], _platform.PathComparison == StringComparison.OrdinalIgnoreCase);
     }
 
+    /// <summary>What a wait for a change <paramref name="program"/> makes is told as, after <c>waits for</c>.</summary>
+    /// <param name="program">The program that changes what is installed, as its request names it.</param>
+    public static string ChangeSubject(string program) => $"'{program}' to change what is installed";
+
     /// <summary>
     /// The change itself, under <paramref name="held"/>: <paramref name="change"/> run never stopped,
     /// then what is installed read back the same way through <paramref name="listSince"/> and
@@ -225,7 +229,7 @@ public sealed class ProgramUpdate(IProcessRunner processRunner, IHostPlatform pl
 
         var tell = told ?? (_ => { });
         var ran = await ProgramWait
-            .ToItsEndAsync(_ => _processRunner.RunAsync(change, CancellationToken.None), $"'{change.FileName}' to change what is installed", tell, clock, CancellationToken.None)
+            .ToItsEndAsync(_ => _processRunner.RunAsync(change, CancellationToken.None), ChangeSubject(change.FileName), tell, clock, CancellationToken.None)
             .ConfigureAwait(false);
         var listed = await ProgramWait
             .ToItsEndAsync(_ => _processRunner.RunAsync(listSince, CancellationToken.None), $"'{listSince.FileName}' to list what is installed since", tell, clock, CancellationToken.None)
