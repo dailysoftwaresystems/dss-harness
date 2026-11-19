@@ -949,9 +949,10 @@ public sealed class DartExtractorTests : CodeGraphExtractorContractTests<DartExt
 
     /// <summary>
     /// A use is of a value the code reads: each bare hole of a string - <c>'$a$b'</c> two - a map's key, a nested one's
-    /// among them, a named argument's value and not its name, a receiver's first name where it is a value - an import's
-    /// prefix and a type's name not - and each branch of a conditional; and an annotation's arguments - a type's, a
-    /// field's, a method's, an enum value's - and a parameter's default are the code of what they are written on.
+    /// among them, a named argument's value and not its name - one after a nullable cast's <c>?</c> among them - a
+    /// receiver's first name where it is a value - an import's prefix and a type's name not - and each branch of a
+    /// conditional; and an annotation's arguments - a type's, a field's, a constructor's, a method's, an enum value's - and
+    /// a parameter's default, a constructor's or a method's, are the code of what they are written on.
     /// </summary>
     [Fact]
     public void AUseIsOfAValueTheCodeReads_AnnotationsAndDefaultsTheirDeclarations()
@@ -965,14 +966,14 @@ public sealed class DartExtractorTests : CodeGraphExtractorContractTests<DartExt
             class User {
               @JsonKey(name: 'user_id')
               final int id;
-              User({this.id = 0, String label = 'parameter default'});
+              @Since('since_v2') User({this.id = 0, String label = 'parameter default'});
 
               @Deprecated('old_show')
-              String show(bool isDark) {
+              String show(bool isDark, [String tone = 'method default']) {
                 final both = '$prefix$id';
                 final colors = {kRed: 1};
                 final nested = [{kBlue: 2}];
-                format(name: darkColor);
+                format(size: width as int?, name: darkColor);
                 config.verbose = true;
                 p.helper();
                 Square.unit();
@@ -989,14 +990,16 @@ public sealed class DartExtractorTests : CodeGraphExtractorContractTests<DartExt
             [
                 new ExtractLiteral("users_table", 5) { Node = "dart:lib/user.dart.User" },
                 new ExtractLiteral("user_id", 7) { Node = "dart:lib/user.dart.User.id" },
+                new ExtractLiteral("since_v2", 9) { Node = "dart:lib/user.dart.User.new" },
                 new ExtractLiteral("parameter default", 9) { Node = "dart:lib/user.dart.User.new" },
                 new ExtractLiteral("old_show", 11) { Node = Show },
+                new ExtractLiteral("method default", 12) { Node = Show },
                 new ExtractLiteral("warm_tone", 24) { Node = "dart:lib/user.dart.Tone.warm" },
             ],
             extract.Literals);
         Assert.Equal(
             [
-                (Show, "prefix", 13, ""), (Show, "id", 13, ""), (Show, "kRed", 14, ""), (Show, "kBlue", 15, ""), (Show, "darkColor", 16, ""), (Show, "config", 17, ""),
+                (Show, "prefix", 13, ""), (Show, "id", 13, ""), (Show, "kRed", 14, ""), (Show, "kBlue", 15, ""), (Show, "width", 16, ""), (Show, "darkColor", 16, ""), (Show, "config", 17, ""),
                 (Show, "verbose", 17, "value config"), (Show, "darkColor", 20, ""), (Show, "lightColor", 20, ""),
             ],
             extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Uses).Select(reference => (reference.From, reference.Name, reference.Line, $"{reference.Qualifier?.Kind} {reference.Qualifier?.Name}".Trim())));

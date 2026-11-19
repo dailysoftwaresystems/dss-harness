@@ -1231,6 +1231,41 @@ public sealed class CSharpExtractorTests : CodeGraphExtractorContractTests<CShar
         Assert.Equal(3, extract.LiteralsBeyond);
     }
 
+    /// <summary>
+    /// A property pattern's path is read from the tested type - its first member, a capital beginning it, the type's - and
+    /// a <c>base</c> read is the base type's; a path, or a chain from a <c>dynamic</c> root, of more than
+    /// <see cref="FileExtract.MostReceiverNames"/> names is read no further: its first name no member of the tested type,
+    /// and a call on it no call through the dynamic value.
+    /// </summary>
+    [Fact]
+    public void APatternsPathAndADynamicRoot_AreReadNoFurtherThanTheMostNames()
+    {
+        var extract = Extractor.Extract(new CodeFileInput("src/Probe.cs", """
+            namespace App;
+
+            public class Probe : Base
+            {
+                public int Run(Board board, dynamic d)
+                {
+                    d.a.b.c.d.e.f.g.Go();
+                    d.a.b.c.d.e.f.g.h.Go();
+                    if (board is { Owner.Name: "x" }) { }
+                    if (board is { a.b.c.d.e.f.g.h: 1 }) { }
+                    if (board is { a.b.c.d.e.f.g.h.i: 1 }) { }
+                    return base.Count;
+                }
+            }
+            """));
+
+        Assert.Equal([7], extract.Dynamic.Select(dynamic => dynamic.Line));
+        Assert.Equal(
+            [(8, "value")],
+            extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Calls).Select(reference => (reference.Line, $"{reference.Qualifier?.Kind} {reference.Qualifier?.Name}".Trim())));
+        Assert.Equal(
+            [("Name", 9, "value"), ("Owner", 9, "type Board"), ("a", 10, "type Board"), ("a", 11, ""), ("Count", 12, "base")],
+            Uses(extract).Where(use => use.Line >= 9 && use.Name is "Owner" or "Name" or "a" or "Count").Select(use => (use.Name, use.Line, use.Qualifier)));
+    }
+
     private static IEnumerable<(string From, string Name, int Line, string Qualifier)> Uses(FileExtract extract)
         => extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Uses).Select(reference => (reference.From, reference.Name, reference.Line, $"{reference.Qualifier?.Kind} {reference.Qualifier?.Name}".Trim()));
 

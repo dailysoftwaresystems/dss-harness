@@ -703,8 +703,9 @@ public sealed class CExtractorTests : CodeGraphExtractorContractTests<CExtractor
 
     /// <summary>
     /// What a declaration names is no use - a macro's parameter in its text, a function pointer's own parameters, a local
-    /// function pointer, a type a <c>struct</c> or an <c>enum</c> names - while a receiver's first name the code reads is,
-    /// and so is each branch of a conditional, its colon no label's.
+    /// function pointer wherever it is read, a type a <c>struct</c> or an <c>enum</c> names and one a declaration is
+    /// written with - while a receiver's first name the code reads is, and so is each branch of a conditional, its colon
+    /// no label's.
     /// </summary>
     [Fact]
     public void ADeclarationIsNoUse_ButAReceiversFirstNameAndAConditionalsBranchesAre()
@@ -719,7 +720,7 @@ public sealed class CExtractorTests : CodeGraphExtractorContractTests<CExtractor
 
             struct settings { int verbose; } config;
 
-            enum Kind { One, Two };
+            enum Kind { One, Two }; typedef struct lexer Lexer;
 
             static int (*handler)(int code) = on_code;
 
@@ -728,8 +729,10 @@ public sealed class CExtractorTests : CodeGraphExtractorContractTests<CExtractor
                 int (*fallback)(struct lexer *self, int code) = lx->peek;
                 enum Kind which = One;
                 config.verbose = TWICE(c);
-                (*fallback)(lx);
+                if (fallback == 0) return c;
                 int size = sizeof(struct lexer);
+                Lexer copy = *lx;
+                (*fallback)(lx);
                 return c ? COUNT : LIMIT;
             }
             """);
@@ -737,7 +740,7 @@ public sealed class CExtractorTests : CodeGraphExtractorContractTests<CExtractor
         Assert.Equal(
             [
                 ("c:src/t.c:handler", "on_code", 12, ""), ("c:take", "peek", 16, "type lexer"), ("c:take", "One", 17, ""), ("c:take", "config", 18, ""),
-                ("c:take", "verbose", 18, "value config"), ("c:take", "COUNT", 21, ""), ("c:take", "LIMIT", 21, ""),
+                ("c:take", "verbose", 18, "value config"), ("c:take", "COUNT", 23, ""), ("c:take", "LIMIT", 23, ""),
             ],
             extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Uses).Select(reference => (reference.From, reference.Name, reference.Line, $"{reference.Qualifier?.Kind} {reference.Qualifier?.Name}".Trim())));
     }

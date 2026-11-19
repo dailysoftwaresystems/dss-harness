@@ -966,10 +966,11 @@ public sealed class CSharpExtractor : ICodeGraphExtractor
 
         /// <summary>
         /// Whether <paramref name="read"/> names a value the member reads by the name alone - the first of a receiver's chain
-        /// among them, where it is a field of its type's or a name no capital begins, a capital beginning the name of a type
-        /// or a namespace a member is reached through: not a call's callee, not a member of a receiver, nothing the compiler
-        /// reads as a type or a namespace, no name a named argument, an initializer, an anonymous type, a tuple or a pattern
-        /// declares or sets - those of an initializer and a pattern are read as their type's - no discard, and none of its
+        /// among them, where it is a field of its type's, a name no capital begins or the member a property pattern's path
+        /// begins with, a capital else beginning the name of a type or a namespace a member is reached through: not a
+        /// call's callee, not a member of a receiver, nothing the compiler reads as a type or a namespace, no name a named
+        /// argument, an initializer, an anonymous type, a tuple or a pattern declares or sets - those of an initializer and
+        /// a pattern are read as their type's - no discard, and none of its
         /// own locals, parameters, local functions or type parameters, nor a primary constructor's parameter or an extension
         /// block's receiver, of which no member is declared. The syntax alone cannot tell a field of another type from a
         /// value the language itself holds, and a use of either is what the graph wants, resolved or not.
@@ -989,8 +990,10 @@ public sealed class CSharpExtractor : ICodeGraphExtractor
             {
                 InvocationExpressionSyntax or MemberBindingExpressionSyntax or NameColonSyntax or NameEqualsSyntax or QualifiedNameSyntax or AliasQualifiedNameSyntax => false,
 
-                // A chain's first name is read where it is a value: a field of its type's, or a name no type's is.
-                MemberAccessExpressionSyntax access => ReferenceEquals(access.Expression, read) && (known.Fields.ContainsKey(name) || !char.IsUpper(name[0])),
+                // A chain's first name is read where it is a value: a field of its type's, a name no type's is, or the member
+                // of the tested type a property pattern's path begins with - { Owner.Name: ... }.
+                MemberAccessExpressionSyntax access => ReferenceEquals(access.Expression, read)
+                    && (known.Fields.ContainsKey(name) || !char.IsUpper(name[0]) || PatternOfPath(read) is not null),
                 AssignmentExpressionSyntax { Parent: InitializerExpressionSyntax initializer } assignment => !ReferenceEquals(assignment.Left, read)
                     || !(initializer.IsKind(SyntaxKind.ObjectInitializerExpression) || initializer.IsKind(SyntaxKind.WithInitializerExpression)),
                 _ => true,
