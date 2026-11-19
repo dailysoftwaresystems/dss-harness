@@ -83,6 +83,35 @@ public sealed class AgentPolicyPatternTests
     }
 
     /// <summary>
+    /// Fifty moves joined by <c>;</c> - each held where it goes and failed where it stood, so the shell may stand in any of
+    /// 2^50 places - are followed as one form whose fifty steps may each be passed, and a path is decided at one place of
+    /// each way those places stand, as at every one: a read of the slot fifty levels up, which only the place every move
+    /// held reaches, is refused, one two levels up refused from the places two moves deep, and the same moves making
+    /// something allowed - in well under a second. Red with each move followed from every place the one before held and
+    /// failed, one by one, which never ends.
+    /// </summary>
+    [Fact]
+    public void FiftyMovesJoinedBySemicolons_AreDecidedAsOneForm()
+    {
+        using var temp = new TempDirectory();
+        var worktree = Directory.CreateDirectory(temp.Combine("tree")).FullName;
+        var policy = Policy(new PassThroughFileSystem(new PhysicalFileSystem(FilePermissionsFactory.Create())), worktree);
+        var moves = string.Join("; ", Enumerable.Range(0, 50).Select(at => $"cd d{at}"));
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+
+        var allowed = policy.Run($"{moves}; make");
+        var deepest = policy.Run($"{moves}; cat {string.Concat(Enumerable.Repeat("../", 50))}.harness-config/workflows/.env/keys.env");
+        var twoDeep = policy.Run($"{moves}; cat ../../.harness-config/workflows/.env/keys.env");
+        var tooDeep = policy.Run($"{moves}; cat {string.Concat(Enumerable.Repeat("../", 51))}tree/x/.harness-config/workflows/.env/keys.env");
+
+        Assert.True(clock.Elapsed < TimeSpan.FromSeconds(1), $"deciding fifty moves took {clock.Elapsed}");
+        Assert.Equal(AgentPolicyAnswer.Allow, allowed);
+        Assert.Equal("the credential slots", Assert.IsType<AgentPolicyAnswer.Denied>(deepest).Rule);
+        Assert.Equal("the credential slots", Assert.IsType<AgentPolicyAnswer.Denied>(twoDeep).Rule);
+        Assert.Equal(AgentPolicyAnswer.Allow, tooDeep);
+    }
+
+    /// <summary>
     /// A path of sixty short-name components, each of which may shorten two guarded names, is decided by the ways its 3^60
     /// readings stand to the policy, never one reading at a time, and decided as reading every one would decide it: a
     /// <c>Read</c> rule over one of those names refuses the path whose last name it names and allows the same path ending

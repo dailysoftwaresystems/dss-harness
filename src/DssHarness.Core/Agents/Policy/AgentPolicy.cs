@@ -1813,20 +1813,21 @@ public sealed partial class AgentPolicy
 
         // Every directory a path may be read against: the working directory, and each a cd of the
         // string moved to - a path is tried against all of them, for a subshell's cd ends with it.
-        return RunDecided(commands, [startsIn ?? _ground.WorkingDirectory], running: new HashSet<string>(StringComparer.Ordinal));
+        return RunDecided(commands, [PlaceForm.Of(startsIn ?? _ground.WorkingDirectory)], running: new HashSet<string>(StringComparer.Ordinal));
     }
 
     /// <summary>
-    /// Each flattened command, refused by the first thing it runs that may not run, read against <paramref name="places"/>
-    /// and every place a move of theirs reaches.
+    /// Each flattened command, refused by the first thing it runs that may not run, read against the places
+    /// <paramref name="forms"/> hold and every place a move of theirs reaches - at one place of each way they stand to the
+    /// decisions (<see cref="Representatives"/>), however many they hold.
     /// </summary>
     /// <param name="commands">The commands, flattened.</param>
-    /// <param name="places">Every directory a path of the first may be read against, added to as the commands move.</param>
+    /// <param name="forms">Every directory a path of the first may be read against, as forms of places, added to as the commands move.</param>
     /// <param name="running">
     /// The texts of the script files this string's text stands in, each one its string wrote and then ran
     /// (<see cref="WrittenScripts"/>), outermost first: one met again runs itself, and is decided by the reading in progress.
     /// </param>
-    private AgentPolicyAnswer RunDecided(IReadOnlyList<AnalyzedCommand> commands, List<string> places, IReadOnlySet<string> running)
+    private AgentPolicyAnswer RunDecided(IReadOnlyList<AnalyzedCommand> commands, List<PlaceForm> forms, IReadOnlySet<string> running)
     {
         // Everything of a command compares as this platform compares names, but for the root
         // actions and the places no agent reaches, which fold case everywhere.
@@ -1839,23 +1840,28 @@ public sealed partial class AgentPolicy
         var environmentDrive = commands.Any(command => command.Wrappers.Append(command.Words).Any(words => words.Any(CommandAnalysis.NamesEnvironmentDrive)));
 
         // What the string's own assignments set, and what its commands write, as each command after them reads it.
-        var state = new StringState(OnWindows, whole => OnWindows ? WindowsNames.Lengthenings(whole, _guardedNames) : [[whole]]);
+        var state = new StringState(OnWindows, Meet, MayEndIn);
 
         // Where each command may stand, as the moves before it at its level left it.
-        var standing = new Standing(places);
+        var standing = new Standing(forms);
 
-        // The places reached so far, each once, as places compare.
-        var placesReached = new HashSet<string>(places, StringComparer.OrdinalIgnoreCase);
+        // The forms of places reached so far, each once.
+        var placesReached = new HashSet<string>(forms.Select(form => form.Key), StringComparer.Ordinal);
 
-        // Every place a path a command names may be, read from each place the command may stand in; null where the path
-        // names one this cannot tell.
-        IReadOnlyList<string>? Wholes(string path)
+        // One place of each way the places reached stand to the decisions, read on where a move reached more.
+        var placeWays = new HashSet<string>(StringComparer.Ordinal);
+        var places = new List<string>();
+        Represent(forms, 0, placeWays, places);
+        var placesRead = forms.Count;
+
+        // Every place a path a command names may be, read from each place the command may stand in, as forms of places;
+        // null where the path names one this cannot tell. Its short names kept: what a file written and one read share is
+        // asked of the forms (Meet, MayEndIn).
+        IReadOnlyList<PlaceForm>? Wholes(string path)
         {
             try
             {
-                // Each spelled as the system reaches it, its short names kept: what a file written and one read share is
-                // asked of their readings as patterns (StringState.Meet, StringState.MayEndIn).
-                return [.. places.SelectMany(place => Spelled(path, place, lengthen: false)).Distinct(StringComparer.OrdinalIgnoreCase)];
+                return Reached(forms, path, pattern: false);
             }
             catch (Exception exception) when (exception is NotSupportedException or ArgumentException)
             {
@@ -1875,7 +1881,7 @@ public sealed partial class AgentPolicy
 
             // The command as it is spelled, and with the variables the string set before it given each value they may hold
             // together - every value kept, one value of a variable wherever it stands.
-            var readings = Readings(analyzed, state, places);
+            var readings = Readings(analyzed, state, forms);
 
             // Each word a reading spells is decided once, however many readings spell it alike: a word no variable reaches
             // is the same in every reading.
@@ -1935,14 +1941,19 @@ public sealed partial class AgentPolicy
             var frontier = standing.Enter(analyzed);
             var moves = readings.Select(reading => MovedTo(reading.Words, frontier, state)).ToList();
             var program = environment < command.Count ? CommandAnalysis.Name(command[environment]) : string.Empty;
-            List<string> moved = Returners.Contains(program, StringComparer.OrdinalIgnoreCase) || moves.Any(move => move is { Back: true })
-                ? [.. places, .. moves.SelectMany(move => move?.To ?? [])]
+            List<PlaceForm> moved = Returners.Contains(program, StringComparer.OrdinalIgnoreCase) || moves.Any(move => move is { Back: true })
+                ? [.. forms, .. moves.SelectMany(move => move?.To ?? [])]
                 : [.. moves.SelectMany(move => move?.To ?? [])];
 
             // Every place reached is kept, each once, however many the moves reach: one more place is one more each path is
-            // read against, never a reason to stop reading.
-            places.AddRange(moved.Where(placesReached.Add));
-            standing.Left(frontier, moves.Any(move => move is not null) || Returners.Contains(program, StringComparer.OrdinalIgnoreCase) ? [.. moved.Distinct(StringComparer.OrdinalIgnoreCase)] : frontier);
+            // read against, never a reason to stop reading - and a move after a ';' one step more of a form, which may be
+            // passed, never twice the places.
+            forms.AddRange(moved.Where(form => placesReached.Add(form.Key)));
+
+            Represent(forms, placesRead, placeWays, places);
+            placesRead = forms.Count;
+
+            standing.Left(frontier, moves.Any(move => move is not null) || Returners.Contains(program, StringComparer.OrdinalIgnoreCase) ? PlaceForm.Union(moved) : frontier);
             state.Moved |= Movers.Contains(program, StringComparer.OrdinalIgnoreCase);
 
             // Where the shell stands may have changed: what PWD holds is read anew by the commands after this one.
@@ -1979,7 +1990,7 @@ public sealed partial class AgentPolicy
                 // However deep scripts that write and run scripts nest, each is decided whole, a level deeper through
                 // DeepCalls; a script that runs one of the texts in progress runs itself, whose every command is being decided.
                 if (!running.Contains(run.Text)
-                    && DeepCalls.Run(() => RunDecided(CommandAnalysis.Commands(run.Text), [.. places], new HashSet<string>(running, StringComparer.Ordinal) { run.Text })).Refusal() is { } inScript)
+                    && DeepCalls.Run(() => RunDecided(CommandAnalysis.Commands(run.Text), [.. forms], new HashSet<string>(running, StringComparer.Ordinal) { run.Text })).Refusal() is { } inScript)
                 {
                     return inScript;
                 }
@@ -2039,7 +2050,7 @@ public sealed partial class AgentPolicy
                 }
             }
 
-            state.Record(analyzed, readings, environment, places, Wholes);
+            state.Record(analyzed, readings, environment, forms, Wholes);
         }
 
         // A side-task's command holds the main tree's lock for its duration, which its end ends: one that leaves a process
@@ -2057,18 +2068,20 @@ public sealed partial class AgentPolicy
     /// where the and-or list read so far leaves the commands after it once it held and once it did not - a command joined
     /// by <c>&amp;&amp;</c> standing where the one before held, by <c>||</c> where it did not, after any other separator
     /// where either; a level entered standing where its parent's next command would, and left as the parent stood, so a
-    /// subshell's move ends with it. A move holds at the places it goes to and fails where it stood.
+    /// subshell's move ends with it. A move holds at the places it goes to and fails where it stood. The places are forms
+    /// (<see cref="PlaceForm"/>), joined as one where they can be: where a move after a <c>;</c> held and where it failed
+    /// are one form whose last step may be passed.
     /// </summary>
-    private sealed class Standing(IReadOnlyList<string> start)
+    private sealed class Standing(IReadOnlyList<PlaceForm> start)
     {
-        private readonly List<(IReadOnlyList<string> Held, IReadOnlyList<string> Failed)> _levels = [([.. start], [])];
+        private readonly List<(IReadOnlyList<PlaceForm> Held, IReadOnlyList<PlaceForm> Failed)> _levels = [([.. start], [])];
 
         private int _level;
 
         private string? _joined;
 
         /// <summary>Where <paramref name="command"/> may stand, the levels it enters or leaves entered or left.</summary>
-        public IReadOnlyList<string> Enter(AnalyzedCommand command)
+        public IReadOnlyList<PlaceForm> Enter(AnalyzedCommand command)
         {
             var level = Math.Max(0, command.Level);
 
@@ -2096,22 +2109,22 @@ public sealed partial class AgentPolicy
         }
 
         /// <summary>The command <see cref="Enter"/> placed at <paramref name="frontier"/> held at <paramref name="held"/>, or failed where it stood.</summary>
-        public void Left(IReadOnlyList<string> frontier, IReadOnlyList<string> held)
+        public void Left(IReadOnlyList<PlaceForm> frontier, IReadOnlyList<PlaceForm> held)
             => _levels[_level] = Outcome(_levels[_level], _joined, held, frontier);
 
-        private static IReadOnlyList<string> Joined((IReadOnlyList<string> Held, IReadOnlyList<string> Failed) before, string? joined)
+        private static IReadOnlyList<PlaceForm> Joined((IReadOnlyList<PlaceForm> Held, IReadOnlyList<PlaceForm> Failed) before, string? joined)
             => joined switch
             {
                 "&&" => before.Held,
                 "||" => before.Failed,
-                _ => [.. before.Held.Concat(before.Failed).Distinct(StringComparer.OrdinalIgnoreCase)],
+                _ => PlaceForm.Union(before.Held.Concat(before.Failed)),
             };
 
-        private static (IReadOnlyList<string> Held, IReadOnlyList<string> Failed) Outcome((IReadOnlyList<string> Held, IReadOnlyList<string> Failed) before, string? joined, IReadOnlyList<string> held, IReadOnlyList<string> failed)
+        private static (IReadOnlyList<PlaceForm> Held, IReadOnlyList<PlaceForm> Failed) Outcome((IReadOnlyList<PlaceForm> Held, IReadOnlyList<PlaceForm> Failed) before, string? joined, IReadOnlyList<PlaceForm> held, IReadOnlyList<PlaceForm> failed)
             => joined switch
             {
-                "&&" => (held, [.. before.Failed.Concat(failed).Distinct(StringComparer.OrdinalIgnoreCase)]),
-                "||" => ([.. before.Held.Concat(held).Distinct(StringComparer.OrdinalIgnoreCase)], failed),
+                "&&" => (held, PlaceForm.Union(before.Failed.Concat(failed))),
+                "||" => (PlaceForm.Union(before.Held.Concat(held)), failed),
                 _ => (held, failed),
             };
     }
@@ -2122,80 +2135,27 @@ public sealed partial class AgentPolicy
     /// one, and whether a command of it moved.
     /// </summary>
     /// <param name="windows">Whether the string runs on Windows, whose device names reach no file where cmd or PowerShell writes them (<see cref="WritesNoFile"/>).</param>
-    /// <param name="lengthenings">
-    /// The parts a whole path's readings are made of (<see cref="WindowsNames.Lengthenings"/>): each segment the names a
-    /// short name may be read as. A file written and a file read are the same where some reading of each is
-    /// (<see cref="Meet"/>), asked of the parts, never of every reading spelled out.
+    /// <param name="meet">
+    /// Whether some place of one form is some place of another (<see cref="AgentPolicy.Meet"/>): a file written and a file
+    /// read are the same where some place each may be is, asked of their forms, never of every place spelled out.
     /// </param>
-    private sealed class StringState(bool windows, Func<string, IReadOnlyList<IReadOnlyList<string>>> lengthenings)
+    /// <param name="mayEndIn">Whether the text of some place of a form ends in an end (<see cref="AgentPolicy.MayEndIn"/>).</param>
+    private sealed class StringState(bool windows, Func<PlaceForm, PlaceForm, bool> meet, Func<PlaceForm, string, bool> mayEndIn)
     {
         /// <summary>
-        /// Whether some reading of <paramref name="first"/> is some reading of <paramref name="second"/>, as places compare:
-        /// the two of as many parts, each run of separators alike and each segment with a name both may be read as.
+        /// The text the string wrote into the file <paramref name="whole"/> names: the file it wrote by that form, or every
+        /// one it wrote that some place of the form is (<see cref="AgentPolicy.Meet"/>) - the one text they all hold, null
+        /// where one holds none known or they hold more than one. Not found where it wrote none.
         /// </summary>
-        public bool Meet(string first, string second)
+        public bool WroteInto(PlaceForm whole, out string? text)
         {
-            if (first.Equals(second, StringComparison.OrdinalIgnoreCase))
+            if (Written.FirstOrDefault(written => written.Whole.Key == whole.Key) is { Whole: not null } same)
             {
+                text = same.Text;
                 return true;
             }
 
-            var (one, other) = (lengthenings(first), lengthenings(second));
-
-            return one.Count == other.Count && one.Zip(other).All(pair => pair.First.Intersect(pair.Second, StringComparer.OrdinalIgnoreCase).Any());
-        }
-
-        /// <summary>
-        /// Whether some reading of <paramref name="whole"/>, its separators spelled '/', ends in <paramref name="end"/>: read
-        /// from its last part back, each part's names against what of the end is still to be met - one count of characters
-        /// for each way - never each reading spelled out.
-        /// </summary>
-        public bool MayEndIn(string whole, string end)
-        {
-            var parts = lengthenings(whole);
-            var left = new HashSet<int> { end.Length };
-
-            for (var at = parts.Count - 1; at >= 0 && left.Count > 0; at--)
-            {
-                var next = new HashSet<int>();
-
-                foreach (var still in left)
-                {
-                    foreach (var name in parts[at].Select(name => name.Replace('\\', '/')))
-                    {
-                        if (name.Length >= still)
-                        {
-                            if (name.EndsWith(end[..still], StringComparison.OrdinalIgnoreCase))
-                            {
-                                return true;
-                            }
-                        }
-                        else if (end[..still].EndsWith(name, StringComparison.OrdinalIgnoreCase))
-                        {
-                            next.Add(still - name.Length);
-                        }
-                    }
-                }
-
-                left = next;
-            }
-
-            return false;
-        }
-
-        /// <summary>
-        /// The text the string wrote into the file <paramref name="whole"/> names: the file it wrote by that name, or every
-        /// one it wrote that some reading of the name reaches (<see cref="Meet"/>) - the one text they all hold, null where
-        /// one holds none known or they hold more than one. Not found where it wrote none.
-        /// </summary>
-        public bool WroteInto(string whole, out string? text)
-        {
-            if (Written.TryGetValue(whole, out text))
-            {
-                return true;
-            }
-
-            var met = Written.Where(written => Meet(written.Key, whole)).Select(written => written.Value).ToList();
+            var met = Written.Where(written => meet(written.Whole, whole)).Select(written => written.Text).ToList();
             text = met.Count > 0 && met.All(each => each is not null && each == met[0]) ? met[0] : null;
 
             return met.Count > 0;
@@ -2222,10 +2182,11 @@ public sealed partial class AgentPolicy
         public HashSet<string> Unknown { get; } = new(StringComparer.Ordinal);
 
         /// <summary>
-        /// The files the string wrote content into, by every place each may be from each place its command may stand in,
-        /// each with the text a here-document or here-string gave it where one did.
+        /// The files the string wrote content into, each the form of every place it may be from each place its command may
+        /// stand in, with the text a here-document or here-string gave it where one did - a later write to the same form
+        /// in its place.
         /// </summary>
-        public Dictionary<string, string?> Written { get; } = new(StringComparer.OrdinalIgnoreCase);
+        public List<(PlaceForm Whole, string? Text)> Written { get; } = [];
 
         /// <summary>
         /// What follows the last expansion of the name of each file the string wrote content into that it named by what
@@ -2239,11 +2200,12 @@ public sealed partial class AgentPolicy
 
         /// <summary>
         /// The pattern of the values <paramref name="name"/> may hold: the string's own; for <c>PWD</c> one choice of every
-        /// place the command may stand in and every value the string gave it - a cd after the assignment sets it to the
-        /// place, which is among them - the same choice for every command that reads it while none moves between, as the
-        /// shell's own directory is one there; none where the string gave it a value it computes; null where none is known.
+        /// place the command may stand in - each form's places as its pattern (<see cref="PlaceForm.Pattern"/>) - and every
+        /// value the string gave it - a cd after the assignment sets it to the place, which is among them - the same choice
+        /// for every command that reads it while none moves between, as the shell's own directory is one there; none where
+        /// the string gave it a value it computes; null where none is known.
         /// </summary>
-        public WordPattern? ValuesOf(string name, IReadOnlyList<string> places)
+        public WordPattern? ValuesOf(string name, IReadOnlyList<PlaceForm> places)
         {
             if (name != "PWD")
             {
@@ -2257,7 +2219,7 @@ public sealed partial class AgentPolicy
 
             if (_standing is not { } standing || standing.Places != places.Count)
             {
-                IReadOnlyList<WordPattern> each = [.. places.Distinct(StringComparer.Ordinal).Select(place => WordPattern.Of(place, new string(WordQuoting.Open, place.Length)))];
+                IReadOnlyList<WordPattern> each = [.. places.Select(place => place.Pattern())];
                 standing = (new WordChoice(Values.TryGetValue(name, out var own) ? [.. each, own] : each), places.Count);
                 _standing = standing;
             }
@@ -2275,7 +2237,7 @@ public sealed partial class AgentPolicy
         /// variable the string set to a value it computes among them (<see cref="Unread"/>). A device it writes to is no
         /// file (<see cref="WritesNoFile"/>), a Windows device's name only where cmd or PowerShell writes it.
         /// </summary>
-        public void Record(AnalyzedCommand analyzed, CommandReadings readings, int environment, IReadOnlyList<string> places, Func<string, IReadOnlyList<string>?> wholes)
+        public void Record(AnalyzedCommand analyzed, CommandReadings readings, int environment, IReadOnlyList<PlaceForm> places, Func<string, IReadOnlyList<PlaceForm>?> wholes)
         {
             var words = analyzed.Words;
             var program = environment < words.Count ? CommandAnalysis.Name(words[environment]) : string.Empty;
@@ -2338,9 +2300,11 @@ public sealed partial class AgentPolicy
 
                     var appended = reading.Redirects.Any(redirect => redirect.Operator == ">>" && redirect.Target == target) || reading.Words.Skip(environment + 1).Any(word => word is "-a" or "--append");
 
+                    // A later write to the same form is what it holds now.
                     foreach (var whole in spelled)
                     {
-                        Written[whole] = appended ? null : text;
+                        Written.RemoveAll(written => written.Whole.Key == whole.Key);
+                        Written.Add((whole, appended ? null : text));
                     }
                 }
             }
@@ -2363,7 +2327,7 @@ public sealed partial class AgentPolicy
         /// file one reads, rather than another word of a program that runs its words (<see cref="CommandAnalysis.RunsAt"/>) -
         /// an option's value, a remote command, a command line's text, an argument.
         /// </param>
-        public bool MayBeUnread(string word, string? quoted, IReadOnlyList<string>? wholes, bool runs)
+        public bool MayBeUnread(string word, string? quoted, IReadOnlyList<PlaceForm>? wholes, bool runs)
         {
             if (runs && (wholes is null || Unread(word, quoted)))
             {
@@ -2371,7 +2335,7 @@ public sealed partial class AgentPolicy
             }
 
             // An end with no separator lies within the last name, so a reading ending in it is one whose last name does.
-            return wholes is not null && UnreadEnds.Any(end => end.Length > 0 && wholes.Any(whole => MayEndIn(whole, end)));
+            return wholes is not null && UnreadEnds.Any(end => end.Length > 0 && wholes.Any(whole => mayEndIn(whole, end)));
         }
 
         /// <summary>
@@ -2427,7 +2391,7 @@ public sealed partial class AgentPolicy
     /// <c>HOME</c>. A variable the string does not set, or sets to a value it computes, is read as the text it spells. Given
     /// lazily: a decision that refuses a reading reads no more of them.
     /// </summary>
-    private static CommandReadings Readings(AnalyzedCommand analyzed, StringState state, IReadOnlyList<string> places)
+    private static CommandReadings Readings(AnalyzedCommand analyzed, StringState state, IReadOnlyList<PlaceForm> places)
     {
         // A shell a command runs with HOME set reads its tilde as that HOME: the command's own environment carries the HOME
         // of each command that runs it (HOME=x bash -c '...'), read beside the string's own - one choice for the command.
@@ -2548,7 +2512,7 @@ public sealed partial class AgentPolicy
     /// (<see cref="StringState.MayBeUnread"/>) - named by what the shell expands, or run as the program or a script file
     /// by a word the shell expands - whose text this does not know. Null where it runs none.
     /// </summary>
-    private static (string File, string? Text)? WrittenScripts(CommandReadings readings, int environment, StringState state, Func<string, IReadOnlyList<string>?> wholes)
+    private static (string File, string? Text)? WrittenScripts(CommandReadings readings, int environment, StringState state, Func<string, IReadOnlyList<PlaceForm>?> wholes)
     {
         if (state.Written.Count == 0 && state.UnreadEnds.Count == 0)
         {
@@ -3895,7 +3859,7 @@ public sealed partial class AgentPolicy
     /// Its <c>CDPATH</c>, <c>OLDPWD</c> or <c>HOME</c> is one the string sets to a value it computes, or <c>cd -</c> goes back to a place
     /// the shell stood in before the string, which this cannot tell.
     /// </exception>
-    private (IReadOnlyList<string> To, bool Back)? MovedTo(IReadOnlyList<string> command, IReadOnlyList<string> places, StringState state)
+    private (IReadOnlyList<PlaceForm> To, bool Back)? MovedTo(IReadOnlyList<string> command, IReadOnlyList<PlaceForm> places, StringState state)
     {
         var environment = CommandAnalysis.EnvironmentOf(command);
 
@@ -3976,13 +3940,13 @@ public sealed partial class AgentPolicy
             }
         }
 
-        var moved = new List<string>();
+        var moved = new List<PlaceForm>();
 
         foreach (var target in going)
         {
             try
             {
-                moved.AddRange(places.SelectMany(place => CommandSpelled(target, place, pattern: true, lengthen: false)));
+                moved.AddRange(Reached(places, target, pattern: true));
             }
             catch (Exception exception) when (exception is ArgumentException or System.Security.SecurityException or PathTooLongException)
             {
@@ -3990,7 +3954,7 @@ public sealed partial class AgentPolicy
             }
         }
 
-        return ([.. moved.Distinct(StringComparer.OrdinalIgnoreCase)], goesBack);
+        return (PlaceForm.Union(moved), goesBack);
 
         // A name cd looks up in CDPATH: one that begins with no root, no home, no expansion and no '.' or '..' of its own.
         static bool LooksUp(string target)
@@ -4493,7 +4457,7 @@ public sealed partial class AgentPolicy
     /// <param name="lengthen">
     /// Whether each short name is read as each guarded name it could shorten: false where the path is a place a move
     /// reaches, which the shell's <c>PWD</c> holds as the move spells it, and where a file's reaching another is asked of
-    /// the two as patterns (<see cref="StringState.Meet"/>) - every path read from such a place, or asked of such a file, is lengthened
+    /// the two as forms (<see cref="Meet"/>) - every path read from such a place, or asked of such a file, is lengthened
     /// where it is decided.
     /// </param>
     /// <param name="rules">Whether a file tool decides the readings, so each of its path patterns tells two readings apart (<see cref="Lengthenings"/>).</param>
