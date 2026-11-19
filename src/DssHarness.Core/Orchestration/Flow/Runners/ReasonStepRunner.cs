@@ -40,7 +40,6 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// <param name="clock">Tells the week a balanced key's spend is counted for.</param>
 /// <param name="isolation">Decides the operating system's isolation the step's agent runs under.</param>
 /// <param name="gitClient">Asks git, for the paths an agent's worktree holds that no fold has taken.</param>
-/// <param name="configStore">Once read the bounds of the engine's own account of a stream, whose keys are retired: read no more.</param>
 /// <param name="updates">Makes the Claude Code a run needs ready, where the step's order holds the client that starts one.</param>
 /// <param name="graphService">The one graph service every graph is read and written by, for the step's serving of the run's graph; null where none is given, and no step is served.</param>
 /// <param name="graphClock">Times the graph tool's searches; the machine's clock where none is given.</param>
@@ -61,9 +60,6 @@ public sealed class ReasonStepRunner(
     Application.Legs.ITestLegs tests,
     ChildSessions children,
     Git.IGitClient? gitClient = null,
-#pragma warning disable CS9113 // No longer read, for the continuation keys it read bounds by are retired; kept while a caller still passes it.
-    Configuration.IConfigStore? configStore = null,
-#pragma warning restore CS9113
     ClaudeCodeUpdateService? updates = null,
     Codebase.ICodebaseGraphService? graphService = null,
     TimeProvider? graphClock = null) : IFlowStepTypeRunner, IFlowHandoffRunner

@@ -131,7 +131,6 @@ public sealed class ReasonStepRunnerTests
             tests ?? new MeasuredTests(),
             kit.Harness.ChildSessions,
             kit.Harness.GitClient,
-            kit.Harness.ConfigStore,
             updates,
             graphService);
 

@@ -74,24 +74,11 @@ public static class AgentCompaction
     public const string OutgrewItsContext = "the conversation outgrew its model's context";
 
     /// <summary>
-    /// Works the compaction of an attempt out: the record, and how much of the attempt it kept and reduced. The same
-    /// events always give the same record. An attempt compacted before is reduced whole all the same: the record that
-    /// began its newest conversation stands for the items before it, which the attempt's events hold themselves, so
-    /// each record is the attempt's first prompt and its items once, never the records before it again.
-    /// </summary>
-    /// <param name="attempt">The attempt's events (<see cref="AgentAttempt.Of"/>): every run of it, from its first prompt on.</param>
-    /// <param name="continuation">How many of the last iterations are kept word for word (<see cref="AgentContinuationBounds.LastIterations"/>).</param>
-    /// <param name="bounds">The compaction's bounds.</param>
-    public static AgentCompacted Reduce(IReadOnlyList<AgentEvent> attempt, AgentContinuationBounds continuation, AgentCompactionBounds bounds)
-    {
-        ArgumentNullException.ThrowIfNull(continuation);
-
-        return Reduce(attempt, bounds, continuation.LastIterations);
-    }
-
-    /// <summary>
-    /// Works the compaction of an attempt out, as <see cref="Reduce(IReadOnlyList{AgentEvent}, AgentContinuationBounds, AgentCompactionBounds)"/>
-    /// does, its last <see cref="AgentCompactionBounds.LastIterations"/> iterations word for word.
+    /// Works the compaction of an attempt out: the record, and how much of the attempt it kept and reduced, its last
+    /// <see cref="AgentCompactionBounds.LastIterations"/> iterations word for word. The same events always give the same
+    /// record. An attempt compacted before is reduced whole all the same: the record that began its newest conversation
+    /// stands for the items before it, which the attempt's events hold themselves, so each record is the attempt's first
+    /// prompt and its items once, never the records before it again.
     /// </summary>
     /// <param name="attempt">The attempt's events (<see cref="AgentAttempt.Of"/>): every run of it, from its first prompt on.</param>
     /// <param name="bounds">The compaction's bounds.</param>
@@ -99,8 +86,9 @@ public static class AgentCompaction
         => Reduce(attempt, bounds, AgentCompactionBounds.LastIterations);
 
     /// <summary>
-    /// The compaction of an attempt, its last <paramref name="last"/> iterations word for word: the one reduction both
-    /// overloads give, and the tests' way to hold the iterations kept apart from the rest.
+    /// The compaction of an attempt, its last <paramref name="last"/> iterations word for word: the one reduction
+    /// <see cref="Reduce(IReadOnlyList{AgentEvent}, AgentCompactionBounds)"/> gives, and the tests' way to hold the
+    /// iterations kept apart from the rest.
     /// </summary>
     internal static AgentCompacted Reduce(IReadOnlyList<AgentEvent> attempt, AgentCompactionBounds bounds, int last)
     {

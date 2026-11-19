@@ -895,7 +895,6 @@ internal sealed class Working
             ? null
             : AgentCompaction.Reduce(
                 stream,
-                AgentContinuationBounds.Of(_common.Context.Config.AgentContext?.Continuation),
                 AgentCompactionBounds.Of(_common.Context.Config.AgentContext?.Compaction));
     }
 
