@@ -8,6 +8,7 @@ using DssHarness.Core.Execution;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Git;
 using DssHarness.Core.Output;
+using DssHarness.Core.Pages;
 using DssHarness.Core.Platform;
 using DssHarness.Core.Processes;
 using DssHarness.Core.Repository;
@@ -427,7 +428,8 @@ public sealed class CiReadStepRunner(IHarnessContextLoader contextLoader, IHostP
 /// Runs a <c>ci-wait</c> step: waits for the checks the forge runs on its <c>commit</c> - the one the run last pushed
 /// where it names none - and says how each ended, as <see cref="ICiChecksService"/> reads them. None appearing,
 /// some still running at its time, or one ended neither green nor red, asks; a red one is answered with where it failed,
-/// and of a job its whole log kept in the step's directory and its last lines in <c>red[].tail</c>, both masked.
+/// and of a job its whole log kept in the step's directory, given by reference (<c>red[].log</c>) with how many lines it
+/// holds and the page of it where the job failed first (<c>red[].failing</c>), both masked.
 /// </summary>
 /// <param name="contextLoader">Finds the repository and its configuration.</param>
 /// <param name="platform">This machine.</param>
@@ -443,6 +445,18 @@ public sealed class CiWaitStepRunner(
 {
     /// <inheritdoc/>
     public string Type => "ci-wait";
+
+    /// <summary>
+    /// What GitHub Actions writes ahead of a line of a job's log it marks an error - an error annotation, and the line the
+    /// failing step ends on (<c>Process completed with exit code N.</c>): the log's last such line is where the job failed.
+    /// </summary>
+    internal const string ErrorMark = "##[error]";
+
+    /// <summary>
+    /// The characters the page of a red job's log its output gives holds: a page of a tool's answer to a model, the one
+    /// room an agent reads a page in (<see cref="PageRoom.ModelAnswer"/>).
+    /// </summary>
+    internal static int LogPage { get; } = PageRoom.For(PageRoom.ModelAnswer, []);
 
     /// <inheritdoc/>
     public async Task<FlowStepResult> RunAsync(FlowStepRun run, CancellationToken cancellationToken)
@@ -506,7 +520,8 @@ public sealed class CiWaitStepRunner(
         foreach (var check in reading.Red)
         {
             string? kept = null;
-            IReadOnlyList<string> tail = [];
+            long? lines = null;
+            IReadOnlyList<string> failing = [];
 
             // Named for its job and the job's id: two red jobs of one name - in two workflows, or named apart only by
             // case or by a character no path carries - would otherwise keep one file, each the other's log.
@@ -516,7 +531,20 @@ public sealed class CiWaitStepRunner(
                 kept = Path.Combine(logs, $"{PhaseLogs.NameFor(check.Job ?? check.Check.Name)}.{jobId.ToString(CultureInfo.InvariantCulture)}{PhaseLogs.Extension}");
                 fileSystem.CreateDirectory(logs);
                 fileSystem.WriteAllTextAtomic(kept, masked);
-                tail = [.. LineText.Of(masked).TrimEnd('\n').Split('\n').TakeLast(PhaseResult.TailLines)];
+
+                // The log is given by reference, kept whole: its pages laid in one pass over the kept file, and the page
+                // where the job failed given first, each line by its number, so every other line is read from the log by
+                // its own - never its last lines alone, which a job's clean-up after its failing step fills.
+                var pages = await TextPages.LayAsync(
+                    fileSystem,
+                    kept,
+                    PageKey.Of(Type, new JsonObject { ["log"] = kept }),
+                    $"the log of {check.Check.Name}",
+                    LogPage,
+                    numbered: true,
+                    cancellationToken).ConfigureAwait(false);
+                lines = pages.Lines;
+                failing = [.. (await FailingPageAsync(pages, masked.Contains(ErrorMark, StringComparison.Ordinal), cancellationToken).ConfigureAwait(false)).Entries.Select(entry => entry.Text)];
             }
 
             red.Add(new JsonObject
@@ -528,8 +556,9 @@ public sealed class CiWaitStepRunner(
                 ["leg"] = check.Leg,
                 ["overran"] = check.Overran,
                 ["url"] = check.Check.Url,
-                ["tail"] = new JsonArray([.. tail.Select(line => (JsonNode?)line)]),
+                ["failing"] = new JsonArray([.. failing.Select(line => (JsonNode?)line)]),
                 ["log"] = kept,
+                ["lines"] = lines,
                 ["conclusion"] = check.Check.Conclusion,
                 ["description"] = check.Check.Description,
                 ["unread"] = check.Unread,
@@ -541,6 +570,33 @@ public sealed class CiWaitStepRunner(
             CiExit.LegRed,
             $"{Named(reading.Red.Select(check => check.Check).ToList())} red on {commit}",
             Output(passed: false, reading, red));
+    }
+
+    /// <summary>
+    /// The page of a red job's log where the job failed: the one holding its last line marked an error
+    /// (<see cref="ErrorMark"/>), looked for from the last page back - each page read alone, by seeking to it - where the
+    /// log holds one; else its last page, where a job that fails stops.
+    /// </summary>
+    /// <param name="pages">The log's pages, laid on its kept file.</param>
+    /// <param name="marked">Whether the log holds a line marked an error.</param>
+    /// <param name="cancellationToken">Stops the reads.</param>
+    private async Task<PageAnswer<TextEntry>> FailingPageAsync(TextPagesKept pages, bool marked, CancellationToken cancellationToken)
+    {
+        var last = await TextPages.PageAsync(fileSystem, pages, pages.Marks.Count, numbered: true, note: null, cancellationToken).ConfigureAwait(false);
+
+        for (var page = pages.Marks.Count; marked && page >= 1; page--)
+        {
+            var read = page == pages.Marks.Count
+                ? last
+                : await TextPages.PageAsync(fileSystem, pages, page, numbered: true, note: null, cancellationToken).ConfigureAwait(false);
+
+            if (read.Entries.Any(entry => entry.Text.Contains(ErrorMark, StringComparison.Ordinal)))
+            {
+                return read;
+            }
+        }
+
+        return last;
     }
 
     /// <summary>The step's output: whether its checks passed, the commit, each check, the red ones, and those still pending or unsettled.</summary>
