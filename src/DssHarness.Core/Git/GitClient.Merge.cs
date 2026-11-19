@@ -755,6 +755,11 @@ public sealed partial class GitClient
     {
         var index = Path.Combine(scratch, $"index-{Guid.NewGuid():N}");
         var written = Path.Combine(scratch, $"checked-out-{Guid.NewGuid():N}") + Path.DirectorySeparatorChar;
+
+        // git makes the directories that lead to the file inside the prefix, but not the prefix itself, so it is made
+        // here before anything is checked out into it.
+        Directory.CreateDirectory(written);
+
         var entry = await RunWithIndexAsync(
                 directory,
                 index,
