@@ -27,7 +27,7 @@ public sealed partial class VueExtractor : ICodeGraphExtractor
     public string Language => "vue";
 
     /// <inheritdoc/>
-    public int Version => 3;
+    public int Version => 2;
 
     /// <inheritdoc/>
     public CodeGraphClaims Claims { get; } = CodeGraphClaims.OfExtensions(".vue");

@@ -20,7 +20,7 @@ public sealed class CssExtractor : ICodeGraphExtractor
     public string Language => "css";
 
     /// <inheritdoc/>
-    public int Version => 2;
+    public int Version => 1;
 
     /// <inheritdoc/>
     public CodeGraphClaims Claims { get; } = CodeGraphClaims.OfExtensions(".css", ".scss", ".sass", ".less");

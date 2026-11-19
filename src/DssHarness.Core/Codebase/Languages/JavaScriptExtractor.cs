@@ -13,7 +13,7 @@ public sealed class JavaScriptExtractor : ICodeGraphExtractor
     public string Language => "javascript";
 
     /// <inheritdoc/>
-    public int Version => 4;
+    public int Version => 3;
 
     /// <inheritdoc/>
     public CodeGraphClaims Claims { get; } = CodeGraphClaims.OfExtensions(".js", ".mjs", ".cjs", ".jsx");

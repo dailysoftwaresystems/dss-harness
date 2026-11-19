@@ -34,7 +34,7 @@ public sealed class HtmlExtractor : ICodeGraphExtractor
     public string Language => "html";
 
     /// <inheritdoc/>
-    public int Version => 3;
+    public int Version => 2;
 
     /// <inheritdoc/>
     public CodeGraphClaims Claims { get; } = CodeGraphClaims.OfExtensions(".html", ".htm");

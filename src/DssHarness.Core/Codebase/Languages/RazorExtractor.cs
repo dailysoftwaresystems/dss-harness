@@ -39,7 +39,7 @@ public sealed partial class RazorExtractor : ICodeGraphExtractor
     public string Language => "razor";
 
     /// <inheritdoc/>
-    public int Version => 2;
+    public int Version => 1;
 
     /// <inheritdoc/>
     public CodeGraphClaims Claims { get; } = CodeGraphClaims.OfExtensions(".cshtml", ".razor");
