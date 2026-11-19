@@ -88,14 +88,24 @@ internal sealed class ScanExtract
     /// <summary>Adds an import, in the order the file makes it.</summary>
     public void Import(ExtractImport import) => _imports.Add(import);
 
-    /// <summary>Adds a reference made from the node of the key <paramref name="from"/>.</summary>
-    public void Reference(string from, string kind, string name, int line, int? arity = null, ExtractQualifier? qualifier = null)
+    /// <summary>
+    /// Adds a reference made from the node of the key <paramref name="from"/>; answers its place among the file's
+    /// references - what a reference made for the next name of a chain links its qualifier to
+    /// (<see cref="ExtractQualifier.Link"/>) - or -1 where it names nothing and is not added.
+    /// </summary>
+    public int Reference(string from, string kind, string name, int line, int? arity = null, ExtractQualifier? qualifier = null)
     {
-        if (name.Length > 0)
+        if (name.Length == 0)
         {
-            _references.Add(new ExtractReference(from, kind, name, line) { Arity = arity, Qualifier = qualifier });
+            return -1;
         }
+
+        _references.Add(new ExtractReference(from, kind, name, line) { Arity = arity, Qualifier = qualifier });
+        return _references.Count - 1;
     }
+
+    /// <summary>The reference at <paramref name="at"/>, as added (<see cref="Reference"/>).</summary>
+    public ExtractReference ReferenceAt(int at) => _references[at];
 
     /// <summary>Marks <paramref name="line"/> dynamic, with why.</summary>
     public void Dynamic(int line, string why) => _dynamic.Add(new ExtractDynamic(line, why));

@@ -1017,14 +1017,14 @@ public sealed class JavaScriptExtractorTests : CodeGraphExtractorContractTests<J
 
         Assert.Equal(
             [
-                new ExtractLiteral("parameter default", 4) { Node = Price },
-                new ExtractLiteral("a\tb ABC", 6) { Node = Price },
-                new ExtractLiteral("USD $", 7) { Node = Price },
-                new ExtractLiteral(" due", 7) { Node = Price },
-                new ExtractLiteral("Tom & Jerry !", 8) { Node = Price },
-                new ExtractLiteral("second", 8) { Node = Price },
+                new LiteralRow("parameter default", 4, Price),
+                new LiteralRow("a\tb ABC", 6, Price),
+                new LiteralRow("USD $", 7, Price),
+                new LiteralRow(" due", 7, Price),
+                new LiteralRow("Tom & Jerry !", 8, Price),
+                new LiteralRow("second", 8, Price),
             ],
-            extract.Literals);
+            LiteralRow.Of(extract));
         Assert.Equal(
             [("config", 9, ""), ("port", 9, "value config"), ("isBig", 12, ""), ("LIMIT", 12, ""), ("SMALL", 12, ""), ("value", 13, "")],
             extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Uses).Select(reference => (reference.Name, reference.Line, $"{reference.Qualifier?.Kind} {reference.Qualifier?.Name}".Trim())));
@@ -1138,7 +1138,7 @@ public sealed class JavaScriptExtractorTests : CodeGraphExtractorContractTests<J
             export const view = <a title="x&#{{digits}}65;y &notanentityofanyname; &#99999999999999; &amp" />;
             """);
 
-        Assert.Equal(["xAy &notanentityofanyname; � &amp"], (extract.Literals ?? []).Select(literal => literal.Value));
+        Assert.Equal(["xAy &notanentityofanyname; � &amp"], LiteralRow.Of(extract).Select(literal => literal.Value));
     }
 
     /// <summary>A String.raw template's value is its text as written, no escape read in it, where another tag's template is read by JavaScript's escapes.</summary>
@@ -1153,7 +1153,7 @@ public sealed class JavaScriptExtractorTests : CodeGraphExtractorContractTests<J
             }
             """);
 
-        Assert.Equal(["^\\d+$ raw pattern", "tab\tseparated text"], (extract.Literals ?? []).Select(literal => literal.Value));
+        Assert.Equal(["^\\d+$ raw pattern", "tab\tseparated text"], LiteralRow.Of(extract).Select(literal => literal.Value));
     }
 
     private static FileExtract Read(string path, string text) => new JavaScriptExtractor().Extract(new CodeFileInput(path, text));

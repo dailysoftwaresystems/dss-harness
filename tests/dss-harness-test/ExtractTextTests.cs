@@ -3,7 +3,7 @@ using DssHarness.Core.Codebase.Languages;
 
 namespace DssHarness.Tests;
 
-/// <summary>How every implementation fits a node's text into the model's bounds, and tells two ids alike apart.</summary>
+/// <summary>How every implementation gives a node its text - whole, on one line - and tells two ids alike apart.</summary>
 public sealed class ExtractTextTests
 {
     /// <summary>A summary is the first sentence: up to a stop a space or the end follows, a stop inside a word no end.</summary>
@@ -19,24 +19,48 @@ public sealed class ExtractTextTests
     public void ASummary_IsTheFirstSentence_UpToAStopASpaceOrTheEndFollows(string text, string expected)
         => Assert.Equal(expected, ExtractText.Summary(text));
 
+    /// <summary>A text is put on one line: each run of white space, line breaks among it, one space, none at either end.</summary>
+    [Fact]
+    public void AText_IsPutOnOneLine()
+        => Assert.Equal(("a b c", "one", string.Empty), (ExtractText.Flat("  a\r\n\tb \n c  "), ExtractText.Flat("one"), ExtractText.Flat(" \t\n ")));
+
     /// <summary>
-    /// A text is put on one line, and cut to its bound at a word before it with an ellipsis - at the bound where no word
-    /// ends late enough, and never inside a surrogate pair.
+    /// A signature is the header whole however long it runs - a generated template's twelve thousand characters among
+    /// them - and the reader that names it keeps it whole in an extract the core takes: what serves it gives one wider
+    /// than a page in pieces, so no cut is needed and none is made.
     /// </summary>
     [Fact]
-    public void AText_IsCutToItsBound_AtAWord_WithAnEllipsis_NeverInsideASurrogatePair()
+    public void ATwelveThousandCharacterSignature_IsKeptWhole()
     {
-        Assert.Equal("a b c", ExtractText.Flat("  a\r\n\tb \n c  "));
+        var header = $"template <{string.Join(", ", Enumerable.Range(0, 1_200).Select(index => $"class T{index:D4}"))}> struct Wide";
 
-        // Seven characters a word with its space, so the bound falls inside one.
-        Assert.InRange((FileExtract.MostSignature - 1) % 7, 1, 5);
-        var words = ExtractText.Signature(string.Join(' ', Enumerable.Repeat("sevens", FileExtract.MostSignature)));
-        Assert.True(words.Length <= FileExtract.MostSignature);
-        Assert.EndsWith(" sevens…", words, StringComparison.Ordinal);
+        Assert.InRange(header.Length, 12_000, 20_000);
+        Assert.Equal(header, ExtractText.Signature(header));
 
-        var letters = new string('a', FileExtract.MostSignature - 2);
-        Assert.Equal(letters + "…", ExtractText.Signature(letters + "😀😀"));
-        Assert.Equal(letters, ExtractText.Signature(letters));
+        var name = new string('k', 12_000);
+        var text = $"{{ \"{name}\": 1 }}";
+        var extract = new JsonExtractor().Extract(new CodeFileInput("wide.json", text));
+
+        Assert.Equal([name], extract.Nodes.Select(node => node.Signature));
+        Assert.Null(extract.WithDigests(CodeFileText.Lines(text)).Problem("json", 1));
+    }
+
+    /// <summary>
+    /// A summary is the whole first sentence what the code says of itself writes, however many lines it runs over - a
+    /// generated document's sentence of forty lines among them - since the sentence's own end is what bounds it.
+    /// </summary>
+    [Fact]
+    public void AFortyLineFirstSentence_IsTheSummary()
+    {
+        var lines = Enumerable.Range(0, 40).Select(index => $"clause {index:D2} of the one sentence the comment writes,").ToList();
+        var sentence = string.Join(' ', lines) + " ending here.";
+        var text = string.Concat(lines.Select(line => $"// {line}\n")) + "// ending here. A second sentence.\nint answer(void);\n";
+        var extract = new CExtractor().Extract(new CodeFileInput("answer.c", text));
+
+        Assert.True(sentence.Length > 1_000, $"the sentence is {sentence.Length} characters");
+        Assert.Equal(sentence, ExtractText.Summary(sentence + " A second sentence."));
+        Assert.Equal([sentence], extract.Nodes.Select(node => node.Summary));
+        Assert.Null(extract.WithDigests(CodeFileText.Lines(text)).Problem("c", CodeFileText.Lines(text).Count));
     }
 
     /// <summary>A text cut inside a character is made whole: each surrogate apart from its pair the replacement character, a pair kept, a whole text the very one.</summary>

@@ -941,14 +941,14 @@ public sealed class DartExtractorTests : CodeGraphExtractorContractTests<DartExt
 
         Assert.Equal(
             [
-                new ExtractLiteral("^\\d+$", 1) { Node = "dart:lib/t.dart.re" },
-                new ExtractLiteral("SELECT * FROM t", 3) { Node = "dart:lib/t.dart.query" },
-                new ExtractLiteral("It's done", 4) { Node = "dart:lib/t.dart.done" },
-                new ExtractLiteral("\U0001F600 and AB", 5) { Node = "dart:lib/t.dart.codes" },
-                new ExtractLiteral("item ", 6) { Node = "dart:lib/t.dart.show" },
-                new ExtractLiteral(" left\nnow", 6) { Node = "dart:lib/t.dart.show" },
+                new LiteralRow("^\\d+$", 1, "dart:lib/t.dart.re"),
+                new LiteralRow("SELECT * FROM t", 3, "dart:lib/t.dart.query"),
+                new LiteralRow("It's done", 4, "dart:lib/t.dart.done"),
+                new LiteralRow("\U0001F600 and AB", 5, "dart:lib/t.dart.codes"),
+                new LiteralRow("item ", 6, "dart:lib/t.dart.show"),
+                new LiteralRow(" left\nnow", 6, "dart:lib/t.dart.show"),
             ],
-            extract.Literals);
+            LiteralRow.Of(extract));
         Assert.Empty(extract.References);
     }
 
@@ -993,15 +993,15 @@ public sealed class DartExtractorTests : CodeGraphExtractorContractTests<DartExt
 
         Assert.Equal(
             [
-                new ExtractLiteral("users_table", 5) { Node = "dart:lib/user.dart.User" },
-                new ExtractLiteral("user_id", 7) { Node = "dart:lib/user.dart.User.id" },
-                new ExtractLiteral("since_v2", 9) { Node = "dart:lib/user.dart.User.new" },
-                new ExtractLiteral("parameter default", 9) { Node = "dart:lib/user.dart.User.new" },
-                new ExtractLiteral("old_show", 11) { Node = Show },
-                new ExtractLiteral("method default", 12) { Node = Show },
-                new ExtractLiteral("warm_tone", 24) { Node = "dart:lib/user.dart.Tone.warm" },
+                new LiteralRow("users_table", 5, "dart:lib/user.dart.User"),
+                new LiteralRow("user_id", 7, "dart:lib/user.dart.User.id"),
+                new LiteralRow("since_v2", 9, "dart:lib/user.dart.User.new"),
+                new LiteralRow("parameter default", 9, "dart:lib/user.dart.User.new"),
+                new LiteralRow("old_show", 11, Show),
+                new LiteralRow("method default", 12, Show),
+                new LiteralRow("warm_tone", 24, "dart:lib/user.dart.Tone.warm"),
             ],
-            extract.Literals);
+            LiteralRow.Of(extract));
         Assert.Equal(
             [
                 (Show, "prefix", 13, ""), (Show, "id", 13, ""), (Show, "kRed", 14, ""), (Show, "kBlue", 15, ""), (Show, "width", 16, ""), (Show, "darkColor", 16, ""), (Show, "config", 17, ""),
@@ -1119,7 +1119,7 @@ public sealed class DartExtractorTests : CodeGraphExtractorContractTests<DartExt
                 ("red", "named Color", 3), ("kOne", "", 6), ("kTwo", "", 7), ("green", "named Color", 8), ("pairs", "", 11),
             ],
             extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Uses).Select(reference => (reference.Name, $"{reference.Qualifier?.Kind} {reference.Qualifier?.Name}".Trim(), reference.Line)));
-        Assert.Equal(["red", "one", "admin role", "admin", "two"], extract.Literals!.Select(literal => literal.Value));
+        Assert.Equal(["red", "one", "admin role", "admin", "two"], LiteralRow.Of(extract).Select(literal => literal.Value));
     }
 
     /// <summary>A label a <c>break</c> or a <c>continue</c> names is a jump's target and no use, while what the loop reads is one.</summary>

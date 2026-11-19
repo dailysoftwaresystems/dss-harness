@@ -60,7 +60,7 @@ public sealed class CodebaseGraphRecordsTests
         Assert.Null(sound.Problem("toy", 3));
         Assert.Null((sound with { Nodes = [Node with { Summary = "An \U0001F600 A." }] }).Problem("toy", 3));
         Assert.Null((sound with { Nodes = [Node with { Exports = ["default"] }], AddressRoots = [new ExtractAddressRoot("pkg", "src/index.ts") { Whole = true }] }).Problem("toy", 3));
-        Assert.Null((sound with { Literals = [new ExtractLiteral("held by a node", 2) { Node = "toy:A.b" }, new ExtractLiteral("held by the file", 3)] }).Problem("toy", 3));
+        Assert.Null((sound with { Literals = LiteralRow.Table(new LiteralRow("held by a node", 2, "toy:A.b"), new LiteralRow("held by the file", 3)) }).Problem("toy", 3));
 
         var wrong = new (FileExtract Extract, string Problem)[]
         {
@@ -75,7 +75,6 @@ public sealed class CodebaseGraphRecordsTests
             (sound with { Nodes = [Node with { Start = 0 }] }, "its lines 0-3 are not lines"),
             (sound with { Nodes = [Node with { Start = 3, End = 2 }] }, "its lines 3-2 are not lines"),
             (sound with { Nodes = [Node with { BodyStart = 4 }] }, "its body begins on line 4"),
-            (sound with { Nodes = [Node with { Signature = new string('x', FileExtract.MostSignature + 1) }] }, "its signature is not one line"),
             (sound with { Nodes = [Node with { Signature = "class\nA" }] }, "its signature is not one line"),
             (sound with { Nodes = [Node with { Summary = "one\rtwo" }] }, "its summary is not one line"),
             (sound with { Nodes = [Node with { MinArity = -1 }] }, "its arity is no range"),
@@ -128,7 +127,7 @@ public sealed class CodebaseGraphRecordsTests
             (sound with { Generated = " " }, "it says it is generated and not why"),
             (sound with { Dynamic = [new ExtractDynamic(1, "")] }, "it marks a line dynamic and not why"),
             (sound with { Dynamic = [new ExtractDynamic(9, "macro")] }, "it marks line 9 dynamic, outside its 3 lines"),
-            (sound with { Literals = [new ExtractLiteral("value", 2) { Node = "toy:Z" }] }, "its literal 'value' is held by 'toy:Z', which it holds no node of"),
+            (sound with { Literals = LiteralRow.Table(new LiteralRow("value", 2, "toy:Z")) }, "its literal 'value' is held by 'toy:Z', which it holds no node of"),
         };
 
         Assert.All(wrong, pair => Assert.Contains(pair.Problem, pair.Extract.Problem("toy", 3), StringComparison.Ordinal));

@@ -745,7 +745,7 @@ public sealed class CssExtractorTests : CodeGraphExtractorContractTests<CssExtra
         var extract = Read("a.css", "@import \"theme\\2d dark.css\";\n@import 'it\\'s.css';\n.a { content: \"hello\\A world\"; background: url( img/a.png ); }\n");
 
         Assert.Equal(["theme-dark.css", "it's.css"], extract.Imports.Select(import => import.Target));
-        Assert.Equal([("hello\nworld", 3, "css:a.css#.a"), ("img/a.png", 3, "css:a.css#.a")], (extract.Literals ?? []).Select(literal => (literal.Value, literal.Line, literal.Node)));
+        Assert.Equal([("hello\nworld", 3, "css:a.css#.a"), ("img/a.png", 3, "css:a.css#.a")], LiteralRow.Of(extract).Select(literal => (literal.Value, literal.Line, literal.Node)));
     }
 
     /// <summary>
@@ -784,7 +784,7 @@ public sealed class CssExtractorTests : CodeGraphExtractorContractTests<CssExtra
         Assert.Equal(
             [("font-face", 3), ("mq", 4), ("$theme", 5), ("--ink", 6)],
             extract.References.Where(reference => reference.From == "css:a.scss#(sheet)").Select(reference => (reference.Name, reference.Line)));
-        Assert.Equal([("Roboto Slab", "css:a.scss#(sheet)")], (extract.Literals ?? []).Select(literal => (literal.Value, literal.Node)));
+        Assert.Equal([("Roboto Slab", "css:a.scss#(sheet)")], LiteralRow.Of(extract).Select(literal => (literal.Value, literal.Node)));
         Assert.DoesNotContain(Read("a.scss", ".a { b: c; }\n").Nodes, node => node.Name == "(sheet)");
     }
 

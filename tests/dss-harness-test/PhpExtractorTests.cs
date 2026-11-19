@@ -1184,18 +1184,18 @@ public sealed class PhpExtractorTests : CodeGraphExtractorContractTests<PhpExtra
 
         Assert.Equal(
             [
-                new ExtractLiteral("Hello ", 4) { Node = "php:greet" },
-                new ExtractLiteral("Dear ", 5) { Node = "php:greet" },
-                new ExtractLiteral(", welcome", 5) { Node = "php:greet" },
-                new ExtractLiteral(" left ", 6) { Node = "php:greet" },
-                new ExtractLiteral(" end", 6) { Node = "php:greet" },
-                new ExtractLiteral(" and ", 7) { Node = "php:greet" },
-                new ExtractLiteral("C:\\temp 'quoted'", 8) { Node = "php:greet" },
-                new ExtractLiteral("Tab\there HI $x", 9) { Node = "php:greet" },
-                new ExtractLiteral("first line\n  second line", 11) { Node = "php:greet" },
-                new ExtractLiteral("raw $x\\n", 15) { Node = "php:greet" },
+                new LiteralRow("Hello ", 4, "php:greet"),
+                new LiteralRow("Dear ", 5, "php:greet"),
+                new LiteralRow(", welcome", 5, "php:greet"),
+                new LiteralRow(" left ", 6, "php:greet"),
+                new LiteralRow(" end", 6, "php:greet"),
+                new LiteralRow(" and ", 7, "php:greet"),
+                new LiteralRow("C:\\temp 'quoted'", 8, "php:greet"),
+                new LiteralRow("Tab\there HI $x", 9, "php:greet"),
+                new LiteralRow("first line\n  second line", 11, "php:greet"),
+                new LiteralRow("raw $x\\n", 15, "php:greet"),
             ],
-            extract.Literals);
+            LiteralRow.Of(extract));
         Assert.Equal(
             [("$name", 5, CodeQualifierKinds.Value), ("$title", 7, CodeQualifierKinds.Value)],
             extract.References.Select(reference => (reference.Name, reference.Line, reference.Qualifier?.Kind)));
@@ -1246,17 +1246,17 @@ public sealed class PhpExtractorTests : CodeGraphExtractorContractTests<PhpExtra
 
         Assert.Equal(
             [
-                new ExtractLiteral("/users", 4) { Node = "php:App.Users" },
-                new ExtractLiteral("old_const", 7) { Node = "php:App.Users.GREETING" },
-                new ExtractLiteral("hello world", 8) { Node = "php:App.Users.GREETING" },
-                new ExtractLiteral("svc_prop", 9) { Node = "php:App.Users.$table" },
-                new ExtractLiteral("users", 10) { Node = "php:App.Users.$table" },
-                new ExtractLiteral("/list", 12) { Node = List },
-                new ExtractLiteral("param_attr", 13) { Node = List },
-                new ExtractLiteral("case_label", 26) { Node = "php:App.Status.Active" },
-                new ExtractLiteral("active", 27) { Node = "php:App.Status.Active" },
+                new LiteralRow("/users", 4, "php:App.Users"),
+                new LiteralRow("old_const", 7, "php:App.Users.GREETING"),
+                new LiteralRow("hello world", 8, "php:App.Users.GREETING"),
+                new LiteralRow("svc_prop", 9, "php:App.Users.$table"),
+                new LiteralRow("users", 10, "php:App.Users.$table"),
+                new LiteralRow("/list", 12, List),
+                new LiteralRow("param_attr", 13, List),
+                new LiteralRow("case_label", 26, "php:App.Status.Active"),
+                new LiteralRow("active", 27, "php:App.Status.Active"),
             ],
-            extract.Literals);
+            LiteralRow.Of(extract));
         Assert.Equal(
             [
                 (List, "DEFAULT_MODE", 13, ""), (List, "$name", 15, "type App.User"), (List, "DEBUG_LEVEL", 16, ""), (List, "INFO_LEVEL", 16, ""), (List, "FALLBACK_LEVEL", 17, ""),

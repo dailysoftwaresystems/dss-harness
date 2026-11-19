@@ -1109,7 +1109,7 @@ public sealed class CSharpExtractorTests : CodeGraphExtractorContractTests<CShar
                 (27, " padding "),
                 (27, " part"),
             ],
-            (extract.Literals ?? []).Select(literal => (literal.Line, literal.Value)));
+            LiteralRow.Of(extract).Select(literal => (literal.Line, literal.Value)));
         Assert.Null(extract.Problem("csharp", CodeFileText.Lines(Reads).Count));
     }
 
@@ -1151,18 +1151,18 @@ public sealed class CSharpExtractorTests : CodeGraphExtractorContractTests<CShar
 
         Assert.Equal(
             [
-                new ExtractLiteral("Friends.Tests", 1),
-                new ExtractLiteral("api/orders", 5) { Node = "csharp:App.Orders" },
-                new ExtractLiteral("user_id", 8) { Node = "csharp:App.Orders.UserId" },
-                new ExtractLiteral("raw \"text\"", 13) { Node = "csharp:App.Orders.Show(int)" },
-                new ExtractLiteral("utf8 bytes", 15) { Node = "csharp:App.Orders.Show(int)" },
-                new ExtractLiteral("order ", 15) { Node = "csharp:App.Orders.Show(int)" },
-                new ExtractLiteral(" of ", 15) { Node = "csharp:App.Orders.Show(int)" },
-                new ExtractLiteral("all_flags", 19) { Node = "csharp:App.Flags.All" },
-                new ExtractLiteral("x_pos", 21) { Node = "csharp:App.Point.X" },
-                new ExtractLiteral("handler_arg", 23) { Node = "csharp:App.Handler" },
+                new LiteralRow("Friends.Tests", 1),
+                new LiteralRow("api/orders", 5, "csharp:App.Orders"),
+                new LiteralRow("user_id", 8, "csharp:App.Orders.UserId"),
+                new LiteralRow("raw \"text\"", 13, "csharp:App.Orders.Show(int)"),
+                new LiteralRow("utf8 bytes", 15, "csharp:App.Orders.Show(int)"),
+                new LiteralRow("order ", 15, "csharp:App.Orders.Show(int)"),
+                new LiteralRow(" of ", 15, "csharp:App.Orders.Show(int)"),
+                new LiteralRow("all_flags", 19, "csharp:App.Flags.All"),
+                new LiteralRow("x_pos", 21, "csharp:App.Point.X"),
+                new LiteralRow("handler_arg", 23, "csharp:App.Handler"),
             ],
-            extract.Literals);
+            LiteralRow.Of(extract));
         Assert.Equal(
             [
                 ("csharp:App.Orders.Show(int)", "UserId", 15, ""), ("csharp:App.Flags.All", "Value", 19, "type EnumMemberAttribute"), ("csharp:App.Flags.All", "Read", 19, ""),
@@ -1217,8 +1217,8 @@ public sealed class CSharpExtractorTests : CodeGraphExtractorContractTests<CShar
     }
 
     /// <summary>
-    /// An extract keeps every string a file holds, however many, in the order the file holds them, and the extract is one
-    /// the core takes; a string shorter than <see cref="FileExtract.LeastLiteral"/> characters is no literal.
+    /// An extract keeps every string a file holds, however many and however short, in the order the file holds them, and
+    /// the extract is one the core takes.
     /// </summary>
     [Fact]
     public void AnExtractKeepsEveryLiteral_HoweverManyTheFileHolds()
@@ -1227,7 +1227,7 @@ public sealed class CSharpExtractorTests : CodeGraphExtractorContractTests<CShar
         var text = $"class Many {{ string[] All = [{strings}, \"ab\"]; }}";
         var extract = Extractor.Extract(new CodeFileInput("src/Many.cs", text));
 
-        Assert.Equal(Enumerable.Range(0, 20_000).Select(index => $"v{index:D5}"), (extract.Literals ?? []).Select(literal => literal.Value));
+        Assert.Equal([.. Enumerable.Range(0, 20_000).Select(index => $"v{index:D5}"), "ab"], LiteralRow.Of(extract).Select(literal => literal.Value));
         Assert.Null(extract.Problem("csharp", CodeFileText.Lines(text).Count));
     }
 

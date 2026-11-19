@@ -19,12 +19,6 @@ namespace DssHarness.Core.Codebase;
 /// <param name="Nodes">Its declarations; the file's own node is the core's, and is not among them.</param>
 public sealed record FileExtract(IReadOnlyList<ExtractNode> Nodes)
 {
-    /// <summary>The longest a node's signature may be, in characters.</summary>
-    public const int MostSignature = 240;
-
-    /// <summary>The longest a node's summary may be, in characters.</summary>
-    public const int MostSummary = 200;
-
     /// <summary>An extract that holds nothing: what the fallback gives every file it lists, whose declarations nothing reads.</summary>
     public static FileExtract Empty { get; } = new([]);
 
@@ -54,15 +48,13 @@ public sealed record FileExtract(IReadOnlyList<ExtractNode> Nodes)
     public IReadOnlyList<ExtractDynamic> Dynamic { get; init; } = [];
 
     /// <summary>
-    /// The string literals the file holds, of at least <see cref="LeastLiteral"/> characters, each with its line and the
-    /// node whose code holds it: the values the data of the code is written in - what the keys' join reads, a literal
-    /// naming a configuration key - interpolated and template strings giving their constant parts. Every one is kept,
-    /// once each, however many the file holds; <see langword="null"/> where the file holds none.
+    /// The string literals the file holds, each value once however many times the file writes it, with every place it is
+    /// written - its line and the node whose code holds it: the values the data of the code is written in - what the
+    /// keys' join reads, a literal naming a configuration key - interpolated and template strings giving their constant
+    /// parts. Every one that holds a character is kept, however many the file holds and however short, the values in the
+    /// order the file first writes each; <see langword="null"/> where the file holds none.
     /// </summary>
     public IReadOnlyList<ExtractLiteral>? Literals { get; init; }
-
-    /// <summary>The shortest a kept string literal is, in characters: a shorter one is not data a search asks for.</summary>
-    public const int LeastLiteral = 3;
 
     /// <summary>
     /// The most names of a receiver's chain - <c>a.b.c</c> - every implementation reads a reference's qualifier from: a
@@ -172,12 +164,142 @@ public sealed record FileExtract(IReadOnlyList<ExtractNode> Nodes)
             ?? (Dynamic ?? []).Select(dynamic => dynamic is null || string.IsNullOrWhiteSpace(dynamic.Why) ? "it marks a line dynamic and not why"
                 : !Within(dynamic.Line, lineCount) ? $"it marks line {dynamic.Line.ToString(CultureInfo.InvariantCulture)} dynamic, outside its {lineCount.ToString(CultureInfo.InvariantCulture)} lines"
                 : null).FirstOrDefault(found => found is not null)
-            ?? (Literals ?? []).Select(literal => literal is null ? "it holds a literal that is null"
-                : string.IsNullOrEmpty(literal.Value) || literal.Value.Length < LeastLiteral ? $"its literal '{literal.Value}' is shorter than {LeastLiteral.ToString(CultureInfo.InvariantCulture)} characters, and no literal is kept that short"
-                : !Within(literal.Line, lineCount) ? $"its literal '{literal.Value}' is on line {literal.Line.ToString(CultureInfo.InvariantCulture)}, outside its {lineCount.ToString(CultureInfo.InvariantCulture)} lines"
-                : literal.Node is { } node && !ids.ContainsKey(node) ? $"its literal '{literal.Value}' is held by '{node}', which it holds no node of"
-                : null).FirstOrDefault(found => found is not null)
+            ?? LinkProblem()
+            ?? LiteralProblem(ids, lineCount)
             ?? (Texts().FirstOrDefault(text => !IsWhole(text)) is { } cut ? $"it holds text that is no whole UTF-16, a surrogate cut from its pair: '{cut}'" : null);
+    }
+
+    /// <summary>
+    /// The names <paramref name="qualifier"/>, the qualifier of one of this extract's references, writes, joined by dots:
+    /// its own name, or - where it is a chain written as links (<see cref="ExtractQualifier.Link"/>) - the names of each
+    /// link's qualifier and the link's own name, from the chain's first to its last, its links followed back from the last
+    /// on a loop of their own; <see langword="null"/> where it writes none. The one reading of a chain's names.
+    /// </summary>
+    /// <param name="qualifier">A qualifier of one of <see cref="References"/>, or none.</param>
+    public string? Written(ExtractQualifier? qualifier)
+    {
+        if (qualifier?.Link is not { } link)
+        {
+            return qualifier?.Name;
+        }
+
+        var names = new List<string>();
+        var references = References ?? [];
+
+        // Each link's name, last first. Every link names a reference made before its own, so the walk ends; one that does
+        // not - which Problem refuses - ends it there.
+        for (var at = link; at >= 0 && at < references.Count;)
+        {
+            names.Add(references[at].Name);
+
+            if (references[at].Qualifier is { Link: { } next } && next < at)
+            {
+                at = next;
+                continue;
+            }
+
+            if (references[at].Qualifier is { Link: null, Name: { } first })
+            {
+                names.Add(first);
+            }
+
+            break;
+        }
+
+        names.Reverse();
+        return string.Join('.', names);
+    }
+
+    /// <summary>
+    /// What is wrong with the chains its references write as links (<see cref="ExtractQualifier.Link"/>); none where
+    /// nothing is. A link names a reference made before its own, so following links always ends; a linked qualifier is a
+    /// chain's - of a value or a name - and names nothing itself; and the reference it links writes names of its own or
+    /// links on, so the chain's names are read whole.
+    /// </summary>
+    private string? LinkProblem()
+    {
+        var references = References ?? [];
+
+        for (var at = 0; at < references.Count; at++)
+        {
+            if (references[at]?.Qualifier is not { Link: { } link } qualifier)
+            {
+                continue;
+            }
+
+            var named = $"a reference to '{references[at].Name}'";
+
+            if (link < 0 || link >= at)
+            {
+                return $"{named} links its qualifier to reference {link.ToString(CultureInfo.InvariantCulture)}, which is not one made before it";
+            }
+
+            if (qualifier.Kind is not (CodeQualifierKinds.Value or CodeQualifierKinds.Named))
+            {
+                return $"{named} links its qualifier of kind '{qualifier.Kind}', and only a chain of a value or of a name is written as links";
+            }
+
+            if (qualifier.Name is not null)
+            {
+                return $"{named} links its qualifier and names '{qualifier.Name}' too: a linked chain's names are its links'";
+            }
+
+            if (references[link]?.Qualifier is not ({ Link: not null } or { Name: not null }))
+            {
+                return $"{named} links its qualifier to the reference to '{references[link]?.Name}', whose qualifier writes no name";
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>What is wrong with the literals it holds: each value once, holding a character, each place on one of its lines and in one of its nodes.</summary>
+    private string? LiteralProblem(Dictionary<string, ExtractNode> ids, int lineCount)
+    {
+        var values = new HashSet<string>(StringComparer.Ordinal);
+
+        foreach (var literal in Literals ?? [])
+        {
+            if (literal is null)
+            {
+                return "it holds a literal that is null";
+            }
+
+            if (string.IsNullOrEmpty(literal.Value))
+            {
+                return "it holds a literal of no value, and only a literal that holds a character is kept";
+            }
+
+            if (!values.Add(literal.Value))
+            {
+                return $"it holds the literal '{literal.Value}' twice: a value is kept once, with every place it is written";
+            }
+
+            if (literal.Places is not { Count: > 0 } places)
+            {
+                return $"its literal '{literal.Value}' is written nowhere";
+            }
+
+            foreach (var place in places)
+            {
+                if (place is null)
+                {
+                    return $"its literal '{literal.Value}' holds a place that is null";
+                }
+
+                if (!Within(place.Line, lineCount))
+                {
+                    return $"its literal '{literal.Value}' is on line {place.Line.ToString(CultureInfo.InvariantCulture)}, outside its {lineCount.ToString(CultureInfo.InvariantCulture)} lines";
+                }
+
+                if (place.Node is { } node && !ids.ContainsKey(node))
+                {
+                    return $"its literal '{literal.Value}' is held by '{node}', which it holds no node of";
+                }
+            }
+        }
+
+        return null;
     }
 
     /// <summary>
@@ -215,7 +337,7 @@ public sealed record FileExtract(IReadOnlyList<ExtractNode> Nodes)
             Imports = [.. Imports.Select(import => import with { Line = line(import.Line) })],
             References = [.. References.Select(reference => reference with { Line = line(reference.Line) })],
             Dynamic = [.. Dynamic.Select(dynamic => dynamic with { Line = line(dynamic.Line) })],
-            Literals = Literals is null ? null : [.. Literals.Select(literal => literal with { Line = line(literal.Line) })],
+            Literals = Literals is null ? null : [.. Literals.Select(literal => literal with { Places = [.. literal.Places.Select(place => place with { Line = line(place.Line) })] })],
         };
     }
 
@@ -246,7 +368,7 @@ public sealed record FileExtract(IReadOnlyList<ExtractNode> Nodes)
                 From = renamed(reference.From),
                 Qualifier = reference.Qualifier is { Kind: CodeQualifierKinds.Own, Name: { } own } named ? named with { Name = renamed(own) } : reference.Qualifier,
             })],
-            Literals = Literals is null ? null : [.. Literals.Select(literal => literal.Node is { } node ? literal with { Node = renamed(node) } : literal)],
+            Literals = Literals is null ? null : [.. Literals.Select(literal => literal with { Places = [.. literal.Places.Select(place => place.Node is { } node ? place with { Node = renamed(node) } : place)] })],
         };
     }
 
@@ -348,7 +470,7 @@ public sealed record FileExtract(IReadOnlyList<ExtractNode> Nodes)
             .Concat((AddressRoots ?? []).SelectMany(root => (string?[])[root.Prefix, root.Directory]))
             .Concat((References ?? []).SelectMany(reference => (string?[])[reference.From, reference.Kind, reference.Name, reference.Qualifier?.Kind, reference.Qualifier?.Name]))
             .Concat((Dynamic ?? []).Select(dynamic => dynamic.Why))
-            .Concat((Literals ?? []).SelectMany(literal => (string?[])[literal.Value, literal.Node]))
+            .Concat((Literals ?? []).SelectMany(literal => (string?[])[literal.Value, .. (literal.Places ?? []).Select(place => place?.Node)]))
             .Append(Generated)
             .OfType<string>();
 
@@ -366,7 +488,7 @@ public sealed record FileExtract(IReadOnlyList<ExtractNode> Nodes)
 /// <param name="Qualified">Its name with every scope it is declared in, as a qualified reference names it.</param>
 /// <param name="Start">Its first line, from 1.</param>
 /// <param name="End">Its last line.</param>
-/// <param name="Signature">Its header on one line, at most <see cref="FileExtract.MostSignature"/> characters.</param>
+/// <param name="Signature">Its header on one line, whole however long it is: what serves it gives a wide one in pieces.</param>
 public sealed record ExtractNode(string Id, string Kind, string Name, string Qualified, int Start, int End, string Signature)
 {
     /// <summary>
@@ -384,7 +506,7 @@ public sealed record ExtractNode(string Id, string Kind, string Name, string Qua
     /// <summary>The line its body begins on, after its signature, where it has one.</summary>
     public int? BodyStart { get; init; }
 
-    /// <summary>What the code says of itself: the first sentence of its documentation, at most <see cref="FileExtract.MostSummary"/> characters.</summary>
+    /// <summary>What the code says of itself: the first sentence of its documentation on one line, whole however long it runs.</summary>
     public string? Summary { get; init; }
 
     /// <summary>Its modifiers, as the implementation names them.</summary>
@@ -474,8 +596,8 @@ public sealed record ExtractNode(string Id, string Kind, string Name, string Qua
             : Name.AsSpan().IndexOfAny('\r', '\n') >= 0 || Qualified.AsSpan().IndexOfAny('\r', '\n') >= 0 ? "its name is not one line"
             : !FileExtract.Within(Start, lineCount) || End < Start || End > lineCount ? string.Create(CultureInfo.InvariantCulture, $"its lines {Start}-{End} are not lines of the file's {lineCount}")
             : BodyStart is { } body && (body < Start || body > End) ? string.Create(CultureInfo.InvariantCulture, $"its body begins on line {body}, outside its lines {Start}-{End}")
-            : Signature is null || Signature.Length > FileExtract.MostSignature || Signature.AsSpan().IndexOfAny('\r', '\n') >= 0 ? $"its signature is not one line of at most {FileExtract.MostSignature} characters"
-            : Summary is { } summary && (summary.Length > FileExtract.MostSummary || summary.AsSpan().IndexOfAny('\r', '\n') >= 0) ? $"its summary is not one line of at most {FileExtract.MostSummary} characters"
+            : Signature is null || Signature.AsSpan().IndexOfAny('\r', '\n') >= 0 ? "its signature is not one line"
+            : Summary is { } summary && summary.AsSpan().IndexOfAny('\r', '\n') >= 0 ? "its summary is not one line"
             : MinArity is < 0 || (MaxArity is { } most && (MinArity is not { } least || most < least)) ? "its arity is no range of argument counts"
             : ValueType is { } valueType && string.IsNullOrWhiteSpace(valueType) ? "its value's type is empty"
             : Extends is { } extends && string.IsNullOrWhiteSpace(extends) ? "the type it extends is empty"
@@ -643,8 +765,23 @@ public sealed record ExtractReference(string From, string Kind, string Name, int
 
 /// <summary>Where a reference's name is looked for first.</summary>
 /// <param name="Kind">One of <see cref="CodeQualifierKinds"/>.</param>
-/// <param name="Name">The type, scope, prefix, value or chain of names it names, where its kind names one.</param>
-public sealed record ExtractQualifier(string Kind, string? Name = null);
+/// <param name="Name">
+/// The type, scope, prefix, value or chain of names it names, where its kind names one and it writes them itself; none
+/// where it is a chain written as links (<see cref="Link"/>).
+/// </param>
+public sealed record ExtractQualifier(string Kind, string? Name = null)
+{
+    /// <summary>
+    /// Where the qualifier is a chain of two names or more - a receiver's <c>a.b.c</c> - of a value or of a name
+    /// (<see cref="CodeQualifierKinds.Value"/>, <see cref="CodeQualifierKinds.Named"/>): the place, among its extract's
+    /// references, of the reference made for the chain's last name - <c>c</c>'s - which is made before this one and whose
+    /// own qualifier writes the names before it, by a name or by a link in turn. So a chain of n names is n references of
+    /// one name each, never each name written again by every reference after it, and the linker reads each link once
+    /// whatever follows it. <see cref="FileExtract.Written"/> reads the chain's names. <see langword="null"/> where the
+    /// qualifier writes its names itself.
+    /// </summary>
+    public int? Link { get; init; }
+}
 
 /// <summary>The kinds of qualifier.</summary>
 public static class CodeQualifierKinds
@@ -763,15 +900,22 @@ public static class CodeQualifierKinds
 /// <param name="Why">What it saw: a call a macro writes, a member named by a string to reflection, a call through a pointer, a file that stops parsing there.</param>
 public sealed record ExtractDynamic(int Line, string Why);
 
-/// <summary>One string literal a file holds, by its value, its line and the node whose code holds it.</summary>
+/// <summary>
+/// One string value a file's literals hold, kept once however many literals of it the file writes, with every place one
+/// is written: a value a minified bundle writes a million times costs its characters once.
+/// </summary>
 /// <param name="Value">
 /// The literal's value as its language reads it, in every language alike: what its opener and closer hold - a prefix, a
 /// raw string's delimiter, a triple quote and a heredoc's label and closing indentation no part of it - its escapes
 /// decoded, a raw one's text as written, its line endings one newline; a constant part of an interpolated or template
 /// string, each part a literal of its own.
 /// </param>
+/// <param name="Places">Each place a literal of the value is written, in the order its reader read them.</param>
+public sealed record ExtractLiteral(string Value, IReadOnlyList<ExtractLiteralPlace> Places);
+
+/// <summary>One place a file writes a string literal.</summary>
 /// <param name="Line">The line its value begins on.</param>
-public sealed record ExtractLiteral(string Value, int Line)
+public sealed record ExtractLiteralPlace(int Line)
 {
     /// <summary>
     /// The id of the node of the extract whose code holds it - the innermost declaration it is written in, or the node of

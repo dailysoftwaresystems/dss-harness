@@ -1861,7 +1861,7 @@ public sealed class CodeGraphLinkerTests
         reader = "t:Reader";
         Case(
             "a configuration key",
-            [new CodeGraphFile("reader.t", "t", Extract([Type("Reader"), Value("Reader.Timeout", null) with { Parent = "t:Reader" }]) with { Literals = [new ExtractLiteral("timeout", 1) { Node = "t:Reader" }] })],
+            [new CodeGraphFile("reader.t", "t", Extract([Type("Reader"), Value("Reader.Timeout", null) with { Parent = "t:Reader" }]) with { Literals = LiteralRow.Table(new LiteralRow("timeout", 1, "t:Reader")) })],
             null,
             new CodeGraphFile("app.json", "json", Extract([new ExtractNode("json:app.json#timeout", CodeNodeKinds.Member, "timeout", "timeout", 1, 1, "timeout") { SubKind = CodeSubKinds.Key }])));
 
@@ -1977,7 +1977,7 @@ public sealed class CodeGraphLinkerTests
             Scopes = declared,
             Imports = RandomImports(random),
             AddressRoots = Chance(random, 5) ? [RandomRoot(random)] : [],
-            Literals = nodes.Count > 0 && Chance(random, 3) ? [new ExtractLiteral(Pick(random, RandomData), 1)] : [],
+            Literals = nodes.Count > 0 && Chance(random, 3) ? LiteralRow.Table(new LiteralRow(Pick(random, RandomData), 1)) : [],
         });
     }
 
@@ -2453,7 +2453,7 @@ public sealed class CodeGraphLinkerTests
             new CodeGraphFile("app.json", "json", new FileExtract([key])),
             new CodeGraphFile("reader.c", "c", new FileExtract([reader, bySegment, byPath, property])
             {
-                Literals = [new ExtractLiteral("callingConvention", 3) { Node = bySegment.Id }, new ExtractLiteral("targets.x64.callingConvention", 5) { Node = byPath.Id }],
+                Literals = LiteralRow.Table(new LiteralRow("callingConvention", 3, bySegment.Id), new LiteralRow("targets.x64.callingConvention", 5, byPath.Id)),
             }),
         ]);
 
@@ -2679,7 +2679,7 @@ public sealed class CodeGraphLinkerTests
             =>
             [
                 .. Enumerable.Range(0, keys).Select(at => new CodeGraphFile($"k{at}.json", "json", new FileExtract([new ExtractNode($"json:k{at}.json#{path}", CodeNodeKinds.Member, path.Split('.')[^1], path, 1, 1, path) { SubKind = CodeSubKinds.Key }]))),
-                new CodeGraphFile("reader.c", "c", new FileExtract([Type("Reader") with { End = 3 }, Value("Reader.Name", "string") with { Parent = "t:Reader" }]) { Literals = [new ExtractLiteral(path, 3)] }),
+                new CodeGraphFile("reader.c", "c", new FileExtract([Type("Reader") with { End = 3 }, Value("Reader.Name", "string") with { Parent = "t:Reader" }]) { Literals = LiteralRow.Table(new LiteralRow(path, 3)) }),
             ];
 
         var named = CodeGraphLinker.Link(Tree(100, "name")).Edges.Where(edge => edge.Kind == CodeEdgeKinds.Uses).ToList();
@@ -2711,14 +2711,12 @@ public sealed class CodeGraphLinkerTests
             new CodeGraphFile("appsettings.json", "json", new FileExtract([Key("Payments.TimeoutSeconds"), Key("Limits[1].Value")])),
             new CodeGraphFile("reader.c", "c", new FileExtract([Type("Reader") with { End = 5 }])
             {
-                Literals =
-                [
-                    new ExtractLiteral("Payments:TimeoutSeconds", 1),
-                    new ExtractLiteral("Payments__TimeoutSeconds", 2),
-                    new ExtractLiteral("Limits:1:Value", 3),
-                    new ExtractLiteral("Payments::TimeoutSeconds", 4),
-                    new ExtractLiteral("Limits:01:Value", 5),
-                ],
+                Literals = LiteralRow.Table(
+                    new LiteralRow("Payments:TimeoutSeconds", 1),
+                    new LiteralRow("Payments__TimeoutSeconds", 2),
+                    new LiteralRow("Limits:1:Value", 3),
+                    new LiteralRow("Payments::TimeoutSeconds", 4),
+                    new LiteralRow("Limits:01:Value", 5)),
             }),
         ]);
 
@@ -2755,7 +2753,7 @@ public sealed class CodeGraphLinkerTests
             => [.. CodeGraphLinker.Link(
                 [
                     new CodeGraphFile("config.yml", "yaml", yaml),
-                    new CodeGraphFile("reader.c", "c", new FileExtract([Type("Reader") with { End = literals.Length }]) { Literals = [.. literals.Select((literal, at) => new ExtractLiteral(literal, at + 1))] }),
+                    new CodeGraphFile("reader.c", "c", new FileExtract([Type("Reader") with { End = literals.Length }]) { Literals = LiteralRow.Table([.. literals.Select((literal, at) => new LiteralRow(literal, at + 1))]) }),
                 ]).Edges.Where(edge => edge is { Kind: CodeEdgeKinds.Uses, Confidence: CodeConfidences.Candidates }).Select(edge => $"{edge.Line} {edge.To}")];
 
         Assert.Equal(["1 yaml:config.yml#defaults.retry.count"], Reached("job.retry.count"));
@@ -2776,7 +2774,7 @@ public sealed class CodeGraphLinkerTests
                 new ExtractReference("d:ring.d#y", CodeEdgeKinds.Uses, "x", 1) { Qualifier = new ExtractQualifier(CodeQualifierKinds.Own, "d:ring.d#x") },
             ],
         });
-        var around = CodeGraphLinker.Link([ring, new CodeGraphFile("reader.c", "c", new FileExtract([Type("Reader") with { End = 2 }]) { Literals = [new ExtractLiteral("x.w", 1), new ExtractLiteral("x.z", 2)] })]);
+        var around = CodeGraphLinker.Link([ring, new CodeGraphFile("reader.c", "c", new FileExtract([Type("Reader") with { End = 2 }]) { Literals = LiteralRow.Table(new LiteralRow("x.w", 1), new LiteralRow("x.z", 2)) })]);
 
         Assert.Equal([("d:ring.d#y.z", 2)], around.Edges.Where(edge => edge.Kind == CodeEdgeKinds.Uses && edge.From == "file:reader.c").Select(edge => (edge.To, edge.Line)));
     }

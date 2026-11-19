@@ -209,7 +209,7 @@ public sealed class VueExtractorTests : CodeGraphExtractorContractTests<VueExtra
         var pay = Assert.Single(extract.Nodes, node => node.Name == "pay");
 
         Assert.Equal((13, 15, "src/Cart.vue"), (pay.Start, pay.End, pay.Scope));
-        Assert.Contains(new ExtractLiteral("done", 14) { Node = "vue:src/Cart.vue.pay" }, extract.Literals ?? []);
+        Assert.Contains(new LiteralRow("done", 14, "vue:src/Cart.vue.pay"), LiteralRow.Of(extract));
 
         var members = new ExtractQualifier(CodeQualifierKinds.This);
 
@@ -307,7 +307,7 @@ public sealed class VueExtractorTests : CodeGraphExtractorContractTests<VueExtra
         var input = new CodeFileInput("src/Options.vue", Options);
         var extract = new VueExtractor().Extract(input);
 
-        var name = Assert.Single(extract.Literals ?? [], literal => literal.Value == "CartView");
+        var name = Assert.Single(LiteralRow.Of(extract), literal => literal.Value == "CartView");
 
         Assert.Null(extract.WithDigests(input.Lines).Problem("vue", input.Lines.Count));
         Assert.Equal(("vue:src/Options.vue", 6), (name.Node, name.Line));
@@ -350,7 +350,7 @@ public sealed class VueExtractorTests : CodeGraphExtractorContractTests<VueExtra
             linked.Edges.Where(edge => edge.Kind != CodeEdgeKinds.Contains && edge.To.StartsWith("vue:src/Pay.vue.", StringComparison.Ordinal)).OrderBy(edge => edge.Line));
         Assert.Equal(
             [("PayButton", "vue:src/Pay.vue"), ("Pay", "vue:src/Pay.vue.label"), ("cart", "vue:src/Pay.vue"), ("hello", "vue:src/Pay.vue.data")],
-            (extract.Literals ?? []).Select(literal => (literal.Value, literal.Node)));
+            LiteralRow.Of(extract).Select(literal => (literal.Value, literal.Node)));
     }
 
     /// <summary>

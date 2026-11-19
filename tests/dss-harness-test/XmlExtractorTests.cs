@@ -293,8 +293,8 @@ public sealed class XmlExtractorTests : CodeGraphExtractorContractTests<XmlExtra
     }
 
     /// <summary>
-    /// Every node an XML file gives is one the core holds: an element whose path is longer than a signature keeps it whole
-    /// in its id and is cut in its signature alone; an id-like attribute of white space names nothing; every element is a
+    /// Every node an XML file gives is one the core holds: an element's long path is whole in its id and in its signature
+    /// alike; an id-like attribute of white space names nothing; every element is a
     /// node, however many; and where the file stops reading as XML, the reader's reason is said.
     /// </summary>
     [Fact]
@@ -306,7 +306,7 @@ public sealed class XmlExtractorTests : CodeGraphExtractorContractTests<XmlExtra
         var item = Assert.Single(extract.Nodes, node => node.SubKind == CodeSubKinds.Element);
 
         Assert.Equal($"root/{string.Join('/', Enumerable.Repeat(segment, 5))}/item/x", item.Qualified);
-        Assert.True(item.Signature.Length <= FileExtract.MostSignature, $"the signature is {item.Signature.Length} characters");
+        Assert.Equal(item.Qualified, item.Signature);
         Assert.Null(extract.WithDigests(CodeFileText.Lines(deep)).Problem("xml", 1));
 
         var many = $"<root>\n{string.Concat(Enumerable.Range(0, 12_000).Select(at => $"<item name=\"i{at}\" />\n"))}</root>\n";

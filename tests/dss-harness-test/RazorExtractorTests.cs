@@ -137,7 +137,7 @@ public sealed class RazorExtractorTests : CodeGraphExtractorContractTests<RazorE
             [("CartModel", CodeEdgeKinds.References, 3), ("CartService", CodeEdgeKinds.References, 4), ("_Total", CodeEdgeKinds.Instantiates, 6), ("_Rows", CodeEdgeKinds.Instantiates, 7)],
             extract.References.Where(reference => reference.Kind != CodeEdgeKinds.Calls && reference.Kind != CodeEdgeKinds.Uses).Select(reference => (reference.Name, reference.Kind, reference.Line)).OrderBy(reference => reference.Line));
         Assert.Equal([(CodeImportForms.Scope, "Shop.Web", 2)], extract.Imports.Select(import => (import.Form, import.Target, import.Line)));
-        Assert.Contains(new ExtractLiteral("rows", 11) { Node = "razor:Views.Cart.Label()" }, extract.Literals ?? []);
+        Assert.Contains(new LiteralRow("rows", 11, "razor:Views.Cart.Label()"), LiteralRow.Of(extract));
     }
 
     /// <summary>
@@ -598,7 +598,7 @@ public sealed class RazorExtractorTests : CodeGraphExtractorContractTests<RazorE
                 new ExtractReference("razor:Views/Home/Index.cshtml#view", CodeEdgeKinds.Uses, "Model", 9),
             ],
             extract.References.Where(reference => reference.From == "razor:Views/Home/Index.cshtml#view"));
-        Assert.Equal([("Title", 3), ("Home", 3)], (extract.Literals ?? []).Select(literal => (literal.Value, literal.Line)));
+        Assert.Equal([("Title", 3), ("Home", 3)], LiteralRow.Of(extract).Select(literal => (literal.Value, literal.Line)));
     }
 
     /// <summary>
@@ -626,7 +626,7 @@ public sealed class RazorExtractorTests : CodeGraphExtractorContractTests<RazorE
         Assert.Equal(
             [(CodeEdgeKinds.References, "MainLayout", 2), (CodeEdgeKinds.References, "AuthorizeAttribute", 4), (CodeEdgeKinds.Uses, "Selected", 5)],
             extract.References.Where(reference => reference.From == component.Id).Select(reference => (reference.Kind, reference.Name, reference.Line)));
-        Assert.Equal([("/items/{id:int}", 1, component.Id)], (extract.Literals ?? []).Select(literal => (literal.Value, literal.Line, literal.Node)));
+        Assert.Equal([("/items/{id:int}", 1, component.Id)], LiteralRow.Of(extract).Select(literal => (literal.Value, literal.Line, literal.Node)));
     }
 
     /// <summary>

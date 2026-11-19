@@ -886,13 +886,13 @@ public sealed class CppExtractorTests : CodeGraphExtractorContractTests<CppExtra
 
         Assert.Equal(
             [
-                new ExtractLiteral("parameter default", 7) { Node = Log },
-                new ExtractLiteral("not ) a \"call(\" here", 11) { Node = Take },
-                new ExtractLiteral("\\d+", 12) { Node = Take },
-                new ExtractLiteral("C:\\temp", 13) { Node = Take },
-                new ExtractLiteral("abc", 14) { Node = Take },
+                new LiteralRow("parameter default", 7, Log),
+                new LiteralRow("not ) a \"call(\" here", 11, Take),
+                new LiteralRow("\\d+", 12, Take),
+                new LiteralRow("C:\\temp", 13, Take),
+                new LiteralRow("abc", 14, Take),
             ],
-            extract.Literals);
+            LiteralRow.Of(extract));
         Assert.Equal(
             [(Log, CodeEdgeKinds.Uses, "LIMIT", 7), (Take, CodeEdgeKinds.References, "Kind", 15), (Take, CodeEdgeKinds.Uses, "One", 15), (Take, CodeEdgeKinds.Calls, "use", 16), (Take, CodeEdgeKinds.Uses, "COUNT", 17)],
             extract.References.Select(reference => (reference.From, reference.Kind, reference.Name, reference.Line)));

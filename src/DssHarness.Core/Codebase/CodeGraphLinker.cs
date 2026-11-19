@@ -1928,10 +1928,14 @@ public static class CodeGraphLinker
                             .Concat(spelt is null ? [] : through.Reached(spelt))
                             .Where(key => key.Node.SubKind == CodeSubKinds.Key && !key.FileOnly));
 
-                    // The node whose code holds the literal, as its implementation said it; the file's own where none does.
-                    foreach (var key in joined)
+                    // A value is joined once, and each place it is written uses what it names: from the node whose code holds
+                    // it, as its implementation said it - the file's own where none does.
+                    foreach (var place in joined.Count == 0 ? [] : literal.Places)
                     {
-                        _edges.Add(new CodeEdge(literal.Node ?? CodeGraphIds.FileId(file.Path), key.Id, CodeEdgeKinds.Uses, literal.Line, CodeConfidences.Candidates));
+                        foreach (var key in joined)
+                        {
+                            _edges.Add(new CodeEdge(place.Node ?? CodeGraphIds.FileId(file.Path), key.Id, CodeEdgeKinds.Uses, place.Line, CodeConfidences.Candidates));
+                        }
                     }
                 }
             }

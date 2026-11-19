@@ -173,28 +173,29 @@ public sealed class MarkdownExtractorTests : CodeGraphExtractorContractTests<Mar
         Assert.Equal(["Top"], Extractor.Extract(new CodeFileInput("dots.md", "---\na: 1\n...\n# Top\n")).Nodes.Select(node => node.Name));
     }
 
-    /// <summary>A heading longer than a signature holds is cut at a word, with an ellipsis, and so is a summary.</summary>
+    /// <summary>
+    /// A long heading is the section's signature whole, and its summary the whole first sentence of its first paragraph,
+    /// however many lines the sentence runs over - each one line, of whole characters, in an extract the core takes.
+    /// </summary>
     [Fact]
-    public void ALongHeadingAndSummary_AreCutAtAWord_WithAnEllipsis()
+    public void ALongHeadingAndSummary_AreKeptWhole()
     {
-        var words = string.Join(' ', Enumerable.Repeat("word", 80));
-        var node = Assert.Single(Extractor.Extract(new CodeFileInput("long.md", $"# {words}\n\n{words}\n")).Nodes);
-
-        Assert.True(node.Signature.Length <= FileExtract.MostSignature);
-        Assert.EndsWith("word…", node.Signature, StringComparison.Ordinal);
-        Assert.True(node.Summary!.Length <= FileExtract.MostSummary);
-        Assert.EndsWith("word…", node.Summary, StringComparison.Ordinal);
-
-        // A cut with no word to fall back to never splits a character written as a surrogate pair.
-        var faces = string.Concat(Enumerable.Repeat("\U0001F600", 200));
-        var text = $"# {faces}\n\n{faces}\n";
-        var input = new CodeFileInput("faces.md", text);
+        var words = string.Join(' ', Enumerable.Repeat("word", 800));
+        var paragraph = string.Join('\n', Enumerable.Repeat(string.Join(' ', Enumerable.Repeat("word", 20)), 40));
+        var text = $"# {words}\n\n{paragraph}. A second sentence.\nStill the paragraph.\n\nAnother paragraph.\n";
+        var input = new CodeFileInput("long.md", text);
         var extract = Extractor.Extract(input);
-        var face = Assert.Single(extract.Nodes);
+        var node = Assert.Single(extract.Nodes);
 
+        Assert.Equal($"# {words}", node.Signature);
+        Assert.Equal(paragraph.Replace('\n', ' ') + ".", node.Summary);
         Assert.Null(extract.WithDigests(input.Lines).Problem(Extractor.Language, input.Lines.Count));
-        Assert.True(face.Signature.Length <= FileExtract.MostSignature);
-        Assert.EndsWith("\U0001F600…", face.Signature, StringComparison.Ordinal);
-        Assert.EndsWith("\U0001F600…", face.Summary, StringComparison.Ordinal);
+
+        // A character written as a surrogate pair is whole in both.
+        var faces = string.Concat(Enumerable.Repeat("\U0001F600", 200));
+        var written = $"# {faces}\n\n{faces}\n";
+        var face = Assert.Single(Extractor.Extract(new CodeFileInput("faces.md", written)).Nodes);
+
+        Assert.Equal(($"# {faces}", faces), (face.Signature, face.Summary));
     }
 }

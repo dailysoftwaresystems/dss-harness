@@ -77,8 +77,9 @@ internal static class EmbeddedCode
     /// node's id made unique among those already held - with its place among those alike, as <see cref="ExtractIds"/>
     /// gives it - and every field that names it following it (<see cref="FileExtract.Renamed"/>): the nodes it holds or is
     /// written onto, the references it makes and the literals it holds; each scope once, by its name, the imports, address
-    /// roots, references, dynamic marks and literals after the host's, every one of each - the literals by the one rule
-    /// every reader keeps them by (<see cref="ExtractLiterals"/>) - and why the file is generated the host's own, else
+    /// roots, references, dynamic marks and literals after the host's, every one of each - each chain's links following
+    /// the references they name (<see cref="ExtractQualifier.Link"/>), the literals by the one rule every reader keeps them
+    /// by (<see cref="ExtractLiterals"/>) - and why the file is generated the host's own, else
     /// the first embedded reader's that says.
     /// </summary>
     /// <param name="host">The host's own extract: what its reader of markup made.</param>
@@ -107,10 +108,7 @@ internal static class EmbeddedCode
         var literals = new ExtractLiterals();
         var generated = host.Generated;
 
-        foreach (var literal in host.Literals ?? [])
-        {
-            literals.Add(literal.Value, literal.Line, literal.Node);
-        }
+        literals.AddAll(host.Literals);
 
         foreach (var extract in embedded)
         {
@@ -123,9 +121,14 @@ internal static class EmbeddedCode
             }
 
             var renamed = extract.Renamed(id => given.GetValueOrDefault(id, id));
+            var before = references.Count;
 
             nodes.AddRange(renamed.Nodes);
-            references.AddRange(renamed.References);
+
+            // A chain's link names a reference by its place among its own extract's, which follows it here.
+            references.AddRange(renamed.References.Select(reference => reference.Qualifier is { Link: { } link } linked
+                ? reference with { Qualifier = linked with { Link = link + before } }
+                : reference));
 
             foreach (var scope in extract.Scopes)
             {
@@ -136,11 +139,7 @@ internal static class EmbeddedCode
             roots.AddRange(extract.AddressRoots);
             dynamic.AddRange(extract.Dynamic);
             generated ??= extract.Generated;
-
-            foreach (var literal in renamed.Literals ?? [])
-            {
-                literals.Add(literal.Value, literal.Line, literal.Node);
-            }
+            literals.AddAll(renamed.Literals);
         }
 
         return new FileExtract(nodes)

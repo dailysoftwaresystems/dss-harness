@@ -153,7 +153,7 @@ public sealed class HtmlExtractorTests : CodeGraphExtractorContractTests<HtmlExt
         var script = Assert.Single(extract.Nodes, node => node.Id == "html:open");
 
         Assert.Equal(17, script.Start);
-        Assert.Contains(new ExtractLiteral("done", 18) { Node = "html:open" }, extract.Literals ?? []);
+        Assert.Contains(new LiteralRow("done", 18, "html:open"), LiteralRow.Of(extract));
         Assert.Equal([("site.css", 5), ("rel.html", 15)], extract.Imports.Select(import => (import.Target, import.Line)));
     }
 
@@ -329,7 +329,7 @@ public sealed class HtmlExtractorTests : CodeGraphExtractorContractTests<HtmlExt
                 ("https://a.example", 4, "html:site/two.html.(module)"), ("Shop home", 10, "html:site/two.html.(module)~2"), ("first one", 11, "html:init"),
                 ("second one", 14, "html:init~2"),
             ],
-            (extract.Literals ?? []).OrderBy(literal => literal.Line).Select(literal => (literal.Value, literal.Line, literal.Node)));
+            LiteralRow.Of(extract).OrderBy(literal => literal.Line).Select(literal => (literal.Value, literal.Line, literal.Node)));
     }
 
     /// <summary>What an inline script's reader marks dynamic is the page's to say as it is the script's own file's: nothing the embedded reader saw is lost.</summary>

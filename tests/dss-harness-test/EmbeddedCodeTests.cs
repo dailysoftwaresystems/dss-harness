@@ -18,7 +18,7 @@ public sealed class EmbeddedCodeTests
         var host = new FileExtract([new ExtractNode("html:x.html#body", CodeNodeKinds.Section, "body", "x.html#body", 1, 9, "body")])
         {
             References = [new ExtractReference("html:x.html#body", CodeEdgeKinds.Uses, ".a", 1)],
-            Literals = [.. Enumerable.Range(0, 2_500).Select(index => new ExtractLiteral($"value {index}", 1))],
+            Literals = LiteralRow.Table([.. Enumerable.Range(0, 2_500).Select(index => new LiteralRow($"value {index}", 1))]),
         };
 
         var merged = EmbeddedCode.Merged(host, [Script(2, "one"), Script(5, "two") with { Generated = "the second says" }]);
@@ -35,12 +35,12 @@ public sealed class EmbeddedCodeTests
         Assert.Equal([("./one.js", 2), ("./two.js", 5)], merged.Imports.Select(import => (import.Target, import.Line)));
         Assert.Equal([new ExtractAddressRoot("@", "src"), new ExtractAddressRoot("@", "src")], merged.AddressRoots);
         Assert.Equal([new ExtractDynamic(2, "one"), new ExtractDynamic(5, "two")], merged.Dynamic);
-        Assert.Equal([.. Enumerable.Range(0, 2_500).Select(index => $"value {index}"), "one", "one-2", "two", "two-2"], (merged.Literals ?? []).Select(literal => literal.Value));
+        Assert.Equal([.. Enumerable.Range(0, 2_500).Select(index => $"value {index}"), "one", "one-2", "two", "two-2"], LiteralRow.Of(merged).Select(literal => literal.Value));
 
         // The second script's literal is held by its own node, under the id the merge gave it.
         Assert.Equal(
             [("one", 2, "html:open"), ("one-2", 2, "html:open.inner"), ("two", 5, "html:open~2"), ("two-2", 5, "html:open.inner~2")],
-            merged.Literals!.Skip(2_500).Select(literal => (literal.Value, literal.Line, literal.Node)));
+            LiteralRow.Of(merged).Skip(2_500).Select(literal => (literal.Value, literal.Line, literal.Node)));
         Assert.Equal("the first says", merged.Generated);
     }
 
@@ -56,7 +56,7 @@ public sealed class EmbeddedCodeTests
 
         Assert.Equal([("html:open.inner", "html:x.html#body")], folded.Nodes.Select(node => (node.Id, node.Parent)));
         Assert.Equal([("html:x.html#body", "one")], folded.References.Select(reference => (reference.From, reference.Name)));
-        Assert.Equal([("one", "html:x.html#body"), ("one-2", "html:open.inner")], folded.Literals!.Select(literal => (literal.Value, literal.Node)));
+        Assert.Equal([("one", "html:x.html#body"), ("one-2", "html:open.inner")], LiteralRow.Of(folded).Select(literal => (literal.Value, literal.Node)));
     }
 
     /// <summary>
@@ -78,7 +78,7 @@ public sealed class EmbeddedCodeTests
                 new ExtractReference("css:a.css#.a&-x", CodeEdgeKinds.Uses, "a", 1) { Qualifier = new ExtractQualifier(CodeQualifierKinds.Own, "css:a.css#.a") },
                 new ExtractReference("css:a.css#.a", CodeEdgeKinds.Uses, "b", 1) { Qualifier = new ExtractQualifier(CodeQualifierKinds.Value, "css:a.css#.a") },
             ],
-            Literals = [new ExtractLiteral("red", 1) { Node = "css:a.css#.a" }],
+            Literals = LiteralRow.Table(new LiteralRow("red", 1, "css:a.css#.a")),
         };
 
         var moved = read.Renamed(id => $"{id}~2");
@@ -89,7 +89,7 @@ public sealed class EmbeddedCodeTests
         Assert.Equal(
             [("css:a.css#.a&-x~2", "css:a.css#.a~2"), ("css:a.css#.a~2", "css:a.css#.a")],
             moved.References.Select(reference => (reference.From, reference.Qualifier!.Name)));
-        Assert.Equal(["css:a.css#.a~2"], moved.Literals!.Select(literal => literal.Node));
+        Assert.Equal(["css:a.css#.a~2"], LiteralRow.Of(moved).Select(literal => literal.Node));
     }
 
     /// <summary>
@@ -120,7 +120,7 @@ public sealed class EmbeddedCodeTests
         AddressRoots = [new ExtractAddressRoot("@", "src")],
         References = [new ExtractReference("html:open", CodeEdgeKinds.Calls, name, line)],
         Dynamic = [new ExtractDynamic(line, name)],
-        Literals = [new ExtractLiteral(name, line) { Node = "html:open" }, new ExtractLiteral($"{name}-2", line) { Node = "html:open.inner" }],
+        Literals = LiteralRow.Table(new LiteralRow(name, line, "html:open"), new LiteralRow($"{name}-2", line, "html:open.inner")),
         Generated = name == "one" ? "the first says" : null,
     };
 }

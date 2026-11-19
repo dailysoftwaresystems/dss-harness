@@ -687,8 +687,8 @@ public sealed class TypeScriptExtractorTests : CodeGraphExtractorContractTests<T
         const string Get = "typescript:src/api.ts.Api.get";
 
         Assert.Equal(
-            [new ExtractLiteral("api_token", 2) { Node = Constructor }, new ExtractLiteral("/default/path", 4) { Node = Get }],
-            extract.Literals);
+            [new LiteralRow("api_token", 2, Constructor), new LiteralRow("/default/path", 4, Get)],
+            LiteralRow.Of(extract));
         Assert.Equal(
             [(Constructor, CodeEdgeKinds.Calls, "Inject", 2), (Constructor, CodeEdgeKinds.Uses, "DEFAULT_RETRIES", 2), (Get, CodeEdgeKinds.Uses, "enabled", 5), (Get, CodeEdgeKinds.Uses, "FALLBACK", 5)],
             extract.References.Select(reference => (reference.From, reference.Kind, reference.Name, reference.Line)));
@@ -760,8 +760,8 @@ public sealed class TypeScriptExtractorTests : CodeGraphExtractorContractTests<T
             """);
 
         Assert.Equal(
-            [new ExtractLiteral("active status", 1) { Node = "typescript:src/e.ts.Status.Active" }, new ExtractLiteral("gone status", 1) { Node = "typescript:src/e.ts.Status.Gone" }],
-            extract.Literals);
+            [new LiteralRow("active status", 1, "typescript:src/e.ts.Status.Active"), new LiteralRow("gone status", 1, "typescript:src/e.ts.Status.Gone")],
+            LiteralRow.Of(extract));
         Assert.Equal(
             [("typescript:src/e.ts.Flags.All", CodeEdgeKinds.Uses, "Read"), ("typescript:src/e.ts.Flags.All", CodeEdgeKinds.Uses, "Write")],
             extract.References.Select(reference => (reference.From, reference.Kind, reference.Name)));

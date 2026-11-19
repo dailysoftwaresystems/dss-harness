@@ -194,13 +194,13 @@ public sealed class JsonExtractorTests : CodeGraphExtractorContractTests<JsonExt
             extract.Nodes.Select(node => (node.Id, node.Name, node.Qualified, node.Summary, node.Parent)));
         Assert.Null(extract.WithDigests(CodeFileText.Lines(Lock)).Problem("json", CodeFileText.Lines(Lock).Count));
 
-        var name = new string('k', FileExtract.MostSignature + 60);
+        var name = new string('k', 12_000);
         var text = $"{{ \"{name}\": \"v\" }}";
         var keyed = Read("long.json", text);
         var key = Assert.Single(keyed.Nodes);
 
         Assert.Equal(($"json:long.json#{name}", name), (key.Id, key.Qualified));
-        Assert.True(key.Signature.Length <= FileExtract.MostSignature, $"the signature is {key.Signature.Length} characters");
+        Assert.Equal(name, key.Signature);
         Assert.Null(keyed.WithDigests(CodeFileText.Lines(text)).Problem("json", 1));
     }
 

@@ -690,15 +690,15 @@ public sealed class CExtractorTests : CodeGraphExtractorContractTests<CExtractor
 
         Assert.Equal(
             [
-                new ExtractLiteral("Main Window", 1) { Node = "c:title" },
-                new ExtractLiteral("abc def", 2) { Node = "c:bytes" },
-                new ExtractLiteral("smile \u263a", 3) { Node = "c:smile" },
-                new ExtractLiteral("could not open %s\n", 7) { Node = "c:main" },
-                new ExtractLiteral("tab\there", 7) { Node = "c:main" },
-                new ExtractLiteral("caf\u00e9 ABC", 8) { Node = "c:main" },
-                new ExtractLiteral("one two", 9) { Node = "c:main" },
+                new LiteralRow("Main Window", 1, "c:title"),
+                new LiteralRow("abc def", 2, "c:bytes"),
+                new LiteralRow("smile \u263a", 3, "c:smile"),
+                new LiteralRow("could not open %s\n", 7, "c:main"),
+                new LiteralRow("tab\there", 7, "c:main"),
+                new LiteralRow("caf\u00e9 ABC", 8, "c:main"),
+                new LiteralRow("one two", 9, "c:main"),
             ],
-            extract.Literals);
+            LiteralRow.Of(extract));
     }
 
     /// <summary>
@@ -844,7 +844,7 @@ public sealed class CExtractorTests : CodeGraphExtractorContractTests<CExtractor
             const char *pattern = R"(\d+ raw in c)";
             """);
 
-        Assert.Equal([new ExtractLiteral("\\d+ raw in c", 1) { Node = "c:pattern" }], extract.Literals);
+        Assert.Equal([new LiteralRow("\\d+ raw in c", 1, "c:pattern")], LiteralRow.Of(extract));
         Assert.Empty(extract.References);
     }
 
