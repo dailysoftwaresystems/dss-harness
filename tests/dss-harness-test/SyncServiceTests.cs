@@ -3237,6 +3237,7 @@ public sealed class SyncServiceTests
     [InlineData(".harness-config/runner/.secrets/ci.env", true)]
     [InlineData(".harness-config/runner/.env/values.env", true)]
     [InlineData(".harness-config/lock.json", true)]
+    [InlineData(".harness-config/sync-pieces/0a1b2c3d/0", true)]
     [InlineData("src/a.c", false)]
     public void TheHarnessDirectory_CarriesItsActions_AndNothingElse(string path, bool withheld)
     {

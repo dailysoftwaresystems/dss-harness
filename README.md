@@ -334,6 +334,7 @@ is enforced by tests that read the built command line itself. The
 .legs/                                       contents ignored, .gitkeep tracked; the copies of the tree its legs work in, in every tree, never sent to a host by sync
 .harness-config/runs/                        ignored; one directory of records per run, in the tree that ran it
 .harness-config/lock.json                    ignored; records in-progress runs
+.harness-config/sync-pieces/                 ignored; the pieces of a file a sync is bringing in, kept until the whole of it has arrived and removed once it is placed, never sent by a sync nor deleted by one
 .harness-config/deps/<name>/                 a mutation worker's alone, never sent by a sync nor deleted by one: its own copy of each dependency source its leg's build fetched ('dssharness help mutations')
 .harness-config/synced-copy.json             a host's copy's alone: the mark the sync that made it leaves, which tells a synced copy from a tree of its own
 .harness-config/host-copies/                 ignores itself; which hosts hold a copy of which worktree, in the main checkout

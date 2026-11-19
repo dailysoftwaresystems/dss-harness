@@ -57,7 +57,7 @@ public sealed class LocalSyncTransport(
     /// root: in its own harness directory, which no sync carries or deletes (<see cref="HarnessDirectorySync.Withholds"/>),
     /// a directory for each file, named by the hash of its path.
     /// </summary>
-    public const string PiecesDirectory = HarnessLayout.DirectoryName + "/sync-pieces";
+    public const string PiecesDirectory = HarnessLayout.SyncPiecesDirectoryRelative;
 
     /// <inheritdoc/>
     public Task<bool> RootExistsAsync(string root, CancellationToken cancellationToken = default)

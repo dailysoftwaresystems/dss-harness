@@ -89,6 +89,10 @@ public sealed class InitService(
             // link to where they are kept is ignored as surely as the directory: see the remarks above.
             new($"/{HarnessLayout.RunsDirectoryRelative}", [$"{HarnessLayout.RunsDirectoryRelative}/{any}"], Ignores: true),
 
+            // The pieces of a file a sync is bringing in, kept until the whole of it has arrived: only a process ended
+            // mid-pull leaves any, and they are never the tree's.
+            new($"/{HarnessLayout.SyncPiecesDirectoryRelative}", [$"{HarnessLayout.SyncPiecesDirectoryRelative}/{any}"], Ignores: true),
+
             // Where worktrees are made and where orchestrators keep what they hold: their contents ignored, and a
             // placeholder kept in each (see the remarks above).
             .. HarnessLayout.RootSlots(worktrees.Root).SelectMany(slot => Slot(slot, keep)),

@@ -128,6 +128,9 @@ public static partial class HelpTopics
             + "tree, never sent to a host by sync"),
         ($"{HarnessLayout.RunsDirectoryRelative}/", "ignored; one directory of records per run, in the tree that ran it"),
         ($"{HarnessLayout.DirectoryName}/{HarnessLayout.LockFileName}", "ignored; records in-progress runs"),
+        ($"{HarnessLayout.SyncPiecesDirectoryRelative}/",
+            "ignored; the pieces of a file a sync is bringing in, kept until the whole of it has arrived and removed once it is "
+            + "placed, never sent by a sync nor deleted by one"),
         ($"{HarnessLayout.DependencySourcesDirectoryRelative}/<name>/",
             "a mutation worker's alone, never sent by a sync nor deleted by one: its own copy of each dependency source its "
             + $"leg's build fetched ('{ToolPackage.Command} help mutations')"),
