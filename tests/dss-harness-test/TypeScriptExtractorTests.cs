@@ -1,3 +1,4 @@
+using System.Globalization;
 using DssHarness.Core.Codebase;
 using DssHarness.Core.Codebase.Languages;
 
@@ -503,7 +504,7 @@ public sealed class TypeScriptExtractorTests : CodeGraphExtractorContractTests<T
 
         Assert.Equal(
             [("area", "type", "Shape"), ("make", null, null), ("scale", "type", "Shape"), ("read", "value", "service"), ("whatever", "value", null)],
-            extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Calls).Select(reference => (reference.Name, reference.Qualifier?.Kind, reference.Qualifier?.Name)));
+            extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Calls).Select(reference => (reference.Name, reference.Qualifier?.Kind, extract.Written(reference.Qualifier))));
         Assert.Equal(
             ["a call on the any value loose", "a call through the function value onChange", "a call through the function value run"],
             extract.Dynamic.Select(dynamic => dynamic.Why));
@@ -656,7 +657,7 @@ public sealed class TypeScriptExtractorTests : CodeGraphExtractorContractTests<T
 
         Assert.Equal(
             [("post", "value", "api"), ("apply", "type", "Patch"), ("m", "value", null), ("take", null, null)],
-            extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Calls).Select(reference => (reference.Name, reference.Qualifier?.Kind, reference.Qualifier?.Name)));
+            extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Calls).Select(reference => (reference.Name, reference.Qualifier?.Kind, extract.Written(reference.Qualifier))));
         Assert.Equal(["a call on the any value x as any"], extract.Dynamic.Select(dynamic => dynamic.Why));
         Assert.DoesNotContain(extract.References, reference => reference.Name is "T" or "U" or "V");
         Assert.Contains(extract.References, reference => reference is { Name: "Item", Kind: CodeEdgeKinds.References });
@@ -780,6 +781,34 @@ public sealed class TypeScriptExtractorTests : CodeGraphExtractorContractTests<T
             [("typescript:src/o.ts.Outcome", "Failure"), ("typescript:src/o.ts.Outcome", "Success"), ("typescript:src/o.ts.Shaped", "First"), ("typescript:src/o.ts.Shaped", "Second")],
             extract.References.Where(reference => reference.Kind == CodeEdgeKinds.References).Select(reference => (reference.From, reference.Name)));
     }
+
+    /// <summary>
+    /// Namespaces nested five thousand deep are read whole, each a node in the one that holds it and each body a walk on
+    /// the reader's stack of walks - the class the deepest declares, its method and what the method calls among them - in
+    /// a child given a small stack, which a reading by recursion would overflow.
+    /// </summary>
+    [Fact]
+    public async Task ABlockFiveThousandDeep_IsReadWhole()
+        => Assert.Equal(
+            new ChildRunAnswer(0, "5002 nodes, m 5002 deep, calls g; 0 dynamic", ""),
+            await ChildRun.MethodAsync(typeof(TypeScriptExtractorTests), nameof(NamespacesFiveThousandDeep), TestContext.Current.CancellationToken));
+
+    /// <summary>The child of <see cref="ABlockFiveThousandDeep_IsReadWhole"/>: how many nodes were read, how deep the method is, what it references, and how much is marked dynamic.</summary>
+    internal static string NamespacesFiveThousandDeep() => SmallStack.Run(() =>
+    {
+        var extract = Read("src/deep.ts", string.Concat(Enumerable.Repeat("namespace n { ", 5_000)) + "export class C { m() { g(); } }" + new string('}', 5_000));
+        var nodes = extract.Nodes.ToDictionary(node => node.Id, StringComparer.Ordinal);
+        var depth = 0;
+
+        for (string? id = Assert.Single(extract.Nodes, node => node.Name == "m").Id; id is not null; id = nodes[id].Parent)
+        {
+            depth++;
+        }
+
+        return string.Create(
+            CultureInfo.InvariantCulture,
+            $"{extract.Nodes.Count} nodes, m {depth} deep, {string.Join(", ", extract.References.Select(reference => $"{reference.Kind} {reference.Name}"))}; {extract.Dynamic.Count} dynamic");
+    });
 
     private static FileExtract Read(string path, string text) => new TypeScriptExtractor().Extract(new CodeFileInput(path, text));
 
