@@ -40,7 +40,7 @@ public sealed partial class HelpTests
 
         // What the main tree's lock refuses a side-task, on every client, its programs read from the command reader's own list.
         Assert.Contains(
-            "and on every client so is a command that leaves a process running after it ends - one the shell runs in the "
+            "and the chat says when its command waited; on every client a command that leaves a process running after it ends is refused - one the shell runs in the "
                 + "background (a lone &, never cmd's, which runs the next command in turn; a coproc; a process substitution's "
                 + "body, <(...) or >(...); PowerShell's job &, or a command PowerShell reads given -AsJob), or one run by "
                 + $"{string.Join(", ", DssHarness.Core.Agents.Policy.CommandAnalysis.Detaching)} (wherever a program of the command "

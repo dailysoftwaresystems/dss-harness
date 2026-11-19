@@ -17,7 +17,10 @@ namespace DssHarness.Tests;
 /// <remarks>
 /// It can also be a launch the engine is not the host of, or one that breaks the protocol, as the client's checks are
 /// held to: the first turn's <c>noInitialize</c> leaves the <c>initialize</c> request unanswered and plays nothing, its
-/// <c>initializeError</c> refuses it, and its <c>initializeAfterMs</c> answers it that long after reading it; a turn's
+/// <c>initializeError</c> refuses it, its <c>initializeAfterMs</c> answers it that long after reading it, and its
+/// <c>initializeOnceFile</c> answers it only once that file is there - a launch silent for as long as its test keeps it so;
+/// a turn's <c>exitOnceFile</c> keeps the process running once its input is closed until that file is there, then exits
+/// by itself, as a launch slow to end does; a turn's
 /// <c>initTools</c> and <c>apiKeySource</c> are what its init says, and its <c>noInit</c> writes none, as a launch that
 /// works before it says what it runs as; a turn's <c>refuseInterrupt</c> answers the interrupt with an error and goes on,
 /// its <c>stderr</c> is a line it writes on its standard error as it begins, and its <c>exitAfter</c> ends the process by
@@ -41,21 +44,8 @@ namespace DssHarness.Tests;
 /// <c>slowUntilHeld</c>, end only once the next user line was read and held as one it never takes, so no load on the
 /// machine moves the one before the other. Each answer of the host's to a call is written back, as the CLI writes it. Its
 /// <c>ignoreEof</c> keeps the process running once its
-/// input is closed, as a launch that does not end by itself.
-/// <para>
-/// Where its environment names an isolation file, an allowed <c>Bash</c> call hands the command the host gave back to the
-/// isolated shell as Claude Code's shell prefix does - its whole line prepared as the isolated shell prepares it, the
-/// receipt at its head written - before its result; its <c>handedAfterMs</c> hands it that long after its result, as a call
-/// run in the background is, and its <c>skipsPrefix</c> never hands it over, as a version that skipped the prefix would.
-/// An allowed call's <c>exitsWhileRunning</c> ends the process once it is handed over, or not, its result never written,
-/// and its <c>hangsWhileRunning</c> writes no result and plays nothing more until the process is ended; its
-/// <c>cutAfterAllowed</c> is cut before it runs, stamped not run, nothing handed over.
-/// An allowed call's <c>pauseAfterMs</c> waits that long after its result before the turn plays on, and its
-/// <c>probesLock</c> names a machine-wide lock it tries as it runs: its result is <c>held</c> where another holds the lock,
-/// and <c>free</c> where it took it - and let it go at once. A call's <c>askedAgain</c> asks the host twice about it, by two
-/// requests of one <c>tool_use_id</c>: <c>atOnce</c> writes the second right after the first and goes by the second's answer,
-/// and <c>afterAllowed</c> writes the second once the first was allowed, and goes by its answer.
-/// </para>
+/// input is closed, as a launch that does not end by itself. A call of a tool of Claude Code's own the host allowed - a
+/// side-task's own web fetch - runs here, its result the call's <c>result</c>.
 /// <para>
 /// Where <c>--mcp-config</c> names a server of type <c>sdk</c>, it connects it before its first init as the probe saw
 /// Claude Code do - <c>initialize</c>, <c>notifications/initialized</c>, <c>tools/list</c>, each an <c>mcp_message</c> it
@@ -362,13 +352,6 @@ internal static class FakeClaude
                 }
 
                 waitingOn = Ask(tool, input, id);
-
-                if (Text(call["askedAgain"]) == "atOnce")
-                {
-                    // It asks again at once, and goes by the second answer.
-                    waitingOn = Ask(tool, input, id);
-                }
-
                 return;
             }
 
@@ -619,6 +602,15 @@ internal static class FakeClaude
                     Thread.Sleep(starting.GetValue<int>());
                 }
 
+                if (Text(first?["initializeOnceFile"]) is { } answerOnce)
+                {
+                    // Silent, reading nothing, until its test lets it answer.
+                    while (!File.Exists(answerOnce))
+                    {
+                        Thread.Sleep(20);
+                    }
+                }
+
                 Say(first is not null && Flag(first, "initializeError")
                     ? new JsonObject { ["type"] = "control_response", ["response"] = new JsonObject { ["subtype"] = "error", ["request_id"] = Text(node["request_id"]), ["error"] = "no host is taken here" } }
                     : new JsonObject { ["type"] = "control_response", ["response"] = new JsonObject { ["subtype"] = "success", ["request_id"] = Text(node["request_id"]), ["response"] = new JsonObject() } });
@@ -763,14 +755,6 @@ internal static class FakeClaude
                 var tool = Text(call["tool"]) ?? "Read";
                 var behavior = Text(node["response"]?["response"]?["behavior"]);
 
-                if (behavior == "allow" && Text(call["askedAgain"]) == "afterAllowed" && !Flag(call, "askedAgainDone"))
-                {
-                    // Allowed, it asks about the same call again, and goes by that answer.
-                    call["askedAgainDone"] = true;
-                    waitingOn = Ask(tool, call["input"]?.DeepClone() ?? new JsonObject(), id);
-                    continue;
-                }
-
                 if (Text(node["response"]?["subtype"]) == "error")
                 {
                     ToolResult(id, ok: false, "Tool permission request failed: Error: " + Text(node["response"]?["error"]), Meta(id, "permission-rule", "reject", "config"));
@@ -781,52 +765,10 @@ internal static class FakeClaude
                     CallServer(call, tool);
                     continue;
                 }
-                else if (behavior == "allow" && Flag(call, "cutAfterAllowed"))
-                {
-                    // Allowed, and cut before it ran, as an interrupt that lands between the answer and the run cuts it:
-                    // stamped not run, nothing handed over.
-                    ToolResult(id, ok: false, "[Request interrupted by user for tool use]", Meta(id, "user-rejected", "accept", "user_temporary"));
-                }
                 else if (behavior == "allow")
                 {
-                    // A shell command of a launch that hands its commands over goes through the prefix, as Claude Code's does,
-                    // unless the call skips it: at once, or - a call run in the background - that long after its result.
-                    if (tool == "Bash" && Environment.GetEnvironmentVariable(DssHarness.Core.Processes.IsolatedShell.FileVariable) is { } handed && !Flag(call, "skipsPrefix"))
-                    {
-                        var command = Text(node["response"]?["response"]?["updatedInput"]?["command"]) ?? string.Empty;
-
-                        if (call["handedAfterMs"] is JsonValue after && after.TryGetValue<int>(out var handedAfter))
-                        {
-                            _ = Task.Run(() =>
-                            {
-                                Thread.Sleep(handedAfter);
-                                HandOver(handed, command);
-                            });
-                        }
-                        else
-                        {
-                            HandOver(handed, command);
-                        }
-                    }
-
-                    if (Flag(call, "exitsWhileRunning"))
-                    {
-                        // It ends the process while the call runs, its result never written.
-                        return 1;
-                    }
-
-                    if (Flag(call, "hangsWhileRunning"))
-                    {
-                        // The call runs on, its result never written, until the process is ended.
-                        continue;
-                    }
-
-                    ToolResult(id, ok: true, Probed(call) ?? Text(call["result"]) ?? "ran", Meta(id, null, "accept", "user_temporary"));
-
-                    if (call["pauseAfterMs"] is JsonValue pause && pause.TryGetValue<int>(out var paused))
-                    {
-                        Thread.Sleep(paused);
-                    }
+                    // A tool of Claude Code's own, allowed, runs here: its result the call's own.
+                    ToolResult(id, ok: true, Text(call["result"]) ?? "ran", Meta(id, null, "accept", "user_temporary"));
                 }
                 else if (Flag(call, "calledThoughDenied") && tool.StartsWith("mcp__", StringComparison.Ordinal))
                 {
@@ -853,6 +795,17 @@ internal static class FakeClaude
             }
         }
 
+        if (turns.OfType<JsonObject>().Select(entry => Text(entry["exitOnceFile"])).FirstOrDefault(file => file is not null) is { } exitOnce)
+        {
+            // A launch slow to end once its input is closed: it ends by itself once its test lets it.
+            while (!File.Exists(exitOnce))
+            {
+                Thread.Sleep(20);
+            }
+
+            return 0;
+        }
+
         if (turns.OfType<JsonObject>().Any(entry => Flag(entry, "ignoreEof")))
         {
             // A launch that does not end by itself once its input is closed: only ending it whole ends it.
@@ -860,35 +813,6 @@ internal static class FakeClaude
         }
 
         return 0;
-    }
-
-    /// <summary>
-    /// A shell command handed to the isolated shell as Claude Code hands it: the whole line it builds - the snapshot sourced,
-    /// the command evaluated, its last working directory written to its own temporary directory - prepared as the isolated
-    /// shell prepares it, its receipt written; then the command's own write of where it ended, where it was given the file.
-    /// </summary>
-    private static void HandOver(string file, string command)
-    {
-        var handing = JsonNode.Parse(File.ReadAllText(file))?["handing"];
-        var receipts = Text(handing?["receipts"]);
-        var temp = Text(handing?["programTemp"]);
-
-        if (receipts is null || temp is null)
-        {
-            return;
-        }
-
-        var end = temp + "/claude-1a2b-cwd";
-        var line = $"source /home/me/.claude/shell-snapshots/snapshot-bash-1.sh 2>/dev/null || true && eval '{command.Replace("'", "'\"'\"'", StringComparison.Ordinal)}' < /dev/null && pwd -P >| {end}";
-        var (prepared, _) = DssHarness.Core.Processes.IsolatedShell.Prepared(
-            new DssHarness.Core.Processes.ProcessIsolation(new DssHarness.Core.Processes.Bubblewrap("/usr/bin/bwrap", "0.9.0", []), DssHarness.Core.Processes.IsolationProfile.Nothing),
-            new DssHarness.Core.Processes.IsolatedShellHanding(receipts, temp),
-            line);
-
-        if (prepared?.Profile.Writes.Any(write => write.Path == end) == true)
-        {
-            File.WriteAllText(end, Environment.CurrentDirectory + "\n");
-        }
     }
 
     /// <summary>The servers of type <c>sdk</c> an <c>--mcp-config</c> file names, by name; none where it names no file.</summary>
@@ -928,20 +852,4 @@ internal static class FakeClaude
 
     private static string? Text(JsonNode? node)
         => node is JsonValue value && value.TryGetValue<string>(out var text) ? text : null;
-
-    /// <summary>
-    /// What a call that probes a machine-wide lock found as it ran: <c>held</c> where another held it, <c>free</c> where the
-    /// fake took it - let go at once; null for a call that probes none.
-    /// </summary>
-    private static string? Probed(JsonNode call)
-    {
-        if (Text(call["probesLock"]) is not { } name)
-        {
-            return null;
-        }
-
-        using var taken = DssHarness.Core.Platform.MachineWideMutex.TryHold(name, "the fake claude's probe");
-
-        return taken is null ? "held" : "free";
-    }
 }

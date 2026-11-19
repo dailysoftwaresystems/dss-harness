@@ -1,6 +1,5 @@
 using System.Text.Json.Nodes;
 using DssHarness.Core.Agents;
-using DssHarness.Core.Agents.ClaudeCode;
 using DssHarness.Core.Agents.Policy;
 using DssHarness.Core.Repository;
 using Xunit;
@@ -43,67 +42,20 @@ public sealed class ClaudeSettingsTests
     private static List<string> Deny(string rendered)
         => [.. JsonNode.Parse(rendered)!["permissions"]!["deny"]!.AsArray().Select(rule => (string)rule!)];
 
+    /// <summary>
+    /// The tools of a launch by Claude Code's own names: the engine's tool server's - none of Claude Code's own shell or
+    /// file tools is ever given.
+    /// </summary>
+    private static readonly string[] Served = ["mcp__dssharness__view_file", "mcp__dssharness__run_command"];
+
+    /// <summary>
+    /// The settings hold the engine's names and nothing else: no name of Claude Code's own shell - no launch is given it -
+    /// and the tokens one answer of the engine's tool server may take, a page whole, written as Claude Code reads it.
+    /// </summary>
     [Fact]
     public void TheSettingsHoldWhatTheEngineDecidesAndNothingElse()
     {
-        var rendered = ClaudeSettings.Render(
-            ["Read", "Grep", "Glob", "Write", "Edit", "Bash"],
-            SettingsGround(Windows, []),
-            AgentCommandSettings.Default,
-            StringComparison.OrdinalIgnoreCase);
-
-        Assert.Equal(
-            $$"""
-            {
-              "disableAllHooks": true,
-              "fallbackModel": [],
-              "switchModelsOnFlag": false,
-              "outputStyle": "default",
-              "env": {
-                "DISABLE_COMPACT": "1",
-                "DISABLE_AUTOUPDATER": "1",
-                "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB": "1",
-                "CLAUDE_CODE_RETRY_WATCHDOG": "0",
-                "CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR": "1",
-                "BASH_DEFAULT_TIMEOUT_MS": "120000",
-                "BASH_MAX_TIMEOUT_MS": "3600000"
-              },
-              "permissions": {
-                "ask": [
-                  "Read",
-                  "Grep",
-                  "Glob",
-                  "Write",
-                  "Edit",
-                  "Bash"
-                ],
-                "deny": []
-              }
-            }
-            """.ReplaceLineEndings().TrimEnd(),
-            rendered.ReplaceLineEndings().TrimEnd());
-    }
-
-    /// <summary>
-    /// A launch whose shell commands run inside this tool's isolation turns Claude Code's own sandbox off, written after the
-    /// output style and before the environment, so the user's own settings cannot start one that no command inside could
-    /// run in; and writes the variables that hand each command over after the engine's own, so the user's settings cannot
-    /// turn them back. A launch whole inside the isolation turns the sandbox off and hands nothing over.
-    /// </summary>
-    [Fact]
-    public void AnIsolatedLaunch_TurnsClaudeCodesOwnSandboxOff_AndHandsItsCommandsOver()
-    {
-        var rendered = ClaudeSettings.Render(
-            ["Bash"],
-            SettingsGround(Posix, []),
-            AgentCommandSettings.Default,
-            StringComparison.Ordinal,
-            isolated: true,
-            ClaudeShell.Variables("/opt/dssharness --isolated-shell", "/r/steps/s1/claude-isolation.json", "/t/abc"));
-        var whole = JsonNode.Parse(ClaudeSettings.Render(["Bash"], SettingsGround(Posix, []), AgentCommandSettings.Default, StringComparison.Ordinal, isolated: true))!;
-
-        Assert.False(whole["sandbox"]!["enabled"]!.GetValue<bool>());
-        Assert.Equal(ClaudeSettings.Launched(AgentCommandSettings.Default).Select(variable => variable.Key), whole["env"]!.AsObject().Select(variable => variable.Key));
+        var rendered = ClaudeSettings.Render(Served, SettingsGround(Windows, []), StringComparison.OrdinalIgnoreCase);
 
         Assert.Equal(
             """
@@ -112,25 +64,17 @@ public sealed class ClaudeSettingsTests
               "fallbackModel": [],
               "switchModelsOnFlag": false,
               "outputStyle": "default",
-              "sandbox": {
-                "enabled": false
-              },
               "env": {
                 "DISABLE_COMPACT": "1",
                 "DISABLE_AUTOUPDATER": "1",
                 "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB": "1",
                 "CLAUDE_CODE_RETRY_WATCHDOG": "0",
-                "CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR": "1",
-                "BASH_DEFAULT_TIMEOUT_MS": "120000",
-                "BASH_MAX_TIMEOUT_MS": "3600000",
-                "CLAUDE_CODE_SHELL_PREFIX": "/opt/dssharness --isolated-shell",
-                "DSSHARNESS_ISOLATED_SHELL": "/r/steps/s1/claude-isolation.json",
-                "CLAUDE_CODE_SHELL": "/bin/bash",
-                "CLAUDE_CODE_TMPDIR": "/t/abc"
+                "MAX_MCP_OUTPUT_TOKENS": "98304"
               },
               "permissions": {
                 "ask": [
-                  "Bash"
+                  "mcp__dssharness__view_file",
+                  "mcp__dssharness__run_command"
                 ],
                 "deny": []
               }
@@ -140,13 +84,20 @@ public sealed class ClaudeSettingsTests
     }
 
     /// <summary>
-    /// Every shell command of a launch starts in the launch's own directory, never where an earlier one's cd left it: the
-    /// policy reads a command's relative paths against that directory, so a cd in one call and a relative path in the
-    /// next would reach a place it never decided. Set in the settings' env and the child's environment alike.
+    /// A launch run inside this tool's isolation turns Claude Code's own sandbox off, written after the output style and
+    /// before the environment, so the user's own settings cannot start one that nothing inside could run in; its
+    /// environment is every launch's, and no other.
     /// </summary>
     [Fact]
-    public void EveryShellCommandStartsInTheLaunchsDirectory()
-        => Assert.Contains(new KeyValuePair<string, string>("CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR", "1"), ClaudeSettings.Controlled);
+    public void AnIsolatedLaunch_TurnsClaudeCodesOwnSandboxOff()
+    {
+        var rendered = ClaudeSettings.Render(Served, SettingsGround(Posix, []), StringComparison.Ordinal, isolated: true);
+        var whole = JsonNode.Parse(rendered)!;
+
+        Assert.False(whole["sandbox"]!["enabled"]!.GetValue<bool>());
+        Assert.Equal(ClaudeSettings.Launched.Select(variable => variable.Key), whole["env"]!.AsObject().Select(variable => variable.Key));
+        Assert.Equal(["disableAllHooks", "fallbackModel", "switchModelsOnFlag", "outputStyle", "sandbox", "env", "permissions"], whole.AsObject().Select(entry => entry.Key));
+    }
 
     [Theory]
     [InlineData("windows", "Read(//c/Users/dev/repo/.harness-config/workflows/.env/**)", "Read(//c/Users/dev/claude/**)")]
@@ -159,9 +110,8 @@ public sealed class ClaudeSettingsTests
         var claude = string.Join(separator, main[..main.LastIndexOf(separator, StringComparison.Ordinal)], "claude");
 
         var rendered = ClaudeSettings.Render(
-            ["Read", "Grep"],
+            Served,
             PolicyGrounds.Of(worktree, [main], [worktree, work], [slot], [claude], []),
-            AgentCommandSettings.Default,
             StringComparison.OrdinalIgnoreCase);
 
         Assert.Equal([slotRule, claudeRule], Deny(rendered));
@@ -180,9 +130,8 @@ public sealed class ClaudeSettingsTests
         var separator = system == "windows" ? @"\" : "/";
 
         var rendered = ClaudeSettings.Render(
-            ["Read", "Grep"],
+            Served,
             PolicyGrounds.Of(worktree, [main], [worktree, work], [], [], [], credentialPlaces: [new(home + separator + ".ssh", Directory: true), new(home + separator + ".netrc", Directory: false)]),
-            AgentCommandSettings.Default,
             StringComparison.OrdinalIgnoreCase);
 
         Assert.Equal([directoryRule, fileRule], Deny(rendered));
@@ -221,7 +170,7 @@ public sealed class ClaudeSettingsTests
         string workRead)
     {
         var rendered = ClaudeSettings.Render(
-            ["Bash", "Read", "Write", "Edit"],
+            Served,
             SettingsGround(
                 Ground(system),
                 [
@@ -230,7 +179,6 @@ public sealed class ClaudeSettingsTests
                     new("Write(.github/**)", AgentPolicySource.Config),
                     new("Read(secrets/**)", AgentPolicySource.Agent),
                 ]),
-            AgentCommandSettings.Default,
             StringComparison.OrdinalIgnoreCase);
 
         // The working directory first, then the main checkout, then the work directory: the one list of roots, in its
@@ -249,9 +197,8 @@ public sealed class ClaudeSettingsTests
     {
         var (main, worktree, _) = Ground(system);
         var rendered = ClaudeSettings.Render(
-            ["Read"],
+            Served,
             PolicyGrounds.Of(worktree, [main], [], [], [], [new("Read(secrets/**)", AgentPolicySource.Config)]),
-            AgentCommandSettings.Default,
             StringComparison.OrdinalIgnoreCase);
 
         Assert.Equal([worktreeRead, mainRead], Deny(rendered));
@@ -268,9 +215,8 @@ public sealed class ClaudeSettingsTests
     public void ARuleThatWouldCoverARootTheLaunchWrites_IsNotWrittenAsADenyRule(string system, string worktreeEdit, string workEdit)
     {
         var rendered = ClaudeSettings.Render(
-            ["Bash"],
+            Served,
             SettingsGround(Ground(system), [new("Write(.orchestrators/**)", AgentPolicySource.Config)]),
-            AgentCommandSettings.Default,
             StringComparison.OrdinalIgnoreCase);
 
         Assert.Equal([worktreeEdit, workEdit], Deny(rendered));
@@ -279,8 +225,8 @@ public sealed class ClaudeSettingsTests
     [Fact]
     public void WebRulesAreWebFetchDomainRules_AndTheWebWholeWebSearchBesideIt()
     {
-        var domain = ClaudeSettings.Render(["Bash"], SettingsGround(Posix, [new("Web(pastebin.com)", AgentPolicySource.Config)]), AgentCommandSettings.Default, StringComparison.Ordinal);
-        var whole = ClaudeSettings.Render(["Bash"], SettingsGround(Posix, [new("Web(*)", AgentPolicySource.Config)]), AgentCommandSettings.Default, StringComparison.Ordinal);
+        var domain = ClaudeSettings.Render(["WebFetch", "WebSearch"], SettingsGround(Posix, [new("Web(pastebin.com)", AgentPolicySource.Config)]), StringComparison.Ordinal);
+        var whole = ClaudeSettings.Render(["WebFetch", "WebSearch"], SettingsGround(Posix, [new("Web(*)", AgentPolicySource.Config)]), StringComparison.Ordinal);
 
         Assert.Equal(["WebFetch(domain:pastebin.com)"], Deny(domain));
         Assert.Equal(["WebFetch", "WebSearch"], Deny(whole));

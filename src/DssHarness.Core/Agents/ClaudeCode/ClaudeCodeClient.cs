@@ -8,6 +8,7 @@ using DssHarness.Core.FileSystem;
 using DssHarness.Core.Orchestration;
 using DssHarness.Core.Platform;
 using DssHarness.Core.Processes;
+using DssHarness.Core.Waiting;
 
 namespace DssHarness.Core.Agents.ClaudeCode;
 
@@ -31,23 +32,27 @@ namespace DssHarness.Core.Agents.ClaudeCode;
 /// through leaves for the engine's fallback, which goes on from what it stored.
 /// </para>
 /// <para>
-/// A step that has the web takes the harness's own fetch and search from the engine's tool server (<see cref="AgentToolServer"/>):
-/// one MCP server of type <c>sdk</c>, the one <c>--mcp-config</c> names, served in the engine's own process over the
+/// Every tool a launch has is served by the engine's tool server (<see cref="AgentToolServer"/>): the tool runtime's tools
+/// of the agent's capabilities - its file tools, its command tool and the web's - and the run's graph and measure tools,
+/// from one MCP server of type <c>sdk</c>, the one <c>--mcp-config</c> names, served in the engine's own process over the
 /// launch's control channel. Each call of it is asked of the engine first, by its ask rule, and run by the tool runtime as
-/// on the API clients; a call the engine never allowed runs nothing and fails the step.
+/// on the API clients; a call the engine never allowed runs nothing and fails the step. Claude Code's own shell and file
+/// tools are given no launch - a side-task keeps its own web tools alone - so no command and no file of an agent's is
+/// opened by Claude Code's own process.
+/// </para>
+/// <para>
+/// Nothing the launch is waited on for has a time of the client's own: its answer to the host's <c>initialize</c> request,
+/// and its end once its input was closed, are each waited on to their end - told every <see cref="Waits.SaidEvery"/>
+/// as every wait of the harness is - and ended by the step's own time, its stop, or an ending that ends the launch at once.
 /// </para>
 /// </remarks>
 /// <param name="processes">Starts the launch.</param>
 /// <param name="fileSystem">Writes what the launch is given and what it leaves beside the stream.</param>
 /// <param name="platform">The machine's case rule and home, for the policy and Claude Code's directory.</param>
 /// <param name="sessions">Where the contained launch records its session, so a killed engine's launch is ended by the next command.</param>
-/// <param name="clock">When each thing happened, and the bounds of a handoff.</param>
+/// <param name="clock">When each thing happened, the bounds of a handoff, and how long each wait of a launch has lasted.</param>
 /// <param name="environment">The tool's own environment, which a launch would otherwise inherit; the process's where none is given.</param>
-/// <param name="tools">The host of the tool runtime the engine's tool server answers from; none for a client whose steps have no web.</param>
-/// <param name="self">
-/// This tool's own program and what it is given before its command line, which a launch's shell prefix names to hand each
-/// command to the isolation (<see cref="ClaudeShell.PrefixOf"/>); the running process's own where none is given.
-/// </param>
+/// <param name="tools">The host of the tool runtime the engine's tool server answers from; none for a client whose launches are given no tool.</param>
 public sealed class ClaudeCodeClient(
     IProcessRunner processes,
     IFileSystem fileSystem,
@@ -55,37 +60,23 @@ public sealed class ClaudeCodeClient(
     ChildSessions sessions,
     TimeProvider clock,
     Func<IReadOnlyDictionary<string, string>>? environment = null,
-    AgentToolHost? tools = null,
-    Func<(string Program, IReadOnlyList<string> Leading)>? self = null) : IAgentClient
+    AgentToolHost? tools = null) : IAgentClient
 {
-    private readonly Func<(string Program, IReadOnlyList<string> Leading)> _self = self ?? DetachedProcessLauncher.Self;
     /// <summary>The client's key under <c>agentClients</c>.</summary>
     public const string ClientName = "claude-code";
 
     /// <summary>How long a launch has to take the interrupt before it is ended whole.</summary>
     public static readonly TimeSpan InterruptBound = TimeSpan.FromSeconds(10);
 
-    /// <summary>How long a launch whose input was closed has to end before it is ended whole.</summary>
-    public static readonly TimeSpan EndBound = TimeSpan.FromSeconds(5);
-
-    /// <summary>How long a launch has to answer the host's <c>initialize</c> request before it is ended, never started.</summary>
-    public static readonly TimeSpan InitializeBound = TimeSpan.FromSeconds(30);
-
     /// <summary>The id of the host's <c>initialize</c> request, which its answer names.</summary>
     public const string InitializeId = "initialize";
 
     /// <summary>
-    /// How long the receipt of a shell call's command is awaited where it is not there yet - a call run in the background,
-    /// once its result came back before its command was handed over; at a launch's end, a call whose result never came -
-    /// before the launch is ended for a command that was not handed over.
+    /// How long the receipt of a shell call's command was awaited, when a launch handed its own shell's commands to the
+    /// isolation. No launch is given Claude Code's own shell now, so none is handed over and none awaited: what the
+    /// isolation's help still says of it is the last that reads this.
     /// </summary>
     public static readonly TimeSpan ReceiptBound = TimeSpan.FromSeconds(20);
-
-    /// <summary>How often a launch at its end looks again for the receipts it awaits.</summary>
-    private static readonly TimeSpan ReceiptLookAgain = TimeSpan.FromMilliseconds(100);
-
-    /// <summary>The member of a shell call's input that runs its command in the background.</summary>
-    private const string BackgroundMember = "run_in_background";
 
     /// <summary>What a run that is no chat's - a one shot - ends with where its interrupt cut its turn: every client's words for it.</summary>
     public const string TurnCut = AgentTurnInterrupt.Cut;
@@ -109,14 +100,8 @@ public sealed class ClaudeCodeClient(
     private readonly Func<IReadOnlyDictionary<string, string>> _environment = environment ?? AgentChildEnvironment.Own;
     private readonly AgentToolHost? _tools = tools;
 
-    /// <summary>The host of the tool runtime the engine's tool server answers from; none for a client whose steps have no web.</summary>
+    /// <summary>The host of the tool runtime the engine's tool server answers from; none for a client whose launches are given no tool.</summary>
     internal AgentToolHost? Tools => _tools;
-
-    /// <summary>
-    /// Takes the main tree's lock for a side-task's write or command (<see cref="MainTreeWriteLock.HoldAsync"/>): a test's
-    /// seam alone, for a lock that cannot be opened is no fault a test can make of the machine's own.
-    /// </summary>
-    internal Func<string, CancellationToken, Task<MachineWideHold?>> TreeLock { get; init; } = MainTreeWriteLock.HoldAsync;
 
     /// <summary>What this client can do, as the capabilities table states it.</summary>
     public static AgentClientCapabilities Descriptor { get; } = new(
@@ -125,7 +110,7 @@ public sealed class ClaudeCodeClient(
         WritableWhileWorking: true,
         GoesOnWith: AgentConversationHandling.Rendered,
         SchemaEnforcedOutput: true,
-        FileAndCommandTools: AgentToolsOwner.Client,
+        FileAndCommandTools: AgentToolsOwner.Harness,
         Web: AgentToolsOwner.Harness,
         ReportsCost: true,
         EffortLevels: Kind.Efforts,
@@ -180,26 +165,16 @@ public sealed class ClaudeCodeClient(
             return NotStarted(AgentNotStartedBecause.ConfigurationWrong, refusal, run);
         }
 
-        // A launch whose commands are handed to the isolation one by one goes through Claude Code's shell prefix, which names
-        // this tool's own executable: where it cannot, no launch runs a command outside.
-        if (HandedTo(run) is not null && ClaudeShell.PrefixOf(_self().Program, _self().Leading).Problem is { } unprefixed)
-        {
-            return NotStarted(AgentNotStartedBecause.ConfigurationWrong, $"Claude Code's commands could not be handed to the isolation: {unprefixed}", run);
-        }
-
-        // Where Claude Code's own process runs apart from the isolation it hands its commands to - outside, or in an outer
-        // layer that writes its own directories - it opens no agent's file itself: the engine's tool server serves the
-        // runtime's file tools in place of its own.
-        var ownFiles = HandedTo(run) is null;
+        // Claude Code's own process opens no agent's file and runs no agent's command: --tools names a side-task's own web
+        // tools alone, and every other tool the launch has is the engine's tool server's.
         var totals = new Totals();
-        var tools = ClaudeCodeTools.Of(ground.Given, ground.SideTask, ownFiles);
+        var tools = ClaudeCodeTools.Of(ground.Given, ground.SideTask);
         var policy = new AgentPolicy(_fileSystem, _platform, ground);
 
-        // The runtime's tools the launch takes from the engine's tool server: the web's, on a step that has the web, the
-        // file tools where Claude Code's own are not given, and the graph tool, on a step that has one (graph: tools) -
-        // served beside --tools with an ask rule, from the same owner the API clients'
-        // tool comes from: the tool runtime.
-        var served = ClaudeCodeTools.Served(AgentTools.Offered(ground, run.Commands, run.WebSearch), ownFiles);
+        // The runtime's tools the launch takes from the engine's tool server: every one the runtime offers the step - its
+        // file tools, its command tool and the web's, by the step's capabilities - and the graph tool, on a step that has
+        // one (graph: tools), each with an ask rule, from the same owner the API clients' tools come from: the tool runtime.
+        var served = ClaudeCodeTools.Served(AgentTools.Offered(ground, run.Commands, run.WebSearch));
 
         if (run.Graph is not null && !served.Contains(AgentGraphSupport.ToolName, StringComparer.Ordinal))
         {
@@ -217,22 +192,6 @@ public sealed class ClaudeCodeClient(
         if (served.Count > 0 && _tools is null)
         {
             return NotStarted(AgentNotStartedBecause.ConfigurationWrong, $"the launch takes {string.Join(", ", served)} from the engine's tool server, and this client was given no tool runtime to serve them with", run);
-        }
-
-        // The probe measured an Edit taken after a ranged Read, inside the range and outside it, on every version
-        // taken (its ranged-edit launch, fixtures/claude-code): an agent that means to change a body reads its lines
-        // with Read and Edits them, and the graph tool's edit operation is not given on this client - the one
-        // change made here to the operations the run's step was given, the same owner serving it as on the APIs.
-        if (run.Graph is { } support)
-        {
-            run = run with
-            {
-                Graph = support with
-                {
-                    Operations = new HashSet<Runtime.GraphOp>((support.Operations ?? Runtime.CodebaseGraphTool.Operations(write: true, narrow: support.Narrow))
-                        .Where(operation => operation != Runtime.GraphOp.Edit)),
-                },
-            };
         }
 
         for (var entry = 0; ; entry++)
@@ -258,33 +217,6 @@ public sealed class ClaudeCodeClient(
 
             return Finished(outcome.Result, run, totals, _clock.GetElapsedTime(began));
         }
-    }
-
-    /// <summary>
-    /// The isolation a launch hands each of its shell commands to, Claude Code's own process apart from it - in an outer layer
-    /// of its own, or outside (<see cref="Isolation.LaunchIsolation.ForClaudeCode"/>) - where its mechanism takes commands
-    /// handed to it (<see cref="IIsolationMechanism.TakesHandedCommands"/>); null where the launch has none, or runs whole
-    /// inside it.
-    /// </summary>
-    private static ProcessIsolation? HandedTo(AgentRun run)
-        => run.Isolation?.Commands is { Mechanism.TakesHandedCommands: true } isolation ? isolation : null;
-
-    /// <summary>The launch's environment, with the variables that hand its shell commands to the isolation set after it, where it has one.</summary>
-    private static IReadOnlyDictionary<string, string?> Handed(IReadOnlyDictionary<string, string?> environment, IReadOnlyList<KeyValuePair<string, string>>? shell)
-    {
-        if (shell is null)
-        {
-            return environment;
-        }
-
-        var handed = new Dictionary<string, string?>(environment, StringComparer.Ordinal);
-
-        foreach (var (name, value) in shell)
-        {
-            handed[name] = value;
-        }
-
-        return handed;
     }
 
     /// <summary>A run that never began, and why.</summary>
@@ -352,8 +284,8 @@ public sealed class ClaudeCodeClient(
 
     /// <summary>
     /// How one launch ended: its result, whether the key it signed in with was refused, and whether the child is ended at
-    /// once - a launch that did what it was never let do, that the engine is not the host of, or that stalled is given no
-    /// bound to end in by itself.
+    /// once - a launch that did what it was never let do, that the engine is not the host of, or that stalled is not waited
+    /// on to end by itself.
     /// </summary>
     private sealed record LaunchOutcome(AgentRunResult Result, bool KeyRefused = false, bool KillNow = false);
 
@@ -370,21 +302,14 @@ public sealed class ClaudeCodeClient(
 
         public sealed record Bound(string Why, Handing While) : Arrival;
 
-        /// <summary>The initialize request's bound passed.</summary>
-        public sealed record Uninitialized : Arrival;
+        /// <summary>A wait of the launch's told where it stands (<see cref="WaitTold.Line"/>), said as a notice of the step's.</summary>
+        public sealed record Told(string Said) : Arrival;
 
         /// <summary>A call of the engine's tool server answered, to send back on the request that carried it.</summary>
         public sealed record Served(string RequestId, AgentToolServerMessage.Call Call, JsonObject Reply, AgentToolCallResult? Result) : Arrival;
 
         /// <summary>A call of the engine's tool server the runtime failed on, a fault of the engine's own.</summary>
         public sealed record ServeFailed(string RequestId, AgentToolServerMessage.Call Call, Exception Fault) : Arrival;
-
-        /// <summary>
-        /// The take of the main tree's lock a side-task's own write or command waited on off the loop ended - the results
-        /// that let the holds before it go were read meanwhile: <paramref name="Hold"/> where it was taken, <paramref name="Fault"/>
-        /// where the lock could not be taken, neither where the take was withdrawn first.
-        /// </summary>
-        public sealed record TreeHeld(TreeTake Take, MachineWideHold? Hold, Exception? Fault) : Arrival;
 
         /// <summary>The stall bound of a message the launch had not taken, counted from when <paramref name="Taken"/> messages were taken.</summary>
         public sealed record Untaken(int Taken) : Arrival;
@@ -400,38 +325,6 @@ public sealed class ClaudeCodeClient(
 
         /// <summary>The bound a launch the person left reads on to its cut turn's result in passed.</summary>
         public sealed record LeaveBound : Arrival;
-
-        /// <summary>The bound a shell call's receipt is awaited in passed.</summary>
-        public sealed record ReceiptDue(string CallId) : Arrival;
-
-        /// <summary>The time to look again for the receipts a launch at its end awaits came.</summary>
-        public sealed record ReceiptsLookedFor : Arrival;
-    }
-
-    /// <summary>
-    /// One take of the main tree's lock a side-task's write or command waits on: the call it is for, its own token - linked to
-    /// the launch's, so the launch's end cancels it too - the asks of the call's permission that wait on it, and whether its
-    /// call stopped waiting for it. Read and written on the launch's loop alone.
-    /// </summary>
-    /// <param name="callId">The call whose permission waits on the take.</param>
-    /// <param name="token">Cancels the take's wait.</param>
-    private sealed class TreeTake(string callId, CancellationTokenSource token)
-    {
-        /// <summary>The call whose permission waits on the take.</summary>
-        public string CallId { get; } = callId;
-
-        /// <summary>Cancels the take's wait.</summary>
-        public CancellationTokenSource Token { get; } = token;
-
-        /// <summary>
-        /// The asks of the call's permission waiting on the take, each answered once it ends: the one that began it, and any
-        /// Claude Code asked again of the same call meanwhile - none of which begins a take of its own, for a second take
-        /// in this process would wait on the first's hold forever.
-        /// </summary>
-        public List<ClaudeLine.ControlRequest> Asks { get; } = [];
-
-        /// <summary>Whether the call stopped waiting for the take: every ask withdrawn, its result come, its turn ended or cut.</summary>
-        public bool Withdrawn { get; set; }
     }
 
     /// <summary>Where a launch stands with the handoff.</summary>
@@ -456,7 +349,8 @@ public sealed class ClaudeCodeClient(
         ClaudeUserSettings.Reading settings,
         Totals totals)
     {
-        // Every tool the launch has, as Claude Code names it: those --tools names, and those of the engine's tool server beside them.
+        // Every tool the launch has, as Claude Code names it: a side-task's own web tools --tools names, and those of the
+        // engine's tool server.
         private readonly IReadOnlyList<string> _given = [.. tools, .. served.Select(ClaudeCodeTools.ServedName)];
 
         // Each call of the engine's tool server running, by its request's id, and each the server answered, by the call's
@@ -466,7 +360,6 @@ public sealed class ClaudeCodeClient(
         private readonly List<Task> _calling = [];
         private readonly Dictionary<string, (string? File, bool Ran)> _servedFiles = new(StringComparer.Ordinal);
         private AgentToolServer? _server;
-        private Runtime.AgentToolRuntime? _servedBy;
         private CancellationToken _ending;
 
         private readonly Channel<Arrival> _arrivals = Channel.CreateUnbounded<Arrival>(new UnboundedChannelOptions { SingleReader = true });
@@ -483,25 +376,8 @@ public sealed class ClaudeCodeClient(
         // Every call of the engine's tool server run, by its id: each runs once.
         private readonly HashSet<string> _served = new(StringComparer.Ordinal);
 
-        // Each take of the main tree's lock a side-task's own write or command waits on, by each request that asked its
-        // permission and waits on it: the call it is for, and its own token, cancelled where every ask is withdrawn, the
-        // call's result comes, or its turn ends or is cut. Kept, and answered, on the loop alone: a take that ends for a
-        // call no longer waiting is let go at once, and nothing is sent.
-        private readonly Dictionary<string, TreeTake> _taking = new(StringComparer.Ordinal);
-
-        // Each of a side-task's own writes and commands that holds the main tree's lock, by its call id: taken where its
-        // permission was first asked - an ask of the call again allowed under the same hold - let go where its result
-        // comes and at the launch's end. Read and written on the loop alone.
-        private readonly Dictionary<string, MachineWideHold> _treeHeld = new(StringComparer.Ordinal);
-
-        // Where the launch hands its commands to the isolation: the directory each command's receipt is written in, Claude
-        // Code's own temporary directory, each shell call the engine allowed whose result has not come, with the receipt at
-        // its command's head and whether it runs in the background, and each call whose receipt is awaited - whether its
-        // result came, which says it ran.
-        private string? _receipts;
-        private string? _claudeTemp;
-        private readonly Dictionary<string, (string Tool, string Receipt, bool Background)> _receipted = new(StringComparer.Ordinal);
-        private readonly Dictionary<string, (string Tool, string Receipt, bool Ran)> _awaited = new(StringComparer.Ordinal);
+        // The launch's answer to the host's initialize request, whichever way it answered: what the wait for it waits on.
+        private readonly TaskCompletionSource<bool> _initializeAnswered = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         // Every call Claude Code refused by itself, by its id: each is told once, by its permission_denied line, its
         // result, or both.
@@ -563,49 +439,26 @@ public sealed class ClaudeCodeClient(
             var settings = Path.Combine(directory, ClaudeLaunch.SettingsFileName);
             var system = Path.Combine(directory, ClaudeLaunch.SystemFileName);
 
-            // Claude Code's own process apart from its commands - in the outer layer it hands each in from where the mechanism
-            // starts again inside one, else outside - every shell command it starts handed to the isolation through its shell
-            // prefix, the launch's isolation written where the handed command reads it; or, where the mechanism takes no
-            // command handed to it, the whole process inside.
-            IReadOnlyList<KeyValuePair<string, string>>? shell = null;
+            // The isolation Claude Code's own process runs inside, where it has one: the whole launch, or the outer layer of
+            // its own the mechanism gives it. Every command and file of the agent's is the tool runtime's, run under the
+            // isolation of the agent's commands, never Claude Code's.
             var whole = run.Isolation?.ClaudeCode;
 
-            if (HandedTo(run) is { } isolation)
+            if (whole is { Profile.Outer: true })
             {
-                var (self, leading) = client._self();
-                var prefix = ClaudeShell.PrefixOf(self, leading).Prefix!;
-                var isolationFile = Path.Combine(directory, ClaudeShell.FileName);
+                // Inside its outer layer Claude Code can make neither its own directory nor the file it keeps its state
+                // in, and it ends at once without them: where it has never run here, each is made as it would make it -
+                // the file holding no state yet.
+                var own = client.Transcripts(run);
+                files.CreateDirectory(own.ConfigDirectory);
 
-                // The receipts and Claude Code's own temporary directory stand in the step's directory, which no command
-                // writes: each command's receipt is written there before it is handed in, and Claude Code's own files kept
-                // from them.
-                _receipts = Path.Combine(directory, ClaudeShell.ReceiptsDirectoryName);
-                _claudeTemp = Path.Combine(directory, ClaudeShell.TempDirectoryName);
-                files.CreateDirectory(_receipts);
-                files.CreateDirectory(_claudeTemp);
-                shell = ClaudeShell.Variables(prefix, isolationFile, _claudeTemp);
-                files.WriteAllTextAtomic(isolationFile, IsolatedShell.Written(isolation, new IsolatedShellHanding(_receipts, _claudeTemp) { Variables = [.. shell.Select(variable => variable.Key)] }));
-
-                if (whole is { Profile.Outer: true })
+                if (!files.FileExists(own.StateFile) && !files.DirectoryExists(own.StateFile))
                 {
-                    // Inside its outer layer Claude Code can make neither its own directory nor the file it keeps its state
-                    // in, and it ends at once without them: where it has never run here, each is made as it would make it -
-                    // the file holding no state yet.
-                    var own = client.Transcripts(run);
-                    files.CreateDirectory(own.ConfigDirectory);
-
-                    if (!files.FileExists(own.StateFile) && !files.DirectoryExists(own.StateFile))
-                    {
-                        files.WriteAllTextAtomic(own.StateFile, "{}\n");
-                    }
-                }
-                else if (run.Isolation?.ClaudeCodeOutside is { } outside)
-                {
-                    await Emit(new Notice($"Claude Code's own process runs outside the isolation, for {outside}: each shell command it starts is handed into the isolation through its shell prefix, and one it ran without would run outside with the user's rights, its missing receipt showing it only once it had run")).ConfigureAwait(false);
+                    files.WriteAllTextAtomic(own.StateFile, "{}\n");
                 }
             }
 
-            files.WriteAllTextAtomic(settings, ClaudeSettings.Render(_given, run.Ground!, run.Commands, client._platform.PathComparison, isolated: shell is not null || whole is not null, shell));
+            files.WriteAllTextAtomic(settings, ClaudeSettings.Render(_given, run.Ground!, client._platform.PathComparison, isolated: whole is not null));
             files.WriteAllTextAtomic(system, run.Mask.Redact(run.SystemPrompt));
 
             // The engine's tool server, named where the launch takes its tools and nowhere else.
@@ -627,8 +480,8 @@ public sealed class ClaudeCodeClient(
             using var runtime = served.Count > 0 ? client._tools!.Serve(run, events, records, served) : null;
             using var stderr = AppendLog.Open(files, Path.Combine(directory, ClaudeLaunch.ErrorFileName));
             using var ending = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            using var answering = CancellationTokenSource.CreateLinkedTokenSource(ending.Token);
             _server = runtime is null ? null : new AgentToolServer(runtime);
-            _servedBy = runtime;
             _ending = ending.Token;
 
             var request = new ProcessRequest
@@ -636,7 +489,7 @@ public sealed class ClaudeCodeClient(
                 FileName = program,
                 Arguments = ClaudeLaunch.Arguments(run, model, _session, tools, roots, settings, system, mcp),
                 WorkingDirectory = working,
-                Environment = Handed(ClaudeLaunch.Environment(run, key, client._environment().Keys), shell),
+                Environment = ClaudeLaunch.Environment(run, key, client._environment().Keys),
                 StandardInput = ChildInput.WrittenBy((stream, exited) => Pump(_input.Reader, stream, exited)),
                 OnOutputLine = line => _arrivals.Writer.TryWrite(new Arrival.Line(line)),
                 OutputKept = StreamKept.TailOfWholeLines,
@@ -678,11 +531,21 @@ public sealed class ClaudeCodeClient(
                 TaskContinuationOptions.OnlyOnRanToCompletion | TaskContinuationOptions.ExecuteSynchronously,
                 TaskScheduler.Default);
             var posting = PostAsync(ending.Token);
-            After(InitializeBound, new Arrival.Uninitialized());
+
+            // The launch's answer to the host's initialize request is waited on for as long as it takes - a first start
+            // that fills Claude Code's own caches, a slow disk, a proxy on its way - told while it does not come, as every
+            // wait of the harness is, and ended by the step's own time and its stop alone: never a time of the client's own.
+            var initializing = Waits.ForAsync(
+                token => _initializeAnswered.Task.WaitAsync(token),
+                new WaitWatch($"{Claude} to answer the host's initialize request", Tell, Bound: null, client._clock),
+                answering.Token);
 
             try
             {
-                var outcome = await HeldToTheirReceiptsAsync(await LoopAsync(ending.Token).ConfigureAwait(false), ending.Token).ConfigureAwait(false);
+                var outcome = await LoopAsync(ending.Token).ConfigureAwait(false);
+
+                // The loop has its outcome: nothing is waited on for the launch's initialize any more.
+                await answering.CancelAsync().ConfigureAwait(false);
 
                 if (outcome.Result.Handoff is { } handoff)
                 {
@@ -699,7 +562,7 @@ public sealed class ClaudeCodeClient(
                     await ending.CancelAsync().ConfigureAwait(false);
                 }
 
-                await EndAsync(process).ConfigureAwait(false);
+                await EndAsync(process, ending.Token).ConfigureAwait(false);
 
                 // A chat's run says how many of the messages it was given are settled, from its own count of what each
                 // turn took and what each interrupt dropped, so the chat sends again what no turn answered; and every run
@@ -715,36 +578,17 @@ public sealed class ClaudeCodeClient(
             }
             finally
             {
-                // A launch still running is ended whole here, however the loop ended: past the bound its input's close
-                // gave it where the loop came to its outcome, at once where a fault or the hard stop ended the loop.
+                // A launch still running is ended whole here, however the loop ended: one whose outcome came has ended by
+                // itself once its input was closed, or was ended at once; a fault or the hard stop ends it now.
                 _input.Writer.TryComplete();
                 await ending.CancelAsync().ConfigureAwait(false);
                 await Quietly(posting).ConfigureAwait(false);
+                await Quietly(initializing).ConfigureAwait(false);
 
                 // The calls of the engine's tool server still running end with the launch, before its records close: what
-                // they asked of the web and were refused is the run's, as on every client. The takes of the tree's lock end
-                // with it too, the launch's token theirs: each said how it ended as an arrival, and none is thrown here.
+                // they asked of the web and were refused is the run's, as on every client. Each said how it ended as an
+                // arrival, and none is thrown here.
                 await Ended(Task.WhenAll(_calling)).ConfigureAwait(false);
-
-                // The tree's locks the launch still holds - calls whose results never came, and a take whose arrival the
-                // loop never read - go with it, once nothing is left that could still take one.
-                while (_arrivals.Reader.TryRead(out var unread))
-                {
-                    if (unread is Arrival.TreeHeld left)
-                    {
-                        Unanswered(left);
-                    }
-                }
-
-                foreach (var take in _taking.Values.Distinct())
-                {
-                    take.Token.Dispose();
-                }
-
-                foreach (var heldTree in _treeHeld.Values)
-                {
-                    heldTree.Dispose();
-                }
 
                 if (runtime is not null)
                 {
@@ -756,29 +600,14 @@ public sealed class ClaudeCodeClient(
                 try
                 {
                     // However the launch ended - its outcome, a fault of the loop's, the hard stop - what its end left is
-                    // said once it has gone: what its container could not reach, a shell call it ended at once with no
-                    // receipt of, and a session file it kept all the same.
+                    // said once it has gone: what its container could not reach, and a session file it kept all the same.
                     await EndedAsync(process).ConfigureAwait(false);
-                    await SayUnreceiptedAsync().ConfigureAwait(false);
                     await RemoveSessionFileAsync().ConfigureAwait(false);
                 }
                 catch (OperationCanceledException)
                 {
                     // The run stopped with no room left in its record: what is left to say reaches nothing, and how the
                     // launch ended stands as it is.
-                }
-
-                // Claude Code's own temporary directory goes once the launch has gone: nothing in it is a record.
-                if (_claudeTemp is not null)
-                {
-                    try
-                    {
-                        files.DeleteDirectory(_claudeTemp);
-                    }
-                    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-                    {
-                        // Left in the step's directory, which no command writes.
-                    }
                 }
             }
         }
@@ -801,19 +630,15 @@ public sealed class ClaudeCodeClient(
                     Arrival.HandoffAsked asked => await OnHandoffAskedAsync(asked.Asked).ConfigureAwait(false),
                     Arrival.Posted posted => await OnPostedAsync(posted.Text).ConfigureAwait(false),
                     Arrival.Bound bound => Bounded(bound),
-                    Arrival.Uninitialized => _initialized
-                        ? null
-                        : NotHost($"{Claude} did not answer the host's initialize request within {InitializeBound.TotalSeconds:0} s: this tool runs Claude Code only as its host"),
+                    Arrival.Told told => await SaidAsync(told).ConfigureAwait(false),
                     Arrival.Untaken untaken => untaken.Taken == _taken && _pending.Count > 0 && !_inTurn
                         ? Ends(Failed(AgentRunStatus.Stalled, $"Claude Code did not take the engine's message within {run.Limits.StallSeconds} s ({Claude})"), killNow: true)
                         : null,
                     Arrival.Served answered => OnServed(answered),
                     Arrival.ServeFailed failed => OnServeFailed(failed),
-                    Arrival.TreeHeld held => await OnTreeHeldAsync(held).ConfigureAwait(false),
                     Arrival.ChatEnded => ChatEnded(),
                     Arrival.TurnInterrupted => await OnTurnInterruptedAsync().ConfigureAwait(false),
                     Arrival.LeaveBound => _leaving ? Left(withItsLastTurn: false) : null,
-                    Arrival.ReceiptDue due => OnReceiptDue(due),
                     _ => null,
                 };
 
@@ -869,20 +694,8 @@ public sealed class ClaudeCodeClient(
                     return await OnControlResponseAsync(answered).ConfigureAwait(false);
 
                 case ClaudeLine.ControlCancel cancelled:
+                    // An ask withdrawn wants no answer: the engine answers each ask as it reads it, so none waits to be.
                     Record(cancelled.Node);
-
-                    // An ask withdrawn wants no answer: a take of the tree's lock it waits on waits for it no more, and is
-                    // withdrawn where no other ask of its call waits on it.
-                    if (_taking.Remove(cancelled.RequestId, out var withdrawn))
-                    {
-                        withdrawn.Asks.RemoveAll(ask => ask.RequestId == cancelled.RequestId);
-
-                        if (withdrawn.Asks.Count == 0)
-                        {
-                            Withdraw(withdrawn);
-                        }
-                    }
-
                     return null;
 
                 case ClaudeLine.Refusal refusal:
@@ -1008,20 +821,9 @@ public sealed class ClaudeCodeClient(
 
             foreach (var result in user.Results)
             {
-                // A call whose result came waits for no take of the tree's lock: one still waiting is withdrawn.
-                WithdrawAll(take => take.CallId == result.CallId);
-
                 if (!_calls.Remove(result.CallId, out var call))
                 {
                     continue;
-                }
-
-                // Its result come, the call is done writing or running - a side-task's command never runs in the background
-                // nor leaves a process behind it (MainTreeWriteLock.InBackground, MainTreeWriteLock.LeftBehind) - so the tree's
-                // lock it held goes with it.
-                if (_treeHeld.Remove(result.CallId, out var heldTree))
-                {
-                    heldTree.Dispose();
                 }
 
                 totals.Worked = true;
@@ -1036,19 +838,17 @@ public sealed class ClaudeCodeClient(
 
                 await Emit(new ToolCallFinished(result.CallId, result.Ok, client._clock.GetElapsedTime(call.Started), call.Input, content, file, result.Ran && (!served || kept.Ran))).ConfigureAwait(false);
 
-                // A file tool's call Claude Code's own deny rules refused as it read the call - never asked of the engine - is
-                // told by its result alone: it is Claude Code's refusal as one its permission_denied line tells.
+                // A call Claude Code's own deny rules refused as it read the call - never asked of the engine - is told by its
+                // result alone: it is Claude Code's refusal as one its permission_denied line tells.
                 if (result.RefusedByRule && await RefusedByItselfAsync(call.Tool, result.CallId, result.Content, (call.Tool, call.Asked)).ConfigureAwait(false) is { } refused)
                 {
                     return refused;
                 }
 
                 // Every call that ran is one the engine was asked about and allowed: one that was not ends the launch at
-                // once, its result told above, since the launch has done what nothing decided. One Claude Code says did not
-                // run is held to no receipt.
+                // once, its result told above, since the launch has done what nothing decided.
                 if (!result.Ran)
                 {
-                    _receipted.Remove(result.CallId);
                     continue;
                 }
 
@@ -1063,40 +863,10 @@ public sealed class ClaudeCodeClient(
                 {
                     return new LaunchOutcome(Failed(AgentRunStatus.Failed, $"Claude Code ran '{call.Tool}' though the engine refused it ({Claude})"), KillNow: true);
                 }
-
-                if (HeldToItsReceipt(result.CallId, call.Tool) is { } unreceipted)
-                {
-                    return unreceipted;
-                }
-
-                // A write of Claude Code's own that did what it was asked, and a command that ran however it ended, is
-                // followed as the runtime's own are: the run's graph synced by it, and a side-task's edit of config.json
-                // said where a run is live.
-                if (Written(call.Tool, call.Asked, result.Ok) is { } written)
-                {
-                    await AfterWrites.FollowAsync(run, written, events, client._platform.PathComparison).ConfigureAwait(false);
-                }
             }
 
             return null;
         }
-
-        /// <summary>
-        /// What a call of Claude Code's own wrote, as what follows a write reads it: the file a file tool's input names, made
-        /// absolute against the agent's working directory, where it did what it was asked; a command, which may have written
-        /// anything, however it ended; null for a call that writes nothing.
-        /// </summary>
-        /// <param name="tool">The tool, as Claude Code names it.</param>
-        /// <param name="input">The call's input, as the model wrote it.</param>
-        /// <param name="ok">Whether its result says it did what it was asked.</param>
-        private AgentGraphWrite? Written(string tool, JsonNode? input, bool ok)
-            => ClaudeCodeTools.Find(tool) switch
-            {
-                { Capability: AgentCapability.Run } => AgentGraphWrite.Command(tool),
-                { Capability: AgentCapability.Write } when ok && ClaudeToolDecider.SubjectOf(tool, input, run.Workspace.WorkingDirectory) is { } subject
-                    => AgentGraphWrite.Of(tool, Path.GetFullPath(Path.Combine(run.Workspace.WorkingDirectory, subject))),
-                _ => null,
-            };
 
         private async Task OnPieceAsync(ClaudeLine.Piece piece)
         {
@@ -1166,7 +936,7 @@ public sealed class ClaudeCodeClient(
             foreach (var call in assistant.Calls.Where(call => call.Tool != ClaudeCodeTools.StructuredOutput))
             {
                 await StartedAsync(call.Id, call.Tool).ConfigureAwait(false);
-                _calls[call.Id] = (call.Tool, Masked(call.Input?.ToJsonString() ?? "{}"), call.Input, _calls.TryGetValue(call.Id, out var known) ? known.Started : client._clock.GetTimestamp());
+                _calls[call.Id] = (call.Tool, Masked(call.Input?.ToJsonString(ClaudeLine.Written) ?? "{}"), call.Input, _calls.TryGetValue(call.Id, out var known) ? known.Started : client._clock.GetTimestamp());
             }
 
             var calls = assistant.Calls.Where(call => call.Tool != ClaudeCodeTools.StructuredOutput).ToList();
@@ -1213,7 +983,7 @@ public sealed class ClaudeCodeClient(
             }
 
             var tool = asked.Tool ?? string.Empty;
-            var answer = await DecideAsync(tool, asked.Input).ConfigureAwait(false);
+            var answer = Decide(tool, asked.Input);
 
             Asked(asked.CallId, tool, answer is AgentPolicyAnswer.Allowed);
 
@@ -1223,68 +993,9 @@ public sealed class ClaudeCodeClient(
                 return null;
             }
 
-            // A side-task's own write or command holds the main tree's lock for its duration, as the engine's folds and
-            // commits do: the lock is taken off the loop and the permission answered on the loop once it is held, so the
-            // launch's stream goes on reading the results that let the holds before this one go - and an ask withdrawn
-            // meanwhile - while the lock is waited for. A tool of the engine's server takes it where the runtime runs it.
-            if (run.Ground is { SideTask: true }
-                && ClaudeCodeTools.ServedAs(tool) is null
-                && ClaudeCodeTools.Find(tool) is { Capability: AgentCapability.Write or AgentCapability.Run }
-                && asked.CallId is { Length: > 0 } callId)
-            {
-                if (_taking.ContainsKey(asked.RequestId))
-                {
-                    Control(Error(asked.RequestId, $"this host is answering the request '{asked.RequestId}' already"));
-                    return null;
-                }
-
-                // A call is held once, by one thread of this process: an ask of a call already held is allowed under that
-                // hold, and one of a call whose take still waits waits on that take - a second take would wait on the first's
-                // hold, which goes only with the call's result, forever.
-                if (_treeHeld.ContainsKey(callId))
-                {
-                    Control(Answer(asked.RequestId, new JsonObject { ["behavior"] = "allow", ["updatedInput"] = Receipted(asked.CallId, tool, asked.Input) }));
-                    return null;
-                }
-
-                if (_taking.Values.FirstOrDefault(waiting => waiting.CallId == callId && !waiting.Withdrawn) is { } waiting)
-                {
-                    waiting.Asks.Add(asked);
-                    _taking.Add(asked.RequestId, waiting);
-                    return null;
-                }
-
-                var taking = new TreeTake(callId, CancellationTokenSource.CreateLinkedTokenSource(_ending));
-                taking.Asks.Add(asked);
-                _taking.Add(asked.RequestId, taking);
-
-                var take = client.TreeLock;
-                var main = run.Workspace.MainCheckout;
-
-                _calling.Add(Task.Run(async () =>
-                {
-                    Arrival.TreeHeld ended;
-
-                    try
-                    {
-                        ended = new(taking, await take(main, taking.Token.Token).ConfigureAwait(false), null);
-                    }
-                    catch (OperationCanceledException)
-                    {
-                        ended = new(taking, null, null);
-                    }
-                    catch (Exception ex)
-                    {
-                        ended = new(taking, null, ex);
-                    }
-
-                    _arrivals.Writer.TryWrite(ended);
-                }));
-
-                return null;
-            }
-
-            Control(Answer(asked.RequestId, new JsonObject { ["behavior"] = "allow", ["updatedInput"] = Receipted(asked.CallId, tool, asked.Input) }));
+            // Allowed as asked: what the call does - a side-task's write or command holding the main tree's lock among it -
+            // is the tool runtime's, as it runs the call.
+            Control(Answer(asked.RequestId, new JsonObject { ["behavior"] = "allow", ["updatedInput"] = asked.Input?.DeepClone() ?? new JsonObject() }));
             return null;
         }
 
@@ -1296,257 +1007,9 @@ public sealed class ClaudeCodeClient(
         {
             var tool = asked.Tool ?? string.Empty;
             totals.Denials++;
-            var subject = ClaudeToolDecider.SubjectOf(tool, asked.Input, run.Workspace.WorkingDirectory) ?? asked.Input?.ToJsonString() ?? string.Empty;
+            var subject = ClaudeToolDecider.SubjectOf(tool, asked.Input, run.Workspace.WorkingDirectory) ?? asked.Input?.ToJsonString(ClaudeLine.Written) ?? string.Empty;
             Control(Answer(asked.RequestId, new JsonObject { ["behavior"] = "deny", ["message"] = Masked(denied.Reason) }));
             await _records!.DeniedAsync(tool, subject, denied).ConfigureAwait(false);
-        }
-
-        /// <summary>
-        /// The take of the tree's lock a side-task's own write or command waited on ended. Held, for a call still waiting:
-        /// each ask of its permission waiting on the take is answered now, and where it waited, the chat says so as the
-        /// engine's step records say the same of theirs. Not taken - the lock could not be opened - for a call still waiting:
-        /// each ask is denied with the lock's own refusal (<see cref="MainTreeWriteLock.Refusal"/>), recorded as every denial
-        /// is. For a call no longer waiting - every ask withdrawn, its result come, its turn ended or cut - the hold is let go
-        /// at once, and nothing is sent.
-        /// </summary>
-        private async Task<LaunchOutcome?> OnTreeHeldAsync(Arrival.TreeHeld held)
-        {
-            var take = held.Take;
-            Forget(take);
-
-            if (take.Withdrawn || take.Asks.Count == 0)
-            {
-                held.Hold?.Dispose();
-                return null;
-            }
-
-            if (held.Fault is { } fault)
-            {
-                foreach (var ask in take.Asks)
-                {
-                    Asked(take.CallId, ask.Tool ?? string.Empty, allowed: false);
-                    await DenyAsync(ask, MainTreeWriteLock.Refusal(fault)).ConfigureAwait(false);
-                }
-
-                return null;
-            }
-
-            if (held.Hold is not { } hold)
-            {
-                return null;
-            }
-
-            _treeHeld.Add(take.CallId, hold);
-
-            if (MainTreeWriteLock.WaitedNotice(hold.Waited) is { } waited)
-            {
-                await Emit(new Notice(waited)).ConfigureAwait(false);
-            }
-
-            foreach (var ask in take.Asks)
-            {
-                Control(Answer(ask.RequestId, new JsonObject
-                {
-                    ["behavior"] = "allow",
-                    ["updatedInput"] = Receipted(ask.CallId, ask.Tool ?? string.Empty, ask.Input),
-                }));
-            }
-
-            return null;
-        }
-
-        /// <summary>The take <paramref name="take"/> ended: no ask waits on it any more, and its token, its task ended, is let go.</summary>
-        private void Forget(TreeTake take)
-        {
-            foreach (var ask in take.Asks)
-            {
-                _taking.Remove(ask.RequestId);
-            }
-
-            take.Token.Dispose();
-        }
-
-        /// <summary>The take <paramref name="take"/> withdrawn: its call waits for it no more, and its wait is cancelled.</summary>
-        private static void Withdraw(TreeTake take)
-        {
-            if (!take.Withdrawn)
-            {
-                take.Withdrawn = true;
-                take.Token.Cancel();
-            }
-        }
-
-        /// <summary>Withdraws every take of the tree's lock still waiting that <paramref name="which"/> names.</summary>
-        private void WithdrawAll(Func<TreeTake, bool> which)
-        {
-            foreach (var take in _taking.Values.Where(which).Distinct())
-            {
-                Withdraw(take);
-            }
-        }
-
-        /// <summary>
-        /// A take of the tree's lock that ended where no call can be answered any more - the launch ending: what it holds is
-        /// let go at once, and nothing is sent.
-        /// </summary>
-        private void Unanswered(Arrival.TreeHeld held)
-        {
-            held.Hold?.Dispose();
-            Forget(held.Take);
-        }
-
-        /// <summary>
-        /// The input an allowed call is given back to run with: as asked, but a shell command of a launch that hands its
-        /// commands to the isolation, which is given back with a new receipt at its head (<see cref="IsolatedShell.Marked"/>)
-        /// - the receipt the isolated shell writes before it runs the command, and the call's result is held to.
-        /// </summary>
-        private JsonNode Receipted(string? callId, string tool, JsonNode? input)
-        {
-            var given = input?.DeepClone() ?? new JsonObject();
-
-            if (_receipts is not null
-                && callId is not null
-                && ClaudeCodeTools.Find(tool) is { Capability: AgentCapability.Run } row
-                && given is JsonObject holding
-                && holding[row.Tool.Subject] is JsonValue value
-                && value.TryGetValue<string>(out var command))
-            {
-                var receipt = IsolatedShell.NewReceipt();
-                holding[row.Tool.Subject] = IsolatedShell.Marked(command, receipt);
-                _receipted[callId] = (tool, receipt, holding[BackgroundMember] is JsonValue background && background.TryGetValue<bool>(out var behind) && behind);
-            }
-
-            return given;
-        }
-
-        /// <summary>
-        /// Holds a shell call that ran to the receipt of its command: none written means the command ran without being handed
-        /// to the isolation - a Claude Code that skips its shell prefix - and ends the launch at once. A call run in the
-        /// background comes back before its command is handed over, so its receipt is awaited for <see cref="ReceiptBound"/>,
-        /// however the launch goes on meanwhile (<see cref="HeldToTheirReceiptsAsync"/>).
-        /// </summary>
-        private LaunchOutcome? HeldToItsReceipt(string callId, string tool)
-        {
-            if (!_receipted.Remove(callId, out var receipted) || Receipted(receipted.Receipt))
-            {
-                return null;
-            }
-
-            if (!receipted.Background)
-            {
-                return Unreceipted(tool, callId, ran: true);
-            }
-
-            _awaited[callId] = (tool, receipted.Receipt, Ran: true);
-            After(ReceiptBound, new Arrival.ReceiptDue(callId));
-
-            return null;
-        }
-
-        /// <summary>A call's receipt awaited past its bound: there by now, or the launch ends.</summary>
-        private LaunchOutcome? OnReceiptDue(Arrival.ReceiptDue due)
-            => _awaited.Remove(due.CallId, out var awaited) && !Receipted(awaited.Receipt)
-                ? Unreceipted(awaited.Tool, due.CallId, awaited.Ran)
-                : null;
-
-        /// <summary>Whether the receipt <paramref name="receipt"/> was written in the launch's receipts' directory.</summary>
-        private bool Receipted(string receipt) => client._fileSystem.FileExists(Path.Combine(_receipts!, receipt));
-
-        /// <summary>
-        /// A shell call whose command left no receipt: the launch ends at once, failed, saying so - a call whose result came
-        /// back ran unhanded; one whose result never came, if it ran.
-        /// </summary>
-        private LaunchOutcome Unreceipted(string tool, string callId, bool ran)
-            => new(
-                Failed(
-                    AgentRunStatus.Failed,
-                    ran
-                        ? $"Claude Code ran the command of its '{tool}' call {callId} with no receipt of it in '{_receipts}': it was not handed to the isolation through Claude Code's shell prefix, so it ran outside its commands' isolation, where Claude Code's own process runs ({Claude})"
-                        : $"Claude Code was allowed its '{tool}' call {callId}, and the launch ended with no result of it and no receipt of its command in '{_receipts}': if it ran, it was not handed to the isolation through Claude Code's shell prefix, so it ran outside its commands' isolation, where Claude Code's own process runs ({Claude})"),
-                KillNow: true);
-
-        /// <summary>
-        /// Holds a launch at its end to the receipt of every shell call the engine allowed that has none yet - one run in the
-        /// background whose command was still being handed over, and one whose result never came - however the loop ended (a
-        /// turn's result, Claude Code gone, its output cut), before anything of the launch is ended, so a command still being
-        /// handed over writes its receipt: each is looked for again until it is there or its bound has passed
-        /// (<see cref="ReceiptBound"/>), and one missing then ends the launch failed in place of the ending it had. An ending
-        /// that ends the launch at once leaves nothing to wait for: what is missing then is said once the launch has
-        /// gone (<see cref="SayUnreceiptedAsync"/>).
-        /// </summary>
-        private async Task<LaunchOutcome> HeldToTheirReceiptsAsync(LaunchOutcome outcome, CancellationToken cancellationToken)
-        {
-            if (outcome.KillNow || _receipts is null)
-            {
-                return outcome;
-            }
-
-            foreach (var (callId, receipted) in _receipted)
-            {
-                _awaited[callId] = (receipted.Tool, receipted.Receipt, Ran: false);
-                After(ReceiptBound, new Arrival.ReceiptDue(callId));
-            }
-
-            _receipted.Clear();
-            var looking = false;
-
-            while (true)
-            {
-                foreach (var callId in _awaited.Where(entry => Receipted(entry.Value.Receipt)).Select(entry => entry.Key).ToList())
-                {
-                    _awaited.Remove(callId);
-                }
-
-                if (_awaited.Count == 0)
-                {
-                    return outcome;
-                }
-
-                if (!looking)
-                {
-                    looking = true;
-                    After(ReceiptLookAgain, new Arrival.ReceiptsLookedFor());
-                }
-
-                switch (await _arrivals.Reader.ReadAsync(cancellationToken).ConfigureAwait(false))
-                {
-                    case Arrival.ReceiptDue due when OnReceiptDue(due) is { } unreceipted:
-                        _withItsLastTurn = false;
-                        return unreceipted;
-
-                    case Arrival.ReceiptsLookedFor:
-                        looking = false;
-                        break;
-
-                    // The launch has its outcome: a take of the tree's lock that ends now answers no call.
-                    case Arrival.TreeHeld held:
-                        Unanswered(held);
-                        break;
-                }
-            }
-        }
-
-        /// <summary>
-        /// Says, once the launch has gone, each shell call the engine allowed whose command left no receipt and that nothing
-        /// waited for - the launch was ended at once, or stopped: how it ended stands, and whether the command ran outside its
-        /// commands' isolation cannot be told.
-        /// </summary>
-        private async Task SayUnreceiptedAsync()
-        {
-            if (_receipts is null)
-            {
-                return;
-            }
-
-            var unreceipted = _receipted.Select(entry => (CallId: entry.Key, entry.Value.Tool, entry.Value.Receipt))
-                .Concat(_awaited.Select(entry => (CallId: entry.Key, entry.Value.Tool, entry.Value.Receipt)))
-                .Where(call => !Receipted(call.Receipt))
-                .ToList();
-
-            foreach (var (callId, tool, _) in unreceipted)
-            {
-                await Emit(new Notice($"The launch ended at once with no receipt in '{_receipts}' of the command of Claude Code's '{tool}' call {callId}: if it ran, it was not handed to the isolation through Claude Code's shell prefix, and ran outside its commands' isolation")).ConfigureAwait(false);
-            }
         }
 
         /// <summary>
@@ -1670,16 +1133,13 @@ public sealed class ClaudeCodeClient(
         /// <summary>
         /// The engine's answer to a call of <paramref name="tool"/>: its policy's, or, in the handoff turn, that turn's
         /// refusal. A fault of the engine's own while deciding is a denial too, by <see cref="AgentPolicy.UndecidedRule"/> - recorded as
-        /// every denial is, and never a failure that escapes - for nothing runs that was not decided. A side-task's shell
-        /// command asked to run in the background is refused (<see cref="MainTreeWriteLock.InBackground"/>): its command holds the main
-        /// tree's lock for its duration, and a command in the background comes back before it ends, its end never seen - as
-        /// the side-task's policy refuses one that leaves a process behind it by its words (<see cref="MainTreeWriteLock.LeftBehind"/>). A
-        /// whole read of a file the graph holds parsed is narrowed here too (<c>graphReads: narrow</c>), by the same owner
-        /// that narrows <c>view_file</c> on the APIs, its denial and its two escapes recorded as the graph's own lines.
+        /// every denial is, and never a failure that escapes - for nothing runs that was not decided. A call of the engine's
+        /// tool server is allowed as asked: what it does, each thing decided as it does it, is the tool runtime's - a whole
+        /// read narrowed (<c>graphReads: narrow</c>), a side-task's command that would leave a process behind it refused.
         /// </summary>
         /// <param name="tool">The tool, as Claude Code names it.</param>
         /// <param name="input">The call's input, as asked.</param>
-        private async Task<AgentPolicyAnswer> DecideAsync(string tool, JsonNode? input)
+        private AgentPolicyAnswer Decide(string tool, JsonNode? input)
         {
             if (_handing != Handing.No)
             {
@@ -1688,27 +1148,7 @@ public sealed class ClaudeCodeClient(
 
             try
             {
-                var decided = ClaudeToolDecider.Decide(policy, _given, tool, input, run.Workspace.WorkingDirectory);
-
-                if (decided is not AgentPolicyAnswer.Allowed || input is not JsonObject holding)
-                {
-                    return decided;
-                }
-
-                if (run.Ground is { SideTask: true }
-                    && ClaudeCodeTools.Find(tool) is { Capability: AgentCapability.Run }
-                    && holding[BackgroundMember] is JsonValue background && background.TryGetValue<bool>(out var behind) && behind)
-                {
-                    return MainTreeWriteLock.InBackground;
-                }
-
-                return tool == ClaudeCodeTools.Read
-                    && holding["offset"] is null && holding["limit"] is null
-                    && holding["file_path"] is JsonValue named && named.TryGetValue<string>(out var path) && path.Length > 0
-                    && _servedBy is { } served
-                    && await served.NarrowedReadAsync(path, _ending).ConfigureAwait(false) is { } narrowed
-                    ? narrowed
-                    : decided;
+                return ClaudeToolDecider.Decide(policy, _given, tool, input, run.Workspace.WorkingDirectory);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -1763,7 +1203,7 @@ public sealed class ClaudeCodeClient(
             }
 
             // What the engine cannot decide it would not have allowed: such a call is a denial, as its refusal said.
-            return await DecideAsync(made.Tool, made.Asked).ConfigureAwait(false) is AgentPolicyAnswer.Allowed
+            return Decide(made.Tool, made.Asked) is AgentPolicyAnswer.Allowed
                 ? NotHost($"Claude Code refused '{made.Tool}' without asking the engine, which allows it ({Claude}): {message}; this tool runs Claude Code only as its host")
                 : null;
         }
@@ -1794,6 +1234,7 @@ public sealed class ClaudeCodeClient(
             if (answered.RequestId == InitializeId)
             {
                 _initialized = answered.Succeeded;
+                _initializeAnswered.TrySetResult(answered.Succeeded);
 
                 if (!answered.Succeeded)
                 {
@@ -1818,9 +1259,6 @@ public sealed class ClaudeCodeClient(
                     await Emit(new Notice($"Claude Code refused the turn's interrupt: {Masked(answered.Error ?? "no reason given")}")).ConfigureAwait(false);
                     return null;
                 }
-
-                // The turn it cut asks nothing more: a take of the tree's lock one of its calls waits on is withdrawn.
-                WithdrawAll(_ => true);
 
                 // The receipt names each waiting message the interrupt dropped, by the id the engine gave it: no turn
                 // takes them, and the person is told, for each was theirs. The turn it cuts ends by itself, and the
@@ -1857,7 +1295,6 @@ public sealed class ClaudeCodeClient(
                 if (answered.Succeeded)
                 {
                     _pending.RemoveAll(id => answered.Cancelled?.Contains(id, StringComparer.Ordinal) == true);
-                    WithdrawAll(_ => true);
                 }
 
                 return Leaving();
@@ -1874,7 +1311,6 @@ public sealed class ClaudeCodeClient(
             }
 
             _interruptId = null;
-            WithdrawAll(_ => true);
 
             // The receipt names each waiting message the interrupt dropped, by the id the engine gave it: no turn takes
             // them. One Claude Code had taken for its next turn already is not named, and that turn runs - cut - first.
@@ -1898,9 +1334,6 @@ public sealed class ClaudeCodeClient(
         private async Task<LaunchOutcome?> OnTurnEndedAsync(ClaudeLine.Result result)
         {
             _inTurn = false;
-
-            // A turn that ended asks nothing more: a take of the tree's lock one of its calls still waits on is withdrawn.
-            WithdrawAll(_ => true);
             await ActedAsync().ConfigureAwait(false);
             var served = _held ?? model;
 
@@ -2232,11 +1665,21 @@ public sealed class ClaudeCodeClient(
             Write(message);
         }
 
-        private void Write(JsonObject message) => _input.Writer.TryWrite(message.ToJsonString());
+        private void Write(JsonObject message) => _input.Writer.TryWrite(message.ToJsonString(ClaudeLine.Written));
 
-        private void Record(JsonNode message) => _control?.Append(Masked(message.ToJsonString()));
+        private void Record(JsonNode message) => _control?.Append(Masked(message.ToJsonString(ClaudeLine.Written)));
 
         private ValueTask Emit(AgentEvent @event) => events.EmitAsync(@event);
+
+        /// <summary>Hands the loop where a wait of the launch's stands, to be said as it reads it.</summary>
+        private void Tell(WaitTold told) => _arrivals.Writer.TryWrite(new Arrival.Told(told.Line()));
+
+        /// <summary>Says where a wait of the launch's stands, as a notice of the step's: the launch goes on.</summary>
+        private async Task<LaunchOutcome?> SaidAsync(Arrival.Told told)
+        {
+            await Emit(new Notice(Masked(told.Said))).ConfigureAwait(false);
+            return null;
+        }
 
         /// <summary>
         /// The run did something that stands - a call ran, or a turn ended - so it never ends NotStarted from here
@@ -2360,13 +1803,42 @@ public sealed class ClaudeCodeClient(
         }
 
         /// <summary>
-        /// Closes the launch's input and gives it the bound to end in by itself: one still running once the bound has
-        /// passed is ended whole as the launch's run ends.
+        /// Closes the launch's input and waits for the launch to end by itself, its own exit awaited - never looked for
+        /// again - for as long as it takes, told while it lasts as every wait of the harness is: what Claude Code writes
+        /// and flushes as it ends is its own to finish. The step's own time, its stop, or an ending that ends the launch at
+        /// once (<paramref name="cancellationToken"/>, which the launch's process was started with) ends it whole, at once.
         /// </summary>
-        private async Task EndAsync(Task<ProcessResult> process)
+        /// <param name="process">The launch's process.</param>
+        /// <param name="cancellationToken">The launch's own token: cancelled, the process is ended whole.</param>
+        private async Task EndAsync(Task<ProcessResult> process, CancellationToken cancellationToken)
         {
             _input.Writer.TryComplete();
-            await Task.WhenAny(process, Task.Delay(EndBound, client._clock)).ConfigureAwait(false);
+
+            // A launch that has ended already - the loop read its end - has nothing to wait for; else its end reaches the
+            // loop's arrivals still, as it does whenever it comes.
+            if (process.IsCompleted)
+            {
+                return;
+            }
+
+            var exited = process.ContinueWith(_ => true, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+            var waiting = Waits.ForAsync(
+                token => exited.WaitAsync(token),
+                new WaitWatch($"{Claude} to end once its input was closed", Tell, Bound: null, client._clock),
+                cancellationToken);
+
+            // The arrivals are read on until the launch's end, which comes once it exits or is ended: what its wait tells is
+            // said as it is told, and the rest - the lines it writes after its outcome among them - passed by, for the launch
+            // has its outcome.
+            while (await _arrivals.Reader.ReadAsync(CancellationToken.None).ConfigureAwait(false) is var arrival and not Arrival.Ended)
+            {
+                if (arrival is Arrival.Told told)
+                {
+                    await SaidAsync(told).ConfigureAwait(false);
+                }
+            }
+
+            await waiting.ConfigureAwait(false);
         }
 
         /// <summary>
@@ -2486,7 +1958,7 @@ public sealed class ClaudeCodeClient(
         }
 
         /// <summary>
-        /// Waits for the launch's own tasks - the calls of the engine's tool server and the takes of the tree's lock - to have
+        /// Waits for the launch's own tasks - the calls of the engine's tool server - to have
         /// ended: each hands the loop how it ended, its fault among them, so none ends the launch's end in turn.
         /// </summary>
         private static async Task Ended(Task tasks)

@@ -73,9 +73,10 @@ public sealed class ClaudeCodeClientTests : IDisposable
     /// <summary>
     /// A launch is a new session, streamed both ways, by the whole argument list and nothing else: no <c>-p</c>, the prompt
     /// never an argument but the first message on its input after the <c>initialize</c> request, a session id the engine
-    /// made and a new one for every launch, no session kept, every root but the working directory an <c>--add-dir</c>, the
-    /// engine's tool server beside <c>--strict-mcp-config</c> for a step with the web; it runs in the agent's working
-    /// directory, with the settings, the system prompt and the server it was given beside the stream.
+    /// made and a new one for every launch, no session kept, no tool of Claude Code's own (<c>--tools ""</c>), every root
+    /// but the working directory an <c>--add-dir</c>, the engine's tool server beside <c>--strict-mcp-config</c>, an ask
+    /// rule for each of its tools; it runs in the agent's working directory, with the settings, the system prompt and the
+    /// server it was given beside the stream.
     /// </summary>
     [Fact]
     public async Task ALaunch_IsANewSessionStreamedBothWays_ByTheOneArgumentList_InTheAgentsWorkingDirectory()
@@ -104,7 +105,7 @@ public sealed class ClaudeCodeClientTests : IDisposable
                 "--replay-user-messages", "--session-id", session, "--no-session-persistence", "--model", Model,
                 "--effort", "high", "--max-turns", "30", "--max-budget-usd", "2.5",
                 "--permission-mode", "default", "--permission-prompt-tool", "stdio", "--permission-prompts", "host",
-                "--tools", "Read,Grep,Glob,Write,Edit,NotebookEdit,Bash", "--setting-sources", "user", "--strict-mcp-config",
+                "--tools", string.Empty, "--setting-sources", "user", "--strict-mcp-config",
                 "--mcp-config", Path.Combine(kit.StepDirectory, ClaudeLaunch.McpFileName),
                 "--settings", Path.Combine(kit.StepDirectory, ClaudeLaunch.SettingsFileName),
                 "--append-system-prompt-file", Path.Combine(kit.StepDirectory, ClaudeLaunch.SystemFileName),
@@ -120,9 +121,7 @@ public sealed class ClaudeCodeClientTests : IDisposable
         Assert.Equal("be terse", File.ReadAllText(Path.Combine(kit.StepDirectory, ClaudeLaunch.SystemFileName)));
 
         var settings = JsonNode.Parse(File.ReadAllText(Path.Combine(kit.StepDirectory, ClaudeLaunch.SettingsFileName)))!;
-        Assert.Equal(
-            ["Read", "Grep", "Glob", "Write", "Edit", "NotebookEdit", "Bash", "mcp__dssharness__web_fetch"],
-            settings["permissions"]!["ask"]!.AsArray().Select(rule => rule!.GetValue<string>()));
+        Assert.Equal(Given, settings["permissions"]!["ask"]!.AsArray().Select(rule => rule!.GetValue<string>()));
         Assert.Empty(settings["fallbackModel"]!.AsArray());
         Assert.Equal("""{"mcpServers":{"dssharness":{"type":"sdk","name":"dssharness"}}}""", File.ReadAllText(Path.Combine(kit.StepDirectory, ClaudeLaunch.McpFileName)));
 
@@ -160,7 +159,6 @@ public sealed class ClaudeCodeClientTests : IDisposable
         var run = kit.Run(credential: new AgentCredential(AgentAuth.ApiKey, [new AgentKey("WORK_KEY", "sk-work")], "https://gateway.example", config)) with
         {
             Withheld = ["ZAI_API_KEY", "WORK_KEY"],
-            Commands = AgentCommandSettings.Default with { TimeoutSeconds = 90, MaxTimeoutSeconds = 900 },
         };
 
         var result = await kit.Client().RunAsync(run, new Sink(), Token);
@@ -193,15 +191,15 @@ public sealed class ClaudeCodeClientTests : IDisposable
         Assert.Null(given["CLAUDE_CODE_OAUTH_TOKEN"]);
         Assert.Equal(config, given["CLAUDE_CONFIG_DIR"]);
 
-        foreach (var (name, value) in ClaudeSettings.Launched(run.Commands))
+        foreach (var (name, value) in ClaudeSettings.Launched)
         {
             Assert.Equal(value, given[name]);
         }
 
-        // The command times are Claude Code's own bounds of a shell command, in its environment and its settings alike.
-        var env = JsonNode.Parse(File.ReadAllText(Path.Combine(kit.StepDirectory, ClaudeLaunch.SettingsFileName)))!["env"]!;
-        Assert.Equal(("90000", "900000"), (given[ClaudeSettings.BashTimeoutVariable], given[ClaudeSettings.BashMaxTimeoutVariable]));
-        Assert.Equal(("90000", "900000"), (env[ClaudeSettings.BashTimeoutVariable]!.GetValue<string>(), env[ClaudeSettings.BashMaxTimeoutVariable]!.GetValue<string>()));
+        // The names the engine sets are its settings' env too, and none bounds a shell of Claude Code's own: it is given none.
+        var env = JsonNode.Parse(File.ReadAllText(Path.Combine(kit.StepDirectory, ClaudeLaunch.SettingsFileName)))!["env"]!.AsObject();
+        Assert.Equal(ClaudeSettings.Launched.Select(name => name.Key), env.Select(name => name.Key));
+        Assert.DoesNotContain(given.Keys.Concat(env.Select(name => name.Key)), name => name.StartsWith("BASH_", StringComparison.Ordinal) || name.StartsWith("CLAUDE_BASH_", StringComparison.Ordinal));
 
         var seen = Assert.Single(kit.Launches()).Environment;
         Assert.False(seen.ContainsKey("CLAUDE_CODE_ENTRYPOINT"), "a host session's name reached the launch");
@@ -213,7 +211,7 @@ public sealed class ClaudeCodeClientTests : IDisposable
         Assert.Equal("sk-work", seen["ANTHROPIC_API_KEY"]);
         Assert.Equal(config, seen[ClaudeTranscripts.ConfigDirectoryVariable]);
 
-        foreach (var (name, value) in ClaudeSettings.Launched(run.Commands))
+        foreach (var (name, value) in ClaudeSettings.Launched)
         {
             Assert.Equal(value, seen[name]);
         }
@@ -295,9 +293,10 @@ public sealed class ClaudeCodeClientTests : IDisposable
     }
 
     /// <summary>
-    /// Every call the launch asks about is answered from the agent's policy: one allowed runs as asked, its input handed
-    /// back whole; one the policy refuses is denied with its rule's reason, which the model reads, and is a denial in the
-    /// events, in <c>denials.jsonl</c> and in the result; a tool the launch was not given is refused by name.
+    /// Every call the launch asks about is answered by the engine: a call of its tool server is allowed as asked, its input
+    /// handed back whole, and run by the tool runtime - one the policy refuses there is denied with its rule's reason,
+    /// which the model reads as the call's result, and is a denial in the events, in <c>denials.jsonl</c> and in the
+    /// result; a tool the launch was not given - Claude Code's own shell among them - is refused by name.
     /// </summary>
     [Fact]
     public async Task ACallAllowed_RunsAsAsked_AndOneThePolicyRefuses_IsDeniedWithItsRuleAndReason()
@@ -309,8 +308,8 @@ public sealed class ClaudeCodeClientTests : IDisposable
             new JsonObject
             {
                 ["calls"] = new JsonArray(
-                    new JsonObject { ["tool"] = "Read", ["input"] = new JsonObject { ["file_path"] = "a.txt" }, ["result"] = "1\talpha" },
-                    new JsonObject { ["tool"] = "Write", ["input"] = new JsonObject { ["file_path"] = outside, ["content"] = "x" } },
+                    new JsonObject { ["tool"] = ViewFile, ["input"] = new JsonObject { ["path"] = "a.txt" } },
+                    new JsonObject { ["tool"] = "mcp__dssharness__create_file", ["input"] = new JsonObject { ["path"] = outside, ["content"] = "x" } },
                     new JsonObject { ["tool"] = "Bash", ["input"] = new JsonObject { ["command"] = "sudo rm -rf /" } },
                     new JsonObject { ["tool"] = "Agent", ["input"] = new JsonObject { ["prompt"] = "go" } }),
             },
@@ -322,25 +321,25 @@ public sealed class ClaudeCodeClientTests : IDisposable
         Assert.Equal(AgentRunStatus.Completed, result.Status);
         Assert.Equal(4, result.ToolCalls);
         Assert.Equal(3, result.Denials);
+        Assert.False(File.Exists(outside));
 
         var answers = Assert.Single(kit.Launches()).Read
             .Where(line => line["type"]?.GetValue<string>() == "control_response")
             .Select(line => line["response"]!["response"]!)
             .Where(answer => answer["mcp_response"] is null)
             .ToList();
-        Assert.Equal(4, answers.Count);
-        Assert.Equal("allow", answers[0]["behavior"]!.GetValue<string>());
-        Assert.Equal("a.txt", answers[0]["updatedInput"]!["file_path"]!.GetValue<string>());
-        Assert.All(answers.Skip(1), answer => Assert.Equal("deny", answer["behavior"]!.GetValue<string>()));
+        Assert.Equal(["allow", "allow", "deny", "deny"], answers.Select(answer => answer["behavior"]!.GetValue<string>()));
+        Assert.Equal("a.txt", answers[0]["updatedInput"]!["path"]!.GetValue<string>());
         Assert.Equal(
-            "'Agent' is no tool this agent was given; it was given: Read, Grep, Glob, Write, Edit, NotebookEdit, Bash, mcp__dssharness__web_fetch",
+            $"'Bash' is no tool this agent was given; it was given: {string.Join(", ", Given)}",
+            answers[2]["message"]!.GetValue<string>());
+        Assert.Equal(
+            $"'Agent' is no tool this agent was given; it was given: {string.Join(", ", Given)}",
             answers[3]["message"]!.GetValue<string>());
 
         var denied = sink.Of<PermissionDenied>();
-        Assert.Equal(["Write", "Bash", "Agent"], denied.Select(denial => denial.Tool));
-        Assert.Equal(outside, denied[0].Subject);
-        Assert.Equal("sudo rm -rf /", denied[1].Subject);
-        Assert.Equal(denied.Select(denial => denial.Reason), answers.Skip(1).Select(answer => answer["message"]!.GetValue<string>()));
+        Assert.Equal(["create_file", "Bash", "Agent"], denied.Select(denial => denial.Tool));
+        Assert.Equal(denied.Skip(1).Select(denial => denial.Reason), answers.Skip(2).Select(answer => answer["message"]!.GetValue<string>()));
 
         var lines = File.ReadAllLines(Path.Combine(kit.StepDirectory, AgentCallRecords.DenialsFileName));
         Assert.Equal(3, lines.Length);
@@ -348,17 +347,21 @@ public sealed class ClaudeCodeClientTests : IDisposable
 
         var finished = sink.Of<ToolCallFinished>();
         Assert.Equal([true, false, false, false], finished.Select(call => call.Ok));
-        Assert.Equal("1\talpha", finished[0].Result);
-        Assert.Equal("""{"file_path":"a.txt"}""", finished[0].Input);
+        Assert.Contains("1\talpha", finished[0].Result, StringComparison.Ordinal);
+        Assert.Contains(denied[0].Reason, finished[1].Result, StringComparison.Ordinal);
+        Assert.Equal("""{"path":"a.txt"}""", finished[0].Input);
     }
 
     /// <summary>
-    /// A side-task's own write on Claude Code holds the main tree's lock for its duration: its permission is answered
-    /// only once the lock is held, the launch waiting out whatever holds the tree and the chat saying so, and the hold
-    /// goes with the call's result - the read beside it needs none.
+    /// A Claude Code launch serves commands and reads through the harness: <c>--tools</c> names none of Claude Code's own -
+    /// no <c>Bash</c>, <c>Read</c>, <c>Edit</c> or <c>Write</c> - and the launch is served the runtime's command tool and
+    /// file tools, each with an ask rule; a served <c>run_command</c> runs through the tool runtime - its answer the
+    /// runtime's, its output kept where the runtime keeps every command's - and a served read and write go through it too.
+    /// Red where a launch keeps Claude Code's own shell or file tools: <c>--tools</c> names them, the init offers them, and
+    /// the served list holds no <c>run_command</c>.
     /// </summary>
     [Fact]
-    public async Task ASideTasksOwnWriteOnClaudeCode_TakesTheMainTreesLock_WaitingOutWhateverHoldsIt_AndLetsItGoAtItsResult()
+    public async Task AClaudeCodeLaunch_ServesCommandsAndReadsThroughTheHarness()
     {
         using var kit = new Kit();
         kit.Script(
@@ -366,8 +369,57 @@ public sealed class ClaudeCodeClientTests : IDisposable
             new JsonObject
             {
                 ["calls"] = new JsonArray(
-                    new JsonObject { ["tool"] = "Write", ["input"] = new JsonObject { ["file_path"] = "w.txt", ["content"] = "written" }, ["result"] = "ok" },
-                    new JsonObject { ["tool"] = "Read", ["input"] = new JsonObject { ["file_path"] = "a.txt" }, ["result"] = "1\talpha" }),
+                    new JsonObject { ["tool"] = ViewFile, ["input"] = new JsonObject { ["path"] = "a.txt" } },
+                    new JsonObject { ["tool"] = "mcp__dssharness__create_file", ["input"] = new JsonObject { ["path"] = "made.txt", ["content"] = "made\n" } },
+                    new JsonObject { ["tool"] = "mcp__dssharness__run_command", ["input"] = new JsonObject { ["program"] = "git", ["args"] = new JsonArray("--version") } }),
+            },
+        ]);
+        var sink = new Sink();
+
+        var result = await kit.Client().RunAsync(kit.Run(), sink, Token);
+
+        Assert.True(result.Status == AgentRunStatus.Completed, $"{result.Status}: {result.Error}");
+
+        // No tool of Claude Code's own: --tools is empty, and every tool the launch has is the engine's tool server's.
+        Assert.Equal(string.Empty, Value(Assert.Single(kit.Launches()).Arguments, "--tools"));
+        var settings = JsonNode.Parse(File.ReadAllText(Path.Combine(kit.StepDirectory, ClaudeLaunch.SettingsFileName)))!;
+        Assert.Equal(Given, settings["permissions"]!["ask"]!.AsArray().Select(rule => rule!.GetValue<string>()));
+
+        var offered = Assert.Single(sink.Of<SessionStarted>()).Tools;
+        Assert.Contains("mcp__dssharness__run_command", offered);
+        Assert.Contains(ViewFile, offered);
+        Assert.Contains("mcp__dssharness__create_file", offered);
+        Assert.DoesNotContain(offered, tool => tool is "Bash" or "Read" or "Edit" or "Write" or "Grep" or "Glob" or "NotebookEdit");
+
+        // Each call ran through the runtime: the read its lines, the write its file, the command its answer and its log.
+        Assert.Equal(0, result.Denials);
+        Assert.Equal(1, result.FilesWritten);
+        Assert.Equal("made\n", File.ReadAllText(Path.Combine(kit.Worktree, "made.txt")));
+
+        var finished = sink.Of<ToolCallFinished>();
+        Assert.Equal([true, true, true], finished.Select(call => call.Ok));
+        Assert.All(finished, call => Assert.True(call.Ran));
+        Assert.Contains("1\talpha", finished[0].Result, StringComparison.Ordinal);
+        Assert.Matches(@"^exit 0, after \d+[.,]\d s:\ngit version", finished[2].Result);
+        Assert.True(File.Exists(AgentCallRecords.ResultFile(kit.StepDirectory, finished[2].Id)), "the command's output was not kept where the runtime keeps every command's");
+    }
+
+    /// <summary>
+    /// A side-task's write on Claude Code holds the main tree's lock for its duration, where the tool runtime runs it: the
+    /// write waits out whatever holds the tree, the chat saying so, and the hold goes with the write - the read beside it
+    /// needs none.
+    /// </summary>
+    [Fact]
+    public async Task ASideTasksWriteOnClaudeCode_TakesTheMainTreesLock_WaitingOutWhateverHoldsIt_AndLetsItGoAtItsEnd()
+    {
+        using var kit = new Kit();
+        kit.Script(
+        [
+            new JsonObject
+            {
+                ["calls"] = new JsonArray(
+                    new JsonObject { ["tool"] = "mcp__dssharness__create_file", ["input"] = new JsonObject { ["path"] = "w.txt", ["content"] = "written" } },
+                    new JsonObject { ["tool"] = ViewFile, ["input"] = new JsonObject { ["path"] = "a.txt" } }),
             },
         ]);
         var sink = new Sink();
@@ -380,10 +432,11 @@ public sealed class ClaudeCodeClientTests : IDisposable
         var waits = DssHarness.Core.Platform.MachineWideHold.WaitBegins(tree);
         var running = Task.Run(() => kit.Client().RunAsync(kit.Run() with { Ground = kit.Ground() with { SideTask = true } }, sink, Token));
 
-        // Let go only once the launch's take of the lock waits - however long the suite's load holds the launch's ask
-        // back - so the permission it leaves unanswered is the lock's wait, and what it reports is a wait.
+        // Let go only once the write's take of the lock waits - however long the suite's load holds the launch's call
+        // back - so what it reports is a wait.
         await waits.WaitAsync(Token);
-        Assert.False(running.IsCompleted, "the launch answered a write's permission and went on while the engine held the main tree's lock");
+        Assert.False(running.IsCompleted, "the launch's write went on while the engine held the main tree's lock");
+        Assert.False(File.Exists(Path.Combine(kit.Worktree, "w.txt")), "the write was made while the engine held the main tree's lock");
         Assert.Empty(sink.Of<PermissionDenied>());
 
         engine.Dispose();
@@ -394,7 +447,9 @@ public sealed class ClaudeCodeClientTests : IDisposable
         Assert.Empty(sink.Of<PermissionDenied>());
         Assert.Matches($@"^waited (a moment|\d+(\.\d)? s) for {System.Text.RegularExpressions.Regex.Escape(DssHarness.Core.Orchestration.MainTreeWriteLock.WaitedOutOnFromSideTask)} to end$", Assert.Single(sink.Of<Notice>()).Text);
 
-        // The call's result let the hold go: the tree's lock is free again once the run has ended.
+        // The write's end let the hold go: the tree's lock is free again once the run has ended.
+        Assert.Equal("written", File.ReadAllText(Path.Combine(kit.Worktree, "w.txt")));
+
         using var taken = DssHarness.Core.Platform.MachineWideMutex.TryHold(
             DssHarness.Core.Orchestration.MainTreeWriteLock.NameFor(kit.Temp.Path),
             "a test as the engine");
@@ -403,288 +458,11 @@ public sealed class ClaudeCodeClientTests : IDisposable
     }
 
     /// <summary>
-    /// The hold a side-task's own write on Claude Code takes of the main tree's lock goes with the call's result while its
-    /// launch runs on: the write ran with the lock held, and the call after it, in the same turn of the same launch, finds
-    /// it free.
+    /// A side-task's edit of config.json on Claude Code, where a run is working over the tree, says in the chat where the
+    /// edit reaches - the runtime's file tool making it, as on every client; a write of another file says nothing.
     /// </summary>
     [Fact]
-    public async Task ASideTasksOwnWriteOnClaudeCode_LetsTheTreesLockGoAtItsResult_WhileItsLaunchRunsOn()
-    {
-        using var kit = new Kit();
-        kit.Script(
-        [
-            new JsonObject
-            {
-                ["calls"] = new JsonArray(
-                    new JsonObject { ["tool"] = "Write", ["input"] = new JsonObject { ["file_path"] = "w.txt", ["content"] = "written" }, ["probesLock"] = kit.TreeLockName },
-                    new JsonObject { ["tool"] = "Read", ["input"] = new JsonObject { ["file_path"] = "a.txt" }, ["probesLock"] = kit.TreeLockName }),
-            },
-        ]);
-        var sink = new Sink();
-
-        var result = await kit.Client().RunAsync(kit.Run() with { Ground = kit.Ground() with { SideTask = true } }, sink, Token);
-
-        Assert.Equal(AgentRunStatus.Completed, result.Status);
-        Assert.Equal([(true, "held"), (true, "free")], sink.Of<ToolCallFinished>().Select(call => (call.Ok, call.Result)));
-    }
-
-    /// <summary>
-    /// A side-task's own command on Claude Code holds the main tree's lock while it runs, as its write does; one asked to
-    /// run in the background is denied - the lock is held for a command's duration, and a command in the background is
-    /// never seen to end - the agent told to run it in the foreground, recorded as every denial is.
-    /// </summary>
-    [Fact]
-    public async Task ASideTasksOwnCommandOnClaudeCode_HoldsTheTreesLockWhileItRuns_AndOneInTheBackgroundIsDenied()
-    {
-        using var kit = new Kit();
-        kit.Script(
-        [
-            new JsonObject
-            {
-                ["calls"] = new JsonArray(
-                    new JsonObject { ["tool"] = "Bash", ["input"] = new JsonObject { ["command"] = "echo hi" }, ["probesLock"] = kit.TreeLockName },
-                    new JsonObject { ["tool"] = "Bash", ["input"] = new JsonObject { ["command"] = "echo later", ["run_in_background"] = true }, ["probesLock"] = kit.TreeLockName }),
-            },
-        ]);
-        var sink = new Sink();
-
-        var result = await kit.Client().RunAsync(kit.Run() with { Ground = kit.Ground() with { SideTask = true } }, sink, Token);
-
-        Assert.Equal(AgentRunStatus.Completed, result.Status);
-        Assert.Equal([(true, "held"), (false, MainTreeWriteLock.InBackground.Reason)], sink.Of<ToolCallFinished>().Select(call => (call.Ok, call.Result)));
-        Assert.Equal(1, result.Denials);
-
-        var denied = Assert.Single(sink.Of<PermissionDenied>());
-        Assert.Equal(("Bash", "echo later", MainTreeWriteLock.Rule, AgentPermissionSource.Builtin, MainTreeWriteLock.InBackground.Reason), (denied.Tool, denied.Subject, denied.Rule, denied.Source, denied.Reason));
-
-        var recorded = JsonNode.Parse(Assert.Single(File.ReadAllLines(Path.Combine(kit.StepDirectory, AgentCallRecords.DenialsFileName))))!;
-        Assert.Equal(("Bash", MainTreeWriteLock.Rule, MainTreeWriteLock.InBackground.Reason), (recorded["tool"]!.GetValue<string>(), recorded["rule"]!.GetValue<string>(), recorded["reason"]!.GetValue<string>()));
-    }
-
-    /// <summary>
-    /// A side-task's shell command on Claude Code that leaves a process running after it ends - one the shell runs in the
-    /// background, one a program keeps apart - is refused by the side-task's policy before anything runs, recorded as every
-    /// denial is, while one whose <c>&amp;</c> joins, redirects or is quoted runs under the main tree's lock.
-    /// </summary>
-    [Fact]
-    public async Task ASideTasksShellCommandThatLeavesAProcessBehind_IsRefusedOnClaudeCode_WhileAnAmpersandThatDoesNotRuns()
-    {
-        using var kit = new Kit();
-        kit.Script(
-        [
-            new JsonObject
-            {
-                ["calls"] = new JsonArray(
-                    new JsonObject { ["tool"] = "Bash", ["input"] = new JsonObject { ["command"] = "npm run codegen > gen.log 2>&1 &" } },
-                    new JsonObject { ["tool"] = "Bash", ["input"] = new JsonObject { ["command"] = "nohup make" } },
-                    new JsonObject { ["tool"] = "Bash", ["input"] = new JsonObject { ["command"] = "make && make test &> test.log; echo 'a & b' 2>&1" }, ["probesLock"] = kit.TreeLockName }),
-            },
-        ]);
-        var sink = new Sink();
-
-        var result = await kit.Client().RunAsync(kit.Run() with { Ground = kit.Ground() with { SideTask = true } }, sink, Token);
-
-        Assert.Equal(AgentRunStatus.Completed, result.Status);
-        Assert.Equal(2, result.Denials);
-        Assert.Equal(
-            [
-                (false, MainTreeWriteLock.LeftBehind("npm run codegen >gen.log").Reason),
-                (false, MainTreeWriteLock.LeftBehind("nohup make").Reason),
-                (true, "held"),
-            ],
-            sink.Of<ToolCallFinished>().Select(call => (call.Ok, call.Result)));
-        Assert.All(sink.Of<PermissionDenied>(), denied => Assert.Equal((MainTreeWriteLock.Rule, AgentPermissionSource.Builtin), (denied.Rule, denied.Source)));
-        Assert.Equal(2, File.ReadAllLines(Path.Combine(kit.StepDirectory, AgentCallRecords.DenialsFileName)).Length);
-    }
-
-    /// <summary>
-    /// A call Claude Code asks about twice - again once it was allowed, or again while the first ask's take of the main
-    /// tree's lock still waits - is allowed under the call's one hold: each ask answered, one take alone begun - a second, on
-    /// another thread of this process, would wait on the first's hold forever - the write running with the lock held and the
-    /// call after it finding it free.
-    /// </summary>
-    [Theory]
-    [InlineData("afterAllowed")]
-    [InlineData("atOnce")]
-    public async Task ACallAskedAboutTwice_IsAllowedUnderItsOneHoldOfTheTreesLock(string again)
-    {
-        using var kit = new Kit();
-        kit.Script(
-        [
-            new JsonObject
-            {
-                ["calls"] = new JsonArray(
-                    new JsonObject { ["tool"] = "Write", ["input"] = new JsonObject { ["file_path"] = "w.txt", ["content"] = "written" }, ["askedAgain"] = again, ["probesLock"] = kit.TreeLockName },
-                    new JsonObject { ["tool"] = "Read", ["input"] = new JsonObject { ["file_path"] = "a.txt" }, ["probesLock"] = kit.TreeLockName }),
-            },
-        ]);
-        var takes = 0;
-        kit.TreeLock = (main, token) =>
-        {
-            Interlocked.Increment(ref takes);
-            return MainTreeWriteLock.HoldAsync(main, token);
-        };
-        var sink = new Sink();
-
-        var result = await kit.Client().RunAsync(kit.Run() with { Ground = kit.Ground() with { SideTask = true } }, sink, Token);
-
-        Assert.Equal(AgentRunStatus.Completed, result.Status);
-        Assert.Equal([(true, "held"), (true, "free")], sink.Of<ToolCallFinished>().Select(call => (call.Ok, call.Result)));
-        Assert.Equal(1, takes);
-        Assert.Equal(
-            ["allow", "allow", "allow"],
-            Assert.Single(kit.Launches()).Read
-                .Where(line => line["type"]?.GetValue<string>() == "control_response" && line["response"]?["response"]?["behavior"] is not null)
-                .Select(line => line["response"]!["response"]!["behavior"]!.GetValue<string>()));
-    }
-
-    /// <summary>
-    /// A take of the main tree's lock whose ask is withdrawn while it waits - the chat's interrupt cutting the call - is
-    /// cancelled and holds nothing: once the engine lets the lock go it is free while the chat's launch runs on, and the
-    /// withdrawn ask is never answered.
-    /// </summary>
-    [Fact]
-    public async Task ATakeOfTheTreesLockWhoseAskIsWithdrawn_IsCancelled_HoldsNothing_AndItsAskIsNeverAnswered()
-    {
-        using var kit = new Kit();
-        kit.Script([new JsonObject { ["calls"] = new JsonArray(new JsonObject { ["tool"] = "Write", ["input"] = new JsonObject { ["file_path"] = "w.txt", ["content"] = "written" }, ["cutWhileAsked"] = true }) }]);
-        var engine = MachineWideMutex.TryHold(kit.TreeLockName, "a test as the engine");
-
-        Assert.NotNull(engine);
-
-        var taking = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var cancelled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        kit.TreeLock = (main, token) =>
-        {
-            token.Register(() => cancelled.TrySetResult());
-            taking.TrySetResult();
-            return MainTreeWriteLock.HoldAsync(main, token);
-        };
-        var cut = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var run = kit.Run() with { Chat = true, Interrupt = new AgentTurnInterrupt(), Ground = kit.Ground() with { SideTask = true } };
-        var sink = new Sink(@event =>
-        {
-            if (@event is TurnFinished)
-            {
-                cut.TrySetResult();
-            }
-        });
-
-        var running = Task.Run(() => kit.Client().RunAsync(run, sink, Token));
-
-        try
-        {
-            // The take waits on the engine's hold; the interrupt withdraws its ask, and the take is cancelled with it.
-            await taking.Task.WaitAsync(TimeSpan.FromSeconds(60), Token);
-            run.Interrupt!.Interrupt();
-            await cancelled.Task.WaitAsync(TimeSpan.FromSeconds(60), Token);
-            await cut.Task.WaitAsync(TimeSpan.FromSeconds(60), Token);
-        }
-        finally
-        {
-            engine!.Dispose();
-        }
-
-        // The lock is free once the engine let it go, while the chat's launch still runs: nothing of the take holds it.
-        MachineWideHold? taken = null;
-
-        for (var till = DateTime.UtcNow + TimeSpan.FromSeconds(30); ; await Task.Delay(50, Token))
-        {
-            Assert.False(running.IsCompleted, "the chat's launch ended before its next message");
-            taken = MachineWideMutex.TryHold(kit.TreeLockName, "a test as the engine");
-
-            if (taken is not null)
-            {
-                break;
-            }
-
-            Assert.True(DateTime.UtcNow < till, "the withdrawn take held the main tree's lock while the chat ran on");
-        }
-
-        taken.Dispose();
-        run.Messages.Complete();
-
-        var result = await running;
-
-        Assert.True(result.Status == AgentRunStatus.Completed, $"{result.Status}: {result.Error}");
-        Assert.Empty(sink.Of<PermissionDenied>());
-        Assert.DoesNotContain(
-            Assert.Single(kit.Launches()).Read,
-            line => line["type"]?.GetValue<string>() == "control_response" && line["response"]?["response"]?["behavior"] is not null);
-    }
-
-    /// <summary>
-    /// A side-task's write whose take of the main tree's lock fails - the lock cannot be opened - is denied with the lock's
-    /// refusal, saying why, and recorded as every denial is: the launch goes on to its end, and nothing of the take escapes.
-    /// </summary>
-    [Fact]
-    public async Task ASideTasksWriteWhoseTakeOfTheTreesLockFails_IsDeniedWithTheLocksRefusal_AndRecorded()
-    {
-        using var kit = new Kit();
-        kit.Script([new JsonObject { ["calls"] = new JsonArray(new JsonObject { ["tool"] = "Write", ["input"] = new JsonObject { ["file_path"] = "w.txt", ["content"] = "written" } }) }]);
-        kit.TreeLock = (_, _) => Task.FromException<MachineWideHold?>(new DssHarness.Core.Results.HarnessException(DssHarness.Core.Results.HarnessExit.Refused, "The lock 'x' belongs to another user on this machine."));
-        var sink = new Sink();
-
-        var result = await kit.Client().RunAsync(kit.Run() with { Ground = kit.Ground() with { SideTask = true } }, sink, Token);
-
-        const string Said = "the main tree's lock, which a side-task's write or command holds for its duration, could not be taken: The lock 'x' belongs to another user on this machine";
-
-        Assert.Equal(AgentRunStatus.Completed, result.Status);
-        Assert.Equal(1, result.Denials);
-        Assert.Equal((false, Said), (Assert.Single(sink.Of<ToolCallFinished>()).Ok, Assert.Single(sink.Of<ToolCallFinished>()).Result));
-        Assert.False(File.Exists(Path.Combine(kit.Worktree, "w.txt")));
-
-        var denied = Assert.Single(sink.Of<PermissionDenied>());
-        Assert.Equal(("Write", "w.txt", MainTreeWriteLock.Rule, AgentPermissionSource.Builtin, Said), (denied.Tool, denied.Subject, denied.Rule, denied.Source, denied.Reason));
-
-        var recorded = JsonNode.Parse(Assert.Single(File.ReadAllLines(Path.Combine(kit.StepDirectory, AgentCallRecords.DenialsFileName))))!;
-        Assert.Equal(("Write", MainTreeWriteLock.Rule, Said), (recorded["tool"]!.GetValue<string>(), recorded["rule"]!.GetValue<string>(), recorded["reason"]!.GetValue<string>()));
-    }
-
-    /// <summary>
-    /// What Claude Code's own write tools wrote and its commands ran is followed as the runtime's own writes are: the run's
-    /// graph synced by the file each write did what it was asked to - made absolute against the agent's working directory -
-    /// and after each command, which may have written anything; a read syncs nothing.
-    /// </summary>
-    [Fact]
-    public async Task ClaudeCodesOwnWritesAndCommands_SyncTheRunsGraph_AsTheRuntimesOwnDo()
-    {
-        using var kit = new Kit();
-        kit.Script(
-        [
-            new JsonObject
-            {
-                ["calls"] = new JsonArray(
-                    new JsonObject { ["tool"] = "Write", ["input"] = new JsonObject { ["file_path"] = "w.txt", ["content"] = "written" } },
-                    new JsonObject { ["tool"] = "Read", ["input"] = new JsonObject { ["file_path"] = "a.txt" } },
-                    new JsonObject { ["tool"] = "Edit", ["input"] = new JsonObject { ["file_path"] = "a.txt", ["old_string"] = "alpha", ["new_string"] = "beta" } },
-                    new JsonObject { ["tool"] = "Bash", ["input"] = new JsonObject { ["command"] = "echo hi" } }),
-            },
-        ]);
-        var synced = new List<(string Tool, IReadOnlyList<string>? Paths)>();
-
-        var result = await kit.Client().RunAsync(kit.Run() with
-        {
-            Graph = new AgentGraphSupport(null, AfterWriteAsync: (write, _) =>
-            {
-                synced.Add((write.Tool, write.Paths));
-                return Task.CompletedTask;
-            }),
-        }, new Sink(), Token);
-
-        Assert.Equal(AgentRunStatus.Completed, result.Status);
-        Assert.Equal(["Write", "Edit", "Bash"], synced.Select(write => write.Tool));
-        Assert.Equal([Path.Combine(kit.Worktree, "w.txt")], synced[0].Paths);
-        Assert.Equal([Path.Combine(kit.Worktree, "a.txt")], synced[1].Paths);
-        Assert.Null(synced[2].Paths);
-    }
-
-    /// <summary>
-    /// A side-task's edit of config.json with Claude Code's own Write, where a run is working over the tree, says in the
-    /// chat where the edit reaches, as the runtime's file tools say it; a write of another file says nothing.
-    /// </summary>
-    [Fact]
-    public async Task ASideTasksOwnWriteOfTheConfiguration_OnClaudeCode_SaysInTheChatWhereItReaches_WhereARunIsLive()
+    public async Task ASideTasksWriteOfTheConfiguration_OnClaudeCode_SaysInTheChatWhereItReaches_WhereARunIsLive()
     {
         using var kit = new Kit();
         var config = new DssHarness.Core.Repository.HarnessLayout(kit.Temp.Path, kit.Temp.Path).ConfigFile;
@@ -693,8 +471,8 @@ public sealed class ClaudeCodeClientTests : IDisposable
             new JsonObject
             {
                 ["calls"] = new JsonArray(
-                    new JsonObject { ["tool"] = "Write", ["input"] = new JsonObject { ["file_path"] = config, ["content"] = "{}" } },
-                    new JsonObject { ["tool"] = "Write", ["input"] = new JsonObject { ["file_path"] = "w.txt", ["content"] = "written" } }),
+                    new JsonObject { ["tool"] = "mcp__dssharness__create_file", ["input"] = new JsonObject { ["path"] = config, ["content"] = "{}" } },
+                    new JsonObject { ["tool"] = "mcp__dssharness__create_file", ["input"] = new JsonObject { ["path"] = "w.txt", ["content"] = "written" } }),
             },
         ]);
         var ground = PolicyGrounds.Of(kit.Worktree, [kit.Temp.Path], [kit.Temp.Path], [], [], []) with { SideTask = true, LiveRun = () => "r1", WorktreeRules = false, ProtectedPaths = false };
@@ -718,7 +496,7 @@ public sealed class ClaudeCodeClientTests : IDisposable
     public async Task TheStoredStream_IsWrittenAsTheLaunchRuns_AndTheControlMessagesBesideIt()
     {
         using var kit = new Kit();
-        kit.Script([new JsonObject { ["calls"] = new JsonArray(new JsonObject { ["tool"] = "Read", ["input"] = new JsonObject { ["file_path"] = "a.txt" } }) }]);
+        kit.Script([new JsonObject { ["calls"] = new JsonArray(new JsonObject { ["tool"] = ViewFile, ["input"] = new JsonObject { ["path"] = "a.txt" } }) }]);
         var result = await kit.StepRunner().RunAsync(kit.Step(), null, Token);
 
         Assert.Equal(AgentRunStatus.Completed, result.Status);
@@ -733,7 +511,8 @@ public sealed class ClaudeCodeClientTests : IDisposable
             ],
             kinds);
 
-        // The engine's tool server's messages among them, each answered: its connection, before the launch's init.
+        // The engine's tool server's messages among them, each answered: its connection, before the launch's init, and the
+        // call it runs once the engine allowed it.
         var control = File.ReadAllLines(Path.Combine(kit.StepDirectory, ClaudeLaunch.ControlFileName))
             .Select(line => JsonNode.Parse(line)!)
             .Select(line => (Kind: $"{line["type"]!.GetValue<string>()}:{(line["request"]?["subtype"] ?? line["response"]?["subtype"])!.GetValue<string>()}", Mcp: line["request"]?["message"]?["method"] ?? line["response"]?["response"]?["mcp_response"]?["result"]?["serverInfo"]?["name"]))
@@ -747,6 +526,7 @@ public sealed class ClaudeCodeClientTests : IDisposable
                 "control_request:mcp_message:notifications/initialized", "control_response:success",
                 "control_request:mcp_message:tools/list", "control_response:success",
                 "control_request:can_use_tool", "control_response:success",
+                "control_request:mcp_message:tools/call", "control_response:success",
             ],
             control);
     }
@@ -776,12 +556,15 @@ public sealed class ClaudeCodeClientTests : IDisposable
 
         var result = await kit.Client().RunAsync(kit.Run() with
         {
-            Graph = new AgentGraphSupport(tool, line => lines.Add(line), Narrow: true),
+            Graph = new AgentGraphSupport(tool, line => lines.Add(line), Narrow: true)
+            {
+                Operations = DssHarness.Core.Agents.Runtime.CodebaseGraphTool.Operations(write: true, narrow: true),
+            },
         }, sink, Token);
 
         Assert.Equal(AgentRunStatus.Completed, result.Status);
 
-        // The ask rule beside --tools, and the tool taken by the launch's init.
+        // The ask rule beside the server's other tools, and the tool taken by the launch's init.
         var settings = JsonNode.Parse(File.ReadAllText(Path.Combine(kit.StepDirectory, ClaudeLaunch.SettingsFileName)))!;
         Assert.Contains(
             "mcp__dssharness__graph",
@@ -804,9 +587,8 @@ public sealed class ClaudeCodeClientTests : IDisposable
             .ToList();
         Assert.Contains(served, text => text.Contains("Demo", StringComparison.Ordinal) && text.Contains("Big.cs", StringComparison.Ordinal));
 
-        // The tool's edit operation is not given on this client: the probe measured an Edit taken after a ranged Read
-        // on every version taken, so an agent that means to change a body reads its lines and Edits them - the schema
-        // the launch was served holds every other operation and not it.
+        // The tool is served with every operation its step was given - its edit among them, as on the API clients: no
+        // edit of Claude Code's own is given in its place.
         var schema = File.ReadAllLines(Path.Combine(kit.StepDirectory, ClaudeLaunch.ControlFileName))
             .Select(line => JsonNode.Parse(line)!)
             .Where(line => line["response"]?["response"]?["mcp_response"]?["result"]?["tools"] is JsonArray)
@@ -814,7 +596,7 @@ public sealed class ClaudeCodeClientTests : IDisposable
             .Single(toolNamed => toolNamed["name"]?.GetValue<string>() == AgentGraphSupport.ToolName);
 
         Assert.Equal(
-            ["find", "node", "related", "outline", "body", "wholeFile"],
+            ["find", "node", "related", "outline", "body", "edit", "wholeFile"],
             [.. schema["inputSchema"]!.AsObject()["properties"]!.AsObject()["op"]!.AsObject()["enum"]!.AsArray().Select(one => one!.GetValue<string>())]);
     }
 
@@ -885,8 +667,8 @@ public sealed class ClaudeCodeClientTests : IDisposable
     }
 
     /// <summary>
-    /// A whole <c>Read</c> of a file the graph holds parsed over the narrowing bound is denied on Claude Code as a whole
-    /// <c>view_file</c> is on the APIs (<c>graphReads: narrow</c>): by the same owner, with the same words, recorded as
+    /// A whole <c>view_file</c> of a file the graph holds parsed over the narrowing bound is denied on Claude Code as it is
+    /// on the APIs (<c>graphReads: narrow</c>) - the tool runtime serving it narrows it, with the same words, recorded as
     /// every denial is and as a line of the step's graph; a ranged read of the same file passes, and a file the graph is
     /// not sure of passes whole, an escape <c>lowConfidence</c> recorded.
     /// </summary>
@@ -905,15 +687,17 @@ public sealed class ClaudeCodeClientTests : IDisposable
         var bigPath = Path.Combine(kit.Worktree, "src", "Big.cs");
         var generatedPath = Path.Combine(kit.Worktree, "src", "Generated.g.cs");
         kit.Script([new JsonObject { ["calls"] = new JsonArray(
-            new JsonObject { ["tool"] = "Read", ["input"] = new JsonObject { ["file_path"] = bigPath } },
-            new JsonObject { ["tool"] = "Read", ["input"] = new JsonObject { ["file_path"] = bigPath, ["offset"] = 3, ["limit"] = 4 } },
-            new JsonObject { ["tool"] = "Read", ["input"] = new JsonObject { ["file_path"] = generatedPath } },
-            new JsonObject { ["tool"] = "Edit", ["input"] = new JsonObject { ["file_path"] = bigPath, ["old_string"] = "RANGE-4", ["new_string"] = "EDITED-AFTER-THE-RANGE" }, ["result"] = "edited" }) }]);
+            new JsonObject { ["tool"] = ViewFile, ["input"] = new JsonObject { ["path"] = bigPath } },
+            new JsonObject { ["tool"] = ViewFile, ["input"] = new JsonObject { ["path"] = bigPath, ["start_line"] = 3, ["end_line"] = 6 } },
+            new JsonObject { ["tool"] = ViewFile, ["input"] = new JsonObject { ["path"] = generatedPath } }) }]);
         var sink = new Sink();
 
         var result = await kit.Client().RunAsync(kit.Run() with
         {
-            Graph = new AgentGraphSupport(tool, line => lines.Add(line), Narrow: true),
+            Graph = new AgentGraphSupport(tool, line => lines.Add(line), Narrow: true)
+            {
+                Operations = DssHarness.Core.Agents.Runtime.CodebaseGraphTool.Operations(write: true, narrow: true),
+            },
         }, sink, Token);
 
         Assert.Equal(AgentRunStatus.Completed, result.Status);
@@ -932,10 +716,8 @@ public sealed class ClaudeCodeClientTests : IDisposable
         var escaped = Assert.IsType<DssHarness.Core.Agents.Runtime.GraphEscapeLine>(Assert.Single(lines.OfType<DssHarness.Core.Agents.Runtime.GraphEscapeLine>()));
         Assert.Equal(("src/Generated.g.cs", DssHarness.Core.Agents.Runtime.GraphEscapeLine.LowConfidence), (escaped.Path, escaped.Escape));
 
-        // An Edit after the ranged read is taken as the probe measured it: asked of the engine and allowed, a write
-        // decided as every write is - the fake claude taking the flow the launch recorded.
-        Assert.DoesNotContain(sink.Of<PermissionDenied>(), denial => denial.Tool == "Edit");
-        Assert.Equal(4, result.ToolCalls);
+        Assert.Equal([false, true, true], sink.Of<ToolCallFinished>().Select(call => call.Ok));
+        Assert.Equal(3, result.ToolCalls);
     }
 
     /// <summary>
@@ -1087,8 +869,8 @@ public sealed class ClaudeCodeClientTests : IDisposable
         using var kit = new Kit();
         kit.Script(
         [
-            new JsonObject { ["calls"] = new JsonArray(new JsonObject { ["tool"] = "Read", ["input"] = new JsonObject { ["file_path"] = "a.txt" } }), ["hang"] = true },
-            new JsonObject { ["calls"] = new JsonArray(new JsonObject { ["tool"] = "Read", ["input"] = new JsonObject { ["file_path"] = "b.txt" } }), ["text"] = "Done: read a.txt." },
+            new JsonObject { ["calls"] = new JsonArray(new JsonObject { ["tool"] = ViewFile, ["input"] = new JsonObject { ["path"] = "a.txt" } }), ["hang"] = true },
+            new JsonObject { ["calls"] = new JsonArray(new JsonObject { ["tool"] = ViewFile, ["input"] = new JsonObject { ["path"] = "b.txt" } }), ["text"] = "Done: read a.txt." },
         ]);
         var run = kit.Run();
         var sink = new Sink(@event =>
@@ -1113,7 +895,7 @@ public sealed class ClaudeCodeClientTests : IDisposable
         Assert.Contains(read, line => line["request"]?["subtype"]?.GetValue<string>() == "interrupt" && line["request"]!["cancel_queued"]!.GetValue<bool>());
 
         var denial = Assert.Single(sink.Of<PermissionDenied>());
-        Assert.Equal((AgentHandoffSignal.TurnRule, AgentHandoffSignal.ToolRefusal, "b.txt"), (denial.Rule, denial.Reason, denial.Subject));
+        Assert.Equal((AgentHandoffSignal.TurnRule, AgentHandoffSignal.ToolRefusal, """{"path":"b.txt"}"""), (denial.Rule, denial.Reason, denial.Subject));
     }
 
     /// <summary>
@@ -1269,18 +1051,19 @@ public sealed class ClaudeCodeClientTests : IDisposable
     }
 
     /// <summary>
-    /// A call's result larger than an event carries is kept whole in a file beside the stream, and its event carries its
-    /// head and its tail with what was left out between them, counted exactly.
+    /// A result of a call of Claude Code's own - a side-task's own web fetch - larger than an event carries is kept whole in
+    /// a file beside the stream, and its event carries its head and its tail with what was left out between them, counted
+    /// exactly.
     /// </summary>
     [Fact]
     public async Task AResultLargerThanAnEventCarries_IsKeptWholeBesideTheStream()
     {
         using var kit = new Kit();
         var whole = string.Concat(Enumerable.Range(0, AgentCallRecords.ResultCap / 8).Select(at => at.ToString("D8", System.Globalization.CultureInfo.InvariantCulture))) + "tail-end";
-        kit.Script([new JsonObject { ["calls"] = new JsonArray(new JsonObject { ["tool"] = "Read", ["input"] = new JsonObject { ["file_path"] = "a.txt" }, ["result"] = whole }) }]);
+        kit.Script([new JsonObject { ["calls"] = new JsonArray(new JsonObject { ["tool"] = "WebFetch", ["input"] = new JsonObject { ["url"] = "https://example.com/page", ["prompt"] = "read it" }, ["result"] = whole }) }]);
         var sink = new Sink();
 
-        var result = await kit.Client().RunAsync(kit.Run(), sink, Token);
+        var result = await kit.Client().RunAsync(kit.Run() with { Ground = kit.Ground() with { SideTask = true } }, sink, Token);
 
         Assert.Equal(AgentRunStatus.Completed, result.Status);
 
@@ -1564,23 +1347,66 @@ public sealed class ClaudeCodeClientTests : IDisposable
     }
 
     /// <summary>
-    /// A launch that does not answer the host's <c>initialize</c> request within its bound is not a child the engine is the
-    /// host of: it is ended at once - a launch that would not end by itself included - and the step never started, naming
-    /// the program's version.
+    /// A launch that never answers the host's <c>initialize</c> request is waited on - no time of the client's own ends it -
+    /// until the step's own time does: it is ended whole there, one that would not end by itself included, and the step
+    /// ends <see cref="AgentRunStatus.TimedOut"/>.
     /// </summary>
     [Fact]
-    public async Task ALaunchThatDoesNotAnswerInitialize_NeverStarted_AndIsEndedAtOnce()
+    public async Task ALaunchThatNeverAnswersInitialize_IsEndedByTheStepsOwnTime()
     {
         using var kit = new Kit();
         kit.Script([new JsonObject { ["noInitialize"] = true, ["ignoreEof"] = true }]);
-        kit.Clock = new BoundsClock((ClaudeCodeClient.InitializeBound, TimeSpan.FromSeconds(1)), (ClaudeCodeClient.EndBound, TimeSpan.FromMinutes(10)));
+        var run = kit.Run() with { Limits = new AgentLimits(30, 2.5m, TimeSpan.FromSeconds(3), null) };
 
-        var result = await kit.Client().RunAsync(kit.Run() with { ProgramVersion = "2.1.287" }, new Sink(), Token);
+        var result = await kit.Client().RunAsync(run, new Sink(), Token).WaitAsync(TimeSpan.FromSeconds(60), Token);
 
-        Assert.Equal((AgentRunStatus.NotStarted, AgentNotStartedBecause.ProgramMissing), (result.Status, result.NotStartedBecause));
-        Assert.Equal(
-            "client 'claude-code' was not started: claude 2.1.287 did not answer the host's initialize request within 30 s: this tool runs Claude Code only as its host",
-            result.Error);
+        Assert.Equal(AgentRunStatus.TimedOut, result.Status);
+        Assert.Equal("the launch ran past its 00:00:03", result.Error);
+    }
+
+    /// <summary>
+    /// A launch silent for two minutes before it answers the host's <c>initialize</c> request - a first start filling
+    /// Claude Code's own caches, a slow disk - is not ended: it is waited on, and once it has been silent past
+    /// <see cref="DssHarness.Core.Waiting.Waits.SaidEvery"/> the step is told it still waits, as every wait of the harness
+    /// tells, and the launch goes on to its end once it answers. The client's own clock moves only as the test moves it.
+    /// Red with a bound of the client's own on the initialize answer (the 30 s that was): two minutes pass it, and the
+    /// launch is ended never started before anything is told.
+    /// </summary>
+    [Fact]
+    public async Task ALaunchSilentForTwoMinutes_IsToldNotEnded()
+    {
+        using var kit = new Kit();
+        var answer = kit.Temp.Combine("answer-initialize");
+        kit.Script([new JsonObject { ["initializeOnceFile"] = answer, ["text"] = "late but done" }]);
+        var clock = new TimerClock();
+        kit.Clock = clock;
+        var told = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var sink = new Sink(@event =>
+        {
+            if (@event is Notice)
+            {
+                told.TrySetResult();
+            }
+        });
+
+        var running = kit.Client().RunAsync(kit.Run(), sink, Token);
+
+        // The wait on the initialize answer stands on the client's clock; two minutes of silence pass it by, and four more
+        // reach the first time a wait is told.
+        await clock.WaitingAsync().WaitAsync(Token);
+        clock.Advance(TimeSpan.FromMinutes(2));
+        clock.Advance(TimeSpan.FromMinutes(4));
+        await Task.WhenAny(told.Task, running).WaitAsync(Token);
+
+        Assert.True(told.Task.IsCompleted, "the launch was ended before it was told to wait");
+        Assert.False(running.IsCompleted, "the launch was ended while it was silent");
+
+        File.WriteAllText(answer, "go");
+        var result = await running;
+
+        Assert.True(result.Status == AgentRunStatus.Completed, $"{result.Status}: {result.Error}");
+        Assert.Equal("late but done", result.FinalText);
+        Assert.Equal("has waited 6m00s for claude to answer the host's initialize request", Assert.Single(sink.Of<Notice>()).Text);
     }
 
     /// <summary>A launch that refuses the host's <c>initialize</c> request never started, saying what it answered.</summary>
@@ -1600,18 +1426,20 @@ public sealed class ClaudeCodeClientTests : IDisposable
 
     /// <summary>
     /// A launch whose init offers a tool the launch was not given ends never started, naming the tool: one this tool never
-    /// gives an agent as that, any other as one the launch was not given - the answer's own tool among them where the
-    /// step names no output.
+    /// gives an agent as that, any other as one the launch was not given - Claude Code's own shell and file tools among
+    /// them, and the answer's own tool where the step names no output.
     /// </summary>
     [Theory]
     [InlineData("Agent", "which this tool never gives an agent")]
     [InlineData("AskUserQuestion", "which this tool never gives an agent")]
+    [InlineData("Bash", "which this launch was not given")]
+    [InlineData("Read", "which this launch was not given")]
     [InlineData("WebSearch", "which this launch was not given")]
     [InlineData("StructuredOutput", "which this launch was not given")]
     public async Task AnInitOfferingAToolTheLaunchWasNotGiven_EndsItNeverStarted(string tool, string why)
     {
         using var kit = new Kit();
-        kit.Script([new JsonObject { ["initTools"] = new JsonArray("Read", tool) }]);
+        kit.Script([new JsonObject { ["initTools"] = new JsonArray(ViewFile, tool) }]);
 
         var result = await kit.Client().RunAsync(kit.Run(), new Sink(), Token);
 
@@ -1660,7 +1488,8 @@ public sealed class ClaudeCodeClientTests : IDisposable
 
     /// <summary>
     /// A call the engine was never asked about that ran - whether it succeeded or failed - fails the step by the tool's
-    /// name, its result told, and the launch is ended at once, one that would not end by itself included.
+    /// name, its result told, and the launch is ended at once, one that would not end by itself included: a side-task's
+    /// own web fetch, the one tool of Claude Code's own a launch is given.
     /// </summary>
     [Theory]
     [InlineData("unasked")]
@@ -1670,13 +1499,13 @@ public sealed class ClaudeCodeClientTests : IDisposable
     public async Task ACallRunUnasked_FailsTheStepByName_AndEndsTheLaunchAtOnce(string how)
     {
         using var kit = new Kit();
-        kit.Script([new JsonObject { ["calls"] = new JsonArray(new JsonObject { ["tool"] = "Read", ["input"] = new JsonObject { ["file_path"] = "a.txt" }, [how] = true }), ["ignoreEof"] = true }]);
+        kit.Script([new JsonObject { ["calls"] = new JsonArray(new JsonObject { ["tool"] = "WebFetch", ["input"] = new JsonObject { ["url"] = "https://example.com/page", ["prompt"] = "read it" }, [how] = true }), ["ignoreEof"] = true }]);
         var sink = new Sink();
 
-        var result = await kit.Client().RunAsync(kit.Run(), sink, Token);
+        var result = await kit.Client().RunAsync(kit.Run() with { Ground = kit.Ground() with { SideTask = true } }, sink, Token);
 
         Assert.Equal(AgentRunStatus.Failed, result.Status);
-        Assert.Equal("Claude Code ran 'Read' without asking the engine (claude fake)", result.Error);
+        Assert.Equal("Claude Code ran 'WebFetch' without asking the engine (claude fake)", result.Error);
         Assert.Equal(how == "unaskedFailedMarked" ? "<tool_use_error>ran unasked</tool_use_error>" : "ran unasked", Assert.Single(sink.Of<ToolCallFinished>()).Result);
     }
 
@@ -1715,7 +1544,7 @@ public sealed class ClaudeCodeClientTests : IDisposable
     public async Task ACallThatFailedOnItsInput_BeforeAnythingWasAsked_IsNoCallRunUnasked()
     {
         using var kit = new Kit();
-        kit.Script([new JsonObject { ["calls"] = new JsonArray(new JsonObject { ["tool"] = "Read", ["input"] = new JsonObject { ["path"] = "a.txt" }, ["invalidInput"] = true }) }]);
+        kit.Script([new JsonObject { ["calls"] = new JsonArray(new JsonObject { ["tool"] = ViewFile, ["input"] = new JsonObject { ["file_path"] = "a.txt" }, ["invalidInput"] = true }) }]);
 
         var result = await kit.Client().RunAsync(kit.Run(), new Sink(), Token);
 
@@ -1723,13 +1552,11 @@ public sealed class ClaudeCodeClientTests : IDisposable
     }
 
     /// <summary>
-    /// Where the engine cannot decide, it never allows, and the launch goes on: a request it answers no kind of is answered
-    /// <c>error</c>; a call its own deciding fails on is denied by the rule <c>undecided</c>, saying the fault, and recorded
-    /// as every denial is - the model reads why, the events, <c>denials.jsonl</c> and the result count it - so no fault of
-    /// the engine's escapes unrecorded. Both answers are kept with the control messages.
+    /// A request the engine answers no kind of - a hook's callback, which no launch of its asks for - is answered
+    /// <c>error</c>, kept with the control messages, and the launch goes on to its end.
     /// </summary>
     [Fact]
-    public async Task WhereTheEngineCannotDecide_TheCallIsDeniedAndRecorded_AndARequestItAnswersNoKindOfIsAnError()
+    public async Task ARequestTheEngineAnswersNoKindOf_IsAnsweredAnError_AndTheLaunchGoesOn()
     {
         using var kit = new Kit();
         kit.Script(
@@ -1737,37 +1564,21 @@ public sealed class ClaudeCodeClientTests : IDisposable
             new JsonObject
             {
                 ["controlRequest"] = new JsonObject { ["subtype"] = "hook_callback", ["callback_id"] = "hook_0" },
-                ["calls"] = new JsonArray(new JsonObject { ["tool"] = "Read", ["input"] = new JsonObject { ["file_path"] = "faulty.txt" } }),
+                ["text"] = "done anyway",
             },
         ]);
-        kit.FileSystem = new FaultsOn(kit.Harness.FileSystem, "faulty.txt");
-        var sink = new Sink();
 
-        var result = await kit.Client().RunAsync(kit.Run(), sink, Token);
+        var result = await kit.Client().RunAsync(kit.Run(), new Sink(), Token);
 
-        Assert.Equal(AgentRunStatus.Completed, result.Status);
+        Assert.Equal((AgentRunStatus.Completed, "done anyway"), (result.Status, result.FinalText));
 
-        // The denied call never ran, as Claude Code stamps it, and its end in the stream says so.
-        var ended = Assert.Single(sink.Of<ToolCallFinished>());
-        Assert.Equal((false, (bool?)false), (ended.Ok, ended.Ran));
-        Assert.Equal(1, result.Denials);
-
-        var faulty = Path.Combine(kit.Worktree, "faulty.txt");
-        var said = $"the engine could not decide this call ('{faulty}' cannot be looked at): it denies what it cannot decide";
         var answers = Assert.Single(kit.Launches()).Read
             .Where(line => line["type"]?.GetValue<string>() == "control_response")
             .Select(line => line["response"]!)
             .Where(answer => answer["response"]?["mcp_response"] is null)
             .ToList();
-        Assert.Equal(2, answers.Count);
-        Assert.Equal(("error", "this host answers no 'hook_callback' request"), (answers[0]["subtype"]!.GetValue<string>(), answers[0]["error"]!.GetValue<string>()));
-        Assert.Equal(("deny", said), (answers[1]["response"]!["behavior"]!.GetValue<string>(), answers[1]["response"]!["message"]!.GetValue<string>()));
-
-        var denied = Assert.Single(sink.Of<PermissionDenied>());
-        Assert.Equal(("Read", "faulty.txt", AgentPolicy.UndecidedRule, AgentPermissionSource.Builtin, said), (denied.Tool, denied.Subject, denied.Rule, denied.Source, denied.Reason));
-
-        var recorded = JsonNode.Parse(Assert.Single(File.ReadAllLines(Path.Combine(kit.StepDirectory, AgentCallRecords.DenialsFileName))))!;
-        Assert.Equal(("Read", "undecided", "Builtin", said), (recorded["tool"]!.GetValue<string>(), recorded["rule"]!.GetValue<string>(), recorded["source"]!.GetValue<string>(), recorded["reason"]!.GetValue<string>()));
+        var answer = Assert.Single(answers);
+        Assert.Equal(("error", "this host answers no 'hook_callback' request"), (answer["subtype"]!.GetValue<string>(), answer["error"]!.GetValue<string>()));
         Assert.Equal(1, File.ReadAllLines(Path.Combine(kit.StepDirectory, ClaudeLaunch.ControlFileName)).Count(line => line.Contains("\"subtype\":\"error\"", StringComparison.Ordinal)));
     }
 
@@ -1857,12 +1668,13 @@ public sealed class ClaudeCodeClientTests : IDisposable
         kit.Script([new JsonObject
         {
             ["calls"] = new JsonArray(
-                new JsonObject { ["tool"] = "Read", ["input"] = new JsonObject { ["file_path"] = "a.txt" } },
+                new JsonObject { ["tool"] = ViewFile, ["input"] = new JsonObject { ["path"] = "a.txt" } },
                 new JsonObject { ["tool"] = Served, ["input"] = new JsonObject { ["url"] = "https://example.test/page" }, [how] = true }),
             ["ignoreEof"] = true,
         }]);
 
-        // The kit's launches are given ten minutes to end by themselves: one that came back in a minute was ended at once.
+        // A launch is waited on to end by itself for as long as it takes, and this one never ends by itself: one that came
+        // back in a minute was ended at once.
         var result = await kit.Client().RunAsync(kit.Run(), new Sink(), Token).WaitAsync(TimeSpan.FromSeconds(60), Token);
 
         Assert.Equal(AgentRunStatus.Failed, result.Status);
@@ -2065,34 +1877,35 @@ public sealed class ClaudeCodeClientTests : IDisposable
     [Theory]
     [InlineData("""{ "mcpStatus": "failed" }""", "did not connect the engine's tool server (it says 'failed'), which serves this launch web_fetch, given to Claude Code through it alone")]
     [InlineData("""{ "initMcpServers": [] }""", "did not connect the engine's tool server (its init names none), which serves this launch web_fetch, given to Claude Code through it alone")]
-    [InlineData("""{ "initTools": ["Read"] }""", "did not take 'mcp__dssharness__web_fetch' from the engine's tool server, which serves it this launch")]
+    [InlineData("""{ "initTools": [] }""", "did not take 'mcp__dssharness__web_fetch' from the engine's tool server, which serves it this launch")]
     [InlineData("""{ "initMcpServers": [{ "name": "dssharness", "status": "connected" }, { "name": "other", "status": "connected" }] }""", "connected the MCP server 'other', which this launch was not given: --strict-mcp-config names none but the engine's own")]
     public async Task AnInitNotHoldingTheEnginesToolServer_EndsItNeverStarted(string turn, string why)
     {
         using var kit = new Kit();
         kit.Script([JsonNode.Parse(turn)!.AsObject()]);
 
-        var result = await kit.Client().RunAsync(kit.Run(), new Sink(), Token);
+        var result = await kit.Client().RunAsync(kit.Run() with { Ground = kit.Ground() with { Capabilities = [AgentCapability.Web] } }, new Sink(), Token);
 
         Assert.Equal((AgentRunStatus.NotStarted, AgentNotStartedBecause.ProgramMissing), (result.Status, result.NotStartedBecause));
         Assert.Equal($"client 'claude-code' was not started: claude fake {why}", result.Error);
     }
 
     /// <summary>
-    /// A step without the web takes no server: no <c>--mcp-config</c>, no file naming one, nothing connected - and a launch
-    /// that connects the engine's all the same never started.
+    /// A step given no tool takes no server: no tool of Claude Code's own, no <c>--mcp-config</c>, no file naming one,
+    /// nothing connected - and a launch that connects the engine's all the same never started.
     /// </summary>
     [Fact]
-    public async Task AStepWithoutTheWeb_TakesNoServer()
+    public async Task AStepGivenNoTool_TakesNoServer()
     {
         using var kit = new Kit();
         kit.Script([new JsonObject()]);
-        var run = kit.Run() with { Ground = kit.Ground() with { Capabilities = [AgentCapability.Read, AgentCapability.Write, AgentCapability.Run] } };
+        var run = kit.Run() with { Ground = kit.Ground() with { Capabilities = [] } };
 
         var result = await kit.Client().RunAsync(run, new Sink(), Token);
 
         Assert.Equal(AgentRunStatus.Completed, result.Status);
         var launch = Assert.Single(kit.Launches());
+        Assert.Equal(string.Empty, Value(launch.Arguments, "--tools"));
         Assert.DoesNotContain("--mcp-config", launch.Arguments);
         Assert.False(File.Exists(Path.Combine(kit.StepDirectory, ClaudeLaunch.McpFileName)));
         Assert.DoesNotContain(launch.Read, line => line["response"]?["response"]?["mcp_response"] is not null);
@@ -2105,24 +1918,26 @@ public sealed class ClaudeCodeClientTests : IDisposable
     }
 
     /// <summary>
-    /// A step with the web on a client given no tool runtime never starts: nothing would serve its web - nor, where the launch
-    /// hands its commands over, its file tools.
+    /// A launch given a tool on a client given no tool runtime never starts: nothing would serve its file tools, its
+    /// command tool or its web, and no tool of Claude Code's own stands in for them.
     /// </summary>
     [Fact]
-    public async Task AStepWithTheWeb_OnAClientWithNoToolRuntime_NeverStarts()
+    public async Task ALaunch_OnAClientWithNoToolRuntime_NeverStarts()
     {
         using var kit = new Kit();
         kit.Script([new JsonObject()]);
-        var client = new ClaudeCodeClient(kit.Runner, kit.Harness.FileSystem, kit.Harness.Platform, kit.Harness.ChildSessions, kit.Clock, () => kit.Own, self: () => kit.Self);
+        var client = new ClaudeCodeClient(kit.Runner, kit.Harness.FileSystem, kit.Harness.Platform, kit.Harness.ChildSessions, kit.Clock, () => kit.Own);
 
         var result = await client.RunAsync(kit.Run(), new Sink(), Token);
-        var handed = await client.RunAsync(Handed(kit) with { Ground = kit.Ground() with { Capabilities = [AgentCapability.Read, AgentCapability.Run] } }, new Sink(), Token);
+        var reading = await client.RunAsync(kit.Run() with { Ground = kit.Ground() with { Capabilities = [AgentCapability.Read] } }, new Sink(), Token);
 
         Assert.Equal((AgentRunStatus.NotStarted, AgentNotStartedBecause.ConfigurationWrong), (result.Status, result.NotStartedBecause));
-        Assert.Equal("client 'claude-code' was not started: the launch takes web_fetch from the engine's tool server, and this client was given no tool runtime to serve them with", result.Error);
+        Assert.Equal(
+            $"client 'claude-code' was not started: the launch takes {string.Join(", ", Given.Select(tool => tool["mcp__dssharness__".Length..]))} from the engine's tool server, and this client was given no tool runtime to serve them with",
+            result.Error);
         Assert.Equal(
             "client 'claude-code' was not started: the launch takes find_files, read_result, search_files, view_file from the engine's tool server, and this client was given no tool runtime to serve them with",
-            handed.Error);
+            reading.Error);
         Assert.Empty(kit.Launches());
     }
 
@@ -2149,13 +1964,13 @@ public sealed class ClaudeCodeClientTests : IDisposable
     public async Task ACallClaudeCodeRefusedByItself_ThatTheEngineAllows_EndsTheLaunch_AndOneItRefusesIsADenial()
     {
         using var kit = new Kit();
-        kit.Script([new JsonObject { ["calls"] = new JsonArray(new JsonObject { ["tool"] = "Read", ["input"] = new JsonObject { ["file_path"] = "a.txt" }, ["refusedByClaude"] = true }) }]);
+        kit.Script([new JsonObject { ["calls"] = new JsonArray(new JsonObject { ["tool"] = ViewFile, ["input"] = new JsonObject { ["path"] = "a.txt" }, ["refusedByClaude"] = true }) }]);
 
         var result = await kit.Client().RunAsync(kit.Run(), new Sink(), Token);
 
         Assert.Equal((AgentRunStatus.NotStarted, AgentNotStartedBecause.ProgramMissing), (result.Status, result.NotStartedBecause));
         Assert.Equal(
-            "client 'claude-code' was not started: Claude Code refused 'Read' without asking the engine, which allows it (claude fake): Claude requested permissions to use this tool, but you haven't granted it yet.; this tool runs Claude Code only as its host",
+            $"client 'claude-code' was not started: Claude Code refused '{ViewFile}' without asking the engine, which allows it (claude fake): Claude requested permissions to use this tool, but you haven't granted it yet.; this tool runs Claude Code only as its host",
             result.Error);
 
         var outside = kit.Temp.Combine("elsewhere", "x.txt");
@@ -2200,20 +2015,20 @@ public sealed class ClaudeCodeClientTests : IDisposable
     }
 
     /// <summary>
-    /// A file tool's call Claude Code's own deny rules refused where the engine allows it was refused by a launch that did
-    /// not ask its host, as one its permission_denied line tells: the launch ends.
+    /// A call Claude Code's own deny rules refused, told by its result alone, where the engine allows it was refused by a
+    /// launch that did not ask its host, as one its permission_denied line tells: the launch ends.
     /// </summary>
     [Fact]
     public async Task ACallClaudeCodesOwnDenyRulesRefused_ThatTheEngineAllows_EndsTheLaunch()
     {
         using var kit = new Kit();
-        kit.Script([new JsonObject { ["calls"] = new JsonArray(new JsonObject { ["tool"] = "Read", ["input"] = new JsonObject { ["file_path"] = "a.txt" }, ["deniedByRule"] = true }) }]);
+        kit.Script([new JsonObject { ["calls"] = new JsonArray(new JsonObject { ["tool"] = ViewFile, ["input"] = new JsonObject { ["path"] = "a.txt" }, ["deniedByRule"] = true }) }]);
 
         var result = await kit.Client().RunAsync(kit.Run(), new Sink(), Token);
 
         Assert.Equal((AgentRunStatus.NotStarted, AgentNotStartedBecause.ProgramMissing), (result.Status, result.NotStartedBecause));
         Assert.Equal(
-            $"client 'claude-code' was not started: Claude Code refused 'Read' without asking the engine, which allows it (claude fake): {ClaudeLine.DeniedByRuleResult}; this tool runs Claude Code only as its host",
+            $"client 'claude-code' was not started: Claude Code refused '{ViewFile}' without asking the engine, which allows it (claude fake): {ClaudeLine.DeniedByRuleResult}; this tool runs Claude Code only as its host",
             result.Error);
     }
 
@@ -2229,12 +2044,12 @@ public sealed class ClaudeCodeClientTests : IDisposable
     public async Task ALaunch_TellsTheConversationBegan_AsSomethingItDidFirstStands(string how)
     {
         using var kit = new Kit();
-        var read = new JsonObject { ["tool"] = "Read", ["input"] = new JsonObject { ["file_path"] = "a.txt" } };
+        var read = new JsonObject { ["tool"] = ViewFile, ["input"] = new JsonObject { ["path"] = "a.txt" } };
         kit.Script(how switch
         {
             "aCallRan" => [new JsonObject { ["calls"] = new JsonArray(read) }],
             "aTurnEnded" => [new JsonObject { ["answer"] = "done" }],
-            _ => [new JsonObject { ["calls"] = new JsonArray(new JsonObject { ["tool"] = "Read", ["input"] = new JsonObject { ["file_path"] = "a.txt" }, ["refusedByClaude"] = true }) }],
+            _ => [new JsonObject { ["calls"] = new JsonArray(new JsonObject { ["tool"] = ViewFile, ["input"] = new JsonObject { ["path"] = "a.txt" }, ["refusedByClaude"] = true }) }],
         });
         var sink = new Sink();
 
@@ -2269,15 +2084,15 @@ public sealed class ClaudeCodeClientTests : IDisposable
     public async Task ALaunchFoundNotTheEnginesChild_OnceSomethingItDidStands_FailsTheStep(string after)
     {
         using var kit = new Kit();
-        var refused = new JsonObject { ["tool"] = "Read", ["input"] = new JsonObject { ["file_path"] = "a.txt" }, ["refusedByClaude"] = true };
+        var refused = new JsonObject { ["tool"] = ViewFile, ["input"] = new JsonObject { ["path"] = "a.txt" }, ["refusedByClaude"] = true };
         kit.Script(after == "aCallRan"
-            ? [new JsonObject { ["calls"] = new JsonArray(new JsonObject { ["tool"] = "Read", ["input"] = new JsonObject { ["file_path"] = "a.txt" } }, refused) }]
+            ? [new JsonObject { ["calls"] = new JsonArray(new JsonObject { ["tool"] = ViewFile, ["input"] = new JsonObject { ["path"] = "a.txt" } }, refused) }]
             : [new JsonObject { ["answer"] = Envelopes.Of(new JsonObject { ["answers"] = "a" }) }, new JsonObject { ["calls"] = new JsonArray(refused) }]);
 
         var result = await kit.Client().RunAsync(kit.Run(new AgentOutput("o", Schema)), new Sink(), Token);
 
         Assert.Equal(AgentRunStatus.Failed, result.Status);
-        Assert.StartsWith("Claude Code refused 'Read' without asking the engine, which allows it (claude fake)", result.Error, StringComparison.Ordinal);
+        Assert.StartsWith($"Claude Code refused '{ViewFile}' without asking the engine, which allows it (claude fake)", result.Error, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -2429,7 +2244,7 @@ public sealed class ClaudeCodeClientTests : IDisposable
     public async Task AMessageTakenIntoTheTurnUnderWay_IsAnsweredByThatTurnsResult()
     {
         using var kit = new Kit();
-        kit.Script([new JsonObject { ["calls"] = new JsonArray(new JsonObject { ["tool"] = "Read", ["input"] = new JsonObject { ["file_path"] = "a.txt" } }), ["waitForMessage"] = true, ["text"] = "Read it, and second." }]);
+        kit.Script([new JsonObject { ["calls"] = new JsonArray(new JsonObject { ["tool"] = ViewFile, ["input"] = new JsonObject { ["path"] = "a.txt" } }), ["waitForMessage"] = true, ["text"] = "Read it, and second." }]);
         var run = kit.Run() with { Limits = new AgentLimits(30, 2.5m, null, StallSeconds: 2) };
         var sink = new Sink(@event =>
         {
@@ -2770,7 +2585,7 @@ public sealed class ClaudeCodeClientTests : IDisposable
     {
         using var kit = new Kit();
         kit.Script([new JsonObject { ["initializeAfterMs"] = 2500, ["untaken"] = true }, new JsonObject { ["text"] = "Nothing done yet." }]);
-        kit.Clock = new BoundsClock((ClaudeCodeClient.EndBound, TimeSpan.FromMinutes(10)), (ClaudeCodeClient.InterruptBound, TimeSpan.FromSeconds(1)));
+        kit.Clock = new BoundsClock((ClaudeCodeClient.InterruptBound, TimeSpan.FromSeconds(1)));
         var run = kit.Run();
         run.Handoff.Ask();
 
@@ -2789,7 +2604,7 @@ public sealed class ClaudeCodeClientTests : IDisposable
     {
         using var kit = new Kit();
         kit.Script([new JsonObject { ["initializeAfterMs"] = 500, ["untaken"] = true, ["ignoreInterrupt"] = true }]);
-        kit.Clock = new BoundsClock((ClaudeCodeClient.EndBound, TimeSpan.FromMinutes(10)), (ClaudeCodeClient.InterruptBound, TimeSpan.FromSeconds(1)));
+        kit.Clock = new BoundsClock((ClaudeCodeClient.InterruptBound, TimeSpan.FromSeconds(1)));
         var run = kit.Run();
         run.Handoff.Ask();
 
@@ -2864,7 +2679,7 @@ public sealed class ClaudeCodeClientTests : IDisposable
         kit.Script(
         [
             new JsonObject { ["hang"] = true },
-            new JsonObject { ["calls"] = new JsonArray(new JsonObject { ["tool"] = "Read", ["input"] = new JsonObject { ["file_path"] = "a.txt" }, ["unasked"] = true }) },
+            new JsonObject { ["calls"] = new JsonArray(new JsonObject { ["tool"] = ViewFile, ["input"] = new JsonObject { ["path"] = "a.txt" }, ["unasked"] = true }) },
         ]);
         var run = kit.Run();
         var sink = new Sink(@event =>
@@ -2883,7 +2698,7 @@ public sealed class ClaudeCodeClientTests : IDisposable
 
     /// <summary>
     /// A hard stop while a turn runs ends the launch whole - one that would not end by itself included - and comes back as
-    /// a stop, well inside the bound a launch is given to end in by itself: nothing of the launch is waited on.
+    /// a stop at once: nothing of the launch is waited on.
     /// </summary>
     [Fact]
     public async Task AStopMidTurn_EndsTheLaunchWhole_AndComesBackAsAStop()
@@ -2899,7 +2714,8 @@ public sealed class ClaudeCodeClientTests : IDisposable
             }
         });
 
-        // The kit's launches are given ten minutes to end by themselves: one that came back in a minute was ended whole.
+        // A launch is waited on to end by itself for as long as it takes, and this one never ends by itself: one that came
+        // back in a minute was ended whole.
         await Assert.ThrowsAnyAsync<OperationCanceledException>(
             () => kit.Client().RunAsync(kit.Run(), sink, stop.Token).WaitAsync(TimeSpan.FromSeconds(60), Token));
 
@@ -2976,19 +2792,14 @@ public sealed class ClaudeCodeClientTests : IDisposable
 
     /// <summary>
     /// A launch whose run was given an isolation that starts none inside a layer of its own - macOS's sandbox - starts Claude
-    /// Code's own process outside it, where it reads its login and key, which no command it runs reaches, and says so as it
-    /// starts: a command it ran without its prefix would run outside. It hands every shell command it starts to the
-    /// isolation through its shell prefix: this tool's own program and its isolated shell's option, the launch's isolation
-    /// written beside its settings with where each command's receipt is written, Claude Code's own temporary directory -
-    /// both in the step's directory, which no command writes - and the variables that hand the commands over, which no
-    /// command is given; named by a variable, the one shell, and that temporary directory as Claude Code's own - each in its
-    /// environment and in its settings' env, where Claude Code's own sandbox is turned off. Its --tools names the shell
-    /// alone: the engine's tool server serves the runtime's file tools in place of Claude Code's own, asked as every tool
-    /// is. The temporary directory goes with the launch; the receipts stay. A launch with none sets none of it, gives Claude
-    /// Code's own file tools, and leaves that sandbox to the user's own settings.
+    /// Code's own process outside it, where it reads its login and key, and hands it no command: no shell of Claude Code's
+    /// own and no file tool is given (<c>--tools ""</c>), every command and file of the agent's the runtime's, served by the
+    /// engine's tool server and run under the isolation of the agent's commands. Nothing hands a command over - no shell
+    /// prefix, no isolation file, no receipts, no temporary directory of the launch's - nothing is said of a command run
+    /// outside, and Claude Code's own sandbox is left to the user's settings, for it has no shell to hold.
     /// </summary>
     [Fact]
-    public async Task ALaunch_RunsClaudeCodeOutside_HandingEachShellCommandToTheIsolation_ItsOwnSandboxOff()
+    public async Task UnderAMechanismThatStartsNoneInside_ClaudeCodeRunsOutside_GivenNoShellOrFileOfItsOwn()
     {
         using var kit = new Kit();
         kit.Script([new JsonObject()]);
@@ -2996,69 +2807,39 @@ public sealed class ClaudeCodeClientTests : IDisposable
         var commands = new DssHarness.Core.Processes.IsolationProfile([new DssHarness.Core.Processes.IsolatedPath("/home/me/.claude", Directory: true)], []) { Temp = "/home/me/.cache/dssharness-isolation/tmp/abc" };
         var sink = new Sink();
 
-        await kit.Client().RunAsync(kit.Run() with { Isolation = new DssHarness.Core.Agents.Isolation.LaunchIsolation("required", mechanism, commands, null, null).Processes }, sink, Token);
+        var result = await kit.Client().RunAsync(kit.Run() with { Isolation = new DssHarness.Core.Agents.Isolation.LaunchIsolation("required", mechanism, commands, null, null).Processes }, sink, Token);
 
-        var file = Path.Combine(kit.StepDirectory, ClaudeShell.FileName);
-        var receipts = Path.Combine(kit.StepDirectory, ClaudeShell.ReceiptsDirectoryName);
-        var temp = Path.Combine(kit.StepDirectory, ClaudeShell.TempDirectoryName);
-        IReadOnlyList<KeyValuePair<string, string>> handed =
-        [
-            new("CLAUDE_CODE_SHELL_PREFIX", "/opt/tools/dssharness --isolated-shell"),
-            new("DSSHARNESS_ISOLATED_SHELL", file),
-            new("CLAUDE_CODE_SHELL", "/bin/bash"),
-            new("CLAUDE_CODE_TMPDIR", temp),
-        ];
         var request = Assert.Single(kit.Runner.Requests);
         var settings = JsonNode.Parse(File.ReadAllText(Path.Combine(kit.StepDirectory, ClaudeLaunch.SettingsFileName)))!;
 
+        Assert.Equal(AgentRunStatus.Completed, result.Status);
         Assert.Null(request.Isolation);
         Assert.True(request.Contained);
-        Assert.All(handed, variable => Assert.Equal(variable.Value, request.Environment[variable.Key]));
-        Assert.All(handed, variable => Assert.Equal(variable.Value, settings["env"]![variable.Key]!.GetValue<string>()));
-        Assert.Equal("""{"enabled":false}""", settings["sandbox"]!.ToJsonString());
-        Assert.Equal(
-            IsolatedShell.Written(
-                new DssHarness.Core.Processes.ProcessIsolation(mechanism, commands),
-                new DssHarness.Core.Processes.IsolatedShellHanding(receipts, temp) { Variables = [.. handed.Select(variable => variable.Key)] }),
-            File.ReadAllText(file));
-        Assert.Equal((true, false), (Directory.Exists(receipts), Directory.Exists(temp)));
-        Assert.Equal(
-            ["Claude Code's own process runs outside the isolation, for macOS starts no sandbox inside another: each shell command it starts is handed into the isolation through its shell prefix, and one it ran without would run outside with the user's rights, its missing receipt showing it only once it had run"],
-            sink.Of<Notice>().Select(notice => notice.Text));
+        Assert.Equal(string.Empty, Value(request.Arguments, "--tools"));
+        Assert.Equal(Given, settings["permissions"]!["ask"]!.AsArray().Select(rule => rule!.GetValue<string>()));
+
+        foreach (var name in new[] { "CLAUDE_CODE_SHELL_PREFIX", "DSSHARNESS_ISOLATED_SHELL", "CLAUDE_CODE_SHELL", "CLAUDE_CODE_TMPDIR" })
+        {
+            Assert.False(request.Environment.ContainsKey(name), name);
+            Assert.Null(settings["env"]![name]);
+        }
+
+        Assert.Null(settings["sandbox"]);
+        Assert.False(File.Exists(Path.Combine(kit.StepDirectory, ClaudeShell.FileName)));
+        Assert.False(Directory.Exists(Path.Combine(kit.StepDirectory, ClaudeShell.ReceiptsDirectoryName)));
+        Assert.False(Directory.Exists(Path.Combine(kit.StepDirectory, ClaudeShell.TempDirectoryName)));
+        Assert.Empty(sink.Of<Notice>());
         Assert.False(File.Exists(Path.Combine(kit.ClaudeDirectory, ".claude.json")), "a launch outside makes nothing of Claude Code's own");
-        Assert.Equal("Bash", Value(request.Arguments, "--tools"));
-        Assert.Equal(
-            [
-                "Bash",
-                "mcp__dssharness__create_directory", "mcp__dssharness__create_file", "mcp__dssharness__delete_directory",
-                "mcp__dssharness__delete_file", "mcp__dssharness__find_files", "mcp__dssharness__insert_in_file",
-                "mcp__dssharness__move_path", "mcp__dssharness__read_result", "mcp__dssharness__replace_in_file", "mcp__dssharness__search_files",
-                "mcp__dssharness__view_file", "mcp__dssharness__web_fetch",
-            ],
-            settings["permissions"]!["ask"]!.AsArray().Select(rule => rule!.GetValue<string>()));
-
-        using var bare = new Kit();
-        bare.Script([new JsonObject()]);
-
-        await bare.Client().RunAsync(bare.Run(), new Sink(), Token);
-
-        var unisolated = Assert.Single(bare.Runner.Requests);
-
-        Assert.Null(JsonNode.Parse(File.ReadAllText(Path.Combine(bare.StepDirectory, ClaudeLaunch.SettingsFileName)))!["sandbox"]);
-        Assert.All(handed, variable => Assert.False(unisolated.Environment.ContainsKey(variable.Key), variable.Key));
-        Assert.False(File.Exists(Path.Combine(bare.StepDirectory, ClaudeShell.FileName)));
-        Assert.False(Directory.Exists(Path.Combine(bare.StepDirectory, ClaudeShell.ReceiptsDirectoryName)));
-        Assert.Equal("Read,Grep,Glob,Write,Edit,NotebookEdit,Bash", Value(unisolated.Arguments, "--tools"));
     }
 
     /// <summary>
     /// Under a mechanism that starts again inside a layer of its own - bubblewrap - a launch runs Claude Code's own process in
-    /// its outer layer, saying nothing of running outside, and hands each shell command it starts through its shell prefix
-    /// into a layer of the command's own; where Claude Code never ran, its own directory and the file it keeps its state in
-    /// are made first - the file holding no state - for inside the outer layer it could make neither.
+    /// its outer layer, its own sandbox off, saying nothing of running outside and handing it no command; where Claude Code
+    /// never ran, its own directory and the file it keeps its state in are made first - the file holding no state - for
+    /// inside the outer layer it could make neither.
     /// </summary>
     [Fact]
-    public async Task UnderAMechanismThatNests_ALaunchRunsClaudeCodeInItsOuterLayer_HandingEachCommandIn()
+    public async Task UnderAMechanismThatNests_ALaunchRunsClaudeCodeInItsOuterLayer_MakingWhatItCannotMakeInside()
     {
         using var kit = new Kit();
         kit.Script([new JsonObject()]);
@@ -3071,24 +2852,27 @@ public sealed class ClaudeCodeClientTests : IDisposable
         var result = await kit.Client().RunAsync(kit.Run() with { Isolation = new DssHarness.Core.Agents.Isolation.LaunchIsolation("required", mechanism, commands, null, null) { ClaudeCode = outer }.Processes }, sink, Token);
 
         var request = Assert.Single(kit.Runner.Requests);
+        var settings = JsonNode.Parse(File.ReadAllText(Path.Combine(kit.StepDirectory, ClaudeLaunch.SettingsFileName)))!;
 
         Assert.Equal(AgentRunStatus.Completed, result.Status);
         Assert.Equal((mechanism, outer), (request.Isolation!.Mechanism, request.Isolation.Profile));
-        Assert.Equal("/opt/tools/dssharness --isolated-shell", request.Environment[ClaudeShell.PrefixVariable]);
-        Assert.True(File.Exists(Path.Combine(kit.StepDirectory, ClaudeShell.FileName)));
+        Assert.Equal("""{"enabled":false}""", settings["sandbox"]!.ToJsonString());
+        Assert.Equal(string.Empty, Value(request.Arguments, "--tools"));
+        Assert.False(request.Environment.ContainsKey("CLAUDE_CODE_SHELL_PREFIX"));
+        Assert.False(File.Exists(Path.Combine(kit.StepDirectory, ClaudeShell.FileName)));
         Assert.Equal("{}\n", File.ReadAllText(Path.Combine(kit.ClaudeDirectory, ".claude.json")));
         Assert.Empty(sink.Of<Notice>());
     }
 
     /// <summary>
     /// Under a mechanism that takes no command handed to it one by one - MXC's on Windows - a launch runs Claude Code's whole
-    /// process inside, with the profile that reads its directories, its own sandbox turned off and nothing handed over: no
-    /// prefix, no isolation file - however this tool runs, for no prefix names it.
+    /// process inside, with the profile that reads its directories, its own sandbox turned off, and no tool of its own: no
+    /// prefix, no isolation file, its commands and files the runtime's as on every machine.
     /// </summary>
     [Fact]
     public async Task UnderAMechanismTakingNoHandedCommand_ALaunchRunsWholeInside_HandingNothingOver()
     {
-        using var kit = new Kit { Self = ("/usr/bin/dotnet", ["exec", "/src/dssharness.dll"]) };
+        using var kit = new Kit();
         kit.Script([new JsonObject()]);
         var mechanism = new PassThroughMechanism { TakesHandedCommands = false, OwnTemp = true };
         var commands = new DssHarness.Core.Processes.IsolationProfile([new DssHarness.Core.Processes.IsolatedPath("/home/me/.claude", Directory: true)], []);
@@ -3101,259 +2885,10 @@ public sealed class ClaudeCodeClientTests : IDisposable
 
         Assert.Equal((mechanism, whole), (request.Isolation!.Mechanism, request.Isolation.Profile));
         Assert.Equal("""{"enabled":false}""", settings["sandbox"]!.ToJsonString());
-        Assert.False(request.Environment.ContainsKey(ClaudeShell.PrefixVariable));
-        Assert.Null(settings["env"]![ClaudeShell.PrefixVariable]);
+        Assert.False(request.Environment.ContainsKey("CLAUDE_CODE_SHELL_PREFIX"));
+        Assert.Null(settings["env"]!["CLAUDE_CODE_SHELL_PREFIX"]);
         Assert.False(File.Exists(Path.Combine(kit.StepDirectory, ClaudeShell.FileName)));
-        Assert.Equal("Read,Grep,Glob,Write,Edit,NotebookEdit,Bash", Value(request.Arguments, "--tools"));
-    }
-
-    /// <summary>
-    /// A shell call a launch that hands its commands over allows is given back with a new receipt at its command's head -
-    /// the command as decided, after the shell's no-op - and the launch goes on where the command came back with its receipt
-    /// written, as the isolated shell writes it before it runs the command.
-    /// </summary>
-    [Fact]
-    public async Task AShellCallHandedOver_IsGivenBackWithItsReceipt_AndGoesOnOnceItCameBackWithIt()
-    {
-        using var kit = new Kit();
-        kit.Script([new JsonObject { ["calls"] = new JsonArray(new JsonObject { ["tool"] = "Bash", ["input"] = new JsonObject { ["command"] = "echo hi" } }) }]);
-
-        var result = await kit.Client().RunAsync(Handed(kit), new Sink(), Token);
-
-        Assert.Equal(AgentRunStatus.Completed, result.Status);
-
-        var given = Control(kit).Select(line => line["response"]?["response"]?["updatedInput"]?["command"]?.GetValue<string>()).OfType<string>().Single();
-        var receipt = Assert.Single(Directory.GetFiles(Path.Combine(kit.StepDirectory, ClaudeShell.ReceiptsDirectoryName)).Select(Path.GetFileName));
-
-        Assert.Equal($": dssharness-receipt {receipt}; echo hi", given);
-        Assert.Matches("^[0-9a-f]{32}$", receipt);
-    }
-
-    /// <summary>
-    /// A shell call that came back with no receipt of its command - a Claude Code that skipped its shell prefix, the command
-    /// run outside the isolation - ends the launch at once, failed, saying so; one run in the background is held to its
-    /// receipt by its turn's end, or by the receipt's bound in a turn that goes on longer.
-    /// </summary>
-    [Theory]
-    [InlineData(false, false)]
-    [InlineData(true, false)]
-    [InlineData(true, true)]
-    public async Task AShellCallThatCameBackWithNoReceipt_EndsTheLaunchFailed(bool background, bool turnGoesOn)
-    {
-        using var kit = new Kit { Clock = new BoundsClock((ClaudeCodeClient.EndBound, TimeSpan.FromMinutes(10)), (ClaudeCodeClient.ReceiptBound, TimeSpan.FromMilliseconds(300))) };
-        var input = new JsonObject { ["command"] = "echo hi" };
-
-        if (background)
-        {
-            input["run_in_background"] = true;
-        }
-
-        kit.Script([new JsonObject { ["calls"] = new JsonArray(new JsonObject { ["tool"] = "Bash", ["input"] = input, ["skipsPrefix"] = true }), ["hang"] = turnGoesOn }]);
-
-        var result = await kit.Client().RunAsync(Handed(kit), new Sink(), Token);
-
-        Assert.Equal(AgentRunStatus.Failed, result.Status);
-        Assert.Equal(Unreceipted(kit, CallIdOf(kit), ran: true), result.Error);
-        Assert.Empty(Directory.GetFiles(Path.Combine(kit.StepDirectory, ClaudeShell.ReceiptsDirectoryName)));
-    }
-
-    /// <summary>
-    /// A shell call run in the background whose command is handed over only after its turn - the launch's last - has ended
-    /// is waited for at the launch's end, Claude Code still running, and the launch completes once its receipt is there: a
-    /// call still starting is no command run unhanded.
-    /// </summary>
-    [Fact]
-    public async Task ABackgroundCallHandedOverAfterItsTurnEnded_IsWaitedForAtTheLaunchsEnd_AndTheLaunchCompletes()
-    {
-        using var kit = new Kit();
-        kit.Script([new JsonObject
-        {
-            ["calls"] = new JsonArray(new JsonObject { ["tool"] = "Bash", ["input"] = new JsonObject { ["command"] = "sleep 5", ["run_in_background"] = true }, ["handedAfterMs"] = 1500 }),
-        }]);
-
-        var result = await kit.Client().RunAsync(Handed(kit), new Sink(), Token);
-
-        Assert.Equal((AgentRunStatus.Completed, (string?)null), (result.Status, result.Error));
-        Assert.Single(Directory.GetFiles(Path.Combine(kit.StepDirectory, ClaudeShell.ReceiptsDirectoryName)));
-    }
-
-    /// <summary>
-    /// A launch that ends otherwise than at a turn's result - a chat the person left, its cut turn's result not come within
-    /// the interrupt's bound - is held at its end to the receipt it still awaits of a call run in the background: none
-    /// written by its bound, the launch ends failed, saying so, never completed.
-    /// </summary>
-    [Fact]
-    public async Task ALaunchEndedOtherwiseThanAtATurnsResult_IsHeldToTheReceiptItAwaits()
-    {
-        using var kit = new Kit
-        {
-            Clock = new BoundsClock(
-                (ClaudeCodeClient.EndBound, TimeSpan.FromMinutes(10)),
-                (ClaudeCodeClient.InterruptBound, TimeSpan.FromSeconds(1)),
-                (ClaudeCodeClient.ReceiptBound, TimeSpan.FromSeconds(3))),
-        };
-        kit.Script([new JsonObject
-        {
-            ["calls"] = new JsonArray(new JsonObject { ["tool"] = "Bash", ["input"] = new JsonObject { ["command"] = "sleep 5", ["run_in_background"] = true }, ["skipsPrefix"] = true }),
-            ["hang"] = true,
-            ["slowInterrupt"] = 8000,
-        }]);
-        var run = Handed(kit) with { Chat = true };
-        var sink = new Sink(@event =>
-        {
-            if (@event is ToolCallFinished)
-            {
-                run.Messages.Complete();
-            }
-        });
-
-        var result = await kit.Client().RunAsync(run, sink, Token).WaitAsync(TimeSpan.FromSeconds(60), Token);
-
-        Assert.Equal((AgentRunStatus.Failed, Unreceipted(kit, CallIdOf(kit), ran: true), false), (result.Status, result.Error, result.EndedWithItsLastTurn));
-    }
-
-    /// <summary>
-    /// A launch whose program ended while an allowed shell call ran - its result never come - is held to that call's
-    /// receipt: written, the command was handed over and the launch ends as its program's end says; none written by the
-    /// bound, the launch ends failed, saying the command may have run unhanded.
-    /// </summary>
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task ALaunchWhoseProgramEndedWhileACallRan_IsHeldToThatCallsReceipt(bool skipsPrefix)
-    {
-        using var kit = new Kit { Clock = new BoundsClock((ClaudeCodeClient.EndBound, TimeSpan.FromMinutes(10)), (ClaudeCodeClient.ReceiptBound, TimeSpan.FromMilliseconds(300))) };
-        kit.Script([new JsonObject { ["calls"] = new JsonArray(new JsonObject { ["tool"] = "Bash", ["input"] = new JsonObject { ["command"] = "make" }, ["skipsPrefix"] = skipsPrefix, ["exitsWhileRunning"] = true }) }]);
-
-        var result = await kit.Client().RunAsync(Handed(kit), new Sink(), Token).WaitAsync(TimeSpan.FromSeconds(60), Token);
-
-        Assert.Equal(AgentRunStatus.Failed, result.Status);
-        Assert.Equal(skipsPrefix ? Unreceipted(kit, CallIdOf(kit), ran: false) : "Claude Code ended before its turn's result, exit 1: ", result.Error);
-    }
-
-    /// <summary>
-    /// A launch stopped while an allowed shell call ran, its command never handed over, waits for nothing at its stop: it
-    /// stops, and says once it has gone that the call left no receipt.
-    /// </summary>
-    [Fact]
-    public async Task ALaunchStoppedWhileACallRanUnhanded_SaysTheCallLeftNoReceipt()
-    {
-        using var kit = new Kit();
-        kit.Script([new JsonObject { ["calls"] = new JsonArray(new JsonObject { ["tool"] = "Bash", ["input"] = new JsonObject { ["command"] = "make" }, ["skipsPrefix"] = true, ["hangsWhileRunning"] = true }) }]);
-        using var stop = CancellationTokenSource.CreateLinkedTokenSource(Token);
-        var sink = new Sink(@event =>
-        {
-            if (@event is ToolCallStarted)
-            {
-                stop.CancelAfter(TimeSpan.FromMilliseconds(1500));
-            }
-        });
-
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => kit.Client().RunAsync(Handed(kit), sink, stop.Token).WaitAsync(TimeSpan.FromSeconds(60), Token));
-
-        Assert.Equal(
-            [$"The launch ended at once with no receipt in '{Path.Combine(kit.StepDirectory, ClaudeShell.ReceiptsDirectoryName)}' of the command of Claude Code's 'Bash' call {CallIdOf(kit)}: if it ran, it was not handed to the isolation through Claude Code's shell prefix, and ran outside its commands' isolation"],
-            sink.Of<Notice>().Select(notice => notice.Text).Where(text => text.Contains("no receipt", StringComparison.Ordinal)));
-    }
-
-    /// <summary>
-    /// A shell call the engine allowed that Claude Code says did not run - cut before it ran - is held to no receipt: the
-    /// launch ends as its turn did, at once, nothing awaited.
-    /// </summary>
-    [Fact]
-    public async Task AnAllowedCallClaudeCodeSaysDidNotRun_IsHeldToNoReceipt()
-    {
-        using var kit = new Kit { Clock = new BoundsClock((ClaudeCodeClient.EndBound, TimeSpan.FromMinutes(10)), (ClaudeCodeClient.ReceiptBound, TimeSpan.FromMilliseconds(300))) };
-        kit.Script([new JsonObject { ["calls"] = new JsonArray(new JsonObject { ["tool"] = "Bash", ["input"] = new JsonObject { ["command"] = "make" }, ["cutAfterAllowed"] = true }) }]);
-
-        var result = await kit.Client().RunAsync(Handed(kit), new Sink(), Token);
-
-        Assert.Equal((AgentRunStatus.Completed, (string?)null), (result.Status, result.Error));
-        Assert.Empty(Directory.GetFiles(Path.Combine(kit.StepDirectory, ClaudeShell.ReceiptsDirectoryName)));
-    }
-
-    /// <summary>What a launch that ended for a call whose command left no receipt says.</summary>
-    private static string Unreceipted(Kit kit, string callId, bool ran)
-    {
-        var receipts = Path.Combine(kit.StepDirectory, ClaudeShell.ReceiptsDirectoryName);
-
-        return ran
-            ? $"Claude Code ran the command of its 'Bash' call {callId} with no receipt of it in '{receipts}': it was not handed to the isolation through Claude Code's shell prefix, so it ran outside its commands' isolation, where Claude Code's own process runs (claude fake)"
-            : $"Claude Code was allowed its 'Bash' call {callId}, and the launch ended with no result of it and no receipt of its command in '{receipts}': if it ran, it was not handed to the isolation through Claude Code's shell prefix, so it ran outside its commands' isolation, where Claude Code's own process runs (claude fake)";
-    }
-
-    /// <summary>The id of the one call the engine was asked about, as the launch's control messages name it.</summary>
-    private static string CallIdOf(Kit kit)
-        => Control(kit).Select(line => line["request"]?["tool_use_id"]?.GetValue<string>()).OfType<string>().Single();
-
-    /// <summary>
-    /// A shell call run in the background comes back before its command is handed over: its receipt, written a moment after,
-    /// is awaited, and the launch goes on once it is there by the turn's end.
-    /// </summary>
-    [Fact]
-    public async Task AShellCallRunInTheBackground_IsHeldToTheReceiptWrittenAfterItCameBack()
-    {
-        using var kit = new Kit();
-        kit.Script([new JsonObject
-        {
-            ["calls"] = new JsonArray(new JsonObject { ["tool"] = "Bash", ["input"] = new JsonObject { ["command"] = "sleep 5", ["run_in_background"] = true }, ["handedAfterMs"] = 200, ["pauseAfterMs"] = 1500 }),
-        }]);
-
-        var result = await kit.Client().RunAsync(Handed(kit), new Sink(), Token);
-
-        Assert.Equal(AgentRunStatus.Completed, result.Status);
-        Assert.Single(Directory.GetFiles(Path.Combine(kit.StepDirectory, ClaudeShell.ReceiptsDirectoryName)));
-    }
-
-    /// <summary>
-    /// Where a launch hands its commands over, a call of the engine's tool server's file tool is run by the runtime in the
-    /// engine's own process - Claude Code opens no agent's file itself - its answer the file's lines, and each file it writes
-    /// counted in the step's files written.
-    /// </summary>
-    [Fact]
-    public async Task WhereALaunchHandsItsCommandsOver_ItsFileToolsAreTheEnginesOwn()
-    {
-        using var kit = new Kit();
-        kit.Script([new JsonObject
-        {
-            ["calls"] = new JsonArray(
-                new JsonObject { ["tool"] = "mcp__dssharness__view_file", ["input"] = new JsonObject { ["path"] = "a.txt" } },
-                new JsonObject { ["tool"] = "mcp__dssharness__create_file", ["input"] = new JsonObject { ["path"] = "made.txt", ["content"] = "made\n" } }),
-        }]);
-        var sink = new Sink();
-
-        var result = await kit.Client().RunAsync(Handed(kit) with { Ground = kit.Ground() with { Capabilities = [AgentCapability.Read, AgentCapability.Write, AgentCapability.Run] } }, sink, Token);
-
-        Assert.Equal((AgentRunStatus.Completed, 1), (result.Status, result.FilesWritten));
-
-        var finished = sink.Of<ToolCallFinished>().ToList();
-        Assert.All(finished, call => Assert.True(call.Ok, call.Result));
-        Assert.Contains("1\talpha", finished[0].Result, StringComparison.Ordinal);
-        Assert.Equal("made\n", File.ReadAllText(Path.Combine(kit.Worktree, "made.txt")));
-    }
-
-    /// <summary>A run of the kit's that hands its commands to an isolation of a mechanism that takes them, over a profile that denies nothing.</summary>
-    private static AgentRun Handed(Kit kit)
-        => kit.Run() with { Isolation = new DssHarness.Core.Agents.Isolation.LaunchIsolation("required", new PassThroughMechanism(), new DssHarness.Core.Processes.IsolationProfile([], []), null, null).Processes };
-
-    /// <summary>
-    /// Where this tool runs with its assembly handed to a runtime, Claude Code's shell prefix cannot name it, so a launch
-    /// with an isolation starts nothing - never one whose commands would run outside it - and says why.
-    /// </summary>
-    [Fact]
-    public async Task ALaunchWhoseCommandsCannotBeHandedOver_StartsNothing_SayingWhy()
-    {
-        using var kit = new Kit { Self = ("/usr/bin/dotnet", ["exec", "/src/dssharness.dll"]) };
-        kit.Script([new JsonObject()]);
-        var commands = new DssHarness.Core.Processes.IsolationProfile([], []) { Temp = "/t" };
-
-        var result = await kit.Client().RunAsync(kit.Run() with { Isolation = new DssHarness.Core.Agents.Isolation.LaunchIsolation("required", new PassThroughMechanism(), commands, null, null).Processes }, new Sink(), Token);
-
-        Assert.Empty(kit.Runner.Requests);
-        Assert.Equal((AgentRunStatus.NotStarted, AgentNotStartedBecause.ConfigurationWrong), (result.Status, result.NotStartedBecause));
-        Assert.Equal(
-            "client 'claude-code' was not started: Claude Code's commands could not be handed to the isolation: this tool runs as '/usr/bin/dotnet' with its assembly handed to it, which Claude Code's shell prefix cannot name: run the installed tool",
-            result.Error);
+        Assert.Equal(string.Empty, Value(request.Arguments, "--tools"));
     }
 
     /// <summary>
@@ -3384,22 +2919,89 @@ public sealed class ClaudeCodeClientTests : IDisposable
     }
 
     /// <summary>
-    /// A launch that does not end once its input is closed after its answer is ended whole when the bound it is given to
-    /// end in passes, and the step keeps its answer: what the launch did is done, and only its end was waited on.
+    /// A launch that does not end once its input is closed after its answer is waited on to its own end, however long that
+    /// takes: no time of the client's own ends it, the step is told it still waits once the wait has lasted past
+    /// <see cref="DssHarness.Core.Waiting.Waits.SaidEvery"/>, and the launch ends by itself, the step keeping its answer.
+    /// The client's own clock moves only as the test moves it. Red with a bound of the client's own on a launch's end (the
+    /// 5 s that was): six minutes pass it, and the launch is ended whole before anything is told.
     /// </summary>
     [Fact]
-    public async Task ALaunchThatOutlivesItsAnswer_IsEndedWholeAfterTheEndBound_AndTheStepKeepsItsAnswer()
+    public async Task ALaunchThatOutlivesItsAnswer_IsWaitedOnToItsOwnEnd_ToldWhileItLasts()
     {
         using var kit = new Kit();
-        kit.Script([new JsonObject { ["ignoreEof"] = true }]);
-        kit.Clock = new BoundsClock((ClaudeCodeClient.EndBound, TimeSpan.FromSeconds(1)));
+        var release = kit.Temp.Combine("release-the-end");
+        kit.Script([new JsonObject { ["exitOnceFile"] = release, ["text"] = "done" }]);
+        var clock = new TimerClock();
+        kit.Clock = clock;
+        var answered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var told = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var sink = new Sink(@event =>
+        {
+            if (@event is TurnFinished)
+            {
+                answered.TrySetResult();
+            }
+            else if (@event is Notice)
+            {
+                told.TrySetResult();
+            }
+        });
 
-        var result = await kit.Client().RunAsync(kit.Run(), new Sink(), Token).WaitAsync(TimeSpan.FromSeconds(60), Token);
+        var running = kit.Client().RunAsync(kit.Run(), sink, Token);
+
+        // The turn answered, the launch's input is closed and its end waited on, on the client's clock: six minutes of it
+        // pass the first time a wait is told.
+        await answered.Task.WaitAsync(Token);
+        await clock.WaitingAsync().WaitAsync(Token);
+        clock.Advance(TimeSpan.FromMinutes(6));
+        await Task.WhenAny(told.Task, running).WaitAsync(Token);
+
+        Assert.True(told.Task.IsCompleted, "the launch was ended before it was told to be waited on");
+        Assert.False(running.IsCompleted, "the launch was ended while it was ending by itself");
+
+        File.WriteAllText(release, "go");
+        var result = await running;
 
         Assert.Equal((AgentRunStatus.Completed, "done"), (result.Status, result.FinalText));
+        Assert.Equal("has waited 6m00s for claude fake to end once its input was closed", Assert.Single(sink.Of<Notice>()).Text);
     }
 
-    /// <summary>The run's reporter is given the tools that read and no other, whatever capabilities its ground names.</summary>
+    /// <summary>
+    /// The MCP setting holds one page: every launch is given a <c>MAX_MCP_OUTPUT_TOKENS</c> no smaller than a page of a
+    /// tool's answer to a model - three times its characters, as JSON escapes and the answer's envelope may take them, a
+    /// token never less than one character - in its environment and in its settings' env alike, so Claude Code never cuts
+    /// an answer the engine paged. Red where the name is left to Claude Code's default, or set below one page.
+    /// </summary>
+    [Fact]
+    public async Task TheMcpOutputSetting_HoldsOnePage()
+    {
+        using var kit = new Kit();
+        kit.Script([new JsonObject()]);
+
+        var result = await kit.Client().RunAsync(kit.Run(), new Sink(), Token);
+
+        Assert.Equal(AgentRunStatus.Completed, result.Status);
+
+        var env = JsonNode.Parse(File.ReadAllText(Path.Combine(kit.StepDirectory, ClaudeLaunch.SettingsFileName)))!["env"]!;
+        var said = new[]
+        {
+            Assert.Single(kit.Runner.Requests).Environment.GetValueOrDefault("MAX_MCP_OUTPUT_TOKENS"),
+            env["MAX_MCP_OUTPUT_TOKENS"]?.GetValue<string>(),
+            Assert.Single(kit.Launches()).Environment.GetValueOrDefault("MAX_MCP_OUTPUT_TOKENS"),
+        };
+
+        foreach (var tokens in said)
+        {
+            Assert.True(int.TryParse(tokens, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var given), $"the launch was given no MAX_MCP_OUTPUT_TOKENS: '{tokens}'");
+            Assert.True(given >= DssHarness.Core.Pages.PageRoom.ModelAnswer, $"{given} tokens hold less than one page of {DssHarness.Core.Pages.PageRoom.ModelAnswer} characters");
+            Assert.Equal(3 * DssHarness.Core.Pages.PageRoom.ModelAnswer, given);
+        }
+    }
+
+    /// <summary>
+    /// The run's reporter is given the engine's tool server's tools that read and no other, whatever capabilities its ground
+    /// names, and none of Claude Code's own.
+    /// </summary>
     [Fact]
     public async Task TheRunsReporter_IsGivenTheToolsThatReadAlone()
     {
@@ -3410,7 +3012,10 @@ public sealed class ClaudeCodeClientTests : IDisposable
         var result = await kit.Client().RunAsync(run, new Sink(), Token);
 
         Assert.Equal(AgentRunStatus.Completed, result.Status);
-        Assert.Equal("Read,Grep,Glob", Value(Assert.Single(kit.Launches()).Arguments, "--tools"));
+        Assert.Equal(string.Empty, Value(Assert.Single(kit.Launches()).Arguments, "--tools"));
+        Assert.Equal(
+            ["mcp__dssharness__find_files", "mcp__dssharness__read_result", "mcp__dssharness__search_files", ViewFile],
+            JsonNode.Parse(File.ReadAllText(Path.Combine(kit.StepDirectory, ClaudeLaunch.SettingsFileName)))!["permissions"]!["ask"]!.AsArray().Select(rule => rule!.GetValue<string>()));
     }
 
     /// <summary>
@@ -3437,11 +3042,11 @@ public sealed class ClaudeCodeClientTests : IDisposable
         Assert.Equal(AgentRunStatus.Completed, result.Status);
 
         var launch = Assert.Single(kit.Launches());
-        Assert.Equal("Read,Grep,Glob", Value(launch.Arguments, "--tools"));
+        Assert.Equal(string.Empty, Value(launch.Arguments, "--tools"));
 
         var denied = Assert.Single(sink.Of<PermissionDenied>());
         Assert.Equal(
-            ("Bash", ClaudeToolDecider.ToolsRule, "'Bash' is no tool this agent was given; it was given: Read, Grep, Glob"),
+            ("Bash", ClaudeToolDecider.ToolsRule, $"'Bash' is no tool this agent was given; it was given: mcp__dssharness__find_files, mcp__dssharness__read_result, mcp__dssharness__search_files, {ViewFile}"),
             (denied.Tool, denied.Rule, denied.Reason));
 
         Assert.Equal("sk-work", launch.Environment["ANTHROPIC_API_KEY"]);
@@ -3463,7 +3068,7 @@ public sealed class ClaudeCodeClientTests : IDisposable
 
         using (var bare = new Kit())
         {
-            bare.Script([new JsonObject { ["calls"] = new JsonArray(new JsonObject { ["tool"] = "Read", ["input"] = new JsonObject { ["file_path"] = "a.txt" } }) }]);
+            bare.Script([new JsonObject { ["calls"] = new JsonArray(new JsonObject { ["tool"] = ViewFile, ["input"] = new JsonObject { ["path"] = "a.txt" } }) }]);
 
             var result = await bare.StepRunner().RunAsync(bare.Step() with { Credential = credential, Withheld = ["WORK_KEY"] }, null, Token);
 
@@ -3479,7 +3084,7 @@ public sealed class ClaudeCodeClientTests : IDisposable
             new JsonObject
             {
                 ["stderr"] = $"warning: signing in with {Key}",
-                ["calls"] = new JsonArray(new JsonObject { ["tool"] = "Read", ["input"] = new JsonObject { ["file_path"] = $"{Key}.txt" } }),
+                ["calls"] = new JsonArray(new JsonObject { ["tool"] = ViewFile, ["input"] = new JsonObject { ["path"] = $"{Key}.txt" } }),
                 ["text"] = $"The key is {Key}.",
                 ["exitAfter"] = 5,
             },
@@ -3719,7 +3324,7 @@ public sealed class ClaudeCodeClientTests : IDisposable
     {
         using var kit = new Kit();
         var config = kit.Temp.Combine("claude-config");
-        kit.Script([new JsonObject { ["sessionFile"] = "proj", ["calls"] = new JsonArray(new JsonObject { ["tool"] = "Read", ["input"] = new JsonObject { ["file_path"] = "a.txt" } }), ["hang"] = true }]);
+        kit.Script([new JsonObject { ["sessionFile"] = "proj", ["calls"] = new JsonArray(new JsonObject { ["tool"] = ViewFile, ["input"] = new JsonObject { ["path"] = "a.txt" } }), ["hang"] = true }]);
         using var stop = CancellationTokenSource.CreateLinkedTokenSource(Token);
         var sink = new Sink(@event =>
         {
@@ -3970,6 +3575,22 @@ public sealed class ClaudeCodeClientTests : IDisposable
     /// <summary>The tool of the engine's tool server a launch with the web takes, as Claude Code names it.</summary>
     private const string Served = "mcp__dssharness__web_fetch";
 
+    /// <summary>The engine's tool server's file reader, as Claude Code names it.</summary>
+    private const string ViewFile = "mcp__dssharness__view_file";
+
+    /// <summary>
+    /// Every tool a launch of the kit's ground is given - every capability, no source to search - as Claude Code names
+    /// them, in the order the runtime offers them: each the engine's tool server's, none of Claude Code's own.
+    /// </summary>
+    private static readonly string[] Given =
+    [
+        .. new[]
+        {
+            "create_directory", "create_file", "delete_directory", "delete_file", "find_files", "insert_in_file", "move_path",
+            "read_result", "replace_in_file", "run_command", "search_files", "view_file", "web_fetch",
+        }.Select(tool => "mcp__dssharness__" + tool),
+    ];
+
     /// <summary>An address that answers nothing, and once its request is cancelled takes a moment to end, as a connection's close does.</summary>
     private sealed class SlowToEndEndpoint : HttpMessageHandler
     {
@@ -4093,7 +3714,7 @@ public sealed class ClaudeCodeClientTests : IDisposable
 
     /// <summary>
     /// The machine's clock, but for the bounds a test gives others: a wait of a bound named here waits its other span
-    /// instead, so a bound of 30 s is reached in one and a bound that would end a launch is never reached in a test.
+    /// instead, so the interrupt's bound of 10 s is reached in one.
     /// </summary>
     private sealed class BoundsClock(params (TimeSpan Bound, TimeSpan Instead)[] bounds) : TimeProvider
     {
@@ -4109,16 +3730,6 @@ public sealed class ClaudeCodeClientTests : IDisposable
 
             return TimeProvider.System.CreateTimer(callback, state, dueTime, period);
         }
-    }
-
-    /// <summary>
-    /// A file system whose reading of the links of one file fails as no policy expects it to: a fault of the engine's own,
-    /// not a path it cannot read, which the policy answers undecided.
-    /// </summary>
-    private sealed class FaultsOn(DssHarness.Core.FileSystem.IFileSystem inner, string file) : PassThroughFileSystem(inner)
-    {
-        public override string ResolveLinks(string path)
-            => Path.GetFileName(path) == file ? throw new InvalidOperationException($"'{path}' cannot be looked at") : base.ResolveLinks(path);
     }
 
     /// <summary>A mask that masks nothing.</summary>
@@ -4154,10 +3765,11 @@ public sealed class ClaudeCodeClientTests : IDisposable
         public Dictionary<string, string> Own { get; }
 
         /// <summary>
-        /// The clock the client is given: the bound a launch is given to end in by itself is never reached, so a launch the
-        /// client should end at once and does not holds its test until the test's own bound, which fails it.
+        /// The clock the client is given: the machine's, unless a test gives another. A launch is waited on to end by itself
+        /// for as long as it takes, so one the client should end at once and does not holds its test until the test's own
+        /// bound, which fails it.
         /// </summary>
-        public TimeProvider Clock { get; set; } = new BoundsClock((ClaudeCodeClient.EndBound, TimeSpan.FromMinutes(10)));
+        public TimeProvider Clock { get; set; } = TimeProvider.System;
 
         /// <summary>The file system the client runs on: the machine's, unless a test gives it one that fails.</summary>
         public DssHarness.Core.FileSystem.IFileSystem? FileSystem { get; set; }
@@ -4185,19 +3797,7 @@ public sealed class ClaudeCodeClientTests : IDisposable
         /// none is given - and every result it answers held together as the runner holds it.
         /// </summary>
         public IAgentClient Client(IProcessRunner? processes = null)
-            => new HeldTogether(new ClaudeCodeClient(processes ?? Runner, FileSystem ?? Harness.FileSystem, Harness.Platform, Harness.ChildSessions, Clock, () => Own, Tools(), () => Self)
-            {
-                TreeLock = TreeLock ?? MainTreeWriteLock.HoldAsync,
-            });
-
-        /// <summary>How the client takes the main tree's lock for a side-task's write or command: the lock's own, unless a test gives another.</summary>
-        public Func<string, CancellationToken, Task<MachineWideHold?>>? TreeLock { get; set; }
-
-        /// <summary>The name of the main tree's lock the kit's runs take, its main checkout the kit's own.</summary>
-        public string TreeLockName => MainTreeWriteLock.NameFor(Temp.Path);
-
-        /// <summary>This tool's own program as a launch's shell prefix names it: the installed tool's, unless a test gives another.</summary>
-        public (string Program, IReadOnlyList<string> Leading) Self { get; set; } = ("/opt/tools/dssharness", []);
+            => new HeldTogether(new ClaudeCodeClient(processes ?? Runner, FileSystem ?? Harness.FileSystem, Harness.Platform, Harness.ChildSessions, Clock, () => Own, Tools()));
 
         /// <summary>What the web answers the harness's own fetch with: one page of text, unless a test gives another.</summary>
         public HttpMessageHandler Endpoint { get; set; } = new WebEndpoint(_ => WebEndpoint.Page("the page's text", "text/plain"));

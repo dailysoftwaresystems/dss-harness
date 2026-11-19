@@ -1,16 +1,23 @@
 namespace DssHarness.Core.Agents.ClaudeCode;
 
 /// <summary>
-/// Which of Claude Code's tools a launch is given: the tools of the agent's capabilities and no other, by one table -
-/// what <c>--tools</c> names, what the launch's settings hold an ask rule for, what the engine decides a call of, and
-/// what <c>help agent-clients</c> prints.
+/// Which tools a Claude Code launch is given: the engine's tool server's, by the agent's capabilities, and of Claude Code's
+/// own a side-task's web tools alone - what <c>--tools</c> names, what the launch's settings hold an ask rule for, what the
+/// engine decides a call of, and what <c>help agent-clients</c> prints.
 /// </summary>
 /// <remarks>
-/// The names are the ones Claude Code gives its tools, as the probe read them on every version it measured. A web tool of
-/// Claude Code's own is named by no capability: the web reaches an agent on this client through the engine's tool server
-/// (<see cref="ServerTools"/>), which serves the harness's own fetch and search beside <c>--tools</c>. Where Claude Code's
-/// own process runs apart from the isolation it hands its commands to, its file tools are given no launch either: the same
-/// server serves the runtime's in their place (<see cref="FileTools"/>), and <c>--tools</c> names its shell alone.
+/// <para>
+/// Every tool the tool runtime offers an agent - its file tools, its command tool <c>run_command</c> and the web's - is
+/// served to a launch by the engine's tool server (<see cref="ServerTools"/>), beside the run's graph and measure tools, so
+/// each call is run by the runtime as on the API clients: a command under the isolation of the agent's commands, its
+/// output kept whole and paged, a file opened and decided again by where the system names it. Claude Code's own shell and
+/// file tools are given no launch: <c>--tools</c> names a side-task's own <c>WebFetch</c> and <c>WebSearch</c>, or nothing.
+/// </para>
+/// <para>
+/// The names of Claude Code's own tools are the ones it gives them, as the probe read them on every version it measured.
+/// Their table (<see cref="Table"/>) reads what a call of one is of - a call in a stream stored before, a skill's allowed
+/// tools, a side-task's own web call - though no launch is given one of its file or shell tools.
+/// </para>
 /// </remarks>
 public static class ClaudeCodeTools
 {
@@ -24,10 +31,11 @@ public static class ClaudeCodeTools
     public const string Edit = "Edit";
 
     /// <summary>
-    /// Each capability with the tools it names, in the order a definition names the capabilities; each tool with the
-    /// member of its input that names what a call of it is of - the path it reads or writes, the command it runs - and
-    /// whether it searches, reading what lies beneath the directory it names - the agent's working directory where it
-    /// names none.
+    /// Each capability with the tools of Claude Code's own it names, in the order a definition names the capabilities;
+    /// each tool with the member of its input that names what a call of it is of - the path it reads or writes, the
+    /// command it runs - and whether it searches, reading what lies beneath the directory it names - the agent's working
+    /// directory where it names none. No launch is given one of them: the engine's tool server serves the runtime's in
+    /// their place.
     /// </summary>
     public static IReadOnlyList<(AgentCapability Capability, IReadOnlyList<ClaudeCodeTool> Tools)> Table { get; } =
     [
@@ -48,44 +56,31 @@ public static class ClaudeCodeTools
     public const string Server = Runtime.AgentToolServer.Name;
 
     /// <summary>
-    /// The runtime's tools a launch takes from the engine's tool server, by the runtime's names: every tool of the runtime
-    /// whose capability names none of Claude Code's own in <see cref="Table"/> - the web's, the harness's own fetch and
-    /// search, on a step the runtime offers them to - and the run's graph and measure tools, offered where its run is
-    /// given one (<c>graph: tools</c>; a repository that declares legs), each beside <c>--tools</c> and never named in it,
-    /// with an ask rule as every tool has. Claude Code's own <c>WebFetch</c> and
-    /// <c>WebSearch</c> are given no launch.
+    /// The tools the engine's tool server serves, by the runtime's names: every tool of the tool runtime - its file tools,
+    /// its command tool and the web's, each to a launch whose step the runtime offers it to - and the run's graph and
+    /// measure tools, offered where its run is given one (<c>graph: tools</c>; a repository that declares legs), each with
+    /// an ask rule as every tool has.
     /// </summary>
     public static IReadOnlyList<string> ServerTools { get; } =
         [.. Runtime.AgentTools.All(AgentCommandSettings.Default)
-            .Where(tool => Table.Any(row => row.Capability == tool.Needs && row.Tools.Count == 0))
             .Select(tool => tool.Name)
             .Concat([AgentGraphSupport.ToolName, AgentMeasureSupport.ToolName])];
 
     /// <summary>
-    /// The capabilities whose tools are the file tools: Claude Code's own, where its process runs where its commands do;
-    /// served by the engine in their place where it runs apart from the isolation it hands its commands to.
-    /// </summary>
-    public static IReadOnlyList<AgentCapability> FileCapabilities { get; } = [AgentCapability.Read, AgentCapability.Write];
-
-    /// <summary>
-    /// The runtime's file tools, by the runtime's names, in its table's order: what the engine's tool server serves a launch
-    /// in place of Claude Code's own file tools, where Claude Code's own process runs apart from the isolation it hands its
-    /// commands to. Claude Code would open each file by a path the engine decided earlier, in its own process outside - a
-    /// link a command put on the way in between reaching what the isolation keeps from every command; the runtime opens
-    /// each and decides the open file again by where the system names it.
+    /// The runtime's file tools, by the runtime's names, in its table's order: what the engine's tool server serves every
+    /// launch of an agent that reads or writes. Claude Code would open each file by a path the engine decided earlier, in
+    /// its own process - a link a command put on the way in between reaching what the isolation keeps from every command;
+    /// the runtime opens each and decides the open file again by where the system names it.
     /// </summary>
     public static IReadOnlyList<string> FileTools { get; } =
-        [.. Runtime.AgentTools.All(AgentCommandSettings.Default).Where(tool => FileCapabilities.Contains(tool.Needs)).Select(tool => tool.Name)];
+        [.. Runtime.AgentTools.All(AgentCommandSettings.Default)
+            .Where(tool => tool.Needs is AgentCapability.Read or AgentCapability.Write)
+            .Select(tool => tool.Name)];
 
-    /// <summary>The runtime's tools the engine's tool server serves a launch: <see cref="ServerTools"/>, and <see cref="FileTools"/> where Claude Code's own file tools are not given.</summary>
-    /// <param name="ownFiles">Whether the launch is given Claude Code's own file tools.</param>
-    public static IReadOnlyList<string> ServedTools(bool ownFiles) => ownFiles ? ServerTools : [.. FileTools, .. ServerTools];
-
-    /// <summary>The tools of the engine's tool server <paramref name="capability"/> gives, as Claude Code names them.</summary>
+    /// <summary>The tools of the engine's tool server <paramref name="capability"/> gives, as Claude Code names them, in the runtime's table's order.</summary>
     /// <param name="capability">The capability.</param>
-    /// <param name="ownFiles">Whether the launch is given Claude Code's own file tools.</param>
-    public static IReadOnlyList<string> ServedOf(AgentCapability capability, bool ownFiles = true)
-        => [.. Runtime.AgentTools.All(AgentCommandSettings.Default).Where(tool => tool.Needs == capability && ServedTools(ownFiles).Contains(tool.Name, StringComparer.Ordinal)).Select(tool => ServedName(tool.Name))];
+    public static IReadOnlyList<string> ServedOf(AgentCapability capability)
+        => [.. Runtime.AgentTools.All(AgentCommandSettings.Default).Where(tool => tool.Needs == capability).Select(tool => ServedName(tool.Name))];
 
     /// <summary>What Claude Code calls a tool of the engine's tool server: <c>mcp__dssharness__web_search</c>.</summary>
     /// <param name="tool">The tool, by the runtime's name.</param>
@@ -102,28 +97,28 @@ public static class ClaudeCodeTools
     {
         ArgumentNullException.ThrowIfNull(name);
 
-        return name.StartsWith(ServedPrefix, StringComparison.Ordinal) && ServedTools(ownFiles: false).Contains(name[ServedPrefix.Length..], StringComparer.Ordinal)
+        return name.StartsWith(ServedPrefix, StringComparison.Ordinal) && ServerTools.Contains(name[ServedPrefix.Length..], StringComparer.Ordinal)
             ? name[ServedPrefix.Length..]
             : null;
     }
 
-    /// <summary>The tools of the engine's tool server a launch takes, by the runtime's names: those the runtime offers its step (<see cref="Runtime.AgentTools.Offered"/>) that the server serves it.</summary>
+    /// <summary>The tools of the engine's tool server a launch takes, by the runtime's names: every one the runtime offers its step (<see cref="Runtime.AgentTools.Offered"/>).</summary>
     /// <param name="offered">What the runtime offers the step.</param>
-    /// <param name="ownFiles">Whether the launch is given Claude Code's own file tools.</param>
-    public static IReadOnlyList<string> Served(IReadOnlyList<Runtime.AgentToolDefinition> offered, bool ownFiles = true)
+    public static IReadOnlyList<string> Served(IReadOnlyList<Runtime.AgentToolDefinition> offered)
     {
         ArgumentNullException.ThrowIfNull(offered);
 
-        var served = ServedTools(ownFiles);
-
-        return [.. offered.Select(tool => tool.Name).Where(name => served.Contains(name, StringComparer.Ordinal))];
+        return [.. offered.Select(tool => tool.Name).Where(name => ServerTools.Contains(name, StringComparer.Ordinal))];
     }
 
     /// <summary>What Claude Code begins the name of each tool of the engine's tool server with.</summary>
     private const string ServedPrefix = "mcp__" + Server + "__";
 
-    /// <summary>What the run's reporter is given, whose reads are narrowed: the tools of <see cref="Policy.AgentPolicyGround.ReporterCapabilities"/>.</summary>
-    public static IReadOnlyList<string> Reporter { get; } = Of(Policy.AgentPolicyGround.ReporterCapabilities);
+    /// <summary>
+    /// What the run's reporter is given, whose reads are narrowed: the engine's tool server's tools of
+    /// <see cref="Policy.AgentPolicyGround.ReporterCapabilities"/>, as Claude Code names them.
+    /// </summary>
+    public static IReadOnlyList<string> Reporter { get; } = [.. Policy.AgentPolicyGround.ReporterCapabilities.SelectMany(capability => ServedOf(capability))];
 
     /// <summary>
     /// Claude Code's own tool for an answer held to the launch's <c>--json-schema</c>: the way an answer arrives, never a
@@ -138,22 +133,18 @@ public static class ClaudeCodeTools
     /// </summary>
     public static IReadOnlyList<string> NeverOffered { get; } = ["Agent", "Task", "Skill", "AskUserQuestion", "EnterPlanMode", "ExitPlanMode"];
 
-    /// <summary>The tools a launch is given, in the table's order, each once.</summary>
+    /// <summary>
+    /// The tools of Claude Code's own a launch is given, as <c>--tools</c> names them: its own web tools where the agent has
+    /// the web and the launch is a side-task's (<see cref="OwnWeb"/>), and none otherwise - every other tool of the launch's
+    /// is the engine's tool server's.
+    /// </summary>
     /// <param name="capabilities">What its tools are given by: the agent's own, or the reporter's (<see cref="Policy.AgentPolicyGround.Given"/>).</param>
-    /// <param name="ownWeb">Whether Claude Code's own web tools are given with them, as a side-task's launch alone
-    /// is.</param>
-    /// <param name="ownFiles">
-    /// Whether Claude Code's own file tools are given: false where its own process runs apart from the isolation it hands its
-    /// commands to, and the engine's tool server serves <see cref="FileTools"/> in their place.
-    /// </param>
-    public static IReadOnlyList<string> Of(IReadOnlyList<AgentCapability> capabilities, bool ownWeb = false, bool ownFiles = true)
+    /// <param name="ownWeb">Whether Claude Code's own web tools are given, as a side-task's launch alone is.</param>
+    public static IReadOnlyList<string> Of(IReadOnlyList<AgentCapability> capabilities, bool ownWeb = false)
     {
         ArgumentNullException.ThrowIfNull(capabilities);
 
-        return [.. Table.Where(row => capabilities.Contains(row.Capability) && (ownFiles || !FileCapabilities.Contains(row.Capability)))
-            .SelectMany(row => row.Tools.Concat(row.Capability == AgentCapability.Web && ownWeb ? OwnWeb : []))
-            .Select(tool => tool.Name)
-            .Distinct(StringComparer.Ordinal)];
+        return ownWeb && capabilities.Contains(AgentCapability.Web) ? [.. OwnWeb.Select(tool => tool.Name)] : [];
     }
 
     /// <summary>The table's row of <paramref name="tool"/>: its capability and what its input names; null for a tool the table does not name.</summary>
