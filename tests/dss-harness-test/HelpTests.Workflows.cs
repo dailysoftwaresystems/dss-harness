@@ -104,7 +104,8 @@ public sealed partial class HelpTests
         Assert.Contains(
             "A fold's apply, and a deletion's, is held to exactly what its dry run named: measured again under its hold and found "
                 + "to write anything else - the trees moved between the two - it writes nothing; an apply of any of the four refused "
-                + $"under its hold so is weighed again, {FoldFamilyStepRunner.MostPasses} times at most. A fold, and a deletion that "
+                + "under its hold so is weighed again, pass after pass, until it applies, or fails with what it said once its trees "
+                + "come back to what a pass weighed before. A fold, and a deletion that "
                 + $"folds, write each path they mean to write, with what the main tree holds there, to the run's ledger ({OrchestratorLayout.FoldsFileName}) "
                 + "before the verb is called, and what they left after, written by the verb under the main tree's lock it wrote "
                 + "under, before it lets that lock go",

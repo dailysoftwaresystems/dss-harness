@@ -1,8 +1,13 @@
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using DssHarness.Core.Application;
+using DssHarness.Core.FileSystem;
 using DssHarness.Core.Platform;
 using DssHarness.Core.Repository;
 using DssHarness.Core.Results;
+using DssHarness.Core.Walks;
 
 namespace DssHarness.Core.Orchestration.Flow;
 
@@ -115,8 +120,10 @@ public static class FoldStandings
 /// in the step's directory (<c>fold.json</c>); answered, the dry run made again, and the consent given by name only where
 /// that names exactly what the question showed - a consent that no longer does is never passed; then the apply - a fold's
 /// and a deletion's held to what the dry run named, and written ahead to the run's ledger of its folds and settled after;
-/// a refresh's and a rebase's request names nothing of the kind. An apply its trees moved under is weighed again, at most
-/// <see cref="MostPasses"/> times. What a fold settled in the main tree - and what a crash left settled by the next
+/// a refresh's and a rebase's request names nothing of the kind. An apply its trees moved under is weighed again, pass after
+/// pass, until it applies or its trees come back to a state a pass weighed before (<see cref="Fixpoint"/>): ten agents
+/// folding into one tree at once each go on until its own fold goes through, and a fold whose trees go round - or stand
+/// still under a refusal - fails with what its apply said and how its trees came round. What a fold settled in the main tree - and what a crash left settled by the next
 /// attempt - syncs the run's graph's base by those paths; a refresh or a rebase that applied syncs its target's view; a
 /// deletion that applied drops its agent's view, and one run again once its agent is deleted is done
 /// (<see cref="DoneAlreadyAsync"/>).
@@ -128,9 +135,6 @@ public static class FoldStandings
 /// <param name="graph">The engine's own syncs of the run's codebase graph.</param>
 public abstract class FoldFamilyStepRunner(IHarnessContextLoader contextLoader, IHostPlatform platform, OrchestrationStore store, FoldLedger? ledger, FlowGraphSyncs graph) : IFlowStepTypeRunner
 {
-    /// <summary>The most times one attempt weighs its dry run and applies, its trees moving under it each time, before it fails.</summary>
-    public const int MostPasses = 3;
-
     /// <inheritdoc/>
     public abstract string Type { get; }
 
@@ -251,24 +255,28 @@ public abstract class FoldFamilyStepRunner(IHarnessContextLoader contextLoader, 
         var grants = record.Granted.ToList();
         record = record with { Attempt = run.Attempt, Agent = agent, Asked = null };
 
-        for (var pass = 1; ; pass++)
+        // Each pass weighs the dry run again and applies; one its trees moved under is weighed again, until it applies or
+        // its trees come back to what a pass weighed before - never at a count of passes.
+        async Task<FixpointStep<FoldPass>> PassAsync(FoldPass before, CancellationToken token)
         {
+            FixpointStep<FoldPass> Ended(FlowStepResult result) => new(before with { Ended = result }, Done: true);
+
             var bare = call with { Grants = [], AlsoExcept = [], Apply = false };
 
             if (ProblemOf(bare) is { } spelt)
             {
-                return FlowStepResult.Ended(passed: false, HarnessExit.ConfigInvalid, $"'{run.Instance}' takes {spelt}");
+                return Ended(FlowStepResult.Ended(passed: false, HarnessExit.ConfigInvalid, $"'{run.Instance}' takes {spelt}"));
             }
 
             // The dry run on the keys alone, which every consent is held to: what it names now is what the trees hold now.
-            var first = await CallAsync(bare, cancellationToken).ConfigureAwait(false);
+            var first = await CallAsync(bare, token).ConfigureAwait(false);
 
             if (first.Facts?.Standing is null)
             {
                 // Not weighed - nothing it named can be held to the question - so an answer that came back waits on, where
                 // it stands, for the attempt that can weigh it.
                 store.WriteFoldRecord(directory, record with { Asked = asked, Shown = ShownOf(first, []), Applied = null });
-                return FlowStepResult.Failed(first.Outcome);
+                return Ended(FlowStepResult.Failed(first.Outcome));
             }
 
             var firstOutside = OutsideOf(first.Facts, call, folds);
@@ -299,10 +307,10 @@ public abstract class FoldFamilyStepRunner(IHarnessContextLoader contextLoader, 
 
             if (ProblemOf(given) is { } givenSpelt)
             {
-                return FlowStepResult.Ended(passed: false, HarnessExit.ConfigInvalid, $"'{run.Instance}' takes {givenSpelt}");
+                return Ended(FlowStepResult.Ended(passed: false, HarnessExit.ConfigInvalid, $"'{run.Instance}' takes {givenSpelt}"));
             }
 
-            var dry = grants.Count == 0 && leftConflicting.Count == 0 ? first : await CallAsync(given, cancellationToken).ConfigureAwait(false);
+            var dry = grants.Count == 0 && leftConflicting.Count == 0 ? first : await CallAsync(given, token).ConfigureAwait(false);
             var outside = OutsideOf(dry.Facts, call, folds);
 
             if (grants.Any(grant => grant.Kind == FlowQuestions.FoldOutside && Same(outside, grant.Named)))
@@ -316,7 +324,7 @@ public abstract class FoldFamilyStepRunner(IHarnessContextLoader contextLoader, 
             {
                 case FoldStanding.Ends:
                     store.WriteFoldRecord(directory, record);
-                    return FlowStepResult.Failed(dry.Outcome);
+                    return Ended(FlowStepResult.Failed(dry.Outcome));
 
                 case FoldStanding.Asks:
                 {
@@ -328,20 +336,20 @@ public abstract class FoldFamilyStepRunner(IHarnessContextLoader contextLoader, 
                     }
 
                     store.WriteFoldRecord(directory, record);
-                    return FlowStepResult.Standing(dryRun);
+                    return Ended(FlowStepResult.Standing(dryRun));
                 }
             }
 
             var expected = folds ? dry.Facts!.Planned : null;
             var intent = folds && expected is { } planned && Writes(planned)
-                ? await ledger!.IntendAsync(layout, place.Repository, run.Instance, run.Attempt, Type, agent, planned, cancellationToken).ConfigureAwait(false)
+                ? await ledger!.IntendAsync(layout, place.Repository, run.Instance, run.Attempt, Type, agent, planned, token).ConfigureAwait(false)
                 : null;
             var applying = given with { Apply = true, Expected = expected, Intent = intent is null ? null : new FoldIntent(ledger!, layout, intent) };
             UseCaseResult<AgentVerbFacts> applied;
 
             try
             {
-                applied = await CallAsync(applying, cancellationToken).ConfigureAwait(false);
+                applied = await CallAsync(applying, token).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (intent is not null)
             {
@@ -371,7 +379,7 @@ public abstract class FoldFamilyStepRunner(IHarnessContextLoader contextLoader, 
                 // exception, which says what happened, never the read's.
                 try
                 {
-                    _ = await ledger!.SettleInterruptedAsync(layout, place.Repository, run.Instance, cancellationToken).ConfigureAwait(false);
+                    _ = await ledger!.SettleInterruptedAsync(layout, place.Repository, run.Instance, token).ConfigureAwait(false);
                 }
                 catch (Exception)
                 {
@@ -396,15 +404,15 @@ public abstract class FoldFamilyStepRunner(IHarnessContextLoader contextLoader, 
 
             if (ledger is not null)
             {
-                await graph.AfterFoldAsync(run, place, context, cancellationToken).ConfigureAwait(false);
+                await graph.AfterFoldAsync(run, place, context, token).ConfigureAwait(false);
             }
 
-            await GraphAfterAsync(graph, applying, context, applied, cancellationToken).ConfigureAwait(false);
+            await GraphAfterAsync(graph, applying, context, applied, token).ConfigureAwait(false);
 
             if (applied.Outcome.Succeeded)
             {
                 // A refresh that handed what did not conflict asks of what it left: a person reconciles each.
-                return leftConflicting.Count > 0
+                return Ended(leftConflicting.Count > 0
                     ? FlowStepResult.Standing(new FlowDryRun(RequestStanding.Refused, [], [], [RefusalKind.Conflict], applied.Outcome.Message)
                     {
                         Conflicting = leftConflicting,
@@ -412,18 +420,65 @@ public abstract class FoldFamilyStepRunner(IHarnessContextLoader contextLoader, 
                         Agent = agent,
                         Target = run.Target,
                     })
-                    : FlowStepResult.Ended(passed: true, HarnessExit.Success, output: applied.Facts is { } facts ? MainTreeWriteLock.WaitedFor(facts.Waited, OutputOf(facts)) : null);
+                    : FlowStepResult.Ended(passed: true, HarnessExit.Success, output: applied.Facts is { } facts ? MainTreeWriteLock.WaitedFor(facts.Waited, OutputOf(facts)) : null));
             }
 
             // Refused under its hold for what it was not refused for a moment before - its trees moved between the two -
-            // it is weighed again; a run holding its trees is waited out by the retry table, as a held lock is.
-            if (applied.Outcome.ExitCode == HarnessExit.Refused && applied.Outcome.Cause != OutcomeCause.LockHeld && pass < MostPasses)
+            // it is weighed again, the trees as this pass found them its state; a run holding its trees is waited out by
+            // the retry table, as a held lock is.
+            if (applied.Outcome.ExitCode == HarnessExit.Refused && applied.Outcome.Cause != OutcomeCause.LockHeld)
             {
-                continue;
+                return new FixpointStep<FoldPass>(new FoldPass(StateOf(dry, applied), applied.Outcome, Ended: null), Done: false);
             }
 
-            return FlowStepResult.Failed(applied.Outcome);
+            return Ended(FlowStepResult.Failed(applied.Outcome));
         }
+
+        var passes = await Fixpoint.RunAsync(new FoldPass(State: string.Empty, Refused: null, Ended: null), PassAsync, pass => pass.State, cancellationToken).ConfigureAwait(false);
+
+        if (passes.Done)
+        {
+            return passes.State.Ended!;
+        }
+
+        // The trees came back to a state a pass weighed before, or stood as the pass before found them: weighed again, the
+        // apply would be refused the same, so it fails with what it said and how its trees came round.
+        var refused = passes.State.Refused!;
+        var said = refused.Message.TrimEnd();
+        var round = passes.Cycled
+            ? $"Weighed {passes.Steps.ToString(System.Globalization.CultureInfo.InvariantCulture)} times, its trees came back to what an earlier pass weighed: weighed again, they would go round for ever."
+            : $"Weighed {passes.Steps.ToString(System.Globalization.CultureInfo.InvariantCulture)} times, its trees held what the pass before weighed: weighed again, the apply would be refused the same.";
+
+        return FlowStepResult.Failed(refused with { Message = $"{said}{(said.EndsWith('.') ? string.Empty : ".")} {round}" });
+    }
+
+    /// <summary>
+    /// One pass of an attempt as the passes are told apart: the state of its trees - what its dry run named, what its apply
+    /// measured under its hold and how it was refused, as one digest - the refusal it ended on, and the step's ending
+    /// where the pass ended it.
+    /// </summary>
+    /// <param name="State">The digest of the trees as the pass found them; empty before the first.</param>
+    /// <param name="Refused">How the pass's apply was refused, where its trees moved under it.</param>
+    /// <param name="Ended">The step's ending, where the pass ended it.</param>
+    private sealed record FoldPass(string State, CommandOutcome? Refused, FlowStepResult? Ended);
+
+    /// <summary>
+    /// The state of the trees a pass found, as one digest: what its dry run named and stood, and what its apply measured
+    /// under its hold and was refused for, by kind - each what the trees hold, and nothing a clock or a process puts in a
+    /// line. Two passes of one digest found the trees alike, and a third would too.
+    /// </summary>
+    private static string StateOf(UseCaseResult<AgentVerbFacts> dry, UseCaseResult<AgentVerbFacts> applied)
+    {
+        var state = new JsonObject
+        {
+            ["dry"] = JsonSerializer.SerializeToNode(dry.Facts?.Planned, JsonStateFile.Options),
+            ["dryStanding"] = dry.Facts?.Standing?.ToString(),
+            ["applied"] = JsonSerializer.SerializeToNode(applied.Facts?.Planned, JsonStateFile.Options),
+            ["appliedStanding"] = applied.Facts?.Standing?.ToString(),
+            ["refusals"] = new JsonArray([.. (applied.Facts?.Refusals ?? []).Select(reason => (JsonNode?)reason.ToString())]),
+        };
+
+        return Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(state.ToJsonString())));
     }
 
     /// <summary>Whether <paramref name="planned"/> writes anything into the main tree, or applies a row.</summary>
