@@ -217,6 +217,42 @@ public sealed class ProcessSamplerTests
         Assert.True(ProcessSampler.InHarnessTree(child, new Dictionary<int, SampledProcess> { [child.Id] = child, [honest.Id] = honest }, harnessId: 100));
     }
 
+    /// <summary>
+    /// A process three hundred parents below the harness - a make recursing into its subdirectories that deep - is placed
+    /// inside the harness's tree: its parent links are followed to their end, never to a count of them, which once gave up
+    /// at sixty-four and called such a process another's.
+    /// </summary>
+    [Fact]
+    public void AThreeHundredDeepProcessChain_IsPlaced()
+    {
+        var table = new Dictionary<int, SampledProcess> { [100] = new(100, ParentId: 1, "dssharness", DateTimeOffset.UnixEpoch, "dssharness build") };
+
+        for (var depth = 1; depth <= 300; depth++)
+        {
+            table[100 + depth] = new SampledProcess(100 + depth, ParentId: 99 + depth, "make", DateTimeOffset.UnixEpoch.AddSeconds(depth), "make -C sub");
+        }
+
+        Assert.True(ProcessSampler.InHarnessTree(table[400], table, harnessId: 100));
+        Assert.False(ProcessSampler.InHarnessTree(table[400], table, harnessId: 7));
+    }
+
+    /// <summary>
+    /// Parent links that lead back to a process already followed - a table read while ids were being reused - are no
+    /// ancestry: the walk ends at the first revisit, and the process is not placed in the harness's tree.
+    /// </summary>
+    [Fact]
+    public void ParentLinksThatLoop_EndAtTheirFirstRevisit_PlacingNothing()
+    {
+        var table = new Dictionary<int, SampledProcess>
+        {
+            [10] = new(10, ParentId: 11, "a", DateTimeOffset.UnixEpoch, "a"),
+            [11] = new(11, ParentId: 12, "b", DateTimeOffset.UnixEpoch, "b"),
+            [12] = new(12, ParentId: 10, "c", DateTimeOffset.UnixEpoch, "c"),
+        };
+
+        Assert.False(ProcessSampler.InHarnessTree(table[10], table, harnessId: 100));
+    }
+
     [Fact]
     public void AProcessIsIdentifiedByItsIdAndItsStartTime()
     {

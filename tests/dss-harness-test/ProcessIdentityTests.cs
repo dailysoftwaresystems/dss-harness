@@ -179,5 +179,51 @@ public sealed class ProcessIdentityTests
         }
     }
 
+    /// <summary>
+    /// Windows' list of every process is read again, into the room it says it needs, for as long as it says the list
+    /// outgrew the room it was given - twenty times over here, on a machine starting processes fast - and the start it
+    /// holds is found: no count of tries leaves it unread, as eight once did. A status that is no such word is the list's
+    /// answer at once. Read through a stand-in for the system's call, so the walk of the list is held on every system.
+    /// </summary>
+    [Fact]
+    public void TheProcessList_RetriesWhileTheOsSaysMismatch()
+    {
+        var created = new DateTime(2026, 11, 19, 8, 30, 0, DateTimeKind.Utc).ToFileTimeUtc();
+        var rooms = new List<int>();
+
+        int Read(IntPtr list, int length, out int needed)
+        {
+            rooms.Add(length);
+            needed = length + 4096;
+
+            if (rooms.Count <= 20)
+            {
+                return SystemProcessList.LengthMismatch;
+            }
+
+            // One entry, the last: no next, the id asked for, and its creation time.
+            System.Runtime.InteropServices.Marshal.WriteInt32(list, 0);
+            System.Runtime.InteropServices.Marshal.WriteIntPtr(list, SystemProcessList.IdOffset, 4242);
+            System.Runtime.InteropServices.Marshal.WriteInt64(list, SystemProcessList.CreateTimeOffset, created);
+
+            return 0;
+        }
+
+        Assert.Equal(DateTime.FromFileTime(created).Ticks, SystemProcessList.StartTicks(4242, Read));
+        Assert.Equal(21, rooms.Count);
+
+        // Each room what the one before was said to need, and the room for growth beside it.
+        Assert.All(rooms.Zip(rooms.Skip(1)), pair => Assert.Equal(pair.First + 4096 + SystemProcessList.GrowthRoom, pair.Second));
+
+        rooms.Clear();
+        Assert.Null(SystemProcessList.StartTicks(4242, (IntPtr _, int length, out int needed) =>
+        {
+            rooms.Add(length);
+            needed = 0;
+            return unchecked((int)0xC0000022);
+        }));
+        Assert.Single(rooms);
+    }
+
     private static IProcessIdentity Identity() => new ProcessIdentity(new HostPlatform());
 }

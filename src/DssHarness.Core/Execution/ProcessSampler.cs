@@ -5,6 +5,7 @@ using System.Text;
 using DssHarness.Core.Output;
 using DssHarness.Core.Platform;
 using DssHarness.Core.Processes;
+using DssHarness.Core.Walks;
 
 namespace DssHarness.Core.Execution;
 
@@ -105,9 +106,6 @@ public sealed record OwnedBuildDirectory(string Directory, BuildDirectoryOwner O
 /// </remarks>
 public sealed class ProcessSampler(IProcessTable processTable, IHostPlatform platform, IHarnessOutput output)
 {
-    /// <summary>How far a parent link is followed before the walk is abandoned as a cycle.</summary>
-    private const int MaxAncestors = 64;
-
     private readonly IProcessTable _processTable = processTable;
     private readonly IHostPlatform _platform = platform;
     private readonly IHarnessOutput _output = output;
@@ -166,6 +164,12 @@ public sealed class ProcessSampler(IProcessTable processTable, IHostPlatform pla
     /// parent link only when the parent started no later than the child. A recycled id otherwise
     /// makes an unrelated process look like the harness's own child, and its contention invisible.
     /// </summary>
+    /// <remarks>
+    /// The parent links are followed to their end however many there are (<see cref="Chain"/>) - a make recursing three
+    /// hundred deep is placed as surely as a shell's child - and a link that leads back to a process already followed,
+    /// by its id and its start, ends the walk there: a table read while ids were being reused can hold a loop, and a loop
+    /// is no ancestry.
+    /// </remarks>
     /// <param name="process">The process to place.</param>
     /// <param name="byId">Every process in the same sample, by id.</param>
     /// <param name="harnessId">This process's id.</param>
@@ -174,31 +178,27 @@ public sealed class ProcessSampler(IProcessTable processTable, IHostPlatform pla
         ArgumentNullException.ThrowIfNull(process);
         ArgumentNullException.ThrowIfNull(byId);
 
-        var current = process;
-
-        for (var depth = 0; depth < MaxAncestors; depth++)
-        {
-            if (current.Id == harnessId)
+        var ancestry = Chain.Follow(
+            process,
+            current =>
             {
-                return true;
-            }
+                if (current.Id == harnessId
+                    || current.ParentId is not { } parentId
+                    || parentId <= 0
+                    || !byId.TryGetValue(parentId, out var parent))
+                {
+                    return ChainNext<SampledProcess>.End;
+                }
 
-            if (current.ParentId is not { } parentId || parentId <= 0 || !byId.TryGetValue(parentId, out var parent))
-            {
-                return false;
-            }
+                // The "parent" started after its child, so the id has been reused since. The link says nothing about
+                // this process, and following it would invent an ancestry.
+                return parent.StartedUtc is { } parentStart && current.StartedUtc is { } childStart && parentStart > childStart
+                    ? ChainNext<SampledProcess>.End
+                    : ChainNext<SampledProcess>.To(parent);
+            },
+            current => (current.Id, current.StartedUtc));
 
-            if (parent.StartedUtc is { } parentStart && current.StartedUtc is { } childStart && parentStart > childStart)
-            {
-                // The "parent" started after its child, so the id has been reused since. The link
-                // says nothing about this process, and following it would invent an ancestry.
-                return false;
-            }
-
-            current = parent;
-        }
-
-        return false;
+        return !ancestry.Cycled && ancestry.Members[^1].Id == harnessId;
     }
 
 }
