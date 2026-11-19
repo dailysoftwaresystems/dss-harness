@@ -948,10 +948,10 @@ public sealed class DartExtractorTests : CodeGraphExtractorContractTests<DartExt
     }
 
     /// <summary>
-    /// A use is of a value the code reads: each bare hole of a string - <c>'$a$b'</c> two - a map's key, a named argument's
-    /// value and not its name, a receiver's first name where it is a value - an import's prefix and a type's name not -
-    /// and each branch of a conditional; and an annotation's arguments and a parameter's default are the code of what they
-    /// are written on.
+    /// A use is of a value the code reads: each bare hole of a string - <c>'$a$b'</c> two - a map's key, a nested one's
+    /// among them, a named argument's value and not its name, a receiver's first name where it is a value - an import's
+    /// prefix and a type's name not - and each branch of a conditional; and an annotation's arguments - a type's, a
+    /// field's, a method's, an enum value's - and a parameter's default are the code of what they are written on.
     /// </summary>
     [Fact]
     public void AUseIsOfAValueTheCodeReads_AnnotationsAndDefaultsTheirDeclarations()
@@ -961,14 +961,17 @@ public sealed class DartExtractorTests : CodeGraphExtractorContractTests<DartExt
 
             const kRed = 1;
 
+            @Entity('users_table')
             class User {
               @JsonKey(name: 'user_id')
               final int id;
               User({this.id = 0, String label = 'parameter default'});
 
+              @Deprecated('old_show')
               String show(bool isDark) {
                 final both = '$prefix$id';
                 final colors = {kRed: 1};
+                final nested = [{kBlue: 2}];
                 format(name: darkColor);
                 config.verbose = true;
                 p.helper();
@@ -976,20 +979,25 @@ public sealed class DartExtractorTests : CodeGraphExtractorContractTests<DartExt
                 return isDark ? darkColor : lightColor;
               }
             }
+
+            enum Tone { @Named('warm_tone') warm, cold }
             """);
 
         const string Show = "dart:lib/user.dart.User.show";
 
         Assert.Equal(
             [
-                new ExtractLiteral("user_id", 6) { Node = "dart:lib/user.dart.User.id" },
-                new ExtractLiteral("parameter default", 8) { Node = "dart:lib/user.dart.User.new" },
+                new ExtractLiteral("users_table", 5) { Node = "dart:lib/user.dart.User" },
+                new ExtractLiteral("user_id", 7) { Node = "dart:lib/user.dart.User.id" },
+                new ExtractLiteral("parameter default", 9) { Node = "dart:lib/user.dart.User.new" },
+                new ExtractLiteral("old_show", 11) { Node = Show },
+                new ExtractLiteral("warm_tone", 24) { Node = "dart:lib/user.dart.Tone.warm" },
             ],
             extract.Literals);
         Assert.Equal(
             [
-                (Show, "prefix", 11, ""), (Show, "id", 11, ""), (Show, "kRed", 12, ""), (Show, "darkColor", 13, ""), (Show, "config", 14, ""), (Show, "verbose", 14, "value config"),
-                (Show, "darkColor", 17, ""), (Show, "lightColor", 17, ""),
+                (Show, "prefix", 13, ""), (Show, "id", 13, ""), (Show, "kRed", 14, ""), (Show, "kBlue", 15, ""), (Show, "darkColor", 16, ""), (Show, "config", 17, ""),
+                (Show, "verbose", 17, "value config"), (Show, "darkColor", 20, ""), (Show, "lightColor", 20, ""),
             ],
             extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Uses).Select(reference => (reference.From, reference.Name, reference.Line, $"{reference.Qualifier?.Kind} {reference.Qualifier?.Name}".Trim())));
     }

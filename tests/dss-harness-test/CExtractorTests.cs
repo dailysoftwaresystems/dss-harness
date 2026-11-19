@@ -721,20 +721,23 @@ public sealed class CExtractorTests : CodeGraphExtractorContractTests<CExtractor
 
             enum Kind { One, Two };
 
+            static int (*handler)(int code) = on_code;
+
             int take(struct lexer *lx, int c)
             {
-                int (*fallback)(struct lexer *) = lx->peek;
+                int (*fallback)(struct lexer *self, int code) = lx->peek;
                 enum Kind which = One;
                 config.verbose = TWICE(c);
                 (*fallback)(lx);
+                int size = sizeof(struct lexer);
                 return c ? COUNT : LIMIT;
             }
             """);
 
         Assert.Equal(
             [
-                ("c:take", "peek", 14, "type lexer"), ("c:take", "One", 15, ""), ("c:take", "config", 16, ""), ("c:take", "verbose", 16, "value config"),
-                ("c:take", "COUNT", 18, ""), ("c:take", "LIMIT", 18, ""),
+                ("c:src/t.c:handler", "on_code", 12, ""), ("c:take", "peek", 16, "type lexer"), ("c:take", "One", 17, ""), ("c:take", "config", 18, ""),
+                ("c:take", "verbose", 18, "value config"), ("c:take", "COUNT", 21, ""), ("c:take", "LIMIT", 21, ""),
             ],
             extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Uses).Select(reference => (reference.From, reference.Name, reference.Line, $"{reference.Qualifier?.Kind} {reference.Qualifier?.Name}".Trim())));
     }

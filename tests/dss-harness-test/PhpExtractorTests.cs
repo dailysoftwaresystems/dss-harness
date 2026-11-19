@@ -1196,8 +1196,9 @@ public sealed class PhpExtractorTests : CodeGraphExtractorContractTests<PhpExtra
     /// <summary>
     /// A use is of a value the code reads: a nullsafe read's property by its <c>$</c>, each branch of a conditional and a
     /// short one, a named argument's value and not its name; a word or a type of the language - <c>true</c>, a cast's, a
-    /// closure's return type - is none; and a constant's, a property's, an enum case's, an attribute's and a parameter's
-    /// default value is the code of what it is written on.
+    /// closure's return type - is none; and a constant's, a property's and an enum case's value, a parameter's default, and
+    /// the arguments of the attributes each of them - a parameter among them - is written with are the code of what they
+    /// are written on.
     /// </summary>
     [Fact]
     public void AUseIsOfAValueTheCodeReads_DeclaredValuesAndAttributesTheirDeclarations()
@@ -1209,11 +1210,13 @@ public sealed class PhpExtractorTests : CodeGraphExtractorContractTests<PhpExtra
             #[Route('/users')]
             class Users
             {
+                #[Deprecated('old_const')]
                 public const GREETING = 'hello world';
+                #[Inject('svc_prop')]
                 protected $table = 'users';
 
                 #[Get('/list')]
-                public function list(User $user, $mode = DEFAULT_MODE): ?string
+                public function list(#[Sensitive('param_attr')] User $user, $mode = DEFAULT_MODE): ?string
                 {
                     $n = $user?->name;
                     $t = $debug ? DEBUG_LEVEL : INFO_LEVEL;
@@ -1226,6 +1229,7 @@ public sealed class PhpExtractorTests : CodeGraphExtractorContractTests<PhpExtra
 
             enum Status: string
             {
+                #[Label('case_label')]
                 case Active = 'active';
             }
             """);
@@ -1235,16 +1239,20 @@ public sealed class PhpExtractorTests : CodeGraphExtractorContractTests<PhpExtra
         Assert.Equal(
             [
                 new ExtractLiteral("/users", 4) { Node = "php:App.Users" },
-                new ExtractLiteral("hello world", 7) { Node = "php:App.Users.GREETING" },
-                new ExtractLiteral("users", 8) { Node = "php:App.Users.$table" },
-                new ExtractLiteral("/list", 10) { Node = List },
-                new ExtractLiteral("active", 24) { Node = "php:App.Status.Active" },
+                new ExtractLiteral("old_const", 7) { Node = "php:App.Users.GREETING" },
+                new ExtractLiteral("hello world", 8) { Node = "php:App.Users.GREETING" },
+                new ExtractLiteral("svc_prop", 9) { Node = "php:App.Users.$table" },
+                new ExtractLiteral("users", 10) { Node = "php:App.Users.$table" },
+                new ExtractLiteral("/list", 12) { Node = List },
+                new ExtractLiteral("param_attr", 13) { Node = List },
+                new ExtractLiteral("case_label", 26) { Node = "php:App.Status.Active" },
+                new ExtractLiteral("active", 27) { Node = "php:App.Status.Active" },
             ],
             extract.Literals);
         Assert.Equal(
             [
-                (List, "DEFAULT_MODE", 11, ""), (List, "$name", 13, "type App.User"), (List, "DEBUG_LEVEL", 14, ""), (List, "INFO_LEVEL", 14, ""), (List, "FALLBACK_LEVEL", 15, ""),
-                (List, "VALUE", 17, ""),
+                (List, "DEFAULT_MODE", 13, ""), (List, "$name", 15, "type App.User"), (List, "DEBUG_LEVEL", 16, ""), (List, "INFO_LEVEL", 16, ""), (List, "FALLBACK_LEVEL", 17, ""),
+                (List, "VALUE", 19, ""),
             ],
             extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Uses).Select(reference => (reference.From, reference.Name, reference.Line, $"{reference.Qualifier?.Kind} {reference.Qualifier?.Name}".Trim())));
     }

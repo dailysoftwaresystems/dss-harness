@@ -1049,7 +1049,7 @@ public sealed class JavaScriptExtractorTests : CodeGraphExtractorContractTests<J
             export function sum() {
               const a = 1, b = total;
               let c = 0, d = first
-              use(p, q)
+              seen = q, rest = 1
               const e = 2,
                 { f, g } = second;
               for (let i = 0, j = limit; i < j; i++) {}
@@ -1058,7 +1058,7 @@ public sealed class JavaScriptExtractorTests : CodeGraphExtractorContractTests<J
             """);
 
         Assert.Equal(
-            [("total", 2), ("first", 3), ("p", 4), ("q", 4), ("second", 6), ("limit", 7)],
+            [("total", 2), ("first", 3), ("seen", 4), ("q", 4), ("rest", 4), ("second", 6), ("limit", 7)],
             extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Uses).Select(reference => (reference.Name, reference.Line)));
     }
 

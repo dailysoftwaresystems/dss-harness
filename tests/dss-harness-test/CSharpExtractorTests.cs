@@ -1117,8 +1117,9 @@ public sealed class CSharpExtractorTests : CodeGraphExtractorContractTests<CShar
     /// <summary>
     /// Every string the file holds is kept with the node whose code holds it, wherever it is written: a type's, a field's -
     /// its declaration's first variable's - an enum member's and a record's positional parameter's attributes, a delegate's
-    /// parameter's, the file's own for an assembly's attribute; a raw string over lines from the line after its quotes,
-    /// an interpolated string's constant parts each one of its own; and an enum member's value reads what it names.
+    /// parameter's, the file's own for an assembly's attribute; a raw string over lines from the line after its quotes, a
+    /// UTF-8 one by its text, an interpolated string's constant parts each one of its own; and an enum member's value
+    /// reads what it names.
     /// </summary>
     [Fact]
     public void EveryStringIsKeptWithItsNode_AttributesAndAnEnumMembersValueAmongThem()
@@ -1138,7 +1139,7 @@ public sealed class CSharpExtractorTests : CodeGraphExtractorContractTests<CShar
                     var raw = """
                         raw "text"
                         """;
-                    return $"order {id} of {UserId}";
+                    _ = "utf8 bytes"u8; return $"order {id} of {UserId}";
                 }
             }
 
@@ -1155,6 +1156,7 @@ public sealed class CSharpExtractorTests : CodeGraphExtractorContractTests<CShar
                 new ExtractLiteral("api/orders", 5) { Node = "csharp:App.Orders" },
                 new ExtractLiteral("user_id", 8) { Node = "csharp:App.Orders.UserId" },
                 new ExtractLiteral("raw \"text\"", 13) { Node = "csharp:App.Orders.Show(int)" },
+                new ExtractLiteral("utf8 bytes", 15) { Node = "csharp:App.Orders.Show(int)" },
                 new ExtractLiteral("order ", 15) { Node = "csharp:App.Orders.Show(int)" },
                 new ExtractLiteral(" of ", 15) { Node = "csharp:App.Orders.Show(int)" },
                 new ExtractLiteral("all_flags", 19) { Node = "csharp:App.Flags.All" },
