@@ -1238,11 +1238,13 @@ public static partial class CommandAnalysis
         }
 
         // A shell another program runs with its script among the command's words - find -exec,
-        // ssh, watch - is gone into too: what it runs is a command of its own.
+        // ssh, watch - is gone into too: what it runs is a command of its own. The words from each
+        // word on are a view over the command's own, never a copy: a command of many words is read
+        // at each of them without a list as long as the command made for each.
         for (var at = 1; at < words.Count; at++)
         {
-            var rest = words.Skip(at).ToList();
-            var restMasks = masks.Skip(at).ToList();
+            var rest = new RestOf(words, at);
+            var restMasks = new RestOf(masks, at);
 
             // A program a program that runs its words starts runs its command lines as well (setsid ssh host 'x').
             if (RunsAt(words, at))
@@ -1264,6 +1266,31 @@ public static partial class CommandAnalysis
                 yield return Step.Into(FromWords(SplitInto(innerSplit), [], redirects, environment, [.. wrapped, rest], inputGiven, inner), WordsKey(rest));
             }
         }
+    }
+
+    /// <summary>
+    /// The words of <paramref name="words"/> from <paramref name="from"/> on - a view over them, nothing copied, so a
+    /// command's words are read from each of its words without a list as long as the command made for each.
+    /// </summary>
+    private readonly struct RestOf(IReadOnlyList<string> words, int from) : IReadOnlyList<string>
+    {
+        /// <inheritdoc/>
+        public int Count => words.Count - from;
+
+        /// <inheritdoc/>
+        public string this[int at] => words[from + at];
+
+        /// <inheritdoc/>
+        public IEnumerator<string> GetEnumerator()
+        {
+            for (var at = 0; at < Count; at++)
+            {
+                yield return this[at];
+            }
+        }
+
+        /// <inheritdoc/>
+        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
     }
 
     /// <summary>
@@ -2832,7 +2859,7 @@ public static partial class CommandAnalysis
          "watch", "ssh", "wsl", "start", "call", "dtach", "abduco", "daemonize"];
 
     /// <summary>Whether <paramref name="program"/> runs the words after its own options (<see cref="CommandRunners"/>), by its name in any case.</summary>
-    public static bool RunsItsWords(string program) => Is(Name(program), [.. CommandRunners]);
+    public static bool RunsItsWords(string program) => CommandRunners.Contains(Name(program), StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
     /// What fish runs, its options read as fish reads them, getopt's way - a short option's value glued after it or the

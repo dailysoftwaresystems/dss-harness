@@ -1669,22 +1669,24 @@ public sealed partial class AgentPolicy
     }
 
     /// <summary>
-    /// Whether <paramref name="named"/>'s pattern matches <paramref name="text"/>: a shell pattern whole, a regular
+    /// Whether the pattern of the named test matches its text: a shell pattern whole, a regular
     /// expression found in it. Where the text stands for entries this did not read - a name unknown, or a directory's path
     /// with a separator after it that any entry it holds continues - it matches where it matches each such text, it
     /// does not where no text that begins so could match, and may otherwise.
     /// </summary>
+    /// <summary>The matchers of a walk's named tests, each compiled once: a test asked of every entry of a walk asks what it compiled the first time.</summary>
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<WalkTest.Named, System.Text.RegularExpressions.Regex> WalkMatchers = new();
     private static Truth Matched(WalkTest.Named named, string? text, bool unread)
     {
         System.Text.RegularExpressions.Regex? pattern;
 
         // A regular expression the linear matcher does not read - no expression at all, or one of a construct it lacks -
-        // may match: what it would remove is not told by this.
+        // may match: what it would remove is not told by this. Compiled once for the test, asked of every entry.
         try
         {
             if (!named.Regular)
             {
-                pattern = SegmentPattern(named.Pattern, named.IgnoreCase);
+                pattern = WalkMatchers.GetValue(named, test => SegmentPattern(test.Pattern, test.IgnoreCase));
             }
             else if (!LinearRegex.TryCompile(named.Pattern, named.IgnoreCase ? System.Text.RegularExpressions.RegexOptions.IgnoreCase : System.Text.RegularExpressions.RegexOptions.None, out pattern, out _))
             {
