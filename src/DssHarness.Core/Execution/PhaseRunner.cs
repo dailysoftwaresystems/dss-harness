@@ -335,6 +335,14 @@ public sealed class PhaseRunner(
         var (result, stopped) = await RunBoundedAsync(processRequest, request.StallSeconds, clock, cancellationToken).ConfigureAwait(false);
         var wall = _wallClock.GetUtcNow() - startedUtc;
 
+        // Every character the child wrote is in the log; what a process it left running - a server its build started,
+        // kept for the next phase - writes from now on is that process's own, and is not read. Said, so a log that ends
+        // where the child's output did is never taken for all that process went on to write.
+        if (result.OutputHeld is { } held)
+        {
+            _output.Warn(request.Phase, $"{request.Leg}: {held}");
+        }
+
         // Both readings cover the same window, so what they disagree by is the clock's own movement:
         // a step forward, a step back, or a host that slept in the middle of the phase.
         var drift = ClockStep.Drift(wall, clock.Elapsed);

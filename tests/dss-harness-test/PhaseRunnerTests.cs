@@ -362,6 +362,33 @@ public sealed class PhaseRunnerTests
     }
 
     /// <summary>
+    /// A phase whose child left a process running that holds its output says so in its output, with what the runner said
+    /// of it: every character the child wrote is in the log, and what that process writes from then on is not read - left
+    /// unsaid, a log ending where the child's output did read as all a server its build started went on to write.
+    /// </summary>
+    [Fact]
+    public async Task APhaseWhoseChildLeftItsOutputHeld_SaysSo()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        const string Held = "'build' left a process running that holds its output: every character it wrote was read, and what that process writes from now on is its own, and is not read";
+
+        var result = await new PhaseRunner(new HeldRunner(Held), factory.FileSystem, factory.Output).RunAsync(
+            Child("exit", temp.Combine("held.log")),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal([$"build: WARN - win-msvc-release: {Held}"], Lines(factory.StandardError.ToString()));
+
+        // A child whose output ended with it says nothing of the kind.
+        var plain = new HarnessFactory();
+        await new PhaseRunner(new ScriptedLines(("done", false)), plain.FileSystem, plain.Output).RunAsync(
+            Child("exit", temp.Combine("plain.log")),
+            TestContext.Current.CancellationToken);
+        Assert.Empty(plain.StandardError.ToString());
+    }
+
+    /// <summary>
     /// A timing pattern written in a form that backtracks is read in linear time against every line, its marks kept as
     /// any pattern's are, never left unmeasured for the time a match took, as once.
     /// </summary>
@@ -717,6 +744,24 @@ public sealed class PhaseRunnerTests
 
     private static PhaseRunner Runner(HarnessFactory factory)
         => new(factory.ProcessRunner, factory.FileSystem, factory.Output);
+
+    /// <summary>What was written, as its lines, without the ending the last one closes with.</summary>
+    private static string[] Lines(string written) => written.ReplaceLineEndings("\n").TrimEnd('\n').Split('\n');
+
+    /// <summary>A runner whose child exits 0 having said nothing, and left a process running that holds its output, as <paramref name="held"/> says.</summary>
+    private sealed class HeldRunner(string held) : IProcessRunner
+    {
+        public Task<ProcessResult> RunAsync(ProcessRequest request, CancellationToken cancellationToken = default)
+        {
+            ArgumentNullException.ThrowIfNull(request);
+
+            request.OnStarted?.Invoke();
+
+            return Task.FromResult(new ProcessResult(0, string.Empty, string.Empty, TimeSpan.FromMilliseconds(5), TimedOut: false) { OutputHeld = held });
+        }
+
+        public string? FindExecutable(string command) => command;
+    }
 
     /// <summary>A phase that runs this assembly as a child, exactly as the process tests do.</summary>
     private static PhaseRequest Child(string mode, string logFile, params string[] arguments)
