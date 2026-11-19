@@ -95,9 +95,9 @@ root.Subcommands.Add(ContainExecCommand.Create());
 // Started by the contained step in an isolated child's place on Windows, and never typed.
 root.Subcommands.Add(IsolateExecCommand.Create());
 
-return await RunAsync(args, CancellationToken.None).ConfigureAwait(false);
+return await RunAsync(args, atTheTerminal: true, CancellationToken.None).ConfigureAwait(false);
 
-async Task<int> RunAsync(string[] arguments, CancellationToken cancellationToken)
+async Task<int> RunAsync(string[] arguments, bool atTheTerminal, CancellationToken cancellationToken)
 {
     var parseResult = root.Parse(arguments);
 
@@ -108,19 +108,11 @@ async Task<int> RunAsync(string[] arguments, CancellationToken cancellationToken
         return await CommandRunner.UnparsedAsync(parseResult).ConfigureAwait(false);
     }
 
-    // A command past its point of no return goes on after Ctrl+C - a deletion, a fold, a hand-over or a
-    // move of an agent's base is never left half written, a host agent can be running one for another
-    // machine, and a run asked to set up brings down what it brought up - so each is waited for as long
-    // as it asks. No other command is any slower to stop. A run's session counts its own interrupts -
-    // the first a safe pause, which starts no clock - and so does a side-task - the first cutting the
-    // agent's turn, a second ending its chat - so the parser's own handling, which cancels at the first
-    // and ends the process when its clock runs out, is turned off for both.
-    var invocation = new InvocationConfiguration();
+    // No clock of the parser's own ends a command after Ctrl+C: the first interrupt cancels it and it ends once its work
+    // has stopped, the second is the system's hard stop - and a run's session and a side-task count their own.
     string[] commandLine = [parseResult.CommandResult.Command.Name, .. parseResult.Tokens.Select(token => token.Value)];
 
-    invocation.ProcessTerminationTimeout = PointOfNoReturn.TerminationTimeoutFor(commandLine, invocation.ProcessTerminationTimeout);
-
-    return await parseResult.InvokeAsync(invocation, cancellationToken).ConfigureAwait(false);
+    return await CommandInterrupts.InvokeAsync(parseResult, commandLine, atTheTerminal, Console.Error, cancellationToken).ConfigureAwait(false);
 }
 
 // A command acts on the current directory when it is given no --directory, so a host runs a request
@@ -130,5 +122,5 @@ Task<int> RunInAsync(string directory, string[] arguments, Dispatch dispatch, Ca
 {
     Directory.SetCurrentDirectory(directory);
     CommandRunner.Serve(CommandOrigin.Served(dispatch));
-    return RunAsync(arguments, cancellationToken);
+    return RunAsync(arguments, atTheTerminal: false, cancellationToken);
 }
