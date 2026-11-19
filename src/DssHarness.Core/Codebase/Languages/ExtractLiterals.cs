@@ -3,15 +3,12 @@ namespace DssHarness.Core.Codebase.Languages;
 /// <summary>
 /// The string literals one file's reader keeps, by the one rule every implementation keeps them by: each value as its
 /// language reads it - its escapes decoded - its line endings read as one newline, so a checkout's own way of writing them
-/// moves no answer, and its text whole UTF-16; of at least <see cref="FileExtract.LeastLiteral"/> characters, the first
-/// <see cref="FileExtract.MostLiterals"/> kept and the rest counted; each with its line and the node whose code holds it.
+/// moves no answer, and its text whole UTF-16; of at least <see cref="FileExtract.LeastLiteral"/> characters, every one
+/// the file holds kept, in the order its reader reads them; each with its line and the node whose code holds it.
 /// </summary>
 internal sealed class ExtractLiterals
 {
     private readonly List<ExtractLiteral> _kept = [];
-
-    /// <summary>How many the file holds past the most an extract keeps.</summary>
-    public int Beyond { get; private set; }
 
     /// <summary>
     /// The literal <paramref name="value"/>, decoded, on <paramref name="line"/>, written in the code of the node
@@ -25,12 +22,6 @@ internal sealed class ExtractLiterals
 
         if (value.Length < FileExtract.LeastLiteral)
         {
-            return;
-        }
-
-        if (_kept.Count == FileExtract.MostLiterals)
-        {
-            Beyond++;
             return;
         }
 

@@ -9,8 +9,8 @@ public sealed class EmbeddedCodeTests
     /// <summary>
     /// Every field of what an embedded reader answers is merged into the host's: an id another reader gave is told apart,
     /// what the node holds and what it makes following it; a scope once by its name; the imports, address roots, dynamic
-    /// marks and keys past those kept added; the literals up to the most an extract keeps and the rest counted; and why the
-    /// file is generated the first reader's that says.
+    /// marks and keys past those kept added; the literals, every one of each; and why the file is generated the first
+    /// reader's that says.
     /// </summary>
     [Fact]
     public void EveryFieldOfAnEmbeddedExtract_IsMergedIntoTheHosts()
@@ -18,7 +18,7 @@ public sealed class EmbeddedCodeTests
         var host = new FileExtract([new ExtractNode("html:x.html#body", CodeNodeKinds.Section, "body", "x.html#body", 1, 9, "body")])
         {
             References = [new ExtractReference("html:x.html#body", CodeEdgeKinds.Uses, ".a", 1)],
-            Literals = [.. Enumerable.Range(0, FileExtract.MostLiterals - 1).Select(index => new ExtractLiteral($"v{index}", 1))],
+            Literals = [.. Enumerable.Range(0, 2_500).Select(index => new ExtractLiteral($"v{index}", 1))],
             KeysBeyond = 1,
         };
 
@@ -36,7 +36,7 @@ public sealed class EmbeddedCodeTests
         Assert.Equal([("./one.js", 2), ("./two.js", 5)], merged.Imports.Select(import => (import.Target, import.Line)));
         Assert.Equal([new ExtractAddressRoot("@", "src"), new ExtractAddressRoot("@", "src")], merged.AddressRoots);
         Assert.Equal([new ExtractDynamic(2, "one"), new ExtractDynamic(5, "two")], merged.Dynamic);
-        Assert.Equal((FileExtract.MostLiterals, new ExtractLiteral("one", 2), 7), (merged.Literals!.Count, merged.Literals[^1], merged.LiteralsBeyond));
+        Assert.Equal([.. Enumerable.Range(0, 2_500).Select(index => $"v{index}"), "one", "one-2", "two", "two-2"], (merged.Literals ?? []).Select(literal => literal.Value));
         Assert.Equal((5, "the first says"), (merged.KeysBeyond, merged.Generated));
     }
 
@@ -69,7 +69,6 @@ public sealed class EmbeddedCodeTests
         References = [new ExtractReference("html:open", CodeEdgeKinds.Calls, name, line)],
         Dynamic = [new ExtractDynamic(line, name)],
         Literals = [new ExtractLiteral(name, line), new ExtractLiteral($"{name}-2", line)],
-        LiteralsBeyond = 2,
         KeysBeyond = 2,
         Generated = name == "one" ? "the first says" : null,
     };

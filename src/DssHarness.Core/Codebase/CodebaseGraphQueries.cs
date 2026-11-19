@@ -74,7 +74,6 @@ public sealed class CodebaseGraphQueries
         }
 
         _extracts = extracts;
-        LiteralsCut = [.. extracts.Where(file => file.Value is { LiteralsBeyond: > 0 }).Select(file => file.Key).Order(StringComparer.Ordinal)];
 
         // A file that declares a test - its implementation marks the test - is test code whole: its classes, fixtures and
         // helpers beside the tests.
@@ -642,14 +641,13 @@ public sealed class CodebaseGraphQueries
 
     /// <summary>
     /// Whether a node an answer names makes the answer not sure, so it adds a text search: its file carries a
-    /// <c>generated</c> or a <c>dynamic</c> mark, or it has external or unresolved callees; or it is a configuration key
-    /// while a file of the view holds string literals past those its extract keeps (<see cref="LiteralsCut"/>), which the
-    /// keys' join does not read. An edge of <c>candidates</c> an answer gives makes it not sure too, judged where the
-    /// answer gives it - but a use's, which is recall (<see cref="CodeEdgeKinds.Recall"/>).
+    /// <c>generated</c> or a <c>dynamic</c> mark, or it has external or unresolved callees. An edge of <c>candidates</c>
+    /// an answer gives makes it not sure too, judged where the answer gives it - but a use's, which is recall
+    /// (<see cref="CodeEdgeKinds.Recall"/>).
     /// </summary>
     /// <param name="id">A node's id, the view's.</param>
     public bool Unsure(string id)
-        => (_nodes.TryGetValue(id, out var at) && at.Count > 0 && (Generated(at[0].Path) || Dynamic(at[0].Path) || (at[0].Node.SubKind == CodeSubKinds.Key && LiteralsCut.Count > 0)))
+        => (_nodes.TryGetValue(id, out var at) && at.Count > 0 && (Generated(at[0].Path) || Dynamic(at[0].Path)))
             || _read.Symbols.External.GetValueOrDefault(id) > 0
             || _read.Symbols.Unresolved.GetValueOrDefault(id) > 0;
 
@@ -794,18 +792,12 @@ public sealed class CodebaseGraphQueries
             lines.Add($"{keyed.KeysBeyond.ToString(CultureInfo.InvariantCulture)} of its keys and elements are in no node: past the {FileExtract.MostKeys.ToString(CultureInfo.InvariantCulture)} nodes its extract keeps, or nested deeper than its reader reads keys");
         }
 
-        if (extract is { LiteralsBeyond: > 0 } literal)
-        {
-            lines.Add($"{ReportText.Counted(literal.LiteralsBeyond, "string literal")} of it past the {FileExtract.MostLiterals.ToString(CultureInfo.InvariantCulture)} its extract keeps are joined to no configuration key");
-        }
-
         return lines;
     }
 
     /// <summary>
     /// What an answer about the node <paramref name="card"/> says the graph does not hold of it: of a file or a
-    /// configuration key, what <see cref="Unread"/> says of its file; of a key, also the files whose string literals past
-    /// those their extracts keep the keys' join does not read. None of any other node.
+    /// configuration key, what <see cref="Unread"/> says of its file. None of any other node.
     /// </summary>
     /// <param name="card">A node the view holds.</param>
     public IReadOnlyList<string> UnreadOf(GraphCard card)
@@ -819,17 +811,8 @@ public sealed class CodebaseGraphQueries
             return [];
         }
 
-        return key && LiteralsCut.Count > 0
-            ? [.. Unread(card.Path), $"{ReportText.Counted(LiteralsCut.Count, "file")} of the view hold string literals past the {FileExtract.MostLiterals.ToString(CultureInfo.InvariantCulture)} an extract keeps, which the keys' join does not read: {ReportText.Listed([.. LiteralsCut])}"]
-            : Unread(card.Path);
+        return Unread(card.Path);
     }
-
-    /// <summary>
-    /// The files whose extracts hold more string literals than the <see cref="FileExtract.MostLiterals"/> each keeps, by
-    /// path: what the keys' join reads is not all they write, so a key read only past what they keep is joined to none
-    /// of them, and an answer about a key is not sure of its users.
-    /// </summary>
-    public IReadOnlyList<string> LiteralsCut { get; }
 
     /// <summary>The nodes in the file at <paramref name="path"/>, as a text hit is turned to a card where one covers its line.</summary>
     /// <param name="path">A file's path, relative to the tree with forward separators.</param>

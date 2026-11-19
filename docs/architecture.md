@@ -4301,12 +4301,12 @@ the scope whose declarations alone see it (`SeenIn`) among what they say - the s
 other files or closed: what a closed one declares, and the type or scope it is the scope of, its file's alone), imports by scope, relative path, address, path ending or directory (a scope every file under a directory imports), with their prefixes and filters, an import that stands in for the one before it (`Fallback`), an export (`Export`) and an import of a file whose imports this one shares (`Shares`),
 address roots, references by name with their qualifiers, the string literals the file holds - each of at least
 `FileExtract.LeastLiteral` characters with its line and the node whose code holds it (none where the file's own
-does), at most `FileExtract.MostLiterals` kept and the rest counted, each its value as the language reads it: one
-collector (`ExtractLiterals`) keeps them for every reader, the C# reader taking the compiler's value and the scanned
-readers the value `ScanLiteral` decodes from what each lexer saw of the literal's form - a prefix, a raw string's
-delimiter, a triple quote, a heredoc's label and closing indentation - by its language's escapes, a `String.raw`
-template's as written; an interpolated or
-template string's constant parts each a literal of its own, its holes read as code, a character constant, a regular
+does), every one kept however many the file holds, each its value as the language reads it: one collector
+(`ExtractLiterals`) keeps them for every reader, the C# reader taking the compiler's value and the scanned readers the
+value `ScanLiteral` decodes from what each lexer saw of the literal's form - a prefix, a raw string's delimiter, a
+triple quote, a heredoc's label and closing indentation - by its language's escapes, a `String.raw` template's as
+written, an HTML character reference by its grammar whatever its length; an interpolated or template string's
+constant parts each a literal of its own, its holes read as code, a character constant, a regular
 expression and JSX markup none, a JSX attribute's text one - and five marks - a prototype, a test, a part of a
 declaration other files hold parts of too (`Part`), generated code with why, and each line it saw something it cannot
 bind or stopped reading at (`dynamic`), with why - of which the linker reads the first three. Beside the calls, every
@@ -4325,8 +4325,9 @@ the file knows it as no value, a C# `x is State.Done` both a reference and a use
 apart; a declaration is no use either - each declarator of `int a = 1, b`, a pattern's variables, a macro's parameter, a
 function pointer's own parameters, a structured binding, a discard - nor is a type or a namespace a member is reached
 through, nor a label a `goto`, a `break` or a `continue` names (`ScanCalls.NamesLabel`), and a member named as a word of
-the language - PHP's `$node->parent`, `FieldType::String` - is its member's use. A use that names nothing the repository declares is the common case and counts nowhere:
-a use is recall, never a doubt, so it makes neither a node `unsure` nor a file's unsureness. A use is looked for as a
+the language - PHP's `$node->parent`, `FieldType::String` - is its member's use. A use that names nothing the
+repository declares is the common case and counts nowhere: a use is recall, never a doubt, so it makes neither a node
+`unsure` nor a file's unsureness. A use is looked for as a
 member of any arity or a type (the same steps as a call), and `query-codebase-graph`'s `node` answers a node's `users`
 and `uses` groups beside its callers and callees.
 

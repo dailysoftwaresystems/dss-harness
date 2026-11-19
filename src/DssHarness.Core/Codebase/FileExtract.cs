@@ -56,15 +56,10 @@ public sealed record FileExtract(IReadOnlyList<ExtractNode> Nodes)
     /// <summary>
     /// The string literals the file holds, of at least <see cref="LeastLiteral"/> characters, each with its line and the
     /// node whose code holds it: the values the data of the code is written in - what the keys' join reads, a literal
-    /// naming a configuration key - interpolated and template strings giving their constant parts. At most
-    /// <see cref="MostLiterals"/> of them are kept, the rest counted in <see cref="LiteralsBeyond"/>, which an answer about
-    /// the file says; <see langword="null"/> where the file holds none.
+    /// naming a configuration key - interpolated and template strings giving their constant parts. Every one is kept,
+    /// once each, however many the file holds; <see langword="null"/> where the file holds none.
     /// </summary>
     public IReadOnlyList<ExtractLiteral>? Literals { get; init; }
-
-    /// <summary>How many string literals the file holds past the <see cref="MostLiterals"/> it keeps.</summary>
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
-    public int LiteralsBeyond { get; init; }
 
     /// <summary>
     /// How many configuration keys and elements a data file holds that its extract keeps no node of: those past the
@@ -76,9 +71,6 @@ public sealed record FileExtract(IReadOnlyList<ExtractNode> Nodes)
 
     /// <summary>The shortest a kept string literal is, in characters: a shorter one is not data a search asks for.</summary>
     public const int LeastLiteral = 3;
-
-    /// <summary>The most string literals an extract keeps of one file; the rest are counted, not kept.</summary>
-    public const int MostLiterals = 2000;
 
     /// <summary>The most nodes an extract keeps of one data file - its keys, its sections and its elements alike; the keys and elements past them are counted, not kept.</summary>
     public const int MostKeys = 5000;
@@ -182,8 +174,6 @@ public sealed record FileExtract(IReadOnlyList<ExtractNode> Nodes)
                 : !Within(literal.Line, lineCount) ? $"its literal '{literal.Value}' is on line {literal.Line.ToString(CultureInfo.InvariantCulture)}, outside its {lineCount.ToString(CultureInfo.InvariantCulture)} lines"
                 : literal.Node is { } node && !ids.ContainsKey(node) ? $"its literal '{literal.Value}' is held by '{node}', which it holds no node of"
                 : null).FirstOrDefault(found => found is not null)
-            ?? (Literals is { Count: > MostLiterals } ? $"it keeps {Literals.Count.ToString(CultureInfo.InvariantCulture)} literals, past the {MostLiterals.ToString(CultureInfo.InvariantCulture)} an extract keeps" : null)
-            ?? (LiteralsBeyond < 0 ? "it counts fewer than no literals past its own" : null)
             ?? (KeysBeyond < 0 ? "it counts fewer than no keys past its own" : null)
             ?? (Texts().FirstOrDefault(text => !IsWhole(text)) is { } cut ? $"it holds text that is no whole UTF-16, a surrogate cut from its pair: '{cut}'" : null);
     }

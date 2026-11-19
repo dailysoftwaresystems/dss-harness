@@ -1110,7 +1110,6 @@ public sealed class CSharpExtractorTests : CodeGraphExtractorContractTests<CShar
                 (27, " part"),
             ],
             (extract.Literals ?? []).Select(literal => (literal.Line, literal.Value)));
-        Assert.Equal(0, extract.LiteralsBeyond);
         Assert.Null(extract.Problem("csharp", CodeFileText.Lines(Reads).Count));
     }
 
@@ -1218,17 +1217,18 @@ public sealed class CSharpExtractorTests : CodeGraphExtractorContractTests<CShar
     }
 
     /// <summary>
-    /// An extract keeps <see cref="FileExtract.MostLiterals"/> strings at most, in the order the file holds them, and counts
-    /// the rest; a string shorter than <see cref="FileExtract.LeastLiteral"/> characters is neither kept nor counted.
+    /// An extract keeps every string a file holds, however many, in the order the file holds them, and the extract is one
+    /// the core takes; a string shorter than <see cref="FileExtract.LeastLiteral"/> characters is no literal.
     /// </summary>
     [Fact]
-    public void AnExtractKeepsTheMostLiteralsItMay_AndCountsTheRest()
+    public void AnExtractKeepsEveryLiteral_HoweverManyTheFileHolds()
     {
-        var strings = string.Join(", ", Enumerable.Range(0, FileExtract.MostLiterals + 3).Select(index => $"\"v{index:D4}\""));
-        var extract = Extractor.Extract(new CodeFileInput("src/Many.cs", $"class Many {{ string[] All = [{strings}, \"ab\"]; }}"));
+        var strings = string.Join(", ", Enumerable.Range(0, 20_000).Select(index => $"\"v{index:D5}\""));
+        var text = $"class Many {{ string[] All = [{strings}, \"ab\"]; }}";
+        var extract = Extractor.Extract(new CodeFileInput("src/Many.cs", text));
 
-        Assert.Equal(Enumerable.Range(0, FileExtract.MostLiterals).Select(index => $"v{index:D4}"), (extract.Literals ?? []).Select(literal => literal.Value));
-        Assert.Equal(3, extract.LiteralsBeyond);
+        Assert.Equal(Enumerable.Range(0, 20_000).Select(index => $"v{index:D5}"), (extract.Literals ?? []).Select(literal => literal.Value));
+        Assert.Null(extract.Problem("csharp", CodeFileText.Lines(text).Count));
     }
 
     /// <summary>

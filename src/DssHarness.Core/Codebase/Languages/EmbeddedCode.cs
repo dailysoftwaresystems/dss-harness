@@ -76,9 +76,8 @@ internal static class EmbeddedCode
     /// <paramref name="host"/> with every field of each of <paramref name="embedded"/> merged into it, in order: each
     /// node's id made unique among those already held - with its place among those alike, as <see cref="ExtractIds"/>
     /// gives it, the nodes it holds and the references it makes following it - each scope once, by its name, the
-    /// imports, address roots, references and dynamic marks after the host's, the literals up to the most an extract keeps
-    /// and the rest counted, the keys past those kept added up, and why the file is generated the host's own, else the
-    /// first embedded reader's that says.
+    /// imports, address roots, references, dynamic marks and literals after the host's, every one of each, the keys past
+    /// those kept added up, and why the file is generated the host's own, else the first embedded reader's that says.
     /// </summary>
     /// <param name="host">The host's own extract: what its reader of markup made.</param>
     /// <param name="embedded">What each reader of the code it embeds made of it.</param>
@@ -104,7 +103,6 @@ internal static class EmbeddedCode
         var references = new List<ExtractReference>(host.References);
         var dynamic = new List<ExtractDynamic>(host.Dynamic);
         var literals = new List<ExtractLiteral>(host.Literals ?? []);
-        var beyond = host.LiteralsBeyond;
         var keysBeyond = host.KeysBeyond;
         var generated = host.Generated;
 
@@ -131,20 +129,7 @@ internal static class EmbeddedCode
             dynamic.AddRange(extract.Dynamic);
             keysBeyond += extract.KeysBeyond;
             generated ??= extract.Generated;
-
-            foreach (var literal in extract.Literals ?? [])
-            {
-                if (literals.Count < FileExtract.MostLiterals)
-                {
-                    literals.Add(literal);
-                }
-                else
-                {
-                    beyond++;
-                }
-            }
-
-            beyond += extract.LiteralsBeyond;
+            literals.AddRange(extract.Literals ?? []);
         }
 
         return new FileExtract(nodes)
@@ -156,7 +141,6 @@ internal static class EmbeddedCode
             Generated = generated,
             Dynamic = dynamic,
             Literals = literals.Count == 0 ? null : literals,
-            LiteralsBeyond = beyond,
             KeysBeyond = keysBeyond,
         };
     }

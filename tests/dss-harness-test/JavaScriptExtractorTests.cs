@@ -1126,6 +1126,21 @@ public sealed class JavaScriptExtractorTests : CodeGraphExtractorContractTests<J
         Assert.Equal([("length", 8), ("LIMIT", 8)], extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Uses).Select(reference => (reference.Name, reference.Line)));
     }
 
+    /// <summary>
+    /// A JSX attribute's character reference is read as HTML reads one, of any length: a number written with any count of
+    /// digits its character, one past every character's the replacement character, and a name no entity has its text.
+    /// </summary>
+    [Fact]
+    public void AnAttributesCharacterReference_IsReadAsHtmlReadsOne_OfAnyLength()
+    {
+        var digits = new string('0', 40);
+        var extract = Read("src/a.jsx", $$"""
+            export const view = <a title="x&#{{digits}}65;y &notanentityofanyname; &#99999999999999; &amp" />;
+            """);
+
+        Assert.Equal(["xAy &notanentityofanyname; � &amp"], (extract.Literals ?? []).Select(literal => literal.Value));
+    }
+
     /// <summary>A String.raw template's value is its text as written, no escape read in it, where another tag's template is read by JavaScript's escapes.</summary>
     [Fact]
     public void AStringRawTemplate_KeepsItsTextAsWritten()

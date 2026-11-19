@@ -226,7 +226,6 @@ public sealed class CSharpExtractor : ICodeGraphExtractor
                 Generated = Generated(),
                 Dynamic = _dynamic,
                 Literals = _literals.Kept(),
-                LiteralsBeyond = _literals.Beyond,
             };
         }
 

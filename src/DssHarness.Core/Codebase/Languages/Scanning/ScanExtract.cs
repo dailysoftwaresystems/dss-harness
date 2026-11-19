@@ -125,7 +125,6 @@ internal sealed class ScanExtract
             Generated = Generated,
             Dynamic = _dynamic,
             Literals = _literals.Kept(from => from is not null ? given[from] : _top is { } top ? given[top] : null),
-            LiteralsBeyond = _literals.Beyond,
         };
     }
 

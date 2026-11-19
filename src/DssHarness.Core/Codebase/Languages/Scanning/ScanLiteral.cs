@@ -1,4 +1,3 @@
-using System.Globalization;
 using System.Text;
 using AngleSharp.Html;
 
@@ -319,37 +318,43 @@ internal sealed record ScanLiteral(IReadOnlyList<ScanLiteralPart> Parts, ScanEsc
         return past >= 0 ? past : index;
     }
 
-    /// <summary>The character reference whose <c>&amp;</c> is at <paramref name="at"/>, decoded where it is one; answers where the text goes on.</summary>
+    /// <summary>
+    /// The character reference whose <c>&amp;</c> is at <paramref name="at"/>, decoded where it is one, as HTML reads
+    /// one: a name of ASCII letters and digits, or a <c>#</c> and a decimal number or an <c>x</c> and a hexadecimal one -
+    /// of any length, a number past every character's the replacement character - then its <c>;</c>; answers where the
+    /// text goes on. Only the run its grammar allows is read, so no text past it is searched for a <c>;</c>.
+    /// </summary>
     private static int Reference(string source, int at, int end, Decoded value)
     {
-        var close = source.IndexOf(';', at + 1, Math.Min(end - at - 1, MostReference + 1));
+        var index = at + 1;
 
-        if (close > at + 1)
+        if (index < end && source[index] == '#')
         {
-            var name = source.AsSpan(at + 1, close - at - 1);
+            var hex = index + 1 < end && source[index + 1] is 'x' or 'X';
+            var digits = index + (hex ? 2 : 1);
+            var code = 0L;
 
-            if (name[0] == '#' && name.Length > 1)
+            for (index = digits; index < end && (hex ? char.IsAsciiHexDigit(source[index]) : char.IsAsciiDigit(source[index])); index++)
             {
-                var hex = name[1] is 'x' or 'X';
-                var digits = name[(hex ? 2 : 1)..];
+                code = Math.Min((code * (hex ? 16 : 10)) + Digit(source[index]), int.MaxValue);
+            }
 
-                if (digits.Length > 0 && int.TryParse(digits, hex ? NumberStyles.AllowHexSpecifier : NumberStyles.None, CultureInfo.InvariantCulture, out var code))
-                {
-                    return value.Code(code, close + 1);
-                }
-            }
-            else if (HtmlEntityProvider.Resolver.GetSymbol(source.Substring(at + 1, close - at)) is { } symbol)
-            {
-                value.Text(symbol);
-                return close + 1;
-            }
+            return index > digits && index < end && source[index] == ';' ? value.Code((int)code, index + 1) : value.Char('&', at + 1);
+        }
+
+        while (index < end && char.IsAsciiLetterOrDigit(source[index]))
+        {
+            index++;
+        }
+
+        if (index > at + 1 && index < end && source[index] == ';' && HtmlEntityProvider.Resolver.GetSymbol(source.Substring(at + 1, index - at)) is { } symbol)
+        {
+            value.Text(symbol);
+            return index + 1;
         }
 
         return value.Char('&', at + 1);
     }
-
-    /// <summary>The most characters a character reference holds between its <c>&amp;</c> and its <c>;</c>.</summary>
-    private const int MostReference = 32;
 
     /// <summary>A value being decoded: its characters, and the bytes of a run of byte escapes, read as UTF-8 once the run ends.</summary>
     private sealed class Decoded(int capacity)
