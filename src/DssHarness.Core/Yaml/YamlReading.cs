@@ -1,3 +1,5 @@
+using System.Runtime.ExceptionServices;
+using DssHarness.Core.Walks;
 using YamlDotNet.Core;
 using YamlDotNet.Core.Events;
 using YamlDotNet.RepresentationModel;
@@ -20,15 +22,41 @@ namespace DssHarness.Core.Yaml;
 /// <para>
 /// Every reader of a YAML file in this tool - the action reader and the workflow reader - reads
 /// through these helpers, so two files written the same way are read the same way, save for the one
-/// thing a reader may ask of its own files before they are read: bounds (<see cref="YamlBounds"/>).
-/// The workflow reader asks them, so a workflow file holding an alias or nested past its bound is
-/// refused; the action reader asks none, so an action file is read whatever it holds of either. The codebase graph's
-/// reader of data files reads a file's documents as written (<see cref="Written"/>), and follows its aliases at a bound of
-/// its own; every depth any of them is held to is counted by one walk of the events.
+/// thing a reader may ask of its own files before they are read: rules (<see cref="YamlRules"/>).
+/// The workflow reader asks them, so a workflow file holding an alias is refused; the action reader
+/// asks none, so an action file is read whatever aliases it holds. The codebase graph's reader of data
+/// files reads a file's documents as written (<see cref="Written"/>), each alias a reference to the node
+/// its anchor names, never that node again.
+/// </para>
+/// <para>
+/// No depth is refused. The representation model recurses once for each level a document nests, and a
+/// stack overflow cannot be caught - it ends the process - so a text is first read as events, on a
+/// stack of this reader's own, to count how deep it nests (<see cref="Nested"/>), and the model then
+/// reads those events on a thread whose stack holds that depth (<see cref="DeepCalls.RunSized"/>), of
+/// <see cref="FrameBytes"/> a level: a file nested a hundred thousand levels deep is read as one nested
+/// two is, its every node keeping its line and column. An alias stays the node its anchor names - the
+/// model gives the one node in each place an alias stands, never a copy of it.
 /// </para>
 /// </remarks>
 public static class YamlReading
 {
+    /// <summary>
+    /// The stack one level of the representation model's reading takes, at most: the recursion of a mapping or a list into
+    /// the node it holds, and the hashing and comparing of a key that is no plain value, which recurse as deep.
+    /// </summary>
+    /// <remarks>
+    /// Measured on YamlDotNet 18.1 under .NET 10 on Windows x64 - whose calls take the most stack of the systems this
+    /// tool runs on, since each reserves room for its callee's arguments - by a probe outside the repository that
+    /// recorded the lowest stack address reached as documents of 500 to 50,000 levels were read, and that searched, in
+    /// steps of 16 KiB, for the least stack each document reads on without overflowing. A level of a mapping took up to
+    /// 568 bytes and one of a list 421 where the reading ran as the runtime first compiles it, unoptimised, which is how
+    /// a reading that recurses at once runs; fully optimised, 320 and 208. Hashing a key of nested lists, comparing two
+    /// equal ones, and an error thrown and unwound at the deepest level took no more a level than reading did. 1024
+    /// bytes is nearly twice the most measured: the margin for other processors, other compilations of the runtime's
+    /// and later versions of the library.
+    /// </remarks>
+    internal const int FrameBytes = 1024;
+
     /// <summary>
     /// Loads <paramref name="text"/> as one document whose top level is a mapping of keys, or says
     /// why it is not: every problem reported together.
@@ -40,15 +68,15 @@ public static class YamlReading
     /// runner ran</c>.
     /// </param>
     /// <param name="problems">Where problems are collected.</param>
-    /// <param name="bounds">
+    /// <param name="rules">
     /// What the text is held to before it is read into nodes, or <see langword="null"/> where the
-    /// reader holds it to nothing: see <see cref="YamlBounds"/>.
+    /// reader holds it to nothing: see <see cref="YamlRules"/>.
     /// </param>
-    public static YamlMappingNode? Root(string text, string oneDocument, List<string> problems, YamlBounds? bounds = null)
+    public static YamlMappingNode? Root(string text, string oneDocument, List<string> problems, YamlRules? rules = null)
     {
         ArgumentNullException.ThrowIfNull(problems);
 
-        var root = Load(text, oneDocument, bounds, out var stop);
+        var root = Load(text, oneDocument, rules, out var stop);
 
         if (stop is not null)
         {
@@ -64,23 +92,38 @@ public static class YamlReading
     /// </summary>
     /// <param name="text">The file's contents.</param>
     /// <param name="oneDocument">How a refusal says the file holds one document (<see cref="Root"/>).</param>
-    /// <param name="bounds">What the text is held to before it is read into nodes, or <see langword="null"/>.</param>
+    /// <param name="rules">What the text is held to before it is read into nodes, or <see langword="null"/>.</param>
     /// <param name="stop">Where and why it is no such document; <see langword="null"/> where it is one.</param>
-    public static YamlMappingNode? Load(string text, string oneDocument, YamlBounds? bounds, out YamlStop? stop)
+    public static YamlMappingNode? Load(string text, string oneDocument, YamlRules? rules, out YamlStop? stop)
     {
         ArgumentNullException.ThrowIfNull(text);
 
-        if (bounds is not null && Bounded(text, bounds) is { } bounded)
+        var measured = Measured(text, rules);
+
+        if (measured.Refusal is not null)
         {
-            stop = bounded;
+            stop = measured.Refusal;
             return null;
         }
 
-        var stream = new YamlStream();
+        YamlStream stream;
 
         try
         {
-            stream.Load(new StringReader(text));
+            stream = DeepCalls.RunSized(
+                measured.Depth,
+                FrameBytes,
+                () =>
+                {
+                    var read = new YamlStream();
+                    read.Load(new YamlReplay(measured.Events, measured.Fault));
+                    return read;
+                });
+        }
+        catch (InsufficientExecutionStackException exception)
+        {
+            stop = new YamlStop(Line(measured.DeepestAt.Line), Line(measured.DeepestAt.Column), $"the file nests {measured.Depth} levels deep here, which no thread can read into nodes ({exception.Message}).");
+            return null;
         }
         catch (YamlException exception)
         {
@@ -329,47 +372,111 @@ public static class YamlReading
     }
 
     /// <summary>
-    /// Where <paramref name="text"/> first does not keep to <paramref name="bounds"/>, read as events
-    /// before anything is read into nodes: no alias, and mappings and lists nested no deeper than the
-    /// bounds allow; <see langword="null"/> where it keeps to them.
+    /// <paramref name="text"/> read as events before anything is read into nodes: the events themselves, kept for the
+    /// model to read (<see cref="YamlReplay"/>), how deep they nest, the deepest place, and where the text first breaks a
+    /// rule its reader asks (<paramref name="rules"/>) or holds a key the representation model could not read in time or
+    /// in any stack.
     /// </summary>
     /// <remarks>
-    /// Read as events because nodes are what the bounds guard: an alias makes a few hundred bytes
-    /// stand for millions of nodes, and nesting past any file's depth is recursed through to be
-    /// read at all. Text that is not YAML passes here, to be refused where it is read into nodes, in
-    /// the parser's own words.
+    /// <para>
+    /// The text is scanned once: the parser takes time that grows with the square of how deep brackets nest, since it
+    /// looks again at the possible key of every open bracket for each token it reads, and the model reads the events kept
+    /// here rather than scanning the text again. Where the text stops reading as YAML, the events read before the fault are kept and the
+    /// fault with them, so the model reads to the same place and meets the same fault, in the parser's own words; the
+    /// depth is the deepest those events reach, since the model recurses that deep before it meets the fault.
+    /// </para>
+    /// <para>
+    /// The model hashes a key, and compares it with the other keys of its mapping, by walking all of it, with no record of
+    /// what it walked: a key holding an alias that names a mapping or a list - one anchored before it, or one whose anchor
+    /// is still to come - would be walked again at each alias, so a few hundred bytes would take years, and a key whose
+    /// node holds itself would be walked without end, past any stack. No reader of this tool reads a key that is no plain
+    /// name, so such a key is refused here, where its alias is met, rather than walked; an alias of a scalar in a key is
+    /// read, as any scalar is.
+    /// </para>
     /// </remarks>
-    private static YamlStop? Bounded(string text, YamlBounds bounds)
+    private static YamlMeasured Measured(string text, YamlRules? rules)
     {
+        var events = new List<ParsingEvent>();
+        var deepest = 0;
+        var deepestAt = Mark.Empty;
+
+        // Whether each anchor of the document names a mapping or a list - the model names a container from where it opens,
+        // so an alias inside it is the container itself.
+        var anchors = new Dictionary<string, bool>(StringComparer.Ordinal);
+
+        YamlMeasured Refused(Mark at, string why)
+            => new(events, null, deepest, deepestAt, new YamlStop(Line(at.Line), Line(at.Column), why));
+
         try
         {
-            foreach (var (current, depth) in Nested(new Parser(new StringReader(text))))
+            foreach (var (current, depth, inKey) in Nested(new Parser(new StringReader(text))))
             {
+                events.Add(current);
+
                 switch (current)
                 {
-                    case AnchorAlias alias:
-                        return new YamlStop(Line(alias.Start.Line), Line(alias.Start.Column), $"the alias '*{alias.Value}' repeats a part of the file by reference; {bounds.NoAlias}.");
+                    case DocumentStart:
+                        anchors.Clear();
+                        break;
 
-                    case MappingStart or SequenceStart when depth > bounds.MaxDepth:
-                        return new YamlStop(Line(current.Start.Line), Line(current.Start.Column), $"the file nests more than {bounds.MaxDepth} levels deep; {bounds.TooDeep}.");
+                    case AnchorAlias alias when rules?.NoAlias is { } noAlias:
+                        return Refused(alias.Start, $"the alias '*{alias.Value}' repeats a part of the file by reference; {noAlias}.");
+
+                    case AnchorAlias alias when inKey && (!anchors.TryGetValue(alias.Value.Value, out var container) || container):
+                        return Refused(alias.Start, $"the alias '*{alias.Value}' makes part of a key of a mapping or a list; a key is a plain name, and such a key would be read by walking all it names again at each alias - without end where it holds itself - so the file is not read.");
+
+                    case MappingStart or SequenceStart:
+                        if (depth > deepest)
+                        {
+                            deepest = depth;
+                            deepestAt = current.Start;
+                        }
+
+                        if (((NodeEvent)current).Anchor is { IsEmpty: false } anchor)
+                        {
+                            anchors[anchor.Value] = true;
+                        }
+
+                        break;
+
+                    case Scalar { Anchor.IsEmpty: false } scalar:
+                        anchors[scalar.Anchor.Value] = false;
+                        break;
                 }
             }
         }
-        catch (YamlException)
+        catch (Exception exception) when (exception is YamlException or InvalidOperationException or ArgumentException)
         {
-            return null;
+            // The text stops reading as YAML here: the model is handed the fault where it meets the place.
+            return new YamlMeasured(events, ExceptionDispatchInfo.Capture(exception), deepest, deepestAt, Refusal: null);
         }
 
-        return null;
+        return new YamlMeasured(events, null, deepest, deepestAt, Refusal: null);
     }
 
     /// <summary>
     /// Each event <paramref name="parser"/> reads, with how deep in mappings and lists it stands - a container's start and
-    /// its end at the depth of the container, 1 for one at the top: the one count of nesting every bound on YAML reads.
+    /// its end at the depth of the container, 1 for one at the top: the one count of nesting the reader reads - and whether
+    /// it stands in a key: a node that is a mapping's key, or anything inside one, and the end of a container that does.
     /// </summary>
-    private static IEnumerable<(ParsingEvent Event, int Depth)> Nested(IParser parser)
+    /// <remarks>Read on a stack of open containers of its own, so no nesting of the text is recursed through.</remarks>
+    private static IEnumerable<(ParsingEvent Event, int Depth, bool InKey)> Nested(IParser parser)
     {
-        var depth = 0;
+        var open = new Stack<YamlOpen>();
+
+        // Whether the node read now, held by the innermost open container, stands in a key: a mapping's children are its
+        // keys and values in turn, from a key.
+        bool Placed()
+        {
+            if (!open.TryPeek(out var holder))
+            {
+                return false;
+            }
+
+            var key = holder.Mapping && holder.KeyNext;
+            holder.KeyNext = !holder.KeyNext;
+            return holder.InKey || key;
+        }
 
         while (parser.MoveNext())
         {
@@ -378,18 +485,77 @@ public static class YamlReading
             switch (current)
             {
                 case MappingStart or SequenceStart:
-                    yield return (current, ++depth);
+                    var inKey = Placed();
+                    open.Push(new YamlOpen(current is MappingStart, inKey));
+                    yield return (current, open.Count, inKey);
                     break;
 
                 case MappingEnd or SequenceEnd:
-                    yield return (current, depth--);
+                    var closed = open.Pop();
+                    yield return (current, open.Count + 1, closed.InKey);
+                    break;
+
+                case Scalar or AnchorAlias:
+                    yield return (current, open.Count, Placed());
                     break;
 
                 default:
-                    yield return (current, depth);
+                    yield return (current, open.Count, false);
                     break;
             }
         }
+    }
+}
+
+/// <summary>A mapping or a list the events have opened and not yet closed (<see cref="YamlReading"/>'s count of nesting).</summary>
+/// <param name="mapping">Whether it is a mapping, whose children are keys and values in turn.</param>
+/// <param name="inKey">Whether it stands in a key: itself a key, or inside one.</param>
+internal sealed class YamlOpen(bool mapping, bool inKey)
+{
+    /// <summary>Whether it is a mapping, whose children are keys and values in turn.</summary>
+    public bool Mapping { get; } = mapping;
+
+    /// <summary>Whether it stands in a key: itself a key, or inside one.</summary>
+    public bool InKey { get; } = inKey;
+
+    /// <summary>Whether a mapping's next child is a key; it begins with one.</summary>
+    public bool KeyNext { get; set; } = true;
+}
+
+/// <summary>A text as its events measure it (<see cref="YamlReading.Load"/>), before it is read into nodes.</summary>
+/// <param name="Events">Its events, in order, as far as the text reads as YAML.</param>
+/// <param name="Fault">What the parser threw where the text stopped reading as YAML; <see langword="null"/> where it read to its end.</param>
+/// <param name="Depth">How deep it nests: its deepest container's depth, 1 for one at the top, 0 for a text of scalars.</param>
+/// <param name="DeepestAt">Where its deepest container opens.</param>
+/// <param name="Refusal">Where and why it is refused before it is read; <see langword="null"/> where it is read.</param>
+internal sealed record YamlMeasured(IReadOnlyList<ParsingEvent> Events, ExceptionDispatchInfo? Fault, int Depth, Mark DeepestAt, YamlStop? Refusal);
+
+/// <summary>
+/// The events of a text scanned once (<see cref="YamlMeasured"/>), handed to the representation model as the parser
+/// handed them: each in turn, then none - or, where the text stopped reading as YAML, the parser's own fault, thrown where
+/// the parser threw it.
+/// </summary>
+/// <param name="events">The events, in order.</param>
+/// <param name="fault">What the parser threw after the last of them; <see langword="null"/> where the text read to its end.</param>
+internal sealed class YamlReplay(IReadOnlyList<ParsingEvent> events, ExceptionDispatchInfo? fault) : IParser
+{
+    private int _next;
+
+    /// <inheritdoc/>
+    public ParsingEvent? Current { get; private set; }
+
+    /// <inheritdoc/>
+    public bool MoveNext()
+    {
+        if (_next < events.Count)
+        {
+            Current = events[_next++];
+            return true;
+        }
+
+        fault?.Throw();
+        Current = null;
+        return false;
     }
 }
 
@@ -459,17 +625,15 @@ internal sealed record YamlWrittenStop(Mark At, string Why);
 public sealed record YamlStop(int Line, int Column, string Why);
 
 /// <summary>
-/// What a reader holds its files' YAML to before they are read into nodes (<see cref="YamlReading.Root"/>): no alias,
-/// and no deeper nesting than <paramref name="MaxDepth"/>. Asked by a reader of files whose every part is meant to be
-/// written out, as a workflow's definition is; the action reader asks none.
+/// What a reader holds its files' YAML to before they are read into nodes (<see cref="YamlReading.Root"/>): the rules of
+/// its own files, which no file of another kind is held to. Asked by a reader of files whose every part is meant to be
+/// written out, as a workflow's definition is; the action reader asks none. No depth is among them: a file is read
+/// however deep it nests.
 /// </summary>
-/// <param name="MaxDepth">How deep mappings and lists may nest inside one another.</param>
 /// <param name="NoAlias">
-/// Why the reader's files write no alias, completing the refusal of one after a semicolon - for instance <c>a
-/// definition writes each of its steps out, so that what it says is what it reads</c>.
+/// Why the reader's files write no alias - <c>*name</c>, a merge key's included, which repeats a part of the file by
+/// reference - completing the refusal of one after a semicolon, for instance <c>a definition writes each of its steps
+/// out, so that what it says is what it reads</c>; <see langword="null"/> where an alias is read as the node its anchor
+/// names.
 /// </param>
-/// <param name="TooDeep">
-/// Why none of the reader's files nests deeper, completing the refusal of one after a semicolon - for instance <c>no
-/// definition does</c>.
-/// </param>
-public sealed record YamlBounds(int MaxDepth, string NoAlias, string TooDeep);
+public sealed record YamlRules(string? NoAlias);
