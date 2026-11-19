@@ -208,6 +208,53 @@ public sealed class JsonWalkTests
         return $"element: {elements}\nnode: {nodes}\n";
     });
 
+    /// <summary>
+    /// A node is copied whole, held by nothing, and compared as JSON compares: an object's members by name in any order, an
+    /// array's items in order, values as .NET compares them, and two kinds never alike.
+    /// </summary>
+    [Fact]
+    public void ACopy_IsTheSameJson_HeldByNothing()
+    {
+        var root = JsonDepth.ParseNode(Small)!;
+        var copy = JsonWalk.Copy(root["b c"]);
+
+        Assert.Null(copy!.Parent);
+        Assert.NotSame(root["b c"], copy);
+        Assert.Equal("""[true,{"d":null}]""", copy.ToJsonString());
+        Assert.True(JsonWalk.Same(root, JsonWalk.Copy(root)));
+        Assert.Null(JsonWalk.Copy(null));
+
+        Assert.True(JsonWalk.Same(JsonNode.Parse("""{"a":1,"b":[1,2]}"""), JsonNode.Parse("""{"b":[1,2],"a":1}""")));
+        Assert.False(JsonWalk.Same(JsonNode.Parse("[1,2]"), JsonNode.Parse("[2,1]")));
+        Assert.False(JsonWalk.Same(JsonNode.Parse("""{"a":1}"""), JsonNode.Parse("""{"a":1,"b":2}""")));
+        Assert.False(JsonWalk.Same(JsonNode.Parse("[]"), JsonNode.Parse("{}")));
+        Assert.False(JsonWalk.Same(JsonNode.Parse("\"1\""), JsonNode.Parse("1")));
+        Assert.True(JsonWalk.Same(null, null));
+        Assert.False(JsonWalk.Same(null, JsonNode.Parse("0")));
+    }
+
+    /// <summary>
+    /// A node 100,000 deep is copied and compared whole: the copy the same JSON, and a node whose bottom differs not. Done in
+    /// a child on a small stack, so a copy or a comparison that recursed would end that child, never this run.
+    /// </summary>
+    [Fact]
+    public async Task ACopyAndAComparison_OfAHundredThousandDeepNode()
+    {
+        var answer = await ChildRun.MethodAsync(typeof(JsonWalkTests), nameof(CopyDeep), TestContext.Current.CancellationToken);
+
+        Assert.Equal(new ChildRunAnswer(0, "copied: the same; changed at the bottom: another\n", string.Empty), answer);
+    }
+
+    /// <summary><see cref="ACopyAndAComparison_OfAHundredThousandDeepNode"/>'s child.</summary>
+    private static string CopyDeep() => SmallStack.Run(() =>
+    {
+        var original = JsonDepth.ParseNode(string.Concat(Enumerable.Repeat("[", Deep)) + "0" + new string(']', Deep));
+        var copy = JsonWalk.Copy(original);
+        var changed = JsonDepth.ParseNode(string.Concat(Enumerable.Repeat("[", Deep)) + "1" + new string(']', Deep));
+
+        return $"copied: {(JsonWalk.Same(original, copy) ? "the same" : "another")}; changed at the bottom: {(JsonWalk.Same(original, changed) ? "the same" : "another")}\n";
+    });
+
     /// <summary>What a walk met: how many places, the deepest one's depth, whether its path is <paramref name="path"/>, and what it holds.</summary>
     private static string Met(IEnumerable<(JsonPlace Place, string? Holding)> walked, string path)
     {

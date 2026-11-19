@@ -108,6 +108,27 @@ public sealed class LinearRegexTests
             refusal);
     }
 
+    /// <summary>
+    /// A pattern written in another dialect and handed over in .NET's writing is refused naming it as its reader wrote it -
+    /// a construct the linear engine lacks, and a writing that is no regular expression .NET reads - never by .NET's writing
+    /// or an offset into it; one that reads compiles as any does.
+    /// </summary>
+    [Fact]
+    public void APatternWrittenInAnotherDialect_IsRefusedNamingItAsWritten()
+    {
+        Assert.False(LinearRegex.TryCompile(@"\A(?:(a)\1)\z", RegexOptions.None, @"(a)\1", out var regex, out var refusal));
+        Assert.Null(regex);
+        Assert.Equal(@"The pattern '(a)\1' holds a backreference, which .NET's linear-time matcher lacks.", refusal);
+
+        Assert.False(LinearRegex.TryCompile(@"\A(?:(a)\z", RegexOptions.None, "(a", out _, out var unread));
+        Assert.Equal("The pattern '(a' is no regular expression .NET reads.", unread);
+
+        Assert.True(LinearRegex.TryCompile(@"\A(?:a)\z", RegexOptions.None, "a", out var read, out var none));
+        Assert.Null(none);
+        Assert.Matches(read, "a");
+        Assert.DoesNotMatch(read, "ab");
+    }
+
     /// <summary>An options value .NET does not define is the caller's mistake, not the pattern's: it is thrown as .NET throws it, never refused.</summary>
     [Fact]
     public void AnOptionsValueDotNetDoesNotDefine_IsThrownNotRefused()
