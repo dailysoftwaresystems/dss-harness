@@ -1174,8 +1174,8 @@ public sealed class ContainExecTests
 
     /// <summary>
     /// The step itself refuses a command line it cannot run, each refusal said whole on its error
-    /// stream: no program after '--' is a usage error, and both levels at once, a job with no name
-    /// or no channel to say the start on end with the step's own code. The root help does not list
+    /// stream: no program after '--' is a usage error, and both levels at once, a job with no name,
+    /// no channel to say the start on or no starter that listens on it end with the step's own code. The root help does not list
     /// it - nobody types it.
     /// </summary>
     [Fact]
@@ -1216,6 +1216,15 @@ public sealed class ContainExecTests
             (ContainExec.Failed, "contain-exec was given 'dotnet', which is no whole path; the process runner names every program by its whole path."
                 + Environment.NewLine),
             (named.ExitCode, named.StandardError));
+
+        var unstarted = await CliRunner.RunAsync(
+            [ContainExec.CommandName, ContainExec.GroupOption, ContainExec.StatusOption, "a-channel", ContainExec.Separator, TestHost.DotnetExecutable, "--version"],
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(
+            (ContainExec.Failed, $"contain-exec was given no '--starter'; it takes the id of the process runner that started it.{Environment.NewLine}"),
+            (unstarted.ExitCode, unstarted.StandardError));
+        Assert.Equal(string.Empty, unstarted.StandardOutput);
 
         var help = await CliRunner.RunAsync(["--help"], TestContext.Current.CancellationToken);
 
@@ -1303,29 +1312,60 @@ public sealed class ContainExecTests
     }
 
     /// <summary>
-    /// The step waits for its channel no longer than its bound: a channel it cannot reach - nobody listens on it - ends
-    /// the step with its own code, saying so on its error stream, once the bound is spent. The step's own bound is thirty
-    /// seconds; a shorter one stands in for it here.
+    /// The step gives up a channel it cannot reach once the process that started it - which listens on it - has ended:
+    /// nobody can listen on it any more, and the step ends with its own code, saying so on its error stream, at the first
+    /// look after, never at a number of seconds of its own.
     /// </summary>
     [Fact]
-    public void TheStep_GivesUpAChannelItCannotReach_OnceItsBoundIsSpent()
+    public void TheStep_GivesUpAChannelItCannotReach_OnceItsStarterHasEnded()
     {
         var channel = ProcessRunner.StatusName(OperatingSystem.IsWindows());
-        var bound = TimeSpan.FromMilliseconds(300);
         using var error = new StringWriter();
-        var waited = Stopwatch.StartNew();
 
-        var code = ContainExec.Run(job: null, group: true, scope: false, channel, CliRunner.CliProgram, ["--version"], error, bound);
+        // No process carries this id, on any system: past Linux's and macOS's highest, and no multiple of four on Windows.
+        var code = ContainExec.Run(job: null, group: true, scope: false, channel, starter: int.MaxValue, CliRunner.CliProgram, ["--version"], error);
 
-        waited.Stop();
+        Assert.Equal((ContainExec.Failed, ContainExec.StarterEndedLine(channel, int.MaxValue) + Environment.NewLine), (code, error.ToString()));
+    }
 
+    /// <summary>
+    /// The step waits to reach its channel for as long as its starter lives - here past the thirty seconds once given
+    /// before it gave up, a machine too busy to let the step through standing in for the moment the channel is listened
+    /// on - looking again every second and told every five minutes, and reaches it once it is listened on.
+    /// </summary>
+    [Fact]
+    public async Task TheStatusChannel_IsWaitedAndTold()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var channel = ProcessRunner.StatusName(OperatingSystem.IsWindows());
+        var clock = new TimerClock();
+        var told = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        var reaching = Task.Run(() => ContainExec.StartStatus.Reach(channel, () => true, wait => told.Enqueue(wait.Line()), clock), cancellationToken);
+
+        for (var tellings = 0; tellings < 2; tellings++)
+        {
+            await clock.WaitingAsync().WaitAsync(ClockDrive.Within, cancellationToken);
+            clock.Advance(DssHarness.Core.Waiting.Waits.SaidEvery);
+        }
+
+        await clock.WaitingAsync().WaitAsync(ClockDrive.Within, cancellationToken);
+        await Task.Delay(TimeSpan.FromSeconds(31), cancellationToken);
+        Assert.False(reaching.IsCompleted, "the step stopped waiting for a channel its starter still lives to listen on");
+
+        using var listening = new System.IO.Pipes.NamedPipeServerStream(
+            channel,
+            System.IO.Pipes.PipeDirection.In,
+            1,
+            System.IO.Pipes.PipeTransmissionMode.Byte,
+            System.IO.Pipes.PipeOptions.Asynchronous | System.IO.Pipes.PipeOptions.CurrentUserOnly);
+
+        await listening.WaitForConnectionAsync(cancellationToken).WaitAsync(LongBound, cancellationToken);
+        using var reached = await reaching.WaitAsync(LongBound, cancellationToken);
+
+        Assert.NotNull(reached);
         Assert.Equal(
-            (ContainExec.Failed, $"contain-exec could not reach the channel '{channel}' it says the start on: The operation has timed out.{Environment.NewLine}"),
-            (code, error.ToString()));
-
-        // Waited for as long as the bound, and given up then: never for the step's own thirty seconds. The wait counts the
-        // bound by the system's tick, which can end it a few milliseconds before a stopwatch says the bound is spent.
-        Assert.InRange(waited.Elapsed, bound - TimeSpan.FromMilliseconds(50), bound + TimeSpan.FromSeconds(10));
+            [$"has waited 5m00s for the channel '{channel}' it says the start on", $"has waited 10m00s for the channel '{channel}' it says the start on"],
+            told);
     }
 
     /// <summary>

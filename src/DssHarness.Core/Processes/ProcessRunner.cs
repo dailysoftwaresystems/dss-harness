@@ -324,6 +324,8 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
 
             startInfo.ArgumentList.Add(ContainExec.StatusOption);
             startInfo.ArgumentList.Add(statusName!);
+            startInfo.ArgumentList.Add(ContainExec.StarterOption);
+            startInfo.ArgumentList.Add(Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture));
             startInfo.ArgumentList.Add(ContainExec.Separator);
             startInfo.ArgumentList.Add(startedProgram);
 
