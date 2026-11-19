@@ -790,6 +790,16 @@ internal sealed class JsonPathParser
             }
         }
 
+        // A pattern written into the query that the linear matcher cannot build is refused as the query is read, so the
+        // query is never asked of a value only to be refused there.
+        if (name is "match" or "search"
+            && arguments[1] is JsonPathArgument.Literal { Value.ValueKind: JsonValueKind.String } pattern
+            && IRegexp.Refusal(pattern.Value.GetString()!, whole: name == "match") is { } unbuilt)
+        {
+            _at = start;
+            throw Fail(unbuilt);
+        }
+
         self.Give(new JsonPathFunction(name, arguments, function.Answers));
     }
 

@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Globalization;
 using System.Text;
 using System.Text.RegularExpressions;
+using DssHarness.Core.Results;
 using DssHarness.Core.Text;
 
 namespace DssHarness.Core.Json;
@@ -18,6 +19,12 @@ namespace DssHarness.Core.Json;
 /// reads them and as RFC 9485's mapping to ECMAScript leaves them - its grammar would make them characters of their own,
 /// which no implementation does. A pattern that is no I-Regexp matches nothing, as the standard asks. A class that names a
 /// character past U+FFFF in a range is not taken, the one corner of the grammar .NET's classes cannot hold.
+/// </para>
+/// <para>
+/// An I-Regexp past what .NET's linear matcher builds its automaton within is refused, in the matcher's own words, and
+/// never matched as nothing: RFC 9535 answers no match only for a pattern that is no I-Regexp, and RFC 9485 (section 8)
+/// lets an implementation refuse a pattern it cannot match in linear time. A query naming one as a literal is refused as
+/// it is read (<see cref="Refusal"/>); one that reads its pattern from the document is refused where it meets it.
 /// </para>
 /// <para>
 /// .NET's classes and categories read one UTF-16 code unit, and a character past U+FFFF is two, each a surrogate of no
@@ -51,9 +58,10 @@ internal static class IRegexp
 
     /// <summary>
     /// Every pattern read, each once, kept for the process's life: a filter asks its pattern of every value it is given, and
-    /// none of them reads it again. A pattern that is no I-Regexp is kept too, as the nothing it matches.
+    /// none of them reads it again. A pattern that is no I-Regexp is kept too, as the nothing it matches, and one the linear
+    /// matcher cannot build, as its refusal.
     /// </summary>
-    private static readonly ConcurrentDictionary<(string Pattern, bool Whole), Regex?> Read = new();
+    private static readonly ConcurrentDictionary<(string Pattern, bool Whole), Built> Read = new();
 
     /// <summary>
     /// Whether <paramref name="text"/> is matched by <paramref name="pattern"/>, whole or somewhere in it; never where the
@@ -63,12 +71,28 @@ internal static class IRegexp
     /// <param name="pattern">The I-Regexp.</param>
     /// <param name="text">The text.</param>
     /// <param name="whole">Whether the whole text must match (<c>match</c>), or a part of it (<c>search</c>).</param>
+    /// <exception cref="HarnessException">The pattern is an I-Regexp the linear matcher cannot build (<see cref="Refusal"/>).</exception>
     public static bool Matches(string pattern, string text, bool whole)
     {
-        var regex = Read.GetOrAdd((pattern, whole), static key => Compiled(key.Pattern, key.Whole));
+        var built = Built.Of(pattern, whole);
 
-        return regex is not null && regex.IsMatch(Tagged(text));
+        if (built.Refusal is { } refusal)
+        {
+            throw new HarnessException(HarnessExit.Refused, refusal);
+        }
+
+        return built.Regex is not null && built.Regex.IsMatch(Tagged(text));
     }
+
+    /// <summary>
+    /// Why <paramref name="pattern"/> - an I-Regexp - cannot be matched, by <c>match</c> where <paramref name="whole"/> is
+    /// true and by <c>search</c> otherwise: the linear matcher's refusal of what it was written as, saying the match is not
+    /// answered rather than answered as none; <see langword="null"/> where it is matched, or where it is no I-Regexp and so
+    /// matches nothing, as the standard asks.
+    /// </summary>
+    /// <param name="pattern">The pattern.</param>
+    /// <param name="whole">Whether the whole text must match (<c>match</c>), or a part of it (<c>search</c>).</param>
+    internal static string? Refusal(string pattern, bool whole) => Built.Of(pattern, whole).Refusal;
 
     /// <summary>The .NET pattern <paramref name="pattern"/> is, matched against a text as <see cref="Tagged"/> writes it; or <see langword="null"/> where it is no I-Regexp.</summary>
     internal static string? ToDotNet(string pattern)
@@ -87,18 +111,31 @@ internal static class IRegexp
     }
 
     /// <summary>
-    /// The regular expression <paramref name="pattern"/> is, matched by .NET's linear-time engine (<see cref="LinearRegex"/>);
-    /// <see langword="null"/> where it is no I-Regexp, or one past the bounds that engine builds its automaton within - the
-    /// engine's own fact, which RFC 9485 lets an implementation say - and so no pattern this matches with.
+    /// What a pattern was built as: the regular expression .NET's linear-time engine matches it with
+    /// (<see cref="LinearRegex"/>); neither that nor a refusal where it is no I-Regexp, which matches nothing; or, for an
+    /// I-Regexp past the bounds that engine builds its automaton within - the engine's own fact, which RFC 9485 lets an
+    /// implementation say - the engine's refusal, which is said and never matched as nothing.
     /// </summary>
-    private static Regex? Compiled(string pattern, bool whole)
+    private sealed record Built(Regex? Regex, string? Refusal)
     {
-        if (ToDotNet(pattern) is not { } written)
-        {
-            return null;
-        }
+        /// <summary><paramref name="pattern"/> as <c>match</c> (<paramref name="whole"/>) or <c>search</c> builds it, once.</summary>
+        public static Built Of(string pattern, bool whole) => Read.GetOrAdd((pattern, whole), static key => Compiled(key.Pattern, key.Whole));
 
-        return LinearRegex.TryCompile(whole ? $@"\A(?:{written})\z" : written, RegexOptions.None, pattern, out var regex, out _) ? regex : null;
+        private static Built Compiled(string pattern, bool whole)
+        {
+            if (ToDotNet(pattern) is not { } written)
+            {
+                return new Built(null, null);
+            }
+
+            return LinearRegex.TryCompile(whole ? $@"\A(?:{written})\z" : written, RegexOptions.None, pattern, out var regex, out var refused)
+                ? new Built(regex, null)
+                : new Built(
+                    null,
+                    $"{refused.TrimEnd('.')}; it is an I-Regexp, so JSONPath's {(whole ? "match" : "search")} of it is not answered, "
+                    + "never answered as no match: RFC 9535 answers no match only for a pattern that is no I-Regexp, and RFC 9485 "
+                    + "(section 8) lets an implementation refuse one it cannot match in linear time");
+        }
     }
 
     /// <summary>

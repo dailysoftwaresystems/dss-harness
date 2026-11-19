@@ -218,6 +218,34 @@ public sealed class JsonPathTests
         Assert.True(IRegexp.Matches(pairs, "x" + string.Concat(Enumerable.Repeat("ba", 2000)) + "x", whole: false));
     }
 
+    /// <summary>
+    /// An I-Regexp past the automaton .NET's linear matcher builds is refused in the matcher's words and never matched as
+    /// nothing: written in the query, as the query is read; read from the document, where the filter meets it. A pattern
+    /// that is no I-Regexp still matches nothing, as RFC 9535 asks.
+    /// </summary>
+    [Fact]
+    public void AnIRegexpPastTheLinearMatcher_IsRefusedInItsWords_NeverMatchedAsNothing()
+    {
+        const string Tail = "; it is an I-Regexp, so JSONPath's match of it is not answered, never answered as no match: RFC 9535 answers no "
+            + "match only for a pattern that is no I-Regexp, and RFC 9485 (section 8) lets an implementation refuse one it cannot match in linear time";
+
+        var written = Assert.Throws<JsonPathException>(() => JsonPath.Parse("$[?match(@, '.{10000}')]"));
+
+        Assert.StartsWith("The pattern '.{10000}' is refused by .NET's linear-time matcher: ", written.Message, StringComparison.Ordinal);
+        Assert.Contains(Tail + " (character 4 of ", written.Message, StringComparison.Ordinal);
+        Assert.Equal(written.Message, JsonPath.Problem("$[?match(@, '.{10000}')]"));
+
+        using var document = JsonDocument.Parse("""[ { "a": "x", "p": ".{10000}" }, { "a": "x", "p": "(" } ]""");
+        var query = JsonPath.Parse("$[?match(@.a, @.p)]");
+        var read = Assert.Throws<DssHarness.Core.Results.HarnessException>(() => query.Select(document.RootElement));
+
+        Assert.Equal(DssHarness.Core.Results.HarnessExit.Refused, read.ExitCode);
+        Assert.EndsWith(Tail, read.Message, StringComparison.Ordinal);
+
+        using var unread = JsonDocument.Parse("""[ { "a": "(", "p": "(" } ]""");
+        Assert.Empty(query.Select(unread.RootElement));
+    }
+
     /// <summary>Two objects compare in time, each member found by its name, however many they hold.</summary>
     [Fact]
     public void ObjectsOfManyMembers_CompareInTime()
