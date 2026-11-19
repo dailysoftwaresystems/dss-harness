@@ -247,6 +247,126 @@ public sealed class AgentPolicyPatternTests
         Assert.Equal(AgentPolicy.UndecidedRule, Assert.IsType<AgentPolicyAnswer.Denied>(answer).Rule);
     }
 
+    /// <summary>
+    /// A command that reads thirty variables, each holding every place a move's readings reach - two places each, so
+    /// 2^30 ways one value may be made - is decided by the forms of those places, never by a reading per way: the
+    /// thirty read together are allowed where every place they reach is, and the slot one of them reaches refused - in
+    /// well under a second. Red with a reading spelled for every way the variables' choices may be made, which never
+    /// ends.
+    /// </summary>
+    [Fact]
+    public void ThirtyVariablesOfEveryPlace_AreDecidedAsTheirForms()
+    {
+        using var temp = new TempDirectory();
+        var worktree = Directory.CreateDirectory(temp.Combine("tree")).FullName;
+        Directory.CreateDirectory(Path.Combine(worktree, "a"));
+        Directory.CreateDirectory(Path.Combine(worktree, "b"));
+        var policy = Policy(new PassThroughFileSystem(new PhysicalFileSystem(FilePermissionsFactory.Create())), worktree);
+        var thirty = string.Join("; ", Enumerable.Range(1, 30).Select(at => $"x{at}=$PWD"));
+        var read = string.Join(' ', Enumerable.Range(1, 30).Select(at => $"$x{at}/f.txt"));
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+
+        var allowed = policy.Run($"cd a || cd b; {thirty}; cat {read}");
+        var refused = policy.Run($"cd a || cd b; {thirty}; cat $x1/../.harness-config/workflows/.env/keys.env");
+
+        Assert.True(clock.Elapsed < TimeSpan.FromSeconds(1), $"deciding thirty variables took {clock.Elapsed}");
+        Assert.Equal(AgentPolicyAnswer.Allow, allowed);
+        Assert.Equal("the credential slots", Assert.IsType<AgentPolicyAnswer.Denied>(refused).Rule);
+    }
+
+    /// <summary>
+    /// Forty brace groups that are not plain - a quoted character among them, a value after an <c>=</c>, a star at their
+    /// end - are decided by their pattern: a witness per guarded place the star may reach, the names that matter for the
+    /// rest, so a word spelling 2^40 paths is refused where one names the slot, allowed where none does, in well under a
+    /// second. Red with every spelling read one at a time, which never ends.
+    /// </summary>
+    [Fact]
+    public void FortyNonPlainBraceGroups_AreDecidedByTheirPattern()
+    {
+        using var temp = new TempDirectory();
+        var worktree = Directory.CreateDirectory(temp.Combine("tree")).FullName;
+        var policy = Policy(new PassThroughFileSystem(new PhysicalFileSystem(FilePermissionsFactory.Create())), worktree);
+        var forty = string.Concat(Enumerable.Repeat("{a,b}", 40));
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+
+        var quoted = policy.Run($"cat 'q'{forty}");
+        var valued = policy.Run($"tar --f={forty} --delete x");
+        var starred = policy.Run($"cat {forty}*");
+
+        Assert.True(clock.Elapsed < TimeSpan.FromSeconds(1), $"deciding forty non-plain groups took {clock.Elapsed}");
+        Assert.Equal(AgentPolicyAnswer.Allow, quoted);
+        Assert.Equal(AgentPolicyAnswer.Allow, valued);
+        Assert.Equal(AgentPolicyAnswer.Allow, starred);
+    }
+
+    /// <summary>
+    /// Both definitions of a command's readings decide alike: every way the variables' choices may be made, one reading
+    /// each and every spelling of a word decided one at a time, against the cores and the spellings that decide - random
+    /// small commands over programs, moves, variables, braces, patterns and the slot, seeded so a failure repeats. Red
+    /// with a probe that answers anything its spelling-true reading would not.
+    /// </summary>
+    [Fact]
+    public void BothDefinitionsOfAReading_DecideAlike()
+    {
+        using var temp = new TempDirectory();
+        var worktree = Directory.CreateDirectory(temp.Combine("tree")).FullName;
+        Directory.CreateDirectory(Path.Combine(worktree, "a"));
+        Directory.CreateDirectory(Path.Combine(worktree, "b"));
+        Directory.CreateDirectory(Path.Combine(worktree, ".harness-config", "workflows", ".env"));
+        var policy = Policy(new PassThroughFileSystem(new PhysicalFileSystem(FilePermissionsFactory.Create())), worktree);
+        var random = new Random(20261119);
+
+        string Word()
+            => random.Next(6) switch
+            {
+                0 => "x.txt",
+                1 => "{a,b}/f.txt",
+                2 => "$p/f.txt",
+                3 => "$p/../.harness-config/workflows/.env/keys.env",
+                4 => "a/*",
+                _ => "'q'",
+            };
+
+        for (var made = 0; made < 60; made++)
+        {
+            var command = string.Join(' ', Enumerable.Range(0, random.Next(1, 4)).Select(_ => Word()));
+            var whole = $"cd a || cd b; p={{a,b}}; cat {command}";
+
+            AgentPolicyAnswer Probes()
+            {
+                AgentPolicy.EveryReading = false;
+                AgentPolicy.EverySpelling = false;
+
+                return policy.Run(whole);
+            }
+
+            AgentPolicyAnswer Every()
+            {
+                AgentPolicy.EveryReading = true;
+                AgentPolicy.EverySpelling = true;
+
+                return policy.Run(whole);
+            }
+
+            var probes = Probes();
+            AgentPolicyAnswer every;
+
+            try
+            {
+                every = Every();
+            }
+            finally
+            {
+                AgentPolicy.EveryReading = false;
+                AgentPolicy.EverySpelling = false;
+            }
+
+            Assert.True(
+                probes.Refusal() is { } one && every.Refusal() is { } two ? one.Rule == two.Rule : probes.Refusal() is null && every.Refusal() is null,
+                $"'{whole}': the probes {(probes.Refusal() is { } answer ? $"refuse it as {answer.Rule}" : "allow it")}, every reading {(every.Refusal() is { } other ? $"refuses it as {other.Rule}" : "allows it")}");
+        }
+    }
+
     /// <summary>A policy over <paramref name="worktree"/>, which it reads and writes, a slot in it and git's own directory kept.</summary>
     private static AgentPolicy Policy(IFileSystem fileSystem, string worktree)
         => new(

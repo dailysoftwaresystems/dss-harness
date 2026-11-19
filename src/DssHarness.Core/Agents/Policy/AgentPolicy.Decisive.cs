@@ -40,6 +40,12 @@ public sealed partial class AgentPolicy
     /// <param name="dotNames">Whether a pattern of the word's matches a name beginning with a dot.</param>
     private IEnumerable<(string Word, string Quoted)> Decisive(WordPattern pattern, string place, IReadOnlyList<string> matters, bool dotNames)
     {
+        // The definition the word is decided by, for the test that both decide alike: every spelling, one at a time.
+        if (EverySpelling)
+        {
+            return pattern.Spellings();
+        }
+
         if (!pattern.Chooses)
         {
             return [SpelledOnce(pattern)];
@@ -500,6 +506,118 @@ public sealed partial class AgentPolicy
         }
 
         return true;
+    }
+
+    /// <summary>
+    /// The places <paramref name="pattern"/> reaches from the places <paramref name="forms"/> hold, as forms: a pattern
+    /// that chooses nothing a path read whole (<see cref="Reached"/>); one whose choices spell names and separators a
+    /// form whose steps are those choices - each alternative a way of the step it spans, an empty one a step that may be
+    /// passed - and one that stands for a directory the shell may stand in (<see cref="WordChoice.Forms"/>) the forms of
+    /// that directory, what follows appended to them. One form per way the pattern goes, however many places it spells:
+    /// never a place spelled out.
+    /// </summary>
+    /// <param name="pattern">The word's pattern, as the command's reading spells it.</param>
+    /// <param name="forms">The places the command may stand in.</param>
+    /// <param name="tildeExpands">Whether the shell expands a tilde at the word's start.</param>
+    private IReadOnlyList<PlaceForm> FormsOf(WordPattern pattern, IReadOnlyList<PlaceForm> forms, bool tildeExpands = true)
+    {
+        var (word, quoted) = SpelledOnce(pattern);
+
+        if (!pattern.Chooses)
+        {
+            return Reached(forms, word, pattern: false, tildeExpands);
+        }
+
+        // The pieces between the pattern's choices, and the choices themselves, in order: a run of fixed text, then a
+        // choice, each alternative of which is walked as the places it reaches.
+        IReadOnlyList<PlaceForm> reached = forms;
+        var text = string.Empty;
+        var home = tildeExpands && CommandAnalysis.TildeExpands(word, quoted);
+
+        foreach (var part in pattern.Parts)
+        {
+            if (part is WordPart.Text fixedText)
+            {
+                // The text before the first choice names where the walk begins: home-expanded where it leads so.
+                if (text.Length == 0 && ReferenceEquals(reached, forms))
+                {
+                    text = fixedText.Spelled;
+                    continue;
+                }
+
+                var sofar = text + fixedText.Spelled;
+                reached = PlaceForm.Union(reached.SelectMany(form => StepsOf(form, sofar, home)));
+                text = string.Empty;
+                home = false;
+                continue;
+            }
+
+            var choice = (WordPart.Choice)part;
+
+            // A choice that stands for a directory the shell may stand in: its forms are the places, what follows
+            // appended to them.
+            if (choice.Of.Forms is { } stands)
+            {
+                reached = PlaceForm.Union(stands);
+                text = string.Empty;
+                home = false;
+                continue;
+            }
+
+            // A choice of the paths it may spell: each alternative a way of the step from the places so far.
+            var ways = new List<IReadOnlyList<string>>();
+
+            foreach (var alternative in choice.Of.Alternatives)
+            {
+                var (spelled, _) = SpelledOnce(alternative);
+
+                // An alternative that itself chooses is walked as the places it reaches: one alternative, one form-set.
+                if (alternative.Chooses)
+                {
+                    reached = PlaceForm.Union(reached.SelectMany(form => Reached([form], spelled, pattern: false, tildeExpands: false)));
+                    continue;
+                }
+
+                if (spelled.Length == 0)
+                {
+                    continue;
+                }
+
+                ways.Add([.. RelativeSegments(spelled)]);
+            }
+
+            if (ways.Count > 0)
+            {
+                reached = PlaceForm.Union(reached.Select(form => form.Stepped(ways, optional: ways.Count != choice.Of.Alternatives.Count)));
+            }
+
+            text = string.Empty;
+            home = false;
+        }
+
+        if (text.Length > 0)
+        {
+            reached = PlaceForm.Union(reached.SelectMany(form => StepsOf(form, text, home)));
+        }
+
+        return reached;
+    }
+
+    /// <summary>The form with <paramref name="text"/> walked from it: rooted, its whole read from the working directory; relative, its segments one step of the form.</summary>
+    private IReadOnlyList<PlaceForm> StepsOf(PlaceForm form, string text, bool tildeExpands)
+        => Reached([form], text, pattern: false, tildeExpands);
+
+    /// <summary>The non-empty segments of a relative alternative, in order.</summary>
+    private static IReadOnlyList<string> RelativeSegments(string spelled)
+    {
+        var segments = new List<string>();
+
+        foreach (var segment in spelled.Split(['/', '\\'], StringSplitOptions.RemoveEmptyEntries).Where(segment => segment != "."))
+        {
+            segments.Add(segment);
+        }
+
+        return segments;
     }
 
     /// <summary>

@@ -1832,7 +1832,8 @@ public sealed partial class AgentPolicy
     /// The texts of the script files this string's text stands in, each one its string wrote and then ran
     /// (<see cref="WrittenScripts"/>), outermost first: one met again runs itself, and is decided by the reading in progress.
     /// </param>
-    private AgentPolicyAnswer RunDecided(IReadOnlyList<AnalyzedCommand> commands, List<PlaceForm> forms, IReadOnlySet<string> running)
+    /// <param name="probes">The cores of this decision of the string.</param>
+    private AgentPolicyAnswer RunDecided(IReadOnlyList<AnalyzedCommand> commands, List<PlaceForm> forms, IReadOnlySet<string> running, Probes? probes = null)
     {
         // Everything of a command compares as this platform compares names, but for the root
         // actions and the places no agent reaches, which fold case everywhere.
@@ -1846,6 +1847,14 @@ public sealed partial class AgentPolicy
 
         // What the string's own assignments set, and what its commands write, as each command after them reads it.
         var state = new StringState(OnWindows, Meet, MayEndIn);
+
+        // The cores of this decision of the string: a script it runs is decided as a decision of its own, with cores of
+        // its own, and what lies outside this decision's readings is left as it was.
+        var outer = _probes;
+        _probes = probes ?? new Probes();
+
+        try
+        {
 
         // Where each command may stand, as the moves before it at its level left it.
         var standing = new Standing(forms);
@@ -1861,9 +1870,15 @@ public sealed partial class AgentPolicy
 
         // Every place a path a command names may be, read from each place the command may stand in, as forms of places;
         // null where the path names one this cannot tell. Its short names kept: what a file written and one read share is
-        // asked of the forms (Meet, MayEndIn).
+        // asked of the forms (Meet, MayEndIn). A word held as a core names the places its choice may be
+        // (<see cref="FormsOf"/>), never the core's own text.
         IReadOnlyList<PlaceForm>? Wholes(string path)
         {
+            if (Templated(path) is { } pattern)
+            {
+                return FormsOf(pattern, forms);
+            }
+
             try
             {
                 return Reached(forms, path, pattern: false);
@@ -1886,7 +1901,7 @@ public sealed partial class AgentPolicy
 
             // The command as it is spelled, and with the variables the string set before it given each value they may hold
             // together - every value kept, one value of a variable wherever it stands.
-            var readings = Readings(analyzed, state, forms);
+            var readings = Readings(analyzed, state, forms, _probes);
 
             // Each word a reading spells is decided once, however many readings spell it alike: a word no variable reaches
             // is the same in every reading.
@@ -1925,7 +1940,7 @@ public sealed partial class AgentPolicy
 
                 // A pathspec of a git command that reaches what git does not track is git's own pattern, quoted or not, its
                 // wildcards matching dot-names, read from the repository's root where its magic says so: text git reads,
-                // whose tilde no shell expands.
+                // whose tilde no shell expands. A pathspec held as a core is spelled by the spellings that decide it.
                 foreach (var pathspec in CommandAnalysis.UntrackedPathspecs(reading.Words, environment))
                 {
                     var from = pathspec.Top ? GitRoots(places) : places;
@@ -1935,9 +1950,19 @@ public sealed partial class AgentPolicy
                         return named;
                     }
 
-                    if (!pathspec.Literal && !pathspec.Glob && GitPatternRefusal(pathspec.Path, from) is { } reached)
+                    if (pathspec.Literal || pathspec.Glob)
                     {
-                        return reached;
+                        continue;
+                    }
+
+                    foreach (var spelled in Templated(pathspec.Path) is { } pattern
+                        ? Decisive(pattern, places.FirstOrDefault() ?? _ground.WorkingDirectory, [], dotNames: true).Select(spelling => spelling.Word)
+                        : [pathspec.Path])
+                    {
+                        if (GitPatternRefusal(spelled, from) is { } reached)
+                        {
+                            return reached;
+                        }
                     }
                 }
             }
@@ -2044,10 +2069,17 @@ public sealed partial class AgentPolicy
                         }
                     }
 
-                    // What a walk of it removes of what it matches is none of those places, nor holds nor lies in one.
-                    if (CommandAnalysis.WalkOf(reading, start) is { } walk && WalkRefusal(walk, places, whole, dotNames) is { } walked)
+                    // What a walk of it removes of what it matches is none of those places, nor holds nor lies in one. A
+                    // point held as a core is spelled by the spellings that decide it, each a walk of its own.
+                    if (CommandAnalysis.WalkOf(reading, start) is { } walk)
                     {
-                        return walked;
+                        foreach (var spelled in WalksSpelled(walk, places))
+                        {
+                            if (WalkRefusal(spelled, places, whole, dotNames) is { } walked)
+                            {
+                                return walked;
+                            }
+                        }
                     }
                 }
 
@@ -2070,6 +2102,11 @@ public sealed partial class AgentPolicy
         return _ground.SideTask && commands.FirstOrDefault(CommandAnalysis.LeavesAProcessBehind) is { } left
             ? MainTreeWriteLock.LeftBehind(string.Join(' ', left.Wrappers.Count > 0 ? left.Wrappers[0] : left.Whole))
             : AgentPolicyAnswer.Allow;
+        }
+        finally
+        {
+            _probes = outer;
+        }
     }
 
     /// <summary>
@@ -2411,13 +2448,15 @@ public sealed partial class AgentPolicy
     /// <summary>
     /// The readings of <paramref name="analyzed"/> a path is decided on: the command as it is spelled, then - where a word
     /// or a redirect's file names a variable the string set to text it spells, or <c>$PWD</c> - the command with those
-    /// variables given their values together (<see cref="CommandAnalysis.Patterned"/>, <see cref="WordPattern.Spellings(IReadOnlyList{WordPattern})"/>):
+    /// variables given their values (<see cref="CommandAnalysis.Patterned"/>, <see cref="WordPattern.Spellings(IReadOnlyList{WordPattern})"/>):
     /// every value each may hold, however many, one value of a variable in every word and file that reads it, as the
     /// shell substitutes one, a leading <c>~</c> among them where the string, or a command that runs this one, sets
-    /// <c>HOME</c>. A variable the string does not set, or sets to a value it computes, is read as the text it spells. Given
-    /// lazily: a decision that refuses a reading reads no more of them.
+    /// <c>HOME</c>. A variable the string does not set, or sets to a value it computes, is read as the text it spells. The
+    /// ways the variables' choices may be made are given as probes (<see cref="ProbesCore"/>): a choice whose
+    /// alternatives name nothing the analysis reads stands as one core, and only the rest are spelled one alternative at
+    /// a time. Given lazily: a decision that refuses a reading reads no more of them.
     /// </summary>
-    private static CommandReadings Readings(AnalyzedCommand analyzed, StringState state, IReadOnlyList<PlaceForm> places)
+    private static CommandReadings Readings(AnalyzedCommand analyzed, StringState state, IReadOnlyList<PlaceForm> places, Probes probes)
     {
         // A shell a command runs with HOME set reads its tilde as that HOME: the command's own environment carries the HOME
         // of each command that runs it (HOME=x bash -c '...'), read beside the string's own - one choice for the command.
@@ -2440,7 +2479,9 @@ public sealed partial class AgentPolicy
         // A command none of whose words or files reads a variable the string set is its one reading.
         return words.Concat(targets).All(pattern => pattern.Parts is [WordPart.Text])
             ? new CommandReadings(analyzed, [])
-            : new CommandReadings(analyzed, Substituted(analyzed, words, targets));
+            : new CommandReadings(analyzed, EveryReading
+                ? Substituted(analyzed, words, targets)
+                : ProbesCore(analyzed, words, targets, probes));
 
         static IEnumerable<AnalyzedCommand> Substituted(AnalyzedCommand analyzed, IReadOnlyList<WordPattern> words, IReadOnlyList<WordPattern> targets)
         {
@@ -2615,6 +2656,45 @@ public sealed partial class AgentPolicy
                 ? pattern.Spellings().Select(each => (each.Word, (string?)each.Quoted))
                 : CommandAnalysis.BraceExpansions(word).Select(each => (each, (string?)null))
             : [(word, quoted)];
+
+    /// <summary>
+    /// The walk as its points are spelled: a point held as a core by the spellings that decide it
+    /// (<see cref="Decisive"/>), each a walk of its own - a point no core holds is the walk itself, all its points together.
+    /// </summary>
+    private IEnumerable<FileWalk> WalksSpelled(FileWalk walk, IReadOnlyList<string> places)
+    {
+        var spelled = new List<IReadOnlyList<string>>();
+
+        foreach (var point in walk.Points)
+        {
+            if (Templated(point) is { } pattern)
+            {
+                spelled.Add([.. Decisive(pattern, places.FirstOrDefault() ?? _ground.WorkingDirectory, [], dotNames: true).Select(each => each.Word)]);
+            }
+        }
+
+        if (spelled.Count == 0)
+        {
+            yield return walk;
+            yield break;
+        }
+
+        // Each cored point a walk of its own beside the others: what one removes of what it matches is asked of it alone.
+        var others = 0;
+
+        foreach (var point in walk.Points)
+        {
+            if (Templated(point) is null)
+            {
+                others++;
+            }
+        }
+
+        foreach (var each in spelled.SelectMany(points => points))
+        {
+            yield return walk with { Points = others > 0 ? [.. walk.Points.Where(point => Templated(point) is null), each] : [each] };
+        }
+    }
 
     /// <summary>
     /// Why <c>run-side-task</c> is refused, where the program at <paramref name="start"/> starts it - by its own name, or
@@ -3996,6 +4076,13 @@ public sealed partial class AgentPolicy
 
         foreach (var target in going)
         {
+            // A move held as a core goes to the places its choice may be (<see cref="FormsOf"/>), never the core's text.
+            if (Templated(target) is { } pattern)
+            {
+                moved.AddRange(FormsOf(pattern, places));
+                continue;
+            }
+
             try
             {
                 moved.AddRange(Reached(places, target, pattern: true));
@@ -4141,6 +4228,26 @@ public sealed partial class AgentPolicy
     /// </summary>
     private IEnumerable<(NamedPath Named, string Place)> NamedAgainst(string word, string? quoted, IReadOnlyList<string> places, bool braces, bool dotNames)
     {
+        // A word held as a core - one text standing for every alternative of a choice - is decided by its pattern, the
+        // core mapped back to the choice (<see cref="Templated"/>): its spellings that decide it, never the core's text.
+        if (Templated(word) is { } core)
+        {
+            var unreachable = _unreachable.SelectMany(kind => kind.Places).ToList();
+
+            foreach (var place in places)
+            {
+                foreach (var (spelling, mask) in Decisive(core, place, unreachable, dotNames))
+                {
+                    foreach (var named in CommandAnalysis.PathsNamed(spelling, braces: false, quoted: mask))
+                    {
+                        yield return (named, place);
+                    }
+                }
+            }
+
+            yield break;
+        }
+
         if (braces && word.Contains('{', StringComparison.Ordinal) && WordPattern.Braces(word, quoted) is { } spelled)
         {
             var unreachable = _unreachable.SelectMany(kind => kind.Places).ToList();
@@ -4184,6 +4291,12 @@ public sealed partial class AgentPolicy
     /// </summary>
     private IEnumerable<string> SpelledAgainst(string word, string place, IReadOnlyList<string> matters, bool dotNames)
     {
+        // A word held as a core is decided by the pattern of the paths it may name, never the core's own text.
+        if (Templated(word) is { } core)
+        {
+            return Decisive(core, place, matters, dotNames).Select(spelling => spelling.Word);
+        }
+
         if (!word.Contains('{', StringComparison.Ordinal) || CommandAnalysis.BraceGroup(word) is null)
         {
             return [word];

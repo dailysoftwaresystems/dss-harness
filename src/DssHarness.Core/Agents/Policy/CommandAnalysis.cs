@@ -2928,7 +2928,7 @@ public static partial class CommandAnalysis
         => [script, .. after.Where(word => word != InputWord)];
 
     /// <summary>The shells whose <c>-c</c> takes a script - fish's read on their own (<see cref="FishScripts"/>).</summary>
-    private static readonly string[] Shells =
+    internal static readonly string[] Shells =
         ["sh", "bash", "zsh", "dash", "ksh", "mksh", "pdksh", "oksh", "ash", "yash", "posh", "rbash", "csh", "tcsh"];
 
     /// <summary>Whether <paramref name="name"/>, as <see cref="Name"/> reads a program's name, is a shell whose script this reads: one of <see cref="Shells"/>, or fish.</summary>

@@ -172,6 +172,13 @@ public sealed partial class AgentPolicy
                 && first[at].Ways.Zip(second[at].Ways).All(pair => pair.First.SequenceEqual(pair.Second, StringComparer.Ordinal)));
 
         /// <summary>
+        /// Each place of the form with a step of <paramref name="ways"/> beneath it, the step passed where
+        /// <paramref name="optional"/> says so: a choice of the paths a word may spell, one way each alternative.
+        /// </summary>
+        public PlaceForm Stepped(IReadOnlyList<IReadOnlyList<string>> ways, bool optional)
+            => new(Base, [.. Steps, new PlaceStep(ways, optional)]);
+
+        /// <summary>
         /// The pattern of the text of every place the form holds, as <c>PWD</c> holds it: the base, then each step's ways as a
         /// choice - none of them where the step may be passed. A base that is a root gives its places' text after it with no
         /// separator of its own, and its own text where every step may be passed.
