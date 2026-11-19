@@ -381,22 +381,6 @@ public sealed class PreExistingIssuesWriter
         Write([.. issues.Issues, entry], at);
         return entry;
     }
-
-    /// <summary>What a cut quote or output ends with: the cut, said.</summary>
-    public static readonly string CutMark = $"… (cut to {PreExistingProof.Most.ToString(System.Globalization.CultureInfo.InvariantCulture)} characters)";
-
-    /// <summary>
-    /// Cuts a quote or an output to the most it may hold, the cut said: the text and the words that say it was cut
-    /// together hold no more than <see cref="PreExistingProof.Most"/> characters, so what is cut is what the reader of the
-    /// issue takes.
-    /// </summary>
-    /// <param name="text">What was read or run.</param>
-    public static string Cut(string text)
-    {
-        ArgumentNullException.ThrowIfNull(text);
-
-        return text.Length <= PreExistingProof.Most ? text : text[..(PreExistingProof.Most - CutMark.Length)] + CutMark;
-    }
 }
 
 /// <summary>

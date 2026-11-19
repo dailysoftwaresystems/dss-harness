@@ -7666,7 +7666,7 @@ public sealed class FlowCoordinator
 
     /// <summary>
     /// The issue a triage instance answered <c>list</c> for, as the run's file would hold it next: its quote or its
-    /// output cut by the one owner of the cut, the cut said.
+    /// output whole, as the triage gave it - a proof is never cut to a length.
     /// </summary>
     private PreExistingIssue IssueOf(FlowInstance instance)
     {
@@ -7683,9 +7683,9 @@ public sealed class FlowCoordinator
                 TextOf(proof?["at"]) ?? string.Empty,
                 TextOf(proof?["file"]),
                 TextOf(proof?["lines"]),
-                TextOf(proof?["quote"]) is { } quote ? PreExistingIssuesWriter.Cut(quote) : null,
+                TextOf(proof?["quote"]),
                 TextOf(proof?["command"]),
-                TextOf(proof?["output"]) is { } output ? PreExistingIssuesWriter.Cut(output) : null),
+                TextOf(proof?["output"])),
             TextOf(instance.Output?["why"]) ?? "none of the three: not related to the work, not critical, and in no step's way",
             instance.RaisedBy?.Id ?? instance.Id,
             instance.FinishedAt ?? _clock.GetUtcNow());

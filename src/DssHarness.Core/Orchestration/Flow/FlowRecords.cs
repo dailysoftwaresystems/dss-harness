@@ -851,21 +851,17 @@ public sealed record PreExistingIssue(
 /// <param name="At">The commit it was made on.</param>
 /// <param name="File">The file it read; null where it ran a command.</param>
 /// <param name="Lines">The lines it read, as a range; null where it ran a command.</param>
-/// <param name="Quote">What the lines say, cut to 4,000 characters, the cut said; null where it ran a command.</param>
+/// <param name="Quote">What the lines say, whole, however long; null where it ran a command.</param>
 /// <param name="Command">The command it ran; null where it read.</param>
-/// <param name="Output">What the command said, cut to 4,000 characters, the cut said; null where it read.</param>
+/// <param name="Output">What the command said, whole, however long; null where it read.</param>
 public sealed record PreExistingProof(string Kind, string At, string? File = null, string? Lines = null, string? Quote = null, string? Command = null, string? Output = null)
 {
-    /// <summary>The most a quote or an output holds, with the cut said.</summary>
-    public const int Most = 4_000;
-
-    /// <summary>What is wrong with this proof; null when nothing is.</summary>
+    /// <summary>What is wrong with this proof; null when nothing is. A quote or an output is never wrong for its length: a proof is kept whole.</summary>
     public string? Problem()
         => Kind is not ("read" or "ran") ? $"'{Kind}' is not what a proof is"
             : string.IsNullOrWhiteSpace(At) ? "it says no commit it was made on"
             : Kind == "read" && (string.IsNullOrWhiteSpace(File) || string.IsNullOrWhiteSpace(Lines) || string.IsNullOrWhiteSpace(Quote)) ? "a proof that reads names the file, the lines and what they say"
             : Kind == "ran" && (string.IsNullOrWhiteSpace(Command) || string.IsNullOrWhiteSpace(Output)) ? "a proof that runs names the command and what it said"
-            : (Quote?.Length ?? 0) > Most || (Output?.Length ?? 0) > Most ? $"a quote or an output is cut to {Most.ToString(CultureInfo.InvariantCulture)} characters, the cut said"
             : null;
 }
 

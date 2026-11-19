@@ -1248,11 +1248,11 @@ public sealed class FlowPreExistingTests
     }
 
     /// <summary>
-    /// A quote or an output longer than the file holds is cut by the one owner of the cut, the cut said, and the issue
-    /// is listed: a long proof never fails the triage step.
+    /// A proof of two megabytes - a failing test's whole output - is kept whole in the run's list, as the triage gave it,
+    /// and the issue is listed: a proof is never cut to a length, and a long one never fails the triage step.
     /// </summary>
     [Fact]
-    public async Task ALongQuote_IsCutTheWayTheFileHoldsIt_AndTheIssueIsListed()
+    public async Task ATwoMegabyteProof_IsKeptWhole()
     {
         using var temp = new TempDirectory();
         var definition = Parse("""
@@ -1271,7 +1271,7 @@ public sealed class FlowPreExistingTests
                 onAddress: recover
                 onFailure: stop
             """);
-        var quote = new string('x', PreExistingProof.Most + 500);
+        var quote = string.Join("\n", Enumerable.Range(1, 2 * 1024 * 1024 / 32).Select(line => $"FAIL test {line,8}: expected 1, was 2"));
         var answer = (JsonObject)Course("list", "a broken test").Output!.DeepClone();
         answer["proof"]!["quote"] = quote;
         var runner = new FakeRunner()
@@ -1295,7 +1295,8 @@ public sealed class FlowPreExistingTests
         var issues = store.ReadPreExistingIssues(layout);
 
         Assert.NotNull(issues);
-        Assert.Equal(PreExistingIssuesWriter.Cut(quote), Assert.Single(issues.Issues).Proof.Quote);
+        Assert.True(quote.Length >= 2 * 1024 * 1024, $"{quote.Length} characters");
+        Assert.Equal(quote, Assert.Single(issues.Issues).Proof.Quote);
     }
 
     /// <summary>A triage answer whose issue does not read back fails the triage step: a record is never guessed at.</summary>
