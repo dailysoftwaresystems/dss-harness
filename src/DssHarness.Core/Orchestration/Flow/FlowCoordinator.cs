@@ -4938,9 +4938,9 @@ public sealed class FlowCoordinator
 
             scope.Instantiated.Add(declaration.Name);
 
-            if (scope.Visits.GetValueOrDefault(declaration.Name) >= 99)
+            if (scope.Visits.GetValueOrDefault(declaration.Name) >= FlowRecover.MostVisits)
             {
-                // A step the run was sent back to a hundredth time in one scope fails, saying so.
+                // A step the run was sent back to once past the engine's bound in one scope fails, saying so.
                 _ = NewVisit(scope, declaration, FlowInstanceState.NotStarted);
                 changed = true;
                 continue;
@@ -5077,9 +5077,9 @@ public sealed class FlowCoordinator
             return false;
         }
 
-        if (scope.Visits.GetValueOrDefault(three.Add.Name) >= 99)
+        if (scope.Visits.GetValueOrDefault(three.Add.Name) >= FlowRecover.MostVisits)
         {
-            // The place was visited ninety-nine times in this scope: the hundredth fails, as any step's does.
+            // The place was visited as often as the engine's bound allows in this scope: the next visit fails, as any step's does.
             _ = NewVisit(scope, three.Add, FlowInstanceState.NotStarted);
             return true;
         }
@@ -8655,16 +8655,21 @@ public sealed class FlowCoordinator
         End(visit, FlowInstanceState.Skipped, visit.Exit, visit.Error);
     }
 
-    /// <summary>Makes a new visit of <paramref name="declaration"/> in <paramref name="scope"/>, and fails it where the run would visit a step more than 99 times in one scope.</summary>
+    /// <summary>
+    /// Makes a new visit of <paramref name="declaration"/> in <paramref name="scope"/>, and fails it where the run would
+    /// visit a step more often in one scope than the engine's bound of visits allows (<see cref="FlowRecover.MostVisits"/>,
+    /// the one owner of that bound, which the recovery's maxVisits is held to as well).
+    /// </summary>
     private FlowInstance NewVisit(Scope scope, WorkflowStep declaration, FlowInstanceState state, Action<FlowInstance>? made = null)
     {
-        if (scope.Visits.GetValueOrDefault(declaration.Name) + 1 > 99)
+        if (scope.Visits.GetValueOrDefault(declaration.Name) + 1 > FlowRecover.MostVisits)
         {
+            var most = FlowRecover.MostVisits.ToString(System.Globalization.CultureInfo.InvariantCulture);
             var bound = Create(scope, declaration, FlowInstanceState.Failed, made: bound =>
             {
                 made?.Invoke(bound);
                 bound.Exit = HarnessExit.Refused;
-                bound.Error = $"'{declaration.Name}' was visited 99 times in its scope; at most 99 visits of one step in one scope are allowed";
+                bound.Error = $"'{declaration.Name}' was visited {most} times in its scope; at most {most} visits of one step in one scope are allowed";
             });
             End(bound, FlowInstanceState.Failed, bound.Exit, bound.Error);
             HandleFailure(bound);
