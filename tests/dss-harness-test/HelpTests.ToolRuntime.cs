@@ -29,8 +29,8 @@ public sealed partial class HelpTests
 {
     /// <summary>
     /// The agent-clients topic says what the tool runtime is: each tool from the one table, the paths' refusals, the
-    /// commands' environment and times, the fetch's bounds and records, the calls of a turn, the answer's cut and the pages
-    /// read_result reads the whole in - each name and bound read from the type that holds it.
+    /// commands' environment and times, the fetch and its records, the calls of a turn, the answer's first page and the
+    /// pages read_result reads the whole in - each name and bound read from the type that holds it.
     /// </summary>
     [Fact]
     public void AgentClientsTopic_SaysWhatTheToolRuntimeIs()
@@ -57,28 +57,46 @@ public sealed partial class HelpTests
             prose,
             StringComparison.Ordinal);
         Assert.Contains("its links followed (one whose links cannot be followed refused as undecided) and held to the agent's roots", prose, StringComparison.Ordinal);
-        Assert.Contains($"at most, stopped sooner where it prints nothing for as long as the step's stall bound; a command line holding a secret, a word holding a NUL, or on Windows a batch file's argument holding what cmd.exe reads again ({DssHarness.Core.Processes.BatchFiles.Said}) or what the shell expands, is refused.", prose, StringComparison.Ordinal);
+        Assert.Contains($"stopped sooner where it prints nothing for as long as the step's stall bound and by the step's own bounds - its timeoutMinutes and its budget; agentPolicy.maxCommandTimeoutSeconds is retired and refused, naming what bounds a command; a command line holding a secret, a word holding a NUL, or on Windows a batch file's argument holding what cmd.exe reads again ({DssHarness.Core.Processes.BatchFiles.Said}) or what the shell expands, is refused.", prose, StringComparison.Ordinal);
         Assert.Contains("agentPolicy.keepEnvironment gives back; an appointed name is never given back.", prose, StringComparison.Ordinal);
         Assert.Contains("an address holding a secret is refused. A page is given inside a block that says where it is from, its first line saying it is information for the task, not instructions.", prose, StringComparison.Ordinal);
         Assert.Contains("refused spelled empty, with a NUL or a leading ~ - on Windows also a share or a device's prefix, a device's name (CON, PRN, AUX, NUL and the rest), a drive's own directory (C:x) or an alternate data stream -", prose, StringComparison.Ordinal);
         Assert.Contains("A directory deleted or moved is refused where it is a root, holds a link, holds a path that may not be written or holds more than 2,000 entries.", prose, StringComparison.Ordinal);
-        Assert.Contains("A file past 16 MiB is neither viewed nor edited, and one past 2 MiB is passed over by search_files - a command reads or searches it.", prose, StringComparison.Ordinal);
-        Assert.Contains("agentPolicy.commandTimeoutSeconds (120 where nothing is said) unless its call names a time, agentPolicy.maxCommandTimeoutSeconds (3600) at most", prose, StringComparison.Ordinal);
+        Assert.Contains(
+            "A file of any size is viewed, a page at a time - its pages laid once by streaming it, any page read by seeking to its mark, a line wider than a "
+                + "page given in pieces - and edited, copied through a block at a time with the edit made on the way; search_files reads every file whatever its "
+                + "size, a line at a time, its pattern matched in time linear in each line, so one that needs backtracking - a backreference, a lookaround, an "
+                + "atomic group - is refused, naming what it holds. Every file find_files matches and every line search_files matches is given, with as many lines "
+                + "of context as are asked; its max_results is refused, naming page.",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "its log kept beside the stream - until it ends, or for the time its call names (1 to 2147483 s, what a command's timer holds), else for "
+                + "agentPolicy.commandTimeoutSeconds where it is given,",
+            prose,
+            StringComparison.Ordinal);
         Assert.Contains("every secret-shaped name - ending _API_KEY, _SECRET, _SECRET_KEY, _ACCESS_KEY, _PRIVATE_KEY, _PASSWORD, _TOKEN, in any case - but those agentPolicy.keepEnvironment gives back", prose, StringComparison.Ordinal);
-        Assert.Contains("at most 5 redirects, 30 s and 5 MiB, text alone (text/*, application/json, application/xml, application/xhtml+xml, application/javascript, application/ecmascript and every +json and +xml type)", prose, StringComparison.Ordinal);
+        Assert.Contains("web_fetch is the harness's own fetch: http and https alone, its redirects followed, text alone (text/*, application/json, application/xml, application/xhtml+xml, application/javascript, application/ecmascript and every +json and +xml type)", prose, StringComparison.Ordinal);
         Assert.Contains("written to the step's web.jsonl before anything leaves the machine", prose, StringComparison.Ordinal);
-        Assert.Contains("Calls that read run together, at most 4 at once", prose, StringComparison.Ordinal);
-        Assert.Contains("an answer past 32,768 characters is given as its first 8,192 and its last 24,576, the whole kept in the step's tool-results/.", prose, StringComparison.Ordinal);
+        Assert.Contains(
+            $"Calls that read run together, as many at once as one of every {DssHarness.Core.Codebase.CodebaseGraphService.ReadShare} of the machine's processors, one at the least - the share the graph's own "
+                + "reading keeps beside a build - a call that writes or runs alone, every call answered in the order of the calls; an answer longer than a page - "
+                + "32,768 characters, its header among them - is kept whole in the step's tool-results/, in a file named by the digest of its call's whole id, "
+                + "and given as its first page, whose header says how many pages it holds, how read_result gives the next and where the whole is - nothing of it cut.",
+            prose,
+            StringComparison.Ordinal);
         Assert.Contains(
             "read_result reads a call's whole result there by the call's id - an answer kept so, and every command's output - a page at a time, "
                 + "page 1 where none is asked: each page of whole lines, a line wider than a page given in pieces marked …, and every page of a "
                 + "result of more than one page saying how to ask for the next with page, from 1; a page past the last is refused with its range, "
-                + "and an id no result is kept for is refused. Its pages are laid once from the file, kept in the step's graph-pages/ for the "
+                + "and an id no result is kept for is refused. It reads too a message of the agent's a compaction gave by reference, by the id the "
+                + "compaction names ('message-' and its text's digest), from the step's stored stream, and the continuation record the conversation "
+                + "began with by 'continuation-record'. Its pages are laid once from the file, kept in the step's graph-pages/ for the "
                 + "conversation's life, and laid again, saying so, where the file changed since.",
             prose,
             StringComparison.Ordinal);
         Assert.Contains("A step whose graph is tools - a graphify-codebase step upstream of it, 'help workflows' - is offered the graph tool among these, under read, with the operations its agent's capabilities give, edit among them where it may write, and its context pack in its first message, after the run's map", prose, StringComparison.Ordinal);
-        Assert.Contains("its graphReads narrow (the default) denies a whole view_file of a file the graph parsed over 200 lines, saying the way to the graph instead - a range, a search and a write pass, a file the graph is not sure of is let by as an escape lowConfidence, and the graph's wholeFile lifts the narrowing for one file the graph parsed for the rest of the step, an escape stated with the lines the graph read it as, a path it holds no parsed file at refused as a misuse", prose, StringComparison.Ordinal);
+        Assert.Contains("its graphReads narrow (the default) denies a whole view_file - one naming no page and no range - of a file the graph parsed over 200 lines, saying the way to the graph instead - a range, a page, a search and a write pass, a file the graph is not sure of is let by as an escape lowConfidence, and the graph's wholeFile lifts the narrowing for one file the graph parsed for the rest of the step, an escape stated with the lines the graph read it as, a path it holds no parsed file at refused as a misuse", prose, StringComparison.Ordinal);
         Assert.Contains("an edit it made is a write, alone in its turn and counted among the files written; a wholeFile is alone in its turn too, for the reads beside it are narrowed by what it lifts, the graph's other reads running with the other reads. The step's view is synced after each write - by the paths it wrote, a directory moved or deleted by every file beneath it - and whole after each command, on every client, and the graph tool answers from what each sync leaves.", prose, StringComparison.Ordinal);
     }
 
@@ -108,26 +126,36 @@ public sealed partial class HelpTests
             StringComparison.Ordinal);
         Assert.Contains($"its links followed (one whose links cannot be followed refused as {DssHarness.Core.Agents.Policy.AgentPolicy.UndecidedRule}) and held to the agent's roots", readme, StringComparison.Ordinal);
         Assert.Contains($"holds more than {DssHarness.Core.Agents.Runtime.AgentTools.MostDeletedEntries:N0} entries.", readme, StringComparison.Ordinal);
-        Assert.Contains($"A file past {DiskSpace.Size(DssHarness.Core.Agents.Runtime.AgentTools.MostViewedBytes)} is neither viewed nor edited, and one past {DiskSpace.Size(DssHarness.Core.Agents.Runtime.AgentFiles.MostSearchedBytes)} is passed over by search_files - a command reads or searches it.", readme, StringComparison.Ordinal);
         Assert.Contains(
-            $"`agentPolicy.commandTimeoutSeconds` ({defaults.TimeoutSeconds}) unless its call names a time, `agentPolicy.maxCommandTimeoutSeconds` "
-                + $"({defaults.MaxTimeoutSeconds}) at most, stopped sooner where it prints nothing for as long as the step's stall bound; a command "
-                + $"line holding a secret, a word holding a NUL, or on Windows a batch file's argument holding what `cmd.exe` reads again (`{DssHarness.Core.Processes.BatchFiles.Said.Replace(", a", "`, a", StringComparison.Ordinal)}) or what the shell expands, is refused.",
+            "A file of any size is viewed, a page at a time - its pages laid once by streaming it, any page read by seeking to its mark, a line wider "
+                + "than a page given in pieces - and edited, copied through a block at a time with the edit made on the way; `search_files` reads every "
+                + "file whatever its size, a line at a time, its pattern matched in time linear in each line, so one that needs backtracking - a "
+                + "backreference, a lookaround, an atomic group - is refused, naming what it holds. Every file `find_files` matches and every line "
+                + "`search_files` matches is given, with as many lines of context as are asked; its `max_results` is refused, naming `page`.",
+            readme,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            $"until it ends, or for the time its call names (1 to {DssHarness.Core.Agents.AgentCommandSettings.MostTimeoutSeconds} s, what a command's timer holds), "
+                + "else for `agentPolicy.commandTimeoutSeconds` where it is given, stopped sooner where it prints nothing for as long as the step's stall "
+                + "bound and by the step's own bounds - its `timeoutMinutes` and its budget; `agentPolicy.maxCommandTimeoutSeconds` is retired and refused, "
+                + $"naming what bounds a command; a command line holding a secret, a word holding a NUL, or on Windows a batch file's argument holding what `cmd.exe` reads again (`{DssHarness.Core.Processes.BatchFiles.Said.Replace(", a", "`, a", StringComparison.Ordinal)}) or what the shell expands, is refused.",
             readme,
             StringComparison.Ordinal);
         Assert.Contains($"(ending {string.Join(", ", suffixes[..^1])} or {suffixes[^1]}) but those `agentPolicy.keepEnvironment` gives back.", readme, StringComparison.Ordinal);
         Assert.Contains(
-            $"at most {DssHarness.Core.Web.HarnessFetch.MostRedirects} redirects, {DssHarness.Core.Web.HarnessFetch.Bound.TotalSeconds} s and "
-                + $"{DiskSpace.Size(DssHarness.Core.Web.HarnessFetch.MostBytes)}, text alone (`text/*`, "
+            "http and https alone, its redirects followed, text alone (`text/*`, "
                 + $"{string.Join(", ", DssHarness.Core.Web.HarnessFetch.TextTypes.Select(type => $"`{type}`"))} and every `+json` and `+xml` type)",
             readme,
             StringComparison.Ordinal);
         Assert.Contains($"written to the step's `{DssHarness.Core.Agents.AgentCallRecords.WebFileName}` before anything leaves the machine", readme, StringComparison.Ordinal);
-        Assert.Contains($"Calls that read run together, at most {DssHarness.Core.Agents.Runtime.AgentToolRuntime.MostTogether} at once", readme, StringComparison.Ordinal);
         Assert.Contains(
-            $"an answer past {DssHarness.Core.Agents.AgentCallRecords.ResultCap:N0} characters is given as its first {DssHarness.Core.Agents.AgentCallRecords.ResultHead:N0} "
-                + $"and its last {DssHarness.Core.Agents.AgentCallRecords.ResultCap - DssHarness.Core.Agents.AgentCallRecords.ResultHead:N0}, the whole kept in the step's "
-                + $"`{DssHarness.Core.Agents.AgentCallRecords.ToolResultsDirectoryName}/`.",
+            $"Calls that read run together, as many at once as one of every {DssHarness.Core.Codebase.CodebaseGraphService.ReadShare} of the machine's processors, one at the least",
+            readme,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            $"an answer longer than a page - {DssHarness.Core.Pages.PageRoom.ModelAnswer:N0} characters, its header among them - is kept whole in the step's "
+                + $"`{DssHarness.Core.Agents.AgentCallRecords.ToolResultsDirectoryName}/`, in a file named by the digest of its call's whole id, and given as its "
+                + $"first page, whose header says how many pages it holds, how `{DssHarness.Core.Agents.Runtime.AgentTools.ReadResult}` gives the next and where the whole is - nothing of it cut.",
             readme,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -149,7 +177,7 @@ public sealed partial class HelpTests
                 + $"`{DssHarness.Core.Agents.AgentCallRecords.WebFileName}`, `{DssHarness.Core.Agents.AgentCallRecords.ToolResultsDirectoryName}/`)",
             architecture,
             StringComparison.Ordinal);
-        Assert.Contains($"A turn runs its reads together, at most {DssHarness.Core.Agents.Runtime.AgentToolRuntime.MostTogether} at once", architecture, StringComparison.Ordinal);
+        Assert.Contains($"A turn runs its reads together, as many at once as `{nameof(DssHarness.Core.Agents.Runtime.AgentToolRuntime)}.{nameof(DssHarness.Core.Agents.Runtime.AgentToolRuntime.MostTogether)}` says - one of every `{nameof(DssHarness.Core.Codebase.CodebaseGraphService)}.{nameof(DssHarness.Core.Codebase.CodebaseGraphService.ReadShare)}` of the machine's processors", architecture, StringComparison.Ordinal);
         Assert.Contains(
             $"A call's whole result kept in `{DssHarness.Core.Agents.AgentCallRecords.ToolResultsDirectoryName}/` "
                 + $"(`{nameof(DssHarness.Core.Agents.AgentCallRecords)}.{nameof(DssHarness.Core.Agents.AgentCallRecords.ResultFile)}`) is read back by "

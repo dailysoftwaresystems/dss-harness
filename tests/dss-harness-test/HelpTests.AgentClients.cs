@@ -147,23 +147,21 @@ public sealed partial class HelpTests
             prose,
             StringComparison.Ordinal);
 
-        // A step that goes on with earlier work is given the continuation record, its bounds said - each the one constant
-        // the code holds - and the first user message's parts - the record only of a new conversation - with the message
-        // kept as user.md.
+        // A step that goes on with earlier work is given the continuation record, nothing of it cut, its pages by
+        // read_result - its old keys retired - and the first user message's parts - the record only of a new
+        // conversation - with the message kept as user.md.
         Assert.Contains(
             "A step that goes on with earlier work is given the engine's record of it: the continuation record, text put "
-                + "together from the step directories of the agent - what it is, the steps so far with each one's notes and "
-                + "output, the files changed, the last red build or test, the handoff, and the last iterations of the newest "
-                + "attempt word for word from its stored stream, every run of the attempt numbered as one, each message the "
-                + "engine sent the agent in its place - nothing in it written or shortened by a model, and whatever is cut "
-                + $"named with a copy in the step's own {DssHarness.Core.Orchestration.OrchestratorLayout.HandedDirectoryName}/{DssHarness.Core.Agents.AgentContinuation.CopiesFolder}/, which the tool alone writes and the agent reads, never where its commands write. Its bounds are agentContext.continuation's - "
-                + $"recordChars ({DssHarness.Core.Agents.AgentContinuationBounds.DefaultRecordChars}), "
-                + $"stepChars ({DssHarness.Core.Agents.AgentContinuationBounds.DefaultStepChars}), "
-                + $"paths ({DssHarness.Core.Agents.AgentContinuationBounds.DefaultPaths}), "
-                + $"lastIterations ({DssHarness.Core.Agents.AgentContinuationBounds.DefaultLastIterations}) and "
-                + $"iterationChars ({DssHarness.Core.Agents.AgentContinuationBounds.DefaultIterationChars}), each at its default "
-                + "where the key says none, each a positive number, the earlier iterations kept back from the last until the "
-                + "first that does not fit",
+                + "together from the step directories of the agent - what it is, the last iterations of the newest attempt word "
+                + "for word from its stored stream, the newest first and every one of them, every run of the attempt numbered as "
+                + "one, each message the engine sent the agent in its place, then the handoff, the last red build or test, the "
+                + "steps so far, the newest first, with each one's notes and output whole, and every file changed - nothing in it "
+                + "written or shortened by a model, and nothing of it cut. It is kept whole among the results of the conversation "
+                + "it begins and laid in pages as every long answer is: the step's first message holds its first page, an index "
+                + $"of the pages each part of it is on, and how read_result with id '{DssHarness.Core.Agents.Runtime.KeptResults.ContinuationId}' gives every page of it; "
+                + $"what it reads is copied to the step's own {DssHarness.Core.Orchestration.OrchestratorLayout.HandedDirectoryName}/{DssHarness.Core.Agents.AgentContinuation.CopiesFolder}/, "
+                + "which the tool alone writes and the agent reads, never where its commands write. The keys of "
+                + "agentContext.continuation that once bounded it are retired and refused, naming what replaces them",
             prose,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -180,14 +178,14 @@ public sealed partial class HelpTests
                 + "is answered compact the engine compacts the conversation - a side-task compacts its own by itself - "
                 + "and no model does: a reduction worked out from the stored stream of the attempt, every run of it, the same "
                 + "input always the same record - the run context and the task whole as they were first sent, the last "
-                + "iterations word for word by the continuation record's rule, every earlier message of the agent its text whole "
+                + $"{DssHarness.Core.Agents.AgentCompactionBounds.LastIterations} iterations word for word, every earlier message of the agent its text whole "
                 + "with its thinking left out, every earlier call one line (the tool, its input cut at callInputChars, how it "
                 + "ended, the path where its input names one), every earlier result left out, and every message the engine sent "
                 + "since the first whole. The reduced part is at most agentContext.compaction.reducedChars "
                 + $"({DssHarness.Core.Agents.AgentCompactionBounds.DefaultReducedChars}); a call's input is cut at callInputChars "
                 + $"({DssHarness.Core.Agents.AgentCompactionBounds.DefaultCallInputChars}); where the reduced part is more, the "
-                + $"oldest messages of the agent are cut to their first {DssHarness.Core.Agents.AgentCompactionBounds.OldestMessageChars} "
-                + "characters each, oldest first, until it fits, and the record says how many were.",
+                + "oldest messages of the agent are given by reference instead, oldest first, until it fits - each whole in the "
+                + "stored stream, by the id read_result gives it by - and the record says how many were; nothing of one is cut.",
             prose,
             StringComparison.Ordinal);
         Assert.Contains(

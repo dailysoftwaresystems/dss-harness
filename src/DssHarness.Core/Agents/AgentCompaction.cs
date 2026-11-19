@@ -20,9 +20,6 @@ public sealed record AgentCompactionBounds(int ReducedChars = AgentCompactionBou
     /// <summary>How many of the last iterations a compaction keeps word for word, whatever their size: the rule of the record it makes.</summary>
     public const int LastIterations = 3;
 
-    /// <summary>The characters the oldest messages were once cut to where the reduced part was over its bound: none is cut now, each given by reference instead.</summary>
-    public const int OldestMessageChars = 2_000;
-
     /// <summary>The bounds the configuration gives, each at its default where it says none.</summary>
     /// <param name="config">The <c>agentContext.compaction</c> entry; null where the configuration declares none.</param>
     public static AgentCompactionBounds Of(Configuration.AgentCompactionConfig? config)
