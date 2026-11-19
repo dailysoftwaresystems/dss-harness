@@ -33,7 +33,7 @@ public sealed class AgentCompactionTests : IDisposable
     [Fact]
     public void TheRecord_SaysWhatItIs_HoldsThePartsWhole_AndEndsWithTheTaskAgain()
     {
-        var compacted = AgentCompaction.Reduce(Stream(), new AgentContinuationBounds(LastIterations: 2), new AgentCompactionBounds());
+        var compacted = AgentCompaction.Reduce(Stream(), new AgentCompactionBounds(), last: 2);
 
         // The earlier iterations: the message text whole, the thinking left out, each call one line with its input cut,
         // how it ended and the path, the result itself left out; the engine's message since the first whole, in its
@@ -80,14 +80,14 @@ public sealed class AgentCompactionTests : IDisposable
         var stream = Stream();
         var bounds = new AgentCompactionBounds();
 
-        Assert.Equal(AgentCompaction.Reduce(stream, new AgentContinuationBounds(), bounds).Record, AgentCompaction.Reduce(stream, new AgentContinuationBounds(), bounds).Record);
+        Assert.Equal(AgentCompaction.Reduce(stream, bounds).Record, AgentCompaction.Reduce(stream, bounds).Record);
     }
 
     /// <summary>An attempt that wrote nothing says so: compacted at iteration naught, none kept word for word.</summary>
     [Fact]
     public void AnAttemptThatWroteNothing_SaysSo()
     {
-        var empty = AgentCompaction.Reduce([new RunStarted(1)], new AgentContinuationBounds(), new AgentCompactionBounds());
+        var empty = AgentCompaction.Reduce([new RunStarted(1)], new AgentCompactionBounds());
         var record = Lines(
             "This conversation was compacted by the engine at iteration 0. Everything up to iteration 0 is reduced to what you wrote and what you called; the last 0 iterations are word for word.",
             string.Empty,
@@ -114,7 +114,7 @@ public sealed class AgentCompactionTests : IDisposable
     [Fact]
     public void AnAttemptCompactedAgain_IsReducedWhole_NeverCopyingTheRecordBefore()
     {
-        var first = AgentCompaction.Reduce(Stream(), new AgentContinuationBounds(LastIterations: 1), new AgentCompactionBounds());
+        var first = AgentCompaction.Reduce(Stream(), new AgentCompactionBounds(), last: 1);
         AgentEvent[] again =
         [
             .. Stream(),
@@ -126,7 +126,7 @@ public sealed class AgentCompactionTests : IDisposable
             new AssistantMessage("the sixth message", []),
         ];
 
-        var second = AgentCompaction.Reduce(AgentAttempt.Of(again, 1), new AgentContinuationBounds(LastIterations: 1), new AgentCompactionBounds());
+        var second = AgentCompaction.Reduce(AgentAttempt.Of(again, 1), new AgentCompactionBounds(), last: 1);
 
         // The head once, the task twice - where it was sent and again at the end - and the earlier record nowhere: the
         // iterations of both runs reduced in order, the engine's message in its place, the last word for word.
@@ -190,7 +190,7 @@ public sealed class AgentCompactionTests : IDisposable
             new AssistantMessage("still working", []),
         };
 
-        var compacted = AgentCompaction.Reduce(AgentAttempt.Of(stream, 2), new AgentContinuationBounds(LastIterations: 1), new AgentCompactionBounds());
+        var compacted = AgentCompaction.Reduce(AgentAttempt.Of(stream, 2), new AgentCompactionBounds(), last: 1);
 
         Assert.Equal(
             Lines(
@@ -241,7 +241,7 @@ public sealed class AgentCompactionTests : IDisposable
             new AssistantMessage("four", []),
         };
 
-        var compacted = AgentCompaction.Reduce(stream, new AgentContinuationBounds(LastIterations: 1), new AgentCompactionBounds());
+        var compacted = AgentCompaction.Reduce(stream, new AgentCompactionBounds(), last: 1);
 
         Assert.Equal(
             Lines(
@@ -283,7 +283,7 @@ public sealed class AgentCompactionTests : IDisposable
             new AssistantMessage("the fifth message", []),
         ];
 
-        var compacted = AgentCompaction.Reduce(stream, new AgentContinuationBounds(LastIterations: 2), new AgentCompactionBounds());
+        var compacted = AgentCompaction.Reduce(stream, new AgentCompactionBounds(), last: 2);
 
         Assert.Equal(
             Lines(
@@ -339,7 +339,7 @@ public sealed class AgentCompactionTests : IDisposable
             new AssistantMessage("two", []),
         };
 
-        var compacted = AgentCompaction.Reduce(stream, new AgentContinuationBounds(LastIterations: 1), new AgentCompactionBounds());
+        var compacted = AgentCompaction.Reduce(stream, new AgentCompactionBounds(), last: 1);
 
         Assert.Equal(
             Lines(
@@ -382,7 +382,7 @@ public sealed class AgentCompactionTests : IDisposable
             new AssistantMessage("two", []),
         };
 
-        var compacted = AgentCompaction.Reduce(stream, new AgentContinuationBounds(LastIterations: 1), new AgentCompactionBounds());
+        var compacted = AgentCompaction.Reduce(stream, new AgentCompactionBounds(), last: 1);
 
         Assert.Contains(new string('x', 400), compacted.Record, StringComparison.Ordinal);
         Assert.DoesNotContain(new string('x', 401), compacted.Record, StringComparison.Ordinal);

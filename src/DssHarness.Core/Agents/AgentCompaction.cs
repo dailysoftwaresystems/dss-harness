@@ -98,8 +98,11 @@ public static class AgentCompaction
     public static AgentCompacted Reduce(IReadOnlyList<AgentEvent> attempt, AgentCompactionBounds bounds)
         => Reduce(attempt, bounds, AgentCompactionBounds.LastIterations);
 
-    /// <summary>The compaction of an attempt, its last <paramref name="last"/> iterations word for word.</summary>
-    private static AgentCompacted Reduce(IReadOnlyList<AgentEvent> attempt, AgentCompactionBounds bounds, int last)
+    /// <summary>
+    /// The compaction of an attempt, its last <paramref name="last"/> iterations word for word: the one reduction both
+    /// overloads give, and the tests' way to hold the iterations kept apart from the rest.
+    /// </summary>
+    internal static AgentCompacted Reduce(IReadOnlyList<AgentEvent> attempt, AgentCompactionBounds bounds, int last)
     {
         ArgumentNullException.ThrowIfNull(attempt);
         ArgumentNullException.ThrowIfNull(bounds);

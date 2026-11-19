@@ -115,7 +115,8 @@ public sealed class AgentContinuationTests : IDisposable
         var file = AgentCallRecords.ResultFile(stepDirectory, KeptResults.ContinuationId);
         var whole = File.ReadAllText(file);
 
-        Assert.True(whole.Length > AgentContinuationBounds.DefaultRecordChars * 3, $"the record is {whole.Length} characters");
+        // Three times the 60,000 characters the retired recordChars cut the record's own parts to.
+        Assert.True(whole.Length > 180_000, $"the record is {whole.Length} characters");
         Assert.StartsWith("You are going on with work begun by step 'items[1].implement'.", prompt, StringComparison.Ordinal);
         Assert.True(prompt.Length < whole.Length / 2, "the prompt holds the record's first page, not the record");
 
