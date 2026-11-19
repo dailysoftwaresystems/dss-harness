@@ -5,11 +5,12 @@ using DssHarness.Core.Agents.Policy;
 using DssHarness.Core.Codebase;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Output;
+using DssHarness.Core.Pages;
 using DssHarness.Core.Repository;
 
 namespace DssHarness.Core.Agents.Runtime;
 
-/// <summary>The tools that read: a file viewed or a directory listed, files found by a pattern, files' text searched.</summary>
+/// <summary>The tools that read: a file viewed or a directory listed, files found by a pattern, files' text searched, a call's whole result read a page at a time.</summary>
 public sealed partial class AgentToolRuntime
 {
     /// <summary><c>view_file</c>: a file's lines from a start to an end, numbered, within the view's bounds - its hash recorded for an edit - or a directory's entries.</summary>
@@ -415,6 +416,37 @@ public sealed partial class AgentToolRuntime
         }
 
         return Answer.Done(Rendered(search, directory, (int)context));
+    }
+
+    /// <summary>
+    /// <c>read_result</c>: a page of the whole result of a call of this conversation, by the call's id, from the file its
+    /// records keep it in (<see cref="KeptResults"/>) - page 1 where none is asked, a page past the last refused with the
+    /// result's range, a page below the first as the graph refuses it, and an id no result is kept for named.
+    /// </summary>
+    private async Task<Answer> ReadResultAsync(JsonObject input, CancellationToken cancellationToken)
+    {
+        var id = Text(input, "id")!;
+        var page = Number(input, "page") ?? 1;
+
+        if (page < 1)
+        {
+            return Answer.NotRun(Paging.BelowTheFirst(page));
+        }
+
+        PageAnswer<TextEntry>? answer;
+
+        try
+        {
+            answer = id.Length == 0 ? null : await _results.ReadAsync(id, page, cancellationToken).ConfigureAwait(false);
+        }
+        catch (InvalidDataException ex)
+        {
+            return Answer.Failed($"the result of '{ReportText.Printable(id)}' does not read: {ex.Message.TrimEnd('.')}");
+        }
+
+        return answer is null ? Answer.Failed(KeptResults.NoneKept(id))
+            : answer.Refusal is null ? Answer.Done(answer.Text)
+            : Answer.Failed(answer.Text);
     }
 
     /// <summary>A search's hits as the model reads them: <c>path:line: text</c>, its context as <c>path-line- text</c>, groups apart; then what it did not give.</summary>

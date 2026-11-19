@@ -320,7 +320,8 @@ public sealed class FlowStepGraph
 
     /// <summary>
     /// Puts away the answers the conversation of the step whose records are in <paramref name="directory"/> kept - the pages
-    /// its graph answers read from - its directory whole (<see cref="KeptAnswers.PutAway"/>): what a step leaves once it is
+    /// its graph answers read from, and the pages of its calls' whole results (<see cref="Agents.Runtime.KeptResults"/>) -
+    /// its directory whole (<see cref="KeptAnswers.PutAway"/>): what a step leaves once it is
     /// done and no later step's conversation goes on with
     /// its work (<see cref="ResumeChain.GoneOnWith"/>), so no page of them is asked again. One that cannot be removed is
     /// said, and the step's ending stands.
@@ -337,7 +338,7 @@ public sealed class FlowStepGraph
 
         if (KeptAnswers.PutAway(Path.Combine(directory, OrchestratorLayout.StepPagesDirectoryName), fileSystem) is { } why)
         {
-            output.Warn("reason", $"the graph pages '{instance}' kept were not put away: {why}. The step's ending stands, and they stay in its records.");
+            output.Warn("reason", $"the pages '{instance}' kept were not put away: {why}. The step's ending stands, and they stay in its records.");
         }
     }
 

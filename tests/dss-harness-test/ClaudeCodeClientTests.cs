@@ -2121,7 +2121,7 @@ public sealed class ClaudeCodeClientTests : IDisposable
         Assert.Equal((AgentRunStatus.NotStarted, AgentNotStartedBecause.ConfigurationWrong), (result.Status, result.NotStartedBecause));
         Assert.Equal("client 'claude-code' was not started: the launch takes web_fetch from the engine's tool server, and this client was given no tool runtime to serve them with", result.Error);
         Assert.Equal(
-            "client 'claude-code' was not started: the launch takes find_files, search_files, view_file from the engine's tool server, and this client was given no tool runtime to serve them with",
+            "client 'claude-code' was not started: the launch takes find_files, read_result, search_files, view_file from the engine's tool server, and this client was given no tool runtime to serve them with",
             handed.Error);
         Assert.Empty(kit.Launches());
     }
@@ -3032,7 +3032,7 @@ public sealed class ClaudeCodeClientTests : IDisposable
                 "Bash",
                 "mcp__dssharness__create_directory", "mcp__dssharness__create_file", "mcp__dssharness__delete_directory",
                 "mcp__dssharness__delete_file", "mcp__dssharness__find_files", "mcp__dssharness__insert_in_file",
-                "mcp__dssharness__move_path", "mcp__dssharness__replace_in_file", "mcp__dssharness__search_files",
+                "mcp__dssharness__move_path", "mcp__dssharness__read_result", "mcp__dssharness__replace_in_file", "mcp__dssharness__search_files",
                 "mcp__dssharness__view_file", "mcp__dssharness__web_fetch",
             ],
             settings["permissions"]!["ask"]!.AsArray().Select(rule => rule!.GetValue<string>()));

@@ -29,8 +29,8 @@ public sealed partial class HelpTests
 {
     /// <summary>
     /// The agent-clients topic says what the tool runtime is: each tool from the one table, the paths' refusals, the
-    /// commands' environment and times, the fetch's bounds and records, the calls of a turn and the answer's cut - each
-    /// name and bound read from the type that holds it.
+    /// commands' environment and times, the fetch's bounds and records, the calls of a turn, the answer's cut and the pages
+    /// read_result reads the whole in - each name and bound read from the type that holds it.
     /// </summary>
     [Fact]
     public void AgentClientsTopic_SaysWhatTheToolRuntimeIs()
@@ -38,14 +38,14 @@ public sealed partial class HelpTests
         var prose = Prose.Words(HelpText.Of("agent-clients").StandardOutput);
 
         Assert.Contains(
-            "each under the capability that gives it: view_file (read); find_files (read); search_files (read); create_file (write, alone "
+            "each under the capability that gives it: view_file (read); find_files (read); search_files (read); read_result (read); create_file (write, alone "
                 + "in its turn); replace_in_file (write, alone in its turn); insert_in_file (write, alone in its turn); create_directory (write, "
                 + "alone in its turn); delete_file (write, alone in its turn); delete_directory (write, alone in its turn); move_path (write, "
                 + "alone in its turn); run_command (run, alone in its turn); web_fetch (web); web_search (web).",
             prose,
             StringComparison.Ordinal);
         Assert.Contains("built for the API clients to give their agents in place of a client's own - the claude-api and glm clients below - and serving the claude-code client the web's through the engine's tool server, and its file tools there too where Claude Code's own process runs apart from the isolation, each under the capability that gives it:", prose, StringComparison.Ordinal);
-        Assert.Contains("The run's reporter is given view_file, find_files, search_files, those that read, and no other.", prose, StringComparison.Ordinal);
+        Assert.Contains("The run's reporter is given view_file, find_files, search_files, read_result, those that read, and no other.", prose, StringComparison.Ordinal);
         Assert.Contains("A replace or an insert needs its file viewed first, by its content: one that changed since is refused, nothing written, and an edit keeps the file's encoding (UTF-8 with or without its mark, UTF-16 by its mark), its line endings and whether it ends with a newline.", prose, StringComparison.Ordinal);
         Assert.Contains(
             "a write inside a writable one and through no link below it (a file is read through the file as it was opened, where the open file stands decided again before a byte "
@@ -69,6 +69,14 @@ public sealed partial class HelpTests
         Assert.Contains("written to the step's web.jsonl before anything leaves the machine", prose, StringComparison.Ordinal);
         Assert.Contains("Calls that read run together, at most 4 at once", prose, StringComparison.Ordinal);
         Assert.Contains("an answer past 32,768 characters is given as its first 8,192 and its last 24,576, the whole kept in the step's tool-results/.", prose, StringComparison.Ordinal);
+        Assert.Contains(
+            "read_result reads a call's whole result there by the call's id - an answer kept so, and every command's output - a page at a time, "
+                + "page 1 where none is asked: each page of whole lines, a line wider than a page given in pieces marked …, and every page of a "
+                + "result of more than one page saying how to ask for the next with page, from 1; a page past the last is refused with its range, "
+                + "and an id no result is kept for is refused. Its pages are laid once from the file, kept in the step's graph-pages/ for the "
+                + "conversation's life, and laid again, saying so, where the file changed since.",
+            prose,
+            StringComparison.Ordinal);
         Assert.Contains("A step whose graph is tools - a graphify-codebase step upstream of it, 'help workflows' - is offered the graph tool among these, under read, with the operations its agent's capabilities give, edit among them where it may write, and its context pack in its first message, after the run's map", prose, StringComparison.Ordinal);
         Assert.Contains("its graphReads narrow (the default) denies a whole view_file of a file the graph parsed over 200 lines, saying the way to the graph instead - a range, a search and a write pass, a file the graph is not sure of is let by as an escape lowConfidence, and the graph's wholeFile lifts the narrowing for one file the graph parsed for the rest of the step, an escape stated with the lines the graph read it as, a path it holds no parsed file at refused as a misuse", prose, StringComparison.Ordinal);
         Assert.Contains("an edit it made is a write, alone in its turn and counted among the files written; a wholeFile is alone in its turn too, for the reads beside it are narrowed by what it lifts, the graph's other reads running with the other reads. The step's view is synced after each write - by the paths it wrote, a directory moved or deleted by every file beneath it - and whole after each command, on every client, and the graph tool answers from what each sync leaves.", prose, StringComparison.Ordinal);
@@ -76,7 +84,8 @@ public sealed partial class HelpTests
 
     /// <summary>
     /// The README says the tool runtime as the help does - each tool, each bound and default read from the type that holds
-    /// it - and the architecture names its owners by the types that are them.
+    /// it, read_result's pages among them - and the architecture names its owners by the types that are them, the pages a
+    /// kept result is read in by the owners that lay and keep them.
     /// </summary>
     [Fact]
     public void TheDocumentsSayTheToolRuntime()
@@ -121,6 +130,14 @@ public sealed partial class HelpTests
                 + $"`{DssHarness.Core.Agents.AgentCallRecords.ToolResultsDirectoryName}/`.",
             readme,
             StringComparison.Ordinal);
+        Assert.Contains(
+            $"`{DssHarness.Core.Agents.Runtime.AgentTools.ReadResult}` reads a call's whole result there by the call's id - an answer kept so, and every "
+                + "command's output - a page at a time, page 1 where none is asked: each page of whole lines, a line wider than a page given in pieces "
+                + "marked `…`, and every page of a result of more than one page saying how to ask for the next with `page`, from 1; a page past the last "
+                + "is refused with its range, and an id no result is kept for is refused. Its pages are laid once from the file, kept in the step's "
+                + $"`{OrchestratorLayout.StepPagesDirectoryName}/` for the conversation's life, and laid again, saying so, where the file changed since.",
+            readme,
+            StringComparison.Ordinal);
 
         var architecture = Prose.Document("docs", "architecture.md");
 
@@ -133,6 +150,19 @@ public sealed partial class HelpTests
             architecture,
             StringComparison.Ordinal);
         Assert.Contains($"A turn runs its reads together, at most {DssHarness.Core.Agents.Runtime.AgentToolRuntime.MostTogether} at once", architecture, StringComparison.Ordinal);
+        Assert.Contains(
+            $"A call's whole result kept in `{DssHarness.Core.Agents.AgentCallRecords.ToolResultsDirectoryName}/` "
+                + $"(`{nameof(DssHarness.Core.Agents.AgentCallRecords)}.{nameof(DssHarness.Core.Agents.AgentCallRecords.ResultFile)}`) is read back by "
+                + $"`{DssHarness.Core.Agents.Runtime.AgentTools.ReadResult}` through `Agents\\Runtime\\{nameof(DssHarness.Core.Agents.Runtime.KeptResults)}`, a page at a time: "
+                + $"its pages laid by `Pages\\{nameof(DssHarness.Core.Pages.TextPages)}`",
+            architecture,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            $"by `Pages\\{nameof(DssHarness.Core.Pages.KeptAnswers)}` in the step's `{OrchestratorLayout.StepPagesDirectoryName}/` beside the graph's pages "
+                + $"(`{nameof(DssHarness.Core.Pages.PageKey)}.{nameof(DssHarness.Core.Pages.PageKey.OfCall)}`, a key the graph's never is), for the conversation's "
+                + $"life; a file that changed since its pages were laid is laid again, the page saying so (`{nameof(DssHarness.Core.Pages.TextPages)}.{nameof(DssHarness.Core.Pages.TextPages.Relaid)}`).",
+            architecture,
+            StringComparison.Ordinal);
         Assert.Contains($"the names `{nameof(DssHarness.Core.Agents.Policy.ClaudeSettings)}.{nameof(DssHarness.Core.Agents.Policy.ClaudeSettings.Launched)}` sets", architecture, StringComparison.Ordinal);
 
         foreach (var owner in new[]

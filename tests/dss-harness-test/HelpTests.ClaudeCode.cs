@@ -40,7 +40,7 @@ public sealed partial class HelpTests
 
         Assert.Contains(
             "where its own process runs apart from the isolation it hands its commands to (above), the engine's tool server serves read's "
-                + "mcp__dssharness__view_file, mcp__dssharness__find_files, mcp__dssharness__search_files and write's mcp__dssharness__create_file, "
+                + "mcp__dssharness__view_file, mcp__dssharness__find_files, mcp__dssharness__search_files, mcp__dssharness__read_result and write's mcp__dssharness__create_file, "
                 + "mcp__dssharness__replace_in_file, mcp__dssharness__insert_in_file, mcp__dssharness__create_directory, mcp__dssharness__delete_file, "
                 + "mcp__dssharness__delete_directory, mcp__dssharness__move_path in place of Claude Code's own, each call asked of the engine and run by the "
                 + "tool runtime below as on the API clients.",
@@ -180,7 +180,7 @@ public sealed partial class HelpTests
             StringComparison.Ordinal);
         Assert.Contains(
             "where its own process runs apart from the isolation it hands its commands to (above), the engine's tool server serves the tool runtime's file tools in place "
-                + "of Claude Code's own - `read`: `mcp__dssharness__view_file`, `mcp__dssharness__find_files`, `mcp__dssharness__search_files`; `write`: "
+                + "of Claude Code's own - `read`: `mcp__dssharness__view_file`, `mcp__dssharness__find_files`, `mcp__dssharness__search_files`, `mcp__dssharness__read_result`; `write`: "
                 + "`mcp__dssharness__create_file`, `mcp__dssharness__replace_in_file`, `mcp__dssharness__insert_in_file`, `mcp__dssharness__create_directory`, "
                 + "`mcp__dssharness__delete_file`, `mcp__dssharness__delete_directory`, `mcp__dssharness__move_path` - each call asked of the engine and run by the "
                 + "tool runtime below as on the API clients.",

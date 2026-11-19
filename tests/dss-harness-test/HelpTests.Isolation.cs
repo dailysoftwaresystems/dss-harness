@@ -516,7 +516,7 @@ public sealed partial class HelpTests
                 + "without its prefix runs outside with the user's rights, and each launch says so as it starts. In or out of a "
                 + "layer, Claude Code opens no file of the agent's in its own process: its "
                 + "file tools are not given, --tools names its shell alone, and the engine's tool server serves the tool runtime's "
-                + "(view_file, find_files, search_files, create_file, replace_in_file, insert_in_file, create_directory, delete_file, "
+                + "(view_file, find_files, search_files, read_result, create_file, replace_in_file, insert_in_file, create_directory, delete_file, "
                 + "delete_directory, move_path) in their place, each file read through the file the engine opened, decided again by "
                 + "where the system names it, and each written, made, moved or deleted relative to its directory held from the "
                 + "writable root it was decided in with no link on the way, so a link a command - one left running in the "

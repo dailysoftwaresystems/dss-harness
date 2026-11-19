@@ -167,6 +167,9 @@ public sealed partial class AgentToolRuntime : IDisposable
     private readonly Web.Search.WebSearchStep? _webSearch;
     private readonly AgentNativeAsk? _native;
 
+    /// <summary>The whole results of the run's calls, which <c>read_result</c> pages: the conversation's, beside its stream.</summary>
+    private readonly KeptResults _results;
+
     /// <summary>The runtime of <paramref name="run"/>, its ground decided once.</summary>
     /// <param name="run">The run.</param>
     /// <param name="events">Where its calls' ends are emitted.</param>
@@ -187,6 +190,7 @@ public sealed partial class AgentToolRuntime : IDisposable
         _paths = new ConfinedPaths(host.FileSystem, host.Platform, ground);
         _records = records ?? new AgentCallRecords(host.FileSystem, run, host.Clock, events);
         _ownsRecords = records is null;
+        _results = KeptResults.Of(host.FileSystem, run.StepDirectory);
         var tools = AgentTools.Offered(ground, run.Commands, run.WebSearch).Where(tool => only?.Contains(tool.Name) != false).ToList();
 
         // The run's graph tool, where it is given one: offered among the harness's own, with the operations the run's
@@ -527,6 +531,7 @@ public sealed partial class AgentToolRuntime : IDisposable
             AgentTools.ViewFile => await ViewAsync(input, cancellationToken).ConfigureAwait(false),
             AgentTools.FindFiles => await FindAsync(input, cancellationToken).ConfigureAwait(false),
             AgentTools.SearchFiles => await SearchAsync(input, cancellationToken).ConfigureAwait(false),
+            AgentTools.ReadResult => await ReadResultAsync(input, cancellationToken).ConfigureAwait(false),
             AgentTools.CreateFile => await Create(input).ConfigureAwait(false),
             AgentTools.ReplaceInFile => await ReplaceAsync(input, cancellationToken).ConfigureAwait(false),
             AgentTools.InsertInFile => await InsertAsync(input, cancellationToken).ConfigureAwait(false),

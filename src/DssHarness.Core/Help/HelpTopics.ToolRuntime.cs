@@ -102,6 +102,12 @@ public static partial class HelpTopics
             + $"{Agents.Runtime.AgentToolRuntime.MostTogether} at once, a call that writes or runs alone, answers in the order "
             + $"of the calls; an answer past {Agents.AgentCallRecords.ResultCap:N0} characters is given as its first "
             + $"{Agents.AgentCallRecords.ResultHead:N0} and its last {Agents.AgentCallRecords.ResultCap - Agents.AgentCallRecords.ResultHead:N0}, "
-            + $"the whole kept in the step's {Agents.AgentCallRecords.ToolResultsDirectoryName}/.";
+            + $"the whole kept in the step's {Agents.AgentCallRecords.ToolResultsDirectoryName}/. {Agents.Runtime.AgentTools.ReadResult} reads a call's "
+            + "whole result there by the call's id - an answer kept so, and every command's output - a page at a time, page 1 where "
+            + "none is asked: each page of whole lines, a line wider than a page given in pieces marked …, and every page of a result "
+            + "of more than one page saying how to ask for the next with page, from 1; a page past the last is refused with its "
+            + "range, and an id no result is kept for is refused. Its pages are laid once from the file, kept in the step's "
+            + $"{OrchestratorLayout.StepPagesDirectoryName}/ for the conversation's life, and laid again, saying so, where the file "
+            + "changed since.";
     }
 }

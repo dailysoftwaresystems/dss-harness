@@ -2734,7 +2734,14 @@ which decides every address before it is asked and gives it its turn (`WebFetchG
 reader's pace, waited for outside the fetch's 30 s), asks only the `http` and `https` addresses of public hosts
 `WebAddresses` allows - checked on the lookup and again on the connection made - and reduces HTML to text by
 `WebPageText` over AngleSharp. A turn runs its reads together, at most 4 at once, a
-write or a run alone between them.
+write or a run alone between them. A call's whole result kept in `tool-results/`
+(`AgentCallRecords.ResultFile`) is read back by `read_result` through `Agents\Runtime\KeptResults`, a page
+at a time: its pages laid by `Pages\TextPages` - the file streamed once, in constant memory, by the encoding rule
+`EncodedText` reads by and the line ends `CodeFileText.Spans` cuts at, each page whole lines and a line wider than
+a page given in pieces by the one rule `Pages\Paging` cuts a piece by - and only where each page begins kept, by
+`Pages\KeptAnswers` in the step's `graph-pages/` beside the graph's pages (`PageKey.OfCall`, a key the graph's
+never is), for the conversation's life; a file that changed since its pages were laid is laid again, the page
+saying so (`TextPages.Relaid`).
 
 The loop the API clients share is `Agents\Loop\ToolLoop`, driven in its own tests by a fake provider: one request
 after another over an `IChatProvider` - the provider's own wire, its form of a conversation's messages and tools, what

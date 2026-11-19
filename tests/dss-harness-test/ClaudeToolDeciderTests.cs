@@ -247,22 +247,22 @@ public sealed class ClaudeToolDeciderTests : IDisposable
     {
         Assert.Equal([AgentCapability.Read, AgentCapability.Write], ClaudeCodeTools.FileCapabilities);
         Assert.Equal(
-            [AgentTools.ViewFile, AgentTools.FindFiles, AgentTools.SearchFiles, AgentTools.CreateFile, AgentTools.ReplaceInFile, AgentTools.InsertInFile, AgentTools.CreateDirectory, AgentTools.DeleteFile, AgentTools.DeleteDirectory, AgentTools.MovePath],
+            [AgentTools.ViewFile, AgentTools.FindFiles, AgentTools.SearchFiles, AgentTools.ReadResult, AgentTools.CreateFile, AgentTools.ReplaceInFile, AgentTools.InsertInFile, AgentTools.CreateDirectory, AgentTools.DeleteFile, AgentTools.DeleteDirectory, AgentTools.MovePath],
             ClaudeCodeTools.FileTools);
         Assert.Equal(ClaudeCodeTools.ServerTools, ClaudeCodeTools.ServedTools(ownFiles: true));
         Assert.Equal([.. ClaudeCodeTools.FileTools, .. ClaudeCodeTools.ServerTools], ClaudeCodeTools.ServedTools(ownFiles: false));
 
         Assert.Equal(["Bash"], ClaudeCodeTools.Of(AgentPolicyGround.EveryCapability, ownFiles: false));
         Assert.Equal(["Bash", "WebFetch", "WebSearch"], ClaudeCodeTools.Of(AgentPolicyGround.EveryCapability, ownWeb: true, ownFiles: false));
-        Assert.Equal(["mcp__dssharness__view_file", "mcp__dssharness__find_files", "mcp__dssharness__search_files"], ClaudeCodeTools.ServedOf(AgentCapability.Read, ownFiles: false));
+        Assert.Equal(["mcp__dssharness__view_file", "mcp__dssharness__find_files", "mcp__dssharness__search_files", "mcp__dssharness__read_result"], ClaudeCodeTools.ServedOf(AgentCapability.Read, ownFiles: false));
         Assert.Empty(ClaudeCodeTools.ServedOf(AgentCapability.Read));
 
         var ground = PolicyGrounds.Of(_worktree, [_worktree], [_worktree], [], [], []);
         Assert.Equal(
-            [AgentTools.CreateDirectory, AgentTools.CreateFile, AgentTools.DeleteDirectory, AgentTools.DeleteFile, AgentTools.FindFiles, AgentTools.InsertInFile, AgentTools.MovePath, AgentTools.ReplaceInFile, AgentTools.SearchFiles, AgentTools.ViewFile, AgentTools.WebFetch],
+            [AgentTools.CreateDirectory, AgentTools.CreateFile, AgentTools.DeleteDirectory, AgentTools.DeleteFile, AgentTools.FindFiles, AgentTools.InsertInFile, AgentTools.MovePath, AgentTools.ReadResult, AgentTools.ReplaceInFile, AgentTools.SearchFiles, AgentTools.ViewFile, AgentTools.WebFetch],
             ClaudeCodeTools.Served(AgentTools.Offered(ground, AgentCommandSettings.Default), ownFiles: false));
         Assert.Equal(
-            [AgentTools.FindFiles, AgentTools.SearchFiles, AgentTools.ViewFile],
+            [AgentTools.FindFiles, AgentTools.ReadResult, AgentTools.SearchFiles, AgentTools.ViewFile],
             ClaudeCodeTools.Served(AgentTools.Offered(ground with { Capabilities = [AgentCapability.Read, AgentCapability.Run] }, AgentCommandSettings.Default), ownFiles: false));
     }
 

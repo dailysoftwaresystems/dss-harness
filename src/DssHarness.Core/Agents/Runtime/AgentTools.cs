@@ -34,6 +34,9 @@ public static class AgentTools
     /// <summary>Searches files' text.</summary>
     public const string SearchFiles = "search_files";
 
+    /// <summary>Reads a page of a call's whole result.</summary>
+    public const string ReadResult = "read_result";
+
     /// <summary>Writes a new file.</summary>
     public const string CreateFile = "create_file";
 
@@ -127,6 +130,11 @@ public static class AgentTools
                     ("case_insensitive", "boolean", "Whether case is folded.", false),
                     ("context", "integer", "How many lines before and after each hit are given.", false),
                     ("max_results", "integer", "The most matching lines given.", false))),
+            new(ReadResult, AgentCapability.Read, false,
+                "Reads the whole result of a call of this conversation by the call's id, a page at a time: a result longer than its answer is kept whole beside the conversation - the answer naming the file it is kept in - and so is every command's output. Each page holds whole lines, a line wider than a page given in pieces each marked … where it goes on; a result of more than one page begins each page with 'page k of n', which says how to ask for the next with page, from 1. An id no result is kept for is refused.",
+                Schema(
+                    ("id", "string", "The call's id, as the call was made.", true),
+                    ("page", "integer", "Which page of the result to give, from 1; the first where it is left out.", false))),
             new(CreateFile, AgentCapability.Write, true,
                 "Writes a new file holding content as it is given, in UTF-8 with no byte order mark, the directories on its way made. A file that is there already is written over only with overwrite: true.",
                 Schema(

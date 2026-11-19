@@ -75,17 +75,17 @@ public sealed class AgentToolRuntimeTests : IDisposable
         _temp.Dispose();
     }
 
-    /// <summary>A step is offered the tools of its capabilities, by name; the run's reporter the three that read and no other.</summary>
+    /// <summary>A step is offered the tools of its capabilities, by name; the run's reporter the four that read and no other.</summary>
     [Fact]
     public void TheToolsOffered_AreThoseOfTheStepsCapabilities()
     {
         Assert.Equal(
             [AgentTools.CreateDirectory, AgentTools.CreateFile, AgentTools.DeleteDirectory, AgentTools.DeleteFile, AgentTools.FindFiles, AgentTools.InsertInFile,
-             AgentTools.MovePath, AgentTools.ReplaceInFile, AgentTools.RunCommand, AgentTools.SearchFiles, AgentTools.ViewFile, AgentTools.WebFetch],
+             AgentTools.MovePath, AgentTools.ReadResult, AgentTools.ReplaceInFile, AgentTools.RunCommand, AgentTools.SearchFiles, AgentTools.ViewFile, AgentTools.WebFetch],
             Names(Open()));
-        Assert.Equal([AgentTools.FindFiles, AgentTools.SearchFiles, AgentTools.ViewFile], Names(Open(capabilities: [AgentCapability.Read])));
-        Assert.Equal([AgentTools.FindFiles, AgentTools.SearchFiles, AgentTools.ViewFile, AgentTools.WebFetch], Names(Open(capabilities: [AgentCapability.Read, AgentCapability.Web])));
-        Assert.Equal([AgentTools.FindFiles, AgentTools.SearchFiles, AgentTools.ViewFile], Names(Open(reporterRoot: _worktree)));
+        Assert.Equal([AgentTools.FindFiles, AgentTools.ReadResult, AgentTools.SearchFiles, AgentTools.ViewFile], Names(Open(capabilities: [AgentCapability.Read])));
+        Assert.Equal([AgentTools.FindFiles, AgentTools.ReadResult, AgentTools.SearchFiles, AgentTools.ViewFile, AgentTools.WebFetch], Names(Open(capabilities: [AgentCapability.Read, AgentCapability.Web])));
+        Assert.Equal([AgentTools.FindFiles, AgentTools.ReadResult, AgentTools.SearchFiles, AgentTools.ViewFile], Names(Open(reporterRoot: _worktree)));
 
         static IEnumerable<string> Names(AgentToolRuntime runtime) => runtime.Tools.Select(tool => tool.Name);
     }
@@ -185,7 +185,7 @@ public sealed class AgentToolRuntimeTests : IDisposable
         var result = await Call(runtime, AgentTools.RunCommand, ("program", "git"));
 
         Assert.False(result.Ok);
-        Assert.Equal("'run_command' is no tool this step is given: it is given find_files, search_files, view_file", result.Text);
+        Assert.Equal("'run_command' is no tool this step is given: it is given find_files, read_result, search_files, view_file", result.Text);
 
         var denied = Assert.Single(_events.All.OfType<PermissionDenied>());
         Assert.Equal((AgentTools.RunCommand, AgentTools.RunCommand, AgentToolRuntime.ToolsRule), (denied.Tool, denied.Subject, denied.Rule));
@@ -1867,6 +1867,63 @@ public sealed class AgentToolRuntimeTests : IDisposable
         Assert.Equal(AgentCallRecords.Cut(File.ReadAllText(big.File!), big.File!), big.Text);
         Assert.EndsWith("big.txt:400: " + new string('x', 99), File.ReadAllText(big.File!), StringComparison.Ordinal);
         Assert.Equal((big.File, big.Text), (_events.All.OfType<ToolCallFinished>().Last().ResultFile, _events.All.OfType<ToolCallFinished>().Last().Result));
+    }
+
+    /// <summary>
+    /// read_result gives a call's whole result by the call's id, a page at a time: page 1 where none is asked, and the page
+    /// asked - whole lines of the answer kept past the cap, as many as a page's room holds, each page saying which of how
+    /// many it is and how to ask for the next - and a page past the last refused with the result's range.
+    /// </summary>
+    [Fact]
+    public async Task ReadResult_GivesPageTwoOfAKeptCallResult()
+    {
+        Write("big.txt", string.Concat(Enumerable.Range(0, 400).Select(_ => new string('x', 99) + "\n")));
+        var runtime = Open();
+
+        var big = await Call(runtime, AgentTools.SearchFiles, "big", ("pattern", "x"), ("glob", "big.txt"), ("max_results", AgentTools.MostSearchResults));
+        var lines = DssHarness.Core.Codebase.CodeFileText.Lines(File.ReadAllText(big.File!));
+
+        // Whole lines while a page's room lasts, each costing its characters and its line's end.
+        var pages = new List<List<string>> { new() };
+        var left = KeptResults.Room;
+
+        foreach (var line in lines)
+        {
+            if (line.Length + 1 > left)
+            {
+                pages.Add([]);
+                left = KeptResults.Room;
+            }
+
+            pages[^1].Add(line);
+            left -= line.Length + 1;
+        }
+
+        Assert.Equal(2, pages.Count);
+
+        var first = await Call(runtime, AgentTools.ReadResult, "read_1", ("id", "big"));
+        var second = await Call(runtime, AgentTools.ReadResult, "read_2", ("id", "big"), ("page", 2));
+        var past = await Call(runtime, AgentTools.ReadResult, "read_3", ("id", "big"), ("page", 3));
+
+        Assert.Equal((true, $"page 1 of 2 · {lines.Count} results · ask again with page: 2 for the next\n{string.Join('\n', pages[0])}"), (first.Ok, first.Text));
+        Assert.Equal((true, $"page 2 of 2 · the last\n{string.Join('\n', pages[1])}"), (second.Ok, second.Text));
+        Assert.Equal((false, "page 3 of 'read_result big': it has 2 pages (1 to 2)"), (past.Ok, past.Text));
+    }
+
+    /// <summary>
+    /// read_result refuses an id no result is kept for in this conversation, naming the id, and a page below the first as
+    /// every paged answer refuses it.
+    /// </summary>
+    [Fact]
+    public async Task ReadResult_RefusesAnUnknownId_NamingIt()
+    {
+        var runtime = Open();
+
+        var unknown = await Call(runtime, AgentTools.ReadResult, ("id", "toolu_none"));
+        var below = await Call(runtime, AgentTools.ReadResult, ("id", "toolu_none"), ("page", 0));
+
+        Assert.Equal((false, "no result is kept for 'toolu_none' in this conversation"), (unknown.Ok, unknown.Text));
+        Assert.Equal((false, "page is 0: pages start at 1"), (below.Ok, below.Text));
     }
 
     /// <summary>An edit keeps the file's mode: a script stays one the system runs.</summary>

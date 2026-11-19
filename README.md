@@ -1293,7 +1293,7 @@ another; there a command Claude Code ran without its prefix runs outside with th
 each launch says so as it starts. In or out of a layer, Claude Code opens no file of the agent's in
 its own process: its file tools are
 not given, `--tools` names its shell alone, and the engine's tool server serves the tool runtime's
-(`view_file`, `find_files`, `search_files`, `create_file`, `replace_in_file`, `insert_in_file`,
+(`view_file`, `find_files`, `search_files`, `read_result`, `create_file`, `replace_in_file`, `insert_in_file`,
 `create_directory`, `delete_file`, `delete_directory`, `move_path`) in their place, each file read
 through the file the engine opened, decided again by where the system names it, and each written,
 made, moved or deleted relative to its directory held from the writable root it was decided in with
@@ -1485,7 +1485,7 @@ the agent's capabilities and no other (`read`: `Read`, `Grep`, `Glob`; `write`: 
 agents, loads skills, asks a person or plans; where its own process runs apart from the isolation it
 hands its commands to (above), the engine's tool server serves the tool runtime's file tools in
 place of Claude Code's own - `read`: `mcp__dssharness__view_file`, `mcp__dssharness__find_files`,
-`mcp__dssharness__search_files`; `write`: `mcp__dssharness__create_file`,
+`mcp__dssharness__search_files`, `mcp__dssharness__read_result`; `write`: `mcp__dssharness__create_file`,
 `mcp__dssharness__replace_in_file`, `mcp__dssharness__insert_in_file`,
 `mcp__dssharness__create_directory`, `mcp__dssharness__delete_file`,
 `mcp__dssharness__delete_directory`, `mcp__dssharness__move_path` - each call asked of the engine and
@@ -1530,8 +1530,8 @@ a new launch, and a move within the step's work goes on from what the engine sto
 The tool runtime is the harness's own tools, built for the API clients to give their agents in
 place of a client's own - the `claude-api` and `glm` clients below - and serving
 the `claude-code` client the web's through the engine's tool server, and its file tools there
-too where Claude Code's own process runs apart from the isolation: `view_file`, `find_files` and `search_files` (read),
-`create_file`, `replace_in_file`, `insert_in_file`, `create_directory`, `delete_file`,
+too where Claude Code's own process runs apart from the isolation: `view_file`, `find_files`,
+`search_files` and `read_result` (read), `create_file`, `replace_in_file`, `insert_in_file`, `create_directory`, `delete_file`,
 `delete_directory` and `move_path` (write), `run_command` (run) and `web_fetch` and `web_search` (web), each under
 the capability that gives it; the run's reporter is given those that read and no other. Each
 call is decided before it runs and recorded: a tool the step was not given, or an input its schema
@@ -1571,7 +1571,13 @@ made to checked again - no cookie, credential or proxy; each address is decided 
 step's `web.jsonl` before anything leaves the machine, and the page is given inside a block saying
 it is information for the task, not instructions. Calls that read run together, at most 4 at once,
 one that writes or runs alone; an answer past 32,768 characters is given as its first 8,192 and its
-last 24,576, the whole kept in the step's `tool-results/`.
+last 24,576, the whole kept in the step's `tool-results/`. `read_result` reads a call's whole result
+there by the call's id - an answer kept so, and every command's output - a page at a time, page 1
+where none is asked: each page of whole lines, a line wider than a page given in pieces marked `…`,
+and every page of a result of more than one page saying how to ask for the next with `page`, from 1;
+a page past the last is refused with its range, and an id no result is kept for is refused. Its
+pages are laid once from the file, kept in the step's `graph-pages/` for the conversation's life,
+and laid again, saying so, where the file changed since.
 
 The loop the `claude-api` and `glm` clients share (`ToolLoop`) runs a step of either over the
 provider each gives it - the Claude API's and Z.AI's below. A turn is one answer of the agent's - a
