@@ -224,10 +224,12 @@ public static partial class HelpTopics
         builder.AppendLine($"tried again, every {SshWakeWindow.DefaultPollDelay.TotalSeconds:0} seconds until that many seconds have passed, before its");
         builder.AppendLine("legs are skipped; a key or a login the host refuses is never waited on. Reached,");
         builder.AppendLine("its report says how long it took to wake; not reached, its reason names the window,");
-        builder.AppendLine("and for the half minute a name's answer is kept the command is refused it at once");
-        builder.AppendLine("rather than waiting again. Left at 0, a host is looked up three times within a second");
-        builder.AppendLine("and never waited for. Never for a host that is simply off, which would then cost the");
-        builder.AppendLine("window on every command.");
+        builder.AppendLine("and for as long again as the window lasts the command is refused it at once rather");
+        builder.AppendLine("than waiting again. A name its DNS server says does not exist ends the lookups at");
+        builder.AppendLine("once, window or none; no answer of this tool's own is kept, the system's resolver");
+        builder.AppendLine("keeping what its answers allow. Left at 0, a name that brought no answer is looked");
+        builder.AppendLine("up once more, and never waited for. Never for a host that is simply off, which");
+        builder.AppendLine("would then cost the window on every command.");
         builder.AppendLine();
         builder.AppendLine("Every WSL distribution and ssh host runs DssHarness itself, installed as a global");
         builder.AppendLine($".NET tool from nuget.org, so it needs the .NET {ToolPackage.MinimumSdkMajor} SDK. It must be this machine's build:");
@@ -381,7 +383,8 @@ public static partial class HelpTopics
         builder.AppendLine("reaches it, and not before, so a command typed in a copy in between runs the old build.");
         builder.AppendLine("Typed there, a command asks nuget.org which listed release is newest - an unlisted one");
         builder.AppendLine("is withdrawn, and no dispatcher is brought to it - and warns when the build running is");
-        builder.AppendLine("older; it waits a few seconds at most, and says nothing when nuget.org does not answer.");
+        builder.AppendLine("older; it waits for nuget.org's answer as long as it takes, said every");
+        builder.AppendLine($"{Waits.SaidEvery.TotalMinutes.ToString(CultureInfo.InvariantCulture)} minutes, and says nothing when nuget.org cannot be asked.");
         builder.AppendLine("A command the host agent runs for another machine asks nothing.");
         builder.AppendLine();
         builder.AppendLine("Exit codes");

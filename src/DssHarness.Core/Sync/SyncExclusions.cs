@@ -120,7 +120,7 @@ public sealed class SyncExclusions
         _worktreesRoot = Normalize(worktreesRoot);
 
         // What an entry of the configuration's, or the worktrees root, already covers - where the search
-        // for a misplaced entry counts no name: see RootedEntriesMatchingNothing.
+        // for a misplaced entry counts no name: see SearchRootedEntries.
         _coveredByConfiguration = [.. _neverTransfer
             .Append(Normalize(worktreesRoot))
             .Where(path => path.Length > 0)
