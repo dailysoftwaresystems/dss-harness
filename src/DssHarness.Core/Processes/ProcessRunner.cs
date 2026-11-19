@@ -477,6 +477,7 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
             request.StandardInput,
             close: !request.HoldStandardInputOpen,
             request.HoldStandardInputOpen ? request.StandardInputBeat : null,
+            () => ProcessGoing.IsGoing(process),
             exited.Token);
 
         if (!stopped)
@@ -965,13 +966,6 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
             throw new OperationCanceledException(cancellationToken);
         }
     }
-
-    /// <summary>
-    /// How long a child whose input can no longer be written is given to be found exiting, before the beat is said to
-    /// have been lost to a child still running: a child that exits takes its input with it a moment before it is seen
-    /// to have gone.
-    /// </summary>
-    private static readonly TimeSpan GoingGrace = TimeSpan.FromSeconds(2);
 
     public string? FindExecutable(string command)
     {
@@ -1603,12 +1597,18 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
     /// ceasing to read, is raised once the child has gone. An input held open is then written <paramref name="beat"/>,
     /// where one is given, until <paramref name="exited"/> says the child has gone.
     /// </remarks>
+    /// <param name="writer">The child's input.</param>
+    /// <param name="input">What is written to it, or <see langword="null"/> where nothing is.</param>
+    /// <param name="close">Whether it is closed once written.</param>
+    /// <param name="beat">What is written again and again on an input held open, or <see langword="null"/>.</param>
+    /// <param name="going">Whether the child is ended or in its exit, as the system says it the moment it is asked (<see cref="ProcessGoing"/>).</param>
+    /// <param name="exited">Cancelled once the child has been seen to exit.</param>
     /// <returns>
     /// Why the beat stopped while the child was still running, or <see langword="null"/> where it did not. The input is
     /// closed then, nothing more being written to it; and the reason is handed back, because a beat that fails without a
     /// word leaves whoever started the child with nothing to say why its far end gave this process up.
     /// </returns>
-    private static async Task<string?> WriteInputAsync(StreamWriter writer, ChildInput? input, bool close, InputBeat? beat, CancellationToken exited)
+    private static async Task<string?> WriteInputAsync(StreamWriter writer, ChildInput? input, bool close, InputBeat? beat, Func<bool> going, CancellationToken exited)
     {
         var whole = false;
         string? beatLost = null;
@@ -1625,7 +1625,7 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
 
             if (!close && beat is not null)
             {
-                beatLost = await BeatAsync(writer.BaseStream, beat, exited).ConfigureAwait(false);
+                beatLost = await BeatAsync(writer.BaseStream, beat, going, exited).ConfigureAwait(false);
             }
         }
         catch (IOException)
@@ -1646,7 +1646,7 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
 
     /// <summary>Writes <paramref name="beat"/> to <paramref name="input"/>, a line each time its interval passes, until <paramref name="exited"/>.</summary>
     /// <returns>Why a beat could not be written to a child that was still running, or <see langword="null"/> where every one was.</returns>
-    private static async Task<string?> BeatAsync(Stream input, InputBeat beat, CancellationToken exited)
+    private static async Task<string?> BeatAsync(Stream input, InputBeat beat, Func<bool> going, CancellationToken exited)
     {
         var line = Utf8NoBom.GetBytes(beat.Line + "\n");
 
@@ -1663,11 +1663,10 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
                 }
                 catch (IOException ex)
                 {
-                    // Its input no longer takes anything. A child that is exiting says the rest itself, and is seen
-                    // to have gone within a moment; one that goes on has stopped hearing this process.
-                    await Task.Delay(GoingGrace, exited).ConfigureAwait(false);
-
-                    return ex.Message;
+                    // Its input no longer takes anything: whatever held it has closed it. Asked of the system now, and never
+                    // waited on: a child whose input closed with its exit is already marked as exiting, and lost no beat;
+                    // one that closed its input and runs on has stopped hearing this process.
+                    return going() ? null : ex.Message;
                 }
             }
         }

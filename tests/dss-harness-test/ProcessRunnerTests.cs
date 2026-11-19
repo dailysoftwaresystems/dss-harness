@@ -742,12 +742,15 @@ public sealed class ProcessRunnerTests
     /// child - a carrier to another machine - has stopped hearing this process and goes on, and whatever counts on the
     /// beat at its far end will give this process up. Passed over, as the child ceasing to read its input always was,
     /// that left whoever started it with a run stopped for a machine that had gone, and nothing here to say why.
-    /// A child that takes its input with it as it exits has lost no beat.
+    /// However soon the child ends after: the system is asked, as the beat fails, whether the child is in its exit - a
+    /// child going on for less than the two seconds once given to be "found exiting" stopped hearing this process all the
+    /// same. A child that takes its input with it as it exits has lost no beat
+    /// (<see cref="RunAsync_WritesABeatOnAnInputHeldOpen_UntilTheChildExits_AndNoneOnOneThatIsNot"/>).
     /// </summary>
     [Theory]
-    [InlineData("4000", true)]
-    [InlineData("300", false)]
-    public async Task RunAsync_SaysABeatWasLost_WhereAChildStillRunningStoppedTakingIt(string runsFor, bool lost)
+    [InlineData("4000")]
+    [InlineData("600")]
+    public async Task RunAsync_SaysABeatWasLost_WhereAChildStillRunningStoppedTakingIt(string runsFor)
     {
         // A child that takes its request, closes its own end of its input and goes on: this build's own on Windows, and
         // a shell elsewhere, where the runtime keeps a second descriptor of its input that closing the first does not
@@ -769,8 +772,44 @@ public sealed class ProcessRunnerTests
 
         Assert.False(result.TimedOut);
         Assert.Equal(0, result.ExitCode);
-        Assert.Equal(lost, result.BeatLost is { Length: > 0 });
+        Assert.False(string.IsNullOrWhiteSpace(result.BeatLost), "a child that closed its input and ran on was said to have lost no beat");
     }
+
+    /// <summary>
+    /// A child is going once the system marks it as in its exit or it has ended, and not while it runs: what tells a
+    /// child whose input closed with its exit from one that closed it and runs on, asked the moment the beat fails
+    /// rather than waited on for a guess at how long an exit takes.
+    /// </summary>
+    [Fact]
+    public async Task AChild_IsGoingOnceItHasEnded_AndNotWhileItRuns()
+    {
+        using var process = Process.Start(TestHost.StartOf(TestHost.ChildRequest("sleep", "300000")))!;
+
+        try
+        {
+            Assert.False(ProcessGoing.IsGoing(process), "a child sleeping was said to be going");
+        }
+        finally
+        {
+            process.Kill(entireProcessTree: true);
+            await process.WaitForExitAsync(TestContext.Current.CancellationToken);
+        }
+
+        Assert.True(ProcessGoing.IsGoing(process), "a child that has ended was not said to be going");
+    }
+
+    /// <summary>
+    /// A thread's <c>stat</c> line says it is exiting where it is a zombie or dead, or its flags hold <c>PF_EXITING</c>,
+    /// read after the last parenthesis of its name - which may hold spaces and parentheses of its own - and not otherwise.
+    /// </summary>
+    [Theory]
+    [InlineData("41 (sleep) S 40 41 41 0 -1 4194304 120 0 0 0", false)]
+    [InlineData("41 (sleep) S 40 41 41 0 -1 4194308 120 0 0 0", true)]
+    [InlineData("41 (a (b) c) R 40 41 41 0 -1 4194304 120 0 0 0", false)]
+    [InlineData("41 (a (b) c) Z 40 41 41 0 -1 4194304 120 0 0 0", true)]
+    [InlineData("41 (x) X 40 41 41 0 -1 0 1 0 0 0", true)]
+    public void AThreadsStatLine_SaysWhetherItIsExiting(string stat, bool exiting)
+        => Assert.Equal(exiting, ProcessGoing.ThreadExiting(stat));
 
     /// <summary>
     /// A start that fails as a program being written does is made again until it succeeds, where the system refuses to
