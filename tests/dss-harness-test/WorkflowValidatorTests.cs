@@ -5020,8 +5020,8 @@ public sealed class WorkflowValidatorTests
 
     /// <summary>
     /// V52: a workflow's codebaseGraph is held to its bounds - each list named or left out, never given empty; patterns as
-    /// a path pattern reads them; languages named once each and each one this tool extracts; maxFileBytes and mapTokens
-    /// within their ranges; generated one of its values - and to a step that makes the graph.
+    /// a path pattern reads them; languages named once each and each one this tool extracts; mapTokens within its range;
+    /// generated one of its values - and to a step that makes the graph.
     /// </summary>
     [Fact]
     public void V52_ACodebaseGraph_IsHeldToItsBounds_AndToAStepThatMakesIt()
@@ -5032,7 +5032,6 @@ public sealed class WorkflowValidatorTests
               include: ["src/**", "docs/**"]
               exclude: ["src/gen/**"]
               languages: [markdown]
-              maxFileBytes: 4096
               generated: exclude
               mapTokens: 0
             steps:
@@ -5056,7 +5055,6 @@ public sealed class WorkflowValidatorTests
                 "codebaseGraph.include is given empty, which is never read as every path graphed: name its patterns, or leave the key out for every path graphed",
                 "codebaseGraph.exclude names the pattern '../out/**', and it holds a '..' segment, which no path inside the tree holds, so it would name nothing; name the path from the tree's root",
                 "codebaseGraph.languages names 'markdown' more than once",
-                "codebaseGraph.maxFileBytes must be from 4,096 to 16,777,216, found 4095",
                 "codebaseGraph.mapTokens must be from 0 to 2,000, found 2001",
                 "codebaseGraph.generated is 'drop', which is none of 'low', 'exclude': generated code's declarations are kept, its file's entry naming why it is generated, or left out with the file listed",
             ],
@@ -5066,7 +5064,6 @@ public sealed class WorkflowValidatorTests
                   include: []
                   exclude: ["../out/**"]
                   languages: [markdown, markdown]
-                  maxFileBytes: 4095
                   mapTokens: 2001
                   generated: drop
                 steps:
@@ -5078,14 +5075,12 @@ public sealed class WorkflowValidatorTests
             [
                 "codebaseGraph.exclude is given empty, which is never read as no path left out: name its patterns, or leave the key out for no path left out",
                 "codebaseGraph.languages is given empty, which is never read as every one used: name the implementations, or leave the key out for every one",
-                "codebaseGraph.maxFileBytes must be from 4,096 to 16,777,216, found 16777217",
             ],
             Problems("""
                 name: flow
                 codebaseGraph:
                   exclude: []
                   languages: []
-                  maxFileBytes: 16777217
                 steps:
                   - name: map
                     type: graphify-codebase

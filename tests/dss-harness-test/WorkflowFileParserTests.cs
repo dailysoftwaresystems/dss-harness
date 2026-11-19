@@ -1327,7 +1327,6 @@ public sealed class WorkflowFileParserTests
               include: ["src/**"]
               exclude: []
               languages: [markdown]
-              maxFileBytes: 8192
               generated: exclude
               mapTokens: 900
               keyNaming: [snake_case]
@@ -1342,11 +1341,11 @@ public sealed class WorkflowFileParserTests
         Assert.Equal(["src/**"], read.CodebaseGraph!.Include!);
         Assert.Empty(read.CodebaseGraph.Exclude!);
         Assert.Equal(["markdown"], read.CodebaseGraph.Languages!);
-        Assert.Equal((8192, "exclude", 900), (read.CodebaseGraph.MaxFileBytes, read.CodebaseGraph.Generated, read.CodebaseGraph.MapTokens));
+        Assert.Equal(("exclude", 900), (read.CodebaseGraph.Generated, read.CodebaseGraph.MapTokens));
         Assert.Equal(["snake_case"], read.CodebaseGraph.KeyNaming!);
         Assert.Equal([".lang.json"], read.CodebaseGraph.Claims!["json"]);
         Assert.True(read.Steps[0].Rebuild);
-        Assert.Equal((8192L, true, 900), (read.CodebaseGraph.Shape.MaxFileBytes, read.CodebaseGraph.Shape.ExcludeGenerated, read.CodebaseGraph.Shape.MapTokens));
+        Assert.Equal((true, 900), (read.CodebaseGraph.Shape.ExcludeGenerated, read.CodebaseGraph.Shape.MapTokens));
 
         Assert.Single(Problems("""
             name: flow
@@ -1368,7 +1367,7 @@ public sealed class WorkflowFileParserTests
         Assert.Contains(Problems("""
             name: flow
             codebaseGraph:
-              maxFileBytes: lots
+              mapTokens: lots
             steps:
               - name: map
                 type: graphify-codebase
@@ -1383,6 +1382,28 @@ public sealed class WorkflowFileParserTests
               - name: map
                 type: graphify-codebase
             """), problem => problem.EndsWith("'codebaseGraph.claims' is not a mapping of an implementation's name to the endings it claims.", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// codebaseGraph.maxFileBytes is retired: every file the graph claims is read whole, streamed, whatever its size, so a
+    /// file that sets one is refused naming why - a key that loads is a key that is read - and the block's other keys read on.
+    /// </summary>
+    [Fact]
+    public void MaxFileBytes_IsRefusedNamingWhy()
+    {
+        Assert.Equal(
+            ["line 3, column 3: 'maxFileBytes' is not a key of codebaseGraph; every file the graph claims is read whole, streamed, whatever its size, so no size is set."],
+            Problems("""
+                name: flow
+                codebaseGraph:
+                  maxFileBytes: 8192
+                  mapTokens: 900
+                steps:
+                  - name: map
+                    type: graphify-codebase
+                """));
+
+        Assert.DoesNotContain(WorkflowKeys.CodebaseGraph, key => key.Name == "maxFileBytes");
     }
 
     /// <summary>A step's failOn takes its own type's values: incomplete is a graph step's, and a build's is refused it.</summary>

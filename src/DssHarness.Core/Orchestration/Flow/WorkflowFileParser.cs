@@ -256,12 +256,11 @@ public static class WorkflowFileParser
             return null;
         }
 
-        var keys = CollectKeys(mapping, "codebaseGraph", KeyDescription.Names(WorkflowKeys.CodebaseGraph), problems);
+        var keys = CollectKeys(mapping, "codebaseGraph", KeyDescription.Names(WorkflowKeys.CodebaseGraph), problems, RetiredGraphKey);
 
         IReadOnlyList<string>? include = null;
         IReadOnlyList<string>? exclude = null;
         IReadOnlyList<string>? languages = null;
-        int? maxFileBytes = null;
         string? generated = null;
         int? mapTokens = null;
         IReadOnlyList<string>? keyNaming = null;
@@ -281,10 +280,6 @@ public static class WorkflowFileParser
 
                 case "languages":
                     languages = RequireStringList(value, "codebaseGraph.languages", problems);
-                    break;
-
-                case "maxFileBytes":
-                    maxFileBytes = RequireInt(value, "codebaseGraph.maxFileBytes", problems);
                     break;
 
                 case "generated":
@@ -308,8 +303,17 @@ public static class WorkflowFileParser
             }
         }
 
-        return new FlowCodebaseGraph(include, exclude, languages, maxFileBytes, generated, mapTokens, keyNaming, claims);
+        return new FlowCodebaseGraph(include, exclude, languages, Generated: generated, MapTokens: mapTokens, KeyNaming: keyNaming, Claims: claims);
     }
+
+    /// <summary>
+    /// The keys <c>codebaseGraph</c> took before what they set went: each is refused naming why, so a reader takes the
+    /// line out knowing what became of it rather than looking for where it moved.
+    /// </summary>
+    internal static string? RetiredGraphKey(string key)
+        => key == "maxFileBytes"
+            ? "every file the graph claims is read whole, streamed, whatever its size, so no size is set"
+            : null;
 
     /// <summary>
     /// Reads the <c>codebaseGraph.claims</c> mapping: each key an implementation's name, its value the file name endings,

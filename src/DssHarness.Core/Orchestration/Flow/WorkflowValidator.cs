@@ -2967,7 +2967,6 @@ public static class WorkflowValidator
                 }
             }
 
-            Within(graph.MaxFileBytes, Codebase.CodebaseGraphShape.LeastMaxFileBytes, Codebase.CodebaseGraphShape.MostMaxFileBytes, $"{lead}codebaseGraph.maxFileBytes");
             Within(graph.MapTokens, 0, Codebase.CodebaseGraphShape.MostMapTokens, $"{lead}codebaseGraph.mapTokens");
 
             if (graph.Generated is { } generated && !Codebase.CodebaseGraphShape.GeneratedValues.Contains(generated, StringComparer.Ordinal))
