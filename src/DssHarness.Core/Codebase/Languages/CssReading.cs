@@ -133,7 +133,7 @@ internal sealed class CssReading
     /// in: the file's own where none is given; a module block's of its own, which a binding of the block names
     /// (<see cref="CodeQualifierKinds.Module"/>).
     /// </param>
-    public CssReading(string language, string path, string text, StyleSyntax syntax, StyleScope scope, string? kept = null)
+    public CssReading(string language, string path, CodeText text, StyleSyntax syntax, StyleScope scope, string? kept = null)
     {
         _language = language;
         _path = path;
@@ -651,7 +651,7 @@ internal sealed class CssReading
         }
 
         var line = LineOf(at);
-        var written = _scan.Source[_scan[at].Start.._scan[head.Stop - 1].End];
+        var written = _scan.Source.Slice(_scan[at].Start, _scan[head.Stop - 1].End);
 
         foreach (var word in written.Split((char[])[' ', '\t', '\r', '\n'], StringSplitOptions.RemoveEmptyEntries))
         {
@@ -930,7 +930,7 @@ internal sealed class CssReading
 
         if (_syntax == StyleSyntax.Sass)
         {
-            return (start, end, Interpolated(start, end) ? null : _scan.Source[_scan[start].Start.._scan[end - 1].End].Trim());
+            return (start, end, Interpolated(start, end) ? null : _scan.Source.Slice(_scan[start].Start, _scan[end - 1].End).Trim());
         }
 
         return (-1, -1, null);
@@ -1978,7 +1978,7 @@ internal sealed class CssReading
                         if (start >= 2 && _scan.Source[start - 2] == '@' && _scan.Source[start - 1] == '{')
                         {
                             // Less's @{name}: the variable it names.
-                            if (_scan.Source[start..end].Trim() is { Length: > 0 } variable && variable.All(character => char.IsAsciiLetterOrDigit(character) || character is '-' or '_')
+                            if (_scan.Source.Slice(start, end).Trim() is { Length: > 0 } variable && variable.All(character => char.IsAsciiLetterOrDigit(character) || character is '-' or '_')
                                 && locals?.Holds($"@{variable}") != true)
                             {
                                 _references.Add((by, CodeEdgeKinds.Uses, $"@{variable}", token.Line, new ExtractQualifier(CodeQualifierKinds.StyleVariable)));

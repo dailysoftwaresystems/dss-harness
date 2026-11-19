@@ -1972,9 +1972,6 @@ public sealed class CodebaseGraphService(
             return false;
         }
 
-        /// <summary>Why a file written while it was read keeps nothing.</summary>
-        private const string ChangedWhileRead = "it changed while it was read";
-
         /// <summary>
         /// How many files read past which the listing after the reads lists the tree whole, where the sync listed it whole:
         /// by their paths, git reads the whole index once for each command line of them - one holds at most
@@ -2245,7 +2242,7 @@ public sealed class CodebaseGraphService(
             {
                 if (moved.Contains(file.Path))
                 {
-                    entries.Add((file.Path, new CodeGraphFileEntry(file.Blob, CodeFileStates.Unreadable, 0) { Why = ChangedWhileRead }));
+                    entries.Add((file.Path, new CodeGraphFileEntry(file.Blob, CodeFileStates.Unreadable, 0) { Why = CodeFileDecoding.ChangedWhileRead.Why }));
                     continue;
                 }
 
@@ -2297,14 +2294,20 @@ public sealed class CodebaseGraphService(
             }
 
             // A write while it was read leaves bytes of no one content, though it may leave the file's blob as it was: its
-            // size or time moved, or its two readings differ. Nothing is made of such bytes.
-            if (decoded.Changed || !StandsAsSeen(path, standing))
+            // size or time moved, or a block of its text no longer decodes as its reading through found it. Nothing is
+            // made of such bytes.
+            if (!StandsAsSeen(path, standing))
             {
-                return (new CodeGraphFileEntry(blob, CodeFileStates.Unreadable, 0) { Why = ChangedWhileRead }, null, null);
+                return (new CodeGraphFileEntry(blob, CodeFileStates.Unreadable, 0) { Why = CodeFileDecoding.ChangedWhileRead.Why }, null, null);
             }
 
-            var read = _service.Read(path, blob, decoded, standing.Length, _shape, standing.Written);
-            return (read.Entry, read.Stored, read.Settled ? standing : null);
+            // The decoding is let go once the read is made, for its text holds the file open while it lives: what the read
+            // keeps of the file is what its implementation keeps.
+            using (decoded)
+            {
+                var read = _service.Read(path, blob, decoded, standing.Length, _shape, standing.Written);
+                return (read.Entry, read.Stored, read.Settled ? standing : null);
+            }
         }
 
         /// <summary>
@@ -2615,8 +2618,9 @@ public sealed class CodebaseGraphService(
                 return null;
             }
 
-            var decoded = await CodeFileText.DecodeAsync(_fileSystem, absolute, standing.Length, cancellationToken).ConfigureAwait(false);
-            return decoded.IsRead && !decoded.Changed ? new CodeFileInput(path, decoded.Text).Lines : null;
+            // The lines are kept past the text, which lets go of what it reads once it is disposed: the comparison holds them.
+            using var decoded = await CodeFileText.DecodeAsync(_fileSystem, absolute, standing.Length, cancellationToken).ConfigureAwait(false);
+            return decoded.IsRead ? [.. decoded.Text.Lines] : null;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
@@ -2645,8 +2649,26 @@ public sealed class CodebaseGraphService(
             return new FileRead(new CodeGraphFileEntry(blob, decoded.State, length) { Why = decoded.Why, Mtime = written }, null, true, null);
         }
 
-        var text = decoded.Text;
-        var route = _extractors.Route(path, CodeFileText.Probe(text), shape.Claims);
+        try
+        {
+            return Read(path, blob, decoded.Text, length, shape, written);
+        }
+        catch (CodeTextChangedException)
+        {
+            // A block of a text read over its file that no longer decodes as it did: nothing is made of what was read, and the
+            // file is read again by the next sync.
+            return new FileRead(new CodeGraphFileEntry(blob, CodeFileStates.Unreadable, length) { Why = CodeFileDecoding.ChangedWhileRead.Why, Mtime = written }, null, false, null);
+        }
+    }
+
+    /// <summary>
+    /// What <paramref name="text"/>, the decoded text of the file at <paramref name="path"/>, is by the implementation that
+    /// claims it (<see cref="Read(string, string, CodeFileDecoding, long, CodebaseGraphShape, DateTime?)"/>), read by
+    /// position: its lines are the text's, made strings only as they are read.
+    /// </summary>
+    private FileRead Read(string path, string blob, CodeText text, long length, CodebaseGraphShape shape, DateTime? written)
+    {
+        var route = _extractors.Route(path, text, shape.Claims);
 
         var input = new CodeFileInput(path, text);
         var lines = input.Lines;
@@ -2666,9 +2688,9 @@ public sealed class CodebaseGraphService(
 
         try
         {
-            extract = extractor.Extract(input).WithDigests(lines);
+            extract = extractor.Extract(input).WithDigests(text);
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        catch (Exception ex) when (ex is not (OperationCanceledException or CodeTextChangedException))
         {
             // The contract's kit holds every implementation to answering for any text; one that throws is a defect of
             // it, said for the one file and never the end of the sync.

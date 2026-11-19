@@ -1,3 +1,5 @@
+using System.Globalization;
+using System.Text;
 using AngleSharp.Html;
 using AngleSharp.Html.Parser;
 using AngleSharp.Text;
@@ -84,7 +86,7 @@ internal sealed class MarkupText
     };
 
     private readonly List<MarkupElement> _elements = [];
-    private readonly List<(int Start, int End)> _texts = [];
+    private readonly List<(long Start, long End)> _texts = [];
     private readonly List<int> _open = [];
     private readonly Dictionary<string, int> _openNames = new(StringComparer.Ordinal);
     private readonly bool _closesAsHtml;
@@ -92,15 +94,21 @@ internal sealed class MarkupText
     /// <summary>How many foreign elements - an <c>svg</c>, a <c>math</c> - are open, in which <c>/&gt;</c> closes any element.</summary>
     private int _foreign;
 
-    private MarkupText(string text, bool closesAsHtml)
+    private MarkupText(CodeText text, bool closesAsHtml)
     {
         Text = text;
-        Lines = CodeFileText.LineIndex(text);
+        Lines = text.LineIndex;
         _closesAsHtml = closesAsHtml;
     }
 
+    /// <summary>
+    /// The most characters a markup file's text holds for AngleSharp's tokenizer to read it: the tokenizer counts a position
+    /// in an Int32 (TextPosition.Index), and its source keeps what it decodes in one StringBuilder, which an Int32 counts.
+    /// </summary>
+    public const long MostCharacters = int.MaxValue;
+
     /// <summary>The text read, its line endings each one line feed.</summary>
-    public string Text { get; }
+    public CodeText Text { get; }
 
     /// <summary>Where its lines begin.</summary>
     public CodeLineIndex Lines { get; }
@@ -109,15 +117,30 @@ internal sealed class MarkupText
     public IReadOnlyList<MarkupElement> Elements => _elements;
 
     /// <summary>Its runs of text - what no tag and no comment is - each from its first character to past its last.</summary>
-    public IReadOnlyList<(int Start, int End)> Texts => _texts;
+    public IReadOnlyList<(long Start, long End)> Texts => _texts;
+
+    /// <summary>
+    /// The extract of a markup file whose text, <paramref name="text"/> - its line endings each one line feed, as it is read -
+    /// holds more characters than <see cref="MostCharacters"/>: nothing in it read, the line the tokenizer's count ends on
+    /// marked dynamic, with why; <see langword="null"/> for any other, which is read.
+    /// </summary>
+    /// <param name="text">The text as it would be read.</param>
+    public static FileExtract? Unread(CodeText text)
+    {
+        ArgumentNullException.ThrowIfNull(text);
+
+        return text.Length > MostCharacters
+            ? new FileExtract([]) { Dynamic = [new ExtractDynamic(text.LineIndex.LineAt(MostCharacters), string.Create(CultureInfo.InvariantCulture, $"the file holds {text.Length:N0} characters, past the {MostCharacters:N0} the HTML tokenizer (AngleSharp) counts a position in, so it is not read"))] }
+            : null;
+    }
 
     /// <summary>
     /// Reads <paramref name="text"/>: its elements closing as HTML closes a page's where <paramref name="closesAsHtml"/>,
     /// else as written.
     /// </summary>
-    /// <param name="text">The markup, its line endings each one line feed (<see cref="EmbeddedCode.LineFeeds"/>).</param>
+    /// <param name="text">The markup, its line endings each one line feed (<see cref="CodeText.LineFed"/>).</param>
     /// <param name="closesAsHtml">Whether it is a page, whose elements HTML closes where their end tags are left out.</param>
-    public static MarkupText Read(string text, bool closesAsHtml)
+    public static MarkupText Read(CodeText text, bool closesAsHtml)
     {
         ArgumentNullException.ThrowIfNull(text);
 
@@ -127,7 +150,7 @@ internal sealed class MarkupText
     }
 
     /// <summary>The line, from 1, that <paramref name="offset"/> stands on.</summary>
-    public int LineAt(int offset) => Lines.LineAt(Math.Clamp(offset, 0, Math.Max(Text.Length - 1, 0)));
+    public int LineAt(long offset) => Lines.LineAt(Math.Clamp(offset, 0, Math.Max(Text.Length - 1, 0)));
 
     /// <summary>
     /// The last line <paramref name="element"/> stands on: its end tag's, where one closes it; else the last line its
@@ -164,19 +187,23 @@ internal sealed class MarkupText
     /// <summary>The one walk over the tokens: each element opened, matched to the end tag that closes it, and closed.</summary>
     private void Walk()
     {
-        var tokenizer = new HtmlTokenizer(new TextSource(Text), HtmlEntityProvider.Resolver);
+        // AngleSharp's tokenizer reads the text as a stream of its bytes: its source keeps what it decodes (its Buffered
+        // mode, the one its tokenizer is given), but no string of the whole text is made here.
+        using var bytes = Text.Utf8();
+        using var source = new TextSource(bytes, Encoding.UTF8);
+        var tokenizer = new HtmlTokenizer(source, HtmlEntityProvider.Resolver);
         var seen = new HashSet<string>(StringComparer.Ordinal);
 
         // A tag ends where the next token begins: what the last start tag's and end tag's ends wait for.
         MarkupElement? opened = null;
         MarkupElement? closed = null;
         var empty = false;
-        var textStart = -1;
+        var textStart = -1L;
 
         while (true)
         {
             var token = tokenizer.Get();
-            var at = Math.Clamp(token.Position.Index, 0, Text.Length);
+            var at = Math.Clamp((long)token.Position.Index, 0, Text.Length);
 
             if (token.Type == HtmlTokenType.EndOfFile)
             {
@@ -230,7 +257,7 @@ internal sealed class MarkupText
                     }
 
                     var element = new MarkupElement(Written(at, name), name, at, LineAt(at), _open.Count > 0 ? _open[^1] : -1,
-                        [.. tag.Attributes.Select(attribute => new MarkupAttribute(attribute.Name, attribute.Value, LineAt(attribute.Position.Index)) { NameAt = Math.Clamp(attribute.Position.Index, 0, Text.Length), ValueAt = ValueAt(attribute.Position.Index, attribute.Name.Length) })]);
+                        [.. tag.Attributes.Select(attribute => new MarkupAttribute(attribute.Name, attribute.Value, LineAt(attribute.Position.Index)) { NameAt = Math.Clamp((long)attribute.Position.Index, 0, Text.Length), ValueAt = ValueAt(attribute.Position.Index, attribute.Name.Length) })]);
 
                     _elements.Add(element);
                     opened = element;
@@ -302,7 +329,7 @@ internal sealed class MarkupText
     }
 
     /// <summary>The element open last, closed where <paramref name="at"/> stands: an end tag's, or what closes it in its place.</summary>
-    private MarkupElement Pop(int at)
+    private MarkupElement Pop(long at)
     {
         var top = _elements[_open[^1]];
         _open.RemoveAt(_open.Count - 1);
@@ -314,7 +341,7 @@ internal sealed class MarkupText
     }
 
     /// <summary>What a page's start tag of <paramref name="name"/> at <paramref name="at"/> closes before it opens, as HTML closes an element whose end tag is left out.</summary>
-    private void Imply(string name, int at)
+    private void Imply(string name, long at)
     {
         // A head is left at the first thing it does not hold, a body's start tag among them.
         if (_open.Count > 0 && _elements[_open[^1]].Name == "head" && !HeadContent.Contains(name))
@@ -384,7 +411,7 @@ internal sealed class MarkupText
     }
 
     /// <summary>An item of <paramref name="names"/> left open closed by the next, unless an element of its own stands between.</summary>
-    private void CloseItem(int at, params string[] names)
+    private void CloseItem(long at, params string[] names)
     {
         if (!IsOpen(names))
         {
@@ -412,7 +439,7 @@ internal sealed class MarkupText
     private bool IsOpen(params string[] names) => names.Any(name => _openNames.GetValueOrDefault(name) > 0);
 
     /// <summary>The element open last closed where it is <paramref name="name"/>.</summary>
-    private void CloseTop(int at, string name)
+    private void CloseTop(long at, string name)
     {
         if (_open.Count > 0 && _elements[_open[^1]].Name == name)
         {
@@ -421,7 +448,7 @@ internal sealed class MarkupText
     }
 
     /// <summary>The nearest element of <paramref name="names"/> open inside the nearest <paramref name="boundary"/>, closed with what it holds.</summary>
-    private void CloseWithin(int at, string boundary, params string[] names)
+    private void CloseWithin(long at, string boundary, params string[] names)
     {
         if (!IsOpen(names))
         {
@@ -446,7 +473,7 @@ internal sealed class MarkupText
     }
 
     /// <summary>Every element open from the last back to the one at <paramref name="index"/> of the open ones, closed.</summary>
-    private void PopTo(int at, int index)
+    private void PopTo(long at, int index)
     {
         while (_open.Count > index)
         {
@@ -459,7 +486,7 @@ internal sealed class MarkupText
     /// <paramref name="name"/> begins: past its name, its <c>=</c> and its opening quote; where its name ends, for one
     /// written with no value.
     /// </summary>
-    private int ValueAt(int name, int length)
+    private long ValueAt(long name, int length)
     {
         var at = Math.Clamp(name + length, 0, Text.Length);
         var after = at;
@@ -482,7 +509,7 @@ internal sealed class MarkupText
     }
 
     /// <summary>The tag at <paramref name="at"/> as the text writes it - <c>MyButton</c>, where the tokenizer says <c>mybutton</c>.</summary>
-    private string Written(int at, string name)
+    private string Written(long at, string name)
     {
         var start = at + 1;
 
@@ -497,7 +524,7 @@ internal sealed class MarkupText
 }
 
 /// <summary>One element of markup, as <see cref="MarkupText"/> reads it.</summary>
-internal sealed class MarkupElement(string tag, string name, int start, int line, int parent, IReadOnlyList<MarkupAttribute> attributes)
+internal sealed class MarkupElement(string tag, string name, long start, int line, int parent, IReadOnlyList<MarkupAttribute> attributes)
 {
     /// <summary>Its tag as the text writes it: <c>MyButton</c>, <c>child-item</c>.</summary>
     public string Tag { get; } = tag;
@@ -506,7 +533,7 @@ internal sealed class MarkupElement(string tag, string name, int start, int line
     public string Name { get; } = name;
 
     /// <summary>Where its start tag begins: its <c>&lt;</c>.</summary>
-    public int Start { get; } = start;
+    public long Start { get; } = start;
 
     /// <summary>The line its start tag begins on.</summary>
     public int Line { get; } = line;
@@ -518,13 +545,13 @@ internal sealed class MarkupElement(string tag, string name, int start, int line
     public IReadOnlyList<MarkupAttribute> Attributes { get; } = attributes;
 
     /// <summary>Where its start tag ends: where what it holds begins.</summary>
-    public int OpenEnd { get; internal set; }
+    public long OpenEnd { get; internal set; }
 
     /// <summary>Where what it holds ends: where its end tag begins, or what closed it in its place.</summary>
-    public int Close { get; internal set; }
+    public long Close { get; internal set; }
 
     /// <summary>Where it ends: past its end tag, or at <see cref="Close"/> where no end tag of its own closed it.</summary>
-    public int End { get; internal set; }
+    public long End { get; internal set; }
 
     /// <summary>The value of its attribute <paramref name="name"/>, the first it writes; <see langword="null"/> where it writes none.</summary>
     public string? Attribute(string name)
@@ -538,8 +565,8 @@ internal sealed class MarkupElement(string tag, string name, int start, int line
 internal sealed record MarkupAttribute(string Name, string Value, int Line)
 {
     /// <summary>Where its name begins in the text, which writes it as written - a dynamic argument's code in its case.</summary>
-    public int NameAt { get; init; }
+    public long NameAt { get; init; }
 
     /// <summary>Where its value begins in the text: past its <c>=</c> and its quote - where its code stands, for a reader of code given it there.</summary>
-    public int ValueAt { get; init; }
+    public long ValueAt { get; init; }
 }

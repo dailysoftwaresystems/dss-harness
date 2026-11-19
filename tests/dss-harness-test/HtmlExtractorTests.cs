@@ -241,11 +241,12 @@ public sealed class HtmlExtractorTests : CodeGraphExtractorContractTests<HtmlExt
     {
         var extract = Read("pages/nested.html", Nested);
 
-        var lines = new CodeFileInput("pages/nested.html", Nested).Lines;
+        var input = new CodeFileInput("pages/nested.html", Nested);
+        var lines = input.Lines;
         var body = Assert.Single(extract.Nodes, node => node.SubKind == "body");
         var dark = Assert.Single(extract.References, reference => reference.Name == ".dark");
 
-        Assert.Null(extract.WithDigests(lines).Problem("html", lines.Count));
+        Assert.Null(extract.WithDigests(input.Text).Problem("html", lines.Count));
         Assert.Equal(("html:pages/nested.html#page-top", "page-top"), (body.Id, body.Name));
         Assert.Equal(("html:pages/nested.html#page-top", 2), (dark.From, dark.Line));
     }

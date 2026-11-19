@@ -433,8 +433,8 @@ public sealed partial record CodebaseWorkingSet(IReadOnlyList<WorkingSetNode> No
             {
                 try
                 {
-                    var decoded = CodeFileText.Decode(fileSystem.ReadAllBytes(Path.Combine(view.Tree, path.Replace('/', Path.DirectorySeparatorChar))));
-                    lines = decoded.IsRead ? CodeFileText.Lines(decoded.Text) : null;
+                    using var decoded = CodeFileText.Decode(fileSystem.ReadAllBytes(Path.Combine(view.Tree, path.Replace('/', Path.DirectorySeparatorChar))));
+                    lines = decoded.IsRead ? [.. decoded.Text.Lines] : null;
                 }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
                 {

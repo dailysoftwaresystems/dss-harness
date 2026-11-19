@@ -29,7 +29,7 @@ internal static class PhpLexer
 
     /// <summary>Scans <paramref name="text"/> by PHP's rules, from its text before the first open tag.</summary>
     /// <param name="text">A file's text.</param>
-    public static InterpolatedText Scan(string text) => Scan(text, 0, text.Length, CodeFileText.LineIndex(text), code: false);
+    public static InterpolatedText Scan(CodeText text) => Scan(text, 0, text.Length, text.LineIndex, code: false);
 
     /// <summary>
     /// Scans the part of <paramref name="text"/> from <paramref name="start"/> to <paramref name="end"/> by PHP's rules, as
@@ -44,9 +44,9 @@ internal static class PhpLexer
     /// scan whose literal holds the part - so each literal the part holds that they read is passed over at once; none for
     /// a scan of its own.
     /// </param>
-    public static InterpolatedText Scan(string text, int start, int end, CodeLineIndex lines, ScanCloses? closes = null) => Scan(text, start, end, lines, code: true, closes);
+    public static InterpolatedText Scan(CodeText text, long start, long end, CodeLineIndex lines, ScanCloses? closes = null) => Scan(text, start, end, lines, code: true, closes);
 
-    private static InterpolatedText Scan(string text, int start, int end, CodeLineIndex lines, bool code, ScanCloses? closes = null)
+    private static InterpolatedText Scan(CodeText text, long start, long end, CodeLineIndex lines, bool code, ScanCloses? closes = null)
     {
         var lexing = new Lexing(text, lines, closes);
         lexing.Closes.Scanned(start, end);
@@ -61,9 +61,9 @@ internal static class PhpLexer
     private static bool InName(char character) => char.IsLetterOrDigit(character) || character == '_' || character > '\u007f';
 
     /// <summary>One run of the lexer over a text.</summary>
-    private sealed class Lexing(string text, CodeLineIndex lines, ScanCloses? closes) : ScanLexing(lines, closes)
+    private sealed class Lexing(CodeText text, CodeLineIndex lines, ScanCloses? closes) : ScanLexing(lines, closes)
     {
-        public void Run(int start, int end, bool code)
+        public void Run(long start, long end, bool code)
         {
             var at = code ? start : Opened(start, end);
 
@@ -111,7 +111,7 @@ internal static class PhpLexer
                     at = Name(at, character == '\\' ? at + 1 : at, end);
 
                     // __halt_compiler(); ends the code, and the file's text with it: what follows is data - a phar's archive.
-                    if (at - name == HaltCompiler.Length && string.Compare(text, name, HaltCompiler, 0, HaltCompiler.Length, StringComparison.OrdinalIgnoreCase) == 0)
+                    if (at - name == HaltCompiler.Length && text.At(name, HaltCompiler, StringComparison.OrdinalIgnoreCase))
                     {
                         at = Halted(at, end);
                     }
@@ -132,13 +132,13 @@ internal static class PhpLexer
         }
 
         /// <summary>Past the text from <paramref name="at"/> to the next open tag - <c>&lt;?php</c>, <c>&lt;?=</c>, or <c>&lt;?</c> before white space - where the code begins; the end where none is.</summary>
-        private int Opened(int at, int end)
+        private long Opened(long at, long end)
         {
-            for (var open = text.IndexOf("<?", at, end - at, StringComparison.Ordinal); open >= 0; open = text.IndexOf("<?", open + 2, end - open - 2, StringComparison.Ordinal))
+            for (var open = text.Find("<?", at, end); open >= 0; open = open + 2 < end ? text.Find("<?", open + 2, end) : -1)
             {
                 var after = open + 2;
 
-                if (after + 3 <= end && string.Compare(text, after, "php", 0, 3, StringComparison.OrdinalIgnoreCase) == 0 && (after + 3 == end || char.IsWhiteSpace(text[after + 3])))
+                if (after + 3 <= end && text.At(after, "php", StringComparison.OrdinalIgnoreCase) && (after + 3 == end || char.IsWhiteSpace(text[after + 3])))
                 {
                     return after + 3;
                 }
@@ -161,7 +161,7 @@ internal static class PhpLexer
         /// Past the parentheses and the <c>;</c> or <c>?&gt;</c> after <c>__halt_compiler</c> at <paramref name="at"/>, each a
         /// token: the end, where nothing after is read; <paramref name="at"/> where they are not there, and reading goes on.
         /// </summary>
-        private int Halted(int at, int end)
+        private long Halted(long at, long end)
         {
             var index = at;
             var tokens = Tokens.Count;
@@ -209,17 +209,17 @@ internal static class PhpLexer
         /// before it (<see cref="LineCommentEnd"/>), <c>/* */</c> past its closer - in an interpolation's code too, which
         /// PHP reads as any code.
         /// </summary>
-        protected override int CommentEnd(int at, int end)
+        protected override long CommentEnd(long at, long end)
             => at >= end ? at
                 : (text[at] == '#' && !(at + 1 < end && text[at + 1] == '[')) || (text[at] == '/' && at + 1 < end && text[at + 1] == '/') ? LineCommentEnd(at, end)
-                : text[at] == '/' && at + 1 < end && text[at + 1] == '*' ? (text.IndexOf("*/", at + 2, end - at - 2, StringComparison.Ordinal) is var close and >= 0 ? close + 2 : end)
+                : text[at] == '/' && at + 1 < end && text[at + 1] == '*' ? (text.Find("*/", at + 2, end) is var close and >= 0 ? close + 2 : end)
                 : at;
 
         /// <summary>Where a line comment at <paramref name="at"/> ends: at its line's break, or before the <c>?&gt;</c> that ends the code.</summary>
-        private int LineCommentEnd(int at, int end)
+        private long LineCommentEnd(long at, long end)
         {
             var lineEnd = LineEnd(text, at, end);
-            var close = text.IndexOf("?>", at, lineEnd - at, StringComparison.Ordinal);
+            var close = text.Find("?>", at, lineEnd);
             return close >= 0 ? close : lineEnd;
         }
 
@@ -228,7 +228,7 @@ internal static class PhpLexer
         /// it, and each further part a <c>\</c> joins (<c>App\Models\User</c>), but one before a group's brace
         /// (<c>use App\{A, B}</c>), which ends it there. Answers where the text goes on.
         /// </summary>
-        private int Name(int start, int first, int end)
+        private long Name(long start, long first, long end)
         {
             var at = first + 1;
 
@@ -253,11 +253,11 @@ internal static class PhpLexer
         }
 
         /// <summary>A punctuator at <paramref name="at"/>, one of <see cref="Whole"/> or one character; a character no token begins with passed over. Answers where the text goes on.</summary>
-        private int Punctuator(int at, int end)
+        private long Punctuator(long at, long end)
         {
             foreach (var whole in Whole)
             {
-                if (at + whole.Length <= end && string.CompareOrdinal(text, at, whole, 0, whole.Length) == 0)
+                if (at + whole.Length <= end && text.At(at, whole))
                 {
                     Add(ScanTokenKind.Punctuation, at, at + whole.Length);
                     return at + whole.Length;
@@ -279,7 +279,7 @@ internal static class PhpLexer
         /// text goes on; 0 where no label follows, so the <c>&lt;</c>s are punctuators. One a scan of the text before this
         /// one read is taken as it was read (<see cref="ScanCloses"/>).
         /// </summary>
-        private int Heredoc(int at, int end)
+        private long Heredoc(long at, long end)
         {
             var label = at + 3;
 
@@ -322,7 +322,7 @@ internal static class PhpLexer
                 past++;
             }
 
-            var written = text[name..past];
+            var written = text.Slice(name, past);
 
             if (quote != '\0')
             {
@@ -342,7 +342,7 @@ internal static class PhpLexer
             var body = past + LineBreakAt(text, past, end);
             var close = end;
             var closeEnd = end;
-            var indent = 0;
+            var indent = 0L;
 
             for (var line = body; line < end;)
             {
@@ -353,7 +353,7 @@ internal static class PhpLexer
                     first++;
                 }
 
-                if (first + written.Length <= end && string.CompareOrdinal(text, first, written, 0, written.Length) == 0
+                if (first + written.Length <= end && text.At(first, written)
                     && (first + written.Length == end || !InName(text[first + written.Length])))
                 {
                     close = line;
@@ -390,7 +390,7 @@ internal static class PhpLexer
         }
 
         /// <summary>How wide the line break that ends just before <paramref name="at"/> is, no further back than <paramref name="floor"/>: 2 for CR LF, 1 for CR or LF, 0 where none does.</summary>
-        private int BreakBefore(int at, int floor)
+        private long BreakBefore(long at, long floor)
             => at - 2 >= floor && text[at - 2] == '\r' && text[at - 1] == '\n' ? 2
                 : at - 1 >= floor && text[at - 1] is '\r' or '\n' ? 1
                 : 0;
@@ -408,7 +408,7 @@ internal static class PhpLexer
         /// as it was read (<see cref="ScanCloses"/>), and passed over at once; what this reading finds of it, and of each
         /// string its code holds, is kept for the scans of that code. Answers where the text goes on.
         /// </summary>
-        private int Literal(int start, int from, char mark, int stop, int end, int indent = 0, bool leftOpen = false, int closeEnd = -1)
+        private long Literal(long start, long from, char mark, long stop, long end, long indent = 0, bool leftOpen = false, long closeEnd = -1)
         {
             if (mark != '\0' && Closes.Of(start, end) is { Tags: null } read)
             {
@@ -517,7 +517,7 @@ internal static class PhpLexer
         }
 
         /// <summary>Past the <c>}</c> of a <c>${name}</c> whose name begins at <paramref name="at"/>: a name alone, then the brace; 0 where anything else stands.</summary>
-        private int VariableNamed(int at, int stop)
+        private long VariableNamed(long at, long stop)
         {
             if (at >= stop || !StartsName(text[at]))
             {

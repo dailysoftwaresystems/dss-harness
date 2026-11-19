@@ -16,61 +16,56 @@ internal static class EmbeddedCode
     /// <summary>
     /// The text a reader of embedded code is given: the ranges of <paramref name="text"/> kept, each on the line it stands
     /// on in the host, and nothing else of it - the line breaks between them kept and every other character left out, two
-    /// ranges on one line apart by a space, so no token of one runs into the next (<see cref="EmbeddedText"/>).
+    /// ranges on one line apart by a space, so no token of one runs into the next (<see cref="EmbeddedText"/>): a text made
+    /// of the host's own runs (<see cref="CodeText.Composed"/>), never a copy of them.
     /// </summary>
     /// <param name="text">The host's text, its line endings each one line feed.</param>
     /// <param name="lines">Where the host's lines begin.</param>
     /// <param name="kept">The ranges of code, each from its first character to past its last, in order and apart.</param>
-    public static string Kept(string text, CodeLineIndex lines, IReadOnlyList<(int Start, int End)> kept)
+    public static CodeText Kept(CodeText text, CodeLineIndex lines, IReadOnlyList<(long Start, long End)> kept)
     {
-        var written = new EmbeddedText(lines);
-        var at = 0;
+        var written = new EmbeddedText(text, lines);
+        var at = 0L;
 
         foreach (var (start, end) in kept)
         {
             var from = Math.Clamp(start, at, text.Length);
             var to = Math.Clamp(end, from, text.Length);
 
-            written.Write(from, text[from..to]);
+            written.Write(from, to);
             at = to;
         }
 
-        return written.ToString();
+        return written.Text();
     }
 
     /// <summary>
     /// <paramref name="text"/> with each of <paramref name="blanked"/> blanked - every character of it a space but a line
     /// feed - so what is left stands where it stood, at its own offset and line: markup read with the code it holds taken
-    /// out.
+    /// out. A text made of the host's own runs, each blanked one read blank (<see cref="CodeTextPiece.Blanked"/>).
     /// </summary>
     /// <param name="text">The host's text, its line endings each one line feed.</param>
     /// <param name="blanked">The ranges taken out, each from its first character to past its last.</param>
-    public static string Blanked(string text, IEnumerable<(int Start, int End)> blanked)
+    public static CodeText Blanked(CodeText text, IEnumerable<(long Start, long End)> blanked)
     {
-        var characters = text.ToCharArray();
+        var pieces = new CodeTextPieces();
+        var at = 0L;
 
-        foreach (var (start, end) in blanked)
+        // Blanking twice is blanking once: the ranges in order, each overlap read as one.
+        foreach (var (start, end) in blanked.Select(range => (Start: Math.Clamp(range.Start, 0, text.Length), End: Math.Clamp(range.End, 0, text.Length))).Where(range => range.End > range.Start).OrderBy(range => range.Start))
         {
-            for (var at = Math.Max(start, 0); at < Math.Min(end, characters.Length); at++)
+            if (end <= at)
             {
-                if (characters[at] != '\n')
-                {
-                    characters[at] = ' ';
-                }
+                continue;
             }
+
+            var from = Math.Max(start, at);
+            pieces.Run(at, from).Blank(from, end);
+            at = end;
         }
 
-        return new string(characters);
+        return text.Composed(pieces.Run(at, text.Length).Pieces);
     }
-
-    /// <summary>
-    /// <paramref name="text"/> with every line ending one line feed - a CR LF and a CR alike - so the host and the code
-    /// it embeds are read over one text whose offsets the markup's positions and the kept ranges share; its lines are
-    /// the ones <see cref="CodeFileText.Lines"/> cuts.
-    /// </summary>
-    /// <param name="text">A file's text.</param>
-    public static string LineFeeds(string text)
-        => text.Contains('\r', StringComparison.Ordinal) ? text.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n') : text;
 
     /// <summary>
     /// <paramref name="host"/> with every field of each of <paramref name="embedded"/> merged into it, in order: each
@@ -187,15 +182,16 @@ internal static class EmbeddedCode
     /// </summary>
     /// <param name="language">The host's implementation, whose name prefixes every id.</param>
     /// <param name="path">The host's path.</param>
+    /// <param name="text">The host's text, its line endings each one line feed.</param>
     /// <param name="lines">Where the host's lines begin.</param>
     /// <param name="regions">The regions, in the order their code is written.</param>
     /// <param name="typescript">Whether the code is TypeScript, as the host's script is.</param>
-    public static FileExtract Script(string language, string path, CodeLineIndex lines, IReadOnlyList<CodeRegion> regions, bool typescript)
+    public static FileExtract Script(string language, string path, CodeText text, CodeLineIndex lines, IReadOnlyList<CodeRegion> regions, bool typescript)
     {
-        var written = new EmbeddedText(lines);
+        var written = new EmbeddedText(text, lines);
         var hosts = Framed(written, regions, name => ($"function {name}(", ") {", "}"));
 
-        return Folded(new JsReading(language, path, written.ToString(), typescript, markup: false, module: false).Read(), node => node.Parent is null && hosts.TryGetValue(node.Name, out var host) ? host : null);
+        return Folded(new JsReading(language, path, written.Text(), typescript, markup: false, module: false).Read(), node => node.Parent is null && hosts.TryGetValue(node.Name, out var host) ? host : null);
     }
 
     /// <summary>
@@ -220,7 +216,7 @@ internal static class EmbeddedCode
     /// What a name the regions' code reads or calls by itself - none of its own, no local's - is qualified by: the
     /// instance's, where the code is an instance's method; <see langword="null"/> to leave it as the reader says.
     /// </param>
-    public static FileExtract CSharp(string language, string path, CodeLineIndex lines, int lineCount, string head, IReadOnlyList<(int Offset, string Code)> members, IReadOnlyList<CodeRegion> regions, ExtractQualifier? alone)
+    public static FileExtract CSharp(string language, string path, CodeLineIndex lines, int lineCount, string head, IReadOnlyList<(long Offset, string Code)> members, IReadOnlyList<CodeRegion> regions, ExtractQualifier? alone)
     {
         var written = new StringBuilder(head);
         var host = new List<int> { 1 };
@@ -228,7 +224,7 @@ internal static class EmbeddedCode
         var called = new HashSet<string>(StringComparer.Ordinal);
 
         // Each piece on a line of its own, the host's line it begins on said, and each line it breaks the host's next.
-        void Write(int offset, string code)
+        void Write(long offset, string code)
         {
             var line = lines.LineAt(Math.Max(offset, 0));
 
@@ -320,7 +316,7 @@ internal static class EmbeddedCode
 /// <param name="Parameters">The parameters the function is given: the names the markup declares where the code stands that it names.</param>
 /// <param name="Offset">Where the code stands in the host.</param>
 /// <param name="Code">The code, its line breaks the host's own.</param>
-internal sealed record CodeRegion(string Node, string Parameters, int Offset, string Code)
+internal sealed record CodeRegion(string Node, string Parameters, long Offset, string Code)
 {
     /// <summary>
     /// Whether the code is the call of a handler a markup names, which its framework makes with whatever the event gives:
@@ -342,10 +338,10 @@ internal sealed class DeclaredNames
     private readonly Dictionary<string, List<string>> _held = new(StringComparer.Ordinal);
 
     /// <summary>The stretches open, the innermost last: where each ends, and the names it declares.</summary>
-    private readonly Stack<(int End, IReadOnlyList<(string Name, string Written)> Names)> _open = new();
+    private readonly Stack<(long End, IReadOnlyList<(string Name, string Written)> Names)> _open = new();
 
     /// <summary>Declares <paramref name="names"/> - each by its name and how a parameter of it is written - until <paramref name="end"/>.</summary>
-    public void Declare(IReadOnlyList<(string Name, string Written)> names, int end)
+    public void Declare(IReadOnlyList<(string Name, string Written)> names, long end)
     {
         if (names.Count == 0)
         {
@@ -366,10 +362,10 @@ internal sealed class DeclaredNames
     }
 
     /// <summary>Declares <paramref name="names"/> - each written as its name alone - until <paramref name="end"/>.</summary>
-    public void Declare(IEnumerable<string> names, int end) => Declare([.. names.Select(name => (name, name))], end);
+    public void Declare(IEnumerable<string> names, long end) => Declare([.. names.Select(name => (name, name))], end);
 
     /// <summary>Leaves every stretch that ends at or before <paramref name="offset"/>: what stands there is declared in none of them.</summary>
-    public void Leave(int offset)
+    public void Leave(long offset)
     {
         while (_open.Count > 0 && _open.Peek().End <= offset)
         {
@@ -435,13 +431,18 @@ internal sealed class DeclaredNames
 /// Code a reader of embedded code is given, written piece by piece on the host's lines: each piece on the line its
 /// offset stands on in the host - or after what is written already, where that ends on a later line - the line breaks
 /// between pieces kept and nothing else of the host, two pieces on one line apart by a space so no token of one runs into
-/// the next. A piece is the host's own code, or code that frames it - a function's head and its close - alike, so what
-/// the reader declares and references carries the host's lines.
+/// the next. A piece is a run of the host's own code, or code that frames it - a function's head and its close - alike, so
+/// what the reader declares and references carries the host's lines; what is written is a text made of the host's runs
+/// and the frames between them (<see cref="CodeText.Composed"/>), never a copy of the host.
 /// </summary>
+/// <param name="host">The host's text.</param>
 /// <param name="lines">Where the host's lines begin.</param>
-internal sealed class EmbeddedText(CodeLineIndex lines)
+internal sealed class EmbeddedText(CodeText host, CodeLineIndex lines)
 {
-    private readonly StringBuilder _built = new();
+    private readonly CodeTextPieces _pieces = new();
+
+    /// <summary>How many characters are written.</summary>
+    private long _written;
 
     /// <summary>The host's line what is written last ends on.</summary>
     private int _line = 1;
@@ -449,24 +450,47 @@ internal sealed class EmbeddedText(CodeLineIndex lines)
     /// <summary>Writes <paramref name="code"/> on the host's line <paramref name="offset"/> stands on, or after what is written already.</summary>
     /// <param name="offset">Where the code stands in the host.</param>
     /// <param name="code">The code, its line breaks the host's own.</param>
-    public void Write(int offset, string code)
+    public void Write(long offset, string code)
+    {
+        Place(offset);
+        _pieces.Write(code);
+        _written += code.Length;
+        _line += code.AsSpan().Count('\n');
+    }
+
+    /// <summary>Writes the host's code from <paramref name="start"/> to before <paramref name="end"/> on the line it stands on, or after what is written already.</summary>
+    /// <param name="start">Where the code begins in the host.</param>
+    /// <param name="end">Where it ends.</param>
+    public void Write(long start, long end)
+    {
+        Place(start);
+        _pieces.Run(start, end);
+        _written += end - start;
+
+        for (var at = start < end ? host.Find('\n', start, end) : -1; at >= 0; at = at + 1 < end ? host.Find('\n', at + 1, end) : -1)
+        {
+            _line++;
+        }
+    }
+
+    /// <summary>What is written.</summary>
+    public CodeText Text() => host.Composed(_pieces.Pieces);
+
+    /// <summary>Goes on to the host's line <paramref name="offset"/> stands on, or puts a space after what is written already on it.</summary>
+    private void Place(long offset)
     {
         var line = lines.LineAt(Math.Max(offset, 0));
 
         if (line > _line)
         {
-            _built.Append('\n', line - _line);
+            _pieces.Write('\n', line - _line);
+            _written += line - _line;
             _line = line;
         }
-        else if (_built.Length > 0)
+        else if (_written > 0)
         {
-            _built.Append(' ');
+            _pieces.Write(" ");
+            _written++;
         }
-
-        _built.Append(code);
-        _line += code.AsSpan().Count('\n');
     }
-
-    /// <summary>What is written.</summary>
-    public override string ToString() => _built.ToString();
 }

@@ -41,7 +41,12 @@ public static partial class HelpTopics
     /// <param name="extractors">The implementations this build holds.</param>
     private static void AppendLanguageReading(StringBuilder builder, CodeGraphExtractors extractors)
     {
-        builder.AppendLine("The implementations this build holds, each with what it reads and what it does not see:");
+        AppendWrapped(
+            builder,
+            "The implementations this build holds, each with what it reads and what it does not see. Each reads its file's "
+            + "text by position, a block at a time, never as one string of the whole file: a file of any size is read, and "
+            + "what reading it holds is what its reader keeps - its tokens, its nodes - and, where a library it reads through "
+            + "keeps more, what that library holds:");
         builder.AppendLine();
 
         foreach (var extractor in extractors.All)
@@ -52,6 +57,11 @@ public static partial class HelpTopics
 
             builder.AppendLine($"  {extractor.Language} (version {extractor.Version.ToString(CultureInfo.InvariantCulture)}; {claims})");
             AppendWrapped(builder, $"    reads {extractor.Help.Reads}.");
+
+            if (extractor.Help.Holds is { } holds)
+            {
+                AppendWrapped(builder, $"    holds {holds}.");
+            }
 
             foreach (var unseen in extractor.Help.DoesNotSee)
             {

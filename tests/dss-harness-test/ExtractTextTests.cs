@@ -42,7 +42,7 @@ public sealed class ExtractTextTests
         var extract = new JsonExtractor().Extract(new CodeFileInput("wide.json", text));
 
         Assert.Equal([name], extract.Nodes.Select(node => node.Signature));
-        Assert.Null(extract.WithDigests(CodeFileText.Lines(text)).Problem("json", 1));
+        Assert.Null(extract.WithDigests(text).Problem("json", 1));
     }
 
     /// <summary>
@@ -60,7 +60,7 @@ public sealed class ExtractTextTests
         Assert.True(sentence.Length > 1_000, $"the sentence is {sentence.Length} characters");
         Assert.Equal(sentence, ExtractText.Summary(sentence + " A second sentence."));
         Assert.Equal([sentence], extract.Nodes.Select(node => node.Summary));
-        Assert.Null(extract.WithDigests(CodeFileText.Lines(text)).Problem("c", CodeFileText.Lines(text).Count));
+        Assert.Null(extract.WithDigests(text).Problem("c", CodeFileText.Lines(text).Count));
     }
 
     /// <summary>A text cut inside a character is made whole: each surrogate apart from its pair the replacement character, a pair kept, a whole text the very one.</summary>

@@ -57,8 +57,8 @@ public sealed class YamlExtractor : ICodeGraphExtractor
     {
         ArgumentNullException.ThrowIfNull(input);
 
-        var lines = new Lines(CodeFileText.LineIndex(input.Text), input.Lines.Count, input.Text.Length);
-        var read = YamlReading.Written(input.Text);
+        var lines = new Lines(input.Text.LineIndex, input.Lines.Count, input.Text.Length);
+        var read = YamlReading.Written(input.Text.Reader());
         var nodes = new DataNodes(Language, input.Path, input.Lines.Count);
         var imports = new List<ExtractImport>();
         var last = LastLines(read.Documents, lines);
@@ -322,13 +322,13 @@ public sealed class YamlExtractor : ICodeGraphExtractor
     /// <param name="index">Where the file's lines begin.</param>
     /// <param name="count">How many lines the file has.</param>
     /// <param name="length">How long its text is.</param>
-    private sealed class Lines(CodeLineIndex index, int count, int length)
+    private sealed class Lines(CodeLineIndex index, int count, long length)
     {
         /// <summary>The line <paramref name="mark"/> begins on, within the file's.</summary>
-        public int Of(Mark mark) => FileExtract.LineWithin(index.LineAt((int)Math.Clamp(mark.Index, 0, length)), count);
+        public int Of(Mark mark) => FileExtract.LineWithin(index.LineAt(Math.Clamp(mark.Index, 0, length)), count);
 
         /// <summary>The line the character before <paramref name="mark"/> is on: where what ends there ends.</summary>
-        public int Before(Mark mark) => FileExtract.LineWithin(index.LineAt((int)Math.Clamp(mark.Index - 1, 0, length)), count);
+        public int Before(Mark mark) => FileExtract.LineWithin(index.LineAt(Math.Clamp(mark.Index - 1, 0, length)), count);
     }
 
     /// <summary>A file's documents, each by its place, as a walk of its keys reads them.</summary>

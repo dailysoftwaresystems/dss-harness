@@ -307,7 +307,7 @@ public sealed class XmlExtractorTests : CodeGraphExtractorContractTests<XmlExtra
 
         Assert.Equal($"root/{string.Join('/', Enumerable.Repeat(segment, 5))}/item/x", item.Qualified);
         Assert.Equal(item.Qualified, item.Signature);
-        Assert.Null(extract.WithDigests(CodeFileText.Lines(deep)).Problem("xml", 1));
+        Assert.Null(extract.WithDigests(deep).Problem("xml", 1));
 
         var many = $"<root>\n{string.Concat(Enumerable.Range(0, 12_000).Select(at => $"<item name=\"i{at}\" />\n"))}</root>\n";
         var counted = Read("many.xml", many);

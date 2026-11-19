@@ -192,10 +192,10 @@ internal sealed class CFamilyReading
     /// <param name="path">The file's path.</param>
     /// <param name="text">Its text.</param>
     /// <param name="cpp">Whether it is C++.</param>
-    public CFamilyReading(string language, string path, string text, bool cpp)
+    public CFamilyReading(string language, string path, CodeText text, bool cpp)
     {
         _scan = CFamilyLexer.Scan(text, cpp);
-        _lines = CodeFileText.LineIndex(text);
+        _lines = text.LineIndex;
         _prefix = $"{language}:";
         _path = path;
         _cpp = cpp;
@@ -214,7 +214,7 @@ internal sealed class CFamilyReading
     /// header with no extension (<c>&lt;vector&gt;</c>, <c>&lt;cstdio&gt;</c>) - an attribute's contents and what a
     /// conditional on <c>__cplusplus</c> holds, which a C header writes for C++'s includers, left out.
     /// </summary>
-    public static bool HasCppMark(string probe)
+    public static bool HasCppMark(CodeText probe)
     {
         var scan = CFamilyLexer.Scan(probe, cpp: true);
         var forCpp = new Stack<bool>();
@@ -224,12 +224,11 @@ internal sealed class CFamilyReading
             if (scan[at].Kind == ScanTokenKind.Directive)
             {
                 var (name, rest) = CFamilyLexer.DirectiveName(scan.Source, scan[at].Start, scan[at].End);
-                var tests = scan.Source.AsSpan(rest, scan[at].End - rest);
 
                 switch (scan[at].Branch)
                 {
                     case ScanBranch.Opens:
-                        forCpp.Push(tests.Contains("__cplusplus", StringComparison.Ordinal) || (forCpp.TryPeek(out var outer) && outer));
+                        forCpp.Push(scan.Source.Find("__cplusplus", rest, scan[at].End) >= 0 || (forCpp.TryPeek(out var outer) && outer));
                         break;
                     case ScanBranch.Closes:
                         forCpp.TryPop(out _);
@@ -315,7 +314,7 @@ internal sealed class CFamilyReading
         }
     }
 
-    private void Include(ScanToken token, int rest)
+    private void Include(ScanToken token, long rest)
     {
         if (Included(_scan.Source, rest, token.End) is not var (quoted, target))
         {
@@ -338,7 +337,7 @@ internal sealed class CFamilyReading
     /// names: in quotes or in angle brackets, its path with forward separators; <see langword="null"/> where it names
     /// neither, as one a macro names does not.
     /// </summary>
-    private static (bool Quoted, string Target)? Included(string text, int rest, int end)
+    private static (bool Quoted, string Target)? Included(CodeText text, long rest, long end)
     {
         var at = rest;
 
@@ -353,14 +352,14 @@ internal sealed class CFamilyReading
         }
 
         var quoted = text[at] == '"';
-        var close = text.IndexOf(quoted ? '"' : '>', at + 1, end - at - 1);
+        var close = text.Find(quoted ? '"' : '>', at + 1, end);
 
-        if (close < 0 || text.AsSpan(at + 1, close - at - 1).IndexOfAny('\r', '\n') >= 0)
+        if (close < 0 || text.FindAny("\r\n", at + 1, close) >= 0)
         {
             return null;
         }
 
-        var target = ExtractText.Whole(text[(at + 1)..close].Trim().Replace('\\', '/'));
+        var target = ExtractText.Whole(text.Slice(at + 1, close).Trim().Replace('\\', '/'));
         return target.Length > 0 ? (quoted, target) : null;
     }
 
@@ -368,7 +367,7 @@ internal sealed class CFamilyReading
     /// A <c>#define</c>: a macro, function-like where a parenthesis follows its name at once, each call its text makes a
     /// reference of it. A macro of a file that is no header is that file's alone, as what it declares <c>static</c> is.
     /// </summary>
-    private void Define(int at, int rest)
+    private void Define(int at, long rest)
     {
         var token = _scan[at];
         var body = CFamilyLexer.ScanDirective(_scan.Source, _lines, rest, token.End, _cpp);

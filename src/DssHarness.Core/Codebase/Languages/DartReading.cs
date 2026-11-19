@@ -166,7 +166,7 @@ internal sealed class DartReading
     /// <param name="language">The implementation's name, which prefixes every id.</param>
     /// <param name="path">The file's path.</param>
     /// <param name="text">Its text.</param>
-    public DartReading(string language, string path, string text)
+    public DartReading(string language, string path, CodeText text)
     {
         _text = DartLexer.Scan(text);
         _scan = _text.Scan;

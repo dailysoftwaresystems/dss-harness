@@ -137,7 +137,7 @@ internal sealed class PhpReading
     /// <param name="language">The implementation's name, which prefixes every id.</param>
     /// <param name="path">The file's path.</param>
     /// <param name="text">Its text.</param>
-    public PhpReading(string language, string path, string text)
+    public PhpReading(string language, string path, CodeText text)
     {
         _text = PhpLexer.Scan(text);
         _scan = _text.Scan;
@@ -1196,12 +1196,12 @@ internal sealed class PhpReading
     {
         foreach (var comment in _scan.CommentsAbove(at))
         {
-            var text = _scan.Source.AsSpan(comment.Start, comment.Length);
+            var (start, end) = (comment.Start, comment.Start + comment.Length);
 
             // @test alone, past any @testdox or @testWith before it.
-            for (var mark = text.IndexOf("@test", StringComparison.Ordinal); mark >= 0; mark = text[(mark + 5)..].IndexOf("@test", StringComparison.Ordinal) is var next and >= 0 ? mark + 5 + next : -1)
+            for (var mark = _scan.Source.Find("@test", start, end); mark >= 0; mark = mark + 5 < end ? _scan.Source.Find("@test", mark + 5, end) : -1)
             {
-                if (mark + 5 == text.Length || !char.IsLetterOrDigit(text[mark + 5]))
+                if (mark + 5 == end || !char.IsLetterOrDigit(_scan.Source[mark + 5]))
                 {
                     return true;
                 }
@@ -2159,7 +2159,7 @@ internal sealed class PhpReading
 
     /// <summary>Whether the token at <paramref name="at"/> is the word <paramref name="word"/>, whatever its case, as PHP's keywords are.</summary>
     private static bool IsWord(ScannedText scan, int at, string word)
-        => scan.IsName(at) && scan[at].Length == word.Length && string.Compare(scan.Source, scan[at].Start, word, 0, word.Length, StringComparison.OrdinalIgnoreCase) == 0;
+        => scan.IsName(at) && scan[at].Length == word.Length && scan.Source.At(scan[at].Start, word, StringComparison.OrdinalIgnoreCase);
 
     /// <summary>The index of the <c>;</c> or <c>?&gt;</c> a statement ending before <paramref name="stop"/> ends with, or <paramref name="stop"/> where it ends with neither.</summary>
     private int Ending(int stop) => _scan.EndsStatement(_scan.LastOf(stop)) ? _scan.LastOf(stop) : stop;

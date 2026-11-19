@@ -53,14 +53,25 @@ public sealed class HtmlExtractor : ICodeGraphExtractor
             "a style element of another syntax (lang=\"stylus\", a template's type): its text read as no style sheet",
             "an element with no id and no landmark tag: no node of its own, its lines its enclosing section's",
             "an href or src that names no file of the tree - another site's, a rooted path, an anchor, data: - no import of it",
-        ]);
+            "a file of more than 2,147,483,647 characters, past the Int32 the HTML tokenizer (AngleSharp) counts a position in: nothing in it read, the line its count ends on marked dynamic, with why",
+        ])
+    {
+        Holds = "AngleSharp's text source, which keeps every character the tokenizer decodes - its HTML tokenizer reads a source of its buffered kind alone (a TextSource over a stream), and the source that lets go of what it read is offered to its parser alone, which builds a document rather than the tokens this reader matches - so reading a file holds its markup's text once, in pieces, never as one string",
+    };
 
     /// <inheritdoc/>
     public FileExtract Extract(CodeFileInput input)
     {
         ArgumentNullException.ThrowIfNull(input);
 
-        var markup = MarkupText.Read(EmbeddedCode.LineFeeds(input.Text), MarkupDialect.Html.ClosesAsHtml);
+        var text = input.Text.LineFed();
+
+        if (MarkupText.Unread(text) is { } unread)
+        {
+            return unread;
+        }
+
+        var markup = MarkupText.Read(text, MarkupDialect.Html.ClosesAsHtml);
         var elements = markup.Elements;
         var lineCount = input.Lines.Count;
         var ids = new ExtractIds();
@@ -151,7 +162,7 @@ public sealed class HtmlExtractor : ICodeGraphExtractor
 
         if (handlers.Count > 0)
         {
-            embedded.Add(EmbeddedCode.Script(Language, input.Path, markup.Lines, handlers, typescript: false));
+            embedded.Add(EmbeddedCode.Script(Language, input.Path, markup.Text, markup.Lines, handlers, typescript: false));
         }
 
         return EmbeddedCode.Merged(new FileExtract([.. nodes]) { References = references, Imports = imports }, embedded);
@@ -168,7 +179,7 @@ public sealed class HtmlExtractor : ICodeGraphExtractor
     /// </summary>
     private FileExtract? Embedded(MarkupText markup, MarkupElement element, string path)
     {
-        if (element.Close <= element.OpenEnd || markup.Text.AsSpan(element.OpenEnd, element.Close - element.OpenEnd).IsWhiteSpace())
+        if (element.Close <= element.OpenEnd || markup.Text.IsWhiteSpace(element.OpenEnd, element.Close))
         {
             return null;
         }

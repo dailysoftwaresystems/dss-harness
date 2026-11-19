@@ -98,6 +98,21 @@ public static class YamlReading
     {
         ArgumentNullException.ThrowIfNull(text);
 
+        return Load(new StringReader(text), oneDocument, rules, out stop);
+    }
+
+    /// <summary>
+    /// Loads the text <paramref name="text"/> reads as <see cref="Load(string, string, YamlRules?, out YamlStop?)"/> does:
+    /// read once, as the parser asks for it, so a file is never held as one string to be read.
+    /// </summary>
+    /// <param name="text">A reader of the file's contents.</param>
+    /// <param name="oneDocument">How a refusal says the file holds one document (<see cref="Root"/>).</param>
+    /// <param name="rules">What the text is held to before it is read into nodes, or <see langword="null"/>.</param>
+    /// <param name="stop">Where and why it is no such document; <see langword="null"/> where it is one.</param>
+    public static YamlMappingNode? Load(TextReader text, string oneDocument, YamlRules? rules, out YamlStop? stop)
+    {
+        ArgumentNullException.ThrowIfNull(text);
+
         var measured = Measured(text, rules);
 
         if (measured.Refusal is not null)
@@ -173,8 +188,8 @@ public static class YamlReading
     /// or of a key written twice, as none. The events are read on a stack of the reader's own, so no nesting of the text
     /// is recursed through.
     /// </remarks>
-    /// <param name="text">The file's contents.</param>
-    internal static YamlWrittenText Written(string text)
+    /// <param name="text">A reader of the file's contents, read once as the parser asks for it.</param>
+    internal static YamlWrittenText Written(TextReader text)
     {
         ArgumentNullException.ThrowIfNull(text);
 
@@ -199,7 +214,7 @@ public static class YamlReading
 
         try
         {
-            var parser = new Parser(new StringReader(text));
+            var parser = new Parser(text);
 
             while (parser.MoveNext())
             {
@@ -394,7 +409,7 @@ public static class YamlReading
     /// read, as any scalar is.
     /// </para>
     /// </remarks>
-    private static YamlMeasured Measured(string text, YamlRules? rules)
+    private static YamlMeasured Measured(TextReader text, YamlRules? rules)
     {
         var events = new List<ParsingEvent>();
         var deepest = 0;
@@ -409,7 +424,7 @@ public static class YamlReading
 
         try
         {
-            foreach (var (current, depth, inKey) in Nested(new Parser(new StringReader(text))))
+            foreach (var (current, depth, inKey) in Nested(new Parser(text)))
             {
                 events.Add(current);
 
@@ -522,7 +537,7 @@ internal sealed class YamlOpen(bool mapping, bool inKey)
     public bool KeyNext { get; set; } = true;
 }
 
-/// <summary>A text as its events measure it (<see cref="YamlReading.Load"/>), before it is read into nodes.</summary>
+/// <summary>A text as its events measure it (<see cref="YamlReading.Load(TextReader, string, YamlRules?, out YamlStop?)"/>), before it is read into nodes.</summary>
 /// <param name="Events">Its events, in order, as far as the text reads as YAML.</param>
 /// <param name="Fault">What the parser threw where the text stopped reading as YAML; <see langword="null"/> where it read to its end.</param>
 /// <param name="Depth">How deep it nests: its deepest container's depth, 1 for one at the top, 0 for a text of scalars.</param>
@@ -618,7 +633,7 @@ internal sealed record YamlWrittenText(IReadOnlyList<YamlWritten> Documents, IRe
 /// <param name="Why">Why, as a clause.</param>
 internal sealed record YamlWrittenStop(Mark At, string Why);
 
-/// <summary>Where and why a text is no document of one mapping (<see cref="YamlReading.Load"/>).</summary>
+/// <summary>Where and why a text is no document of one mapping (<see cref="YamlReading.Load(TextReader, string, YamlRules?, out YamlStop?)"/>).</summary>
 /// <param name="Line">The line it is found at, from 1; 0 where it is the whole file's.</param>
 /// <param name="Column">The column, from 1; 0 where it is the whole file's.</param>
 /// <param name="Why">Why, as a sentence.</param>

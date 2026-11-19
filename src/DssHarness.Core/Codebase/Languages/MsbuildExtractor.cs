@@ -57,7 +57,7 @@ public sealed class MsbuildExtractor : ICodeGraphExtractor
 
         var lines = input.Lines;
         var text = input.Text;
-        var index = CodeFileText.LineIndex(text);
+        var index = text.LineIndex;
         var name = CodeGraphIds.FileName(input.Path);
         var solution = name.EndsWith(".slnx", StringComparison.OrdinalIgnoreCase);
         var id = $"{Language}:{input.Path}";
@@ -82,14 +82,15 @@ public sealed class MsbuildExtractor : ICodeGraphExtractor
         // Each $(Name) of the text between start and end as the file writes it - an entity left as written, so a match is
         // told by the line it stands on - a use of the property of that name it reads: in a PropertyGroup or an Import,
         // read as properties are, of those declared before it; anywhere else, read once every property is, of any.
-        void Uses(int start, int end, IReadOnlyList<string> elements)
+        void Uses(long start, long end, IReadOnlyList<string> elements)
         {
             var inOrder = elements.Count > 1 && elements[1] is "PropertyGroup" or "Import" or "ImportGroup";
+            var between = text.Slice(start, end);
 
-            foreach (var match in Used.EnumerateMatches(text.AsSpan(start, end - start)))
+            foreach (var match in Used.EnumerateMatches(between))
             {
                 // The match is $( the name ), its name what its brackets hold.
-                var name = text.Substring(start + match.Index + 2, match.Length - 3);
+                var name = between.Substring(match.Index + 2, match.Length - 3);
                 written.Add((new ExtractReference(id, CodeEdgeKinds.Uses, name, index.LineAt(start + match.Index)), inOrder ? [.. declared.GetValueOrDefault(name) ?? []] : null));
             }
         }
@@ -106,7 +107,7 @@ public sealed class MsbuildExtractor : ICodeGraphExtractor
 
         try
         {
-            using var reader = XmlReader.Create(new StringReader(text), settings);
+            using var reader = XmlReader.Create(text.Reader(), settings);
             var at = (IXmlLineInfo)reader;
             var describing = false;
 
@@ -255,26 +256,26 @@ public sealed class MsbuildExtractor : ICodeGraphExtractor
     /// character, a CDATA section's first after its opening - from the line and column the reader says, which count lines
     /// as the core does (<see cref="CodeFileText.Lines"/>); <see langword="null"/> where the reader says none.
     /// </summary>
-    private static int? Offset(CodeLineIndex index, string text, IXmlLineInfo at)
+    private static long? Offset(CodeLineIndex index, CodeText text, IXmlLineInfo at)
     {
-        if (!at.HasLineInfo() || at.LineNumber < 1 || at.LineNumber > index.Starts.Count || at.LinePosition < 1)
+        if (!at.HasLineInfo() || at.LineNumber < 1 || at.LineNumber > index.Count || at.LinePosition < 1)
         {
             return null;
         }
 
-        var offset = index.Starts[at.LineNumber - 1] + at.LinePosition - 1;
+        var offset = index.StartOf(at.LineNumber) + at.LinePosition - 1;
         return offset <= text.Length ? offset : null;
     }
 
     /// <summary>Where <paramref name="ending"/> first stands in <paramref name="text"/> from <paramref name="start"/> on, or the text's end.</summary>
-    private static int Until(string text, int start, string ending)
-        => text.IndexOf(ending, start, StringComparison.Ordinal) is var end and >= 0 ? end : text.Length;
+    private static long Until(CodeText text, long start, string ending)
+        => text.IndexOf(ending, start) is var end and >= 0 ? end : text.Length;
 
     /// <summary>
     /// The written value of the attribute whose name begins at <paramref name="name"/>: what its quotes hold, past its
     /// <c>=</c>; <see langword="null"/> where the text there is no attribute so written.
     /// </summary>
-    private static (int Start, int End)? Value(string text, int name)
+    private static (long Start, long End)? Value(CodeText text, long name)
     {
         var equals = text.IndexOf('=', name);
 

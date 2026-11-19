@@ -197,14 +197,14 @@ public sealed class CodeGraphExtractors
     }
 
     /// <summary>
-    /// Which implementation reads <paramref name="path"/>, whose text begins with <paramref name="probe"/>: the one
+    /// Which implementation reads <paramref name="path"/>, whose text is <paramref name="probe"/>: the one
     /// claimant whose content test says yes - a claim with none says yes - or the fallback where none claims it. Where
     /// none or several of its claimants say yes, no implementation reads it, and it is listed <c>ambiguous</c>.
     /// </summary>
     /// <param name="path">The file's path, relative to the tree's root with forward separators.</param>
-    /// <param name="probe">Its decoded text, whole (<see cref="CodeFileText.Probe"/>): each test reads of it as far as it needs.</param>
+    /// <param name="probe">Its decoded text, whole (<see cref="CodeText"/>): each test reads of it as far as it needs.</param>
     /// <param name="endingClaims">The endings a repository maps to implementations, by name, or null where it maps none.</param>
-    public CodeGraphRoute Route(string path, string probe, IReadOnlyDictionary<string, IReadOnlyList<string>>? endingClaims = null)
+    public CodeGraphRoute Route(string path, CodeText probe, IReadOnlyDictionary<string, IReadOnlyList<string>>? endingClaims = null)
     {
         ArgumentNullException.ThrowIfNull(probe);
 

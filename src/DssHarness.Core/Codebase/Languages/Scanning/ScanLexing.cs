@@ -23,14 +23,14 @@ internal abstract class ScanLexing(CodeLineIndex lines, ScanCloses? closes = nul
     public List<ScanComment> Comments { get; } = [];
 
     /// <summary>For each literal that holds code, by where it begins: where each run of code it holds directly begins and ends.</summary>
-    public Dictionary<int, List<(int Start, int End)>> Interpolations { get; } = [];
+    public Dictionary<long, List<(long Start, long End)>> Interpolations { get; } = [];
 
     /// <summary>
     /// For each string literal, by where its token begins: where each constant part of its value is written and how it is
     /// decoded (<see cref="ScanLiteral"/>). A token the lexer keeps whole that is no string - a character literal, a
     /// regular expression - has none.
     /// </summary>
-    public Dictionary<int, ScanLiteral> Literals { get; } = [];
+    public Dictionary<long, ScanLiteral> Literals { get; } = [];
 
     /// <summary>Whether <paramref name="character"/> may begin a name: a letter - one past ASCII among them - <c>_</c> or <c>$</c>.</summary>
     public static bool IsNameStart(char character) => char.IsLetter(character) || character is '_' or '$';
@@ -39,7 +39,7 @@ internal abstract class ScanLexing(CodeLineIndex lines, ScanCloses? closes = nul
     public static bool IsNamePart(char character) => char.IsLetterOrDigit(character) || character is '_' or '$';
 
     /// <summary>How wide the line break at <paramref name="at"/> is: 2 for CR LF, 1 for CR or LF, 0 where none is.</summary>
-    public static int LineBreakAt(string text, int at, int end)
+    public static int LineBreakAt(CodeText text, long at, long end)
         => at >= end ? 0
             : text[at] == '\r' ? (at + 1 < end && text[at + 1] == '\n' ? 2 : 1)
             : text[at] == '\n' ? 1
@@ -53,7 +53,7 @@ internal abstract class ScanLexing(CodeLineIndex lines, ScanCloses? closes = nul
     protected static int Alone(char character) => character is > ' ' and < '\u007f' && !IsNamePart(character) ? 1 : 0;
 
     /// <summary>A token of <paramref name="kind"/> from <paramref name="start"/> to <paramref name="end"/>.</summary>
-    protected void Add(ScanTokenKind kind, int start, int end, ScanBranch branch = ScanBranch.None)
+    protected void Add(ScanTokenKind kind, long start, long end, ScanBranch branch = ScanBranch.None)
         => Tokens.Add(new ScanToken(kind, start, end - start, Lines.LineAt(start), Lines.LineAt(Math.Max(start, end - 1)), branch));
 
     /// <summary>
@@ -63,10 +63,10 @@ internal abstract class ScanLexing(CodeLineIndex lines, ScanCloses? closes = nul
     /// (<see cref="LiteralStack{TMark}"/>) are both read: a quote in a comment there - <c>// don't</c> - opens no string,
     /// and a brace in one closes nothing.
     /// </summary>
-    protected abstract int CommentEnd(int at, int end);
+    protected abstract long CommentEnd(long at, long end);
 
     /// <summary>A comment from <paramref name="start"/> to <paramref name="end"/>, kept apart; answers where the text goes on.</summary>
-    protected int Comment(int start, int end)
+    protected long Comment(long start, long end)
     {
         Comments.Add(new ScanComment(start, end - start, Lines.LineAt(start), Lines.LineAt(Math.Max(start, end - 1))));
         return end;
@@ -77,11 +77,11 @@ internal abstract class ScanLexing(CodeLineIndex lines, ScanCloses? closes = nul
     /// script's interpreter reads and the lexer keeps as a comment - JavaScript's and Dart's; <paramref name="start"/>
     /// where it begins none, or the run is not the text's own from its start.
     /// </summary>
-    protected int Shebang(string text, int start, int end)
-        => start == 0 && text.StartsWith("#!", StringComparison.Ordinal) ? Comment(0, LineEnd(text, 0, end)) : start;
+    protected long Shebang(CodeText text, long start, long end)
+        => start == 0 && text.StartsWith("#!") ? Comment(0, LineEnd(text, 0, end)) : start;
 
     /// <summary>Where the line <paramref name="at"/> is on ends, within <paramref name="end"/>: at its line break, which a comment that runs to it does not hold.</summary>
-    protected static int LineEnd(string text, int at, int end)
+    protected static long LineEnd(CodeText text, long at, long end)
     {
         while (at < end && LineBreakAt(text, at, end) == 0)
         {
@@ -92,7 +92,7 @@ internal abstract class ScanLexing(CodeLineIndex lines, ScanCloses? closes = nul
     }
 
     /// <summary>Records that the literal beginning at <paramref name="literal"/> holds code from <paramref name="start"/> to <paramref name="end"/>.</summary>
-    protected void Interpolated(int literal, int start, int end)
+    protected void Interpolated(long literal, long start, long end)
     {
         if (end > start)
         {
@@ -101,10 +101,10 @@ internal abstract class ScanLexing(CodeLineIndex lines, ScanCloses? closes = nul
     }
 
     /// <summary>Records the string literal whose token begins at <paramref name="token"/>: where its value is written, and how it is decoded.</summary>
-    protected void KeepLiteral(int token, ScanLiteral literal) => Literals[token] = literal;
+    protected void KeepLiteral(long token, ScanLiteral literal) => Literals[token] = literal;
 
     /// <summary>A constant part of a literal's value from <paramref name="start"/> to <paramref name="end"/>, placed on its line.</summary>
-    protected ScanLiteralPart Part(int start, int end) => new(start, Math.Max(start, end), Lines.LineAt(start));
+    protected ScanLiteralPart Part(long start, long end) => new(start, Math.Max(start, end), Lines.LineAt(start));
 
     /// <summary>
     /// The hole a bare <c>$name</c> whose <c>$</c> is at <paramref name="sigil"/> opens in a string, within
@@ -115,12 +115,12 @@ internal abstract class ScanLexing(CodeLineIndex lines, ScanCloses? closes = nul
     /// <c>[...]</c> of a number or a variable; a bare word in the brackets - <c>"$row[key]"</c> - is a key the string
     /// names, the hole's and no code's.
     /// </summary>
-    protected static (int Start, int End, int Past)? BareHole(string text, int sigil, int stop, bool variable)
+    protected static (long Start, long End, long Past)? BareHole(CodeText text, long sigil, long stop, bool variable)
     {
         bool Starts(char character) => char.IsLetter(character) || character == '_' || (variable && character > '\u007f');
         bool Continues(char character) => char.IsLetterOrDigit(character) || character == '_' || (variable && character > '\u007f');
 
-        int NameEnd(int at)
+        long NameEnd(long at)
         {
             while (at < stop && Continues(text[at]))
             {
@@ -147,7 +147,7 @@ internal abstract class ScanLexing(CodeLineIndex lines, ScanCloses? closes = nul
         {
             var member = name + arrow.Length;
 
-            if (string.CompareOrdinal(text, name, arrow, 0, arrow.Length) == 0 && member < stop && Starts(text[member]))
+            if (text.At(name, arrow) && member < stop && Starts(text[member]))
             {
                 var past = NameEnd(member + 1);
                 return (sigil, past, past);
@@ -196,7 +196,7 @@ internal abstract class ScanLexing(CodeLineIndex lines, ScanCloses? closes = nul
     /// <typeparam name="TMark">What the lexer keeps of each literal it opens: its quote, whether it is raw, whether it is triple.</typeparam>
     /// <param name="lexing">The run the literal is read in.</param>
     /// <param name="literal">Where the literal begins.</param>
-    protected sealed class LiteralStack<TMark>(ScanLexing lexing, int literal)
+    protected sealed class LiteralStack<TMark>(ScanLexing lexing, long literal)
     {
         private readonly List<LiteralFrame> _frames = [];
 
@@ -219,13 +219,13 @@ internal abstract class ScanLexing(CodeLineIndex lines, ScanCloses? closes = nul
         public bool Holes => _outermost?.Holes ?? false;
 
         /// <summary>Where each run of code the literal holds directly begins and ends, as recorded so far: none empty.</summary>
-        public IReadOnlyList<(int Start, int End)> Spans => _outermost?.Spans ?? [];
+        public IReadOnlyList<(long Start, long End)> Spans => _outermost?.Spans ?? [];
 
         /// <summary>
         /// Opens a literal whose token begins at <paramref name="start"/>: the one read, its value's text beginning at
         /// <paramref name="content"/> - past its opener - or one an interpolation's code holds.
         /// </summary>
-        public void OpenLiteral(TMark mark, int start, int content)
+        public void OpenLiteral(TMark mark, long start, long content)
         {
             var frame = new LiteralFrame(mark, code: false, start, content);
 
@@ -238,10 +238,10 @@ internal abstract class ScanLexing(CodeLineIndex lines, ScanCloses? closes = nul
         /// what its literals' code holds - a style sheet's, which keeps its own: the one read begins where the stack was made
         /// for, and nothing is kept of one its code holds.
         /// </summary>
-        public void OpenLiteral(TMark mark, int content) => OpenLiteral(mark, _outermost is null ? literal : -1, content);
+        public void OpenLiteral(TMark mark, long content) => OpenLiteral(mark, _outermost is null ? literal : -1, content);
 
         /// <summary>Closes the literal the reading is in, whose closer stands at <paramref name="at"/> and ends before <paramref name="past"/>.</summary>
-        public void CloseLiteral(int at, int past)
+        public void CloseLiteral(long at, long past)
         {
             var frame = _frames[^1];
 
@@ -250,11 +250,11 @@ internal abstract class ScanLexing(CodeLineIndex lines, ScanCloses? closes = nul
             Kept(frame, past, leftOpen: false);
         }
 
-        /// <summary>Closes the literal the reading is in, whose closer stands at <paramref name="at"/>, keeping nothing of it (<see cref="OpenLiteral(TMark, int)"/>).</summary>
-        public void CloseLiteral(int at) => CloseLiteral(at, past: -1);
+        /// <summary>Closes the literal the reading is in, whose closer stands at <paramref name="at"/>, keeping nothing of it (<see cref="OpenLiteral(TMark, long)"/>).</summary>
+        public void CloseLiteral(long at) => CloseLiteral(at, past: -1);
 
         /// <summary>Opens an interpolation's code, which begins at <paramref name="at"/>, its sigil at <paramref name="sigil"/>.</summary>
-        public void OpenCode(int sigil, int at)
+        public void OpenCode(long sigil, long at)
         {
             var holder = _frames[^1];
 
@@ -268,7 +268,7 @@ internal abstract class ScanLexing(CodeLineIndex lines, ScanCloses? closes = nul
         /// at <paramref name="sigil"/>, its code from <paramref name="start"/> to <paramref name="end"/>, the literal going on
         /// at <paramref name="past"/>: recorded as its own, its code read in its turn.
         /// </summary>
-        public void Hole(int sigil, int start, int end, int past)
+        public void Hole(long sigil, long start, long end, long past)
         {
             var holder = _frames[^1];
 
@@ -282,7 +282,7 @@ internal abstract class ScanLexing(CodeLineIndex lines, ScanCloses? closes = nul
         /// A hole of the literal the reading is in that holds no code the graph reads - PHP's <c>${name}</c>, a variable
         /// read by its name - from its sigil at <paramref name="sigil"/>, the literal going on at <paramref name="past"/>.
         /// </summary>
-        public void Hole(int sigil, int past)
+        public void Hole(long sigil, long past)
         {
             var holder = _frames[^1];
 
@@ -292,7 +292,7 @@ internal abstract class ScanLexing(CodeLineIndex lines, ScanCloses? closes = nul
         }
 
         /// <summary>Ends the constant part of <paramref name="holder"/>'s value being read at <paramref name="at"/>.</summary>
-        private void EndPart(LiteralFrame holder, int at)
+        private void EndPart(LiteralFrame holder, long at)
         {
             if (holder.Part >= 0)
             {
@@ -305,7 +305,7 @@ internal abstract class ScanLexing(CodeLineIndex lines, ScanCloses? closes = nul
         /// Records that <paramref name="holder"/> holds code from <paramref name="start"/> to <paramref name="end"/> directly
         /// - none where it is empty - as the lexing's own where it is the literal read.
         /// </summary>
-        private void Span(LiteralFrame holder, int start, int end)
+        private void Span(LiteralFrame holder, long start, long end)
         {
             if (end > start)
             {
@@ -322,7 +322,7 @@ internal abstract class ScanLexing(CodeLineIndex lines, ScanCloses? closes = nul
         /// Keeps what was read of <paramref name="frame"/>, a literal the code of the one read holds, in the text's
         /// close-index: the literal read is its lexer's to keep, which knows its form whole.
         /// </summary>
-        private void Kept(LiteralFrame frame, int end, bool leftOpen)
+        private void Kept(LiteralFrame frame, long end, bool leftOpen)
         {
             if (!ReferenceEquals(frame, _outermost) && frame.Start >= 0 && end >= 0)
             {
@@ -337,7 +337,7 @@ internal abstract class ScanLexing(CodeLineIndex lines, ScanCloses? closes = nul
         /// or closing (<see cref="Brace"/>). Answers where the reading goes on; <paramref name="at"/> where neither stands
         /// there, and the lexer reads what does by its language's rules - a string, a template, a regular expression.
         /// </summary>
-        public int Past(char character, int at, int end)
+        public long Past(char character, long at, long end)
         {
             if (lexing.CommentEnd(at, end) is var comment && comment > at)
             {
@@ -357,7 +357,7 @@ internal abstract class ScanLexing(CodeLineIndex lines, ScanCloses? closes = nul
         /// A brace in an interpolation's code at <paramref name="at"/>: an opening one held open; a closing one closing the
         /// last held open, else the code itself - recorded as the code of the literal that holds it.
         /// </summary>
-        private void Brace(bool opens, int at)
+        private void Brace(bool opens, long at)
         {
             var top = _frames[^1];
 
@@ -379,7 +379,7 @@ internal abstract class ScanLexing(CodeLineIndex lines, ScanCloses? closes = nul
         /// literal's own value left open ends there, and each literal left open ends there, open - the literal read still
         /// open, as <see cref="Open"/> says.
         /// </summary>
-        public void End(int at)
+        public void End(long at)
         {
             for (var index = _frames.Count - 1; index >= 0; index--)
             {
@@ -405,27 +405,27 @@ internal abstract class ScanLexing(CodeLineIndex lines, ScanCloses? closes = nul
         /// <param name="code">Whether it is an interpolation's code.</param>
         /// <param name="start">Where a literal's token begins; where code begins.</param>
         /// <param name="content">Where a literal's value's text begins.</param>
-        private sealed class LiteralFrame(TMark mark, bool code, int start, int content)
+        private sealed class LiteralFrame(TMark mark, bool code, long start, long content)
         {
             public TMark Mark { get; } = mark;
 
             public bool Code { get; } = code;
 
-            public int Start { get; } = start;
+            public long Start { get; } = start;
 
-            public int Content { get; } = content;
+            public long Content { get; } = content;
 
             /// <summary>How many braces code holds open.</summary>
             public int Depth { get; set; }
 
             /// <summary>Where the constant part of a literal's value being read began; -1 outside one.</summary>
-            public int Part { get; set; } = code ? -1 : content;
+            public long Part { get; set; } = code ? -1 : content;
 
             /// <summary>A literal's constant parts read so far.</summary>
             public List<ScanLiteralPart> Parts { get; } = [];
 
             /// <summary>Where each run of code a literal holds directly begins and ends.</summary>
-            public List<(int Start, int End)> Spans { get; } = [];
+            public List<(long Start, long End)> Spans { get; } = [];
 
             /// <summary>Whether a literal holds holes of its own.</summary>
             public bool Holes { get; set; }
@@ -437,7 +437,7 @@ internal abstract class ScanLexing(CodeLineIndex lines, ScanCloses? closes = nul
     /// binary or an octal one and of a suffix, separators, a fraction's point before a digit, and an exponent's sign but in
     /// a hexadecimal one. Answers where the text goes on.
     /// </summary>
-    protected int Number(string text, int start, int end)
+    protected long Number(CodeText text, long start, long end)
     {
         var at = start;
         var hexadecimal = start + 1 < end && text[start] == '0' && text[start + 1] is 'x' or 'X';
@@ -477,9 +477,9 @@ internal abstract class ScanLexing(CodeLineIndex lines, ScanCloses? closes = nul
 /// <param name="Elements">For each JSX element, by where it begins: where the name of each tag it opens stands; none where the text holds no markup.</param>
 internal sealed record InterpolatedText(
     ScannedText Scan,
-    IReadOnlyDictionary<int, List<(int Start, int End)>> Interpolations,
+    IReadOnlyDictionary<long, List<(long Start, long End)>> Interpolations,
     CodeLineIndex Lines,
-    IReadOnlyDictionary<int, List<(int Start, int End)>>? Elements = null)
+    IReadOnlyDictionary<long, List<(long Start, long End)>>? Elements = null)
 {
     /// <summary>
     /// What the scans of the text read of its literals (<see cref="ScanCloses"/>): what the scan of a literal's code is
@@ -499,7 +499,7 @@ internal sealed record InterpolatedText(
 /// </summary>
 internal sealed class ScanCloses
 {
-    private readonly Dictionary<int, ScanLiteralRead> _read = [];
+    private readonly Dictionary<long, ScanLiteralRead> _read = [];
 
     /// <summary>
     /// How many characters the scans of the text read: each scan's own, less those of each literal it passed over at once
@@ -508,17 +508,17 @@ internal sealed class ScanCloses
     public long Read { get; private set; }
 
     /// <summary>Counts a scan of the text from <paramref name="start"/> to <paramref name="end"/>.</summary>
-    internal void Scanned(int start, int end) => Read += Math.Max(end - start, 0);
+    internal void Scanned(long start, long end) => Read += Math.Max(end - start, 0);
 
     /// <summary>Keeps what the literal whose token begins at <paramref name="start"/> was read to be, where nothing is kept of it yet.</summary>
-    internal void Keep(int start, ScanLiteralRead read) => _read.TryAdd(start, read);
+    internal void Keep(long start, ScanLiteralRead read) => _read.TryAdd(start, read);
 
     /// <summary>
     /// What the literal whose token begins at <paramref name="start"/> was read to be, for a scan that reads to
     /// <paramref name="end"/>: one that closed before that end, or was left open at it - the scan's own reading of it,
     /// which would end at the same place; <see langword="null"/> where none was kept, and the scan reads it.
     /// </summary>
-    internal ScanLiteralRead? Of(int start, int end)
+    internal ScanLiteralRead? Of(long start, long end)
     {
         if (!_read.TryGetValue(start, out var read) || (read.LeftOpen ? read.End != end : read.End > end))
         {
@@ -538,7 +538,7 @@ internal sealed class ScanCloses
 /// <param name="End">Where its token ends.</param>
 /// <param name="Parts">Its value's constant parts; a JSX element's, the strings its attributes hold.</param>
 /// <param name="Spans">Where each run of code it holds directly begins and ends, none empty, in order.</param>
-internal sealed record ScanLiteralRead(int End, IReadOnlyList<ScanLiteralPart> Parts, IReadOnlyList<(int Start, int End)> Spans)
+internal sealed record ScanLiteralRead(long End, IReadOnlyList<ScanLiteralPart> Parts, IReadOnlyList<(long Start, long End)> Spans)
 {
     /// <summary>Whether it holds holes of its own.</summary>
     public bool Holes { get; init; }
@@ -547,11 +547,11 @@ internal sealed record ScanLiteralRead(int End, IReadOnlyList<ScanLiteralPart> P
     public bool LeftOpen { get; init; }
 
     /// <summary>Where its value's text begins.</summary>
-    public int Content { get; init; }
+    public long Content { get; init; }
 
     /// <summary>How many characters of white space each of its lines begins with that are no part of its value: a heredoc's.</summary>
-    public int Indent { get; init; }
+    public long Indent { get; init; }
 
     /// <summary>Where the name of each tag it opens stands, where it is a JSX element; <see langword="null"/> where it is a string.</summary>
-    public IReadOnlyList<(int Start, int End)>? Tags { get; init; }
+    public IReadOnlyList<(long Start, long End)>? Tags { get; init; }
 }

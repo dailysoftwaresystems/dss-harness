@@ -296,20 +296,24 @@ public sealed record FileExtract(IReadOnlyList<ExtractNode> Nodes)
     }
 
     /// <summary>
-    /// This extract with every node's digest set from <paramref name="lines"/>, the file's lines it was made from: what the
+    /// This extract with every node's digest set from <paramref name="text"/>, the file's text it was made from: what the
     /// core does once an implementation has answered, and nothing else does - a digest an implementation set is never
-    /// kept. A node whose lines are not the file's is left without one, for <see cref="Problem"/> to refuse.
+    /// kept. Each is read from the text by position (<see cref="CodeGraphIds.Digest(CodeText, int, int)"/>), so a node over
+    /// a whole file of any size is digested without its lines made strings. A node whose lines are not the file's is left
+    /// without one, for <see cref="Problem"/> to refuse.
     /// </summary>
-    /// <param name="lines">The file's lines (<see cref="CodeFileText.Lines"/>).</param>
-    public FileExtract WithDigests(IReadOnlyList<string> lines)
+    /// <param name="text">The file's text.</param>
+    public FileExtract WithDigests(CodeText text)
     {
-        ArgumentNullException.ThrowIfNull(lines);
+        ArgumentNullException.ThrowIfNull(text);
+
+        var count = text.LineIndex.Count;
 
         return this with
         {
             Nodes = [.. (Nodes ?? []).Select(node => node is null ? node! : node with
             {
-                Digest = node.Start >= 1 && node.End >= node.Start && node.End <= lines.Count ? CodeGraphIds.Digest(lines, node.Start, node.End) : null,
+                Digest = node.Start >= 1 && node.End >= node.Start && node.End <= count ? CodeGraphIds.Digest(text, node.Start, node.End) : null,
             })],
         };
     }
@@ -570,7 +574,7 @@ public sealed record ExtractNode(string Id, string Kind, string Name, string Qua
     public IReadOnlyList<string>? SuffixOf { get; init; }
 
     /// <summary>
-    /// The SHA-256 of its lines (<see cref="CodeGraphIds.Digest"/>): set by the core once the implementation has answered,
+    /// The SHA-256 of its lines (<see cref="CodeGraphIds.Digest(CodeText, int, int)"/>): set by the core once the implementation has answered,
     /// never by it, and what says whether the bytes served are the ones extracted.
     /// </summary>
     public string? Digest { get; init; }

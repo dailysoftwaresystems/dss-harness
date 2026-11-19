@@ -104,7 +104,11 @@ public sealed class CSharpExtractor : ICodeGraphExtractor
             "code a source generator writes while the project builds, which is in no file of the tree",
             "two types of one name in two projects - a Program in each - which are one node, as a partial type's parts are; a record's positional property as an override of its base's",
             "what an assembly's or a module's attribute names or reads - [assembly: InternalsVisibleTo(...)] - which no node of the file declares: only its strings are kept, held by the file",
-        ]);
+            "a file of more than 2,147,483,647 characters, past the Int32 the compiler counts a text's characters in (SourceText.Length): nothing in it parsed, the line its count ends on marked dynamic, with why",
+        ])
+    {
+        Holds = "the compiler's syntax tree of the file, whole by the compiler's design - as Roslyn's documentation has it, a syntax tree holds every bit of the text it was parsed from: every token and every run of trivia is an entry of it, its text kept where it is 42 characters or more and a shorter one shared - so reading a file holds as much as its code writes, though the text itself is given the compiler by position (SourceText over the core's text), never as one string",
+    };
 
     /// <inheritdoc/>
     public FileExtract Extract(CodeFileInput input)
@@ -123,7 +127,7 @@ public sealed class CSharpExtractor : ICodeGraphExtractor
     {
         ArgumentNullException.ThrowIfNull(input);
 
-        var lines = CodeFileText.LineIndex(input.Text);
+        var lines = input.Text.LineIndex;
         var (root, unread) = Parse(input.Text);
 
         return root is not null
@@ -138,9 +142,16 @@ public sealed class CSharpExtractor : ICodeGraphExtractor
     /// is more than one thread can be given, where it nests deepest and why it is not read: the one way a file goes
     /// unread, and said.
     /// </summary>
-    private static (CompilationUnitSyntax? Root, (int At, string Why)? Unread) Parse(string text)
+    private static (CompilationUnitSyntax? Root, (long At, string Why)? Unread) Parse(CodeText text)
     {
+        // Roslyn counts a text's characters in an Int32 (SourceText.Length): a file of more is no text it can be given.
+        if (text.Length > int.MaxValue)
+        {
+            return (null, (int.MaxValue, string.Create(CultureInfo.InvariantCulture, $"the file holds {text.Length:N0} characters, past the {int.MaxValue:N0} the C# compiler's text counts in an Int32 (SourceText.Length), so it is not parsed")));
+        }
+
         var (depth, deepest) = Nesting.Of(text);
+        var source = new CodeSourceText(text);
 
         for (var levels = Math.Max(depth, 1); ; levels *= 2)
         {
@@ -148,7 +159,7 @@ public sealed class CSharpExtractor : ICodeGraphExtractor
 
             try
             {
-                root = DeepCalls.RunSized(levels, FrameBytes, () => CSharpSyntaxTree.ParseText(text, Options).GetCompilationUnitRoot());
+                root = DeepCalls.RunSized(levels, FrameBytes, () => CSharpSyntaxTree.ParseText(source, Options).GetCompilationUnitRoot());
             }
             catch (InsufficientExecutionStackException exception)
             {
@@ -173,7 +184,7 @@ public sealed class CSharpExtractor : ICodeGraphExtractor
     /// </summary>
     /// <param name="text">The text.</param>
     /// <param name="open">Where the bracket stands.</param>
-    internal static int Closing(string text, int open)
+    internal static long Closing(CodeText text, long open)
     {
         ArgumentNullException.ThrowIfNull(text);
 
@@ -188,26 +199,79 @@ public sealed class CSharpExtractor : ICodeGraphExtractor
         {
             var depth = 0;
 
-            foreach (var token in SyntaxFactory.ParseTokens(text, offset: open, initialTokenPosition: open, options: Tokens))
+            foreach (var (kind, start, _) in TokensFrom(text, open, Tokens))
             {
-                if (token.IsKind(SyntaxKind.EndOfFileToken))
+                if (kind == SyntaxKind.EndOfFileToken)
                 {
                     break;
                 }
 
-                if (token.IsKind(opens))
+                if (kind == opens)
                 {
                     depth++;
                 }
-                else if (token.IsKind(closes) && --depth == 0)
+                else if (kind == closes && --depth == 0)
                 {
-                    return token.SpanStart;
+                    return start;
                 }
             }
 
             return text.Length;
         });
     }
+
+    /// <summary>
+    /// The tokens of <paramref name="text"/> from <paramref name="at"/> on as the compiler's own lexer reads them - a string,
+    /// an interpolated or raw one among them, a character and a comment each one token - each with where it begins and
+    /// ends, the text's end last: what reading C# a markup file holds goes by. The text is lexed from
+    /// <paramref name="at"/> a piece at a time, each twice the one before, as far as the tokens are asked for - a token the
+    /// piece's end may have cut short, one that runs to it, is given from the next piece - so what the lexer is given is
+    /// never the whole text, only as far as the reader reads, and each piece is lexed from <paramref name="at"/> as the
+    /// lexer reads from there.
+    /// </summary>
+    /// <param name="text">The text.</param>
+    /// <param name="at">Where the lexing begins.</param>
+    /// <param name="options">What the lexer reads by; its own defaults where none is given.</param>
+    internal static IEnumerable<(SyntaxKind Kind, long Start, long End)> TokensFrom(CodeText text, long at, CSharpParseOptions? options = null)
+    {
+        ArgumentNullException.ThrowIfNull(text);
+
+        var given = at;
+
+        for (var size = (long)PieceCharacters; ; size *= 2)
+        {
+            var end = Math.Min(text.Length, at + size);
+            var whole = end == text.Length;
+            var piece = text.Slice(at, end);
+
+            foreach (var token in SyntaxFactory.ParseTokens(piece, options: options))
+            {
+                var (start, past) = (at + token.SpanStart, at + token.Span.End);
+
+                if (!whole && (token.IsKind(SyntaxKind.EndOfFileToken) || token.Span.End >= piece.Length))
+                {
+                    break;
+                }
+
+                if (start < given)
+                {
+                    continue;
+                }
+
+                yield return (token.Kind(), start, past);
+
+                if (token.IsKind(SyntaxKind.EndOfFileToken))
+                {
+                    yield break;
+                }
+
+                given = past;
+            }
+        }
+    }
+
+    /// <summary>How many characters of a text <see cref="TokensFrom"/> lexes first, twice as many each time after.</summary>
+    private const int PieceCharacters = 4096;
 
     /// <summary>
     /// The type a <c>var</c> is given where its initializer says: a <c>new</c> of a named type, or a cast - the one rule a
@@ -2529,9 +2593,9 @@ public sealed class CSharpExtractor : ICodeGraphExtractor
     private sealed class Nesting
     {
         /// <summary>How much the lexer could recurse for each text <see cref="Lexed"/> was asked of, kept while the text is.</summary>
-        private static readonly ConditionalWeakTable<string, StrongBox<long>> LexedDepths = new();
+        private static readonly ConditionalWeakTable<CodeText, StrongBox<long>> LexedDepths = new();
 
-        private readonly string _text;
+        private readonly CodeText _text;
 
         /// <summary>The brackets, braces, interpolated strings and holes open, the innermost on top.</summary>
         private readonly Stack<Frame> _frames = new();
@@ -2542,7 +2606,7 @@ public sealed class CSharpExtractor : ICodeGraphExtractor
         /// <summary>The symbols the file defines where its code is read.</summary>
         private readonly HashSet<string> _defined = new(StringComparer.Ordinal);
 
-        private int _at;
+        private long _at;
 
         /// <summary>The levels the open frames are themselves.</summary>
         private long _levels;
@@ -2563,7 +2627,7 @@ public sealed class CSharpExtractor : ICodeGraphExtractor
         private int _holes;
 
         private long _most;
-        private int _mostAt;
+        private long _mostAt;
 
         /// <summary>Whether the token before is an operand, after which an operator is a binary one.</summary>
         private bool _operand;
@@ -2591,7 +2655,7 @@ public sealed class CSharpExtractor : ICodeGraphExtractor
         private XmlPart _xml;
         private char _xmlQuote;
 
-        private Nesting(string text) => _text = text;
+        private Nesting(CodeText text) => _text = text;
 
         private enum XmlPart
         {
@@ -2605,7 +2669,7 @@ public sealed class CSharpExtractor : ICodeGraphExtractor
         }
 
         /// <summary>How deep <paramref name="text"/> nests, in levels the parser takes, and where it nests deepest.</summary>
-        public static (long Depth, int At) Of(string text)
+        public static (long Depth, long At) Of(CodeText text)
         {
             var nesting = new Nesting(text);
             nesting.Read();
@@ -2618,13 +2682,15 @@ public sealed class CSharpExtractor : ICodeGraphExtractor
         /// where it holds a dollar sign, and into a directive's condition, no more than one line's parentheses and
         /// negations - counted once for each text, so many lexes of one text cost one count.
         /// </summary>
-        public static long Lexed(string text) => LexedDepths.GetValue(text, static counted =>
+        public static long Lexed(CodeText text) => LexedDepths.GetValue(text, static counted =>
         {
             long dollars = 0, brackets = 0, directive = 0, line = 0;
             var (lineStart, inDirective) = (true, false);
 
-            foreach (var character in counted)
+            for (long at = 0; at < counted.Length; at++)
             {
+                var character = counted[at];
+
                 if (character is '\r' or '\n')
                 {
                     (directive, line, lineStart, inDirective) = (Math.Max(directive, line), 0, true, false);
@@ -2665,7 +2731,7 @@ public sealed class CSharpExtractor : ICodeGraphExtractor
         }
 
         /// <summary>Records the depth now, and <paramref name="beyond"/> more levels, where it is the deepest yet, at <paramref name="at"/>.</summary>
-        private void Note(long beyond = 0, int at = -1)
+        private void Note(long beyond = 0, long at = -1)
         {
             if (Depth + beyond > _most)
             {
@@ -2676,8 +2742,11 @@ public sealed class CSharpExtractor : ICodeGraphExtractor
 
         private char Peek(int ahead) => _at + ahead < _text.Length ? _text[_at + ahead] : '\0';
 
+        /// <summary>How long the longest keyword the read tells a word apart by is: <c>stackalloc</c>'s ten, and room to spare.</summary>
+        private const int LongestKeyword = 16;
+
         /// <summary>How many of <paramref name="character"/> stand in a run from the read on.</summary>
-        private int Run(char character)
+        private long Run(char character)
         {
             var at = _at;
 
@@ -2690,10 +2759,10 @@ public sealed class CSharpExtractor : ICodeGraphExtractor
         }
 
         /// <summary>Where the line <paramref name="at"/> is on ends: at its line break, or the text's end.</summary>
-        private int LineEnd(int at)
+        private long LineEnd(long at)
         {
-            var found = _text.AsSpan(at).IndexOfAny('\r', '\n');
-            return found < 0 ? _text.Length : at + found;
+            var found = at < _text.Length ? _text.FindAny("\r\n", at, _text.Length) : -1;
+            return found < 0 ? _text.Length : found;
         }
 
         /// <summary>One line a directive's branch leaves out: no code, read for a directive alone.</summary>
@@ -2764,7 +2833,7 @@ public sealed class CSharpExtractor : ICodeGraphExtractor
 
             if (character == '/' && next == '*')
             {
-                var end = _text.IndexOf("*/", _at + 2, StringComparison.Ordinal);
+                var end = _at + 2 <= _text.Length ? _text.IndexOf("*/", _at + 2) : -1;
                 var close = end < 0 ? _text.Length : end + 2;
 
                 if (Peek(2) == '*' && Peek(3) != '/')
@@ -2827,7 +2896,8 @@ public sealed class CSharpExtractor : ICodeGraphExtractor
                 _expression++;
             }
 
-            switch (_text.AsSpan(start, _at - start))
+            // No word the read tells apart is longer than a keyword: a longer one is none of them, and is never made a string.
+            switch (_at - start <= LongestKeyword ? _text.Slice(start, _at) : string.Empty)
             {
                 // A statement that holds the next, its block a statement's.
                 case "if" or "else" or "while" or "for" or "foreach" or "do" or "using" or "lock" or "fixed" or "try" or "catch" or "finally" or "checked" or "unchecked" or "unsafe":
@@ -3087,7 +3157,7 @@ public sealed class CSharpExtractor : ICodeGraphExtractor
         /// What a run of <paramref name="run"/> angle brackets read is with an <c>=</c> after it: a shift's assignment, which
         /// holds what is after it, or a comparison, read on a loop.
         /// </summary>
-        private void Shifted(int run)
+        private void Shifted(long run)
         {
             if (Peek(0) == '=')
             {
@@ -3274,7 +3344,7 @@ public sealed class CSharpExtractor : ICodeGraphExtractor
         }
 
         /// <summary>A string with no holes, to its end: a raw one at as many quotes as it opened with, a regular one at its line's end too.</summary>
-        private void Unholed(int quotes, bool verbatim)
+        private void Unholed(long quotes, bool verbatim)
         {
             while (_at < _text.Length)
             {
@@ -3410,7 +3480,7 @@ public sealed class CSharpExtractor : ICodeGraphExtractor
                     next++;
                 }
 
-                if (next == end || !_text.AsSpan(next).StartsWith("///", StringComparison.Ordinal) || (next + 3 < _text.Length && _text[next + 3] == '/'))
+                if (next == end || !_text.At(next, "///") || (next + 3 < _text.Length && _text[next + 3] == '/'))
                 {
                     return;
                 }
@@ -3420,14 +3490,14 @@ public sealed class CSharpExtractor : ICodeGraphExtractor
         }
 
         /// <summary>A block's documentation comment from <paramref name="from"/> to <paramref name="to"/>: its XML.</summary>
-        private void Documentation(int from, int to)
+        private void Documentation(long from, long to)
         {
             (_elements, _xml) = (0, XmlPart.Content);
             Xml(from, to);
         }
 
         /// <summary>The XML of a documentation comment from <paramref name="from"/> to <paramref name="to"/>, read on from where the read of it stands: each element open a level.</summary>
-        private void Xml(int from, int to)
+        private void Xml(long from, long to)
         {
             for (var at = from; at < to; at++)
             {
@@ -3441,11 +3511,11 @@ public sealed class CSharpExtractor : ICodeGraphExtractor
                         {
                             (_elements, _xml) = (Math.Max(0, _elements - 1), XmlPart.EndTag);
                         }
-                        else if (_text.AsSpan(at).StartsWith("<!--", StringComparison.Ordinal))
+                        else if (_text.At(at, "<!--"))
                         {
                             _xml = XmlPart.Comment;
                         }
-                        else if (_text.AsSpan(at).StartsWith("<![CDATA[", StringComparison.Ordinal))
+                        else if (_text.At(at, "<![CDATA["))
                         {
                             _xml = XmlPart.Data;
                         }
@@ -3478,9 +3548,9 @@ public sealed class CSharpExtractor : ICodeGraphExtractor
                         _xml = XmlPart.Tag;
                         break;
 
-                    case XmlPart.Comment when _text.AsSpan(at).StartsWith("-->", StringComparison.Ordinal):
-                    case XmlPart.Data when _text.AsSpan(at).StartsWith("]]>", StringComparison.Ordinal):
-                    case XmlPart.Instruction when _text.AsSpan(at).StartsWith("?>", StringComparison.Ordinal):
+                    case XmlPart.Comment when _text.At(at, "-->"):
+                    case XmlPart.Data when _text.At(at, "]]>"):
+                    case XmlPart.Instruction when _text.At(at, "?>"):
                         _xml = XmlPart.Content;
                         break;
                 }
@@ -3495,7 +3565,7 @@ public sealed class CSharpExtractor : ICodeGraphExtractor
         private void Directive()
         {
             var end = LineEnd(_at);
-            var line = _text.AsSpan(_at + 1, end - _at - 1).TrimStart();
+            var line = _text.Slice(_at + 1, end).AsSpan().TrimStart();
             var named = 0;
 
             while (named < line.Length && char.IsLetter(line[named]))
@@ -3677,10 +3747,10 @@ public sealed class CSharpExtractor : ICodeGraphExtractor
             public const char Hole = 'h';
 
             /// <summary>A string's: how many quotes it opened with, one for a regular or a verbatim one.</summary>
-            public int Quotes { get; init; }
+            public long Quotes { get; init; }
 
             /// <summary>A string's: how many braces open and close a hole - its dollar signs for a raw one, else one.</summary>
-            public int Dollars { get; init; }
+            public long Dollars { get; init; }
 
             /// <summary>A string's: whether it is a verbatim one, which a line's end does not end.</summary>
             public bool Verbatim { get; init; }

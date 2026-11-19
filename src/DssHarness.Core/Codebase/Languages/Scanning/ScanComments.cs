@@ -29,7 +29,7 @@ internal static class ScanComments
         foreach (var comment in scan.CommentsAbove(at))
         {
             // A shebang says how the file is run, never what a declaration is.
-            if (comment.Start == 0 && scan.Source.StartsWith("#!", StringComparison.Ordinal))
+            if (comment.Start == 0 && scan.Source.StartsWith("#!"))
             {
                 continue;
             }
@@ -71,23 +71,23 @@ internal static class ScanComments
     /// <param name="scan">The text.</param>
     public static string? Generated(ScannedText scan)
     {
-        var code = scan.Count > 0 ? scan[0].Start : int.MaxValue;
+        var code = scan.Count > 0 ? scan[0].Start : long.MaxValue;
 
         foreach (var comment in scan.Comments.TakeWhile(comment => comment.Start < code))
         {
-            var text = scan.Source.AsSpan(comment.Start, comment.Length);
+            var (start, end) = (comment.Start, comment.Start + comment.Length);
 
-            if (text.Contains("DO NOT EDIT", StringComparison.Ordinal))
+            if (scan.Source.Find("DO NOT EDIT", start, end) >= 0)
             {
                 return "its first lines say DO NOT EDIT, as a generator writes";
             }
 
-            if (text.Contains("DO NOT MODIFY BY HAND", StringComparison.Ordinal))
+            if (scan.Source.Find("DO NOT MODIFY BY HAND", start, end) >= 0)
             {
                 return "its first lines say DO NOT MODIFY BY HAND, as a generator writes";
             }
 
-            if (text.Contains("@generated", StringComparison.Ordinal))
+            if (scan.Source.Find("@generated", start, end) >= 0)
             {
                 return "its first lines say @generated, as a generator writes";
             }

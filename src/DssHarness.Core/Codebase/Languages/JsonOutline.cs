@@ -1,3 +1,4 @@
+using System.Runtime.ExceptionServices;
 using System.Text;
 using System.Text.Json;
 using DssHarness.Core.Json;
@@ -7,7 +8,9 @@ namespace DssHarness.Core.Codebase.Languages;
 /// <summary>
 /// A JSON file as a project file's implementation reads it: its values, each with the line it begins on as the core
 /// counts lines (<see cref="CodeFileText.Lines"/>) - what <see cref="JsonDocument"/> does not keep - read once, however
-/// deep it nests, on a stack of the reader's own, and the line it stops at where it is no JSON.
+/// deep it nests, on a stack of the reader's own, and the line it stops at where it is no JSON. The text is read as its
+/// UTF-8 bytes a block at a time (<see cref="CodeText.Utf8"/>), never all at once: what the read holds is the values it
+/// keeps.
 /// </summary>
 internal static class JsonOutline
 {
@@ -29,7 +32,7 @@ internal static class JsonOutline
     /// <param name="text">The file's text.</param>
     /// <param name="lenient">Whether comments and trailing commas are allowed.</param>
     /// <param name="stop">Where and why it is no object, where it is none.</param>
-    public static JsonOutlineValue? Load(string text, bool lenient, out JsonOutlineStop? stop)
+    public static JsonOutlineValue? Load(CodeText text, bool lenient, out JsonOutlineStop? stop)
     {
         var value = LoadAny(text, lenient, out stop);
 
@@ -55,37 +58,38 @@ internal static class JsonOutline
     /// <param name="text">The file's text.</param>
     /// <param name="lenient">Whether comments and trailing commas are allowed.</param>
     /// <param name="stop">Where and why it is no JSON, where it is none.</param>
-    public static JsonOutlineValue? LoadAny(string text, bool lenient, out JsonOutlineStop? stop)
+    public static JsonOutlineValue? LoadAny(CodeText text, bool lenient, out JsonOutlineStop? stop)
     {
-        var skipped = text.StartsWith('﻿') ? 1 : 0;
-        var bytes = Encoding.UTF8.GetBytes(text[skipped..]);
-        var positions = new Positions(bytes, CodeFileText.LineIndex(text), skipped);
+        ArgumentNullException.ThrowIfNull(text);
+
+        var skipped = text.Length > 0 && text[0] == '\uFEFF' ? 1 : 0;
+        var lines = text.LineIndex;
+        stop = null;
+
+        if (HoldsNoValue(text, skipped, lenient))
+        {
+            return null;
+        }
+
         // As deep as the file nests (JsonDepth): the values are read on a stack of the reader's own, not the call's.
-        var reader = new Utf8JsonReader(bytes, JsonDepth.Reader with
+        using var tokens = new Tokens(text.Utf8(skipped), JsonDepth.Reader with
         {
             CommentHandling = lenient ? JsonCommentHandling.Skip : JsonCommentHandling.Disallow,
             AllowTrailingCommas = lenient,
         });
 
-        stop = null;
-
-        if (HoldsNoValue(text.AsSpan(skipped), lenient))
-        {
-            return null;
-        }
-
         try
         {
-            if (!reader.Read())
+            if (!tokens.Read())
             {
                 return null;
             }
 
-            var value = Value(ref reader, positions);
+            var value = Value(tokens, lines, skipped);
 
-            if (reader.Read())
+            if (tokens.Read())
             {
-                stop = new JsonOutlineStop(positions.LineAt(reader.TokenStartIndex), NoJson) { Detail = "a second value follows the first" };
+                stop = new JsonOutlineStop(lines.LineAt(tokens.Character + skipped), NoJson) { Detail = "a second value follows the first" };
                 return null;
             }
 
@@ -93,31 +97,32 @@ internal static class JsonOutline
         }
         catch (Exception exception) when (exception is JsonException or InvalidOperationException or ArgumentException)
         {
-            stop = new JsonOutlineStop(positions.LineAt(Math.Min(reader.TokenStartIndex, Math.Max(bytes.Length - 1, 0))), NoJson) { Detail = Reason(exception.Message) };
+            stop = new JsonOutlineStop(lines.LineAt(tokens.Stopped + skipped), NoJson) { Detail = Reason(exception.Message) };
             return null;
         }
     }
 
     /// <summary>
-    /// Whether <paramref name="text"/> holds no value at all: white space alone, and where comments are allowed, comments -
-    /// which a reader refuses as holding no token, though nothing in it stops reading as JSON.
+    /// Whether <paramref name="text"/> from <paramref name="from"/> on holds no value at all: white space alone, and where
+    /// comments are allowed, comments - which a reader refuses as holding no token, though nothing in it stops reading as
+    /// JSON.
     /// </summary>
-    private static bool HoldsNoValue(ReadOnlySpan<char> text, bool lenient)
+    private static bool HoldsNoValue(CodeText text, long from, bool lenient)
     {
-        for (var at = 0; at < text.Length;)
+        for (var at = from; at < text.Length;)
         {
             if (char.IsWhiteSpace(text[at]))
             {
                 at++;
             }
-            else if (lenient && text[at..].StartsWith("//", StringComparison.Ordinal))
+            else if (lenient && text.At(at, "//"))
             {
-                var end = text[at..].IndexOfAny('\r', '\n');
-                at = end < 0 ? text.Length : at + end;
+                var end = text.FindAny("\r\n", at, text.Length);
+                at = end < 0 ? text.Length : end;
             }
-            else if (lenient && text[at..].StartsWith("/*", StringComparison.Ordinal))
+            else if (lenient && text.At(at, "/*"))
             {
-                var end = text[(at + 2)..].IndexOf("*/", StringComparison.Ordinal);
+                var end = text.IndexOf("*/", at + 2);
 
                 if (end < 0)
                 {
@@ -125,7 +130,7 @@ internal static class JsonOutline
                     return false;
                 }
 
-                at += end + 4;
+                at = end + 2;
             }
             else
             {
@@ -147,10 +152,10 @@ internal static class JsonOutline
     }
 
     /// <summary>
-    /// The value the reader stands at the first token of, read to its last: each object and array it holds opened on a
+    /// The value the tokens stand at the first token of, read to its last: each object and array it holds opened on a
     /// stack of its own and closed where the reader closes it, so no nesting of the file is recursed through.
     /// </summary>
-    private static JsonOutlineValue Value(ref Utf8JsonReader reader, Positions positions)
+    private static JsonOutlineValue Value(Tokens tokens, CodeLineIndex lines, int skipped)
     {
         // Each object or array open, with the line it begins on, what it holds so far, and the name and line of the property
         // it is the value of in the one that holds it.
@@ -161,18 +166,18 @@ internal static class JsonOutline
 
         while (true)
         {
-            var line = positions.LineAt(reader.TokenStartIndex);
+            var line = lines.LineAt(tokens.Character + skipped);
             JsonOutlineValue? value = null;
 
-            switch (reader.TokenType)
+            switch (tokens.Type)
             {
                 case JsonTokenType.PropertyName:
-                    name = reader.GetString()!;
+                    name = tokens.Text!;
                     nameLine = line;
                     break;
 
                 case JsonTokenType.StartObject or JsonTokenType.StartArray:
-                    open.Push(new Open(reader.TokenType == JsonTokenType.StartObject, line, name, nameLine));
+                    open.Push(new Open(tokens.Type == JsonTokenType.StartObject, line, name, nameLine));
                     name = null;
                     break;
 
@@ -185,20 +190,19 @@ internal static class JsonOutline
                     break;
 
                 case JsonTokenType.String:
-                    value = new JsonOutlineValue(JsonValueKind.String, line, reader.GetString(), null, null) { End = line };
+                    value = new JsonOutlineValue(JsonValueKind.String, line, tokens.Text, null, null) { End = line };
                     break;
 
                 default:
                     // The raw text of a number, a true, a false or a nothing, as the file writes it: a data file's key holds
                     // it as its value.
-                    var raw = Encoding.UTF8.GetString(reader.ValueSpan);
-                    value = new JsonOutlineValue(reader.TokenType switch
+                    value = new JsonOutlineValue(tokens.Type switch
                     {
                         JsonTokenType.Number => JsonValueKind.Number,
                         JsonTokenType.True => JsonValueKind.True,
                         JsonTokenType.False => JsonValueKind.False,
                         _ => JsonValueKind.Null,
-                    }, line, raw.Length > 0 ? raw : null, null, null) { End = line };
+                    }, line, tokens.Text is { Length: > 0 } raw ? raw : null, null, null) { End = line };
                     break;
             }
 
@@ -225,7 +229,7 @@ internal static class JsonOutline
                 return done;
             }
 
-            if (!reader.Read())
+            if (!tokens.Read())
             {
                 // The reader says where a text ends before its value does.
                 throw new JsonException("the text ends before its value does");
@@ -242,30 +246,150 @@ internal static class JsonOutline
     }
 
     /// <summary>
-    /// The lines of the text whose bytes a reader reads, as the core counts them (<see cref="CodeFileText.LineIndex"/>): a
-    /// byte's position told as the line its character is on, the characters before it counted once as the reader moves on.
+    /// The tokens of a text's UTF-8 bytes as <see cref="Utf8JsonReader"/> reads them, the bytes read from a stream a block
+    /// at a time - the reader's state carried from one block to the next, as its documentation reads a stream - so no more
+    /// of the text is held than a block and the token it may cut short, which a block twice as long is read for. Each token
+    /// is told with the character it begins at, counted once as the reader moves on; where the reader stops, its reason is
+    /// given after the tokens before it, with the character it stopped at.
     /// </summary>
     /// <param name="bytes">The text's bytes, after the byte order mark it may begin with.</param>
-    /// <param name="lines">Where the text's lines begin.</param>
-    /// <param name="skipped">The characters the text begins with that are not among <paramref name="bytes"/>: its byte order mark's.</param>
-    private sealed class Positions(byte[] bytes, CodeLineIndex lines, int skipped)
+    /// <param name="options">How the reader reads.</param>
+    private sealed class Tokens(Stream bytes, JsonReaderOptions options) : IDisposable
     {
-        private int _byte;
-        private int _character;
+        /// <summary>How many bytes a block holds first.</summary>
+        private const int BlockBytes = 16 * 1024;
 
-        /// <summary>The line, from 1, the character at the byte <paramref name="position"/> begins is on.</summary>
-        public int LineAt(long position)
+        private readonly Queue<(JsonTokenType Type, long Character, string? Text)> _read = new();
+        private byte[] _buffer = new byte[BlockBytes];
+        private JsonReaderState _state = new(options);
+
+        // The byte of the stream the buffer begins at, where its bytes the reader has yet to consume begin, and how many it holds.
+        private long _base;
+        private int _from;
+        private int _held;
+        private bool _final;
+        private bool _ended;
+
+        // The byte the last token begins at - the buffer keeps it, so a stop before the next is counted from it - and its character.
+        private long _countedByte;
+        private long _countedCharacter;
+
+        private ExceptionDispatchInfo? _failed;
+        private long _failedAt;
+
+        /// <summary>What the token read is.</summary>
+        public JsonTokenType Type { get; private set; }
+
+        /// <summary>A name's and a string's value; a number's, a true's, a false's and a nothing's raw text; an object's and an array's bracket none.</summary>
+        public string? Text { get; private set; }
+
+        /// <summary>The character the token read begins at, after the byte order mark.</summary>
+        public long Character { get; private set; }
+
+        /// <summary>The character the reading stands at: the last token's, or where the reader stopped.</summary>
+        public long Stopped { get; private set; }
+
+        /// <summary>The next token, read into <see cref="Type"/>, <see cref="Text"/> and <see cref="Character"/>; <see langword="false"/> where the text holds no more.</summary>
+        public bool Read()
         {
-            var at = (int)Math.Clamp(position, 0, bytes.Length);
+            (JsonTokenType Type, long Character, string? Text) token;
 
-            if (at < _byte)
+            while (!_read.TryDequeue(out token))
             {
-                (_byte, _character) = (0, 0);
+                if (_failed is not null)
+                {
+                    Stopped = _failedAt;
+                    _failed.Throw();
+                }
+
+                if (_ended)
+                {
+                    return false;
+                }
+
+                Fill();
             }
 
-            _character += Encoding.UTF8.GetCharCount(bytes, _byte, at - _byte);
-            _byte = at;
-            return lines.LineAt(_character + skipped);
+            (Type, Character, Text) = token;
+            Stopped = Character;
+            return true;
+        }
+
+        /// <inheritdoc/>
+        public void Dispose() => bytes.Dispose();
+
+        /// <summary>
+        /// The tokens of the next block: the bytes before the last token's start let go, the buffer twice as long where what
+        /// it holds is one token it cut short, filled from the stream and read from the reader's state on.
+        /// </summary>
+        private void Fill()
+        {
+            var keep = (int)Math.Min(_from, _countedByte - _base);
+
+            if (keep > 0)
+            {
+                Buffer.BlockCopy(_buffer, keep, _buffer, 0, _held - keep);
+                (_base, _from, _held) = (_base + keep, _from - keep, _held - keep);
+            }
+
+            if (_held == _buffer.Length)
+            {
+                Array.Resize(ref _buffer, _buffer.Length * 2);
+            }
+
+            while (!_final && _held < _buffer.Length)
+            {
+                var read = bytes.Read(_buffer, _held, _buffer.Length - _held);
+                _final = read == 0;
+                _held += read;
+            }
+
+            var reader = new Utf8JsonReader(_buffer.AsSpan(_from, _held - _from), _final, _state);
+            var any = false;
+
+            try
+            {
+                while (reader.Read())
+                {
+                    any = true;
+                    var character = CharacterAt(_from + (int)reader.TokenStartIndex);
+                    var text = reader.TokenType switch
+                    {
+                        JsonTokenType.PropertyName or JsonTokenType.String => reader.GetString(),
+                        JsonTokenType.StartObject or JsonTokenType.EndObject or JsonTokenType.StartArray or JsonTokenType.EndArray => null,
+                        _ => Encoding.UTF8.GetString(reader.ValueSpan),
+                    };
+
+                    _read.Enqueue((reader.TokenType, character, text));
+                }
+            }
+            catch (Exception exception) when (exception is JsonException or InvalidOperationException or ArgumentException)
+            {
+                // Where the reader stopped: the token it began, or the last one it read where it stopped before beginning
+                // one in this block - the place a single reader of the whole text would say.
+                var at = any || reader.TokenStartIndex > 0 ? _from + (int)reader.TokenStartIndex : (int)(_countedByte - _base);
+                _failedAt = CharacterAt(Math.Min(at, Math.Max(_held - 1, 0)));
+                _failed = ExceptionDispatchInfo.Capture(exception);
+                return;
+            }
+
+            _from += (int)reader.BytesConsumed;
+            _state = reader.CurrentState;
+            _ended = _final;
+        }
+
+        /// <summary>The character the byte at <paramref name="at"/> in the buffer begins, the bytes since the last counted once.</summary>
+        private long CharacterAt(int at)
+        {
+            var counted = (int)(_countedByte - _base);
+
+            if (at > counted)
+            {
+                _countedCharacter += Encoding.UTF8.GetCharCount(_buffer, counted, at - counted);
+                _countedByte = _base + at;
+            }
+
+            return _countedCharacter;
         }
     }
 }

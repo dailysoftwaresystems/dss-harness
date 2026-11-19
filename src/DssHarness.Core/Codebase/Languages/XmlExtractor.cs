@@ -68,7 +68,7 @@ public sealed class XmlExtractor : ICodeGraphExtractor
 
         try
         {
-            using var reader = XmlReader.Create(new StringReader(input.Text), settings);
+            using var reader = XmlReader.Create(input.Text.Reader(), settings);
             var at = (IXmlLineInfo)reader;
 
             for (var more = reader.Read(); more;)

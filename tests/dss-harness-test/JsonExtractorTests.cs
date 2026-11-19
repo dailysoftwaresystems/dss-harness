@@ -192,7 +192,7 @@ public sealed class JsonExtractorTests : CodeGraphExtractorContractTests<JsonExt
                 ("json:package-lock.json#[\"\"].a", "a", "[\"\"].a", "1", "json:package-lock.json#[\"\"]"),
             ],
             extract.Nodes.Select(node => (node.Id, node.Name, node.Qualified, node.Summary, node.Parent)));
-        Assert.Null(extract.WithDigests(CodeFileText.Lines(Lock)).Problem("json", CodeFileText.Lines(Lock).Count));
+        Assert.Null(extract.WithDigests(Lock).Problem("json", CodeFileText.Lines(Lock).Count));
 
         var name = new string('k', 12_000);
         var text = $"{{ \"{name}\": \"v\" }}";
@@ -201,7 +201,7 @@ public sealed class JsonExtractorTests : CodeGraphExtractorContractTests<JsonExt
 
         Assert.Equal(($"json:long.json#{name}", name), (key.Id, key.Qualified));
         Assert.Equal(name, key.Signature);
-        Assert.Null(keyed.WithDigests(CodeFileText.Lines(text)).Problem("json", 1));
+        Assert.Null(keyed.WithDigests(text).Problem("json", 1));
     }
 
     /// <summary>
@@ -223,7 +223,7 @@ public sealed class JsonExtractorTests : CodeGraphExtractorContractTests<JsonExt
                 ("json:i18n/en.json#messages.plain", "plain", "messages.plain"),
             ],
             extract.Nodes.Select(node => (node.Id, node.Name, node.Qualified)));
-        Assert.Null(extract.WithDigests(CodeFileText.Lines(Text)).Problem("json", CodeFileText.Lines(Text).Count));
+        Assert.Null(extract.WithDigests(Text).Problem("json", CodeFileText.Lines(Text).Count));
     }
 
     /// <summary>
@@ -278,7 +278,7 @@ public sealed class JsonExtractorTests : CodeGraphExtractorContractTests<JsonExt
                 ("json:list.json#[2]", 5, 5),
             ],
             extract.Nodes.Select(node => (node.Id, node.Start, node.End)));
-        Assert.Null(extract.WithDigests(CodeFileText.Lines(Text)).Problem("json", CodeFileText.Lines(Text).Count));
+        Assert.Null(extract.WithDigests(Text).Problem("json", CodeFileText.Lines(Text).Count));
 
         // A list of records is a section and a key a record, however many: none is left out, and each key is inside its
         // own record's section.
@@ -310,7 +310,7 @@ public sealed class JsonExtractorTests : CodeGraphExtractorContractTests<JsonExt
         Assert.Equal((string.Join('.', Enumerable.Repeat("a", Depth)), "1"), (extract.Nodes[^1].Qualified, extract.Nodes[^1].Summary));
         Assert.Equal(extract.Nodes[^2].Id, extract.Nodes[^1].Parent);
         Assert.Empty(extract.Dynamic);
-        Assert.Null(extract.WithDigests(CodeFileText.Lines(text)).Problem("json", 1));
+        Assert.Null(extract.WithDigests(text).Problem("json", 1));
     }
 
     /// <summary>The named manifests keep their own extractors: an exact name wins over the json extension.</summary>

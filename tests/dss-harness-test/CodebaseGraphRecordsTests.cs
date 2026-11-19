@@ -170,17 +170,19 @@ public sealed class CodebaseGraphRecordsTests
     [Fact]
     public void TheCoresDigests_AreEachNodesLines_AndNoneWhereItsLinesAreNotTheFiles()
     {
-        var lines = CodeFileText.Lines("class A\r\n  go\r\nend\r\n");
-        var digested = new FileExtract([Node, Node with { Id = "toy:B", End = 9 }]).WithDigests(lines);
+        const string Text = "class A\r\n  go\r\nend\r\n";
+        var lines = CodeFileText.Lines(Text);
+        var digested = new FileExtract([Node, Node with { Id = "toy:B", End = 9 }]).WithDigests(Text);
 
         Assert.Equal(CodeGraphIds.Sha256("class A\n  go\nend"), digested.Nodes[0].Digest);
 
         Assert.Equal(CodeGraphIds.Digest(CodeFileText.Lines("class A\n  go\nend"), 1, 3), digested.Nodes[0].Digest);
+        Assert.Equal(CodeGraphIds.Digest(lines, 2, 3), CodeGraphIds.Digest(CodeText.Of(Text), 2, 3));
         Assert.Null(digested.Nodes[1].Digest);
         Assert.Throws<ArgumentOutOfRangeException>(() => CodeGraphIds.Digest(lines, 2, 4));
 
         // A digest the implementation set is never kept: the core's replaces it, and none is left where the lines are not the file's.
-        var set = new FileExtract([Node with { Digest = new string('0', 64) }, Node with { Id = "toy:B", End = 9, Digest = new string('0', 64) }]).WithDigests(lines);
+        var set = new FileExtract([Node with { Digest = new string('0', 64) }, Node with { Id = "toy:B", End = 9, Digest = new string('0', 64) }]).WithDigests(Text);
 
         Assert.Equal(digested.Nodes[0].Digest, set.Nodes[0].Digest);
         Assert.Null(set.Nodes[1].Digest);
@@ -227,7 +229,8 @@ public sealed class CodebaseGraphRecordsTests
     {
         using var directory = new TempDirectory();
         var (store, layout) = Store(directory);
-        var lines = CodeFileText.Lines("class A\n  go\nend\n");
+        const string Text = "class A\n  go\nend\n";
+        var lines = CodeFileText.Lines(Text);
         var extract = new FileExtract([Node with { SubKind = "class", Scope = "app", Modifiers = ["public", "static"], Prototype = true, Test = true, Summary = "An \U0001F600 A." }, Node with { Id = "toy:A.b", Kind = CodeNodeKinds.Member, Name = "b", Qualified = "A.b", Start = 2, End = 3, Parent = "toy:A", BodyStart = null, MinArity = null, MaxArity = null, ValueType = "Repo", Extends = "A" }])
         {
             Scopes = [new ExtractScope("app", Open: true) { Parent = "root" }, new ExtractScope("root", Open: false)],
@@ -240,7 +243,7 @@ public sealed class CodebaseGraphRecordsTests
             ],
             Generated = "a generator wrote it",
             Dynamic = [new ExtractDynamic(3, "a call through a pointer")],
-        }.WithDigests(lines);
+        }.WithDigests(Text);
         var stored = new CodeGraphStoredExtract(CodeGraphManifest.CurrentSchema, "toy", 1, Blob, "src/a.toy", lines.Count, extract);
         var file = layout.GraphExtractFile(CodeGraphIds.ExtractName(Blob, "src/a.toy", "toy", 1));
 
@@ -380,7 +383,7 @@ public sealed class CodebaseGraphRecordsTests
     [Fact]
     public void AStoredExtract_IsRefusedForEachThingItGetsWrong()
     {
-        var extract = new FileExtract([Node]).WithDigests(["class A", "go", "end"]);
+        var extract = new FileExtract([Node]).WithDigests("class A\ngo\nend");
         var stored = new CodeGraphStoredExtract(CodeGraphManifest.CurrentSchema, "toy", 1, Blob, "src/a.toy", 3, extract);
 
         Assert.Null(stored.Problem());

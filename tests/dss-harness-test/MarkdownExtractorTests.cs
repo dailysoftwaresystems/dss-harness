@@ -189,7 +189,7 @@ public sealed class MarkdownExtractorTests : CodeGraphExtractorContractTests<Mar
 
         Assert.Equal($"# {words}", node.Signature);
         Assert.Equal(paragraph.Replace('\n', ' ') + ".", node.Summary);
-        Assert.Null(extract.WithDigests(input.Lines).Problem(Extractor.Language, input.Lines.Count));
+        Assert.Null(extract.WithDigests(input.Text).Problem(Extractor.Language, input.Lines.Count));
 
         // A character written as a surrogate pair is whole in both.
         var faces = string.Concat(Enumerable.Repeat("\U0001F600", 200));

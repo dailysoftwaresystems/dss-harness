@@ -251,12 +251,12 @@ internal sealed class ToyExtractor : ICodeGraphExtractor
     {
         Interlocked.Increment(ref _reads);
 
-        if (input.Text.Contains("boom", StringComparison.Ordinal))
+        if (input.Text.Contains("boom"))
         {
             throw new InvalidOperationException("boom");
         }
 
-        if (input.Text.Contains("hold", StringComparison.Ordinal) && Gate is { } gate)
+        if (input.Text.Contains("hold") && Gate is { } gate)
         {
             Holding.Set();
             gate.Wait(TimeSpan.FromSeconds(30));
@@ -334,7 +334,7 @@ internal sealed class MarkedExtractor(string language, string marker) : ICodeGra
 
     public int Version => 1;
 
-    public CodeGraphClaims Claims { get; } = new([], [new CodeGraphClaim(".mk", text => text.Contains(marker, StringComparison.Ordinal))]);
+    public CodeGraphClaims Claims { get; } = new([], [new CodeGraphClaim(".mk", text => text.Contains(marker))]);
 
     public bool Outlines => false;
 

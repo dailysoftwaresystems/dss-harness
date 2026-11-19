@@ -62,14 +62,25 @@ public sealed class VueExtractor : ICodeGraphExtractor
             "a component with no script block: the type alone, and nothing of its own members",
             "what a mixin or an extends option adds, a prop defineModel declares and one defineProps is given by a type another file declares: no member of the component",
             "a module block's classes read through what useCssModule() returns, or by a string ($style['red-x']): no use of them",
-        ]);
+            "a file of more than 2,147,483,647 characters, past the Int32 the HTML tokenizer (AngleSharp) counts a position in: nothing in it read, the line its count ends on marked dynamic, with why",
+        ])
+    {
+        Holds = "AngleSharp's text source, which keeps every character the tokenizer decodes - its HTML tokenizer reads a source of its buffered kind alone (a TextSource over a stream), and the source that lets go of what it read is offered to its parser alone, which builds a document rather than the tokens this reader matches - so reading a file holds its markup's text once, in pieces, never as one string",
+    };
 
     /// <inheritdoc/>
     public FileExtract Extract(CodeFileInput input)
     {
         ArgumentNullException.ThrowIfNull(input);
 
-        var markup = MarkupText.Read(EmbeddedCode.LineFeeds(input.Text), MarkupDialect.Vue.ClosesAsHtml);
+        var fed = input.Text.LineFed();
+
+        if (MarkupText.Unread(fed) is { } unread)
+        {
+            return unread;
+        }
+
+        var markup = MarkupText.Read(fed, MarkupDialect.Vue.ClosesAsHtml);
         var lineCount = input.Lines.Count;
         var name = Named(CodeGraphIds.FileName(input.Path));
         // The component is the module its script is: qualified by the scope the script declares in, so the script's
@@ -103,7 +114,7 @@ public sealed class VueExtractor : ICodeGraphExtractor
         if (blocks.FirstOrDefault(block => block.Name == "template") is { } template && template.Attribute("src") is null && template.Attribute("lang") is null or "html"
             && Template(markup, template, component.Id, references) is { Count: > 0 } regions)
         {
-            embedded.Add(Members(EmbeddedCode.Script(Language, input.Path, markup.Lines, regions, typescript)));
+            embedded.Add(Members(EmbeddedCode.Script(Language, input.Path, markup.Text, markup.Lines, regions, typescript)));
         }
 
         if (scripts.Count > 0)
@@ -185,7 +196,7 @@ public sealed class VueExtractor : ICodeGraphExtractor
                 var (textStart, textEnd) = texts[nextText];
                 declared.Leave(textStart);
 
-                foreach (Match mustache in Mustaches.Matches(markup.Text[textStart..textEnd]))
+                foreach (Match mustache in Mustaches.Matches(markup.Text.Slice(textStart, textEnd)))
                 {
                     if (mustache.Groups["code"] is { Value.Length: > 0 } code && !string.IsNullOrWhiteSpace(code.Value))
                     {
@@ -272,9 +283,9 @@ public sealed class VueExtractor : ICodeGraphExtractor
         return regions;
 
         // A piece of code, in a function of the names declared where it stands that it names.
-        CodeRegion Piece(int offset, string code) => new(component, declared.Given(code), offset, code);
+        CodeRegion Piece(long offset, string code) => new(component, declared.Given(code), offset, code);
 
-        void Add(int offset, string code) => regions.Add(Piece(offset, code));
+        void Add(long offset, string code) => regions.Add(Piece(offset, code));
     }
 
     /// <summary>
@@ -282,9 +293,9 @@ public sealed class VueExtractor : ICodeGraphExtractor
     /// text writes it, in its own case, as Vue's compiler reads it: the expression between the brackets after the directive's
     /// name, with where it begins; <see langword="null"/> where the name holds none.
     /// </summary>
-    private static (int At, string Code)? Argument(string text, MarkupAttribute attribute)
+    private static (long At, string Code)? Argument(CodeText text, MarkupAttribute attribute)
     {
-        var written = text.AsSpan(attribute.NameAt, Math.Min(attribute.Name.Length, text.Length - attribute.NameAt));
+        var written = text.Substring(attribute.NameAt, Math.Min(attribute.Name.Length, text.Length - attribute.NameAt)).AsSpan();
         var open = written.IndexOf('[');
         var close = written.LastIndexOf(']');
 

@@ -112,26 +112,13 @@ public sealed class CodeFileTextTests
         var index = CodeFileText.LineIndex(text);
 
         Assert.Equal(CodeFileText.Lines(text).Count, index.Starts.Count);
-        Assert.Equal([1, 1, 1, 2, 2, 3, 3, 4, 4, 4, 4, 4, 4], Enumerable.Range(0, text.Length + 1).Select(index.LineAt));
+        Assert.Equal([1, 1, 1, 2, 2, 3, 3, 4, 4, 4, 4, 4, 4], Enumerable.Range(0, text.Length + 1).Select(at => index.LineAt(at)));
         Assert.Equal(1, CodeFileText.LineIndex(string.Empty).LineAt(0));
-    }
-
-    /// <summary>
-    /// What a content test is given is the decoded text whole, however long - its surrogate pairs whole with it - so a
-    /// marker anywhere in a file decides its claim. Red with the probe cut at its first characters (ProbeCharacters).
-    /// </summary>
-    [Fact]
-    public void AProbe_IsTheWholeText_HoweverLong()
-    {
-        var text = new string('a', 100_000) + "😀" + "tail";
-
-        Assert.Equal("short", CodeFileText.Probe("short"));
-        Assert.Same(text, CodeFileText.Probe(text));
     }
 
     private static (string? Text, string? State) Read(byte[] bytes)
     {
-        var decoded = CodeFileText.Decode(bytes);
-        return (decoded.Text, decoded.State);
+        using var decoded = CodeFileText.Decode(bytes);
+        return (decoded.Text?.Slice(0, decoded.Text.Length), decoded.State);
     }
 }

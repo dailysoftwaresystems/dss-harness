@@ -46,7 +46,7 @@ public sealed class PubspecExtractor : ICodeGraphExtractor
 
         var lines = input.Lines;
         var id = $"{Language}:{input.Path}";
-        var root = YamlReading.Load(input.Text, "a pubspec is one document", Rules, out var stop);
+        var root = YamlReading.Load(input.Text.Reader(), "a pubspec is one document", Rules, out var stop);
         var name = root is not null && Value(root, "name") is { } named ? named : null;
         var references = new List<ExtractReference>();
 

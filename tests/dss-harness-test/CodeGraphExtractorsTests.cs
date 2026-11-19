@@ -122,8 +122,8 @@ public sealed class CodeGraphExtractorsTests
     [Fact]
     public void ASharedClaim_IsRefusedWithoutAContentTestOnEach_AndAcceptedWithOne()
     {
-        static bool Yes(string probe) => probe.StartsWith("toy", StringComparison.Ordinal);
-        static bool No(string probe) => !Yes(probe);
+        static bool Yes(CodeText probe) => probe.StartsWith("toy");
+        static bool No(CodeText probe) => !Yes(probe);
 
         var extension = Refused(Fake("toy", ".x", Yes), Fake("other", ".X"), Fallback());
         Assert.Contains("'other', 'toy' each claim the extension '.x'", extension.Message, StringComparison.OrdinalIgnoreCase);
@@ -218,7 +218,21 @@ public sealed class CodeGraphExtractorsTests
         return refused;
     }
 
-    private static FakeExtractor Fake(string language, string? extension = null, Func<string, bool>? test = null, string[]? names = null)
+    /// <summary>
+    /// What a content test is given is the decoded text itself, read by position however long - its surrogate pairs whole
+    /// with it - so a marker anywhere in a file decides its claim. Red with the text the test is given cut at its head.
+    /// </summary>
+    [Fact]
+    public void AContentTest_IsGivenTheWholeText_HoweverLong()
+    {
+        var text = CodeText.Of(new string('a', 100_000) + "\U0001F600" + "tail");
+        var registry = new CodeGraphExtractors([Fake("toy", ".x", probe => probe.EndsWith("\U0001F600tail")), Fake("other", ".x", probe => !probe.EndsWith("\U0001F600tail")), Fallback()]);
+
+        Assert.Equal("toy", registry.Route("a.x", text).Extractor?.Language);
+        Assert.Equal("other", registry.Route("a.x", "a").Extractor?.Language);
+    }
+
+    private static FakeExtractor Fake(string language, string? extension = null, Func<CodeText, bool>? test = null, string[]? names = null)
         => new(language, new CodeGraphClaims(
             [.. (names ?? []).Select(name => new CodeGraphClaim(name, test))],
             extension is null ? [] : [new CodeGraphClaim(extension, test)]));

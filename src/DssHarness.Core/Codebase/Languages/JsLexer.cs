@@ -30,7 +30,7 @@ internal static class JsLexer
     /// <summary>Scans <paramref name="text"/> by JavaScript's rules - TypeScript's are the same - its markup read where <paramref name="markup"/>.</summary>
     /// <param name="text">A file's text.</param>
     /// <param name="markup">Whether the file may hold JSX: a <c>.jsx</c> or <c>.tsx</c> one.</param>
-    public static InterpolatedText Scan(string text, bool markup) => Scan(text, 0, text.Length, CodeFileText.LineIndex(text), markup);
+    public static InterpolatedText Scan(CodeText text, bool markup) => Scan(text, 0, text.Length, text.LineIndex, markup);
 
     /// <summary>
     /// Scans the part of <paramref name="text"/> from <paramref name="start"/> to <paramref name="end"/>, its tokens
@@ -46,7 +46,7 @@ internal static class JsLexer
     /// <see cref="InterpolatedText.Closes"/> of the scan whose literal or element holds the part - so each one the part
     /// holds that they read is passed over at once; none for a scan of its own.
     /// </param>
-    public static InterpolatedText Scan(string text, int start, int end, CodeLineIndex lines, bool markup, ScanCloses? closes = null)
+    public static InterpolatedText Scan(CodeText text, long start, long end, CodeLineIndex lines, bool markup, ScanCloses? closes = null)
     {
         var lexing = new Lexing(text, lines, markup, closes);
         lexing.Closes.Scanned(start, end);
@@ -67,17 +67,17 @@ internal static class JsLexer
     /// text's own, or - where <see cref="Element"/> is one - what that element's brace at <see cref="From"/> opens, to
     /// the <c>}</c> no brace it read opened.
     /// </summary>
-    private sealed class CodeReading(Lexing lexing, int at, int end, ElementReading? element, int from) : Reading
+    private sealed class CodeReading(Lexing lexing, long at, long end, ElementReading? element, long from) : Reading
     {
         public Lexing Lexing { get; } = lexing;
 
-        public int At { get; set; } = at;
+        public long At { get; set; } = at;
 
-        public int End { get; } = end;
+        public long End { get; } = end;
 
         public ElementReading? Element { get; } = element;
 
-        public int From { get; } = from;
+        public long From { get; } = from;
 
         /// <summary>How many braces it read are open.</summary>
         public int Braces { get; set; }
@@ -88,28 +88,28 @@ internal static class JsLexer
     /// code <see cref="Code"/> reads, which goes on past it; where it stands, what it read so far and which part of a tag
     /// it is in.
     /// </summary>
-    private sealed class ElementReading(Lexing lexing, CodeReading code, int start, int end) : Reading
+    private sealed class ElementReading(Lexing lexing, CodeReading code, long start, long end) : Reading
     {
         public Lexing Lexing { get; } = lexing;
 
         public CodeReading Code { get; } = code;
 
-        public int Start { get; } = start;
+        public long Start { get; } = start;
 
-        public int End { get; } = end;
+        public long End { get; } = end;
 
-        public int At { get; set; } = start;
+        public long At { get; set; } = start;
 
         public ElementPart Part { get; set; } = ElementPart.Tag;
 
         /// <summary>Where the name of each tag it opens stands.</summary>
-        public List<(int Start, int End)> Tags { get; } = [];
+        public List<(long Start, long End)> Tags { get; } = [];
 
         /// <summary>Its attributes' strings.</summary>
         public List<ScanLiteralPart> Strings { get; } = [];
 
         /// <summary>Where each run of code its braces hold begins and ends, none empty.</summary>
-        public List<(int Start, int End)> Spans { get; } = [];
+        public List<(long Start, long End)> Spans { get; } = [];
 
         /// <summary>How many of its tags are open.</summary>
         public int Open { get; set; }
@@ -134,17 +134,17 @@ internal static class JsLexer
     /// <param name="lines">Its lines.</param>
     /// <param name="markup">Whether it may hold JSX.</param>
     /// <param name="closes">What the scans of the text read of its literals and elements; a fresh index where none is given.</param>
-    private sealed class Lexing(string text, CodeLineIndex lines, bool markup, ScanCloses? closes) : ScanLexing(lines, closes)
+    private sealed class Lexing(CodeText text, CodeLineIndex lines, bool markup, ScanCloses? closes) : ScanLexing(lines, closes)
     {
         /// <summary>For each JSX element, by where it begins: where the name of each tag it opens stands.</summary>
-        public Dictionary<int, List<(int Start, int End)>> Elements { get; } = [];
+        public Dictionary<long, List<(long Start, long End)>> Elements { get; } = [];
 
         /// <summary>
         /// Lexes from <paramref name="start"/> to <paramref name="end"/>: the code, each element it holds, the code each
         /// element's braces hold, and on, as frames of one stack (<see cref="Reading"/>) - the tokens this run's own, those
         /// of an element's code a run's of their own, which only find where the code ends.
         /// </summary>
-        public void Run(int start, int end)
+        public void Run(long start, long end)
         {
             var readings = new Stack<Reading>();
             readings.Push(new CodeReading(this, Shebang(text, start, end), end, element: null, start));
@@ -171,7 +171,7 @@ internal static class JsLexer
         /// Reads one token of <paramref name="code"/>, or begins an element it holds on <paramref name="readings"/>; answers
         /// where the code ends once it does - at the <c>}</c> that closes an element's code, or at its end - and else none.
         /// </summary>
-        private int? Step(CodeReading code, Stack<Reading> readings)
+        private long? Step(CodeReading code, Stack<Reading> readings)
         {
             var (at, end) = (code.At, code.End);
 
@@ -247,14 +247,14 @@ internal static class JsLexer
         }
 
         /// <summary>JavaScript's comments: <c>//</c> to its line's end, <c>/* */</c> past its closer - to the end where none closes it.</summary>
-        protected override int CommentEnd(int at, int end)
+        protected override long CommentEnd(long at, long end)
             => at + 1 >= end || text[at] != '/' ? at
                 : text[at + 1] == '/' ? LineEnd(text, at, end)
-                : text[at + 1] == '*' ? (text.IndexOf("*/", at + 2, end - at - 2, StringComparison.Ordinal) is var close and >= 0 ? close + 2 : end)
+                : text[at + 1] == '*' ? (text.Find("*/", at + 2, end) is var close and >= 0 ? close + 2 : end)
                 : at;
 
         /// <summary>A name from <paramref name="start"/> - a private one's <c>#</c> with it - its characters from <paramref name="from"/>.</summary>
-        private int Name(int start, int from, int end)
+        private long Name(long start, long from, long end)
         {
             var past = from + 1;
 
@@ -281,23 +281,24 @@ internal static class JsLexer
             }
 
             var last = Tokens[^1];
-            var written = text.AsSpan(last.Start, last.Length);
+
+            bool Written(ScanToken token, string value) => text.Is(token.Start, token.Length, value);
 
             var before = Tokens.Count > 1 ? Tokens[^2] : default;
             var adjoins = Tokens.Count > 1 && before.End == last.Start;
 
             return last.Kind switch
             {
-                ScanTokenKind.Name => !Openers.Contains(written.ToString()) || (Tokens.Count > 1 && text.AsSpan(before.Start, before.Length) is "." or "?."),
+                ScanTokenKind.Name => !Openers.Contains(text.Substring(last.Start, last.Length)) || (Tokens.Count > 1 && (Written(before, ".") || Written(before, "?."))),
                 ScanTokenKind.Number or ScanTokenKind.Text => true,
-                _ => written is ")" or "]"
-                    || (written is "+" or "-" && adjoins && text[before.Start] == written[0] && before.Length == 1)
-                    || (written is "!" && adjoins && (before.Kind == ScanTokenKind.Name || text[before.Start] is ')' or ']')),
+                _ => Written(last, ")") || Written(last, "]")
+                    || ((Written(last, "+") || Written(last, "-")) && adjoins && text[before.Start] == text[last.Start] && before.Length == 1)
+                    || (Written(last, "!") && adjoins && (before.Kind == ScanTokenKind.Name || text[before.Start] is ')' or ']')),
             };
         }
 
         /// <summary>A string in single or double quotes from <paramref name="start"/>: to its closing quote, past escapes, its value what the quotes hold; to the line's end where none closes it.</summary>
-        private int Quoted(int start, int end)
+        private long Quoted(long start, long end)
         {
             var quote = text[start];
             var at = start + 1;
@@ -322,7 +323,7 @@ internal static class JsLexer
         /// as it was read (<see cref="ScanCloses"/>), and passed over at once; what this reading finds of it, and of each
         /// template its code holds, is kept for the scans of that code.
         /// </summary>
-        private int Template(int start, int end)
+        private long Template(long start, long end)
         {
             if (Closes.Of(start, end) is { Tags: null } read)
             {
@@ -413,13 +414,13 @@ internal static class JsLexer
         /// </summary>
         private bool RawTagged()
             => Tokens.Count >= 3
-                && text.AsSpan(Tokens[^1].Start, Tokens[^1].Length) is "raw"
-                && text.AsSpan(Tokens[^2].Start, Tokens[^2].Length) is "."
-                && text.AsSpan(Tokens[^3].Start, Tokens[^3].Length) is "String"
-                && (Tokens.Count == 3 || text.AsSpan(Tokens[^4].Start, Tokens[^4].Length) is not ("." or "?."));
+                && text.Is(Tokens[^1].Start, Tokens[^1].Length, "raw")
+                && text.Is(Tokens[^2].Start, Tokens[^2].Length, ".")
+                && text.Is(Tokens[^3].Start, Tokens[^3].Length, "String")
+                && (Tokens.Count == 3 || !(text.Is(Tokens[^4].Start, Tokens[^4].Length, ".") || text.Is(Tokens[^4].Start, Tokens[^4].Length, "?.")));
 
         /// <summary>Past the string in quotes at <paramref name="start"/>, inside a template's code: no token of it is kept.</summary>
-        private int Skipped(int start, int end)
+        private long Skipped(long start, long end)
         {
             var quote = text[start];
             var at = start + 1;
@@ -433,7 +434,7 @@ internal static class JsLexer
         }
 
         /// <summary>A regular expression literal from <paramref name="start"/>: one token to its end (<see cref="ExpressionEnd"/>).</summary>
-        private int Expression(int start, int end)
+        private long Expression(long start, long end)
         {
             var at = ExpressionEnd(start, end);
             Add(ScanTokenKind.Text, start, at);
@@ -441,7 +442,7 @@ internal static class JsLexer
         }
 
         /// <summary>Past the regular expression literal from <paramref name="start"/>: to its closing slash outside a class, past escapes, then its flags; to the line's end where none closes it.</summary>
-        private int ExpressionEnd(int start, int end)
+        private long ExpressionEnd(long start, long end)
         {
             var at = start + 1;
             var inClass = false;
@@ -471,7 +472,7 @@ internal static class JsLexer
         /// or <c>&lt;T&gt;</c> before parameters an arrow or a return type follows - which a <c>.tsx</c> file writes before a
         /// generic function's or a function type's parameters.
         /// </summary>
-        private bool OpensElement(int at, int end)
+        private bool OpensElement(long at, long end)
         {
             if (at + 1 >= end || !(IsNameStart(text[at + 1]) || text[at + 1] == '>'))
             {
@@ -481,7 +482,7 @@ internal static class JsLexer
             var past = at + 1;
 
             // <const T, ...>: a type parameter's modifier.
-            if (string.CompareOrdinal(text, past, "const", 0, 5) == 0 && past + 5 < end && char.IsWhiteSpace(text[past + 5]))
+            if (text.At(past, "const") && past + 5 < end && char.IsWhiteSpace(text[past + 5]))
             {
                 past += 5;
 
@@ -508,8 +509,8 @@ internal static class JsLexer
             }
 
             // <T>(x: T) => T is a signature, unless a closing tag of its name follows: <small>(optional): </small>.
-            return !(next < end && text[next] == ',') && !(next + 7 <= end && string.CompareOrdinal(text, next, "extends", 0, 7) == 0 && next > past)
-                && !(next < end && text[next] == '>' && SignatureFollows(next + 1, end) && !ClosedAfter(past, end, text[name..named]));
+            return !(next < end && text[next] == ',') && !(next + 7 <= end && text.At(next, "extends") && next > past)
+                && !(next < end && text[next] == '>' && SignatureFollows(next + 1, end) && !ClosedAfter(past, end, text.Slice(name, named)));
         }
 
         /// <summary>
@@ -518,7 +519,7 @@ internal static class JsLexer
         /// the strings within passed over: none of the tag's own <c>&gt;</c>; <paramref name="at"/> where no list begins
         /// there, or the text ends before one closes.
         /// </summary>
-        private int TypeArgumentsPast(int at, int end)
+        private long TypeArgumentsPast(long at, long end)
         {
             var less = at;
 
@@ -546,7 +547,7 @@ internal static class JsLexer
                 }
                 else if (text[index] is '\'' or '"' or '`')
                 {
-                    var close = text.IndexOf(text[index], index + 1, end - index - 1);
+                    var close = text.Find(text[index], index + 1, end);
 
                     if (close < 0)
                     {
@@ -561,10 +562,10 @@ internal static class JsLexer
         }
 
         /// <summary>Whether a closing tag of <paramref name="name"/> - that name whole, <c>&lt;/T&gt;</c> and no <c>&lt;/Table&gt;</c> - is written from <paramref name="at"/>.</summary>
-        private bool ClosedAfter(int at, int end, string name)
+        private bool ClosedAfter(long at, long end, string name)
         {
-            for (var close = text.IndexOf("</" + name, at, end - at, StringComparison.Ordinal); close >= 0;
-                close = text.IndexOf("</" + name, close + 1, end - close - 1, StringComparison.Ordinal))
+            for (var close = text.Find("</" + name, at, end); close >= 0;
+                close = close + 1 < end ? text.Find("</" + name, close + 1, end) : -1)
             {
                 var after = close + 2 + name.Length;
 
@@ -581,7 +582,7 @@ internal static class JsLexer
         /// Whether a function's parameters begin at <paramref name="at"/>, past white space: a parenthesis whose match an
         /// arrow or a return type's colon follows - <c>&lt;T&gt;(item: T) =&gt; string</c> - and no element's text does.
         /// </summary>
-        private bool SignatureFollows(int at, int end)
+        private bool SignatureFollows(long at, long end)
         {
             while (at < end && char.IsWhiteSpace(text[at]))
             {
@@ -670,7 +671,7 @@ internal static class JsLexer
                         if (text[at] is '\'' or '"')
                         {
                             // An attribute's string: a string the element holds.
-                            var close = text.IndexOf(text[at], at + 1, end - at - 1);
+                            var close = text.Find(text[at], at + 1, end);
                             element.Strings.Add(Part(at + 1, close < 0 ? end : close));
                             at = close < 0 ? end : close + 1;
                         }
@@ -716,14 +717,14 @@ internal static class JsLexer
         /// <paramref name="from"/>: read as code - its strings, templates and elements of its own with it - by a run of its
         /// own, which only finds the <c>}</c> that closes it.
         /// </summary>
-        private void Begin(ElementReading element, int from, Stack<Reading> readings)
+        private void Begin(ElementReading element, long from, Stack<Reading> readings)
         {
             element.At = from;
             readings.Push(new CodeReading(new Lexing(text, Lines, markup, Closes), from, element.End, element, from));
         }
 
         /// <summary>The code <paramref name="element"/>'s brace opened at <paramref name="from"/>, read to the <c>}</c> at <paramref name="close"/>: recorded as its code, and the element read on past that brace.</summary>
-        private void Coded(ElementReading element, int from, int close)
+        private void Coded(ElementReading element, long from, long close)
         {
             Interpolated(element.Start, from, close);
 
@@ -761,7 +762,7 @@ internal static class JsLexer
         /// (<see cref="ScanCloses"/>): taken as it was read - its token, its tags, its strings and its code - and passed
         /// over at once; none where none did, and it is read.
         /// </summary>
-        private int? Taken(int start, int end)
+        private long? Taken(long start, long end)
         {
             var read = Closes.Of(start, end);
 
@@ -786,11 +787,11 @@ internal static class JsLexer
         }
 
         /// <summary>How long the punctuator at <paramref name="at"/> is: one of <see cref="Whole"/> - <c>?.</c> not before a digit, where it is a condition's - else one character; 0 where none is.</summary>
-        private int Punctuator(int at, int end)
+        private long Punctuator(long at, long end)
         {
             foreach (var whole in Whole)
             {
-                if (at + whole.Length <= end && string.CompareOrdinal(text, at, whole, 0, whole.Length) == 0
+                if (at + whole.Length <= end && text.At(at, whole)
                     && !(whole == "?." && at + 2 < end && char.IsAsciiDigit(text[at + 2])))
                 {
                     return whole.Length;

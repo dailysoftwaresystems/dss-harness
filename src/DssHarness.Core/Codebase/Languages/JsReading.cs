@@ -239,7 +239,7 @@ internal sealed class JsReading
     /// <param name="component">Whether the text is a Vue single-file component's script, whose default export - an object
     /// of the component's options, or one a call such as <c>defineComponent</c> is given - declares the component's
     /// members (<see cref="Options"/>).</param>
-    public JsReading(string language, string path, string text, bool typescript, bool? markup = null, bool? module = null, bool component = false)
+    public JsReading(string language, string path, CodeText text, bool typescript, bool? markup = null, bool? module = null, bool component = false)
     {
         var name = CodeGraphIds.FileName(path);
 
@@ -3319,7 +3319,7 @@ internal sealed class JsReading
         /// each by where its first token begins in the source, with the text it is read in and the index past it: names
         /// a type's, which the code read references and goes on past.
         /// </summary>
-        public Dictionary<int, (ScannedText Scan, int End)> Typed { get; } = [];
+        public Dictionary<long, (ScannedText Scan, int End)> Typed { get; } = [];
 
         /// <summary>The type parameters of the generic functions the body writes: no type the repository declares.</summary>
         public HashSet<string> TypeParameters { get; } = new(StringComparer.Ordinal);
@@ -3608,7 +3608,7 @@ internal sealed class JsReading
                 {
                     foreach (var (tagStart, tagEnd) in tags ?? [])
                     {
-                        Component(scan.Source[tagStart..tagEnd], text.Lines.LineAt(tagStart), From, locals);
+                        Component(scan.Source.Slice(tagStart, tagEnd), text.Lines.LineAt(tagStart), From, locals);
                     }
                 }
 

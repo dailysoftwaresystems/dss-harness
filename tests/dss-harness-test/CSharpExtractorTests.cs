@@ -1364,7 +1364,7 @@ public sealed class CSharpExtractorTests : CodeGraphExtractorContractTests<CShar
         Assert.Equal((1, 23, 2), (nodes["csharp:A"].Start, nodes["csharp:A"].End, nodes["csharp:A"].BodyStart));
         Assert.Equal((3, 22, "Said here."), (nodes["csharp:A.X"].Start, nodes["csharp:A.X"].End, nodes["csharp:A.X"].Summary));
         Assert.Equal(["csharp:A.X", "csharp:A.X"], new[] { "csharp:A.X.Two()", "csharp:A.X.Inner" }.Select(id => nodes[id].Parent));
-        Assert.Null(extract.WithDigests(new CodeFileInput("X.cs", Text).Lines).Problem("csharp", new CodeFileInput("X.cs", Text).Lines.Count));
+        Assert.Null(extract.WithDigests(Text).Problem("csharp", new CodeFileInput("X.cs", Text).Lines.Count));
     }
 
     /// <summary>

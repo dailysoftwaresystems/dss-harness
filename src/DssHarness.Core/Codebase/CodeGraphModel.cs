@@ -435,7 +435,105 @@ public static class CodeGraphIds
         ArgumentOutOfRangeException.ThrowIfLessThan(end, start);
         ArgumentOutOfRangeException.ThrowIfGreaterThan(end, lines.Count);
 
-        return Sha256(string.Join('\n', Enumerable.Range(start - 1, end - start + 1).Select(at => lines[at])));
+        return FileContentHash.Of(into =>
+        {
+            var joined = new JoinedLines(into);
+
+            for (var at = start - 1; at < end; at++)
+            {
+                joined.Line();
+                joined.Write(lines[at]);
+            }
+
+            joined.End();
+        });
+    }
+
+    /// <summary>
+    /// The digest of the lines <paramref name="start"/> to <paramref name="end"/> of <paramref name="text"/>, as
+    /// <see cref="Digest(IReadOnlyList{string}, int, int)"/> gives of its lines: each line's characters read by position a
+    /// piece at a time and taken into the hash as they are read, so neither a line nor the lines together is ever one
+    /// string - a node over a whole file of any size is digested in the memory of a piece.
+    /// </summary>
+    /// <param name="text">The file's text.</param>
+    /// <param name="start">The first line, from 1.</param>
+    /// <param name="end">The last line, inclusive.</param>
+    public static string Digest(CodeText text, int start, int end)
+    {
+        ArgumentNullException.ThrowIfNull(text);
+
+        var lines = text.LineIndex;
+        ArgumentOutOfRangeException.ThrowIfLessThan(start, 1);
+        ArgumentOutOfRangeException.ThrowIfLessThan(end, start);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(end, lines.Count);
+
+        return FileContentHash.Of(into =>
+        {
+            var joined = new JoinedLines(into);
+            var piece = new char[DigestPiece];
+
+            for (var line = start; line <= end; line++)
+            {
+                joined.Line();
+                var (from, to) = lines.Span(text, line);
+
+                for (var at = from; at < to;)
+                {
+                    var count = (int)Math.Min(piece.Length, to - at);
+                    text.CopyTo(at, piece.AsSpan(0, count));
+                    joined.Write(piece.AsSpan(0, count));
+                    at += count;
+                }
+            }
+
+            joined.End();
+        });
+    }
+
+    /// <summary>How many characters of a line <see cref="Digest(CodeText, int, int)"/> reads at a time.</summary>
+    private const int DigestPiece = 4096;
+
+    /// <summary>
+    /// Lines written into a stream as the UTF-8 bytes of their join by a line feed - what a digest hashes - through one
+    /// encoder, so a line given in pieces is written as it would be whole and the bytes are those of the joined string's.
+    /// </summary>
+    private sealed class JoinedLines(Stream into)
+    {
+        private readonly Encoder _encoder = Encoding.UTF8.GetEncoder();
+        private readonly byte[] _bytes = new byte[16 * 1024];
+        private bool _begun;
+
+        /// <summary>A line begins: the line feed that parts it from the one before, where there is one.</summary>
+        public void Line()
+        {
+            if (_begun)
+            {
+                Write("\n");
+            }
+
+            _begun = true;
+        }
+
+        /// <summary>Characters of the line, in order.</summary>
+        public void Write(ReadOnlySpan<char> characters) => Encode(characters, flush: false);
+
+        /// <summary>The lines end: what the encoder holds is written.</summary>
+        public void End() => Encode([], flush: true);
+
+        private void Encode(ReadOnlySpan<char> characters, bool flush)
+        {
+            while (true)
+            {
+                _encoder.Convert(characters, _bytes, flush, out var used, out var written, out var completed);
+                into.Write(_bytes, 0, written);
+                characters = characters[used..];
+
+                if (characters.IsEmpty && (!flush || completed))
+                {
+                    return;
+                }
+            }
+        }
     }
 
     /// <summary>The SHA-256 of <paramref name="text"/>'s UTF-8 bytes, in lowercase hexadecimal, as every content hash of the tool is (<see cref="FileContentHash"/>).</summary>

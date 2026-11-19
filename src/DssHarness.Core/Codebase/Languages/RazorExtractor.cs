@@ -63,15 +63,25 @@ public sealed class RazorExtractor : ICodeGraphExtractor
         [
             "what a tag helper is, and an element no component of the tree names: an instantiates that resolves nowhere, counted as such",
             "a component attribute written without an @ whose parameter is no string - Count=\"Items.Count\" - read as text: the parameter's type is the component's, which the file does not say",
-        ]);
+            "a file of more than 2,147,483,647 characters, past the Int32 the HTML tokenizer (AngleSharp) counts a position in: nothing in it read, the line its count ends on marked dynamic, with why",
+        ])
+    {
+        Holds = "AngleSharp's text source, which keeps every character the tokenizer decodes - its HTML tokenizer reads a source of its buffered kind alone (a TextSource over a stream), and the source that lets go of what it read is offered to its parser alone, which builds a document rather than the tokens this reader matches - so reading a file holds its markup's text once, in pieces, never as one string; and the C# compiler's syntax tree of each run of code, which the compiler is given as a string of its own and keeps whole, as the C# reader's says",
+    };
 
     /// <inheritdoc/>
     public FileExtract Extract(CodeFileInput input)
     {
         ArgumentNullException.ThrowIfNull(input);
 
-        var text = EmbeddedCode.LineFeeds(input.Text);
-        var lines = CodeFileText.LineIndex(text);
+        var text = input.Text.LineFed();
+
+        if (MarkupText.Unread(text) is { } unread)
+        {
+            return unread;
+        }
+
+        var lines = text.LineIndex;
         var lineCount = input.Lines.Count;
         var name = CodeGraphIds.FileName(input.Path);
         var component = name.EndsWith(".razor", StringComparison.OrdinalIgnoreCase);
@@ -149,7 +159,7 @@ public sealed class RazorExtractor : ICodeGraphExtractor
 
         foreach (var (start, end) in razor.Expressions)
         {
-            var code = text[start..end];
+            var code = text.Slice(start, end);
 
             Partials(SyntaxFactory.ParseExpression(code), start);
             events.Add(Region(start, $"_ = ({code});"));
@@ -197,7 +207,7 @@ public sealed class RazorExtractor : ICodeGraphExtractor
             embedded.Add(read);
         }
 
-        if (Usings(lines, razor, Imports.Contains(name)) is { } usings)
+        if (Usings(text, lines, razor, Imports.Contains(name)) is { } usings)
         {
             var read = CSharpExtractor.Read(Language, new CodeFileInput(input.Path, usings));
 
@@ -209,10 +219,10 @@ public sealed class RazorExtractor : ICodeGraphExtractor
         // The partials its code renders and what its elements say, in the order the file writes them.
         return EmbeddedCode.Merged(new FileExtract(head is null ? [] : [head]) { References = [.. references.OrderBy(reference => reference.Line)] }, embedded);
 
-        Event Region(int at, string code) => new(at, EventKind.Region, 0, [], new CodeRegion(from, string.Empty, at, code));
+        Event Region(long at, string code) => new(at, EventKind.Region, 0, [], new CodeRegion(from, string.Empty, at, code));
 
         // Each partial view a call of the code renders by its name - Html.Partial("x") and its kin - an instantiates of it.
-        void Partials(SyntaxNode code, int offset)
+        void Partials(SyntaxNode code, long offset)
         {
             foreach (var call in code.DescendantNodesAndSelf().OfType<InvocationExpressionSyntax>())
             {
@@ -250,10 +260,10 @@ public sealed class RazorExtractor : ICodeGraphExtractor
     /// block's local, a pattern variable of a statement at the top - declared to the end of the stretch it stands in, the
     /// file's where it stands in none, as Razor compiles each into the method or the template that holds it.
     /// </summary>
-    private static List<CodeRegion> Scoped(List<Event> events, int length)
+    private static List<CodeRegion> Scoped(List<Event> events, long length)
     {
         var declared = new DeclaredNames();
-        var holders = new Stack<int>();
+        var holders = new Stack<long>();
         var regions = new List<CodeRegion>();
 
         foreach (var held in events.OrderBy(held => held.At).ThenBy(held => held.Kind))
@@ -295,7 +305,7 @@ public sealed class RazorExtractor : ICodeGraphExtractor
     /// which is a template of its own: <paramref name="elements"/> read from <paramref name="next"/>, left past the
     /// construct's, for the constructs stand apart in the order the file writes them.
     /// </summary>
-    private static string Code(string text, Construct construct, IReadOnlyList<MarkupElement> elements, ref int next)
+    private static string Code(CodeText text, Construct construct, IReadOnlyList<MarkupElement> elements, ref int next)
     {
         var code = new char[construct.End - construct.Start];
 
@@ -306,7 +316,7 @@ public sealed class RazorExtractor : ICodeGraphExtractor
 
         foreach (var (start, end) in construct.CSharp)
         {
-            text.CopyTo(start, code, start - construct.Start, end - start);
+            text.CopyTo(start, code.AsSpan((int)(start - construct.Start), (int)(end - start)));
         }
 
         for (; next < elements.Count && elements[next].Start < construct.End; next++)
@@ -328,14 +338,14 @@ public sealed class RazorExtractor : ICodeGraphExtractor
     /// an <c>@inject</c> a property of the type it is given, <c>@model</c> the <c>Model</c> property, and
     /// <c>@inherits</c>, <c>@implements</c> and <c>@attribute</c> a part of the class with that base or attribute.
     /// </summary>
-    private static List<(int Offset, string Code)> Members(string text, Syntax razor, string className, List<Match> typeParameters)
+    private static List<(long Offset, string Code)> Members(CodeText text, Syntax razor, string className, List<Match> typeParameters)
     {
-        var members = new List<(int Offset, string Code)>();
+        var members = new List<(long Offset, string Code)>();
         var named = Head(className, typeParameters);
 
         foreach (var (_, open, close) in razor.Blocks)
         {
-            members.Add((open + 1, text[(open + 1)..Math.Max(open + 1, close)]));
+            members.Add((open + 1, text.Slice(open + 1, Math.Max(open + 1, close))));
         }
 
         foreach (var directive in razor.Directives)
@@ -404,7 +414,7 @@ public sealed class RazorExtractor : ICodeGraphExtractor
     /// directives reach its directory's every file (<paramref name="imports"/>), its <c>@namespace</c> as one too: the
     /// namespace every component under it is in, and so sees the names of; <see langword="null"/> where the file holds none.
     /// </summary>
-    private static string? Usings(CodeLineIndex lines, Syntax razor, bool imports)
+    private static CodeText? Usings(CodeText text, CodeLineIndex lines, Syntax razor, bool imports)
     {
         var usings = razor.Directives.Where(directive => (directive.Name == "using" || (imports && directive.Name == "namespace")) && directive.Rest.Length > 0).ToList();
 
@@ -413,14 +423,14 @@ public sealed class RazorExtractor : ICodeGraphExtractor
             return null;
         }
 
-        var written = new EmbeddedText(lines);
+        var written = new EmbeddedText(text, lines);
 
         foreach (var directive in usings)
         {
             written.Write(directive.Start, $"using {directive.Rest.TrimEnd(';').Trim()};");
         }
 
-        return written.ToString();
+        return written.Text();
     }
 
     /// <summary>
@@ -470,19 +480,19 @@ public sealed class RazorExtractor : ICodeGraphExtractor
     }
 
     /// <summary>One thing the walk meets: where, what, where what it declares ends - -1 for the end of the stretch it stands in - its names, and its region.</summary>
-    private sealed record Event(int At, EventKind Kind, int End, IReadOnlyList<(string Name, string Written)> Names, CodeRegion? Region);
+    private sealed record Event(long At, EventKind Kind, long End, IReadOnlyList<(string Name, string Written)> Names, CodeRegion? Region);
 
     /// <summary>A statement Razor's markup writes at its top - an <c>@{ }</c> block, an <c>@if</c> and its kin - from its <c>@</c> to its end.</summary>
-    private sealed class Construct(int start)
+    private sealed class Construct(long start)
     {
         /// <summary>Where its <c>@</c> stands.</summary>
-        public int Start { get; } = start;
+        public long Start { get; } = start;
 
         /// <summary>Where it ends: past its last block.</summary>
-        public int End { get; set; }
+        public long End { get; set; }
 
         /// <summary>The ranges of it that are C# as written: the rest its markup, and the expressions its markup holds.</summary>
-        public List<(int Start, int End)> CSharp { get; } = [];
+        public List<(long Start, long End)> CSharp { get; } = [];
     }
 
     /// <summary>A directive a line of Razor begins with.</summary>
@@ -490,7 +500,7 @@ public sealed class RazorExtractor : ICodeGraphExtractor
     /// <param name="Rest">What it says, the rest of its line.</param>
     /// <param name="Start">Where its <c>@</c> stands.</param>
     /// <param name="End">Where its line ends.</param>
-    private sealed record Directive(string Name, string Rest, int Start, int End);
+    private sealed record Directive(string Name, string Rest, long Start, long End);
 
     /// <summary>
     /// What a Razor file holds, as Razor's own parser reads it from the top, in one walk over its text with a stack of what
@@ -510,19 +520,19 @@ public sealed class RazorExtractor : ICodeGraphExtractor
         /// <summary>The characters short of which the markup holds nothing the walk reads but text.</summary>
         private static readonly SearchValues<char> Special = SearchValues.Create("@<\n{}");
 
-        private readonly string _text;
+        private readonly CodeText _text;
         private readonly Stack<Frame> _frames = new();
 
         /// <summary>The statement at the markup's top whose code the walk is in; <see langword="null"/> where it is in none.</summary>
         private Construct? _construct;
 
-        private Syntax(string text) => _text = text;
+        private Syntax(CodeText text) => _text = text;
 
         /// <summary>The comments.</summary>
-        public List<(int Start, int End)> Comments { get; } = [];
+        public List<(long Start, long End)> Comments { get; } = [];
 
         /// <summary>The class's code blocks: where each one's word, its opening brace and its closing brace stand.</summary>
-        public List<(int Keyword, int Open, int Close)> Blocks { get; } = [];
+        public List<(long Keyword, long Open, long Close)> Blocks { get; } = [];
 
         /// <summary>The directives.</summary>
         public List<Directive> Directives { get; } = [];
@@ -531,18 +541,18 @@ public sealed class RazorExtractor : ICodeGraphExtractor
         public List<Construct> Constructs { get; } = [];
 
         /// <summary>The expressions: where each one's C# begins and ends.</summary>
-        public List<(int Start, int End)> Expressions { get; } = [];
+        public List<(long Start, long End)> Expressions { get; } = [];
 
         /// <summary>The sections' markup: where each begins and ends.</summary>
-        public List<(int Start, int End)> Sections { get; } = [];
+        public List<(long Start, long End)> Sections { get; } = [];
 
         /// <summary>What is no markup: the ranges the markup reader is not given.</summary>
-        public List<(int Start, int End)> Code { get; } = [];
+        public List<(long Start, long End)> Code { get; } = [];
 
-        private int Length => _text.Length;
+        private long Length => _text.Length;
 
         /// <summary>What <paramref name="text"/> holds.</summary>
-        public static Syntax Of(string text)
+        public static Syntax Of(CodeText text)
         {
             var syntax = new Syntax(text);
             syntax.Walk();
@@ -553,7 +563,7 @@ public sealed class RazorExtractor : ICodeGraphExtractor
         {
             _frames.Push(new Frame { Root = true });
 
-            for (var at = 0; at < Length;)
+            for (var at = 0L; at < Length;)
             {
                 var frame = _frames.Peek();
                 at = frame.Code ? InCode(frame, at) : InMarkup(frame, at);
@@ -572,7 +582,7 @@ public sealed class RazorExtractor : ICodeGraphExtractor
         }
 
         /// <summary>One step of the walk in markup at <paramref name="at"/>: answers where the next begins.</summary>
-        private int InMarkup(Frame frame, int at)
+        private long InMarkup(Frame frame, long at)
         {
             var character = _text[at];
 
@@ -613,12 +623,12 @@ public sealed class RazorExtractor : ICodeGraphExtractor
                     return at + 1;
 
                 default:
-                    return _text.AsSpan(at + 1).IndexOfAny(Special) is var next and >= 0 ? at + 1 + next : Length;
+                    return at + 1 < Length && _text.FindAny(Special, at + 1, Length) is var next and >= 0 ? next : Length;
             }
         }
 
         /// <summary>An <c>@</c> in markup at <paramref name="at"/>: what Razor reads it as - in an attribute's value, an expression's alone.</summary>
-        private int Transition(Frame frame, int at, bool inAttribute)
+        private long Transition(Frame frame, long at, bool inAttribute)
         {
             if (at + 1 >= Length)
             {
@@ -678,7 +688,7 @@ public sealed class RazorExtractor : ICodeGraphExtractor
                 }
 
                 if (DirectiveNames.Contains(word) && (after == Length || _text[after] is ' ' or '\t' or '\n') && LineEnd(at) is var end
-                    && _text[after..end].Trim() is var rest && (word != "using" || !rest.StartsWith('(')))
+                    && _text.Slice(after, end).Trim() is var rest && (word != "using" || !rest.StartsWith('(')))
                 {
                     Directives.Add(new Directive(word, rest, at, end));
                     NotMarkup(at, end);
@@ -711,7 +721,7 @@ public sealed class RazorExtractor : ICodeGraphExtractor
         }
 
         /// <summary>Where the implicit expression whose first name begins at <paramref name="start"/> ends.</summary>
-        private int Implicit(int start)
+        private long Implicit(long start)
         {
             var end = start + Word(start).Length;
 
@@ -745,7 +755,7 @@ public sealed class RazorExtractor : ICodeGraphExtractor
         }
 
         /// <summary>A statement at <paramref name="at"/>, its word ending at <paramref name="after"/>: its parenthesis, where it has one, and its block.</summary>
-        private int Statement(int at, string word, int after)
+        private long Statement(long at, string word, long after)
         {
             var owns = Begin(at);
             NotMarkup(at, at + 1);
@@ -769,7 +779,7 @@ public sealed class RazorExtractor : ICodeGraphExtractor
         }
 
         /// <summary>The block a statement's head ends before at <paramref name="at"/>, its code read in its turn; where none follows, the statement's end.</summary>
-        private int Body(int at, string? continued, bool owns)
+        private long Body(long at, string? continued, bool owns)
         {
             var brace = Skipped(at);
 
@@ -786,16 +796,15 @@ public sealed class RazorExtractor : ICodeGraphExtractor
         /// One run of the walk in C# from <paramref name="at"/>, token by token as C#'s own lexer reads it: to the markup a
         /// statement switches to, a comment of Razor's, or the brace that closes the block; answers where the walk goes on.
         /// </summary>
-        private int InCode(Frame frame, int at)
+        private long InCode(Frame frame, long at)
         {
-            foreach (var token in SyntaxFactory.ParseTokens(_text, offset: at, initialTokenPosition: at))
+            foreach (var (kind, start, _) in CSharpExtractor.TokensFrom(_text, at))
             {
-                if (token.IsKind(SyntaxKind.EndOfFileToken))
+                if (kind == SyntaxKind.EndOfFileToken)
                 {
                     break;
                 }
 
-                var start = token.SpanStart;
 
                 if (_text[start] == '@' && start + 1 < Length)
                 {
@@ -846,7 +855,7 @@ public sealed class RazorExtractor : ICodeGraphExtractor
                     return start;
                 }
 
-                switch (token.Kind())
+                switch (kind)
                 {
                     case SyntaxKind.OpenBraceToken:
                         frame.Braces++;
@@ -890,7 +899,7 @@ public sealed class RazorExtractor : ICodeGraphExtractor
         }
 
         /// <summary>The brace at <paramref name="close"/> that closes a block of code: a statement's goes on where its words say - <c>else</c>, <c>catch</c>, <c>finally</c>, a <c>do</c>'s <c>while</c>.</summary>
-        private int Closed(Frame frame, int close)
+        private long Closed(Frame frame, long close)
         {
             _frames.Pop();
 
@@ -958,11 +967,11 @@ public sealed class RazorExtractor : ICodeGraphExtractor
         }
 
         /// <summary>A tag in markup at <paramref name="at"/>, an end tag among them: the markup code switched to ends at the end tag that closes it.</summary>
-        private int Tag(Frame frame, int at)
+        private long Tag(Frame frame, long at)
         {
-            if (_text.AsSpan(at).StartsWith("<!--"))
+            if (_text.At(at, "<!--"))
             {
-                var end = _text.IndexOf("-->", at + 4, StringComparison.Ordinal);
+                var end = _text.IndexOf("-->", at + 4);
                 frame.TextUntil = end < 0 ? Length : end;
                 return at + 4;
             }
@@ -1015,14 +1024,14 @@ public sealed class RazorExtractor : ICodeGraphExtractor
 
             if (!selfClosing && MarkupText.IsRaw(tag))
             {
-                frame.TextUntil = _text.IndexOf($"</{tag}", closed, StringComparison.OrdinalIgnoreCase) is var ends and >= 0 ? ends : Length;
+                frame.TextUntil = EndTagOf(tag, closed) is var ends and >= 0 ? ends : Length;
             }
 
             return closed;
         }
 
         /// <summary>The attributes of a start tag from <paramref name="at"/>: answers where it ends and whether <c>/&gt;</c> ends it.</summary>
-        private (int End, bool SelfClosing) Attributes(Frame frame, int at)
+        private (long End, bool SelfClosing) Attributes(Frame frame, long at)
         {
             while (at < Length)
             {
@@ -1099,16 +1108,16 @@ public sealed class RazorExtractor : ICodeGraphExtractor
         }
 
         /// <summary>A comment of Razor's at <paramref name="at"/>: answers where it ends.</summary>
-        private int Comment(int at)
+        private long Comment(long at)
         {
-            var end = _text.IndexOf("*@", at + 2, StringComparison.Ordinal) is var stop and >= 0 ? stop + 2 : Length;
+            var end = _text.IndexOf("*@", at + 2) is var stop and >= 0 ? stop + 2 : Length;
             Comments.Add((at, end));
             NotMarkup(at, end);
             return end;
         }
 
         /// <summary>Begins a statement at <paramref name="at"/>: one at the markup's top where none is under way; answers whether it is.</summary>
-        private bool Begin(int at)
+        private bool Begin(long at)
         {
             if (_construct is not null)
             {
@@ -1121,7 +1130,7 @@ public sealed class RazorExtractor : ICodeGraphExtractor
         }
 
         /// <summary>Ends the statement at the markup's top at <paramref name="at"/>, where <paramref name="owns"/>; answers where the walk goes on.</summary>
-        private int Ended(bool owns, int at)
+        private long Ended(bool owns, long at)
         {
             if (owns && _construct is not null)
             {
@@ -1133,14 +1142,14 @@ public sealed class RazorExtractor : ICodeGraphExtractor
         }
 
         /// <summary>Ends the markup code switched to at <paramref name="at"/>: the code goes on there, where a statement may begin.</summary>
-        private void Pop(int at)
+        private void Pop(long at)
         {
             _frames.Pop();
             Resume(at);
         }
 
         /// <summary>Goes on with the code under what ended at <paramref name="at"/>, where one is: there, where a statement may begin.</summary>
-        private void Resume(int at)
+        private void Resume(long at)
         {
             if (_frames.TryPeek(out var below) && below.Code)
             {
@@ -1150,7 +1159,7 @@ public sealed class RazorExtractor : ICodeGraphExtractor
         }
 
         /// <summary>The C# of <paramref name="frame"/> from where it last began to <paramref name="end"/>.</summary>
-        private void Run(Frame frame, int end)
+        private void Run(Frame frame, long end)
         {
             if (end > frame.RunStart)
             {
@@ -1161,7 +1170,7 @@ public sealed class RazorExtractor : ICodeGraphExtractor
         }
 
         /// <summary>C# of the statement under way, from <paramref name="start"/> to <paramref name="end"/>.</summary>
-        private void CSharp(int start, int end)
+        private void CSharp(long start, long end)
         {
             if (end > start)
             {
@@ -1171,7 +1180,7 @@ public sealed class RazorExtractor : ICodeGraphExtractor
         }
 
         /// <summary>Holds that the text from <paramref name="start"/> to <paramref name="end"/> is no markup.</summary>
-        private void NotMarkup(int start, int end)
+        private void NotMarkup(long start, long end)
         {
             if (end > start)
             {
@@ -1180,7 +1189,7 @@ public sealed class RazorExtractor : ICodeGraphExtractor
         }
 
         /// <summary>The name written at <paramref name="at"/>, as C# writes one; empty where none is.</summary>
-        private string Word(int at)
+        private string Word(long at)
         {
             if (at >= Length || !SyntaxFacts.IsIdentifierStartCharacter(_text[at]))
             {
@@ -1194,11 +1203,11 @@ public sealed class RazorExtractor : ICodeGraphExtractor
                 end++;
             }
 
-            return _text[at..end];
+            return _text.Slice(at, end);
         }
 
         /// <summary>The tag's name written at <paramref name="at"/>: what stands to a space, a <c>/</c> or a <c>&gt;</c>.</summary>
-        private string TagName(int at)
+        private string TagName(long at)
         {
             var end = at;
 
@@ -1207,11 +1216,11 @@ public sealed class RazorExtractor : ICodeGraphExtractor
                 end++;
             }
 
-            return _text[at..end];
+            return _text.Slice(at, end);
         }
 
         /// <summary>Where the first character from <paramref name="at"/> that is no white space stands, line breaks among it.</summary>
-        private int Skipped(int at)
+        private long Skipped(long at)
         {
             while (at < Length && char.IsWhiteSpace(_text[at]))
             {
@@ -1221,11 +1230,27 @@ public sealed class RazorExtractor : ICodeGraphExtractor
             return at;
         }
 
+        /// <summary>Where the end tag of <paramref name="tag"/> - <c>&lt;/</c> and its name, in any case - first stands from <paramref name="from"/> on; -1 where none does.</summary>
+        private long EndTagOf(string tag, long from)
+        {
+            var written = $"</{tag}";
+
+            for (var at = from < Length ? _text.Find('<', from, Length) : -1; at >= 0; at = at + 1 < Length ? _text.Find('<', at + 1, Length) : -1)
+            {
+                if (_text.At(at, written, StringComparison.OrdinalIgnoreCase))
+                {
+                    return at;
+                }
+            }
+
+            return -1;
+        }
+
         /// <summary>Where the line <paramref name="at"/> stands on ends.</summary>
-        private int LineEnd(int at) => _text.IndexOf('\n', at) is var end and >= 0 ? end : Length;
+        private long LineEnd(long at) => _text.IndexOf('\n', at) is var end and >= 0 ? end : Length;
 
         /// <summary>Whether nothing but white space is before <paramref name="at"/> on its line.</summary>
-        private bool StartsLine(int at)
+        private bool StartsLine(long at)
         {
             for (var before = at - 1; before >= 0 && _text[before] != '\n'; before--)
             {
@@ -1261,19 +1286,19 @@ public sealed class RazorExtractor : ICodeGraphExtractor
         public bool Section { get; init; }
 
         /// <summary>Where a section's markup begins.</summary>
-        public int Start { get; init; }
+        public long Start { get; init; }
 
         /// <summary>How many braces are open: a section's text's, a block's code's.</summary>
         public int Braces { get; set; }
 
         /// <summary>Where the text that holds no tag - a comment's, a raw element's - ends.</summary>
-        public int TextUntil { get; set; }
+        public long TextUntil { get; set; }
 
         /// <summary>Whether it is a <c>@{ }</c> block, whose braces are no C#.</summary>
         public bool Razor { get; init; }
 
         /// <summary>Where its C# last began.</summary>
-        public int RunStart { get; set; }
+        public long RunStart { get; set; }
 
         /// <summary>The statement whose block it is, where words may go on with it: <c>if</c>, <c>try</c>, <c>do</c>.</summary>
         public string? Statement { get; init; }

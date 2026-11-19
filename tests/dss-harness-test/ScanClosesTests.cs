@@ -89,7 +89,7 @@ public sealed class ScanClosesTests
     /// <c>f(...)</c> of the level below - with how many characters of its own each level's code holds, and how the text and
     /// a part of it are scanned.
     /// </summary>
-    private static IEnumerable<(string Name, string Text, int Own, Func<string, InterpolatedText> First, Func<string, InterpolatedText, Func<int, int, ScanCloses?, InterpolatedText>> Inner)> Languages(int deep)
+    private static IEnumerable<(string Name, string Text, int Own, Func<string, InterpolatedText> First, Func<CodeText, InterpolatedText, Func<long, long, ScanCloses?, InterpolatedText>> Inner)> Languages(int deep)
     {
         yield return ("javascript", $"x = {Nested(deep, "`v`", "`a${f(", ")}b`")};", 3, text => JsLexer.Scan(text, markup: false), (text, first) => (start, end, closes) => JsLexer.Scan(text, start, end, first.Lines, markup: false, closes));
         yield return ("php", $"<?php $x = {Nested(deep, "\"v\"", "\"a{$f(", ")}b\"")};", 4, text => PhpLexer.Scan(text), (text, first) => (start, end, closes) => PhpLexer.Scan(text, start, end, first.Lines, closes));
@@ -101,7 +101,7 @@ public sealed class ScanClosesTests
         => string.Concat(Enumerable.Repeat(open, deep)) + innermost + string.Concat(Enumerable.Repeat(close, deep));
 
     /// <summary>The scans a reader makes of <paramref name="first"/>'s literals' code, and of theirs in turn, each part scanned as <paramref name="inner"/> scans one of the text.</summary>
-    private static (int Levels, bool Alike) Scanned(InterpolatedText first, Func<string, InterpolatedText, Func<int, int, ScanCloses?, InterpolatedText>> inner, bool compared)
+    private static (int Levels, bool Alike) Scanned(InterpolatedText first, Func<CodeText, InterpolatedText, Func<long, long, ScanCloses?, InterpolatedText>> inner, bool compared)
         => Scanned(first, inner(first.Scan.Source, first), compared);
 
     /// <summary>
@@ -109,7 +109,7 @@ public sealed class ScanClosesTests
     /// turn - on a queue, as a reader reads them - each given the index of the scan before it; answers how many runs were
     /// scanned and, where <paramref name="compared"/>, whether each scan read what the same scan reads without the index.
     /// </summary>
-    private static (int Levels, bool Alike) Scanned(InterpolatedText first, Func<int, int, ScanCloses?, InterpolatedText> scan, bool compared)
+    private static (int Levels, bool Alike) Scanned(InterpolatedText first, Func<long, long, ScanCloses?, InterpolatedText> scan, bool compared)
     {
         var pending = new Queue<InterpolatedText>([first]);
         var levels = 0;
@@ -146,7 +146,7 @@ public sealed class ScanClosesTests
             read.Add(string.Create(CultureInfo.InvariantCulture, $"code {key}: {string.Join(',', spans)}"));
         }
 
-        foreach (var (key, tags) in (text.Elements ?? new Dictionary<int, List<(int Start, int End)>>()).OrderBy(pair => pair.Key))
+        foreach (var (key, tags) in (text.Elements ?? new Dictionary<long, List<(long Start, long End)>>()).OrderBy(pair => pair.Key))
         {
             read.Add(string.Create(CultureInfo.InvariantCulture, $"tags {key}: {string.Join(',', tags)}"));
         }

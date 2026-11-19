@@ -309,7 +309,7 @@ public sealed class VueExtractorTests : CodeGraphExtractorContractTests<VueExtra
 
         var name = Assert.Single(LiteralRow.Of(extract), literal => literal.Value == "CartView");
 
-        Assert.Null(extract.WithDigests(input.Lines).Problem("vue", input.Lines.Count));
+        Assert.Null(extract.WithDigests(input.Text).Problem("vue", input.Lines.Count));
         Assert.Equal(("vue:src/Options.vue", 6), (name.Node, name.Line));
     }
 

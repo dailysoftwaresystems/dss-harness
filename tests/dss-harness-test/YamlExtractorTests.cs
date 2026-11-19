@@ -304,7 +304,7 @@ public sealed class YamlExtractorTests : CodeGraphExtractorContractTests<YamlExt
         Assert.Equal(5001 * 2, chain.Nodes.Count);
         Assert.Equal([.. Enumerable.Range(1, 5000).Select(at => ($"yaml:chain.yml#a{at}[0]", $"a{at - 1}", at + 1, $"yaml:chain.yml#a{at - 1}"))], References(chain));
         Assert.Empty(chain.Dynamic);
-        Assert.Null(chain.WithDigests(CodeFileText.Lines(text.ToString())).Problem("yaml", CodeFileText.Lines(text.ToString()).Count));
+        Assert.Null(chain.WithDigests(text.ToString()).Problem("yaml", CodeFileText.Lines(text.ToString()).Count));
 
         const int Depth = 3000;
         var deep = string.Concat(Enumerable.Repeat("{a: ", Depth)) + "1" + new string('}', Depth);
@@ -345,7 +345,7 @@ public sealed class YamlExtractorTests : CodeGraphExtractorContractTests<YamlExt
             ("*job", 7, "yaml:.github/workflows/twice.yml#jobs"),
             Assert.Single(workflow.Nodes, node => node.Id == "yaml:.github/workflows/twice.yml#jobs.test") is var test ? (test.Summary, test.Start, test.Parent) : default);
         Assert.Equal([("yaml:.github/workflows/twice.yml#jobs.test", "job", 7, "yaml:.github/workflows/twice.yml#jobs.build")], References(workflow));
-        Assert.Null(workflow.WithDigests(CodeFileText.Lines(Workflow)).Problem("yaml", CodeFileText.Lines(Workflow).Count));
+        Assert.Null(workflow.WithDigests(Workflow).Problem("yaml", CodeFileText.Lines(Workflow).Count));
     }
 
     /// <summary>

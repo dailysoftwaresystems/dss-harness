@@ -59,7 +59,7 @@ internal enum ScanEscapes
 /// <param name="Start">Where it begins in the text.</param>
 /// <param name="End">Where it ends: the first character after it.</param>
 /// <param name="Line">The line it begins on, from 1: the part's own, for each part of a literal over lines.</param>
-internal readonly record struct ScanLiteralPart(int Start, int End, int Line);
+internal readonly record struct ScanLiteralPart(long Start, long End, int Line);
 
 /// <summary>
 /// One string literal as its lexer read it: where each constant part of its value is written - a plain string's one part,
@@ -83,22 +83,22 @@ internal sealed record ScanLiteral(IReadOnlyList<ScanLiteralPart> Parts, ScanEsc
     /// closing indentation, which PHP takes off every line - none past that many, and none of a part's that begins after
     /// a hole on its line.
     /// </summary>
-    public int Indent { get; init; }
+    public long Indent { get; init; }
 
     /// <summary>Where its value begins: the start of its first line, where <see cref="Indent"/> is taken off too.</summary>
-    public int Content { get; init; }
+    public long Content { get; init; }
 
     /// <summary>Whether its closer never came - its line or the text ended first: its parts are what it holds, but it has no whole value.</summary>
     public bool LeftOpen { get; init; }
 
     /// <summary>Each constant part's value, decoded, with the line it begins on.</summary>
     /// <param name="source">The text the literal is written in.</param>
-    public IEnumerable<(string Value, int Line)> Values(string source)
+    public IEnumerable<(string Value, int Line)> Values(CodeText source)
         => Parts.Select(part => (Decode(source, part.Start, part.End, Escapes, Indent, Indent > 0 && part.Start == Content), part.Line));
 
     /// <summary>Its whole value, decoded, where it is one closed string of one part and no holes; <see langword="null"/> where it is not.</summary>
     /// <param name="source">The text the literal is written in.</param>
-    public string? Whole(string source)
+    public string? Whole(CodeText source)
         => Interpolated || Markup || LeftOpen || Parts.Count != 1 ? null : Decode(source, Parts[0].Start, Parts[0].End, Escapes, Indent, Indent > 0);
 
     /// <summary>
@@ -106,17 +106,17 @@ internal sealed record ScanLiteral(IReadOnlyList<ScanLiteralPart> Parts, ScanEsc
     /// each escape decoded, each line break kept as written, and up to <paramref name="indent"/> blanks taken off the start
     /// of each line after a line break - and of the first, where <paramref name="lineStart"/>.
     /// </summary>
-    internal static string Decode(string source, int start, int end, ScanEscapes escapes, int indent, bool lineStart)
+    internal static string Decode(CodeText source, long start, long end, ScanEscapes escapes, long indent, bool lineStart)
     {
         // A value with nothing to decode is its text.
         var marker = escapes switch { ScanEscapes.None => (char?)null, ScanEscapes.Html => '&', _ => '\\' };
 
-        if (indent == 0 && (marker is not { } escape || source.AsSpan(start, end - start).IndexOf(escape) < 0))
+        if (indent == 0 && (marker is not { } escape || source.Find(escape, start, end) < 0))
         {
-            return source[start..end];
+            return source.Slice(start, end);
         }
 
-        var value = new Decoded(end - start);
+        var value = new Decoded();
         var at = start;
         var dedent = lineStart;
 
@@ -135,7 +135,7 @@ internal sealed record ScanLiteral(IReadOnlyList<ScanLiteralPart> Parts, ScanEsc
 
             if (ScanLexing.LineBreakAt(source, at, end) is var width and > 0)
             {
-                value.Text(source.AsSpan(at, width));
+                value.Text(source.Slice(at, at + width));
                 at += width;
                 dedent = indent > 0;
                 continue;
@@ -163,7 +163,7 @@ internal sealed record ScanLiteral(IReadOnlyList<ScanLiteralPart> Parts, ScanEsc
     /// <param name="text">The text.</param>
     /// <param name="at">Where the backslash may stand.</param>
     /// <param name="end">Where the text read ends.</param>
-    internal static int CssEscape(string text, int at, int end)
+    internal static int CssEscape(CodeText text, long at, long end)
     {
         if (at + 1 >= end || text[at] != '\\' || ScanLexing.LineBreakAt(text, at + 1, end) > 0)
         {
@@ -182,11 +182,11 @@ internal sealed record ScanLiteral(IReadOnlyList<ScanLiteralPart> Parts, ScanEsc
             past++;
         }
 
-        return past - at + (past < end && text[past] is ' ' or '\t' or '\f' ? 1 : ScanLexing.LineBreakAt(text, past, end));
+        return (int)(past - at) + (past < end && text[past] is ' ' or '\t' or '\f' ? 1 : ScanLexing.LineBreakAt(text, past, end));
     }
 
     /// <summary>The style sheet's escape whose backslash is at <paramref name="at"/>, decoded into <paramref name="value"/>; answers where the text goes on.</summary>
-    private static int CssEscaped(string source, int at, int end, Decoded value)
+    private static long CssEscaped(CodeText source, long at, long end, Decoded value)
     {
         if (ScanLexing.LineBreakAt(source, at + 1, end) is var continued and > 0)
         {
@@ -203,7 +203,7 @@ internal sealed record ScanLiteral(IReadOnlyList<ScanLiteralPart> Parts, ScanEsc
 
         if (!char.IsAsciiHexDigit(source[at + 1]))
         {
-            value.Text(source.AsSpan(at + 1, width - 1));
+            value.Text(source.Slice(at + 1, at + width));
             return at + width;
         }
 
@@ -219,7 +219,7 @@ internal sealed record ScanLiteral(IReadOnlyList<ScanLiteralPart> Parts, ScanEsc
     }
 
     /// <summary>The escape whose backslash is at <paramref name="at"/>, decoded into <paramref name="value"/>; answers where the text goes on.</summary>
-    private static int Escape(string source, int at, int end, ScanEscapes escapes, Decoded value)
+    private static long Escape(CodeText source, long at, long end, ScanEscapes escapes, Decoded value)
     {
         var next = source[at + 1];
         var after = at + 2;
@@ -322,7 +322,7 @@ internal sealed record ScanLiteral(IReadOnlyList<ScanLiteralPart> Parts, ScanEsc
     }
 
     /// <summary>Where the <c>}</c> closing the <c>{</c> at <paramref name="open"/> stands, past one hex digit at least and none but hex digits; 0 where none does.</summary>
-    private static int Braced(string source, int open, int end)
+    private static long Braced(CodeText source, long open, long end)
     {
         var at = open + 1;
 
@@ -335,14 +335,14 @@ internal sealed record ScanLiteral(IReadOnlyList<ScanLiteralPart> Parts, ScanEsc
     }
 
     /// <summary>The character the hex digits from <paramref name="start"/> to the <c>}</c> at <paramref name="close"/> name, added; answers past the brace.</summary>
-    private static int Braced(string source, int start, int close, Decoded value)
+    private static long Braced(CodeText source, long start, long close, Decoded value)
         => Hex(source, start, close, close - start) is { } code ? value.Code(code, close + 1) : value.Code(int.MaxValue, close + 1);
 
     /// <summary>
     /// The number the <paramref name="count"/> hex digits at <paramref name="at"/> write - one past every character's code
     /// read as past them all; <see langword="null"/> where fewer stand there.
     /// </summary>
-    private static int? Hex(string source, int at, int end, int count)
+    private static int? Hex(CodeText source, long at, long end, long count)
     {
         if (count <= 0 || at + count > end)
         {
@@ -372,7 +372,7 @@ internal sealed record ScanLiteral(IReadOnlyList<ScanLiteralPart> Parts, ScanEsc
     /// a byte where <paramref name="asByte"/>, its low eight bits, else the character of its code; answers where the text
     /// goes on: past its digits, or <paramref name="past"/> where given.
     /// </summary>
-    private static int Number(string source, int at, int end, int radix, int most, Decoded value, bool asByte, int past = -1)
+    private static long Number(CodeText source, long at, long end, int radix, long most, Decoded value, bool asByte, long past = -1)
     {
         var code = 0L;
         var index = at;
@@ -401,7 +401,7 @@ internal sealed record ScanLiteral(IReadOnlyList<ScanLiteralPart> Parts, ScanEsc
     /// of any length, a number past every character's the replacement character - then its <c>;</c>; answers where the
     /// text goes on. Only the run its grammar allows is read, so no text past it is searched for a <c>;</c>.
     /// </summary>
-    private static int Reference(string source, int at, int end, Decoded value)
+    private static long Reference(CodeText source, long at, long end, Decoded value)
     {
         var index = at + 1;
 
@@ -434,13 +434,13 @@ internal sealed record ScanLiteral(IReadOnlyList<ScanLiteralPart> Parts, ScanEsc
     }
 
     /// <summary>A value being decoded: its characters, and the bytes of a run of byte escapes, read as UTF-8 once the run ends.</summary>
-    private sealed class Decoded(int capacity)
+    private sealed class Decoded
     {
-        private readonly StringBuilder _value = new(capacity);
+        private readonly StringBuilder _value = new();
         private readonly List<byte> _bytes = [];
 
         /// <summary>Adds <paramref name="character"/>; answers <paramref name="past"/>, where the text goes on.</summary>
-        public int Char(char character, int past)
+        public long Char(char character, long past)
         {
             Settle();
             _value.Append(character);
@@ -448,7 +448,7 @@ internal sealed record ScanLiteral(IReadOnlyList<ScanLiteralPart> Parts, ScanEsc
         }
 
         /// <summary>Adds the character of the code <paramref name="code"/> - one no character has, the replacement character; answers <paramref name="past"/>.</summary>
-        public int Code(int code, int past)
+        public long Code(int code, long past)
         {
             Settle();
 

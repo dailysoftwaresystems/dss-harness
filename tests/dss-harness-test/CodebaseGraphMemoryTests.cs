@@ -19,8 +19,9 @@ public sealed class CodebaseGraphMemoryTests
     /// left the file unread.
     /// </summary>
     /// <remarks>
-    /// Bounded by the text and not by the nodes alone: an implementation is given a file's text whole, as a string, so
-    /// the text is held while it reads - what holds a file's nodes and no more is a reader that streams its file.
+    /// Bounded by what its reader keeps and not by the nodes alone: an implementation reads its file's text by
+    /// position (<see cref="CodeText"/>), so no string of the file is held while it reads - what holds a file's
+    /// nodes and no more is what its reader keeps of it.
     /// </remarks>
     [Fact]
     public async Task AFortyMegabytePackageLock_IsExtracted()

@@ -375,7 +375,7 @@ public sealed class StructuralScannerTests
         Assert.Equal(2, scan.Scan.Code(0, scan.Scan.Count).Count(at => scan.Scan.Is(at, "/")));
         Assert.Equal(
             ["i({ j: '}' })", "`k ${l}`"],
-            scan.Interpolations[scan.Scan[template].Start].Select(span => scan.Scan.Source[span.Start..span.End]));
+            scan.Interpolations[scan.Scan[template].Start].Select(span => scan.Scan.Source.Slice(span.Start, span.End)));
     }
 
     /// <summary>
@@ -392,8 +392,8 @@ public sealed class StructuralScannerTests
         var start = scan.Scan[element].Start;
 
         Assert.Equal("<Card title={`t${n}`} on={() => go('>')}>Don't {list.map(i => <Item key={i} />)}<br/></Card>", scan.Scan.Text(element));
-        Assert.Equal(["`t${n}`", "() => go('>')", "list.map(i => <Item key={i} />)"], scan.Interpolations[start].Select(span => Text[span.Start..span.End]));
-        Assert.Equal(["Card", "br"], scan.Elements![start].Select(span => Text[span.Start..span.End]));
+        Assert.Equal(["`t${n}`", "() => go('>')", "list.map(i => <Item key={i} />)"], scan.Interpolations[start].Select(span => Text[(int)span.Start..(int)span.End]));
+        Assert.Equal(["Card", "br"], scan.Elements![start].Select(span => Text[(int)span.Start..(int)span.End]));
         Assert.Contains(Enumerable.Range(0, scan.Scan.Count), at => scan.Scan.Text(at) == "<>" + "</>");
         Assert.Equal(2, Enumerable.Range(0, scan.Scan.Count).Count(at => scan.Scan.Is(at, "<")));
         Assert.Empty(JsLexer.Scan(Text, markup: false).Elements!);
@@ -477,8 +477,8 @@ public sealed class StructuralScannerTests
         Assert.Equal(
             ["'x {$no}'", "\"y {$b->c(\"}\")} ${d} {$o->{'p'}->q()} {$a['{$']} \\\" e\"", "`f`", "<<<EOT\n  g {$h->i()}\n  EOT", "<<<'N'\n  {$j}\n  N"],
             texts.Select(at => scan.Scan.Text(at)));
-        Assert.Equal(["$b->c(\"}\")", "$o->{'p'}->q()", "$a['{$']"], scan.Interpolations[scan.Scan[texts[1]].Start].Select(span => Text[span.Start..span.End]));
-        Assert.Equal(["$h->i()"], scan.Interpolations[scan.Scan[texts[3]].Start].Select(span => Text[span.Start..span.End]));
+        Assert.Equal(["$b->c(\"}\")", "$o->{'p'}->q()", "$a['{$']"], scan.Interpolations[scan.Scan[texts[1]].Start].Select(span => Text[(int)span.Start..(int)span.End]));
+        Assert.Equal(["$h->i()"], scan.Interpolations[scan.Scan[texts[3]].Start].Select(span => Text[(int)span.Start..(int)span.End]));
         Assert.False(scan.Interpolations.ContainsKey(scan.Scan[texts[0]].Start));
         Assert.False(scan.Interpolations.ContainsKey(scan.Scan[texts[4]].Start));
         Assert.Equal(";", scan.Scan.Text(scan.Scan.Count - 1));
@@ -492,7 +492,7 @@ public sealed class StructuralScannerTests
         }
 
         var open = PhpLexer.Scan("<?php a = \"x {$b->c()");
-        Assert.Equal(["$b->c()"], open.Interpolations.Values.Single().Select(span => "<?php a = \"x {$b->c()"[span.Start..span.End]));
+        Assert.Equal(["$b->c()"], open.Interpolations.Values.Single().Select(span => "<?php a = \"x {$b->c()"[(int)span.Start..(int)span.End]));
     }
 
     /// <summary>
@@ -519,7 +519,7 @@ public sealed class StructuralScannerTests
             var source = scan.Scan.Source;
 
             Assert.Equal(["a", "=", literal, ";", "f", "(", ")", ";"], Enumerable.Range(0, scan.Scan.Count).Select(at => scan.Scan.Text(at)));
-            Assert.Equal([code], scan.Interpolations[scan.Scan[2].Start].Select(span => source[span.Start..span.End]));
+            Assert.Equal([code], scan.Interpolations[scan.Scan[2].Start].Select(span => source.Slice(span.Start, span.End)));
         }
     }
 

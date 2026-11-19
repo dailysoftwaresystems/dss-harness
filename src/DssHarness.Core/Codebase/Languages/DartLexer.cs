@@ -21,7 +21,7 @@ internal static class DartLexer
 
     /// <summary>Scans <paramref name="text"/> by Dart's rules.</summary>
     /// <param name="text">A file's text.</param>
-    public static InterpolatedText Scan(string text) => Scan(text, 0, text.Length, CodeFileText.LineIndex(text));
+    public static InterpolatedText Scan(CodeText text) => Scan(text, 0, text.Length, text.LineIndex);
 
     /// <summary>
     /// Scans the part of <paramref name="text"/> from <paramref name="start"/> to <paramref name="end"/> by Dart's rules,
@@ -36,7 +36,7 @@ internal static class DartLexer
     /// scan whose literal holds the part - so each literal the part holds that they read is passed over at once; none for
     /// a scan of its own.
     /// </param>
-    public static InterpolatedText Scan(string text, int start, int end, CodeLineIndex lines, ScanCloses? closes = null)
+    public static InterpolatedText Scan(CodeText text, long start, long end, CodeLineIndex lines, ScanCloses? closes = null)
     {
         var lexing = new Lexing(text, lines, closes);
         lexing.Closes.Scanned(start, end);
@@ -45,9 +45,9 @@ internal static class DartLexer
     }
 
     /// <summary>One run of the lexer over a text.</summary>
-    private sealed class Lexing(string text, CodeLineIndex lines, ScanCloses? closes) : ScanLexing(lines, closes)
+    private sealed class Lexing(CodeText text, CodeLineIndex lines, ScanCloses? closes) : ScanLexing(lines, closes)
     {
-        public void Run(int start, int end)
+        public void Run(long start, long end)
         {
             var at = Shebang(text, start, end);
 
@@ -101,14 +101,14 @@ internal static class DartLexer
         }
 
         /// <summary>Dart's comments: <c>//</c> and <c>///</c> to their line's end, <c>/* */</c> past its closer, as they nest (<see cref="BlockEnd"/>).</summary>
-        protected override int CommentEnd(int at, int end)
+        protected override long CommentEnd(long at, long end)
             => at + 1 >= end || text[at] != '/' ? at
                 : text[at + 1] == '/' ? LineEnd(text, at, end)
                 : text[at + 1] == '*' ? BlockEnd(at, end)
                 : at;
 
         /// <summary>Past the block comment that opens at <paramref name="at"/>: each <c>/*</c> inside it opens one more, as Dart's nest.</summary>
-        private int BlockEnd(int at, int end)
+        private long BlockEnd(long at, long end)
         {
             var depth = 0;
 
@@ -147,7 +147,7 @@ internal static class DartLexer
         /// (<see cref="ScanCloses"/>), and passed over at once; what this reading finds of it, and of each string it holds,
         /// is kept for the scans of its code.
         /// </summary>
-        private int Literal(int start, int quote, bool raw, int end)
+        private long Literal(long start, long quote, bool raw, long end)
         {
             if (Closes.Of(start, end) is { Tags: null } read)
             {
@@ -235,7 +235,7 @@ internal static class DartLexer
         /// <paramref name="quote"/> on <paramref name="literals"/>; answers where its text begins - a triple-quoted one's past
         /// a first line of white space alone, which Dart leaves out of its value.
         /// </summary>
-        private int Open(LiteralStack<Quote> literals, int start, int quote, bool raw, int end)
+        private long Open(LiteralStack<Quote> literals, long start, long quote, bool raw, long end)
         {
             var mark = text[quote];
             var triple = quote + 2 < end && text[quote + 1] == mark && text[quote + 2] == mark;
@@ -250,7 +250,7 @@ internal static class DartLexer
         /// each blank possibly after a backslash - and its line break: where the string's value begins, as Dart reads it;
         /// <paramref name="at"/> where the line holds anything else.
         /// </summary>
-        private int PastBlankFirstLine(int at, int end)
+        private long PastBlankFirstLine(long at, long end)
         {
             var index = at;
 
@@ -263,11 +263,11 @@ internal static class DartLexer
         }
 
         /// <summary>How long the punctuator at <paramref name="at"/> is: one of <see cref="Whole"/>, else one character; 0 where none is.</summary>
-        private int Punctuator(int at, int end)
+        private long Punctuator(long at, long end)
         {
             foreach (var whole in Whole)
             {
-                if (at + whole.Length <= end && string.CompareOrdinal(text, at, whole, 0, whole.Length) == 0)
+                if (at + whole.Length <= end && text.At(at, whole))
                 {
                     return whole.Length;
                 }

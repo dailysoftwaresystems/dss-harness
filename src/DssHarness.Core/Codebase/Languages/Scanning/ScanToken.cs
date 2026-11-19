@@ -42,10 +42,10 @@ internal enum ScanBranch
 /// <param name="Line">The line it begins on, from 1.</param>
 /// <param name="EndLine">The line it ends on.</param>
 /// <param name="Branch">Where a directive stands among a conditional's branches.</param>
-internal readonly record struct ScanToken(ScanTokenKind Kind, int Start, int Length, int Line, int EndLine, ScanBranch Branch = ScanBranch.None)
+internal readonly record struct ScanToken(ScanTokenKind Kind, long Start, long Length, int Line, int EndLine, ScanBranch Branch = ScanBranch.None)
 {
     /// <summary>Where it ends in the text: the first character after it.</summary>
-    public int End => Start + Length;
+    public long End => Start + Length;
 }
 
 /// <summary>One comment of a scanned text, which no token holds: what a declaration's summary is read from.</summary>
@@ -53,4 +53,4 @@ internal readonly record struct ScanToken(ScanTokenKind Kind, int Start, int Len
 /// <param name="Length">How many characters it has.</param>
 /// <param name="Line">The line it begins on, from 1.</param>
 /// <param name="EndLine">The line it ends on.</param>
-internal readonly record struct ScanComment(int Start, int Length, int Line, int EndLine);
+internal readonly record struct ScanComment(long Start, long Length, int Line, int EndLine);

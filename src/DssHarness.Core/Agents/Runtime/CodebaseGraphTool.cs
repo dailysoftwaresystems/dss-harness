@@ -95,8 +95,8 @@ public sealed record GraphToolFacts(IReadOnlyList<string> Asked, IReadOnlyList<s
 /// <param name="Start">The first line written, from 1, as the file stood once it had.</param>
 /// <param name="Count">How many lines it wrote; none where its text was empty.</param>
 /// <param name="Hash">
-/// Their hash, as a node's is (<see cref="CodeGraphIds.Digest"/>, its first eight characters): what finds them where a
-/// later write moved them; null where it wrote none.
+/// Their hash, as a node's is (<see cref="CodeGraphIds.Digest(IReadOnlyList{string}, int, int)"/>, its first eight
+/// characters): what finds them where a later write moved them; null where it wrote none.
 /// </param>
 public sealed record GraphWrittenLines(string Path, int Start, int Count, string? Hash = null)
 {

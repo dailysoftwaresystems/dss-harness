@@ -55,37 +55,17 @@ public interface ICodeGraphExtractor
 
 /// <summary>One file given to an implementation to extract.</summary>
 /// <param name="Path">The file's path, relative to the tree's root with forward separators.</param>
-/// <param name="Text">The file's text, decoded by the core.</param>
-public sealed record CodeFileInput(string Path, string Text)
+/// <param name="Text">
+/// The file's text, decoded by the core and read by position (<see cref="CodeText"/>): never one string of the whole file,
+/// so what an implementation holds of a file is what it keeps of it, whatever the file's size.
+/// </param>
+public sealed record CodeFileInput(string Path, CodeText Text)
 {
-    /// <summary>The lines cut once, with the text they were cut from: a copy made with another text cuts its own.</summary>
-    private (string Of, IReadOnlyList<string> Lines)? _lines;
-
     /// <summary>
-    /// The file's lines, as every span of its extract counts them (<see cref="CodeFileText.Lines"/>): cut once, however
-    /// often the implementation and the core ask, so a file's lines are held once beside its text.
+    /// The file's lines, as every span of its extract counts them (<see cref="CodeFileText.Lines"/>): each read from the
+    /// text when it is asked for (<see cref="CodeText.Lines"/>), so only the lines an implementation keeps are held.
     /// </summary>
-    public IReadOnlyList<string> Lines
-    {
-        get
-        {
-            if (_lines is not { } held || !ReferenceEquals(held.Of, Text))
-            {
-                held = (Text, CodeFileText.Lines(Text));
-                _lines = held;
-            }
-
-            return held.Lines;
-        }
-    }
-
-    /// <summary>Whether <paramref name="other"/> is the same file: its path and its text, whatever either has cut of its lines.</summary>
-    /// <param name="other">Another input.</param>
-    public bool Equals(CodeFileInput? other)
-        => other is not null && string.Equals(Path, other.Path, StringComparison.Ordinal) && string.Equals(Text, other.Text, StringComparison.Ordinal);
-
-    /// <inheritdoc/>
-    public override int GetHashCode() => HashCode.Combine(StringComparer.Ordinal.GetHashCode(Path), StringComparer.Ordinal.GetHashCode(Text));
+    public IReadOnlyList<string> Lines => Text.Lines;
 }
 
 /// <summary>What files an implementation reads.</summary>
@@ -106,13 +86,23 @@ public sealed record CodeGraphClaims(IReadOnlyList<CodeGraphClaim> Names, IReadO
 /// <summary>One file name or extension an implementation claims.</summary>
 /// <param name="Value">The exact file name, or the extension with its dot; compared without regard to case.</param>
 /// <param name="ContentTest">
-/// A pure test of the file's decoded text, given whole (<see cref="CodeFileText.Probe"/>) and read only as far as the test
-/// reads, which says whether it is this implementation's; <see langword="null"/> where the claim needs none. Where two implementations claim one name or one
-/// extension, each must give one, and the registry refuses them otherwise.
+/// A pure test of the file's decoded text, given whole and read by position (<see cref="CodeText"/>) only as far as the
+/// test reads - a test defined by a format's start (a shebang, an XML prolog) stops there by its own grammar, and one that
+/// looks for a mark finds it wherever the file holds it - which says whether it is this implementation's;
+/// <see langword="null"/> where the claim needs none. Where two implementations claim one name or one extension, each must
+/// give one, and the registry refuses them otherwise.
 /// </param>
-public sealed record CodeGraphClaim(string Value, Func<string, bool>? ContentTest = null);
+public sealed record CodeGraphClaim(string Value, Func<CodeText, bool>? ContentTest = null);
 
 /// <summary>What <c>help codebase-graph</c> says of one implementation.</summary>
 /// <param name="Reads">One line: what it reads, and through what.</param>
 /// <param name="DoesNotSee">What it does not see, each a line a person reads before trusting an answer of the graph.</param>
-public sealed record CodeGraphExtractorHelp(string Reads, IReadOnlyList<string> DoesNotSee);
+public sealed record CodeGraphExtractorHelp(string Reads, IReadOnlyList<string> DoesNotSee)
+{
+    /// <summary>
+    /// What reading a file holds beyond what the implementation keeps of it, where a library it reads through keeps more -
+    /// which library, what it keeps and why, as its documentation says; <see langword="null"/> where reading a file holds
+    /// what the implementation keeps and no more, as every reader of the core's text by position does.
+    /// </summary>
+    public string? Holds { get; init; }
+}
