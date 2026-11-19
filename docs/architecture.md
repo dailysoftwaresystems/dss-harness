@@ -80,6 +80,54 @@ the command line supplies only how a password is asked at its terminal (`Console
 no command's wiring outgrows 220 lines but the two files that declare several commands'
 options, so a file under `Commands\` is wiring, and wiring is all a person reads in it.
 
+### What every area shares: pages, walks, waits and text
+
+Four folders of Core sit above the file system, the output and the platform seam and below every area that answers,
+walks or waits - the agents, the codebase graph, the engine, the web, git and CI, runs, sync, hosts, execution,
+mutations and anchors - and each holds one rule those areas ask of it, so no area answers a large input, a deep one or a
+slow one by a number of its own. They reach files only through `IFileSystem`, time only through `TimeProvider` and a
+process's life only through `IProcessIdentity`; they tell what they wait on through a callback, never through the
+console or `IHarnessOutput`; and nothing in them branches on the operating system - a thread given a stack of a size is
+.NET's own on every system.
+
+- `Pages\`: an answer's pages. No answer is cut: each is pages of whole entries, page 1 given and any page asked by
+  number, its totals counted exactly (`Paging`, over each answer's own entry, `IPageEntry`); an entry wider than a page
+  is given in pieces at character boundaries, each marked where it goes on, by one rule (`Pieces`); and how much a page
+  holds has one owner (`PageRoom`) - a page's size, never a limit, since every entry stays reachable. A conversation's
+  kept answers are `KeptAnswers`: one file an ask in the conversation's directory, read once and then held, every one
+  kept for the conversation's life and put away when it ends, the work it goes on from read nearest first, and an
+  answer kept under another state - the graph moved, the file changed - never given for this one (`IKeptFreshness`). A
+  text file's pages (`TextPages`) are laid by streaming the file once and keep only the byte offsets where pages begin;
+  a page is read by seeking to its own, so a two-gigabyte log costs a page's memory.
+- `Walks\`: a walk on an explicit stack or queue that keeps a set of what it met (`Walk`); a memo that answers each key
+  once from its dependencies' answers, and a key met again while it is being answered by the cycle's own rule (`Memo`);
+  a chain followed to its end or its first revisit (`Chain`); a step repeated until it says it is done or its state
+  repeats, which is told as a cycle (`Fixpoint`); and a recursion moved onto a thread of a larger stack where the stack
+  runs short - our own at each level (`DeepCalls.Run`), a library's we do not own on a thread whose stack holds the depth
+  it was measured to need (`DeepCalls.RunSized`). A walk is linear in what is true, cycles included, and no depth, count
+  or visit budget ends one; a .NET thread's stack is an `int` count of bytes, the runtime's fact, and a depth past it is
+  refused naming it.
+- `Waiting\`: a wait for the thing itself - a work's end, a lock's holder ending (`Waits`) - told every five minutes
+  (`Waits.SaidEvery`, the cadence an admission's wait keeps), cancellable, and ended only at the bound the user
+  configured; and the one owner of retrying (`Retrying`): a cause that passes by nature - a live holder, a 429, a
+  provider's pause - retried while it lasts, as long as its own answer says to wait; a failure retried while it is a new
+  one, by its digest; and a final one ended at once.
+- `Text\`: every regular expression made by one maker on .NET's linear-time engine, with no timeout, a construct that
+  engine lacks refused by name (`LinearRegex`); and two sequences diffed by one owner with no edit bound - anchors that
+  occur once on each side first, Myers' linear-space algorithm where a region has none (`SequenceDiff`).
+
+Four owners gained members of the same kind. A one-line message names every item that fits its room and says where the
+whole list is (`Output\Names.Line`). JSON is read, written and walked at any depth (`Json\JsonDepth`, and
+`Json\JsonWalk` on an explicit stack, each place's path spelt only when it is asked for). A stream is hashed as it is
+read (`FileContentHash.OfStreamAsync`), and a file's first line is read whole whatever its length
+(`FileLines.FirstLineWholeAsync`). And the one YAML reader loads a document however deep it nests: its event scan
+measures the nesting - the deepest it reached, where the text later stops reading as YAML - and YamlDotNet's model then
+reads those events on a thread whose stack holds that depth (`DeepCalls.RunSized`), so an agent's frontmatter nested a
+hundred thousand deep is read, or refused for what it holds, and never ends the process. An alias is the node its anchor
+names, never a copy; a reader's own rule refuses one where its files write each part out (`YamlRules`: a workflow's
+definition and a pubspec do); and a key that holds an alias of a mapping or a list, or of an anchor not yet written, is
+refused, since the model would hash it without end.
+
 ### The platform layer
 
 `HostPlatform`, `FilePermissionsFactory` and `ProcessTableFactory` are where the tool learns
@@ -1780,7 +1828,9 @@ review loop decides at its `review`, so the last rework of a loop that ends at i
 reviewed by the round after it and what it leaves is what its last review found. A step raised by another step's ending
 says `on` - by the outcome, a failure by exit code - and sends the run back with `then`; the
 schedule never starts it. Steps nest at most ten deep; every step's name is a lower-case word,
-unique among its siblings and never a word a definition reads for its own.
+unique among its siblings and never a word a definition reads for its own. The file writes no YAML alias - a
+definition writes each of its steps out, so that what it says is what it reads - and its values are read however deep
+they nest, by the one YAML reader (see "Layering").
 
 A step may be a whole workflow of its own: it says `use` - a path to the workflow's yml file,
 relative to the calling workflow's directory and resolving inside the workflows folder, so a

@@ -81,7 +81,7 @@ public static partial class HelpTopics
             + $"{OrchestratorLayout.HandoffFileName} where one stopped it, and for a reason step the {OrchestratorLayout.PolicyFileName} it started under - the agents' "
             + "configuration read when each step starts, as its prompts are, so an edit of config.json reaches the steps "
             + "that start after it and never one under way - and, where the step has a codebase graph, its graph.jsonl (a "
-            + $"line for each launch's first message, each call of the graph tool, each escape of its narrowed reads), its {OrchestratorLayout.StepPagesDirectoryName}/ (the whole result of each ask of more than one page its graph tool answered, one file an ask, each kept packed for the conversation's life and put away when it ends, so a later page, a resumed conversation and a step that goes on with its work read pages of that one result) and its working-set.json, the "
+            + $"line for each launch's first message, each call of the graph tool, each escape of its narrowed reads), its {OrchestratorLayout.StepPagesDirectoryName}/ (the whole result of each ask of more than one page its graph tool answered, and where each page of a call's whole result read_result reads begins, one file an ask, each kept packed for the conversation's life and put away when it ends, so a later page, a resumed conversation and a step that goes on with its work read pages of that one result) and its working-set.json, the "
             + "seeds of the packs of the steps after it"),
         ($"{HarnessLayout.OrchestratorsDirectoryName}/<o>/{OrchestratorLayout.AgentsDirectoryName}/<agent>/{OrchestratorLayout.SessionsDirectoryName}/<id>/",
             "ignored; API clients only: one conversation with the provider, in the provider's own form"),
@@ -112,7 +112,7 @@ public static partial class HelpTopics
         ($"{HarnessLayout.SideTasksDirectoryName}/<task>/",
             "ignored; one side-task: its task.json, stored stream, transcript, denials and web, its conversation where "
             + "its client stores one, and its own codebase graph (graph/, its map and each call of the graph tool) where it "
-            + $"was given one, with {OrchestratorLayout.StepPagesDirectoryName}/ (the whole result of each ask of more than one page its graph tool answered, which its later pages read); <task>.owner.json beside it while a side-task holds it open"),
+            + $"was given one, and {OrchestratorLayout.StepPagesDirectoryName}/ (the whole result of each ask of more than one page its graph tool answered, and where each page of a call's whole result read_result reads begins, which their later pages read); <task>.owner.json beside it while a side-task holds it open"),
         ($"{HarnessLayout.MutationsDirectoryName}/",
             $"contents ignored, {HarnessLayout.GitKeepFileName} tracked; the tree's mutation workers, in every tree, never "
             + $"sent to a host by sync ('{ToolPackage.Command} help mutations')"),

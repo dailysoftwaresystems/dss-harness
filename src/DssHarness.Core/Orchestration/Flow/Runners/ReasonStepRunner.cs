@@ -408,8 +408,8 @@ public sealed class ReasonStepRunner(
 
             // The step's graph, where it was given one, ends with the step: its working set written beside its output,
             // the seeds of the packs of the steps after it, and its figures gathered for its record. A step done whose
-            // work no later step's conversation goes on with puts away the pages its graph answers kept: none is asked
-            // again.
+            // work no later step's conversation goes on with puts away the pages its conversation kept - its graph answers'
+            // and its call results': none is asked again.
             var graphUse = stepGraph?.Ended(graphService!, fileSystem, platform.PathComparison, layout, cancellationToken);
 
             if (ended is { Passed: true, Asked: null } && !ResumeChain.GoneOnWith(place.Definition, run.DeclarationPath, run.Step))

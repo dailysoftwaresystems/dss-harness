@@ -45,7 +45,7 @@ them.
 |---|---|
 | `Application` | The lifecycle every command shares and the use cases a front end calls (`DssHarnessHost`, `CommandSession`, `SessionOptions`, `UseCaseResult<T>`, `Legs/BuildLegs`, `TestLegs`, `RunnerLegs`, `MutationLegs`) |
 | `Composition` | The dependency-injection registrations, every front end's alike (`ServiceRegistration.AddDssHarness`) |
-| `Help` | Every `help` topic's text, held to the code (`HelpTopics`) |
+| `Help` | Every `help` topic's text, held to the code (`HelpTopics`: the dispatch and the shared helpers in `HelpTopics.cs`, each topic's text a `HelpTopics.<Topic>.cs` partial) |
 | `Agents` | The agents' clients and what they share: the policy (`Policy/AgentPolicy`, `AgentPolicyGround`), the claude-code client (`ClaudeCode/ClaudeCodeClient`, `ClaudeLaunch`), the harness's own tools, which the API clients give their agents and the claude-code client takes the web's from (`Runtime/AgentToolRuntime`, its table `AgentTools`, its paths `ConfinedPaths`), the loop the API clients share (`Loop/ToolLoop` over `IChatProvider`), the claude-api client (`ClaudeApi/ClaudeApiClient`) and the glm client (`ZaiApi/ZaiApiClient`), what their wires share (`Http/ApiConnection`, `ApiBody`, `ApiAnswers`), the envelope every client asks for where a step names an output and the gate that reads it (`AgentEnvelope`, `StructuredOutputGate`), the records every client's calls leave (`AgentCallRecords`), the environment every child of an agent has (`AgentChildEnvironment`), and the stored stream (`AgentRunner`) |
 | `Anchors` | Anchor registry rows, balance and citations (`IAnchorRegistryService`, `AnchorBalanceService`, `AnchorCitationService`) |
 | `Build` | Build adapters and CMake/Ninja inspection (`BuildService`, `BuildDirectoryGuard`, `CMakeToolchainReader`) |
@@ -56,26 +56,33 @@ them.
 | `Execution` | A leg's run: phases, locks, ledgers, verdicts, admission, input watch (`LegExecutor`, `PhaseRunner`, `RunLock`, `LegLedger`, `LegVerdict`, `LegAdmission`) |
 | `FileSystem` | `IFileSystem`/`PhysicalFileSystem`, whole-file reads and writes (`WholeFiles`, `FileLines`), records (`JsonStateFile`, and `JsonLineWriter`/`JsonLineReader` in `JsonLines.cs`), what makes content binary (`BinaryContent`), a text file read and written back in its encoding (`EncodedText`, `EditedText`), `PathCase`, Windows' own file calls (`Win32Files`), what a path is off Windows where .NET does not say (`UnixFiles`: a pipe, a socket, a device), junctions, holds, verified copies |
 | `Git` | `IGitClient`/`GitClient` (partial files for history and merges), what a work tree's files are as git lists them (`GitTreeFiles`) |
+| `Json` | JSON read, written and walked at any depth (`JsonDepth`, `JsonWalk`), JSONPath, I-Regexp |
 | `Hosts` | Reaching and probing ssh and WSL hosts, the tool on each host (`HostCommandRunner`, `HostAgentService`, `ToolUpdateService`) |
 | `Legs` | Leg placement and selection (`LegsService`, `LegPlacement`, `LegSelection`) |
 | `LineEndings` | `.gitattributes` policy (`LineEndingService`) |
 | `Mutations` | `check-mutations` (`MutationService`, `MutationRegistry*`, `ArmJudge`, `MutationFixture`) |
 | `Orchestration` | Orchestrators and agents: seeding, folding, rebasing (`OrchestratorService`, `AgentService`, `AgentFold`); the engine in `Flow`, its step runners in `Flow/Runners`, and its own syncs of a run's graph (`FlowGraphSyncs`) |
-| `Output` | `IHarnessOutput`/`ConsoleHarnessOutput`, text and JSON reports, a cut by characters that never parts a surrogate pair (`TextCut`) |
+| `Output` | `IHarnessOutput`/`ConsoleHarnessOutput`, text and JSON reports, a cut by characters that never parts a surrogate pair (`TextCut`), a one-line list that names every item that fits and says where the whole is (`Names`) |
+| `Pages` | An answer's pages, none of them cut (`Paging`, `IPageEntry`, `PageRoom`), a conversation's kept answers (`KeptAnswers`, `IKeptFreshness`, `PageKey`), a text file's pages laid by streaming it (`TextPages`) |
 | `Platform` | The operating-system seam (`IHostPlatform`, `IFilePermissions`, `IProcessTable`, `PathBudget`) |
 | `Processes` | `IProcessRunner`/`ProcessRunner`, `ProcessRequest`/`ProcessResult`/`ProcessStoppedException`, containment (`ContainExec`, `Containment`, `ProcessScope`), `CommandLineText` (the one no-shell line splitter) |
 | `Projects` | What `init` detects and seeds (`IProjectDetector`) |
 | `Repository` | The harness context and layout, `GitIgnoreManager` |
 | `Results` | `CommandOutcome`, `HarnessException`, `HarnessExit` (the shared exit codes), `KnownCauses.Meaning` (the one place an exception becomes an exit code), `OutcomeCause` |
+| `Schemas` | The JSON Schema subset a workflow's schemas and answers are held to (`JsonSchemaSubset`) |
 | `Runners` | Predefined runners and action files (`RunnerRunService`, `ActionFileParser`) |
 | `Runs` | Leg runs, remote runs, `stop-run`, `clean` (`LegRunService`, `RemoteLegRunner`, `RunStopService`/`RunStops`, `CleanService`) |
 | `SetUps` | `up`/`down` and a run's `--set-up`: lines, shared holds, bringing up around a leg (`SetUpService`, `SetUpHolds`, `LegSetUps`) |
 | `Secrets` | Host connection data and its permission checks, and the dotenv readers (`HostSecretsStore`, `ItemEnvironment`, `DotEnvFile`, `DotEnvDirectories`) |
 | `Sync` | Syncing a tree to hosts (`SyncService`, `SyncManifest`, `HostCopies`) |
+| `Text` | Every regular expression, linear in its text with no timeout (`LinearRegex`), and the one diff of two sequences (`SequenceDiff`) |
 | `Testing` | `test` and ctest (`TestService`, `TestInvocationResolver`) |
 | `Tools` | `install-missing-tools` (`IToolProvisionService`), which judges each tool by the host's own survey (`IHostInspector`) |
+| `Waiting` | A wait for the thing itself, told every five minutes and ended only at the user's bound (`Waits`), and the one retry owner (`Retrying`) |
+| `Walks` | Walks with a visited set on explicit stacks (`Walk`, `Memo`, `Chain`, `Fixpoint`), recursion given the stack its depth needs (`DeepCalls`) |
 | `Web` | The harness's own fetch (`HarnessFetch`), the addresses it reaches (`WebAddresses`), a page's text (`WebPageText`, over AngleSharp) and how web text reaches a model (`WebBlocks`); `Web/Search` the web search - the sources (`WebSearchSources`, over the embedded `Agents/Templates/web-search-sources.json`), their kinds (`IWebSearchKind` in `Kinds/`), the search (`HarnessWebSearch`), the machine's pace (`WebSearchPace`), the run's record (`WebSearchRun`) and the keys (`WebSearchKeys`); `Web/Index` a sitemap source's index (`WebIndexes`, `SitemapFill`) |
 | `Worktrees` | Worktrees, root litter, host copies (`WorktreeService`, `RootLitterService`) |
+| `Yaml` | The one YAML reader, any depth (`YamlReading`, `YamlRules`), and a file's frontmatter (`Frontmatter`) |
 
 ## 3. Layering
 
@@ -153,7 +160,7 @@ dotnet build DssHarness.slnx
 | An enum status mapped to exit codes | [`VerifyGitCommand.cs`](../../../../src/DssHarness.Cli/Commands/VerifyGitCommand.cs) |
 | A Core service with its interface | [`RootLitterService.cs`](../../../../src/DssHarness.Core/Worktrees/RootLitterService.cs) — documented exceptions, a result record, collaborators through `IHarnessContextLoader`, `IGitClient`, `IFileSystem` |
 | A test class on real collaborators | [`RootLitterServiceTests.cs`](../../../../tests/dss-harness-test/RootLitterServiceTests.cs) |
-| Help held to the code it describes | [`HelpTests.cs`](../../../../tests/dss-harness-test/HelpTests.cs) |
+| Help held to the code it describes | [`HelpTests.cs`](../../../../tests/dss-harness-test/HelpTests.cs) and its `HelpTests.<Topic>.cs` partials |
 | The exit-code contract | [`HarnessExit.cs`](../../../../src/DssHarness.Core/Results/HarnessExit.cs) and [`ExitCodeContractTests.cs`](../../../../tests/dss-harness-test/ExitCodeContractTests.cs) |
 | `--json` on every exit | [`JsonAnswer.cs`](../../../../src/DssHarness.Cli/JsonAnswer.cs) and [`StoppedDocumentTests.cs`](../../../../tests/dss-harness-test/StoppedDocumentTests.cs) |
 

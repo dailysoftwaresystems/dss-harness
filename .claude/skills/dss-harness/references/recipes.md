@@ -37,7 +37,7 @@ purpose: find a member by name. Sentences of `README.md` and `docs/architecture.
    `StoppedDocumentTests.OwnDocuments`, and to the architecture sentence listing the commands that answer `--json`,
    which that class pins.
 6. **Help** — the root `--help` lists it from its description (over ten characters). Explain it in the topic it belongs
-   to (`HelpTopics.Render*`, in `src/DssHarness.Core/Help/HelpTopics.cs`); the overview's "Getting started" list is
+   to (`HelpTopics.Render*`, in its topic's partial `src/DssHarness.Core/Help/HelpTopics.<Topic>.cs`); the overview's "Getting started" list is
    curated, not complete.
 7. **Docs** — the `README.md` "Commands" table lists every command a user types (not the hidden ones);
    `docs/architecture.md` "Status" names every implemented command. No test checks either list: update both.
@@ -89,7 +89,7 @@ The vocabulary is closed: a new verdict is a design decision.
 ## 5. A help topic
 
 Add `new("name", ["alias"], "summary", RenderX)` to `HelpTopics.Topics` (`src/DssHarness.Core/Help/HelpTopics.cs`) and
-write `RenderX`. That one list drives
+write `RenderX` in a partial of its own, `HelpTopics.<Topic>.cs`, its tests in `HelpTests.<Topic>.cs`. That one list drives
 the overview, the argument's description and the unknown-topic message. Names are `[a-z-]+`. `HelpTests` renders
 every advertised topic and checks every command a topic tells the user to type is spelt as installed (`dssharness`,
 lowercase); add sentence assertions of your own with `Prose.Words`. Update the README `help [topic]` row.

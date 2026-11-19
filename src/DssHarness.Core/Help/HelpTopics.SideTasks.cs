@@ -242,7 +242,7 @@ public static partial class HelpTopics
             + "and effort, what it used and cost, and what the agent ran under), the stored stream (stream.jsonl) and the transcript as a "
             + "person reads it (transcript.md), each action decided (tools.json holds the offered table), each denial "
             + "(denials.jsonl) and each search and fetch (web.jsonl), the stored conversation under sessions/ where "
-            + $"its client stores one, and where it has its graph, graph/ and {OrchestratorLayout.StepPagesDirectoryName}/ - the whole result of each ask of more than one page its graph tool answered, which the chat's later pages read. Beside the directory, <task>.owner.json names the process that holds the side-task "
+            + $"its client stores one, where it has its graph, graph/, and {OrchestratorLayout.StepPagesDirectoryName}/ - the whole result of each ask of more than one page its graph tool answered, and where each page of a call's whole result read_result reads begins, which the chat's later pages read. Beside the directory, <task>.owner.json names the process that holds the side-task "
             + "open, claimed before anything is written and task.json written inside the claim, so two commands never "
             + "take one name; a dead one is reclaimed and said. A side-task whose turn outgrew the model's context - a "
             + "chat's, or a one shot's - keeps no stored conversation to go on with, for handed again it would meet the "

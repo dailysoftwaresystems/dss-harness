@@ -31,7 +31,7 @@ namespace DssHarness.Core.Orchestration;
 /// &lt;step&gt;/commit-message.txt   a commit step: the message it commits with
 /// &lt;step&gt;/pull-request-body.md  a pull-request step: the body it opens the pull request with, its file filled
 /// &lt;step&gt;/graph.jsonl          a reason step that has a codebase graph: one line for each call of the graph tool; nothing writes it yet
-/// &lt;step&gt;/graph-pages/         a reason step given the graph tool: the whole result of each ask of more than one page, which its later pages read
+/// &lt;step&gt;/graph-pages/         a reason step given the graph tool or read_result: the whole result of each graph ask of more than one page, and where each page of a call's whole result begins, which their later pages read
 /// &lt;step&gt;/working-set.json     a reason step that has a codebase graph: the nodes it edited, served, read and found, which seed the packs of the steps after it; nothing writes it yet
 /// &lt;step&gt;/targets/&lt;agent&gt;/     a refresh or a rebase of others: one target's fold.json
 /// &lt;step&gt;/web.jsonl            a step whose agent asks the web: each address and each search source asked, decided before it was asked and what it answered; written by every client whose step has the web
@@ -207,10 +207,11 @@ public sealed record OrchestratorLayout(string Name, string Directory)
     public const string StepGraphFileName = "graph.jsonl";
 
     /// <summary>
-    /// The name of the directory a conversation that has the graph tool keeps the whole result an answer's pages read from
-    /// in - a reason step's, in its own directory, and a side-task's, in its records: one file an ask of more than one
-    /// page, under the digest of the graph it was computed on, so a later page, a resumed conversation and one that goes
-    /// on with the step's work read pages of that one result. The one spelling of the name.
+    /// The name of the directory a conversation keeps its kept answers in (<see cref="Pages.KeptAnswers{TKept}"/>) - a
+    /// reason step's, in its own directory, and a side-task's, in its records: one file an ask - the whole result of a graph
+    /// ask of more than one page, under the digest of the graph it was computed on, and where each page of a call's whole
+    /// result begins, under the digest of its file - so a later page, a resumed conversation and one that goes on with the
+    /// step's work read pages of that one result. The one spelling of the name.
     /// </summary>
     public const string StepPagesDirectoryName = "graph-pages";
 
