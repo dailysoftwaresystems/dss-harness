@@ -82,6 +82,82 @@ public sealed class AgentPolicyPatternTests
         Assert.Contains("zz-last", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run("find . -name 'zz*' -delete")).Reason, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// A path of sixty short-name components, each of which may shorten two guarded names, is decided by the ways its 3^60
+    /// readings stand to the policy, never one reading at a time, and decided as reading every one would decide it: a
+    /// <c>Read</c> rule over one of those names refuses the path whose last name it names and allows the same path ending
+    /// in another, a command's write of it beneath the tree is refused as git's own and one beneath no tree allowed - all of
+    /// it in well under a second. Red with <c>Spelled</c> deciding every reading <see cref="WindowsNames.Lengthened"/>
+    /// gives, which never ends.
+    /// </summary>
+    [Fact]
+    public void ASixtyComponentShortNamePath_IsDecidedByHowItsReadingsStand()
+    {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "Only Windows reads a short name as each name it may shorten.");
+
+        using var temp = new TempDirectory();
+        var worktree = Directory.CreateDirectory(temp.Combine("tree")).FullName;
+        var elsewhere = Directory.CreateDirectory(temp.Combine("elsewhere")).FullName;
+        var policy = new AgentPolicy(
+            new PassThroughFileSystem(new PhysicalFileSystem(FilePermissionsFactory.Create())),
+            HostDoubles.Platform(PlatformId.Windows),
+            PolicyGrounds.Of(worktree, [worktree], [worktree], [], [], [new AgentRestriction("Read(**/.github/secret)", AgentPolicySource.Config)]));
+        var sixty = string.Concat(Enumerable.Repeat(@"\GIT~1", 60));
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+
+        var refused = policy.Read(worktree + sixty + @"\secret");
+        var allowed = policy.Read(worktree + sixty + @"\public");
+        var written = policy.Run($"echo x > \"{worktree + sixty}\\x\"");
+        var writtenElsewhere = policy.Run($"echo x > \"{elsewhere + sixty}\\x\"");
+
+        Assert.True(clock.Elapsed < TimeSpan.FromSeconds(1), $"deciding sixty short names took {clock.Elapsed}");
+        Assert.Equal("Read(**/.github/secret)", Assert.IsType<AgentPolicyAnswer.Denied>(refused).Rule);
+        Assert.Equal(AgentPolicyAnswer.Allow, allowed);
+        Assert.Equal(AgentPolicy.GitsOwnRule, Assert.IsType<AgentPolicyAnswer.Denied>(written).Rule);
+        Assert.Equal(AgentPolicyAnswer.Allow, writtenElsewhere);
+    }
+
+    /// <summary>
+    /// A pattern read a segment at a time (<c>GlobPattern.Begin</c>, <c>Next</c>, <c>Ends</c>) decides what reading the
+    /// path whole decides, for every pattern shape - anchored or not, naming a directory or not, <c>**</c> leading, inside
+    /// and trailing - against every path of up to four segments over its names. Red with a trailing <c>**</c> matched by the
+    /// segment it begins at, or with a matched directory forgotten by the segments after it.
+    /// </summary>
+    [Fact]
+    public void APatternReadASegmentAtATime_DecidesAsTheWholePath()
+    {
+        string[] patterns = ["a", "a/", "*.txt", "/a", "a/b", "a/b/", "**/b", "a/**", "a/**/b", "**/a/**", "a/*/b/", "**"];
+        string[] names = ["a", "b", "x.txt", "A"];
+        var paths = new List<string[]> { Array.Empty<string>() };
+
+        for (var length = 1; length <= 4; length++)
+        {
+            paths.AddRange(paths.Where(path => path.Length == length - 1).SelectMany(path => names.Select(name => (string[])[.. path, name])).ToList());
+        }
+
+        foreach (var text in patterns)
+        {
+            var pattern = DssHarness.Core.Repository.GlobPattern.Parse(text);
+
+            foreach (var path in paths.Where(path => path.Length > 0))
+            {
+                foreach (var comparison in new[] { StringComparison.Ordinal, StringComparison.OrdinalIgnoreCase })
+                {
+                    var stands = pattern.Begin();
+
+                    foreach (var segment in path)
+                    {
+                        stands = pattern.Next(stands, segment, comparison);
+                    }
+
+                    Assert.True(
+                        pattern.Matches(string.Join('/', path), comparison) == pattern.Ends(stands),
+                        $"'{text}' against '{string.Join('/', path)}' ({comparison}): whole {pattern.Matches(string.Join('/', path), comparison)}, a segment at a time {pattern.Ends(stands)}");
+                }
+            }
+        }
+    }
+
     /// <summary>A policy over <paramref name="worktree"/>, which it reads and writes, a slot in it and git's own directory kept.</summary>
     private static AgentPolicy Policy(IFileSystem fileSystem, string worktree)
         => new(

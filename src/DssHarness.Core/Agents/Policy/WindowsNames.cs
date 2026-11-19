@@ -109,22 +109,41 @@ public static partial class WindowsNames
     /// <param name="names">The names a short name is read as where it may shorten one.</param>
     public static IEnumerable<string> Lengthened(string path, IReadOnlyCollection<string> names)
     {
+        var parts = Lengthenings(path, names);
+
+        return parts.Any(part => part.Count > 1)
+            ? new WordPattern([.. parts.Select(part => part.Count == 1
+                ? new WordPart.Text(part[0], string.Empty)
+                : (WordPart)new WordPart.Choice(new WordChoice([.. part.Select(name => WordPattern.Of(name, string.Empty))])))]).Spellings().Select(spelled => spelled.Word)
+            : [path];
+    }
+
+    /// <summary>
+    /// <paramref name="path"/> as the parts its readings (<see cref="Lengthened"/>) are made of, in order: each run of
+    /// separators a part of its own, spelled as it is; each segment a part of the names it may be read as - itself first,
+    /// then, where it is spelled as a short name, each of <paramref name="names"/> it may shorten (<see cref="MayShorten"/>),
+    /// each once in any case. The pattern of the readings, held at the size of the path and its names: a reader that
+    /// decides the readings one segment at a time, keeping one of each way they may stand, reads them all without
+    /// spelling them out (the agents' policy, <c>AgentPolicy.Readings</c>).
+    /// </summary>
+    /// <param name="path">A whole path, after the system has given each short name it knows as its long one.</param>
+    /// <param name="names">The names a short name is read as where it may shorten one.</param>
+    public static IReadOnlyList<IReadOnlyList<string>> Lengthenings(string path, IReadOnlyCollection<string> names)
+    {
         ArgumentNullException.ThrowIfNull(path);
         ArgumentNullException.ThrowIfNull(names);
 
         if (!path.Contains('~', StringComparison.Ordinal))
         {
-            return [path];
+            return [[path]];
         }
 
-        var parts = Separators.Split(path)
+        return [.. Separators.Split(path)
             .Select((segment, at) => at % 2 == 0 && IsShortName(segment)
                     && names.Where(name => MayShorten(segment, name)).Distinct(StringComparer.OrdinalIgnoreCase).ToList() is { Count: > 0 } longer
-                ? new WordPart.Choice(new WordChoice([WordPattern.Of(segment, string.Empty), .. longer.Select(name => WordPattern.Of(name, string.Empty))]))
-                : (WordPart)new WordPart.Text(segment, string.Empty))
-            .ToList();
-
-        return parts.Any(part => part is WordPart.Choice) ? new WordPattern(parts).Spellings().Select(spelled => spelled.Word) : [path];
+                ? (IReadOnlyList<string>)[segment, .. longer]
+                : [segment])
+            .Where(part => part[0].Length > 0 || part.Count > 1)];
     }
 
     /// <summary>

@@ -1839,7 +1839,7 @@ public sealed partial class AgentPolicy
         var environmentDrive = commands.Any(command => command.Wrappers.Append(command.Words).Any(words => words.Any(CommandAnalysis.NamesEnvironmentDrive)));
 
         // What the string's own assignments set, and what its commands write, as each command after them reads it.
-        var state = new StringState(OnWindows);
+        var state = new StringState(OnWindows, whole => OnWindows ? WindowsNames.Lengthenings(whole, _guardedNames) : [[whole]]);
 
         // Where each command may stand, as the moves before it at its level left it.
         var standing = new Standing(places);
@@ -1853,7 +1853,9 @@ public sealed partial class AgentPolicy
         {
             try
             {
-                return [.. places.SelectMany(place => Spelled(path, place)).Distinct(StringComparer.OrdinalIgnoreCase)];
+                // Each spelled as the system reaches it, its short names kept: what a file written and one read share is
+                // asked of their readings as patterns (StringState.Meet, StringState.MayEndIn).
+                return [.. places.SelectMany(place => Spelled(path, place, lengthen: false)).Distinct(StringComparer.OrdinalIgnoreCase)];
             }
             catch (Exception exception) when (exception is NotSupportedException or ArgumentException)
             {
@@ -2120,8 +2122,85 @@ public sealed partial class AgentPolicy
     /// one, and whether a command of it moved.
     /// </summary>
     /// <param name="windows">Whether the string runs on Windows, whose device names reach no file where cmd or PowerShell writes them (<see cref="WritesNoFile"/>).</param>
-    private sealed class StringState(bool windows)
+    /// <param name="lengthenings">
+    /// The parts a whole path's readings are made of (<see cref="WindowsNames.Lengthenings"/>): each segment the names a
+    /// short name may be read as. A file written and a file read are the same where some reading of each is
+    /// (<see cref="Meet"/>), asked of the parts, never of every reading spelled out.
+    /// </param>
+    private sealed class StringState(bool windows, Func<string, IReadOnlyList<IReadOnlyList<string>>> lengthenings)
     {
+        /// <summary>
+        /// Whether some reading of <paramref name="first"/> is some reading of <paramref name="second"/>, as places compare:
+        /// the two of as many parts, each run of separators alike and each segment with a name both may be read as.
+        /// </summary>
+        public bool Meet(string first, string second)
+        {
+            if (first.Equals(second, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            var (one, other) = (lengthenings(first), lengthenings(second));
+
+            return one.Count == other.Count && one.Zip(other).All(pair => pair.First.Intersect(pair.Second, StringComparer.OrdinalIgnoreCase).Any());
+        }
+
+        /// <summary>
+        /// Whether some reading of <paramref name="whole"/>, its separators spelled '/', ends in <paramref name="end"/>: read
+        /// from its last part back, each part's names against what of the end is still to be met - one count of characters
+        /// for each way - never each reading spelled out.
+        /// </summary>
+        public bool MayEndIn(string whole, string end)
+        {
+            var parts = lengthenings(whole);
+            var left = new HashSet<int> { end.Length };
+
+            for (var at = parts.Count - 1; at >= 0 && left.Count > 0; at--)
+            {
+                var next = new HashSet<int>();
+
+                foreach (var still in left)
+                {
+                    foreach (var name in parts[at].Select(name => name.Replace('\\', '/')))
+                    {
+                        if (name.Length >= still)
+                        {
+                            if (name.EndsWith(end[..still], StringComparison.OrdinalIgnoreCase))
+                            {
+                                return true;
+                            }
+                        }
+                        else if (end[..still].EndsWith(name, StringComparison.OrdinalIgnoreCase))
+                        {
+                            next.Add(still - name.Length);
+                        }
+                    }
+                }
+
+                left = next;
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// The text the string wrote into the file <paramref name="whole"/> names: the file it wrote by that name, or every
+        /// one it wrote that some reading of the name reaches (<see cref="Meet"/>) - the one text they all hold, null where
+        /// one holds none known or they hold more than one. Not found where it wrote none.
+        /// </summary>
+        public bool WroteInto(string whole, out string? text)
+        {
+            if (Written.TryGetValue(whole, out text))
+            {
+                return true;
+            }
+
+            var met = Written.Where(written => Meet(written.Key, whole)).Select(written => written.Value).ToList();
+            text = met.Count > 0 && met.All(each => each is not null && each == met[0]) ? met[0] : null;
+
+            return met.Count > 0;
+        }
+
         /// <summary>
         /// The pattern of the values each variable the string set to text it spells may hold, by its name: every value
         /// kept, however many, and a value read from another variable the same choice as that variable's own
@@ -2291,8 +2370,8 @@ public sealed partial class AgentPolicy
                 return true;
             }
 
-            return wholes is not null && UnreadEnds.Any(end => end.Length > 0 && wholes.Select(whole => whole.Replace('\\', '/'))
-                .Any(whole => (end.Contains('/', StringComparison.Ordinal) ? whole : whole[(whole.LastIndexOf('/') + 1)..]).EndsWith(end, StringComparison.OrdinalIgnoreCase)));
+            // An end with no separator lies within the last name, so a reading ending in it is one whose last name does.
+            return wholes is not null && UnreadEnds.Any(end => end.Length > 0 && wholes.Any(whole => MayEndIn(whole, end)));
         }
 
         /// <summary>
@@ -2503,9 +2582,11 @@ public sealed partial class AgentPolicy
                 {
                     var places = wholes(word);
 
-                    if (places?.FirstOrDefault(state.Written.ContainsKey) is { } written)
+                    string? text = null;
+
+                    if (places?.FirstOrDefault(whole => state.WroteInto(whole, out text)) is not null)
                     {
-                        return (word, read ? state.Written[written] : null);
+                        return (word, read ? text : null);
                     }
 
                     if (state.MayBeUnread(word, quoted, places, runsIt))
@@ -2817,26 +2898,69 @@ public sealed partial class AgentPolicy
     /// </summary>
     private static bool GlobReaches(string pattern, string place, bool dotNames, bool exactly = false)
     {
-        var patterned = pattern.Split(['/', '\\'], StringSplitOptions.RemoveEmptyEntries);
+        var (reaches, prefixes) = GlobAgainst(GlobSegments(pattern), place, dotNames);
+
+        return exactly ? prefixes[^1] : reaches;
+    }
+
+    /// <summary>A shell pattern's segments, each with the expression it matches a name by - null for a <c>**</c> - read once for every place it is held against.</summary>
+    private static (string[] Segments, System.Text.RegularExpressions.Regex?[] Matchers) GlobSegments(string pattern)
+    {
+        var segments = pattern.Split(['/', '\\'], StringSplitOptions.RemoveEmptyEntries);
+
+        return (segments, [.. segments.Select(segment => segment == "**" ? null : SegmentPattern(segment))]);
+    }
+
+    /// <summary>
+    /// How the pattern <paramref name="pattern"/> stands to <paramref name="place"/> (<see cref="GlobReaches"/>): whether a
+    /// path it may name is the place or lies beneath it, and, for each count of the place's leading segments, whether it
+    /// may be exactly those - the place's own count last. Read from the start, each pattern segment against each place
+    /// segment once: whether the pattern's first p segments may be the place's first q, a <c>**</c> taking none of them or
+    /// any run of them, crossing a dot-named directory where a star matches one.
+    /// </summary>
+    private static (bool Reaches, bool[] Prefixes) GlobAgainst((string[] Segments, System.Text.RegularExpressions.Regex?[] Matchers) pattern, string place, bool dotNames)
+    {
+        var (patterned, segments) = pattern;
         var placed = place.Split(['/', '\\'], StringSplitOptions.RemoveEmptyEntries);
-        var segments = patterned.Select(segment => segment == "**" ? null : SegmentPattern(segment)).ToList();
+        var met = new bool[patterned.Length + 1, placed.Length + 1];
+        met[0, 0] = true;
 
-        // Each pattern segment against each place segment, from the ends back: whether the pattern
-        // from p on reaches the place from q on. A '**' crosses a dot-named directory where a star matches one.
-        var reaches = new bool[patterned.Length + 1, placed.Length + 1];
-
-        for (var p = patterned.Length; p >= 0; p--)
+        for (var q = 0; q <= placed.Length; q++)
         {
-            for (var q = placed.Length; q >= 0; q--)
+            for (var p = 0; p <= patterned.Length; p++)
             {
-                reaches[p, q] = (q == placed.Length && (!exactly || p == patterned.Length || patterned[p..].All(segment => segment == "**")))
-                    || (p < patterned.Length && (segments[p] is not { } segment
-                        ? reaches[p + 1, q] || (q < placed.Length && (dotNames || !placed[q].StartsWith('.')) && reaches[p, q + 1])
-                        : q < placed.Length && DotNamed(patterned[p], placed[q], dotNames) && segment.IsMatch(placed[q]) && reaches[p + 1, q + 1]));
+                if (!met[p, q] || p == patterned.Length)
+                {
+                    continue;
+                }
+
+                if (segments[p] is not { } segment)
+                {
+                    met[p + 1, q] = true;
+
+                    if (q < placed.Length && (dotNames || !placed[q].StartsWith('.')))
+                    {
+                        met[p, q + 1] = true;
+                    }
+                }
+                else if (q < placed.Length && DotNamed(patterned[p], placed[q], dotNames) && segment.IsMatch(placed[q]))
+                {
+                    met[p + 1, q + 1] = true;
+                }
             }
         }
 
-        return reaches[0, 0];
+        // A path the pattern names reaches the place where the place is met with the pattern's rest still to go; it is
+        // exactly a count of the place's segments where they are met with nothing left of the pattern but its '**'s.
+        var reaches = Enumerable.Range(0, patterned.Length + 1).Any(p => met[p, placed.Length]);
+        var prefixes = new bool[placed.Length + 1];
+
+        for (var q = 0; q <= placed.Length; q++)
+        {
+            prefixes[q] = Enumerable.Range(0, patterned.Length + 1).Any(p => met[p, q] && patterned[p..].All(rest => rest == "**"));
+        }
+
+        return (reaches, prefixes);
     }
 
     /// <summary>
@@ -3858,7 +3982,7 @@ public sealed partial class AgentPolicy
         {
             try
             {
-                moved.AddRange(places.SelectMany(place => CommandSpelled(target, place, pattern: true)));
+                moved.AddRange(places.SelectMany(place => CommandSpelled(target, place, pattern: true, lengthen: false)));
             }
             catch (Exception exception) when (exception is ArgumentException or System.Security.SecurityException or PathTooLongException)
             {
@@ -4332,7 +4456,7 @@ public sealed partial class AgentPolicy
                 throw new ArgumentException("it names no path");
             }
 
-            foreach (var asked in Spelled(path, _ground.WorkingDirectory))
+            foreach (var asked in Spelled(path, _ground.WorkingDirectory, rules: true))
             {
                 if (decide(asked, Resolved(asked)).Refusal() is { } denied)
                 {
@@ -4366,14 +4490,22 @@ public sealed partial class AgentPolicy
     /// Whether the shell expands a tilde at the path's start (<see cref="NamedPath.TildeExpands"/>): false where a program
     /// reads it out of its word or it is quoted, so its tilde of a variable is the text it spells.
     /// </param>
-    private IReadOnlyList<string> Spelled(string path, string directory, bool tildeExpands = true)
+    /// <param name="lengthen">
+    /// Whether each short name is read as each guarded name it could shorten: false where the path is a place a move
+    /// reaches, which the shell's <c>PWD</c> holds as the move spells it, and where a file's reaching another is asked of
+    /// the two as patterns (<see cref="StringState.Meet"/>) - every path read from such a place, or asked of such a file, is lengthened
+    /// where it is decided.
+    /// </param>
+    /// <param name="rules">Whether a file tool decides the readings, so each of its path patterns tells two readings apart (<see cref="Lengthenings"/>).</param>
+    private IReadOnlyList<string> Spelled(string path, string directory, bool tildeExpands = true, bool lengthen = true, bool rules = false)
     {
         var text = HomeExpanded(path.Trim(), _platform.HomeDirectory, tildeExpands);
         IReadOnlyList<string> readings = OnWindows && DriveSpelled(text) is { } drive ? [drive, text] : [text];
 
-        // A short name the system gave no long one - its path is not there yet - may be any guarded name it could shorten.
+        // A short name the system gave no long one - its path is not there yet - may be any guarded name it could shorten:
+        // read one of each way its readings stand to the decisions (Lengthenings), never every one of them.
         return [.. readings.Select(reading => Plain(reading, directory))
-            .SelectMany(whole => OnWindows ? WindowsNames.Lengthened(whole, _guardedNames) : [whole])
+            .SelectMany(whole => OnWindows && lengthen ? Lengthenings(whole, rules) : [whole])
             .Distinct(StringComparer.OrdinalIgnoreCase)];
     }
 
@@ -4382,15 +4514,17 @@ public sealed partial class AgentPolicy
     /// <paramref name="pattern"/> says the shell expands its pattern, each place it reaches with a segment that begins with
     /// a dot and may match <c>..</c> or <c>.</c> (<c>.?</c>, <c>.[.]</c>, <c>.*</c>) read as that name - for a shell that
     /// does not skip them (sh, bash before 5.2 or with <c>globskipdots</c> off) matches them so - each folded away as the
-    /// system walks it.
+    /// system walks it; then each short name left read as <see cref="Spelled"/> reads it, where
+    /// <paramref name="lengthen"/> says so.
     /// </summary>
-    private IReadOnlyList<string> CommandSpelled(string path, string directory, bool pattern, bool tildeExpands = true)
+    private IReadOnlyList<string> CommandSpelled(string path, string directory, bool pattern, bool tildeExpands = true, bool lengthen = true)
     {
-        var spelled = Spelled(path, directory, tildeExpands);
-
-        return pattern && spelled.Any(reading => reading.IndexOfAny(['*', '?', '[']) >= 0)
+        var spelled = Spelled(path, directory, tildeExpands, lengthen: false);
+        IReadOnlyList<string> read = pattern && spelled.Any(reading => reading.IndexOfAny(['*', '?', '[']) >= 0)
             ? [.. spelled.SelectMany(DotReadings).Distinct(StringComparer.OrdinalIgnoreCase)]
             : spelled;
+
+        return OnWindows && lengthen ? [.. read.SelectMany(whole => Lengthenings(whole, rules: false)).Distinct(StringComparer.OrdinalIgnoreCase)] : read;
     }
 
     /// <summary>
