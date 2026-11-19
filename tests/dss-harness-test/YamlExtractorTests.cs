@@ -158,9 +158,9 @@ public sealed class YamlExtractorTests : CodeGraphExtractorContractTests<YamlExt
         var steps = Assert.Single(extract.Nodes, node => node.Id == $"{job.Id}.steps");
 
         Assert.Equal(
-            [("step 1", 9, 9, steps.Id), ("deploy", 10, 13, steps.Id)],
-            extract.Nodes.Where(node => node.Parent == steps.Id).Select(node => (node.Name, node.Start, node.End, node.Parent)));
-        Assert.Equal((6, 13, "yaml:.github/workflows/ci.yaml#jobs"), (job.Start, job.End, job.Parent));
+            [("step 1", 9, 9, steps.Id.Whole()), ("deploy", 10, 13, steps.Id.Whole())],
+            extract.Nodes.Where(node => node.Parent == steps.Id).Select(node => (node.Name, node.Start, node.End, node.Parent?.Whole())));
+        Assert.Equal((6, 13, "yaml:.github/workflows/ci.yaml#jobs"), (job.Start, job.End, job.Parent?.Whole()));
         Assert.Equal([("../../.github/actions/deploy/action.yml", 11, false), ("../../.github/actions/deploy/action.yaml", 11, true)],
             extract.Imports.Select(import => (import.Target, import.Line, import.Fallback)));
     }
@@ -177,14 +177,14 @@ public sealed class YamlExtractorTests : CodeGraphExtractorContractTests<YamlExt
 
         Assert.Equal(
             [("yaml:broken.yml#first", "1"), ("yaml:broken.yml#second", null), ("yaml:broken.yml#second.third", "3")],
-            extract.Nodes.Select(node => (node.Id, node.Summary)));
+            extract.Nodes.Select(node => (node.Id.Whole(), node.Summary)));
         Assert.Equal([4], extract.Dynamic.Select(mark => mark.Line));
         Assert.StartsWith("the file stops reading as YAML here (", Assert.Single(extract.Dynamic).Why, StringComparison.Ordinal);
 
         // A fault the reader says no place of is said past the last place it read.
         var placeless = Read("tag.yml", "x: 1\ny: !<> b\nz: 3\n");
 
-        Assert.Equal(["yaml:tag.yml#x"], placeless.Nodes.Select(node => node.Id));
+        Assert.Equal(["yaml:tag.yml#x"], placeless.Nodes.Select(node => node.Id.Whole()));
         Assert.Equal([new ExtractDynamic(2, "the file stops reading as YAML past here (Tag value must not be empty. (Parameter 'value')), and nothing after it is read")], placeless.Dynamic);
 
         foreach (var text in new[] { string.Empty, "# a file of comments\n\n# and more\n", "---\n...\n" })
@@ -221,7 +221,7 @@ public sealed class YamlExtractorTests : CodeGraphExtractorContractTests<YamlExt
         // Each list a section and each of its ten items a key: the first's of 1, every other's an alias of the list before.
         Assert.Equal(
             [.. names.SelectMany(name => new[] { name }.Concat(Enumerable.Range(0, 10).Select(item => $"{name}[{item}]")))],
-            extract.Nodes.Select(node => node.Qualified[(node.Qualified.IndexOf('#', StringComparison.Ordinal) + 1)..]));
+            extract.Nodes.Select(node => { var qualified = node.Qualified.Whole(); return qualified[(qualified.IndexOf('#', StringComparison.Ordinal) + 1)..]; }));
         Assert.Equal(
             [.. names.Skip(1).SelectMany((name, at) => Enumerable.Range(0, 10).Select(item => ($"yaml:bomb.yml#{name}[{item}]", names[at], at + 2, $"yaml:bomb.yml#{names[at]}")))],
             References(extract));
@@ -367,7 +367,7 @@ public sealed class YamlExtractorTests : CodeGraphExtractorContractTests<YamlExt
                 ("yaml:deploy.yaml#[1].kind", 4, 4),
                 ("yaml:deploy.yaml#[1].port", 5, 5),
             ],
-            documents.Nodes.Select(node => (node.Id, node.Start, node.End)));
+            documents.Nodes.Select(node => (node.Id.Whole(), node.Start, node.End)));
 
         var merged = Read("merge.yml", "a: &a { timeout: 1, retries: 2 }\nb: &b { timeout: 3, level: x }\nc:\n  <<: [*a, *b, { own: 1 }]\n  retries: 9\n");
 
@@ -441,5 +441,5 @@ public sealed class YamlExtractorTests : CodeGraphExtractorContractTests<YamlExt
 
     /// <summary>Each reference an extract makes, by where it is made from, the name it repeats, its line and the node of its own file it names.</summary>
     private static IEnumerable<(string From, string Name, int Line, string? To)> References(FileExtract extract)
-        => extract.References.Select(reference => (reference.From, reference.Name, reference.Line, reference.Qualifier?.Kind == CodeQualifierKinds.Own ? reference.Qualifier.Name : null));
+        => extract.References.Select(reference => (reference.From.Whole(), reference.Name, reference.Line, reference.Qualifier?.Kind == CodeQualifierKinds.Own ? reference.Qualifier.Name?.Whole() : null));
 }

@@ -126,14 +126,14 @@ public sealed class VueExtractor : ICodeGraphExtractor
 
         // Each style block: a module's names its own, kept to a scope of its binding's - $style where it gives none -
         // which the binding names; a scoped one's this component's alone; any other the page's.
-        var bindings = new Dictionary<string, string>(StringComparer.Ordinal);
+        var bindings = new Dictionary<string, QualifiedName>(StringComparer.Ordinal);
 
         foreach (var style in blocks.Where(block => block.Name == "style" && block.Attribute("src") is null && block.Close > block.OpenEnd))
         {
             var module = style.Attribute("module");
             var binding = module?.Trim() is { Length: > 0 } named ? named : ModuleBinding;
             var scope = module is not null ? StyleScope.Module : style.Attribute("scoped") is not null ? StyleScope.Scoped : StyleScope.Global;
-            var kept = module is not null ? $"{input.Path}#{binding}" : null;
+            var kept = module is not null ? QualifiedName.Of($"{input.Path}#{binding}") : null;
             var text = EmbeddedCode.Kept(markup.Text, markup.Lines, [(style.OpenEnd, style.Close)]);
 
             if (CssExtractor.Read(Language, new CodeFileInput(input.Path, text), style.Attribute("lang"), style.Attribute("type"), scope, kept) is { } read)
@@ -159,11 +159,11 @@ public sealed class VueExtractor : ICodeGraphExtractor
     /// </summary>
     /// <param name="merged">The component's extract, every reader's merged.</param>
     /// <param name="bindings">The scope each module block's own names are kept to, by the name it is bound by.</param>
-    private static FileExtract Bound(FileExtract merged, IReadOnlyDictionary<string, string> bindings)
+    private static FileExtract Bound(FileExtract merged, IReadOnlyDictionary<string, QualifiedName> bindings)
         => bindings.Count == 0 ? merged : merged with
         {
             References = [.. merged.References.Select(reference => reference is { Kind: CodeEdgeKinds.Uses, Qualifier: { Kind: CodeQualifierKinds.Value, Name: { } binding } }
-                && bindings.TryGetValue(binding, out var kept)
+                && bindings.TryGetValue(binding.Whole(), out var kept)
                     ? reference with { Qualifier = new ExtractQualifier(CodeQualifierKinds.Module, kept) }
                     : reference)],
         };
@@ -178,7 +178,7 @@ public sealed class VueExtractor : ICodeGraphExtractor
     /// <c>v-slot</c> around it gives what it holds, its pattern a function's parameters where it is written, so its
     /// defaults are code read once; answers those functions, each the component's.
     /// </summary>
-    private static List<CodeRegion> Template(MarkupText markup, MarkupElement template, string component, List<ExtractReference> references)
+    private static List<CodeRegion> Template(MarkupText markup, MarkupElement template, QualifiedName component, List<ExtractReference> references)
     {
         var elements = markup.Elements;
         var regions = new List<CodeRegion>();
@@ -334,9 +334,9 @@ public sealed class VueExtractor : ICodeGraphExtractor
     /// declaration the script exports by name besides is no longer exported by <c>default</c>, which the component answers
     /// alone.
     /// </summary>
-    private static FileExtract Folded(FileExtract script, string path, string component)
+    private static FileExtract Folded(FileExtract script, string path, QualifiedName component)
     {
-        var folded = script.Nodes.Where(node => node.Name == Default && node.Parent is null && node.Scope == path).Select(node => node.Id).ToHashSet(StringComparer.Ordinal);
+        var folded = script.Nodes.Where(node => node.Name == Default && node.Parent is null && node.Scope is { } scope && scope.Is(path)).Select(node => node.Id).ToHashSet();
         var shown = script.References.Where(reference => folded.Contains(reference.From) && reference.Kind == CodeEdgeKinds.Uses && reference.Qualifier is null)
             .Select(reference => reference.Name).ToHashSet(StringComparer.Ordinal);
 
@@ -344,7 +344,7 @@ public sealed class VueExtractor : ICodeGraphExtractor
         {
             Nodes = [.. script.Nodes.Select(node => node with
             {
-                SeenIn = node.Parent is null && node.Scope == path && shown.Contains(node.Name) ? null : node.SeenIn,
+                SeenIn = node.Parent is null && node.Scope is { } within && within.Is(path) && shown.Contains(node.Name) ? null : node.SeenIn,
                 Exports = node.Exports?.Contains(Default, StringComparer.Ordinal) == true && !folded.Contains(node.Id)
                     ? node.Exports.Where(exported => exported != Default).ToList() is { Count: > 0 } rest ? rest : null
                     : node.Exports,

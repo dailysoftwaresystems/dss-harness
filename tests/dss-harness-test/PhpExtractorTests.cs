@@ -482,7 +482,7 @@ public sealed class PhpExtractorTests : CodeGraphExtractorContractTests<PhpExtra
                 ("Shop.Suit", "enum"), ("Shop.Suit.Hearts", "case"), ("Shop.Suit.Spades", "case"), ("Shop.Suit.Wild", "constant"),
                 ("Shop.Suit.size", "method"), ("Shop.Point", "class"), ("Shop.Point.__construct", "constructor"), ("Shop.Point.$x", "property"),
             ],
-            extract.Nodes.Select(node => (node.Qualified, node.SubKind!)));
+            extract.Nodes.Select(node => (node.Qualified.Whole(), node.SubKind!)));
 
         Assert.Equal(["final"], Node(extract, "php:Shop.Cart").Modifiers);
         Assert.Equal(["readonly"], Node(extract, "php:Shop.Point").Modifiers);
@@ -507,7 +507,7 @@ public sealed class PhpExtractorTests : CodeGraphExtractorContractTests<PhpExtra
                 ("php:Shop.Sized", CodeEdgeKinds.Inherits, "Measured", "type", "Shop"), ("php:Shop.Suit", CodeEdgeKinds.Implements, "Sized", "type", "Shop"),
             ],
             extract.References.Where(reference => reference.Kind is CodeEdgeKinds.Inherits or CodeEdgeKinds.Implements or CodeEdgeKinds.MixesIn)
-                .Select(reference => (reference.From, reference.Kind, reference.Name, reference.Qualifier?.Kind, extract.Written(reference.Qualifier))));
+                .Select(reference => (reference.From.Whole(), reference.Kind, reference.Name, reference.Qualifier?.Kind, extract.Written(reference.Qualifier))));
         Assert.Equal(["strtoupper", "name", "apply"], Calls(extract, "php:Shop.Cart.$label"));
         Assert.Equal(["Cart"], Calls(extract, "php:Shop.Cart.make"));
     }
@@ -540,10 +540,10 @@ public sealed class PhpExtractorTests : CodeGraphExtractorContractTests<PhpExtra
             class Y {}
             """);
 
-        Assert.Equal([("php:A", 2, 5), ("php:A.f", 4, 4), ("php:C", 6, 8), ("php:C.g", 7, 7), ("php:h", 10, 10)], braced.Nodes.Select(node => (node.Id, node.Start, node.End)));
+        Assert.Equal([("php:A", 2, 5), ("php:A.f", 4, 4), ("php:C", 6, 8), ("php:C.g", 7, 7), ("php:h", 10, 10)], braced.Nodes.Select(node => (node.Id.Whole(), node.Start, node.End)));
         Assert.Equal([("make", "B.Thing"), ("make", "C.Thing")], braced.References.Select(reference => (reference.Name, braced.Written(reference.Qualifier))));
-        Assert.Equal([("php:A", 2, 3), ("php:A.X", 3, 3), ("php:B.Deep", 4, 5), ("php:B.Deep.Y", 5, 5)], ended.Nodes.Select(node => (node.Id, node.Start, node.End)));
-        Assert.Equal([("A", null), ("A.X", "A"), ("B.Deep", null), ("B.Deep.Y", "B.Deep")], ended.Scopes.Select(scope => (scope.Name, scope.Parent)));
+        Assert.Equal([("php:A", 2, 3), ("php:A.X", 3, 3), ("php:B.Deep", 4, 5), ("php:B.Deep.Y", 5, 5)], ended.Nodes.Select(node => (node.Id.Whole(), node.Start, node.End)));
+        Assert.Equal([("A", null), ("A.X", "A"), ("B.Deep", null), ("B.Deep.Y", "B.Deep")], ended.Scopes.Select(scope => (scope.Name.Whole(), scope.Parent?.Whole())));
         Assert.Equal("Deep", Node(ended, "php:B.Deep").Name);
     }
 
@@ -771,7 +771,7 @@ public sealed class PhpExtractorTests : CodeGraphExtractorContractTests<PhpExtra
 
         Assert.Equal(
             ["php:Tests.CartTest.testAdds", "php:Tests.CartTest.removes", "php:Tests.CartTest.empties", "php:Tests.ShopTest.testOpen", "php:Tests.FeatureTestCase.testInherited"],
-            extract.Nodes.Where(node => node.Test).Select(node => node.Id));
+            extract.Nodes.Where(node => node.Test).Select(node => node.Id.Whole()));
 
         var linked = Link(
             ("src/A.php", "<?php\nclass A { public function m(): void {} }\n"),
@@ -806,8 +806,8 @@ public sealed class PhpExtractorTests : CodeGraphExtractorContractTests<PhpExtra
                 extract.Nodes.Select(node => (node.Name, node.SubKind!, node.Start, node.End)));
             Assert.All(extract.Nodes, node => Assert.True(node.Test));
             Assert.Equal(extract.Nodes[0].Id, extract.Nodes[1].Parent);
-            Assert.Equal(["beforeEach", "setup", "skip"], Calls(extract, extract.Nodes[0].Id));
-            Assert.Equal(["run"], Calls(extract, extract.Nodes[1].Id));
+            Assert.Equal(["beforeEach", "setup", "skip"], Calls(extract, extract.Nodes[0].Id.Whole()));
+            Assert.Equal(["run"], Calls(extract, extract.Nodes[1].Id.Whole()));
         }
 
         Assert.DoesNotContain(Read("src/x.php", Text).Nodes, node => node.Test);
@@ -832,7 +832,7 @@ public sealed class PhpExtractorTests : CodeGraphExtractorContractTests<PhpExtra
             <?php $x = 1 ?><?php function g() {} ?>
             """);
 
-        Assert.Equal([("php:f", 1, 1), ("php:views/a.php.(script)", 1, 4), ("php:g", 4, 4)], extract.Nodes.Select(node => (node.Id, node.Start, node.End)));
+        Assert.Equal([("php:f", 1, 1), ("php:views/a.php.(script)", 1, 4), ("php:g", 4, 4)], extract.Nodes.Select(node => (node.Id.Whole(), node.Start, node.End)));
         Assert.Equal([2, 3, 3], extract.References.Where(reference => reference.Name == "f").Select(reference => reference.Line));
     }
 
@@ -901,7 +901,7 @@ public sealed class PhpExtractorTests : CodeGraphExtractorContractTests<PhpExtra
         var test = Assert.Single(extract.Nodes, node => node.SubKind == "test");
         var held = groups.Skip(1).Select((group, at) => group.Parent == groups[at].Id).All(holds => holds) && test.Parent == groups[^1].Id;
 
-        return string.Create(CultureInfo.InvariantCulture, $"{groups.Count} {held} {string.Join(',', Calls(extract, test.Id))} {extract.Dynamic.Count}");
+        return string.Create(CultureInfo.InvariantCulture, $"{groups.Count} {held} {string.Join(',', Calls(extract, test.Id.Whole()))} {extract.Dynamic.Count}");
     });
 
     /// <summary>
@@ -972,11 +972,11 @@ public sealed class PhpExtractorTests : CodeGraphExtractorContractTests<PhpExtra
                 ("php:App.T.$b", "A", 6), ("php:App.T.$b", "B", 6), ("php:App.T.$c", "X", 7), ("php:App.T.$d", "Resource", 8), ("php:App.T.f", "Boolean", 11),
                 ("php:App.T.f", "Resource", 11), ("php:App.T.f", "Handle", 11), ("php:App.T.f", "Handle", 13), ("php:App.T.f", "Handle", 14), ("php:App.T.f", "First", 15), ("php:App.T.f", "Second", 15),
             ],
-            extract.References.Where(reference => reference.Kind == CodeEdgeKinds.References).Select(reference => (reference.From, reference.Name, reference.Line)));
+            extract.References.Where(reference => reference.Kind == CodeEdgeKinds.References).Select(reference => (reference.From.Whole(), reference.Name, reference.Line)));
         Assert.Equal(
             [("m", "value", null), ("close", "type", "App.Handle")],
             extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Calls).Select(reference => (reference.Name, reference.Qualifier?.Kind, extract.Written(reference.Qualifier))));
-        Assert.Equal(["php:App.T.NAME", "php:App.T.ONE", "php:App.T.TWO"], extract.Nodes.Where(node => node.SubKind == "constant").Select(node => node.Id));
+        Assert.Equal(["php:App.T.NAME", "php:App.T.ONE", "php:App.T.TWO"], extract.Nodes.Where(node => node.SubKind == "constant").Select(node => node.Id.Whole()));
         Assert.Equal((4, (int?)5), Arity(extract, "php:App.T.f"));
     }
 
@@ -998,7 +998,7 @@ public sealed class PhpExtractorTests : CodeGraphExtractorContractTests<PhpExtra
             }
             """);
 
-        Assert.Equal(["php:src/c.php.(script)", "php:f", "php:g", "php:h", "php:i", "php:go"], extract.Nodes.Select(node => node.Id));
+        Assert.Equal(["php:src/c.php.(script)", "php:f", "php:g", "php:h", "php:i", "php:go"], extract.Nodes.Select(node => node.Id.Whole()));
         Assert.Equal(["a", "b", "c"], Calls(extract, "php:src/c.php.(script)"));
         Assert.Equal(
             [("Mailer", "type", "Lib"), ("send", "type", "Lib.Mailer"), ("inner", "scope", null)],
@@ -1071,7 +1071,7 @@ public sealed class PhpExtractorTests : CodeGraphExtractorContractTests<PhpExtra
             }
             """);
 
-        Assert.Equal(["php:Checks.marked", "php:OrderTest.orders"], extract.Nodes.Where(node => node.Test).Select(node => node.Id));
+        Assert.Equal(["php:Checks.marked", "php:OrderTest.orders"], extract.Nodes.Where(node => node.Test).Select(node => node.Id.Whole()));
     }
 
     /// <summary>
@@ -1340,7 +1340,7 @@ public sealed class PhpExtractorTests : CodeGraphExtractorContractTests<PhpExtra
                 (List, "DEFAULT_MODE", 13, ""), (List, "$name", 15, "type App.User"), (List, "DEBUG_LEVEL", 16, ""), (List, "INFO_LEVEL", 16, ""), (List, "FALLBACK_LEVEL", 17, ""),
                 (List, "VALUE", 19, ""),
             ],
-            extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Uses).Select(reference => (reference.From, reference.Name, reference.Line, $"{reference.Qualifier?.Kind} {extract.Written(reference.Qualifier)}".Trim())));
+            extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Uses).Select(reference => (reference.From.Whole(), reference.Name, reference.Line, $"{reference.Qualifier?.Kind} {extract.Written(reference.Qualifier)}".Trim())));
     }
 
     /// <summary>A call's receiver of any number of names is read by them all - a long chain is read once, not crawled from each member.</summary>

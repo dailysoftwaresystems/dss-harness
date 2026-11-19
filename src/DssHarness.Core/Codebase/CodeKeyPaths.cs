@@ -150,8 +150,17 @@ public static class CodeKeyPaths
         ArgumentNullException.ThrowIfNull(node);
         ArgumentNullException.ThrowIfNull(file);
 
-        return node.SubKind == CodeSubKinds.Key ? node.Qualified
-            : node.Kind == CodeNodeKinds.Section && node.Qualified.Length > file.Length && node.Qualified.StartsWith(file, StringComparison.Ordinal) && node.Qualified[file.Length] == '#' ? node.Qualified[(file.Length + 1)..]
-            : null;
+        if (node.SubKind == CodeSubKinds.Key)
+        {
+            return node.Qualified.Whole();
+        }
+
+        if (node.Kind == CodeNodeKinds.Section)
+        {
+            var qualified = node.Qualified.Whole();
+            return qualified.Length > file.Length && qualified.StartsWith(file, StringComparison.Ordinal) && qualified[file.Length] == '#' ? qualified[(file.Length + 1)..] : null;
+        }
+
+        return null;
     }
 }

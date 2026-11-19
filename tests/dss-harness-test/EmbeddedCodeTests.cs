@@ -27,10 +27,10 @@ public sealed class EmbeddedCodeTests
             [
                 ("html:x.html#body", null), ("html:open", null), ("html:open.inner", "html:open"), ("html:open~2", null), ("html:open.inner~2", "html:open~2"),
             ],
-            merged.Nodes.Select(node => (node.Id, node.Parent)));
+            merged.Nodes.Select(node => (node.Id.Whole(), node.Parent?.Whole())));
         Assert.Equal(
             [("html:x.html#body", ".a"), ("html:open", "one"), ("html:open~2", "two")],
-            merged.References.Select(reference => (reference.From, reference.Name)));
+            merged.References.Select(reference => (reference.From.Whole(), reference.Name)));
         Assert.Equal([new ExtractScope("x.html", false)], merged.Scopes);
         Assert.Equal([("./one.js", 2), ("./two.js", 5)], merged.Imports.Select(import => (import.Target, import.Line)));
         Assert.Equal([new ExtractAddressRoot("@", "src"), new ExtractAddressRoot("@", "src")], merged.AddressRoots);
@@ -52,10 +52,10 @@ public sealed class EmbeddedCodeTests
     public void AFoldedNode_IsGone_AndEveryFieldThatNamedIt_NamesTheNodeItIsFoldedInto()
     {
         var read = Script(2, "one");
-        var folded = EmbeddedCode.Folded(read, node => node.Id == "html:open" ? "html:x.html#body" : null);
+        var folded = EmbeddedCode.Folded(read, node => node.Id.Is("html:open") ? QualifiedName.Of("html:x.html#body") : null);
 
-        Assert.Equal([("html:open.inner", "html:x.html#body")], folded.Nodes.Select(node => (node.Id, node.Parent)));
-        Assert.Equal([("html:x.html#body", "one")], folded.References.Select(reference => (reference.From, reference.Name)));
+        Assert.Equal([("html:open.inner", "html:x.html#body")], folded.Nodes.Select(node => (node.Id.Whole(), node.Parent?.Whole())));
+        Assert.Equal([("html:x.html#body", "one")], folded.References.Select(reference => (reference.From.Whole(), reference.Name)));
         Assert.Equal([("one", "html:x.html#body"), ("one-2", "html:open.inner")], LiteralRow.Of(folded).Select(literal => (literal.Value, literal.Node)));
     }
 
@@ -85,10 +85,10 @@ public sealed class EmbeddedCodeTests
 
         Assert.Equal(
             [("css:a.css#.a~2", null, null), ("css:a.css#.a&-x~2", "css:a.css#.a~2", "css:a.css#.a~2")],
-            moved.Nodes.Select(node => (node.Id, node.Parent, node.SuffixOf is { } onto ? string.Join(',', onto) : null)));
+            moved.Nodes.Select(node => (node.Id.Whole(), node.Parent?.Whole(), node.SuffixOf is { } onto ? string.Join(',', onto) : null)));
         Assert.Equal(
             [("css:a.css#.a&-x~2", "css:a.css#.a~2"), ("css:a.css#.a~2", "css:a.css#.a")],
-            moved.References.Select(reference => (reference.From, reference.Qualifier!.Name)));
+            moved.References.Select(reference => (reference.From.Whole(), reference.Qualifier!.Name?.Whole())));
         Assert.Equal(["css:a.css#.a~2"], LiteralRow.Of(moved).Select(literal => literal.Node));
     }
 

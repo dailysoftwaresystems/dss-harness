@@ -280,5 +280,5 @@ public sealed class CodebaseGraphChangesTests
     }
 
     private static FileExtract Extract(params (string Id, string Kind, int Start, int End, string? Parent, string Digest)[] nodes)
-        => new([.. nodes.Select(node => new ExtractNode(node.Id, node.Kind, node.Id, node.Id, node.Start, node.End, node.Id) { Parent = node.Parent, Digest = node.Digest })]);
+        => new([.. nodes.Select(node => new ExtractNode(node.Id, node.Kind, node.Id, node.Id, node.Start, node.End, node.Id) { Parent = node.Parent is null ? null : QualifiedName.Of(node.Parent), Digest = node.Digest })]);
 }

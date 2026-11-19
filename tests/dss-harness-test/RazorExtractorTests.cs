@@ -128,7 +128,7 @@ public sealed class RazorExtractorTests : CodeGraphExtractorContractTests<RazorE
         Assert.Equal(["view"], extract.Nodes.Where(node => node.Kind == CodeNodeKinds.Section).Select(node => node.SubKind));
         Assert.Equal(
             [("razor:Views.Cart.Model", "CartModel", 3), ("razor:Views.Cart.Carts", "CartService", 4)],
-            extract.Nodes.Where(node => node.SubKind == "property").Select(node => (node.Id, node.ValueType, node.Start)));
+            extract.Nodes.Where(node => node.SubKind == "property").Select(node => (node.Id.Whole(), node.ValueType, node.Start)));
 
         var label = Assert.Single(extract.Nodes, node => node.Name == "Label");
 
@@ -195,7 +195,7 @@ public sealed class RazorExtractorTests : CodeGraphExtractorContractTests<RazorE
     {
         var extract = Read("App.razor", "@code {\n    private void Start()\n    {\n    }\n}\n");
 
-        Assert.Equal([("razor:App", CodeNodeKinds.Type, 1, 5), ("razor:App.Start()", CodeNodeKinds.Member, 2, 4)], extract.Nodes.Select(node => (node.Id, node.Kind, node.Start, node.End)));
+        Assert.Equal([("razor:App", CodeNodeKinds.Type, 1, 5), ("razor:App.Start()", CodeNodeKinds.Member, 2, 4)], extract.Nodes.Select(node => (node.Id.Whole(), node.Kind, node.Start, node.End)));
     }
 
     /// <summary>
@@ -207,7 +207,7 @@ public sealed class RazorExtractorTests : CodeGraphExtractorContractTests<RazorE
     {
         var extract = Read("src/my-app/Pages/Index.razor", Braces);
 
-        Assert.Equal(["razor:src.my_app.Pages.Index"], extract.Nodes.Where(node => node.Kind == CodeNodeKinds.Type).Select(node => node.Id));
+        Assert.Equal(["razor:src.my_app.Pages.Index"], extract.Nodes.Where(node => node.Kind == CodeNodeKinds.Type).Select(node => node.Id.Whole()));
         Assert.Equal("razor:src.my_app.Pages.Index", Assert.Single(extract.Nodes, node => node.Name == "Select").Parent);
     }
 
@@ -698,7 +698,7 @@ public sealed class RazorExtractorTests : CodeGraphExtractorContractTests<RazorE
         Assert.Equal(
             [(CodeEdgeKinds.References, "MainLayout", 2), (CodeEdgeKinds.References, "AuthorizeAttribute", 4), (CodeEdgeKinds.Uses, "Selected", 5)],
             extract.References.Where(reference => reference.From == component.Id).Select(reference => (reference.Kind, reference.Name, reference.Line)));
-        Assert.Equal([("/items/{id:int}", 1, component.Id)], LiteralRow.Of(extract).Select(literal => (literal.Value, literal.Line, literal.Node)));
+        Assert.Equal([("/items/{id:int}", 1, component.Id.Whole())], LiteralRow.Of(extract).Select(literal => (literal.Value, literal.Line, literal.Node)));
     }
 
     /// <summary>

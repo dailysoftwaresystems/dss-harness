@@ -213,7 +213,7 @@ public sealed class CssExtractorTests : CodeGraphExtractorContractTests<CssExtra
         Assert.Equal(["The primary buttons."], extract.Nodes.Select(node => node.Summary).OfType<string>().Distinct());
         Assert.Equal(
             [("css:site.css#.btn", CodeEdgeKinds.Uses, "--gap", 11, CodeQualifierKinds.StyleVariable), ("css:site.css#.after", CodeEdgeKinds.Uses, "--angle", 41, CodeQualifierKinds.StyleVariable)],
-            extract.References.Select(reference => (reference.From, reference.Kind, reference.Name, reference.Line, reference.Qualifier?.Kind)));
+            extract.References.Select(reference => (reference.From.Whole(), reference.Kind, reference.Name, reference.Line, reference.Qualifier?.Kind)));
         Assert.Equal([("base.css", 2), ("print.css", 3)], extract.Imports.Select(import => (import.Target, import.Line)));
         Assert.Empty(extract.Dynamic);
     }
@@ -292,10 +292,10 @@ public sealed class CssExtractorTests : CodeGraphExtractorContractTests<CssExtra
         watch.Stop();
 
         Assert.Equal([.. Enumerable.Range(0, Depth).Select(depth => $".n{depth}"), ".after"], blocks.Nodes.Select(node => node.Name));
-        Assert.Equal([.. Enumerable.Range(0, Depth).Select(depth => ($"css:a.scss#.n{depth}", "$out"))], blocks.References.Select(reference => (reference.From, reference.Name)));
+        Assert.Equal([.. Enumerable.Range(0, Depth).Select(depth => ($"css:a.scss#.n{depth}", "$out"))], blocks.References.Select(reference => (reference.From.Whole(), reference.Name)));
         Assert.Equal(["a", ".b"], selectors.Nodes.Select(node => node.Name));
         Assert.Equal([".a", ".c"], interpolations.Nodes.Select(node => node.Name));
-        Assert.Equal([("css:a.scss#.a", "$deep", 1)], interpolations.References.Select(reference => (reference.From, reference.Name, reference.Line)));
+        Assert.Equal([("css:a.scss#.a", "$deep", 1)], interpolations.References.Select(reference => (reference.From.Whole(), reference.Name, reference.Line)));
         Assert.Empty(blocks.Dynamic.Concat(selectors.Dynamic).Concat(interpolations.Dynamic));
         Assert.True(watch.Elapsed < TimeSpan.FromSeconds(10), $"reading nesting {Depth} deep took {watch.Elapsed}");
     }
@@ -343,14 +343,14 @@ public sealed class CssExtractorTests : CodeGraphExtractorContractTests<CssExtra
         var less = Read("a.less", ".a { .rounded(); #ns > .shadow; color: red; } .b {}\n");
 
         Assert.Equal([(".a", 1, 1), (".b", 1, 1)], less.Nodes.Select(node => (node.Name, node.Start, node.End)));
-        Assert.Equal([("css:a.less#.a", ".rounded"), ("css:a.less#.a", ".shadow")], less.References.Select(reference => (reference.From, reference.Name)));
+        Assert.Equal([("css:a.less#.a", ".rounded"), ("css:a.less#.a", ".shadow")], less.References.Select(reference => (reference.From.Whole(), reference.Name)));
         Assert.All(less.References, reference => Assert.Equal(new ExtractQualifier(CodeQualifierKinds.Selector), reference.Qualifier));
 
         var tailwind = Read("a.css", "@tailwind base;\n@tailwind components;\n.btn {\n  @apply px-4 md:hover:bg-blue !font-bold;\n}\n");
 
         Assert.Equal([(".btn", 3, 5)], tailwind.Nodes.Select(node => (node.Name, node.Start, node.End)));
         Assert.Equal([".px-4", ".bg-blue", ".font-bold"], tailwind.References.Select(reference => reference.Name));
-        Assert.All(tailwind.References, reference => Assert.Equal(("css:a.css#.btn", CodeEdgeKinds.Uses, 4, CodeQualifierKinds.Selector), (reference.From, reference.Kind, reference.Line, reference.Qualifier?.Kind)));
+        Assert.All(tailwind.References, reference => Assert.Equal(("css:a.css#.btn", CodeEdgeKinds.Uses, 4, CodeQualifierKinds.Selector), (reference.From.Whole(), reference.Kind, reference.Line, reference.Qualifier?.Kind)));
     }
 
     /// <summary>
@@ -363,7 +363,7 @@ public sealed class CssExtractorTests : CodeGraphExtractorContractTests<CssExtra
         var extract = Read("a.scss", ".a {}\n.col-#{$i} { width: 1px; }\n.y { width: calc(100% - #{$gutter}); }\n");
 
         Assert.Equal([".a", ".y", "(sheet)"], extract.Nodes.Select(node => node.Name));
-        Assert.Equal([("css:a.scss#(sheet)", "$i", 2), ("css:a.scss#.y", "$gutter", 3)], extract.References.Select(reference => (reference.From, reference.Name, reference.Line)));
+        Assert.Equal([("css:a.scss#(sheet)", "$i", 2), ("css:a.scss#.y", "$gutter", 3)], extract.References.Select(reference => (reference.From.Whole(), reference.Name, reference.Line)));
         Assert.Equal([new ExtractDynamic(2, "a selector an interpolation writes, whose rule is no node")], extract.Dynamic);
     }
 
@@ -395,7 +395,7 @@ public sealed class CssExtractorTests : CodeGraphExtractorContractTests<CssExtra
                 ("css:a.scss#@mixin rounded", CodeEdgeKinds.Uses, "$radius", 8), ("css:a.scss#.panel", CodeEdgeKinds.Uses, "rounded", 9),
                 ("css:a.scss#.panel", CodeEdgeKinds.Inherits, ".btn", 9), ("css:a.scss#.panel", CodeEdgeKinds.Uses, "--hover", 9),
             ],
-            extract.References.Select(reference => (reference.From, reference.Kind, reference.Name, reference.Line)));
+            extract.References.Select(reference => (reference.From.Whole(), reference.Kind, reference.Name, reference.Line)));
     }
 
     /// <summary>An <c>@extend</c> links to the rule it names as an inheritance, through the selector it writes, in another sheet too.</summary>
@@ -495,7 +495,7 @@ public sealed class CssExtractorTests : CodeGraphExtractorContractTests<CssExtra
         Assert.Equal("The sheet's own rules, in the indented syntax.", extract.Nodes[0].Summary);
         Assert.Equal(
             [("css:styles.sass#.edge", "$gap", 8, CodeQualifierKinds.StyleVariable), ("css:styles.sass#.inner", "bevel", 10, CodeQualifierKinds.StyleMixin)],
-            extract.References.Select(reference => (reference.From, reference.Name, reference.Line, reference.Qualifier?.Kind)));
+            extract.References.Select(reference => (reference.From.Whole(), reference.Name, reference.Line, reference.Qualifier?.Kind)));
     }
 
     /// <summary>
@@ -527,7 +527,7 @@ public sealed class CssExtractorTests : CodeGraphExtractorContractTests<CssExtra
 
         Assert.Equal(
             [("css:a.css#.spinner", "spin", 3, CodeQualifierKinds.Keyframes), ("css:a.css#.spinner", "pulse", 4, CodeQualifierKinds.Keyframes), ("css:a.css#.spinner", "fade", 4, CodeQualifierKinds.Keyframes)],
-            extract.References.Where(reference => reference.Qualifier?.Kind != CodeQualifierKinds.StyleVariable).Select(reference => (reference.From, reference.Name, reference.Line, reference.Qualifier?.Kind)));
+            extract.References.Where(reference => reference.Qualifier?.Kind != CodeQualifierKinds.StyleVariable).Select(reference => (reference.From.Whole(), reference.Name, reference.Line, reference.Qualifier?.Kind)));
 
         var linked = CodeGraphLinker.Link(
         [
@@ -608,7 +608,7 @@ public sealed class CssExtractorTests : CodeGraphExtractorContractTests<CssExtra
                 ("css:a.scss#.card&__title&--big", "&--big", "css:a.scss#.card&__title"), ("css:a.scss#.lifted", ".lifted", null), ("css:a.scss#.box", ".box", null),
                 ("css:a.scss#.box__head", ".box__head", null), ("css:a.scss#.box__head--open", ".box__head--open", null), ("css:a.scss#.top", ".top", null), ("css:a.scss#.q", ".q", (string?)null),
             ],
-            extract.Nodes.Select(node => (node.Id, node.Name, node.SuffixOf is { } onto ? string.Join(" ", onto) : null)));
+            extract.Nodes.Select(node => (node.Id.Whole(), node.Name, node.SuffixOf is { } onto ? string.Join(" ", onto) : null)));
 
         var linked = Linked(("a.scss", extract), ("b.scss", Read("b.scss", ".z { @extend .card__title; @extend .tile__title--small; @extend .card__title-big; }\n")));
 
@@ -638,11 +638,11 @@ public sealed class CssExtractorTests : CodeGraphExtractorContractTests<CssExtra
         watch.Stop();
 
         Assert.Equal(2 + (2 * Levels), extract.Nodes.Count);
-        Assert.Equal(["css:a.scss#.a&-x0&-x1", "css:a.scss#.a&-x0&-y1"], extract.Nodes.Where(node => node.Name is "&-x1" or "&-y1").Select(node => node.Id));
+        Assert.Equal(["css:a.scss#.a&-x0&-x1", "css:a.scss#.a&-x0&-y1"], extract.Nodes.Where(node => node.Name is "&-x1" or "&-y1").Select(node => node.Id.Whole()));
         Assert.All(extract.Nodes.Skip(4), node => Assert.Equal(2, node.SuffixOf!.Count));
         Assert.Empty(extract.Dynamic);
         Assert.Equal(
-            [new CodeEdge("css:b.scss#.z", Assert.Single(extract.Nodes, node => node.Name == $"&-y{Levels - 1}").Id, CodeEdgeKinds.Inherits, 1, CodeConfidences.Unique)],
+            [new CodeEdge("css:b.scss#.z", Assert.Single(extract.Nodes, node => node.Name == $"&-y{Levels - 1}").Id.Whole(), CodeEdgeKinds.Inherits, 1, CodeConfidences.Unique)],
             linked.Edges.Where(edge => edge.Kind == CodeEdgeKinds.Inherits));
         Assert.True(watch.Elapsed < TimeSpan.FromSeconds(5), $"reading and linking {Levels} levels took {watch.Elapsed}");
 
@@ -760,7 +760,7 @@ public sealed class CssExtractorTests : CodeGraphExtractorContractTests<CssExtra
 
         Assert.Equal(
             [("css:a.scss#@keyframes fade-in", CodeSubKinds.Keyframes), ("css:a.scss#@mixin fade-in", CodeSubKinds.StyleMixin), ("css:a.scss#.modal", CodeSubKinds.Rule), ("css:a.scss#@mixin button", CodeSubKinds.StyleMixin), ("css:a.scss#button", CodeSubKinds.Rule)],
-            extract.Nodes.Select(node => (node.Id, node.SubKind!)));
+            extract.Nodes.Select(node => (node.Id.Whole(), node.SubKind!)));
         Assert.Equal(
             [
                 new CodeEdge("css:a.scss#@mixin fade-in", "css:a.scss#@keyframes fade-in", CodeEdgeKinds.Uses, 2, CodeConfidences.Exact),
@@ -856,7 +856,7 @@ public sealed class CssExtractorTests : CodeGraphExtractorContractTests<CssExtra
 
         // What a block declares is its own to its close: the rule after it uses the sheet's of those names.
         Assert.Equal([("$base", 1), ("$palette", 2), ("$count", 3), ("mq", 4), ("$tablet", 4), ("$g", 5), ("$w", 5), ("$i", 5), ("$color", 5)], scss.References.Select(reference => (reference.Name, reference.Line)));
-        Assert.Equal(["@mixin rounded", ".t", ".c", ".x", "$g", ".y", "(sheet)"], scss.Nodes.Select(node => node.Id[(node.Id.IndexOf('#') + 1)..]));
+        Assert.Equal(["@mixin rounded", ".t", ".c", ".x", "$g", ".y", "(sheet)"], scss.Nodes.Select(node => { var id = node.Id.Whole(); return id[(id.IndexOf('#') + 1)..]; }));
 
         var less = Read("a.less", ".rounded(@r: @base) { border-radius: @r; }\n.z { .rounded(@r: 3px); }\n");
 
@@ -874,7 +874,7 @@ public sealed class CssExtractorTests : CodeGraphExtractorContractTests<CssExtra
 
         Assert.Equal(
             [(".legacy", null, null), (".loc", "loc", "file:src/a.module.css"), (".wide", null, null), (".own", "own", "file:src/a.module.css"), (".theirs", null, (string?)null)],
-            module.Nodes.Select(node => (node.Name, node.Exports is { } exports ? string.Join(" ", exports) : null, node.SeenIn)));
+            module.Nodes.Select(node => (node.Name, node.Exports is { } exports ? string.Join(" ", exports) : null, node.SeenIn?.Whole())));
     }
 
     /// <summary>

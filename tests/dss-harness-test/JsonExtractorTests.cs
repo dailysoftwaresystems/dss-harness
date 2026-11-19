@@ -112,12 +112,12 @@ public sealed class JsonExtractorTests : CodeGraphExtractorContractTests<JsonExt
                 ("[1]", null, 12, 12, "json:appsettings.json#limits"),
                 ("logging", null, 14, 16, null),
             ],
-            extract.Nodes.Where(node => node.Kind == CodeNodeKinds.Section).Select(node => (node.Name, node.SubKind, node.Start, node.End, node.Parent)));
+            extract.Nodes.Where(node => node.Kind == CodeNodeKinds.Section).Select(node => (node.Name, node.SubKind, node.Start, node.End, node.Parent?.Whole())));
 
         var key = Assert.Single(extract.Nodes, node => node.Id == "json:appsettings.json#targets.x64.callingConvention");
 
         Assert.Equal(("callingConvention", "targets.x64.callingConvention", "cdecl"), (key.Name, key.Qualified, key.Summary));
-        Assert.Equal("json:appsettings.json#targets.x64", key.Parent);
+        Assert.Equal("json:appsettings.json#targets.x64", key.Parent!.Whole());
 
         var inner = Assert.Single(extract.Nodes, node => node.Id == "json:appsettings.json#limits[1].value");
 
@@ -191,7 +191,7 @@ public sealed class JsonExtractorTests : CodeGraphExtractorContractTests<JsonExt
                 ("json:package-lock.json#[\"\"]", "[\"\"]", "package-lock.json#[\"\"]", null, null),
                 ("json:package-lock.json#[\"\"].a", "a", "[\"\"].a", "1", "json:package-lock.json#[\"\"]"),
             ],
-            extract.Nodes.Select(node => (node.Id, node.Name, node.Qualified, node.Summary, node.Parent)));
+            extract.Nodes.Select(node => (node.Id.Whole(), node.Name, node.Qualified.Whole(), node.Summary, node.Parent?.Whole())));
         Assert.Null(extract.WithDigests(Lock).Problem("json", CodeFileText.Lines(Lock).Count));
 
         var name = new string('k', 12_000);
@@ -222,7 +222,7 @@ public sealed class JsonExtractorTests : CodeGraphExtractorContractTests<JsonExt
                 ("json:i18n/en.json#messages[\"Tab\\there\"]", "[\"Tab\\there\"]", "messages[\"Tab\\there\"]"),
                 ("json:i18n/en.json#messages.plain", "plain", "messages.plain"),
             ],
-            extract.Nodes.Select(node => (node.Id, node.Name, node.Qualified)));
+            extract.Nodes.Select(node => (node.Id.Whole(), node.Name, node.Qualified.Whole())));
         Assert.Null(extract.WithDigests(Text).Problem("json", CodeFileText.Lines(Text).Count));
     }
 
@@ -277,7 +277,7 @@ public sealed class JsonExtractorTests : CodeGraphExtractorContractTests<JsonExt
                 ("json:list.json#[1].b", 4, 4),
                 ("json:list.json#[2]", 5, 5),
             ],
-            extract.Nodes.Select(node => (node.Id, node.Start, node.End)));
+            extract.Nodes.Select(node => (node.Id.Whole(), node.Start, node.End)));
         Assert.Null(extract.WithDigests(Text).Problem("json", CodeFileText.Lines(Text).Count));
 
         // A list of records is a section and a key a record, however many: none is left out, and each key is inside its
@@ -286,7 +286,7 @@ public sealed class JsonExtractorTests : CodeGraphExtractorContractTests<JsonExt
 
         Assert.Equal(
             [.. Enumerable.Range(0, 12_000).SelectMany(at => new[] { ($"json:records.json#[{at}]", (string?)null), ($"json:records.json#[{at}].id", $"json:records.json#[{at}]") })],
-            records.Nodes.Select(node => (node.Id, node.Parent)));
+            records.Nodes.Select(node => (node.Id.Whole(), node.Parent?.Whole())));
     }
 
     /// <summary>
@@ -328,5 +328,5 @@ public sealed class JsonExtractorTests : CodeGraphExtractorContractTests<JsonExt
     private static FileExtract Read(string path, string text) => new JsonExtractor().Extract(new CodeFileInput(path, text));
 
     private static string OwnerOf(FileExtract extract, int line)
-        => extract.Nodes.FirstOrDefault(node => node.Start <= line && line <= node.End)?.Id ?? "file:";
+        => extract.Nodes.FirstOrDefault(node => node.Start <= line && line <= node.End)?.Id.Whole() ?? "file:";
 }

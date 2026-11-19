@@ -313,7 +313,7 @@ public sealed class CSharpExtractor : ICodeGraphExtractor
     /// <param name="Interface">Whether it is an interface, whose members without a body are prototypes.</param>
     /// <param name="Fields">Its fields, properties, events and primary constructor's parameters, by name, each with its declared type where the file says.</param>
     /// <param name="TypeParameters">The names of its type parameters, and those of every type it is declared in.</param>
-    private sealed record TypeFrame(ExtractNode Node, string IdName, bool Local, string Identifier, string? Inherited, bool Interface, IReadOnlyDictionary<string, string?> Fields, IReadOnlySet<string> TypeParameters)
+    private sealed record TypeFrame(ExtractNode Node, QualifiedName IdName, bool Local, string Identifier, string? Inherited, bool Interface, IReadOnlyDictionary<string, string?> Fields, IReadOnlySet<string> TypeParameters)
     {
         /// <summary>The receiver's type of the extension block its members are declared in; <see langword="null"/> outside one.</summary>
         public TypeSyntax? Receiver { get; init; }
@@ -330,7 +330,7 @@ public sealed class CSharpExtractor : ICodeGraphExtractor
     /// <param name="Scope">The qualified name of the namespace or type it is declared in; <see langword="null"/> at a file's level.</param>
     /// <param name="Parent">The node it is declared inside; <see langword="null"/> at a file's level.</param>
     /// <param name="Type">The type it is a member of; <see langword="null"/> outside one.</param>
-    private readonly record struct Declaration(MemberDeclarationSyntax Member, string? Scope, ExtractNode? Parent, TypeFrame? Type);
+    private readonly record struct Declaration(MemberDeclarationSyntax Member, QualifiedName? Scope, ExtractNode? Parent, TypeFrame? Type);
 
     /// <summary>
     /// The values a member's code reads by a name alone where its walk stands - its parameters, variables and local
@@ -690,7 +690,7 @@ public sealed class CSharpExtractor : ICodeGraphExtractor
     private sealed class Reading(string prefix, string path, CodeLineIndex lines, CompilationUnitSyntax root)
     {
         private readonly List<ExtractNode> _nodes = [];
-        private readonly Dictionary<string, ExtractScope> _scopes = new(StringComparer.Ordinal);
+        private readonly Dictionary<QualifiedName, ExtractScope> _scopes = new();
         private readonly List<ExtractImport> _imports = [];
         private readonly List<ExtractReference> _references = [];
         private readonly List<ExtractDynamic> _dynamic = [];
@@ -698,10 +698,10 @@ public sealed class CSharpExtractor : ICodeGraphExtractor
         private readonly ExtractIds _ids = new();
 
         /// <summary>The index in the nodes of each namespace's and type's first node, by its id, kind and parent: where a later part of it runs on.</summary>
-        private readonly Dictionary<(string Id, string Kind, string? Parent), int> _parts = [];
+        private readonly Dictionary<(QualifiedName Id, string Kind, QualifiedName? Parent), int> _parts = [];
 
         /// <summary>The class each type of the file inherits, by the type's id, as its constructors are named: a partial type's base list may be on another part.</summary>
-        private readonly Dictionary<string, string> _inherited = new(StringComparer.Ordinal);
+        private readonly Dictionary<QualifiedName, string> _inherited = new();
 
         /// <summary>The delegate types the file declares, by name: a variable of one is called only through the delegate.</summary>
         private readonly HashSet<string> _delegates = root.DescendantNodes(node => node is not BlockSyntax).OfType<DelegateDeclarationSyntax>()
@@ -828,7 +828,7 @@ public sealed class CSharpExtractor : ICodeGraphExtractor
         }
 
         /// <summary>A namespace: its node, its scopes and imports; answers the declarations it holds.</summary>
-        private IEnumerable<Declaration> Namespace(BaseNamespaceDeclarationSyntax declared, string? scope, ExtractNode? parent)
+        private IEnumerable<Declaration> Namespace(BaseNamespaceDeclarationSyntax declared, QualifiedName? scope, ExtractNode? parent)
         {
             if (Written(declared.Name) is not { } written)
             {
@@ -847,9 +847,9 @@ public sealed class CSharpExtractor : ICodeGraphExtractor
                 at = opened;
             }
 
-            var node = Part(qualified, CodeNodeKinds.Namespace, parent, declared, () => new ExtractNode(string.Empty, CodeNodeKinds.Namespace, qualified[(qualified.LastIndexOf('.') + 1)..], qualified, Line(declared.SpanStart), EndLine(declared), ExtractText.Signature($"namespace {written}"))
+            var node = Part(qualified, CodeNodeKinds.Namespace, parent, declared, () => new ExtractNode(string.Empty, CodeNodeKinds.Namespace, qualified.PastLastDot(), qualified, Line(declared.SpanStart), EndLine(declared), ExtractText.Signature($"namespace {written}"))
             {
-                Scope = qualified.LastIndexOf('.') is var dot and > 0 ? qualified[..dot] : null,
+                Scope = qualified.BeforeLastDot(),
                 Parent = parent?.Id,
                 BodyStart = declared is NamespaceDeclarationSyntax block ? LineOf(block.OpenBraceToken) : null,
             });
@@ -863,7 +863,7 @@ public sealed class CSharpExtractor : ICodeGraphExtractor
         }
 
         /// <summary>A type: its node, its scope, bases and head, an enum's members; answers the declarations it holds.</summary>
-        private IEnumerable<Declaration> Type(BaseTypeDeclarationSyntax declared, string? scope, ExtractNode? parent, TypeFrame? outer)
+        private IEnumerable<Declaration> Type(BaseTypeDeclarationSyntax declared, QualifiedName? scope, ExtractNode? parent, TypeFrame? outer)
         {
             var identifier = declared.Identifier.ValueText;
 
@@ -988,7 +988,7 @@ public sealed class CSharpExtractor : ICodeGraphExtractor
             return declared is TypeDeclarationSyntax withMembers ? [.. withMembers.Members.Select(member => new Declaration(member, qualified, node, frame))] : [];
         }
 
-        private void Delegate(DelegateDeclarationSyntax declared, string? scope, ExtractNode? parent, TypeFrame? outer)
+        private void Delegate(DelegateDeclarationSyntax declared, QualifiedName? scope, ExtractNode? parent, TypeFrame? outer)
         {
             var identifier = declared.Identifier.ValueText;
 
@@ -1281,9 +1281,9 @@ public sealed class CSharpExtractor : ICodeGraphExtractor
         /// namespace, in the same place - the first one, its lines running on to this part's last and its summary the
         /// first said: two nodes of one would make every reference to it name both.
         /// </summary>
-        private ExtractNode Part(string idName, string kind, ExtractNode? parent, SyntaxNode declared, Func<ExtractNode> made)
+        private ExtractNode Part(QualifiedName idName, string kind, ExtractNode? parent, SyntaxNode declared, Func<ExtractNode> made)
         {
-            var key = ($"{prefix}{idName}", kind, parent?.Id);
+            var key = (idName.Prepend(prefix), kind, parent?.Id);
 
             if (!_parts.TryGetValue(key, out var at))
             {
@@ -1426,7 +1426,7 @@ public sealed class CSharpExtractor : ICodeGraphExtractor
 
                     // A member an attribute's named argument sets - [Display(Name = "x")] - of the attribute's class.
                     case AttributeArgumentSyntax { NameEquals.Name: IdentifierNameSyntax member, Parent.Parent: AttributeSyntax attribute }:
-                        Used(from, member, NameOf(attribute.Name) is { } named ? new ExtractQualifier(CodeQualifierKinds.Type, ExtractText.Qualify(named.Qualifier, AttributeClass(named.Name))) : new ExtractQualifier(CodeQualifierKinds.Value));
+                        Used(from, member, NameOf(attribute.Name) is { } named ? new ExtractQualifier(CodeQualifierKinds.Type, ExtractText.Qualify(named.Qualifier is null ? null : QualifiedName.Of(named.Qualifier), AttributeClass(named.Name))) : new ExtractQualifier(CodeQualifierKinds.Value));
                         break;
 
                     case IdentifierNameSyntax read when Readable(read, walk, typeParameters):
@@ -1445,7 +1445,7 @@ public sealed class CSharpExtractor : ICodeGraphExtractor
         /// or an interpolated string's constant parts, each a literal of its own, its holes code read as code: kept as held by
         /// the node of <paramref name="holder"/>, none where the file's own holds it.
         /// </summary>
-        private void Literal(SyntaxNode node, string? holder)
+        private void Literal(SyntaxNode node, QualifiedName? holder)
         {
             switch (node)
             {
@@ -1759,7 +1759,7 @@ public sealed class CSharpExtractor : ICodeGraphExtractor
                     return new ExtractQualifier(CodeQualifierKinds.Base);
 
                 case ObjectCreationExpressionSyntax created when NameOf(created.Type) is { } made:
-                    return new ExtractQualifier(CodeQualifierKinds.Type, ExtractText.Qualify(made.Qualifier, made.Name));
+                    return new ExtractQualifier(CodeQualifierKinds.Type, ExtractText.Qualify(made.Qualifier is null ? null : QualifiedName.Of(made.Qualifier), made.Name));
 
                 case ParenthesizedExpressionSyntax { Expression: CastExpressionSyntax cast } when Key(cast.Type) is { } to:
                     return new ExtractQualifier(CodeQualifierKinds.Type, to);
@@ -2155,7 +2155,7 @@ public sealed class CSharpExtractor : ICodeGraphExtractor
                     continue;
                 }
 
-                Reference(from, CodeEdgeKinds.References, AttributeClass(named.Name), named.Qualifier, Line(attribute.SpanStart));
+                Reference(from, CodeEdgeKinds.References, AttributeClass(named.Name), named.Qualifier is null ? null : QualifiedName.Of(named.Qualifier), Line(attribute.SpanStart));
                 Arguments(from, attribute.Name, typeParameters);
             }
         }
@@ -2192,9 +2192,9 @@ public sealed class CSharpExtractor : ICodeGraphExtractor
         }
 
         private void Reference(ExtractNode from, string kind, (string Name, string? Qualifier) target, SyntaxNode at)
-            => Reference(from, kind, target.Name, target.Qualifier, Line(at.SpanStart));
+            => Reference(from, kind, target.Name, target.Qualifier is null ? null : QualifiedName.Of(target.Qualifier), Line(at.SpanStart));
 
-        private void Reference(ExtractNode from, string kind, string name, string? qualifier, int line)
+        private void Reference(ExtractNode from, string kind, string name, QualifiedName? qualifier, int line)
             => _references.Add(new ExtractReference(from.Id, kind, name, line)
             {
                 Qualifier = qualifier is null ? null : new ExtractQualifier(CodeQualifierKinds.Type, qualifier),
@@ -2202,7 +2202,7 @@ public sealed class CSharpExtractor : ICodeGraphExtractor
 
         private void Dynamic(SyntaxNode at, string why) => _dynamic.Add(new ExtractDynamic(Line(at.SpanStart), why));
 
-        private void Scope(string name, string? parent, bool open = true) => _scopes.TryAdd(name, new ExtractScope(name, open) { Parent = parent });
+        private void Scope(QualifiedName name, QualifiedName? parent, bool open = true) => _scopes.TryAdd(name, new ExtractScope(name, open) { Parent = parent });
 
         private ExtractNode Add(ExtractNode node)
         {
@@ -2211,17 +2211,17 @@ public sealed class CSharpExtractor : ICodeGraphExtractor
         }
 
         /// <summary>The id of a declaration named so: the language's prefix and the name, told apart from an earlier one alike by its place.</summary>
-        private string Id(string name) => _ids.Next($"{prefix}{name}");
+        private QualifiedName Id(QualifiedName name) => _ids.Next(name.Prepend(prefix));
 
         /// <summary>The id of a member of <paramref name="type"/> identified by <paramref name="tail"/>: an extension block's with the block's receiver.</summary>
-        private string MemberId(TypeFrame type, string tail)
-            => Id($"{type.IdName}.{(type.Receiver is { } receiver ? $"extension({TypeText(receiver)})." : string.Empty)}{tail}");
+        private QualifiedName MemberId(TypeFrame type, string tail)
+            => Id(type.IdName.Under($"{(type.Receiver is { } receiver ? $"extension({TypeText(receiver)})." : string.Empty)}{tail}"));
 
         /// <summary>
         /// The name a type's id is made of, and whether it is its file's alone: a file-local type's - and one declared in
         /// it - holds its file's path, as the statements at a file's top do, since many files may each have one alike.
         /// </summary>
-        private (string IdName, bool Local) Named(TypeFrame? outer, SyntaxTokenList modifiers, string name, string qualified)
+        private (QualifiedName IdName, bool Local) Named(TypeFrame? outer, SyntaxTokenList modifiers, string name, QualifiedName qualified)
             => outer is not null ? (ExtractText.Qualify(outer.IdName, name), outer.Local)
                 : modifiers.Any(SyntaxKind.FileKeyword) ? ($"{path}:{qualified}", true)
                 : (qualified, false);

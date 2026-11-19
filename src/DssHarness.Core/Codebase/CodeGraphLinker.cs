@@ -123,20 +123,21 @@ public static class CodeGraphLinker
     /// <param name="SeenKey">The scope whose declarations alone see it, by key; <see langword="null"/> where it is kept to none.</param>
     private sealed record Declaration(ExtractNode Node, CodeGraphFile File, ScopeKey? ScopeKey, bool FileOnly, ScopeKey? SeenKey)
     {
-        public string Id => Node.Id;
+        public QualifiedName Id => Node.Id;
     }
 
     /// <summary>
     /// A scope as the linker holds it and a finding reads it: its qualified name, and the path of the file whose own it is
-    /// where that file declares it closed - every file's where it is open. The name is the very text its extract holds,
-    /// never a copy, so a scope nested any depth costs its tables a reference, not its whole name again.
+    /// where that file declares it closed - every file's where it is open. The name is the very name its extract holds -
+    /// the one before its own part and that part - never a copy or a writing-out of it, so a scope nested any depth costs
+    /// its tables a reference and the part the name adds, not its whole name again.
     /// </summary>
     /// <param name="Closed">The path of the file it is the closed scope of; <see langword="null"/> where it is open.</param>
     /// <param name="Name">Its qualified name.</param>
-    internal readonly record struct ScopeKey(string? Closed, string Name)
+    internal readonly record struct ScopeKey(string? Closed, QualifiedName Name)
     {
         /// <summary>The scope as a part a file holds of a key is written (<see cref="Linking"/>'s parts): its file and name, apart.</summary>
-        public override string ToString() => Closed is { } path ? $"closed\u0000{path}\u0000{Name}" : $"open\u0000{Name}";
+        public override string ToString() => Closed is { } path ? $"closed\u0000{path}\u0000{Name.Whole()}" : $"open\u0000{Name.Whole()}";
     }
 
     /// <summary>One address root an extract declares, placed.</summary>
@@ -316,13 +317,18 @@ public static class CodeGraphLinker
 
     /// <summary>
     /// The number of every key a finding may read: one table for a graph and every link made again from it, which links of
-    /// several views may add to at once.
+    /// several views may add to at once. A key that is a name (<see cref="QualifiedName"/>) holds the name - the one before
+    /// its own part and that part - so what the tables hold grows with the names' own parts and never with the square of
+    /// how deep they nest.
     /// </summary>
     internal sealed class LinkKeys
     {
-        private readonly ConcurrentDictionary<string, int>[] _tables = [.. Enumerable.Range(0, Enum.GetValues<Read>().Length).Select(_ => new ConcurrentDictionary<string, int>(StringComparer.Ordinal))];
+        private readonly ConcurrentDictionary<string, int>[] _texts = [.. Enumerable.Range(0, Enum.GetValues<Read>().Length).Select(_ => new ConcurrentDictionary<string, int>(StringComparer.Ordinal))];
 
-        /// <summary>The scopes' keys, each a scope as the linker holds it: its name the extract's own text.</summary>
+        /// <summary>The tables whose keys are names: an id's and a qualified name's.</summary>
+        private readonly ConcurrentDictionary<QualifiedName, int>[] _names = [.. Enumerable.Range(0, Enum.GetValues<Read>().Length).Select(_ => new ConcurrentDictionary<QualifiedName, int>())];
+
+        /// <summary>The scopes' keys, each a scope as the linker holds it: its name the extract's own.</summary>
         private readonly ConcurrentDictionary<ScopeKey, int> _scopes = new();
         private int _next;
         private long _characters;
@@ -330,13 +336,16 @@ public static class CodeGraphLinker
         /// <summary>
         /// How many characters the texts of every key held come to, each once: what the link keeps for every one made again
         /// from it, which grows with what the findings read - each text a name the tree holds, or one a reference writes - and
-        /// never with what a chain of links rebuilt.
+        /// never with what a chain of links rebuilt. A key that is a name counts what the name itself holds, its own part,
+        /// for the name before it is held by that and counted with it, never by each of its own.
         /// </summary>
         public long Characters => Interlocked.Read(ref _characters);
 
-        public int Of(int table, string text) => Of(_tables[table], text, text.Length);
+        public int Of(int table, string text) => Of(_texts[table], text, text.Length);
 
-        public int Of(ScopeKey scope) => Of(_scopes, scope, scope.Name.Length);
+        public int Of(int table, QualifiedName name) => Of(_names[table], name, name.Held);
+
+        public int Of(ScopeKey scope) => Of(_scopes, scope, scope.Name.Held);
 
         /// <summary>The number of <paramref name="key"/> in <paramref name="table"/>, given it where it has none: its characters counted once, by the add that held.</summary>
         private int Of<TKey>(ConcurrentDictionary<TKey, int> table, TKey key, int characters)
@@ -362,7 +371,7 @@ public static class CodeGraphLinker
     /// <summary>What a link keeps for the next to be made from it: the files it was given, what each reference found, and each type's bases after each round.</summary>
     internal sealed class LinkMemory
     {
-        internal LinkMemory(LinkKeys keys, IReadOnlyDictionary<string, CodeGraphFile> files, IReadOnlyDictionary<string, FileFound> found, IReadOnlyList<Dictionary<string, List<string[]>>> rounds, IReadOnlyDictionary<string, FolderRead> folders)
+        internal LinkMemory(LinkKeys keys, IReadOnlyDictionary<string, CodeGraphFile> files, IReadOnlyDictionary<string, FileFound> found, IReadOnlyList<Dictionary<QualifiedName, List<string[]>>> rounds, IReadOnlyDictionary<string, FolderRead> folders)
         {
             Keys = keys;
             Files = files;
@@ -382,7 +391,7 @@ public static class CodeGraphLinker
         internal IReadOnlyDictionary<string, FileFound> Found { get; }
 
         /// <summary>Each type's bases after each round of the bases, the last the bases every other reference was found through.</summary>
-        internal IReadOnlyList<Dictionary<string, List<string[]>>> Rounds { get; }
+        internal IReadOnlyList<Dictionary<QualifiedName, List<string[]>>> Rounds { get; }
     }
 
     /// <summary>A file read in the scope a directory above it names (<see cref="FileExtract.FolderScope"/>): the file given, that scope, and the file as the link reads it.</summary>
@@ -416,14 +425,14 @@ public static class CodeGraphLinker
         private readonly List<Declaration> _declarations = [];
 
         /// <summary>Each file's declarations by id: the one a reference of that file is made from.</summary>
-        private readonly Dictionary<CodeGraphFile, Dictionary<string, Declaration>> _owners = new(ReferenceEqualityComparer.Instance);
+        private readonly Dictionary<CodeGraphFile, Dictionary<QualifiedName, Declaration>> _owners = new(ReferenceEqualityComparer.Instance);
 
         /// <summary>What every file of each language imports (<see cref="ExtractImport.Global"/>), with the file that says so.</summary>
         private readonly Dictionary<string, List<(CodeGraphFile File, ExtractImport Import)>> _global = new(StringComparer.Ordinal);
 
         /// <summary>The scope imports each file of a language declares for the whole of its directory's subtree: a Razor <c>_ViewImports.cshtml</c>'s <c>@using</c> among them.</summary>
         private readonly Dictionary<string, List<(string Directory, CodeGraphFile File, ExtractImport Import)>> _ofDirectory = new(StringComparer.Ordinal);
-        private readonly Dictionary<string, List<Declaration>> _byId = new(StringComparer.Ordinal);
+        private readonly Dictionary<QualifiedName, List<Declaration>> _byId = [];
 
         /// <summary>Every declaration by the scope it is declared in and its name.</summary>
         private readonly Dictionary<ScopeKey, Dictionary<string, List<Declaration>>> _byScope = [];
@@ -435,7 +444,7 @@ public static class CodeGraphLinker
         private readonly Dictionary<string, Dictionary<string, List<Declaration>>> _closedByFile = new(StringComparer.Ordinal);
 
         /// <summary>Every type and namespace by its qualified name.</summary>
-        private readonly Dictionary<string, List<Declaration>> _containers = new(StringComparer.Ordinal);
+        private readonly Dictionary<QualifiedName, List<Declaration>> _containers = [];
 
         /// <summary>Each scope's parent scope, by key, as the extracts declare or their containers place it.</summary>
         private readonly Dictionary<ScopeKey, ScopeKey?> _scopeParents = [];
@@ -471,13 +480,13 @@ public static class CodeGraphLinker
         private readonly Dictionary<CodeGraphFile, IReadOnlyList<ScopeKey>> _tops = new(ReferenceEqualityComparer.Instance);
 
         /// <summary>The names of the closed scopes each file's extract declares: found once a file, as every key of one of its names is.</summary>
-        private readonly Dictionary<CodeGraphFile, HashSet<string>> _closed = new(ReferenceEqualityComparer.Instance);
+        private readonly Dictionary<CodeGraphFile, HashSet<QualifiedName>> _closed = new(ReferenceEqualityComparer.Instance);
 
         /// <summary>The containers a written name was found to be, from one file and scope: a name such as a type no file declares is looked for once.</summary>
         private readonly Dictionary<(string Path, ScopeKey? Scope, string Written), (IReadOnlyList<Declaration> Value, KeptReads Reads)> _containersFound = [];
 
         /// <summary>Every type's and scope's qualified name by the run of a name's characters it ends with, in ordinal order: where an ending is looked for.</summary>
-        private readonly Dictionary<string, List<string>> _byTrailing = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, List<QualifiedName>> _byTrailing = new(StringComparer.Ordinal);
 
         /// <summary>The containers each written name ends, as the last way a qualifier is found: looked for once.</summary>
         private readonly Dictionary<string, (IReadOnlyList<Declaration> Value, KeptReads Reads)> _endings = new(StringComparer.Ordinal);
@@ -517,7 +526,7 @@ public static class CodeGraphLinker
         private readonly Dictionary<string, List<Declaration>> _extensions = new(StringComparer.Ordinal);
 
         /// <summary>The types each extension extends, by id, as its own file names the type: found once.</summary>
-        private readonly Dictionary<Declaration, (IReadOnlyList<string> Value, KeptReads Reads)> _extended = new(ReferenceEqualityComparer.Instance);
+        private readonly Dictionary<Declaration, (IReadOnlyList<QualifiedName> Value, KeptReads Reads)> _extended = new(ReferenceEqualityComparer.Instance);
 
         /// <summary>What each file's references found, by the file.</summary>
         private readonly Dictionary<CodeGraphFile, FileFound> _found = new(ReferenceEqualityComparer.Instance);
@@ -532,7 +541,7 @@ public static class CodeGraphLinker
         /// Each type's bases, by id, that a finding looks through now - none in the first round of the bases - as
         /// <see cref="BaseRanksOf"/> ranks them.
         /// </summary>
-        private Dictionary<string, List<string[]>> _bases = new(StringComparer.Ordinal);
+        private Dictionary<QualifiedName, List<string[]>> _bases = [];
 
         /// <summary>What the finding under way has read; null outside one.</summary>
         private Reading? _reads;
@@ -550,7 +559,7 @@ public static class CodeGraphLinker
         private int _exposedFiles;
 
         /// <summary>The parts each type's files join to it though their qualified names differ (<see cref="CodeBehinds"/>), by the type's id: each of the other side, by id.</summary>
-        private readonly Dictionary<string, List<string>> _siblings = new(StringComparer.Ordinal);
+        private readonly Dictionary<QualifiedName, List<QualifiedName>> _siblings = [];
 
         public Linking(IReadOnlyList<CodeGraphFile> files, LinkMemory? previous, IReadOnlyList<string> keyNaming)
         {
@@ -578,7 +587,7 @@ public static class CodeGraphLinker
                     continue;
                 }
 
-                var owners = _owners[file] = new(StringComparer.Ordinal);
+                var owners = _owners[file] = [];
                 var top = _topByFile[file] = new(StringComparer.Ordinal);
                 var closed = _closed[file] = Closed(extract);
 
@@ -661,9 +670,9 @@ public static class CodeGraphLinker
                 }
             }
 
-            foreach (var qualified in _containers.Keys.Order(StringComparer.Ordinal))
+            foreach (var qualified in _containers.Keys.Order(ByText))
             {
-                Add(_byTrailing, Trailing(qualified), qualified);
+                Add(_byTrailing, Trailing(qualified.Whole()), qualified);
             }
 
             _suffixes = [.. _suffixesByFile.Values.SelectMany(lengths => lengths).Distinct().Order()];
@@ -694,7 +703,7 @@ public static class CodeGraphLinker
                 {
                     var siblings = _siblings.TryGetValue(one.Id, out var held) ? held : _siblings[one.Id] = [];
 
-                    if (!siblings.Contains(other.Id, StringComparer.Ordinal))
+                    if (!siblings.Contains(other.Id))
                     {
                         siblings.Add(other.Id);
                     }
@@ -787,7 +796,7 @@ public static class CodeGraphLinker
                 : null;
 
         /// <summary>One round of the bases (<see cref="Link"/>): which it is, and each type's bases it found.</summary>
-        private sealed record BaseRound(int Round, Dictionary<string, List<string[]>> Bases);
+        private sealed record BaseRound(int Round, Dictionary<QualifiedName, List<string[]>> Bases);
 
         public CodeGraphLinked Link()
         {
@@ -811,9 +820,9 @@ public static class CodeGraphLinker
             // - a base forty levels up is found in the forty-first - or comes back to bases a round before found, which is
             // a cycle no further round leaves. A round finds again only what read a base that moved; and no base hangs on
             // the order the files come in.
-            var rounds = new List<Dictionary<string, List<string[]>>>();
+            var rounds = new List<Dictionary<QualifiedName, List<string[]>>>();
             var end = Fixpoint.Run(
-                new BaseRound(-1, new Dictionary<string, List<string[]>>(StringComparer.Ordinal)),
+                new BaseRound(-1, []),
                 round =>
                 {
                     var bases = Round(references, round.Round + 1, changed, rounds);
@@ -844,7 +853,7 @@ public static class CodeGraphLinker
                 .Select(alike => alike.First() with { Confidence = alike.Select(edge => edge.Confidence).Aggregate(CodeConfidences.Surer) })
                 .ToList();
             var symbols = _files.Select(file => new CodeGraphSymbol(FileIdOf(file.Path), CodeNodeKinds.File, [file.Path]))
-                .Concat(_byId.Select(pair => new CodeGraphSymbol(pair.Key, pair.Value[0].Node.Kind, [.. pair.Value.Select(declaration => declaration.File.Path).Distinct(StringComparer.Ordinal)])))
+                .Concat(_byId.Select(pair => new CodeGraphSymbol(pair.Key.Whole(), pair.Value[0].Node.Kind, [.. pair.Value.Select(declaration => declaration.File.Path).Distinct(StringComparer.Ordinal)])))
                 .ToList();
 
             return new CodeGraphLinked(symbols, edges, _external, _resolved.Count)
@@ -866,9 +875,9 @@ public static class CodeGraphLinker
         /// <param name="round">The round, from 0.</param>
         /// <param name="changed">Every key a change altered since the link this is made from.</param>
         /// <param name="rounds">The bases each round before found.</param>
-        private Dictionary<string, List<string[]>> Round(List<CodeGraphFile> files, int round, HashSet<int> changed, List<Dictionary<string, List<string[]>>> rounds)
+        private Dictionary<QualifiedName, List<string[]>> Round(List<CodeGraphFile> files, int round, HashSet<int> changed, List<Dictionary<QualifiedName, List<string[]>>> rounds)
         {
-            var none = new Dictionary<string, List<string[]>>(StringComparer.Ordinal);
+            Dictionary<QualifiedName, List<string[]>> none = [];
             var given = round == 0 ? none : rounds[round - 1];
 
             // What moved between the bases the round before was given and those this one is, in this link; and between those
@@ -881,7 +890,7 @@ public static class CodeGraphLinker
             _bases = given;
             Forget();
 
-            var bases = new Dictionary<string, List<string[]>>(StringComparer.Ordinal);
+            Dictionary<QualifiedName, List<string[]>> bases = [];
 
             foreach (var file in files)
             {
@@ -985,7 +994,7 @@ public static class CodeGraphLinker
         /// nearer than every base named before it; an implemented base's joining the rank before the last, an inherited
         /// one's the last - each empty while the type names none - as <see cref="BaseRanksOf"/> ranks them.
         /// </summary>
-        private static void AddBases(Declaration from, Finding finding, Dictionary<string, List<string[]>> bases)
+        private static void AddBases(Declaration from, Finding finding, Dictionary<QualifiedName, List<string[]>> bases)
         {
             if (finding.Edges.Count == 0)
             {
@@ -1028,7 +1037,7 @@ public static class CodeGraphLinker
 
             if (finding.External)
             {
-                Count(_external, from.Id);
+                Count(_external, from.Id.Whole());
             }
         }
 
@@ -1047,7 +1056,7 @@ public static class CodeGraphLinker
         {
             foreach (var declaration in _declarations)
             {
-                _edges.Add(new CodeEdge(declaration.Node.Parent ?? FileIdOf(declaration.File.Path), declaration.Id, CodeEdgeKinds.Contains, declaration.Node.Start, CodeConfidences.Exact));
+                _edges.Add(new CodeEdge((declaration.Node.Parent ?? QualifiedName.Of(FileIdOf(declaration.File.Path))).Whole(), declaration.Id.Whole(), CodeEdgeKinds.Contains, declaration.Node.Start, CodeConfidences.Exact));
             }
         }
 
@@ -1071,8 +1080,8 @@ public static class CodeGraphLinker
 
                 return new Finding(
                     [.. found.Select(target => new CodeEdge(
-                        from.Id,
-                        target.Id,
+                        from.Id.Whole(),
+                        target.Id.Whole(),
                         reference.Kind == CodeEdgeKinds.Calls && target.Node.Kind == CodeNodeKinds.Type ? CodeEdgeKinds.Instantiates : reference.Kind,
                         reference.Line,
                         sure))],
@@ -1110,9 +1119,9 @@ public static class CodeGraphLinker
                         return Through(from, values, reference.Name, Accepts);
                     }
 
-                    if (value.Name is { } written && ImportsOf(from.File).Any(made => string.Equals(made.Import.Prefix, written, StringComparison.Ordinal)))
+                    if (value.Name is { } written && ImportsOf(from.File).Any(made => string.Equals(made.Import.Prefix, written.Whole(), StringComparison.Ordinal)))
                     {
-                        return (Prefixed(from, written, reference.Name, Imports), CodeConfidences.Exact);
+                        return (Prefixed(from, written.Whole(), reference.Name, Imports), CodeConfidences.Exact);
                     }
                 }
 
@@ -1266,7 +1275,7 @@ public static class CodeGraphLinker
         /// </summary>
         private bool Writes(Declaration written, string name, int form)
         {
-            var walked = new HashSet<(string Id, int End)>();
+            var walked = new HashSet<(QualifiedName Id, int End)>();
             var pending = new Stack<(Declaration Node, int End)>();
             pending.Push((written, name.Length));
             walked.Add((written.Id, name.Length));
@@ -1331,7 +1340,7 @@ public static class CodeGraphLinker
                     return EnclosingType(from) is { } derived ? Typed(from, [derived], null, name, accepts, withSelf: false) : ([], CodeConfidences.Exact);
 
                 case CodeQualifierKinds.Prefix:
-                    return (Prefixed(from, qualifier.Name!, name, imported), CodeConfidences.Exact);
+                    return (Prefixed(from, qualifier.Name!.Whole(), name, imported), CodeConfidences.Exact);
 
                 case CodeQualifierKinds.Own:
                     // The node of its own file its implementation names by id - what a YAML alias or merge repeats, read
@@ -1346,7 +1355,7 @@ public static class CodeGraphLinker
                         .Where(target => target.Node.SeenIn == qualifier.Name && accepts(target))), CodeConfidences.Exact);
 
                 case CodeQualifierKinds.Type:
-                    return Typed(from, Containers(from, qualifier.Name!), qualifier.Name!, name, accepts, withSelf: true);
+                    return Typed(from, Containers(from, qualifier.Name!.Whole()), qualifier.Name!.Whole(), name, accepts, withSelf: true);
 
                 case CodeQualifierKinds.Scope:
                     // The scope the code names, else what no scope holds: a PHP function's namespace, then the global one -
@@ -1366,7 +1375,7 @@ public static class CodeGraphLinker
                 case CodeQualifierKinds.Key:
                     // A key qualifier names a configuration key wherever the repository declares one so - the property a
                     // project reads - of its own kind alone, as Takes keeps it; one with a name, of the language it names alone.
-                    return (Distinct(RepositoryNamed(from.File, name).Where(target => accepts(target) && (qualifier.Name is null || target.File.Language == qualifier.Name))), CodeConfidences.Exact);
+                    return (Distinct(RepositoryNamed(from.File, name).Where(target => accepts(target) && (qualifier.Name is null || target.File.Language is { } language && qualifier.Name.Is(language)))), CodeConfidences.Exact);
 
                 default:
                     // A value the scopes hold, nearer than any type or scope of its name, is that value; a type or a scope is
@@ -1384,7 +1393,7 @@ public static class CodeGraphLinker
                         return Typed(from, Containers(from, chain), chain.Name, name, accepts, withSelf: true);
                     }
 
-                    return Typed(from, Containers(from, qualifier.Name!), qualifier.Name!, name, accepts, withSelf: true);
+                    return Typed(from, Containers(from, qualifier.Name!.Whole()), qualifier.Name!.Whole(), name, accepts, withSelf: true);
             }
         }
 
@@ -1421,8 +1430,8 @@ public static class CodeGraphLinker
                 return [];
             }
 
-            var receivers = new HashSet<string>(StringComparer.Ordinal);
-            var pending = new Queue<string>(containers.Where(container => container.Node.Kind == CodeNodeKinds.Type)
+            var receivers = new HashSet<QualifiedName>();
+            var pending = new Queue<QualifiedName>(containers.Where(container => container.Node.Kind == CodeNodeKinds.Type)
                 .SelectMany(type => withSelf ? [type.Id] : BasesOf(type.Id)));
 
             while (pending.TryDequeue(out var id))
@@ -1444,11 +1453,11 @@ public static class CodeGraphLinker
         }
 
         /// <summary>The types <paramref name="extension"/> extends, by id, as its own file names the type: found once.</summary>
-        private IReadOnlyList<string> Extended(Declaration extension)
+        private IReadOnlyList<QualifiedName> Extended(Declaration extension)
             => Cached(_extended, extension, () => [.. Containers(extension, extension.Node.Extends!)
                 .Where(container => container.Node.Kind == CodeNodeKinds.Type)
                 .Select(type => type.Id)
-                .Distinct(StringComparer.Ordinal)]);
+                .Distinct()]);
 
         /// <summary>
         /// Whether <paramref name="from"/> reaches <paramref name="declaration"/>, an extension: the scope it is declared in,
@@ -1586,7 +1595,7 @@ public static class CodeGraphLinker
         /// of its names and the call on it reading the links before them once - and one that writes its names, by them.
         /// </summary>
         private IReadOnlyList<Declaration>? ValuesOf(Declaration from, ExtractQualifier qualifier, ReferenceAt place)
-            => qualifier.Link is { } link ? ChainTo(from, place with { At = link }).Values : qualifier.Name is { } written ? Values(from, written) : null;
+            => qualifier.Link is { } link ? ChainTo(from, place with { At = link }).Values : qualifier.Name is { } written ? Values(from, written.Whole()) : null;
 
         /// <summary>
         /// What the chain the reference at <paramref name="place"/> ends - its qualifier's names, then its own - comes to from
@@ -1611,7 +1620,7 @@ public static class CodeGraphLinker
             {
                 var reference = key.Place.File.Extract!.References[key.Place.At];
                 var prefix = before.Count > 0 ? before[0] : null;
-                var link = new ChainLink(key.From, prefix, prefix is null ? reference.Qualifier?.Name : null, prefix is null && reference.Qualifier?.Kind == CodeQualifierKinds.Type, reference.Name);
+                var link = new ChainLink(key.From, prefix, prefix is null ? reference.Qualifier?.Name?.Whole() : null, prefix is null && reference.Qualifier?.Kind == CodeQualifierKinds.Type, reference.Name);
 
                 if (_chainSteps.TryGetValue(link, out var stepped))
                 {
@@ -1736,7 +1745,7 @@ public static class CodeGraphLinker
         private IReadOnlyList<Declaration> Ending(Declaration from, string written)
         {
             var ending = Cached(_endings, written, () => Distinct(QualifiedEnding(Trailing(written))
-                .Where(qualified => EndsWithName(qualified, written))
+                .Where(qualified => EndsWithName(qualified.Whole(), written))
                 .SelectMany(qualified => ContainersOf(qualified))));
 
             return ending.Any(container => container.FileOnly || container.SeenKey is not null) ? [.. ending.Where(container => Sees(from, container))] : ending;
@@ -1860,7 +1869,7 @@ public static class CodeGraphLinker
         private IReadOnlyList<Declaration> Ending(Declaration from, ChainName written)
         {
             var ending = Cached(_chainEndings, written, () => Distinct(QualifiedEnding(Trailing(written.Name))
-                .Where(qualified => written.EndsName(qualified))
+                .Where(qualified => written.EndsName(qualified.Whole()))
                 .SelectMany(qualified => ContainersOf(qualified))));
 
             return ending.Any(container => container.FileOnly || container.SeenKey is not null) ? [.. ending.Where(container => Sees(from, container))] : ending;
@@ -1896,7 +1905,7 @@ public static class CodeGraphLinker
             {
                 var reference = references[place];
                 var before = Linked(reference, place) is { } link ? _chainOf[(file, link)]
-                    : reference.Qualifier is { Link: null, Name: { } head } ? Names(null, head)
+                    : reference.Qualifier is { Link: null, Name: { } head } ? Names(null, head.Whole())
                     : null;
 
                 _chainOf[(file, place)] = Names(before, reference.Name);
@@ -1932,7 +1941,7 @@ public static class CodeGraphLinker
 
             foreach (var (qualified, containers) in _containers)
             {
-                root.Under(qualified).Here = containers;
+                root.Under(qualified.Whole()).Here = containers;
             }
 
             return root;
@@ -2116,7 +2125,7 @@ public static class CodeGraphLinker
             }
 
             var extract = file.Extract;
-            var own = extract?.Nodes.Where(IsContainer).Select(node => node.Qualified).ToHashSet(StringComparer.Ordinal) ?? [];
+            var own = extract?.Nodes.Where(IsContainer).Select(node => node.Qualified).ToHashSet() ?? [];
 
             return _tops[file] = extract is null
                 ? []
@@ -2154,16 +2163,16 @@ public static class CodeGraphLinker
         /// <see cref="InType"/> finds it.
         /// </summary>
         private IReadOnlyList<Declaration> InTypes(IReadOnlyList<Declaration> types, string name, Func<Declaration, bool> accepts, bool withSelf)
-            => Distinct(types.DistinctBy(type => type.Id, StringComparer.Ordinal).SelectMany(type => InType(type.Id, name, accepts, withSelf)));
+            => Distinct(types.DistinctBy(type => type.Id).SelectMany(type => InType(type.Id, name, accepts, withSelf)));
 
         /// <summary>
         /// What the type <paramref name="id"/> declares named <paramref name="name"/> - itself where <paramref name="withSelf"/>,
         /// then its bases a level at a time, each level a rank at a time as <see cref="LevelUp"/> ranks it: the first rank
         /// that holds one decides, all it holds answering.
         /// </summary>
-        private IReadOnlyList<Declaration> InType(string id, string name, Func<Declaration, bool> accepts, bool withSelf)
+        private IReadOnlyList<Declaration> InType(QualifiedName id, string name, Func<Declaration, bool> accepts, bool withSelf)
         {
-            var seen = new HashSet<string>(StringComparer.Ordinal);
+            var seen = new HashSet<QualifiedName>();
 
             // The type is itself and each part its file joins to it (SiblingsOf), whose bases are its own too.
             List<BaseRank> level = [new BaseRank([id, .. SiblingsOf(id)], Mixin: false)];
@@ -2191,7 +2200,7 @@ public static class CodeGraphLinker
         }
 
         /// <summary>One rank of the bases a level holds: the ids in it, and whether they are a mixin's, applied over what the rest of the level's type holds.</summary>
-        private readonly record struct BaseRank(string[] Ids, bool Mixin);
+        private readonly record struct BaseRank(QualifiedName[] Ids, bool Mixin);
 
         /// <summary>One reference of a file, by its place among the file's references.</summary>
         private readonly record struct ReferenceAt(CodeGraphFile File, int At);
@@ -2302,7 +2311,7 @@ public static class CodeGraphLinker
         private List<BaseRank> LevelUp(IEnumerable<BaseRank> level)
         {
             var ranks = new List<BaseRank>();
-            var inherited = new List<string>();
+            var inherited = new List<QualifiedName>();
 
             foreach (var rank in level)
             {
@@ -2313,26 +2322,26 @@ public static class CodeGraphLinker
                         continue;
                     }
 
-                    ranks.AddRange(bases.Take(bases.Count - 2).Select(mixin => new BaseRank(mixin, Mixin: true)));
-                    inherited.AddRange(bases[^2]);
+                    ranks.AddRange(bases.Take(bases.Count - 2).Select(mixin => new BaseRank([.. mixin.Select(QualifiedName.Of)], Mixin: true)));
+                    inherited.AddRange(bases[^2].Select(QualifiedName.Of));
 
                     if (!rank.Mixin)
                     {
-                        inherited.AddRange(bases[^1]);
+                        inherited.AddRange(bases[^1].Select(QualifiedName.Of));
                     }
                 }
             }
 
             if (inherited.Count > 0)
             {
-                ranks.Add(new BaseRank([.. inherited.Distinct(StringComparer.Ordinal)], Mixin: false));
+                ranks.Add(new BaseRank([.. inherited.Distinct()], Mixin: false));
             }
 
             return ranks;
         }
 
         /// <summary>The bases of the type <paramref name="id"/>, by id, nearest first (<see cref="BaseRanksOf"/>).</summary>
-        private IEnumerable<string> BasesOf(string id) => BaseRanksOf(id).SelectMany(rank => rank);
+        private IEnumerable<QualifiedName> BasesOf(QualifiedName id) => BaseRanksOf(id).SelectMany(rank => rank.Select(QualifiedName.Of));
 
         /// <summary>
         /// The bases of the type <paramref name="id"/>, by id, in ranks nearest first: each mixin it names a rank of its own,
@@ -2342,7 +2351,7 @@ public static class CodeGraphLinker
         /// bases are told from what it implements. Each of the two is empty where the type names none; a type that names no
         /// base has no ranks.
         /// </summary>
-        private IReadOnlyList<string[]> BaseRanksOf(string id)
+        private IReadOnlyList<string[]> BaseRanksOf(QualifiedName id)
         {
             Touch(Read.Bases, id);
             return _bases.TryGetValue(id, out var bases) ? bases : [];
@@ -2558,9 +2567,9 @@ public static class CodeGraphLinker
                 {
                     if (import.Form == CodeImportForms.Scope)
                     {
-                        foreach (var id in ContainersOf(import.Target).Where(container => Sees(file, container)).Select(container => container.Id).Distinct(StringComparer.Ordinal))
+                        foreach (var id in ContainersOf(import.Target).Where(container => Sees(file, container)).Select(container => container.Id).Distinct())
                         {
-                            _edges.Add(new CodeEdge(from, id, CodeEdgeKinds.Imports, import.Line, CodeConfidences.Exact));
+                            _edges.Add(new CodeEdge(from, id.Whole(), CodeEdgeKinds.Imports, import.Line, CodeConfidences.Exact));
                         }
 
                         continue;
@@ -2598,7 +2607,7 @@ public static class CodeGraphLinker
                     {
                         foreach (var (answer, found) in Answering(type, member, bases))
                         {
-                            _edges.Add(new CodeEdge(member.Id, answer.Id, CodeEdgeKinds.Dispatches, answer.Node.Start, CodeConfidences.Weaker(way, found)));
+                            _edges.Add(new CodeEdge(member.Id.Whole(), answer.Id.Whole(), CodeEdgeKinds.Dispatches, answer.Node.Start, CodeConfidences.Weaker(way, found)));
                         }
                     }
                 }
@@ -2643,8 +2652,8 @@ public static class CodeGraphLinker
         /// </summary>
         private List<(Declaration Answer, string Sure)> Answering(string type, Declaration member, ILookup<string, CodeEdge> bases)
         {
-            var seen = new HashSet<string>(StringComparer.Ordinal) { type };
-            List<BaseRank> level = [new BaseRank([type], Mixin: false)];
+            var seen = new HashSet<QualifiedName> { QualifiedName.Of(type) };
+            List<BaseRank> level = [new BaseRank([QualifiedName.Of(type)], Mixin: false)];
 
             // How sure the surest way up to each of the level's types is.
             var sure = new Dictionary<string, string>(StringComparer.Ordinal) { [type] = CodeConfidences.Exact };
@@ -2659,8 +2668,8 @@ public static class CodeGraphLinker
                             .Where(candidate => candidate.Node.Kind == CodeNodeKinds.Member
                                 && !candidate.Node.Prototype
                                 && TakeAlike(candidate.Node, member.Node))
-                            .Select(answer => (Answer: answer, Sure: sure[at])))
-                        .GroupBy(answer => answer.Answer.Id, StringComparer.Ordinal)
+                            .Select(answer => (Answer: answer, Sure: sure[at.Whole()])))
+                        .GroupBy(answer => answer.Answer.Id)
                         .Select(alike => (alike.First().Answer, Sure: alike.Select(answer => answer.Sure).Aggregate(CodeConfidences.Surer)))
                         .ToList();
 
@@ -2678,16 +2687,16 @@ public static class CodeGraphLinker
                 {
                     foreach (var at in rank.Ids)
                     {
-                        foreach (var edge in bases[at].Where(edge => edge.Kind == CodeEdgeKinds.MixesIn || (edge.Kind == CodeEdgeKinds.Inherits && !rank.Mixin)))
+                        foreach (var edge in bases[at.Whole()].Where(edge => edge.Kind == CodeEdgeKinds.MixesIn || (edge.Kind == CodeEdgeKinds.Inherits && !rank.Mixin)))
                         {
-                            var way = CodeConfidences.Weaker(sure[at], edge.Confidence);
+                            var way = CodeConfidences.Weaker(sure[at.Whole()], edge.Confidence);
                             ways[edge.To] = ways.TryGetValue(edge.To, out var known) ? CodeConfidences.Surer(known, way) : way;
                         }
                     }
                 }
 
                 level = [.. LevelUp(level)
-                    .Select(rank => rank with { Ids = [.. rank.Ids.Where(id => ways.ContainsKey(id) && !seen.Contains(id))] })
+                    .Select(rank => rank with { Ids = [.. rank.Ids.Where(id => ways.ContainsKey(id.Whole()) && !seen.Contains(id))] })
                     .Where(rank => rank.Ids.Length > 0)];
                 sure = ways;
                 seen.UnionWith(level.SelectMany(rank => rank.Ids));
@@ -2697,7 +2706,7 @@ public static class CodeGraphLinker
         }
 
         /// <summary>The members the type <paramref name="id"/> declares, each once.</summary>
-        private IReadOnlyList<Declaration> MembersOf(string id)
+        private IReadOnlyList<Declaration> MembersOf(QualifiedName id)
             => Distinct(PartsOf(id)
                 .SelectMany(type => _byScope.TryGetValue(KeyOf(type.File, type.Node.Qualified), out var names) ? names.Values.SelectMany(declared => declared) : [])
                 .Where(member => member.Node.Kind == CodeNodeKinds.Member));
@@ -2717,7 +2726,7 @@ public static class CodeGraphLinker
                 {
                     foreach (var body in bodies)
                     {
-                        _edges.Add(new CodeEdge(prototype.Id, body.Id, CodeEdgeKinds.Declares, prototype.Node.Start, bodies.Count == 1 ? CodeConfidences.Unique : CodeConfidences.Candidates));
+                        _edges.Add(new CodeEdge(prototype.Id.Whole(), body.Id.Whole(), CodeEdgeKinds.Declares, prototype.Node.Start, bodies.Count == 1 ? CodeConfidences.Unique : CodeConfidences.Candidates));
                     }
                 }
             }
@@ -2726,7 +2735,7 @@ public static class CodeGraphLinker
         /// <summary>Each <c>tests</c> edge: from a test to each member it calls directly, as sure as the call.</summary>
         private void Tests()
         {
-            var tests = _declarations.Where(declaration => declaration.Node.Test).Select(declaration => declaration.Id).ToHashSet(StringComparer.Ordinal);
+            var tests = _declarations.Where(declaration => declaration.Node.Test).Select(declaration => declaration.Id.Whole()).ToHashSet(StringComparer.Ordinal);
 
             foreach (var call in _edges.Where(edge => edge.Kind == CodeEdgeKinds.Calls && tests.Contains(edge.From)).ToList())
             {
@@ -2747,7 +2756,7 @@ public static class CodeGraphLinker
         {
             var parts = _declarations.Where(declaration => declaration.Node.Part).ToList();
             var joined = new PartsJoined(parts.Count);
-            var byQualified = new Dictionary<string, int>(StringComparer.Ordinal);
+            var byQualified = new Dictionary<QualifiedName, int>();
             var places = new Dictionary<Declaration, int>(ReferenceEqualityComparer.Instance);
 
             for (var at = 0; at < parts.Count; at++)
@@ -2767,20 +2776,20 @@ public static class CodeGraphLinker
 
             foreach (var alike in Enumerable.Range(0, parts.Count).GroupBy(joined.Root).Select(group => group.Select(at => parts[at]).ToList()).Where(group => group.Count > 1))
             {
-                var byId = new Dictionary<string, Declaration>(StringComparer.Ordinal);
+                var byId = new Dictionary<QualifiedName, Declaration>();
 
                 foreach (var part in alike)
                 {
                     byId.TryAdd(part.Id, part);
                 }
 
-                List<string> ids = [.. byId.Keys.Order(StringComparer.Ordinal)];
+                List<QualifiedName> ids = [.. byId.Keys.Order(ByText)];
                 var first = byId[ids[0]];
 
                 for (var at = 1; at < ids.Count; at++)
                 {
                     var part = byId[ids[at]];
-                    _edges.Add(new CodeEdge(ids[at], ids[0], CodeEdgeKinds.PartOf, part.Node.Start, part.Node.Qualified == first.Node.Qualified ? CodeConfidences.Exact : CodeConfidences.Unique));
+                    _edges.Add(new CodeEdge(ids[at].Whole(), ids[0].Whole(), CodeEdgeKinds.PartOf, part.Node.Start, part.Node.Qualified == first.Node.Qualified ? CodeConfidences.Exact : CodeConfidences.Unique));
                 }
             }
         }
@@ -2830,10 +2839,10 @@ public static class CodeGraphLinker
         private void Keys()
         {
             var bySegment = new Dictionary<string, List<Declaration>>(StringComparer.Ordinal);
-            var byPath = new Dictionary<string, List<Declaration>>(StringComparer.Ordinal);
+            var byPath = new Dictionary<QualifiedName, List<Declaration>>();
             var byMember = new Dictionary<string, List<Declaration>>(StringComparer.Ordinal);
 
-            foreach (var key in _declarations.Where(declaration => declaration.Node.SubKind == CodeSubKinds.Key && !declaration.FileOnly).DistinctBy(declaration => declaration.Id, StringComparer.Ordinal))
+            foreach (var key in _declarations.Where(declaration => declaration.Node.SubKind == CodeSubKinds.Key && !declaration.FileOnly).DistinctBy(declaration => declaration.Id))
             {
                 Add(bySegment, key.Node.Name, key);
                 Add(byPath, key.Node.Qualified, key);
@@ -2875,7 +2884,7 @@ public static class CodeGraphLinker
                     {
                         foreach (var key in joined)
                         {
-                            _edges.Add(new CodeEdge(place.Node ?? FileIdOf(file.Path), key.Id, CodeEdgeKinds.Uses, place.Line, CodeConfidences.Candidates));
+                            _edges.Add(new CodeEdge((place.Node ?? QualifiedName.Of(FileIdOf(file.Path))).Whole(), key.Id.Whole(), CodeEdgeKinds.Uses, place.Line, CodeConfidences.Candidates));
                         }
                     }
                 }
@@ -2889,7 +2898,7 @@ public static class CodeGraphLinker
                 {
                     foreach (var key in keys)
                     {
-                        _edges.Add(new CodeEdge(member.Id, key.Id, CodeEdgeKinds.Uses, member.Node.Start, CodeConfidences.Candidates));
+                        _edges.Add(new CodeEdge(member.Id.Whole(), key.Id.Whole(), CodeEdgeKinds.Uses, member.Node.Start, CodeConfidences.Candidates));
                     }
                 }
             }
@@ -2919,7 +2928,7 @@ public static class CodeGraphLinker
             /// <summary>The paths of each file being looked for now, so a path its references bring round again ends.</summary>
             private readonly HashSet<(CodeGraphFile File, string Path)> _looking = [];
 
-            public KeyPaths(IEnumerable<CodeGraphFile> files, IReadOnlyDictionary<CodeGraphFile, Dictionary<string, Declaration>> owners)
+            public KeyPaths(IEnumerable<CodeGraphFile> files, IReadOnlyDictionary<CodeGraphFile, Dictionary<QualifiedName, Declaration>> owners)
             {
                 foreach (var file in files)
                 {
@@ -2931,7 +2940,7 @@ public static class CodeGraphLinker
                     var own = owners[file];
                     var root = new Place();
 
-                    foreach (var node in own.Values.DistinctBy(node => node.Id, StringComparer.Ordinal))
+                    foreach (var node in own.Values.DistinctBy(node => node.Id))
                     {
                         if (CodeKeyPaths.OfNode(node.Node, file.Path) is { } path)
                         {
@@ -3180,7 +3189,7 @@ public static class CodeGraphLinker
         private Declaration? EnclosingType(Declaration from)
         {
             var at = from;
-            var seen = new HashSet<string>(StringComparer.Ordinal);
+            var seen = new HashSet<QualifiedName>();
 
             while (at.Node.Kind != CodeNodeKinds.Type)
             {
@@ -3199,6 +3208,8 @@ public static class CodeGraphLinker
 
         /// <summary>Says that the finding under way read the key <paramref name="text"/> of <paramref name="kind"/>.</summary>
         private void Touch(Read kind, string text) => _reads?.Keys.Add(_keys.Of((int)kind, text));
+
+        private void Touch(Read kind, QualifiedName name) => _reads?.Keys.Add(_keys.Of((int)kind, name));
 
         // What a finding reads of the tree, each through the one way it is read, which says the key it read: no index is
         // looked in otherwise while a reference is found - only where a whole link derives its edges after, once.
@@ -3240,22 +3251,25 @@ public static class CodeGraphLinker
             return _scopeParents.TryGetValue(key, out parent);
         }
 
-        /// <summary>The types and scopes of the qualified name <paramref name="qualified"/>.</summary>
-        private IReadOnlyList<Declaration> ContainersOf(string qualified)
+        /// <summary>
+        /// The types and scopes of the qualified name <paramref name="qualified"/>, held as the name the extract holds and
+        /// compared by the text it writes.
+        /// </summary>
+        private IReadOnlyList<Declaration> ContainersOf(QualifiedName qualified)
         {
             Touch(Read.Qualified, qualified);
             return _containers.TryGetValue(qualified, out var containers) ? containers : [];
         }
 
         /// <summary>The qualified names of every type and scope that end with the run of a name's characters <paramref name="trailing"/>.</summary>
-        private IReadOnlyList<string> QualifiedEnding(string trailing)
+        private IReadOnlyList<QualifiedName> QualifiedEnding(string trailing)
         {
             Touch(Read.Trailing, trailing);
             return _byTrailing.TryGetValue(trailing, out var named) ? named : [];
         }
 
         /// <summary>The parts of the declaration <paramref name="id"/>: a type of several, one for each file.</summary>
-        private IReadOnlyList<Declaration> PartsOf(string id)
+        private IReadOnlyList<Declaration> PartsOf(QualifiedName id)
         {
             Touch(Read.Id, id);
             return _byId.TryGetValue(id, out var parts) ? parts : [];
@@ -3266,7 +3280,7 @@ public static class CodeGraphLinker
         /// (<see cref="CodeBehinds"/>): a Blazor component's code-behind partial, and the component of a code-behind. The
         /// finding under way reads the pair of files, so a code-behind come, gone or renamed finds it again.
         /// </summary>
-        private IReadOnlyList<string> SiblingsOf(string id)
+        private IReadOnlyList<QualifiedName> SiblingsOf(QualifiedName id)
         {
             foreach (var part in PartsOf(id).Where(part => part.Node.Part))
             {
@@ -3314,7 +3328,7 @@ public static class CodeGraphLinker
         }
 
         /// <summary>The open scopes the file at <paramref name="path"/> declares: what an import of it by its path makes visible, with its top.</summary>
-        private IEnumerable<string> OpensOf(string path)
+        private IEnumerable<QualifiedName> OpensOf(string path)
         {
             Touch(Read.Opens, path);
             return _byPath[path].Extract is { } extract ? extract.Scopes.Where(scope => scope.Open).Select(scope => scope.Name) : [];
@@ -3488,7 +3502,7 @@ public static class CodeGraphLinker
                     node.Qualified,
                     node.Prototype,
                     string.Join(PartEnd, node.Exports ?? []),
-                    string.Join(PartEnd, node.SuffixOf ?? []));
+                    string.Join(PartEnd, (node.SuffixOf ?? []).Select(id => id.Whole())));
 
                 Named(Read.Name, node.Name, shape);
 
@@ -3504,7 +3518,9 @@ public static class CodeGraphLinker
                     Named(Read.Name, DottedEnd(dotted), shape);
                 }
 
-                Named(Read.Id, node.Id, shape);
+                // The id and the qualified name are names: their keys are held as the names the extract holds, each its
+                // own part, so what the parts keep of a file nested any depth grows with its depth, not its square.
+                Add(_keys.Of((int)Read.Id, node.Id), shape);
 
                 // A part a component's file or its code-behind's declares is what pairs the two (CodeBehinds).
                 if (node.Part && ComponentPath(file.Path) is { } component)
@@ -3514,8 +3530,8 @@ public static class CodeGraphLinker
 
                 if (own is { } scope)
                 {
-                    Named(Read.Qualified, node.Qualified, shape);
-                    Named(Read.Trailing, Trailing(node.Qualified), node.Qualified);
+                    Add(_keys.Of((int)Read.Qualified, node.Qualified), shape);
+                    Named(Read.Trailing, Trailing(node.Qualified.Whole()), node.Qualified);
                     Add(_keys.Of(scope), (object?)scopeKey ?? None);
                 }
             }
@@ -3531,32 +3547,32 @@ public static class CodeGraphLinker
         /// never joined into a text of its own.
         /// </summary>
         private sealed record NodePart(
-            string Id,
+            QualifiedName Id,
             string? Language,
             string Kind,
             string? SubKind,
             ScopeKey? Scope,
             ScopeKey? Own,
-            string? Parent,
+            QualifiedName? Parent,
             int? MinArity,
             int? MaxArity,
             string? ValueType,
             string? Extends,
             ScopeKey? SeenIn,
-            string Qualified,
+            QualifiedName Qualified,
             bool Prototype,
             string Exports,
             string SuffixOf);
 
         /// <summary>The keys of the types whose bases are not what they were: what a finding that went through them read.</summary>
-        private IEnumerable<int> Moved(Dictionary<string, List<string[]>>? before, Dictionary<string, List<string[]>> now)
+        private IEnumerable<int> Moved(Dictionary<QualifiedName, List<string[]>>? before, Dictionary<QualifiedName, List<string[]>> now)
         {
             if (before is null)
             {
                 yield break;
             }
 
-            foreach (var id in before.Keys.Union(now.Keys, StringComparer.Ordinal))
+            foreach (var id in before.Keys.Union(now.Keys))
             {
                 if (Ranks(before.GetValueOrDefault(id)) != Ranks(now.GetValueOrDefault(id)))
                 {
@@ -3569,14 +3585,14 @@ public static class CodeGraphLinker
         /// The digest of every type's bases written out, the types in order: what tells two rounds' bases apart. Hashed as it
         /// is written, never held as one text, so the loop keeps a digest a round however many types and bases a round finds.
         /// </summary>
-        private static string Written(Dictionary<string, List<string[]>> bases)
+        private static string Written(Dictionary<QualifiedName, List<string[]>> bases)
             => FileSystem.FileContentHash.Of(stream =>
             {
                 using var writer = new StreamWriter(stream, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false), leaveOpen: true);
 
-                foreach (var id in bases.Keys.Order(StringComparer.Ordinal))
+                foreach (var id in bases.Keys.Order(ByText))
                 {
-                    writer.Write(id);
+                    writer.Write(id.Whole());
                     writer.Write(FieldEnd);
                     writer.Write(FieldEnd);
 
@@ -3619,7 +3635,7 @@ public static class CodeGraphLinker
                 import.Shares ? "shares" : None);
 
         /// <summary>The names of the closed scopes <paramref name="extract"/> declares.</summary>
-        private static HashSet<string> Closed(FileExtract extract) => extract.Scopes.Where(scope => !scope.Open).Select(scope => scope.Name).ToHashSet(StringComparer.Ordinal);
+        private static HashSet<QualifiedName> Closed(FileExtract extract) => extract.Scopes.Where(scope => !scope.Open).Select(scope => scope.Name).ToHashSet();
 
         /// <summary>
         /// How long the suffixes the nodes of <paramref name="extract"/> write onto others' names are
@@ -3632,7 +3648,7 @@ public static class CodeGraphLinker
         /// The scope <paramref name="node"/> of <paramref name="file"/> is declared in, by key, and whether it is its file's
         /// alone: a type or a scope whose own scope is closed is, as what it declares is.
         /// </summary>
-        private static (ScopeKey? ScopeKey, bool FileOnly) Placed(CodeGraphFile file, ExtractNode node, HashSet<string> closed)
+        private static (ScopeKey? ScopeKey, bool FileOnly) Placed(CodeGraphFile file, ExtractNode node, HashSet<QualifiedName> closed)
             => (node.Scope is { } scope ? KeyOf(file, scope, closed) : null,
                 (node.Scope is { } declared && closed.Contains(declared)) || (IsContainer(node) && closed.Contains(node.Qualified)));
 
@@ -3649,7 +3665,7 @@ public static class CodeGraphLinker
         /// The scope <paramref name="name"/> is from <paramref name="file"/>: that file's own where it declares it closed, and
         /// the one every file shares otherwise.
         /// </summary>
-        private ScopeKey KeyOf(CodeGraphFile file, string name)
+        private ScopeKey KeyOf(CodeGraphFile file, QualifiedName name)
             => _closed.TryGetValue(file, out var closed) && closed.Contains(name) ? ClosedKey(file.Path, name) : OpenKey(name);
 
         /// <summary>Whether <paramref name="file"/> sees <paramref name="declaration"/>: one that is its file's alone is seen from that file alone.</summary>
@@ -3666,12 +3682,12 @@ public static class CodeGraphLinker
         private static bool Under(string path, string directory)
             => directory.Length == 0 || path.StartsWith(directory, StringComparison.Ordinal);
 
-        private static ScopeKey KeyOf(CodeGraphFile file, string name, HashSet<string> closed)
+        private static ScopeKey KeyOf(CodeGraphFile file, QualifiedName name, HashSet<QualifiedName> closed)
             => closed.Contains(name) ? ClosedKey(file.Path, name) : OpenKey(name);
 
-        private static ScopeKey OpenKey(string name) => new(null, name);
+        private static ScopeKey OpenKey(QualifiedName name) => new(null, name);
 
-        private static ScopeKey ClosedKey(string path, string name) => new(path, name);
+        private static ScopeKey ClosedKey(string path, QualifiedName name) => new(path, name);
     }
 
     /// <summary>
@@ -3709,54 +3725,56 @@ public static class CodeGraphLinker
         /// <summary>
         /// <paramref name="name"/>, a scope's or a qualified name, read in the scope: the folder's scope, or what is declared
         /// in it, in the other; a scope the folder's is in, in the other's of its place, none where the other has no scope
-        /// so high; any other name unchanged.
+        /// so high; any other name unchanged. The texts are made here and never kept by the names the extract holds: a file
+        /// read so is named by its path, its names few and its own.
         /// </summary>
-        public string? Name(string name)
+        public QualifiedName Name(QualifiedName name)
         {
+            var text = name.Whole();
+
             if (_folderNames == 0)
             {
-                return $"{_scope}.{name}";
+                return QualifiedName.Of($"{_scope}.{text}");
             }
 
-            if (name == _folder || name.StartsWith(_folder + ".", StringComparison.Ordinal))
+            if (text == _folder || text.StartsWith(_folder + ".", StringComparison.Ordinal))
             {
-                return _scope + name[_folder.Length..];
+                return QualifiedName.Of(_scope + text[_folder.Length..]);
             }
 
-            return _above.TryGetValue(name, out var depth) ? ScopeOf(depth + _scopeNames.Length - _folderNames) : name;
+            return _above.TryGetValue(text, out var depth) && ScopeOf(depth + _scopeNames.Length - _folderNames) is { } scope ? QualifiedName.Of(scope) : name;
         }
 
         /// <summary><paramref name="extract"/> read in the scope: each node's qualified name, its scope and the scope it is seen in; each scope's name and parent; the other's scopes above the folder's; its ids and everything else kept.</summary>
         public FileExtract Of(FileExtract extract)
         {
-            var scopes = new Dictionary<string, ExtractScope>(StringComparer.Ordinal);
+            var scopes = new Dictionary<QualifiedName, ExtractScope>();
 
             // The other's scopes the folder's have no place of, each in the one above it, so its names are looked for to its top.
             for (var depth = 1; depth <= _scopeNames.Length - _folderNames; depth++)
             {
-                scopes.TryAdd(ScopeOf(depth)!, new ExtractScope(ScopeOf(depth)!, Open: true) { Parent = ScopeOf(depth - 1) });
+                var scope = QualifiedName.Of(ScopeOf(depth)!);
+                scopes.TryAdd(scope, new ExtractScope(scope, Open: true) { Parent = ScopeOf(depth - 1) is { } above ? QualifiedName.Of(above) : null });
             }
 
             foreach (var held in extract.Scopes)
             {
-                if (Name(held.Name) is { } name)
-                {
-                    scopes.TryAdd(name, held with { Name = name, Parent = held.Parent is { } parent ? Name(parent) : IsTop(held.Name) ? Top : null });
-                }
+                var name = Name(held.Name);
+                scopes.TryAdd(name, held with { Name = name, Parent = held.Parent is { } parent ? Name(parent) : IsTop(held.Name) ? TopName : null });
             }
 
             return extract with
             {
                 Nodes = [.. extract.Nodes.Select(node =>
                 {
-                    var qualified = Name(node.Qualified) ?? node.Qualified;
+                    var qualified = Name(node.Qualified);
 
                     // A namespace the folder's names are is named as the other's of its place.
                     return node with
                     {
                         Qualified = qualified,
-                        Name = qualified != node.Qualified && qualified != node.Name && !qualified.EndsWith("." + node.Name, StringComparison.Ordinal) ? qualified[(qualified.LastIndexOf('.') + 1)..] : node.Name,
-                        Scope = node.Scope is { } within ? Name(within) : IsTop(node.Qualified) ? Top : null,
+                        Name = qualified != node.Qualified && !qualified.Is(node.Name) && !qualified.Whole().EndsWith("." + node.Name, StringComparison.Ordinal) ? qualified.PastLastDot() : node.Name,
+                        Scope = node.Scope is { } within ? Name(within) : IsTop(node.Qualified) ? TopName : null,
                         SeenIn = node.SeenIn is { } seen ? Name(seen) : null,
                     };
                 })],
@@ -3766,10 +3784,14 @@ public static class CodeGraphLinker
         }
 
         /// <summary>Whether <paramref name="name"/> is what stood at the top of the file: the folder's first scope, or at the tree's root any name in none.</summary>
-        private bool IsTop(string name) => _folderNames == 0 || _above.GetValueOrDefault(name) == 1 || (_folderNames == 1 && name == _folder);
+        private bool IsTop(QualifiedName name)
+        {
+            var text = name.Whole();
+            return _folderNames == 0 || _above.GetValueOrDefault(text) == 1 || (_folderNames == 1 && text == _folder);
+        }
 
         /// <summary>The scope what stood at the top of the file is in now: the one above the other's place of the folder's first scope; at the tree's root the other itself.</summary>
-        private string? Top => ScopeOf(_scopeNames.Length - _folderNames);
+        private QualifiedName? TopName => ScopeOf(_scopeNames.Length - _folderNames) is { } top ? QualifiedName.Of(top) : null;
 
         /// <summary>The other scope's first <paramref name="depth"/> names, joined; none for none.</summary>
         private string? ScopeOf(int depth) => depth >= 1 ? string.Join('.', _scopeNames[..depth]) : null;
@@ -3876,9 +3898,19 @@ public static class CodeGraphLinker
 
     /// <summary>One declaration of each id among <paramref name="declarations"/>: a type of several parts is one target.</summary>
     private static IReadOnlyList<Declaration> Distinct(IEnumerable<Declaration> declarations)
-        => [.. declarations.DistinctBy(declaration => declaration.Id, StringComparer.Ordinal)];
+        => [.. declarations.DistinctBy(declaration => declaration.Id)];
 
     private static void Add<T>(Dictionary<string, List<T>> into, string key, T value)
+    {
+        if (!into.TryGetValue(key, out var values))
+        {
+            into[key] = values = [];
+        }
+
+        values.Add(value);
+    }
+
+    private static void Add<T>(Dictionary<QualifiedName, List<T>> into, QualifiedName key, T value)
     {
         if (!into.TryGetValue(key, out var values))
         {
@@ -3925,6 +3957,12 @@ public static class CodeGraphLinker
 
     /// <summary>The last part of a dotted name: a type's own name, as an extension names the type it extends.</summary>
     private static string SimpleName(string written) => written[(written.LastIndexOf('.') + 1)..];
+
+    /// <summary>The last part of a dotted name a name holds, read from its own parts: a type's own name, as its file is paired with its code-behind's.</summary>
+    private static string SimpleName(QualifiedName written) => written.PastLastDot();
+
+    /// <summary>How names are told apart by the text they write, where their order is read.</summary>
+    private static readonly Comparer<QualifiedName> ByText = Comparer<QualifiedName>.Create((one, other) => string.CompareOrdinal(one.Whole(), other.Whole()));
 
 }
 

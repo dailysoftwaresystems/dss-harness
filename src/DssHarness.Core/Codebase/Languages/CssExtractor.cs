@@ -65,7 +65,7 @@ public sealed class CssExtractor : ICodeGraphExtractor
     /// <param name="type">The block's <c>type</c>, as HTML writes it; <see langword="null"/> where it has none.</param>
     /// <param name="scope">Whose the block's names are.</param>
     /// <param name="kept">The scope the block's own names are kept to, where it is not its file's: a module block's, which its binding names.</param>
-    internal static FileExtract? Read(string language, CodeFileInput input, string? lang, string? type, StyleScope scope = StyleScope.Global, string? kept = null)
+    internal static FileExtract? Read(string language, CodeFileInput input, string? lang, string? type, StyleScope scope = StyleScope.Global, QualifiedName? kept = null)
     {
         ArgumentNullException.ThrowIfNull(input);
         return BlockSyntax(lang, type) is { } syntax ? new CssReading(language, input.Path, input.Text, syntax, scope, kept).Read() : null;

@@ -154,10 +154,10 @@ internal sealed class DartReading
     private bool _privateExtension;
 
     /// <summary>The scope the file's declarations are put in: its library's, by the library's path or, for a part that names it so, its name.</summary>
-    private string _library;
+    private QualifiedName _library;
 
     /// <summary>The library's name, where it has one and parts that may name it by it; <see langword="null"/> otherwise.</summary>
-    private string? _named;
+    private QualifiedName? _named;
 
     /// <summary>Whether the file is a part of another's library.</summary>
     private bool _part;
@@ -172,7 +172,7 @@ internal sealed class DartReading
         _scan = _text.Scan;
         _prefix = $"{language}:";
         _path = path;
-        _library = path;
+        _library = QualifiedName.Of(path);
         _testFile = path.EndsWith("_test.dart", StringComparison.Ordinal) || path.StartsWith("test/", StringComparison.Ordinal) || path.Contains("/test/", StringComparison.Ordinal);
     }
 
@@ -248,7 +248,7 @@ internal sealed class DartReading
             }
         }
 
-        _named = parts && !_part ? name : null;
+        _named = parts && !_part && name is not null ? QualifiedName.Of(name) : null;
     }
 
     /// <summary>An <c>import</c> or <c>export</c> at <paramref name="at"/>: its URI, its configurations' URIs, its prefix and its combinators.</summary>
@@ -535,7 +535,7 @@ internal sealed class DartReading
     /// What the arguments of the annotations from <paramref name="at"/> to <paramref name="end"/> read and hold -
     /// <c>@JsonKey(name: 'user_id')</c> - as code of the node of <paramref name="key"/> they mark.
     /// </summary>
-    private void AnnotationArguments(int at, int end, string key, string? owner)
+    private void AnnotationArguments(int at, int end, QualifiedName key, string? owner)
     {
         foreach (var (_, arguments, _) in Annotated(_scan, at, end))
         {
@@ -832,7 +832,7 @@ internal sealed class DartReading
     /// <paramref name="head"/> before <paramref name="signatureEnd"/>, what its annotations' arguments hold its own; answers
     /// its key.
     /// </summary>
-    private string DeclareType(int start, int head, int last, ScanFrame frame, string name, string subKind, List<string> modifiers, List<string> marks, int signatureEnd, string? seenIn = null)
+    private QualifiedName DeclareType(int start, int head, int last, ScanFrame frame, string name, string subKind, List<string> modifiers, List<string> marks, int signatureEnd, QualifiedName? seenIn = null)
     {
         var key = _extract.Add(new ExtractNode(Id(frame.Qualify(name)), CodeNodeKinds.Type, name, frame.Qualify(name), _scan[start].Line, _scan[Math.Clamp(last, start, _scan.Count - 1)].EndLine, _scan.Signature(head, signatureEnd))
         {
@@ -855,7 +855,7 @@ internal sealed class DartReading
     /// <c>inherits</c> edge each - its body sees their members, and its <c>super</c> reaches them - each type's arguments
     /// referenced. <paramref name="kind"/> is what a type before any clause is: a class alias's base.
     /// </summary>
-    private void Clauses(string key, int at, int end, string? kind)
+    private void Clauses(QualifiedName key, int at, int end, string? kind)
     {
         while (at < end)
         {
@@ -878,7 +878,7 @@ internal sealed class DartReading
                 // Object, num, double and the rest of dart:core: no type the repository declares.
                 if (!Builtins.Contains(chain!))
                 {
-                    Mention(key, kind, chain!, _scan[at].Line);
+                    Mention(key, kind, QualifiedName.Of(chain!), _scan[at].Line);
                 }
 
                 if (_scan.Is(past, "<"))
@@ -900,7 +900,7 @@ internal sealed class DartReading
     /// The members of the body <paramref name="open"/> opens, read in <paramref name="frame"/>, the type's own - an enum's
     /// values first, now - their walk on the stack, their bodies read once every member is declared.
     /// </summary>
-    private void Members(int open, int inner, ScanFrame frame, string? enumKey)
+    private void Members(int open, int inner, ScanFrame frame, QualifiedName? enumKey)
     {
         var at = enumKey is not null ? Values(open + 1, inner, frame, enumKey) : open + 1;
         List<Action>? outer = null;
@@ -924,7 +924,7 @@ internal sealed class DartReading
     /// An enum's values from <paramref name="at"/>, to the <c>;</c> that ends them or the body's end: each a constant of
     /// the enum's type, a call of the constructor it names with what its arguments call; answers where its members begin.
     /// </summary>
-    private int Values(int at, int inner, ScanFrame frame, string enumKey)
+    private int Values(int at, int inner, ScanFrame frame, QualifiedName enumKey)
     {
         var stop = ScanCalls.TopLevel(_scan, at, inner, ";", DartTypes);
 
@@ -1322,7 +1322,7 @@ internal sealed class DartReading
     }
 
     /// <summary>What each of <paramref name="parameters"/>' annotations and default holds, as code of the node of <paramref name="key"/>: <c>{String name = 'x'}</c>, <c>@Default(1) int n</c>.</summary>
-    private void Signed(Parameters parameters, string key, string? owner)
+    private void Signed(Parameters parameters, QualifiedName key, string? owner)
     {
         foreach (var (start, annotated, written, end) in parameters.Written)
         {
@@ -1336,7 +1336,7 @@ internal sealed class DartReading
     }
 
     /// <summary>The constructor a redirecting factory names from <paramref name="at"/>: <c>= Other;</c> instantiates it, <c>= Other.named;</c> calls that one.</summary>
-    private void Redirect(string key, int at, int last)
+    private void Redirect(QualifiedName key, int at, int last)
     {
         var (names, _) = ChainAt(_scan, at, last + 1);
 
@@ -1354,7 +1354,7 @@ internal sealed class DartReading
         }
         else
         {
-            Mention(key, CodeEdgeKinds.Instantiates, string.Join('.', written), line);
+            Mention(key, CodeEdgeKinds.Instantiates, QualifiedName.Of(string.Join('.', written)), line);
         }
     }
 
@@ -1450,7 +1450,7 @@ internal sealed class DartReading
     /// of its name its bases declare, where it is marked <c>@override</c>: a method's, an operator's, a getter's and a
     /// setter's, and a field's, which overrides a getter of its name as well.
     /// </summary>
-    private void Overriding(string key, string name, int nameAt, List<string> marks)
+    private void Overriding(QualifiedName key, string name, int nameAt, List<string> marks)
     {
         if (marks.Contains("@override", StringComparer.Ordinal))
         {
@@ -1462,7 +1462,7 @@ internal sealed class DartReading
     /// The body of a callable at <paramref name="body"/> - a block or an arrow - to <paramref name="last"/>: what it calls,
     /// its parameters its locals; read once its type's every member is declared.
     /// </summary>
-    private void ReadBody(int body, int last, string key, Parameters parameters, ScanFrame frame, IReadOnlyList<string> own)
+    private void ReadBody(int body, int last, QualifiedName key, Parameters parameters, ScanFrame frame, IReadOnlyList<string> own)
     {
         var typeParameters = _typeParameters.Concat(own).ToList();
 
@@ -1754,7 +1754,7 @@ internal sealed class DartReading
     /// the reading's own (<see cref="CodeRun"/>), read before the run it stands in goes on: in the order the text writes it,
     /// and never a call into the reading, so no nesting of them reaches past its stack.
     /// </remarks>
-    private void Calls(InterpolatedText text, int from, int to, string key, Locals locals, string? owner)
+    private void Calls(InterpolatedText text, int from, int to, QualifiedName key, Locals locals, string? owner)
     {
         var runs = new Stack<CodeRun>();
         runs.Push(new CodeRun(text, from, to, key, locals));
@@ -1776,16 +1776,16 @@ internal sealed class DartReading
     /// its own where it reaches it, each by where it begins and with where it ends: the types a closure's or a local
     /// function's parameters are written with, and the patterns a switch expression's arms match by.
     /// </summary>
-    private sealed class CodeRun : ScanRun<string, Locals>
+    private sealed class CodeRun : ScanRun<QualifiedName, Locals>
     {
         /// <summary>A run of <paramref name="text"/> from <paramref name="from"/> to <paramref name="to"/>.</summary>
-        public CodeRun(InterpolatedText text, int from, int to, string key, Locals locals)
+        public CodeRun(InterpolatedText text, int from, int to, QualifiedName key, Locals locals)
             : base(text, from, to, key, locals)
         {
         }
 
         /// <summary>A run of the whole of the text <paramref name="scanned"/> scans, once it is reached.</summary>
-        public CodeRun(Func<InterpolatedText> scanned, string key, Locals locals)
+        public CodeRun(Func<InterpolatedText> scanned, QualifiedName key, Locals locals)
             : base(scanned, key, locals)
         {
         }
@@ -1996,7 +1996,7 @@ internal sealed class DartReading
     /// by what its receiver is where the file says. A name a named argument, a record or a label writes before a colon is
     /// a name, not a read, where one a map's key, a case or a conditional writes there is.
     /// </summary>
-    private void Used(ScannedText scan, int at, string key, Locals locals, string word, int line)
+    private void Used(ScannedText scan, int at, QualifiedName key, Locals locals, string word, int line)
     {
         var previous = scan.Previous(at);
 
@@ -2019,7 +2019,7 @@ internal sealed class DartReading
     /// function value, a word of the language and a label a <c>break</c> or a <c>continue</c> names are its own or none,
     /// and no use, and so is a name a member is reached through that is no value - an import's prefix, a type's.
     /// </summary>
-    private void Bare(ScannedText scan, int at, string key, Locals locals, string word, int line)
+    private void Bare(ScannedText scan, int at, QualifiedName key, Locals locals, string word, int line)
     {
         if ((IsMember(scan, scan.Next(at)) && (_prefixes.Contains(word) || IsTypeName(word)))
             || word == "_" || NoTypes.Contains(word) || Builtins.Contains(word) || ScanCalls.NamesLabel(scan, at)
@@ -2087,7 +2087,7 @@ internal sealed class DartReading
     /// <paramref name="dot"/>: a reference qualified by that receiver, a cascade's its target; one through a function
     /// value's <c>call</c>, <c>Function.apply</c> or a field of a function type marked dynamic, and not linked.
     /// </summary>
-    private void MemberCall(ScannedText scan, int dot, ScannedCall call, string key, Locals locals, string word, int line)
+    private void MemberCall(ScannedText scan, int dot, ScannedCall call, QualifiedName key, Locals locals, string word, int line)
     {
         var target = scan.Is(dot, "..") || scan.Is(dot, "?..") ? CascadeHead(scan, dot) : dot;
 
@@ -2115,8 +2115,12 @@ internal sealed class DartReading
 
     /// <summary>Whether <paramref name="name"/> is a field of a function type of the type the node <paramref name="from"/> is a member of.</summary>
     private bool IsFunctionField(ExtractNode from, string name)
-        => from.Qualified.LastIndexOf('.') is var dot and > 0 && from.Qualified[..dot] is var holder
+    {
+        var qualified = from.Qualified.Whole();
+
+        return qualified.LastIndexOf('.') is var dot and > 0 && qualified[..dot] is var holder
             && _functionFields.TryGetValue(holder[(holder.LastIndexOf('.') + 1)..], out var fields) && fields.Contains(name);
+    }
 
     /// <summary>Whether the token at <paramref name="at"/> makes what follows it a member of what precedes it: <c>.</c>, <c>?.</c>, <c>..</c>, <c>?..</c>.</summary>
     private static bool IsMember(ScannedText scan, int at) => at >= 0 && at < scan.Count && Accessors.Contains(scan.Text(at));
@@ -2159,7 +2163,7 @@ internal sealed class DartReading
     /// or <c>?..</c> before it: a reference qualified by its receiver, kept as what the chain of the member after it is
     /// linked to.
     /// </summary>
-    private void MemberUse(ScannedText scan, int at, string key, Locals locals, string word, int line)
+    private void MemberUse(ScannedText scan, int at, QualifiedName key, Locals locals, string word, int line)
     {
         var made = _extract.Reference(key, CodeEdgeKinds.Uses, word, line, qualifier: Receiver(scan, scan.Previous(at), locals, out var dynamic));
 
@@ -2360,7 +2364,7 @@ internal sealed class DartReading
     /// its type; answers where the reading goes on - at a named constructor's name, read as a call of it - or 0 where it
     /// is none, a <c>const</c> declaration's or a collection's.
     /// </summary>
-    private int Instantiated(ScannedText scan, int at, string key)
+    private int Instantiated(ScannedText scan, int at, QualifiedName key)
     {
         var (names, past) = ChainAt(scan, scan.Next(at), scan.Count);
 
@@ -2384,7 +2388,7 @@ internal sealed class DartReading
         // p.Foo.named: the prefix, the type and the constructor's name.
         var written = names.Select(index => scan.Text(index)).ToList();
         var typeNames = written.Count > 1 && !IsTypeName(written[^1]) ? written.Count - 1 : written.Count;
-        Mention(key, CodeEdgeKinds.Instantiates, string.Join('.', written.Take(typeNames)), scan[names[0]].Line);
+        Mention(key, CodeEdgeKinds.Instantiates, QualifiedName.Of(string.Join('.', written.Take(typeNames))), scan[names[0]].Line);
 
         // A constructor named after its type is read on as a call of that name on the type: Foo.named( calls Foo's named.
         return typeNames < written.Count ? names[typeNames] : scan.Next(names[typeNames - 1]);
@@ -2706,7 +2710,7 @@ internal sealed class DartReading
     /// pattern's operand, a map pattern's key - and a const constructor's call an <c>instantiates</c> edge. A record's
     /// field names a field, which no use is of, and <c>_</c> matches anything.
     /// </summary>
-    private void Pattern(ScannedText scan, int from, int to, string key, Locals locals, bool matching)
+    private void Pattern(ScannedText scan, int from, int to, QualifiedName key, Locals locals, bool matching)
     {
         // The brackets the pattern has open, each by where it closes, with the type an object pattern's tests.
         var open = new Stack<(int Close, string? Type)>();
@@ -2808,7 +2812,7 @@ internal sealed class DartReading
             if (scan.Is(argued, "("))
             {
                 var written = string.Join('.', names.Select(index => scan.Text(index)));
-                Mention(key, CodeEdgeKinds.References, written, line);
+                Mention(key, CodeEdgeKinds.References, QualifiedName.Of(written), line);
                 TypeReferences(scan, key, chainEnd, argued);
                 tested = written;
                 at = argued - 1;
@@ -2859,7 +2863,7 @@ internal sealed class DartReading
     /// is an object pattern's field written short, its colon first - <c>:var x</c>, <c>:x</c> - a use of the getter of its
     /// name, of the type <paramref name="tested"/>.
     /// </summary>
-    private void Variable(ScannedText scan, int at, int typeStart, int first, Locals locals, string? tested, string key)
+    private void Variable(ScannedText scan, int at, int typeStart, int first, Locals locals, string? tested, QualifiedName key)
     {
         var name = scan.Text(at);
         var colon = scan.Previous(first);
@@ -2877,7 +2881,7 @@ internal sealed class DartReading
     /// own, named by its description and held by the node of <paramref name="parent"/>; answers where what its arguments
     /// call - its own - begins and its node's key, or none where it gives no description.
     /// </summary>
-    private (int From, string Key)? Test(ScannedText scan, int at, ScannedCall call, string parent)
+    private (int From, QualifiedName Key)? Test(ScannedText scan, int at, ScannedCall call, QualifiedName? parent)
     {
         var pieces = ScanCalls.Split(scan, call.Open + 1, call.Close, DartTypes);
 
@@ -2887,7 +2891,7 @@ internal sealed class DartReading
         }
 
         var word = scan.Text(at);
-        var qualified = $"{_extract.Node(parent).Qualified}.{name}";
+        var qualified = _extract.Node(parent!).Qualified.Under(name);
         var key = _extract.Add(new ExtractNode(Id(qualified), CodeNodeKinds.Member, name, qualified, scan[at].Line, scan[call.Close].EndLine, ExtractText.Signature($"{word}({name})"))
         {
             SubKind = word == "group" ? "testGroup" : "test",
@@ -2913,18 +2917,8 @@ internal sealed class DartReading
     /// The type a reference of <paramref name="kind"/> names: its last name, qualified by the prefix written before it -
     /// an import's, where the file imports by it - or the names before it as a type's.
     /// </summary>
-    private void Mention(string key, string kind, string chain, int line)
-    {
-        var dot = chain.LastIndexOf('.');
-
-        if (dot < 0)
-        {
-            _extract.Reference(key, kind, chain, line);
-            return;
-        }
-
-        _extract.Reference(key, kind, chain[(dot + 1)..], line, qualifier: Qualifier(chain[..dot]));
-    }
+    private void Mention(QualifiedName key, string kind, QualifiedName chain, int line)
+        => _extract.Reference(key, kind, chain.PastLastDot(), line, qualifier: chain.BeforeLastDot() is { } scopes ? Qualifier(scopes.Whole()) : null);
 
     /// <summary>What a name written after <paramref name="written"/> is qualified by: an import's prefix, where the file imports by it; a type's name otherwise.</summary>
     private ExtractQualifier Qualifier(string written)
@@ -2936,7 +2930,7 @@ internal sealed class DartReading
     /// parameter in force is, and that is no record field's name: a signature's, and each a body writes - a local's, a
     /// closure's parameter's, a cast's and a test's, a call's and a literal's type arguments, a pattern's.
     /// </summary>
-    private void TypeReferences(ScannedText scan, string key, int start, int end)
+    private void TypeReferences(ScannedText scan, QualifiedName key, int start, int end)
     {
         for (var at = start; at < end && at < scan.Count; at = scan.Next(at))
         {
@@ -2959,7 +2953,7 @@ internal sealed class DartReading
 
             if (chain is not null && !(chain.Contains('.', StringComparison.Ordinal) && !_prefixes.Contains(chain[..chain.IndexOf('.', StringComparison.Ordinal)])))
             {
-                Mention(key, CodeEdgeKinds.References, chain, scan[at].Line);
+                Mention(key, CodeEdgeKinds.References, QualifiedName.Of(chain), scan[at].Line);
             }
 
             at = Math.Max(at, scan.Previous(past));
@@ -3015,6 +3009,6 @@ internal sealed class DartReading
     private static bool IsTypeName(string name) => name.TrimStart('_', '$') is { Length: > 0 } trimmed && char.IsUpper(trimmed[0]);
 
     /// <summary>The id of a declaration of the qualified name <paramref name="qualified"/>.</summary>
-    private string Id(string qualified) => _prefix + qualified;
+    private QualifiedName Id(QualifiedName qualified) => qualified.Prepend(_prefix);
 
 }

@@ -79,7 +79,7 @@ public sealed class CodebaseGraphQueries
         _testFiles = extracts.Where(file => file.Value?.Nodes.Any(node => node.Test) == true).Select(file => file.Key).ToHashSet(StringComparer.Ordinal);
 
         // Each file's nodes by their ids, made once a file rather than looked for once a node.
-        var declared = extracts.ToDictionary(file => file.Key, file => (file.Value?.Nodes ?? []).ToLookup(node => node.Id, StringComparer.Ordinal), StringComparer.Ordinal);
+        var declared = extracts.ToDictionary(file => file.Key, file => (file.Value?.Nodes ?? []).ToLookup(node => node.Id), StringComparer.Ordinal);
         var kept = new List<CodeGraphSymbolEntry>();
 
         foreach (var symbol in symbols.Nodes)
@@ -103,9 +103,9 @@ public sealed class CodebaseGraphQueries
             nodes[symbol.Id] = at;
 
             var representative = Representative(symbol, at).Node;
-            byQualified.Add((representative.Qualified, symbol.Id));
+            byQualified.Add((representative.Qualified.Whole(), symbol.Id));
             bySimple.Add((representative.Name, symbol.Id));
-            words[symbol.Id] = [.. Split(representative.Qualified)];
+            words[symbol.Id] = [.. Split(representative.Qualified.Whole())];
         }
 
         Unheld = [.. unheld];
@@ -443,7 +443,7 @@ public sealed class CodebaseGraphQueries
             node.SubKind,
             node.Signature,
             node.Name,
-            node.Qualified,
+            node.Qualified.Whole(),
             path,
             node.Start,
             node.End,

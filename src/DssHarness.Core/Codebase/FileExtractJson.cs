@@ -33,10 +33,23 @@ internal sealed class FileExtractJson : JsonConverter<FileExtract>
     /// <summary>The name of <paramref name="node"/> the field <paramref name="field"/> holds.</summary>
     private static string? NameOf(ExtractNode node, string field) => field switch
     {
+        "id" => node.Id.Whole(),
+        "qualified" => node.Qualified.Whole(),
+        "signature" => node.Signature,
+        "scope" => node.Scope?.Whole(),
+        _ => throw new JsonException($"a name is written against the field '{field}', which is none of {string.Join(", ", Names)}"),
+    };
+
+    /// <summary>
+    /// The name of <paramref name="node"/> the field <paramref name="field"/> holds, as a name (<see cref="QualifiedName"/>)
+    /// where the field holds one and as its whole text where it holds text: what a name read back is made against.
+    /// </summary>
+    private static QualifiedName Base(ExtractNode node, string field) => field switch
+    {
         "id" => node.Id,
         "qualified" => node.Qualified,
-        "signature" => node.Signature,
-        "scope" => node.Scope,
+        "signature" => QualifiedName.Of(node.Signature),
+        "scope" => node.Scope ?? throw new JsonException($"a name is written against the field '{field}', which the node it is written against holds none of"),
         _ => throw new JsonException($"a name is written against the field '{field}', which is none of {string.Join(", ", Names)}"),
     };
 
@@ -82,14 +95,14 @@ internal sealed class FileExtractJson : JsonConverter<FileExtract>
         public static StoredExtract Of(FileExtract extract)
         {
             var nodes = extract.Nodes ?? [];
-            var places = new Dictionary<string, int>(StringComparer.Ordinal);
+            var places = new Dictionary<QualifiedName, int>();
 
             for (var at = 0; at < nodes.Count; at++)
             {
                 places.TryAdd((nodes[at] ?? throw new JsonException("an extract holds a node that is null")).Id, at);
             }
 
-            int Place(string id, string why) => places.TryGetValue(id, out var at) ? at : throw new JsonException($"{why} '{id}', which the extract holds no node of");
+            int Place(QualifiedName id, string why) => places.TryGetValue(id, out var at) ? at : throw new JsonException($"{why} '{id.Whole()}', which the extract holds no node of");
 
             var stored = new StoredNode[nodes.Count];
 
@@ -99,9 +112,12 @@ internal sealed class FileExtractJson : JsonConverter<FileExtract>
                 var parent = node.Parent is { } held ? Place(held, $"its node '{node.Id}' is declared inside") : (int?)null;
                 var named = parent is { } under ? nodes[under] : null;
 
-                StoredName Name(string field, string name) => named is null ? new StoredName(name) : StoredName.Against(name, BasesOf(named, field));
+                // The whole name's text is made here, against the bases, and never kept by the extract that holds the
+                // name: what the record writes is the part the name adds to a base it begins with.
+                StoredName Name(string field, QualifiedName name) => named is null ? new StoredName(name.Whole()) : StoredName.Against(name.Whole(), BasesOf(named, field));
+                StoredName Text(string field, string name) => named is null ? new StoredName(name) : StoredName.Against(name, BasesOf(named, field));
 
-                stored[at] = new StoredNode(Name("id", node.Id), node.Kind, node.Name, Name("qualified", node.Qualified), node.Start, node.End, Name("signature", node.Signature))
+                stored[at] = new StoredNode(Name("id", node.Id), node.Kind, node.Name, Name("qualified", node.Qualified), node.Start, node.End, Text("signature", node.Signature))
                 {
                     SubKind = node.SubKind,
                     Scope = node.Scope is { } scope ? Name("scope", scope) : null,
@@ -124,7 +140,7 @@ internal sealed class FileExtractJson : JsonConverter<FileExtract>
             }
 
             var scopes = extract.Scopes ?? [];
-            var scopePlaces = new Dictionary<string, int>(StringComparer.Ordinal);
+            var scopePlaces = new Dictionary<QualifiedName, int>();
 
             for (var at = 0; at < scopes.Count; at++)
             {
@@ -135,9 +151,9 @@ internal sealed class FileExtractJson : JsonConverter<FileExtract>
             {
                 // A scope's parent may be a scope of its own in turn - a Dart library and its part's - so one is written
                 // against its parent's place only where the two can never be written against each other.
-                Scopes = [.. scopes.Select((scope, at) => scope.Parent is { } parent && scopePlaces.TryGetValue(parent, out var under) && StoredName.Precedes(scopes[under].Name, under, scope.Name, at)
-                    ? new StoredScope(StoredName.Against(scope.Name, [("name", scopes[under].Name)]), scope.Open) { ParentAt = under }
-                    : new StoredScope(new StoredName(scope.Name), scope.Open) { Parent = scope.Parent })],
+                Scopes = [.. scopes.Select((scope, at) => scope.Parent is { } parent && scopePlaces.TryGetValue(parent, out var under) && StoredName.Precedes(scopes[under].Name.Whole(), under, scope.Name.Whole(), at)
+                    ? new StoredScope(StoredName.Against(scope.Name.Whole(), [("name", scopes[under].Name.Whole())]), scope.Open) { ParentAt = under }
+                    : new StoredScope(new StoredName(scope.Name.Whole()), scope.Open) { Parent = scope.Parent?.Whole() })],
                 Imports = extract.Imports,
                 AddressRoots = extract.AddressRoots,
                 References = [.. (extract.References ?? []).Select(reference => new StoredReference(Place(reference.From, $"a reference to '{reference.Name}' is made from"), reference.Kind, reference.Name, reference.Line)
@@ -145,7 +161,7 @@ internal sealed class FileExtractJson : JsonConverter<FileExtract>
                     Arity = reference.Arity,
                     Qualifier = reference.Qualifier is not { } qualifier ? null
                         : qualifier is { Kind: CodeQualifierKinds.Own, Name: { } own } ? new StoredQualifier(qualifier.Kind) { Node = Place(own, $"a reference to '{reference.Name}' names the node") }
-                        : new StoredQualifier(qualifier.Kind) { Name = qualifier.Name, Link = qualifier.Link },
+                        : new StoredQualifier(qualifier.Kind) { Name = qualifier.Name?.Whole(), Link = qualifier.Link },
                 })],
                 FolderScope = extract.FolderScope,
                 Generated = extract.Generated,
@@ -170,19 +186,37 @@ internal sealed class FileExtractJson : JsonConverter<FileExtract>
                     var stored = Nodes[at];
                     var parent = stored.Parent is { } under ? nodes[under] : null;
 
-                    string Name(StoredName name, string field)
+                    // A name read back is held as the base it is written against and the part it adds to it, where it is
+                    // written against all of that base - so what the record kept in bytes is what the extract holds.
+                    QualifiedName Name(StoredName name, string field)
                     {
                         if (name.At is not null)
                         {
                             throw new JsonException(string.Create(CultureInfo.InvariantCulture, $"node {at}'s {field} is written against a line, and a node's names are written against its parent's"));
                         }
 
-                        return name.Text(name.Kept == 0 ? null : parent is null ? throw new JsonException(string.Create(CultureInfo.InvariantCulture, $"node {at}'s {field} keeps characters of a parent it has none of")) : NameOf(parent, name.Field ?? field));
+                        if (name.Kept == 0)
+                        {
+                            return QualifiedName.Of(name.Rest);
+                        }
+
+                        if (parent is null)
+                        {
+                            throw new JsonException(string.Create(CultureInfo.InvariantCulture, $"node {at}'s {field} keeps characters of a parent it has none of"));
+                        }
+
+                        var @base = Base(parent, name.Field ?? field);
+                        return name.Kept == @base.Length
+                            ? name.Rest.StartsWith(".", StringComparison.Ordinal) ? @base.Under(name.Rest[1..]) : @base.Under(name.Rest, "")
+                            : QualifiedName.Of(@base.Whole()[..name.Kept] + name.Rest);
                     }
 
                     var scope = stored.Scope is { } scoped ? Name(scoped, "scope") : null;
 
-                    nodes[at] = new ExtractNode(Name(stored.Id, "id"), stored.Kind, stored.Name, Name(stored.Qualified, "qualified"), stored.Start, stored.End, Name(stored.Signature, "signature"))
+                    // The signature is text, not a name: read back against the parent's name it was written against.
+                    string Signature(StoredName text) => text.Text(parent is null ? null : NameOf(parent, text.Field ?? "signature"));
+
+                    nodes[at] = new ExtractNode(Name(stored.Id, "id"), stored.Kind, stored.Name, Name(stored.Qualified, "qualified"), stored.Start, stored.End, Signature(stored.Signature))
                     {
                         SubKind = stored.SubKind,
 
@@ -206,7 +240,7 @@ internal sealed class FileExtractJson : JsonConverter<FileExtract>
                 },
                 "node");
 
-            string IdAt(int at, string what)
+            QualifiedName IdAt(int at, string what)
                 => at >= 0 && at < nodes.Length ? nodes[at].Id : throw new JsonException(string.Create(CultureInfo.InvariantCulture, $"{what} node {at}, and the extract holds {nodes.Length}"));
 
             for (var at = 0; at < nodes.Length; at++)
@@ -238,7 +272,13 @@ internal sealed class FileExtractJson : JsonConverter<FileExtract>
                         throw new JsonException(string.Create(CultureInfo.InvariantCulture, $"scope {at}'s name keeps characters of what is not its parent's name"));
                     }
 
-                    scopes[at] = new ExtractScope(stored.Name.Text(parent?.Name), stored.Open) { Parent = parent?.Name ?? stored.Parent };
+                    // A scope's name, too, is held as the one it is written against and the part it adds to it.
+                    var name = stored.Name.Kept == 0 ? QualifiedName.Of(stored.Name.Rest)
+                        : stored.Name.Rest.StartsWith(".", StringComparison.Ordinal) && stored.Name.Kept == parent!.Name.Length ? parent.Name.Under(stored.Name.Rest[1..])
+                        : stored.Name.Kept == parent!.Name.Length ? parent.Name.Under(stored.Name.Rest, "")
+                        : QualifiedName.Of(parent.Name.Whole()[..stored.Name.Kept] + stored.Name.Rest);
+
+                    scopes[at] = new ExtractScope(name, stored.Open) { Parent = parent?.Name ?? (stored.Parent is { } held ? QualifiedName.Of(held) : null) };
                 },
                 "scope");
 
@@ -255,7 +295,7 @@ internal sealed class FileExtractJson : JsonConverter<FileExtract>
                             ? qualifier.Kind == CodeQualifierKinds.Own && qualifier.Name is null && qualifier.Link is null
                                 ? new ExtractQualifier(qualifier.Kind, IdAt(own, $"reference {at.ToString(CultureInfo.InvariantCulture)} names"))
                                 : throw new JsonException(string.Create(CultureInfo.InvariantCulture, $"reference {at}'s qualifier names a node by its place, and only one of its own file does, alone"))
-                            : new ExtractQualifier(qualifier.Kind, qualifier.Name) { Link = qualifier.Link },
+                            : new ExtractQualifier(qualifier.Kind, qualifier.Name is { } named ? QualifiedName.Of(named) : null) { Link = qualifier.Link },
                 })],
                 FolderScope = FolderScope,
                 Generated = Generated,

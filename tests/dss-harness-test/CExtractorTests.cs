@@ -360,11 +360,11 @@ public sealed class CExtractorTests : CodeGraphExtractorContractTests<CExtractor
                 "c:Color", "c:Foo", "c:F", "c:F.hi", "c:F.lo", "c:GREEN", "c:P", "c:P.x", "c:P.y", "c:RED", "c:S", "c:S.z", "c:_Foo", "c:_Foo.w",
                 "c:a", "c:b", "c:byte_t", "c:point_t", "c:point_t.v", "c:ps", "c:s", "c:u8", "c:U", "c:U.f", "c:U.i", "c:u",
             ]).Order(StringComparer.Ordinal),
-            extract.Nodes.Select(node => node.Id).Order(StringComparer.Ordinal));
+            extract.Nodes.Select(node => node.Id.Whole()).Order(StringComparer.Ordinal));
         Assert.Equal("struct", Node(extract, "c:point_t").SubKind);
         Assert.Equal("union", Node(extract, "c:U").SubKind);
         Assert.Equal("typedef", Node(extract, "c:Foo").SubKind);
-        Assert.Contains(extract.References, reference => reference is { From: "c:Foo", Kind: CodeEdgeKinds.References, Name: "_Foo" });
+        Assert.Contains(extract.References, reference => reference is { Kind: CodeEdgeKinds.References, Name: "_Foo" } && reference.From.Is("c:Foo"));
     }
 
     /// <summary>A bracket one branch of a conditional leaves open and no other does is read as holding nothing, marked dynamic: what follows the conditional is read as it stands.</summary>
@@ -378,7 +378,7 @@ public sealed class CExtractorTests : CodeGraphExtractorContractTests<CExtractor
             int ok(void) { return done(); }
             """);
 
-        Assert.Equal(["c:ok"], extract.Nodes.Select(node => node.Id));
+        Assert.Equal(["c:ok"], extract.Nodes.Select(node => node.Id.Whole()));
         Assert.Equal((4, 4), Lines(extract, "c:ok"));
         Assert.Equal(["done"], Calls(extract, "c:ok"));
         Assert.Contains(extract.Dynamic, dynamic => dynamic is { Line: 2, Why: "a bracket one branch of a conditional leaves open and no other does: read as holding nothing" });
@@ -394,7 +394,7 @@ public sealed class CExtractorTests : CodeGraphExtractorContractTests<CExtractor
     {
         var extract = Read("util.h", text);
 
-        Assert.Equal(["c:util"], extract.Nodes.Select(node => node.Id));
+        Assert.Equal(["c:util"], extract.Nodes.Select(node => node.Id.Whole()));
         Assert.Empty(Node(extract, "c:util").Modifiers);
     }
 
@@ -429,7 +429,7 @@ public sealed class CExtractorTests : CodeGraphExtractorContractTests<CExtractor
 
         Assert.Equal(
             ["c:ext", "c:ext.e", "c:op", "c:op.f", "c:op.n", "c:shared", "c:x.c:ops", "c:x.c:state"],
-            extract.Nodes.Select(node => node.Id).Order(StringComparer.Ordinal));
+            extract.Nodes.Select(node => node.Id.Whole()).Order(StringComparer.Ordinal));
         Assert.True(Node(extract, "c:shared").Prototype);
         Assert.False(Node(extract, "c:x.c:ops").Prototype);
         Assert.Equal("op", Node(extract, "c:x.c:ops").ValueType);
@@ -441,7 +441,7 @@ public sealed class CExtractorTests : CodeGraphExtractorContractTests<CExtractor
     {
         var extract = Read("m.c", "static DEFINE_MUTEX(lock);\nstatic LIST_HEAD(queue);\nstatic inline int ok(void) { return 1; }\n");
 
-        Assert.Equal(["c:m.c:ok"], extract.Nodes.Select(node => node.Id));
+        Assert.Equal(["c:m.c:ok"], extract.Nodes.Select(node => node.Id.Whole()));
         Assert.Equal([1, 2], extract.Dynamic.Select(dynamic => dynamic.Line));
     }
 
@@ -454,7 +454,7 @@ public sealed class CExtractorTests : CodeGraphExtractorContractTests<CExtractor
     {
         var extract = Read("m.c", "static EXPORT(1) int count;\nstatic EXPORT(2) ALIGNED(8) int twice(void) { return 2; }\nstatic EXPORT(int) third(void) { bar(); }\n");
 
-        Assert.Equal(["c:m.c:count", "c:m.c:third", "c:m.c:twice"], extract.Nodes.Select(node => node.Id).Order(StringComparer.Ordinal));
+        Assert.Equal(["c:m.c:count", "c:m.c:third", "c:m.c:twice"], extract.Nodes.Select(node => node.Id.Whole()).Order(StringComparer.Ordinal));
         Assert.Equal(
             [(1, "the macro EXPORT stands in a declaration, which is not expanded"), (2, "the macro EXPORT stands in a declaration, which is not expanded"), (2, "the macro ALIGNED stands in a declaration, which is not expanded"), (3, "the macro EXPORT stands in a declaration, which is not expanded")],
             extract.Dynamic.Select(dynamic => (dynamic.Line, dynamic.Why)));
@@ -470,7 +470,7 @@ public sealed class CExtractorTests : CodeGraphExtractorContractTests<CExtractor
     {
         var extract = Read("u.c", "struct msg { int type; union { int i; float f; } data; struct { int x; }; };\n");
 
-        Assert.Equal(["c:msg", "c:msg.data", "c:msg.type", "c:msg.x"], extract.Nodes.Select(node => node.Id).Order(StringComparer.Ordinal));
+        Assert.Equal(["c:msg", "c:msg.data", "c:msg.type", "c:msg.x"], extract.Nodes.Select(node => node.Id.Whole()).Order(StringComparer.Ordinal));
     }
 
     /// <summary>C has no operators to name: <c>operator</c> is a name like any other, its <c>=</c> an initializer's.</summary>
@@ -479,7 +479,7 @@ public sealed class CExtractorTests : CodeGraphExtractorContractTests<CExtractor
     {
         var extract = Read("o.c", "int operator = compute();\n");
 
-        Assert.Equal([("c:operator", "variable")], extract.Nodes.Select(node => (node.Id, node.SubKind)));
+        Assert.Equal([("c:operator", "variable")], extract.Nodes.Select(node => (node.Id.Whole(), node.SubKind)));
         Assert.Equal(["compute"], Calls(extract, "c:operator"));
     }
 
@@ -513,7 +513,7 @@ public sealed class CExtractorTests : CodeGraphExtractorContractTests<CExtractor
         var extract = Read("n.h", text);
 
         Assert.Empty(extract.Dynamic);
-        return string.Join(' ', extract.Nodes.Select(node => node.Id).Order(StringComparer.Ordinal));
+        return string.Join(' ', extract.Nodes.Select(node => node.Id.Whole()).Order(StringComparer.Ordinal));
     });
 
     /// <summary>
@@ -546,7 +546,7 @@ public sealed class CExtractorTests : CodeGraphExtractorContractTests<CExtractor
 
         Assert.Equal(
             [("c:foo", "struct", null), ("c:foo.pad", "field", "c:foo"), ("c:foo.x", "field", "c:foo"), ("c:foo_t", "typedef", null), ("c:net_init", "function", null)],
-            extract.Nodes.OrderBy(node => node.Id, StringComparer.Ordinal).Select(node => (node.Id, node.SubKind, node.Parent)));
+            extract.Nodes.OrderBy(node => node.Id.Whole(), StringComparer.Ordinal).Select(node => (node.Id.Whole(), node.SubKind, node.Parent?.Whole())));
         Assert.Equal(["WSAStartup", "MAKEWORD", "signal_off", "setup"], Calls(extract, "c:net_init"));
     }
 
@@ -579,7 +579,7 @@ public sealed class CExtractorTests : CodeGraphExtractorContractTests<CExtractor
             }
             """);
 
-        Assert.Equal([("c:serve", (6, 6)), ("c:sort", (3, 3))], extract.Nodes.OrderBy(node => node.Id, StringComparer.Ordinal).Select(node => (node.Id, Arity(extract, node.Id))));
+        Assert.Equal([("c:serve", (6, 6)), ("c:sort", (3, 3))], extract.Nodes.OrderBy(node => node.Id.Whole(), StringComparer.Ordinal).Select(node => (node.Id.Whole(), Arity(extract, node.Id.Whole()))));
         Assert.Equal([((1, 8), 5), ((10, 18), 16)], new[] { "c:sort", "c:serve" }.Select(id => (Lines(extract, id), Node(extract, id).BodyStart)));
         Assert.Equal(["run"], Calls(extract, "c:sort"));
         Assert.Empty(Calls(extract, "c:serve"));
@@ -595,7 +595,7 @@ public sealed class CExtractorTests : CodeGraphExtractorContractTests<CExtractor
     {
         var extract = Read("p.h", "struct pipe { enum pipe_format format:16; unsigned bound:1; };\n");
 
-        Assert.Equal([("c:pipe", "struct"), ("c:pipe.bound", "field"), ("c:pipe.format", "field")], extract.Nodes.OrderBy(node => node.Id, StringComparer.Ordinal).Select(node => (node.Id, node.SubKind!)));
+        Assert.Equal([("c:pipe", "struct"), ("c:pipe.bound", "field"), ("c:pipe.format", "field")], extract.Nodes.OrderBy(node => node.Id.Whole(), StringComparer.Ordinal).Select(node => (node.Id.Whole(), node.SubKind!)));
         Assert.Equal("pipe_format", Node(extract, "c:pipe.format").ValueType);
     }
 
@@ -608,7 +608,7 @@ public sealed class CExtractorTests : CodeGraphExtractorContractTests<CExtractor
     {
         var extract = Read("h.c", "struct __packed hdr { int a; };\n");
 
-        Assert.Equal([("c:hdr", "struct"), ("c:hdr.a", "field")], extract.Nodes.Select(node => (node.Id, node.SubKind!)));
+        Assert.Equal([("c:hdr", "struct"), ("c:hdr.a", "field")], extract.Nodes.Select(node => (node.Id.Whole(), node.SubKind!)));
     }
 
     /// <summary>
@@ -664,13 +664,13 @@ public sealed class CExtractorTests : CodeGraphExtractorContractTests<CExtractor
 
         Assert.Equal(
             [("c:after", "function"), ("c:deflateInit_", "function"), ("c:main", "function")],
-            extract.Nodes.OrderBy(node => node.Id, StringComparer.Ordinal).Select(node => (node.Id, node.SubKind!)));
+            extract.Nodes.OrderBy(node => node.Id.Whole(), StringComparer.Ordinal).Select(node => (node.Id.Whole(), node.SubKind!)));
         Assert.Equal("int ZEXPORT deflateInit_(strm, level) z_streamp strm; int level;", Node(extract, "c:deflateInit_").Signature);
         Assert.Equal(((1, 6), 4), (Lines(extract, "c:deflateInit_"), Node(extract, "c:deflateInit_").BodyStart));
         Assert.Equal(((2, 2), (2, 2)), (Arity(extract, "c:deflateInit_"), Arity(extract, "c:main")));
         Assert.Equal(
             [("c:deflateInit_", CodeEdgeKinds.References, "z_streamp"), ("c:deflateInit_", CodeEdgeKinds.Calls, "helper"), ("c:main", CodeEdgeKinds.Calls, "run"), ("c:after", CodeEdgeKinds.Calls, "done")],
-            extract.References.Select(reference => (reference.From, reference.Kind, reference.Name)));
+            extract.References.Select(reference => (reference.From.Whole(), reference.Kind, reference.Name)));
         Assert.Empty(extract.Dynamic);
     }
 
@@ -753,7 +753,7 @@ public sealed class CExtractorTests : CodeGraphExtractorContractTests<CExtractor
                 ("c:src/t.c:handler", "on_code", 12, ""), ("c:take", "peek", 16, "type lexer"), ("c:take", "One", 17, ""), ("c:take", "config", 18, ""),
                 ("c:take", "verbose", 18, "value config"), ("c:take", "COUNT", 23, ""), ("c:take", "LIMIT", 23, ""),
             ],
-            extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Uses).Select(reference => (reference.From, reference.Name, reference.Line, $"{reference.Qualifier?.Kind} {reference.Qualifier?.Name}".Trim())));
+            extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Uses).Select(reference => (reference.From.Whole(), reference.Name, reference.Line, $"{reference.Qualifier?.Kind} {reference.Qualifier?.Name}".Trim())));
     }
 
     /// <summary>
@@ -822,7 +822,7 @@ public sealed class CExtractorTests : CodeGraphExtractorContractTests<CExtractor
 
         Assert.Equal(
             [("c:One", "BASE", 1), ("c:Two", "One", 1), ("c:Two", "MASK", 1)],
-            extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Uses).Select(reference => (reference.From, reference.Name, reference.Line)));
+            extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Uses).Select(reference => (reference.From.Whole(), reference.Name, reference.Line)));
     }
 
     /// <summary>A label a <c>goto</c> names is a jump's target and no use, while what the code reads around it is one.</summary>

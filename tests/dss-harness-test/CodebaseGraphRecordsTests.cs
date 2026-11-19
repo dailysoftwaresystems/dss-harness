@@ -142,7 +142,7 @@ public sealed class CodebaseGraphRecordsTests
     public void AnExtractNestedAHundredThousandDeep_IsCheckedInTimeToItsNodes()
     {
         const int Depth = 100_000;
-        var nodes = Enumerable.Range(0, Depth).Select(at => new ExtractNode($"toy:N{at}", CodeNodeKinds.Section, $"N{at}", $"N{at}", 1, 1, $"N{at}") { Parent = at == 0 ? null : $"toy:N{at - 1}" }).ToList();
+        var nodes = Enumerable.Range(0, Depth).Select(at => new ExtractNode($"toy:N{at}", CodeNodeKinds.Section, $"N{at}", $"N{at}", 1, 1, $"N{at}") { Parent = at == 0 ? null : QualifiedName.Of($"toy:N{at - 1}") }).ToList();
         var watch = System.Diagnostics.Stopwatch.StartNew();
 
         Assert.Null(new FileExtract(nodes).Problem("toy", 1));
@@ -591,7 +591,7 @@ public sealed class CodebaseGraphRecordsTests
         Assert.Contains("{\"name\":\"shapes\",\"open\":true,\"parent\":\"lib/shapes.dart\"}", text, StringComparison.Ordinal);
         Assert.Equal(
             [("Alpha", null), ("Alpha.Inner", "Alpha"), ("lib/shapes.dart", "shapes"), ("shapes", "lib/shapes.dart")],
-            JsonSerializer.Deserialize<FileExtract>(text, JsonStateFile.LineOptions)!.Scopes.Select(scope => (scope.Name, scope.Parent)));
+            JsonSerializer.Deserialize<FileExtract>(text, JsonStateFile.LineOptions)!.Scopes.Select(scope => (scope.Name.Whole(), scope.Parent?.Whole())));
         Assert.Equal(text, Json(JsonSerializer.Deserialize<FileExtract>(text, JsonStateFile.LineOptions)));
 
         static string Refused(string written) => Assert.Throws<JsonException>(() => JsonSerializer.Deserialize<FileExtract>(written, JsonStateFile.LineOptions)).Message;
@@ -660,6 +660,36 @@ public sealed class CodebaseGraphRecordsTests
         Assert.InRange((double)whole.Symbols / half.Symbols, 1.8, 2.3);
         Assert.InRange(whole.Extract, 1, 5_000L * 600);
         Assert.InRange(whole.Symbols, 1, 5_000L * 300);
+    }
+
+    /// <summary>
+    /// A file nested thousands deep, read by its reader and linked again, holds link keys that grow with its depth and
+    /// not with the square of it: each node's id the name before it and its own part, as its extract holds it, and what
+    /// the link keeps of the keys it may read again - each node's id, each scope's name - counts each name's own part
+    /// alone. Twice the depth is about twice the characters; a link whose keys were each name written out whole holds
+    /// every node's whole path, which for twice the depth is four times the characters.
+    /// </summary>
+    [Fact]
+    public void ADeepFilesLinkKeys_GrowWithItsDepth_NotWithTheSquareOfIt()
+    {
+        long Kept(int depth)
+        {
+            var text = string.Concat(Enumerable.Repeat("{\"a\":", depth)) + "1" + new string('}', depth);
+            var extract = new JsonExtractor().Extract(new CodeFileInput("deep.json", text)).WithDigests(text);
+            var linked = CodeGraphLinker.Link([new CodeGraphFile("deep.json", "json", extract)]);
+            var relinked = CodeGraphLinker.Relink(linked, [new CodeGraphFile("deep.json", "json", extract)]);
+
+            Assert.Equal([.. linked.Symbols.Select(symbol => symbol.Id)], [.. relinked.Symbols.Select(symbol => symbol.Id)]);
+            Assert.Equal(linked.Edges, relinked.Edges);
+            Assert.True(relinked.Memory!.Keys.Characters > 0, "the link kept no key of the file");
+            return relinked.Memory.Keys.Characters;
+        }
+
+        var half = Kept(2_500);
+        var whole = Kept(5_000);
+
+        Assert.InRange((double)whole / Math.Max(half, 1), 1.8, 2.3);
+        Assert.True(whole < 5_000L * 100, $"linking a file 5,000 deep kept {whole} key characters");
     }
 
     /// <summary>

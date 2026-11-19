@@ -72,7 +72,7 @@ internal sealed class MarkupDialect
     /// <param name="element">The element.</param>
     /// <param name="from">The id of the node the references are made from.</param>
     /// <param name="references">Where the references go.</param>
-    public void Read(MarkupElement element, string from, List<ExtractReference> references)
+    public void Read(MarkupElement element, QualifiedName from, List<ExtractReference> references)
     {
         ArgumentNullException.ThrowIfNull(element);
         ArgumentNullException.ThrowIfNull(references);

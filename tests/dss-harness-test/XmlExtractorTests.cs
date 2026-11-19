@@ -155,7 +155,7 @@ public sealed class XmlExtractorTests : CodeGraphExtractorContractTests<XmlExtra
         var custom = Assert.Single(extract.Nodes, node => node.Id == "xml:app.config#configuration/mySection/add/Custom");
 
         Assert.Equal(("Custom", "element"), (custom.Name, custom.SubKind));
-        Assert.Equal("xml:app.config#configuration", custom.Parent);
+        Assert.Equal("xml:app.config#configuration", custom.Parent!.Whole());
         Assert.DoesNotContain(extract.Nodes, node => node.Name == "appSettings");
 
         var plain = Read("list.xml", Plain);
@@ -230,7 +230,7 @@ public sealed class XmlExtractorTests : CodeGraphExtractorContractTests<XmlExtra
                 ("xml:Shop.Cart.Root", "Root", "Shop.Cart.Root", "field", "Shop.Cart", "xml:Shop.Cart", "StackPanel"),
                 ("xml:Shop.Cart.Checkout", "Checkout", "Shop.Cart.Checkout", "field", "Shop.Cart", "xml:Shop.Cart", "Button"),
             ],
-            extract.Nodes.Where(node => node.Kind == CodeNodeKinds.Member).Select(node => (node.Id, node.Name, node.Qualified, node.SubKind, node.Scope, node.Parent, node.ValueType)));
+            extract.Nodes.Where(node => node.Kind == CodeNodeKinds.Member).Select(node => (node.Id.Whole(), node.Name, node.Qualified, node.SubKind, node.Scope, node.Parent, node.ValueType)));
 
         const string CodeBehind = """
             namespace Shop;
@@ -253,7 +253,7 @@ public sealed class XmlExtractorTests : CodeGraphExtractorContractTests<XmlExtra
         var wire = Assert.Single(code.Nodes, node => node.Name == "Wire");
 
         Assert.Equal(
-            [new CodeEdge(wire.Id, "xml:Shop.Cart.Checkout", CodeEdgeKinds.Uses, 7, CodeConfidences.Exact), new CodeEdge(wire.Id, "xml:Shop.Cart.Root", CodeEdgeKinds.Uses, 8, CodeConfidences.Exact)],
+            [new CodeEdge(wire.Id.Whole(), "xml:Shop.Cart.Checkout", CodeEdgeKinds.Uses, 7, CodeConfidences.Exact), new CodeEdge(wire.Id.Whole(), "xml:Shop.Cart.Root", CodeEdgeKinds.Uses, 8, CodeConfidences.Exact)],
             linked.Edges.Where(edge => edge.From == wire.Id && edge.To.StartsWith("xml:", StringComparison.Ordinal)));
 
         var refused = Read("doc.xml", "<!DOCTYPE root [<!ENTITY x \"y\">]>\n<root>&x;</root>");
@@ -264,7 +264,7 @@ public sealed class XmlExtractorTests : CodeGraphExtractorContractTests<XmlExtra
         // A root whose x:Class names no type - one ending in a dot - is a section, as every other root is.
         Assert.Equal(
             [("xml:Views/Odd.xaml#Window", CodeNodeKinds.Section)],
-            Read("Views/Odd.xaml", "<Window x:Class=\"Shop.\" xmlns:x=\"http://schemas.microsoft.com/winfx/2006/xaml\" />").Nodes.Select(node => (node.Id, node.Kind)));
+            Read("Views/Odd.xaml", "<Window x:Class=\"Shop.\" xmlns:x=\"http://schemas.microsoft.com/winfx/2006/xaml\" />").Nodes.Select(node => (node.Id.Whole(), node.Kind)));
     }
 
     /// <summary>
@@ -287,7 +287,7 @@ public sealed class XmlExtractorTests : CodeGraphExtractorContractTests<XmlExtra
 
         Assert.Equal(
             ["xml:deep.xml#root", $"xml:deep.xml#root/{string.Join('/', Enumerable.Repeat("a", Depth))}/item/inside", "xml:deep.xml#root/item/after"],
-            extract!.Nodes.Select(node => node.Id));
+            extract!.Nodes.Select(node => node.Id.Whole()));
         Assert.Empty(extract.Dynamic);
         Assert.True(watch.Elapsed < TimeSpan.FromSeconds(10), $"the file took {watch.Elapsed} to read");
     }
@@ -312,11 +312,11 @@ public sealed class XmlExtractorTests : CodeGraphExtractorContractTests<XmlExtra
         var many = $"<root>\n{string.Concat(Enumerable.Range(0, 12_000).Select(at => $"<item name=\"i{at}\" />\n"))}</root>\n";
         var counted = Read("many.xml", many);
 
-        Assert.Equal(["xml:many.xml#root", .. Enumerable.Range(0, 12_000).Select(at => $"xml:many.xml#root/item/i{at}")], counted.Nodes.Select(node => node.Id));
+        Assert.Equal(["xml:many.xml#root", .. Enumerable.Range(0, 12_000).Select(at => $"xml:many.xml#root/item/i{at}")], counted.Nodes.Select(node => node.Id.Whole()));
 
         var broken = Read("broken.xml", "<root>\n  <item name=\"a\">\n</root>\n");
 
-        Assert.Equal(["xml:broken.xml#root", "xml:broken.xml#root/item/a"], broken.Nodes.Select(node => node.Id));
+        Assert.Equal(["xml:broken.xml#root", "xml:broken.xml#root/item/a"], broken.Nodes.Select(node => node.Id.Whole()));
         Assert.Equal([new ExtractDynamic(3, "the file stops reading as XML here (The 'item' start tag on line 2 position 4 does not match the end tag of 'root'), and nothing after it is read")], broken.Dynamic);
     }
 

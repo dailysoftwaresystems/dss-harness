@@ -95,7 +95,7 @@ public sealed class MsbuildExtractorTests : CodeGraphExtractorContractTests<Msbu
 
         var project = shapes.Nodes[0];
         Assert.Equal(("Shapes.csproj", "src/Shapes/Shapes.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\">", "Shapes on a plane."), (project.Name, project.Qualified, project.Signature, project.Summary));
-        Assert.Equal([("msbuild:src/Shapes/Shapes.csproj#Description", "Shapes on a plane. Drawn and measured.")], shapes.Nodes.Skip(1).Select(node => (node.Id, node.Summary)));
+        Assert.Equal([("msbuild:src/Shapes/Shapes.csproj#Description", "Shapes on a plane. Drawn and measured.")], shapes.Nodes.Skip(1).Select(node => (node.Id.Whole(), node.Summary)));
         Assert.Equal(
             [
                 ("Geometry.csproj", CodeEdgeKinds.ProjectReference, 8),

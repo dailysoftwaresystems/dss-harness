@@ -545,7 +545,7 @@ public sealed class CSharpExtractorTests : CodeGraphExtractorContractTests<CShar
         Assert.Equal([("Shapes", null, true), ("Shapes.Shape", "Figure", true)], usings.Imports.Select(import => (import.Target, import.Prefix, import.Global)));
         Assert.Empty(usings.Nodes);
 
-        Assert.Equal([("Shapes", null), ("Shapes.Tests", "Shapes"), ("Shapes.Tests.CircleTests", "Shapes.Tests")], tests.Scopes.Select(scope => (scope.Name, scope.Parent)));
+        Assert.Equal([("Shapes", null), ("Shapes.Tests", "Shapes"), ("Shapes.Tests.CircleTests", "Shapes.Tests")], tests.Scopes.Select(scope => (scope.Name.Whole(), scope.Parent)));
         Assert.All(tests.Scopes, scope => Assert.True(scope.Open));
     }
 
@@ -667,7 +667,7 @@ public sealed class CSharpExtractorTests : CodeGraphExtractorContractTests<CShar
             """;
 
         var calls = Extractor.Extract(new CodeFileInput("Yard.cs", Text)).References.Where(reference => reference.Kind == CodeEdgeKinds.Calls && reference.Qualifier is not null)
-            .Select(reference => (reference.Name, reference.Qualifier!.Kind, reference.Qualifier.Name)).ToList();
+            .Select(reference => (reference.Name, reference.Qualifier!.Kind, reference.Qualifier.Name?.Whole())).ToList();
 
         Assert.Equal(
             [
@@ -799,7 +799,7 @@ public sealed class CSharpExtractorTests : CodeGraphExtractorContractTests<CShar
                 ("csharp:Rec", CodeEdgeKinds.Inherits, "Parent"),
                 ("csharp:Rec", CodeEdgeKinds.Calls, "Parent"),
             ],
-            extract.References.Select(reference => (reference.From, reference.Kind, reference.Name)));
+            extract.References.Select(reference => (reference.From.Whole(), reference.Kind, reference.Name)));
 
         Assert.Equal(("record", "record struct Point : IThird"), (extract.Nodes.Single(node => node.Id == "csharp:Point").SubKind, extract.Nodes.Single(node => node.Id == "csharp:Point").Signature));
         Assert.All(extract.References.Where(reference => reference.Kind is CodeEdgeKinds.Overrides), reference => Assert.Equal(CodeQualifierKinds.Base, reference.Qualifier?.Kind));
@@ -839,7 +839,7 @@ public sealed class CSharpExtractorTests : CodeGraphExtractorContractTests<CShar
                 "csharp:N.M.Outer`2.Same()~2",
                 "csharp:N.M.Outer`2.IList`1.this[int]",
             ],
-            Extractor.Extract(new CodeFileInput("Outer.cs", Text)).Nodes.Select(node => node.Id));
+            Extractor.Extract(new CodeFileInput("Outer.cs", Text)).Nodes.Select(node => node.Id.Whole()));
     }
 
     /// <summary>
@@ -930,7 +930,7 @@ public sealed class CSharpExtractorTests : CodeGraphExtractorContractTests<CShar
     {
         var extract = Extractor.Extract(new CodeFileInput("A.cs", "class A\r{\n    string s = @\"one\u2028two\u2029three\u0085four\f\";\n    void M() { }\r\n}\n"));
 
-        Assert.Equal([("csharp:A", 1, 5), ("csharp:A.s", 3, 3), ("csharp:A.M()", 4, 4)], extract.Nodes.Select(node => (node.Id, node.Start, node.End)));
+        Assert.Equal([("csharp:A", 1, 5), ("csharp:A.s", 3, 3), ("csharp:A.M()", 4, 4)], extract.Nodes.Select(node => (node.Id.Whole(), node.Start, node.End)));
     }
 
     /// <summary>Code under a preprocessor branch the parse does not take is not seen: no symbol is defined.</summary>
@@ -948,7 +948,7 @@ public sealed class CSharpExtractorTests : CodeGraphExtractorContractTests<CShar
             }
             """;
 
-        Assert.Equal(["csharp:A", "csharp:A.Shown()"], Extractor.Extract(new CodeFileInput("A.cs", Text)).Nodes.Select(node => node.Id));
+        Assert.Equal(["csharp:A", "csharp:A.Shown()"], Extractor.Extract(new CodeFileInput("A.cs", Text)).Nodes.Select(node => node.Id.Whole()));
     }
 
     /// <summary>
@@ -986,14 +986,14 @@ public sealed class CSharpExtractorTests : CodeGraphExtractorContractTests<CShar
                 ("csharp:Ext.extension(Item).Heavy", null, null, "Item"),
                 ("csharp:Ext.extension(List<T>).Weigh(int)", 1, 2, "List`1"),
             ],
-            extract.Nodes.Select(node => (node.Id, node.MinArity, node.MaxArity, node.Extends)));
+            extract.Nodes.Select(node => (node.Id.Whole(), node.MinArity, node.MaxArity, node.Extends)));
         Assert.Equal(
             ["csharp:Ext.extension(Item).Weigh(int)", "csharp:Ext.extension(Item).Count()", "csharp:Ext.extension(Item).Heavy"],
-            extract.References.Where(reference => reference.Name == "Item").Select(reference => reference.From));
+            extract.References.Where(reference => reference.Name == "Item").Select(reference => reference.From.Whole()));
 
         // The block's type parameter is no type, and its receiver is read by its name as a field is.
         Assert.DoesNotContain(extract.References, reference => reference.Name == "T");
-        Assert.Contains(extract.References, reference => reference is { Name: "Clear", Qualifier: { Kind: CodeQualifierKinds.Type, Name: "List`1" } });
+        Assert.Contains(extract.References, reference => reference is { Name: "Clear", Qualifier: { Kind: CodeQualifierKinds.Type } } && reference.Qualifier!.Name!.Is("List`1"));
     }
 
     /// <summary>
@@ -1039,14 +1039,14 @@ public sealed class CSharpExtractorTests : CodeGraphExtractorContractTests<CShar
         Assert.Equal(7, Assert.Single(extract.Nodes, node => node.Name == "Right").Start);
 
         // An interface's member implemented explicitly hides no positional property, nor the type of a member of its name.
-        Assert.Equal(["csharp:App.Pair.Items", "csharp:App.Pair.IPair.Items"], extract.Nodes.Where(node => node.Name == "Items").Select(node => node.Id));
-        Assert.Contains(extract.References, reference => reference is { Name: "Open", Qualifier: { Kind: CodeQualifierKinds.Type, Name: "Item" } });
+        Assert.Equal(["csharp:App.Pair.Items", "csharp:App.Pair.IPair.Items"], extract.Nodes.Where(node => node.Name == "Items").Select(node => node.Id.Whole()));
+        Assert.Contains(extract.References, reference => reference is { Name: "Open", Qualifier: { Kind: CodeQualifierKinds.Type } } && reference.Qualifier!.Name!.Is("Item"));
         Assert.Equal(
             ["csharp:src/Gen.cs:App.Helpers", "csharp:src/Gen.cs:App.Helpers.Run()", "csharp:src/Gen.cs:App.Helpers.Inner", "csharp:src/Gen.cs:App.Done"],
-            extract.Nodes.Where(node => node.Qualified.StartsWith("App.Helpers", StringComparison.Ordinal) || node.Name == "Done").Select(node => node.Id));
+            extract.Nodes.Where(node => node.Qualified.Whole().StartsWith("App.Helpers", StringComparison.Ordinal) || node.Name == "Done").Select(node => node.Id.Whole()));
         Assert.Equal(
             [("App", true), ("App.Pair", true), ("App.Helpers", false), ("App.Helpers.Inner", false), ("App.Done", false), ("App.Holder", true)],
-            extract.Scopes.Select(scope => (scope.Name, scope.Open)));
+            extract.Scopes.Select(scope => (scope.Name.Whole(), scope.Open)));
     }
 
     /// <summary>
@@ -1075,9 +1075,9 @@ public sealed class CSharpExtractorTests : CodeGraphExtractorContractTests<CShar
 
         var extract = Extractor.Extract(new CodeFileInput("Vec.cs", Text));
 
-        Assert.Contains(extract.References, reference => reference is { Name: "Open", Qualifier: { Kind: CodeQualifierKinds.Type, Name: "Crate" } });
-        Assert.Contains(extract.References, reference => reference is { Name: "Close", Qualifier: { Kind: CodeQualifierKinds.Type, Name: "Crate" } });
-        Assert.Contains(extract.References, reference => reference is { From: "csharp:Vec.operator +(Vec,Vec)", Kind: CodeEdgeKinds.References, Name: "Pt" });
+        Assert.Contains(extract.References, reference => reference is { Name: "Open", Qualifier: { Kind: CodeQualifierKinds.Type } } && reference.Qualifier!.Name!.Is("Crate"));
+        Assert.Contains(extract.References, reference => reference is { Name: "Close", Qualifier: { Kind: CodeQualifierKinds.Type } } && reference.Qualifier!.Name!.Is("Crate"));
+        Assert.Contains(extract.References, reference => reference is { Kind: CodeEdgeKinds.References, Name: "Pt" } && reference.From.Is("csharp:Vec.operator +(Vec,Vec)"));
         Assert.DoesNotContain(extract.References, reference => reference.Name == "Pick");
     }
 
@@ -1308,7 +1308,7 @@ public sealed class CSharpExtractorTests : CodeGraphExtractorContractTests<CShar
     });
 
     private static IEnumerable<(string From, string Name, int Line, string Qualifier)> Uses(FileExtract extract)
-        => extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Uses).Select(reference => (reference.From, reference.Name, reference.Line, $"{reference.Qualifier?.Kind} {extract.Written(reference.Qualifier)}".Trim()));
+        => extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Uses).Select(reference => (reference.From.Whole(), reference.Name, reference.Line, $"{reference.Qualifier?.Kind} {extract.Written(reference.Qualifier)}".Trim()));
 
     /// <summary>
     /// A use of a name the repository declares nowhere is left with no edge and no count: a use is recall, never a doubt.
@@ -1361,7 +1361,7 @@ public sealed class CSharpExtractorTests : CodeGraphExtractorContractTests<CShar
         var extract = Extractor.Extract(new CodeFileInput("X.cs", Text));
         var nodes = extract.Nodes.ToDictionary(node => node.Id);
 
-        Assert.Equal(["csharp:A", "csharp:A.X", "csharp:A.X.One()", "csharp:B", "csharp:B.X", "csharp:A.X.Two()", "csharp:A.X.Inner"], extract.Nodes.Select(node => node.Id));
+        Assert.Equal(["csharp:A", "csharp:A.X", "csharp:A.X.One()", "csharp:B", "csharp:B.X", "csharp:A.X.Two()", "csharp:A.X.Inner"], extract.Nodes.Select(node => node.Id.Whole()));
         Assert.Equal((1, 23, 2), (nodes["csharp:A"].Start, nodes["csharp:A"].End, nodes["csharp:A"].BodyStart));
         Assert.Equal((3, 22, "Said here."), (nodes["csharp:A.X"].Start, nodes["csharp:A.X"].End, nodes["csharp:A.X"].Summary));
         Assert.Equal(["csharp:A.X", "csharp:A.X"], new[] { "csharp:A.X.Two()", "csharp:A.X.Inner" }.Select(id => nodes[id].Parent));

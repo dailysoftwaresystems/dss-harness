@@ -565,8 +565,8 @@ public sealed class StructuralScannerTests
 
         Assert.Equal(
             [("c:T", null), ("c:T.f()~2", "c:T"), ("c:T.f()", "c:T")],
-            built.Nodes.Select(node => (node.Id, node.Parent)));
-        Assert.Equal([("c:T.f()", "g"), ("c:T.f()~2", "U")], built.References.Select(reference => (reference.From, reference.Name)));
+            built.Nodes.Select(node => (node.Id.Whole(), node.Parent?.Whole())));
+        Assert.Equal([("c:T.f()", "g"), ("c:T.f()~2", "U")], built.References.Select(reference => (reference.From.Whole(), reference.Name)));
     }
 
     /// <summary>A part of a node of the same id, kind and holder is that node, running to the part's last line; another holder's is its own.</summary>
@@ -581,7 +581,7 @@ public sealed class StructuralScannerTests
         Assert.Equal(first, again);
         Assert.NotEqual(first, inner);
         Assert.Equal((1, 12), (extract.Node(first).Start, extract.Node(first).End));
-        Assert.Equal(["cpp:app", "cpp:app~2"], extract.Build().Nodes.Select(node => node.Id));
+        Assert.Equal(["cpp:app", "cpp:app~2"], extract.Build().Nodes.Select(node => node.Id.Whole()));
     }
 
     /// <summary>A scope is declared once, its first declaration's openness and holder kept.</summary>

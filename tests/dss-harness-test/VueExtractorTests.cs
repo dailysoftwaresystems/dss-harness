@@ -436,8 +436,8 @@ public sealed class VueExtractorTests : CodeGraphExtractorContractTests<VueExtra
     {
         var extract = Read("src/Billing.vue", Billing);
 
-        Assert.Equal(["vue:src/Billing.vue"], extract.Nodes.Where(node => node.Name == "default" || node.Exports?.Contains("default") == true).Select(node => node.Id));
-        Assert.Equal([("vue:src/Billing.vue", "charge", 6)], extract.References.Select(reference => (reference.From, reference.Name, reference.Line)));
+        Assert.Equal(["vue:src/Billing.vue"], extract.Nodes.Where(node => node.Name == "default" || node.Exports?.Contains("default") == true).Select(node => node.Id.Whole()));
+        Assert.Equal([("vue:src/Billing.vue", "charge", 6)], extract.References.Select(reference => (reference.From.Whole(), reference.Name, reference.Line)));
     }
 
     /// <summary>
@@ -523,8 +523,8 @@ public sealed class VueExtractorTests : CodeGraphExtractorContractTests<VueExtra
                 ("handle", CodeEdgeKinds.Calls, 3, null, CodeQualifierKinds.This, null), ("isNaN", CodeEdgeKinds.Calls, 4, 1, null, null),
                 ("count", CodeEdgeKinds.Uses, 4, null, CodeQualifierKinds.This, null),
             ],
-            extract.References.Select(reference => (reference.Name, reference.Kind, reference.Line, reference.Arity, reference.Qualifier?.Kind, reference.Qualifier?.Name)));
-        Assert.Equal(["vue:src/Act.vue"], extract.Nodes.Select(node => node.Id));
+            extract.References.Select(reference => (reference.Name, reference.Kind, reference.Line, reference.Arity, reference.Qualifier?.Kind, reference.Qualifier?.Name?.Whole())));
+        Assert.Equal(["vue:src/Act.vue"], extract.Nodes.Select(node => node.Id.Whole()));
     }
 
     /// <summary>

@@ -17,9 +17,18 @@ internal sealed class DataNodes(string language, string file, int lineCount)
 {
     private readonly ExtractIds _ids = new();
     private readonly List<ExtractNode> _nodes = [];
-    private readonly Dictionary<string, int> _at = new(StringComparer.Ordinal);
+    private readonly Dictionary<QualifiedName, int> _at = [];
     private readonly List<ExtractDynamic> _dynamic = [];
     private readonly List<ExtractReference> _references = [];
+
+    /// <summary>
+    /// What stands before every id the file's nodes take - its implementation's name, the file's path and the mark that
+    /// parts it from the node's own path - built once, so each id is held as its own path's own parts and this text.
+    /// </summary>
+    private readonly string _prefix = $"{language}:{file}#";
+
+    /// <summary>What a section's qualified name begins with: the file's path and the mark that parts it from the section's own path.</summary>
+    private readonly string _fileMark = $"{file}#";
 
     /// <summary>The nodes made, in the order they were made.</summary>
     public IReadOnlyList<ExtractNode> Nodes => _nodes;
@@ -36,15 +45,15 @@ internal sealed class DataNodes(string language, string file, int lineCount)
     public void Stopped(int line, string why) => _dynamic.Add(new ExtractDynamic(FileExtract.LineWithin(line, lineCount), why));
 
     /// <summary>The key at <paramref name="path"/> on <paramref name="line"/>, its value <paramref name="value"/>, inside <paramref name="parent"/>: its id.</summary>
-    public string Key(IReadOnlyList<DataPlace> path, int line, string? value, string? parent)
+    public QualifiedName Key(IReadOnlyList<DataPlace> path, int line, string? value, QualifiedName? parent)
         => Key(path[^1].Written, PathOf(path), line, value, parent);
 
     /// <summary>The key <paramref name="name"/> - its whole path <paramref name="qualified"/> - on <paramref name="line"/>: its id.</summary>
-    public string Key(string name, string qualified, int line, string? value, string? parent)
+    public QualifiedName Key(string name, QualifiedName qualified, int line, string? value, QualifiedName? parent)
     {
         var at = FileExtract.LineWithin(line, lineCount);
 
-        return Add(new ExtractNode(_ids.Next($"{language}:{file}#{ExtractText.Whole(qualified)}"), CodeNodeKinds.Member, ExtractText.Whole(name), ExtractText.Whole(qualified), at, at, ExtractText.Signature(ExtractText.Flat(qualified)))
+        return Add(new ExtractNode(_ids.Next(qualified.Prepend(_prefix)), CodeNodeKinds.Member, ExtractText.Whole(name), qualified, at, at, ExtractText.Signature(ExtractText.Flat(qualified.Whole())))
         {
             SubKind = CodeSubKinds.Key,
             Parent = parent,
@@ -53,11 +62,11 @@ internal sealed class DataNodes(string language, string file, int lineCount)
     }
 
     /// <summary>The element <paramref name="name"/> - its whole path <paramref name="qualified"/> - beginning on <paramref name="line"/>, inside <paramref name="parent"/>: its id.</summary>
-    public string Element(string name, string qualified, int line, string? parent)
+    public QualifiedName Element(string name, QualifiedName qualified, int line, QualifiedName? parent)
     {
         var at = FileExtract.LineWithin(line, lineCount);
 
-        return Add(new ExtractNode(_ids.Next($"{language}:{file}#{ExtractText.Whole(qualified)}"), CodeNodeKinds.Member, ExtractText.Whole(name), ExtractText.Whole(qualified), at, at, ExtractText.Signature(ExtractText.Flat(qualified)))
+        return Add(new ExtractNode(_ids.Next(qualified.Prepend(_prefix)), CodeNodeKinds.Member, ExtractText.Whole(name), qualified, at, at, ExtractText.Signature(ExtractText.Flat(qualified.Whole())))
         {
             SubKind = CodeSubKinds.Element,
             Parent = parent,
@@ -65,26 +74,26 @@ internal sealed class DataNodes(string language, string file, int lineCount)
     }
 
     /// <summary>The section <paramref name="name"/> at <paramref name="path"/>, over the lines <paramref name="start"/> to <paramref name="end"/>, inside <paramref name="parent"/>: its id.</summary>
-    public string Section(string name, string path, int start, int end, string? parent)
+    public QualifiedName Section(string name, QualifiedName path, int start, int end, QualifiedName? parent)
     {
         var from = FileExtract.LineWithin(start, lineCount);
 
-        return Add(new ExtractNode(_ids.Next($"{language}:{file}#{ExtractText.Whole(path)}"), CodeNodeKinds.Section, ExtractText.Whole(name), $"{file}#{ExtractText.Whole(path)}", from, Math.Max(from, FileExtract.LineWithin(end, lineCount)), ExtractText.Signature(ExtractText.Flat(path))) { Parent = parent });
+        return Add(new ExtractNode(_ids.Next(path.Prepend(_prefix)), CodeNodeKinds.Section, ExtractText.Whole(name), path.Prepend(_fileMark), from, Math.Max(from, FileExtract.LineWithin(end, lineCount)), ExtractText.Signature(ExtractText.Flat(path.Whole()))) { Parent = parent });
     }
 
     /// <summary><paramref name="node"/>, a node of the file's own kind - a XAML view's type, a member of it - its id given as the file's other ids are: its id.</summary>
-    public string Node(ExtractNode node)
+    public QualifiedName Node(ExtractNode node)
         => Add(node with { Id = _ids.Next(node.Id), Signature = ExtractText.Signature(ExtractText.Flat(node.Signature)) });
 
     /// <summary>Sets the last line of the node <paramref name="id"/> made: its lines end there, never before they begin.</summary>
-    public void Ends(string id, int end)
+    public void Ends(QualifiedName id, int end)
     {
         var at = _at[id];
         _nodes[at] = _nodes[at] with { End = Math.Max(_nodes[at].Start, FileExtract.LineWithin(end, lineCount)) };
     }
 
     /// <summary>Names the node <paramref name="id"/> made <paramref name="name"/>: a workflow's step by the name it gives itself.</summary>
-    public void Rename(string id, string name)
+    public void Rename(QualifiedName id, string name)
     {
         var at = _at[id];
         _nodes[at] = _nodes[at] with { Name = ExtractText.Whole(name) };
@@ -94,7 +103,7 @@ internal sealed class DataNodes(string language, string file, int lineCount)
     /// Sets the summary of the node <paramref name="id"/> made from <paramref name="value"/>, where it has none: the text an
     /// element holds, first, on one line and whole.
     /// </summary>
-    public void Summarize(string id, string value)
+    public void Summarize(QualifiedName id, string value)
     {
         var at = _at[id];
 
@@ -108,7 +117,7 @@ internal sealed class DataNodes(string language, string file, int lineCount)
     /// A reference of the node <paramref name="from"/> to the node <paramref name="to"/> of this file - what it repeats by
     /// reference, by the name it is repeated by, on <paramref name="line"/>.
     /// </summary>
-    public void Refers(string from, string to, string name, int line)
+    public void Refers(QualifiedName from, QualifiedName to, string name, int line)
         => _references.Add(new ExtractReference(from, CodeEdgeKinds.Uses, ExtractText.Whole(name), FileExtract.LineWithin(line, lineCount))
         {
             Qualifier = new ExtractQualifier(CodeQualifierKinds.Own, to),
@@ -119,7 +128,9 @@ internal sealed class DataNodes(string language, string file, int lineCount)
     /// section over its lines inside the one that holds it, each item of a list placed by its place, an alias a key whose
     /// value is the alias and a reference to the node it names, a container that merges others a reference to each - every
     /// one of them, however many and however deep, on a stack of the walk's own; the references made once the walk has
-    /// placed every node, so each names the node it repeats whatever the order the file writes them in.
+    /// placed every node, so each names the node it repeats whatever the order the file writes them in. Each node's path
+    /// is held as the path of what holds it and its own place (<see cref="QualifiedName"/>), so a file nested any deep is
+    /// read holding names that grow with its depth and never with the square of it.
     /// </summary>
     /// <param name="root">The file's value.</param>
     /// <returns>The nodes made of what the file holds: the sections at its top by the name of the member each is, and each value's node by the value.</returns>
@@ -127,12 +138,12 @@ internal sealed class DataNodes(string language, string file, int lineCount)
     {
         ArgumentNullException.ThrowIfNull(root);
 
-        var sections = new Dictionary<string, string>(StringComparer.Ordinal);
-        var made = new Dictionary<object, string>(ReferenceEqualityComparer.Instance);
-        var refers = new List<(string From, object To, string Name, int Line)>();
+        var sections = new Dictionary<string, QualifiedName>(StringComparer.Ordinal);
+        var made = new Dictionary<object, QualifiedName>(ReferenceEqualityComparer.Instance);
+        var refers = new List<(QualifiedName From, object To, string Name, int Line)>();
         var path = new List<DataPlace>();
-        var pending = new Stack<(IEnumerator<(DataPlace Place, int Line, IDataValue Value)> Members, string? Holder)>();
-        pending.Push((root.Members.GetEnumerator(), null));
+        var pending = new Stack<(IEnumerator<(DataPlace Place, int Line, IDataValue Value)> Members, QualifiedName? Holder, QualifiedName? Under)>();
+        pending.Push((root.Members.GetEnumerator(), null, null));
 
         try
         {
@@ -154,11 +165,15 @@ internal sealed class DataNodes(string language, string file, int lineCount)
 
                 var (place, line, member) = frame.Members.Current;
                 path.Add(place);
-                string id;
+                QualifiedName id;
+
+                // This member's path: the path of what holds it and its own place, a dot before it where its name is one
+                // a dotted path holds and nothing where it is bracketed to the place before it.
+                var under = frame.Under is { } held ? held.Under(ExtractText.Whole(place.Written), place.Bracketed ? "" : ".") : QualifiedName.Of(ExtractText.Whole(place.Written));
 
                 if (member.Alias is { } alias)
                 {
-                    id = Key(path, line, $"*{alias.Name}", frame.Holder);
+                    id = Key(place.Written, under, line, $"*{alias.Name}", frame.Holder);
 
                     if (alias.Target is { } target)
                     {
@@ -167,11 +182,11 @@ internal sealed class DataNodes(string language, string file, int lineCount)
                 }
                 else if (!member.Holds)
                 {
-                    id = Key(path, line, member.Text, frame.Holder);
+                    id = Key(place.Written, under, line, member.Text, frame.Holder);
                 }
                 else
                 {
-                    id = Section(place.Written, PathOf(path), line, Math.Max(line, member.End), frame.Holder);
+                    id = Section(place.Written, under, line, Math.Max(line, member.End), frame.Holder);
 
                     if (path.Count == 1)
                     {
@@ -180,7 +195,7 @@ internal sealed class DataNodes(string language, string file, int lineCount)
 
                     refers.AddRange(member.Merges.Select(merge => (id, merge.Target, merge.Name, merge.Line)));
                     Made(member, id);
-                    pending.Push((member.Members.GetEnumerator(), id));
+                    pending.Push((member.Members.GetEnumerator(), id, under));
                     continue;
                 }
 
@@ -206,7 +221,7 @@ internal sealed class DataNodes(string language, string file, int lineCount)
 
         return new DataWalk(sections, made);
 
-        void Made(IDataValue value, string id)
+        void Made(IDataValue value, QualifiedName id)
         {
             if (value.Identity is { } identity)
             {
@@ -225,7 +240,7 @@ internal sealed class DataNodes(string language, string file, int lineCount)
     /// <summary><paramref name="value"/> as a node's summary: on one line, whole (<see cref="ExtractText.Value"/>); <see langword="null"/> where nothing is left of it.</summary>
     private static string? SummaryOf(string value) => ExtractText.Value(value);
 
-    private string Add(ExtractNode node)
+    private QualifiedName Add(ExtractNode node)
     {
         _at[node.Id] = _nodes.Count;
         _nodes.Add(node);
@@ -236,7 +251,7 @@ internal sealed class DataNodes(string language, string file, int lineCount)
 /// <summary>What a walk of a data file made (<see cref="DataNodes.Walk"/>).</summary>
 /// <param name="Sections">The sections at the file's top, by the name of the member each is.</param>
 /// <param name="Made">Each value's node, by the value's own (<see cref="IDataValue.Identity"/>), where it has one.</param>
-internal sealed record DataWalk(IReadOnlyDictionary<string, string> Sections, IReadOnlyDictionary<object, string> Made);
+internal sealed record DataWalk(IReadOnlyDictionary<string, QualifiedName> Sections, IReadOnlyDictionary<object, QualifiedName> Made);
 
 /// <summary>One place of a data file's key path: a name, or an item's place in a list.</summary>
 /// <param name="Name">The name; <see langword="null"/> for an item.</param>

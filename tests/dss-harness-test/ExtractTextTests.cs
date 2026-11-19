@@ -85,6 +85,6 @@ public sealed class ExtractTextTests
     {
         var ids = new ExtractIds();
 
-        Assert.Equal(["a", "b~2", "a~2", "b", "b~3", "a~3"], new[] { "a", "b~2", "a", "b", "b", "a" }.Select(ids.Next));
+        Assert.Equal(["a", "b~2", "a~2", "b", "b~3", "a~3"], new[] { "a", "b~2", "a", "b", "b", "a" }.Select(name => ids.Next(QualifiedName.Of(name))));
     }
 }

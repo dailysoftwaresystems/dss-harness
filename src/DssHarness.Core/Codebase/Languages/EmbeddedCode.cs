@@ -89,7 +89,7 @@ internal static class EmbeddedCode
             nodes.Add(node with { Id = ids.Next(node.Id) });
         }
 
-        var scopes = new Dictionary<string, ExtractScope>(StringComparer.Ordinal);
+        var scopes = new Dictionary<QualifiedName, ExtractScope>();
 
         foreach (var scope in host.Scopes)
         {
@@ -108,7 +108,7 @@ internal static class EmbeddedCode
         foreach (var extract in embedded)
         {
             // An id the host or an earlier reader gave is told apart; whatever names the node follows it.
-            var given = new Dictionary<string, string>(StringComparer.Ordinal);
+            var given = new Dictionary<QualifiedName, QualifiedName>();
 
             foreach (var node in extract.Nodes)
             {
@@ -158,9 +158,9 @@ internal static class EmbeddedCode
     /// </summary>
     /// <param name="read">What the embedded code's reader made.</param>
     /// <param name="into">The id of the host's node a node is folded into; <see langword="null"/> for one kept.</param>
-    public static FileExtract Folded(FileExtract read, Func<ExtractNode, string?> into)
+    public static FileExtract Folded(FileExtract read, Func<ExtractNode, QualifiedName?> into)
     {
-        var gone = new Dictionary<string, string>(StringComparer.Ordinal);
+        var gone = new Dictionary<QualifiedName, QualifiedName>();
 
         foreach (var node in read.Nodes)
         {
@@ -220,7 +220,7 @@ internal static class EmbeddedCode
     {
         var written = new StringBuilder(head);
         var host = new List<int> { 1 };
-        var hosts = new Dictionary<string, string>(StringComparer.Ordinal);
+        var hosts = new Dictionary<string, QualifiedName>(StringComparer.Ordinal);
         var called = new HashSet<string>(StringComparer.Ordinal);
 
         // Each piece on a line of its own, the host's line it begins on said, and each line it breaks the host's next.
@@ -270,7 +270,7 @@ internal static class EmbeddedCode
         written.Append(" }");
 
         var read = CSharpExtractor.Read(language, new CodeFileInput(path, written.ToString())).Relined(line => FileExtract.LineWithin(host[Math.Clamp(line, 1, host.Count) - 1], lineCount));
-        var frames = read.Nodes.Where(node => node.Parent is not null && hosts.ContainsKey(node.Name)).ToDictionary(node => node.Id, node => node.Name, StringComparer.Ordinal);
+        var frames = read.Nodes.Where(node => node.Parent is not null && hosts.ContainsKey(node.Name)).ToDictionary(node => node.Id, node => node.Name);
 
         // A region's own names are what its host's code reads by itself; a handler's call is given what the event gives.
         read = read with
@@ -291,9 +291,9 @@ internal static class EmbeddedCode
     /// between them and its code and after it - on the host's lines, in the order they stand in the host; answers the
     /// name each frame is given, by its place, with the host's node it stands for.
     /// </summary>
-    private static Dictionary<string, string> Framed(EmbeddedText written, IReadOnlyList<CodeRegion> regions, Func<string, (string Open, string Body, string Close)> frame)
+    private static Dictionary<string, QualifiedName> Framed(EmbeddedText written, IReadOnlyList<CodeRegion> regions, Func<string, (string Open, string Body, string Close)> frame)
     {
-        var hosts = new Dictionary<string, string>(StringComparer.Ordinal);
+        var hosts = new Dictionary<string, QualifiedName>(StringComparer.Ordinal);
 
         for (var at = 0; at < regions.Count; at++)
         {
@@ -316,7 +316,7 @@ internal static class EmbeddedCode
 /// <param name="Parameters">The parameters the function is given: the names the markup declares where the code stands that it names.</param>
 /// <param name="Offset">Where the code stands in the host.</param>
 /// <param name="Code">The code, its line breaks the host's own.</param>
-internal sealed record CodeRegion(string Node, string Parameters, long Offset, string Code)
+internal sealed record CodeRegion(QualifiedName Node, string Parameters, long Offset, string Code)
 {
     /// <summary>
     /// Whether the code is the call of a handler a markup names, which its framework makes with whatever the event gives:

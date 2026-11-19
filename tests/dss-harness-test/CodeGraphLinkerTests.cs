@@ -1599,7 +1599,7 @@ public sealed class CodeGraphLinkerTests
     private static Dictionary<string, (string Reader, CodeGraphFile[] Before, CodeGraphFile[] After)> Reading()
     {
         static ExtractQualifier TypeQualifier(string name) => new(CodeQualifierKinds.Type, name);
-        static ExtractNode Node(string id, string kind, string qualified, string? scope) => new(id, kind, Last(qualified), qualified, 1, 1, qualified) { Scope = scope };
+        static ExtractNode Node(string id, string kind, string qualified, string? scope) => new(id, kind, Last(qualified), qualified, 1, 1, qualified) { Scope = scope is null ? null : QualifiedName.Of(scope) };
 
         var cases = new Dictionary<string, (string Reader, CodeGraphFile[] Before, CodeGraphFile[] After)>(StringComparer.Ordinal);
         var reader = "t:Go";
@@ -1925,7 +1925,7 @@ public sealed class CodeGraphLinkerTests
             return new CodeGraphFile(path, "t", null);
         }
 
-        var declared = RandomScopes.Where(_ => Chance(random, 2)).Select(scope => new ExtractScope(scope, Open: !Chance(random, 6)) { Parent = Chance(random, 3) ? Pick(random, RandomScopes) : null }).ToList();
+        var declared = RandomScopes.Where(_ => Chance(random, 2)).Select(scope => new ExtractScope(scope, Open: !Chance(random, 6)) { Parent = Chance(random, 3) ? QualifiedName.Of(Pick(random, RandomScopes)) : null }).ToList();
         var nodes = new List<ExtractNode>();
 
         for (var types = random.Next(0, 4); types > 0; types--)
@@ -1964,12 +1964,12 @@ public sealed class CodeGraphLinkerTests
 
         foreach (var type in nodes.Where(node => node.Kind == CodeNodeKinds.Type && Chance(random, 2)))
         {
-            references.Add(RandomBase(random, type.Id));
+            references.Add(RandomBase(random, type.Id.Whole()));
         }
 
         for (var made = nodes.Count == 0 ? 0 : random.Next(0, 9); made > 0; made--)
         {
-            references.Add(RandomReference(random, Pick(random, nodes).Id, made, Pick(random, nodes).Id));
+            references.Add(RandomReference(random, Pick(random, nodes).Id.Whole(), made, Pick(random, nodes).Id.Whole()));
         }
 
         return new CodeGraphFile(path, Chance(random, 12) ? "u" : "t", new FileExtract(nodes)
@@ -2018,14 +2018,15 @@ public sealed class CodeGraphLinkerTests
     private static void AddNamespace(Random random, List<ExtractNode> nodes, IReadOnlyList<ExtractScope> declared)
     {
         var scope = Pick(random, declared);
-        var dot = scope.Name.LastIndexOf('.');
+        var dot = scope.Name.Whole().LastIndexOf('.');
 
         if (nodes.Any(node => node.Id == $"n:{scope.Name}"))
         {
             return;
         }
 
-        nodes.Add(new ExtractNode($"n:{scope.Name}", CodeNodeKinds.Namespace, scope.Name[(dot + 1)..], scope.Name, 1, 1, scope.Name) { Scope = dot < 0 ? null : scope.Name[..dot] });
+        var name = scope.Name.Whole();
+        nodes.Add(new ExtractNode($"n:{name}", CodeNodeKinds.Namespace, name[(dot + 1)..], name, 1, 1, name) { Scope = dot < 0 ? null : QualifiedName.Of(name[..dot]) });
     }
 
     private static void AddMember(Random random, List<ExtractNode> nodes, string type)
@@ -2053,7 +2054,7 @@ public sealed class CodeGraphLinkerTests
             Extends = !value && Chance(random, 3) ? Dotted(random) : null,
             Prototype = !value && Chance(random, 8),
             Test = !value && Chance(random, 8),
-            SeenIn = Chance(random, 8) ? Pick(random, RandomScopes) : null,
+            SeenIn = Chance(random, 8) ? QualifiedName.Of(Pick(random, RandomScopes)) : null,
             Exports = Chance(random, 8) ? [Pick(random, RandomNames)] : null,
         });
     }
@@ -2086,9 +2087,9 @@ public sealed class CodeGraphLinkerTests
                 4 or 5 => new ExtractQualifier(CodeQualifierKinds.Value, Dotted(random)),
                 6 => new ExtractQualifier(CodeQualifierKinds.This, null),
                 7 => new ExtractQualifier(CodeQualifierKinds.Base, null),
-                8 => new ExtractQualifier(CodeQualifierKinds.Scope, random.Next(2) == 0 ? null : Pick(random, RandomScopes)),
+                8 => new ExtractQualifier(CodeQualifierKinds.Scope, random.Next(2) == 0 ? null : QualifiedName.Of(Pick(random, RandomScopes))),
                 9 => new ExtractQualifier(CodeQualifierKinds.Selector),
-                10 => new ExtractQualifier(CodeQualifierKinds.Key, random.Next(2) == 0 ? null : Pick(random, ["t", "u"])),
+                10 => new ExtractQualifier(CodeQualifierKinds.Key, random.Next(2) == 0 ? null : QualifiedName.Of(Pick(random, ["t", "u"]))),
                 _ => new ExtractQualifier(CodeQualifierKinds.Prefix, "p"),
             },
         };
@@ -2177,7 +2178,7 @@ public sealed class CodeGraphLinkerTests
         {
             case 0:
                 Each(node => node.Kind == CodeNodeKinds.Member && node.MinArity is null && Chance(random, 2), node => node with { ValueType = Chance(random, 4) ? null : Dotted(random) });
-                Each(node => Chance(random, 3), node => node with { SeenIn = node.SeenIn is null ? Pick(random, RandomScopes) : null });
+                Each(node => Chance(random, 3), node => node with { SeenIn = node.SeenIn is null ? QualifiedName.Of(Pick(random, RandomScopes)) : null });
                 Each(node => Chance(random, 4), node => node with { Exports = node.Exports is null ? [Pick(random, RandomNames)] : null });
                 break;
 
@@ -2239,7 +2240,7 @@ public sealed class CodeGraphLinkerTests
 
             case 2 when scopes.Count > 0:
                 var parented = random.Next(scopes.Count);
-                scopes[parented] = scopes[parented] with { Parent = Chance(random, 3) ? null : Pick(random, RandomScopes) };
+                scopes[parented] = scopes[parented] with { Parent = Chance(random, 3) ? null : QualifiedName.Of(Pick(random, RandomScopes)) };
                 break;
 
             case 3 when scopes.Count > 0:
@@ -2277,7 +2278,7 @@ public sealed class CodeGraphLinkerTests
                 }
                 else if (type is not null)
                 {
-                    references.Add(RandomBase(random, type.Id));
+                    references.Add(RandomBase(random, type.Id.Whole()));
                 }
 
                 break;
@@ -2285,7 +2286,7 @@ public sealed class CodeGraphLinkerTests
             case 7:
                 if (nodes.FirstOrDefault(node => node.Kind == CodeNodeKinds.Type && Chance(random, 2)) is { } holder)
                 {
-                    AddMember(random, nodes, holder.Qualified);
+                    AddMember(random, nodes, holder.Qualified.Whole());
                 }
                 else
                 {
@@ -2310,7 +2311,7 @@ public sealed class CodeGraphLinkerTests
                 break;
 
             case 11 when nodes.Count > 0:
-                references.Add(RandomReference(random, Pick(random, nodes).Id, references.Count + 1, Pick(random, nodes).Id));
+                references.Add(RandomReference(random, Pick(random, nodes).Id.Whole(), references.Count + 1, Pick(random, nodes).Id.Whole()));
                 break;
 
             case 19:
@@ -2320,7 +2321,7 @@ public sealed class CodeGraphLinkerTests
                 break;
 
             default:
-                Each(node => node.Kind == CodeNodeKinds.Type && Chance(random, 2), node => node with { Scope = Chance(random, 3) ? null : Pick(random, RandomScopes) });
+                Each(node => node.Kind == CodeNodeKinds.Type && Chance(random, 2), node => node with { Scope = Chance(random, 3) ? null : QualifiedName.Of(Pick(random, RandomScopes)) });
                 break;
         }
 
@@ -2454,7 +2455,7 @@ public sealed class CodeGraphLinkerTests
             new CodeGraphFile("app.json", "json", new FileExtract([key])),
             new CodeGraphFile("reader.c", "c", new FileExtract([reader, bySegment, byPath, property])
             {
-                Literals = LiteralRow.Table(new LiteralRow("callingConvention", 3, bySegment.Id), new LiteralRow("targets.x64.callingConvention", 5, byPath.Id)),
+                Literals = LiteralRow.Table(new LiteralRow("callingConvention", 3, bySegment.Id.Whole()), new LiteralRow("targets.x64.callingConvention", 5, byPath.Id.Whole())),
             }),
         ]);
 
@@ -2877,7 +2878,7 @@ public sealed class CodeGraphLinkerTests
 
         for (var level = 0; level < Levels; level++)
         {
-            string[] below = level == 0 ? ["css:a.css#.a", "css:a.css#.a~2"] : [$"css:a.css#l{level - 1}a", $"css:a.css#l{level - 1}b"];
+            QualifiedName[] below = [.. (level == 0 ? (string[])["css:a.css#.a", "css:a.css#.a~2"] : [$"css:a.css#l{level - 1}a", $"css:a.css#l{level - 1}b"]).Select(QualifiedName.Of)];
             nodes.Add(Rule($"l{level}a", "&-s") with { SuffixOf = below });
             nodes.Add(Rule($"l{level}b", "&-s") with { SuffixOf = below });
         }
@@ -2898,7 +2899,7 @@ public sealed class CodeGraphLinkerTests
         watch.Stop();
 
         Assert.Equal(
-            [new CodeEdge(page.Id, $"css:a.css#l{Levels - 1}a", CodeEdgeKinds.Uses, 1, CodeConfidences.Candidates), new CodeEdge(page.Id, $"css:a.css#l{Levels - 1}b", CodeEdgeKinds.Uses, 1, CodeConfidences.Candidates)],
+            [new CodeEdge(page.Id.Whole(), $"css:a.css#l{Levels - 1}a", CodeEdgeKinds.Uses, 1, CodeConfidences.Candidates), new CodeEdge(page.Id.Whole(), $"css:a.css#l{Levels - 1}b", CodeEdgeKinds.Uses, 1, CodeConfidences.Candidates)],
             linked.Edges.Where(edge => edge.From == page.Id));
         Assert.True(watch.Elapsed < TimeSpan.FromSeconds(5), $"matching {Levels} levels took {watch.Elapsed}");
     }
@@ -3290,7 +3291,7 @@ public sealed class CodeGraphLinkerTests
 
     private static string Last(string qualified) => qualified[(qualified.LastIndexOf('.') + 1)..];
 
-    private static string? ScopeOf(string qualified) => qualified.LastIndexOf('.') is var dot and > 0 ? qualified[..dot] : null;
+    private static QualifiedName? ScopeOf(string qualified) => qualified.LastIndexOf('.') is var dot and > 0 ? QualifiedName.Of(qualified[..dot]) : null;
 
     /// <summary>Symbols compared by their id, kind and paths.</summary>
     private sealed class SymbolComparer : IEqualityComparer<CodeGraphSymbol>

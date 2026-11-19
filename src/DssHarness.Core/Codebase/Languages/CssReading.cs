@@ -90,25 +90,25 @@ internal sealed class CssReading
     private readonly string _path;
     private readonly StyleSyntax _syntax;
     private readonly StyleScope _scope;
-    private readonly string _kept;
+    private readonly QualifiedName _kept;
     private readonly InterpolatedText _text;
     private readonly ScannedText _scan;
     private readonly ScanExtract _extract = new();
 
     /// <summary>The key of each node, by its kind, its name and whether it is the module's or the component's own: one node of each in a sheet, where it is first declared.</summary>
-    private readonly Dictionary<(string SubKind, string Name, bool Own), string> _named = [];
+    private readonly Dictionary<(string SubKind, string Name, bool Own), QualifiedName> _named = [];
 
     /// <summary>The references, in the order the text makes them, each from the key of the node that holds it - none where no node does.</summary>
-    private readonly List<(string? From, string Kind, string Name, int Line, ExtractQualifier? Qualifier)> _references = [];
+    private readonly List<(QualifiedName? From, string Kind, string Name, int Line, ExtractQualifier? Qualifier)> _references = [];
 
     /// <summary>The key of the sheet's top node, once a reference needs it.</summary>
-    private string? _top;
+    private QualifiedName? _top;
 
     /// <summary>Whether the closed scope of the file's own - what a module's or a component's own nodes are kept to - is declared.</summary>
     private bool _keptDeclared;
 
     /// <summary>The fragment of each node's id, by its key: what a node a suffix is written onto it by spells its own with.</summary>
-    private readonly Dictionary<string, string> _fragments = new(StringComparer.Ordinal);
+    private readonly Dictionary<QualifiedName, string> _fragments = new();
 
     /// <summary>Where the sheet's first scan found each interpolation closes: what the scan of each one's code passes the ones it holds over by.</summary>
     private readonly CssLexer.Closes _closes = new();
@@ -133,19 +133,19 @@ internal sealed class CssReading
     /// in: the file's own where none is given; a module block's of its own, which a binding of the block names
     /// (<see cref="CodeQualifierKinds.Module"/>).
     /// </param>
-    public CssReading(string language, string path, CodeText text, StyleSyntax syntax, StyleScope scope, string? kept = null)
+    public CssReading(string language, string path, CodeText text, StyleSyntax syntax, StyleScope scope, QualifiedName? kept = null)
     {
         _language = language;
         _path = path;
         _syntax = syntax;
         _scope = scope;
-        _kept = kept ?? CodeGraphIds.FileId(path);
+        _kept = kept ?? QualifiedName.Of(CodeGraphIds.FileId(path));
         _text = CssLexer.Scan(syntax == StyleSyntax.Sass ? CssLexer.Braced(text) : text, syntax, _closes);
         _scan = _text.Scan;
     }
 
     /// <summary>The scope a module's or a component's own nodes are kept to, closed, which every declaration of the file is written in.</summary>
-    private string Kept => _kept;
+    private QualifiedName Kept => _kept;
 
     /// <summary>The sheet's extract.</summary>
     public FileExtract Read()
@@ -175,7 +175,7 @@ internal sealed class CssReading
         public bool Face { get; init; }
 
         /// <summary>The key of the node a reference made here is made from; <see langword="null"/> at the sheet's top.</summary>
-        public string? From => Frame.Parent;
+        public QualifiedName? From => Frame.Parent;
     }
 
     /// <summary>
@@ -573,7 +573,7 @@ internal sealed class CssReading
     /// <paramref name="at"/>: each one's name the block's own, and what each default uses - a parameter before it among
     /// them, which is the block's own too - made from <paramref name="by"/>. Answers the names.
     /// </summary>
-    private List<string> Parameters(int at, int stop, string? by, Locals? locals)
+    private List<string> Parameters(int at, int stop, QualifiedName? by, Locals? locals)
     {
         if (!_scan.Is(at, "("))
         {
@@ -1042,9 +1042,9 @@ internal sealed class CssReading
     {
         var read = Selector(selector, head.Stop, place.Parents, global: false);
         var signature = Signature(head);
-        var keys = new string[read.Parts.Count];
-        string? subject = null;
-        string? first = null;
+        var keys = new QualifiedName[read.Parts.Count];
+        QualifiedName? subject = null;
+        QualifiedName? first = null;
 
         for (var at = 0; at < read.Parts.Count; at++)
         {
@@ -1088,12 +1088,12 @@ internal sealed class CssReading
         Uses(selector, head.Stop, subject, locals, names: _syntax == StyleSyntax.Less);
         locals.Close();
 
-        IReadOnlyList<Atom> parents = [.. read.Lasts.Select(tail => tail.Atom ?? AtomOf(read.Parts[tail.Part].Item, keys[tail.Part])).DistinctBy(atom => atom.Key, StringComparer.Ordinal)];
+        IReadOnlyList<Atom> parents = [.. read.Lasts.Select(tail => tail.Atom ?? AtomOf(read.Parts[tail.Part].Item, keys[tail.Part])).DistinctBy(atom => atom.Key)];
         Body(head, place, place.Frame.Inside(null, null, subject, null), parents, binds: parameters);
     }
 
     /// <summary>The selector the part <paramref name="item"/> of a rule, of the node <paramref name="key"/>, is to a <c>&amp;</c> nested in it.</summary>
-    private static Atom AtomOf(Simple item, string key) => new(key, item.Name, item.Classy, item.Dashed);
+    private static Atom AtomOf(Simple item, QualifiedName key) => new(key, item.Name, item.Classy, item.Dashed);
 
     /// <summary>The parameters a Less mixin's selector declares, from the token at <paramref name="from"/> to <paramref name="to"/>: each <c>@name</c> that begins a part of a group a class or an id opens.</summary>
     private List<string> LessParameters(int from, int to)
@@ -1155,7 +1155,7 @@ internal sealed class CssReading
     /// ids', and whether they end in a dash or an underscore after their first character, which a CSS module camel-cases
     /// with the suffix a <c>&amp;</c> writes after it (<see cref="CamelCased"/>).
     /// </summary>
-    private sealed record Atom(string Key, string? Name, bool Classy, bool Dashed);
+    private sealed record Atom(QualifiedName Key, string? Name, bool Classy, bool Dashed);
 
     /// <summary>
     /// What one simple selector writes: a name of its own (<paramref name="Name"/>); or, where it writes a suffix onto a
@@ -1170,7 +1170,7 @@ internal sealed class CssReading
 
         /// <summary><paramref name="suffix"/> written onto each of <paramref name="onto"/>.</summary>
         public static Simple Written(string suffix, IReadOnlyList<Atom> onto)
-            => new($"&{suffix}\u0000{string.Join('\u0000', onto.Select(atom => atom.Key))}", null, suffix, onto, onto.All(atom => atom.Classy), suffix[^1] is '-' or '_');
+            => new($"&{suffix}\u0000{string.Join('\u0000', onto.Select(atom => atom.Key.Whole()))}", null, suffix, onto, onto.All(atom => atom.Classy), suffix[^1] is '-' or '_');
 
         /// <summary>Whether <paramref name="name"/> ends in a dash or an underscore after the first character of what a module exports it by.</summary>
         private static bool IsDashed(string name)
@@ -1195,7 +1195,7 @@ internal sealed class CssReading
     /// </summary>
     private sealed class SelectorRead
     {
-        private readonly HashSet<string> _lasts = new(StringComparer.Ordinal);
+        private readonly HashSet<QualifiedName> _lasts = new();
 
         public List<Part> Parts { get; } = [];
 
@@ -1217,7 +1217,7 @@ internal sealed class CssReading
         {
             foreach (var tail in tails)
             {
-                if (_lasts.Add(tail.Atom?.Key ?? Parts[tail.Part].Item.Key))
+                if (_lasts.Add(tail.Atom is { } atom ? atom.Key : QualifiedName.Of(Parts[tail.Part].Item.Key)))
                 {
                     Lasts.Add(tail);
                 }
@@ -1823,7 +1823,7 @@ internal sealed class CssReading
     /// <paramref name="by"/> - but a word the shorthand gives a meaning of its own (<see cref="AnimationWords"/>), a
     /// function's name and what its parentheses hold, and a variable, which <see cref="Uses"/> reads.
     /// </summary>
-    private void Animated(int from, int to, string? by)
+    private void Animated(int from, int to, QualifiedName? by)
     {
         for (var at = from; at < to; at++)
         {
@@ -1850,7 +1850,7 @@ internal sealed class CssReading
     /// as CSS matches one (<see cref="Folded"/>), made from <paramref name="by"/>: a string's value, or a run of names
     /// joined by one space - none of a generic family (<see cref="GenericFamilies"/>), a variable or a function.
     /// </summary>
-    private void Families(IEnumerable<(int Start, int End)> parts, string? by)
+    private void Families(IEnumerable<(int Start, int End)> parts, QualifiedName? by)
     {
         foreach (var (start, end) in parts)
         {
@@ -1867,7 +1867,7 @@ internal sealed class CssReading
     /// (<c>12px</c>, <c>1.2em/1.5</c>) a weight's number comes before - none where it writes no number, as a system font's
     /// keyword does.
     /// </summary>
-    private void Shorthand(int from, int to, string? by)
+    private void Shorthand(int from, int to, QualifiedName? by)
     {
         var parts = Split(from, to);
         var (start, end) = parts[0];
@@ -1896,7 +1896,7 @@ internal sealed class CssReading
     /// and its <c>composes: a b from "./x.css"</c> an import of that file, each class a use of the one that file exports by
     /// that name, through the import alone.
     /// </summary>
-    private void Composed(int from, int to, string? by, Head head)
+    private void Composed(int from, int to, QualifiedName? by, Head head)
     {
         var source = Source(from, to);
         string? prefix = null;
@@ -1942,7 +1942,7 @@ internal sealed class CssReading
     /// each scanned once past the ones it holds (<see cref="CssLexer.Closes"/>). Where <paramref name="names"/> is false,
     /// only the literals and the interpolations are read.
     /// </summary>
-    private void Uses(int from, int to, string? by, Locals? locals, bool names = true)
+    private void Uses(int from, int to, QualifiedName? by, Locals? locals, bool names = true)
     {
         var pending = new Queue<(InterpolatedText Text, int From, int To, bool Nested)>();
         pending.Enqueue((_text, from, to, false));
@@ -2002,7 +2002,7 @@ internal sealed class CssReading
     /// a call names - SCSS's and Sass's, and CSS's own custom one (<c>--x()</c>), a module's through its namespace, but a
     /// pseudo-class's - the function's qualifier saying so; none of any other name.
     /// </summary>
-    private void Used(ScannedText scan, int at, string? by, Locals? locals)
+    private void Used(ScannedText scan, int at, QualifiedName? by, Locals? locals)
     {
         var name = scan.Text(at);
         var joined = at >= 2 && scan.Is(at - 1, ".") && scan[at - 1].End == scan[at].Start && scan.IsName(at - 2) && scan[at - 2].End == scan[at - 1].Start;
@@ -2062,7 +2062,7 @@ internal sealed class CssReading
     /// alone, and where the sheet is a CSS module exported by its name to the scripts that import it, as a module exports
     /// its classes, ids and keyframes. Its id says its kind where its name does not (<see cref="Spelled"/>).
     /// </summary>
-    private string Node(string name, string subKind, Head head, string signature, bool own)
+    private QualifiedName Node(string name, string subKind, Head head, string signature, bool own)
         => _named.TryGetValue((subKind, name, own), out var known)
             ? known
             : Added((subKind, name, own), name, subKind, Spelled(name, subKind), head, signature, own, own && _scope == StyleScope.Module ? Exported(name, subKind) : null, suffixOf: null);
@@ -2074,7 +2074,7 @@ internal sealed class CssReading
     /// the first selector's with the suffix, and where it is a module's own exported by the suffix as each name it is
     /// written onto is exported (<see cref="CamelCased"/>).
     /// </summary>
-    private string Node(Simple item, Head head, string signature, bool own)
+    private QualifiedName Node(Simple item, Head head, string signature, bool own)
     {
         if (item.Name is { } name)
         {
@@ -2091,11 +2091,10 @@ internal sealed class CssReading
             ? (camel == suffix ? [$"&{suffix}"] : (IReadOnlyList<string>)[$"&{suffix}", $"&{camel}"])
             : null;
 
-        return Added((CodeSubKinds.Rule, item.Key, own), $"&{suffix}", CodeSubKinds.Rule, $"{_fragments[onto[0].Key]}&{suffix}", head, signature, own, exports, [.. onto.Select(atom => atom.Key)]);
-    }
+        return Added((CodeSubKinds.Rule, item.Key, own), $"&{suffix}", CodeSubKinds.Rule, $"{_fragments[onto[0].Key]}&{suffix}", head, signature, own, exports, [.. onto.Select(atom => atom.Key)]);    }
 
     /// <summary>Adds the node of <paramref name="name"/>, known by <paramref name="named"/>, its id's fragment <paramref name="fragment"/>; answers its key.</summary>
-    private string Added((string SubKind, string Name, bool Own) named, string name, string subKind, string fragment, Head head, string signature, bool own, IReadOnlyList<string>? exports, IReadOnlyList<string>? suffixOf)
+    private QualifiedName Added((string SubKind, string Name, bool Own) named, string name, string subKind, string fragment, Head head, string signature, bool own, IReadOnlyList<string>? exports, IReadOnlyList<QualifiedName>? suffixOf)
     {
         var start = LineOf(head.Start);
         var end = head.Opens && head.Close < _scan.Count && _scan.Is(head.Close, "}") && _scan.Match(head.Close) == head.Stop
@@ -2142,7 +2141,7 @@ internal sealed class CssReading
     /// holds is made from - a top-level <c>@include</c>, a flow control's head, a rule of no parts - and every literal
     /// written there, made the first time a reference needs it (<see cref="ScanExtract.Top"/>).
     /// </summary>
-    private string Top()
+    private QualifiedName Top()
     {
         if (_top is not null)
         {

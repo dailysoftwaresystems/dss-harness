@@ -421,17 +421,17 @@ public sealed class TypeScriptExtractorTests : CodeGraphExtractorContractTests<T
                 ("typescript:src/k.ts.Animal.changed", "method"), ("typescript:src/k.ts.over~2", "function"), ("typescript:src/k.ts.over~3", "function"),
                 ("typescript:src/k.ts.over", "function"),
             ],
-            extract.Nodes.Select(node => (node.Id, node.SubKind!)));
+            extract.Nodes.Select(node => (node.Id.Whole(), node.SubKind!)));
         Assert.Equal((1, 2), (Node(extract, "typescript:src/k.ts.Shape").Start, Node(extract, "typescript:src/k.ts.Shape").End));
         Assert.Equal([true, true, false], extract.Nodes.Where(node => node.Name == "over").Select(node => node.Prototype));
         Assert.True(Node(extract, "typescript:src/k.ts.Animal.speak").Prototype);
-        Assert.Equal("src/k.ts.Animal", Node(extract, "typescript:src/k.ts.Animal.id").SeenIn);
+        Assert.Equal("src/k.ts.Animal", Node(extract, "typescript:src/k.ts.Animal.id").SeenIn?.Whole());
         Assert.Null(Node(extract, "typescript:src/k.ts.'lib'").SeenIn);
         Assert.Equal(["const"], Node(extract, "typescript:src/k.ts.Flag").Modifiers.Except(["export"]));
         Assert.Equal(["@Watch"], Node(extract, "typescript:src/k.ts.Animal.changed").Modifiers);
         Assert.Equal(
             [("typescript:src/k.ts.Animal.changed", "Watch"), ("typescript:src/k.ts.Animal", "register")],
-            extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Calls).Select(reference => (reference.From, reference.Name)));
+            extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Calls).Select(reference => (reference.From.Whole(), reference.Name)));
     }
 
     /// <summary>A TypeScript callable takes from its required parameters to all of them - none most where a rest one takes any - and its this parameter is none.</summary>
@@ -521,7 +521,7 @@ public sealed class TypeScriptExtractorTests : CodeGraphExtractorContractTests<T
         var extract = Read("types/lib.d.ts", "declare function f(): void;\ndeclare class C { m(): void; field: number; }\ndeclare const v: string;\nfunction g() { return 1; }\nconst h = () => 1;");
 
         Assert.All(extract.Nodes.Where(node => node.Kind == CodeNodeKinds.Member), node => Assert.True(node.Prototype));
-        Assert.Equal(["typescript:f", "typescript:C", "typescript:C.m", "typescript:C.field", "typescript:v", "typescript:g", "typescript:h"], extract.Nodes.Select(node => node.Id));
+        Assert.Equal(["typescript:f", "typescript:C", "typescript:C.m", "typescript:C.field", "typescript:v", "typescript:g", "typescript:h"], extract.Nodes.Select(node => node.Id.Whole()));
         Assert.Null(extract.Generated);
     }
 
@@ -583,7 +583,7 @@ public sealed class TypeScriptExtractorTests : CodeGraphExtractorContractTests<T
             Assert.Equal([("List", 1, 1), ("Other", 2, 2)], extract.Nodes.Select(node => (node.Name, node.Start, node.End)));
             Assert.Equal(
                 element.Contains("draw", StringComparison.Ordinal) ? ["List:map", "List:draw", "List:Table", "Other:helper"] : ["List:Table", "Other:helper"],
-                extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Calls).Select(reference => $"{reference.From[(reference.From.LastIndexOf('.') + 1)..]}:{reference.Name}"));
+                extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Calls).Select(reference => $"{reference.From.PastLastDot()}:{reference.Name}"));
         }
     }
 
@@ -692,7 +692,7 @@ public sealed class TypeScriptExtractorTests : CodeGraphExtractorContractTests<T
             LiteralRow.Of(extract));
         Assert.Equal(
             [(Constructor, CodeEdgeKinds.Calls, "Inject", 2), (Constructor, CodeEdgeKinds.Uses, "DEFAULT_RETRIES", 2), (Get, CodeEdgeKinds.Uses, "enabled", 5), (Get, CodeEdgeKinds.Uses, "FALLBACK", 5)],
-            extract.References.Select(reference => (reference.From, reference.Kind, reference.Name, reference.Line)));
+            extract.References.Select(reference => (reference.From.Whole(), reference.Kind, reference.Name, reference.Line)));
     }
 
     /// <summary>
@@ -765,7 +765,7 @@ public sealed class TypeScriptExtractorTests : CodeGraphExtractorContractTests<T
             LiteralRow.Of(extract));
         Assert.Equal(
             [("typescript:src/e.ts.Flags.All", CodeEdgeKinds.Uses, "Read"), ("typescript:src/e.ts.Flags.All", CodeEdgeKinds.Uses, "Write")],
-            extract.References.Select(reference => (reference.From, reference.Kind, reference.Name)));
+            extract.References.Select(reference => (reference.From.Whole(), reference.Kind, reference.Name)));
     }
 
     /// <summary>A conditional type's first branch names a type as its second does, where an object type's key - an optional one's among them - names none.</summary>
@@ -779,7 +779,7 @@ public sealed class TypeScriptExtractorTests : CodeGraphExtractorContractTests<T
 
         Assert.Equal(
             [("typescript:src/o.ts.Outcome", "Failure"), ("typescript:src/o.ts.Outcome", "Success"), ("typescript:src/o.ts.Shaped", "First"), ("typescript:src/o.ts.Shaped", "Second")],
-            extract.References.Where(reference => reference.Kind == CodeEdgeKinds.References).Select(reference => (reference.From, reference.Name)));
+            extract.References.Where(reference => reference.Kind == CodeEdgeKinds.References).Select(reference => (reference.From.Whole(), reference.Name)));
     }
 
     /// <summary>
@@ -797,10 +797,10 @@ public sealed class TypeScriptExtractorTests : CodeGraphExtractorContractTests<T
     internal static string NamespacesFiveThousandDeep() => SmallStack.Run(() =>
     {
         var extract = Read("src/deep.ts", string.Concat(Enumerable.Repeat("namespace n { ", 5_000)) + "export class C { m() { g(); } }" + new string('}', 5_000));
-        var nodes = extract.Nodes.ToDictionary(node => node.Id, StringComparer.Ordinal);
+        var nodes = extract.Nodes.ToDictionary(node => node.Id);
         var depth = 0;
 
-        for (string? id = Assert.Single(extract.Nodes, node => node.Name == "m").Id; id is not null; id = nodes[id].Parent)
+        for (var id = Assert.Single(extract.Nodes, node => node.Name == "m").Id; id is not null; id = nodes[id].Parent)
         {
             depth++;
         }

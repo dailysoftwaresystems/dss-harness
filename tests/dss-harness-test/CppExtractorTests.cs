@@ -243,10 +243,10 @@ public sealed class CppExtractorTests : CodeGraphExtractorContractTests<CppExtra
                 ("cpp:V.operator=(const V&)", "operator", 1, 1), ("cpp:V.operator<(const V&)const", "operator", 1, 1), ("cpp:V.operator<<=(int)", "operator", 1, 1),
                 ("cpp:V.operator bool()const", "operator", 0, 0), ("cpp:V.operator()(int)const", "operator", 1, 1),
             ],
-            extract.Nodes.Where(node => node.Kind == CodeNodeKinds.Member).Select(node => (node.Id, node.SubKind, node.MinArity ?? -1, node.MaxArity ?? -1)));
+            extract.Nodes.Where(node => node.Kind == CodeNodeKinds.Member).Select(node => (node.Id.Whole(), node.SubKind, node.MinArity ?? -1, node.MaxArity ?? -1)));
         Assert.Equal(
             ["cpp:V.operator=(const V&)", "cpp:V.operator<<=(int)"],
-            extract.Nodes.Where(node => node.Kind == CodeNodeKinds.Member && !node.Prototype).Select(node => node.Id));
+            extract.Nodes.Where(node => node.Kind == CodeNodeKinds.Member && !node.Prototype).Select(node => node.Id.Whole()));
     }
 
     /// <summary>
@@ -264,7 +264,7 @@ public sealed class CppExtractorTests : CodeGraphExtractorContractTests<CppExtra
 
         Assert.Equal(
             [("cpp:V.operator const std::map<std::string,std::vector<std::pair<std::size_t,std::int64_t>>,Less>&()const", "operator", 0, 0)],
-            extract.Nodes.Where(node => node.Kind == CodeNodeKinds.Member).Select(node => (node.Id, node.SubKind, node.MinArity ?? -1, node.MaxArity ?? -1)));
+            extract.Nodes.Where(node => node.Kind == CodeNodeKinds.Member).Select(node => (node.Id.Whole(), node.SubKind, node.MinArity ?? -1, node.MaxArity ?? -1)));
     }
 
     /// <summary>
@@ -280,7 +280,7 @@ public sealed class CppExtractorTests : CodeGraphExtractorContractTests<CppExtra
         Assert.Empty(extract.Dynamic);
         Assert.Equal(
             [("cpp:f(int)", CodeEdgeKinds.Calls, "make", (int?)1), .. types.Select(type => ("cpp:f(int)", CodeEdgeKinds.References, type, (int?)null))],
-            extract.References.Select(reference => (reference.From, reference.Kind, reference.Name, reference.Arity)));
+            extract.References.Select(reference => (reference.From.Whole(), reference.Kind, reference.Name, reference.Arity)));
     }
 
     /// <summary>
@@ -307,8 +307,8 @@ public sealed class CppExtractorTests : CodeGraphExtractorContractTests<CppExtra
         Assert.Equal("file:x.cc", Node(extract, "cpp:x.cc:helper()").Scope);
         Assert.Equal("file:x.cc", Node(extract, "cpp:x.cc:count").Scope);
         Assert.Equal("file:x.cc", Node(extract, "cpp:x.cc:app.tick()").Scope);
-        Assert.Contains(extract.Scopes, scope => scope is { Name: "Local", Open: false });
-        Assert.Contains(extract.Scopes, scope => scope is { Name: "file:x.cc", Open: false });
+        Assert.Contains(extract.Scopes, scope => scope is { Open: false } && scope.Name.Is("Local"));
+        Assert.Contains(extract.Scopes, scope => scope is { Open: false } && scope.Name.Is("file:x.cc"));
     }
 
     /// <summary>A constructor's initializers call what their arguments call, and the members and bases they name are no calls.</summary>
@@ -367,7 +367,7 @@ public sealed class CppExtractorTests : CodeGraphExtractorContractTests<CppExtra
             extract.Imports,
             ImportComparer.Instance);
         Assert.Equal("alias", Node(extract, "cpp:Name").SubKind);
-        Assert.Contains(extract.References, reference => reference is { From: "cpp:Name", Kind: CodeEdgeKinds.References, Name: "Text", Qualifier.Name: "app" });
+        Assert.Contains(extract.References, reference => reference is { Kind: CodeEdgeKinds.References, Name: "Text" } && reference.From.Is("cpp:Name") && reference.Qualifier!.Name!.Is("app"));
     }
 
     /// <summary>A raw string, whatever its prefix and delimiter, is never read as code.</summary>
@@ -431,8 +431,8 @@ public sealed class CppExtractorTests : CodeGraphExtractorContractTests<CppExtra
         Assert.Equal(
             [(5, "a call through the function pointer cb_"), (5, "a call through the function pointer cb_"), (5, "a call through the function pointer later"), (5, "a call through the function pointer read"), (8, "a call through the function pointer read")],
             extract.Dynamic.Select(dynamic => (dynamic.Line, dynamic.Why)).Order());
-        Assert.Equal(["read"], extract.References.Where(reference => reference is { From: "cpp:top()", Kind: CodeEdgeKinds.Calls }).Select(reference => reference.Name));
-        Assert.DoesNotContain(extract.References, reference => reference.Kind == CodeEdgeKinds.Calls && reference.From is "cpp:Obj.go()" or "cpp:use(Obj*)");
+        Assert.Equal(["read"], extract.References.Where(reference => reference is { Kind: CodeEdgeKinds.Calls } && reference.From.Is("cpp:top()")).Select(reference => reference.Name));
+        Assert.DoesNotContain(extract.References, reference => reference.Kind == CodeEdgeKinds.Calls && (reference.From.Is("cpp:Obj.go()") || reference.From.Is("cpp:use(Obj*)")));
     }
 
     /// <summary>A function with a trailing return type is read whole, its body the brace after the type, and the next declaration is its own.</summary>
@@ -441,7 +441,7 @@ public sealed class CppExtractorTests : CodeGraphExtractorContractTests<CppExtra
     {
         var extract = Read("t.cc", "auto f() -> int { return g(); }\nint h() { return k(); }\nauto m() -> std::string { return n(); }\n");
 
-        Assert.Equal([("cpp:f()", "g", 1), ("cpp:h()", "k", 2), ("cpp:m()", "n", 3)], extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Calls).Select(reference => (reference.From, reference.Name, reference.Line)));
+        Assert.Equal([("cpp:f()", "g", 1), ("cpp:h()", "k", 2), ("cpp:m()", "n", 3)], extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Calls).Select(reference => (reference.From.Whole(), reference.Name, reference.Line)));
         Assert.Equal((1, 1), (Node(extract, "cpp:f()").Start, Node(extract, "cpp:f()").End));
     }
 
@@ -510,7 +510,7 @@ public sealed class CppExtractorTests : CodeGraphExtractorContractTests<CppExtra
             };
             """);
 
-        Assert.Equal(["cpp:A", "cpp:B", "cpp:C"], extract.Nodes.Where(node => node.SubKind == "enumerator").Select(node => node.Id));
+        Assert.Equal(["cpp:A", "cpp:B", "cpp:C"], extract.Nodes.Where(node => node.SubKind == "enumerator").Select(node => node.Id.Whole()));
     }
 
     /// <summary><c>namespace a::b</c> is a part of <c>a</c> holding a part of <c>b</c>: one node each with <c>namespace a { namespace b {} }</c>.</summary>
@@ -519,7 +519,7 @@ public sealed class CppExtractorTests : CodeGraphExtractorContractTests<CppExtra
     {
         var extract = Read("n.cc", "namespace a { namespace b { void f(); } }\nnamespace a::b { void g(); }\n");
 
-        Assert.Equal(["cpp:a", "cpp:a.b", "cpp:a.b.f()", "cpp:a.b.g()"], extract.Nodes.Select(node => node.Id).Order(StringComparer.Ordinal));
+        Assert.Equal(["cpp:a", "cpp:a.b", "cpp:a.b.f()", "cpp:a.b.g()"], extract.Nodes.Select(node => node.Id.Whole()).Order(StringComparer.Ordinal));
         Assert.Equal("cpp:a", Node(extract, "cpp:a.b").Parent);
         Assert.Equal((1, 2), (Node(extract, "cpp:a").Start, Node(extract, "cpp:a").End));
     }
@@ -530,7 +530,7 @@ public sealed class CppExtractorTests : CodeGraphExtractorContractTests<CppExtra
     {
         var extract = Read("h.hpp", "namespace { int helper(); }\nstatic int count;\n");
 
-        Assert.Equal(["cpp:count", "cpp:helper()"], extract.Nodes.Select(node => node.Id).Order(StringComparer.Ordinal));
+        Assert.Equal(["cpp:count", "cpp:helper()"], extract.Nodes.Select(node => node.Id.Whole()).Order(StringComparer.Ordinal));
         Assert.DoesNotContain(extract.Scopes, scope => !scope.Open);
     }
 
@@ -552,7 +552,7 @@ public sealed class CppExtractorTests : CodeGraphExtractorContractTests<CppExtra
         Assert.Equal(
             [(2, "the macro DECLARE_MODULE stands here in the place of a declaration, which is not seen"), (4, "the macro Q_OBJECT stands here in the place of a declaration, which is not seen")],
             extract.Dynamic.Select(dynamic => (dynamic.Line, dynamic.Why)));
-        Assert.Equal(["cpp:app", "cpp:app.Widget", "cpp:app.Widget.show()"], extract.Nodes.Select(node => node.Id).Order(StringComparer.Ordinal));
+        Assert.Equal(["cpp:app", "cpp:app.Widget", "cpp:app.Widget.show()"], extract.Nodes.Select(node => node.Id.Whole()).Order(StringComparer.Ordinal));
     }
 
     /// <summary>A literal inside a parameter's type's arguments is the type's: such a function is no variable its type makes.</summary>
@@ -563,7 +563,7 @@ public sealed class CppExtractorTests : CodeGraphExtractorContractTests<CppExtra
 
         Assert.Equal(
             [("cpp:V.add(Vec<3>)const", "method"), ("cpp:V.fill(char[16])", "method"), ("cpp:V.half(std::array<int,N/2>)", "method"), ("cpp:V.pick(std::enable_if_t<N==2,int>)", "method"), ("cpp:V.set(std::array<int,4>)", "method"), ("cpp:mask(std::bitset<8>)", "function")],
-            extract.Nodes.Where(node => node.Kind == CodeNodeKinds.Member).Select(node => (node.Id, node.SubKind)).Order());
+            extract.Nodes.Where(node => node.Kind == CodeNodeKinds.Member).Select(node => (node.Id.Whole(), node.SubKind)).Order());
     }
 
     /// <summary>A member template's body, read once its class's is, is read with the template's parameters: a value of one of them is of no type the repository declares.</summary>
@@ -725,7 +725,7 @@ public sealed class CppExtractorTests : CodeGraphExtractorContractTests<CppExtra
         var extract = Read("deep.hpp", text);
 
         Assert.Empty(extract.Dynamic);
-        return $"{string.Join(' ', extract.Nodes.Select(node => node.Id).Order(StringComparer.Ordinal))}\n{Runs(extract)}";
+        return $"{string.Join(' ', extract.Nodes.Select(node => node.Id.Whole()).Order(StringComparer.Ordinal))}\n{Runs(extract)}";
     });
 
     /// <summary>
@@ -748,7 +748,7 @@ public sealed class CppExtractorTests : CodeGraphExtractorContractTests<CppExtra
         var extract = Read("p.cc", $"void f() {{\n    auto p = {placed};\n}}\nvoid after() {{ done(); }}\n");
 
         Assert.Empty(extract.Dynamic);
-        return $"{string.Join(' ', extract.Nodes.Select(node => node.Id).Order(StringComparer.Ordinal))}\n{Runs(extract)}";
+        return $"{string.Join(' ', extract.Nodes.Select(node => node.Id.Whole()).Order(StringComparer.Ordinal))}\n{Runs(extract)}";
     });
 
     /// <summary>
@@ -857,7 +857,7 @@ public sealed class CppExtractorTests : CodeGraphExtractorContractTests<CppExtra
                 "cpp:Mode", "cpp:Mode.On", "cpp:Mode.Wide", "cpp:Sock", "cpp:Sock.fd_", "cpp:Sock.h_", "cpp:Sock.send()", "cpp:api()", "cpp:closed()", "cpp:net",
                 "cpp:net.open()", "cpp:net.wide()", "cpp:run(int)",
             ],
-            extract.Nodes.Select(node => node.Id).Order(StringComparer.Ordinal));
+            extract.Nodes.Select(node => node.Id.Whole()).Order(StringComparer.Ordinal));
         Assert.Equal(["A", "B"], extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Inherits).Select(reference => reference.Name));
         Assert.Equal(["fast", "quick", "go"], extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Calls).Select(reference => reference.Name));
     }
@@ -892,7 +892,7 @@ public sealed class CppExtractorTests : CodeGraphExtractorContractTests<CppExtra
                 ("cpp:Outer.n_", "field"), ("cpp:Outer.tv_", "field"), ("cpp:Part", "struct"), ("cpp:Part.p", "field"), ("cpp:Widget", "class"),
                 ("cpp:Widget.w_", "field"), ("cpp:net", null), ("cpp:net.any_", "variable"), ("cpp:shade_", "variable"),
             ],
-            extract.Nodes.OrderBy(node => node.Id, StringComparer.Ordinal).Select(node => (node.Id, node.SubKind)));
+            extract.Nodes.OrderBy(node => node.Id.Whole(), StringComparer.Ordinal).Select(node => (node.Id.Whole(), node.SubKind)));
         Assert.Equal(
             ("sockaddr_in", "timeval", "sockaddr_in", "Color"),
             (Node(extract, "cpp:Outer.addr_").ValueType, Node(extract, "cpp:Outer.tv_").ValueType, Node(extract, "cpp:net.any_").ValueType, Node(extract, "cpp:shade_").ValueType));
@@ -926,7 +926,7 @@ public sealed class CppExtractorTests : CodeGraphExtractorContractTests<CppExtra
                 ("cpp:Less", "struct"), ("cpp:Less.operator()(int,int)const", "operator"), ("cpp:Open", "struct"), ("cpp:Pair", "struct"), ("cpp:Pair.a", "field"),
                 ("cpp:Widget", "struct"), ("cpp:Widget.Widget()", "constructor"), ("cpp:cb_", "variable"),
             ],
-            extract.Nodes.OrderBy(node => node.Id, StringComparer.Ordinal).Select(node => (node.Id, node.SubKind!)));
+            extract.Nodes.OrderBy(node => node.Id.Whole(), StringComparer.Ordinal).Select(node => (node.Id.Whole(), node.SubKind!)));
     }
 
     /// <summary>
@@ -945,9 +945,9 @@ public sealed class CppExtractorTests : CodeGraphExtractorContractTests<CppExtra
 
         Assert.Equal(
             [("cpp:A", "enumerator"), ("cpp:E", "enum"), ("cpp:S", "struct"), ("cpp:S.c", "field"), ("cpp:S.d", "field"), ("cpp:Sealed", "class"), ("cpp:Sealed.s", "field")],
-            extract.Nodes.OrderBy(node => node.Id, StringComparer.Ordinal).Select(node => (node.Id, node.SubKind!)));
+            extract.Nodes.OrderBy(node => node.Id.Whole(), StringComparer.Ordinal).Select(node => (node.Id.Whole(), node.SubKind!)));
         Assert.Equal("Color", Node(extract, "cpp:S.c").ValueType);
-        Assert.Contains(extract.References, reference => reference is { From: "cpp:S.c", Kind: CodeEdgeKinds.References, Name: "Color" });
+        Assert.Contains(extract.References, reference => reference is { Kind: CodeEdgeKinds.References, Name: "Color" } && reference.From.Is("cpp:S.c"));
     }
 
     /// <summary>
@@ -995,7 +995,7 @@ public sealed class CppExtractorTests : CodeGraphExtractorContractTests<CppExtra
             LiteralRow.Of(extract));
         Assert.Equal(
             [(Log, CodeEdgeKinds.Uses, "LIMIT", 7), (Take, CodeEdgeKinds.References, "Kind", 15), (Take, CodeEdgeKinds.Uses, "One", 15), (Take, CodeEdgeKinds.Calls, "use", 16), (Take, CodeEdgeKinds.Uses, "COUNT", 17)],
-            extract.References.Select(reference => (reference.From, reference.Kind, reference.Name, reference.Line)));
+            extract.References.Select(reference => (reference.From.Whole(), reference.Kind, reference.Name, reference.Line)));
     }
 
     /// <summary>
@@ -1075,7 +1075,7 @@ public sealed class CppExtractorTests : CodeGraphExtractorContractTests<CppExtra
 
         Assert.Equal(
             [("cpp:Flags.All", "Read", ""), ("cpp:Flags.All", "Write", ""), ("cpp:Flags.Max", "top", "named Limits")],
-            extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Uses).Select(reference => (reference.From, reference.Name, $"{reference.Qualifier?.Kind} {reference.Qualifier?.Name}".Trim())));
+            extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Uses).Select(reference => (reference.From.Whole(), reference.Name, $"{reference.Qualifier?.Kind} {reference.Qualifier?.Name}".Trim())));
     }
 
     private static FileExtract Read(string path, string text) => new CppExtractor().Extract(new CodeFileInput(path, text));

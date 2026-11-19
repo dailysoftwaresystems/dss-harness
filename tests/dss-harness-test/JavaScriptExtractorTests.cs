@@ -457,7 +457,7 @@ public sealed class JavaScriptExtractorTests : CodeGraphExtractorContractTests<J
             extract.Nodes.Select(node => (node.Name, node.SubKind!)));
         Assert.Equal(["static"], Node(extract, "javascript:src/k.mjs.Box.of").Modifiers);
         Assert.Equal(["async", "*"], Node(extract, "javascript:src/k.mjs.Box.each").Modifiers);
-        Assert.Equal("src/k.mjs.Box", Node(extract, "javascript:src/k.mjs.Box.#hidden").SeenIn);
+        Assert.Equal("src/k.mjs.Box", Node(extract, "javascript:src/k.mjs.Box.#hidden").SeenIn?.Whole());
         Assert.Equal(["Base"], extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Inherits).Select(reference => reference.Name));
     }
 
@@ -606,7 +606,7 @@ public sealed class JavaScriptExtractorTests : CodeGraphExtractorContractTests<J
         Assert.Equal(
             [("./all", "all", null, false), ("./parts", "second", "two", false), ("./parts", null, "one", false), ("./side", null, "", false)],
             extract.Imports.Where(import => !import.Fallback).Select(import => (import.Target, import.Prefix, import.Show is null ? null : string.Join(',', import.Show), import.Export)));
-        Assert.Equal("lib/c.js", Node(extract, "javascript:lib/c.js.hidden").SeenIn);
+        Assert.Equal("lib/c.js", Node(extract, "javascript:lib/c.js.hidden").SeenIn?.Whole());
         Assert.Null(Node(extract, "javascript:lib/c.js.shown").SeenIn);
         Assert.Equal(["alias"], Node(extract, "javascript:lib/c.js.Kept").Exports);
         Assert.Null(Node(extract, "javascript:lib/c.js.inline").SeenIn);
@@ -778,15 +778,15 @@ public sealed class JavaScriptExtractorTests : CodeGraphExtractorContractTests<J
         Assert.Equal(
             [("a", null, null), ("b", null, null), ("c", "src/m.js", "see"), ("d", "src/m.js", "default"), ("handler", "src/m.js", "default")],
             module.Nodes.Select(node => (node.Name, node.SeenIn, node.Exports is null ? null : string.Join(',', node.Exports))));
-        Assert.Equal(["src/m.js"], module.Scopes.Select(scope => scope.Name));
-        Assert.Equal([("javascript:a", null), ("javascript:b", null)], script.Nodes.Select(node => (node.Id, node.SeenIn)));
+        Assert.Equal(["src/m.js"], module.Scopes.Select(scope => scope.Name.Whole()));
+        Assert.Equal([("javascript:a", null), ("javascript:b", null)], script.Nodes.Select(node => (node.Id.Whole(), node.SeenIn?.Whole())));
         Assert.Empty(script.Scopes);
         Assert.Equal(listed.Nodes.Single(node => node.Name == "a").Id, Assert.Single(listed.References, reference => reference.Name == "b").From);
         Assert.Equal(listed.Nodes.Single(node => node.Name == "K").Id, listed.Nodes.Single(node => node.Name == "m").Parent);
 
         foreach (var path in (string[])["src/plain.mjs", "src/plain.cjs"])
         {
-            Assert.Equal(path, Assert.Single(Read(path, "function f() {}").Nodes).SeenIn);
+            Assert.Equal(path, Assert.Single(Read(path, "function f() {}").Nodes).SeenIn?.Whole());
         }
 
         var linked = Link(
@@ -1011,10 +1011,10 @@ public sealed class JavaScriptExtractorTests : CodeGraphExtractorContractTests<J
     internal static string TestGroupsFiveThousandDeep() => SmallStack.Run(() =>
     {
         var extract = Read("test/g.js", string.Concat(Enumerable.Repeat("describe(g, () => {", 5_000)) + "deep();" + string.Concat(Enumerable.Repeat("});", 5_000)));
-        var nodes = extract.Nodes.ToDictionary(node => node.Id, StringComparer.Ordinal);
+        var nodes = extract.Nodes.ToDictionary(node => node.Id);
         var depth = 0;
 
-        for (string? id = Assert.Single(extract.References, reference => reference.Kind == CodeEdgeKinds.Calls).From; id is not null; id = nodes[id].Parent)
+        for (var id = Assert.Single(extract.References, reference => reference.Kind == CodeEdgeKinds.Calls).From; id is not null; id = nodes[id].Parent)
         {
             depth++;
         }

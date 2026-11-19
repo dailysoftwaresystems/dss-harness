@@ -94,5 +94,5 @@ internal static class ExtractText
     /// <summary><paramref name="name"/> joined to <paramref name="scope"/>, the qualified name it is declared in, by the model's separator, a dot; itself at the top.</summary>
     /// <param name="scope">The qualified name of the scope it is declared in; <see langword="null"/> at the top.</param>
     /// <param name="name">Its name.</param>
-    public static string Qualify(string? scope, string name) => scope is null ? name : $"{scope}.{name}";
+    public static QualifiedName Qualify(QualifiedName? scope, string name) => scope is null ? QualifiedName.Of(name) : scope.Under(name);
 }

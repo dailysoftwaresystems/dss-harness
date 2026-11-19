@@ -72,10 +72,10 @@ public sealed class MsbuildExtractor : ICodeGraphExtractor
         // declared before it - every one of its name otherwise, told once the whole file is read.
         var ids = new ExtractIds();
         var properties = new List<ExtractNode>();
-        var declared = new Dictionary<string, List<string>>(StringComparer.Ordinal);
-        var written = new List<(ExtractReference Reference, IReadOnlyList<string>? Reads)>();
+        var declared = new Dictionary<string, List<QualifiedName>>(StringComparer.Ordinal);
+        var written = new List<(ExtractReference Reference, IReadOnlyList<QualifiedName>? Reads)>();
         var open = new List<string>();
-        (string Id, string Name, int At)? property = null;
+        (QualifiedName Id, string Name, int At)? property = null;
 
         var settings = new XmlReaderSettings { DtdProcessing = DtdProcessing.Ignore, IgnoreComments = true, IgnoreProcessingInstructions = true };
 

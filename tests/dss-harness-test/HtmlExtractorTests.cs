@@ -180,7 +180,7 @@ public sealed class HtmlExtractorTests : CodeGraphExtractorContractTests<HtmlExt
             extract.Nodes.Where(node => node.Kind == CodeNodeKinds.Section).Select(node => (node.Name, node.Start, node.End)));
         Assert.Equal(
             ["html:pages/nested.html#page-top", "html:pages/nested.html#page-top", "html:pages/nested.html#page-top", "html:pages/nested.html#page-top"],
-            extract.Nodes.Where(node => node.Kind == CodeNodeKinds.Section && node.SubKind != "body").Select(node => node.Parent));
+            extract.Nodes.Where(node => node.Kind == CodeNodeKinds.Section && node.SubKind != "body").Select(node => node.Parent?.Whole()));
     }
 
     /// <summary>
@@ -324,7 +324,7 @@ public sealed class HtmlExtractorTests : CodeGraphExtractorContractTests<HtmlExt
 
         Assert.Equal(
             [("html:site/two.html.(module)", 4, 4), ("html:site/two.html.(module)~2", 10, 10), ("html:init", 11, 11), ("html:init~2", 14, 14)],
-            extract.Nodes.Where(node => node.Kind == CodeNodeKinds.Member).OrderBy(node => node.Start).Select(node => (node.Id, node.Start, node.End)));
+            extract.Nodes.Where(node => node.Kind == CodeNodeKinds.Member).OrderBy(node => node.Start).Select(node => (node.Id.Whole(), node.Start, node.End)));
         Assert.Equal(
             [
                 ("https://a.example", 4, "html:site/two.html.(module)"), ("Shop home", 10, "html:site/two.html.(module)~2"), ("first one", 11, "html:init"),
@@ -360,8 +360,8 @@ public sealed class HtmlExtractorTests : CodeGraphExtractorContractTests<HtmlExt
                 (CodeEdgeKinds.Calls, "save", 3, 0, null), (CodeEdgeKinds.Uses, "ok", 4, null, null), (CodeEdgeKinds.Calls, "send", 4, 2, null),
             ],
             extract.References.Select(reference => (reference.Kind, reference.Name, reference.Line, reference.Arity, reference.Qualifier?.Kind)));
-        Assert.All(extract.References, reference => Assert.Equal("html:h.html#body", reference.From));
-        Assert.Equal(["html:h.html#body"], extract.Nodes.Select(node => node.Id));
+        Assert.All(extract.References, reference => Assert.Equal("html:h.html#body", reference.From.Whole()));
+        Assert.Equal(["html:h.html#body"], extract.Nodes.Select(node => node.Id.Whole()));
     }
 
     /// <summary>A style element's text is read by the style sheet's reader, its rules carrying the lines they stand on.</summary>
@@ -407,7 +407,7 @@ public sealed class HtmlExtractorTests : CodeGraphExtractorContractTests<HtmlExt
             extract.Nodes.Where(node => CodeSubKinds.IsData(node.SubKind)).Select(node => (node.Name, node.SubKind!, node.Start)));
         Assert.Equal(
             [("html:index.html#.box", "@pad", 4, CodeQualifierKinds.StyleVariable)],
-            extract.References.Where(reference => reference.Qualifier?.Kind == CodeQualifierKinds.StyleVariable).Select(reference => (reference.From, reference.Name, reference.Line, reference.Qualifier?.Kind)));
+            extract.References.Where(reference => reference.Qualifier?.Kind == CodeQualifierKinds.StyleVariable).Select(reference => (reference.From.Whole(), reference.Name, reference.Line, reference.Qualifier?.Kind)));
         Assert.Equal(
             [".ghost"],
             Read("plain.html", "<style>\n// .ghost { a: b; }\n</style>\n").Nodes.Where(node => CodeSubKinds.IsData(node.SubKind)).Select(node => node.Name));

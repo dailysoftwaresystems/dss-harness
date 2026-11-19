@@ -14,9 +14,10 @@ internal sealed class ExtractLiterals
 
     /// <summary>
     /// The literal <paramref name="value"/>, decoded, on <paramref name="line"/>, written in the code of the node
-    /// <paramref name="node"/> names - as the reader names it - or in none: kept where it holds a character.
+    /// <paramref name="node"/> names - as the reader names it, a name (<see cref="QualifiedName"/>) - or in none: kept
+    /// where it holds a character.
     /// </summary>
-    public void Add(string value, int line, string? node)
+    public void Add(string value, int line, QualifiedName? node)
     {
         ArgumentNullException.ThrowIfNull(value);
 
@@ -54,7 +55,7 @@ internal sealed class ExtractLiterals
     /// read; <see langword="null"/> where the file holds none.
     /// </summary>
     /// <param name="idOf">The id of the node each place names, from what the reader named it by - its key, or none; the names as they are where none is given.</param>
-    public IReadOnlyList<ExtractLiteral>? Kept(Func<string?, string?>? idOf = null)
+    public IReadOnlyList<ExtractLiteral>? Kept(Func<QualifiedName?, QualifiedName?>? idOf = null)
         => _kept.Count == 0 ? null
             : [.. _kept.Select(kept => new ExtractLiteral(kept.Value, idOf is null ? [.. kept.Places] : [.. kept.Places.Select(place => place with { Node = idOf(place.Node) })]))];
 }

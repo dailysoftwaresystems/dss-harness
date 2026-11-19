@@ -155,7 +155,7 @@ internal sealed class CFamilyReading
     private readonly Dictionary<(ScannedText Scan, int At), int> _members = [];
 
     /// <summary>The file's closed scope: what its names with internal linkage are put in, named by the file's own id.</summary>
-    private readonly string _closed;
+    private readonly QualifiedName _closed;
 
     /// <summary>The index of the file's include guard's conditional; -1 where it has none.</summary>
     private readonly int _guard;
@@ -203,7 +203,7 @@ internal sealed class CFamilyReading
         _keywords = cpp ? CppKeywords : CKeywords;
         _calls = cpp ? CppCalls : CCalls;
         _types = cpp ? CppTypes : null;
-        _closed = CodeGraphIds.FileId(path);
+        _closed = QualifiedName.Of(CodeGraphIds.FileId(path));
         _guard = Guard();
         _conditional = Conditional();
     }
@@ -407,7 +407,7 @@ internal sealed class CFamilyReading
             MaxArity = most,
         });
 
-        Calls(body, past, body.Count, key, new Dictionary<string, string?>(StringComparer.Ordinal), [], owner: null, taken);
+        Calls(body, past, body.Count, key, new Dictionary<string, QualifiedName?>(), [], owner: null, taken);
     }
 
     /// <summary>For each token, whether it lies under a conditional: under any but the file's include guard (<see cref="Guard"/>).</summary>
@@ -696,7 +696,7 @@ internal sealed class CFamilyReading
         {
             var qualified = ExtractText.Qualify(scope, part);
             _extract.Scope(qualified, open: true, scope);
-            parent = _extract.Part(new ExtractNode(_prefix + qualified, CodeNodeKinds.Namespace, part, qualified, _scan[start].Line, LastLine(close), _scan.Signature(start, name))
+            parent = _extract.Part(new ExtractNode(Id(qualified, local: false), CodeNodeKinds.Namespace, part, qualified, _scan[start].Line, LastLine(close), _scan.Signature(start, name))
             {
                 Scope = scope,
                 Parent = parent,
@@ -1043,7 +1043,7 @@ internal sealed class CFamilyReading
     /// The members of the body <paramref name="head"/> opens, read in <paramref name="frame"/> - the type's own where it is
     /// named, its holder's where it is not: an enumeration's enumerators, or a class's, a struct's or a union's declarations.
     /// </summary>
-    private void Members(Head head, int inner, ScanFrame frame, bool local, string? typeKey, ScanFrame outer)
+    private void Members(Head head, int inner, ScanFrame frame, bool local, QualifiedName? typeKey, ScanFrame outer)
     {
         if (head.IsEnum)
         {
@@ -1064,7 +1064,7 @@ internal sealed class CFamilyReading
     /// held by the node of <paramref name="parent"/>, and its value - to the comma at its top, a type's arguments' commas
     /// among what it passes - code of the enumerator's, what it reads and holds read from there: <c>All = Read | Write</c>.
     /// </summary>
-    private void Enumerators(int at, int inner, ScanFrame holder, bool local, string? parent)
+    private void Enumerators(int at, int inner, ScanFrame holder, bool local, QualifiedName? parent)
     {
         while (at < inner)
         {
@@ -1078,7 +1078,7 @@ internal sealed class CFamilyReading
                 break;
             }
 
-            string? key = null;
+            QualifiedName? key = null;
 
             if (_scan.IsName(at))
             {
@@ -1109,7 +1109,7 @@ internal sealed class CFamilyReading
 
             if (key is not null && value >= 0)
             {
-                Calls(_scan, value, Math.Min(at, inner), key, new Dictionary<string, string?>(StringComparer.Ordinal), [], holder.Owner);
+                Calls(_scan, value, Math.Min(at, inner), key, new Dictionary<string, QualifiedName?>(), [], holder.Owner);
             }
 
             at = _scan.Next(at);
@@ -1117,7 +1117,7 @@ internal sealed class CFamilyReading
     }
 
     /// <summary>A class's bases, each an <c>inherits</c> reference by its name, the scopes written before it its qualifier.</summary>
-    private void Bases(string key, int at, int open)
+    private void Bases(QualifiedName key, int at, int open)
     {
         while (at < open)
         {
@@ -1130,7 +1130,7 @@ internal sealed class CFamilyReading
 
             if (chain is not null)
             {
-                Mention(key, CodeEdgeKinds.Inherits, chain, _scan[at].Line);
+                Mention(key, CodeEdgeKinds.Inherits, QualifiedName.Of(chain), _scan[at].Line);
             }
 
             at = Math.Max(past, at + 1);
@@ -1773,7 +1773,7 @@ internal sealed class CFamilyReading
         // What its parameters' defaults read and hold.
         foreach (var (defaultStart, defaultEnd) in parameters.Defaults)
         {
-            Calls(_scan, defaultStart, defaultEnd, key, new Dictionary<string, string?>(StringComparer.Ordinal), [], owner);
+            Calls(_scan, defaultStart, defaultEnd, key, new Dictionary<string, QualifiedName?>(), [], owner);
         }
 
         if (body < 0)
@@ -1786,7 +1786,7 @@ internal sealed class CFamilyReading
 
         void Body()
         {
-            var locals = new Dictionary<string, string?>(parameters.Locals, StringComparer.Ordinal);
+            var locals = new Dictionary<string, QualifiedName?>(parameters.Locals);
             var pointers = new HashSet<string>(parameters.Pointers, StringComparer.Ordinal);
             var added = typeParameters.Where(_typeParameters.Add).ToList();
 
@@ -1829,7 +1829,7 @@ internal sealed class CFamilyReading
     }
 
     /// <summary>A function's parameters: their types as its id names them, the spans of those types, its arity, and the names each binds with its type.</summary>
-    private sealed record Parameters(IReadOnlyList<string> Types, IReadOnlyList<(int Start, int End)> TypeSpans, int? Least, int? Most, IReadOnlyDictionary<string, string?> Locals, IReadOnlySet<string> Pointers)
+    private sealed record Parameters(IReadOnlyList<string> Types, IReadOnlyList<(int Start, int End)> TypeSpans, int? Least, int? Most, IReadOnlyDictionary<string, QualifiedName?> Locals, IReadOnlySet<string> Pointers)
     {
         /// <summary>Each parameter's default, from past its <c>=</c> to its end: code of the function's.</summary>
         public IReadOnlyList<(int Start, int End)> Defaults { get; init; } = [];
@@ -1845,7 +1845,7 @@ internal sealed class CFamilyReading
         var (open, close) = (head.Open, head.Close);
         var types = new List<string>();
         var spans = new List<(int, int)>();
-        var locals = new Dictionary<string, string?>(StringComparer.Ordinal);
+        var locals = new Dictionary<string, QualifiedName?>();
         var pointers = new HashSet<string>(StringComparer.Ordinal);
         var defaults = new List<(int Start, int End)>();
         var packs = 0;
@@ -1915,7 +1915,7 @@ internal sealed class CFamilyReading
         var listed = names.ToHashSet(StringComparer.Ordinal);
         var types = new Dictionary<string, string>(StringComparer.Ordinal);
         var spans = new List<(int, int)>();
-        var locals = new Dictionary<string, string?>(StringComparer.Ordinal);
+        var locals = new Dictionary<string, QualifiedName?>();
         var pointers = new HashSet<string>(StringComparer.Ordinal);
 
         foreach (var name in names)
@@ -1971,7 +1971,7 @@ internal sealed class CFamilyReading
     }
 
     /// <summary>A variable or a field, of the type <paramref name="valueType"/> names.</summary>
-    private void Variable(int start, int last, ScanFrame frame, bool local, DeclaratorName declared, string? valueType, bool prototype)
+    private void Variable(int start, int last, ScanFrame frame, bool local, DeclaratorName declared, QualifiedName? valueType, bool prototype)
     {
         var name = declared.Name!;
         var qualified = frame.Qualify(name);
@@ -1985,7 +1985,7 @@ internal sealed class CFamilyReading
             Summary = ScanComments.Summary(_scan, start),
             Modifiers = Marks(start, [.. _scan.Code(start, declared.At).Select(index => _scan.Text(index)).Where(Modifying.Contains).Distinct(StringComparer.Ordinal)]),
             Prototype = prototype,
-            ValueType = valueType,
+            ValueType = valueType?.Whole(),
         });
 
         // A function pointer of a file's or a namespace's scope is called by its name; a field, on its type's value.
@@ -2009,18 +2009,18 @@ internal sealed class CFamilyReading
 
         if (declared.Pointer && declared.Function && _scan.Match(declared.TypeEnd) is var close and >= 0 && close < to)
         {
-            Calls(_scan, from, close, key, new Dictionary<string, string?>(StringComparer.Ordinal), [], frame.Owner);
+            Calls(_scan, from, close, key, new Dictionary<string, QualifiedName?>(), [], frame.Owner);
             from = Math.Min(_scan.Past(_scan.Next(close)), to);
         }
 
-        Calls(_scan, from, to, key, new Dictionary<string, string?>(StringComparer.Ordinal), [], frame.Owner);
+        Calls(_scan, from, to, key, new Dictionary<string, QualifiedName?>(), [], frame.Owner);
     }
 
     /// <summary>
     /// A node over the tokens from <paramref name="start"/> to <paramref name="last"/>, its signature the tokens before
     /// <paramref name="signatureEnd"/>; answers its key.
     /// </summary>
-    private string Declare(int start, int last, ScanFrame frame, bool local, string name, string kind, string subKind, string qualified, int signatureEnd, bool templated)
+    private QualifiedName Declare(int start, int last, ScanFrame frame, bool local, string name, string kind, string subKind, QualifiedName qualified, int signatureEnd, bool templated)
         => _extract.Add(new ExtractNode(Id(qualified, local), kind, name, qualified, _scan[start].Line, _scan[Math.Clamp(last, start, _scan.Count - 1)].EndLine, _scan.Signature(start, signatureEnd))
         {
             SubKind = subKind,
@@ -2043,7 +2043,7 @@ internal sealed class CFamilyReading
     /// what the code nests in what - a placement's arguments in a <c>new</c>, a cast's type, a template's arguments, at any
     /// depth - reaches past no stack.
     /// </summary>
-    private void Calls(ScannedText scan, int from, int to, string key, Dictionary<string, string?> locals, HashSet<string> pointers, string? owner, IReadOnlySet<string>? taken = null)
+    private void Calls(ScannedText scan, int from, int to, QualifiedName key, Dictionary<string, QualifiedName?> locals, HashSet<string> pointers, string? owner, IReadOnlySet<string>? taken = null)
         => Run(new CallsReading(this, scan, from, to, key, locals, pointers, owner, taken));
 
     /// <summary>
@@ -2081,7 +2081,7 @@ internal sealed class CFamilyReading
     }
 
     /// <summary>What a run of a body's tokens calls and uses (<see cref="Calls"/>), read token by token.</summary>
-    private sealed class CallsReading(CFamilyReading reader, ScannedText scan, int from, int to, string key, Dictionary<string, string?> locals, HashSet<string> pointers, string? owner, IReadOnlySet<string>? taken)
+    private sealed class CallsReading(CFamilyReading reader, ScannedText scan, int from, int to, QualifiedName key, Dictionary<string, QualifiedName?> locals, HashSet<string> pointers, string? owner, IReadOnlySet<string>? taken)
         : CodeReading
     {
         /// <summary>The index of the next token read.</summary>
@@ -2202,7 +2202,7 @@ internal sealed class CFamilyReading
     /// a call by its name and arity, qualified by its receiver where the code says, or a use of what it reads; what it
     /// cannot bind marked dynamic.
     /// </summary>
-    private void Call(ScannedText scan, int at, string key, Dictionary<string, string?> locals, HashSet<string> pointers, string? owner, IReadOnlySet<string>? taken)
+    private void Call(ScannedText scan, int at, QualifiedName key, Dictionary<string, QualifiedName?> locals, HashSet<string> pointers, string? owner, IReadOnlySet<string>? taken)
     {
         var word = scan.Text(at);
         Local(scan, at, locals, pointers);
@@ -2226,7 +2226,7 @@ internal sealed class CFamilyReading
 
             var receiver = Receiver(scan, previous, locals);
 
-            if (receiver.Kind == CodeQualifierKinds.This ? IsFieldPointer(owner, word) : receiver is { Kind: CodeQualifierKinds.Type, Name: { } type } && IsFieldPointer(type[(type.LastIndexOf('.') + 1)..], word))
+            if (receiver.Kind == CodeQualifierKinds.This ? IsFieldPointer(owner, word) : receiver is { Kind: CodeQualifierKinds.Type, Name: { } type } && IsFieldPointer(type.PastLastDot(), word))
             {
                 _extract.Dynamic(line, $"a call through the function pointer {word}");
                 return;
@@ -2286,7 +2286,7 @@ internal sealed class CFamilyReading
     /// a brace initializes, <c>Point{1, 2}</c>, is one made, as a <c>new</c>'s is; a name a <c>case</c> or a conditional
     /// writes before its colon is a value the code reads, and is.
     /// </summary>
-    private void Used(ScannedText scan, int at, string key, Dictionary<string, string?> locals, HashSet<string> pointers, IReadOnlySet<string>? taken)
+    private void Used(ScannedText scan, int at, QualifiedName key, Dictionary<string, QualifiedName?> locals, HashSet<string> pointers, IReadOnlySet<string>? taken)
     {
         var word = scan.Text(at);
         var previous = scan.Previous(at);
@@ -2311,7 +2311,7 @@ internal sealed class CFamilyReading
 
             if (scan.Is(listed, "{"))
             {
-                Mention(key, CodeEdgeKinds.Instantiates, scoped && Qualifier(scan, previous) is { } scopes ? $"{scopes}.{word}" : word, line);
+                Mention(key, CodeEdgeKinds.Instantiates, QualifiedName.Of(scoped && Qualifier(scan, previous) is { } scopes ? $"{scopes}.{word}" : word), line);
                 return;
             }
 
@@ -2409,7 +2409,7 @@ internal sealed class CFamilyReading
     /// A <c>new</c>: an <c>instantiates</c> reference to the type it makes, and the closing brackets of an array's bounds
     /// among <paramref name="bounds"/>; answers the index past that type's name, what the bounds hold read on from it.
     /// </summary>
-    private int New(ScannedText scan, int at, string key, HashSet<int> bounds)
+    private int New(ScannedText scan, int at, QualifiedName key, HashSet<int> bounds)
     {
         var next = scan.Next(at);
 
@@ -2423,7 +2423,7 @@ internal sealed class CFamilyReading
 
         if (chain is not null)
         {
-            Mention(key, CodeEdgeKinds.Instantiates, chain, scan[next].Line);
+            Mention(key, CodeEdgeKinds.Instantiates, QualifiedName.Of(chain), scan[next].Line);
         }
         else if (scan.IsName(next))
         {
@@ -2445,7 +2445,7 @@ internal sealed class CFamilyReading
     /// declared with - written before it, or made by <c>new</c> or a type's name after <c>auto</c> - and a function
     /// pointer's name among <paramref name="pointers"/>; and each later declarator of a statement's declaration.
     /// </summary>
-    private void Local(ScannedText scan, int at, Dictionary<string, string?> locals, HashSet<string> pointers)
+    private void Local(ScannedText scan, int at, Dictionary<string, QualifiedName?> locals, HashSet<string> pointers)
     {
         var next = scan.Next(at);
         var previous = scan.Previous(at);
@@ -2469,7 +2469,7 @@ internal sealed class CFamilyReading
             var made = scan.Next(next);
             made = scan.Is(made, "new") ? scan.Next(made) : made;
             var (chain, past) = Chain(scan, made, scan.Count, CppCodeTypes);
-            locals[name] = chain is not null && (scan.Is(past, "(") || scan.Is(past, "{")) ? chain : null;
+            locals[name] = chain is not null && (scan.Is(past, "(") || scan.Is(past, "{")) ? QualifiedName.Of(chain) : null;
         }
         else
         {
@@ -2639,7 +2639,7 @@ internal sealed class CFamilyReading
     /// declared with, or the value itself - a chain of two names or more written as links (<see cref="ExtractQualifier.Link"/>)
     /// to the reference made for its last, which was read before, so each name of a chain however long is read once.
     /// </summary>
-    private ExtractQualifier Receiver(ScannedText scan, int dot, Dictionary<string, string?> locals)
+    private ExtractQualifier Receiver(ScannedText scan, int dot, Dictionary<string, QualifiedName?> locals)
     {
         var last = scan.Previous(dot);
 
@@ -2864,7 +2864,7 @@ internal sealed class CFamilyReading
     /// with its scopes, a smart pointer's the type it holds - a pointer's of a pointer's the innermost, read on in a loop,
     /// so no nesting of them reaches past the reader's stack; <see langword="null"/> where it is one C and C++ build in.
     /// </summary>
-    private string? TypeKey(ScannedText scan, int start, int end, ScanTypeArguments types)
+    private QualifiedName? TypeKey(ScannedText scan, int start, int end, ScanTypeArguments types)
     {
         for (var at = start; at < end && at < scan.Count; at = scan.Next(at))
         {
@@ -2887,7 +2887,7 @@ internal sealed class CFamilyReading
 
             if (!(_cpp && Holders.Contains(chain[(chain.LastIndexOf('.') + 1)..]) && scan.Previous(past) is var held && scan.Is(held, ">") && ScanCalls.TypeArgumentsStart(scan, held, types) is var less and >= 0))
             {
-                return chain;
+                return QualifiedName.Of(chain);
             }
 
             // What the pointer holds is read next, as the type itself.
@@ -2927,11 +2927,11 @@ internal sealed class CFamilyReading
     /// members it sees. Read on the reader's stack of code readings (<see cref="Run"/>), so a type's arguments nested in
     /// one another at any depth reach past no stack.
     /// </summary>
-    private void TypeReferences(ScannedText scan, string key, int start, int end, Dictionary<string, string?>? locals = null, HashSet<string>? pointers = null, string? owner = null, IReadOnlySet<string>? taken = null)
+    private void TypeReferences(ScannedText scan, QualifiedName key, int start, int end, Dictionary<string, QualifiedName?>? locals = null, HashSet<string>? pointers = null, string? owner = null, IReadOnlySet<string>? taken = null)
         => Run(new TypeReferencesReading(this, scan, key, start, end, locals, pointers, owner, taken));
 
     /// <summary>The types a run of tokens names (<see cref="TypeReferences"/>), read name by name, and the arguments of each template among them in turn.</summary>
-    private sealed class TypeReferencesReading(CFamilyReading reader, ScannedText scan, string key, int start, int end, Dictionary<string, string?>? locals, HashSet<string>? pointers, string? owner, IReadOnlySet<string>? taken)
+    private sealed class TypeReferencesReading(CFamilyReading reader, ScannedText scan, QualifiedName key, int start, int end, Dictionary<string, QualifiedName?>? locals, HashSet<string>? pointers, string? owner, IReadOnlySet<string>? taken)
         : CodeReading
     {
         /// <summary>The index of the name read, or of the next token to read.</summary>
@@ -2989,7 +2989,7 @@ internal sealed class CFamilyReading
 
                 if (chain is not null && !chain.StartsWith("std.", StringComparison.Ordinal) && chain != "std")
                 {
-                    reader.Mention(key, CodeEdgeKinds.References, chain, scan[at].Line);
+                    reader.Mention(key, CodeEdgeKinds.References, QualifiedName.Of(chain), scan[at].Line);
                 }
 
                 _less = scan.Next(at);
@@ -3063,7 +3063,7 @@ internal sealed class CFamilyReading
     /// C does not say the kind of is a type's where a type or a value may stand: a value of another file is rarely
     /// measured or cast, a type of another file often.
     /// </summary>
-    private bool IsType(ScannedText scan, int start, int end, bool functions, Dictionary<string, string?> locals, HashSet<string> pointers, IReadOnlySet<string>? taken)
+    private bool IsType(ScannedText scan, int start, int end, bool functions, Dictionary<string, QualifiedName?> locals, HashSet<string> pointers, IReadOnlySet<string>? taken)
         => TypeShapeOf(scan, start, end, functions, out var head) switch
         {
             TypeShape.Certain => true,
@@ -3077,7 +3077,7 @@ internal sealed class CFamilyReading
     /// and an operand after it, a chain of names alone cast only where a name, a literal, a group or a brace follows, as
     /// <c>(a) - b</c> subtracts; -1 where it holds none (<see cref="IsType"/>).
     /// </summary>
-    private int TypeInParentheses(ScannedText scan, int open, Dictionary<string, string?> locals, HashSet<string> pointers, IReadOnlySet<string>? taken)
+    private int TypeInParentheses(ScannedText scan, int open, Dictionary<string, QualifiedName?> locals, HashSet<string> pointers, IReadOnlySet<string>? taken)
     {
         if (scan.Match(open) is not (var close and > 0) || !IsType(scan, open + 1, close, functions: false, locals, pointers, taken))
         {
@@ -3114,7 +3114,7 @@ internal sealed class CFamilyReading
     /// <c>&amp;Listener::receive</c> - a value, what it reads and calls read as code from the node of <paramref name="key"/>;
     /// each argument a reading of its own, read in turn on the reader's stack of them (<see cref="Run"/>).
     /// </summary>
-    private sealed class TemplateArgumentsReading(CFamilyReading reader, ScannedText scan, int less, int past, string key, Dictionary<string, string?> locals, HashSet<string> pointers, string? owner, IReadOnlySet<string>? taken)
+    private sealed class TemplateArgumentsReading(CFamilyReading reader, ScannedText scan, int less, int past, QualifiedName key, Dictionary<string, QualifiedName?> locals, HashSet<string> pointers, string? owner, IReadOnlySet<string>? taken)
         : CodeReading
     {
         /// <summary>The arguments, split once the list is first read.</summary>
@@ -3141,11 +3141,8 @@ internal sealed class CFamilyReading
     }
 
     /// <summary>A reference of <paramref name="kind"/> to the type <paramref name="chain"/> names: its last name, the scopes before it its qualifier.</summary>
-    private void Mention(string key, string kind, string chain, int line)
-    {
-        var dot = chain.LastIndexOf('.');
-        _extract.Reference(key, kind, chain[(dot + 1)..], line, qualifier: dot > 0 ? new ExtractQualifier(CodeQualifierKinds.Type, chain[..dot]) : null);
-    }
+    private void Mention(QualifiedName key, string kind, QualifiedName chain, int line)
+        => _extract.Reference(key, kind, chain.PastLastDot(), line, qualifier: chain.BeforeLastDot() is { } before ? new ExtractQualifier(CodeQualifierKinds.Type, before) : null);
 
     /// <summary>The run of names joined by <c>::</c> at <paramref name="at"/>, a template's arguments passed over, joined by dots, and the index past it; no run where no name is there.</summary>
     private (string? Chain, int Past) Chain(ScannedText scan, int at, int end, ScanTypeArguments types)
@@ -3206,11 +3203,11 @@ internal sealed class CFamilyReading
         return at;
     }
 
-    /// <summary>The id of a declaration named <paramref name="name"/>: its language's prefix and its name - its file's path before it, where it is its file's alone.</summary>
-    private string Id(string name, bool local) => local ? $"{_prefix}{_path}:{name}" : _prefix + name;
+    /// <summary>The id of a declaration named <paramref name="name"/>: its language's prefix before its name - its file's path before it, where it is its file's alone.</summary>
+    private QualifiedName Id(QualifiedName name, bool local) => local ? QualifiedName.Of($"{_prefix}{_path}:{name.Whole()}") : name.Prepend(_prefix);
 
     /// <summary>The scope a declaration is put in: the file's closed scope where it is its file's alone - declared at the first such - else <paramref name="scope"/>.</summary>
-    private string? Placed(string? scope, bool local)
+    private QualifiedName? Placed(QualifiedName? scope, bool local)
     {
         if (!local)
         {

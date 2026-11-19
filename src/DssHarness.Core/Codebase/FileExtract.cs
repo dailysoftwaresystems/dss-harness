@@ -82,7 +82,7 @@ public sealed record FileExtract(IReadOnlyList<ExtractNode> Nodes)
     /// <param name="lineCount">How many lines the file has (<see cref="CodeFileText.Lines"/>).</param>
     public string? Problem(string language, int lineCount)
     {
-        var ids = new Dictionary<string, ExtractNode>(StringComparer.Ordinal);
+        var ids = new Dictionary<QualifiedName, ExtractNode>();
 
         foreach (var node in Nodes ?? [])
         {
@@ -121,12 +121,12 @@ public sealed record FileExtract(IReadOnlyList<ExtractNode> Nodes)
         // Two nodes of one span may each say the other holds it, and one may name itself: what holds what is a tree, which
         // whatever walks it up - the type a reference is made in - ends at its root. A node found to end there is never
         // walked up again, so the whole tree is walked once, however deep it nests.
-        var rooted = new HashSet<string>(StringComparer.Ordinal);
+        var rooted = new HashSet<QualifiedName>();
 
         foreach (var node in Nodes ?? [])
         {
-            var seen = new List<string> { node.Id };
-            var walked = new HashSet<string>(StringComparer.Ordinal) { node.Id };
+            var seen = new List<QualifiedName> { node.Id };
+            var walked = new HashSet<QualifiedName> { node.Id };
 
             for (var parent = node.Parent; parent is not null && !rooted.Contains(parent); parent = ids[parent].Parent)
             {
@@ -146,11 +146,11 @@ public sealed record FileExtract(IReadOnlyList<ExtractNode> Nodes)
             return suffixed;
         }
 
-        var scopes = new HashSet<string>(StringComparer.Ordinal);
+        var scopes = new HashSet<QualifiedName>();
 
         foreach (var scope in Scopes ?? [])
         {
-            if (scope is null || string.IsNullOrWhiteSpace(scope.Name))
+            if (scope is null || scope.Name.WhitespaceOnly())
             {
                 return "it holds a scope with no name";
             }
@@ -191,7 +191,7 @@ public sealed record FileExtract(IReadOnlyList<ExtractNode> Nodes)
     {
         if (qualifier?.Link is not { } link)
         {
-            return qualifier?.Name;
+            return qualifier?.Name?.ToString();
         }
 
         var names = new List<string>();
@@ -211,7 +211,7 @@ public sealed record FileExtract(IReadOnlyList<ExtractNode> Nodes)
 
             if (references[at].Qualifier is { Link: null, Name: { } first })
             {
-                names.Add(first);
+                names.Add(first.ToString());
             }
 
             break;
@@ -265,7 +265,7 @@ public sealed record FileExtract(IReadOnlyList<ExtractNode> Nodes)
     }
 
     /// <summary>What is wrong with the literals it holds: each value once, holding a character, each place on one of its lines and in one of its nodes.</summary>
-    private string? LiteralProblem(Dictionary<string, ExtractNode> ids, int lineCount)
+    private string? LiteralProblem(Dictionary<QualifiedName, ExtractNode> ids, int lineCount)
     {
         var values = new HashSet<string>(StringComparer.Ordinal);
 
@@ -366,7 +366,7 @@ public sealed record FileExtract(IReadOnlyList<ExtractNode> Nodes)
     /// tells apart the ids of the code it embeds, and where one node is folded into another.
     /// </summary>
     /// <param name="renamed">The id each id is given: itself, where it is kept.</param>
-    internal FileExtract Renamed(Func<string, string> renamed)
+    internal FileExtract Renamed(Func<QualifiedName, QualifiedName> renamed)
     {
         ArgumentNullException.ThrowIfNull(renamed);
 
@@ -427,10 +427,10 @@ public sealed record FileExtract(IReadOnlyList<ExtractNode> Nodes)
     /// name nodes of <paramref name="ids"/>, and none its own names in turn - what they stand for is read back to names of
     /// their own, which a node written onto itself never reaches. Each node is walked once, from the first that names it.
     /// </summary>
-    private static string? SuffixProblem(Dictionary<string, ExtractNode> ids)
+    private static string? SuffixProblem(Dictionary<QualifiedName, ExtractNode> ids)
     {
         // 1 while a node's own are being walked, 2 once they are done.
-        var walked = new Dictionary<string, int>(StringComparer.Ordinal);
+        var walked = new Dictionary<QualifiedName, int>();
 
         foreach (var start in ids.Values.Where(node => node.SuffixOf is not null))
         {
@@ -479,13 +479,13 @@ public sealed record FileExtract(IReadOnlyList<ExtractNode> Nodes)
 
     /// <summary>Every text the extract holds, each of which a store writes.</summary>
     private IEnumerable<string> Texts()
-        => (Nodes ?? []).SelectMany(node => (string?[])[node.Id, node.Kind, node.Name, node.Qualified, node.Signature, node.SubKind, node.Scope, node.Parent, node.Summary, node.ValueType, node.Extends, node.SeenIn, .. node.Modifiers ?? [], .. node.Exports ?? [], .. node.SuffixOf ?? []])
-            .Concat((Scopes ?? []).SelectMany(scope => (string?[])[scope.Name, scope.Parent]))
+        => (Nodes ?? []).SelectMany(node => (string?[])[node.Id.ToString(), node.Kind, node.Name, node.Qualified.ToString(), node.Signature, node.SubKind, node.Scope?.ToString(), node.Parent?.ToString(), node.Summary, node.ValueType, node.Extends, node.SeenIn?.ToString(), .. node.Modifiers ?? [], .. node.Exports ?? [], .. (node.SuffixOf ?? []).Select(id => id.ToString())])
+            .Concat((Scopes ?? []).SelectMany(scope => (string?[])[scope.Name.ToString(), scope.Parent?.ToString()]))
             .Concat((Imports ?? []).SelectMany(import => (string?[])[import.Form, import.Target, import.Prefix, .. import.Show ?? [], .. import.Hide ?? []]))
             .Concat((AddressRoots ?? []).SelectMany(root => (string?[])[root.Prefix, root.Directory]))
-            .Concat((References ?? []).SelectMany(reference => (string?[])[reference.From, reference.Kind, reference.Name, reference.Qualifier?.Kind, reference.Qualifier?.Name]))
+            .Concat((References ?? []).SelectMany(reference => (string?[])[reference.From.ToString(), reference.Kind, reference.Name, reference.Qualifier?.Kind, reference.Qualifier?.Name?.ToString()]))
             .Concat((Dynamic ?? []).Select(dynamic => dynamic.Why))
-            .Concat((Literals ?? []).SelectMany(literal => (string?[])[literal.Value, .. (literal.Places ?? []).Select(place => place?.Node)]))
+            .Concat((Literals ?? []).SelectMany(literal => (string?[])[literal.Value, .. (literal.Places ?? []).Select(place => place?.Node?.ToString())]))
             .Append(FolderScope)
             .Append(Generated)
             .OfType<string>();
@@ -497,15 +497,20 @@ public sealed record FileExtract(IReadOnlyList<ExtractNode> Nodes)
 /// <summary>One declaration of a file's extract.</summary>
 /// <param name="Id">
 /// Its id: the implementation's <see cref="ICodeGraphExtractor.Language"/>, a colon and its qualified name, with its
-/// parameters' types where it takes some - stable across syncs while the declaration keeps its name and parameters.
+/// parameters' types where it takes some - stable across syncs while the declaration keeps its name and parameters. A
+/// name (<see cref="QualifiedName"/>) held as the one before it and its own part, so a declaration nested any depth
+/// holds an id that grows with its own part and not with the square of its depth.
 /// </param>
 /// <param name="Kind">One of <see cref="CodeNodeKinds.Extracted"/>.</param>
 /// <param name="Name">Its simple name, as a reference names it.</param>
-/// <param name="Qualified">Its name with every scope it is declared in, as a qualified reference names it.</param>
+/// <param name="Qualified">
+/// Its name with every scope it is declared in, as a qualified reference names it - held, too, as the name before its
+/// own part, the whole name made again where a text is asked for (<see cref="QualifiedName.Whole"/>).
+/// </param>
 /// <param name="Start">Its first line, from 1.</param>
 /// <param name="End">Its last line.</param>
 /// <param name="Signature">Its header on one line, whole however long it is: what serves it gives a wide one in pieces.</param>
-public sealed record ExtractNode(string Id, string Kind, string Name, string Qualified, int Start, int End, string Signature)
+public sealed record ExtractNode(QualifiedName Id, string Kind, string Name, QualifiedName Qualified, int Start, int End, string Signature)
 {
     /// <summary>
     /// The kind within its kind, which the implementation names freely - a <c>class</c>, a <c>method</c> - but for the
@@ -513,11 +518,14 @@ public sealed record ExtractNode(string Id, string Kind, string Name, string Qua
     /// </summary>
     public string? SubKind { get; init; }
 
-    /// <summary>The scope it is declared in, by its qualified name; <see langword="null"/> where it is the repository's own.</summary>
-    public string? Scope { get; init; }
+    /// <summary>
+    /// The scope it is declared in, by its qualified name; <see langword="null"/> where it is the repository's own. A
+    /// name held as the one before its own part, so a scope nested any depth is held once by each of its names.
+    /// </summary>
+    public QualifiedName? Scope { get; init; }
 
     /// <summary>The id of the node of this extract it is declared inside; <see langword="null"/> where it is the file's.</summary>
-    public string? Parent { get; init; }
+    public QualifiedName? Parent { get; init; }
 
     /// <summary>The line its body begins on, after its signature, where it has one.</summary>
     public int? BodyStart { get; init; }
@@ -569,7 +577,7 @@ public sealed record ExtractNode(string Id, string Kind, string Name, string Qua
     /// the library's file and its parts see and no importer does. <see langword="null"/> where every declaration that
     /// reaches it sees it.
     /// </summary>
-    public string? SeenIn { get; init; }
+    public QualifiedName? SeenIn { get; init; }
 
     /// <summary>
     /// The names another file imports it by besides its own, where it is exported so - a JavaScript module's
@@ -590,7 +598,7 @@ public sealed record ExtractNode(string Id, string Kind, string Name, string Qua
     /// each of those nodes is exported by, the second to the second, and the last of either standing for those past it.
     /// <see langword="null"/> where it is a name of its own.
     /// </summary>
-    public IReadOnlyList<string>? SuffixOf { get; init; }
+    public IReadOnlyList<QualifiedName>? SuffixOf { get; init; }
 
     /// <summary>
     /// The SHA-256 of its lines (<see cref="CodeGraphIds.Digest(CodeText, int, int)"/>): set by the core once the implementation has answered,
@@ -605,11 +613,11 @@ public sealed record ExtractNode(string Id, string Kind, string Name, string Qua
 
     /// <summary>What is wrong with this node of an extract of <paramref name="lineCount"/> lines; <see langword="null"/> where nothing is.</summary>
     internal string? Problem(string language, int lineCount)
-        => string.IsNullOrWhiteSpace(Id) ? "it has no id"
-            : !Id.StartsWith(language + ":", StringComparison.Ordinal) ? $"its id does not begin '{language}:', its implementation's name"
+        => Id.WhitespaceOnly() ? "it has no id"
+            : !Id.StartsWith(language + ":") ? $"its id does not begin '{language}:', its implementation's name"
             : !CodeNodeKinds.Extracted.Contains(Kind, StringComparer.Ordinal) ? $"its kind is '{Kind}', which is none of {string.Join(", ", CodeNodeKinds.Extracted)}"
-            : string.IsNullOrWhiteSpace(Name) || string.IsNullOrWhiteSpace(Qualified) ? "it has no name"
-            : Name.AsSpan().IndexOfAny('\r', '\n') >= 0 || Qualified.AsSpan().IndexOfAny('\r', '\n') >= 0 ? "its name is not one line"
+            : string.IsNullOrWhiteSpace(Name) || Qualified.WhitespaceOnly() ? "it has no name"
+            : Name.AsSpan().IndexOfAny('\r', '\n') >= 0 || Qualified.Whole().AsSpan().IndexOfAny('\r', '\n') >= 0 ? "its name is not one line"
             : !FileExtract.Within(Start, lineCount) || End < Start || End > lineCount ? string.Create(CultureInfo.InvariantCulture, $"its lines {Start}-{End} are not lines of the file's {lineCount}")
             : BodyStart is { } body && (body < Start || body > End) ? string.Create(CultureInfo.InvariantCulture, $"its body begins on line {body}, outside its lines {Start}-{End}")
             : Signature is null || Signature.AsSpan().IndexOfAny('\r', '\n') >= 0 ? "its signature is not one line"
@@ -617,9 +625,9 @@ public sealed record ExtractNode(string Id, string Kind, string Name, string Qua
             : MinArity is < 0 || (MaxArity is { } most && (MinArity is not { } least || most < least)) ? "its arity is no range of argument counts"
             : ValueType is { } valueType && string.IsNullOrWhiteSpace(valueType) ? "its value's type is empty"
             : Extends is { } extends && string.IsNullOrWhiteSpace(extends) ? "the type it extends is empty"
-            : SeenIn is { } seenIn && string.IsNullOrWhiteSpace(seenIn) ? "the scope it is seen in is empty"
+            : SeenIn is { } seenIn && seenIn.WhitespaceOnly() ? "the scope it is seen in is empty"
             : Exports is { } exports && (exports.Count == 0 || exports.Any(string.IsNullOrWhiteSpace)) ? "a name it is exported by is empty, or it lists none"
-            : SuffixOf is { } suffixOf && (suffixOf.Count == 0 || suffixOf.Any(string.IsNullOrWhiteSpace)) ? "a node its names are written onto is empty, or it names none"
+            : SuffixOf is { } suffixOf && (suffixOf.Count == 0 || suffixOf.Any(id => string.IsNullOrWhiteSpace(id.Whole()))) ? "a node its names are written onto is empty, or it names none"
             : SuffixOf is not null && Name is not ['&', _, ..] ? "it stands for names written onto others', and its name is no & and the suffix it writes"
             : SuffixOf is not null && Exports is { } suffixes && suffixes.Any(exported => exported is not ['&', ..]) ? "it stands for names written onto others', and a name it is exported by is no & and a suffix"
             : Digest is { } digest && !OrchestrationRules.IsDigest(digest) ? "its digest is no SHA-256"
@@ -627,16 +635,19 @@ public sealed record ExtractNode(string Id, string Kind, string Name, string Qua
 }
 
 /// <summary>One named container a file's declarations are put in.</summary>
-/// <param name="Name">Its qualified name.</param>
+/// <param name="Name">
+/// Its qualified name, held as the name before its own part (<see cref="QualifiedName"/>), so a scope nested any depth
+/// is held once by each of its names and never whole by each.
+/// </param>
 /// <param name="Open">
 /// Whether other files contribute to it - a namespace, a library and its parts - so that its name is one scope for every
 /// file that declares it; a closed scope is its file's alone, and what is declared in it - and the type or scope it is
 /// the scope of - is seen from no other file.
 /// </param>
-public sealed record ExtractScope(string Name, bool Open)
+public sealed record ExtractScope(QualifiedName Name, bool Open)
 {
     /// <summary>The scope it is declared in, by its qualified name, which the linker looks in next; <see langword="null"/> where none is.</summary>
-    public string? Parent { get; init; }
+    public QualifiedName? Parent { get; init; }
 }
 
 /// <summary>What a file imports: how the linker finds what it makes visible.</summary>
@@ -769,7 +780,7 @@ public sealed record ExtractAddressRoot(string Prefix, string Directory)
 /// <param name="Kind">The edge it becomes: one of <see cref="CodeEdgeKinds.Referenced"/>.</param>
 /// <param name="Name">The simple name it names.</param>
 /// <param name="Line">The line it is written on.</param>
-public sealed record ExtractReference(string From, string Kind, string Name, int Line)
+public sealed record ExtractReference(QualifiedName From, string Kind, string Name, int Line)
 {
     /// <summary>How many arguments a call gives; <see langword="null"/> where it is no call, or that is not known.</summary>
     public int? Arity { get; init; }
@@ -784,19 +795,20 @@ public sealed record ExtractReference(string From, string Kind, string Name, int
             : !FileExtract.Within(Line, lineCount) ? string.Create(CultureInfo.InvariantCulture, $"it is on line {Line}, outside the file's {lineCount}")
             : Arity is < 0 ? "its arity is below zero"
             : Qualifier is { } qualifier && !CodeQualifierKinds.All.Contains(qualifier.Kind, StringComparer.Ordinal) ? $"its qualifier's kind is '{qualifier.Kind}', which is none of {string.Join(", ", CodeQualifierKinds.All)}"
-            : Qualifier is { Kind: CodeQualifierKinds.Named or CodeQualifierKinds.Type or CodeQualifierKinds.Prefix or CodeQualifierKinds.Own or CodeQualifierKinds.Module } named && string.IsNullOrWhiteSpace(named.Name)
+            : Qualifier is { Kind: CodeQualifierKinds.Named or CodeQualifierKinds.Type or CodeQualifierKinds.Prefix or CodeQualifierKinds.Own or CodeQualifierKinds.Module } named && (named.Name is not { } namedName || namedName.WhitespaceOnly())
                 && named is not { Kind: CodeQualifierKinds.Named, Name: null, Link: not null } ? "its qualifier names nothing"
-            : Qualifier is { Kind: CodeQualifierKinds.Value or CodeQualifierKinds.Scope or CodeQualifierKinds.Key, Name: { } value } && string.IsNullOrWhiteSpace(value) ? "its qualifier's name is empty"
+            : Qualifier is { Kind: CodeQualifierKinds.Value or CodeQualifierKinds.Scope or CodeQualifierKinds.Key, Name: { } value } && value.WhitespaceOnly() ? "its qualifier's name is empty"
             : null;
 }
 
 /// <summary>Where a reference's name is looked for first.</summary>
 /// <param name="Kind">One of <see cref="CodeQualifierKinds"/>.</param>
 /// <param name="Name">
-/// The type, scope, prefix, value or chain of names it names, where its kind names one and it writes them itself; none
-/// where it is a chain written as links (<see cref="Link"/>).
+/// The type, scope, prefix, value or chain of names it names, where its kind names one and it writes them itself - a
+/// name as a whole, or a node of its own file named by its id - none where it is a chain written as links
+/// (<see cref="Link"/>).
 /// </param>
-public sealed record ExtractQualifier(string Kind, string? Name = null)
+public sealed record ExtractQualifier(string Kind, QualifiedName? Name = null)
 {
     /// <summary>
     /// Where the qualifier is a chain of two names or more - a receiver's <c>a.b.c</c> - of a value or of a name
@@ -948,5 +960,5 @@ public sealed record ExtractLiteralPlace(int Line)
     /// The id of the node of the extract whose code holds it - the innermost declaration it is written in, or the node of
     /// what a file's top does outside its declarations; <see langword="null"/> where none does, and the file's own holds it.
     /// </summary>
-    public string? Node { get; init; }
+    public QualifiedName? Node { get; init; }
 }

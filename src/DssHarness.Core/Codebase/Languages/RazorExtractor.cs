@@ -91,14 +91,15 @@ public sealed class RazorExtractor : ICodeGraphExtractor
         var razor = Syntax.Of(text);
         var ownNamespace = razor.Directives.FirstOrDefault(directive => directive.Name == "namespace" && directive.Rest.Length > 0)?.Rest;
         var scope = ownNamespace ?? FolderNamespace(input.Path);
+        var scopeName = scope is null ? null : QualifiedName.Of(scope);
 
         // A generic component's class is named as the C# reader names a generic one: by its count of type parameters.
         var typeParameters = razor.Directives.Where(directive => directive.Name == "typeparam").Select(directive => TypeParameter.Match(directive.Rest)).Where(match => match.Success).ToList();
-        var qualified = ExtractText.Qualify(scope, typeParameters.Count > 0 ? $"{className}`{typeParameters.Count}" : className);
+        var qualified = ExtractText.Qualify(scopeName, typeParameters.Count > 0 ? $"{className}`{typeParameters.Count}" : className);
 
         // The head of the extract, which the markup's references and its code's are made from: a component's type, a view's section.
         ExtractNode? head = component
-            ? new ExtractNode($"{Language}:{qualified}", CodeNodeKinds.Type, className, qualified, 1, Math.Max(lineCount, 1), ExtractText.Signature(qualified)) { SubKind = "component", Part = true }
+            ? new ExtractNode(qualified.Prepend($"{Language}:"), CodeNodeKinds.Type, className, qualified, 1, Math.Max(lineCount, 1), ExtractText.Signature(qualified.Whole())) { SubKind = "component", Part = true }
             : new ExtractNode($"{Language}:{input.Path}#view", CodeNodeKinds.Section, className, $"{input.Path}#view", 1, Math.Max(lineCount, 1), ExtractText.Signature(className)) { SubKind = "view" };
         var from = head.Id;
 

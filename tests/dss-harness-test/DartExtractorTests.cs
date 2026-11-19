@@ -377,9 +377,9 @@ public sealed class DartExtractorTests : CodeGraphExtractorContractTests<DartExt
             ],
             extract.Nodes.Select(node => (node.Name, node.SubKind!, string.Join(' ', node.Modifiers))));
         Assert.Equal("dart:lib/k.dart.Box.operator[]=", Assert.Single(extract.Nodes, node => node.Name == "operator[]=").Id);
-        Assert.Equal("lib/k.dart", Assert.Single(extract.Nodes, node => node.Name == "extension").SeenIn);
+        Assert.Equal("lib/k.dart", Assert.Single(extract.Nodes, node => node.Name == "extension").SeenIn?.Whole());
         Assert.Equal("String", Assert.Single(extract.Nodes, node => node.Name == "twice").Extends);
-        Assert.Equal("lib/k.dart", Assert.Single(extract.Nodes, node => node.Name == "twice").SeenIn);
+        Assert.Equal("lib/k.dart", Assert.Single(extract.Nodes, node => node.Name == "twice").SeenIn?.Whole());
         Assert.Equal(["A"], extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Inherits).Select(reference => reference.Name));
         Assert.True(Assert.Single(extract.Nodes, node => node.Name == "native").Prototype);
     }
@@ -548,8 +548,8 @@ public sealed class DartExtractorTests : CodeGraphExtractorContractTests<DartExt
         var byName = Read("lib/c_part.dart", "part of shapes.c;\nvoid shown() {}\n");
         var library = Read("lib/c.dart", "library shapes.c;\npart 'c_part.dart';\nvoid go() {}\n");
 
-        Assert.Equal(["dart:lib/a.dart._hidden", "dart:lib/a.dart.shown"], byUri.Nodes.Select(node => node.Id));
-        Assert.Equal(["lib/a.dart", null], byUri.Nodes.Select(node => node.SeenIn));
+        Assert.Equal(["dart:lib/a.dart._hidden", "dart:lib/a.dart.shown"], byUri.Nodes.Select(node => node.Id.Whole()));
+        Assert.Equal(["lib/a.dart", null], byUri.Nodes.Select(node => node.SeenIn?.Whole()));
         Assert.Equal(new ExtractImport(CodeImportForms.Relative, "../a.dart", 1) { Shares = true }, Assert.Single(byUri.Imports));
         Assert.Equal("dart:packages/shapes/lib/src/b.dart.shown", Assert.Single(byPackage.Nodes).Id);
         Assert.Equal(CodeImportForms.Address, Assert.Single(byPackage.Imports).Form);
@@ -791,7 +791,7 @@ public sealed class DartExtractorTests : CodeGraphExtractorContractTests<DartExt
         var extract = Read("lib/b.dart", string.Concat(Enumerable.Repeat("class A { ", Deep)) + "void go() { work(); } " + new string('}', Deep) + "\nvoid after() {}\n");
         var go = Assert.Single(extract.Nodes, node => node.Name == "go").Id;
 
-        return string.Create(CultureInfo.InvariantCulture, $"{extract.Nodes.Count(node => node.Name == "A")} {string.Join(',', Calls(extract, go))} {extract.Dynamic.Count} {extract.Nodes.Any(node => node.Id == "dart:lib/b.dart.after")}");
+        return string.Create(CultureInfo.InvariantCulture, $"{extract.Nodes.Count(node => node.Name == "A")} {string.Join(',', Calls(extract, go.Whole()))} {extract.Dynamic.Count} {extract.Nodes.Any(node => node.Id == "dart:lib/b.dart.after")}");
     });
 
     /// <summary>
@@ -835,7 +835,7 @@ public sealed class DartExtractorTests : CodeGraphExtractorContractTests<DartExt
         var test = Assert.Single(extract.Nodes, node => node.SubKind == "test");
         var held = groups.Skip(1).Select((group, at) => group.Parent == groups[at].Id).All(holds => holds) && test.Parent == groups[^1].Id;
 
-        return string.Create(CultureInfo.InvariantCulture, $"{groups.Count} {held} {string.Join(',', Calls(extract, test.Id))} {extract.Dynamic.Count}");
+        return string.Create(CultureInfo.InvariantCulture, $"{groups.Count} {held} {string.Join(',', Calls(extract, test.Id.Whole()))} {extract.Dynamic.Count}");
     });
 
     /// <summary>
@@ -873,7 +873,7 @@ public sealed class DartExtractorTests : CodeGraphExtractorContractTests<DartExt
         Assert.Equal(["render"], Calls(extract, "dart:lib/t.dart.Theme2.show"));
         Assert.Equal(
             [("Theme2", null, null), ("on", "type", "Theme2"), ("when", "type", "AsyncValue"), ("new", "named", "Theme2")],
-            extract.References.Where(reference => reference is { From: "dart:lib/t.dart.Theme2.go", Kind: CodeEdgeKinds.Calls }).Select(reference => (reference.Name, reference.Qualifier?.Kind, extract.Written(reference.Qualifier))));
+            extract.References.Where(reference => reference is { Kind: CodeEdgeKinds.Calls } && reference.From.Is("dart:lib/t.dart.Theme2.go")).Select(reference => (reference.Name, reference.Qualifier?.Kind, extract.Written(reference.Qualifier))));
         Assert.DoesNotContain(extract.References, reference => reference.Name == "hidden");
     }
 
@@ -906,8 +906,8 @@ public sealed class DartExtractorTests : CodeGraphExtractorContractTests<DartExt
 
         Assert.Equal(
             [("add", 2), ("fromJson", 1), ("add", 2), ("add", 2), ("add", 2), ("add", 2), ("add", 2), ("add", 2)],
-            extract.References.Where(reference => reference is { From: "dart:lib/a.dart.main", Kind: CodeEdgeKinds.Calls }).Select(reference => (reference.Name, reference.Arity ?? -1)));
-        Assert.Equal([2, 2], extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Calls && reference.From.StartsWith("dart:lib/a.dart.Size.", StringComparison.Ordinal)).Select(reference => reference.Arity ?? -1));
+            extract.References.Where(reference => reference is { Kind: CodeEdgeKinds.Calls } && reference.From.Is("dart:lib/a.dart.main")).Select(reference => (reference.Name, reference.Arity ?? -1)));
+        Assert.Equal([2, 2], extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Calls && reference.From.Whole().StartsWith("dart:lib/a.dart.Size.", StringComparison.Ordinal)).Select(reference => reference.Arity ?? -1));
         Assert.Equal(7, Link(("lib/a.dart", text)).Edges.Count(edge => edge is { From: "dart:lib/a.dart.main", To: "dart:lib/a.dart.add", Kind: CodeEdgeKinds.Calls }));
     }
 
@@ -1054,7 +1054,7 @@ public sealed class DartExtractorTests : CodeGraphExtractorContractTests<DartExt
                 (Show, "prefix", 13, ""), (Show, "id", 13, ""), (Show, "kRed", 14, ""), (Show, "kBlue", 15, ""), (Show, "width", 16, ""), (Show, "darkColor", 16, ""), (Show, "config", 17, ""),
                 (Show, "verbose", 17, "value config"), (Show, "darkColor", 20, ""), (Show, "lightColor", 20, ""),
             ],
-            extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Uses).Select(reference => (reference.From, reference.Name, reference.Line, $"{reference.Qualifier?.Kind} {extract.Written(reference.Qualifier)}".Trim())));
+            extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Uses).Select(reference => (reference.From.Whole(), reference.Name, reference.Line, $"{reference.Qualifier?.Kind} {extract.Written(reference.Qualifier)}".Trim())));
     }
 
     /// <summary>

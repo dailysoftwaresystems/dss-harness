@@ -173,11 +173,16 @@ public sealed class XmlExtractor : ICodeGraphExtractor
         var element = reader.LocalName;
         var holder = parent?.Nearest;
 
+        // The path of the element, each element's name from the root parted by a slash: carried down, so an element
+        // named by its path holds the path of what holds it and its own part (<see cref="QualifiedName"/>), never the
+        // whole path written out again.
+        var path = parent?.Path.Under(element, "/") ?? QualifiedName.Of(element);
+
         // The root's x:Class makes the root a part of the C# type it names; every other root - one whose x:Class names no
         // type, ending in a dot among them - is a section.
         var xClass = parent is null && kind == "xaml" && Attribute(reader, "x:Class") is { } named && !named.EndsWith('.') ? named : null;
         var view = parent is null ? null : parent.View;
-        string? node;
+        QualifiedName? node;
 
         if (xClass is not null)
         {
@@ -206,7 +211,7 @@ public sealed class XmlExtractor : ICodeGraphExtractor
         {
             // The build makes each element a view names a field of the view's type, of the element's type: its code-behind
             // reaches it by the field's name, as it reaches any member of its own.
-            node = nodes.Node(new ExtractNode($"{Language}:{type.Class}.{field}", CodeNodeKinds.Member, field, $"{type.Class}.{field}", line, line, $"{element} {field}")
+            node = nodes.Node(new ExtractNode(QualifiedName.Of($"{Language}:{type.Class}.{field}"), CodeNodeKinds.Member, field, $"{type.Class}.{field}", line, line, $"{element} {field}")
             {
                 SubKind = "field",
                 Scope = type.Class,
@@ -216,7 +221,7 @@ public sealed class XmlExtractor : ICodeGraphExtractor
         }
         else if ((Attribute(reader, Named) ?? Attribute(reader, "x:Name")) is { } id)
         {
-            node = nodes.Element(id, $"{PathOf(parent, element)}/{id}", line, holder);
+            node = nodes.Element(id, path.Under(id, "/"), line, holder);
         }
         else
         {
@@ -228,7 +233,7 @@ public sealed class XmlExtractor : ICodeGraphExtractor
             imports.Add(new ExtractImport(CodeImportForms.Relative, project, line));
         }
 
-        return new Frame(element, parent, node, node ?? holder, view);
+        return new Frame(element, parent, node, node ?? holder, view, path);
     }
 
     /// <summary>
@@ -244,38 +249,23 @@ public sealed class XmlExtractor : ICodeGraphExtractor
     };
 
     /// <summary>
-    /// The path of the element <paramref name="element"/> opened inside <paramref name="parent"/>: each element's name from
-    /// the root, parted by a slash - told only where a node is named by it, from the open elements up, so no element is
-    /// given a path it is not named by.
-    /// </summary>
-    private static string PathOf(Frame? parent, string element)
-    {
-        var names = new List<string> { element };
-
-        for (var open = parent; open is not null; open = open.Parent)
-        {
-            names.Add(open.Name);
-        }
-
-        names.Reverse();
-        return string.Join('/', names);
-    }
-
-    /// <summary>
     /// One open element: its name, the element it is open inside, its node among the extract's, the nearest node that holds
-    /// what is inside it, and the XAML view it is inside - its type's node and the C# type it names - where it is in one.
+    /// what is inside it, the XAML view it is inside - its type's node and the C# type it names - where it is in one, and
+    /// the path its parts are named by.
     /// </summary>
-    private sealed class Frame(string name, Frame? parent, string? node, string? nearest, (string Node, string Class)? view)
+    private sealed class Frame(string name, Frame? parent, QualifiedName? node, QualifiedName? nearest, (QualifiedName Node, string Class)? view, QualifiedName path)
     {
         public string Name => name;
 
         public Frame? Parent => parent;
 
-        public string? Node => node;
+        public QualifiedName? Node => node;
 
-        public string? Nearest => nearest;
+        public QualifiedName? Nearest => nearest;
 
-        public (string Node, string Class)? View => view;
+        public (QualifiedName Node, string Class)? View => view;
+
+        public QualifiedName Path => path;
     }
 
     /// <summary>
