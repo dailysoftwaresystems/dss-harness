@@ -4747,25 +4747,33 @@ public sealed class FlowCoordinator
     /// <summary>
     /// Takes a NotRun place-holder back out of its scope, so the schedule draws its declaration again under the same id:
     /// it never ran, holds nothing and wrote nothing, and its record is written over by the instance drawn in its place.
-    /// The place-holders it left its handlers go with it.
+    /// The place-holders it left its handlers go with it, and theirs with them, along the whole chain of <c>on</c>: walked
+    /// once on a stack of the walk's own (<see cref="Core.Walks.Walk.Visit"/>), each place-holder taken out once, however long the
+    /// chain of handlers of handlers runs.
     /// </summary>
     private void Redraw(FlowInstance notRun)
     {
         var scope = notRun.DeclaredScope!;
 
-        _ = scope.Members.Remove(notRun.Step.Name);
-        _ = scope.Instantiated.Remove(notRun.Step.Name);
-        scope.Visits[notRun.Step.Name] = notRun.Visit - 1;
-        _ = _instances.Remove(notRun.Id);
-        _ = _created.Remove(notRun);
+        // Who handles a step's ending, by the step's name: one look over the scope's declarations, never one a link.
+        var handlers = DeclarationsOf(scope)
+            .Where(declaration => declaration.On is not null)
+            .ToLookup(declaration => declaration.On!.Step, StringComparer.Ordinal);
 
-        foreach (var follower in DeclarationsOf(scope)
-            .Where(declaration => declaration.On?.Step == notRun.Step.Name)
-            .Select(declaration => scope.Members.GetValueOrDefault(declaration.Name))
-            .Where(follower => follower is { State: FlowInstanceState.NotRun, RaisedBy: null, RaisedByRecord: null })
-            .ToList())
+        // Each place-holder's handlers are read before it is taken out of its scope, as the walk reaches it.
+        IEnumerable<FlowInstance> FollowersOf(FlowInstance source)
+            => [.. handlers[source.Step.Name]
+                .Select(declaration => scope.Members.GetValueOrDefault(declaration.Name))
+                .Where(follower => follower is { State: FlowInstanceState.NotRun, RaisedBy: null, RaisedByRecord: null })
+                .Select(follower => follower!)];
+
+        foreach (var drawn in Core.Walks.Walk.Visit([notRun], instance => instance.Id, FollowersOf).ToList())
         {
-            Redraw(follower!);
+            _ = scope.Members.Remove(drawn.Step.Name);
+            _ = scope.Instantiated.Remove(drawn.Step.Name);
+            scope.Visits[drawn.Step.Name] = drawn.Visit - 1;
+            _ = _instances.Remove(drawn.Id);
+            _ = _created.Remove(drawn);
         }
     }
 

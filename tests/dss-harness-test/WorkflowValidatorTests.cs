@@ -4441,32 +4441,30 @@ public sealed class WorkflowValidatorTests
     }
 
     /// <summary>
-    /// V26: a workflow declares at most 200 steps - groups and their members each one, the recovery's among them, for
-    /// they run. Exactly 200 is a flow; 201, however they are split between the flow, its groups and the recovery, is
-    /// refused.
+    /// A workflow declares what it declares: no count of its steps is refused. Five thousand steps, each waiting for the
+    /// one before it, five thousand more in a group and a recovery of a thousand, validate with no problem - what bounds a
+    /// run is its maxInstances, the work it may draw, never the size of the file that says it.
     /// </summary>
     [Fact]
-    public void AWorkflowDeclaresAtMostTwoHundredSteps()
+    public void AFiveThousandStepWorkflow_Validates()
     {
-        Assert.Empty(Problems(Flow(top: WorkflowValidator.MostSteps, recovered: 0)));
+        Assert.Empty(Problems(Flow(top: 5_000, recovered: 0)));
+        Assert.Empty(Problems(Flow(top: 5_000, recovered: 1_000)));
 
-        Assert.Equal(
-            ["the workflow declares 201 steps; at most 200"],
-            Problems(Flow(top: 201, recovered: 0)));
-
-        Assert.Equal(
-            ["the workflow declares 201 steps; at most 200"],
-            Problems(Flow(top: 150, recovered: 51)));
-
-        // A group and its 199 members are 200 steps, and one more step beside them is the 201st.
+        // A group of five thousand members beside one step.
         var nested = new StringBuilder("name: flow\nsteps:\n  - name: alone\n    type: orient\n  - name: group\n    steps:");
 
-        for (var index = 0; index < 199; index++)
+        for (var index = 0; index < 5_000; index++)
         {
-            nested.Append($"\n      - name: s{index}\n        type: orient");
+            nested.Append(System.Globalization.CultureInfo.InvariantCulture, $"\n      - name: s{index}\n        type: orient");
+
+            if (index > 0)
+            {
+                nested.Append(System.Globalization.CultureInfo.InvariantCulture, $"\n        dependsOn: [s{index - 1}]");
+            }
         }
 
-        Assert.Equal(["the workflow declares 201 steps; at most 200"], Problems(nested.ToString()));
+        Assert.Empty(Problems(nested.ToString()));
 
         // A flow of top-level steps, the first of which gives its failure to a recovery of so many steps.
         static string Flow(int top, int recovered)
@@ -4475,7 +4473,12 @@ public sealed class WorkflowValidatorTests
 
             for (var index = 0; index < top; index++)
             {
-                text.Append($"\n  - name: s{index}\n    type: orient");
+                text.Append(System.Globalization.CultureInfo.InvariantCulture, $"\n  - name: s{index}\n    type: orient");
+
+                if (index > 0)
+                {
+                    text.Append(System.Globalization.CultureInfo.InvariantCulture, $"\n    dependsOn: [s{index - 1}]");
+                }
 
                 if (index == 0 && recovered > 0)
                 {
@@ -4489,7 +4492,7 @@ public sealed class WorkflowValidatorTests
 
                 for (var index = 0; index < recovered; index++)
                 {
-                    text.Append($"\n    - name: r{index}\n      type: orient");
+                    text.Append(System.Globalization.CultureInfo.InvariantCulture, $"\n    - name: r{index}\n      type: orient");
                 }
             }
 

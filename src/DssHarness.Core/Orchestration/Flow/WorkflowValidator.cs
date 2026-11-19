@@ -115,9 +115,6 @@ public static class WorkflowValidator
         ["checksUnsettled"] = (step, _) => step.Type == "ci-wait",
     };
 
-    /// <summary>V26: the most steps one workflow may declare, the recovery's among them, for they run. How deep a flow nests is <see cref="WorkflowFileParser.MaxDepth"/>'s own bound.</summary>
-    internal const int MostSteps = 200;
-
     /// <summary>Returns every problem found, in the order the definition declares what they concern.</summary>
     /// <param name="definition">A workflow's parsed definition.</param>
     /// <param name="hasCommitTemplate">
@@ -323,7 +320,6 @@ public static class WorkflowValidator
             Index(definition.Steps, parent: null);
             IndexRecover();
             Shadowing();
-            Size();
             Cycle();
             WorkflowAnswers();
             Steps();
@@ -633,22 +629,6 @@ public static class WorkflowValidator
             foreach (var (kind, answer) in _definition.Answers)
             {
                 AnswerRules(kind, answer, "the workflow", owner: null);
-            }
-        }
-
-        /// <summary>
-        /// V26, the flow's size a reader cannot see: a workflow declares at most 200 steps, the recovery's among
-        /// them, for they run. How deep a flow may nest is the reader's own bound, refused with its line and
-        /// column where the file is read (<see cref="WorkflowFileParser.MaxDepth"/>), and no definition that deep
-        /// reaches this check.
-        /// </summary>
-        private void Size()
-        {
-            var declared = _entries.Count(entry => !ReferenceEquals(entry, _recover) && !_useRecoveries.Any(place => ReferenceEquals(entry, place)));
-
-            if (declared > MostSteps)
-            {
-                _problems.Add($"the workflow declares {declared} steps; at most {MostSteps}");
             }
         }
 

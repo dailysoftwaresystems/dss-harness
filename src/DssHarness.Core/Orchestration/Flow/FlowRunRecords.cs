@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using DssHarness.Core.FileSystem;
+using DssHarness.Core.Json;
 using DssHarness.Core.Results;
 
 namespace DssHarness.Core.Orchestration.Flow;
@@ -120,8 +121,14 @@ public sealed record FlowRunContext(
     public static string DigestOf(WorkflowDefinition definition)
     {
         ArgumentNullException.ThrowIfNull(definition);
-        return DigestOf(JsonSerializer.Serialize(definition with { Path = string.Empty }, JsonStateFile.Options));
+        return DigestOf(JsonSerializer.Serialize(definition with { Path = string.Empty }, Frozen));
     }
+
+    /// <summary>
+    /// How a definition is frozen for its digest: as <c>definition.json</c> holds it, at any depth - a schema a step holds
+    /// inline may nest past what the serializer writes by default, and a digest is never refused for depth alone.
+    /// </summary>
+    private static readonly JsonSerializerOptions Frozen = JsonDepth.Serializer(JsonStateFile.Options);
 
     /// <summary>The SHA-256 of the definition as this build freezes it, spelt in lower-case hex.</summary>
     /// <param name="frozen">The definition, serialized as <c>definition.json</c> holds it.</param>
