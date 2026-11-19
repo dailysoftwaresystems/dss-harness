@@ -1,6 +1,8 @@
 using System.Collections.Concurrent;
 using System.Globalization;
+using System.Runtime.CompilerServices;
 using System.Text;
+using DssHarness.Core.Walks;
 
 namespace DssHarness.Core.Codebase;
 
@@ -38,8 +40,15 @@ namespace DssHarness.Core.Codebase;
 /// inside it alone. A file that shares another's imports (<see cref="ExtractImport.Shares"/>) imports what that one
 /// does, after its own. A name an import's prefix is stands for that import wherever a value or a type is written with
 /// it. A type is looked in before its bases, and its bases nearest first: a mixin before what it is applied over, the last
-/// one first, the first base that holds the name deciding. A type's bases are found in two passes - with no base known, then with the bases the first found - so what a base is never
-/// hangs on the order the files come in.
+/// one first, the first base that holds the name deciding. A type's bases are found a round at a time - the first with no
+/// base known, each next through the bases the round before found - until a round finds what the one before did, or
+/// comes back to bases a round before found, a cycle no round leaves: a base named through any number of bases of bases
+/// is found, and what a base is never hangs on the order the files come in.
+/// </para>
+/// <para>
+/// A chain of names written as links (<see cref="ExtractQualifier.Link"/>) is read a link at a time, each link's chain
+/// answered once for each declaration that reads through it (<see cref="Memo{TKey, TAnswer}"/>), so a chain of any
+/// length costs a step a link, and every reference made on it reads the links before it once.
 /// </para>
 /// <para>
 /// <c>dispatches</c>, <c>declares</c>, <c>tests</c> and <c>partOf</c> are derived after, from the <c>implements</c> edges and
@@ -160,6 +169,9 @@ public static class CodeGraphLinker
         /// they are exported by among them - and, under no file's path, every file's: what a name is cut by to be matched.
         /// </summary>
         Suffixes,
+
+        /// <summary>The parts a Blazor component's file and its code-behind's declare, by the component's path: which parts their files join.</summary>
+        Siblings,
     }
 
     /// <summary>One reference's finding: its edges, whether it named nothing, and every key it read.</summary>
@@ -169,39 +181,74 @@ public static class CodeGraphLinker
     internal sealed record Finding(IReadOnlyList<CodeEdge> Edges, bool External, int[] Reads);
 
     /// <summary>
-    /// What one file's references found: in the first pass of the bases, and in the last pass each reference is found in.
-    /// An unchanged file shares the arrays of the link it was linked again from until one of its references is found again.
+    /// What one file's references found: its bases' references in each round of the bases (<see cref="Linking.Link"/>),
+    /// and every other reference once the bases are known. An unchanged file shares the arrays of the link it was linked
+    /// again from until one of its references is found again.
     /// </summary>
-    internal sealed class FileFound(Finding?[] first, Finding?[] final, bool owned)
+    internal sealed class FileFound
     {
-        public Finding?[] First { get; private set; } = first;
+        private readonly int _count;
+        private readonly List<Finding?[]> _rounds;
+        private readonly List<bool> _roundsOwned;
+        private bool _othersOwned;
 
-        public Finding?[] Final { get; private set; } = final;
-
-        private bool _firstOwned = owned;
-        private bool _finalOwned = owned;
-
-        public void Set(bool firstPass, int at, Finding finding)
+        /// <summary>A file's findings: <paramref name="rounds"/> and <paramref name="others"/>, its own where <paramref name="owned"/> and else shared until changed.</summary>
+        public FileFound(IEnumerable<Finding?[]> rounds, Finding?[] others, int count, bool owned)
         {
-            if (firstPass)
-            {
-                if (!_firstOwned)
-                {
-                    First = (Finding?[])First.Clone();
-                    _firstOwned = true;
-                }
+            _count = count;
+            _rounds = [.. rounds];
+            _roundsOwned = [.. _rounds.Select(_ => owned)];
+            Others = others;
+            _othersOwned = owned;
+        }
 
-                First[at] = finding;
-                return;
+        /// <summary>What its bases' references found in each round, the first first.</summary>
+        public IReadOnlyList<Finding?[]> Rounds => _rounds;
+
+        /// <summary>What its other references found.</summary>
+        public Finding?[] Others { get; private set; }
+
+        /// <summary>What the reference at <paramref name="at"/> found in <paramref name="round"/>, where it is held; none past the rounds held.</summary>
+        public Finding? Round(int round, int at) => round < _rounds.Count ? _rounds[round][at] : null;
+
+        /// <summary>Sets what the reference at <paramref name="at"/> found in <paramref name="round"/>.</summary>
+        public void SetRound(int round, int at, Finding finding)
+        {
+            while (_rounds.Count <= round)
+            {
+                _rounds.Add(new Finding?[_count]);
+                _roundsOwned.Add(true);
             }
 
-            if (!_finalOwned)
+            if (!_roundsOwned[round])
             {
-                Final = (Finding?[])Final.Clone();
-                _finalOwned = true;
+                _rounds[round] = (Finding?[])_rounds[round].Clone();
+                _roundsOwned[round] = true;
             }
 
-            Final[at] = finding;
+            _rounds[round][at] = finding;
+        }
+
+        /// <summary>Sets what the reference at <paramref name="at"/>, no base's, found.</summary>
+        public void SetOther(int at, Finding finding)
+        {
+            if (!_othersOwned)
+            {
+                Others = (Finding?[])Others.Clone();
+                _othersOwned = true;
+            }
+
+            Others[at] = finding;
+        }
+
+        /// <summary>Keeps the first <paramref name="count"/> rounds alone: those the link ran, which the next is made from.</summary>
+        public void Keep(int count)
+        {
+            if (_rounds.Count > count)
+            {
+                _rounds.RemoveRange(count, _rounds.Count - count);
+                _roundsOwned.RemoveRange(count, _roundsOwned.Count - count);
+            }
         }
     }
 
@@ -218,16 +265,15 @@ public static class CodeGraphLinker
             => _tables[table].TryGetValue(text, out var number) ? number : _tables[table].GetOrAdd(text, _ => Interlocked.Increment(ref _next));
     }
 
-    /// <summary>What a link keeps for the next to be made from it: the files it was given, what each reference found, and each type's bases.</summary>
+    /// <summary>What a link keeps for the next to be made from it: the files it was given, what each reference found, and each type's bases after each round.</summary>
     internal sealed class LinkMemory
     {
-        internal LinkMemory(LinkKeys keys, IReadOnlyDictionary<string, CodeGraphFile> files, IReadOnlyDictionary<string, FileFound> found, Dictionary<string, List<string[]>> firstBases, Dictionary<string, List<string[]>> bases)
+        internal LinkMemory(LinkKeys keys, IReadOnlyDictionary<string, CodeGraphFile> files, IReadOnlyDictionary<string, FileFound> found, IReadOnlyList<Dictionary<string, List<string[]>>> rounds)
         {
             Keys = keys;
             Files = files;
             Found = found;
-            FirstBases = firstBases;
-            Bases = bases;
+            Rounds = rounds;
         }
 
         internal LinkKeys Keys { get; }
@@ -236,9 +282,8 @@ public static class CodeGraphLinker
 
         internal IReadOnlyDictionary<string, FileFound> Found { get; }
 
-        internal Dictionary<string, List<string[]>> FirstBases { get; }
-
-        internal Dictionary<string, List<string[]>> Bases { get; }
+        /// <summary>Each type's bases after each round of the bases, the last the bases every other reference was found through.</summary>
+        internal IReadOnlyList<Dictionary<string, List<string[]>>> Rounds { get; }
     }
 
     private sealed class Linking
@@ -342,7 +387,7 @@ public static class CodeGraphLinker
         private readonly Dictionary<string, int> _external = new(StringComparer.Ordinal);
 
         /// <summary>
-        /// Each type's bases, by id, that a finding looks through now - none in the first pass of the bases - as
+        /// Each type's bases, by id, that a finding looks through now - none in the first round of the bases - as
         /// <see cref="BaseRanksOf"/> ranks them.
         /// </summary>
         private Dictionary<string, List<string[]>> _bases = new(StringComparer.Ordinal);
@@ -350,8 +395,18 @@ public static class CodeGraphLinker
         /// <summary>Every key the finding under way has read; null outside one.</summary>
         private HashSet<int>? _reads;
 
+        /// <summary>What each chain a link ends comes to, from each declaration that reads through it (<see cref="ChainTo"/>).</summary>
+        private Memo<ChainKey, ChainAnswer> _chains;
+
+        /// <summary>How many links of chains were read, each once for each declaration that reads through it.</summary>
+        private int _chainLinks;
+
+        /// <summary>The parts each type's files join to it though their qualified names differ (<see cref="CodeBehinds"/>), by the type's id: each of the other side, by id.</summary>
+        private readonly Dictionary<string, List<string>> _siblings = new(StringComparer.Ordinal);
+
         public Linking(IReadOnlyList<CodeGraphFile> files, LinkMemory? previous, IReadOnlyList<string> keyNaming)
         {
+            _chains = NewChains();
             // In one order whatever order they came in: a link made again is the whole link of the same files.
             _files = [.. files.OrderBy(file => file.Path, StringComparer.Ordinal)];
             _previous = previous;
@@ -481,15 +536,51 @@ public static class CodeGraphLinker
                     _prefixRoots.Add(root);
                 }
             }
+
+            // A component and its code-behind are one type, whatever namespaces their files put them in: each finds the
+            // other's members as its own.
+            foreach (var (codeBehind, component) in CodeBehinds())
+            {
+                foreach (var (one, other) in (ReadOnlySpan<(Declaration, Declaration)>)[(codeBehind, component), (component, codeBehind)])
+                {
+                    var siblings = _siblings.TryGetValue(one.Id, out var held) ? held : _siblings[one.Id] = [];
+
+                    if (!siblings.Contains(other.Id, StringComparer.Ordinal))
+                    {
+                        siblings.Add(other.Id);
+                    }
+                }
+            }
         }
 
-        /// <summary>The stages a reference is found in: the bases twice, then every other reference.</summary>
-        private enum Stage
+        /// <summary>
+        /// Each part a Blazor component's code-behind file declares with the part of its name the component's file declares
+        /// - <c>Cart.razor.cs</c> beside <c>Cart.razor</c>, as Razor pairs them - whatever namespace the tree's path gives the
+        /// component, for the namespace Razor compiles it into is its project's, which the file does not say: one type,
+        /// joined by its files. The one rule that pairs them, which the <c>partOf</c> edges and every lookup in a type read.
+        /// </summary>
+        private IEnumerable<(Declaration CodeBehind, Declaration Component)> CodeBehinds()
         {
-            FirstBases,
-            Bases,
-            Others,
+            var components = _declarations.Where(declaration => declaration.Node.Part && declaration.File.Path.EndsWith(".razor", StringComparison.OrdinalIgnoreCase))
+                .ToLookup(declaration => (declaration.File.Path, SimpleName(declaration.Node.Qualified)));
+
+            foreach (var part in _declarations.Where(declaration => declaration.Node.Part && declaration.File.Path.EndsWith(".razor.cs", StringComparison.OrdinalIgnoreCase)))
+            {
+                foreach (var component in components[(part.File.Path[..^3], SimpleName(part.Node.Qualified))])
+                {
+                    yield return (part, component);
+                }
+            }
         }
+
+        /// <summary>The path of the Blazor component <paramref name="path"/> is, or is the code-behind of; none where it is neither.</summary>
+        private static string? ComponentPath(string path)
+            => path.EndsWith(".razor", StringComparison.OrdinalIgnoreCase) ? path
+                : path.EndsWith(".razor.cs", StringComparison.OrdinalIgnoreCase) ? path[..^3]
+                : null;
+
+        /// <summary>One round of the bases (<see cref="Link"/>): which it is, and each type's bases it found.</summary>
+        private sealed record BaseRound(int Round, Dictionary<string, List<string[]>> Bases);
 
         public CodeGraphLinked Link()
         {
@@ -498,19 +589,41 @@ public static class CodeGraphLinker
             var changed = Changed();
             var references = _files.Where(file => file.Extract is not null).ToList();
 
-            // Bases first: a member is looked for in a type's bases, which their own references name - found with no base
-            // known, then again with the bases that found, so no base hangs on the order the files come in.
-            var first = new Dictionary<string, List<string[]>>(StringComparer.Ordinal);
-            Pass(references, Stage.FirstBases, changed, first);
+            foreach (var file in references)
+            {
+                var count = file.Extract!.References.Count;
 
-            var final = new Dictionary<string, List<string[]>>(StringComparer.Ordinal);
-            _bases = first;
-            Forget();
-            Pass(references, Stage.Bases, [.. changed, .. Moved(_previous?.FirstBases, first)], final);
+                _found[file] = _previous is { } previous && previous.Files.TryGetValue(file.Path, out var was) && ReferenceEquals(was, file)
+                    ? new FileFound(previous.Found[file.Path].Rounds, previous.Found[file.Path].Others, count, owned: false)
+                    : new FileFound([], new Finding?[count], count, owned: true);
+            }
 
-            _bases = final;
+            // Bases first: a member is looked for in a type's bases, which their own references name - and a base may be
+            // named through a base of a base, any number of levels up. So the bases are found a round at a time, each round
+            // through the bases the round before found, the first through none, until a round finds what the one before did
+            // - a base forty levels up is found in the forty-first - or comes back to bases a round before found, which is
+            // a cycle no further round leaves. A round finds again only what read a base that moved; and no base hangs on
+            // the order the files come in.
+            var rounds = new List<Dictionary<string, List<string[]>>>();
+            var end = Fixpoint.Run(
+                new BaseRound(-1, new Dictionary<string, List<string[]>>(StringComparer.Ordinal)),
+                round =>
+                {
+                    var bases = Round(references, round.Round + 1, changed, rounds);
+                    rounds.Add(bases);
+                    return new FixpointStep<BaseRound>(new BaseRound(round.Round + 1, bases), Done: false);
+                },
+                round => Written(round.Bases));
+
+            foreach (var found in _found.Values)
+            {
+                found.Keep(rounds.Count);
+            }
+
+            _bases = end.State.Bases;
             Forget();
-            Pass(references, Stage.Others, [.. changed, .. Moved(_previous?.Bases, final)], null);
+            TakeBases(references, rounds.Count - 1);
+            Others(references, [.. changed, .. Moved(_previous?.Rounds[^1], _bases)]);
 
             Imports();
             Dispatches();
@@ -529,89 +642,169 @@ public static class CodeGraphLinker
 
             return new CodeGraphLinked(symbols, edges, _external, _resolved.Count)
             {
-                Memory = new LinkMemory(_keys, _byPath, _found.ToDictionary(found => found.Key.Path, found => found.Value, StringComparer.Ordinal), first, final),
+                Memory = new LinkMemory(_keys, _byPath, _found.ToDictionary(found => found.Key.Path, found => found.Value, StringComparer.Ordinal), rounds),
+                ChainLinks = _chainLinks,
             };
         }
 
         /// <summary>
-        /// Finds each reference of <paramref name="stage"/> - or keeps what the link it is made from found for it, where its
-        /// file did not change and it read nothing <paramref name="changed"/> holds - and takes what it found: its edges, its
-        /// counts, and the bases it found into <paramref name="bases"/>.
+        /// One round of the bases: each base's reference found through the bases the round before found - none for the first
+        /// - and the bases that gives, by type. A reference keeps what it found where finding it again would find the same:
+        /// what the link this is made from found in the same round, where its file did not change and it read nothing
+        /// <paramref name="changed"/> holds, nor a type whose bases that round was given otherwise; else what it found in the
+        /// round before, where it read no type whose bases moved between the two rounds.
         /// </summary>
-        private void Pass(List<CodeGraphFile> files, Stage stage, HashSet<int> changed, Dictionary<string, List<string[]>>? bases)
+        /// <param name="files">The files whose references are found.</param>
+        /// <param name="round">The round, from 0.</param>
+        /// <param name="changed">Every key a change altered since the link this is made from.</param>
+        /// <param name="rounds">The bases each round before found.</param>
+        private Dictionary<string, List<string[]>> Round(List<CodeGraphFile> files, int round, HashSet<int> changed, List<Dictionary<string, List<string[]>>> rounds)
         {
-            var firstPass = stage == Stage.FirstBases;
+            var none = new Dictionary<string, List<string[]>>(StringComparer.Ordinal);
+            var given = round == 0 ? none : rounds[round - 1];
+
+            // What moved between the bases the round before was given and those this one is, in this link; and between those
+            // this round was given in the link this is made from and now, where that link ran this round.
+            HashSet<int> moved = round == 0 ? [] : [.. Moved(round == 1 ? none : rounds[round - 2], given)];
+            HashSet<int>? since = _previous is { } previous && round < previous.Rounds.Count
+                ? [.. changed, .. Moved(round == 0 ? none : previous.Rounds[round - 1], given)]
+                : null;
+
+            _bases = given;
+            Forget();
+
+            var bases = new Dictionary<string, List<string[]>>(StringComparer.Ordinal);
 
             foreach (var file in files)
             {
                 var references = file.Extract!.References;
                 var owners = _owners[file];
-
-                if (!_found.TryGetValue(file, out var found))
-                {
-                    _found[file] = found = _previous is { } previous && previous.Files.TryGetValue(file.Path, out var was) && ReferenceEquals(was, file)
-                        ? new FileFound(previous.Found[file.Path].First, previous.Found[file.Path].Final, owned: false)
-                        : new FileFound(new Finding?[references.Count], new Finding?[references.Count], owned: true);
-                }
+                var found = _found[file];
 
                 for (var at = 0; at < references.Count; at++)
                 {
                     var reference = references[at];
 
-                    if (IsBase(reference.Kind) == (stage == Stage.Others))
+                    if (!IsBase(reference.Kind))
                     {
                         continue;
                     }
 
                     var from = owners[reference.From];
-                    var kept = firstPass ? found.First[at] : found.Final[at];
+                    var kept = since is not null && found.Round(round, at) is { } before && !before.Reads.Any(since.Contains) ? before : null;
 
-                    if (kept is null || kept.Reads.Any(changed.Contains))
+                    if (kept is null && round > 0 && found.Round(round - 1, at) is { } last && !last.Reads.Any(moved.Contains))
                     {
-                        kept = Find(from, reference);
-                        found.Set(firstPass, at, kept);
+                        kept = last;
+                    }
+
+                    if (kept is null)
+                    {
+                        kept = Find(from, reference, file, at);
                         _resolved.Add((file, at));
                     }
 
-                    Take(from, kept, stage, bases, reference);
+                    if (!ReferenceEquals(kept, found.Round(round, at)))
+                    {
+                        found.SetRound(round, at, kept);
+                    }
+
+                    AddBases(from, kept, bases);
+                }
+            }
+
+            return bases;
+        }
+
+        /// <summary>Takes the edges and counts of every base's reference, as the last round of the bases found it.</summary>
+        private void TakeBases(List<CodeGraphFile> files, int round)
+        {
+            foreach (var file in files)
+            {
+                var references = file.Extract!.References;
+
+                for (var at = 0; at < references.Count; at++)
+                {
+                    if (IsBase(references[at].Kind) && _found[file].Round(round, at) is { } finding)
+                    {
+                        Take(_owners[file][references[at].From], finding, references[at]);
+                    }
                 }
             }
         }
 
-        /// <summary>Takes what one reference found: the bases it found, and, past the first pass, its edges and counts.</summary>
-        private void Take(Declaration from, Finding finding, Stage stage, Dictionary<string, List<string[]>>? bases, ExtractReference reference)
+        /// <summary>
+        /// Finds each reference that names no base, through the bases the last round found - or keeps what the link it is
+        /// made from found for it, where its file did not change and it read nothing <paramref name="changed"/> holds - and
+        /// takes what it found: its edges and its counts.
+        /// </summary>
+        private void Others(List<CodeGraphFile> files, HashSet<int> changed)
         {
-            // A mixin's findings are a rank of their own, nearer than every base named before it; an implemented base's join
-            // the rank before the last, an inherited one's the last - each empty while the type names none - as BaseRanksOf
-            // ranks them.
-            if (bases is not null && finding.Edges.Count > 0)
+            foreach (var file in files)
             {
-                var found = finding.Edges.Select(edge => edge.To).ToArray();
+                var references = file.Extract!.References;
+                var owners = _owners[file];
+                var found = _found[file];
 
-                if (!bases.TryGetValue(from.Id, out var ranks))
+                for (var at = 0; at < references.Count; at++)
                 {
-                    bases[from.Id] = ranks = [[], []];
-                }
+                    var reference = references[at];
 
-                var kind = finding.Edges[0].Kind;
+                    if (IsBase(reference.Kind))
+                    {
+                        continue;
+                    }
 
-                if (kind == CodeEdgeKinds.MixesIn)
-                {
-                    ranks.Insert(0, found);
-                }
-                else
-                {
-                    var at = kind == CodeEdgeKinds.Implements ? ranks.Count - 2 : ranks.Count - 1;
-                    ranks[at] = [.. ranks[at], .. found];
+                    var from = owners[reference.From];
+                    var kept = found.Others[at];
+
+                    if (kept is null || kept.Reads.Any(changed.Contains))
+                    {
+                        kept = Find(from, reference, file, at);
+                        found.SetOther(at, kept);
+                        _resolved.Add((file, at));
+                    }
+
+                    Take(from, kept, reference);
                 }
             }
+        }
 
-            // The first pass's findings are only what the second looks through.
-            if (stage == Stage.FirstBases)
+        /// <summary>
+        /// The bases one base's reference found, into <paramref name="bases"/>: a mixin's findings a rank of their own,
+        /// nearer than every base named before it; an implemented base's joining the rank before the last, an inherited
+        /// one's the last - each empty while the type names none - as <see cref="BaseRanksOf"/> ranks them.
+        /// </summary>
+        private static void AddBases(Declaration from, Finding finding, Dictionary<string, List<string[]>> bases)
+        {
+            if (finding.Edges.Count == 0)
             {
                 return;
             }
 
+            var found = finding.Edges.Select(edge => edge.To).ToArray();
+
+            if (!bases.TryGetValue(from.Id, out var ranks))
+            {
+                bases[from.Id] = ranks = [[], []];
+            }
+
+            var kind = finding.Edges[0].Kind;
+
+            if (kind == CodeEdgeKinds.MixesIn)
+            {
+                ranks.Insert(0, found);
+            }
+            else
+            {
+                var at = kind == CodeEdgeKinds.Implements ? ranks.Count - 2 : ranks.Count - 1;
+                ranks[at] = [.. ranks[at], .. found];
+            }
+        }
+
+        /// <summary>Takes what one reference found: its edges and its counts.</summary>
+        private void Take(Declaration from, Finding finding, ExtractReference reference)
+        {
             _edges.AddRange(finding.Edges);
 
             // A use that names nothing the repository declares is the common case - a member of a type the repository
@@ -629,11 +822,12 @@ public static class CodeGraphLinker
             }
         }
 
-        /// <summary>What a written name was found to be while other bases were known may be otherwise now.</summary>
+        /// <summary>What a written name or a chain was found to be while other bases were known may be otherwise now.</summary>
         private void Forget()
         {
             _containersFound.Clear();
             _extended.Clear();
+            _chains = NewChains();
         }
 
         /// <summary>Every declaration's <c>contains</c> edge, from what it is declared inside: its parent node, or its file.</summary>
@@ -645,15 +839,15 @@ public static class CodeGraphLinker
             }
         }
 
-        /// <summary>One reference found: its edges or its count, with every key the finding read.</summary>
-        private Finding Find(Declaration from, ExtractReference reference)
+        /// <summary>One reference found - the one at <paramref name="at"/> among <paramref name="file"/>'s - its edges or its count, with every key the finding read.</summary>
+        private Finding Find(Declaration from, ExtractReference reference, CodeGraphFile file, int at)
         {
             var outer = _reads;
             _reads = [];
 
             try
             {
-                var (all, confidence) = Found(from, reference);
+                var (all, confidence) = Found(from, reference, new ReferenceAt(file, at));
                 var found = Bodied(all);
 
                 if (found.Count == 0)
@@ -683,7 +877,7 @@ public static class CodeGraphLinker
         /// What <paramref name="reference"/> names, one declaration for each id, and how sure the place it was found makes
         /// it: none where nothing the repository declares has that name.
         /// </summary>
-        private (IReadOnlyList<Declaration> Found, string Confidence) Found(Declaration from, ExtractReference reference)
+        private (IReadOnlyList<Declaration> Found, string Confidence) Found(Declaration from, ExtractReference reference, ReferenceAt place)
         {
             bool Accepts(Declaration target) => Takes(from, reference, target, imported: false) && Sees(from, target);
 
@@ -694,17 +888,17 @@ public static class CodeGraphLinker
             // declares where that type is not the repository's - else, where no value is so named and an import's prefix
             // is, through that import alone, as a file that shares another's imports writes that file's prefixes; else by
             // its name alone, where nothing is known of its type; never in the scopes it is written in, as though it were
-            // a call of their own.
+            // a call of their own. A chain written as links is two names or more, and so no import's prefix.
             if (reference.Qualifier is { Kind: CodeQualifierKinds.Value } value)
             {
-                if (value.Name is { } written)
+                if (value.Name is not null || value.Link is not null)
                 {
-                    if (Values(from, written) is { } values)
+                    if (ValuesOf(from, value, place) is { } values)
                     {
                         return Through(from, values, reference.Name, Accepts);
                     }
 
-                    if (ImportsOf(from.File).Any(made => string.Equals(made.Import.Prefix, written, StringComparison.Ordinal)))
+                    if (value.Name is { } written && ImportsOf(from.File).Any(made => string.Equals(made.Import.Prefix, written, StringComparison.Ordinal)))
                     {
                         return (Prefixed(from, written, reference.Name, Imports), CodeConfidences.Exact);
                     }
@@ -717,7 +911,7 @@ public static class CodeGraphLinker
             // one the repository does not declare there, but for an extension of that type.
             if (reference.Qualifier is { } qualifier)
             {
-                return Qualified(from, qualifier, reference.Name, Accepts, Imports);
+                return Qualified(from, qualifier, reference.Name, Accepts, Imports, place);
             }
 
             return Unqualified(from, reference.Name, Accepts, Imports);
@@ -914,7 +1108,7 @@ public static class CodeGraphLinker
             => Distinct(RepositoryNamed(from.File, name).Where(accepts));
 
         /// <summary>What the qualifier of a reference names <paramref name="name"/> in, and how sure where it was found makes it; what an import makes visible taken by <paramref name="imported"/>.</summary>
-        private (IReadOnlyList<Declaration> Found, string Confidence) Qualified(Declaration from, ExtractQualifier qualifier, string name, Func<Declaration, bool> accepts, Func<Declaration, bool> imported)
+        private (IReadOnlyList<Declaration> Found, string Confidence) Qualified(Declaration from, ExtractQualifier qualifier, string name, Func<Declaration, bool> accepts, Func<Declaration, bool> imported, ReferenceAt place)
         {
             switch (qualifier.Kind)
             {
@@ -964,12 +1158,16 @@ public static class CodeGraphLinker
 
                 default:
                     // A value the scopes hold, nearer than any type or scope of its name, is that value; a type or a scope is
-                    // found as one is named; a name that is neither is every type or scope it ends.
-                    var written = qualifier.Name!;
+                    // found as one is named - its names read whole, a chain written as links too; a name that is neither is
+                    // every type or scope it ends.
+                    if (ValuesOf(from, qualifier, place) is { } values)
+                    {
+                        return Through(from, values, name, accepts);
+                    }
 
-                    return Values(from, written) is { } values
-                        ? Through(from, values, name, accepts)
-                        : Typed(from, Containers(from, written), written, name, accepts, withSelf: true);
+                    var written = place.File.Extract!.Written(qualifier)!;
+
+                    return Typed(from, Containers(from, written), written, name, accepts, withSelf: true);
             }
         }
 
@@ -1149,39 +1347,103 @@ public static class CodeGraphLinker
         /// call is looked for through by its name alone. <see langword="null"/> where its first name is no value; none where
         /// a link's type is not the repository's, or holds no value of the next name.
         /// </summary>
-        private IReadOnlyList<Declaration>? Values(Declaration from, string written)
+        private IReadOnlyList<Declaration>? Values(Declaration from, string written) => Fold(from, written).Values;
+
+        /// <summary>
+        /// The values <paramref name="qualifier"/>, the qualifier of the reference at <paramref name="place"/>, comes to from
+        /// where <paramref name="from"/> stands, as <see cref="Values"/> says of its names: a chain written as links read
+        /// link by link, each link's chain read once whatever reads it - so a chain of n names costs n steps, the use of each
+        /// of its names and the call on it reading the links before them once - and one that writes its names, by them.
+        /// </summary>
+        private IReadOnlyList<Declaration>? ValuesOf(Declaration from, ExtractQualifier qualifier, ReferenceAt place)
+            => qualifier.Link is { } link ? ChainTo(from, place with { At = link }).Values : qualifier.Name is { } written ? Values(from, written) : null;
+
+        /// <summary>
+        /// What the chain the reference at <paramref name="place"/> ends - its qualifier's names, then its own - comes to from
+        /// where <paramref name="from"/> stands: answered once, link by link on the memo's own stack, never a call into
+        /// itself however long the chain; the finding under way reads what answering it read.
+        /// </summary>
+        private Chained ChainTo(Declaration from, ReferenceAt place)
+        {
+            var answer = _chains.Of(new ChainKey(from, place));
+            _reads?.UnionWith(answer.Reads);
+            return answer.State;
+        }
+
+        /// <summary>A memo of the chains links end, emptied whenever the bases they were read through are not the ones known now.</summary>
+        private Memo<ChainKey, ChainAnswer> NewChains() => new(
+            key => key.Place.File.Extract!.References[key.Place.At].Qualifier is { Link: { } link } ? [key with { Place = key.Place with { At = link } }] : [],
+            (key, before) =>
+            {
+                var outer = _reads;
+                var reads = _reads = [];
+
+                try
+                {
+                    var reference = key.Place.File.Extract!.References[key.Place.At];
+                    var prefix = before.Count > 0 ? before[0] : null;
+                    var state = Step(key.From, prefix?.State ?? (reference.Qualifier?.Name is { } written ? Fold(key.From, written) : Chained.None), reference.Name);
+                    _chainLinks++;
+
+                    return new ChainAnswer(state, [.. reads, .. prefix?.Reads ?? []]);
+                }
+                finally
+                {
+                    _reads = outer;
+                }
+            },
+            _ => new ChainAnswer(Chained.None, []),
+            ChainKey.Comparer);
+
+        /// <summary>What the chain of names <paramref name="written"/> comes to from where <paramref name="from"/> stands, a name at a time.</summary>
+        private Chained Fold(Declaration from, string written)
         {
             var parts = written.Split('.');
-            IReadOnlyList<Declaration> values = [.. Scoped(from, parts[0], declaration => (IsValue(declaration) || IsContainer(declaration)) && Sees(from, declaration)).Where(IsValue)];
-            var at = 1;
+            var state = Head(from, parts[0]);
 
-            // A chain that begins at a type - `Cache.Instance` - begins at that type's value.
-            if (values.Count == 0 && parts.Length > 1)
+            for (var at = 1; at < parts.Length; at++)
             {
-                var types = Distinct(NamedContainers(from, parts[0]).Where(container => container.Node.Kind == CodeNodeKinds.Type));
-                values = types.Count > 0 ? InTypes(types, parts[1], IsValue, withSelf: true) : [];
-                at = 2;
+                state = Step(from, state, parts[at]);
             }
 
-            if (values.Count == 0)
+            return state;
+        }
+
+        /// <summary>A chain's first name, <paramref name="name"/>: a value the scopes hold - nearest first, with each type's bases, none past one that declares a type or a scope of that name - else a name a type may be.</summary>
+        private Chained Head(Declaration from, string name)
+        {
+            IReadOnlyList<Declaration> values = [.. Scoped(from, name, declaration => (IsValue(declaration) || IsContainer(declaration)) && Sees(from, declaration)).Where(IsValue)];
+
+            return values.Count > 0 ? new Chained(ChainedKind.Values, values, null) : new Chained(ChainedKind.Head, [], name);
+        }
+
+        /// <summary>
+        /// The chain <paramref name="before"/> stands for, one name longer: after a first name no value is, a value of the
+        /// type it names - <c>Cache.Instance</c> - else no value at all; after values, the value of the next name in the type
+        /// each is declared with, none where those types hold none - the rest of the chain then holding none - and the
+        /// values themselves where one does not say its type, which a call is looked for through by its name alone.
+        /// </summary>
+        private Chained Step(Declaration from, Chained before, string name)
+        {
+            switch (before.Kind)
             {
-                return null;
+                case ChainedKind.Head:
+                    var types = Distinct(NamedContainers(from, before.Head!).Where(container => container.Node.Kind == CodeNodeKinds.Type));
+                    var held = types.Count > 0 ? InTypes(types, name, IsValue, withSelf: true) : [];
+
+                    return held.Count > 0 ? new Chained(ChainedKind.Values, held, null) : Chained.None;
+
+                case ChainedKind.Values when before.Found.Any(value => value.Node.ValueType is null):
+                    return before with { Kind = ChainedKind.Untyped };
+
+                case ChainedKind.Values:
+                    var next = Of(from, before.Found, name, IsValue).Found;
+
+                    return next.Count > 0 ? new Chained(ChainedKind.Values, next, null) : new Chained(ChainedKind.Empty, [], null);
+
+                default:
+                    return before;
             }
-
-            for (; at < parts.Length; at++)
-            {
-                if (values.Any(value => value.Node.ValueType is null))
-                {
-                    return values;
-                }
-
-                if ((values = Of(from, values, parts[at], IsValue).Found).Count == 0)
-                {
-                    return [];
-                }
-            }
-
-            return values;
         }
 
         /// <summary>
@@ -1298,7 +1560,18 @@ public static class CodeGraphLinker
 
             var types = ContainersOf(QualifiedOf(key)).Where(container => container.Node.Kind == CodeNodeKinds.Type && KeyOf(container.File, container.Node.Qualified) == key).ToList();
 
-            return types.Count > 0 ? InTypes(types, name, accepts, withSelf: false) : [];
+            if (types.Count == 0)
+            {
+                return [];
+            }
+
+            // A part its file joins to it - a component's code-behind, or the component of one - is the same type, in a
+            // scope of its own: what it declares is the type's, before any base's.
+            var joined = Distinct(types.SelectMany(type => SiblingsOf(type.Id)).SelectMany(PartsOf)
+                .SelectMany(part => ScopeNamed(KeyOf(part.File, part.Node.Qualified), name))
+                .Where(accepts));
+
+            return joined.Count > 0 ? joined : InTypes(types, name, accepts, withSelf: false);
         }
 
         /// <summary>
@@ -1316,7 +1589,9 @@ public static class CodeGraphLinker
         private IReadOnlyList<Declaration> InType(string id, string name, Func<Declaration, bool> accepts, bool withSelf)
         {
             var seen = new HashSet<string>(StringComparer.Ordinal);
-            List<BaseRank> level = [new BaseRank([id], Mixin: false)];
+
+            // The type is itself and each part its file joins to it (SiblingsOf), whose bases are its own too.
+            List<BaseRank> level = [new BaseRank([id, .. SiblingsOf(id)], Mixin: false)];
             level = withSelf ? level : LevelUp(level);
 
             while (level.Count > 0)
@@ -1342,6 +1617,63 @@ public static class CodeGraphLinker
 
         /// <summary>One rank of the bases a level holds: the ids in it, and whether they are a mixin's, applied over what the rest of the level's type holds.</summary>
         private readonly record struct BaseRank(string[] Ids, bool Mixin);
+
+        /// <summary>One reference of a file, by its place among the file's references.</summary>
+        private readonly record struct ReferenceAt(CodeGraphFile File, int At);
+
+        /// <summary>
+        /// A chain a link ends, read from where one declaration stands: the declaration and the reference whose name ends
+        /// the chain. Two keys are one where they are of the very declaration, file and place.
+        /// </summary>
+        private readonly record struct ChainKey(Declaration From, ReferenceAt Place)
+        {
+            public static IEqualityComparer<ChainKey> Comparer { get; } = new ByIdentity();
+
+            private sealed class ByIdentity : IEqualityComparer<ChainKey>
+            {
+                public bool Equals(ChainKey x, ChainKey y)
+                    => ReferenceEquals(x.From, y.From) && ReferenceEquals(x.Place.File, y.Place.File) && x.Place.At == y.Place.At;
+
+                public int GetHashCode(ChainKey key)
+                    => HashCode.Combine(RuntimeHelpers.GetHashCode(key.From), RuntimeHelpers.GetHashCode(key.Place.File), key.Place.At);
+            }
+        }
+
+        /// <summary>What a chain a link ends comes to, with every key reading it read.</summary>
+        private sealed record ChainAnswer(Chained State, int[] Reads);
+
+        /// <summary>What a chain of names has come to so far (<see cref="Values"/>).</summary>
+        private enum ChainedKind
+        {
+            /// <summary>No value: its first name is none, nor a type's value.</summary>
+            None,
+
+            /// <summary>Its one name is no value the scopes hold; a type of that name may hold the next.</summary>
+            Head,
+
+            /// <summary>The values its last name is, each of a type it says.</summary>
+            Values,
+
+            /// <summary>Values one of which says no type: what the rest of the chain is, nothing says.</summary>
+            Untyped,
+
+            /// <summary>A link's type holds no value of the next name, so the chain holds nothing the repository declares.</summary>
+            Empty,
+        }
+
+        /// <summary>What a chain of names has come to so far: of which kind, the values found, and the first name where no value is it.</summary>
+        private sealed record Chained(ChainedKind Kind, IReadOnlyList<Declaration> Found, string? Head)
+        {
+            public static Chained None { get; } = new(ChainedKind.None, [], null);
+
+            /// <summary>The values the chain comes to, as <see cref="Linking.Values"/> answers them.</summary>
+            public IReadOnlyList<Declaration>? Values => Kind switch
+            {
+                ChainedKind.Values or ChainedKind.Untyped => Found,
+                ChainedKind.Empty => [],
+                _ => null,
+            };
+        }
 
         /// <summary>
         /// The ranks of the bases one level up from <paramref name="level"/>'s types, nearest first: the mixins each type
@@ -1800,7 +2132,7 @@ public static class CodeGraphLinker
             var parts = _declarations.Where(declaration => declaration.Node.Part).ToList();
             var joined = new PartsJoined(parts.Count);
             var byQualified = new Dictionary<string, int>(StringComparer.Ordinal);
-            var byFile = new Dictionary<(string Path, string Name), int>();
+            var places = new Dictionary<Declaration, int>(ReferenceEqualityComparer.Instance);
 
             for (var at = 0; at < parts.Count; at++)
             {
@@ -1809,16 +2141,12 @@ public static class CodeGraphLinker
                     joined.Join(at, byQualified[parts[at].Node.Qualified]);
                 }
 
-                byFile.TryAdd((parts[at].File.Path, SimpleName(parts[at].Node.Qualified)), at);
+                places[parts[at]] = at;
             }
 
-            for (var at = 0; at < parts.Count; at++)
+            foreach (var (codeBehind, component) in CodeBehinds())
             {
-                if (parts[at].File.Path.EndsWith(".razor.cs", StringComparison.OrdinalIgnoreCase)
-                    && byFile.TryGetValue((parts[at].File.Path[..^3], SimpleName(parts[at].Node.Qualified)), out var component))
-                {
-                    joined.Join(at, component);
-                }
+                joined.Join(places[codeBehind], places[component]);
             }
 
             foreach (var alike in Enumerable.Range(0, parts.Count).GroupBy(joined.Root).Select(group => group.Select(at => parts[at]).ToList()).Where(group => group.Count > 1))
@@ -1839,9 +2167,6 @@ public static class CodeGraphLinker
                     _edges.Add(new CodeEdge(ids[at], ids[0], CodeEdgeKinds.PartOf, part.Node.Start, part.Node.Qualified == first.Node.Qualified ? CodeConfidences.Exact : CodeConfidences.Unique));
                 }
             }
-
-            // A qualified name's last part: the type's own name, its count of type parameters among it.
-            static string SimpleName(string qualified) => qualified.LastIndexOf('.') is var dot and >= 0 ? qualified[(dot + 1)..] : qualified;
         }
 
         /// <summary>
@@ -2320,6 +2645,24 @@ public static class CodeGraphLinker
             return _byId.TryGetValue(id, out var parts) ? parts : [];
         }
 
+        /// <summary>
+        /// The ids of the parts the files of <paramref name="id"/>'s parts join to it though their qualified names differ
+        /// (<see cref="CodeBehinds"/>): a Blazor component's code-behind partial, and the component of a code-behind. The
+        /// finding under way reads the pair of files, so a code-behind come, gone or renamed finds it again.
+        /// </summary>
+        private IReadOnlyList<string> SiblingsOf(string id)
+        {
+            foreach (var part in PartsOf(id).Where(part => part.Node.Part))
+            {
+                if (ComponentPath(part.File.Path) is { } component)
+                {
+                    Touch(Read.Siblings, component);
+                }
+            }
+
+            return _siblings.TryGetValue(id, out var siblings) ? siblings : [];
+        }
+
         /// <summary>Whether <paramref name="path"/> is a file of the tree.</summary>
         private bool IsFile(string path)
         {
@@ -2525,6 +2868,12 @@ public static class CodeGraphLinker
 
                 Add(Read.Id, node.Id, shape);
 
+                // A part a component's file or its code-behind's declares is what pairs the two (CodeBehinds).
+                if (node.Part && ComponentPath(file.Path) is { } component)
+                {
+                    Add(Read.Siblings, component, $"{file.Path}{FieldEnd}{SimpleName(node.Qualified)}{FieldEnd}{node.Id}");
+                }
+
                 if (own is not null)
                 {
                     Add(Read.Qualified, node.Qualified, shape);
@@ -2544,17 +2893,24 @@ public static class CodeGraphLinker
                 yield break;
             }
 
-            // Each rank's ids and where it ends: a base moved from one rank to another is a change too.
-            static string Written(List<string[]>? ranks) => ranks is null ? string.Empty : string.Join(PartEnd, ranks.Select(rank => string.Join(FieldEnd, rank)));
-
             foreach (var id in before.Keys.Union(now.Keys, StringComparer.Ordinal))
             {
-                if (Written(before.GetValueOrDefault(id)) != Written(now.GetValueOrDefault(id)))
+                if (Ranks(before.GetValueOrDefault(id)) != Ranks(now.GetValueOrDefault(id)))
                 {
                     yield return _keys.Of((int)Read.Bases, id);
                 }
             }
         }
+
+        /// <summary>Every type's bases written out, the types in order: what tells two rounds' bases apart.</summary>
+        private static string Written(Dictionary<string, List<string[]>> bases)
+            => string.Join(PartEnd, bases.Keys.Order(StringComparer.Ordinal).Select(id => id + FieldEnd + FieldEnd + Ranks(bases[id])));
+
+        /// <summary>One type's ranks of bases written out: each rank's ids and where it ends, so a base moved from one rank to another is a change too.</summary>
+        private static string Ranks(List<string[]>? ranks) => ranks is null ? string.Empty : string.Join(RankEnd, ranks.Select(rank => string.Join(FieldEnd, rank)));
+
+        /// <summary>What ends one rank of a type's bases written out.</summary>
+        private const string RankEnd = "\u0003";
 
         /// <summary>
         /// What an import is, as a finding reads it: its form, target, prefix, filters, whether it stands in for the one
@@ -2814,4 +3170,10 @@ public sealed record CodeGraphLinked(
 {
     /// <summary>What the link keeps for one made again from it (<see cref="CodeGraphLinker.Relink"/>).</summary>
     internal CodeGraphLinker.LinkMemory? Memory { get; init; }
+
+    /// <summary>
+    /// How many links of chains of names the link read (<see cref="ExtractQualifier.Link"/>): each once for each
+    /// declaration that reads through it, and again for each round of the bases that might move what it comes to.
+    /// </summary>
+    internal int ChainLinks { get; init; }
 }

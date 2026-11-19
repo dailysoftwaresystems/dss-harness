@@ -58,7 +58,7 @@ public sealed partial class RazorExtractor : ICodeGraphExtractor
 
     /// <inheritdoc/>
     public CodeGraphExtractorHelp Help { get; } = new(
-        "Razor views (.cshtml) and Blazor components (.razor): a component as a type named by its file in its @namespace - else the namespace its directory's path gives, none at the tree's root - generic by its @typeparams, a part of its code-behind partial, a view as a section over its lines; the file read as Razor's parser reads it and the class it compiles to read by the C# reader - its @code and @functions blocks, an @inject a property of the type it is given, @model its Model property, @inherits and @implements its bases, @attribute an attribute of it - and every piece of C# its markup holds, each @{ } block, each @if, @foreach, @try and their kin with their else, catch and finally, each @x and @( ) expression, each directive attribute's value (@onclick, @bind), @layout's type and @page's route, read as code of the file's head that sees the class's members: what it calls, makes and uses - a name the markup's own code declares where it stands (a statement's or a pattern's variable, a @{ } block's local, a template's context - or the name its Context= gives - inside a component's content) the markup's and no member; @using read by the C# reader as a scope import - one a _ViewImports.cshtml or _Imports.razor holds reaching every file of the language under its directory; and its markup read by the reader every markup file shares: a PascalCase element, a partial name= and an Html.Partial(\"x\") as instantiates, and each class and id as a use of the rule that styles it",
+        "Razor views (.cshtml) and Blazor components (.razor): a component as a type named by its file in its @namespace - else the namespace its directory's path gives, none at the tree's root - generic by its @typeparams, a part of its code-behind partial, a view as a section over its lines; the file read as Razor's parser reads it and the class it compiles to read by the C# reader - its @code and @functions blocks, an @inject a property of the type it is given, @model its Model property, @inherits and @implements its bases, @attribute an attribute of it - and every piece of C# its markup holds, each @{ } block, each @if, @foreach, @try and their kin with their else, catch and finally, each @x and @( ) expression, each directive attribute's value (@onclick, @bind), @layout's type and @page's route, read as code of the file's head that sees the class's members: what it calls, makes and uses - a name the markup's own code declares where it stands (a statement's or a pattern's variable, a @{ } block's local, a template's context - or the name its Context= gives - inside a component's content) the markup's and no member; @using read by the C# reader as a scope import - one a _ViewImports.cshtml or _Imports.razor holds reaching every file of the language under its directory, as its @namespace does; and its markup read by the reader every markup file shares: a PascalCase element, a partial name= and an Html.Partial(\"x\") as instantiates, and each class and id as a use of the rule that styles it",
         [
             "what a tag helper is, and an element no component of the tree names: an instantiates that resolves nowhere, counted as such",
             "a component attribute written without an @ whose parameter is no string - Count=\"Items.Count\" - read as text: the parameter's type is the component's, which the file does not say",
@@ -196,7 +196,7 @@ public sealed partial class RazorExtractor : ICodeGraphExtractor
             embedded.Add(read);
         }
 
-        if (Usings(lines, razor) is { } usings)
+        if (Usings(lines, razor, Imports.Contains(name)) is { } usings)
         {
             var read = CSharpExtractor.Read(Language, new CodeFileInput(input.Path, usings));
 
@@ -398,10 +398,14 @@ public sealed partial class RazorExtractor : ICodeGraphExtractor
         }
     }
 
-    /// <summary>Each <c>@using</c> as the C# directive it is, on the line it stands on, and nothing else; <see langword="null"/> where the file holds none.</summary>
-    private static string? Usings(CodeLineIndex lines, Syntax razor)
+    /// <summary>
+    /// Each <c>@using</c> as the C# directive it is, on the line it stands on, and nothing else - and, in a file whose
+    /// directives reach its directory's every file (<paramref name="imports"/>), its <c>@namespace</c> as one too: the
+    /// namespace every component under it is in, and so sees the names of; <see langword="null"/> where the file holds none.
+    /// </summary>
+    private static string? Usings(CodeLineIndex lines, Syntax razor, bool imports)
     {
-        var usings = razor.Directives.Where(directive => directive.Name == "using" && directive.Rest.Length > 0).ToList();
+        var usings = razor.Directives.Where(directive => (directive.Name == "using" || (imports && directive.Name == "namespace")) && directive.Rest.Length > 0).ToList();
 
         if (usings.Count == 0)
         {
