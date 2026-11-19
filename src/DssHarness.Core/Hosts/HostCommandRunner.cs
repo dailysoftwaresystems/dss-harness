@@ -219,6 +219,17 @@ public sealed record HostCommand
 
     /// <summary>How much of standard error the result keeps, as <see cref="OutputKept"/> says of standard output.</summary>
     public StreamKept ErrorKept { get; init; }
+
+    /// <summary>
+    /// Where standard output is written whole as it arrives, so the result's tail is quoted by reference to it; see
+    /// <see cref="ProcessRequest.OutputLog"/>. Over ssh and WSL it is what the local process that reaches the host relays,
+    /// a host's startup output before the mark among it; <see langword="null"/> where the caller keeps or shows each line
+    /// itself.
+    /// </summary>
+    public string? OutputLog { get; init; }
+
+    /// <summary>Where standard error is written whole as it arrives, as <see cref="OutputLog"/> says of standard output.</summary>
+    public string? ErrorLog { get; init; }
 }
 
 /// <summary>
@@ -555,6 +566,8 @@ public sealed class HostCommandRunner(IProcessRunner processRunner) : IHostComma
             OnErrorLine = command.OnErrorLine,
             OutputKept = command.OutputKept,
             ErrorKept = command.ErrorKept,
+            OutputLog = command.OutputLog,
+            ErrorLog = command.ErrorLog,
         };
 
         string Marked(string line) => mark is null ? line : RemoteCommandLine.Marked(line, mark, connection.Shell);
