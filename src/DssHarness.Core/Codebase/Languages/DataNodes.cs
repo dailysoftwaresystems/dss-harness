@@ -28,9 +28,10 @@ internal sealed class DataNodes(string language, string file, int lineCount)
     public const int MostNesting = 64;
 
     /// <summary>
-    /// The most nodes a walk visits again through what a file repeats by reference - a YAML alias - past which what it
-    /// repeats is counted, not read, and the place is marked: a few hundred bytes of aliases can stand for millions of
-    /// nodes.
+    /// The most visits reading a file makes through what it repeats by reference - a YAML alias, each node reached through
+    /// one, each key a merge reads through one - past which what it repeats is counted, not read, and the place is marked:
+    /// a few hundred bytes of aliases can stand for millions of nodes, and each visit past the budget costs no more than
+    /// its count.
     /// </summary>
     public const int MostRepeated = 10 * FileExtract.MostKeys;
 
@@ -39,7 +40,6 @@ internal sealed class DataNodes(string language, string file, int lineCount)
     private readonly List<ExtractDynamic> _dynamic = [];
     private long _beyond;
     private int _repeated;
-    private bool _repeatedPast;
 
     /// <summary>The nodes made, in the order they were made.</summary>
     public IReadOnlyList<ExtractNode> Nodes => _nodes;
@@ -55,7 +55,7 @@ internal sealed class DataNodes(string language, string file, int lineCount)
 
     /// <summary>Counts <paramref name="keys"/> keys or elements no node is made of.</summary>
     /// <param name="keys">How many.</param>
-    public void Count(long keys) => _beyond = keys > long.MaxValue - _beyond ? long.MaxValue : _beyond + keys;
+    public void Count(long keys) => _beyond = Sum(_beyond, keys);
 
     /// <summary>Marks <paramref name="line"/> as a place reading stopped at, with why.</summary>
     /// <param name="line">The line, from 1, held within the file's.</param>
@@ -161,8 +161,9 @@ internal sealed class DataNodes(string language, string file, int lineCount)
     /// <summary>
     /// Walks <paramref name="root"/>, a data file's value: each scalar key a key node named by its path, each container at
     /// the top a section over its lines, each item of a list placed by its place - nothing deeper than
-    /// <see cref="MostDepth"/> places kept, the keys past it counted, and a container repeated past
-    /// <see cref="MostRepeated"/> visits counted and its place marked.
+    /// <see cref="MostDepth"/> places kept, the keys past it counted, what its reader leaves unread
+    /// (<see cref="IDataValue.Unread"/>) counted, and once the extract is <see cref="Full"/>, what each value holds past that
+    /// point counted whole, never visited a member at a time.
     /// </summary>
     /// <param name="root">The file's value.</param>
     /// <returns>The sections made at the top, by the name of the member each is.</returns>
@@ -177,9 +178,18 @@ internal sealed class DataNodes(string language, string file, int lineCount)
 
     private void Walk(IDataValue value, List<DataPlace> path, string? parent, Dictionary<string, string> sections)
     {
-        foreach (var (place, line, member) in value.Members)
+        // What of the value's keys the members walked so far hold, so that once the extract is full the rest is counted from
+        // the value's own count: a member past that point is never asked for, so nothing its reader would visit to give it
+        // is visited.
+        long walked = 0;
+        using var members = value.Members.GetEnumerator();
+
+        while (!Full && members.MoveNext())
         {
-            if (member.Repeated && !Repeats(line))
+            var (place, line, member) = members.Current;
+            walked = Sum(walked, member.Scalars);
+
+            if (member.Unread)
             {
                 Count(member.Scalars);
                 continue;
@@ -218,29 +228,39 @@ internal sealed class DataNodes(string language, string file, int lineCount)
                 path.RemoveAt(path.Count - 1);
             }
         }
+
+        if (Full)
+        {
+            Count(Math.Max(0, value.Scalars - walked));
+        }
     }
 
     /// <summary>
-    /// Whether reading may visit one more node through what the file repeats - a walk's, and a reader's of its own that
-    /// reads what a reference repeats, as YAML's merge keys - the place marked the first time it may not: one budget of
-    /// <see cref="MostRepeated"/> for all of it.
+    /// Whether reading may make one more visit through what the file repeats - an alias, a node reached through one, a key
+    /// a merge reads through one, whoever reads it - the place marked the first time it may not: one budget of
+    /// <see cref="MostRepeated"/> for all of it, which never grants a visit again once spent.
     /// </summary>
     /// <param name="line">The line the visit is made from, which the mark names.</param>
     public bool Repeats(int line)
     {
-        if (++_repeated <= MostRepeated)
+        if (_repeated < MostRepeated)
         {
+            _repeated++;
             return true;
         }
 
-        if (!_repeatedPast)
+        if (_repeated == MostRepeated)
         {
-            _repeatedPast = true;
+            // Past the budget the count stays where it is, one past: no number of visits refused brings it round again.
+            _repeated++;
             Stopped(line, $"the file's aliases repeat more than {MostRepeated.ToString(CultureInfo.InvariantCulture)} nodes, and what they repeat from here on is not read");
         }
 
         return false;
     }
+
+    /// <summary><paramref name="count"/> and <paramref name="more"/> added, held at <see cref="long.MaxValue"/>.</summary>
+    internal static long Sum(long count, long more) => more > long.MaxValue - count ? long.MaxValue : count + more;
 
     /// <summary>
     /// The path <paramref name="places"/> are: each name joined by a dot, an item's place and a name that is empty, white
@@ -310,10 +330,16 @@ internal interface IDataValue
     /// <summary>The last line it is written on, from 1: where its content ends, its closing bracket among it.</summary>
     int End { get; }
 
-    /// <summary>Whether it is reached through what the file repeats by reference - an alias - so a walk visits it again.</summary>
-    bool Repeated { get; }
+    /// <summary>
+    /// Whether it stands for what its reader leaves unread - what a file repeats by reference past its budget
+    /// (<see cref="DataNodes.Repeats"/>) - which a walk counts and never reads.
+    /// </summary>
+    bool Unread { get; }
 
-    /// <summary>How many scalar keys it holds at any depth, itself one where it holds none: what a walk counts of it where it walks it not.</summary>
+    /// <summary>
+    /// How many scalar keys it holds at any depth, itself one where it holds none: what a walk counts of it where it walks
+    /// it not - as many as its members hold together, so a walk that stops among them counts the rest from it.
+    /// </summary>
     long Scalars { get; }
 
     /// <summary>Its members or items, in the order the file writes them, each with its place and the line it is written on.</summary>

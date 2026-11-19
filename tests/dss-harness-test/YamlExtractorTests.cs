@@ -224,28 +224,121 @@ public sealed class YamlExtractorTests : CodeGraphExtractorContractTests<YamlExt
     }
 
     /// <summary>
-    /// Merge keys that merge one large mapping again and again - each merge reading every key of it, the ones a key before
-    /// shadows among them - spend the file's budget of what it repeats as aliases do: past
-    /// <see cref="DataNodes.MostRepeated"/> nodes no merge reads more, and the line it stops at is marked.
+    /// Merge keys that merge one large mapping - each key a merge reads through an alias a visit - spend the file's budget
+    /// of what it repeats as aliases do, a mapping merged twice in one list merged once: past
+    /// <see cref="DataNodes.MostRepeated"/> visits no merge reads more, the line it stops at is marked, and each later
+    /// merge is counted at its first key, its mapping's keys never visited again.
     /// </summary>
     [Fact]
     public void MergesOfOneMappingAgainAndAgain_SpendTheBudgetOfWhatTheFileRepeats()
     {
-        var text = new System.Text.StringBuilder($"a: &a {{ {string.Join(", ", Enumerable.Range(0, 100).Select(at => $"k{at}: 1"))} }}\n");
+        // Each key of the mapping merged holds an empty list, so no merge makes a node and the extract is never full.
+        var text = new System.Text.StringBuilder($"a: &a {{ {string.Join(", ", Enumerable.Range(0, 1000).Select(at => $"k{at}: []"))} }}\n");
 
-        for (var at = 0; at < 10; at++)
+        for (var at = 0; at < 100; at++)
         {
-            text.Append($"m{at}: {{ <<: [{string.Join(", ", Enumerable.Repeat("*a", 64))}] }}\n");
+            text.Append($"m{at}: {{ <<: [*a, *a] }}\n");
         }
 
+        var watch = System.Diagnostics.Stopwatch.StartNew();
         var extract = Read("merges.yml", text.ToString());
 
-        // Each mapping reads its 64 merges' 6,400 keys and walks the 100 they give: the eighth, m7 on line 9, passes the
-        // budget, keeping the keys its first merge gave; m8 and m9 merge none.
-        Assert.Equal([new ExtractDynamic(9, $"the file's aliases repeat more than {DataNodes.MostRepeated} nodes, and what they repeat from here on is not read")], extract.Dynamic);
-        Assert.Equal(
-            [100, 100, 100, 100, 100, 100, 100, 100, 0, 0],
-            Enumerable.Range(0, 10).Select(at => extract.Nodes.Count(node => node.Qualified.StartsWith($"m{at}.", StringComparison.Ordinal))));
+        // Each mapping visits the 1,000 keys its one merge gives: m0 to m49 spend the budget, and m50, on line 52, is the
+        // first that merges none.
+        Assert.Equal([new ExtractDynamic(52, $"the file's aliases repeat more than {DataNodes.MostRepeated} nodes, and what they repeat from here on is not read")], extract.Dynamic);
+        Assert.Equal(["a", .. Enumerable.Range(0, 100).Select(at => $"m{at}")], extract.Nodes.Select(node => node.Name));
+        Assert.Equal(0, extract.KeysBeyond);
+        Assert.True(watch.Elapsed < TimeSpan.FromSeconds(10), $"the file took {watch.Elapsed} to read");
+    }
+
+    /// <summary>
+    /// An alias of one wide anchor written again and again spends the budget at the alias: once the file has made
+    /// <see cref="DataNodes.MostRepeated"/> visits through its aliases, each later alias is counted where it is written,
+    /// the anchor's members never visited again - a list of thousands of aliases of a list of fifty thousand is read in a
+    /// moment.
+    /// </summary>
+    [Fact]
+    public void AnAliasOfAWideAnchorWrittenAgainAndAgain_IsCountedAtTheAlias_PastTheBudget()
+    {
+        // The anchor's items are empty lists, which make no node: the extract is never full, so only the budget bounds the
+        // walk.
+        var text = $"a: &a [{string.Join(", ", Enumerable.Repeat("[]", DataNodes.MostRepeated + 1))}]\nb: [{string.Join(", ", Enumerable.Repeat("*a", 5000))}]\n";
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        var extract = Read("wide.yml", text);
+
+        // The first alias and its first 49,999 items are the budget's visits; the rest of it, and every later alias, counted.
+        Assert.Equal([new ExtractDynamic(2, $"the file's aliases repeat more than {DataNodes.MostRepeated} nodes, and what they repeat from here on is not read")], extract.Dynamic);
+        Assert.Equal(["a", "b"], extract.Nodes.Select(node => node.Name));
+        Assert.Equal(0, extract.KeysBeyond);
+        Assert.True(watch.Elapsed < TimeSpan.FromSeconds(10), $"the file took {watch.Elapsed} to read");
+    }
+
+    /// <summary>
+    /// Counting the keys past those an extract keeps spends nothing of the budget a walk reads what aliases repeat by: a
+    /// large CI file of a template every job merges - with a second mapping that shares two of its names, and a key of the
+    /// template each job writes itself - is marked nowhere, and every key it holds is a node or counted, a shadowed one never
+    /// counted twice.
+    /// </summary>
+    [Fact]
+    public void CountingALargeFileOfMerges_SpendsNoneOfTheBudget_AndCountsEveryKeyOnce()
+    {
+        const int Jobs = 2500;
+        var text = new System.Text.StringBuilder(".defaults: &defaults\n");
+
+        for (var at = 0; at < 25; at++)
+        {
+            text.Append($"  k{at}: v{at}\n");
+        }
+
+        text.Append(".docker: &docker\n  k23: x\n  k24: y\n  image: dotnet\n  services: db\n  tags: linux\n");
+
+        for (var at = 0; at < Jobs; at++)
+        {
+            text.Append($"job{at}:\n  <<: [*defaults, *docker]\n  k0: own\n  script: run {at}\n");
+        }
+
+        var extract = Read(".gitlab-ci.yml", text.ToString());
+
+        // Each job holds its own k0 and script, the template's other 24 and the three names of the second it adds: 29.
+        var keys = 25 + 5 + (Jobs * 29L);
+        var kept = extract.Nodes.Count(node => node.Kind == CodeNodeKinds.Member);
+
+        Assert.Empty(extract.Dynamic);
+        Assert.Equal((FileExtract.MostKeys, keys), (extract.Nodes.Count, kept + (long)extract.KeysBeyond));
+    }
+
+    /// <summary>
+    /// A count of what merges of many large mappings share compares their names at most
+    /// <see cref="YamlExtractor.MostCompared"/> times: past it, a key two of the mappings hold is counted once for each, the
+    /// line of the mapping whose count passed it marked - and the file is read in a moment.
+    /// </summary>
+    [Fact]
+    public void MergesComparedPastTheBound_CountAKeyTwoMappingsHoldOnceForEach_TheLineMarked()
+    {
+        const int Mappings = 128;
+        const int Each = 100;
+        var text = new System.Text.StringBuilder();
+
+        // Each mapping holds the same 100 names and 100 of its own.
+        for (var at = 0; at < Mappings; at++)
+        {
+            text.Append($"s{at}: &s{at} {{ {string.Join(", ", Enumerable.Range(0, Each).Select(name => $"shared{name}: 1").Concat(Enumerable.Range(0, Each).Select(name => $"own{at}_{name}: 1")))} }}\n");
+        }
+
+        // The mapping that merges them all is nested past the depth keys are read at, so it is counted, never walked.
+        text.Append("x:\n a:\n  b:\n   c:\n    d:\n     e:\n      f:\n       g:\n        <<: [")
+            .Append(string.Join(", ", Enumerable.Range(0, Mappings).Select(at => $"*s{at}")))
+            .Append("]\n");
+
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        var extract = Read("shared.yml", text.ToString());
+        var kept = extract.Nodes.Count(node => node.Kind == CodeNodeKinds.Member);
+
+        // Told whole, the merging mapping holds the 100 names once and each mapping's own 100; past the bound, each
+        // mapping's 200.
+        Assert.Equal([new ExtractDynamic(Mappings + 9, $"the file's merge keys compare more than {YamlExtractor.MostCompared} names, and from here on a key both a mapping and what it merges hold, or two mappings it merges, is counted once for each")], extract.Dynamic);
+        Assert.Equal(Mappings * 2L * Each * 2, kept + (long)extract.KeysBeyond);
+        Assert.True(watch.Elapsed < TimeSpan.FromSeconds(10), $"the file took {watch.Elapsed} to read");
     }
 
     /// <summary>

@@ -10,8 +10,10 @@ namespace DssHarness.Core.Codebase.Languages;
 /// member that holds others a <c>section</c> over its lines, and each scalar key anywhere down to
 /// <see cref="DataNodes.MostDepth"/> places of its path a <c>member</c> SubKind <c>key</c> named by its path, its value as
 /// its summary. Its aliases are followed - a key reached through one on the alias's line, where the key is written into
-/// this place - at most <see cref="DataNodes.MostRepeated"/> nodes, and its merge keys read as the keys of the mapping that
-/// merges them, one merged of a list of mappings too, a key the mapping writes itself winning. A file of several documents
+/// this place - at most <see cref="DataNodes.MostRepeated"/> visits, the alias itself one, and its merge keys read as the
+/// keys of the mapping that merges them, one merged of a list of mappings too, a key the mapping writes itself winning;
+/// what is counted rather than read is counted from what the text writes, never by visiting what an alias repeats
+/// (<see cref="Counts"/>). A file of several documents
 /// is each document a section by its place, <c>[0]</c> the first. A GitHub Actions workflow - a YAML file under
 /// <c>.github/workflows/</c> - is read further as its jobs and its steps, each a <c>section</c> inside its holder: a step's
 /// <c>uses:</c> that names a local action by a path of the repository an import of its <c>action.yml</c>, and a job's
@@ -21,6 +23,14 @@ namespace DssHarness.Core.Codebase.Languages;
 /// </summary>
 public sealed class YamlExtractor : ICodeGraphExtractor
 {
+    /// <summary>
+    /// The most names a count of a file's keys compares to tell which keys of the mappings its merge keys merge are shadowed -
+    /// by a key the merging mapping writes itself, or by an earlier mapping it merges - past which a key two of them hold is
+    /// counted once for each and the place is marked: a few lines of merges of large mappings can make a count compare
+    /// without end.
+    /// </summary>
+    internal const int MostCompared = 100 * FileExtract.MostKeys;
+
     /// <summary>The key a workflow names its jobs under.</summary>
     private const string Jobs = "jobs";
 
@@ -42,7 +52,8 @@ public sealed class YamlExtractor : ICodeGraphExtractor
         [
             "pubspec.yaml, which the pubspec extractor reads",
             $"a key nested past {DataNodes.MostDepth.ToString(CultureInfo.InvariantCulture)} places of its path, and a file of more than {FileExtract.MostKeys.ToString(CultureInfo.InvariantCulture)} keys and sections: the first {FileExtract.MostKeys.ToString(CultureInfo.InvariantCulture)} are kept, the rest counted, and an answer about the file says how many",
-            $"what aliases repeat past {DataNodes.MostRepeated.ToString(CultureInfo.InvariantCulture)} nodes, and what a file nests past {DataNodes.MostNesting.ToString(CultureInfo.InvariantCulture)} levels: counted or not read, the line marked dynamic",
+            $"what a file's aliases and merge keys repeat past {DataNodes.MostRepeated.ToString(CultureInfo.InvariantCulture)} visits - an alias, each node reached through one and each key a merge reads through one a visit, a workflow's reading of its jobs among them - counted from what the text writes, never read, the line marked dynamic; and what a file nests past {DataNodes.MostNesting.ToString(CultureInfo.InvariantCulture)} levels: not read, the line marked dynamic",
+            $"which keys of the mappings a merge key merges are shadowed, past {MostCompared.ToString(CultureInfo.InvariantCulture)} names a file's count compares to tell it: from there on, a key both a mapping and what it merges hold, or two mappings it merges, is counted once for each, the line marked dynamic",
             "what follows the point a file stops reading as YAML - a template's {{ }} among it: what came before is read, the line it stops at marked dynamic",
             "a key's value past the cut of a summary",
             "a uses: that names an action or a workflow of a marketplace or of another repository by its owner: no import of it",
@@ -201,10 +212,11 @@ public sealed class YamlExtractor : ICodeGraphExtractor
         public int Before(Mark mark) => FileExtract.LineWithin(index.LineAt((int)Math.Clamp(mark.Index - 1, 0, length)), count);
     }
 
+
     /// <summary>
-    /// What reading one file's nodes shares: its lines, how many scalar keys each node holds - counted once a node - and the
-    /// budget of what the file repeats by reference (<see cref="DataNodes.Repeats"/>), which a merge key's reading spends
-    /// as a walk's does.
+    /// What reading one file's nodes shares: its lines, its nodes - whose budget of what the file repeats by reference
+    /// (<see cref="DataNodes.Repeats"/>) every visit through an alias spends, a walk's and a workflow's reading of its jobs
+    /// alike - and how many keys each node holds (<see cref="Counts"/>), which spends none of it.
     /// </summary>
     /// <param name="lines">The file's lines.</param>
     /// <param name="nodes">The file's nodes, whose budget of repeats is the file's.</param>
@@ -214,7 +226,7 @@ public sealed class YamlExtractor : ICodeGraphExtractor
 
         public DataNodes Nodes => nodes;
 
-        public Dictionary<YamlWritten, long> Scalars { get; } = new(ReferenceEqualityComparer.Instance);
+        public Counts Counts { get; } = new(lines, nodes);
     }
 
     /// <summary>A file's documents, each by its place, as a walk of its keys reads them.</summary>
@@ -226,9 +238,9 @@ public sealed class YamlExtractor : ICodeGraphExtractor
 
         public int End => documents.Max(document => new Node(document, null, reading).End);
 
-        public bool Repeated => false;
+        public bool Unread => false;
 
-        public long Scalars => documents.Sum(document => new Node(document, null, reading).Scalars);
+        public long Scalars => documents.Aggregate(0L, (count, document) => DataNodes.Sum(count, reading.Counts.Of(document)));
 
         public IEnumerable<(DataPlace Place, int Line, IDataValue Value)> Members
             => documents.Select((document, at) => (DataPlace.At(at), reading.Lines.Of(document.Start), (IDataValue)new Node(document, null, reading)));
@@ -236,7 +248,12 @@ public sealed class YamlExtractor : ICodeGraphExtractor
 
     /// <summary>
     /// A YAML node as a walk of its keys reads it: an alias as the node it names, every line where this place writes it -
-    /// through an alias, the alias's own line, which <paramref name="over"/> holds for all it repeats.
+    /// through an alias, the alias's own line, which <paramref name="over"/> holds for all it repeats. Each member it gives
+    /// through an alias - an alias written here, what one repeats, a key a merge reads through one, one a key before it
+    /// shadows among them - is a visit of what the file repeats (<see cref="DataNodes.Repeats"/>). Past the file's budget,
+    /// what this place still holds through one is given as one member that is counted, never read (<see cref="Counted"/>):
+    /// the rest of what an alias repeats, or of what a mapping merges, whole, and an alias written here alone - so a visit
+    /// past the budget costs no more than its count.
     /// </summary>
     /// <param name="written">The node as the text writes it here.</param>
     /// <param name="over">The line of the alias it is reached through, where it is reached through one; null where written here.</param>
@@ -246,9 +263,12 @@ public sealed class YamlExtractor : ICodeGraphExtractor
         private readonly Lines _lines = reading.Lines;
 
         /// <summary>What the node is: an alias's node, or itself; null for an alias that names nothing or is not followed.</summary>
-        private YamlWritten? Resolved => written.Kind == YamlWrittenKind.Alias ? written.Target : written;
+        private YamlWritten? Resolved => Resolve(written);
 
-        /// <summary>The line of the alias the node and all it holds are reached through, where it is one.</summary>
+        /// <summary>
+        /// The line of the alias the node and all it holds are reached through - an alias's own, where it is written here -
+        /// which makes a visit of it one of what the file repeats; null where it is written here.
+        /// </summary>
         private int? Over => over ?? (written.Kind == YamlWrittenKind.Alias ? _lines.Of(written.Start) : null);
 
         /// <summary>A container, or an alias not followed: what it repeats nests too deep to read, and none of it is.</summary>
@@ -258,134 +278,89 @@ public sealed class YamlExtractor : ICodeGraphExtractor
 
         public int End => Over ?? Last(written);
 
-        public bool Repeated => over is not null;
+        public bool Unread => false;
 
-        public long Scalars => written is { Kind: YamlWrittenKind.Alias, Cut: true } ? 0 : Resolved is not { } node ? 1 : Count(node);
+        public long Scalars => reading.Counts.Of(written);
 
         public IEnumerable<(DataPlace Place, int Line, IDataValue Value)> Members
         {
             get
             {
-                if (written.Cut || Resolved is not { Cut: false } node)
-                {
-                    yield break;
-                }
+                var repeated = Over is not null;
+                long given = 0;
 
-                if (node.Kind == YamlWrittenKind.Sequence)
+                foreach (var visit in Visits())
                 {
-                    for (var at = 0; at < node.Children.Count; at++)
+                    if (visit.Value.Over is not null && !reading.Nodes.Repeats(visit.Line))
                     {
-                        yield return (DataPlace.At(at), Over ?? _lines.Of(node.Children[at].Start), new Node(node.Children[at], Over, reading));
+                        // Past the budget, every later visit through a repeat is refused too: what is left of a container
+                        // reached through one, or of a mapping's merged keys, is one member counted, and an alias written
+                        // here is counted alone, the keys written beside it read on.
+                        if (repeated || visit.Merged)
+                        {
+                            yield return (visit.Place, visit.Line, new Counted(visit.Line, Math.Max(0, Scalars - given)));
+                            yield break;
+                        }
+
+                        given = DataNodes.Sum(given, visit.Value.Scalars);
+                        yield return (visit.Place, visit.Line, new Counted(visit.Line, visit.Value.Scalars));
+                        continue;
                     }
 
-                    yield break;
-                }
-
-                if (node.Kind != YamlWrittenKind.Mapping)
-                {
-                    yield break;
-                }
-
-                foreach (var member in Effective(node, Over))
-                {
-                    yield return member;
+                    if (!visit.Shadowed)
+                    {
+                        given = DataNodes.Sum(given, visit.Value.Scalars);
+                        yield return (visit.Place, visit.Line, visit.Value);
+                    }
                 }
             }
         }
 
         /// <summary>
-        /// The keys of <paramref name="mapping"/>, as a mapping that merges others reads: its own, in the order written, then
-        /// each merged mapping's - of a merge key's mapping or list of mappings, in order - but one of a name a key before it
-        /// gave, the mapping's own winning, an earlier merged one over a later. Each key a merge reads - one it gives, and one
-        /// a key before it shadows - is a visit of what the file repeats (<see cref="DataNodes.Repeats"/>): a few lines of
-        /// merges of large mappings stand for many keys, and past the file's budget none is read.
+        /// Each visit reading the node makes, as the text gives its members: a list's items; a mapping's own keys in the order
+        /// written, then each merged mapping's (<see cref="MergesOf"/>) - its own merged ones among them - one of a name a key
+        /// before it gave shadowed, the mapping's own winning, an earlier merged one over a later. Each is on the line this
+        /// place writes it: where it is reached through an alias, the alias's.
         /// </summary>
-        private IEnumerable<(DataPlace Place, int Line, IDataValue Value)> Effective(YamlWritten mapping, int? repeated)
+        private IEnumerable<Visit> Visits()
         {
+            if (written.Cut || Resolved is not { Cut: false } node)
+            {
+                yield break;
+            }
+
+            if (node.Kind == YamlWrittenKind.Sequence)
+            {
+                for (var at = 0; at < node.Children.Count; at++)
+                {
+                    yield return new Visit(DataPlace.At(at), Over ?? _lines.Of(node.Children[at].Start), new Node(node.Children[at], Over, reading), Merged: false, Shadowed: false);
+                }
+
+                yield break;
+            }
+
+            if (node.Kind != YamlWrittenKind.Mapping)
+            {
+                yield break;
+            }
+
             var given = new HashSet<string>(StringComparer.Ordinal);
-            var merged = new List<(YamlWritten Source, int? Over)>();
 
-            for (var at = 0; at + 1 < mapping.Children.Count; at += 2)
+            foreach (var (key, value) in OwnKeys(node))
             {
-                var (key, value) = (mapping.Children[at], mapping.Children[at + 1]);
-
-                if (key is { Kind: YamlWrittenKind.Scalar, Plain: true, Value: "<<" })
-                {
-                    merged.AddRange(Merged(value, repeated));
-                    continue;
-                }
-
-                if (key.Kind != YamlWrittenKind.Scalar || key.Value is not { } name)
-                {
-                    continue;
-                }
-
-                given.Add(name);
-                yield return (DataPlace.Named(name), repeated ?? _lines.Of(key.Start), new Node(value, repeated, reading));
+                given.Add(key.Value!);
+                yield return new Visit(DataPlace.Named(key.Value!), Over ?? _lines.Of(key.Start), new Node(value, Over, reading), Merged: false, Shadowed: false);
             }
 
-            foreach (var (source, through) in merged)
+            foreach (var (merged, list) in MergesOf(node))
             {
-                foreach (var member in new Node(source, through, reading).Members)
-                {
-                    if (!reading.Nodes.Repeats(member.Line))
-                    {
-                        yield break;
-                    }
+                var source = new Node(merged, Over ?? (list is null ? null : _lines.Of(list.Start)), reading);
 
-                    if (member.Place.Name is { } name && given.Add(name))
-                    {
-                        yield return member;
-                    }
+                foreach (var visit in source.Visits())
+                {
+                    yield return visit with { Merged = true, Shadowed = visit.Shadowed || !given.Add(visit.Place.Name!) };
                 }
             }
-        }
-
-        /// <summary>The mappings a merge key's value merges: a mapping, an alias of one, or a list of either, each with the line of the alias it is reached through.</summary>
-        private IEnumerable<(YamlWritten Source, int? Over)> Merged(YamlWritten value, int? repeated)
-        {
-            var through = repeated ?? (value.Kind == YamlWrittenKind.Alias ? _lines.Of(value.Start) : null);
-            var resolved = value.Kind == YamlWrittenKind.Alias ? value.Target : value;
-
-            if (resolved?.Kind == YamlWrittenKind.Mapping)
-            {
-                yield return (value, repeated);
-            }
-            else if (resolved?.Kind == YamlWrittenKind.Sequence && !resolved.Cut)
-            {
-                foreach (var item in resolved.Children)
-                {
-                    if ((item.Kind == YamlWrittenKind.Alias ? item.Target : item)?.Kind == YamlWrittenKind.Mapping)
-                    {
-                        yield return (item, through);
-                    }
-                }
-            }
-        }
-
-        /// <summary>How many scalar keys <paramref name="node"/> holds at any depth, merged keys among them - a scalar itself one: counted once a node, so a count of what aliases repeat costs what the text writes.</summary>
-        private long Count(YamlWritten node)
-        {
-            if (node.Kind == YamlWrittenKind.Scalar)
-            {
-                return 1;
-            }
-
-            if (reading.Scalars.TryGetValue(node, out var known))
-            {
-                return known;
-            }
-
-            long count = 0;
-
-            foreach (var member in new Node(node, null, reading).Members)
-            {
-                var more = member.Value.Scalars;
-                count = more > long.MaxValue - count ? long.MaxValue : count + more;
-            }
-
-            reading.Scalars[node] = count;
-            return count;
         }
 
         /// <summary>
@@ -400,6 +375,384 @@ public sealed class YamlExtractor : ICodeGraphExtractor
             }
 
             return node.Children.Count == 0 ? _lines.Of(node.Start) : Math.Max(_lines.Of(node.Start), node.Children.Max(Last));
+        }
+    }
+
+    /// <summary>One visit a node's reading makes: the member's place, its line, its node, whether a merge gave it, and whether a key before it of its name shadows it.</summary>
+    /// <param name="Place">Its place.</param>
+    /// <param name="Line">The line it is on, where this place writes it.</param>
+    /// <param name="Value">Its node.</param>
+    /// <param name="Merged">Whether a merge key gave it.</param>
+    /// <param name="Shadowed">Whether a key before it of its name shadows it, so it is visited and given to no walk.</param>
+    private readonly record struct Visit(DataPlace Place, int Line, Node Value, bool Merged, bool Shadowed);
+
+    /// <summary>What a place holds through what the file repeats, past the file's budget: counted, never read (<see cref="IDataValue.Unread"/>).</summary>
+    /// <param name="line">The line it stands on.</param>
+    /// <param name="scalars">How many scalar keys it holds.</param>
+    private sealed class Counted(int line, long scalars) : IDataValue
+    {
+        public bool Holds => false;
+
+        public string? Text => null;
+
+        public int End => line;
+
+        public bool Unread => true;
+
+        public long Scalars => scalars;
+
+        public IEnumerable<(DataPlace Place, int Line, IDataValue Value)> Members => [];
+    }
+
+    /// <summary>What <paramref name="node"/> is: an alias's node, or itself; null for an alias that names nothing or is not followed.</summary>
+    private static YamlWritten? Resolve(YamlWritten node) => node.Kind == YamlWrittenKind.Alias ? node.Target : node;
+
+    /// <summary>Whether <paramref name="key"/> is a merge key: a plain <c>&lt;&lt;</c>, never a quoted one.</summary>
+    private static bool IsMerge(YamlWritten key) => key is { Kind: YamlWrittenKind.Scalar, Plain: true, Value: "<<" };
+
+    /// <summary>The keys <paramref name="mapping"/> writes itself, each with its value, in the order written: each a scalar, a merge key never.</summary>
+    private static IEnumerable<(YamlWritten Key, YamlWritten Value)> OwnKeys(YamlWritten mapping)
+    {
+        for (var at = 0; at + 1 < mapping.Children.Count; at += 2)
+        {
+            if (mapping.Children[at] is { Kind: YamlWrittenKind.Scalar, Value: not null } key && !IsMerge(key))
+            {
+                yield return (key, mapping.Children[at + 1]);
+            }
+        }
+    }
+
+    /// <summary>
+    /// The mappings <paramref name="mapping"/>'s merge keys merge, each once, in the order written - of each merge key's
+    /// mapping, alias of one, or list of either, an alias of a list among them - each as it is written here, with the alias
+    /// of its list where the list is one, whose line its keys are read on. A mapping merged twice is merged once: every key
+    /// it gives the second time a key before it shadows. The one rule of what a merge merges, which a walk and a count read
+    /// alike.
+    /// </summary>
+    private static IEnumerable<(YamlWritten Merged, YamlWritten? List)> MergesOf(YamlWritten mapping)
+    {
+        var seen = new HashSet<YamlWritten>(ReferenceEqualityComparer.Instance);
+
+        for (var at = 0; at + 1 < mapping.Children.Count; at += 2)
+        {
+            if (!IsMerge(mapping.Children[at]))
+            {
+                continue;
+            }
+
+            var value = mapping.Children[at + 1];
+
+            if (Resolve(value) is { Kind: YamlWrittenKind.Mapping } one)
+            {
+                if (seen.Add(one))
+                {
+                    yield return (value, null);
+                }
+            }
+            else if (Resolve(value) is { Kind: YamlWrittenKind.Sequence, Cut: false } list)
+            {
+                foreach (var item in list.Children)
+                {
+                    if (Resolve(item) is { Kind: YamlWrittenKind.Mapping } merged && seen.Add(merged))
+                    {
+                        yield return (item, value.Kind == YamlWrittenKind.Alias ? value : null);
+                    }
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// How many scalar keys each node of a file holds at any depth, a scalar itself one: counted once a node from what the
+    /// text writes, never by visiting what an alias or a merge repeats, so counting spends nothing of the budget a walk reads
+    /// repeats by. A mapping that merges others holds its own keys and its merged mappings' - each as many as it gives, the
+    /// first of a name it writes twice - but those of a name a key before gave: the mapping's own, then an earlier merged
+    /// mapping's. Which names a merged mapping shares with the mapping that merges it, and with another it merges, is told by
+    /// their names, compared at most <see cref="MostCompared"/> times a file: past that, a name both hold is counted once for
+    /// each, and the line is marked.
+    /// </summary>
+    /// <param name="lines">The file's lines.</param>
+    /// <param name="nodes">The file's nodes, where the mark is made.</param>
+    private sealed class Counts(Lines lines, DataNodes nodes)
+    {
+        private readonly Dictionary<YamlWritten, (long All, long Merged)> _held = new(ReferenceEqualityComparer.Instance);
+        private readonly Dictionary<YamlWritten, Dictionary<string, long>?> _names = new(ReferenceEqualityComparer.Instance);
+        private readonly Dictionary<YamlWritten[], long> _merged = new(SameMappings.Instance);
+        private long _compared;
+        private bool _comparedPast;
+
+        /// <summary>How many scalar keys <paramref name="written"/> holds at any depth, as written here: an alias its node's, one not followed none, one naming nothing one.</summary>
+        public long Of(YamlWritten written) => written.Kind switch
+        {
+            YamlWrittenKind.Scalar => 1,
+            YamlWrittenKind.Alias => written.Cut ? 0 : written.Target is { } target ? Of(target) : 1,
+            _ => Held(written).All,
+        };
+
+        /// <summary>
+        /// How many scalar keys the container <paramref name="node"/> holds - all of them, and those it gives a mapping that
+        /// merges it, the first of each name alone - counted once a node.
+        /// </summary>
+        private (long All, long Merged) Held(YamlWritten node)
+        {
+            if (_held.TryGetValue(node, out var known))
+            {
+                return known;
+            }
+
+            (long All, long Merged) held = (0, 0);
+
+            if (node is { Cut: false, Kind: YamlWrittenKind.Sequence })
+            {
+                var all = node.Children.Aggregate(0L, (count, child) => DataNodes.Sum(count, Of(child)));
+                held = (all, all);
+            }
+            else if (node is { Cut: false, Kind: YamlWrittenKind.Mapping })
+            {
+                long own = 0;
+                long again = 0;
+                var names = new HashSet<string>(StringComparer.Ordinal);
+
+                foreach (var (key, value) in OwnKeys(node))
+                {
+                    var count = Of(value);
+                    own = DataNodes.Sum(own, count);
+
+                    if (!names.Add(key.Value!))
+                    {
+                        again = DataNodes.Sum(again, count);
+                    }
+                }
+
+                YamlWritten[] merged = [.. MergesOf(node).Select(merge => Resolve(merge.Merged)!)];
+                var given = merged.Length == 0 ? 0 : Math.Max(0, Merged(merged, node) - Shadowed(names, merged, node));
+                held = (DataNodes.Sum(own, given), DataNodes.Sum(own - again, given));
+            }
+
+            _held[node] = held;
+            return held;
+        }
+
+        /// <summary>How many keys the mappings <paramref name="merged"/> give merged together, an earlier one's of a name two hold: counted once a list of them.</summary>
+        private long Merged(YamlWritten[] merged, YamlWritten at)
+        {
+            if (merged.Length == 1)
+            {
+                return Held(merged[0]).Merged;
+            }
+
+            if (_merged.TryGetValue(merged, out var known))
+            {
+                return known;
+            }
+
+            long total = 0;
+            long? shared = 0;
+
+            for (var later = 0; later < merged.Length; later++)
+            {
+                total = DataNodes.Sum(total, Held(merged[later]).Merged);
+                shared = later == 0 || shared is not { } before ? shared : Shared(merged, later, at) is { } more ? DataNodes.Sum(before, more) : null;
+            }
+
+            // Past the bound on comparing, no name two of them share is told: each is counted once for each.
+            var count = shared is { } told ? Math.Max(0, total - told) : total;
+            _merged[merged] = count;
+            return count;
+        }
+
+        /// <summary>
+        /// How many keys the mapping at <paramref name="later"/> of <paramref name="merged"/> gives of the names a mapping
+        /// before it gives, read from whichever of the two holds fewer names; <see langword="null"/> past the bound on comparing.
+        /// </summary>
+        private long? Shared(YamlWritten[] merged, int later, YamlWritten at)
+        {
+            if (Names(merged[later], at) is not { } names)
+            {
+                return null;
+            }
+
+            var earlier = new List<Dictionary<string, long>>();
+
+            foreach (var before in merged[..later])
+            {
+                if (Names(before, at) is not { } given)
+                {
+                    return null;
+                }
+
+                earlier.Add(given);
+            }
+
+            long shared = 0;
+
+            if (names.Count <= earlier.Sum(given => (long)given.Count))
+            {
+                foreach (var (name, count) in names)
+                {
+                    if (!Compare(earlier.Count, at))
+                    {
+                        return null;
+                    }
+
+                    if (earlier.Any(given => given.ContainsKey(name)))
+                    {
+                        shared = DataNodes.Sum(shared, count);
+                    }
+                }
+
+                return shared;
+            }
+
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+
+            foreach (var name in earlier.SelectMany(given => given.Keys))
+            {
+                if (!Compare(1, at))
+                {
+                    return null;
+                }
+
+                if (seen.Add(name) && names.TryGetValue(name, out var count))
+                {
+                    shared = DataNodes.Sum(shared, count);
+                }
+            }
+
+            return shared;
+        }
+
+        /// <summary>How many keys the mappings <paramref name="merged"/> give of the names <paramref name="own"/>, which the mapping merging them writes itself: the first of them to give each.</summary>
+        private long Shadowed(HashSet<string> own, YamlWritten[] merged, YamlWritten at)
+        {
+            if (own.Count == 0)
+            {
+                return 0;
+            }
+
+            var indexes = new List<Dictionary<string, long>>();
+
+            foreach (var mapping in merged)
+            {
+                if (Names(mapping, at) is not { } names)
+                {
+                    return 0;
+                }
+
+                indexes.Add(names);
+            }
+
+            long shadowed = 0;
+
+            foreach (var name in own)
+            {
+                if (!Compare(indexes.Count, at))
+                {
+                    return 0;
+                }
+
+                if (indexes.FirstOrDefault(names => names.ContainsKey(name)) is { } giving)
+                {
+                    shadowed = DataNodes.Sum(shadowed, giving[name]);
+                }
+            }
+
+            return shadowed;
+        }
+
+        /// <summary>
+        /// Each name <paramref name="mapping"/> gives a mapping that merges it, with how many keys it gives of it - its own
+        /// first, then its merged mappings' - made once a mapping; <see langword="null"/> past the bound on comparing.
+        /// </summary>
+        private Dictionary<string, long>? Names(YamlWritten mapping, YamlWritten at)
+        {
+            if (_names.TryGetValue(mapping, out var known))
+            {
+                return known;
+            }
+
+            var names = new Dictionary<string, long>(StringComparer.Ordinal);
+
+            bool Gathered()
+            {
+                if (mapping.Cut)
+                {
+                    return true;
+                }
+
+                foreach (var (key, value) in OwnKeys(mapping))
+                {
+                    if (!Compare(1, at))
+                    {
+                        return false;
+                    }
+
+                    names.TryAdd(key.Value!, Of(value));
+                }
+
+                foreach (var (merged, _) in MergesOf(mapping))
+                {
+                    if (Names(Resolve(merged)!, at) is not { } inner)
+                    {
+                        return false;
+                    }
+
+                    foreach (var (name, count) in inner)
+                    {
+                        if (!Compare(1, at))
+                        {
+                            return false;
+                        }
+
+                        names.TryAdd(name, count);
+                    }
+                }
+
+                return true;
+            }
+
+            var gathered = Gathered() ? names : null;
+            _names[mapping] = gathered;
+            return gathered;
+        }
+
+        /// <summary>Whether <paramref name="comparisons"/> more names may be compared, the line of <paramref name="at"/> marked the first time they may not.</summary>
+        private bool Compare(int comparisons, YamlWritten at)
+        {
+            if (!_comparedPast && _compared <= MostCompared - comparisons)
+            {
+                _compared += comparisons;
+                return true;
+            }
+
+            if (!_comparedPast)
+            {
+                _comparedPast = true;
+                nodes.Stopped(lines.Of(at.Start), $"the file's merge keys compare more than {MostCompared.ToString(CultureInfo.InvariantCulture)} names, and from here on a key both a mapping and what it merges hold, or two mappings it merges, is counted once for each");
+            }
+
+            return false;
+        }
+    }
+
+    /// <summary>Two lists of merged mappings alike: the same mappings, in the same order.</summary>
+    private sealed class SameMappings : IEqualityComparer<YamlWritten[]>
+    {
+        public static SameMappings Instance { get; } = new();
+
+        public bool Equals(YamlWritten[]? one, YamlWritten[]? other)
+            => ReferenceEquals(one, other) || (one is not null && other is not null && one.Length == other.Length && one.Zip(other).All(pair => ReferenceEquals(pair.First, pair.Second)));
+
+        public int GetHashCode(YamlWritten[] mappings)
+        {
+            var hash = new HashCode();
+
+            foreach (var mapping in mappings)
+            {
+                hash.Add(System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(mapping));
+            }
+
+            return hash.ToHashCode();
         }
     }
 }

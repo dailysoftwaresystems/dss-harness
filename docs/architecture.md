@@ -4340,8 +4340,14 @@ places of its path a key named by its path (`targets.x64.callingConvention`, an 
 empty name in brackets `packages[""].name`), its value as its summary, and each top-level member that holds others a
 section over its lines. JSON stops where its reader does, nothing of the file read, and reads a `$schema` or `$ref`
 naming another file by a relative path - its `#` pointer left out - as an import of it. YAML follows anchors and
-aliases - what they repeat bounded by `DataNodes.MostRepeated` visits, the rest counted and the line marked - reads
-merge keys, one or a list, makes each document of a file of several a section by its place (`[0]`), reads a GitHub
+aliases - what they repeat bounded by `DataNodes.MostRepeated` visits, an alias itself one, each node reached through
+one and each key a merge reads through one, whoever reads it; past the budget what is left counted whole at the place it
+stands, the line marked - reads merge keys, one or a list, a mapping merged twice in one merged once, and counts what it
+does not read from what the text writes, once a node, spending none of that budget: a merged mapping's keys less those of
+a name the merging mapping or an earlier merged one gives, told by comparing names at most `YamlExtractor.MostCompared`
+times a file, past which a name two of them hold is counted once for each and the line marked. Once an extract is full a
+walk asks no member more of any value: what each holds past that point is counted whole. YAML makes each document of a
+file of several a section by its place (`[0]`), reads a GitHub
 Actions workflow's jobs and steps as sections, a step's local `uses:` an import of its `action.yml` and a job's an import
 of the workflow file it names, and keeps what it read before the place it stops reading, marked. An empty JSON or YAML
 file, or one of comments alone, is no stop. `xml` (`.xml`, `.config`, `.props`, `.targets`, `.resx`, `.xaml`, `.manifest`, `.nuspec`, but the MSBuild projects

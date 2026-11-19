@@ -112,7 +112,7 @@ public sealed class JsonExtractor : ICodeGraphExtractor
 
         public int End => Math.Max(value.Line, value.End);
 
-        public bool Repeated => false;
+        public bool Unread => false;
 
         public long Scalars => _scalars ??= Holds ? Members.Sum(member => member.Value.Scalars) : 1;
 
