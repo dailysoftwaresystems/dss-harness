@@ -212,13 +212,13 @@ public sealed class ContainExecTests
     }
 
     /// <summary>
-    /// What a bound child leaves running that holds its output holds the run no longer than the bound, on every system,
-    /// and lives on: it outlives the child by design - a server its build started, kept for the next phase - and the run,
-    /// reading to the end the leftover held off, waited for as long as it lived, the run's time limit and its caller's stop
-    /// reaching nothing once the child had gone.
+    /// What a bound child leaves running that holds its output holds the run no longer than it takes to read every
+    /// character the child wrote, on every system, and lives on: it outlives the child by design - a server its build
+    /// started, kept for the next phase - and the run says that what it writes from then on is its own, never waiting on
+    /// it for as long as it lives.
     /// </summary>
     [Fact]
-    public async Task ABoundChildsLeftoverHoldingItsOutput_HoldsTheRunNoLongerThanTheBound()
+    public async Task ABoundChildsLeftoverHoldingItsOutput_HoldsTheRunOnlyUntilTheChildsOutputIsRead()
     {
         var holder = LearnedProcess.None;
 
@@ -230,10 +230,11 @@ public sealed class ContainExecTests
                     Bound = true,
                     OnOutputLine = line => holder = LearnedProcess.In(line, "holder=") ?? holder,
                 },
-                TestContext.Current.CancellationToken).WaitAsync(ProcessRunner.DrainBound + TimeSpan.FromMinutes(1), TestContext.Current.CancellationToken);
+                TestContext.Current.CancellationToken).WaitAsync(LongBound, TestContext.Current.CancellationToken);
 
             Assert.Equal((0, false), (result.ExitCode, result.TimedOut));
             Assert.Equal($"holder={holder}\n", result.StandardOutput);
+            Assert.NotNull(result.OutputHeld);
             Assert.True(holder.Running, $"the leftover {holder} was ended by its bound parent's end");
         }
         finally
@@ -266,7 +267,7 @@ public sealed class ContainExecTests
                         }
                     },
                 },
-                TestContext.Current.CancellationToken).WaitAsync(ProcessRunner.DrainBound + TimeSpan.FromMinutes(1), TestContext.Current.CancellationToken);
+                TestContext.Current.CancellationToken).WaitAsync(LongBound, TestContext.Current.CancellationToken);
 
             holder = LearnedProcess.In(result.StandardOutput, "holder=") ?? holder;
 
@@ -299,7 +300,7 @@ public sealed class ContainExecTests
                 line => string.Equals(line, "orphaned", StringComparison.Ordinal));
 
             Assert.IsType<ProcessStoppedException>(raised);
-            Assert.True(since < ProcessRunner.DrainBound + TimeSpan.FromMinutes(1), $"the stopped run waited {since} for the leftover's end");
+            Assert.True(since < TimeSpan.FromMinutes(1), $"the stopped run waited {since} for the leftover's end");
             Assert.True(holder.Running, $"the leftover {holder} outside the stopped child's tree was ended by the stop");
         }
         finally
@@ -696,7 +697,7 @@ public sealed class ContainExecTests
             Assert.Equal(0, result.ExitCode);
             Assert.NotEqual(0, holder.Id);
             Assert.True(holder.AwaitGone(), $"the holder {holder} outlived the contained child that left it");
-            Assert.True(since.Elapsed < ProcessRunner.DrainBound, $"the run waited {since.Elapsed} for the leftover's end");
+            Assert.True(since.Elapsed < TimeSpan.FromMinutes(1), $"the run waited {since.Elapsed} for the leftover's end");
         }
         finally
         {
@@ -728,7 +729,7 @@ public sealed class ContainExecTests
             Assert.IsType<ProcessStoppedException>(raised);
             Assert.NotEqual(0, holder.Id);
             Assert.True(holder.AwaitGone(), $"the holder {holder} outlived the stopped child's container");
-            Assert.True(since < ProcessRunner.DrainBound, $"the stopped run waited {since} for the holder's end");
+            Assert.True(since < TimeSpan.FromMinutes(1), $"the stopped run waited {since} for the holder's end");
         }
         finally
         {
@@ -785,7 +786,7 @@ public sealed class ContainExecTests
 
             Assert.IsType<ProcessStoppedException>(raised);
             Assert.True(holder.AwaitGone(), $"the descendant {holder} in a group of its own outlived the stop");
-            Assert.True(since < ProcessRunner.DrainBound, $"the stopped run waited {since} for the descendant's end");
+            Assert.True(since < TimeSpan.FromMinutes(1), $"the stopped run waited {since} for the descendant's end");
         }
         finally
         {
@@ -814,40 +815,101 @@ public sealed class ContainExecTests
     }
 
     /// <summary>
-    /// What a contained child left that refuses to be asked is killed once the grace is spent, on
-    /// Linux and macOS: the asking signal is a request, and the run's stop is not.
+    /// What a contained child left that refuses to be asked to end is waited for, told every five minutes, until the run's
+    /// own bound - its time limit, an hour here - and killed there, on Linux and macOS: never at five seconds of the code's
+    /// own, as once, and never left running. The clock the wait is measured by stands in for the hour.
     /// </summary>
     [Fact]
-    public async Task AContainedChildsLeftoverThatRefusesToBeAsked_IsKilledOnceTheGraceIsSpent()
+    public async Task AChildIgnoringSigterm_IsWaitedAndToldUntilTheRunsBound()
     {
         Assert.SkipWhen(OperatingSystem.IsWindows(), "the signal that asks is the C library's; Windows ends a job's members at once.");
 
+        var cancellationToken = TestContext.Current.CancellationToken;
         using var temp = new TempDirectory();
         var ready = temp.Combine("ready.txt");
         var orphan = LearnedProcess.None;
-        using var stop = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        var clock = new TimerClock();
+        var told = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        using var stop = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        Task<ProcessResult> run;
 
-        try
+        using (DssHarness.Core.Waiting.Waits.TellingTo(wait => told.Enqueue(wait.Line())))
         {
-            var run = ContainingRunner().RunAsync(
+            run = new ProcessRunner(new HostPlatform(), FilePermissionsFactory.Create(), CliRunner.CliProgram) { Clock = clock }.RunAsync(
                 Child("spawn-orphan-and-sleep", "300000", "300000", "ignore-term-and-sleep", ready) with
                 {
                     Contained = true,
-                    Timeout = LongBound,
+                    Timeout = TimeSpan.FromHours(1),
                     OnOutputLine = line => orphan = LearnedProcess.In(line, "orphan=") ?? orphan,
                 },
                 stop.Token);
+        }
 
-            // Stopped once the leftover refuses the asking, which it says by the file.
+        try
+        {
             Assert.True(Until(() => orphan.Id != 0 && File.Exists(ready)), "the leftover never said it refuses to be asked");
             await stop.CancelAsync();
 
-            Assert.IsType<ProcessStoppedException>(await Record.ExceptionAsync(() => run.WaitAsync(LongBound, TestContext.Current.CancellationToken)));
-            Assert.True(orphan.AwaitGone(), $"the leftover {orphan}, refusing to be asked, outlived the grace");
+            // Asked, and waited for: past the five seconds it was once given, and told at five minutes.
+            await clock.WaitingAsync().WaitAsync(ClockDrive.Within, cancellationToken);
+            clock.Advance(DssHarness.Core.Waiting.Waits.SaidEvery);
+            await clock.WaitingAsync().WaitAsync(ClockDrive.Within, cancellationToken);
+            await Task.Delay(TimeSpan.FromSeconds(6), cancellationToken);
+
+            Assert.False(run.IsCompleted, "the stop gave up on the leftover before the run's bound");
+            Assert.True(orphan.Running, $"the leftover {orphan} was killed before the run's bound");
+            Assert.Contains(told, line => line.StartsWith("has waited 5m00s for the contained child's session", StringComparison.Ordinal));
+
+            // The run's bound reached: made to end.
+            clock.Advance(TimeSpan.FromHours(1));
+
+            Assert.IsType<ProcessStoppedException>(await Record.ExceptionAsync(() => run.WaitAsync(LongBound, cancellationToken)));
+            Assert.True(orphan.AwaitGone(), $"the leftover {orphan}, refusing to be asked, outlived the run's bound");
         }
         finally
         {
             orphan.TryEnding();
+        }
+    }
+
+    /// <summary>
+    /// What a bound child wrote just before it ended is read to its last character however long the reading takes - here
+    /// a line handler slow enough that reading what the pipe held at the child's end takes ten seconds, past the five the
+    /// run once read for before it let go of the rest - while what it left running holds the output open.
+    /// </summary>
+    [Fact]
+    public async Task OutputAfterTheChildEnds_IsReadToEof()
+    {
+        var holder = LearnedProcess.None;
+        var lines = new List<string>();
+
+        try
+        {
+            var result = await ContainingRunner().RunAsync(
+                Child("spawn-holder", "flood", "200", "sleep", "300000") with
+                {
+                    Bound = true,
+                    OnOutputLine = line =>
+                    {
+                        holder = LearnedProcess.In(line, "holder=") ?? holder;
+                        Thread.Sleep(TimeSpan.FromMilliseconds(50));
+
+                        lock (lines)
+                        {
+                            lines.Add(line);
+                        }
+                    },
+                },
+                TestContext.Current.CancellationToken).WaitAsync(LongBound, TestContext.Current.CancellationToken);
+
+            Assert.Equal(0, result.ExitCode);
+            Assert.Equal(201, lines.Count);
+            Assert.Equal(TestChild.FloodLine(199, 100), lines[^1]);
+            Assert.NotNull(result.OutputHeld);
+        }
+        finally
+        {
+            holder.TryEnding();
         }
     }
 
@@ -881,7 +943,7 @@ public sealed class ContainExecTests
             await stop.CancelAsync();
 
             Assert.IsType<ProcessStoppedException>(await Record.ExceptionAsync(() => run.WaitAsync(LongBound, TestContext.Current.CancellationToken)));
-            Assert.True(since.Elapsed < ProcessRunner.SessionGrace, $"stopping a child apart from the terminal took {since.Elapsed}");
+            Assert.True(since.Elapsed < TimeSpan.FromSeconds(5), $"stopping a child apart from the terminal took {since.Elapsed}");
             Assert.True(child.AwaitGone(), $"the child {child} outlived its stop");
         }
         finally
@@ -1040,10 +1102,10 @@ public sealed class ContainExecTests
     /// <summary>
     /// What left both a contained child's session and its tree - a daemon that made a session of
     /// its own and whose parent has gone - is reached by nothing, and holds the run's output no
-    /// longer than the bound: the run ends once the bound is spent, with the output read so far.
+    /// longer than it takes to read every character the child wrote: the run ends then, saying so.
     /// </summary>
     [Fact]
-    public async Task WhatLeftAContainedChildsSessionAndTree_HoldsItsOutputNoLongerThanTheBound()
+    public async Task WhatLeftAContainedChildsSessionAndTree_HoldsItsOutputOnlyUntilTheChildsOutputIsRead()
     {
         Assert.SkipWhen(OperatingSystem.IsWindows(), "sessions are the C library's; on Windows nothing born in the job leaves it.");
 
@@ -1057,10 +1119,11 @@ public sealed class ContainExecTests
                     Contained = true,
                     OnOutputLine = line => holder = LearnedProcess.In(line, "holder=") ?? holder,
                 },
-                TestContext.Current.CancellationToken).WaitAsync(ProcessRunner.DrainBound + TimeSpan.FromMinutes(1), TestContext.Current.CancellationToken);
+                TestContext.Current.CancellationToken).WaitAsync(LongBound, TestContext.Current.CancellationToken);
 
             Assert.Equal(0, result.ExitCode);
             Assert.Equal($"holder={holder}\n", result.StandardOutput);
+            Assert.NotNull(result.OutputHeld);
             Assert.True(holder.Running, $"the daemon {holder} was reached by what reaches nothing outside the session and the tree");
         }
         finally

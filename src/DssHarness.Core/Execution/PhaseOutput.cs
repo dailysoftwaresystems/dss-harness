@@ -109,7 +109,7 @@ public abstract class PhaseOutput
         public override IEnumerable<string> Lines()
         {
             var lines = new List<string>();
-            var splitter = new LineSplitter(lines.Add, ProcessRunner.LongestLine);
+            var splitter = new LineSplitter(lines.Add, ProcessRunner.LongestLineHandedOn);
 
             splitter.Add(text);
             splitter.End();
@@ -136,7 +136,7 @@ public abstract class PhaseOutput
             // the runner writes one, and otherwise the line's own.
             var splitter = new LineSplitter(
                 lines.Enqueue,
-                ProcessRunner.LongestLine,
+                ProcessRunner.LongestLineHandedOn,
                 carriageReturnEnds: string.Equals(PhaseRunner.LogLineEnding, "\r\n", StringComparison.Ordinal));
 
             using var log = Open();

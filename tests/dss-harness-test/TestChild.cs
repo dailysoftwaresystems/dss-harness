@@ -554,6 +554,15 @@ internal static class TestChild
             Thread.Sleep(int.Parse(arguments[1], CultureInfo.InvariantCulture));
         }
 
+        // 'flood' writes as many lines of a hundred characters as arguments[1] says, and ends at once.
+        if (string.Equals(arguments[0], "flood", StringComparison.Ordinal))
+        {
+            for (var index = 0; index < int.Parse(arguments[1], CultureInfo.InvariantCulture); index++)
+            {
+                output.Write(FloodLine(index, 100) + "\n");
+            }
+        }
+
         return 0;
     }
 

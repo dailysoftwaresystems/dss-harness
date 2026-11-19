@@ -1,4 +1,5 @@
 using DssHarness.Core.Platform;
+using DssHarness.Core.Waiting;
 
 namespace DssHarness.Core.Processes;
 
@@ -7,7 +8,8 @@ namespace DssHarness.Core.Processes;
 /// the process which started it left running - killed before it could end it, or a group still holding what the child
 /// left at its own end - the way that process ends a contained child's session: every
 /// process still in the session or the group, and while its leader stands every one in its tree, asked to end, and what
-/// still stands once the grace is spent made to.
+/// still stands then made to - at once, since the run that started it has ended, and every bound it was configured with
+/// passed with it.
 /// </summary>
 /// <remarks>
 /// Windows has no such session or group to end: a child there is held in a job that ends every member when the last
@@ -39,7 +41,7 @@ public sealed class LeftSessions(IHostPlatform platform, IProcessTable table)
                 $"{Noun(group)} {leader} cannot be ended on Windows, whose bound and contained children are held in a job that ends them with the process that held it, so none is ever left running for a sweep to end");
         }
 
-        return Containment.EndSessionAsync(leader, _table.ReadAsync, ProcessRunner.SessionGrace, group);
+        return Containment.EndSessionAsync(leader, _table.ReadAsync, TimeSpan.Zero, Waits.Told, TimeProvider.System, group);
     }
 
     /// <summary>What a child leads, as every line that names one calls it: a session of its own, or a process group within its starter's.</summary>

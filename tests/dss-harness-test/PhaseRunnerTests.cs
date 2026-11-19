@@ -378,9 +378,11 @@ public sealed class PhaseRunnerTests
         using var temp = new TempDirectory();
         var factory = new HarnessFactory(verbose: true);
         const string Secret = "s3cr3t-T0KEN-value";
+        const int Piece = 32 * 1024;
+        using var cut = ProcessRunner.LinesHandedOnIn(Piece);
 
         // The secret spans the first place the line would be cut, were it cut where it is full.
-        var line = new string('x', ProcessRunner.LongestLine - 5) + Secret + new string('y', ProcessRunner.LongestLine) + Secret + "z";
+        var line = new string('x', Piece - 5) + Secret + new string('y', Piece) + Secret + "z";
         var file = temp.WriteFile("long.txt", "before\n" + line + "\nafter\n");
         var values = new Core.Runners.ActionValues(
             new Dictionary<string, string>(StringComparer.Ordinal),
@@ -397,7 +399,7 @@ public sealed class PhaseRunnerTests
         Assert.DoesNotContain(Secret, factory.StandardOutput.ToString() + factory.StandardError, StringComparison.Ordinal);
         Assert.Equal(values.Redact(line), string.Concat(read.Skip(1).SkipLast(1)));
         Assert.Equal(["before", "after"], [read[0], read[^1]]);
-        Assert.All(read, piece => Assert.True(piece.Length <= ProcessRunner.LongestLine, $"a piece of {piece.Length} characters"));
+        Assert.All(read, piece => Assert.True(piece.Length <= Piece, $"a piece of {piece.Length} characters"));
         Assert.True(result.Witnessed);
     }
 
@@ -411,9 +413,11 @@ public sealed class PhaseRunnerTests
         using var temp = new TempDirectory();
         var factory = new HarnessFactory();
         const string Secret = "ab";
+        const int Piece = 32 * 1024;
+        using var cut = ProcessRunner.LinesHandedOnIn(Piece);
 
         // Every two characters masked as three: a line exactly as long as a line is kept in comes out half as long again.
-        var line = string.Concat(Enumerable.Repeat(Secret, ProcessRunner.LongestLine / 2));
+        var line = string.Concat(Enumerable.Repeat(Secret, Piece / 2));
         var file = temp.WriteFile("short.txt", line + "\n");
         var values = new Core.Runners.ActionValues(
             new Dictionary<string, string>(StringComparer.Ordinal),

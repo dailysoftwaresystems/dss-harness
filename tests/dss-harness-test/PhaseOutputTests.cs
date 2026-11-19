@@ -231,9 +231,11 @@ public sealed class PhaseOutputTests
     [Fact]
     public void OutputMadeUp_ReadsAsAChildsStreamIs_AndOutputsJoinInOrder()
     {
-        var long1 = new string('x', ProcessRunner.LongestLine + 3);
+        const int Piece = 32 * 1024;
+        using var cut = ProcessRunner.LinesHandedOnIn(Piece);
+        var long1 = new string('x', Piece + 3);
 
-        Assert.Equal(["a", "b\rc", new string('x', ProcessRunner.LongestLine), "xxx"], PhaseOutput.Of("a\r\nb\rc\n" + long1).Lines());
+        Assert.Equal(["a", "b\rc", new string('x', Piece), "xxx"], PhaseOutput.Of("a\r\nb\rc\n" + long1).Lines());
         Assert.Empty(PhaseOutput.Empty.Lines());
         Assert.Equal(
             ["configure", "build 1", "build 2"],

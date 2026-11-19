@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.Runtime.InteropServices;
 using DssHarness.Core.Execution;
 using DssHarness.Core.Platform;
+using DssHarness.Core.Waiting;
 using Microsoft.Win32.SafeHandles;
 
 namespace DssHarness.Core.Processes;
@@ -15,7 +16,7 @@ namespace DssHarness.Core.Processes;
 /// </summary>
 internal static class Containment
 {
-    /// <summary>How often a wait for an ending looks again.</summary>
+    /// <summary>How often a wait for an ending looks again: a look's pace, never a bound.</summary>
     private static readonly TimeSpan GraceSlice = TimeSpan.FromMilliseconds(20);
 
     /// <summary>
@@ -103,12 +104,19 @@ internal static class Containment
     /// Ends a contained child's whole session on Linux and macOS - or, where <paramref name="group"/>, the whole process
     /// group a child apart from the terminal leads within its starter's session: every process in it, and while the
     /// child stands every one in its tree, is asked to end - the group as one, each member outside
-    /// the group on its own - and every one still standing once they have all gone or
-    /// <paramref name="grace"/> is spent is killed.
+    /// the group on its own - and waited for for as long as any of them stands, told every five minutes
+    /// (<see cref="Waits.SaidEvery"/>); every one still standing once they have all gone or <paramref name="bound"/> - the
+    /// bound its run was configured with - is spent is killed.
     /// </summary>
     /// <param name="leader">The child, which leads the session and the group, or the group alone, by its own process id.</param>
     /// <param name="read">Reads the machine's process table.</param>
-    /// <param name="grace">How long the asking signal is given to be obeyed.</param>
+    /// <param name="bound">
+    /// What is left of the bound the run that started it was configured with - its time limit - where SIGKILL follows the
+    /// asking; none where it was given none, so a member that refuses to be asked is waited for, told, for as long as it
+    /// stands; and no time where that bound has passed - a run that was killed passed it with its own end.
+    /// </param>
+    /// <param name="tell">Told of the wait every five minutes.</param>
+    /// <param name="clock">What the wait is measured and told by: the system's, or a test's.</param>
     /// <param name="group">Whether the child leads a process group alone, in a session that is not its own.</param>
     /// <returns>
     /// Whether anything was still in it to end, and what could not be reached, and why - none where
@@ -137,9 +145,17 @@ internal static class Containment
     /// the leader's tree, never by the session it shares with the process that started it.
     /// </para>
     /// </remarks>
-    public static async Task<HeldEnding> EndSessionAsync(int leader, Func<CancellationToken, Task<ProcessTableReading>> read, TimeSpan grace, bool group = false)
+    public static async Task<HeldEnding> EndSessionAsync(
+        int leader,
+        Func<CancellationToken, Task<ProcessTableReading>> read,
+        TimeSpan? bound,
+        Action<WaitTold> tell,
+        TimeProvider clock,
+        bool group = false)
     {
         ArgumentNullException.ThrowIfNull(read);
+        ArgumentNullException.ThrowIfNull(tell);
+        ArgumentNullException.ThrowIfNull(clock);
 
         var calls = Posix.Calls();
 
@@ -163,13 +179,19 @@ internal static class Containment
         }
 
         // The signal with no number asks nothing and reports everything: a group or a process it
-        // cannot signal is one that has ended.
-        for (var waited = TimeSpan.Zero;
-             waited < grace && !(calls.SignalGroup(leader, 0) == -1 && members.All(member => calls.Signal(member.Id, 0) == -1));
-             waited += GraceSlice)
-        {
-            await Task.Delay(GraceSlice).ConfigureAwait(false);
-        }
+        // cannot signal is one that has ended. Waited for while any of it stands, and made to at the bound.
+        await Waits.ForAsync(
+            async cancellationToken =>
+            {
+                while (!(calls.SignalGroup(leader, 0) == -1 && members.All(member => calls.Signal(member.Id, 0) == -1)))
+                {
+                    await Task.Delay(GraceSlice, cancellationToken).ConfigureAwait(false);
+                }
+
+                return true;
+            },
+            new WaitWatch($"{held} ({leader.ToString(System.Globalization.CultureInfo.InvariantCulture)}) to end once asked", tell, bound, clock),
+            CancellationToken.None).ConfigureAwait(false);
 
         calls.SignalGroup(leader, Posix.Kill);
 

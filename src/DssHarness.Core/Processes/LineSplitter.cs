@@ -31,9 +31,13 @@ namespace DssHarness.Core.Processes;
 /// Whether a carriage return before a line feed is the line's ending rather than its own: so for what a program wrote,
 /// whatever its platform; for a log this machine wrote, only where this machine ends its lines with one.
 /// </param>
-internal sealed class LineSplitter(Action<string> onLine, int? longest = null, Func<string, int>? cut = null, bool carriageReturnEnds = true)
+/// <param name="pieced">Told once for each line handed on in pieces, as its first piece is: so a cut is never silent.</param>
+internal sealed class LineSplitter(Action<string> onLine, int? longest = null, Func<string, int>? cut = null, bool carriageReturnEnds = true, Action? pieced = null)
 {
     private readonly StringBuilder _line = new();
+
+    /// <summary>Whether the line held has been handed on in pieces so far.</summary>
+    private bool _pieced;
 
     /// <summary>
     /// The lines <paramref name="line"/>, which holds no line feed, is read back as once it is written down whole and its
@@ -98,6 +102,7 @@ internal sealed class LineSplitter(Action<string> onLine, int? longest = null, F
             : _line.ToString();
 
         _line.Clear();
+        _pieced = false;
         return line;
     }
 
@@ -152,6 +157,12 @@ internal sealed class LineSplitter(Action<string> onLine, int? longest = null, F
         if (at > 1 && char.IsHighSurrogate(full[at - 1]))
         {
             at--;
+        }
+
+        if (!_pieced)
+        {
+            _pieced = true;
+            pieced?.Invoke();
         }
 
         onLine(full[..at]);

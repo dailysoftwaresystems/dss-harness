@@ -31,6 +31,20 @@ public sealed record ProcessResult(
     /// </summary>
     public string? Uncontained { get; init; }
 
+    /// <summary>The file stdout was written whole to, as the request named it (<see cref="ProcessRequest.OutputLog"/>).</summary>
+    public string? OutputLog { get; init; }
+
+    /// <summary>The file stderr was written whole to, as the request named it (<see cref="ProcessRequest.ErrorLog"/>).</summary>
+    public string? ErrorLog { get; init; }
+
+    /// <summary>
+    /// Where a process the child left running holds its output once the child has ended - a server its build started,
+    /// kept for the next phase by design - what that says: every character the child wrote was read, and what the process
+    /// it left writes from then on is its own, never the child's, and is not read; <see langword="null"/> where the output
+    /// ended with the child.
+    /// </summary>
+    public string? OutputHeld { get; init; }
+
     /// <summary>True only when the process ran to completion and reported success.</summary>
     public bool Succeeded => !TimedOut && ExitCode == 0;
 

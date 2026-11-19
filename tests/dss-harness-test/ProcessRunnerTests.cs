@@ -161,6 +161,62 @@ public sealed class ProcessRunnerTests
     }
 
     /// <summary>
+    /// A stream kept as a tail whose request names its log is written there whole, every character as the child wrote
+    /// it, and the result names the log beside the tail it quotes: the tail is quoted by reference to the whole, never
+    /// all there is of a stream two megabytes long.
+    /// </summary>
+    [Fact]
+    public async Task AStreamsWholeOutput_IsQuotedByReference()
+    {
+        const int Count = 20_000;
+        const int Length = 100;
+        using var temp = new TempDirectory();
+        var log = temp.Combine("output.log");
+        var printed = string.Concat(Enumerable.Range(0, Count).Select(index => TestChild.FloodLine(index, Length) + "\n"));
+
+        var result = await CreateRunner().RunAsync(
+            TestHost.ChildRequest("flood", $"{Count}", $"{Length}") with
+            {
+                OnOutputLine = _ => { },
+                OutputKept = StreamKept.Tail,
+                OutputLog = log,
+            },
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(log, result.OutputLog);
+        Assert.Equal(printed, await File.ReadAllTextAsync(log, TestContext.Current.CancellationToken));
+        Assert.Equal(printed[^ProcessRunner.TailLength..], result.StandardOutput);
+    }
+
+    /// <summary>
+    /// A line thirty megabytes long - a test printing a whole JSON document on one line - is handed on whole, as one line,
+    /// on a stream kept as a tail, and the request is told of no line in pieces: lines are cut only past the longest string
+    /// .NET makes, never at 32K characters of the code's own, as once.
+    /// </summary>
+    [Fact]
+    public async Task AThirtyMegabyteLine_IsKeptWholeAndMatched()
+    {
+        const int Giant = 30_000_000;
+        var lines = new List<string>();
+        var pieced = 0;
+
+        await CreateRunner().RunAsync(
+            TestHost.ChildRequest("flood", "0", "200", $"{Giant}") with
+            {
+                OnOutputLine = lines.Add,
+                OutputKept = StreamKept.Tail,
+                OnLineInPieces = () => Interlocked.Increment(ref pieced),
+            },
+            TestContext.Current.CancellationToken);
+
+        var line = Assert.Single(lines);
+
+        Assert.Equal(Giant, line.Length);
+        Assert.Matches("^g+$", line);
+        Assert.Equal(0, pieced);
+    }
+
+    /// <summary>
     /// A line handler that fails - of the output or of the error output - is handed no more lines, and its stream is still
     /// read to the end: a child writing more than a pipe holds would otherwise block on a pipe nobody reads, and one whose
     /// input is held open, as a host's agent's is, would never end. What the handler raised is raised once the child has
@@ -241,14 +297,24 @@ public sealed class ProcessRunnerTests
     public async Task RunAsync_HandsOnALineThatNeverEnds_InPieces_OnAStreamKeptAsATail()
     {
         const int Giant = 100_000;
+        const int Piece = 32 * 1024;
+        using var cut = ProcessRunner.LinesHandedOnIn(Piece);
         var pieces = new List<string>();
+        var pieced = 0;
 
         var result = await CreateRunner().RunAsync(
-            TestHost.ChildRequest("flood", "0", "200", $"{Giant}") with { OnOutputLine = pieces.Add, OutputKept = StreamKept.Tail },
+            TestHost.ChildRequest("flood", "0", "200", $"{Giant}") with
+            {
+                OnOutputLine = pieces.Add,
+                OutputKept = StreamKept.Tail,
+                OnLineInPieces = () => Interlocked.Increment(ref pieced),
+            },
             TestContext.Current.CancellationToken);
 
+        Assert.Equal(1, pieced);
+
         Assert.Equal(
-            [ProcessRunner.LongestLine, ProcessRunner.LongestLine, ProcessRunner.LongestLine, Giant - (3 * ProcessRunner.LongestLine)],
+            [Piece, Piece, Piece, Giant - (3 * Piece)],
             pieces.Select(piece => piece.Length));
         Assert.Equal(TestChild.GiantLine(Giant), string.Concat(pieces));
         Assert.Equal(TestChild.GiantLine(ProcessRunner.TailLength), result.StandardOutput);
@@ -264,7 +330,7 @@ public sealed class ProcessRunnerTests
             },
             TestContext.Current.CancellationToken);
 
-        Assert.All(cutShort.SkipLast(1), piece => Assert.Equal(ProcessRunner.LongestLine - 100, piece.Length));
+        Assert.All(cutShort.SkipLast(1), piece => Assert.Equal(Piece - 100, piece.Length));
         Assert.Equal(TestChild.GiantLine(Giant), string.Concat(cutShort));
 
         var whole = new List<string>();
@@ -725,19 +791,44 @@ public sealed class ProcessRunnerTests
                 }
             },
             busyPasses: true,
-            TimeSpan.FromSeconds(30),
             TestContext.Current.CancellationToken);
 
         Assert.Equal(3, tries);
     }
 
     /// <summary>
-    /// A program still held once the grace is spent fails as what it is; any other failure is the start's own at once,
-    /// as is that one where the system gives the number another meaning; and the waiting between two tries stops when
-    /// the run is cancelled.
+    /// A start the system refuses as a program being written is made again for as long as the system says so - here past
+    /// the two seconds it was once given before the start failed - and then starts.
     /// </summary>
     [Fact]
-    public async Task AStartStillFailingOnceTheGraceIsSpent_OrFailingAnotherWay_IsItsOwnFailure()
+    public async Task ETxtBusy_IsRetriedWhileTheOsSaysIt()
+    {
+        var busyFor = Stopwatch.StartNew();
+        var tries = 0;
+
+        await ProcessRunner.StartAsync(
+            () =>
+            {
+                tries++;
+
+                if (busyFor.Elapsed < TimeSpan.FromSeconds(3))
+                {
+                    throw new System.ComponentModel.Win32Exception(ProcessRunner.TextFileBusy);
+                }
+            },
+            busyPasses: true,
+            TestContext.Current.CancellationToken);
+
+        Assert.True(busyFor.Elapsed >= TimeSpan.FromSeconds(3), $"the start succeeded after {busyFor.Elapsed}, before the system stopped saying busy");
+        Assert.InRange(tries, 2, int.MaxValue);
+    }
+
+    /// <summary>
+    /// Any other failure is the start's own at once, as is a busy one where the system gives the number another meaning;
+    /// and the waiting between two tries stops when the run is cancelled.
+    /// </summary>
+    [Fact]
+    public async Task AStartFailingAnotherWay_IsItsOwnFailure_AndTheWaitsEndWithTheRun()
     {
         var token = TestContext.Current.CancellationToken;
         var tries = 0;
@@ -748,15 +839,8 @@ public sealed class ProcessRunnerTests
             throw new System.ComponentModel.Win32Exception(ProcessRunner.TextFileBusy);
         }
 
-        var spent = await Assert.ThrowsAsync<System.ComponentModel.Win32Exception>(
-            () => ProcessRunner.StartAsync(Busy, busyPasses: true, TimeSpan.FromMilliseconds(100), token));
-
-        Assert.Equal(ProcessRunner.TextFileBusy, spent.NativeErrorCode);
-        Assert.InRange(tries, 2, 50);
-
-        tries = 0;
         await Assert.ThrowsAsync<System.ComponentModel.Win32Exception>(
-            () => ProcessRunner.StartAsync(Busy, busyPasses: false, TimeSpan.FromSeconds(30), token));
+            () => ProcessRunner.StartAsync(Busy, busyPasses: false, token));
         Assert.Equal(1, tries);
 
         tries = 0;
@@ -768,7 +852,6 @@ public sealed class ProcessRunnerTests
                     throw new System.ComponentModel.Win32Exception(2);
                 },
                 busyPasses: true,
-                TimeSpan.FromSeconds(30),
                 token));
         Assert.Equal(1, tries);
 
@@ -783,7 +866,6 @@ public sealed class ProcessRunnerTests
                     Busy();
                 },
                 busyPasses: true,
-                TimeSpan.FromSeconds(30),
                 cancelled.Token));
         Assert.Equal(1, tries);
     }

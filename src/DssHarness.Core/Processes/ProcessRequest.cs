@@ -113,7 +113,27 @@ public sealed record ProcessRequest
     /// </remarks>
     public Func<string, int>? CutLine { get; init; }
 
-    /// <summary>Wall clock budget, or <see langword="null"/> for no limit.</summary>
+    /// <summary>
+    /// Told once for each line of a stream kept as a <see cref="StreamKept.Tail"/> that ran past
+    /// <see cref="ProcessRunner.LongestLine"/> - the longest string .NET makes - and so was handed on in pieces: raised on
+    /// a reader's thread, as a line is, so a line matched in pieces is said, never passed over.
+    /// </summary>
+    public Action? OnLineInPieces { get; init; }
+
+    /// <summary>
+    /// Where stdout is written whole as it arrives - every character, as the child wrote it - so the result's tail is
+    /// quoted by reference to it (<see cref="ProcessResult.OutputLog"/>); <see langword="null"/> where the caller keeps its
+    /// lines itself, or needs no more than the result's text. Made, or emptied, as the child starts.
+    /// </summary>
+    public string? OutputLog { get; init; }
+
+    /// <summary>Where stderr is written whole as it arrives, as <see cref="OutputLog"/> says of stdout.</summary>
+    public string? ErrorLog { get; init; }
+
+    /// <summary>
+    /// The child's time limit, or <see langword="null"/> for none: the bound its run was configured with - which ends it
+    /// where it runs on, and at which what it left asked to end and still standing is made to.
+    /// </summary>
     public TimeSpan? Timeout { get; init; }
 
     /// <summary>
@@ -142,10 +162,10 @@ public sealed record ProcessRequest
     /// member when its last handle closes. So this process ending in any way, a hard
     /// kill among them, ends the child and all it started at once, as a host ends a dispatched leg whose dispatcher has
     /// gone. Its own end and a stop are as any other child's: what it leaves running at its normal end lives on until this
-    /// process ends. On every system its output is read for no longer than <see cref="ProcessRunner.DrainBound"/> once it
-    /// has ended, as a contained child's is once its container has: what still holds the output then is something it left
-    /// running, which the run would otherwise wait on for as long as it lived. What that leftover writes after it goes
-    /// unread, and once the run has let go of the output, it writes to a pipe nobody reads. On Linux and macOS the child starts as any
+    /// process ends. On every system its output is read, once it has ended, until every character it wrote has been: what
+    /// still holds the output then is something it left running, which the run would otherwise wait on for as long as it
+    /// lived. What that leftover writes after it is its own, said not read (<see cref="ProcessResult.OutputHeld"/>), and
+    /// once the run has let go of the output, it writes to a pipe nobody reads. On Linux and macOS the child starts as any
     /// other: an interrupt or a termination signal this process is given ends it with this process's stop, its terminal's
     /// hang-up reaches it as it reaches this process, and a kill of this process alone does not reach it - save under an
     /// operation's <see cref="ProcessScope"/>, a run's machine step's, which starts it apart from the terminal and records

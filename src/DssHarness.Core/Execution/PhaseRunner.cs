@@ -313,6 +313,13 @@ public sealed class PhaseRunner(
             ErrorKept = request.WholeLines ? StreamKept.TailOfWholeLines : StreamKept.Tail,
             CutLine = request.Mask is { } cutting ? cutting.Cut : null,
 
+            // A line past the longest string .NET makes is read in pieces, and said: never matched in pieces unseen.
+            OnLineInPieces = () => _output.Warn(
+                request.Phase,
+                string.Create(
+                    CultureInfo.InvariantCulture,
+                    $"{request.Leg}: a line of its output ran past the longest text .NET holds ({ProcessRunner.LongestLine:N0} characters), and was kept and matched in pieces")),
+
             // A wall-clock bound only where the phase declares one of its own; the stall bound below
             // is the one in force otherwise, for the reason the class remarks give.
             Timeout = request.Timeout,
@@ -618,7 +625,7 @@ public sealed class PhaseRunner(
         /// <summary>Reads the next line the child printed, as the log keeps it.</summary>
         public void Read(string line)
         {
-            foreach (var piece in LineSplitter.PiecesOf(line, ProcessRunner.LongestLine))
+            foreach (var piece in LineSplitter.PiecesOf(line, ProcessRunner.LongestLineHandedOn))
             {
                 Witness(piece);
                 Time(piece);
