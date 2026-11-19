@@ -117,7 +117,7 @@ internal sealed class ScanExtract
             }
         }
 
-        return new FileExtract([.. _nodes.Select(node => node with { Id = given[node.Id], Parent = node.Parent is { } parent ? given[parent] : null })])
+        return new FileExtract([.. _nodes.Select(node => node with { Id = given[node.Id], Parent = node.Parent is { } parent ? given[parent] : null, SuffixOf = node.SuffixOf?.Select(key => given[key]).ToList() })])
         {
             Scopes = [.. _scopes.Values],
             Imports = _imports,

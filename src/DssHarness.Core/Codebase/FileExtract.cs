@@ -142,6 +142,11 @@ public sealed record FileExtract(IReadOnlyList<ExtractNode> Nodes)
             }
         }
 
+        if (SuffixProblem(ids) is { } suffixed)
+        {
+            return suffixed;
+        }
+
         var scopes = new HashSet<string>(StringComparer.Ordinal);
 
         foreach (var scope in Scopes ?? [])
@@ -232,9 +237,64 @@ public sealed record FileExtract(IReadOnlyList<ExtractNode> Nodes)
         return -1;
     }
 
+    /// <summary>
+    /// What is wrong with the nodes whose names are written onto others' (<see cref="ExtractNode.SuffixOf"/>): each must
+    /// name nodes of <paramref name="ids"/>, and none its own names in turn - what they stand for is read back to names of
+    /// their own, which a node written onto itself never reaches. Each node is walked once, from the first that names it.
+    /// </summary>
+    private static string? SuffixProblem(Dictionary<string, ExtractNode> ids)
+    {
+        // 1 while a node's own are being walked, 2 once they are done.
+        var walked = new Dictionary<string, int>(StringComparer.Ordinal);
+
+        foreach (var start in ids.Values.Where(node => node.SuffixOf is not null))
+        {
+            if (walked.ContainsKey(start.Id))
+            {
+                continue;
+            }
+
+            var path = new Stack<(ExtractNode Node, int Next)>();
+            path.Push((start, 0));
+            walked[start.Id] = 1;
+
+            while (path.TryPop(out var at))
+            {
+                var onto = at.Node.SuffixOf ?? [];
+
+                if (at.Next == onto.Count)
+                {
+                    walked[at.Node.Id] = 2;
+                    continue;
+                }
+
+                path.Push(at with { Next = at.Next + 1 });
+                var id = onto[at.Next];
+
+                if (!ids.TryGetValue(id, out var under))
+                {
+                    return $"its node '{at.Node.Id}' stands for names written onto '{id}', which it holds no node of";
+                }
+
+                switch (walked.GetValueOrDefault(id))
+                {
+                    case 1:
+                        return $"its node '{at.Node.Id}' stands for names written onto its own, through '{id}'";
+
+                    case 0:
+                        walked[id] = 1;
+                        path.Push((under, 0));
+                        break;
+                }
+            }
+        }
+
+        return null;
+    }
+
     /// <summary>Every text the extract holds, each of which a store writes.</summary>
     private IEnumerable<string> Texts()
-        => (Nodes ?? []).SelectMany(node => (string?[])[node.Id, node.Kind, node.Name, node.Qualified, node.Signature, node.SubKind, node.Scope, node.Parent, node.Summary, node.ValueType, node.Extends, node.SeenIn, .. node.Modifiers ?? [], .. node.Exports ?? []])
+        => (Nodes ?? []).SelectMany(node => (string?[])[node.Id, node.Kind, node.Name, node.Qualified, node.Signature, node.SubKind, node.Scope, node.Parent, node.Summary, node.ValueType, node.Extends, node.SeenIn, .. node.Modifiers ?? [], .. node.Exports ?? [], .. node.SuffixOf ?? []])
             .Concat((Scopes ?? []).SelectMany(scope => (string?[])[scope.Name, scope.Parent]))
             .Concat((Imports ?? []).SelectMany(import => (string?[])[import.Form, import.Target, import.Prefix, .. import.Show ?? [], .. import.Hide ?? []]))
             .Concat((AddressRoots ?? []).SelectMany(root => (string?[])[root.Prefix, root.Directory]))
@@ -335,6 +395,18 @@ public sealed record ExtractNode(string Id, string Kind, string Name, string Qua
     public IReadOnlyList<string>? Exports { get; init; }
 
     /// <summary>
+    /// The ids of the nodes of its extract whose names its own are written onto, where it stands for one name written onto
+    /// each of several - a style sheet's nested <c>&amp;-x</c> under a list of selectors: its <see cref="Name"/> is
+    /// <c>&amp;</c> and the suffix it writes, and the names it stands for are each name of each of those nodes - their own,
+    /// or in turn the ones they stand for - with that suffix appended, matched when linking and never written out, so a list
+    /// nested in a list nested in a list is as many nodes as the sheet writes, not the product of every list. Where it is
+    /// exported, each of its <see cref="Exports"/> is <c>&amp;</c> and a suffix too: the first appended to the first name
+    /// each of those nodes is exported by, the second to the second, and the last of either standing for those past it.
+    /// <see langword="null"/> where it is a name of its own.
+    /// </summary>
+    public IReadOnlyList<string>? SuffixOf { get; init; }
+
+    /// <summary>
     /// The SHA-256 of its lines (<see cref="CodeGraphIds.Digest"/>): set by the core once the implementation has answered,
     /// never by it, and what says whether the bytes served are the ones extracted.
     /// </summary>
@@ -361,6 +433,9 @@ public sealed record ExtractNode(string Id, string Kind, string Name, string Qua
             : Extends is { } extends && string.IsNullOrWhiteSpace(extends) ? "the type it extends is empty"
             : SeenIn is { } seenIn && string.IsNullOrWhiteSpace(seenIn) ? "the scope it is seen in is empty"
             : Exports is { } exports && (exports.Count == 0 || exports.Any(string.IsNullOrWhiteSpace)) ? "a name it is exported by is empty, or it lists none"
+            : SuffixOf is { } suffixOf && (suffixOf.Count == 0 || suffixOf.Any(string.IsNullOrWhiteSpace)) ? "a node its names are written onto is empty, or it names none"
+            : SuffixOf is not null && Name is not ['&', _, ..] ? "it stands for names written onto others', and its name is no & and the suffix it writes"
+            : SuffixOf is not null && Exports is { } suffixes && suffixes.Any(exported => exported is not ['&', ..]) ? "it stands for names written onto others', and a name it is exported by is no & and a suffix"
             : Digest is { } digest && !OrchestrationRules.IsDigest(digest) ? "its digest is no SHA-256"
             : null;
 }
@@ -568,8 +643,12 @@ public static class CodeQualifierKinds
     public const string Scope = "scope";
 
     /// <summary>
-    /// A selector, as markup writes one - <c>.class</c>, <c>#id</c>, an element - the name looked for among rules alone
-    /// (<see cref="CodeSubKinds.Rule"/>): the style sheet's, wherever the repository declares them.
+    /// A selector, as markup writes one - <c>.class</c>, <c>#id</c>, an element - and a sheet's <c>@extend</c>,
+    /// <c>@apply</c> and <c>composes</c> do: the name looked for among rules alone (<see cref="CodeSubKinds.Rule"/>),
+    /// nearest first, as every name a style sheet's syntax says the kind of is - what the reference's own file declares,
+    /// what each file it imports or links declares, then the repository's - a rule that stands for a suffix written onto
+    /// several (<see cref="ExtractNode.SuffixOf"/>) found where it writes the name; a rule a file keeps to itself - a CSS
+    /// module's class, a scoped style block's - seen from that file alone.
     /// </summary>
     public const string Selector = "selector";
 
@@ -582,25 +661,37 @@ public static class CodeQualifierKinds
 
     /// <summary>
     /// A style sheet's variable, as a value names one - <c>var(--x)</c>, <c>$x</c>, <c>@x</c>: the name looked for among
-    /// style variables alone (<see cref="CodeSubKinds.StyleVariable"/>), found as a name is - the sheet's own, what it
-    /// imports, else the repository's.
+    /// style variables alone (<see cref="CodeSubKinds.StyleVariable"/>), nearest first as a selector is - the sheet's own,
+    /// what it imports by no namespace, else the repository's.
     /// </summary>
     public const string StyleVariable = CodeSubKinds.StyleVariable;
 
     /// <summary>
     /// A Sass mixin, as an <c>@include</c> names one: the name looked for among mixins alone
-    /// (<see cref="CodeSubKinds.StyleMixin"/>), found as a name is.
+    /// (<see cref="CodeSubKinds.StyleMixin"/>), nearest first as a variable is.
     /// </summary>
     public const string StyleMixin = CodeSubKinds.StyleMixin;
 
     /// <summary>
+    /// A style sheet's function, as a value's call names one - <c>rem(2px)</c>: the name looked for among functions alone
+    /// (<see cref="CodeSubKinds.StyleFunction"/>), nearest first as a variable is.
+    /// </summary>
+    public const string StyleFunction = CodeSubKinds.StyleFunction;
+
+    /// <summary>
     /// An animation's keyframes, as an <c>animation</c> or <c>animation-name</c> value names them: the name looked for
-    /// among keyframes alone (<see cref="CodeSubKinds.Keyframes"/>), found as a name is.
+    /// among keyframes alone (<see cref="CodeSubKinds.Keyframes"/>), nearest first as a selector is.
     /// </summary>
     public const string Keyframes = CodeSubKinds.Keyframes;
 
+    /// <summary>
+    /// A font's face, as a <c>font-family</c> or a <c>font</c> names its family - in lower case, as CSS matches one: the
+    /// name looked for among font faces alone (<see cref="CodeSubKinds.FontFace"/>), nearest first as a selector is.
+    /// </summary>
+    public const string FontFace = CodeSubKinds.FontFace;
+
     /// <summary>Every kind.</summary>
-    public static IReadOnlyList<string> All { get; } = [This, Base, Named, Type, Prefix, Value, Scope, Selector, Key, StyleVariable, StyleMixin, Keyframes];
+    public static IReadOnlyList<string> All { get; } = [This, Base, Named, Type, Prefix, Value, Scope, Selector, Key, StyleVariable, StyleMixin, StyleFunction, Keyframes, FontFace];
 }
 
 /// <summary>A place an implementation saw something it cannot bind, or stopped reading.</summary>

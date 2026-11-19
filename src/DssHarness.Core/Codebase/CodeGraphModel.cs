@@ -133,7 +133,8 @@ public static class CodeEdgeKinds
 /// <summary>
 /// The kinds within a kind the linker reads, of the nodes of data files and style sheets - a configuration key, an
 /// element, each node a style sheet declares - which no reference reaches by its name alone: only one whose qualifier
-/// says it names one (<see cref="ReachedBy"/>), or an import's prefix, which names what the file it imports declares.
+/// says it names one (<see cref="ReachedBy"/>), a use through an import's prefix, which names what the file it imports
+/// declares, and a use an import binds by a name the file exports the node by - a CSS module's class.
 /// Every kind a style sheet's node is of is one of these, spelt so no code's kind is, so a name code writes - a PHP
 /// <c>$radius</c>, a C# <c>Button()</c> - reaches none of them. Every other kind within a kind is its implementation's
 /// to name freely.
@@ -151,8 +152,10 @@ public static class CodeSubKinds
     public const string Element = "element";
 
     /// <summary>
-    /// A style sheet's rule - a selector's simple part, <c>.btn</c>, <c>#main</c>, an element: reached by a selector -
-    /// markup's <c>class</c> and <c>id</c>, a sheet's <c>@extend</c>, <c>@apply</c> and <c>composes</c>.
+    /// A style sheet's rule - a selector's simple part, <c>.btn</c>, <c>#main</c>, an element, or a suffix a <c>&amp;</c>
+    /// writes onto several selectors (<c>&amp;-x</c>, <see cref="ExtractNode.SuffixOf"/>) standing for each name it writes:
+    /// reached by a selector - markup's <c>class</c> and <c>id</c>, a sheet's <c>@extend</c>, <c>@apply</c> and
+    /// <c>composes</c> - that names it, or one of those names.
     /// </summary>
     public const string Rule = "rule";
 
@@ -162,10 +165,16 @@ public static class CodeSubKinds
     /// <summary>A Sass <c>@mixin</c>: reached by an <c>@include</c> of it.</summary>
     public const string StyleMixin = "style-mixin";
 
-    /// <summary>A Sass <c>@function</c>: reached through an import's prefix alone.</summary>
+    /// <summary>
+    /// A Sass <c>@function</c>, or CSS's own custom one (<c>@function --x</c>): reached by a value's call of it - its name
+    /// before its parenthesis, <c>rem(2px)</c> - and through a module's namespace, <c>m.rem(2px)</c>.
+    /// </summary>
     public const string StyleFunction = "style-function";
 
-    /// <summary>A style sheet's <c>@font-face</c>, by the family it names: reached through an import's prefix alone.</summary>
+    /// <summary>
+    /// A style sheet's <c>@font-face</c>, by the family it names, its ASCII letters in lower case as CSS matches a family's
+    /// name: reached by a <c>font-family</c> or a <c>font</c> that names the family.
+    /// </summary>
     public const string FontFace = "font-face";
 
     /// <summary>
@@ -174,15 +183,22 @@ public static class CodeSubKinds
     /// </summary>
     public const string StyleVariable = "style-variable";
 
+    /// <summary>
+    /// A style sheet's top, <c>(sheet)</c>: what it does outside every node it declares - a top-level <c>@include</c>, a
+    /// flow control's head, a rule of no parts - the node those references are made from, as a script's module node is;
+    /// reached by no name.
+    /// </summary>
+    public const string Sheet = "sheet";
+
     /// <summary>Whether <paramref name="subKind"/> is a data file's or a style sheet's, which no reference reaches by its name alone.</summary>
     /// <param name="subKind">A node's kind within its kind, or <see langword="null"/>.</param>
-    public static bool IsData(string? subKind) => subKind is Key or Element or Rule or Keyframes or StyleMixin or StyleFunction or FontFace or StyleVariable;
+    public static bool IsData(string? subKind) => subKind is Key or Element or Rule or Keyframes or StyleMixin or StyleFunction or FontFace or StyleVariable or Sheet;
 
     /// <summary>
     /// The kind within a kind a reference of the qualifier <paramref name="qualifier"/> reaches alone: a rule for a
     /// selector, a key for a key qualifier, and for each qualifier a style sheet writes where its syntax says what a name
-    /// names - a variable, a mixin, an animation's keyframes - that kind; <see langword="null"/> for every other, which
-    /// reaches no node of data by its name alone.
+    /// names - a variable, a mixin, a function, an animation's keyframes, a font's face - that kind; <see langword="null"/>
+    /// for every other, which reaches no node of data by its name alone.
     /// </summary>
     /// <param name="qualifier">The kind of a reference's qualifier (<see cref="CodeQualifierKinds"/>), or <see langword="null"/>.</param>
     public static string? ReachedBy(string? qualifier) => qualifier switch
@@ -191,7 +207,9 @@ public static class CodeSubKinds
         CodeQualifierKinds.Key => Key,
         CodeQualifierKinds.StyleVariable => StyleVariable,
         CodeQualifierKinds.StyleMixin => StyleMixin,
+        CodeQualifierKinds.StyleFunction => StyleFunction,
         CodeQualifierKinds.Keyframes => Keyframes,
+        CodeQualifierKinds.FontFace => FontFace,
         _ => null,
     };
 }

@@ -45,6 +45,14 @@ internal enum ScanEscapes
 
     /// <summary>Markup's - a JSX attribute's: no backslash escapes, and HTML's character references decoded.</summary>
     Html,
+
+    /// <summary>
+    /// A style sheet's, in a string, an unquoted <c>url(...)</c> and a name alike (<see cref="ScanLiteral.CssEscape"/>): up
+    /// to six hexadecimal digits a character's code - none, a surrogate's or one past every character's the replacement
+    /// character - and the one white space after them no part of the value; a backslash before a line break dropping both;
+    /// any other character after a backslash itself, a space among them.
+    /// </summary>
+    Css,
 }
 
 /// <summary>One constant part of a literal's value as its text writes it.</summary>
@@ -144,6 +152,72 @@ internal sealed record ScanLiteral(IReadOnlyList<ScanLiteralPart> Parts, ScanEsc
         return value.ToString();
     }
 
+    /// <summary>
+    /// How many characters the style sheet's escape at <paramref name="at"/> is, within <paramref name="end"/>: a backslash
+    /// and the character it escapes - a surrogate pair whole - or up to six hexadecimal digits and the one white space that
+    /// may end them, a CR LF one; 0 where none stands there, as a backslash before a line break, before a surrogate apart
+    /// from its pair or at the end is none. The
+    /// one reading of how long one is, which the style sheet's lexer reads a name by and <see cref="ScanEscapes.Css"/>
+    /// decodes a value by.
+    /// </summary>
+    /// <param name="text">The text.</param>
+    /// <param name="at">Where the backslash may stand.</param>
+    /// <param name="end">Where the text read ends.</param>
+    internal static int CssEscape(string text, int at, int end)
+    {
+        if (at + 1 >= end || text[at] != '\\' || ScanLexing.LineBreakAt(text, at + 1, end) > 0)
+        {
+            return 0;
+        }
+
+        if (!char.IsAsciiHexDigit(text[at + 1]))
+        {
+            return !char.IsSurrogate(text[at + 1]) ? 2 : char.IsHighSurrogate(text[at + 1]) && at + 2 < end && char.IsLowSurrogate(text[at + 2]) ? 3 : 0;
+        }
+
+        var past = at + 1;
+
+        while (past < end && past - at <= 6 && char.IsAsciiHexDigit(text[past]))
+        {
+            past++;
+        }
+
+        return past - at + (past < end && text[past] is ' ' or '\t' or '\f' ? 1 : ScanLexing.LineBreakAt(text, past, end));
+    }
+
+    /// <summary>The style sheet's escape whose backslash is at <paramref name="at"/>, decoded into <paramref name="value"/>; answers where the text goes on.</summary>
+    private static int CssEscaped(string source, int at, int end, Decoded value)
+    {
+        if (ScanLexing.LineBreakAt(source, at + 1, end) is var continued and > 0)
+        {
+            return at + 1 + continued;
+        }
+
+        var width = CssEscape(source, at, end);
+
+        if (width == 0)
+        {
+            // A backslash before a surrogate apart from its pair escapes nothing: the text goes on at what follows it.
+            return at + 1;
+        }
+
+        if (!char.IsAsciiHexDigit(source[at + 1]))
+        {
+            value.Text(source.AsSpan(at + 1, width - 1));
+            return at + width;
+        }
+
+        var digits = at + 1;
+
+        while (digits < at + width && char.IsAsciiHexDigit(source[digits]))
+        {
+            digits++;
+        }
+
+        var code = Hex(source, at + 1, digits, digits - at - 1) ?? 0;
+        return value.Code(code is 0 or (>= 0xD800 and <= 0xDFFF) ? 0xFFFD : code, at + width);
+    }
+
     /// <summary>The escape whose backslash is at <paramref name="at"/>, decoded into <paramref name="value"/>; answers where the text goes on.</summary>
     private static int Escape(string source, int at, int end, ScanEscapes escapes, Decoded value)
     {
@@ -152,6 +226,9 @@ internal sealed record ScanLiteral(IReadOnlyList<ScanLiteralPart> Parts, ScanEsc
 
         switch (escapes)
         {
+            case ScanEscapes.Css:
+                return CssEscaped(source, at, end, value);
+
             case ScanEscapes.PhpSingle:
                 return next is '\\' or '\'' ? value.Char(next, after) : value.Char('\\', at + 1);
 

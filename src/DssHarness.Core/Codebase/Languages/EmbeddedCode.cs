@@ -116,7 +116,12 @@ internal static class EmbeddedCode
                 given[node.Id] = ids.Next(node.Id);
             }
 
-            nodes.AddRange(extract.Nodes.Select(node => node with { Id = given[node.Id], Parent = node.Parent is { } parent && given.TryGetValue(parent, out var held) ? held : node.Parent }));
+            nodes.AddRange(extract.Nodes.Select(node => node with
+            {
+                Id = given[node.Id],
+                Parent = node.Parent is { } parent && given.TryGetValue(parent, out var held) ? held : node.Parent,
+                SuffixOf = node.SuffixOf?.Select(onto => given.TryGetValue(onto, out var written) ? written : onto).ToList(),
+            }));
             references.AddRange(extract.References.Select(reference => given.TryGetValue(reference.From, out var from) ? reference with { From = from } : reference));
 
             foreach (var scope in extract.Scopes)

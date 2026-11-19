@@ -4353,9 +4353,11 @@ project's attribute or element text writes - a comment never - is a `uses` of th
 (the `key` qualifier). A key, an element and every node a style sheet declares - a rule, a keyframes, a mixin, a
 function, a font face, a variable, each of a kind within a kind `CodeSubKinds` owns and no code's kind is spelt as -
 are reached only by a reference that says it names one - a `key` qualifier, a `selector` qualifier, a style sheet's
-`style-variable`, `style-mixin` or `keyframes` qualifier (`CodeSubKinds.ReachedBy`), a use through an import's prefix -
-and by the keys' join, never by a name alone as code names code (`Takes`, the one place that says what a reference may
-reach), so a PHP `$radius` reaches no SCSS `$radius` and a C# `Button()` no mixin `Button`. The linker joins each key to the code
+`style-variable`, `style-mixin`, `style-function`, `keyframes` or `font-face` qualifier (`CodeSubKinds.ReachedBy`), a
+use through an import's prefix, a use an import makes visible by a name the file that declares the node exports it by
+(`import { btn } from './x.module.css'`) - and by the keys' join, never by a name alone as code names code (`Takes`, the
+one place that says what a reference may reach), so a PHP `$radius` reaches no SCSS `$radius` and a C# `Button()` no
+mixin `Button`. The linker joins each key to the code
 that names it: a string literal equal to the key's last segment or whole path, and each field or property whose name is
 the segment as a naming policy the repository declares (`codebaseGraph.keyNaming`: `camelCase`, `snake_case`,
 `kebab-case` or `exact`, `camelCase` and `exact` the default) writes it - each a `uses` edge of `candidates`, for nothing
@@ -4567,27 +4569,51 @@ and each `<style>` by the style sheet's reader in the syntax its `lang` or its `
 `css` (`.css`, `.scss`, `.sass`, `.less`) reads a sheet over the structural scanner's core, as the code readers do:
 `CssLexer` cuts it into tokens - a string to its own quote not escaped, an unquoted `url(...)` one token, `/* */` a
 comment and `//` one only in SCSS, Sass and Less, an interpolation (`#{...}`, Less's `@{...}`) one token whose code is
-read in its turn - and `ScannedText` matches its braces, so `CssReading` walks it block by block, each line a token's,
-no block nested past `ScanFrame.MostDepth` read and each one deeper marked dynamic. The indented syntax of `.sass` is
-first written in SCSS's braces line for line (`CssLexer.Braced`), so one reader reads all four. Each simple part of
-each selector - `.btn`, `#main`, `my-widget`, `%placeholder`; no pseudo-class, attribute or `:not()`, but an `:is()`'s
-and a `:where()`'s selectors, and a nested rule's `&__title` written onto its parent's names - is a member SubKind
-`rule` named as CSS reads it, escapes read, over its own rule's lines, inside an `@media`, `@supports`, `@layer` or
-any other at-rule's block too; each custom property, `@property` and SCSS or Less variable a `style-variable`; each
-`@mixin` a `style-mixin`, `@function` a `style-function`, `@keyframes` a `keyframes` and `@font-face` a `font-face`;
-a selector an interpolation writes no node, marked dynamic. A `var(--x)`, a `$x` and a Less `@x` are uses of the
-variable (the `style-variable` qualifier), an `@include` a use of the mixin (`style-mixin`), a name an `animation` or an
-`animation-name` gives - not one of the shorthand's own words - a use of the keyframes (`keyframes`), each looked for
-as a name the sheet writes alone is, among that kind alone; a Less mixin call a use of the rule it names, an `@extend`
-and a Less `:extend` an `inherits` of the rule it names - looked for among rules by the `selector` qualifier, as a
-document's classes are - and a Tailwind `@apply` and a CSS module's `composes` uses of the rules of the classes they
-name; each is made from the node that holds it, and only what no node holds from the sheet's first node. An `@import`, `@use` and `@forward` naming a file of the tree is an import of
-it, each file it may be tried in the order its language tries them - Sass's partials, extensions and index files a
-fallback each, Less's `.less` - none of a package, a URL or one of Sass's own modules; a `@use` is reached by its
-namespace, the import's prefix, and a `@forward` is an export with its `show` and `hide`. A sheet named as a CSS module
-(`x.module.css`) exports each class, id and keyframes by its name and its camel-cased one (`ExtractNode.Exports`), so a
-script's `import styles from './x.module.css'` and its `styles.btn` bind to the rule `.btn` through the import, by
-the linker's one rule for an exported name. `related` answers `styledBy` (the rules that style a node: its `uses`
+read in its turn, each one nested in it passed over to its close where the first scan found it (`CssLexer.Closes`), so
+every character is scanned by its own interpolation's scan and the first alone - and `ScannedText` matches its braces,
+so `CssReading` walks it block by block with a stack of the blocks it is in, each line a token's: a block, a
+pseudo-class's selectors and an interpolation nested to any depth are read whole, never by a call into itself, and
+nothing is cut at a depth. The indented syntax of `.sass` is first written in SCSS's braces line for line
+(`CssLexer.Braced`), each line's end, trailing comma and brackets read by the same lexer, so one reader reads all four.
+Each simple part of each selector - `.btn`, `#main`, `my-widget`, `%placeholder`; no pseudo-class, attribute or
+`:not()`, but an `:is()`'s, a `:where()`'s, a `:global()`'s, a `:local()`'s and a `:deep()`'s selectors, and a nested
+rule's `&__title` written onto its parent's name - is a member SubKind `rule` named as CSS reads it, escapes read
+(`ScanEscapes.Css`, which a string's value is decoded by too), over its own rule's lines, inside an `@media`,
+`@supports`, `@layer` or any other at-rule's block too. A suffix written onto a `&` that stands for several selectors -
+`.a, .b { &-x {} }` - is one node named `&-x`, written onto each of their nodes (`ExtractNode.SuffixOf`) and never
+written out name by name, so lists nested in lists are as many nodes as the sheet writes, not the product of every
+list; the linker matches a name to the nodes that write it - the suffix its end, the rest a name a node it is written
+onto stands for in turn - each node at each place of the name once, however many reach it. Each custom property,
+`@property` and SCSS or Less variable is a `style-variable` - but a Sass or Less variable a block declares without
+`!global`, a mixin's and a function's parameter and a loop's variable, which are the block's own: no node and no use,
+known at once from one table of what the open blocks declare; each `@mixin` a `style-mixin`, `@function` a
+`style-function`, `@keyframes` a `keyframes` and `@font-face` a `font-face` named by its family in lower case, each id
+spelt with its at-rule's word (`#@mixin fade-in`) so two kinds of one name are two nodes; a selector, an import's path
+or a name an interpolation writes is no node and no import, marked dynamic, what the interpolation uses read. A
+`var(--x)`, a `$x` and a Less `@x` are uses of the variable (the `style-variable` qualifier), an `@include` a use of
+the mixin (`style-mixin`), a call of a function a sheet may declare a use of it (`style-function`; CSS's own -
+`calc()`, `var()`, `url()` - none), a name an `animation` or an `animation-name` gives - not one of the shorthand's
+own words - a use of the keyframes (`keyframes`), a family a `font-family` or a `font` names a use of the font face
+(`font-face`; a generic family none); a Less mixin call a use of the rule it names, an `@extend` and a Less `:extend`
+an `inherits` of the rule it names - by the `selector` qualifier, as a document's classes are - and a Tailwind
+`@apply` and a CSS module's `composes` uses of the rules of the classes they name. Each is made from the node that
+holds it, what no node holds - a top-level `@include`, a rule of no parts - from the sheet's own top node, `(sheet)`
+(`ScanExtract.Top`), and each string and `url(...)` is a literal of its node. Each is looked for nearest first, of its
+kind alone: the sheet's own, exact; then what each file it imports makes visible, unique - one walk through them all, a
+file reached once - a Sass member by an import of no namespace alone; then the repository's, unique. An `@import`,
+`@use` and `@forward` naming a file of the tree is an import of it, each file it may be tried in the order its language
+tries them - Sass's partials, extensions and index files a fallback each, Less's `.less` - none of a package, a URL or
+one of Sass's own modules, and an `@import` Sass leaves to CSS (`url(...)`, one a media query follows) tried as
+written; a `@use` is reached by its namespace, the import's prefix, a `@forward` is an export with its `show` and
+`hide`, and a `composes: a from "./x.css"` an import of that file by its path, `a` the class it exports by that name.
+A sheet named as a CSS module (`x.module.css`) keeps each class, id and keyframes to itself (`ExtractNode.SeenIn`) -
+but one under `:global` - and exports each by its name and its camel-cased one (`ExtractNode.Exports`; a suffix
+written onto several by the forms of its suffix, matched as its names are), so a script's
+`import styles from './x.module.css'` and its `styles.btn`, or an `import { btn }`, bind to the rule `.btn` through the
+import, by the linker's one rule for an exported name, and no other file's selector reaches it. A style block another
+reader hands the style sheet's reader as a component's `<style scoped>` (`StyleScope.Scoped`) keeps the parts of each
+selector's last compound - the element Vue's attribute marks - and its keyframes to its file, but those under `:deep`,
+`:slotted` or `:global`; one handed as a `<style module>` is read as a CSS module is. `related` answers `styledBy` (the rules that style a node: its `uses`
 edges to a rule, SubKind `rule`, alone) and `styles` (what a rule reaches: the nodes whose `uses` edges reach it, asked
 of a rule - of any other node, nothing), so "who uses this class" and "what styles this element" are one call each.
 

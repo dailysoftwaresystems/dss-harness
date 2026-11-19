@@ -322,7 +322,7 @@ public sealed class VueExtractorTests : CodeGraphExtractorContractTests<VueExtra
         Assert.Equal(
             [
                 new CodeEdge("vue:src/Card.vue", "vue:src/Card.vue#.card", CodeEdgeKinds.Uses, 2, CodeConfidences.Exact),
-                new CodeEdge("vue:src/Card.vue#.card", "vue:src/Card.vue#$radius", CodeEdgeKinds.Uses, 7, CodeConfidences.Unique),
+                new CodeEdge("vue:src/Card.vue#.card", "vue:src/Card.vue#$radius", CodeEdgeKinds.Uses, 7, CodeConfidences.Exact),
             ],
             linked.Edges.Where(edge => edge.Kind == CodeEdgeKinds.Uses).OrderBy(edge => edge.Line));
     }

@@ -5345,8 +5345,10 @@ public static class HelpTopics
             + "it is paged and kept; the verb answers a person's own view, unmasked. "
             + "A configuration key, an element and every node a style sheet declares - a rule, keyframes, a mixin, a function, "
             + "a font face, a variable - are reached only by what names one so - a key's join, an MSBuild $(Name), a selector, "
-            + "a sheet's var(--x), $x, @x, @include or animation name, a use through an import's prefix - never by a name "
-            + "alone, as code names code. "
+            + "a sheet's var(--x), $x, @x, @include, function call, animation name or font family, a use through an import's "
+            + "prefix, a name an import binds that the file exports the node by (import { btn } from './x.module.css') - never "
+            + "by a name alone, as code names code; a sheet's name is looked for nearest first - the sheet's own, what it "
+            + "imports, then the repository's - and a CSS module's class is seen from its own file and its importers alone. "
             + "No model writes any of it: every node and edge is read from a file by a program.");
         builder.AppendLine();
         AppendWrapped(

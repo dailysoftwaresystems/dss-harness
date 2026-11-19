@@ -137,14 +137,14 @@ public sealed class CssExtractorTests : CodeGraphExtractorContractTests<CssExtra
                 new("css:site.css#--gap", CodeNodeKinds.Member, (5, 5)),
                 new("css:site.css#.btn", CodeNodeKinds.Member, (8, 12)),
                 new("css:site.css#my-widget", CodeNodeKinds.Member, (13, 16)),
-                new("css:site.css#slide-in", CodeNodeKinds.Member, (17, 20)),
+                new("css:site.css#@keyframes slide-in", CodeNodeKinds.Member, (17, 20)),
                 new("css:site.css#.card", CodeNodeKinds.Member, (22, 24)),
                 new("css:site.css#.after", CodeNodeKinds.Member, (41, 41)),
             ],
             Edges =
             [
                 new("file:site.css", "file:base.css", CodeEdgeKinds.Imports, 2, CodeConfidences.Exact),
-                new("css:site.css#.btn", "css:site.css#--gap", CodeEdgeKinds.Uses, 11, CodeConfidences.Unique),
+                new("css:site.css#.btn", "css:site.css#--gap", CodeEdgeKinds.Uses, 11, CodeConfidences.Exact),
             ],
         },
         new("base.css", "body { margin: 0; }\n"),
@@ -152,7 +152,7 @@ public sealed class CssExtractorTests : CodeGraphExtractorContractTests<CssExtra
         {
             Nodes =
             [
-                new("css:styles.scss#rounded", CodeNodeKinds.Member, (8, 10)),
+                new("css:styles.scss#@mixin rounded", CodeNodeKinds.Member, (8, 10)),
                 new("css:styles.scss#.panel", CodeNodeKinds.Member, (14, 28)),
                 new("css:styles.scss#.panel__title", CodeNodeKinds.Member, (18, 20)),
                 new("css:styles.scss#.wide", CodeNodeKinds.Member, (25, 25)),
@@ -161,7 +161,7 @@ public sealed class CssExtractorTests : CodeGraphExtractorContractTests<CssExtra
             [
                 new("file:styles.scss", "file:theme/_colors.scss", CodeEdgeKinds.Imports, 2, CodeConfidences.Exact),
                 new("file:styles.scss", "file:src/list/_index.scss", CodeEdgeKinds.Imports, 3, CodeConfidences.Exact),
-                new("css:styles.scss#.panel", "css:styles.scss#rounded", CodeEdgeKinds.Uses, 15, CodeConfidences.Unique),
+                new("css:styles.scss#.panel", "css:styles.scss#@mixin rounded", CodeEdgeKinds.Uses, 15, CodeConfidences.Exact),
                 new("css:styles.scss#.panel", "css:styles.scss#%raised", CodeEdgeKinds.Inherits, 16, CodeConfidences.Exact),
                 new("css:styles.scss#.panel", "css:theme/_colors.scss#$primary", CodeEdgeKinds.Uses, 17, CodeConfidences.Exact),
             ],
@@ -176,7 +176,7 @@ public sealed class CssExtractorTests : CodeGraphExtractorContractTests<CssExtra
                 new("css:styles.sass#.inner", CodeNodeKinds.Member, (9, 11)),
                 new("css:styles.sass#.other", CodeNodeKinds.Member, (12, 13)),
             ],
-            Edges = [new("css:styles.sass#.inner", "css:styles.sass#bevel", CodeEdgeKinds.Uses, 10, CodeConfidences.Unique)],
+            Edges = [new("css:styles.sass#.inner", "css:styles.sass#@mixin bevel", CodeEdgeKinds.Uses, 10, CodeConfidences.Exact)],
         },
         new("styles.less", Less)
         {
@@ -205,7 +205,7 @@ public sealed class CssExtractorTests : CodeGraphExtractorContractTests<CssExtra
             [
                 ("--gap", CodeSubKinds.StyleVariable, 5, 5), (".btn", CodeSubKinds.Rule, 8, 12), (".btn-primary", CodeSubKinds.Rule, 8, 12), ("#main", CodeSubKinds.Rule, 13, 16),
                 ("my-widget", CodeSubKinds.Rule, 13, 16), ("slide-in", CodeSubKinds.Keyframes, 17, 20), (".card", CodeSubKinds.Rule, 22, 24), (".lead", CodeSubKinds.Rule, 26, 28),
-                (".intro", CodeSubKinds.Rule, 26, 28), ("p", CodeSubKinds.Rule, 26, 28), (".sm:hidden", CodeSubKinds.Rule, 29, 31), ("Inter", CodeSubKinds.FontFace, 32, 35),
+                (".intro", CodeSubKinds.Rule, 26, 28), ("p", CodeSubKinds.Rule, 26, 28), (".sm:hidden", CodeSubKinds.Rule, 29, 31), ("inter", CodeSubKinds.FontFace, 32, 35),
                 ("--angle", CodeSubKinds.StyleVariable, 36, 40), (".after", CodeSubKinds.Rule, 41, 41),
             ],
             extract.Nodes.Select(node => (node.Name, node.SubKind!, node.Start, node.End)));
@@ -274,22 +274,30 @@ public sealed class CssExtractorTests : CodeGraphExtractorContractTests<CssExtra
     }
 
     /// <summary>
-    /// A block nested past the scanner's most depth is not read and its line is marked dynamic, and the sheet goes on
-    /// past it; nesting far deeper - blocks, a pseudo-class's selectors, interpolations - is answered, never a stack
-    /// overflow that would end the process.
+    /// Blocks, a pseudo-class's selectors and interpolations nested to any depth are each read whole, and the sheet goes on
+    /// past them - each read with a stack of what it is in, never a call into itself, so no nesting ends the process, and
+    /// in time that grows with the sheet: a block's own variable is its own at every depth, the selector innermost in a
+    /// run of <c>:is()</c> is a part of its rule, and what the innermost of a run of interpolations uses is read, nothing
+    /// said dynamic.
     /// </summary>
     [Fact]
-    public void ABlockNestedPastTheMostDepth_IsNotRead_SaidDynamic_AndTheSheetGoesOn()
+    public void BlocksSelectorsAndInterpolationsNestedToAnyDepth_AreReadWhole_AndTheSheetGoesOnPastThem()
     {
-        var nested = string.Concat(Enumerable.Range(0, 100).Select(depth => $".n{depth} {{\n")) + new string('}', 100) + "\n.after {}\n";
-        var extract = Read("a.scss", nested);
+        const int Depth = 50_000;
+        var nested = string.Concat(Enumerable.Range(0, Depth).Select(depth => $".n{depth} {{ $v{depth}: 1; a: $v0 $v{depth} $out;\n")) + new string('}', Depth) + "\n.after {}\n";
+        var watch = Stopwatch.StartNew();
+        var blocks = Read("a.scss", nested);
+        var selectors = Read("a.css", string.Concat(Enumerable.Repeat(":is(", Depth)) + "a" + new string(')', Depth) + " {}\n.b {}\n");
+        var interpolations = Read("a.scss", ".a { b: \"" + string.Concat(Enumerable.Repeat("#{\"", Depth)) + "#{$deep}" + string.Concat(Enumerable.Repeat("\"}", Depth)) + "\"; }\n.c {}\n");
+        watch.Stop();
 
-        Assert.Equal([.. Enumerable.Range(0, ScanFrame.MostDepth + 1).Select(depth => $".n{depth}"), ".after"], extract.Nodes.Select(node => node.Name));
-        Assert.Equal([new ExtractDynamic(ScanFrame.MostDepth + 2, ScanFrame.TooDeepWhy)], extract.Dynamic);
-
-        Assert.Single(Read("a.scss", string.Concat(Enumerable.Repeat("a{", 20_000))).Nodes);
-        Assert.Equal([".b"], Read("a.css", string.Concat(Enumerable.Repeat(":is(", 20_000)) + "a" + new string(')', 20_000) + " {}\n.b {}\n").Nodes.Select(node => node.Name));
-        Assert.Equal([".a"], Read("a.scss", ".a { b: \"" + string.Concat(Enumerable.Repeat("#{\"", 20_000)) + "\"; }\n").Nodes.Select(node => node.Name));
+        Assert.Equal([.. Enumerable.Range(0, Depth).Select(depth => $".n{depth}"), ".after"], blocks.Nodes.Select(node => node.Name));
+        Assert.Equal([.. Enumerable.Range(0, Depth).Select(depth => ($"css:a.scss#.n{depth}", "$out"))], blocks.References.Select(reference => (reference.From, reference.Name)));
+        Assert.Equal(["a", ".b"], selectors.Nodes.Select(node => node.Name));
+        Assert.Equal([".a", ".c"], interpolations.Nodes.Select(node => node.Name));
+        Assert.Equal([("css:a.scss#.a", "$deep", 1)], interpolations.References.Select(reference => (reference.From, reference.Name, reference.Line)));
+        Assert.Empty(blocks.Dynamic.Concat(selectors.Dynamic).Concat(interpolations.Dynamic));
+        Assert.True(watch.Elapsed < TimeSpan.FromSeconds(10), $"reading nesting {Depth} deep took {watch.Elapsed}");
     }
 
     /// <summary>A selector written over several lines counts each line once: the rules after it keep their own lines.</summary>
@@ -346,22 +354,23 @@ public sealed class CssExtractorTests : CodeGraphExtractorContractTests<CssExtra
     }
 
     /// <summary>
-    /// A selector an interpolation writes is no rule, said as dynamic, and what the interpolation uses is read; one in a
-    /// value is read for what it uses, and no rule.
+    /// A selector an interpolation writes is no rule, said as dynamic, and what the interpolation uses is read - from the
+    /// sheet's top node, which holds it; one in a value is read for what it uses, and no rule.
     /// </summary>
     [Fact]
     public void ASelectorAnInterpolationWrites_IsNoRule_SaidDynamic_AndWhatItUsesRead()
     {
         var extract = Read("a.scss", ".a {}\n.col-#{$i} { width: 1px; }\n.y { width: calc(100% - #{$gutter}); }\n");
 
-        Assert.Equal([".a", ".y"], extract.Nodes.Select(node => node.Name));
-        Assert.Equal([("css:a.scss#.a", "$i", 2), ("css:a.scss#.y", "$gutter", 3)], extract.References.Select(reference => (reference.From, reference.Name, reference.Line)));
+        Assert.Equal([".a", ".y", "(sheet)"], extract.Nodes.Select(node => node.Name));
+        Assert.Equal([("css:a.scss#(sheet)", "$i", 2), ("css:a.scss#.y", "$gutter", 3)], extract.References.Select(reference => (reference.From, reference.Name, reference.Line)));
         Assert.Equal([new ExtractDynamic(2, "a selector an interpolation writes, whose rule is no node")], extract.Dynamic);
     }
 
     /// <summary>
     /// Every reference is made from the node that holds it: a rule's from the rule - its subject, a nested one's own - a
-    /// mixin's from the mixin, a variable's value's from the variable; only what no node holds from the sheet's first node.
+    /// mixin's from the mixin, a variable's value's from the variable; what no node holds - a top-level <c>@include</c> -
+    /// from the sheet's own top node, never from a node declared elsewhere in the sheet.
     /// </summary>
     [Fact]
     public void EveryReference_IsMadeFromTheNodeThatHoldsIt()
@@ -380,10 +389,10 @@ public sealed class CssExtractorTests : CodeGraphExtractorContractTests<CssExtra
 
         Assert.Equal(
             [
-                ("css:a.scss#--brand", CodeEdgeKinds.Uses, "reset", 1), ("css:a.scss#--brand", CodeEdgeKinds.Uses, "--base", 2),
+                ("css:a.scss#(sheet)", CodeEdgeKinds.Uses, "reset", 1), ("css:a.scss#--brand", CodeEdgeKinds.Uses, "--base", 2),
                 ("css:a.scss#.btn", CodeEdgeKinds.Uses, "--brand", 4), ("css:a.scss#.icon", CodeEdgeKinds.Uses, "$ink", 4),
                 ("css:a.scss#.child", CodeEdgeKinds.Inherits, ".base", 6), ("css:a.scss#$radius", CodeEdgeKinds.Uses, "$size", 7),
-                ("css:a.scss#rounded", CodeEdgeKinds.Uses, "$radius", 8), ("css:a.scss#.panel", CodeEdgeKinds.Uses, "rounded", 9),
+                ("css:a.scss#@mixin rounded", CodeEdgeKinds.Uses, "$radius", 8), ("css:a.scss#.panel", CodeEdgeKinds.Uses, "rounded", 9),
                 ("css:a.scss#.panel", CodeEdgeKinds.Inherits, ".btn", 9), ("css:a.scss#.panel", CodeEdgeKinds.Uses, "--hover", 9),
             ],
             extract.References.Select(reference => (reference.From, reference.Kind, reference.Name, reference.Line)));
@@ -395,10 +404,11 @@ public sealed class CssExtractorTests : CodeGraphExtractorContractTests<CssExtra
     {
         var linked = Link(("base.scss", ".base { color: red; }\n%raised { x: y; }\n"), ("child.scss", ".child {\n  @extend .base;\n  @extend %raised;\n}\n"));
 
+        // Neither sheet imports the other: the repository's rule, found by its name alone.
         Assert.Equal(
             [
-                new CodeEdge("css:child.scss#.child", "css:base.scss#.base", CodeEdgeKinds.Inherits, 2, CodeConfidences.Exact),
-                new CodeEdge("css:child.scss#.child", "css:base.scss#%raised", CodeEdgeKinds.Inherits, 3, CodeConfidences.Exact),
+                new CodeEdge("css:child.scss#.child", "css:base.scss#.base", CodeEdgeKinds.Inherits, 2, CodeConfidences.Unique),
+                new CodeEdge("css:child.scss#.child", "css:base.scss#%raised", CodeEdgeKinds.Inherits, 3, CodeConfidences.Unique),
             ],
             linked.Edges.Where(edge => edge.Kind == CodeEdgeKinds.Inherits));
     }
@@ -468,8 +478,8 @@ public sealed class CssExtractorTests : CodeGraphExtractorContractTests<CssExtra
 
     /// <summary>
     /// The indented syntax is read as SCSS is: a selector and the lines indented under it a rule over them, a list a
-    /// comma ends going on to the next line, <c>=name</c> a mixin and <c>+name</c> its use, a comment going on over the
-    /// lines indented under it, and one that trails a line no part of its code.
+    /// comma ends going on to the next line, <c>=name</c> a mixin - its parameter its own, no use - and <c>+name</c> its
+    /// use, a comment going on over the lines indented under it, and one that trails a line no part of its code.
     /// </summary>
     [Fact]
     public void TheIndentedSyntax_IsReadAsScssIs()
@@ -484,11 +494,24 @@ public sealed class CssExtractorTests : CodeGraphExtractorContractTests<CssExtra
             extract.Nodes.Select(node => (node.Name, node.SubKind!, node.Start, node.End)));
         Assert.Equal("The sheet's own rules, in the indented syntax.", extract.Nodes[0].Summary);
         Assert.Equal(
-            [
-                ("css:styles.sass#bevel", "$r", 5, CodeQualifierKinds.StyleVariable), ("css:styles.sass#.edge", "$gap", 8, CodeQualifierKinds.StyleVariable),
-                ("css:styles.sass#.inner", "bevel", 10, CodeQualifierKinds.StyleMixin),
-            ],
+            [("css:styles.sass#.edge", "$gap", 8, CodeQualifierKinds.StyleVariable), ("css:styles.sass#.inner", "bevel", 10, CodeQualifierKinds.StyleMixin)],
             extract.References.Select(reference => (reference.From, reference.Name, reference.Line, reference.Qualifier?.Kind)));
+    }
+
+    /// <summary>
+    /// The indented syntax's lines are read by the sheet's own lexer: an escaped bracket or quote in a selector - a
+    /// Tailwind class - opens nothing, so the rules after it keep their blocks, and a string and an unquoted
+    /// <c>url(...)</c> hold no comment and no bracket of the line's.
+    /// </summary>
+    [Fact]
+    public void TheIndentedSyntaxsLines_AreReadByTheSheetsLexer_AnEscapedBracketOpeningNothing()
+    {
+        var extract = Read("a.sass", ".content-\\[\\'x\\'\\] // tailwind-style escaped class\n  color: red\n  .inner\n    margin: 0\n.after\n  background: url(//cdn/a.png) // a comment\n  content: \"( // [\"\n.last\n  padding: 0\n");
+
+        Assert.Equal(
+            [(".content-['x']", 1, 4), (".inner", 3, 4), (".after", 5, 7), (".last", 8, 9)],
+            extract.Nodes.Select(node => (node.Name, node.Start, node.End)));
+        Assert.Empty(extract.Dynamic);
     }
 
     /// <summary>
@@ -514,7 +537,7 @@ public sealed class CssExtractorTests : CodeGraphExtractorContractTests<CssExtra
         ]);
 
         Assert.Equal(
-            [new CodeEdge("css:a.css#.spinner", "css:a.css#spin", CodeEdgeKinds.Uses, 3, CodeConfidences.Unique)],
+            [new CodeEdge("css:a.css#.spinner", "css:a.css#@keyframes spin", CodeEdgeKinds.Uses, 3, CodeConfidences.Exact)],
             linked.Edges.Where(edge => edge.Kind == CodeEdgeKinds.Uses));
     }
 
@@ -535,13 +558,17 @@ public sealed class CssExtractorTests : CodeGraphExtractorContractTests<CssExtra
         var linked = CodeGraphLinker.Link(
         [
             new CodeGraphFile("src/Button.module.css", "css", module),
-            new CodeGraphFile("src/app.js", "javascript", new JavaScriptExtractor().Extract(new CodeFileInput("src/app.js", "import styles from './Button.module.css';\nexport function f() {\n  return styles.btn + styles.btnPrimary;\n}\n"))),
+            new CodeGraphFile("src/app.js", "javascript", new JavaScriptExtractor().Extract(new CodeFileInput("src/app.js", "import styles from './Button.module.css';\nimport { btn, btnPrimary as primary, main } from './Button.module.css';\nexport function f() {\n  return styles.btn + styles.btnPrimary;\n}\nexport function g() {\n  return btn + primary + main;\n}\n"))),
         ]);
 
+        // A named import binds as the default import's member does, by a name the module exports the node by.
         Assert.Equal(
             [
-                new CodeEdge("javascript:src/app.js.f", "css:src/Button.module.css#.btn", CodeEdgeKinds.Uses, 3, CodeConfidences.Exact),
-                new CodeEdge("javascript:src/app.js.f", "css:src/Button.module.css#.btn-primary", CodeEdgeKinds.Uses, 3, CodeConfidences.Exact),
+                new CodeEdge("javascript:src/app.js.f", "css:src/Button.module.css#.btn", CodeEdgeKinds.Uses, 4, CodeConfidences.Exact),
+                new CodeEdge("javascript:src/app.js.f", "css:src/Button.module.css#.btn-primary", CodeEdgeKinds.Uses, 4, CodeConfidences.Exact),
+                new CodeEdge("javascript:src/app.js.g", "css:src/Button.module.css#.btn", CodeEdgeKinds.Uses, 7, CodeConfidences.Unique),
+                new CodeEdge("javascript:src/app.js.g", "css:src/Button.module.css#.btn-primary", CodeEdgeKinds.Uses, 7, CodeConfidences.Exact),
+                new CodeEdge("javascript:src/app.js.g", "css:src/Button.module.css##main", CodeEdgeKinds.Uses, 7, CodeConfidences.Unique),
             ],
             linked.Edges.Where(edge => edge.Kind == CodeEdgeKinds.Uses));
     }
@@ -564,13 +591,103 @@ public sealed class CssExtractorTests : CodeGraphExtractorContractTests<CssExtra
             linked.Edges.Where(edge => edge.Kind is CodeEdgeKinds.Uses or CodeEdgeKinds.Imports));
     }
 
-    /// <summary>A nested rule's <c>&amp;</c> with a suffix is a part of each of its parent's names with the suffix written on, as SCSS and Less write BEM's.</summary>
+    /// <summary>
+    /// A nested rule's <c>&amp;</c> with a suffix, where it stands for one selector, is a part of its name with the suffix
+    /// written on, as SCSS and Less write BEM's; where it stands for several, one node named <c>&amp;</c> and the suffix,
+    /// written onto each of them (<see cref="ExtractNode.SuffixOf"/>) - and a name it writes, used from its own sheet or
+    /// another, links to it, one it does not write to nothing.
+    /// </summary>
     [Fact]
-    public void AnAmpersandsSuffix_IsAPartOfItsParentsNameWithTheSuffix()
+    public void AnAmpersandsSuffix_IsAPartOfItsParentsNameWithTheSuffix_OrOneNodeWrittenOntoEachOfSeveral()
     {
-        var extract = Read("a.scss", ".card, .tile {\n  &__title { &--big { a: b; } }\n  &:hover { a: b; }\n  &.lifted { a: b; }\n}\n");
+        var extract = Read("a.scss", ".card, .tile {\n  &__title { &--big { a: b; } }\n  &:hover { a: b; }\n  &.lifted { a: b; }\n}\n.box { &__head { &--open { a: b; } } }\n.top { .q { @extend .tile__title--big; } }\n");
 
-        Assert.Equal([".card", ".tile", ".card__title", ".tile__title", ".card__title--big", ".tile__title--big", ".lifted"], extract.Nodes.Select(node => node.Name));
+        Assert.Equal(
+            [
+                ("css:a.scss#.card", ".card", null), ("css:a.scss#.tile", ".tile", null), ("css:a.scss#.card&__title", "&__title", "css:a.scss#.card css:a.scss#.tile"),
+                ("css:a.scss#.card&__title&--big", "&--big", "css:a.scss#.card&__title"), ("css:a.scss#.lifted", ".lifted", null), ("css:a.scss#.box", ".box", null),
+                ("css:a.scss#.box__head", ".box__head", null), ("css:a.scss#.box__head--open", ".box__head--open", null), ("css:a.scss#.top", ".top", null), ("css:a.scss#.q", ".q", (string?)null),
+            ],
+            extract.Nodes.Select(node => (node.Id, node.Name, node.SuffixOf is { } onto ? string.Join(" ", onto) : null)));
+
+        var linked = Linked(("a.scss", extract), ("b.scss", Read("b.scss", ".z { @extend .card__title; @extend .tile__title--small; @extend .card__title-big; }\n")));
+
+        Assert.Equal(
+            [
+                new CodeEdge("css:a.scss#.q", "css:a.scss#.card&__title&--big", CodeEdgeKinds.Inherits, 7, CodeConfidences.Exact),
+                new CodeEdge("css:b.scss#.z", "css:a.scss#.card&__title", CodeEdgeKinds.Inherits, 1, CodeConfidences.Unique),
+            ],
+            linked.Edges.Where(edge => edge.Kind == CodeEdgeKinds.Inherits));
+    }
+
+    /// <summary>
+    /// Lists nested in lists are as many nodes as the sheet writes, never the product of every list: twenty levels of a
+    /// two-way list - a million names - are forty-two nodes, read and linked at once, each a suffix written onto the
+    /// level's above; a name they write links to the deepest that writes it, nothing is said dynamic, and a list that
+    /// writes one selector twice is one.
+    /// </summary>
+    [Fact]
+    public void ListsNestedInLists_AreAsManyNodesAsTheSheetWrites_EachNameTheyWriteLinked()
+    {
+        const int Levels = 20;
+        var sheet = ".a, .b {" + string.Concat(Enumerable.Range(0, Levels).Select(level => $" &-x{level}, &-y{level} {{")) + " c: d;" + new string('}', Levels + 1) + "\n";
+        var deepest = ".b" + string.Concat(Enumerable.Range(0, Levels).Select(level => level % 2 == 0 ? $"-x{level}" : $"-y{level}"));
+        var watch = Stopwatch.StartNew();
+        var extract = Read("a.scss", sheet);
+        var linked = Linked(("a.scss", extract), ("b.scss", Read("b.scss", $".z {{ @extend {deepest}; @extend {deepest}-x; @extend .c-x0; }}\n")));
+        watch.Stop();
+
+        Assert.Equal(2 + (2 * Levels), extract.Nodes.Count);
+        Assert.Equal(["css:a.scss#.a&-x0&-x1", "css:a.scss#.a&-x0&-y1"], extract.Nodes.Where(node => node.Name is "&-x1" or "&-y1").Select(node => node.Id));
+        Assert.All(extract.Nodes.Skip(4), node => Assert.Equal(2, node.SuffixOf!.Count));
+        Assert.Empty(extract.Dynamic);
+        Assert.Equal(
+            [new CodeEdge("css:b.scss#.z", Assert.Single(extract.Nodes, node => node.Name == $"&-y{Levels - 1}").Id, CodeEdgeKinds.Inherits, 1, CodeConfidences.Unique)],
+            linked.Edges.Where(edge => edge.Kind == CodeEdgeKinds.Inherits));
+        Assert.True(watch.Elapsed < TimeSpan.FromSeconds(5), $"reading and linking {Levels} levels took {watch.Elapsed}");
+
+        Assert.Equal([".a", ".a-x"], Read("a.scss", ".a, .a { &-x, &-x { c: d; } }\n").Nodes.Select(node => node.Name));
+    }
+
+    /// <summary>
+    /// In a CSS module a suffix written onto several classes is exported as each name it writes is - as written and
+    /// camel-cased, a class that ends in a dash upper-casing the suffix's first letter - so a script's member, and a named
+    /// import, of a name it writes binds to its node, and one it does not write to nothing.
+    /// </summary>
+    [Fact]
+    public void AModulesSuffixWrittenOntoSeveral_IsExportedByEachNameItWrites()
+    {
+        var module = Read("src/Button.module.scss", ".a, .b { &-x { c: d; } }\n.btn-, .card- { &big { c: d; } }\n");
+
+        Assert.Equal(
+            [("&-x", "&-x &X"), ("&big", "&big &Big")],
+            module.Nodes.Where(node => node.SuffixOf is not null).Select(node => (node.Name, string.Join(" ", node.Exports!))));
+
+        var script = new JavaScriptExtractor().Extract(new CodeFileInput("src/app.js", """
+            import styles from './Button.module.scss';
+            import { aX, bX as q } from './Button.module.scss';
+            export function f() {
+              const a = styles.aX;
+              const b = styles.bX;
+              const c = styles.btnBig;
+              const d = styles.cardBig;
+              const e = styles.btnbig + styles.aXx + styles.ax;
+              const g = aX;
+              return q;
+            }
+            """));
+        var linked = CodeGraphLinker.Link([new CodeGraphFile("src/Button.module.scss", "css", module), new CodeGraphFile("src/app.js", "javascript", script)]);
+
+        Assert.Equal(
+            [
+                new CodeEdge("javascript:src/app.js.f", "css:src/Button.module.scss#.a&-x", CodeEdgeKinds.Uses, 4, CodeConfidences.Exact),
+                new CodeEdge("javascript:src/app.js.f", "css:src/Button.module.scss#.a&-x", CodeEdgeKinds.Uses, 5, CodeConfidences.Exact),
+                new CodeEdge("javascript:src/app.js.f", "css:src/Button.module.scss#.btn-&big", CodeEdgeKinds.Uses, 6, CodeConfidences.Exact),
+                new CodeEdge("javascript:src/app.js.f", "css:src/Button.module.scss#.btn-&big", CodeEdgeKinds.Uses, 7, CodeConfidences.Exact),
+                new CodeEdge("javascript:src/app.js.f", "css:src/Button.module.scss#.a&-x", CodeEdgeKinds.Uses, 9, CodeConfidences.Unique),
+                new CodeEdge("javascript:src/app.js.f", "css:src/Button.module.scss#.a&-x", CodeEdgeKinds.Uses, 10, CodeConfidences.Exact),
+            ],
+            linked.Edges.Where(edge => edge.Kind == CodeEdgeKinds.Uses).OrderBy(edge => edge.Line));
     }
 
     /// <summary>
@@ -595,6 +712,230 @@ public sealed class CssExtractorTests : CodeGraphExtractorContractTests<CssExtra
         Assert.Null(Ids(null, "text/x-template"));
     }
 
+    /// <summary>
+    /// An escape in a name is the character it stands for, as CSS reads one: an escaped space or tab is part of the name,
+    /// a hex escape takes the one white space after it, and the sheet goes on past each.
+    /// </summary>
+    [Fact]
+    public void AnEscapeInAName_IsTheCharacterItStandsFor_AnEscapedSpaceOrTabAmongThem()
+    {
+        var extract = Read("a.css", ".a\\ b { color: red; }\n.c\\\tx {}\n.d\\31 0 {}\n.e {}\n");
+
+        Assert.Equal([".a b", ".c\tx", ".d10", ".e"], extract.Nodes.Select(node => node.Name));
+    }
+
+    /// <summary>A backslash before a line break in a string goes on past the break whole, so a sheet's rules are the same under LF and CR LF.</summary>
+    [Fact]
+    public void AnEscapedLineBreakInAString_GoesOnAlikeUnderLfAndCrLf()
+    {
+        const string Text = ".c { content: \"a\\\nb\"; }\n.d { x: y; }\n";
+
+        Assert.Equal([(".c", 1, 2), (".d", 3, 3)], Read("a.css", Text).Nodes.Select(node => (node.Name, node.Start, node.End)));
+        Assert.Equal([(".c", 1, 2), (".d", 3, 3)], Read("a.css", Text.Replace("\n", "\r\n", StringComparison.Ordinal)).Nodes.Select(node => (node.Name, node.Start, node.End)));
+    }
+
+    /// <summary>
+    /// A string's value is decoded by the sheet's escapes, the one rule its names are read by - an import's path among
+    /// them - and each string and unquoted <c>url(...)</c> a value writes is kept as a literal of the node that holds it,
+    /// a <c>url(...)</c>'s without the white space about its address.
+    /// </summary>
+    [Fact]
+    public void AStringsValue_IsDecodedByTheSheetsEscapes_AndKeptAsALiteralOfTheNodeThatHoldsIt()
+    {
+        var extract = Read("a.css", "@import \"theme\\2d dark.css\";\n@import 'it\\'s.css';\n.a { content: \"hello\\A world\"; background: url( img/a.png ); }\n");
+
+        Assert.Equal(["theme-dark.css", "it's.css"], extract.Imports.Select(import => import.Target));
+        Assert.Equal([("hello\nworld", 3, "css:a.css#.a"), ("img/a.png", 3, "css:a.css#.a")], (extract.Literals ?? []).Select(literal => (literal.Value, literal.Line, literal.Node)));
+    }
+
+    /// <summary>
+    /// Two declarations of one name and two kinds are two nodes, each its kind's: a mixin named as keyframes are, and an
+    /// element rule named as a mixin - each linked to by the uses of its own kind alone.
+    /// </summary>
+    [Fact]
+    public void TwoDeclarationsOfOneNameAndTwoKinds_AreTwoNodes_EachReachedByItsOwnKind()
+    {
+        var extract = Read("a.scss", "@keyframes fade-in { from { a: b; } }\n@mixin fade-in($d: 1s) { animation: fade-in $d; }\n.modal { @include fade-in(2s); }\n@mixin button { a: b; }\nbutton { @include button; }\n");
+        var linked = Linked(("a.scss", extract));
+
+        Assert.Equal(
+            [("css:a.scss#@keyframes fade-in", CodeSubKinds.Keyframes), ("css:a.scss#@mixin fade-in", CodeSubKinds.StyleMixin), ("css:a.scss#.modal", CodeSubKinds.Rule), ("css:a.scss#@mixin button", CodeSubKinds.StyleMixin), ("css:a.scss#button", CodeSubKinds.Rule)],
+            extract.Nodes.Select(node => (node.Id, node.SubKind!)));
+        Assert.Equal(
+            [
+                new CodeEdge("css:a.scss#@mixin fade-in", "css:a.scss#@keyframes fade-in", CodeEdgeKinds.Uses, 2, CodeConfidences.Exact),
+                new CodeEdge("css:a.scss#.modal", "css:a.scss#@mixin fade-in", CodeEdgeKinds.Uses, 3, CodeConfidences.Exact),
+                new CodeEdge("css:a.scss#button", "css:a.scss#@mixin button", CodeEdgeKinds.Uses, 5, CodeConfidences.Exact),
+            ],
+            linked.Edges.Where(edge => edge.Kind == CodeEdgeKinds.Uses));
+    }
+
+    /// <summary>
+    /// What no node holds - a top-level <c>@include</c> and its block's head, a flow control's head, a rule of no parts -
+    /// is made from the sheet's own top node over the lines its text stands on, and so are the literals written there:
+    /// never from a node declared elsewhere in the sheet.
+    /// </summary>
+    [Fact]
+    public void WhatNoNodeHolds_IsMadeFromTheSheetsTopNode()
+    {
+        var extract = Read("a.scss", "// The sheet.\n$gap: 4px;\n@include font-face(\"Roboto Slab\");\n@include mq(tablet) { .nav { a: b; } }\n@if $theme == dark { .x { a: b; } }\n* { color: var(--ink); }\n:root { --ink: #000; }\n");
+
+        Assert.Equal(("(sheet)", CodeSubKinds.Sheet, 1, 7), extract.Nodes.Where(node => node.Name == "(sheet)").Select(node => (node.Name, node.SubKind!, node.Start, node.End)).Single());
+        Assert.Equal(
+            [("font-face", 3), ("mq", 4), ("$theme", 5), ("--ink", 6)],
+            extract.References.Where(reference => reference.From == "css:a.scss#(sheet)").Select(reference => (reference.Name, reference.Line)));
+        Assert.Equal([("Roboto Slab", "css:a.scss#(sheet)")], (extract.Literals ?? []).Select(literal => (literal.Value, literal.Node)));
+        Assert.DoesNotContain(Read("a.scss", ".a { b: c; }\n").Nodes, node => node.Name == "(sheet)");
+    }
+
+    /// <summary>
+    /// A selector is found nearest first: the sheet's own rule, exact, before any other file's; what the sheet imports,
+    /// before the repository's; a CSS module's <c>composes ... from</c> an import of that file, its classes the ones that
+    /// file exports - not another file's of the name; and a module's own class and a scoped style block's rule are seen
+    /// from their own file alone, never by another file's selector.
+    /// </summary>
+    [Fact]
+    public void ASelector_IsFoundNearestFirst_AndAModulesOrAScopedBlocksRuleFromItsOwnFileAlone()
+    {
+        var own = Link(("a.scss", ".btn {}\n.x { @extend .btn; }\n"), ("b.scss", ".btn {}\n"));
+
+        Assert.Equal([new CodeEdge("css:a.scss#.x", "css:a.scss#.btn", CodeEdgeKinds.Inherits, 2, CodeConfidences.Exact)], own.Edges.Where(edge => edge.Kind == CodeEdgeKinds.Inherits));
+
+        var imported = Link(("c.less", "@import \"mixins\";\n.y { .rounded(); }\n"), ("mixins.less", ".rounded() { a: b; }\n"), ("vendor.css", ".rounded { a: b; }\n"));
+
+        Assert.Equal([new CodeEdge("css:c.less#.y", "css:mixins.less#.rounded", CodeEdgeKinds.Uses, 2, CodeConfidences.Unique)], imported.Edges.Where(edge => edge.Kind == CodeEdgeKinds.Uses));
+
+        var composed = Link(("src/Button.module.css", ".btn { composes: base from \"./base.module.css\"; composes: own; }\n.own {}\n"), ("src/base.module.css", ".base {}\n"), ("src/other.css", ".base {}\n.own {}\n"));
+
+        Assert.Equal(
+            [
+                new CodeEdge("css:src/Button.module.css#.btn", "css:src/base.module.css#.base", CodeEdgeKinds.Uses, 1, CodeConfidences.Exact),
+                new CodeEdge("css:src/Button.module.css#.btn", "css:src/Button.module.css#.own", CodeEdgeKinds.Uses, 1, CodeConfidences.Exact),
+                new CodeEdge("file:src/Button.module.css", "file:src/base.module.css", CodeEdgeKinds.Imports, 1, CodeConfidences.Exact),
+            ],
+            composed.Edges.Where(edge => edge.Kind is CodeEdgeKinds.Uses or CodeEdgeKinds.Imports));
+
+        // A page's class names no module's class and no other component's scoped rule; a component's own class reaches its own.
+        var page = new HtmlExtractor().Extract(new CodeFileInput("page.html", "<div class=\"btn box\"></div>\n"));
+        var module = Read("src/x.module.css", ".btn {}\n");
+        FileExtract Component(string path) => CssExtractor.Read("vue", new CodeFileInput(path, ".box { a: b; }\n.card .box {}\n"), lang: null, type: null, StyleScope.Scoped)! is var block
+            ? block with { References = [new ExtractReference(block.Nodes[0].Id, CodeEdgeKinds.Uses, ".box", 1) { Qualifier = new ExtractQualifier(CodeQualifierKinds.Selector) }] }
+            : null!;
+
+        var scoped = CodeGraphLinker.Link(
+        [
+            new CodeGraphFile("page.html", "html", page),
+            new CodeGraphFile("src/x.module.css", "css", module),
+            new CodeGraphFile("Card.vue", "vue", Component("Card.vue")),
+            new CodeGraphFile("Other.vue", "vue", Component("Other.vue")),
+        ]);
+
+        Assert.Equal(
+            [("vue:Card.vue#.box", "vue:Card.vue#.box"), ("vue:Other.vue#.box", "vue:Other.vue#.box")],
+            scoped.Edges.Where(edge => edge.Kind == CodeEdgeKinds.Uses).Select(edge => (edge.From, edge.To)));
+        Assert.Equal(
+            [(".box", "file:Card.vue"), (".card", null), (".box", "file:Other.vue"), (".card", null)],
+            ((string[])["Card.vue", "Other.vue"]).SelectMany(path => Component(path).Nodes).Select(node => (node.Name, node.SeenIn)));
+    }
+
+    /// <summary>
+    /// A name a block declares of its own is no use of the sheet's: a mixin's and a function's parameters, a loop's
+    /// variables, a variable a rule's block declares - but one it declares <c>!global</c> - a call's keyword names and a
+    /// Less mixin's parameters; what the defaults and the arguments use is read.
+    /// </summary>
+    [Fact]
+    public void ANameABlockDeclaresOfItsOwn_IsNoUseOfTheSheets()
+    {
+        var scss = Read("a.scss", """
+            @mixin rounded($size, $pad: $size + $base) { border-radius: $size; padding: $pad; }
+            @each $color, $shade in $palette { .t { color: $color $shade; } }
+            @for $i from 1 through $count { .c { order: $i; } }
+            .x { $w: 1px; width: $w; $g: 2px !global; @include mq($from: $tablet); }
+            .y { height: $g; width: $w $i $color; }
+            """);
+
+        // What a block declares is its own to its close: the rule after it uses the sheet's of those names.
+        Assert.Equal([("$base", 1), ("$palette", 2), ("$count", 3), ("mq", 4), ("$tablet", 4), ("$g", 5), ("$w", 5), ("$i", 5), ("$color", 5)], scss.References.Select(reference => (reference.Name, reference.Line)));
+        Assert.Equal(["@mixin rounded", ".t", ".c", ".x", "$g", ".y", "(sheet)"], scss.Nodes.Select(node => node.Id[(node.Id.IndexOf('#') + 1)..]));
+
+        var less = Read("a.less", ".rounded(@r: @base) { border-radius: @r; }\n.z { .rounded(@r: 3px); }\n");
+
+        Assert.Equal([("@base", 1), (".rounded", 2)], less.References.Select(reference => (reference.Name, reference.Line)));
+    }
+
+    /// <summary>
+    /// In a CSS module a <c>:global(...)</c>'s selectors, and those after a <c>:global</c> written alone, are the page's -
+    /// nodes no file keeps and the module exports none of - and a <c>:local(...)</c>'s the module's own, exported.
+    /// </summary>
+    [Fact]
+    public void AModulesGlobalSelectors_AreThePages_AndItsLocalOnesItsOwn()
+    {
+        var module = Read("src/a.module.css", ":global(.legacy) {}\n:local(.loc) {}\n:global .wide {}\n.own :global(.theirs) {}\n");
+
+        Assert.Equal(
+            [(".legacy", null, null), (".loc", "loc", "file:src/a.module.css"), (".wide", null, null), (".own", "own", "file:src/a.module.css"), (".theirs", null, (string?)null)],
+            module.Nodes.Select(node => (node.Name, node.Exports is { } exports ? string.Join(" ", exports) : null, node.SeenIn)));
+    }
+
+    /// <summary>
+    /// An import's path and a keyframes' name an interpolation writes are no import and no node, said as dynamic, and
+    /// what the interpolation uses is read from the node that holds it.
+    /// </summary>
+    [Fact]
+    public void AnImportsPathOrAKeyframesNameAnInterpolationWrites_IsSaidDynamic_AndWhatItUsesRead()
+    {
+        var less = Read("a.less", "@import \"@{themes}/tidal-wave.less\";\n");
+        var scss = Read("a.scss", "@import url(\"#{$t}/a.css\");\n@keyframes \"#{$n}\" { to { a: b; } }\n@keyframes #{$m}-x { to { a: b; } }\n");
+
+        Assert.Empty(less.Imports.Concat(scss.Imports));
+        Assert.Equal([("@themes", 1)], less.References.Select(reference => (reference.Name, reference.Line)));
+        Assert.Equal([new ExtractDynamic(1, "an import whose path an interpolation writes, which is no import")], less.Dynamic);
+        Assert.Equal([("$t", 1), ("$n", 2), ("$m", 3)], scss.References.Select(reference => (reference.Name, reference.Line)));
+        Assert.Equal(
+            [(1, "an import whose path an interpolation writes, which is no import"), (2, "a name an interpolation writes, whose node is not read"), (3, "a name an interpolation writes, whose node is not read")],
+            scss.Dynamic.Select(dynamic => (dynamic.Line, dynamic.Why)));
+        Assert.Equal(["(sheet)"], scss.Nodes.Select(node => node.Name));
+    }
+
+    /// <summary>An SCSS <c>@import</c> Sass compiles to CSS's own - of a <c>url(...)</c>, or one a media query follows - is tried as written, no Sass file.</summary>
+    [Fact]
+    public void AnScssImportSassLeavesToCss_IsTriedAsWritten()
+    {
+        Assert.Equal(["theme", "print.css", "x"], Read("a.scss", "@import url(theme);\n@import url(\"print.css\");\n@import \"x\" print;\n").Imports.Select(import => import.Target));
+    }
+
+    /// <summary>
+    /// A call of a function a sheet declares is a use of it - through a module's namespace too - and a family a
+    /// <c>font-family</c> or a <c>font</c> names a use of the font face of that family, matched without case as CSS
+    /// matches one; CSS's own functions, a generic family and a variable are none.
+    /// </summary>
+    [Fact]
+    public void AFunctionsCall_AndAFontsFamily_AreUsesOfWhatTheSheetDeclares()
+    {
+        var extract = Read("a.scss", """
+            @use "sizes" as s;
+            @function rem($px) { @return $px; }
+            @font-face { font-family: "Open Sans"; src: url(a.woff2); }
+            .a { width: rem(24px) calc(1px + 2px) var(--x) s.gap(1); }
+            .b { font-family: "open sans", Arial, sans-serif, $stack; }
+            .c { font: italic 12px/1.5 Open  Sans, serif; }
+            """);
+
+        Assert.Equal(
+            [("rem", 4, CodeQualifierKinds.StyleFunction), ("--x", 4, CodeQualifierKinds.StyleVariable), ("gap", 4, CodeQualifierKinds.Prefix), ("$stack", 5, CodeQualifierKinds.StyleVariable), ("open sans", 5, CodeQualifierKinds.FontFace), ("arial", 5, CodeQualifierKinds.FontFace), ("open sans", 6, CodeQualifierKinds.FontFace)],
+            extract.References.Select(reference => (reference.Name, reference.Line, reference.Qualifier?.Kind)));
+
+        var linked = Linked(("a.scss", extract));
+
+        Assert.Equal(
+            [
+                new CodeEdge("css:a.scss#.a", "css:a.scss#@function rem", CodeEdgeKinds.Uses, 4, CodeConfidences.Exact),
+                new CodeEdge("css:a.scss#.b", "css:a.scss#@font-face open sans", CodeEdgeKinds.Uses, 5, CodeConfidences.Exact),
+                new CodeEdge("css:a.scss#.c", "css:a.scss#@font-face open sans", CodeEdgeKinds.Uses, 6, CodeConfidences.Exact),
+            ],
+            linked.Edges.Where(edge => edge.Kind == CodeEdgeKinds.Uses));
+    }
+
     /// <summary>A sheet of many rules is read in time that grows with its rules alone: one node a name, found by its name.</summary>
     [Fact]
     public void ASheetOfManyRules_IsReadInTimeThatGrowsWithItsRules()
@@ -615,5 +956,8 @@ public sealed class CssExtractorTests : CodeGraphExtractorContractTests<CssExtra
     private static FileExtract Read(string path, string text) => new CssExtractor().Extract(new CodeFileInput(path, text));
 
     private static CodeGraphLinked Link(params (string Path, string Text)[] files)
-        => CodeGraphLinker.Link([.. files.Select(file => new CodeGraphFile(file.Path, "css", Read(file.Path, file.Text)))]);
+        => Linked([.. files.Select(file => (file.Path, Read(file.Path, file.Text)))]);
+
+    private static CodeGraphLinked Linked(params (string Path, FileExtract Extract)[] files)
+        => CodeGraphLinker.Link([.. files.Select(file => new CodeGraphFile(file.Path, "css", file.Extract))]);
 }

@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using DssHarness.Core.Codebase;
 
 namespace DssHarness.Tests;
@@ -2529,7 +2530,9 @@ public sealed class CodeGraphLinkerTests
     /// A node of data - a configuration key, an element, a style rule - is reached by no reference that names it by its
     /// name alone: a call of <c>build()</c> and a use of <c>body</c> written as code names code find the function and the
     /// field of those names, unique, and none of the key, the element or the rule of each name beside them; a use through
-    /// an import's prefix - <c>cfg.timeout</c> of a JSON file imported as <c>cfg</c> - reaches the key it names.
+    /// an import's prefix - <c>cfg.timeout</c> of a JSON file imported as <c>cfg</c> - reaches the key it names, and a
+    /// name an import makes visible by a name the file it imports exports the node by - a CSS module's <c>btn</c>, as
+    /// <c>import { btn }</c> binds it - the rule.
     /// </summary>
     [Fact]
     public void DataIsReachedByNoNameAlone_ButAUseThroughAnImportsPrefixReachesTheKey()
@@ -2543,12 +2546,14 @@ public sealed class CodeGraphLinkerTests
                 Call("Go", "build", 0),
                 Ref("Go", CodeEdgeKinds.Uses, "body") with { Line = 2 },
                 Ref("Go", CodeEdgeKinds.Uses, "timeout") with { Line = 3, Qualifier = Prefix("cfg") },
-            ], imports: [Import(CodeImportForms.Relative, "config.json") with { Prefix = "cfg" }]),
+                Ref("Go", CodeEdgeKinds.Uses, "btn") with { Line = 4 },
+            ], imports: [Import(CodeImportForms.Relative, "config.json") with { Prefix = "cfg" }, Import(CodeImportForms.Relative, "x.module.css")]),
             File("lib.t", [Member("build", 0), Value("body", null)]),
             new CodeGraphFile("compose.yml", "yaml", Extract([Data("yaml:compose.yml#services.web.build", "build", CodeSubKinds.Key)])),
             new CodeGraphFile("site.css", "css", Extract([Data("css:site.css#body", "body", CodeSubKinds.Rule)])),
             new CodeGraphFile("page.xml", "xml", Extract([Data("xml:page.xml#page/body", "body", CodeSubKinds.Element)])),
             new CodeGraphFile("config.json", "json", Extract([Data("json:config.json#timeout", "timeout", CodeSubKinds.Key)])),
+            new CodeGraphFile("x.module.css", "css", Extract([Data("css:x.module.css#.btn", ".btn", CodeSubKinds.Rule) with { Exports = ["btn"] }, Data("css:x.module.css#body", "body", CodeSubKinds.Rule)])),
         ]);
 
         Assert.Equal(
@@ -2556,6 +2561,7 @@ public sealed class CodeGraphLinkerTests
                 new CodeEdge("t:Go", "t:build", CodeEdgeKinds.Calls, 1, CodeConfidences.Unique),
                 new CodeEdge("t:Go", "t:body", CodeEdgeKinds.Uses, 2, CodeConfidences.Unique),
                 new CodeEdge("t:Go", "json:config.json#timeout", CodeEdgeKinds.Uses, 3, CodeConfidences.Exact),
+                new CodeEdge("t:Go", "css:x.module.css#.btn", CodeEdgeKinds.Uses, 4, CodeConfidences.Unique),
             ],
             linked.Edges.Where(edge => edge.From == "t:Go").OrderBy(edge => edge.Line));
     }
@@ -2605,9 +2611,9 @@ public sealed class CodeGraphLinkerTests
 
     /// <summary>
     /// A style sheet's own references reach its nodes through the qualifiers that say what each names, each among its
-    /// kind alone: <c>$radius</c> the variable, an <c>@include button</c> the mixin, an animation's <c>spin</c> the
-    /// keyframes and an <c>@extend .btn</c> the rule - none the code's of those names - and a qualifier that names another
-    /// kind - a mixin <c>spin</c> - none of them.
+    /// kind alone and its own sheet's first, exact: <c>$radius</c> the variable, an <c>@include button</c> the mixin, an
+    /// animation's <c>spin</c> the keyframes and an <c>@extend .btn</c> the rule - none the code's of those names - and a
+    /// qualifier that names another kind - a mixin <c>spin</c> - none of them.
     /// </summary>
     [Fact]
     public void AStyleSheetsReferences_ReachItsNodes_ThroughQualifiersThatSayWhatTheyName()
@@ -2641,9 +2647,9 @@ public sealed class CodeGraphLinkerTests
 
         Assert.Equal(
             [
-                new CodeEdge("css:site.scss#.card", "css:site.scss#$radius", CodeEdgeKinds.Uses, 2, CodeConfidences.Unique),
-                new CodeEdge("css:site.scss#.card", "css:site.scss#button", CodeEdgeKinds.Uses, 3, CodeConfidences.Unique),
-                new CodeEdge("css:site.scss#.card", "css:site.scss#spin", CodeEdgeKinds.Uses, 4, CodeConfidences.Unique),
+                new CodeEdge("css:site.scss#.card", "css:site.scss#$radius", CodeEdgeKinds.Uses, 2, CodeConfidences.Exact),
+                new CodeEdge("css:site.scss#.card", "css:site.scss#button", CodeEdgeKinds.Uses, 3, CodeConfidences.Exact),
+                new CodeEdge("css:site.scss#.card", "css:site.scss#spin", CodeEdgeKinds.Uses, 4, CodeConfidences.Exact),
                 new CodeEdge("css:site.scss#.card", "css:site.scss#.btn", CodeEdgeKinds.Inherits, 5, CodeConfidences.Exact),
             ],
             linked.Edges.Where(edge => edge.From == "css:site.scss#.card").OrderBy(edge => edge.Line));
@@ -2706,7 +2712,8 @@ public sealed class CodeGraphLinkerTests
 
     /// <summary>
     /// A class a document writes is a use of the rule of that name, looked for among rules alone: the style sheet's
-    /// <c>.btn</c> reaches the page that writes <c>class="btn"</c>, and nothing else of that name is its target.
+    /// <c>.btn</c> reaches the page that writes <c>class="btn"</c> - the repository's, unique, as the page neither holds
+    /// nor links it - and nothing else of that name is its target.
     /// </summary>
     [Fact]
     public void AClassADocumentWrites_IsAUseOfTheRuleOfThatName_AmongRulesAlone()
@@ -2725,9 +2732,86 @@ public sealed class CodeGraphLinkerTests
             new CodeGraphFile("helper.c", "c", new FileExtract([member])),
         ]);
 
-        Assert.Contains(new CodeEdge("html:index.html#body", "css:site.css#.btn", CodeEdgeKinds.Uses, 5, CodeConfidences.Exact), linked.Edges);
+        Assert.Contains(new CodeEdge("html:index.html#body", "css:site.css#.btn", CodeEdgeKinds.Uses, 5, CodeConfidences.Unique), linked.Edges);
         Assert.DoesNotContain(linked.Edges, edge => edge.To == "c:Helper" && edge.Kind == CodeEdgeKinds.Uses);
         Assert.DoesNotContain(linked.External, pair => pair.Key == page.Id);
+    }
+
+    /// <summary>
+    /// A node standing for a suffix written onto others' (<see cref="ExtractNode.SuffixOf"/>) is matched to a name each
+    /// node at each place in the name once, however many others reach it: forty levels of two nodes, each written onto
+    /// both below it - a trillion ways down - match a name they write at once, and one they do not write to nothing.
+    /// </summary>
+    [Fact]
+    public void ANodeWrittenOntoOthers_IsMatchedOnceAtEachPlaceOfTheName_HoweverManyReachIt()
+    {
+        const int Levels = 40;
+        static ExtractNode Rule(string id, string name) => new($"css:a.css#{id}", CodeNodeKinds.Member, name, name, 1, 1, name) { SubKind = CodeSubKinds.Rule };
+
+        var nodes = new List<ExtractNode> { Rule(".a", ".a"), Rule(".b", ".a") with { Id = "css:a.css#.a~2" } };
+
+        for (var level = 0; level < Levels; level++)
+        {
+            string[] below = level == 0 ? ["css:a.css#.a", "css:a.css#.a~2"] : [$"css:a.css#l{level - 1}a", $"css:a.css#l{level - 1}b"];
+            nodes.Add(Rule($"l{level}a", "&-s") with { SuffixOf = below });
+            nodes.Add(Rule($"l{level}b", "&-s") with { SuffixOf = below });
+        }
+
+        var page = new ExtractNode("html:p.html#body", CodeNodeKinds.Section, "body", "p.html#body", 1, 2, "body");
+        var written = ".a" + string.Concat(Enumerable.Repeat("-s", Levels));
+        var watch = Stopwatch.StartNew();
+        var linked = Link(
+            new CodeGraphFile("a.css", "css", Extract(nodes)),
+            new CodeGraphFile("p.html", "html", Extract([page]) with
+            {
+                References =
+                [
+                    new ExtractReference(page.Id, CodeEdgeKinds.Uses, written, 1) { Qualifier = new ExtractQualifier(CodeQualifierKinds.Selector) },
+                    new ExtractReference(page.Id, CodeEdgeKinds.Uses, written + "-t", 2) { Qualifier = new ExtractQualifier(CodeQualifierKinds.Selector) },
+                ],
+            }));
+        watch.Stop();
+
+        Assert.Equal(
+            [new CodeEdge(page.Id, $"css:a.css#l{Levels - 1}a", CodeEdgeKinds.Uses, 1, CodeConfidences.Candidates), new CodeEdge(page.Id, $"css:a.css#l{Levels - 1}b", CodeEdgeKinds.Uses, 1, CodeConfidences.Candidates)],
+            linked.Edges.Where(edge => edge.From == page.Id));
+        Assert.True(watch.Elapsed < TimeSpan.FromSeconds(5), $"matching {Levels} levels took {watch.Elapsed}");
+    }
+
+    /// <summary>
+    /// A style sheet's selector is looked for through each of its file's imports in turn as one walk: a file a walk before
+    /// reached - here the one hub every import forwards, and each file the hub forwards - is not walked again for the next
+    /// import, so a sheet of many imports that share what they forward is linked in time that grows with the files, not
+    /// with the imports times what they share.
+    /// </summary>
+    [Fact]
+    public void AStyleSheetsImports_AreWalkedAsOne_AFileAWalkReachedNeverWalkedAgain()
+    {
+        const int Imports = 3_000;
+        const int Shared = 3_000;
+        static ExtractNode Rule(string path, string name) => new($"css:{path}#{name}", CodeNodeKinds.Member, name, name, 1, 1, name) { SubKind = CodeSubKinds.Rule };
+        static ExtractImport Forward(string target) => new(CodeImportForms.Relative, target, 1) { Export = true };
+
+        var main = Extract([Rule("main.css", ".m")]) with
+        {
+            Imports = [.. Enumerable.Range(0, Imports).Select(at => new ExtractImport(CodeImportForms.Relative, $"i{at}.css", 1))],
+            References = [new ExtractReference("css:main.css#.m", CodeEdgeKinds.Uses, ".found", 2) { Qualifier = new ExtractQualifier(CodeQualifierKinds.Selector) }],
+        };
+
+        var files = new List<CodeGraphFile> { new("main.css", "css", main) };
+        files.AddRange(Enumerable.Range(0, Imports).Select(at => new CodeGraphFile($"i{at}.css", "css", Extract([Rule($"i{at}.css", $".i{at}")]) with { Imports = [Forward("hub.css")] })));
+        files.Add(new CodeGraphFile("hub.css", "css", Extract([Rule("hub.css", ".hub")]) with { Imports = [.. Enumerable.Range(0, Shared).Select(at => Forward($"s{at}.css"))] }));
+        files.AddRange(Enumerable.Range(0, Shared).Select(at => new CodeGraphFile($"s{at}.css", "css", Extract([Rule($"s{at}.css", $".s{at}")]))));
+        files.Add(new CodeGraphFile("elsewhere.css", "css", Extract([Rule("elsewhere.css", ".found")])));
+
+        var watch = Stopwatch.StartNew();
+        var linked = Link([.. files]);
+        watch.Stop();
+
+        Assert.Equal(
+            [new CodeEdge("css:main.css#.m", "css:elsewhere.css#.found", CodeEdgeKinds.Uses, 2, CodeConfidences.Unique)],
+            linked.Edges.Where(edge => edge.Kind == CodeEdgeKinds.Uses));
+        Assert.True(watch.Elapsed < TimeSpan.FromSeconds(5), $"linking {Imports} imports of one hub forwarding {Shared} files took {watch.Elapsed}");
     }
 
     /// <summary>

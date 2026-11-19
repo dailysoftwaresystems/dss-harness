@@ -29,6 +29,11 @@ namespace DssHarness.Core.Codebase;
 /// repository does not declare.
 /// </para>
 /// <para>
+/// A node that stands for a suffix written onto others' names (<see cref="ExtractNode.SuffixOf"/>) is found where a name
+/// it writes is looked for, by the end of the name its suffix is: the rest is a name a node it is written onto stands for
+/// in turn, each node at each place of the name walked once however many reach it.
+/// </para>
+/// <para>
 /// What a closed scope declares is seen from its file alone, as is a type or a scope whose own scope is closed; a
 /// declaration kept to a scope (<see cref="ExtractNode.SeenIn"/>) is seen from the declarations written in that scope or
 /// inside it alone. A file that shares another's imports (<see cref="ExtractImport.Shares"/>) imports what that one
@@ -150,6 +155,12 @@ public static class CodeGraphLinker
 
         /// <summary>What one file imports, and its language.</summary>
         Imports,
+
+        /// <summary>
+        /// How long the suffixes one file's nodes write onto others' names are (<see cref="ExtractNode.SuffixOf"/>), those
+        /// they are exported by among them - and, under no file's path, every file's: what a name is cut by to be matched.
+        /// </summary>
+        Suffixes,
     }
 
     /// <summary>One reference's finding: its edges, whether it named nothing or too much, and every key it read.</summary>
@@ -293,6 +304,18 @@ public static class CodeGraphLinker
         /// <summary>Each file's declarations by each name another file imports them by besides their own (<see cref="ExtractNode.Exports"/>).</summary>
         private readonly Dictionary<CodeGraphFile, Dictionary<string, List<Declaration>>> _exportedByFile = new(ReferenceEqualityComparer.Instance);
 
+        /// <summary>
+        /// How long the suffixes each file's nodes write onto others' names are (<see cref="ExtractNode.SuffixOf"/>), those
+        /// they are exported by among them, shortest first: the ends of a name such a node may stand for.
+        /// </summary>
+        private readonly Dictionary<CodeGraphFile, int[]> _suffixesByFile = new(ReferenceEqualityComparer.Instance);
+
+        /// <summary>How long the suffixes every file's nodes write are, shortest first.</summary>
+        private int[] _suffixes = [];
+
+        /// <summary>The most names any node is exported by: each form of a name a node written onto others' is matched in.</summary>
+        private int _mostExports;
+
         /// <summary>Each file's closed scopes at its top, by key: found once for each file.</summary>
         private readonly Dictionary<CodeGraphFile, IReadOnlyList<string>> _tops = new(ReferenceEqualityComparer.Instance);
 
@@ -382,8 +405,14 @@ public static class CodeGraphLinker
                     }
                 }
 
+                if (SuffixLengths(extract) is { Length: > 0 } suffixes)
+                {
+                    _suffixesByFile[file] = suffixes;
+                }
+
                 foreach (var node in extract.Nodes)
                 {
+                    _mostExports = Math.Max(_mostExports, node.Exports?.Count ?? 0);
                     var (scopeKey, fileOnly) = Placed(file, node, closed);
                     var declaration = new Declaration(node, file, scopeKey, fileOnly, node.SeenIn is { } seenIn ? KeyOf(file, seenIn, closed) : null);
                     _declarations.Add(declaration);
@@ -435,6 +464,8 @@ public static class CodeGraphLinker
             {
                 Add(_byTrailing, Trailing(qualified), qualified);
             }
+
+            _suffixes = [.. _suffixesByFile.Values.SelectMany(lengths => lengths).Distinct().Order()];
 
             // The longest prefix first; roots of one prefix in the order their files declare them - a path mapping's places, a
             // package's entries - the files in their paths' order, whatever order they came in.
@@ -666,7 +697,10 @@ public static class CodeGraphLinker
         /// </summary>
         private (IReadOnlyList<Declaration> Found, string Confidence) Found(Declaration from, ExtractReference reference)
         {
-            bool Accepts(Declaration target) => Takes(reference, target) && Sees(from, target);
+            bool Accepts(Declaration target) => Takes(reference, target, imported: false) && Sees(from, target);
+
+            // What an import of the file that declares it makes visible: a name it binds may be data the file exports.
+            bool Imports(Declaration target) => Takes(reference, target, imported: true) && Sees(from, target);
 
             // A value of a type the code does not say: through the type of the member it is - nothing the repository
             // declares where that type is not the repository's - else, where no value is so named and an import's prefix
@@ -684,7 +718,7 @@ public static class CodeGraphLinker
 
                     if (ImportsOf(from.File).Any(made => string.Equals(made.Import.Prefix, written, StringComparison.Ordinal)))
                     {
-                        return (Prefixed(from, written, reference.Name, Accepts), CodeConfidences.Exact);
+                        return (Prefixed(from, written, reference.Name, Imports), CodeConfidences.Exact);
                     }
                 }
 
@@ -695,18 +729,19 @@ public static class CodeGraphLinker
             // one the repository does not declare there, but for an extension of that type.
             if (reference.Qualifier is { } qualifier)
             {
-                return Qualified(from, qualifier, reference.Name, Accepts);
+                return Qualified(from, qualifier, reference.Name, Accepts, Imports);
             }
 
-            return Unqualified(from, reference.Name, Accepts);
+            return Unqualified(from, reference.Name, Accepts, Imports);
         }
 
         /// <summary>
         /// What <paramref name="name"/> written with no qualifier names: what the scopes <paramref name="from"/> is written
-        /// in declare, nearest first - exact - else what lies beyond them (<see cref="Beyond"/>).
+        /// in declare, nearest first - exact - else what lies beyond them (<see cref="Beyond"/>), what an import makes
+        /// visible taken by <paramref name="imported"/>.
         /// </summary>
-        private (IReadOnlyList<Declaration> Found, string Confidence) Unqualified(Declaration from, string name, Func<Declaration, bool> accepts)
-            => Scoped(from, name, accepts) is { Count: > 0 } scoped ? (scoped, CodeConfidences.Exact) : Beyond(from, name, accepts);
+        private (IReadOnlyList<Declaration> Found, string Confidence) Unqualified(Declaration from, string name, Func<Declaration, bool> accepts, Func<Declaration, bool> imported)
+            => Scoped(from, name, accepts) is { Count: > 0 } scoped ? (scoped, CodeConfidences.Exact) : Beyond(from, name, accepts, imported);
 
         /// <summary>What the file at <paramref name="path"/> declares that another file imports by the name <paramref name="name"/> besides its own.</summary>
         private IReadOnlyList<Declaration> ExportedNamed(string path, string name)
@@ -731,10 +766,10 @@ public static class CodeGraphLinker
 
         /// <summary>
         /// What <paramref name="name"/> is past the scopes <paramref name="from"/> is written in: a prefix written alone,
-        /// what its import stands for; else what its file imports, in order, and what every file of its language imports;
-        /// else the repository's.
+        /// what its import stands for; else what its file imports, in order, and what every file of its language imports,
+        /// each taken by <paramref name="imported"/>; else the repository's.
         /// </summary>
-        private (IReadOnlyList<Declaration> Found, string Confidence) Beyond(Declaration from, string name, Func<Declaration, bool> accepts)
+        private (IReadOnlyList<Declaration> Found, string Confidence) Beyond(Declaration from, string name, Func<Declaration, bool> accepts, Func<Declaration, bool> imported)
         {
             if (Aliased(from.File, name).Where(accepts).ToList() is { Count: > 0 } aliased)
             {
@@ -743,21 +778,155 @@ public static class CodeGraphLinker
 
             foreach (var (import, owner) in ImportsOf(from.File).Where(made => made.Import.Prefix is null && made.Import.Lets(name)))
             {
-                if (Imported(import, owner, name, accepts) is { Count: > 0 } imported)
+                if (Imported(import, owner, name, imported) is { Count: > 0 } visible)
                 {
-                    return (imported, CodeConfidences.Unique);
+                    return (visible, CodeConfidences.Unique);
                 }
             }
 
             return (Repository(from, name, accepts), CodeConfidences.Unique);
         }
 
+        /// <summary>
+        /// What <paramref name="name"/>, written where a style sheet's syntax says what it names - a selector, a variable,
+        /// a mixin, a function, an animation's keyframes, a font's face (<paramref name="kind"/>) - names: nearest first, as
+        /// a name written alone is found past its scopes. What <paramref name="from"/>'s own file declares, exact - a page's
+        /// own style block, the sheet's own rule; else what each file its file imports or links makes visible, in order,
+        /// unique - an import by a namespace's prefix among them for what a sheet compiles into CSS (a rule, keyframes, a
+        /// font face), which no namespace holds, and none for a Sass member (a variable, a mixin, a function), which its
+        /// namespace's prefix alone reaches; else the repository's, unique. What a file keeps to itself - a CSS module's
+        /// class, a scoped style block's rule - is seen from it alone (<see cref="Sees(Declaration, Declaration)"/>), so no
+        /// other file's selector reaches it. A selector is found at each of those places by the rules named so, and by the
+        /// ones that stand for a suffix written onto others' (<see cref="ExtractNode.SuffixOf"/>) whose names it is one of
+        /// (<see cref="Suffixed"/>). The imports are walked as one: a file a walk of one import reached is not walked again
+        /// for the next, which would find there what it found the first time - nothing.
+        /// </summary>
+        private (IReadOnlyList<Declaration> Found, string Confidence) Styled(Declaration from, string kind, string name, Func<Declaration, bool> accepts)
+        {
+            var selector = kind == CodeQualifierKinds.Selector;
+            var written = selector ? Suffixed(from.File, name, exported: false) : [];
+
+            if (Distinct(RepositoryNamed(from.File, name).Where(target => ReferenceEquals(target.File, from.File)).Concat(written).Where(accepts)) is { Count: > 0 } own)
+            {
+                return (own, CodeConfidences.Exact);
+            }
+
+            var member = kind is CodeQualifierKinds.StyleVariable or CodeQualifierKinds.StyleMixin or CodeQualifierKinds.StyleFunction;
+            var walked = new HashSet<string>(StringComparer.Ordinal);
+
+            foreach (var (import, owner) in ImportsOf(from.File).Where(made => !member || (made.Import.Prefix is null && made.Import.Lets(name))))
+            {
+                if (Imported(import, owner, name, accepts, walked, suffixed: selector) is { Count: > 0 } visible)
+                {
+                    return (visible, CodeConfidences.Unique);
+                }
+            }
+
+            return (Distinct(Repository(from, name, accepts).Concat(selector ? Suffixed(from.File, name, exported: false, everywhere: true).Where(accepts) : [])), CodeConfidences.Unique);
+        }
+
+        /// <summary>
+        /// The nodes of <paramref name="file"/> - of every file where <paramref name="everywhere"/>, as the repository's are
+        /// seen from it - standing for a suffix written onto others' names (<see cref="ExtractNode.SuffixOf"/>) that stand
+        /// for <paramref name="name"/>: by their names, or where <paramref name="exported"/> by a name they are exported by. Each is looked for by the end of the name its suffix
+        /// is - the name cut at each length the suffixes there are - and matched by what it is written onto (<see cref="Writes"/>).
+        /// </summary>
+        private List<Declaration> Suffixed(CodeGraphFile file, string name, bool exported, bool everywhere = false)
+        {
+            Touch(Read.Suffixes, everywhere ? string.Empty : file.Path);
+            var found = new List<Declaration>();
+
+            foreach (var length in everywhere ? _suffixes : _suffixesByFile.GetValueOrDefault(file) ?? [])
+            {
+                // What a suffix is written onto writes a character of the name at least.
+                if (length >= name.Length)
+                {
+                    break;
+                }
+
+                var end = $"&{name[^length..]}";
+                var named = everywhere ? RepositoryNamed(file, end)
+                    : exported ? ExportedNamed(file.Path, end)
+                    : TopNamed(file.Path, end);
+
+                foreach (var candidate in named.Where(candidate => candidate.Node.SuffixOf is not null))
+                {
+                    if (exported ? Enumerable.Range(0, _mostExports).Any(form => Writes(candidate, name, form)) : Writes(candidate, name, form: -1))
+                    {
+                        found.Add(candidate);
+                    }
+                }
+            }
+
+            return found;
+        }
+
+        /// <summary>
+        /// Whether <paramref name="written"/>, a node standing for a suffix written onto others' names
+        /// (<see cref="ExtractNode.SuffixOf"/>), stands for <paramref name="name"/>: by their names, where
+        /// <paramref name="form"/> is below 0 - its suffix past its <c>&amp;</c> the end of the name, and the rest one of
+        /// the nodes it is written onto stands for in turn, a name of its own or one written onto others' again - or else by
+        /// the <paramref name="form"/>-th name each is exported by, the last standing for those past it. Walked with a stack,
+        /// each node at each place in the name once, so a node many others are written onto is matched once there however
+        /// many reach it.
+        /// </summary>
+        private bool Writes(Declaration written, string name, int form)
+        {
+            var walked = new HashSet<(string Id, int End)>();
+            var pending = new Stack<(Declaration Node, int End)>();
+            pending.Push((written, name.Length));
+            walked.Add((written.Id, name.Length));
+
+            while (pending.TryPop(out var at))
+            {
+                var node = at.Node.Node;
+                var own = form < 0 ? node.Name : node.Exports is { Count: > 0 } exports ? exports[Math.Min(form, exports.Count - 1)] : null;
+
+                if (own is null)
+                {
+                    continue;
+                }
+
+                if (node.SuffixOf is not { } onto)
+                {
+                    if (own.Length == at.End && name.AsSpan(0, at.End).SequenceEqual(own))
+                    {
+                        return true;
+                    }
+
+                    continue;
+                }
+
+                var suffix = own.AsSpan(1);
+
+                if (suffix.Length >= at.End || !name.AsSpan(0, at.End).EndsWith(suffix))
+                {
+                    continue;
+                }
+
+                var rest = at.End - suffix.Length;
+
+                foreach (var id in onto)
+                {
+                    foreach (var under in PartsOf(id).Where(under => ReferenceEquals(under.File, at.Node.File)))
+                    {
+                        if (walked.Add((under.Id, rest)))
+                        {
+                            pending.Push((under, rest));
+                        }
+                    }
+                }
+            }
+
+            return false;
+        }
+
         /// <summary>What the repository declares named <paramref name="name"/>: what any file can see, and what <paramref name="from"/>'s own file keeps to itself.</summary>
         private IReadOnlyList<Declaration> Repository(Declaration from, string name, Func<Declaration, bool> accepts)
             => Distinct(RepositoryNamed(from.File, name).Where(accepts));
 
-        /// <summary>What the qualifier of a reference names <paramref name="name"/> in, and how sure where it was found makes it.</summary>
-        private (IReadOnlyList<Declaration> Found, string Confidence) Qualified(Declaration from, ExtractQualifier qualifier, string name, Func<Declaration, bool> accepts)
+        /// <summary>What the qualifier of a reference names <paramref name="name"/> in, and how sure where it was found makes it; what an import makes visible taken by <paramref name="imported"/>.</summary>
+        private (IReadOnlyList<Declaration> Found, string Confidence) Qualified(Declaration from, ExtractQualifier qualifier, string name, Func<Declaration, bool> accepts, Func<Declaration, bool> imported)
         {
             switch (qualifier.Kind)
             {
@@ -768,7 +937,7 @@ public static class CodeGraphLinker
                     return EnclosingType(from) is { } derived ? Typed(from, [derived], null, name, accepts, withSelf: false) : ([], CodeConfidences.Exact);
 
                 case CodeQualifierKinds.Prefix:
-                    return (Prefixed(from, qualifier.Name!, name, accepts), CodeConfidences.Exact);
+                    return (Prefixed(from, qualifier.Name!, name, imported), CodeConfidences.Exact);
 
                 case CodeQualifierKinds.Type:
                     return Typed(from, Containers(from, qualifier.Name!), qualifier.Name!, name, accepts, withSelf: true);
@@ -782,17 +951,16 @@ public static class CodeGraphLinker
                         ? (held, CodeConfidences.Exact)
                         : (Distinct(RepositoryNamed(from.File, name).Where(target => target.Node.Scope is null && Own(target))), CodeConfidences.Exact);
 
-                case CodeQualifierKinds.StyleVariable or CodeQualifierKinds.StyleMixin or CodeQualifierKinds.Keyframes:
-                    // A name a style sheet writes where its syntax says what it names - a variable, a mixin, an animation's
-                    // keyframes - is found as a name written alone is: the sheet's own, what it imports, else the
-                    // repository's - of that kind alone, as Takes keeps it.
-                    return Unqualified(from, name, accepts);
+                case CodeQualifierKinds.Selector or CodeQualifierKinds.StyleVariable or CodeQualifierKinds.StyleMixin or CodeQualifierKinds.StyleFunction
+                    or CodeQualifierKinds.Keyframes or CodeQualifierKinds.FontFace:
+                    // A name a style sheet's syntax says the kind of - a selector, a variable, a mixin, a function, an
+                    // animation's keyframes, a font's face - is found nearest first, of that kind alone, as Takes keeps it.
+                    return Styled(from, qualifier.Kind, name, accepts);
 
-                case CodeQualifierKinds.Selector or CodeQualifierKinds.Key:
-                    // A selector names a rule, and a key qualifier a configuration key, wherever the repository declares
-                    // one so - the styles a page is told by, the property a project reads - each of its own kind alone, as
-                    // Takes keeps it; a key qualifier with a name, of the language it names alone.
-                    return (Distinct(RepositoryNamed(from.File, name).Where(target => accepts(target) && (qualifier.Kind != CodeQualifierKinds.Key || qualifier.Name is null || target.File.Language == qualifier.Name))), CodeConfidences.Exact);
+                case CodeQualifierKinds.Key:
+                    // A key qualifier names a configuration key wherever the repository declares one so - the property a
+                    // project reads - of its own kind alone, as Takes keeps it; one with a name, of the language it names alone.
+                    return (Distinct(RepositoryNamed(from.File, name).Where(target => accepts(target) && (qualifier.Name is null || target.File.Language == qualifier.Name))), CodeConfidences.Exact);
 
                 default:
                     // A value the scopes hold, nearer than any type or scope of its name, is that value; a type or a scope is
@@ -1029,7 +1197,7 @@ public static class CodeGraphLinker
 
                 return Distinct(ContainersOf(written).Where(Seen)) is { Count: > 0 } named
                     ? named
-                    : Beyond(from, written, Seen).Found;
+                    : Beyond(from, written, Seen, Seen).Found;
             });
         }
 
@@ -1219,38 +1387,57 @@ public static class CodeGraphLinker
             return _bases.TryGetValue(id, out var bases) ? bases : [];
         }
 
-        /// <summary>What <paramref name="import"/>, made by <paramref name="file"/>, makes visible named <paramref name="name"/>.</summary>
-        private IReadOnlyList<Declaration> Imported(ExtractImport import, CodeGraphFile file, string name, Func<Declaration, bool> accepts)
+        /// <summary>
+        /// What <paramref name="import"/>, made by <paramref name="file"/>, makes visible named <paramref name="name"/> - with
+        /// the nodes standing for a suffix written onto others' that stand for it where <paramref name="suffixed"/> - the files
+        /// <paramref name="walked"/> holds, which a walk before reached, not walked again.
+        /// </summary>
+        private IReadOnlyList<Declaration> Imported(ExtractImport import, CodeGraphFile file, string name, Func<Declaration, bool> accepts, HashSet<string>? walked = null, bool suffixed = false)
         {
             if (import.Form == CodeImportForms.Scope)
             {
                 return InScope(OpenKey(import.Target), name, accepts, withBases: true);
             }
 
-            return Distinct(FilesOf(import, file).SelectMany(target => Visible(target, name, [])).Where(accepts));
+            walked ??= new HashSet<string>(StringComparer.Ordinal);
+            return Distinct(FilesOf(import, file).SelectMany(target => Visible(target, name, walked, suffixed)).Where(accepts));
         }
 
         /// <summary>
         /// What a file imported by path makes visible named <paramref name="name"/>: its own top-level declarations, those of
-        /// the open scopes it declares, those it declares exported by that name (<see cref="ExtractNode.Exports"/>), and what
-        /// each file it exports makes visible, that export's filter applied - each file once, so exports that come round again
-        /// end.
+        /// the open scopes it declares, those it declares exported by that name (<see cref="ExtractNode.Exports"/>) - a node
+        /// standing for a suffix written onto others' exported by one it stands for among them - and what each file it
+        /// exports makes visible, that export's filter applied - each file once, so exports that come round again end. Where
+        /// <paramref name="suffixed"/>, the top-level nodes standing for a suffix written onto others' whose names it is one
+        /// of besides (<see cref="Suffixed"/>).
         /// </summary>
-        private IEnumerable<Declaration> Visible(string path, string name, HashSet<string> seen)
+        private IEnumerable<Declaration> Visible(string path, string name, HashSet<string> seen, bool suffixed = false)
         {
             if (!seen.Add(path))
             {
                 return [];
             }
 
+            var file = _byPath.GetValueOrDefault(path);
             var own = TopNamed(path, name).Concat(OpensOf(path).SelectMany(scope => ScopeNamed(OpenKey(scope), name))).Concat(ExportedNamed(path, name)).ToList();
+
+            if (file is not null)
+            {
+                own.AddRange(Suffixed(file, name, exported: true));
+
+                if (suffixed)
+                {
+                    own.AddRange(Suffixed(file, name, exported: false));
+                }
+            }
+
             Touch(Read.Imports, path);
 
-            if (_byPath.TryGetValue(path, out var file) && file.Extract is not null)
+            if (file?.Extract is not null)
             {
                 foreach (var export in Taken(file).Where(import => import.Export && import.Lets(name)))
                 {
-                    own.AddRange(FilesOf(export, file).SelectMany(target => Visible(target, name, seen)));
+                    own.AddRange(FilesOf(export, file).SelectMany(target => Visible(target, name, seen, suffixed)));
                 }
             }
 
@@ -1959,6 +2146,13 @@ public static class CodeGraphLinker
                 Add(Read.Scope, KeyOf(file, scope.Name, closed), scope.Parent is { } parent ? KeyOf(file, parent, closed) : None);
             }
 
+            if (SuffixLengths(extract) is { Length: > 0 } suffixes)
+            {
+                var lengths = string.Join(',', suffixes);
+                Add(Read.Suffixes, file.Path, lengths);
+                Add(Read.Suffixes, string.Empty, lengths);
+            }
+
             foreach (var node in extract.Nodes)
             {
                 // Whether it is its file's alone is no field of its own: a closed scope's key is its file's, so the two keys say it.
@@ -1979,7 +2173,8 @@ public static class CodeGraphLinker
                     node.SeenIn is { } seenIn ? KeyOf(file, seenIn, closed) : None,
                     node.Qualified,
                     node.Prototype ? "prototype" : None,
-                    string.Join(PartEnd, node.Exports ?? []));
+                    string.Join(PartEnd, node.Exports ?? []),
+                    string.Join(PartEnd, node.SuffixOf ?? []));
 
                 Add(Read.Name, node.Name, shape);
 
@@ -2040,6 +2235,13 @@ public static class CodeGraphLinker
 
         /// <summary>The names of the closed scopes <paramref name="extract"/> declares.</summary>
         private static HashSet<string> Closed(FileExtract extract) => extract.Scopes.Where(scope => !scope.Open).Select(scope => scope.Name).ToHashSet(StringComparer.Ordinal);
+
+        /// <summary>
+        /// How long the suffixes the nodes of <paramref name="extract"/> write onto others' names are
+        /// (<see cref="ExtractNode.SuffixOf"/>) - each past its <c>&amp;</c>, those they are exported by among them - shortest first.
+        /// </summary>
+        private static int[] SuffixLengths(FileExtract extract)
+            => [.. extract.Nodes.Where(node => node.SuffixOf is not null).SelectMany(node => (string[])[node.Name, .. node.Exports ?? []]).Select(suffix => suffix.Length - 1).Distinct().Order()];
 
         /// <summary>
         /// The scope <paramref name="node"/> of <paramref name="file"/> is declared in, by key, and whether it is its file's
@@ -2121,18 +2323,25 @@ public static class CodeGraphLinker
     /// Whether <paramref name="target"/> is something <paramref name="reference"/> can name: of a kind its edge reaches, and
     /// taking its arity. A node of data - a configuration key, an element, a node a style sheet declares
     /// (<see cref="CodeSubKinds"/>) - is reached only by a reference that says it names one: a selector a rule, a key
-    /// qualifier a key, a style sheet's variable, mixin or keyframes qualifier its kind (<see cref="CodeSubKinds.ReachedBy"/>),
-    /// each of the kind it names alone, and a use through an import's prefix whatever the file it imports declares - never
-    /// one that names it by its name alone, as code names code: the one place that says what a reference may reach.
+    /// qualifier a key, a style sheet's variable, mixin, function, keyframes or font face qualifier its kind
+    /// (<see cref="CodeSubKinds.ReachedBy"/>), each of the kind it names alone; a use through an import's prefix whatever
+    /// the file it imports declares; and a use an import makes visible (<paramref name="imported"/>) by a name the file
+    /// that declares the node exports it by - <c>import { btn } from './x.module.css'</c> as <c>styles.btn</c> is, and a
+    /// node standing for a suffix written onto others' (<see cref="ExtractNode.SuffixOf"/>), which no name finds but one
+    /// it was matched to stand for - never one that names it by its name alone, as code names code: the one place that
+    /// says what a reference may reach.
     /// </summary>
-    private static bool Takes(ExtractReference reference, Declaration target)
+    private static bool Takes(ExtractReference reference, Declaration target, bool imported)
     {
         if (CodeSubKinds.ReachedBy(reference.Qualifier?.Kind) is { } reached)
         {
             return target.Node.Kind == CodeNodeKinds.Member && target.Node.SubKind == reached;
         }
 
-        if (CodeSubKinds.IsData(target.Node.SubKind) && (reference.Kind != CodeEdgeKinds.Uses || reference.Qualifier?.Kind != CodeQualifierKinds.Prefix))
+        if (CodeSubKinds.IsData(target.Node.SubKind)
+            && (reference.Kind != CodeEdgeKinds.Uses
+                || !(reference.Qualifier?.Kind == CodeQualifierKinds.Prefix
+                    || (imported && (target.Node.SuffixOf is not null || target.Node.Exports?.Contains(reference.Name, StringComparer.Ordinal) == true)))))
         {
             return false;
         }

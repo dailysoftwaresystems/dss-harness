@@ -35,7 +35,8 @@ internal static class CssLexer
     /// <summary>Scans <paramref name="text"/> by the rules of <paramref name="syntax"/>.</summary>
     /// <param name="text">A sheet's text: braced, where it is written in the indented syntax (<see cref="Braced"/>).</param>
     /// <param name="syntax">What it is written in.</param>
-    public static InterpolatedText Scan(string text, StyleSyntax syntax) => Scan(text, 0, text.Length, CodeFileText.LineIndex(text), syntax);
+    /// <param name="closes">Where the scan says each interpolation it reads closes, for the scans of their code after it; none where nothing scans it again.</param>
+    public static InterpolatedText Scan(string text, StyleSyntax syntax, Closes? closes = null) => Scan(text, 0, text.Length, CodeFileText.LineIndex(text), syntax, closes);
 
     /// <summary>
     /// Scans the part of <paramref name="text"/> from <paramref name="start"/> to <paramref name="end"/> by the rules of
@@ -46,15 +47,63 @@ internal static class CssLexer
     /// <param name="end">Where it ends.</param>
     /// <param name="lines">The text's lines.</param>
     /// <param name="syntax">What it is written in.</param>
-    public static InterpolatedText Scan(string text, int start, int end, CodeLineIndex lines, StyleSyntax syntax)
+    /// <param name="closes">
+    /// Where a scan of the text read before this one found each interpolation it holds closes: each this scan reads is
+    /// passed over to its close at once, its code read by the scan of its own; none where nothing scanned it before.
+    /// </param>
+    public static InterpolatedText Scan(string text, int start, int end, CodeLineIndex lines, StyleSyntax syntax, Closes? closes = null)
     {
-        var lexing = new Lexing(text, lines, syntax);
+        var lexing = new Lexing(text, lines, syntax, closes ?? new Closes());
         lexing.Run(start, end);
-        return new InterpolatedText(new ScannedText(text, lexing.Tokens, lexing.Comments), lexing.Interpolations, lines);
+        return new InterpolatedText(new ScannedText(text, lexing.Tokens, lexing.Comments, literals: lexing.Literals), lexing.Interpolations, lines);
+    }
+
+    /// <summary>
+    /// Where each brace an interpolation's code opens closes - the interpolation's own among them, and each nested in it to
+    /// any depth - as the first scan of a sheet finds them: the scan of an interpolation's code, read in its turn, passes
+    /// over each interpolation that code holds to its close at once, so a character of the sheet is read by the scan of
+    /// its own interpolation and the first scan alone, never again by the scan of each interpolation outside it.
+    /// </summary>
+    public sealed class Closes
+    {
+        private readonly Dictionary<int, int> _at = [];
+
+        /// <summary>Says the brace at <paramref name="open"/> closes at <paramref name="close"/> - where the reading ended, where nothing closes it.</summary>
+        internal void Closed(int open, int close) => _at[open] = close;
+
+        /// <summary>Where the brace at <paramref name="open"/> closes, as a scan before found it; -1 where none found it.</summary>
+        internal int Of(int open) => _at.TryGetValue(open, out var close) ? close : -1;
     }
 
     /// <summary>Whether <paramref name="syntax"/> writes <c>//</c> comments.</summary>
     private static bool LineComments(StyleSyntax syntax) => syntax is not StyleSyntax.Css;
+
+    /// <summary>
+    /// Where the comment that begins at <paramref name="at"/> ends, within <paramref name="end"/>, by the rules of
+    /// <paramref name="syntax"/>: a <c>/* */</c> past its closer - the end where none closes it - and a <c>//</c> at its
+    /// line's end where the syntax writes one; <paramref name="at"/> where none begins there. The one reading of a sheet's
+    /// comments, which its code, the code its interpolations hold and the indented syntax's lines are each read by.
+    /// </summary>
+    /// <param name="text">A sheet's text.</param>
+    /// <param name="at">Where a comment may begin.</param>
+    /// <param name="end">Where the text read ends.</param>
+    /// <param name="syntax">What it is written in.</param>
+    public static int CommentEnd(string text, int at, int end, StyleSyntax syntax)
+        => at + 1 >= end || text[at] != '/' ? at
+            : text[at + 1] == '*' ? (text.IndexOf("*/", at + 2, end - at - 2, StringComparison.Ordinal) is var close and >= 0 ? close + 2 : end)
+            : text[at + 1] == '/' && LineComments(syntax) ? LineEndOf(text, at, end)
+            : at;
+
+    /// <summary>Where the line <paramref name="at"/> is on ends, within <paramref name="end"/>: at its line break.</summary>
+    private static int LineEndOf(string text, int at, int end)
+    {
+        while (at < end && ScanLexing.LineBreakAt(text, at, end) == 0)
+        {
+            at++;
+        }
+
+        return at;
+    }
 
     /// <summary>Whether <paramref name="character"/>, past ASCII, stands in a name: any but a surrogate, which stands in one only with its pair.</summary>
     private static bool Wide(char character) => character > '\u007f' && !char.IsSurrogate(character);
@@ -73,7 +122,7 @@ internal static class CssLexer
             return 1;
         }
 
-        return Escape(text, at, end) is var escape and > 0 ? escape : Pair(text, at, end);
+        return ScanLiteral.CssEscape(text, at, end) is var escape and > 0 ? escape : Pair(text, at, end);
     }
 
     /// <summary>How many characters at <paramref name="at"/> may begin a name: a letter, <c>_</c>, a character past ASCII, or an escape; 0 where none stands there.</summary>
@@ -86,7 +135,7 @@ internal static class CssLexer
             return 1;
         }
 
-        return Escape(text, at, end) is var escape and > 0 ? escape : Pair(text, at, end);
+        return ScanLiteral.CssEscape(text, at, end) is var escape and > 0 ? escape : Pair(text, at, end);
     }
 
     /// <summary>2 where a surrogate pair stands at <paramref name="at"/>, else 0.</summary>
@@ -94,74 +143,12 @@ internal static class CssLexer
         => char.IsHighSurrogate(text[at]) && at + 1 < end && char.IsLowSurrogate(text[at + 1]) ? 2 : 0;
 
     /// <summary>
-    /// How many characters the escape at <paramref name="at"/> is: a backslash and the character it escapes - a surrogate
-    /// pair whole - or up to six hexadecimal digits and the one white space that may end them; 0 where none stands there, as
-    /// a backslash before a line break is none.
-    /// </summary>
-    private static int Escape(string text, int at, int end)
-    {
-        if (text[at] != '\\' || at + 1 >= end || ScanLexing.LineBreakAt(text, at + 1, end) > 0)
-        {
-            return 0;
-        }
-
-        if (!char.IsAsciiHexDigit(text[at + 1]))
-        {
-            return char.IsSurrogate(text[at + 1]) ? (Pair(text, at + 1, end) is 2 ? 3 : 0) : 2;
-        }
-
-        var past = at + 1;
-
-        while (past < end && past - at <= 6 && char.IsAsciiHexDigit(text[past]))
-        {
-            past++;
-        }
-
-        return past < end && text[past] is ' ' or '\t' ? past + 1 - at : past - at;
-    }
-
-    /// <summary>
-    /// <paramref name="name"/> as CSS reads it, each escape the character it stands for: <c>md\:flex</c> is the class
-    /// <c>md:flex</c> markup writes. A code point no character is reads as the replacement character.
+    /// <paramref name="name"/> as CSS reads it, each escape the character it stands for (<see cref="ScanEscapes.Css"/>, the
+    /// one rule a sheet's strings are decoded by too): <c>md\:flex</c> is the class <c>md:flex</c> markup writes, and
+    /// <c>a\ b</c> the class <c>a b</c>.
     /// </summary>
     /// <param name="name">A name as a sheet writes it.</param>
-    public static string Unescaped(string name)
-    {
-        if (!name.Contains('\\', StringComparison.Ordinal))
-        {
-            return name;
-        }
-
-        var read = new StringBuilder(name.Length);
-
-        for (var at = 0; at < name.Length;)
-        {
-            var escape = Escape(name, at, name.Length);
-
-            if (escape == 0)
-            {
-                read.Append(name[at]);
-                at++;
-                continue;
-            }
-
-            var escaped = name.AsSpan(at + 1, escape - 1).TrimEnd([' ', '\t']);
-
-            if (char.IsAsciiHexDigit(escaped[0]))
-            {
-                var code = int.Parse(escaped, System.Globalization.NumberStyles.HexNumber, System.Globalization.CultureInfo.InvariantCulture);
-                read.Append(code is 0 or > 0x10FFFF or (>= 0xD800 and <= 0xDFFF) ? char.ConvertFromUtf32(0xFFFD) : char.ConvertFromUtf32(code));
-            }
-            else
-            {
-                read.Append(escaped);
-            }
-
-            at += escape;
-        }
-
-        return read.ToString();
-    }
+    public static string Unescaped(string name) => ScanLiteral.Decode(name, 0, name.Length, ScanEscapes.Css, 0, lineStart: false);
 
     /// <summary>
     /// The indented syntax of a <c>.sass</c> sheet written in SCSS's braces, line for line - no line added, none taken
@@ -176,6 +163,7 @@ internal static class CssLexer
     public static string Braced(string text)
     {
         var spans = CodeFileText.Spans(text);
+        var index = new CodeLineIndex([.. spans.Select(span => span.Start)]);
         var lines = new SassLine[spans.Count];
 
         for (var at = 0; at < spans.Count; at++)
@@ -192,7 +180,7 @@ internal static class CssLexer
 
         for (var at = 0; at < lines.Length; at++)
         {
-            if (lines[at].Kind == SassLineKind.Code && CommentOver(text, lines, at) is var last and >= 0)
+            if (lines[at].Kind == SassLineKind.Code && CommentOver(text, index, lines, at) is var last and >= 0)
             {
                 at = last;
             }
@@ -202,7 +190,7 @@ internal static class CssLexer
         {
             if (lines[at].Kind == SassLineKind.Code)
             {
-                lines[at] = CodeOf(text, lines[at]);
+                lines[at] = CodeOf(text, index, lines[at]);
             }
         }
 
@@ -239,22 +227,26 @@ internal static class CssLexer
     }
 
     /// <summary>
-    /// Where the line at <paramref name="at"/> begins a comment, the lines it goes on over marked as its own - every line
-    /// indented deeper than its first a <c>//</c>'s, a <c>/*</c>'s to the line that closes it, and its last line closing it
-    /// where none does - and the index of its last line; -1 where the line begins no comment.
+    /// Where the line at <paramref name="at"/> begins a comment, as the lexer reads one
+    /// (<see cref="CommentEnd(string, int, int, StyleSyntax)"/>), the lines it goes on over marked as its own - every line
+    /// indented deeper than its first a <c>//</c>'s, a <c>/*</c>'s to the line its closer stands on, and its last line
+    /// closing it where none of them does - and the index of its last line; -1 where the line begins no comment.
     /// </summary>
-    private static int CommentOver(string text, SassLine[] lines, int at)
+    private static int CommentOver(string text, CodeLineIndex index, SassLine[] lines, int at)
     {
         var line = lines[at];
-        var written = text.AsSpan(line.First, line.End - line.First);
+        var end = CommentEnd(text, line.First, text.Length, StyleSyntax.Sass);
 
-        if (!written.StartsWith("//", StringComparison.Ordinal) && !written.StartsWith("/*", StringComparison.Ordinal))
+        if (end == line.First)
         {
             return -1;
         }
 
-        var silent = written[1] == '/';
-        var closed = !silent && written[2..].Contains("*/", StringComparison.Ordinal);
+        var silent = text[line.First + 1] == '/';
+
+        // The line a /* comment's closer stands on; -1 where nothing closes it.
+        var closes = !silent && end - line.First >= 4 && text[end - 2] == '*' && text[end - 1] == '/' ? index.LineAt(end - 1) - 1 : -1;
+        var closed = closes == at;
         var last = at;
         lines[at] = line with { Kind = SassLineKind.Comment };
 
@@ -265,7 +257,7 @@ internal static class CssLexer
                 continue;
             }
 
-            closed = !silent && text.AsSpan(lines[next].First, lines[next].End - lines[next].First).Contains("*/", StringComparison.Ordinal);
+            closed = next == closes;
             lines[next] = lines[next] with { Kind = silent ? SassLineKind.Silent : SassLineKind.Comment };
             last = next;
         }
@@ -347,59 +339,28 @@ internal static class CssLexer
     }
 
     /// <summary>
-    /// <paramref name="line"/>, a line of code, with where its code ends - before a comment that trails it and the white
-    /// space before that - whether it ends at a comma, and how many brackets it leaves open, less those it closes: a string
-    /// and an unquoted <c>url(...)</c> passed over whole.
+    /// <paramref name="line"/>, a line of code, as the lexer reads it on its own: where its code ends - its last token's
+    /// end, before a comment that trails it - whether it ends at a comma, and how many brackets it leaves open, less those
+    /// it closes, so a string, an unquoted <c>url(...)</c>, an interpolation, a comment and an escaped character - a
+    /// <c>\[</c>, a <c>\'</c> - are read as the sheet's reader reads them; blank where it holds no token.
     /// </summary>
-    private static SassLine CodeOf(string text, SassLine line)
+    private static SassLine CodeOf(string text, CodeLineIndex index, SassLine line)
     {
-        var (first, end) = (line.First, line.End);
+        var scan = Scan(text, line.First, line.End, index, StyleSyntax.Sass).Scan;
+
+        if (scan.Count == 0)
+        {
+            return line with { Kind = SassLineKind.Blank };
+        }
+
         var depth = 0;
-        var at = first;
-        var stop = end;
 
-        while (at < end)
+        for (var at = 0; at < scan.Count; at++)
         {
-            var character = text[at];
-
-            if (character is '"' or '\'')
-            {
-                at++;
-
-                while (at < end && text[at] != character)
-                {
-                    at += text[at] == '\\' ? 2 : 1;
-                }
-
-                at = Math.Min(at + 1, end);
-                continue;
-            }
-
-            if (at + 4 <= end && string.Compare(text, at, "url(", 0, 4, StringComparison.OrdinalIgnoreCase) == 0
-                && text.IndexOf(')', at, end - at) is var close and >= 0
-                && text.AsSpan(at + 4, close - at - 4).TrimStart() is var argument
-                && (argument.IsEmpty || argument[0] is not ('"' or '\'')))
-            {
-                at = close + 1;
-                continue;
-            }
-
-            if (character == '/' && at + 1 < end && text[at + 1] is '/' or '*')
-            {
-                stop = at;
-                break;
-            }
-
-            depth += character is '(' or '[' or '{' ? 1 : character is ')' or ']' or '}' ? -1 : 0;
-            at++;
+            depth += scan.Is(at, "(") || scan.Is(at, "[") || scan.Is(at, "{") ? 1 : scan.Is(at, ")") || scan.Is(at, "]") || scan.Is(at, "}") ? -1 : 0;
         }
 
-        while (stop > first && text[stop - 1] is ' ' or '\t')
-        {
-            stop--;
-        }
-
-        return line with { End = stop, Comma = stop > first && text[stop - 1] == ',', Depth = depth };
+        return line with { End = scan[scan.Count - 1].End, Comma = scan.Is(scan.Count - 1, ","), Depth = depth };
     }
 
     /// <summary>What a line of the indented syntax is.</summary>
@@ -437,7 +398,7 @@ internal static class CssLexer
 
 
     /// <summary>One run of the lexer over a text.</summary>
-    private sealed class Lexing(string text, CodeLineIndex lines, StyleSyntax syntax) : ScanLexing(lines)
+    private sealed class Lexing(string text, CodeLineIndex lines, StyleSyntax syntax, Closes closes) : ScanLexing(lines)
     {
         public void Run(int start, int end)
         {
@@ -489,12 +450,8 @@ internal static class CssLexer
             }
         }
 
-        /// <summary>A sheet's comments: <c>/* */</c> past its closer, and <c>//</c> to its line's end where the syntax writes one.</summary>
-        protected override int CommentEnd(int at, int end)
-            => at + 1 >= end || text[at] != '/' ? at
-                : text[at + 1] == '*' ? (text.IndexOf("*/", at + 2, end - at - 2, StringComparison.Ordinal) is var close and >= 0 ? close + 2 : end)
-                : text[at + 1] == '/' && LineComments(syntax) ? LineEnd(text, at, end)
-                : at;
+        /// <summary>A sheet's comments, as <see cref="CssLexer.CommentEnd(string, int, int, StyleSyntax)"/> reads them.</summary>
+        protected override int CommentEnd(int at, int end) => CssLexer.CommentEnd(text, at, end, syntax);
 
         /// <summary>Whether an interpolation opens at <paramref name="at"/>: SCSS's and Sass's <c>#{</c>, Less's <c>@{</c>.</summary>
         private bool Hole(int at, int end)
@@ -571,8 +528,12 @@ internal static class CssLexer
         /// <paramref name="from"/>: to <paramref name="close"/> not escaped - a quote, a <c>url(</c>'s parenthesis, or for an
         /// interpolation outside a string (<c>'\0'</c>) the brace that closes its code - past each interpolation it holds,
         /// whose code may hold braces, comments and strings of their own, read with a stack of what it is in, never a call
-        /// into itself, so no nesting reaches past the reader's stack. A line break ends one left open, and what holds it
-        /// with it. Answers where the text goes on.
+        /// into itself, so no nesting reaches past the reader's stack - and passed over to its close at once where a scan
+        /// before this one found it (<see cref="Closes"/>), each brace's close said for the scans after. A line break not
+        /// escaped - a CR LF one break - ends one left open, and what holds it with it. A string and a <c>url(...)</c> are kept as literals (<see cref="ScanLiteral"/>),
+        /// each constant part between its opener, its interpolations and its closer, decoded by a sheet's escapes - a
+        /// <c>url(...)</c>'s without the white space about its address - and an interpolation outside a string none. Answers
+        /// where the text goes on.
         /// </summary>
         private int Literal(int start, int from, char close, int end)
         {
@@ -580,10 +541,14 @@ internal static class CssLexer
             literals.OpenLiteral(close, from);
             var at = from;
 
+            // The braces of the code being read still open, innermost last.
+            var braces = new Stack<int>();
+
             if (close == '\0')
             {
                 at += 2;
                 literals.OpenCode(from, at);
+                at = Opened(braces, from + 1, at, end);
             }
 
             while (at < end && literals.Open)
@@ -594,6 +559,15 @@ internal static class CssLexer
                 {
                     if (literals.Past(character, at, end) is var past && past > at)
                     {
+                        if (past == at + 1 && character == '{')
+                        {
+                            braces.Push(at);
+                        }
+                        else if (past == at + 1 && character == '}' && braces.TryPop(out var open))
+                        {
+                            closes.Closed(open, at);
+                        }
+
                         at = past;
                     }
                     else if (character is '"' or '\'')
@@ -618,12 +592,13 @@ internal static class CssLexer
                 }
                 else if (character == '\\')
                 {
-                    at += 2;
+                    // The backslash and what it escapes: a line break whole, a CR LF one.
+                    at += 1 + Math.Max(1, LineBreakAt(text, at + 1, end));
                 }
                 else if (Hole(at, end))
                 {
                     literals.OpenCode(at, at + 2);
-                    at += 2;
+                    at = Opened(braces, at + 1, at + 2, end);
                 }
                 else if (character == top)
                 {
@@ -642,8 +617,61 @@ internal static class CssLexer
 
             at = Math.Min(at, end);
             literals.End(at);
+
+            // A brace nothing closed closes where the reading ended.
+            while (braces.TryPop(out var open))
+            {
+                closes.Closed(open, at);
+            }
+
+            if (close != '\0')
+            {
+                KeepLiteral(start, new ScanLiteral(close == ')' ? Trimmed(literals.Parts) : literals.Parts, ScanEscapes.Css) { Interpolated = literals.Holes, LeftOpen = literals.Open });
+            }
+
             Add(ScanTokenKind.Text, start, at);
             return at;
+        }
+
+        /// <summary>
+        /// The interpolation whose brace stands at <paramref name="brace"/> opened, its code at <paramref name="code"/>: where
+        /// the reading goes on - at its close, where a scan before this one found it (<see cref="Closes"/>), so its code is
+        /// read by the scan of its own alone; at its code where none did - its brace held open till its close is read.
+        /// </summary>
+        private int Opened(Stack<int> braces, int brace, int code, int end)
+        {
+            braces.Push(brace);
+            return closes.Of(brace) is var close and >= 0 ? Math.Min(Math.Max(close, code), end) : code;
+        }
+
+        /// <summary>The parts of an unquoted <c>url(...)</c>, the white space before its address and after it taken off, which CSS reads as none of it.</summary>
+        private List<ScanLiteralPart> Trimmed(IReadOnlyList<ScanLiteralPart> parts)
+        {
+            var trimmed = parts.ToList();
+
+            if (trimmed.Count > 0)
+            {
+                var first = trimmed[0];
+                var start = first.Start;
+
+                while (start < first.End && char.IsWhiteSpace(text[start]))
+                {
+                    start++;
+                }
+
+                trimmed[0] = Part(start, first.End);
+                var last = trimmed[^1];
+                var stop = last.End;
+
+                while (stop > last.Start && char.IsWhiteSpace(text[stop - 1]))
+                {
+                    stop--;
+                }
+
+                trimmed[^1] = last with { End = stop };
+            }
+
+            return trimmed;
         }
     }
 }
