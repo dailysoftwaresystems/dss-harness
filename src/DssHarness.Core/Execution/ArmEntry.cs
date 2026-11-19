@@ -83,4 +83,11 @@ public sealed record ArmHeld(string Run, DateTimeOffset At);
 /// <summary>Why <c>--pending</c> swept an arm: the first reason it was pending.</summary>
 /// <param name="Code">The reason, as data names it: <c>files-moved</c>.</param>
 /// <param name="Said">The reason, as a line says it.</param>
-public sealed record ArmPending(string Code, string Said);
+public sealed record ArmPending(string Code, string Said)
+{
+    /// <summary>
+    /// Every path the reason names, where it names any - its line names as many as fit and counts the rest - or
+    /// <see langword="null"/> where it names none.
+    /// </summary>
+    public IReadOnlyList<string>? Paths { get; init; }
+}

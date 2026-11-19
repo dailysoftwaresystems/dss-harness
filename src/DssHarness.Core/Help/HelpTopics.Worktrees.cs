@@ -37,11 +37,14 @@ public static partial class HelpTopics
 
         builder.AppendLine("Worktrees");
         builder.AppendLine();
-        builder.AppendLine("Names are lowercase letters and digits joined by single hyphens, at most");
-        builder.AppendLine($"{WorktreeSettings.DefaultMaxNameLength} characters unless worktrees.maxNameLength says otherwise.");
-        builder.AppendLine("Use --random to have one generated.");
+        builder.AppendLine("Names are lowercase letters and digits joined by single hyphens. Their length is");
+        builder.AppendLine("the path budget's to decide, measured against the real path of each tree, unless");
+        builder.AppendLine("worktrees.maxNameLength sets a longest name of the repository's own.");
+        builder.AppendLine($"Use --random to have one of {WorktreeName.RandomLength} characters generated - fewer where");
+        builder.AppendLine("worktrees.maxNameLength is shorter - drawn from outside the names worktrees and");
+        builder.AppendLine("orchestrators already have, so it is never one of them.");
         builder.AppendLine();
-        builder.AppendLine("The length limit is not cosmetic. A worktree's build tree sits below");
+        builder.AppendLine("The path budget is not cosmetic. A worktree's build tree sits below");
         builder.AppendLine("  <worktrees.root>/<name>");
         builder.AppendLine($"which is '{WorktreeSettings.SeededRoot}' in a configuration init writes, and");
         builder.AppendLine($"'{WorktreeSettings.DefaultRoot}' in one that names none. That root is configurable");
@@ -205,8 +208,11 @@ public static partial class HelpTopics
             + "worktree repair is named only while git still records a worktree there - at that path, or, after the checkout was "
             + "moved by hand, at another place that holds none now.");
         builder.AppendLine();
-        builder.AppendLine("An interruption during the deletion can leave it partly done, on any platform, and");
-        builder.AppendLine("says what is left; running delete-worktree again with --force finishes it.");
+        builder.AppendLine("Once every check has passed, the deletion is past its point of no return: an");
+        builder.AppendLine("interruption from then on is said, and the deletion goes on to its end, told every");
+        builder.AppendLine($"{ReportText.Limit(Waiting.Waits.SaidEvery)} while it lasts, git never stopped part way. A second interruption, the hard");
+        builder.AppendLine("stop, ends it at once and can leave it partly done, on any platform; running");
+        builder.AppendLine("delete-worktree again with --force finishes it.");
         builder.AppendLine();
         AppendWrapped(
             builder,

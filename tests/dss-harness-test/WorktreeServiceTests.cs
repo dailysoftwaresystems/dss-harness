@@ -1053,11 +1053,13 @@ public sealed class WorktreeServiceTests
     }
 
     /// <summary>
-    /// A worktree whose own removal is stopped once its workers are gone says which went, as one whose removal fails
-    /// does: what the interruption left is the worktree, and the copies that went before it are gone all the same.
+    /// Work past its point of no return finishes: an interruption that arrives as the worktree's own removal starts is said
+    /// at once, as the deletion going on to its end, and the removal - git still at work a second later, past any grace an
+    /// interruption once gave it - runs to its end, never stopped part way, git given no token the interruption cancels.
+    /// The worktree is gone, and its workers are said as gone before it. Red with the interruption's grace put back.
     /// </summary>
     [Fact]
-    public async Task ARemovalStoppedOnceTheWorkersAreGone_StillSaysWhichWent()
+    public async Task WorkPastItsPointOfNoReturn_Finishes()
     {
         using var temp = new TempDirectory();
         using var interruption = new CancellationTokenSource();
@@ -1070,7 +1072,8 @@ public sealed class WorktreeServiceTests
         var worker = await WorkerAsync(harness, Slot(created.Path, "357e24cw-1"), cancellationToken);
         var size = harness.FileSystem.DirectorySize(worker);
 
-        // A git that hangs over the worktree's own removal until it is stopped, interrupted as that removal starts.
+        // A git slow over the worktree's own removal, interrupted as that removal starts.
+        var cancellable = new List<bool>();
         var git = new InterceptingGitClient(harness.GitClient)
         {
             BeforeRun = arguments =>
@@ -1084,24 +1087,27 @@ public sealed class WorktreeServiceTests
             {
                 if (arguments is ["worktree", "remove", ..])
                 {
-                    await Task.Delay(Timeout.InfiniteTimeSpan, token);
+                    cancellable.Add(token.CanBeCanceled);
+                    await Task.Delay(TimeSpan.FromSeconds(1), CancellationToken.None);
                 }
 
                 return null;
             },
         };
-        var service = new WorktreeService(harness.ContextLoader, git, harness.FileSystem, harness.PathBudget, harness.Platform, harness.Output, harness.HostCopies, harness.LocalTransport, harness.RunLock, harness.ProcessContext)
-        {
-            InterruptionGrace = TimeSpan.FromMilliseconds(400),
-        };
+        var service = new WorktreeService(harness.ContextLoader, git, harness.FileSystem, harness.PathBudget, harness.Platform, harness.Output, harness.HostCopies, harness.LocalTransport, harness.RunLock, harness.ProcessContext);
 
-        var stopped = await service.DeleteAsync(temp.Path, "wt", force: false, deleteEvidence: false, cancellationToken: interruption.Token);
+        var deleted = await service.DeleteAsync(temp.Path, "wt", force: false, deleteEvidence: false, cancellationToken: interruption.Token);
 
-        Assert.Equal(HarnessExit.Cancelled, stopped.Outcome.ExitCode);
-        Assert.StartsWith("Deleting worktree 'wt' was stopped part way", stopped.Outcome.Message, StringComparison.Ordinal);
-        Assert.True(Directory.Exists(created.Path));
+        Assert.True(deleted.Succeeded, deleted.Outcome.Message);
+        Assert.Equal([false], cancellable);
+        Assert.False(Directory.Exists(created.Path));
         Assert.False(Directory.Exists(worker));
-        Assert.Equal([$"removed 1 mutation worker(s) kept in it, {DiskSpace.Size(size)}: '{worker}'"], stopped.Outcome.Details ?? []);
+        Assert.Contains($"removed 1 mutation worker(s) kept in it, {DiskSpace.Size(size)}: '{worker}'", deleted.Outcome.Details ?? []);
+        Assert.Contains(
+            "delete-worktree: WARN - Deleting worktree 'wt' is past its point of no return and goes on to its end; a second interruption "
+            + "ends it at once and may leave it half done",
+            harness.StandardError.ToString(),
+            StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -1375,7 +1381,7 @@ public sealed class WorktreeServiceTests
         var outcome = await harness.WorktreeService.DeleteAsync(temp.Path, "many", force: false, deleteEvidence: false, cancellationToken: cancellationToken);
 
         Assert.Equal(
-            "Worktree 'many' was not deleted, because it has 5 uncommitted change(s) that would be lost: a.txt, b.txt, c.txt and 2 more (commit them to a branch, run 'git stash -u', or pass --discard-uncommitted to delete them with the worktree); fix that, or pass --force to delete it anyway.",
+            "Worktree 'many' was not deleted, because it has 5 uncommitted change(s) that would be lost: a.txt, b.txt, c.txt, d.txt, e.txt (commit them to a branch, run 'git stash -u', or pass --discard-uncommitted to delete them with the worktree); fix that, or pass --force to delete it anyway.",
             outcome.Outcome.Message);
     }
 
@@ -1438,7 +1444,9 @@ public sealed class WorktreeServiceTests
 
         Assert.True(outcome.Succeeded, outcome.Outcome.Message);
         Assert.False(Directory.Exists(path));
-        Assert.Contains("discarded 4 uncommitted change(s): README.md, b.txt, c.txt and 1 more", outcome.Outcome.Details ?? []);
+        Assert.Contains(
+            outcome.Outcome.Details ?? [],
+            line => line.StartsWith("discarded 4 uncommitted change(s): README.md, b.txt, c.txt, d", StringComparison.Ordinal) && !line.Contains(" more", StringComparison.Ordinal));
 
         var worktrees = await harness.GitClient.ListWorktreesAsync(temp.Path, cancellationToken);
         Assert.DoesNotContain(worktrees, worktree => PathAssert.AreSame(path, worktree.Path));

@@ -163,6 +163,73 @@ public static class Waits
     }
 
     /// <summary>
+    /// Waits until the watch's clock says it is past <paramref name="moment"/>: the clock read again after every pause, so a
+    /// pause a timer ends early is waited again for what is left, and a clock that steps back meanwhile is waited out as
+    /// well - the clock decides, never the pause. Told each time <see cref="SaidEvery"/> has passed since the wait last said
+    /// so, never as it begins: what a wait for a moment begins with is the caller's to say, why it waits and how far ahead
+    /// the moment is.
+    /// </summary>
+    /// <param name="moment">What the clock is to pass.</param>
+    /// <param name="watch">What the wait is told as, the user's bound, and the clock it is measured on.</param>
+    /// <param name="cancellationToken">Ends the wait.</param>
+    /// <returns>
+    /// <see cref="WaitEndKind.Done"/> once the clock is past the moment, at once where it already was;
+    /// <see cref="WaitEndKind.Bound"/> at the user's bound; <see cref="WaitEndKind.Cancelled"/> on the caller's token. Each
+    /// with how long the wait lasted, and the value true where it was done.
+    /// </returns>
+    /// <exception cref="ArgumentNullException"><paramref name="watch"/> is null.</exception>
+    public static async Task<WaitEnd<bool>> UntilAsync(DateTimeOffset moment, WaitWatch watch, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(watch);
+
+        var clock = watch.Clock;
+        var started = clock.GetTimestamp();
+        var saidAt = started;
+
+        try
+        {
+            while (true)
+            {
+                var left = moment - clock.GetUtcNow();
+                var now = clock.GetTimestamp();
+                var waited = clock.GetElapsedTime(started, now);
+
+                if (left < TimeSpan.Zero)
+                {
+                    return new WaitEnd<bool>(WaitEndKind.Done, true, waited);
+                }
+
+                if (watch.Bound is { } bound && waited >= bound)
+                {
+                    return new WaitEnd<bool>(WaitEndKind.Bound, false, waited);
+                }
+
+                var sinceSaid = clock.GetElapsedTime(saidAt, now);
+
+                if (sinceSaid >= SaidEvery)
+                {
+                    watch.Tell(new WaitTold(watch.Subject, waited, null, null));
+                    (saidAt, sinceSaid) = (now, TimeSpan.Zero);
+                }
+
+                // A tick past what is left: the wait ends past the moment, never at it.
+                var pause = Shorter(left + TimeSpan.FromTicks(1), SaidEvery - sinceSaid);
+
+                if (watch.Bound is { } rest)
+                {
+                    pause = Shorter(pause, rest - waited);
+                }
+
+                await Task.Delay(pause, clock, cancellationToken).ConfigureAwait(false);
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            return new WaitEnd<bool>(WaitEndKind.Cancelled, false, clock.GetElapsedTime(started));
+        }
+    }
+
+    /// <summary>
     /// Waits while something is held by a holder that lives: asks <paramref name="holder"/> who holds it, and looks again
     /// every <see cref="LooksAgainEvery"/> for as long as the holder it names lives by <paramref name="identity"/>.
     /// </summary>

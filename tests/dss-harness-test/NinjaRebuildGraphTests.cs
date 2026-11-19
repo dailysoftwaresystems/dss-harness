@@ -58,8 +58,8 @@ public sealed class NinjaRebuildGraphTests
         var cancellationToken = TestContext.Current.CancellationToken;
 
         var failure = await Assert.ThrowsAsync<HarnessException>(
-            () => NinjaRebuildGraph.ReadRecordsAsync(new Answering("ninja: no work to do.\n"), "build", ProgramDirectories.None, null, null, cancellationToken));
-        var records = await NinjaRebuildGraph.ReadRecordsAsync(new Answering("a.o: #deps 1, deps mtime 1 (VALID)\r\n    a.cpp\r\n"), "build", ProgramDirectories.None, null, null, cancellationToken);
+            () => NinjaRebuildGraph.ReadRecordsAsync(new Answering("ninja: no work to do.\n"), "build", ProgramDirectories.None, null, null, null, TimeProvider.System, cancellationToken));
+        var records = await NinjaRebuildGraph.ReadRecordsAsync(new Answering("a.o: #deps 1, deps mtime 1 (VALID)\r\n    a.cpp\r\n"), "build", ProgramDirectories.None, null, null, null, TimeProvider.System, cancellationToken);
 
         Assert.Equal(HarnessExit.CommandFailed, failure.ExitCode);
         Assert.Contains("'ninja -t deps' listed no objects for 'build'", failure.Message, StringComparison.Ordinal);
@@ -225,6 +225,53 @@ public sealed class NinjaRebuildGraphTests
 
         return new NinjaRebuildGraph(build, NinjaManifest.Read(fileSystem, build), records, fileSystem, paths ?? PathCase.In(fileSystem, build));
     }
+
+    /// <summary>
+    /// Ninja's deep inputs are read on explicit stacks and memos, never a recursion a level: a manifest of subninja files
+    /// nested twenty thousand deep is read to its deepest, whose build line finds a rule its top file declared; and a chain
+    /// of two thousand generated inputs, each built from the one before, is followed back to the source it starts from -
+    /// on a stack of a megabyte, which a recursion once a level would pass long before. Red with the recursive reading
+    /// put back.
+    /// </summary>
+    [Fact]
+    public async Task NinjasDeepInputs_AreReadAndFollowed_OnASmallStack()
+    {
+        Assert.Equal(new ChildRunAnswer(0, "gen,True,2001", ""), await ChildRun.MethodAsync(typeof(NinjaRebuildGraphTests), nameof(DeepInputs), TestContext.Current.CancellationToken));
+    }
+
+    /// <summary>
+    /// The child of <see cref="NinjasDeepInputs_AreReadAndFollowed_OnASmallStack"/>: the deepest build line's rule, whether
+    /// the chain's last output depends on its source, and how many build lines its closure holds.
+    /// </summary>
+    internal static string DeepInputs() => SmallStack.Run(() =>
+    {
+        const int Nested = 20_000;
+        const int Chained = 2_000;
+        using var temp = new TempDirectory();
+        var top = new System.Text.StringBuilder("rule gen\n  command = gen $in $out\n\nbuild g1: gen src.txt\n");
+
+        for (var index = 2; index <= Chained; index++)
+        {
+            top.Append(System.Globalization.CultureInfo.InvariantCulture, $"build g{index}: gen g{index - 1}\n");
+        }
+
+        top.Append(System.Globalization.CultureInfo.InvariantCulture, $"build final.o: gen g{Chained}\nsubninja n1.ninja\n");
+        File.WriteAllText(Path.Combine(temp.Path, NinjaDependencyCheck.ManifestFileName), top.ToString());
+
+        for (var index = 1; index < Nested; index++)
+        {
+            File.WriteAllText(Path.Combine(temp.Path, $"n{index}.ninja"), $"subninja n{index + 1}.ninja\n");
+        }
+
+        File.WriteAllText(Path.Combine(temp.Path, $"n{Nested}.ninja"), "build deep.o: gen deep.c\n");
+
+        var fileSystem = new PhysicalFileSystem(FilePermissionsFactory.Create());
+        var manifest = NinjaManifest.Read(fileSystem, temp.Path);
+        var graph = new NinjaRebuildGraph(temp.Path, manifest, new Dictionary<string, DepsRecord>(), fileSystem, PathCase.In(fileSystem, temp.Path));
+        var final = manifest.EdgeFor("final.o")!;
+
+        return string.Join(',', manifest.EdgeFor("deep.o")?.Rule, graph.DependsOn(final, "src.txt"), manifest.Closure(["final.o"]).Count);
+    });
 
     private static string Slashed(string path) => path.Replace('\\', '/');
 

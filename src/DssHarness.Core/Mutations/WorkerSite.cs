@@ -1,4 +1,6 @@
+using System.Globalization;
 using DssHarness.Core.Build;
+using DssHarness.Core.Execution;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Waiting;
 
@@ -22,11 +24,12 @@ internal interface IWorkerSite
 
     /// <summary>
     /// When a file of the worker written now must be dated, so the build that follows sees it changed: past the newest
-    /// file the worker's last build left in <paramref name="buildDirectory"/>, and past now - or past now alone, where
-    /// that file is dated further ahead of the clock than a build waits for it: the clock went back from it, and the
-    /// build's own rule then starts from clean.
+    /// file the worker's last build left in <paramref name="buildDirectory"/>, and past now, by the granularity the file
+    /// system there dates files at - so a file written just after another is never dated with it.
     /// </summary>
     /// <param name="buildDirectory">The worker's build directory.</param>
+    /// <exception cref="IOException">The granularity could not be measured: no time could be set on a file there.</exception>
+    /// <exception cref="UnauthorizedAccessException">This process may not write there.</exception>
     DateTime Stamp(string buildDirectory);
 
     /// <summary>Writes <paramref name="contents"/> to <paramref name="path"/>, dated <paramref name="stamp"/>.</summary>
@@ -41,38 +44,47 @@ internal interface IWorkerSite
 
     /// <summary>
     /// Waits until the clock is past <paramref name="stamp"/>, so nothing a build writes after it is dated before the file
-    /// dated there.
+    /// dated there: for as long as that takes - a clock behind the files a build left, as a WSL clock minutes ahead of
+    /// this machine's leaves them, is waited out - told as it begins and every <see cref="Waits.SaidEvery"/> while it lasts.
     /// </summary>
     /// <param name="stamp">When the file was dated.</param>
+    /// <param name="told">Told where the wait stands.</param>
     /// <param name="cancellationToken">Stops the wait.</param>
-    Task UntilPastAsync(DateTime stamp, CancellationToken cancellationToken);
+    Task UntilPastAsync(DateTime stamp, Action<WaitTold> told, CancellationToken cancellationToken);
 }
 
 /// <inheritdoc cref="IWorkerSite"/>
 /// <remarks>
 /// <para>
-/// A site is dated two seconds past the later of now and the newest file the worker's last build recorded leaving, and
-/// the build waits until the clock is past that: two seconds, since a filesystem that dates coarsely - FAT to two seconds -
-/// dates a file written just after another as written with it. Dated by the clock alone, a site written on a machine whose
-/// clock stepped back since its last build would be older than the objects built from it, and the build would not see it
-/// changed, which is a mutation measured on a binary that never held it.
+/// A site is dated past the later of now and the newest file the worker's last build recorded leaving, by the granularity
+/// the file system dates files at - measured there, once for each build directory, by setting a file's time and reading
+/// back what was kept: a tick on NTFS, a second or two where a file system dates coarsely, as FAT does - and the build
+/// waits until the clock is past that. Dated by the clock alone, a site written on a machine whose clock stepped back
+/// since its last build would be older than the objects built from it, and the build would not see it changed, which is a
+/// mutation measured on a binary that never held it.
 /// </para>
 /// <para>
-/// A newest file dated more than <see cref="LongestWait"/> ahead of the clock is one the clock went back from: waiting it
-/// out could take hours, so the site is dated by the clock, and the build's own rule answers what that leaves - an input
-/// changed and dated no later than what the last build left starts the build from clean, saying so.
+/// A newest file dated ahead of the clock - one a clock that stepped back left, or a WSL distribution's clock ahead of
+/// this machine's - is waited out however far ahead it is, told: the clock is past the stamp when it says so, never when
+/// a number of the code's own says it has waited long enough.
 /// </para>
 /// </remarks>
 internal sealed class WorkerSite(IFileSystem fileSystem, TimeProvider clock) : IWorkerSite
 {
-    /// <summary>How far past the later of the clock and the last build's newest file a site is dated.</summary>
-    public static readonly TimeSpan Margin = TimeSpan.FromSeconds(2);
+    /// <summary>
+    /// A moment the granularity is measured at, a whole even second - which every file system that dates files keeps -
+    /// long past and long before any limit a file system's dates have.
+    /// </summary>
+    private static readonly DateTime Measured = new(2020, 1, 1, 0, 0, 0, DateTimeKind.Utc);
 
-    /// <summary>The longest a build waits for the clock to pass the newest file the worker's last build left.</summary>
-    public static readonly TimeSpan LongestWait = TimeSpan.FromMinutes(1);
+    /// <summary>The file the granularity is measured on, in a build directory, made and removed at once.</summary>
+    private const string ProbeName = ".dssharness-date-probe";
 
     private readonly IFileSystem _fileSystem = fileSystem;
     private readonly TimeProvider _clock = clock;
+
+    /// <summary>The granularity measured in each build directory, by its path: measured once there.</summary>
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, TimeSpan> _granularities = new(StringComparer.Ordinal);
 
     /// <inheritdoc/>
     public byte[]? Read(string worker, string path)
@@ -95,10 +107,46 @@ internal sealed class WorkerSite(IFileSystem fileSystem, TimeProvider clock) : I
     {
         var now = _clock.GetUtcNow().UtcDateTime;
         var newest = BuildRecord.NewestIn(_fileSystem, buildDirectory);
-        var from = newest is { } dated && dated > now && dated - now <= LongestWait ? dated : now;
+        var from = newest is { } dated && dated > now ? dated : now;
 
-        return from + Margin;
+        return from + Granularity(buildDirectory);
     }
+
+    /// <summary>
+    /// The granularity the file system holding <paramref name="buildDirectory"/> dates files at: a file's time set to just
+    /// past a whole second, and to just short of the next but one, each read back - the most either moved, and a tick more,
+    /// is a step no two times a file is given there fall within. Measured once for each directory, on a file made there and
+    /// removed at once.
+    /// </summary>
+    internal TimeSpan Granularity(string buildDirectory)
+        => _granularities.GetOrAdd(buildDirectory, directory =>
+        {
+            var probe = Path.Combine(directory, ProbeName);
+
+            _fileSystem.CreateDirectory(directory);
+            _fileSystem.WriteAllTextAtomic(probe, string.Empty);
+
+            try
+            {
+                var moved = TimeSpan.Zero;
+
+                foreach (var asked in new[] { Measured.AddTicks(1), Measured.AddSeconds(2).AddTicks(-1) })
+                {
+                    _fileSystem.SetLastWriteTimeUtc(probe, asked);
+
+                    var kept = _fileSystem.LastWriteTimeUtc(probe);
+                    var by = (kept - asked).Duration();
+
+                    moved = by > moved ? by : moved;
+                }
+
+                return moved + TimeSpan.FromTicks(1);
+            }
+            finally
+            {
+                _fileSystem.DeleteFile(probe);
+            }
+        });
 
     /// <inheritdoc/>
     public async Task WriteAsync(string worker, string path, byte[] contents, DateTime stamp, CancellationToken cancellationToken)
@@ -108,18 +156,27 @@ internal sealed class WorkerSite(IFileSystem fileSystem, TimeProvider clock) : I
     }
 
     /// <inheritdoc/>
-    public async Task UntilPastAsync(DateTime stamp, CancellationToken cancellationToken)
+    public async Task UntilPastAsync(DateTime stamp, Action<WaitTold> told, CancellationToken cancellationToken)
     {
-        var started = _clock.GetTimestamp();
+        ArgumentNullException.ThrowIfNull(told);
 
-        // Read again after each wait: the clock is past the stamp when it says so, never when the wait it was given ran
-        // out. Never longer than a stamp is ever ahead of the clock: one that stepped back while it waited is the build's
-        // to answer, whose phases say they spanned a step, and whose next build starts from clean for it.
-        for (var left = stamp - _clock.GetUtcNow().UtcDateTime;
-             left >= TimeSpan.Zero && _clock.GetElapsedTime(started) <= LongestWait + Margin;
-             left = stamp - _clock.GetUtcNow().UtcDateTime)
+        var subject = $"the clock to pass {stamp.ToString("yyyy-MM-dd HH:mm:ss.fffffff", CultureInfo.InvariantCulture)}Z, which its site was dated by";
+        var left = stamp - _clock.GetUtcNow().UtcDateTime;
+
+        // Said as it begins where it is a wait a person sees - as long as a wait on a holder takes to look again, or
+        // longer - which is a clock behind the files a build left: one the file system's own granularity alone sets is
+        // over before it could be read.
+        if (left >= Waits.LooksAgainEvery)
         {
-            await Task.Delay(Waits.Shorter(LongestWait, left) + TimeSpan.FromMilliseconds(10), _clock, cancellationToken).ConfigureAwait(false);
+            told(new WaitTold(subject, TimeSpan.Zero, null, $"this machine's clock is {LedgerReport.FormatDuration(left)} behind it"));
+        }
+
+        var ended = await Waits.UntilAsync(new DateTimeOffset(DateTime.SpecifyKind(stamp, DateTimeKind.Utc)), new WaitWatch(subject, told, Bound: null, _clock), cancellationToken)
+            .ConfigureAwait(false);
+
+        if (ended.Kind != WaitEndKind.Done)
+        {
+            throw new OperationCanceledException(cancellationToken);
         }
     }
 }

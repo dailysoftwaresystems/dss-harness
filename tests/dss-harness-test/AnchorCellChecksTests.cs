@@ -89,16 +89,16 @@ public sealed class AnchorCellChecksTests
     }
 
     /// <summary>
-    /// A word diff names what a cell loses and what replaces it, with a few unchanged words either side of each change and
-    /// the rest left out, at its start, between two changes, and at its end.
+    /// A word diff names what a cell loses and what replaces it, every unchanged word quoted as it stands, at its start,
+    /// between two changes, and at its end: what a reader is asked to accept losing is never shown in part.
     /// </summary>
     [Theory]
     [InlineData(
         "one two three four five six seven eight nine ten",
         "one two three four five SIX seven eight nine ten",
-        "… two three four five [-six-] {+SIX+} seven eight nine ten")]
-    [InlineData("a b c d e f g h", "a b c d e f g X", "… d e f g [-h-] {+X+}")]
-    [InlineData("a b c d e f g h i j k l m", "X b c d e f g h i j k l Y", "[-a-] {+X+} b c d e … i j k l [-m-] {+Y+}")]
+        "one two three four five [-six-] {+SIX+} seven eight nine ten")]
+    [InlineData("a b c d e f g h", "a b c d e f g X", "a b c d e f g [-h-] {+X+}")]
+    [InlineData("a b c d e f g h i j k l m", "X b c d e f g h i j k l Y", "[-a-] {+X+} b c d e f g h i j k l [-m-] {+Y+}")]
     [InlineData(
         "see tests/hir/ test_x.cpp for the case",
         "see tests/hir/test_x.cpp for the case",
@@ -110,17 +110,27 @@ public sealed class AnchorCellChecksTests
         Assert.Equal(diff, AnchorCellComparison.WordDiff(stored, written));
     }
 
-    /// <summary>Two texts too long to compare word by word are shown the one removed and the other written, and said to be.</summary>
+    /// <summary>
+    /// A cell of two hundred thousand words is compared exactly, word by word, never shown as the one removed and the
+    /// other written: one word changed in its middle is the one change said, every other word quoted as it stands, and a
+    /// cell held whole inside a longer one is still kept. Red with the four million comparisons put back.
+    /// </summary>
     [Fact]
-    public void WordDiff_OfTextsTooLongToCompare_SaysSo()
+    public void ATwoHundredThousandWordCell_IsComparedExactly()
     {
-        var stored = string.Join(' ', Enumerable.Range(0, 2001).Select(index => $"w{index}"));
-        var written = string.Join(' ', Enumerable.Range(0, 2001).Select(index => $"v{index}"));
+        var words = Enumerable.Range(0, 200_000).Select(index => $"w{index}").ToArray();
+        var changed = (string[])words.Clone();
+        changed[100_000] = "CHANGED";
+        var stored = string.Join(' ', words);
+        var written = string.Join(' ', changed);
 
         var diff = AnchorCellComparison.WordDiff(stored, written);
 
-        Assert.StartsWith("[-w0 w1 ", diff);
-        Assert.EndsWith("v2000+} (too long to compare word by word)", diff);
+        Assert.Equal(
+            $"{string.Join(' ', words[..100_000])} [-w100000-] {{+CHANGED+}} {string.Join(' ', words[100_001..])}",
+            diff);
+        Assert.Equal(AnchorCellFate.Lost, AnchorCellComparison.Fate(stored, written));
+        Assert.Equal(AnchorCellFate.Kept, AnchorCellComparison.Fate(stored, $"{stored} and the test that proves it"));
     }
 
     /// <summary>

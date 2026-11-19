@@ -49,7 +49,10 @@ public sealed record CompilerVersionAnswer(string? Version, string? Replaced, st
 /// which are defined: clang defines __GNUC__ as well, as 4.2.1.
 /// </para>
 /// </remarks>
-public sealed class CompilerVersionProbe(IProcessRunner processRunner, IFileSystem fileSystem)
+/// <param name="processRunner">Runs the compiler.</param>
+/// <param name="fileSystem">Holds the line it preprocesses.</param>
+/// <param name="clock">Times the wait for the compiler's answer; the system's where none is given.</param>
+public sealed class CompilerVersionProbe(IProcessRunner processRunner, IFileSystem fileSystem, TimeProvider? clock = null)
 {
     /// <summary>The word the probed line starts with, which no compiler defines.</summary>
     private const string Marker = "dssharness_compiler_version";
@@ -65,14 +68,9 @@ public sealed class CompilerVersionProbe(IProcessRunner processRunner, IFileSyst
         "__clang_major__", "__clang_minor__", "__clang_patchlevel__", "__apple_build_version__",
     ];
 
-    /// <summary>
-    /// How long a compiler is given to preprocess one line: far past any that is working, and short of
-    /// holding a build up for long on one that is not.
-    /// </summary>
-    private static readonly TimeSpan Budget = TimeSpan.FromMinutes(2);
-
     private readonly IProcessRunner _processRunner = processRunner;
     private readonly IFileSystem _fileSystem = fileSystem;
+    private readonly TimeProvider _clock = clock ?? TimeProvider.System;
 
     /// <summary>
     /// What <paramref name="compiler"/> says its version is now, or <see langword="null"/> where CMake's id
@@ -82,12 +80,17 @@ public sealed class CompilerVersionProbe(IProcessRunner processRunner, IFileSyst
     /// <param name="scratchDirectory">Where the line to preprocess is written: never the build directory, whose files date its changes.</param>
     /// <param name="environment">The environment the build's phases start in, a developer environment's among it.</param>
     /// <param name="programDirectories">The directories the build's phases have added to their PATH.</param>
+    /// <param name="told">
+    /// Told where the wait for the compiler stands, every <see cref="Waiting.Waits.SaidEvery"/> it lasts: the compiler is
+    /// waited for to its end, however long it takes, never cut off at a budget. Nothing is told where null.
+    /// </param>
     /// <param name="cancellationToken">Stops the compiler.</param>
     public async Task<CompilerVersionAnswer?> AskAsync(
         IdentifiedCompiler compiler,
         string scratchDirectory,
         IReadOnlyDictionary<string, string?> environment,
         ProgramDirectories programDirectories,
+        Action<Waiting.WaitTold>? told = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(compiler);
@@ -127,7 +130,8 @@ public sealed class CompilerVersionProbe(IProcessRunner processRunner, IFileSyst
 
         try
         {
-            result = await _processRunner.RunAsync(
+            result = await BuildProbes.RunAsync(
+                    _processRunner,
                     new ProcessRequest
                     {
                         FileName = compiler.Program,
@@ -135,19 +139,16 @@ public sealed class CompilerVersionProbe(IProcessRunner processRunner, IFileSyst
                         WorkingDirectory = scratchDirectory,
                         Environment = environment,
                         ProgramDirectories = programDirectories,
-                        Timeout = Budget,
                     },
+                    $"the {compiler.Language} compiler '{compiler.Program}' to preprocess one line",
+                    told,
+                    _clock,
                     cancellationToken)
                 .ConfigureAwait(false);
         }
         catch (ProgramStartException ex)
         {
             return CompilerVersionAnswer.NotAsked(ex.Message.TrimEnd('.'));
-        }
-
-        if (result.TimedOut)
-        {
-            return CompilerVersionAnswer.NotAsked($"it had not preprocessed one line after {Budget.TotalMinutes} minutes");
         }
 
         if (result.ExitCode != 0)

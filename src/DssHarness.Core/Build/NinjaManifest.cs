@@ -1,5 +1,6 @@
 using System.Text;
 using DssHarness.Core.FileSystem;
+using DssHarness.Core.Walks;
 
 namespace DssHarness.Core.Build;
 
@@ -323,7 +324,8 @@ public sealed class NinjaManifest
 
                 try
                 {
-                    return Evaluate(unevaluated, Variable);
+                    // A binding naming another is evaluated through it: given the stack the chain's depth needs, however long.
+                    return DeepCalls.Run(() => Evaluate(unevaluated, Variable));
                 }
                 finally
                 {
@@ -358,103 +360,154 @@ public sealed class NinjaManifest
             ? "\"" + path.Replace("\"", "\\\"", StringComparison.Ordinal) + "\""
             : path;
 
+    /// <summary>
+    /// Reads the manifest file <paramref name="name"/> and every file it includes or reads as a subninja, each where it is
+    /// named: a file's lines are read in order, an <c>include</c> read whole in its scope before the line after it, and a
+    /// <c>subninja</c> in a scope of its own below it.
+    /// </summary>
+    /// <remarks>
+    /// Read on a stack of its own, a file's place in its lines kept while what it names is read, never a recursion: a chain
+    /// of includes however long is read to its end. Each file is read once (<paramref name="read"/>), so one named again -
+    /// a chain that names a file already read - adds nothing more.
+    /// </remarks>
     private void ReadFile(IFileSystem fileSystem, string buildDirectory, string name, Scope scope, HashSet<string> read)
     {
-        var path = Path.GetFullPath(Path.Combine(buildDirectory, name));
+        var readings = new Stack<Reading>();
 
-        if (!read.Add(path))
-        {
-            return;
-        }
-
-        if (!fileSystem.FileExists(path))
-        {
-            _passedOver.Add((name, "is not there"));
-            return;
-        }
-
-        // What the indented lines that follow a statement bind: its rule's, or its build's.
-        Rule? rule = null;
-        Dictionary<string, string>? building = null;
-
-        string text;
+        Open(name, scope);
 
         try
         {
-            text = fileSystem.ReadAllText(path);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            _passedOver.Add((name, $"could not be read: {ex.Message}"));
-            return;
-        }
-
-        foreach (var line in LogicalLines(text))
-        {
-            if (line.TrimStart().Length == 0 || line.TrimStart().StartsWith('#'))
+            while (readings.TryPeek(out var reading))
             {
-                continue;
-            }
+                if (!reading.Lines.MoveNext())
+                {
+                    readings.Pop().Lines.Dispose();
+                    continue;
+                }
 
-            if (line[0] is ' ' or '\t')
-            {
-                if (Binding(line) is not { } binding)
+                var line = reading.Lines.Current;
+
+                if (line.TrimStart().Length == 0 || line.TrimStart().StartsWith('#'))
                 {
                     continue;
                 }
 
-                // A rule's bindings are evaluated for each build line; a build line's, as it is read.
-                if (rule is not null)
+                if (line[0] is ' ' or '\t')
                 {
-                    rule.Bindings[binding.Name] = binding.Value;
-                }
-                else if (building is not null)
-                {
-                    building[binding.Name] = scope.Evaluate(binding.Value);
-                }
-
-                continue;
-            }
-
-            rule = null;
-            building = null;
-
-            var (keyword, remainder) = Statement(line);
-
-            switch (keyword)
-            {
-                case "rule":
-                    rule = new Rule();
-                    scope.Rules[remainder.Trim()] = rule;
-                    break;
-
-                case "build":
-                    // Its rule is the one declared by now, whatever a subninja declares later.
-                    var statement = BuildLine(remainder, scope.Variable);
-                    building = new Dictionary<string, string>(StringComparer.Ordinal);
-                    _read.Add((statement, scope.Find(statement.Rule), building, scope));
-                    break;
-
-                case "include":
-                    ReadFile(fileSystem, buildDirectory, scope.Evaluate(remainder.Trim()), scope, read);
-                    break;
-
-                case "subninja":
-                    ReadFile(fileSystem, buildDirectory, scope.Evaluate(remainder.Trim()), new Scope(scope), read);
-                    break;
-
-                case "default" or "pool":
-                    break;
-
-                default:
-                    if (Binding(line) is { } variable)
+                    if (Binding(line) is not { } binding)
                     {
-                        scope.Variables[variable.Name] = scope.Evaluate(variable.Value);
+                        continue;
                     }
 
-                    break;
+                    // A rule's bindings are evaluated for each build line; a build line's, as it is read.
+                    if (reading.Rule is not null)
+                    {
+                        reading.Rule.Bindings[binding.Name] = binding.Value;
+                    }
+                    else if (reading.Building is not null)
+                    {
+                        reading.Building[binding.Name] = reading.Scope.Evaluate(binding.Value);
+                    }
+
+                    continue;
+                }
+
+                reading.Rule = null;
+                reading.Building = null;
+
+                var (keyword, remainder) = Statement(line);
+
+                switch (keyword)
+                {
+                    case "rule":
+                        reading.Rule = new Rule();
+                        reading.Scope.Rules[remainder.Trim()] = reading.Rule;
+                        break;
+
+                    case "build":
+                        // Its rule is the one declared by now, whatever a subninja declares later.
+                        var statement = BuildLine(remainder, reading.Scope.Variable);
+                        reading.Building = new Dictionary<string, string>(StringComparer.Ordinal);
+                        _read.Add((statement, reading.Scope.Find(statement.Rule), reading.Building, reading.Scope));
+                        break;
+
+                    case "include":
+                        Open(reading.Scope.Evaluate(remainder.Trim()), reading.Scope);
+                        break;
+
+                    case "subninja":
+                        Open(reading.Scope.Evaluate(remainder.Trim()), new Scope(reading.Scope));
+                        break;
+
+                    case "default" or "pool":
+                        break;
+
+                    default:
+                        if (Binding(line) is { } variable)
+                        {
+                            reading.Scope.Variables[variable.Name] = reading.Scope.Evaluate(variable.Value);
+                        }
+
+                        break;
+                }
             }
         }
+        finally
+        {
+            while (readings.TryPop(out var unfinished))
+            {
+                unfinished.Lines.Dispose();
+            }
+        }
+
+        // Pushes the file's reading, its lines read in order from the next turn, where it is there, readable and not read.
+        void Open(string file, Scope within)
+        {
+            var path = Path.GetFullPath(Path.Combine(buildDirectory, file));
+
+            if (!read.Add(path))
+            {
+                return;
+            }
+
+            if (!fileSystem.FileExists(path))
+            {
+                _passedOver.Add((file, "is not there"));
+                return;
+            }
+
+            string text;
+
+            try
+            {
+                text = fileSystem.ReadAllText(path);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                _passedOver.Add((file, $"could not be read: {ex.Message}"));
+                return;
+            }
+
+            readings.Push(new Reading(LogicalLines(text).GetEnumerator(), within));
+        }
+    }
+
+    /// <summary>
+    /// A manifest file being read: what is left of its lines, the scope it is read in, and what the indented lines that
+    /// follow a statement bind - its rule's, or its build's.
+    /// </summary>
+    /// <param name="lines">Its logical lines, read so far.</param>
+    /// <param name="scope">The scope it is read in.</param>
+    private sealed class Reading(IEnumerator<string> lines, Scope scope)
+    {
+        public IEnumerator<string> Lines { get; } = lines;
+
+        public Scope Scope { get; } = scope;
+
+        public Rule? Rule { get; set; }
+
+        public Dictionary<string, string>? Building { get; set; }
     }
 
     /// <summary>The file's lines, each one ending in an unescaped <c>$</c> joined to the next.</summary>
@@ -659,15 +712,42 @@ public sealed class NinjaManifest
     /// <summary>The rules and variables a file sees: its own, then those of the file it is a subninja of.</summary>
     private sealed class Scope(Scope? parent)
     {
+        /// <summary>The scope of the file this one is a subninja of; null for the manifest's own.</summary>
+        private readonly Scope? _parent = parent;
+
         public Dictionary<string, Rule> Rules { get; } = new(StringComparer.Ordinal);
 
         public Dictionary<string, string> Variables { get; } = new(StringComparer.Ordinal);
 
-        public Rule? Find(string name) => Rules.TryGetValue(name, out var rule) ? rule : parent?.Find(name);
+        /// <summary>The rule <paramref name="name"/> names here, or where this file is read from; null where none is declared.</summary>
+        /// <remarks>Looked up the scopes in a loop, never a recursion, so a subninja nested however deep finds its rules.</remarks>
+        public Rule? Find(string name)
+        {
+            for (var scope = this; scope is not null; scope = scope._parent)
+            {
+                if (scope.Rules.TryGetValue(name, out var rule))
+                {
+                    return rule;
+                }
+            }
+
+            return null;
+        }
 
         /// <summary>What <paramref name="name"/> is bound to here, or where this file is read from; empty where nothing binds it.</summary>
+        /// <remarks>Looked up the scopes in a loop, never a recursion, so a subninja nested however deep finds its variables.</remarks>
         public string Variable(string name)
-            => Variables.TryGetValue(name, out var value) ? value : parent?.Variable(name) ?? string.Empty;
+        {
+            for (var scope = this; scope is not null; scope = scope._parent)
+            {
+                if (scope.Variables.TryGetValue(name, out var value))
+                {
+                    return value;
+                }
+            }
+
+            return string.Empty;
+        }
 
         /// <summary><paramref name="text"/> evaluated in this scope.</summary>
         public string Evaluate(string text) => NinjaManifest.Evaluate(text, Variable);

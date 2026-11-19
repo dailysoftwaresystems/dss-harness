@@ -22,6 +22,7 @@ using DssHarness.Core.Results;
 using DssHarness.Core.Runners;
 using DssHarness.Core.Runs;
 using DssHarness.Core.Sync;
+using DssHarness.Core.Worktrees;
 
 namespace DssHarness.Tests;
 
@@ -33,8 +34,13 @@ public sealed partial class HelpTests
         var result = HelpText.Of("worktrees");
 
         Assert.Contains(
-            WorktreeSettings.DefaultMaxNameLength.ToString(CultureInfo.InvariantCulture),
-            result.StandardOutput,
+            $"Use --random to have one of {WorktreeName.RandomLength.ToString(CultureInfo.InvariantCulture)} characters generated",
+            Prose.Words(result.StandardOutput),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Their length is the path budget's to decide, measured against the real path of each tree, unless "
+            + "worktrees.maxNameLength sets a longest name of the repository's own.",
+            Prose.Words(result.StandardOutput),
             StringComparison.Ordinal);
         Assert.Contains(
             HostPlatform.WindowsMaxPath.ToString(CultureInfo.InvariantCulture),

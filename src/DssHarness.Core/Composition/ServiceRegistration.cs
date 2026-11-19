@@ -149,7 +149,8 @@ public static class ServiceRegistration
         services.AddSingleton<IAnchorRegistryLocator, AnchorRegistryLocator>();
         services.AddSingleton<IAnchorRegistryLock>(provider => new NamedMutexAnchorRegistryLock(
             provider.GetRequiredService<IHostPlatform>(),
-            NamedMutexAnchorRegistryLock.DefaultTimeout));
+            provider.GetRequiredService<IHarnessOutput>(),
+            provider.GetRequiredService<TimeProvider>()));
         services.AddSingleton<IAnchorRegistryService, AnchorRegistryService>();
         services.AddSingleton<IAnchorBalanceService, AnchorBalanceService>();
     services.AddSingleton<IAnchorArmsService, AnchorArmsService>();

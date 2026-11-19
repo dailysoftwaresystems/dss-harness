@@ -86,15 +86,14 @@ public sealed class ArmTestRunnerTests
     }
 
     /// <summary>
-    /// A report that is there and cannot be read - another process still holds it as the run ends - is read again, a
-    /// few times, <see cref="ArmTestRunner.ReadRetry"/> apart: one let go meanwhile is read as it is, and one held
-    /// throughout is said as written and unread, with why, and never as no report, which would be a finding about the
-    /// binary.
+    /// A report that is there and cannot be read is read again: one another program holds as the run ends,
+    /// <see cref="ArmTestRunner.ReadRetry"/> apart for as long as the hold lasts, and read as it is once let go; one refused
+    /// otherwise - a right this user lacks - once more, and said, where that read meets the same refusal on the file as it
+    /// stands, as written and unread, with why, never as no report, which would be a finding about the binary.
     /// </summary>
     [Theory]
     [InlineData(2, false)]
     [InlineData(2, true)]
-    [InlineData(int.MaxValue, false)]
     [InlineData(int.MaxValue, true)]
     public async Task AReportThatCannotBeReadFromItsFile_IsReadAgain_AndSaidAsUnread_NeverAsNoReport(int heldFor, bool denied)
     {
@@ -108,21 +107,47 @@ public sealed class ArmTestRunnerTests
         Assert.True(result.Run.Report.Written);
         Assert.Null(result.Run.Report.Problem);
 
-        // Waited between two reads, each time as long: what holds a report lets go within moments, never at once.
-        Assert.Equal(Enumerable.Repeat(ArmTestRunner.ReadRetry, Math.Min(heldFor, ArmTestRunner.ReadAttempts - 1)), clock.Waits);
-
-        if (heldFor == int.MaxValue)
+        if (denied)
         {
+            // The second read met the first's refusal on a file that did not change, which a third would only meet again.
+            Assert.Equal([ArmTestRunner.ReadRetry], clock.Waits);
             Assert.Null(result.Run.Report.Read);
             Assert.Equal("'report.xml' is held by another process", result.Run.Report.Unread);
-            Assert.Equal(ArmTestRunner.ReadAttempts, held.Reads);
+            Assert.Equal(2, held.Reads);
         }
         else
         {
+            // Waited between two reads, each time as long: what holds a report lets go within moments, never at once.
+            Assert.Equal(Enumerable.Repeat(ArmTestRunner.ReadRetry, heldFor), clock.Waits);
             Assert.Equal(["Fixture.Charge"], result.Run.Report.Read?.Reds);
             Assert.Null(result.Run.Report.Unread);
             Assert.Equal(heldFor + 1, held.Reads);
         }
+    }
+
+    /// <summary>
+    /// A report another program holds is read again for as long as the hold lasts, never a count of tries of the code's
+    /// own: held through a thousand reads, it is read on the thousand and first, and the wait is told by the report's
+    /// name as it begins. Red with the five reads put back.
+    /// </summary>
+    [Fact]
+    public async Task AHeldReportXml_IsRetriedWhileHeld()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var held = new HeldReport(harness.FileSystem, heldFor: 1000, denied: false);
+        var clock = new JumpingClock();
+        var told = new List<string>();
+        var request = Child("write-file", temp.Combine("arms", "charge-bound"), "{report}", Report) with { Told = wait => told.Add(wait.Line()) };
+
+        var result = await RunAsync(request, fileSystem: held, clock: clock);
+
+        Assert.Equal(["Fixture.Charge"], result.Run.Report.Read?.Reds);
+        Assert.Null(result.Run.Report.Unread);
+        Assert.Equal(1001, held.Reads);
+        Assert.Equal(1000, clock.Waits.Count);
+        Assert.All(clock.Waits, wait => Assert.Equal(ArmTestRunner.ReadRetry, wait));
+        Assert.StartsWith($"waits for the report '{Path.Combine(temp.Combine("arms", "charge-bound"), ArmTestRunner.ReportFileName)}' to be read: another program holds it", told[0], StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -343,6 +368,32 @@ public sealed class ArmTestRunnerTests
     /// </summary>
     private sealed class HeldReport(IFileSystem inner, int heldFor, bool denied) : PassThroughFileSystem(inner)
     {
+        private const string Held = "'report.xml' is held by another process";
+
+        /// <summary>
+        /// The code this machine's system gives a refusal of a file another open holds: met once, by opening a file this
+        /// process itself holds sharing nothing, so the double's refusal is the one the harness reads as a hold.
+        /// </summary>
+        private static readonly Lazy<int> HeldResult = new(() =>
+        {
+            using var temp = new TempDirectory();
+            var path = temp.WriteFile("held", "held");
+
+            using (new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+            {
+                try
+                {
+                    using var opened = File.OpenRead(path);
+                }
+                catch (IOException ex) when (FileHolds.HeldElsewhere(ex))
+                {
+                    return ex.HResult;
+                }
+            }
+
+            throw new InvalidOperationException("A file this process holds, sharing nothing, was opened again, or refused as no hold.");
+        });
+
         private int _reads;
 
         /// <summary>How many times the report was read, or tried.</summary>
@@ -360,9 +411,7 @@ public sealed class ArmTestRunnerTests
                 return base.OpenRead(path);
             }
 
-            const string Held = "'report.xml' is held by another process";
-
-            throw denied ? new UnauthorizedAccessException(Held) : new IOException(Held);
+            throw denied ? new UnauthorizedAccessException(Held) : new IOException(Held, HeldResult.Value);
         }
     }
 

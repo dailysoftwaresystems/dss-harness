@@ -1211,13 +1211,25 @@ public sealed class FlowServiceTests
         Assert.Empty(Directory.EnumerateDirectories(Path.Combine(repository.Path, ".orchestrators")));
     }
 
-    /// <summary>A run's name is held to the length the repository's worktrees take, as an orchestrator's is: a usage error, and nothing made.</summary>
+    /// <summary>
+    /// A run's name is held to the length the repository's worktrees take, where worktrees.maxNameLength sets one, as an
+    /// orchestrator's is: a usage error, and nothing made.
+    /// </summary>
     [Fact]
     public async Task ARunsNameLongerThanAWorktreeTakes_IsAUsageError()
     {
-        var (repository, service, _) = await ServiceAsync();
+        const int Longest = 10;
+        var (repository, runner) = await RepositoryAsync(
+            """
+            name: flow
+            steps:
+              - name: one
+                type: orient
+            """,
+            new HarnessConfig { Workflows = [Workflow], Worktrees = new WorktreeSettings { MaxNameLength = Longest } });
         using var disposed = repository;
-        var name = new string('a', new WorktreeSettings().MaxNameLength + 1);
+        var service = Service(repository.Harness, runner);
+        var name = new string('a', Longest + 1);
 
         var outcome = await service.RunAsync(repository.Path, Workflow, run: name, inputs: null, json: false, cancellationToken: Token);
 

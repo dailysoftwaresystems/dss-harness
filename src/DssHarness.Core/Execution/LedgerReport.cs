@@ -998,7 +998,7 @@ public sealed class LedgerReport
         Records = arm.Records is { } records ? show(records) : null,
         arm.Key,
         arm.Held,
-        Pending = arm.Pending is { } pending ? new { pending.Code, Said = show(pending.Said) } : null,
+        Pending = arm.Pending is { } pending ? new { pending.Code, Said = show(pending.Said), pending.Paths } : null,
     };
 
     /// <summary>

@@ -3,6 +3,8 @@ using System.Text.RegularExpressions;
 using DssHarness.Core.Configuration;
 using DssHarness.Core.Execution;
 using DssHarness.Core.FileSystem;
+using DssHarness.Core.Json;
+using DssHarness.Core.Text;
 
 namespace DssHarness.Core.Build;
 
@@ -219,7 +221,7 @@ public static class CompilerFacts
 /// date would tell it apart only on a clock that holds, which no verdict can rest on.
 /// </para>
 /// </remarks>
-public sealed partial class CMakeToolchainReader(IFileSystem fileSystem)
+public sealed class CMakeToolchainReader(IFileSystem fileSystem)
 {
     /// <summary>The query, relative to a build directory.</summary>
     public const string QueryRelativePath = ".cmake/api/v1/query/toolchains-v1";
@@ -231,8 +233,7 @@ public sealed partial class CMakeToolchainReader(IFileSystem fileSystem)
     /// A line of CMake's record of identifying a language's compiler: <c>set(CMAKE_C_COMPILER_ID "MSVC")</c>,
     /// the name and the value CMake wrote between the quotes.
     /// </summary>
-    [GeneratedRegex(@"^\s*set\((?<name>CMAKE_\w+)\s+""(?<value>.*)""\)\s*$", RegexOptions.CultureInvariant)]
-    private static partial Regex RecordedSetting { get; }
+    private static readonly Regex RecordedSetting = LinearRegex.Compile(@"^\s*set\((?<name>CMAKE_\w+)\s+""(?<value>.*)""\)\s*$");
 
     private readonly IFileSystem _fileSystem = fileSystem;
 
@@ -315,7 +316,7 @@ public sealed partial class CMakeToolchainReader(IFileSystem fileSystem)
 
             var indexFile = Path.Combine(replies, index);
 
-            using var indexDocument = JsonDocument.Parse(_fileSystem.ReadAllText(indexFile));
+            using var indexDocument = JsonDepth.ParseDocument(_fileSystem.ReadAllText(indexFile));
 
             // The version that answered, under which CMake keeps its record of each language it identified.
             var version = VersionIn(indexDocument);
@@ -343,7 +344,7 @@ public sealed partial class CMakeToolchainReader(IFileSystem fileSystem)
                 return CompilerReading.None($"CMake's answer about the compilers names '{name}', which is not there");
             }
 
-            using var toolchains = JsonDocument.Parse(_fileSystem.ReadAllText(file));
+            using var toolchains = JsonDepth.ParseDocument(_fileSystem.ReadAllText(file));
 
             if (!toolchains.RootElement.TryGetProperty("toolchains", out var list) || list.ValueKind != JsonValueKind.Array)
             {
@@ -628,7 +629,7 @@ public sealed partial class CMakeToolchainReader(IFileSystem fileSystem)
     /// <summary>The version of CMake that wrote the index at <paramref name="indexFile"/>, or <see langword="null"/> where it names none.</summary>
     private string? VersionThatAnswered(string indexFile)
     {
-        using var index = JsonDocument.Parse(_fileSystem.ReadAllText(indexFile));
+        using var index = JsonDepth.ParseDocument(_fileSystem.ReadAllText(indexFile));
 
         return VersionIn(index);
     }
@@ -662,7 +663,7 @@ public sealed partial class CMakeToolchainReader(IFileSystem fileSystem)
     /// <summary>Why a configure CMake answered with an error index said nothing about the compilers.</summary>
     private string Error(string file)
     {
-        using var document = JsonDocument.Parse(_fileSystem.ReadAllText(file));
+        using var document = JsonDepth.ParseDocument(_fileSystem.ReadAllText(file));
 
         return document.RootElement.TryGetProperty("reply", out var reply)
             && reply.TryGetProperty("toolchains-v1", out var answer)

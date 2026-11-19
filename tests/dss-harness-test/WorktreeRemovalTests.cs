@@ -569,7 +569,7 @@ public sealed class WorktreeRemovalTests
         Assert.Equal(HarnessExit.Refused, outcome.Outcome.ExitCode);
         Assert.Equal(
             $"Worktree 'held' was not deleted, and nothing of it was removed: something holds '{Path.Combine(asked, "a")}', "
-            + $"'{Path.Combine(asked, "b")}', '{Path.Combine(asked, "c")}' and 1 more - a process whose current directory is in the "
+            + $"'{Path.Combine(asked, "b")}', '{Path.Combine(asked, "c")}', '{Path.Combine(asked, "d")}' - a process whose current directory is in the "
             + "worktree, a program with a file of it open, or a program running from it. Windows would not let what is held be "
             + "deleted, so the removal would stop part way, with some of the worktree's files already gone. Close what holds "
             + $"it, then run '{ToolPackage.Command} delete-worktree held' again. Windows said: {HeldReason}",
@@ -951,9 +951,10 @@ public sealed class WorktreeRemovalTests
     }
 
     [Fact]
-    public async Task ARemovalStillRunningAsTheGraceRunsOut_IsStopped_AndSaysWhatIsLeft()
+    public async Task ARemovalStillRunningAsItIsInterrupted_GoesOnToItsEnd()
     {
-        // Left to the command line, the process would end mid-deletion without a word.
+        // Past its point of no return a deletion stopped part way would be a worktree nobody can check again: git is given
+        // no token the interruption cancels, and the deletion ends whole.
         using var temp = new TempDirectory();
         using var interruption = new CancellationTokenSource();
         var harness = await PrepareAsync(temp);
@@ -975,34 +976,22 @@ public sealed class WorktreeRemovalTests
                     return null;
                 }
 
-                // A git that hangs until it is stopped.
-                try
-                {
-                    await Task.Delay(Timeout.InfiniteTimeSpan, token);
-                }
-                catch (OperationCanceledException)
-                {
-                    stopped = true;
-                    throw;
-                }
+                // A git still at work well past the interruption, which nothing stops.
+                stopped = token.CanBeCanceled;
+                await Task.Delay(TimeSpan.FromSeconds(1), CancellationToken.None);
 
                 return null;
             },
         };
-        var service = new WorktreeService(harness.ContextLoader, git, harness.FileSystem, harness.PathBudget, harness.Platform, harness.Output, harness.HostCopies, harness.LocalTransport, harness.RunLock, harness.ProcessContext)
-        {
-            InterruptionGrace = TimeSpan.FromMilliseconds(400),
-        };
+        var service = new WorktreeService(harness.ContextLoader, git, harness.FileSystem, harness.PathBudget, harness.Platform, harness.Output, harness.HostCopies, harness.LocalTransport, harness.RunLock, harness.ProcessContext);
 
         var outcome = await service.DeleteAsync(temp.Path, "hung", force: false, deleteEvidence: false, cancellationToken: interruption.Token);
 
-        Assert.True(stopped, "git was not stopped before the grace ran out.");
-        Assert.Equal(HarnessExit.Cancelled, outcome.Outcome.ExitCode);
-        Assert.StartsWith("Deleting worktree 'hung' was stopped part way", outcome.Outcome.Message, StringComparison.Ordinal);
-        Assert.Contains("and its .git file and git's record of it are still there, so it is still a worktree", outcome.Outcome.Message, StringComparison.Ordinal);
-        Assert.Contains("delete-worktree hung --force", outcome.Outcome.Message, StringComparison.Ordinal);
-        Assert.True(Directory.Exists(path));
-        Assert.True(File.Exists(Path.Combine(path, ".git")));
+        Assert.False(stopped, "git was given a token the interruption could cancel.");
+        Assert.True(outcome.Succeeded, outcome.Outcome.Message);
+        Assert.False(Directory.Exists(path));
+        Assert.Contains("delete-worktree hung --force", harness.StandardError.ToString(), StringComparison.Ordinal);
+        Assert.Single(await harness.GitClient.ListWorktreesAsync(temp.Path, TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -1049,10 +1038,10 @@ public sealed class WorktreeRemovalTests
     }
 
     [Fact]
-    public async Task AnInterruptedForcedRemoval_ClaimsNothingAboutChecks()
+    public async Task AnInterruptedForcedRemoval_GoesOnToItsEnd()
     {
-        // A forced deletion made no check, so telling the reader every check passed would read as
-        // reassurance that nothing valuable was at risk.
+        // A forced deletion is past its point of no return as it begins, and an interruption meeting it is said, the
+        // deletion going on to its end - never claiming any check passed, since a forced one made none.
         using var temp = new TempDirectory();
         using var interruption = new CancellationTokenSource();
         var harness = await PrepareAsync(temp);
@@ -1076,21 +1065,18 @@ public sealed class WorktreeRemovalTests
                     return null;
                 }
 
-                await Task.Delay(Timeout.InfiniteTimeSpan, token);
+                await Task.Delay(TimeSpan.FromSeconds(1), CancellationToken.None);
                 return null;
             },
         };
-        var service = new WorktreeService(harness.ContextLoader, git, harness.FileSystem, harness.PathBudget, harness.Platform, harness.Output, harness.HostCopies, harness.LocalTransport, harness.RunLock, harness.ProcessContext)
-        {
-            InterruptionGrace = TimeSpan.FromMilliseconds(400),
-        };
+        var service = new WorktreeService(harness.ContextLoader, git, harness.FileSystem, harness.PathBudget, harness.Platform, harness.Output, harness.HostCopies, harness.LocalTransport, harness.RunLock, harness.ProcessContext);
 
         var outcome = await service.DeleteAsync(temp.Path, "forced", force: true, deleteEvidence: false, cancellationToken: interruption.Token);
 
-        Assert.Equal(HarnessExit.Cancelled, outcome.Outcome.ExitCode);
-        Assert.Contains("already gone", outcome.Outcome.Message, StringComparison.Ordinal);
-        Assert.DoesNotContain("Every check passed", outcome.Outcome.Message, StringComparison.Ordinal);
-        Assert.Contains("delete-worktree forced --force", outcome.Outcome.Message, StringComparison.Ordinal);
+        Assert.True(outcome.Succeeded, outcome.Outcome.Message);
+        Assert.False(Directory.Exists(path));
+        Assert.DoesNotContain("Every check passed", harness.StandardError.ToString(), StringComparison.Ordinal);
+        Assert.Contains("delete-worktree forced --force", harness.StandardError.ToString(), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -1120,16 +1106,13 @@ public sealed class WorktreeRemovalTests
                 return result;
             },
         };
-        var service = new WorktreeService(harness.ContextLoader, git, harness.FileSystem, harness.PathBudget, harness.Platform, harness.Output, harness.HostCopies, harness.LocalTransport, harness.RunLock, harness.ProcessContext)
-        {
-            InterruptionGrace = TimeSpan.Zero,
-        };
+        var service = new WorktreeService(harness.ContextLoader, git, harness.FileSystem, harness.PathBudget, harness.Platform, harness.Output, harness.HostCopies, harness.LocalTransport, harness.RunLock, harness.ProcessContext);
 
         var outcome = await service.DeleteAsync(temp.Path, "verified", force: true, deleteEvidence: false, cancellationToken: interruption.Token);
 
-        // The warning proves the interruption was delivered, which is what arms the stop, so
-        // verification ran with the stop already fired rather than before it.
-        Assert.Contains("is under way", harness.StandardError.ToString(), StringComparison.Ordinal);
+        // The warning proves the interruption was delivered, so verification ran with it already arrived rather than
+        // before it.
+        Assert.Contains("is past its point of no return and goes on to its end", harness.StandardError.ToString(), StringComparison.Ordinal);
         Assert.True(outcome.Succeeded, outcome.Outcome.Message);
         Assert.False(Directory.Exists(path));
         Assert.Single(await harness.GitClient.ListWorktreesAsync(temp.Path, TestContext.Current.CancellationToken));
@@ -1174,52 +1157,48 @@ public sealed class WorktreeRemovalTests
     }
 
     /// <summary>
-    /// A checked removal stopped as its files go, once its directory junctions went as links, says those junctions were
-    /// removed beside what is left: nothing puts a junction back - a checkout restores what the index holds - so a reader
-    /// told only that the checkout puts the files back would never learn the link to a shared cache is gone.
+    /// A checked removal interrupted as its files go, once its directory junctions went as links, goes on to its end -
+    /// the emptying given no token the interruption cancels - and says those junctions were removed first, as links:
+    /// nothing puts a junction back, so a reader told only that the worktree went would never learn the link to a shared
+    /// cache is gone.
     /// </summary>
     [Fact]
-    public async Task ARemovalStoppedAsItsFilesGo_SaysTheJunctionsThatWentBeforeIt()
+    public async Task ARemovalInterruptedAsItsFilesGo_GoesOnToItsEnd_AndSaysTheJunctionsThatWentBeforeIt()
     {
         using var temp = new TempDirectory();
         using var interruption = new CancellationTokenSource();
         var harness = await PrepareAsync(temp);
         var path = await CreateAsync(harness, temp, "joined");
-        var gitDirectory = await GitDirectoryAsync(harness, path);
         var cache = Path.Combine(path, "node_modules");
-        var fileSystem = new StoppedAsItEmpties(harness.FileSystem, interruption, [cache]);
-        var service = new WorktreeService(harness.ContextLoader, harness.GitClient, fileSystem, harness.PathBudget, harness.Platform, harness.Output, harness.HostCopies, harness.Local(fileSystem), harness.RunLock, harness.ProcessContext)
-        {
-            InterruptionGrace = TimeSpan.Zero,
-        };
+        var fileSystem = new InterruptedAsItEmpties(harness.FileSystem, interruption, [cache]);
+        var service = new WorktreeService(harness.ContextLoader, harness.GitClient, fileSystem, harness.PathBudget, harness.Platform, harness.Output, harness.HostCopies, harness.Local(fileSystem), harness.RunLock, harness.ProcessContext);
 
         var outcome = await service.DeleteAsync(temp.Path, "joined", force: false, deleteEvidence: false, cancellationToken: interruption.Token);
 
-        Assert.Equal(HarnessExit.Cancelled, outcome.Outcome.ExitCode);
-        Assert.Equal(
-            "Deleting worktree 'joined' was stopped part way, before the interruption ended the command. Some of its files may already be "
-            + $"gone, and its .git file and git's record of it are still there, so it is still a worktree: 'git -C {path} checkout -- .' puts "
-            + "back the files its index holds. Close whatever holds its files open; every check passed before removal began, so run "
-            + $"'{ToolPackage.Command} delete-worktree joined --force' to finish deleting it. Its 1 directory junction(s) had been removed "
-            + $"first, as links: {cache}.",
-            outcome.Outcome.Message);
-        Assert.True(File.Exists(Path.Combine(path, ".git")));
-        Assert.True(Directory.Exists(gitDirectory));
+        Assert.True(outcome.Succeeded, outcome.Outcome.Message);
+        Assert.Equal([false], fileSystem.Cancellable);
+        Assert.False(Directory.Exists(path));
+        Assert.Contains($"removed 1 directory junction(s) first, as links, never what they lead to: {cache}", outcome.Outcome.Details ?? []);
     }
 
     /// <summary>
     /// The real file system, except that removing the junctions under a directory answers <paramref name="junctions"/>, as
-    /// though each went as a link, and that emptying a directory is interrupted as it begins: it sends the interruption,
-    /// waits for the removal's own stop, and is stopped by it, as Ctrl+C meeting the deletion between two entries is.
+    /// though each went as a link, and that emptying a directory is interrupted as it begins, as Ctrl+C meeting the
+    /// deletion between two entries is - noting whether the token it was given is one an interruption could cancel.
     /// </summary>
-    private sealed class StoppedAsItEmpties(IFileSystem inner, CancellationTokenSource interruption, IReadOnlyList<string> junctions) : PassThroughFileSystem(inner)
+    private sealed class InterruptedAsItEmpties(IFileSystem inner, CancellationTokenSource interruption, IReadOnlyList<string> junctions) : PassThroughFileSystem(inner)
     {
+        private readonly List<bool> _cancellable = [];
+
+        /// <summary>Whether each emptying was given a token that can be cancelled, in order.</summary>
+        public IReadOnlyList<bool> Cancellable => _cancellable;
+
         public override IReadOnlyList<string> RemoveJunctions(string path) => junctions;
 
         public override void EmptyDirectory(string path, IReadOnlyCollection<string> keeping, CancellationToken cancellationToken = default)
         {
             interruption.Cancel();
-            Assert.True(SpinWait.SpinUntil(() => cancellationToken.IsCancellationRequested, TimeSpan.FromSeconds(30)), "the removal was never stopped");
+            _cancellable.Add(cancellationToken.CanBeCanceled);
             base.EmptyDirectory(path, keeping, cancellationToken);
         }
     }

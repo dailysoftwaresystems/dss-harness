@@ -3,7 +3,10 @@ namespace DssHarness.Core.Configuration;
 /// <summary>Worktree creation policy.</summary>
 public sealed class WorktreeSettings
 {
-    /// <summary>Longest worktree name permitted unless configured otherwise.</summary>
+    /// <summary>
+    /// The longest worktree name an earlier version allowed where config.json set none. Nothing reads it: a name is held
+    /// to the path budget alone where <see cref="MaxNameLength"/> is not set, and it stays only while another file names it.
+    /// </summary>
     public const int DefaultMaxNameLength = 10;
 
     /// <summary>The worktrees root used when config.json names none.</summary>
@@ -41,11 +44,13 @@ public sealed class WorktreeSettings
     public List<string> EvidenceRoots { get; init; } = [];
 
     /// <summary>
-    /// Longest permitted worktree name. The default keeps a worktree's build tree inside
-    /// the Windows path budget for a repository at a typical depth. The budget itself is
-    /// still checked against the real path, so this is a naming policy, not the guard.
+    /// The longest worktree, agent or run name this repository permits, where it sets one: a naming policy of the
+    /// repository's own, never the guard. Where it is not set, no length is refused for itself: the path budget decides,
+    /// measured against the real path of each tree - the worktree's, and below it its builds' and the longest file the
+    /// repository tracks - so a name that fits is taken however long, and one that does not is refused saying how long a
+    /// name would still fit.
     /// </summary>
-    public int MaxNameLength { get; init; } = DefaultMaxNameLength;
+    public int? MaxNameLength { get; init; }
 
     /// <summary>
     /// Longest path a build system generates below its own build directory,

@@ -97,7 +97,7 @@ public sealed class CompilerVersionProbeTests
             scratch,
             environment,
             ProgramDirectories.After([temp.Combine("tools")]),
-            TestContext.Current.CancellationToken);
+            cancellationToken: TestContext.Current.CancellationToken);
 
         var request = Assert.Single(runner.Requests);
         var source = Path.Combine(scratch, $"compiler-version-{language}{extension}");
@@ -121,7 +121,7 @@ public sealed class CompilerVersionProbeTests
             temp.Combine("scratch"),
             new Dictionary<string, string?>(),
             ProgramDirectories.None,
-            TestContext.Current.CancellationToken);
+            cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.NotNull(answer);
         Assert.Equal("it is not there now", answer.Replaced);
@@ -129,17 +129,16 @@ public sealed class CompilerVersionProbeTests
     }
 
     /// <summary>
-    /// A compiler that cannot be asked says why, and gives no version: it would not start, it exited
-    /// otherwise than 0, or it did not finish in time. What it said on exiting is quoted past the name of
-    /// the file it read, which cl says first - on its standard error, under /EP - and from its standard
-    /// output where its standard error says nothing else.
+    /// A compiler that cannot be asked says why, and gives no version: it would not start, or it exited
+    /// otherwise than 0. What it said on exiting is quoted past the name of the file it read, which cl says
+    /// first - on its standard error, under /EP - and from its standard output where its standard error says
+    /// nothing else.
     /// </summary>
     [Theory]
     [InlineData("start", "could not be started: Text file busy")]
     [InlineData("exit", "preprocessing one line, it exited 2: fatal error: cannot open source file")]
     [InlineData("exit-naming", "preprocessing one line, it exited 2: compiler-version-C.c(1): fatal error C1034: no include path set")]
     [InlineData("exit-naming-only", "preprocessing one line, it exited 2: cl : Command line error D8021 : invalid numeric argument")]
-    [InlineData("time", "it had not preprocessed one line after 2 minutes")]
     public async Task ACompilerThatCannotBeAsked_SaysWhy(string how, string why)
     {
         using var temp = new TempDirectory();
@@ -151,7 +150,7 @@ public sealed class CompilerVersionProbeTests
             temp.Combine("scratch"),
             new Dictionary<string, string?>(),
             ProgramDirectories.None,
-            TestContext.Current.CancellationToken);
+            cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.NotNull(answer);
         Assert.Null(answer.Version);
@@ -176,7 +175,7 @@ public sealed class CompilerVersionProbeTests
             temp.Combine("scratch"),
             new Dictionary<string, string?>(),
             ProgramDirectories.None,
-            TestContext.Current.CancellationToken);
+            cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Null(answer);
         Assert.Empty(runner.Requests);
@@ -200,11 +199,80 @@ public sealed class CompilerVersionProbeTests
             temp.Combine("scratch"),
             new Dictionary<string, string?>(),
             ProgramDirectories.None,
-            TestContext.Current.CancellationToken);
+            cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.NotNull(answer);
         Assert.Equal(why, answer.Unanswered);
         Assert.Empty(runner.Requests);
+    }
+
+    /// <summary>
+    /// A compiler slow to answer - a cold disk, a busy machine - is waited for to its end, however long, and told while it
+    /// is: past five minutes the build says how long it has waited, naming the compiler, and the version it then answers
+    /// is the answer. No request carries a timeout of the probe's own, and the probe asks for none. Red with the two
+    /// minutes' budget put back.
+    /// </summary>
+    [Fact]
+    public async Task TheCompilerProbe_IsWaitedAndTold()
+    {
+        using var temp = new TempDirectory();
+        var program = temp.WriteFile("cc", "a compiler");
+        var clock = new JumpingClock();
+        var answered = new TaskCompletionSource<ProcessResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var runner = new SlowRunner(answered.Task);
+        var told = new List<string>();
+
+        var answer = await new CompilerVersionProbe(runner, new HarnessFactory().FileSystem, clock).AskAsync(
+            new IdentifiedCompiler("C", "GNU", "13.2.0", program, [], MsvcOptions: false),
+            temp.Combine("scratch"),
+            new Dictionary<string, string?>(),
+            ProgramDirectories.None,
+            wait =>
+            {
+                told.Add(wait.Line());
+
+                // Answered once the wait has been told twice: ten minutes of the clock, past any budget of minutes.
+                if (told.Count == 2)
+                {
+                    answered.SetResult(new ProcessResult(
+                        0,
+                        "dssharness_compiler_version _MSC_VER _MSC_FULL_VER _MSC_BUILD 13 13 2 0 __clang_major__ __clang_minor__ __clang_patchlevel__ __apple_build_version__\n",
+                        string.Empty,
+                        TimeSpan.FromMinutes(10),
+                        TimedOut: false));
+                }
+            },
+            TestContext.Current.CancellationToken);
+
+        Assert.NotNull(answer);
+        Assert.Null(answer.Unanswered);
+        Assert.Equal("13.2.0", answer.Version);
+        Assert.Null(Assert.Single(runner.Requests).Timeout);
+        Assert.Equal(
+            [
+                $"has waited 5m00s for the C compiler '{program}' to preprocess one line",
+                $"has waited 10m00s for the C compiler '{program}' to preprocess one line",
+            ],
+            told);
+    }
+
+    /// <summary>A runner that answers every request with what <paramref name="answer"/> comes to, once it does.</summary>
+    private sealed class SlowRunner(Task<ProcessResult> answer) : IProcessRunner
+    {
+        private readonly List<ProcessRequest> _requests = [];
+
+        /// <summary>Every request it was given.</summary>
+        public IReadOnlyList<ProcessRequest> Requests => _requests;
+
+        public Task<ProcessResult> RunAsync(ProcessRequest request, CancellationToken cancellationToken = default)
+        {
+            _requests.Add(request);
+
+            // The answer itself, so it is complete the moment it is given, and the wait sees it at its next look.
+            return answer;
+        }
+
+        public string? FindExecutable(string command) => command;
     }
 
     /// <summary>A runner that answers every request with <paramref name="output"/>, or fails as told.</summary>
@@ -217,7 +285,7 @@ public sealed class CompilerVersionProbeTests
 
         /// <summary>
         /// How it fails: "start", "exit", "exit-naming" as cl does, "exit-naming-only" with the reason on its
-        /// standard output, or "time"; null to answer.
+        /// standard output; null to answer.
         /// </summary>
         public string? Fails { get; init; }
 
@@ -241,7 +309,7 @@ public sealed class CompilerVersionProbeTests
                     "compiler-version-C.c\r\n",
                     TimeSpan.Zero,
                     TimedOut: false)),
-                "time" => Task.FromResult(new ProcessResult(-1, string.Empty, string.Empty, TimeSpan.FromMinutes(2), TimedOut: true)),
+
                 _ => Task.FromResult(new ProcessResult(0, output + "\n", string.Empty, TimeSpan.Zero, TimedOut: false)),
             };
         }

@@ -113,4 +113,34 @@ public sealed partial class HelpTests
         Assert.Contains("with no hyphen on either side", Prose.Words(described.StandardOutput), StringComparison.Ordinal);
         Assert.Contains("with no hyphen on either side", Prose.Words(listed.StandardOutput), StringComparison.Ordinal);
     }
+
+    /// <summary>
+    /// The anchors topic says what has no bound of the code's own: the registries' lock is waited for while its holder
+    /// lives, told as it begins and every five minutes; every value is given whole and every same-namespace id named; a
+    /// row with no id is told apart by its whole cell; <c>\x</c> takes any count of hex digits; a history form's commit is
+    /// spelled as git spells one; and the arms registry's whole history is read.
+    /// </summary>
+    [Fact]
+    public void AnchorsTopic_SaysWhatHasNoBoundOfTheCodesOwn()
+    {
+        var topic = Prose.Words(HelpText.Of("anchors").StandardOutput);
+
+        foreach (var text in new[]
+        {
+            "A change or a read that finds the lock held waits for as long as its holder lives - a holder that ends lets it go - "
+                + $"saying so as it begins, under '{NamedMutexAnchorRegistryLock.TellsAs}', and every "
+                + $"{ReportText.Limit(DssHarness.Core.Waiting.Waits.SaidEvery)} while it lasts; an interruption ends the wait, nothing read or written.",
+            "is given whole, never cut short, and a change of a cell is said word by word however long the cell",
+            "an id read-anchor does not find names every id of its namespace that a registry holds",
+            "A row with no id in its Anchor cell is told from another by the whole of that cell's text.",
+            "or \\x41 with as many hex digits as C lets \\x take, which is any count - is a citation",
+            "a commit spelled as git spells one, in 4 to 64 hex characters",
+            "the registry's whole history read, under every name it had",
+        })
+        {
+            Assert.Contains(text, topic, StringComparison.Ordinal);
+        }
+
+        Assert.DoesNotContain("seconds writes nothing", topic, StringComparison.Ordinal);
+    }
 }

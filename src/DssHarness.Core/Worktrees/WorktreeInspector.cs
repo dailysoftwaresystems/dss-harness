@@ -3,6 +3,7 @@ using DssHarness.Core.Git;
 using DssHarness.Core.Output;
 using DssHarness.Core.Platform;
 using DssHarness.Core.Results;
+using DssHarness.Core.Waiting;
 
 namespace DssHarness.Core.Worktrees;
 
@@ -121,12 +122,19 @@ internal sealed record WorktreeFindings(
 /// </summary>
 internal sealed class WorktreeInspector(IGitClient gitClient, IFileSystem fileSystem, IHostPlatform platform, IHarnessOutput output)
 {
-    private const int CleanupAttempts = 5;
+    /// <summary>
+    /// The first wait before a deletion of a temporary file is tried again: what holds a file it has just seen appear - a
+    /// scanner - lets go within moments, and the waits double from here while it holds.
+    /// </summary>
+    private static readonly TimeSpan CleanupFirstWait = TimeSpan.FromMilliseconds(20);
 
     private readonly IGitClient _gitClient = gitClient;
     private readonly IFileSystem _fileSystem = fileSystem;
     private readonly IHostPlatform _platform = platform;
     private readonly IHarnessOutput _output = output;
+
+    /// <summary>The clock a retry of a temporary file's deletion waits on.</summary>
+    private readonly TimeProvider _clock = TimeProvider.System;
 
     /// <summary>
     /// Whether <paramref name="directory"/> holds a <c>.git</c> of its own - a worktree's file or a repository's directory -
@@ -212,10 +220,10 @@ internal sealed class WorktreeInspector(IGitClient gitClient, IFileSystem fileSy
             : ownRepository ? await CountOwnCommitsAsync(path, cancellationToken).ConfigureAwait(false)
             : await CountUnreferencedCommitsAsync(path, mainCheckoutRoot, head, administrativeDirectory, cancellationToken).ConfigureAwait(false);
 
-        var repositories = new List<SubmoduleRepository>();
-        var populated = await CollectCheckedOutSubmodulesAsync(mainCheckoutRoot, path, administrativeDirectory, string.Empty, index, repositories, changes, cancellationToken)
+        var found = new SubmoduleFind(_platform.PathComparison);
+        var populated = await CollectCheckedOutSubmodulesAsync(mainCheckoutRoot, path, administrativeDirectory, index, found, changes, cancellationToken)
             .ConfigureAwait(false);
-        await CollectModuleRepositoriesAsync(mainCheckoutRoot, Path.Combine(administrativeDirectory, "modules"), string.Empty, repositories, cancellationToken)
+        await CollectModuleRepositoriesAsync(mainCheckoutRoot, Path.Combine(administrativeDirectory, "modules"), string.Empty, found, cancellationToken)
             .ConfigureAwait(false);
 
         // git's own rule for a worktree holding submodules: a modules directory in its git
@@ -232,7 +240,7 @@ internal sealed class WorktreeInspector(IGitClient gitClient, IFileSystem fileSy
             changes,
             commits,
             head,
-            await FindSubmoduleLossesAsync(repositories, cancellationToken).ConfigureAwait(false),
+            await FindSubmoduleLossesAsync(found.Repositories, cancellationToken).ConfigureAwait(false),
             ownRepository ? null : ReadLockReason(administrativeDirectory),
             holdsSubmodules,
             movedFrom)
@@ -314,7 +322,7 @@ internal sealed class WorktreeInspector(IGitClient gitClient, IFileSystem fileSy
     /// <exception cref="HarnessException">git's records could not be read (<see cref="HarnessExit.CommandFailed"/>).</exception>
     public async Task<string?> MovedFromAsync(string mainCheckoutRoot, string directory, CancellationToken cancellationToken)
     {
-        if (ReadGitFile(directory) is not { } named)
+        if (await ReadGitFileAsync(directory, cancellationToken).ConfigureAwait(false) is not { } named)
         {
             return null;
         }
@@ -353,10 +361,10 @@ internal sealed class WorktreeInspector(IGitClient gitClient, IFileSystem fileSy
 
     /// <summary>
     /// The full path of the record the .git file in <paramref name="directory"/> names, or null where its .git is no such
-    /// file: read without following a link - a worktree's own files are a place its agent's commands write - and only as
-    /// far as git's own one line runs.
+    /// file: read without following a link - a worktree's own files are a place its agent's commands write - and its first
+    /// line read whole, as git reads it, however long the path it names.
     /// </summary>
-    private string? ReadGitFile(string directory)
+    private async Task<string?> ReadGitFileAsync(string directory, CancellationToken cancellationToken)
     {
         var dotGit = Path.Combine(directory, ".git");
 
@@ -367,13 +375,17 @@ internal sealed class WorktreeInspector(IGitClient gitClient, IFileSystem fileSy
                 return null;
             }
 
-            using var reader = new StreamReader(UnfollowedFiles.OpenRead(_fileSystem, directory, dotGit));
-            var buffer = new char[4096];
-            var line = new string(buffer, 0, reader.ReadBlock(buffer)).Split('\n')[0].TrimEnd('\r');
+            string? line;
+            var opened = UnfollowedFiles.OpenRead(_fileSystem, directory, dotGit);
+
+            await using (opened.ConfigureAwait(false))
+            {
+                line = await FileLines.FirstLineWholeAsync(opened, cancellationToken).ConfigureAwait(false);
+            }
 
             const string Prefix = "gitdir:";
 
-            return line.StartsWith(Prefix, StringComparison.Ordinal) && line[Prefix.Length..].Trim() is { Length: > 0 } named
+            return line is not null && line.StartsWith(Prefix, StringComparison.Ordinal) && line[Prefix.Length..].Trim() is { Length: > 0 } named
                 ? Path.TrimEndingDirectorySeparator(Path.GetFullPath(Path.Combine(directory, named)))
                 : null;
         }
@@ -507,7 +519,7 @@ internal sealed class WorktreeInspector(IGitClient gitClient, IFileSystem fileSy
     {
         ArgumentNullException.ThrowIfNull(directories);
 
-        return $"git records no worktree at {ReportText.Listed([.. directories.Select(directory => $"'{directory}'")])}, though "
+        return $"git records no worktree at {Names.All([.. directories.Select(directory => $"'{directory}'")])}, though "
             + (directories.Count == 1 ? "it holds" : "each holds")
             + $" a .git entry of its own - {UnrecordedWhy}. Look inside {(directories.Count == 1 ? "it" : "each")} for anything wanted, then delete it";
     }
@@ -540,15 +552,15 @@ internal sealed class WorktreeInspector(IGitClient gitClient, IFileSystem fileSy
             ? 0
             : await CountUnreferencedCommitsAsync(mainCheckoutRoot, mainCheckoutRoot, record.Commit, administrativeDirectory, cancellationToken).ConfigureAwait(false);
 
-        var repositories = new List<SubmoduleRepository>();
-        await CollectModuleRepositoriesAsync(mainCheckoutRoot, Path.Combine(administrativeDirectory, "modules"), string.Empty, repositories, cancellationToken)
+        var found = new SubmoduleFind(_platform.PathComparison);
+        await CollectModuleRepositoriesAsync(mainCheckoutRoot, Path.Combine(administrativeDirectory, "modules"), string.Empty, found, cancellationToken)
             .ConfigureAwait(false);
 
         return new WorktreeFindings(
             [],
             commits,
             record.Commit,
-            await FindSubmoduleLossesAsync(repositories, cancellationToken).ConfigureAwait(false),
+            await FindSubmoduleLossesAsync(found.Repositories, cancellationToken).ConfigureAwait(false),
 
             // git's list says it is locked; why is read here, as every record of the worktree's is, never through a link.
             record.LockReason is null ? null : ReadLockReason(administrativeDirectory) ?? string.Empty,
@@ -696,10 +708,11 @@ internal sealed class WorktreeInspector(IGitClient gitClient, IFileSystem fileSy
 
     /// <summary>
     /// Adds the repository of every submodule checked out under <paramref name="root"/>, nested ones
-    /// included, and reports whether any is checked out. A submodule whose .git is a directory in the
+    /// included, and reports whether any is checked out there. A submodule whose .git is a directory in the
     /// work tree keeps its repository there rather than among the worktree's modules.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// The status of the tree a submodule is checked out in tells it by its commit alone
     /// (<see cref="GitOwnSettings.SubmoduleCommits"/>), so each one's own changes are asked of it here, by its own
     /// git - which runs its own configuration, a clean filter among it - only where its repository is one git keeps
@@ -707,60 +720,96 @@ internal sealed class WorktreeInspector(IGitClient gitClient, IFileSystem fileSy
     /// agent does. One whose repository is anywhere else - a directory of its work tree, or where a .git file there
     /// points, either written by whatever writes the tree - is named a change never looked into: deleting it is never
     /// taken for losing nothing.
+    /// </para>
+    /// <para>
+    /// Walked on a stack of its own, never a recursion, so submodules nested however deep are each reached, and each work
+    /// tree once (<see cref="SubmoduleFind.FirstTree"/>): one a link leads back into - a submodule's directory that is a
+    /// link to one above it - is reached again as the directory it already walked, and the walk goes on past it.
+    /// </para>
     /// </remarks>
     private async Task<bool> CollectCheckedOutSubmodulesAsync(
         string mainCheckoutRoot,
         string root,
         string gitDirectory,
-        string shownPrefix,
         IReadOnlyList<GitIndexEntry> index,
-        List<SubmoduleRepository> repositories,
+        SubmoduleFind found,
         List<WorktreeChange> changes,
         CancellationToken cancellationToken)
     {
         var populated = false;
+        var frames = new Stack<CheckedOutFrame>();
 
-        foreach (var entry in index.Where(entry => entry.IsSubmodule && entry.Stage == 0))
+        if (found.FirstTree( ResolveLinks(root)))
         {
-            var directory = Path.Combine(root, entry.Path);
+            frames.Push(new CheckedOutFrame(Submodules(index), root, gitDirectory, string.Empty));
+        }
 
-            if (!HoldsOwnGit(_fileSystem, directory))
+        try
+        {
+            while (frames.TryPeek(out var frame))
             {
-                continue;
+                if (!frame.Entries.MoveNext())
+                {
+                    frames.Pop().Entries.Dispose();
+                    continue;
+                }
+
+                var entry = frame.Entries.Current;
+                var directory = Path.Combine(frame.Root, entry.Path);
+
+                if (!HoldsOwnGit(_fileSystem, directory))
+                {
+                    continue;
+                }
+
+                // Only the tree asked about says whether it holds a checked-out submodule: a nested one's is its parent's.
+                populated |= frames.Count == 1;
+                var shown = frame.Shown + entry.Path;
+
+                // Spelt as status spells the change, so the change it named is this one, and the second look finds it so.
+                var at = frame.Shown + entry.Name.Quoted;
+
+                var location = await _gitClient.GetLocationAsync(directory, cancellationToken).ConfigureAwait(false)
+                    ?? throw new HarnessException(
+                        HarnessExit.CommandFailed,
+                        $"git does not see the submodule checked out at '{directory}' as a repository.");
+
+                found.Add(shown, location.GitDirectory);
+                await CollectModuleRepositoriesAsync(mainCheckoutRoot, Path.Combine(location.GitDirectory, "modules"), shown + "/", found, cancellationToken)
+                    .ConfigureAwait(false);
+
+                if (!PathContainment.IsStrictlyInside(Path.Combine(frame.GitDirectory, "modules"), location.GitDirectory, _platform.PathComparison))
+                {
+                    changes.RemoveAll(change => string.Equals(change.Path, at, StringComparison.Ordinal));
+                    changes.Add(new WorktreeChange(at, $"{shown} (a submodule whose repository is not among its superproject's modules, so its work tree is never looked into)"));
+                }
+                else if (!changes.Exists(change => string.Equals(change.Path, at, StringComparison.Ordinal))
+                    && (await _gitClient.GetStatusAsync(directory, cancellationToken).ConfigureAwait(false)).Count > 0)
+                {
+                    changes.Add(new WorktreeChange(at, shown));
+                }
+
+                // A work tree reached again - a link leading back into one already walked - is passed over: its
+                // submodules were reached the first time.
+                if (found.FirstTree( ResolveLinks(directory)))
+                {
+                    var nested = await _gitClient.ListIndexAsync(directory, cancellationToken).ConfigureAwait(false);
+                    frames.Push(new CheckedOutFrame(Submodules(nested), directory, location.GitDirectory, shown + "/"));
+                }
             }
-
-            populated = true;
-            var shown = shownPrefix + entry.Path;
-
-            // Spelt as status spells the change, so the change it named is this one, and the second look finds it so.
-            var at = shownPrefix + entry.Name.Quoted;
-
-            var location = await _gitClient.GetLocationAsync(directory, cancellationToken).ConfigureAwait(false)
-                ?? throw new HarnessException(
-                    HarnessExit.CommandFailed,
-                    $"git does not see the submodule checked out at '{directory}' as a repository.");
-
-            Add(repositories, shown, location.GitDirectory);
-            await CollectModuleRepositoriesAsync(mainCheckoutRoot, Path.Combine(location.GitDirectory, "modules"), shown + "/", repositories, cancellationToken)
-                .ConfigureAwait(false);
-
-            if (!PathContainment.IsStrictlyInside(Path.Combine(gitDirectory, "modules"), location.GitDirectory, _platform.PathComparison))
+        }
+        finally
+        {
+            while (frames.TryPop(out var unfinished))
             {
-                changes.RemoveAll(change => string.Equals(change.Path, at, StringComparison.Ordinal));
-                changes.Add(new WorktreeChange(at, $"{shown} (a submodule whose repository is not among its superproject's modules, so its work tree is never looked into)"));
+                unfinished.Entries.Dispose();
             }
-            else if (!changes.Exists(change => string.Equals(change.Path, at, StringComparison.Ordinal))
-                && (await _gitClient.GetStatusAsync(directory, cancellationToken).ConfigureAwait(false)).Count > 0)
-            {
-                changes.Add(new WorktreeChange(at, shown));
-            }
-
-            var nested = await _gitClient.ListIndexAsync(directory, cancellationToken).ConfigureAwait(false);
-            await CollectCheckedOutSubmodulesAsync(mainCheckoutRoot, directory, location.GitDirectory, shown + "/", nested, repositories, changes, cancellationToken)
-                .ConfigureAwait(false);
         }
 
         return populated;
+
+        static IEnumerator<GitIndexEntry> Submodules(IReadOnlyList<GitIndexEntry> entries)
+            => entries.Where(entry => entry.IsSubmodule && entry.Stage == 0).GetEnumerator();
     }
 
     /// <summary>
@@ -768,68 +817,138 @@ internal sealed class WorktreeInspector(IGitClient gitClient, IFileSystem fileSy
     /// not: a submodule deinitialised in the worktree keeps its repository there, with its work. A
     /// submodule's name can hold slashes, so a directory that is not a repository is part of a name.
     /// </summary>
+    /// <remarks>
+    /// Walked on a stack of its own, never a recursion, each directory once (<see cref="SubmoduleFind.FirstModules"/>), by
+    /// where its links lead: a directory that is a link to one above it - a modules directory leading back into itself -
+    /// is reached again as the directory it already walked, and the walk ends there rather than going round it until a
+    /// path is too long to name.
+    /// </remarks>
     private async Task CollectModuleRepositoriesAsync(
         string mainCheckoutRoot,
         string modules,
         string shownPrefix,
-        List<SubmoduleRepository> repositories,
+        SubmoduleFind found,
         CancellationToken cancellationToken)
     {
-        List<string> directories;
+        var frames = new Stack<ModulesFrame>();
+
+        Enter(modules, shownPrefix);
 
         try
         {
-            if (!_fileSystem.DirectoryExists(modules))
+            while (frames.TryPeek(out var frame))
             {
-                return;
+                if (!frame.Directories.MoveNext())
+                {
+                    frames.Pop().Directories.Dispose();
+                    continue;
+                }
+
+                var full = Path.TrimEndingDirectorySeparator(Path.GetFullPath(frame.Directories.Current));
+                var shown = frame.Shown + Path.GetFileName(full);
+
+                if (await _gitClient.ResolveGitDirectoryAsync(mainCheckoutRoot, full, cancellationToken).ConfigureAwait(false)
+                    is { } gitDirectory)
+                {
+                    found.Add(shown, gitDirectory);
+                    Enter(Path.Combine(gitDirectory, "modules"), shown + "/");
+                }
+                else if (_fileSystem.FileExists(Path.Combine(full, "HEAD"))
+                    || _fileSystem.DirectoryExists(Path.Combine(full, "objects"))
+                    || _fileSystem.DirectoryExists(Path.Combine(full, "refs")))
+                {
+                    // A repository git cannot read, such as one whose HEAD a crash emptied, still holds
+                    // its branches on disk. Taken for part of a submodule's name, it would be walked
+                    // through, and deleted without a word.
+                    throw new HarnessException(
+                        HarnessExit.CommandFailed,
+                        $"git does not read '{full}' as a repository, though it looks like a submodule's, so the work it may hold cannot be checked.");
+                }
+                else
+                {
+                    Enter(full, shown + "/");
+                }
             }
-
-            directories = [.. _fileSystem.EnumerateDirectories(modules)];
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        finally
         {
-            throw new HarnessException(
-                HarnessExit.CommandFailed,
-                $"Could not look for submodule repositories in '{modules}': {ex.Message}");
-        }
-
-        foreach (var directory in directories)
-        {
-            var full = Path.TrimEndingDirectorySeparator(Path.GetFullPath(directory));
-            var shown = shownPrefix + Path.GetFileName(full);
-
-            if (await _gitClient.ResolveGitDirectoryAsync(mainCheckoutRoot, full, cancellationToken).ConfigureAwait(false)
-                is { } gitDirectory)
+            while (frames.TryPop(out var unfinished))
             {
-                Add(repositories, shown, gitDirectory);
-                await CollectModuleRepositoriesAsync(mainCheckoutRoot, Path.Combine(gitDirectory, "modules"), shown + "/", repositories, cancellationToken)
-                    .ConfigureAwait(false);
+                unfinished.Directories.Dispose();
             }
-            else if (_fileSystem.FileExists(Path.Combine(full, "HEAD"))
-                || _fileSystem.DirectoryExists(Path.Combine(full, "objects"))
-                || _fileSystem.DirectoryExists(Path.Combine(full, "refs")))
+        }
+
+        // Pushes the directory's frame where it is there and not walked already, its subdirectories listed now.
+        void Enter(string directory, string shown)
+        {
+            List<string> directories;
+
+            try
             {
-                // A repository git cannot read, such as one whose HEAD a crash emptied, still holds
-                // its branches on disk. Taken for part of a submodule's name, it would be walked
-                // through, and deleted without a word.
+                if (!_fileSystem.DirectoryExists(directory) || !found.FirstModules(ResolveLinks(directory)))
+                {
+                    return;
+                }
+
+                directories = [.. _fileSystem.EnumerateDirectories(directory)];
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
                 throw new HarnessException(
                     HarnessExit.CommandFailed,
-                    $"git does not read '{full}' as a repository, though it looks like a submodule's, so the work it may hold cannot be checked.");
+                    $"Could not look for submodule repositories in '{directory}': {ex.Message}");
             }
-            else
-            {
-                await CollectModuleRepositoriesAsync(mainCheckoutRoot, full, shown + "/", repositories, cancellationToken)
-                    .ConfigureAwait(false);
-            }
+
+            frames.Push(new ModulesFrame(directories.GetEnumerator(), shown));
         }
     }
 
-    /// <summary>Adds a repository unless it was already found another way.</summary>
-    private void Add(List<SubmoduleRepository> repositories, string shown, string gitDirectory)
+    /// <summary>A work tree being walked for its checked-out submodules: what is left of its index, and where it is.</summary>
+    /// <param name="Entries">Its submodules' index entries, read so far.</param>
+    /// <param name="Root">The work tree.</param>
+    /// <param name="GitDirectory">Its git directory, among whose modules a submodule's repository is looked into.</param>
+    /// <param name="Shown">What a submodule's path in it is named after.</param>
+    private sealed record CheckedOutFrame(IEnumerator<GitIndexEntry> Entries, string Root, string GitDirectory, string Shown);
+
+    /// <summary>A modules directory being walked: what is left of its subdirectories, and what each is named after.</summary>
+    /// <param name="Directories">Its subdirectories, read so far.</param>
+    /// <param name="Shown">What a subdirectory's name is put after.</param>
+    private sealed record ModulesFrame(IEnumerator<string> Directories, string Shown);
+
+    /// <summary>
+    /// What a look for the submodule repositories a deletion would delete has found, and where it has been: each
+    /// repository once, by its git directory, and each directory walked once, by where its links lead - so a walk never
+    /// goes round a link that leads back into what it walked.
+    /// </summary>
+    /// <param name="comparison">How this machine's file system compares paths.</param>
+    private sealed class SubmoduleFind(StringComparison comparison)
     {
-        if (!repositories.Any(repository => PathsEqual(repository.GitDirectory, gitDirectory)))
+        private readonly HashSet<string> _gitDirectories = new(StringComparer.FromComparison(comparison));
+
+        /// <summary>Every repository found, in the order it was found.</summary>
+        public List<SubmoduleRepository> Repositories { get; } = [];
+
+        /// <summary>The work trees walked for checked-out submodules, by where their links lead.</summary>
+        private readonly HashSet<string> _trees = new(StringComparer.FromComparison(comparison));
+
+        /// <summary>The modules directories walked, by where their links lead.</summary>
+        private readonly HashSet<string> _modules = new(StringComparer.FromComparison(comparison));
+
+        /// <summary>Whether the work tree <paramref name="directory"/> is walked for the first time, which it is now marked as.</summary>
+        /// <param name="directory">The work tree, its links followed.</param>
+        public bool FirstTree(string directory) => _trees.Add(Path.TrimEndingDirectorySeparator(Path.GetFullPath(directory)));
+
+        /// <summary>Whether the modules directory <paramref name="directory"/> is walked for the first time, which it is now marked as.</summary>
+        /// <param name="directory">The directory, its links followed.</param>
+        public bool FirstModules(string directory) => _modules.Add(Path.TrimEndingDirectorySeparator(Path.GetFullPath(directory)));
+
+        /// <summary>Adds a repository unless it was already found another way.</summary>
+        public void Add(string shown, string gitDirectory)
         {
-            repositories.Add(new SubmoduleRepository(shown, gitDirectory));
+            if (_gitDirectories.Add(Path.TrimEndingDirectorySeparator(Path.GetFullPath(gitDirectory))))
+            {
+                Repositories.Add(new SubmoduleRepository(shown, gitDirectory));
+            }
         }
     }
 
@@ -973,34 +1092,44 @@ internal sealed class WorktreeInspector(IGitClient gitClient, IFileSystem fileSy
 
     /// <summary>
     /// Deletes the temporary copy of the index, and the lock file a git killed while writing it leaves
-    /// beside it. A scanner can hold a file it has just seen appear, so each is retried briefly. What
-    /// still cannot be deleted is reported under --verbose, and never fails the command or replaces
-    /// the answer the copy was made for.
+    /// beside it. A scanner can hold a file it has just seen appear: a deletion another program's hold refuses is tried
+    /// again for as long as the hold lasts (<see cref="Retrying"/>), told by the file's name while it waits; any other
+    /// refusal is tried again only while it is new. What still cannot be deleted is reported under --verbose, and never
+    /// fails the command or replaces the answer the copy was made for.
     /// </summary>
     private async Task DeleteTemporaryCopyAsync(string copy)
     {
         foreach (var file in new[] { copy, copy + ".lock" })
         {
-            string? problem = null;
+            var ended = await Retrying.RunAsync<bool>(
+                    (_, _) =>
+                    {
+                        try
+                        {
+                            _fileSystem.DeleteFile(file);
+                            return Task.FromResult<RetryTry<bool>>(new RetryTry<bool>.Done(true));
+                        }
+                        catch (IOException ex) when (FileHolds.HeldElsewhere(ex))
+                        {
+                            return Task.FromResult<RetryTry<bool>>(new RetryTry<bool>.Passing($"another program holds it: {ex.Message.TrimEnd('.')}", After: null));
+                        }
+                        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                        {
+                            return Task.FromResult<RetryTry<bool>>(new RetryTry<bool>.Failed(ex.Message.TrimEnd('.'), ex.Message));
+                        }
+                    },
+                    new RetryWatch(
+                        $"the temporary index copy '{ReportText.Printable(file)}' to be deleted",
+                        told => _output.Detail(WorktreeService.DeleteCommand, told.Line()),
+                        CleanupFirstWait,
+                        Bound: null,
+                        _clock),
+                    CancellationToken.None)
+                .ConfigureAwait(false);
 
-            for (var attempt = 1; attempt <= CleanupAttempts; attempt++)
+            if (ended.Kind != RetryEndKind.Done)
             {
-                try
-                {
-                    _fileSystem.DeleteFile(file);
-                    problem = null;
-                    break;
-                }
-                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-                {
-                    problem = ex.Message;
-                    await Task.Delay(TimeSpan.FromMilliseconds(20 * attempt), CancellationToken.None).ConfigureAwait(false);
-                }
-            }
-
-            if (problem is not null)
-            {
-                _output.Detail(WorktreeService.DeleteCommand, $"Could not delete the temporary index copy '{file}': {problem}");
+                _output.Detail(WorktreeService.DeleteCommand, $"Could not delete the temporary index copy '{file}': {ended.Failure}");
             }
         }
     }

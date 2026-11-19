@@ -1042,7 +1042,7 @@ public sealed class MutationServiceTests
             Time: false);
 
         var subject = service.Subject(work, arms, force: false, new RepositoryTreesFound([new RepositoryTree(temp.Path, RepositoryTree.MainCheckout)]), records: true);
-        var selfTest = MutationService.SelfTestSubject(work, MutationService.SelfTestArms(null), force: false, temp.Combine("data", MutationFixture.DirectoryName));
+        var selfTest = MutationService.SelfTestSubject(work, MutationService.SelfTestArms(null), force: false, temp.Combine("data", MutationFixture.DirectoryName), new HarnessFactory().FileSystem);
 
         Assert.Equal(works, subject.TreeRoot);
         Assert.Equal(MutationWorkers.Of(works, variant), subject.Workers);
@@ -1289,7 +1289,7 @@ public sealed class MutationServiceTests
             temp.Combine("runs", "r1"),
             Time: false);
 
-        var selfTest = MutationService.SelfTestSubject(work, MutationService.SelfTestArms(null), force: false, temp.Combine("data", MutationFixture.DirectoryName));
+        var selfTest = MutationService.SelfTestSubject(work, MutationService.SelfTestArms(null), force: false, temp.Combine("data", MutationFixture.DirectoryName), new HarnessFactory().FileSystem);
         var forAnother = service.Subject(work, arms, force: false, new RepositoryTreesFound([]), records: false);
         var here = service.Subject(work, arms, force: false, new RepositoryTreesFound([]), records: true);
 
@@ -1805,7 +1805,8 @@ public sealed class MutationServiceTests
     /// <summary>
     /// A self-test of a leg sweeps the fixture kept where it was written, as the leg's variant builds it: the fixture's
     /// project, settings and arms, its binary run in its worker with nothing of the leg's tests, each worker's paths
-    /// reckoned by the fixture's own build, nothing said of what a build of it comes to, and each arm held to its design.
+    /// reckoned by the repository's own reserve until a build of the fixture is there to measure, nothing said of what a
+    /// build of it comes to, and each arm held to its design.
     /// Its workers are kept in the leg's own tree, in the self-test's family - so two repositories self-testing with
     /// one fixture never share a worker, and each one's are removed with its tree.
     /// </summary>
@@ -1826,7 +1827,8 @@ public sealed class MutationServiceTests
             Time: false);
         var fixture = temp.Combine("data", MutationFixture.DirectoryName);
 
-        var subject = MutationService.SelfTestSubject(work, MutationService.SelfTestArms(null), force: true, fixture);
+        var fileSystem = new HarnessFactory().FileSystem;
+        var subject = MutationService.SelfTestSubject(work, MutationService.SelfTestArms(null), force: true, fixture, fileSystem);
 
         Assert.Equal(fixture, subject.TreeRoot);
         Assert.Equal(MutationWorkers.Of(temp.Path, variant, selfTest: true), subject.Workers);
@@ -1842,14 +1844,15 @@ public sealed class MutationServiceTests
                 Time: false),
             MutationService.SelfTestArms(null),
             force: false,
-            fixture);
+            fixture,
+            fileSystem);
 
         Assert.Equal(fixture, theirs.TreeRoot);
         Assert.Equal(HarnessLayout.InSlot(elsewhere, HarnessLayout.MutationsDirectoryName, variant.CopyKey + "s-1"), theirs.Workers.PathOf(1));
         Assert.Equal((MutationFixture.DirectoryName, "cmake", "."), (subject.Project.Name, subject.Project.Type, subject.Project.Path));
         Assert.Equal(MutationFixture.Project.BuildOutputs, subject.Project.BuildOutputs);
         Assert.Null(subject.Tests);
-        Assert.Equal(MutationFixture.LongestBuildPath, subject.PathReserve);
+        Assert.Null(subject.PathReserve);
         Assert.Null(subject.ExpectedBuildBytes);
         Assert.Equal(("arms.txt", 3, 4.0), (subject.Settings.Registry, subject.Settings.Workers, subject.Settings.RunTimeFactor));
         Assert.Equal(MutationFixture.Designed.Keys.Order(StringComparer.Ordinal), subject.Arms.Driven.Select(arm => arm.Id).Order(StringComparer.Ordinal));
@@ -1859,6 +1862,49 @@ public sealed class MutationServiceTests
 
         Assert.Equal(MutationFixture.Hold("spare-unseen", survived), subject.Hold!("spare-unseen", survived));
         Assert.Equal(LegVerdict.Violated, subject.Hold!("charge-bound", survived).Verdict);
+    }
+
+    /// <summary>
+    /// The reserve a self-test's workers' paths are reckoned with is measured, never a number of the code's own: the
+    /// deepest path a build of the fixture made below a worker's build directory - CMake's own check of a compiler, at a
+    /// depth that changes with CMake's version and the compiler's - the deepest of every worker the sweep runs, a worker
+    /// past them not counted; none where no worker holds a build yet. Red with the hundred characters put back.
+    /// </summary>
+    [Fact]
+    public void TheFixturesReserve_IsMeasured()
+    {
+        using var temp = new TempDirectory();
+        var config = Sweepable(new MutationSettings { Workers = 2 });
+        var context = new HarnessContext(new HarnessLayout(temp.Path, temp.Path), config);
+        var project = new ProjectConfig { Name = "app", Type = "cmake", Test = new TestConfig { All = new TestInvocation { Runner = "ctest" } } };
+        var variant = VariantKey.For(config, config.Legs["native"], "linux");
+        var host = new HostReport { Host = HostId.Local, Os = "linux", Processor = "x86_64" };
+        var work = new LegWork(
+            new PlacedLeg("native", config.Legs["native"], host, project, variant, temp.Path, temp.Path, variant.DirectoryUnder(temp.Path), new LocalHostConfig(), Emulated: false),
+            context,
+            RunId.New(),
+            temp.Combine("runs", "r1"),
+            Time: false);
+        var fixture = temp.Combine("data", MutationFixture.DirectoryName);
+        var fileSystem = new HarnessFactory().FileSystem;
+        var workers = MutationService.SelfTestSubject(work, MutationService.SelfTestArms(null), force: false, fixture, fileSystem).Workers;
+        var deep = Path.Combine("CMakeFiles", "4.2.0", "CompilerIdCXX", "tmp", new string('d', 30) + ".o");
+        var shallow = Path.Combine("bin", "fixture_tests");
+        var past = Path.Combine("CMakeFiles", new string('p', 70) + ".o");
+
+        Assert.Null(MutationFixture.LongestBuildPath(fileSystem, workers, 2));
+
+        foreach (var (number, relative) in new[] { (1, shallow), (2, deep), (3, past) })
+        {
+            var file = Path.Combine(workers.BuildDirectoryOf(number), relative);
+
+            Directory.CreateDirectory(Path.GetDirectoryName(file)!);
+            File.WriteAllText(file, "built");
+        }
+
+        Assert.Equal(deep.Length, MutationFixture.LongestBuildPath(fileSystem, workers, 2));
+        Assert.Equal(past.Length, MutationFixture.LongestBuildPath(fileSystem, workers, 3));
+        Assert.Equal(deep.Length, MutationService.SelfTestSubject(work, MutationService.SelfTestArms(null), force: false, fixture, fileSystem).PathReserve);
     }
 
     /// <summary>

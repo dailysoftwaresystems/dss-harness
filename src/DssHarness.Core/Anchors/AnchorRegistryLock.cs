@@ -1,7 +1,9 @@
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Hosts;
+using DssHarness.Core.Output;
 using DssHarness.Core.Platform;
 using DssHarness.Core.Results;
+using DssHarness.Core.Waiting;
 
 namespace DssHarness.Core.Anchors;
 
@@ -11,18 +13,22 @@ namespace DssHarness.Core.Anchors;
 public interface IAnchorRegistryLock
 {
     /// <summary>
-    /// Runs <paramref name="work"/> while holding the lock for <paramref name="registries"/>.
+    /// Runs <paramref name="work"/> while holding the lock for <paramref name="registries"/>, waiting for the lock while
+    /// another process holds it.
     /// </summary>
     /// <remarks>
-    /// The work is synchronous on purpose, and must stay so: the lock is released by the thread that
-    /// took it, and an await inside the work could resume on a different one.
+    /// The work is synchronous: a read, a decision and a write of two files, which holds the lock only as long as they take.
     /// </remarks>
+    /// <param name="registries">The pair of registries the lock is named for.</param>
+    /// <param name="work">What is done while the lock is held.</param>
+    /// <param name="cancellationToken">Ends the wait for the lock where it has not been taken; the work, once begun, ends as it ends.</param>
     /// <exception cref="HarnessException">
-    /// Another process held the lock for longer than the wait allows (<see cref="HarnessExit.Refused"/>), or the lock
-    /// could not be opened: it belongs to another user (<see cref="HarnessExit.Refused"/>), or the system would not open
-    /// it (<see cref="HarnessExit.HostUnavailable"/>).
+    /// The lock could not be opened: it belongs to another user (<see cref="HarnessExit.Refused"/>), or the system would
+    /// not open it (<see cref="HarnessExit.HostUnavailable"/>); or another process held it past a bound the lock was given
+    /// (<see cref="HarnessExit.Refused"/>). Where none was given, the lock is waited for while its holder lives.
     /// </exception>
-    T RunExclusive<T>(AnchorRegistries registries, Func<T> work);
+    /// <exception cref="OperationCanceledException"><paramref name="cancellationToken"/> ended the wait, nothing read or changed.</exception>
+    Task<T> RunExclusiveAsync<T>(AnchorRegistries registries, Func<T> work, CancellationToken cancellationToken);
 }
 
 /// <summary>Reads of the two registries as one moment.</summary>
@@ -38,61 +44,113 @@ public static class AnchorRegistryReading
     /// like an anchor closed or lost, or in both, which reads as a duplicate.
     /// </remarks>
     /// <exception cref="HarnessException">
-    /// The lock could not be taken, as <see cref="IAnchorRegistryLock.RunExclusive"/> says; or a registry's path holds a
+    /// The lock could not be taken, as <see cref="IAnchorRegistryLock.RunExclusiveAsync"/> says; or a registry's path holds a
     /// directory, or its file could not be read (<see cref="AnchorRegistry.ReadText"/>).
     /// </exception>
-    public static IReadOnlyList<(AnchorRegistry Registry, string? Text)> ReadTogether(
+    /// <exception cref="OperationCanceledException"><paramref name="cancellationToken"/> ended the wait for the lock.</exception>
+    public static Task<List<(AnchorRegistry Registry, string? Text)>> ReadTogetherAsync(
         this IAnchorRegistryLock registryLock,
         AnchorRegistries registries,
-        IFileSystem fileSystem)
+        IFileSystem fileSystem,
+        CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(registryLock);
         ArgumentNullException.ThrowIfNull(registries);
         ArgumentNullException.ThrowIfNull(fileSystem);
 
-        return registryLock.RunExclusive(registries, () => registries.All.Select(registry => (registry, registry.ReadText(fileSystem))).ToList());
+        return registryLock.RunExclusiveAsync(
+            registries,
+            () => registries.All.Select(registry => (registry, registry.ReadText(fileSystem))).ToList(),
+            cancellationToken);
     }
+
+    /// <summary>
+    /// <see cref="ReadTogetherAsync"/>, waited for on the caller's thread and ended by nothing but the lock's own bound: it
+    /// stays only while another file reads through it, and goes once that file reads through <see cref="ReadTogetherAsync"/>.
+    /// </summary>
+    /// <exception cref="HarnessException">As <see cref="ReadTogetherAsync"/> says.</exception>
+    public static IReadOnlyList<(AnchorRegistry Registry, string? Text)> ReadTogether(
+        this IAnchorRegistryLock registryLock,
+        AnchorRegistries registries,
+        IFileSystem fileSystem)
+        => registryLock.ReadTogetherAsync(registries, fileSystem, CancellationToken.None).GetAwaiter().GetResult();
 }
 
 /// <inheritdoc cref="IAnchorRegistryLock"/>
 /// <remarks>
+/// <para>
 /// A change reads both registries, decides, and writes them back, so two changes at once would each
 /// write over the other and one would be lost without a word. A named mutex is the machine-wide lock
 /// .NET supports on Windows, Linux and macOS alike; a named semaphore is not available on Linux or macOS.
-/// Anchor changes take milliseconds, so the wait is short, and a lock still held after it is reported
-/// rather than waited on indefinitely.
+/// </para>
+/// <para>
+/// The lock is waited for while its holder lives, through the hold every machine-wide lock of the tool is waited for by
+/// (<see cref="MachineWideMutex.HoldAsync"/>): a holder that ends holding it lets it go as it ends - the system passes a
+/// mutex its holder ended holding to the next to wait - so a wait ends when the holder does, however long its work. The
+/// wait is told as it begins, naming what holds the lock, and every <see cref="Waits.SaidEvery"/> while it lasts
+/// (<see cref="Waits.ForAsync"/>), so a change waiting on a long one reads as waiting, never as hung; the person's
+/// interruption ends it, nothing read or changed.
+/// </para>
 /// </remarks>
-public sealed class NamedMutexAnchorRegistryLock(IHostPlatform platform, TimeSpan timeout) : IAnchorRegistryLock
+public sealed class NamedMutexAnchorRegistryLock : IAnchorRegistryLock
 {
-    /// <summary>How long a change or a read waits for the lock before refusing.</summary>
-    public static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(10);
 
-    private readonly IHostPlatform _platform = platform;
-    private readonly TimeSpan _timeout = timeout;
+    /// <summary>
+    /// What a wait for the lock is said under: the registries' own name, as a leg's admission's wait is said under
+    /// <c>admission</c>, since one lock serves every command that reads or changes them.
+    /// </summary>
+    public const string TellsAs = "anchors";
 
-    public T RunExclusive<T>(AnchorRegistries registries, Func<T> work)
+    /// <summary>What a wait for the lock is told as, after <c>waits for</c>, and what a refusal to open it names.</summary>
+    private const string Subject = "the anchor registries";
+
+    /// <summary>What the lock's holder is named as: a mutex says nothing of who holds it.</summary>
+    private static readonly string HolderName = $"another {ToolPackage.Id} process";
+
+    private readonly IHostPlatform _platform;
+    private readonly IHarnessOutput? _output;
+    private readonly TimeProvider _clock;
+    private readonly TimeSpan? _bound;
+
+    /// <summary>A lock waited for while its holder lives, each wait told through <paramref name="output"/>.</summary>
+    /// <param name="platform">Says how this machine compares paths, which names the lock.</param>
+    /// <param name="output">Tells a wait for the lock as it begins and every <see cref="Waits.SaidEvery"/> while it lasts.</param>
+    /// <param name="clock">Measures a wait.</param>
+    public NamedMutexAnchorRegistryLock(IHostPlatform platform, IHarnessOutput output, TimeProvider clock)
+        : this(platform, output ?? throw new ArgumentNullException(nameof(output)), clock, bound: null)
+    {
+    }
+
+    /// <summary>
+    /// A lock that refuses once <paramref name="bound"/> has passed with the lock still held, telling nothing: the bound a
+    /// test sets in place of a person's interruption, so a holder that never lets go is refused rather than waited for.
+    /// </summary>
+    /// <param name="platform">Says how this machine compares paths, which names the lock.</param>
+    /// <param name="bound">How long a change or a read waits for the lock before refusing.</param>
+    internal NamedMutexAnchorRegistryLock(IHostPlatform platform, TimeSpan bound)
+        : this(platform, output: null, TimeProvider.System, bound)
+    {
+    }
+
+    private NamedMutexAnchorRegistryLock(IHostPlatform platform, IHarnessOutput? output, TimeProvider clock, TimeSpan? bound)
+    {
+        ArgumentNullException.ThrowIfNull(platform);
+        ArgumentNullException.ThrowIfNull(clock);
+
+        _platform = platform;
+        _output = output;
+        _clock = clock;
+        _bound = bound;
+    }
+
+    public async Task<T> RunExclusiveAsync<T>(AnchorRegistries registries, Func<T> work, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(registries);
         ArgumentNullException.ThrowIfNull(work);
 
-        using var mutex = MachineWideMutex.Open(NameFor(registries), "the anchor registries");
+        using var hold = await TakeAsync(NameFor(registries), cancellationToken).ConfigureAwait(false);
 
-        if (!MachineWideMutex.Wait(mutex, _timeout))
-        {
-            throw new HarnessException(
-                HarnessExit.Refused,
-                $"Another {ToolPackage.Id} process has held the anchor registries for {_timeout.TotalSeconds:0} seconds, "
-                + "so nothing was read or changed. Run the command again once it has finished.");
-        }
-
-        try
-        {
-            return work();
-        }
-        finally
-        {
-            mutex.ReleaseMutex();
-        }
+        return work();
     }
 
     /// <summary>The lock's name: one per pair of registry files, however their paths are spelled.</summary>
@@ -105,4 +163,41 @@ public sealed class NamedMutexAnchorRegistryLock(IHostPlatform platform, TimeSpa
             registries.All.Select(registry => registry.FullPath),
             _platform.PathComparison == StringComparison.OrdinalIgnoreCase);
     }
+
+    /// <summary>
+    /// Takes the mutex <paramref name="name"/>: at once where nobody holds it; otherwise told as the wait begins, and
+    /// waited for until its holder lets it go or ends, the person's interruption, or the lock's bound where it has one.
+    /// </summary>
+    /// <exception cref="HarnessException">The mutex could not be opened, or the lock's bound passed with it still held.</exception>
+    /// <exception cref="OperationCanceledException"><paramref name="cancellationToken"/> ended the wait.</exception>
+    private async Task<MachineWideHold> TakeAsync(string name, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        if (MachineWideMutex.TryHold(name, Subject) is { } free)
+        {
+            return free;
+        }
+
+        Tell(new WaitTold(Subject, TimeSpan.Zero, HolderName, null));
+
+        var ended = await Waits.ForAsync(
+            async stop => await MachineWideMutex.HoldAsync(name, Subject, Timeout.InfiniteTimeSpan, stop).ConfigureAwait(false)
+                ?? throw new OperationCanceledException(stop),
+            new WaitWatch(Subject, Tell, _bound, _clock),
+            cancellationToken).ConfigureAwait(false);
+
+        return ended.Kind switch
+        {
+            WaitEndKind.Done => ended.Value!,
+            WaitEndKind.Bound => throw new HarnessException(
+                HarnessExit.Refused,
+                $"Another {ToolPackage.Id} process has held the anchor registries for {_bound!.Value.TotalSeconds:0} seconds, "
+                + "so nothing was read or changed. Run the command again once it has finished."),
+            _ => throw new OperationCanceledException(cancellationToken),
+        };
+    }
+
+    /// <summary>Says where a wait for the lock stands, in the one line every wait is told in.</summary>
+    private void Tell(WaitTold told) => _output?.Info(TellsAs, told.Line());
 }

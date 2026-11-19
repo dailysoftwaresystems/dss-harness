@@ -912,9 +912,9 @@ public sealed class AnchorArmsServiceTests
             topic,
             StringComparison.Ordinal);
         Assert.Contains(
-            "the history read under every name the registry had, across each of its renames and down both sides of every merge; where "
-                + "more commits changed the registry than were read, or the clone is shallow, that is noted, for an id may have been "
-                + "declared before either cut, and so is a version that is not UTF-8.",
+            "the registry's whole history read, under every name it had, across each of its renames and down both sides of every "
+                + "merge; where the clone is shallow, that is noted, for an id may have been declared before the cut, and so is a "
+                + "version that is not UTF-8.",
             topic,
             StringComparison.Ordinal);
     }

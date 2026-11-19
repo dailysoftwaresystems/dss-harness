@@ -1,6 +1,7 @@
 using DssHarness.Core.Execution;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Processes;
+using DssHarness.Core.Waiting;
 
 namespace DssHarness.Core.Mutations;
 
@@ -42,6 +43,12 @@ internal sealed record ArmRunRequest
 
     /// <summary>The text its output must say, or <see langword="null"/> where nothing is watched for.</summary>
     public string? Diagnostic { get; init; }
+
+    /// <summary>
+    /// Told where a wait of the run stands - its report held by another program as the run ends, read again for as long
+    /// as the hold lasts - every <see cref="Waiting.Waits.SaidEvery"/> it lasts and as each wait begins.
+    /// </summary>
+    public Action<Waiting.WaitTold> Told { get; init; } = _ => { };
 }
 
 /// <summary>
@@ -88,8 +95,10 @@ internal interface IArmTestRunner
 /// stopped at its bound has no phase left to say it.
 /// </para>
 /// <para>
-/// Its report is read once it ends, and read again where its file cannot be: a report that is no report is the
-/// binary's, said with why it is none, and one this could not read is this tool's, said as that.
+/// Its report is read once it ends, and read again where its file cannot be: for as long as another program holds it -
+/// the binary's own child still closing it, a scanner reading it - told while it lasts, and otherwise while each failure
+/// is new on the file as it stands. A report that is no report is the binary's, said with why it is none, and one this
+/// could not read is this tool's, said as that.
 /// </para>
 /// </remarks>
 internal sealed class ArmTestRunner(PhaseRunner phaseRunner, IFileSystem fileSystem, TimeProvider clock) : IArmTestRunner
@@ -100,12 +109,11 @@ internal sealed class ArmTestRunner(PhaseRunner phaseRunner, IFileSystem fileSys
     /// <summary>The name a run's report is kept under.</summary>
     public const string ReportFileName = "report.xml";
 
-    /// <summary>How many times a report that is there is read before it is said to be unread.</summary>
-    public const int ReadAttempts = 5;
-
     /// <summary>
-    /// How long a read of a report waits before it is tried again: what holds a report as its run ends - the binary's
-    /// own child still closing it, a scanner reading it - lets go within moments.
+    /// How long a read of a report waits before it is tried again: while another program holds the report, every time,
+    /// since what holds a report as its run ends - the binary's own child still closing it, a scanner reading it - lets go
+    /// within moments, and the read should follow at once; after any other refusal, the first of the waits that double. A
+    /// pace, never a bound: the read is tried again for as long as the hold lasts.
     /// </summary>
     public static readonly TimeSpan ReadRetry = TimeSpan.FromMilliseconds(200);
 
@@ -180,7 +188,7 @@ internal sealed class ArmTestRunner(PhaseRunner phaseRunner, IFileSystem fileSys
         return new ArmRunResult(
             ArmRun.Exited(
                 phase.ExitCode,
-                _fileSystem.FileExists(report) ? await ReadAsync(report, cancellationToken).ConfigureAwait(false) : RunReport.None,
+                _fileSystem.FileExists(report) ? await ReadAsync(report, request.Told, cancellationToken).ConfigureAwait(false) : RunReport.None,
                 request.Diagnostic is { } diagnostic && DiagWindow.Appears(diagnostic, phase.Output.Lines())),
             phase.Duration)
         {
@@ -190,26 +198,43 @@ internal sealed class ArmTestRunner(PhaseRunner phaseRunner, IFileSystem fileSys
 
     /// <summary>
     /// The report at <paramref name="path"/>, which is there: itself; why it is no report; or why its file could not be
-    /// read, tried <see cref="ReadAttempts"/> times, <see cref="ReadRetry"/> apart. The two are never said as one: a
-    /// file this could not read is the harness's own failure, and what it holds may be a report naming every case.
+    /// read. A read another program's hold refuses is tried again for as long as the hold lasts (<see cref="Retrying"/>),
+    /// told by the report's name while it waits; any other refusal is tried again only while it is new on the file as it
+    /// stands, so one met again on a file that did not change ends the reading. The two are never said as one: a file this
+    /// could not read is the harness's own failure, and what it holds may be a report naming every case.
     /// </summary>
-    private async Task<RunReport> ReadAsync(string path, CancellationToken cancellationToken)
+    private async Task<RunReport> ReadAsync(string path, Action<Waiting.WaitTold> told, CancellationToken cancellationToken)
     {
-        for (var attempt = 1; ; attempt++)
-        {
-            try
-            {
-                return JUnitReport.Read(_fileSystem.ReadAllText(path), out var problem) is { } report ? RunReport.Of(report) : RunReport.NoReport(problem);
-            }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-            {
-                if (attempt == ReadAttempts)
+        var ended = await Retrying.RunAsync<RunReport>(
+                (_, _) =>
                 {
-                    return RunReport.NotRead(ex.Message);
-                }
-            }
+                    try
+                    {
+                        return Task.FromResult<RetryTry<RunReport>>(new RetryTry<RunReport>.Done(
+                            JUnitReport.Read(_fileSystem.ReadAllText(path), out var problem) is { } report ? RunReport.Of(report) : RunReport.NoReport(problem)));
+                    }
+                    catch (IOException ex) when (FileHolds.HeldElsewhere(ex))
+                    {
+                        return Task.FromResult<RetryTry<RunReport>>(new RetryTry<RunReport>.Passing($"another program holds it: {ex.Message.TrimEnd('.')}", After: ReadRetry));
+                    }
+                    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                    {
+                        var standing = _fileSystem.StandingOf(path);
 
-            await Task.Delay(ReadRetry, _clock, cancellationToken).ConfigureAwait(false);
-        }
+                        return Task.FromResult<RetryTry<RunReport>>(new RetryTry<RunReport>.Failed(
+                            ex.Message.TrimEnd('.'),
+                            $"{ex.GetType().Name}\n{ex.Message}\n{standing?.Length}\n{standing?.Written?.Ticks}"));
+                    }
+                },
+                new RetryWatch($"the report '{path}' to be read", told, ReadRetry, Bound: null, _clock),
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        return ended.Kind switch
+        {
+            RetryEndKind.Done => ended.Value!,
+            RetryEndKind.Cancelled => throw new OperationCanceledException(cancellationToken),
+            _ => RunReport.NotRead(ended.Failure!),
+        };
     }
 }

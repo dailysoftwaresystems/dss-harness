@@ -102,4 +102,17 @@ public static class Names
 
     /// <summary>What follows the names given, for the rest: <c> and N more (all in </c><paramref name="whole"/><c>)</c>.</summary>
     private static string More(int rest, string whole) => $" and {rest.ToString(CultureInfo.InvariantCulture)} more (all in {whole})";
+
+    /// <summary>
+    /// Every one of <paramref name="items"/>, each written printable (<see cref="ReportText.Printable"/>) and in order,
+    /// <c>, </c> between two: for a message that is itself the one place the list is kept - a refusal, a verdict's detail -
+    /// so it names the whole list, however long. A list of none is no text.
+    /// </summary>
+    /// <param name="items">What to name, in the order it is named.</param>
+    public static string All(IReadOnlyList<string> items)
+    {
+        ArgumentNullException.ThrowIfNull(items);
+
+        return string.Join(Separator, items.Select(ReportText.Printable));
+    }
 }

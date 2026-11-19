@@ -948,7 +948,7 @@ public sealed class ConfigStoreTests
         Assert.Equal(HarnessDefaults.DefaultCores, config.Defaults.BuildCores);
         Assert.Equal(HarnessDefaults.DefaultCores, config.Defaults.TestCores);
         Assert.Null(config.Defaults.MaxParallelLegs);
-        Assert.Equal(WorktreeSettings.DefaultMaxNameLength, config.Worktrees.MaxNameLength);
+        Assert.Null(config.Worktrees.MaxNameLength);
         Assert.True(config.Commit.SignOff);
         Assert.Empty(HarnessConfigValidator.Validate(config));
     }

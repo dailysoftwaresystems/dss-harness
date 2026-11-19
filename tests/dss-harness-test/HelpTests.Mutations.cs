@@ -238,14 +238,18 @@ public sealed partial class HelpTests
             + "says; every other arm is pending.",
             "Never an arm its machine did not admit, one the sweep's own stop or a refusal of the run ended, one no worker reached, "
             + "a skipped one, or anything of a self-test",
-            $"The record is {HarnessLayout.MutationRecordDirectoryRelative} in the main checkout, whichever tree swept: <leg>.json "
-            + $"for each leg, and the tables its entries name in {ArmVerdictRecord.TablesDirectoryName}/<leg>/",
+            $"The record is {HarnessLayout.MutationRecordDirectoryRelative} in the main checkout, whichever tree swept: "
+            + "<leg>.jsonl for each leg, a log each verdict is appended to as a line, and the tables its entries name in "
+            + $"{ArmVerdictRecord.TablesDirectoryName}/<leg>/",
+            "The <leg>.json an earlier version kept a leg's verdicts in is read once, where no log is there yet, carried into "
+            + "the log whole, and never written again.",
             "a host's copy keeps none, so a leg swept there tells this machine instead - each verdict as a "
             + "line on the host's standard error that this machine reads as the arm ends there and never relays, a sweep "
             + "stopped part way or cut off keeping what it had judged - and a sweep typed by hand in a copy the harness "
             + "synced records nothing, saying so once as a warning: under --pending it then holds nothing, and sweeps every "
             + "selected arm.",
-            $"an arm keeps {ArmVerdictRecord.KeptPerArm} keys on a leg, the oldest by its place in the file going first, never by its date.",
+            "an arm keeps every key it was judged on, however many sweeps there were, each a change that appends what it adds "
+            + "and reads only what was appended since.",
             "clean, a deleted worktree and a removed host copy leave it as it was; deleting it is the one way to forget it, and "
             + "every arm is then pending.",
             $"A record that cannot be read, or that a newer {ToolPackage.Id} wrote, is never written: a sweep of that leg says so "

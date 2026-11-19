@@ -1,5 +1,6 @@
 using System.Text.RegularExpressions;
 using DssHarness.Core.Execution;
+using DssHarness.Core.Text;
 
 namespace DssHarness.Core.Build;
 
@@ -27,7 +28,7 @@ internal static class Make
     public static IReadOnlyList<string> KeepGoingArguments { get; } = ["-k"];
 
     /// <summary>A terminal's colour codes, which make writes around what it says where something makes it colour its output.</summary>
-    private static readonly Regex Colour = new(@"\x1B\[[0-9;]*m", RegexOptions.CultureInvariant);
+    private static readonly Regex Colour = LinearRegex.Compile(@"\x1B\[[0-9;]*m");
 
     /// <summary>
     /// The line GNU make says a target failed on, read by its structure alone: its own name, the depth of the make that
@@ -37,29 +38,27 @@ internal static class Make
     /// (<c>Killed</c>, <c>Segmentation fault</c>), and neither its <c>*** </c> nor its brackets. GNU make before 4 names the
     /// target alone. A failure make was told to ignore is written without the <c>*** </c>, and is no failure.
     /// </summary>
-    private static readonly Regex Failed = new(
-        @"\A\S+?(?:\[(?<depth>[0-9]+)\])?: \*\*\* \[(?<rule>.+?)\] \S.*\z",
-        RegexOptions.CultureInvariant);
+    private static readonly Regex Failed = LinearRegex.Compile(@"\A\S+?(?:\[(?<depth>[0-9]+)\])?: \*\*\* \[(?<rule>.+?)\] \S.*\z");
 
     /// <summary>
     /// The makefile and line GNU make 4 and later writes before the target, in a failure's brackets, parted from it as its
     /// catalogs write the colon: <c>build.make:76: a.o</c> in English and most others, French's <c>build.make:76 : a.o</c>
     /// with a space before it, Simplified Chinese's <c>build.make:76：a.o</c> with a full-width one.
     /// </summary>
-    private static readonly Regex RuleAt = new(@"\A(?<makefile>.+?):[0-9]+\s*[:：]\s*", RegexOptions.CultureInvariant);
+    private static readonly Regex RuleAt = LinearRegex.Compile(@"\A(?<makefile>.+?):[0-9]+\s*[:：]\s*");
 
     /// <summary>
     /// A line number after a colon, which no target's name holds: where a failure's brackets hold one that
     /// <see cref="RuleAt"/> could not part from the target, make named a makefile in a form this does not read.
     /// </summary>
-    private static readonly Regex LineNumber = new(@":[0-9]+", RegexOptions.CultureInvariant);
+    private static readonly Regex LineNumber = LinearRegex.Compile(@":[0-9]+");
 
     /// <summary>
     /// The directory of a target's own makefiles in what a target's name or a makefile's path holds - <c>CMakeFiles/app.dir/</c>,
     /// <c>sub/CMakeFiles/app.dir/</c> - which ties a failure of CMake's driving makefiles for a target to the failures of
     /// that target's own steps.
     /// </summary>
-    private static readonly Regex TargetDirectory = new(@"\A(?<directory>(?:[^/]*/)*?CMakeFiles/[^/]+\.dir/)", RegexOptions.CultureInvariant);
+    private static readonly Regex TargetDirectory = LinearRegex.Compile(@"\A(?<directory>(?:[^/]*/)*?CMakeFiles/[^/]+\.dir/)");
 
     /// <summary>The targets of CMake's driving makefiles that stand for the whole build, or for more than one target.</summary>
     private static readonly string[] WholeBuild = ["all", "default_target", "preinstall"];
@@ -68,7 +67,7 @@ internal static class Make
     /// The goals <c>CMakeFiles/Makefile2</c> names for each target - <c>CMakeFiles/app.dir/all</c>, <c>.../rule</c> -
     /// by which a failure of a driving makefile is known where make names no makefile.
     /// </summary>
-    private static readonly Regex DriverGoal = new(@"(?:\A|/)CMakeFiles/[^/]+\.dir/(?:all|rule|preinstall|clean)\z", RegexOptions.CultureInvariant);
+    private static readonly Regex DriverGoal = LinearRegex.Compile(@"(?:\A|/)CMakeFiles/[^/]+\.dir/(?:all|rule|preinstall|clean)\z");
 
     /// <summary>Whether a CMake generator, as configuration or CMake's cache names it, is one whose build tool is make.</summary>
     /// <param name="generator">The generator, or <see langword="null"/> where nothing names one.</param>

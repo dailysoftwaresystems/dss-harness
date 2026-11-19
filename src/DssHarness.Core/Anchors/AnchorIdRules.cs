@@ -1,5 +1,6 @@
 using System.Text.RegularExpressions;
 using DssHarness.Core.Configuration;
+using DssHarness.Core.Text;
 
 namespace DssHarness.Core.Anchors;
 
@@ -12,8 +13,6 @@ namespace DssHarness.Core.Anchors;
 /// </remarks>
 public sealed class AnchorIdRules
 {
-    private const int MaximumFallbackIdentityLength = 80;
-
     /// <summary>One hyphen-separated segment of an id after its prefix, as every reader of an id spells one.</summary>
     internal const string Segment = "[A-Za-z0-9_]+";
 
@@ -34,12 +33,10 @@ public sealed class AnchorIdRules
 
         // \z rather than $: $ also matches before a trailing line break, which would let an id
         // carrying one through and break its row in two.
-        _mintable = new Regex(
-            $@"^{escaped}-[A-Z0-9_]+(?:-{Segment}){{{minimumSegments - 1},}}\z",
-            RegexOptions.CultureInvariant);
-        _wellFormed = new Regex($@"^{escaped}-{Segment}(?:-{Segment})*\z", RegexOptions.CultureInvariant);
-        _token = new Regex($@"{escaped}-{Segment}(?:[-.]{Segment})+", RegexOptions.CultureInvariant);
-        _backticked = new Regex($@"^`{escaped}-{Segment}(?:-{Segment})*`\z", RegexOptions.CultureInvariant);
+        _mintable = LinearRegex.Compile($@"^{escaped}-[A-Z0-9_]+(?:-{Segment}){{{minimumSegments - 1},}}\z");
+        _wellFormed = LinearRegex.Compile($@"^{escaped}-{Segment}(?:-{Segment})*\z");
+        _token = LinearRegex.Compile($@"{escaped}-{Segment}(?:[-.]{Segment})+");
+        _backticked = LinearRegex.Compile($@"^`{escaped}-{Segment}(?:-{Segment})*`\z");
     }
 
     /// <summary>What every id starts with, before its first hyphen.</summary>
@@ -88,11 +85,14 @@ public sealed class AnchorIdRules
         return $"{Prefix}-{string.Join('-', segments)}";
     }
 
-    /// <summary>The identity of a row: the id in its Anchor cell, or the cell's own text when it has none.</summary>
+    /// <summary>The identity of a row: the id in its Anchor cell, or the cell's own text, whole, when it has none.</summary>
     /// <remarks>
     /// Decoration is ignored, so a struck-through id (<c>~~D-A-B-C~~</c>) is still the same row rather
     /// than a different one. The fallback never fails: a row whose first cell is not an id is still
-    /// readable, and linting reports it.
+    /// readable, and linting reports it. It is the whole of the cell's text, never a part of it: two rows with no id
+    /// whose cells share any start are two rows, however long that start. No identity is kept anywhere but the
+    /// registries' own text, which each reading identifies afresh, so no shorter identity an earlier build made is
+    /// left to match.
     /// </remarks>
     public string Identify(string anchorCell)
     {
@@ -106,11 +106,6 @@ public sealed class AnchorIdRules
 
         var stripped = AnchorCells.StripDecoration(anchorCell);
 
-        return stripped.Length switch
-        {
-            0 => "<blank>",
-            > MaximumFallbackIdentityLength => Output.TextCut.Head(stripped, MaximumFallbackIdentityLength),
-            _ => stripped,
-        };
+        return stripped.Length == 0 ? "<blank>" : stripped;
     }
 }

@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using DssHarness.Core.Text;
 
 namespace DssHarness.Core.Anchors;
 
@@ -22,22 +23,33 @@ namespace DssHarness.Core.Anchors;
 /// A file's name is a word holding <c>_</c>, <c>.</c> or <c>-</c> and ending in a letter or a digit, so prose passes that
 /// only looks like a path - "no src/hir/ or src/mir/", a sentence ending "read/ write." - as does a name with neither, such
 /// as <c>Makefile</c>, which no rule can tell from a word. A cut the cell already held is history, and is not judged again.
+/// <para>
+/// Each pattern is matched by the linear engine (<see cref="LinearRegex"/>), which looks neither behind nor ahead: what
+/// may not stand just before or just after a cut is matched as a character of the match's own, or the text's start or
+/// end, around the cut itself (the group <c>cut</c>), and each search goes on from the cut's end - so a character that
+/// ended one cut may begin the next.
+/// </para>
 /// </remarks>
 public sealed class AnchorCellCuts
 {
-    /// <summary>What may not come just before a path: a character of one, which would make it the tail of a longer word.</summary>
-    private const string NotAfterPathCharacter = "(?<![A-Za-z0-9_./-])";
+    /// <summary>What comes just before a path: the text's start, or a character no path holds, which would make it the tail of a longer word.</summary>
+    private const string NotAfterPathCharacter = "(?:^|[^A-Za-z0-9_./-])";
+
+    /// <summary>What comes just after a file's name: a character no path holds, or the text's end.</summary>
+    private const string NotBeforePathCharacter = @"(?:[^A-Za-z0-9_./-]|\z)";
 
     /// <summary>The directories a path runs through, each ended by its '/'.</summary>
     private const string Directories = "(?:[A-Za-z0-9_.-]+/)*";
 
     /// <summary>A file's name, as a word that could be one: holding '_', '.' or '-', and ending in a letter or a digit.</summary>
-    private const string FileName = @"\.?[A-Za-z0-9]+[_.-][A-Za-z0-9_./-]*[A-Za-z0-9](?![A-Za-z0-9_./-])";
+    private const string FileName = @"\.?[A-Za-z0-9]+[_.-][A-Za-z0-9_./-]*[A-Za-z0-9]";
 
     /// <summary>A directory ending a line, and a file's name opening the next: a path the line cut after its '/'.</summary>
-    private static readonly Regex WrappedPath = new(
-        $@"{NotAfterPathCharacter}[A-Za-z0-9_.-]+/{Directories}[ \t]*{AnchorCells.LineBreakPattern}[ \t]*{FileName}",
-        RegexOptions.CultureInvariant);
+    private static readonly Regex WrappedPath = LinearRegex.Compile(
+        $@"{NotAfterPathCharacter}(?<cut>[A-Za-z0-9_.-]+/{Directories}[ \t]*{AnchorCells.LineBreakPattern}[ \t]*{FileName}){NotBeforePathCharacter}");
+
+    /// <summary>One line break, each boundary a value is broken at (<see cref="AnchorCells.LineBreakPattern"/>).</summary>
+    private static readonly Regex LineBreak = LinearRegex.Compile(AnchorCells.LineBreakPattern);
 
     private readonly AnchorIdScanner _scanner;
     private readonly Regex _spacedId;
@@ -55,15 +67,14 @@ public sealed class AnchorCellCuts
         var prefix = Regex.Escape(scanner.Rules.Prefix);
         var segment = AnchorIdRules.Segment;
 
-        _spacedId = new Regex(
-            $@"(?<![A-Za-z0-9_-]){prefix}-(?:(?:{segment}-)+[ \t]+{segment}(?:-{segment})*|[ \t]+{segment}(?:-{segment})+)",
-            RegexOptions.CultureInvariant);
+        _spacedId = LinearRegex.Compile(
+            $@"(?:^|[^A-Za-z0-9_-])(?<cut>{prefix}-(?:(?:{segment}-)+[ \t]+{segment}(?:-{segment})*|[ \t]+{segment}(?:-{segment})+))");
 
         var named = roots.Where(root => root.Length > 0).Distinct(StringComparer.Ordinal).Select(Regex.Escape).ToList();
 
         _spacedPath = named.Count == 0
             ? null
-            : new Regex($@"{NotAfterPathCharacter}(?:{string.Join('|', named)})/{Directories}[ \t]+{FileName}", RegexOptions.CultureInvariant);
+            : LinearRegex.Compile($@"{NotAfterPathCharacter}(?<cut>(?:{string.Join('|', named)})/{Directories}[ \t]+{FileName}){NotBeforePathCharacter}");
     }
 
     /// <summary>Why <paramref name="text"/> would be stored broken: one sentence for each cut, but for those it held already.</summary>
@@ -94,34 +105,50 @@ public sealed class AnchorCellCuts
                 + "so the row would hold an id no search for the real one finds. Keep every id whole on one line.");
         }
 
-        foreach (var match in _spacedId.Matches(text).Cast<Match>())
+        foreach (var cut in CutsOf(_spacedId, text))
         {
             yield return (
-                AnchorCells.Flatten(match.Value),
-                $"The {heading} holds an anchor id with a space after one of its hyphens ('{match.Value}'), which cuts it in two. "
+                AnchorCells.Flatten(cut),
+                $"The {heading} holds an anchor id with a space after one of its hyphens ('{cut}'), which cuts it in two. "
                 + "Keep every id whole.");
         }
 
-        foreach (var match in WrappedPath.Matches(text).Cast<Match>())
+        foreach (var cut in CutsOf(WrappedPath, text))
         {
             yield return (
-                AnchorCells.Flatten(match.Value),
-                $"The {heading} holds a path broken across a line after a '/' ('{Shown(match.Value)}'): stored, the path has a space "
+                AnchorCells.Flatten(cut),
+                $"The {heading} holds a path broken across a line after a '/' ('{Shown(cut)}'): stored, the path has a space "
                 + "in it. Write every path whole on one line.");
         }
 
         if (_spacedPath is not null)
         {
-            foreach (var match in _spacedPath.Matches(AnchorCells.Flatten(text)).Cast<Match>())
+            foreach (var cut in CutsOf(_spacedPath, AnchorCells.Flatten(text)))
             {
                 yield return (
-                    match.Value,
-                    $"The {heading} holds a path with a space after a '/' ('{match.Value}', as it would be stored), which cuts it in "
+                    cut,
+                    $"The {heading} holds a path with a space after a '/' ('{cut}', as it would be stored), which cuts it in "
                     + "two. Write every path whole.");
             }
         }
     }
 
     /// <summary>A match holding a line break, each break written as <c>\n</c>, so the refusal is one line.</summary>
-    private static string Shown(string text) => Regex.Replace(text, AnchorCells.LineBreakPattern, @"\n");
+    private static string Shown(string text) => LineBreak.Replace(text, @"\n");
+
+    /// <summary>
+    /// Each cut <paramref name="pattern"/> finds in <paramref name="text"/>, in order: its group <c>cut</c>, the search going
+    /// on from where that group ends, so the character after one cut may be the one before the next.
+    /// </summary>
+    private static IEnumerable<string> CutsOf(Regex pattern, string text)
+    {
+        for (var match = pattern.Match(text); match.Success;)
+        {
+            var cut = match.Groups["cut"];
+
+            yield return cut.Value;
+
+            match = pattern.Match(text, cut.Index + cut.Length);
+        }
+    }
 }

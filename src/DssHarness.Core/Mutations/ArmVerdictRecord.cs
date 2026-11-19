@@ -5,6 +5,7 @@ using System.Text.Json.Serialization;
 using DssHarness.Core.Execution;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Hosts;
+using DssHarness.Core.Json;
 using DssHarness.Core.Repository;
 
 namespace DssHarness.Core.Mutations;
@@ -216,21 +217,26 @@ public sealed record RecordedTable
 
 /// <summary>
 /// Each leg's recorded verdicts of its mutation arms, with what each was judged on, in the main checkout's harness
-/// directory (<see cref="HarnessLayout.MutationRecordDirectory"/>): one file to a leg, and beside them each table an entry
+/// directory (<see cref="HarnessLayout.MutationRecordDirectory"/>): one log to a leg, and beside them each table an entry
 /// names, written once under its digest.
 /// </summary>
 /// <remarks>
 /// <para>
-/// One file to a leg: a sweep of one leg never rewrites another's verdicts, two legs' sweeps never wait on one file, and a
-/// file that cannot be read loses one leg. Each change is one read, merge and write under the file's machine-wide mutex,
-/// entries merged by arm and key, so two sweeps recording at once - of one leg, from two trees - lose neither's verdicts,
-/// whatever their order.
+/// One log to a leg: a sweep of one leg never touches another's verdicts, two legs' sweeps never wait on one file, and a
+/// log that cannot be read loses one leg. Each change appends its lines under the log's machine-wide mutex, after reading
+/// only what was appended since this record last read it, so two sweeps recording at once - of one leg, from two trees -
+/// lose neither's verdicts, whatever their order, and a year of nightly sweeps costs each change what it adds, never a
+/// rewrite of all that came before.
 /// </para>
 /// <para>
-/// An arm keeps one entry to a key, at most <see cref="KeptPerArm"/>, in the order recorded: a later verdict on the same
-/// key replaces the entry, whatever either was, and the oldest by position goes first - never by when, as a host's clock
-/// may step. A table is written before the first entry naming it, and removed once no entry names it, under the same
-/// mutex: a table is never written ahead of an entry that names it, so two sweeps cannot remove each other's.
+/// Every entry is kept. Read back, an arm holds one entry to a key, in the order recorded: a later verdict on the same key
+/// replaces the entry, whatever either was, by its place in the log - never by when, as a host's clock may step - and no
+/// key is ever dropped for the arm holding many. A table is written before the first entry naming it, and kept: every
+/// entry the log holds may still name it.
+/// </para>
+/// <para>
+/// The whole document an earlier build kept a leg's verdicts in (<see cref="DocumentOf"/>) is read once, where no log is
+/// there yet, and carried into the log whole; it is never written again.
 /// </para>
 /// <para>
 /// A record that cannot be read, or that a newer build wrote, is never written: it is said why, and its leg records
@@ -241,24 +247,48 @@ public sealed record RecordedTable
 /// <param name="layout">The repository, whose main checkout keeps the record.</param>
 public sealed class ArmVerdictRecord(IFileSystem fileSystem, HarnessLayout layout)
 {
-    /// <summary>The format this build writes and reads.</summary>
-    public const int Format = 1;
+    /// <summary>The format of the log this build writes and reads.</summary>
+    public const int Format = 2;
 
-    /// <summary>How many entries an arm keeps on a leg: one to a key.</summary>
-    public const int KeptPerArm = 8;
+    /// <summary>The format of the retired whole document, which this build reads where no log is there yet, and never writes.</summary>
+    public const int DocumentFormat = 1;
 
     /// <summary>The directory, in the record's, that holds a directory of tables for each leg.</summary>
     public const string TablesDirectoryName = "built";
 
+    /// <summary>
+    /// How a line of the log is read: one object, at any depth - and so every line of the record's own shape, wherever it
+    /// comes from: a note a host wrote in passing, the arms a dispatch carried.
+    /// </summary>
+    internal static readonly JsonSerializerOptions LineReading = JsonDepth.Serializer(JsonStateFile.LineOptions);
+
+    /// <summary>How the retired whole document is read: at any depth.</summary>
+    private static readonly JsonSerializerOptions DocumentReading = JsonDepth.Serializer(JsonStateFile.Options);
+
     private readonly IFileSystem _fileSystem = fileSystem;
     private readonly HarnessLayout _layout = layout;
+
+    /// <summary>How far this record has read each leg's log, by the leg, so a change reads only what is new.</summary>
+    private readonly Dictionary<string, LogState> _logs = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>The record's directory.</summary>
     public string Directory => _layout.MutationRecordDirectory;
 
-    /// <summary>Where <paramref name="leg"/>'s verdicts are recorded.</summary>
+    /// <summary>Where <paramref name="leg"/>'s verdicts are recorded: its log, a line to each change.</summary>
     /// <param name="leg">The leg, as the configuration names it.</param>
-    public string FileOf(string leg) => Path.Combine(Directory, leg + ".json");
+    public string FileOf(string leg) => Path.Combine(Directory, leg + ".jsonl");
+
+    /// <summary>Where an earlier build kept <paramref name="leg"/>'s verdicts, as one whole document: read once, never written.</summary>
+    /// <param name="leg">The leg, as the configuration names it.</param>
+    public string DocumentOf(string leg) => Path.Combine(Directory, leg + ".json");
+
+    /// <summary>
+    /// The file <paramref name="leg"/>'s record is read from, as a line about it names it: the retired whole document where
+    /// only that is there, which is what a record that cannot be read then is; otherwise the log.
+    /// </summary>
+    /// <param name="leg">The leg.</param>
+    public string ReadFrom(string leg)
+        => !_fileSystem.FileExists(FileOf(leg)) && _fileSystem.FileExists(DocumentOf(leg)) ? DocumentOf(leg) : FileOf(leg);
 
     /// <summary>Where the tables <paramref name="leg"/>'s entries name are kept.</summary>
     /// <param name="leg">The leg.</param>
@@ -359,9 +389,9 @@ public sealed class ArmVerdictRecord(IFileSystem fileSystem, HarnessLayout layou
 
     /// <summary>
     /// Marks each entry of <paramref name="leg"/> whose arm and key <paramref name="keys"/> names as verified by
-    /// <paramref name="by"/>, in one change of the record: the last sweep that found it holding on the leg's machine. An
-    /// entry no longer there - another sweep replaced it meanwhile - is passed over. Nothing is written where the record
-    /// cannot be read, which is said instead.
+    /// <paramref name="by"/>, in one change of the record: the last sweep that found it holding on the leg's machine,
+    /// appended to the leg's log as a line to each. An entry no longer there - another sweep replaced it meanwhile - is
+    /// passed over as the log is read. Nothing is written where the record cannot be read, which is said instead.
     /// </summary>
     /// <param name="leg">The leg.</param>
     /// <param name="keys">The key that held of each arm, by the arm's id.</param>
@@ -378,33 +408,12 @@ public sealed class ArmVerdictRecord(IFileSystem fileSystem, HarnessLayout layou
 
         return Held(leg, () =>
         {
-            var read = ReadHeld(leg);
-
-            if (read.Unread is { } unread)
+            if (Appendable(leg, out var log) is { } unread)
             {
                 return unread;
             }
 
-            var arms = new Dictionary<string, IReadOnlyList<RecordedVerdict>>(read.Arms, StringComparer.OrdinalIgnoreCase);
-            var marked = false;
-
-            foreach (var (arm, key) in keys)
-            {
-                if (arms.GetValueOrDefault(arm) is not { } entries)
-                {
-                    continue;
-                }
-
-                var verified = entries.Select(entry => string.Equals(entry.Key, key, StringComparison.Ordinal) ? entry with { Verified = by } : entry).ToList();
-
-                marked |= !verified.SequenceEqual(entries);
-                arms[arm] = verified;
-            }
-
-            if (marked)
-            {
-                Write(leg, arms, read.Tables);
-            }
+            Append(leg, log, [.. keys.Select(pair => new LogLine { Arm = pair.Key, Key = pair.Value, Verified = by })]);
 
             return null;
         });
@@ -412,9 +421,9 @@ public sealed class ArmVerdictRecord(IFileSystem fileSystem, HarnessLayout layou
 
     /// <summary>
     /// Records <paramref name="verdict"/> of <paramref name="arm"/> on <paramref name="leg"/>: the tables it names written
-    /// where absent, the entry merged - replacing the arm's entry on the same key, or with no key where it has none - the
-    /// entries beyond <see cref="KeptPerArm"/> dropped oldest first, the leg's file written whole, and every table no entry
-    /// names any more removed. Nothing is written where the record cannot be read, which is said instead.
+    /// where absent, and the entry appended to the leg's log, with an index line of each table the log does not hold yet.
+    /// Read back, it replaces the arm's entry on the same key, or with no key where it has none; every other entry stays.
+    /// Nothing is written where the record cannot be read, which is said instead.
     /// </summary>
     /// <param name="leg">The leg.</param>
     /// <param name="arm">The arm, as the registry names it.</param>
@@ -433,14 +442,12 @@ public sealed class ArmVerdictRecord(IFileSystem fileSystem, HarnessLayout layou
 
         return Held(leg, () =>
         {
-            var read = ReadHeld(leg);
-
-            if (read.Unread is { } unread)
+            if (Appendable(leg, out var log) is { } unread)
             {
                 return unread;
             }
 
-            var names = Names(verdict);
+            var names = Names(verdict).ToHashSet(StringComparer.Ordinal);
             var given = new Dictionary<string, BuiltFromTable>(StringComparer.Ordinal);
 
             foreach (var table in tables)
@@ -451,14 +458,7 @@ public sealed class ArmVerdictRecord(IFileSystem fileSystem, HarnessLayout layou
                 }
             }
 
-            _fileSystem.CreateDirectory(Directory);
-
-            if (!_fileSystem.FileExists(_layout.MutationRecordIgnoreFile))
-            {
-                _fileSystem.WriteAllTextAtomic(_layout.MutationRecordIgnoreFile, HarnessLayout.SelfIgnoreRule);
-            }
-
-            // Each table before the entry that names it: once written, it is named by the time anything could remove it.
+            // Each table before the entry that names it: once written, it is named by the time anything reads the entry.
             foreach (var (digest, table) in given)
             {
                 var file = TableFile(leg, digest);
@@ -470,61 +470,271 @@ public sealed class ArmVerdictRecord(IFileSystem fileSystem, HarnessLayout layou
                 }
             }
 
-            var arms = new Dictionary<string, IReadOnlyList<RecordedVerdict>>(read.Arms, StringComparer.OrdinalIgnoreCase);
-            var kept = arms.GetValueOrDefault(arm) ?? [];
+            List<LogLine> lines =
+            [
+                .. given.Where(pair => !log.Tables.Contains(pair.Key)).Select(pair => new LogLine { Table = pair.Key, Index = pair.Value.Index() }),
+                new LogLine { Arm = arm, Entry = verdict },
+            ];
 
-            // Kept under the spelling it was last recorded by.
-            arms.Remove(arm);
-
-            List<RecordedVerdict> entries = [.. kept.Where(entry => !string.Equals(entry.Key, verdict.Key, StringComparison.Ordinal)), verdict];
-
-            arms[arm] = entries[Math.Max(0, entries.Count - KeptPerArm)..];
-
-            var named = arms.Values.SelectMany(entry => entry).SelectMany(Names).ToHashSet(StringComparer.Ordinal);
-            var index = new SortedDictionary<string, TableIndex>(StringComparer.Ordinal);
-
-            foreach (var (digest, table) in read.Tables.Where(pair => named.Contains(pair.Key)))
-            {
-                index[digest] = table;
-            }
-
-            foreach (var (digest, table) in given.Where(pair => named.Contains(pair.Key)))
-            {
-                index[digest] = table.Index();
-            }
-
-            Write(leg, arms, index);
-            Prune(leg, named);
+            Append(leg, log, lines);
 
             return null;
         });
     }
 
-    /// <summary>Writes <paramref name="leg"/>'s record whole, holding <paramref name="arms"/> and <paramref name="tables"/>, while its mutex is held.</summary>
-    private void Write(string leg, IReadOnlyDictionary<string, IReadOnlyList<RecordedVerdict>> arms, IReadOnlyDictionary<string, TableIndex> tables)
-        => JsonStateFile.Write(
-            _fileSystem,
-            FileOf(leg),
-            new Document
+    /// <summary>Runs <paramref name="work"/> with no other process inside a change of <paramref name="leg"/>'s record.</summary>
+    private T Held<T>(string leg, Func<T> work) => MachineWideFile.Update(Path.GetFullPath(FileOf(leg)), MachineWideFile.Window, work);
+
+    /// <summary>
+    /// <paramref name="leg"/>'s log, made ready for a line, while its mutex is held: made where neither form of the record
+    /// is there, made from the retired whole document where only that is, and otherwise read for whatever was appended
+    /// since this record last read it - the whole of it the first time - so each change reads only what is new, and a log
+    /// with a line this build cannot read is never written to. Why it cannot be read, or <see langword="null"/> with
+    /// <paramref name="log"/> where a line may be appended.
+    /// </summary>
+    private RecordUnread? Appendable(string leg, out LogState log)
+    {
+        log = new LogState();
+        var file = FileOf(leg);
+
+        _fileSystem.CreateDirectory(Directory);
+
+        if (!_fileSystem.FileExists(_layout.MutationRecordIgnoreFile))
+        {
+            _fileSystem.WriteAllTextAtomic(_layout.MutationRecordIgnoreFile, HarnessLayout.SelfIgnoreRule);
+        }
+
+        if (!_fileSystem.FileExists(file))
+        {
+            // The retired whole document, where one is there, read once and carried into the log whole: never written again.
+            var document = ReadDocument(leg);
+
+            if (document.Unread is { } unread)
             {
-                Format = Format,
-                Leg = leg,
-                Arms = new SortedDictionary<string, List<RecordedVerdict>>(
-                    arms.ToDictionary(pair => pair.Key, pair => pair.Value.ToList(), StringComparer.Ordinal),
-                    StringComparer.Ordinal),
-                Tables = new SortedDictionary<string, TableIndex>(tables.ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal), StringComparer.Ordinal),
-            });
+                _logs.Remove(leg);
+                return unread;
+            }
+
+            var lines = new List<LogLine> { new() { Format = Format, Leg = leg } };
+
+            lines.AddRange(document.Tables.Select(pair => new LogLine { Table = pair.Key, Index = pair.Value }));
+            lines.AddRange(document.Arms.SelectMany(pair => pair.Value.Select(entry => new LogLine { Arm = pair.Key, Entry = entry })));
+            _fileSystem.WriteAllTextAtomic(file, string.Concat(lines.Select(Line)));
+            _logs.Remove(leg);
+        }
+
+        var known = _logs.GetValueOrDefault(leg);
+        var length = _fileSystem.StandingOf(file)?.Length ?? 0;
+
+        // A log shorter than this record last read it was replaced - deleted and begun again - and is read whole.
+        log = known is not null && known.ReadTo <= length ? known : new LogState();
+
+        if (Fold(leg, file, log, folded: null) is { } problem)
+        {
+            _logs.Remove(leg);
+            return problem;
+        }
+
+        _logs[leg] = log;
+        return null;
+    }
+
+    /// <summary>
+    /// Appends <paramref name="lines"/> to <paramref name="leg"/>'s log, made ready by <see cref="Appendable"/>, each on the
+    /// disk before the change ends; a line a writer that stopped part way left torn at the end is cut back first, so it
+    /// never runs into the next.
+    /// </summary>
+    private void Append(string leg, LogState log, IReadOnlyList<LogLine> lines)
+    {
+        using var appended = _fileSystem.OpenForAppend(FileOf(leg));
+        var end = appended.Length;
+
+        if (end > 0)
+        {
+            Span<byte> last = stackalloc byte[1];
+            appended.ReadExactlyAt(end - 1, last);
+
+            if (last[0] != (byte)'\n')
+            {
+                end = log.ReadTo;
+                appended.TruncateTo(end);
+            }
+        }
+
+        appended.AppendFlushed(System.Text.Encoding.UTF8.GetBytes(string.Concat(lines.Select(Line))));
+
+        log.ReadTo = appended.Length;
+
+        foreach (var line in lines.Where(line => line.Table is not null))
+        {
+            log.Tables.Add(line.Table!);
+        }
+    }
 
     /// <summary>The digests of the tables <paramref name="verdict"/> names.</summary>
     private static IEnumerable<string> Names(RecordedVerdict verdict) => verdict.JudgedOn?.Built.Values ?? [];
 
-    /// <summary>Runs <paramref name="work"/> with no other process inside a change of <paramref name="leg"/>'s record.</summary>
-    private T Held<T>(string leg, Func<T> work) => MachineWideFile.Update(Path.GetFullPath(FileOf(leg)), MachineWideFile.Window, work);
+    /// <summary>A line of the log as it is written: one object, then a line feed.</summary>
+    private static string Line(LogLine line) => JsonSerializer.Serialize(line, JsonStateFile.LineOptions) + "\n";
 
     /// <summary>What <paramref name="leg"/>'s record holds, read while its mutex is held, or why it cannot be read.</summary>
     private LegVerdictRecord ReadHeld(string leg)
     {
         var file = FileOf(leg);
+
+        if (!_fileSystem.FileExists(file))
+        {
+            return ReadDocument(leg);
+        }
+
+        var folded = new Folded();
+        var read = Fold(leg, file, new LogState(), folded);
+
+        return read is { } unread
+            ? LegVerdictRecord.Unreadable(file, unread)
+            : LegVerdictRecord.Read(
+                file,
+                folded.Arms.ToDictionary(pair => pair.Key, pair => (IReadOnlyList<RecordedVerdict>)pair.Value, StringComparer.OrdinalIgnoreCase),
+                folded.Tables);
+    }
+
+    /// <summary>
+    /// Reads <paramref name="leg"/>'s log from where <paramref name="log"/> last read it to its end - a line torn at the
+    /// end, by a writer that stopped part way, not yet read - noting each table index it holds in <paramref name="log"/>,
+    /// and, where <paramref name="folded"/> is given, folding each line into it: an entry replacing its arm's entry on the
+    /// same key, newest last, a verification marking the entry it names. Why it cannot be read, or <see langword="null"/>.
+    /// </summary>
+    private RecordUnread? Fold(string leg, string file, LogState log, Folded? folded)
+    {
+        using var stream = _fileSystem.OpenRead(file);
+
+        // Read on from where this record last read it only while a line still ends there: a log deleted and begun again
+        // since, by another process, is read whole.
+        if (log.ReadTo > 0)
+        {
+            stream.Seek(log.ReadTo - 1, SeekOrigin.Begin);
+
+            if (stream.ReadByte() != '\n')
+            {
+                log.ReadTo = 0;
+                log.Tables.Clear();
+                stream.Seek(0, SeekOrigin.Begin);
+            }
+        }
+
+        var position = log.ReadTo;
+        var line = new List<byte>();
+        int read;
+
+        while ((read = stream.ReadByte()) >= 0)
+        {
+            if (read != '\n')
+            {
+                line.Add((byte)read);
+                continue;
+            }
+
+            var problem = Took(leg, log, folded, System.Text.Encoding.UTF8.GetString([.. line]), first: position == 0);
+
+            if (problem is not null)
+            {
+                return problem;
+            }
+
+            position += line.Count + 1;
+            line.Clear();
+        }
+
+        log.ReadTo = position;
+
+        return position == 0 ? RecordUnread.Because("it holds no whole line saying its format") : null;
+    }
+
+    /// <summary>One line of the log, read: its kind refused where no build of this one's writes it, or taken.</summary>
+    private RecordUnread? Took(string leg, LogState log, Folded? folded, string text, bool first)
+    {
+        LogLine line;
+
+        try
+        {
+            line = JsonSerializer.Deserialize<LogLine>(text, LineReading) ?? throw new JsonException("it holds null");
+        }
+        catch (JsonException)
+        {
+            // Asked before the shape, which a newer format may have changed: its members are then no reason to call it unreadable.
+            return first && NewerFormat(text) is { } newer ? RecordUnread.Newer(newer) : RecordUnread.Because(WrittenOtherwise);
+        }
+
+        if (first)
+        {
+            return line.Format is not { } format || line.Leg is null || line.Arm is not null || line.Entry is not null || line.Table is not null || line.Verified is not null
+                ? RecordUnread.Because("its first line says no format")
+                : format > Format ? RecordUnread.Newer(format)
+                : format != Format ? RecordUnread.Because($"it says it is of format {format}, which no build of {ToolPackage.Id} writes")
+                : !string.Equals(line.Leg, leg, StringComparison.OrdinalIgnoreCase) ? RecordUnread.Because($"it is the record of leg '{line.Leg}'")
+                : null;
+        }
+
+        switch (line)
+        {
+            case { Arm: { } arm, Entry: { } entry, Table: null, Index: null, Key: null, Verified: null, Format: null, Leg: null }:
+                if (entry.Key is not null && entry.JudgedOn is null)
+                {
+                    return RecordUnread.Because($"it holds an entry of arm '{arm}' with the key '{entry.Key}' and nothing it was judged on");
+                }
+
+                if (entry.JudgedOn is { } on && Damaged(arm, on) is { } damaged)
+                {
+                    return RecordUnread.Because(damaged);
+                }
+
+                if (folded is not null)
+                {
+                    // Kept under the spelling it was last recorded by.
+                    var kept = folded.Arms.Remove(arm, out var entries) ? entries : [];
+
+                    kept.RemoveAll(other => string.Equals(other.Key, entry.Key, StringComparison.Ordinal));
+                    kept.Add(entry);
+                    folded.Arms[arm] = kept;
+                }
+
+                return null;
+
+            case { Table: { } digest, Index: { } index, Arm: null, Entry: null, Key: null, Verified: null, Format: null, Leg: null }:
+                log.Tables.Add(digest);
+
+                if (folded is not null)
+                {
+                    folded.Tables[digest] = index;
+                }
+
+                return null;
+
+            case { Arm: { } marked, Key: { } key, Verified: { } by, Entry: null, Table: null, Index: null, Format: null, Leg: null }:
+                if (folded?.Arms.GetValueOrDefault(marked) is { } named)
+                {
+                    var at = named.FindIndex(entry => string.Equals(entry.Key, key, StringComparison.Ordinal));
+
+                    if (at >= 0)
+                    {
+                        named[at] = named[at] with { Verified = by };
+                    }
+                }
+
+                return null;
+
+            default:
+                return RecordUnread.Because(WrittenOtherwise);
+        }
+    }
+
+    /// <summary>
+    /// What <paramref name="leg"/>'s record held in the retired whole document (<see cref="DocumentOf"/>), which an earlier
+    /// build wrote and this one reads, once, to begin the log from - or why it cannot be read. Nothing where it is not there.
+    /// </summary>
+    private LegVerdictRecord ReadDocument(string leg)
+    {
+        var file = DocumentOf(leg);
         var none = LegVerdictRecord.Read(
             file,
             new Dictionary<string, IReadOnlyList<RecordedVerdict>>(StringComparer.OrdinalIgnoreCase),
@@ -542,27 +752,29 @@ public sealed class ArmVerdictRecord(IFileSystem fileSystem, HarnessLayout layou
             return none;
         }
 
-        // Asked before the shape, which a newer format may have changed: its members are then no reason to call it unreadable.
+        // Asked before the shape, which another format may have changed: its members are then no reason to call it what no
+        // build writes. No build writes the whole document in any format but its one - a newer build writes the log - so
+        // one of another is never said to be newer.
         if (node is JsonObject { } written
             && written["format"] is JsonValue declared
             && declared.TryGetValue<int>(out var format)
-            && format > Format)
+            && format != DocumentFormat)
         {
-            return LegVerdictRecord.Unreadable(file, RecordUnread.Newer(format));
+            return LegVerdictRecord.Unreadable(file, RecordUnread.Because($"it says it is of format {format}, which no build of {ToolPackage.Id} writes"));
         }
 
         Document document;
 
         try
         {
-            document = node.Deserialize<Document>(JsonStateFile.Options) ?? throw new JsonException("it holds null");
+            document = node.Deserialize<Document>(DocumentReading) ?? throw new JsonException("it holds null");
         }
         catch (JsonException)
         {
             return LegVerdictRecord.Unreadable(file, RecordUnread.Because(WrittenOtherwise));
         }
 
-        if (document.Format != Format)
+        if (document.Format != DocumentFormat)
         {
             return LegVerdictRecord.Unreadable(file, RecordUnread.Because($"it says it is of format {document.Format}, which no build of {ToolPackage.Id} writes"));
         }
@@ -630,36 +842,65 @@ public sealed class ArmVerdictRecord(IFileSystem fileSystem, HarnessLayout layou
     /// <summary>Why a record this build cannot read says it cannot be, in this tool's words, wherever a shape is to blame.</summary>
     private static string WrittenOtherwise => $"it holds what no build of {ToolPackage.Id} writes - another build wrote it, or a hand changed it";
 
-    /// <summary>
-    /// Removes each table of <paramref name="leg"/> whose digest is not among <paramref name="named"/>. One that cannot be
-    /// removed is left for the next change of the record to remove: a table no entry names is never read.
-    /// </summary>
-    private void Prune(string leg, IReadOnlySet<string> named)
+    /// <summary>The format a first line declares where it is newer than this build's, whatever else it holds; otherwise null.</summary>
+    private static int? NewerFormat(string text)
     {
-        var directory = TablesOf(leg);
-
-        if (!_fileSystem.DirectoryExists(directory))
+        try
         {
-            return;
+            return JsonDepth.ParseNode(text) is JsonObject { } written
+                && written["format"] is JsonValue declared && declared.TryGetValue<int>(out var format) && format > Format
+                ? format
+                : null;
         }
-
-        foreach (var file in _fileSystem.EnumerateFiles(directory, recursive: false).ToList())
+        catch (JsonException)
         {
-            if (string.Equals(Path.GetExtension(file), ".json", StringComparison.Ordinal) && !named.Contains(Path.GetFileNameWithoutExtension(file)))
-            {
-                try
-                {
-                    _fileSystem.DeleteFile(file);
-                }
-                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-                {
-                    // Named by nothing, so read by nothing: the next change of the record tries again.
-                }
-            }
+            return null;
         }
     }
 
-    /// <summary>A leg's record as it is written.</summary>
+    /// <summary>How far this record has read a leg's log, and the table indexes it holds so far.</summary>
+    private sealed class LogState
+    {
+        /// <summary>The byte the next unread line begins at.</summary>
+        public long ReadTo { get; set; }
+
+        /// <summary>The digests of the tables the log holds an index of.</summary>
+        public HashSet<string> Tables { get; } = new(StringComparer.Ordinal);
+    }
+
+    /// <summary>A log read whole: each arm's entries, one to a key, newest last, and each table's index.</summary>
+    private sealed class Folded
+    {
+        public Dictionary<string, List<RecordedVerdict>> Arms { get; } = new(StringComparer.OrdinalIgnoreCase);
+
+        public Dictionary<string, TableIndex> Tables { get; } = new(StringComparer.Ordinal);
+    }
+
+    /// <summary>
+    /// A line of a leg's log, of one of four kinds: the first, saying its <see cref="Format"/> and <see cref="Leg"/>; an
+    /// entry (<see cref="Arm"/>, <see cref="Entry"/>); a table's index (<see cref="Table"/>, <see cref="Index"/>); or a
+    /// verification (<see cref="Arm"/>, <see cref="Key"/>, <see cref="Verified"/>).
+    /// </summary>
+    private sealed record LogLine
+    {
+        public int? Format { get; init; }
+
+        public string? Leg { get; init; }
+
+        public string? Arm { get; init; }
+
+        public RecordedVerdict? Entry { get; init; }
+
+        public string? Table { get; init; }
+
+        public TableIndex? Index { get; init; }
+
+        public string? Key { get; init; }
+
+        public RecordedRun? Verified { get; init; }
+    }
+
+    /// <summary>A leg's record as the retired whole document held it.</summary>
     private sealed record Document
     {
         /// <summary>The format it is written in.</summary>

@@ -338,6 +338,24 @@ public sealed class AnchorCellsTests
         Assert.Contains("[|]", exception.Message, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// Whole values are quoted: a refusal of a pipe escaped by hand deep in a long value names where it is and quotes the
+    /// whole value, never forty characters either side of it, and a value a report quotes is the whole of it, on one line.
+    /// Red with the window, or the excerpts' lengths, put back.
+    /// </summary>
+    [Fact]
+    public void WholeValues_AreQuoted()
+    {
+        var before = string.Join(' ', Enumerable.Range(0, 60).Select(index => $"word{index}"));
+        var after = string.Join(' ', Enumerable.Range(0, 60).Select(index => $"tail{index}"));
+        var value = $"{before} \\| {after}";
+
+        var exception = Assert.Throws<HarnessException>(() => AnchorCells.Format(value, "Trigger"));
+
+        Assert.EndsWith($"At character {before.Length + 1} of the value: {value}", exception.Message, StringComparison.Ordinal);
+        Assert.Equal($"{before} {after}", AnchorCells.Collapse($"{before}\n   {after}"));
+    }
+
     [Fact]
     public void ACellReadAndWrittenBack_IsUnchanged()
     {

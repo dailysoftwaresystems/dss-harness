@@ -64,8 +64,9 @@ public sealed record WorkerPlan
 /// <remarks>
 /// <para>
 /// A sweep already runs beside the other legs of its command, on a machine that may be a small one, so it wants no more
-/// workers than <c>mutations.workers</c> - two where left out - and never more than it has arms. A WSL distribution
-/// cannot see the memory Windows has, and its sweep is admitted as one heavy leg for the whole of it, so it runs one.
+/// workers than <c>mutations.workers</c> - two where left out - and never more than it has arms, in a WSL distribution as
+/// anywhere: each worker's build and each arm are admitted as units of the leg's admission, which weighs the machine's
+/// own memory and slots as every leg's is, so a distribution runs as many as its room and admission allow.
 /// </para>
 /// <para>
 /// A worker needs its copy of the tree, where it holds none yet, and what its build is expected to come to, less what
@@ -76,16 +77,15 @@ public sealed record WorkerPlan
 /// </remarks>
 public static class WorkerRoom
 {
-    /// <summary>How many workers a sweep wants: <paramref name="cap"/>, no more than <paramref name="arms"/>, and one in WSL.</summary>
+    /// <summary>How many workers a sweep wants: <paramref name="cap"/>, and no more than <paramref name="arms"/>.</summary>
     /// <param name="cap">At most how many: <c>mutations.workers</c>.</param>
     /// <param name="arms">How many arms the sweep drives on the leg.</param>
-    /// <param name="wsl">Whether the leg runs in a WSL distribution.</param>
-    public static int Wanted(int cap, int arms, bool wsl)
+    public static int Wanted(int cap, int arms)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(cap);
         ArgumentOutOfRangeException.ThrowIfNegative(arms);
 
-        return Math.Min(wsl ? 1 : cap, arms);
+        return Math.Min(cap, arms);
     }
 
     /// <summary>

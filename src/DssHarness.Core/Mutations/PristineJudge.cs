@@ -97,8 +97,6 @@ public sealed record PristineOutcome
 /// </remarks>
 public static class PristineJudge
 {
-    /// <summary>The least time a mutated run may take beyond the unmutated run's, however quick that was.</summary>
-    public static readonly TimeSpan Headroom = TimeSpan.FromSeconds(60);
 
     /// <summary>
     /// The longest a bound can be: the longest a timer can wait, some 49 days, which a factor however large never takes a
@@ -172,24 +170,41 @@ public static class PristineJudge
                 $"the unmutated {runner} fails with no case to show for it");
         }
 
-        return PristineOutcome.Passed(Bound(duration, factor));
+        return PristineOutcome.Passed(Bound(duration, StartAndExit(duration, report), factor));
+    }
+
+    /// <summary>
+    /// What the unmutated run of a binary took beyond its cases, measured on this machine: the program's start and exit -
+    /// loading it, its sanitizer's set-up, writing its report. The run's whole length less the time its report says its
+    /// cases took; the whole run where its report says nothing of their time, since nothing then tells the cases from the
+    /// rest.
+    /// </summary>
+    /// <param name="duration">How long the unmutated run took.</param>
+    /// <param name="report">The report it wrote.</param>
+    public static TimeSpan StartAndExit(TimeSpan duration, JUnitReport report)
+    {
+        ArgumentNullException.ThrowIfNull(report);
+
+        return report.CaseTime is { } cases && cases < duration ? duration - cases : duration;
     }
 
     /// <summary>
     /// How long a mutated run may take: <paramref name="factor"/> times the unmutated run, never less than the unmutated
-    /// run and <see cref="Headroom"/>, and never more than <see cref="LongestBound"/> - saying which of the three set
-    /// it, so a run stopped under the least a bound can be is never said to have run past the factor.
+    /// run and its start and exit again (<paramref name="startAndExit"/>), the program's own cost on this machine, and never
+    /// more than <see cref="LongestBound"/> - saying which of the three set it, so a run stopped under the least a bound can
+    /// be is never said to have run past the factor.
     /// </summary>
     /// <param name="duration">How long the unmutated run took.</param>
+    /// <param name="startAndExit">What the unmutated run took beyond its cases (<see cref="StartAndExit"/>).</param>
     /// <param name="factor">How many times that a mutated run may take.</param>
-    public static RunBound Bound(TimeSpan duration, double factor)
+    public static RunBound Bound(TimeSpan duration, TimeSpan startAndExit, double factor)
     {
-        var least = (duration + Headroom).Ticks;
+        var least = (double)duration.Ticks + startAndExit.Ticks;
         var scaled = duration.Ticks * factor;
 
         // Written so that a factor that is no number is the longest a bound can be, as it has always been.
         return !(Math.Max(scaled, least) < LongestBound.Ticks) ? new RunBound(LongestBound, "the longest a run is waited for")
             : scaled >= least ? new RunBound(TimeSpan.FromTicks((long)scaled), $"{factor.ToString(CultureInfo.InvariantCulture)}x the unmutated run")
-            : new RunBound(TimeSpan.FromTicks(least), $"the unmutated run and {LedgerReport.FormatDuration(Headroom)} more");
+            : new RunBound(TimeSpan.FromTicks((long)least), $"the unmutated run and its start and exit, {LedgerReport.FormatDuration(startAndExit)}, again");
     }
 }

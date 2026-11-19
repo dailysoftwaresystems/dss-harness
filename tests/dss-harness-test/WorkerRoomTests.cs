@@ -4,22 +4,34 @@ using DssHarness.Core.Mutations;
 namespace DssHarness.Tests;
 
 /// <summary>
-/// How many workers a sweep runs: no more than its cap and its arms, one in WSL, and of those the ones that fit the room,
-/// counted each beside the ones before it - fewer said as fewer, and none turning the leg away.
+/// How many workers a sweep runs: no more than its cap and its arms, in a WSL distribution as anywhere, and of those the
+/// ones that fit the room, counted each beside the ones before it - fewer said as fewer, and none turning the leg away.
 /// </summary>
 public sealed class WorkerRoomTests
 {
     private const long Gibibyte = 1L << 30;
 
-    /// <summary>A sweep wants its cap, never more than it has arms, and one in a WSL distribution.</summary>
+    /// <summary>A sweep wants its cap, never more than it has arms.</summary>
     [Theory]
-    [InlineData(2, 10, false, 2)]
-    [InlineData(4, 3, false, 3)]
-    [InlineData(2, 0, false, 0)]
-    [InlineData(4, 10, true, 1)]
-    [InlineData(4, 0, true, 0)]
-    public void ASweepWants_ItsCap_NoMoreThanItsArms_AndOneInWsl(int cap, int arms, bool wsl, int wanted)
-        => Assert.Equal(wanted, WorkerRoom.Wanted(cap, arms, wsl));
+    [InlineData(2, 10, 2)]
+    [InlineData(4, 3, 3)]
+    [InlineData(2, 0, 0)]
+    public void ASweepWants_ItsCap_NoMoreThanItsArms(int cap, int arms, int wanted)
+        => Assert.Equal(wanted, WorkerRoom.Wanted(cap, arms));
+
+    /// <summary>
+    /// A sweep in a WSL distribution wants its cap as a sweep anywhere does, and runs as many as the distribution's room
+    /// holds - eight workers wanted there run where the room the distribution has holds all eight, and fewer where it
+    /// holds fewer, said so; what bounds them is what is measured, the distribution's own room and the leg's admission,
+    /// never a count of the code's own. Red with the one worker in WSL put back.
+    /// </summary>
+    [Fact]
+    public void EightWslWorkers_RunWhereRoomAllows()
+    {
+        Assert.Equal(8, WorkerRoom.Wanted(8, 20));
+        Assert.Equal(WorkerPlan.Running(8), Plan([.. Enumerable.Repeat(Gibibyte, 8)], Room(8 * Gibibyte), null, null));
+        Assert.Equal(5, Plan([.. Enumerable.Repeat(Gibibyte, 8)], Room(5 * Gibibyte), null, null).Count);
+    }
 
     /// <summary>
     /// A worker needs its copy where it has none, and its build's expected size less what its last build recorded -
