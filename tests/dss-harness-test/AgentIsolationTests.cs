@@ -1,5 +1,4 @@
 using DssHarness.Core.Agents;
-using DssHarness.Core.Agents.ClaudeCode;
 using DssHarness.Core.Agents.Isolation;
 using DssHarness.Core.Agents.Policy;
 using DssHarness.Core.Agents.SideTasks;
@@ -239,16 +238,15 @@ public sealed class AgentIsolationTests
         Assert.Equal((new GitDirectoryPin(worktree, own, own), new GitDirectoryPin(kit.Main, git, git)), (pins.Of(worktree), pins.Of(kit.Main)));
         Assert.Equal(new AgentIsolationRecord(AgentIsolationMode.Required) { Mechanism = "test", Version = "1.0" }, isolated.Record);
 
-        // Claude Code's whole process, in the outer layer each command is handed in from: the slots still hidden, Claude
-        // Code's own directory and file written, and the receipts' directory and its own temporary one in the launch's.
+        // Claude Code's whole process, in an outer layer of its own: the slots still hidden, and Claude Code's own
+        // directory and file written beside what the commands write - nothing of the launch's directory, where nothing of
+        // Claude Code's is kept now that it runs no command of its own.
         var outer = isolated.ForClaudeCode!.Profile;
         IReadOnlyList<IsolatedWrite> outerWrites =
         [
             .. writes,
             new(claude, Directory: true, Writable: true),
             new(claude + ".json", Directory: false, Writable: true),
-            new(Path.Combine(launch, ClaudeShell.ReceiptsDirectoryName), Directory: true, Writable: true),
-            new(Path.Combine(launch, ClaudeShell.TempDirectoryName), Directory: true, Writable: true),
         ];
 
         Assert.Equal((true, (string?)null, (string?)null), (outer.Outer, isolated.ClaudeCodeOutside, isolated.Processes.ClaudeCodeOutside));

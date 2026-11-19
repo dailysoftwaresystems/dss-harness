@@ -71,12 +71,6 @@ public sealed class ClaudeCodeClient(
     /// <summary>The id of the host's <c>initialize</c> request, which its answer names.</summary>
     public const string InitializeId = "initialize";
 
-    /// <summary>
-    /// How long the receipt of a shell call's command was awaited, when a launch handed its own shell's commands to the
-    /// isolation. No launch is given Claude Code's own shell now, so none is handed over and none awaited: what the
-    /// isolation's help still says of it is the last that reads this.
-    /// </summary>
-    public static readonly TimeSpan ReceiptBound = TimeSpan.FromSeconds(20);
 
     /// <summary>What a run that is no chat's - a one shot - ends with where its interrupt cut its turn: every client's words for it.</summary>
     public const string TurnCut = AgentTurnInterrupt.Cut;

@@ -497,63 +497,33 @@ public sealed partial class HelpTests
             prose,
             StringComparison.Ordinal);
         Assert.Contains(
-            "On Linux and macOS a claude-code launch's own process runs apart from its commands, reading its login and the key it is "
-                + "handed there, and every shell command it starts is handed into a layer of its own through its shell prefix "
-                + "(CLAUDE_CODE_SHELL_PREFIX: this tool and --isolated-shell, which becomes the mechanism with /bin/bash inside, the "
-                + "launch's isolation read from the file DSSHARNESS_ISOLATED_SHELL names) - so no command it runs reaches its "
-                + "directories, its login or its environment. On Linux Claude Code's own process runs inside an outer layer of "
-                + "bubblewrap: the machine read-only, every credential slot hidden, git's code-running files and the tool's state "
-                + "sealed as for its commands, and written but its writable roots, its temporary directory, the declared caches, "
-                + "Claude Code's own directories and ~/.claude.json - without which it fails every shell command - and the step's "
-                + "claude-receipts and claude-tmp; the outer layer alone is left a user namespace to make each command's layer in, "
-                + "and the mounts it laid are locked into every namespace made inside it, so none is undone there. A command Claude "
-                + "Code ran without its prefix therefore still runs inside the outer layer, never with the user's rights - though "
-                + "there it reads Claude Code's login and environment and could write its directories. Where Claude Code never ran, "
-                + "its directory and .claude.json (holding {}) are made first, for inside it can make neither. Where this machine's "
-                + "bubblewrap cannot start again inside a layer of its own - an AppArmor profile that denies its children every "
-                + "capability, as Ubuntu's bwrap-userns-restrict does - the probe says so, and Claude Code's own process runs "
-                + "outside every layer, as on macOS, whose sandbox starts none inside another; there a command Claude Code ran "
-                + "without its prefix runs outside with the user's rights, and each launch says so as it starts. In or out of a "
-                + "layer, Claude Code opens no file of the agent's in its own process: its "
-                + "file tools are not given, --tools names its shell alone, and the engine's tool server serves the tool runtime's "
-                + "(view_file, find_files, search_files, read_result, create_file, replace_in_file, insert_in_file, create_directory, delete_file, "
-                + "delete_directory, move_path) in their place, each file read through the file the engine opened, decided again by "
-                + "where the system names it, and each written, made, moved or deleted relative to its directory held from the "
-                + "writable root it was decided in with no link on the way, so a link a command - one left running in the "
-                + "background among them - puts on a path between the decision and the act reaches nothing.",
+            "A claude-code launch is given no tool of Claude Code's own - --tools names none but a side-task's own web tools - so "
+                + "Claude Code runs no command and opens no file of the agent's in its own process: the engine's tool server serves "
+                + "the tool runtime's in their place (view_file, find_files, search_files, read_result, create_file, replace_in_file, "
+                + "insert_in_file, create_directory, delete_file, delete_directory, move_path, run_command and the rest), each file read "
+                + "through the file the engine opened, decided again by where the system names it, and each written, made, moved or "
+                + "deleted relative to its directory held from the writable root it was decided in with no link on the way, so a "
+                + "link a command - one left running in the background among them - puts on a path between the decision and the act "
+                + "reaches nothing. Claude Code's own process runs apart from the agent's commands, reading its login and the key it "
+                + "is handed there. On Linux it runs inside an outer layer of bubblewrap: the machine read-only, every credential slot "
+                + "hidden, git's code-running files and the tool's state sealed as for the commands, and written but its writable "
+                + "roots, its temporary directory, the declared caches, Claude Code's own directories and ~/.claude.json, without "
+                + "which it does not start. Where Claude Code never ran, its directory and .claude.json (holding {}) are made first, "
+                + "for inside it can make neither. Where this machine's bubblewrap cannot start again inside a layer of its own - an "
+                + "AppArmor profile that denies its children every capability, as Ubuntu's bwrap-userns-restrict does - the probe "
+                + "says so, and Claude Code's own process runs outside every layer, as on macOS, whose sandbox starts none inside "
+                + "another, and each launch says so as it starts: there it runs with the user's rights, though no command of the "
+                + "agent's and no file of its runs there. Claude Code's own sandbox is turned off in its settings, for none nests in "
+                + "this tool's.",
             prose,
             StringComparison.Ordinal);
         Assert.Contains(
-            "Each shell command the engine allows is given back with a receipt at its head (: dssharness-receipt <32 hexadecimal "
-                + "digits>;, the shell's no-op), which --isolated-shell writes in the step's claude-receipts directory, where no command "
-                + "handed over writes, before it runs the command - the command itself run without that mark, and without the "
-                + "variables that hand it over, so nothing it is started with names its receipt or where receipts are written. A call "
-                + "that comes back with none - a Claude Code that skipped its prefix - ends the launch failed at once, and one run in "
-                + "the background is waited for within 20 s; however a launch ends - at a turn's result, Claude Code gone or its "
-                + "output cut - each allowed call whose receipt is not there yet is waited for within 20 s before anything of it is "
-                + "ended, one with none by then ending it failed, and where the launch was stopped or ended at once, each is said. A "
-                + "receipt proves only that Claude Code handed the command over, and only once it has run: it stops nothing, and a "
-                + "command run without the prefix runs where Claude Code's own process runs, where it could write a receipt of its "
-                + "own - so what holds such a command is the outer layer on Linux, and nothing on macOS or where bubblewrap starts "
-                + "none inside itself. "
-                + "Claude Code's own temporary directory is the step's claude-tmp, where no command writes but the one file each ends "
-                + "by writing its working directory to - made empty, given that command alone, written in place, never removed or replaced - so "
-                + "nothing Claude Code writes or reads there in its own process is a command's to replace with a link; it goes with the "
-                + "launch. Claude Code's own sandbox is turned off in its settings, for none nests in a command's layer;",
-            prose,
-            StringComparison.Ordinal);
-        Assert.Contains(
-            "There its own file tools are given, for they open each file inside the container, which holds every place they reach as "
-                + "it holds the commands, and its temporary directory is MXC's own inside it; nothing is handed over, so no receipt is "
-                + "asked. Where there is no isolation at all - preferred, on a machine with none - Claude Code's own file tools open each "
-                + "file by the path the engine decided, the words policy alone between them.",
-            prose,
-            StringComparison.Ordinal);
-        Assert.Contains(
-            "On Windows, where nothing becomes another program and every command Claude Code runs is Git Bash's, the launch runs "
-                + "whole inside MXC's container with its directories read alone: its commands read its login there, and a login whose "
-                + "token has run out is not renewed inside until a claude run outside renews it - written, they would let a command "
-                + "plant what Claude Code runs outside later.",
+            "On Windows, where nothing becomes another program, the launch runs whole inside MXC's container with Claude Code's "
+                + "directories read alone, its temporary directory MXC's own inside it: a login whose token has run out is not renewed "
+                + "inside until a claude run outside renews it - written, they would let what runs inside plant what Claude Code runs "
+                + "outside later. Where there is no isolation at all - preferred, on a machine with none - the tool runtime serves the "
+                + "launch all the same, the words policy alone between the agent and the machine. Every client's run_command, Claude "
+                + "Code's among them, starts each command inside it.",
             prose,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -596,9 +566,7 @@ public sealed partial class HelpTests
                 + "its own, a linked worktree's none, its common directory read-only to the work: so a command over the main "
                 + "checkout can move any branch, tag, stash or remote-tracking ref, which a person's checkout outside then takes, "
                 + "and, as git's checkout reads an object as it lies without hashing it again, put other "
-                + "content under a name the store already holds, which a checkout outside then writes. A command Claude Code runs "
-                + "without its shell prefix runs where Claude Code's own process runs - in the outer layer on Linux, with the user's "
-                + "rights on macOS and where bubblewrap starts none inside itself - its missing receipt telling it only once it has run.",
+                + "content under a name the store already holds, which a checkout outside then writes.",
             prose,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -722,7 +690,6 @@ public sealed partial class HelpTests
             nameof(DssHarness.Core.Processes.IsolatedShell.EndFileOf),
             nameof(DssHarness.Core.Processes.IsolatedShellHanding),
             $"{nameof(DssHarness.Core.Agents.ClaudeCode.ClaudeCodeTools)}.{nameof(DssHarness.Core.Agents.ClaudeCode.ClaudeCodeTools.FileTools)}",
-            $"{nameof(DssHarness.Core.Agents.ClaudeCode.ClaudeCodeClient)}.{nameof(DssHarness.Core.Agents.ClaudeCode.ClaudeCodeClient.ReceiptBound)}",
             $"{nameof(DssHarness.Core.Git.GitOwnSettings)}.{nameof(DssHarness.Core.Git.GitOwnSettings.Apply)}",
             $"{nameof(DssHarness.Core.Git.GitOwnSettings)}.{nameof(DssHarness.Core.Git.GitOwnSettings.Arguments)}",
             $"{nameof(DssHarness.Core.Git.GitOwnSettings)}.{nameof(DssHarness.Core.Git.GitOwnSettings.NoRecursion)}",

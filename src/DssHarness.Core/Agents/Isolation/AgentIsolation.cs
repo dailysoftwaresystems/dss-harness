@@ -1434,11 +1434,10 @@ public sealed class AgentIsolation(
     /// outside later, its settings' hooks, its own file's servers, but the files a program reads by itself inside a hidden
     /// directory of the user's credentials still read (<paramref name="readable"/>); where it takes handed commands and
     /// starts again inside a layer of its own (bubblewrap where its probe proved that), an outer layer: the commands'
-    /// profile with Claude Code's own places written - those directories and that file, which Claude Code fails every shell
-    /// command without writing, and the receipts' directory and its own temporary directory in the launch directory,
-    /// sealed but for them - so a command Claude Code ran without its prefix stays inside it, the slots hidden, the machine
-    /// read-only, git's code-running files and the tool's state sealed; null where it takes handed commands and starts none
-    /// inside (macOS's sandbox), and Claude Code's own process runs outside, or for an execution, which has no launch.
+    /// profile with Claude Code's own places written - those directories and that file, without which Claude Code does not
+    /// start - and every other place as the commands' profile holds it: the slots hidden, the machine read-only, git's
+    /// code-running files and the tool's state sealed; null where it takes handed commands and starts none inside (macOS's
+    /// sandbox), and Claude Code's own process runs outside, or for an execution, which has no launch.
     /// </summary>
     private IsolationProfile? ClaudeCodeOf(IsolationProfile profile, IsolationGround ground, IReadOnlyList<(string place, bool directory)> hidden, IReadOnlyList<string> readable, IIsolationMechanism mechanism, IEqualityComparer<string> comparer)
     {
@@ -1451,7 +1450,7 @@ public sealed class AgentIsolation(
             return apart;
         }
 
-        if (mechanism.Unnested is not null || ground.LaunchDirectory is not { } launch)
+        if (mechanism.Unnested is not null || ground.LaunchDirectory is null)
         {
             return null;
         }
@@ -1460,7 +1459,6 @@ public sealed class AgentIsolation(
         [
             .. profile.Writes,
             .. own.DistinctBy(entry => entry.place, comparer).Select(entry => new IsolatedWrite(Real(entry.place), entry.directory, Writable: true)),
-            .. ClaudeCode.ClaudeShell.PlacesIn(launch).Select(place => new IsolatedWrite(Real(place), Directory: true, Writable: true)),
         ];
 
         return apart with { Writes = IsolationProfiles.Ordered(written, comparer), Outer = true };
