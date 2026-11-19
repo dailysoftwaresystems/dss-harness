@@ -25,6 +25,7 @@ using DssHarness.Core.Secrets;
 using DssHarness.Core.SetUps;
 using DssHarness.Core.Sync;
 using DssHarness.Core.Tools;
+using DssHarness.Core.Waiting;
 using DssHarness.Core.Worktrees;
 
 namespace DssHarness.Core.Help;
@@ -233,7 +234,8 @@ public static partial class HelpTopics
             + "where the definition the run began with takes no such change. "
             + $"{FlowService.PauseCommand} asks that engine for the safe pause through stop.json - its agents hand off, the machine "
             + "steps finish unless --all, then the run is paused - and waits until it is complete; "
-            + $"{FlowService.StopCommand} asks it to stop where it stands and waits {FlowTimings.Default.StopWait.TotalSeconds.ToString(CultureInfo.InvariantCulture)} s, "
+            + $"{FlowService.StopCommand} asks it to stop where it stands and waits while the engine runs, for as long as that is, "
+            + $"saying so every {Waits.SaidEvery.TotalMinutes.ToString(CultureInfo.InvariantCulture)} minutes - its own Ctrl+C ends the wait, the stop staying asked - "
             + "and --now ends its process: only on this machine, and only the process its owner names by its start. "
             + $"{OrchestratorService.DeleteCommand} refuses a run a live engine owns, and removes a gone engine's owner with the run. In the terminal "
             + "a session runs in, the first Ctrl+C - and off Windows SIGTERM or a hang-up - asks the safe pause, which starts no "

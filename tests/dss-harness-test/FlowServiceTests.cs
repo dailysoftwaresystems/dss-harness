@@ -12,6 +12,7 @@ using DssHarness.Core.Output;
 using DssHarness.Core.Platform;
 using DssHarness.Core.Processes;
 using DssHarness.Core.Results;
+using DssHarness.Core.Waiting;
 using NSubstitute;
 
 namespace DssHarness.Tests;
@@ -1636,43 +1637,47 @@ public sealed class FlowServiceTests
         Assert.Equal("question 'q1' of run 'r1' is answered", again.Message);
     }
 
-    /// <summary>An answer handed to a running engine lands in inbox.json under an id of its own, nothing is applied by the command, and the inbox is named.</summary>
+    /// <summary>
+    /// An answer handed to a running engine lands in inbox.json under an id of its own, nothing is applied by the command -
+    /// the question stands open, for the engine alone takes the answer, and the command waits while the engine lives until
+    /// it has - and the inbox is named.
+    /// </summary>
     [Fact]
     public async Task AnAnswerHandedToARunningEngine_LandsInTheInbox()
     {
-        var (repository, service, _) = await ServiceAsync("""
-            name: flow
-            steps:
-              - name: holding
-                type: pause
-                question: what now?
-                options: [stay, go]
-            """);
+        var (repository, runner) = await RepositoryAsync(HoldingFlow);
         using var disposed = repository;
+        var files = new Signalling(repository.Harness.FileSystem);
+        var service = Service(repository.Harness, runner, timings: HandedOverTimings, fileSystem: files);
 
         _ = await service.RunAsync(repository.Path, Workflow, run: null, inputs: null, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
 
         var run = RunOf(repository);
+        var store = repository.Harness.OrchestrationStore;
         var identity = repository.Harness.Identity;
 
         // The engine that runs the run is a live owner: this process stands for it.
-        repository.Harness.OrchestrationStore.WriteOwner(run, new RunOwner(identity.CurrentMachine, identity.CurrentId, DateTimeOffset.UtcNow, identity.Current));
+        store.WriteOwner(run, new RunOwner(identity.CurrentMachine, identity.CurrentId, DateTimeOffset.UtcNow, identity.Current));
 
-        var outcome = await service.AnswerAsync(repository.Path, "r1", "go", question: null, text: null, textFile: null, again: false, json: true, cancellationToken: Token);
+        var answering = service.AnswerAsync(repository.Path, "r1", "go", question: null, text: null, textFile: null, again: false, json: true, cancellationToken: Token);
+
+        await files.Written(run.InboxFile).WaitAsync(Bound, Token);
+        var entry = Assert.Single(store.ReadInbox(run)!.Answers);
+
+        Assert.Equal("q1", entry.Question);
+        Assert.Equal(32, entry.Id.Length);
+
+        // The command applied nothing: the question stands open, and the command waits on the engine that takes it.
+        Assert.Equal("open", store.ReadFlowQuestions(run)!.Questions[0].State);
+        Assert.False(answering.IsCompleted, "the command waits while the engine it handed the answer to lives");
+
+        Engine(store, run, answered: new FlowAnswerRecord("go", DateTimeOffset.UtcNow, By: new FlowAnswerBy("person", FlowService.AnswerCommand, Inbox: entry.Id)));
+
+        var outcome = await answering.WaitAsync(Bound, Token);
 
         Assert.Equal(HarnessExit.Success, outcome.ExitCode);
         Assert.Equal("handed 'go' for question 'q1' to the engine running 'r1'", outcome.Message);
         Assert.Equal(run.InboxFile, JsonNode.Parse(Assert.Single(outcome.Data))!["records"]!["inbox"]!.GetValue<string>());
-
-        var inbox = repository.Harness.OrchestrationStore.ReadInbox(run);
-
-        Assert.NotNull(inbox);
-        var entry = Assert.Single(inbox.Answers);
-        Assert.Equal("q1", entry.Question);
-        Assert.Equal(32, entry.Id.Length);
-
-        // The command applied nothing: the question stands open, for the engine alone takes the answer.
-        Assert.Equal("open", repository.Harness.OrchestrationStore.ReadFlowQuestions(run)!.Questions[0].State);
     }
 
     /// <summary>The timings of a command that hands an answer over and waits on what became of it: an engine's poll long enough that the wait ends by what the test does, never by its own bound.</summary>
@@ -2584,9 +2589,13 @@ public sealed class FlowServiceTests
         Assert.True(File.Exists(run.StopFile));
     }
 
-    /// <summary>A stop the engine does not see through within the wait is refused, saying the stop stays asked and naming --now; a cancelled wait is never said to be one that ran out.</summary>
+    /// <summary>
+    /// A stop waits while the engine lives, for as long as it takes to stop where it stands - a quarter of an hour on its
+    /// clock, thirty times what a stop once gave it before it refused - told as it finds the engine and every five minutes
+    /// after, naming it; once the engine has taken the stop, recorded the run stopped and gone, the stop says so.
+    /// </summary>
     [Fact]
-    public async Task AStopNotSeenThroughWithinItsWait_IsRefused_NamingNow()
+    public async Task StopOrchestrator_WaitsWhileTheEngineLives()
     {
         var (repository, finished, runner) = await ServiceAsync();
         using var disposed = repository;
@@ -2595,18 +2604,49 @@ public sealed class FlowServiceTests
         _ = await finished.RunAsync(repository.Path, Workflow, run: null, inputs: null, json: false, cancellationToken: Token).WaitAsync(Bound, Token);
 
         var run = RunOf(repository);
+        var store = repository.Harness.OrchestrationStore;
         var engines = new Engines(repository.Harness.Identity);
-        var clock = new JumpingClock();
-        var service = Service(repository.Harness, runner, clock, new FlowTimings(TimeSpan.FromMilliseconds(10), TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(30)), identity: engines);
+        var clock = new TimerClock();
+        var told = new ConcurrentQueue<string>();
+        var output = Substitute.For<IHarnessOutput>();
+        output.When(said => said.Info(FlowService.StopCommand, Arg.Any<string>())).Do(call => told.Enqueue(call.ArgAt<string>(1)));
+        var service = Service(repository.Harness, runner, clock, FlowTimings.Default, output, identity: engines);
 
-        repository.Harness.OrchestrationStore.WriteOwner(run, new RunOwner(engines.CurrentMachine, Engines.Engine, DateTimeOffset.UtcNow, "its start"));
+        store.WriteOwner(run, new RunOwner(engines.CurrentMachine, Engines.Engine, DateTimeOffset.UtcNow, "its start"));
 
-        var outcome = await service.StopAsync(repository.Path, "r1", now: false, json: false, Token).WaitAsync(Bound, Token);
+        var stopping = service.StopAsync(repository.Path, "r1", now: false, json: false, Token);
 
-        Assert.Equal(HarnessExit.Refused, outcome.ExitCode);
-        Assert.Equal("the engine running 'r1' did not stop within 30 s; the stop stays asked", outcome.Message);
-        Assert.Equal(["stop-orchestrator r1 --now ends its process where it stands", $"stop: {run.StopFile}", $"log {run.LogFile("r1")}"], outcome.Details);
-        Assert.Equal(TimeSpan.FromSeconds(30), clock.Moved);
+        for (var tellings = 0; tellings < 3; tellings++)
+        {
+            await clock.WaitingAsync().WaitAsync(ClockDrive.Within, Token);
+            clock.Advance(Waits.SaidEvery);
+        }
+
+        await clock.WaitingAsync().WaitAsync(ClockDrive.Within, Token);
+        Assert.False(stopping.IsCompleted, "the stop waits while the engine lives");
+        Assert.True(File.Exists(run.StopFile));
+
+        // The engine takes the stop, records the run stopped, and goes.
+        _ = store.TakeStopFile(run);
+        store.WriteFlow(run, store.ReadFlow(run)! with { Status = nameof(FlowRunStatus.Stopped) });
+        engines.Alive = false;
+        clock.Advance(Waits.LooksAgainEvery);
+
+        var outcome = await stopping.WaitAsync(Bound, Token);
+        var engine = $"its engine, process {Engines.Engine.ToString(CultureInfo.InvariantCulture)}";
+
+        Assert.Equal((HarnessExit.Success, "run 'r1' is stopped"), (outcome.ExitCode, outcome.Message));
+        Assert.Equal(
+            ["its engine took the stop and left", $"{FlowService.ResumeCommand} goes on with it where it stands", $"stop: {run.StopFile}", $"state: {run.FlowFile}", $"report: {run.ReportFile}", $"log {run.LogFile("r1")}"],
+            outcome.Details);
+        Assert.Equal(
+            [
+                $"waits for run 'r1' to stop, held by {engine}",
+                $"has waited 5m00s for run 'r1' to stop, held by {engine}",
+                $"has waited 10m00s for run 'r1' to stop, held by {engine}",
+                $"has waited 15m00s for run 'r1' to stop, held by {engine}",
+            ],
+            told);
     }
 
     /// <summary>A stop of a running engine ends it stopped: the step in flight stopped, the owner released, the report written.</summary>

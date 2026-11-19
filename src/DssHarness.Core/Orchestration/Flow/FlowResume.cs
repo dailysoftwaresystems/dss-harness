@@ -3,6 +3,7 @@ using System.Text.Json;
 using DssHarness.Core.Execution;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Results;
+using DssHarness.Core.Waiting;
 
 namespace DssHarness.Core.Orchestration.Flow;
 
@@ -293,6 +294,29 @@ public sealed class FlowRunOwner(OrchestrationStore store, IProcessIdentity iden
 {
     private readonly ProcessOwner _owner = new(store ?? throw new ArgumentNullException(nameof(store)), identity ?? throw new ArgumentNullException(nameof(identity)), clock);
 
+    private readonly IProcessIdentity _identity = identity;
+
+    /// <summary>
+    /// The engine that holds the run, as a wait on it names it (<see cref="Waits.WhileHeldAsync"/>): its process, the stamp
+    /// that tells it from a later one, and its name as a line says it; null where none is live (<see cref="Live"/>).
+    /// </summary>
+    /// <param name="layout">The run's layout.</param>
+    public WaitHolder? Holder(OrchestratorLayout layout)
+        => Live(layout) is { } held ? new WaitHolder(held.ProcessId, held.Stamp, $"its engine, {Named(held)}") : null;
+
+    /// <summary>
+    /// This process's identity as a wait on the run's engine asks it (<see cref="Waits.WhileHeldAsync"/>): a holder lives
+    /// while the run's recorded owner is still that process and live as this owner judges one (<see cref="Live"/>) - an
+    /// engine of another machine among them, which no process here can tell ended - and every other question is this
+    /// process's own.
+    /// </summary>
+    /// <param name="layout">The run's layout.</param>
+    public IProcessIdentity Liveness(OrchestratorLayout layout)
+    {
+        ArgumentNullException.ThrowIfNull(layout);
+        return new OwnerLiveness(this, layout, _identity);
+    }
+
     /// <summary>
     /// The engine that holds the run, where one is live: on this machine while its process runs, and on another until
     /// somebody takes it over - nothing here can ask that machine. Null where none is recorded or the recorded one has
@@ -324,6 +348,26 @@ public sealed class FlowRunOwner(OrchestrationStore store, IProcessIdentity iden
     /// <summary>The engine <paramref name="held"/> names, as a line names it: its process, and that it runs on another machine where it does - never that machine's name.</summary>
     /// <param name="held">The owner recorded.</param>
     public string Named(RunOwner held) => _owner.Named(held);
+
+    /// <summary>A process's liveness as the run's owner is judged, for a wait on the run's engine: see <see cref="Liveness"/>.</summary>
+    /// <param name="owner">The run's owner.</param>
+    /// <param name="layout">The run's layout.</param>
+    /// <param name="identity">This process.</param>
+    private sealed class OwnerLiveness(FlowRunOwner owner, OrchestratorLayout layout, IProcessIdentity identity) : IProcessIdentity
+    {
+        public int CurrentId => identity.CurrentId;
+
+        public string CurrentMachine => identity.CurrentMachine;
+
+        public string? Current => identity.Current;
+
+        public bool IsAlive(int processId, string? stamp)
+            => owner.Live(layout) is { } held && held.ProcessId == processId && string.Equals(held.Stamp, stamp, StringComparison.Ordinal);
+
+        public string? StampOf(int processId) => identity.StampOf(processId);
+
+        public bool IsSame(int processId, string stamp) => identity.IsSame(processId, stamp);
+    }
 
     /// <summary>
     /// Claims the run for this process: refused (13) where a live owner holds it - an engine that paused its run and
