@@ -10,12 +10,6 @@ namespace DssHarness.Core.Execution;
 public sealed class FileSystemWatcherKind : IWatchKind
 {
     /// <summary>
-    /// Retired: no watch is bounded by a number of directories any more - a tree is one watch of its root. Kept only for
-    /// the configuration help's sentence that still names it, which is rewritten with the help; nothing reads it.
-    /// </summary>
-    public const int MostDirectoriesWatched = 64;
-
-    /// <summary>
     /// The largest buffer the operating system accepts. Events arrive faster than they can be read
     /// during a build, and a buffer that overflows loses them silently, which this exists to avoid.
     /// </summary>

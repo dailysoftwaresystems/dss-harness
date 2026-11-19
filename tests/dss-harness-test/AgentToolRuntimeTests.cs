@@ -2578,37 +2578,6 @@ public sealed class AgentToolRuntimeTests : IDisposable
     }
 
     /// <summary>
-    /// The narrowing a client's own whole read is asked under reads nothing it cannot narrow: a run that narrows nothing
-    /// reads not a byte of the file, and in one that narrows, a file not there, one the view does not parse and one that
-    /// cannot be read pass - null, left to the client's own tool - while a parsed file over its lines is denied as a whole
-    /// view of it is.
-    /// </summary>
-    [Fact]
-    public async Task TheNarrowingOfAClientsOwnWholeRead_ReadsNothingItCannotNarrow()
-    {
-        Write("a.txt", "alpha\n");
-        var plain = Open(fileSystem: new Held(_harness.FileSystem, Path.Combine(_worktree, "a.txt")));
-
-        Assert.Null(await plain.NarrowedReadAsync("a.txt", Token));
-
-        using var tree = await CodebaseGraphToolTests.TreeAsync(("src/Big.cs", BigFile), ("src/Held.cs", BigFile.Replace("big file", "held file", StringComparison.Ordinal)));
-        var lines = new List<GraphStepLine>();
-        var runtime = Narrowing(tree, CodebaseGraphToolTests.Tool(tree, await CodebaseGraphToolTests.QueriesAsync(tree)), lines, new Held(tree.Harness.FileSystem, Path.Combine(tree.Tree, "src", "Held.cs")));
-
-        Assert.Null(await runtime.NarrowedReadAsync("src/Missing.cs", Token));
-        Assert.Null(await runtime.NarrowedReadAsync("docs/zoo.txt", Token));
-        Assert.Null(await runtime.NarrowedReadAsync("src/Held.cs", Token));
-        Assert.Empty(lines);
-
-        var denied = await runtime.NarrowedReadAsync("src/Big.cs", Token);
-
-        Assert.Equal(
-            ("graphReads: narrow", "'src/Big.cs' is 222 lines and in the codebase graph: ask graph for its outline and the bodies you need, read a range of it, or, if you need it whole, say why with graph's wholeFile"),
-            (denied?.Rule, denied?.Reason));
-        Assert.Equal(("src/Big.cs", 222), (Assert.IsType<GraphDeniedLine>(Assert.Single(lines)).Path, ((GraphDeniedLine)lines[0]).Lines));
-    }
-
-    /// <summary>
     /// A page of a graph body is a view of the files whose lines it served, as they were read, and of no other: after page
     /// 1, a file whose lines only a later page holds is no view an edit may follow; after page 2 - read from what page 1
     /// kept, the file changed on disk since - it is the view of the file as its lines were read, so the edit meets the

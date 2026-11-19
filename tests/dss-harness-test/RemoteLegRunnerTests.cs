@@ -1239,7 +1239,7 @@ public sealed class RemoteLegRunnerTests
 
         Assert.Null(check.Poisoned);
         Assert.Equal([SaidAsItStarted], check.Restarts.Said);
-        Assert.Equal(1 + RemoteLegRunner.MostRestarts, hosts.Calls.Count);
+        Assert.Equal(2, hosts.Calls.Count);
         Assert.Contains(
             $"run: WARN - wsl-debug: {SaidAsItStarted}; asking it to check the leg once more",
             harness.StandardError.ToString(),
@@ -1263,7 +1263,7 @@ public sealed class RemoteLegRunnerTests
         var check = await Runner(hosts).CheckAsync("run", Leg(), ["corpus", "--check-before-admission"], TestContext.Current.CancellationToken);
         var poisoned = check.Poisoned;
 
-        Assert.Equal(1 + RemoteLegRunner.MostRestarts, hosts.Calls.Count);
+        Assert.Equal(2, hosts.Calls.Count);
         Assert.NotNull(poisoned);
         Assert.Equal(LegVerdict.Poisoned, poisoned.Verdict);
         Assert.Equal(
@@ -1480,7 +1480,7 @@ public sealed class RemoteLegRunnerTests
 
         const string Said = $"wsl Example-Linux's DssHarness exited 70 as it started, before anything ran there, saying: {CouldNotLoad}";
 
-        Assert.Equal(1 + RemoteLegRunner.MostRestarts, hosts.Calls.Count);
+        Assert.Equal(2, hosts.Calls.Count);
         Assert.Equal((LegVerdict.Passed, "412 tests"), (entry.Verdict, entry.Detail));
         Assert.Equal([Said], entry.Retried);
         Assert.Contains($"build: WARN - wsl-debug: waits for its start there once more: {Said}; tries again in 1s", harness.StandardError.ToString(), StringComparison.Ordinal);
@@ -1560,7 +1560,7 @@ public sealed class RemoteLegRunnerTests
 
         var entry = await Runner(hosts).RunAsync("build", Leg(), [], cancellationToken: TestContext.Current.CancellationToken);
 
-        Assert.Equal(1 + RemoteLegRunner.MostRestarts, hosts.Calls.Count);
+        Assert.Equal(2, hosts.Calls.Count);
         Assert.Equal(LegVerdict.Poisoned, entry.Verdict);
         Assert.Equal(
             "wsl Example-Linux ran 'build' for leg 'wsl-debug', and its DssHarness failed as it started, before anything ran there: "
@@ -1701,7 +1701,7 @@ public sealed class RemoteLegRunnerTests
         var failure = await Assert.ThrowsAsync<HarnessException>(() => Runner(hosts).RunAsync(
             "build", Leg(), [], cancellationToken: TestContext.Current.CancellationToken));
 
-        Assert.Equal(1 + RemoteLegRunner.MostRestarts, hosts.Calls.Count);
+        Assert.Equal(2, hosts.Calls.Count);
         Assert.Equal(code, failure.ExitCode);
         Assert.Equal(
             (code == HarnessExit.UsageError
@@ -1747,7 +1747,7 @@ public sealed class RemoteLegRunnerTests
         {
             var entry = await running;
 
-            Assert.Equal(1 + RemoteLegRunner.MostRestarts, hosts.Calls.Count);
+            Assert.Equal(2, hosts.Calls.Count);
             Assert.Equal((LegVerdict.Passed, "412 tests"), (entry.Verdict, entry.Detail));
             Assert.Equal([Checked, SaidAsItStarted], entry.Retried);
             return;

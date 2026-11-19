@@ -379,7 +379,6 @@ public sealed class ZaiApiProviderTests : IDisposable
             var past = await Sent(Request() with { Messages = messages, ContextTokens = contextTokens }, provider: provider);
 
             Assert.IsType<ChatPart.Answered>(past[^1]);
-            Assert.DoesNotContain(past, part => part is ChatPart.Shortened);
         }
 
         Assert.All(_endpoint.Asked, asked => Assert.Equal(messages, Messages(asked).Skip(1).Select(message => message!.ToJsonString(ApiBody.Json))));

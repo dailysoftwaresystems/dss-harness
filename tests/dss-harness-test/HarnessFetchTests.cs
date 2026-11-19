@@ -590,7 +590,7 @@ public sealed class HarnessFetchTests
     [Fact]
     public async Task ABodyPastFiveMebibytes_IsReadWhole()
     {
-        var body = new string('a', (int)HarnessFetch.MostBytes + 10);
+        var body = new string('a', (5 * 1024 * 1024) + 10);
         using var fetch = Fetch(new WebEndpoint(_ => WebEndpoint.Page(body, "text/plain")));
 
         var read = await fetch.FetchAsync("https://example.com/big", new WebFetchAsk(), WebFetchGate.Open, TestContext.Current.CancellationToken);

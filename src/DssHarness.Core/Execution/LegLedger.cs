@@ -248,7 +248,7 @@ public sealed record LegEntry
 
     /// <summary>
     /// What each start of the leg's command on its host said, in order, where the host's DssHarness failed there as a
-    /// defect before anything ran and the command was started once more (<see cref="Runs.RemoteLegRunner.MostRestarts"/>) -
+    /// defect before anything ran and the command was started once more, for each cause not met before -
     /// its check's before this machine took its slot first, then its run's: said on the line whatever the leg then
     /// reached, so a failure the next start did not meet is never hidden (<see cref="Runs.HostRestarts"/>, the one owner of
     /// how it is said). Empty where each was started once.

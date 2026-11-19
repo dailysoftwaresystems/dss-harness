@@ -23,15 +23,9 @@ namespace DssHarness.Core.Agents.Runtime;
 /// </summary>
 /// <param name="git">Lists a work tree's files.</param>
 /// <param name="fileSystem">Walks a directory git does not list, and reads and writes each file.</param>
-/// <param name="clock">The clock a search is made with; it bounds nothing of it.</param>
+/// <param name="clock">The clock a search was once bounded on; it bounds nothing of it now.</param>
 public sealed class AgentFiles(IGitClient git, IFileSystem fileSystem, TimeProvider clock)
 {
-    /// <summary>
-    /// The size past which <c>search_files</c> once passed a file over. It reads every file now, whatever it holds; a caller
-    /// that passes no file over gives <see cref="long.MaxValue"/>.
-    /// </summary>
-    public const long MostSearchedBytes = 2 * 1024 * 1024;
-
     /// <summary>The refusal a search's own decision stands for, where it only says whether a place may be read: counted, never said.</summary>
     private static readonly AgentPolicyAnswer.Denied NotToBeRead = new(ConfinedPaths.RootsRule, AgentPolicySource.Builtin, "a place the reader may not read");
 

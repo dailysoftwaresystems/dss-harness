@@ -538,7 +538,7 @@ public sealed class WebIndexesTests
     {
         using var directory = new TempDirectory();
         var site = new SiteDouble();
-        site.Guides = site.Guides.Replace("</urlset>", $"<!-- {new string('x', (int)HarnessFetch.MostBytes)} --></urlset>", StringComparison.Ordinal);
+        site.Guides = site.Guides.Replace("</urlset>", $"<!-- {new string('x', 5 * 1024 * 1024)} --></urlset>", StringComparison.Ordinal);
         using var harness = new Harness(site);
         var settings = Settings(include: ["/guides/**"]);
 
@@ -642,7 +642,7 @@ public sealed class WebIndexesTests
     public async Task ARobotsTxtLongerThanAFetchOnceRead_IsReadWhole()
     {
         using var directory = new TempDirectory();
-        var site = new SiteDouble { Robots = $"User-agent: *\nDisallow: /private/\nDisallow: /guides/alpha\n# {new string('x', (int)HarnessFetch.MostBytes)}\nDisallow: /guides/beta\nSitemap: https://docs.example.test/sitemap-index.xml\n" };
+        var site = new SiteDouble { Robots = $"User-agent: *\nDisallow: /private/\nDisallow: /guides/alpha\n# {new string('x', 5 * 1024 * 1024)}\nDisallow: /guides/beta\nSitemap: https://docs.example.test/sitemap-index.xml\n" };
         using var harness = new Harness(site);
 
         harness.Indexes.Search(directory.Path, Settings(), "x", FirstFive, Open);

@@ -133,45 +133,6 @@ public sealed partial class AgentToolRuntime
     }
 
     /// <summary>
-    /// What a whole read of the file at <paramref name="path"/> is under the narrowing of reads (<c>graphReads:
-    /// narrow</c>), for a client whose own tool reads the file - Claude Code's <c>Read</c> with no offset and no limit,
-    /// asked of the engine before it runs: the same refusal, with the same words and the same two escapes recorded, as
-    /// <see cref="ViewAsync"/> answers a whole <c>view_file</c>; null where the read passes plainly or nothing narrows it.
-    /// Nothing is read unless the run narrows its reads and its view holds the file as parsed, unlifted; the file's lines
-    /// are then counted as a view counts them - its pages laid once by streaming it through its decided open, whatever
-    /// its size - and one that is not there, stands where the reader may not read or does not read as text is left to
-    /// the client's own tool to answer.
-    /// </summary>
-    /// <param name="path">The file as the agent's tool asked it.</param>
-    /// <param name="cancellationToken">Stops the read.</param>
-    public async Task<AgentPolicyAnswer.Denied?> NarrowedReadAsync(string path, CancellationToken cancellationToken)
-    {
-        ArgumentNullException.ThrowIfNull(path);
-
-        if (_run.Graph is not { Narrow: true, Tool: { } tool }
-            || ReadPlace(path).Full is not { } full
-            || AgentPolicy.Beneath(_run.Workspace.Worktree ?? _run.Workspace.MainCheckout, full, _host.Platform.PathComparison) is not { } relative
-            || !tool.MayNarrow(relative)
-            || !_host.FileSystem.FileExists(full))
-        {
-            return null;
-        }
-
-        TextPagesKept kept;
-
-        try
-        {
-            (kept, _) = await ViewedAsync(full, cancellationToken).ConfigureAwait(false);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
-        {
-            return null;
-        }
-
-        return Narrowed(path, full, kept.Lines, TokensOf(full));
-    }
-
-    /// <summary>
     /// What a whole read of the file at <paramref name="full"/> is under the narrowing of reads, where the run is given a
     /// graph that narrows (<c>graphReads: narrow</c>): the refusal, recorded as every denial is, where the graph holds
     /// the file as parsed and it is over <see cref="CodebaseGraphTool.NarrowLines"/> lines; an escape let by, recorded,

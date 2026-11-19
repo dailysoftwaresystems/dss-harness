@@ -7,51 +7,6 @@ using DssHarness.Core.Pages;
 
 namespace DssHarness.Core.Agents;
 
-/// <summary>
-/// The bounds the continuation record was once cut by (<c>agentContext.continuation</c>), each with the default it had.
-/// The record cuts nothing now - it holds every step, every changed path and every iteration of the work it goes on with,
-/// its first page in the step's first message and every page of it by <c>read_result</c> - and the keys are refused where
-/// a configuration names them (<see cref="Configuration.MisplacedKeys"/>). What is left of them is the compaction's: how
-/// many of the last iterations it keeps word for word (<see cref="AgentCompactionBounds.LastIterations"/>).
-/// </summary>
-/// <param name="RecordChars">The most characters the record's own parts were once cut to.</param>
-/// <param name="StepChars">The most characters one step's notes and its output were once cut to.</param>
-/// <param name="Paths">The most changed paths once listed.</param>
-/// <param name="LastIterations">How many of the last iterations a compaction keeps word for word.</param>
-/// <param name="IterationChars">The most characters of the earlier iterations once kept.</param>
-public sealed record AgentContinuationBounds(
-    int RecordChars = AgentContinuationBounds.DefaultRecordChars,
-    int StepChars = AgentContinuationBounds.DefaultStepChars,
-    int Paths = AgentContinuationBounds.DefaultPaths,
-    int LastIterations = AgentContinuationBounds.DefaultLastIterations,
-    int IterationChars = AgentContinuationBounds.DefaultIterationChars)
-{
-    /// <summary>The most characters the record's own parts were once cut to; it cuts none now.</summary>
-    public const int DefaultRecordChars = 60_000;
-
-    /// <summary>The most characters one step's notes and its output were once cut to; it cuts none now.</summary>
-    public const int DefaultStepChars = 16_000;
-
-    /// <summary>The most changed paths once listed; it lists every one now.</summary>
-    public const int DefaultPaths = 300;
-
-    /// <summary>How many of the last iterations a compaction keeps word for word: the compaction's own (<see cref="AgentCompactionBounds.LastIterations"/>).</summary>
-    public const int DefaultLastIterations = AgentCompactionBounds.LastIterations;
-
-    /// <summary>The most characters of the earlier iterations once kept; it keeps every one now.</summary>
-    public const int DefaultIterationChars = 120_000;
-
-    /// <summary>The bounds as they stand: the defaults, for a configuration that names <c>agentContext.continuation</c> is refused before it is read.</summary>
-    /// <param name="config">The <c>agentContext.continuation</c> entry; null where the configuration declares none.</param>
-    public static AgentContinuationBounds Of(Configuration.AgentContinuationConfig? config)
-        => new(
-            config?.RecordChars ?? DefaultRecordChars,
-            config?.StepChars ?? DefaultStepChars,
-            config?.Paths ?? DefaultPaths,
-            config?.LastIterations ?? DefaultLastIterations,
-            config?.IterationChars ?? DefaultIterationChars);
-}
-
 /// <summary>One step of the chain a continuation record holds: what it was, how it ended, and where its records are.</summary>
 /// <param name="Instance">The step instance's name, as the run names it.</param>
 /// <param name="Ended">How it ended, in the record's own words: <c>done</c>, <c>stopped by a pause</c>, <c>reached its turn limit</c>, <c>cut off</c>.</param>

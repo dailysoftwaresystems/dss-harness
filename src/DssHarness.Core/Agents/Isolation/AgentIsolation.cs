@@ -203,12 +203,11 @@ public sealed record LaunchIsolation(
     public const string NoCommands = "the agent may run no command";
 
     /// <summary>
-    /// What a Claude Code launch's whole process is denied: where the mechanism takes no command handed to it one by one
-    /// (<see cref="IIsolationMechanism.TakesHandedCommands"/>), the commands' profile with the Claude Code directories read,
-    /// for it reads its login there; where it takes them and holds a layer around a program of its own (bubblewrap), the
-    /// outer layer that holds Claude Code's process alone (<see cref="IsolationProfile.Outer"/>), with a temporary
-    /// directory of its own in the launch's records. Null where there is no mechanism, or Claude Code's own process runs
-    /// outside every layer.
+    /// The isolation a Claude Code launch's whole process is started with: the outer layer that holds its process alone
+    /// where the mechanism starts one inside a layer of its own (<see cref="IsolationProfile.Outer"/>), with a temporary
+    /// directory of its own in the launch's records; else the commands' profile with the Claude Code directories read
+    /// alone, where the mechanism takes no command of the launch's one by one. Null where there is no mechanism, or
+    /// Claude Code's own process runs outside every layer.
     /// </summary>
     public IsolationProfile? ClaudeCode { get; init; }
 
@@ -222,12 +221,6 @@ public sealed record LaunchIsolation(
     public ProcessIsolation? ForClaudeCode => Mechanism is not null && ClaudeCode is not null ? new ProcessIsolation(Mechanism, ClaudeCode) : null;
 
     /// <summary>
-    /// Why a Claude Code launch's own process runs outside every layer, handing each command in from there - the mechanism
-    /// takes handed commands and starts none inside a layer of its own; null where it runs inside, or there is no mechanism.
-    /// </summary>
-    public string? ClaudeCodeOutside => Mechanism is { TakesHandedCommands: true } && ClaudeCode is null ? Mechanism.Unnested : null;
-
-    /// <summary>
     /// What every launch whose ground writes a linked worktree - an agent an earlier version of this tool made - says as it
     /// starts, each tree one saying: inside the isolation the work writes the tree's own git directory alone, so git add and
     /// git fetch fail there, and the remedy names the verbs that give the agent a repository of its own. Empty where no tree
@@ -235,8 +228,8 @@ public sealed record LaunchIsolation(
     /// </summary>
     public IReadOnlyList<string> LegacyWorktrees { get; init; } = [];
 
-    /// <summary>What the launch's client runs its processes under, handed it in its run: <see cref="ForCommands"/>, <see cref="ForClaudeCode"/> and <see cref="ClaudeCodeOutside"/>.</summary>
-    public LaunchProcesses Processes => new(ForCommands, ForClaudeCode) { ClaudeCodeOutside = ClaudeCodeOutside };
+    /// <summary>What the launch's client runs its processes under, handed it in its run: <see cref="ForCommands"/> and <see cref="ForClaudeCode"/>.</summary>
+    public LaunchProcesses Processes => new(ForCommands, ForClaudeCode);
 
     /// <summary>
     /// What every launch says where it starts on the words policy alone, its agent able to run a command: why there is no
@@ -260,16 +253,13 @@ public sealed record LaunchIsolation(
 /// <summary>
 /// What a client runs a launch's processes under, handed it in its run (<see cref="AgentRun.Isolation"/>): the isolation
 /// each command it starts is started with, and the one a Claude Code launch's whole process is started with where it runs
-/// inside one - whole, or in an outer layer. The decision it comes from (<see cref="LaunchIsolation"/>) stays with the one
-/// who asked it, who releases it once the launch has run, so a client is handed nothing it could end.
+/// inside one - whole, or in an outer layer; null where it runs outside, as the client sees. The decision it comes from
+/// (<see cref="LaunchIsolation"/>) stays with the one who asked it, who releases it once the launch has run, so a client
+/// is handed nothing it could end.
 /// </summary>
 /// <param name="Commands">The isolation each command of the launch is started with; null where there is none.</param>
 /// <param name="ClaudeCode">The isolation a Claude Code launch's whole process is started with; null where there is none, or it runs outside.</param>
-public sealed record LaunchProcesses(ProcessIsolation? Commands, ProcessIsolation? ClaudeCode)
-{
-    /// <summary>Why a Claude Code launch's own process runs outside every layer, handing each command in (<see cref="LaunchIsolation.ClaudeCodeOutside"/>); null where it does not.</summary>
-    public string? ClaudeCodeOutside { get; init; }
-}
+public sealed record LaunchProcesses(ProcessIsolation? Commands, ProcessIsolation? ClaudeCode);
 
 /// <summary>
 /// Which of the tool's own executions of an agent's work an <see cref="ExecutionGround"/> is of: what decides the

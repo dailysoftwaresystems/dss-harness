@@ -53,8 +53,6 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
     /// started needs: a consumer's leg met a DssHarness in a WSL distribution that could not load one of the runtime's own
     /// assemblies, once, and the next run was fine. Never once anything ran there.
     /// </summary>
-    public const int MostRestarts = 1;
-
     private static readonly JsonSerializerOptions LedgerOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
@@ -97,7 +95,7 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
     /// <returns>
     /// The leg's line from the host's ledger; or, where the host's DssHarness failed as a defect with no line for the leg,
     /// a <c>poisoned</c> line naming the host, the code and what it said. A DssHarness there that failed so before
-    /// anything ran is started once more first, for each cause not met before (<see cref="MostRestarts"/>), and the line says what each such start said
+    /// anything ran is started once more first, for each cause not met before, and the line says what each such start said
     /// (<see cref="LegEntry.Retried"/>), <paramref name="earlier"/>'s first, whatever the leg then reached.
     /// </returns>
     /// <exception cref="HarnessException">
@@ -153,7 +151,7 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
     /// <returns>
     /// What each start of the check that failed as a defect before anything ran said (<see cref="HostCheck.Restarts"/>),
     /// which the leg's line says whatever the leg then reaches; and, where the host's DssHarness failed so again, started
-    /// once more as a run of the leg is (<see cref="MostRestarts"/>), the leg's <c>poisoned</c> line, naming the host, the
+    /// once more as a run of the leg is, the leg's <c>poisoned</c> line, naming the host, the
     /// code and what each start said, as the leg's run there would have ended - none where the host refused nothing.
     /// </returns>
     /// <exception cref="HarnessException">
@@ -239,8 +237,8 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
 
     /// <summary>
     /// Has the host of <paramref name="leg"/> run <paramref name="commandLine"/> (<see cref="AskAsync"/>), starts it once
-    /// more where the host's own DssHarness failed before anything ran there, for each cause not met before
-    /// (<see cref="MostRestarts"/>), telling each pause before it as a wait for <paramref name="again"/>, and reads the last
+    /// more where the host's own DssHarness failed before anything ran there, for each cause not met before,
+    /// telling each pause before it as a wait for <paramref name="again"/>, and reads the last
     /// start's answer by <paramref name="read"/>: the one start a leg's run
     /// and its check share, and the one place what each start that failed so said reaches whatever the leg came to.
     /// </summary>

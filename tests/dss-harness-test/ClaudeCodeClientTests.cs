@@ -2832,9 +2832,9 @@ public sealed class ClaudeCodeClientTests : IDisposable
         }
 
         Assert.Null(settings["sandbox"]);
-        Assert.False(File.Exists(Path.Combine(kit.StepDirectory, ClaudeShell.FileName)));
-        Assert.False(Directory.Exists(Path.Combine(kit.StepDirectory, ClaudeShell.ReceiptsDirectoryName)));
-        Assert.False(Directory.Exists(Path.Combine(kit.StepDirectory, ClaudeShell.TempDirectoryName)));
+        Assert.False(File.Exists(Path.Combine(kit.StepDirectory, "claude-isolation.json")));
+        Assert.False(Directory.Exists(Path.Combine(kit.StepDirectory, "claude-receipts")));
+        Assert.False(Directory.Exists(Path.Combine(kit.StepDirectory, "claude-tmp")));
         Assert.Empty(sink.Of<Notice>());
         Assert.False(File.Exists(Path.Combine(kit.ClaudeDirectory, ".claude.json")), "a launch outside makes nothing of Claude Code's own");
     }
@@ -2867,7 +2867,7 @@ public sealed class ClaudeCodeClientTests : IDisposable
         Assert.Equal("""{"enabled":false}""", settings["sandbox"]!.ToJsonString());
         Assert.Equal(string.Empty, Value(request.Arguments, "--tools"));
         Assert.False(request.Environment.ContainsKey("CLAUDE_CODE_SHELL_PREFIX"));
-        Assert.False(File.Exists(Path.Combine(kit.StepDirectory, ClaudeShell.FileName)));
+        Assert.False(File.Exists(Path.Combine(kit.StepDirectory, "claude-isolation.json")));
         Assert.Equal("{}\n", File.ReadAllText(Path.Combine(kit.ClaudeDirectory, ".claude.json")));
         Assert.True(Directory.Exists(Path.Combine(kit.StepDirectory, DssHarness.Core.Agents.Isolation.AgentIsolation.ClaudeCodeTempDirectory)), "Claude Code's own temporary directory is made in the launch's records");
         Assert.Empty(sink.Of<Notice>());
@@ -2896,7 +2896,7 @@ public sealed class ClaudeCodeClientTests : IDisposable
         Assert.Equal("""{"enabled":false}""", settings["sandbox"]!.ToJsonString());
         Assert.False(request.Environment.ContainsKey("CLAUDE_CODE_SHELL_PREFIX"));
         Assert.Null(settings["env"]!["CLAUDE_CODE_SHELL_PREFIX"]);
-        Assert.False(File.Exists(Path.Combine(kit.StepDirectory, ClaudeShell.FileName)));
+        Assert.False(File.Exists(Path.Combine(kit.StepDirectory, "claude-isolation.json")));
         Assert.Equal(string.Empty, Value(request.Arguments, "--tools"));
     }
 

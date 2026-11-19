@@ -254,7 +254,7 @@ public sealed class AgentIsolationTests
             new(claude + ".json", Directory: false, Writable: true),
         ];
 
-        Assert.Equal((true, (string?)null, (string?)null), (outer.Outer, isolated.ClaudeCodeOutside, isolated.Processes.ClaudeCodeOutside));
+        Assert.True(outer.Outer);
         Assert.Equal([.. HarnessLayout.SecretSlotDirectoriesUnder(kit.Main).Where(Directory.Exists).Select(slot => new IsolatedPath(slot, Directory: true))], outer.Hidden);
         Assert.Equal(outerWrites.OrderBy(write => write.Path, StringComparer.Ordinal), outer.Writes.OrderBy(write => write.Path, StringComparer.Ordinal));
         Assert.Equal(outer.Writes.OrderBy(write => IsolationProfile.Depth(write.Path)), outer.Writes);
@@ -349,10 +349,11 @@ public sealed class AgentIsolationTests
 
     /// <summary>
     /// Under a mechanism that takes handed commands and starts none inside a layer of its own - macOS's sandbox - a Claude
-    /// Code launch's whole process is given no profile: it runs outside every layer, and the launch says why to its client.
+    /// Code launch's whole process is given no profile: it runs outside every layer, which its client sees as no isolation
+    /// for it.
     /// </summary>
     [Fact]
-    public async Task AMechanismThatStartsNoneInsideItself_LeavesClaudeCodeOutside_SayingWhy()
+    public async Task AMechanismThatStartsNoneInsideItself_LeavesClaudeCodeOutside()
     {
         using var temp = new TempDirectory();
         using var home = new TempDirectory();
@@ -365,7 +366,8 @@ public sealed class AgentIsolationTests
         using var isolated = await isolation.ForLaunchAsync(config, SideTaskPolicy.Ground(layout, config, [], []), kit.Main, SideTaskLayout.Of(layout, "one").Directory, Token);
 
         Assert.NotNull(isolated.ForCommands);
-        Assert.Equal(((ProcessIsolation?)null, (ProcessIsolation?)null, SandboxExec.NoSandboxInside), (isolated.ForClaudeCode, isolated.Processes.ClaudeCode, isolated.Processes.ClaudeCodeOutside));
+        Assert.Null(isolated.ForClaudeCode);
+        Assert.Null(isolated.Processes.ClaudeCode);
     }
 
     /// <summary>

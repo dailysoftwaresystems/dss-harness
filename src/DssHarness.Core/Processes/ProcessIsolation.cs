@@ -203,10 +203,10 @@ public interface IIsolationMechanism
     bool OwnTemp { get; }
 
     /// <summary>
-    /// Whether a program may hand each shell command it runs to the mechanism through this tool's isolated shell
-    /// (<see cref="IsolatedShell"/>), which becomes the mechanism in the command's place - so Claude Code's own process, its
-    /// login and the key it is handed stay apart from every command it runs. Where false, a launch of Claude Code runs whole
-    /// inside.
+    /// Whether a program's shell commands are handed to the mechanism one by one, as this tool starts them itself
+    /// (bubblewrap, macOS's sandbox), rather than the whole program running inside one placement of it (MXC's
+    /// container) - so a launch of Claude Code, whose every command the tool runtime starts, runs in an outer layer
+    /// where it does, and whole inside where it does not.
     /// </summary>
     bool TakesHandedCommands { get; }
 

@@ -843,9 +843,11 @@ public sealed partial class CodebaseGraphToolTests
     [Fact]
     public async Task ABodyAndATextSearch_ReadAFileWhateverItHolds()
     {
-        using var tree = await TreeAsync(("docs/huge.txt", new string('z', (int)AgentFiles.MostSearchedBytes + 10) + "\nAn Okapi grazes here.\n"));
+        const int Huge = 16 * 1024 * 1024;
+
+        using var tree = await TreeAsync(("docs/huge.txt", new string('z', Huge + 10) + "\nAn Okapi grazes here.\n"));
         var tool = Tool(tree, await QueriesAsync(tree), sync: false);
-        File.AppendAllText(Path.Combine(tree.Tree, "src", "Geometry.cs"), "//" + new string('y', (int)AgentTools.MostViewedBytes) + "\n");
+        File.AppendAllText(Path.Combine(tree.Tree, "src", "Geometry.cs"), "//" + new string('y', Huge) + "\n");
 
         var body = (await AskAsync(tool, """{"op":"body","symbols":["Twice"]}""")).Text;
         var hits = (await AskAsync(tool, """{"op":"find","query":"Okapi"}""")).Text;
@@ -1017,7 +1019,7 @@ public sealed partial class CodebaseGraphToolTests
 
     /// <summary>
     /// A whole file is no declaration: its body is served with its lines and no hash, never said changed nor checked again,
-    /// and one past the bytes a view of the runtime holds is read whole as any other: a body reads its file whatever it holds.
+    /// and one past the bytes a view of the runtime once held is read whole as any other: a body reads its file whatever it holds.
     /// </summary>
     [Fact]
     public async Task Body_OfAWholeFile_HasNoHash_AndOnePastTheViewsBoundIsReadWhole()
@@ -1025,7 +1027,7 @@ public sealed partial class CodebaseGraphToolTests
         using var tree = await TreeAsync(("big.txt", new string('a', 1023) + "\n"));
         var queries = await QueriesAsync(tree);
         var tool = Tool(tree, queries);
-        File.AppendAllText(Path.Combine(tree.Tree, "big.txt"), new string('b', (int)AgentTools.MostViewedBytes) + "\n");
+        File.AppendAllText(Path.Combine(tree.Tree, "big.txt"), new string('b', 16 * 1024 * 1024) + "\n");
 
         var zoo = (await AskAsync(tool, """{"op":"body","symbols":["docs/zoo.txt"]}""")).Text;
         var large = (await AskAsync(tool, """{"op":"body","symbols":["big.txt"]}""")).Text;

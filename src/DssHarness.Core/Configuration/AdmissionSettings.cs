@@ -60,9 +60,6 @@ public sealed class AdmissionSettings
     /// </summary>
     public const double CountedGiB = 8589934592;
 
-    /// <summary>The ceiling minFreeGiB once had, a tebibyte, which bounds nothing now (<see cref="CountedGiB"/>); kept only until nothing names it.</summary>
-    public const double MostMinFreeGiB = 1024;
-
     /// <summary>
     /// Heavy legs the machine runs at once, across every command this user runs there, at least one: each takes a slot
     /// before it starts, in the order they asked, and gives it back when its work ends.

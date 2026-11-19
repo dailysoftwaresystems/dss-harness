@@ -35,7 +35,7 @@ public abstract record GraphStepLine
 /// <param name="Seeds">How many nodes the pack was seeded from.</param>
 /// <param name="Nodes">How many nodes the pack lists.</param>
 /// <param name="Tokens">The pack's estimated tokens.</param>
-/// <param name="LeftOut">How many of the pack's lines did not fit its cap.</param>
+/// <param name="LeftOut">How many of the pack's lines did not fit its cap: 0 since the pack is paged and page 1 says where the whole is; kept so older graph.jsonl lines read.</param>
 /// <param name="Why">
 /// Why the launch was given no pack, where it was given none: the sentence for a graph the run never built, a step that
 /// asked for none, a conversation gone on with, a compaction's record; null where it was given one, or the changes in its place.

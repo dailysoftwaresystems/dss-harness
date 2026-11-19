@@ -148,15 +148,6 @@ public abstract record ChatPart
     /// <param name="Message">What it says.</param>
     public sealed record Notice(string Message) : ChatPart;
 
-    /// <summary>
-    /// A point the conversation was once sent shortened before. No provider yields it now - every request sends the
-    /// conversation whole, and a context that would be passed is full - so the loop refuses one as no part a provider
-    /// streams; it is kept while the stored conversation's own point (<see cref="StoredConversation.ShortenedBefore"/>)
-    /// still names it.
-    /// </summary>
-    /// <param name="Before">The first message sent whole, by its place in the conversation.</param>
-    public sealed record Shortened(int Before) : ChatPart;
-
     /// <summary>A fragment of the answer's text.</summary>
     /// <param name="Fragment">The fragment.</param>
     public sealed record Text(string Fragment) : ChatPart;

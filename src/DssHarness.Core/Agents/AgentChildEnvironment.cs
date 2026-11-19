@@ -16,12 +16,6 @@ namespace DssHarness.Core.Agents;
 /// </param>
 public sealed record AgentCommandSettings(IReadOnlyList<string> KeepEnvironment, int? CommandTimeoutSeconds)
 {
-    /// <summary>A number the configuration's help topic says beside <c>commandTimeoutSeconds</c>: read by nothing that bounds a command.</summary>
-    public const int DefaultTimeoutSeconds = 120;
-
-    /// <summary>A number the configuration's help topic says beside the retired <c>maxCommandTimeoutSeconds</c>: read by nothing that bounds a command.</summary>
-    public const int DefaultMaxTimeoutSeconds = 3600;
-
     /// <summary>
     /// The most a time may say: what a timer of milliseconds holds - the runner's, and Claude Code's - about 24 days. A
     /// time past it would end no command, but fail the one it was set on once it had started.

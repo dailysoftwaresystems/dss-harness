@@ -27,28 +27,8 @@ namespace DssHarness.Core.Web;
 /// </summary>
 public sealed class HarnessFetch : IDisposable
 {
-    /// <summary>
-    /// What <c>web_fetch</c>'s description and the tool runtime's help say of redirects: the fetch itself follows them as a
-    /// chain to its end and ends a loop at its first revisit, so this bounds no fetch.
-    /// </summary>
-    public const int MostRedirects = 5;
-
     /// <summary>The rule an address a search source's key may not be sent to is refused by (<see cref="WebFetchAsk.Key"/>): https alone, its origins alone, and no parameter of its own name.</summary>
     public const string KeyRule = "the source's key";
-
-    /// <summary>
-    /// What <c>web_fetch</c>'s description and the tool runtime's help say of a page's size: the fetch itself reads an
-    /// answer whole, so this bounds no fetch; an asker's own protocol bounds its answers where it has one
-    /// (<see cref="WebFetchAsk.Most"/>).
-    /// </summary>
-    public const long MostBytes = 5 * 1024 * 1024;
-
-    /// <summary>
-    /// What <c>web_fetch</c>'s description and the tool runtime's help say of a fetch's time: the fetch itself waits for an
-    /// answer for as long as it moves, its silence ended at the reader's stall bound (<see cref="WebFetchGate.Stall"/>), so
-    /// this bounds no fetch.
-    /// </summary>
-    public static readonly TimeSpan Bound = TimeSpan.FromSeconds(30);
 
     /// <summary>The types of what a fetch reads, beside every <c>text/</c> one and every <c>+json</c> and <c>+xml</c> one.</summary>
     public static IReadOnlyList<string> TextTypes { get; } = ["application/json", "application/xml", "application/xhtml+xml", "application/javascript", "application/ecmascript"];

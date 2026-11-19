@@ -67,12 +67,6 @@ public static class AgentTools
     /// <summary>Searches the web's sources the configuration declares.</summary>
     public const string WebSearch = "web_search";
 
-    /// <summary>
-    /// The size past which a view once refused a file, and an edit too. A view reads a file of any size now, a page at a
-    /// time, and an edit copies one of any size through: no file is refused for its size.
-    /// </summary>
-    public const long MostViewedBytes = 16 * 1024 * 1024;
-
     /// <summary>The most entries a directory deleted whole may hold.</summary>
     public const int MostDeletedEntries = 2000;
 

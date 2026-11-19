@@ -2530,7 +2530,7 @@ public sealed class LegRunServiceTests
             hosts: hosts);
 
         // The check alone was sent - once, or once more where the distribution's DssHarness failed as it started.
-        Assert.Equal(checks == "fails" ? 1 + RemoteLegRunner.MostRestarts : 1, sent.Count);
+        Assert.Equal(checks == "fails" ? 2 : 1, sent.Count);
         Assert.All(sent, check => Assert.Equal(["test", "--legs", "remote", RemoteLegRunner.HereOption, "wsl Ubuntu", "corpus", "--check-there"], check));
 
         using var document = JsonDocument.Parse(Assert.Single(outcome.Data));

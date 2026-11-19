@@ -3455,8 +3455,7 @@ left running once bubblewrap's first process inside is ended. Where Claude Code 
 client makes its directory and the file it keeps its state in (`ClaudeTranscripts.StateFile`,
 holding `{}`) before the launch, for inside it could make neither. Where the mechanism starts none
 inside (`IIsolationMechanism.Unnested`: macOS's sandbox, `SandboxExec.NoSandboxInside`), Claude
-Code's own process runs outside every layer, the launch says so as it starts
-(`LaunchIsolation.ClaudeCodeOutside`, `LaunchProcesses.ClaudeCodeOutside`), and runs nothing of
+Code's own process runs outside every layer, and runs nothing of
 the agent's there. Where the mechanism takes no handed command (MXC's container, on Windows), the
 whole `claude` runs inside the profile that leaves the Claude Code
 directories and `~/.claude.json` read alone (`LaunchIsolation.ForClaudeCode`): written, they would let a command plant

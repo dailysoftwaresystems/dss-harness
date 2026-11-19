@@ -257,59 +257,8 @@ public sealed class HarnessConfig
 /// </summary>
 public sealed class AgentContextConfig
 {
-    /// <summary>
-    /// The continuation record's bounds, a section no longer read: a file that writes it is refused where it is read,
-    /// naming that the record holds the whole of the work (<see cref="MisplacedKeys"/>), so this is never set from one.
-    /// </summary>
-    public AgentContinuationConfig? Continuation { get; init; }
-
     /// <summary>The compaction's bounds. Left out, the defaults hold.</summary>
     public AgentCompactionConfig? Compaction { get; init; }
-}
-
-/// <summary>
-/// The bounds the continuation record once had, under the retired <c>agentContext.continuation</c>: refused where a file
-/// writes them (<see cref="MisplacedKeys"/>), for the record holds every step, path and iteration of the work.
-/// </summary>
-public sealed class AgentContinuationConfig
-{
-    /// <summary>The most characters of the record's own parts (all but the last iterations): <see cref="Agents.AgentContinuationBounds.DefaultRecordChars"/> where left out.</summary>
-    public int? RecordChars { get; init; }
-
-    /// <summary>The most characters of one step's notes and of its output, each its own bound: <see cref="Agents.AgentContinuationBounds.DefaultStepChars"/> where left out.</summary>
-    public int? StepChars { get; init; }
-
-    /// <summary>The most changed paths listed, the count of the rest said: <see cref="Agents.AgentContinuationBounds.DefaultPaths"/> where left out.</summary>
-    public int? Paths { get; init; }
-
-    /// <summary>How many of the last iterations are kept whole, whatever their size: <see cref="Agents.AgentContinuationBounds.DefaultLastIterations"/> where left out.</summary>
-    public int? LastIterations { get; init; }
-
-    /// <summary>The most characters of the earlier iterations kept, none cut in the middle of one: <see cref="Agents.AgentContinuationBounds.DefaultIterationChars"/> where left out.</summary>
-    public int? IterationChars { get; init; }
-
-    /// <summary>Each bound said, where one is not a positive number; empty where every one is.</summary>
-    public IReadOnlyList<string> Problems()
-    {
-        var problems = new List<string>();
-
-        foreach (var (name, value) in new (string Name, int? Value)[]
-        {
-            ("agentContext.continuation.recordChars", RecordChars),
-            ("agentContext.continuation.stepChars", StepChars),
-            ("agentContext.continuation.paths", Paths),
-            ("agentContext.continuation.lastIterations", LastIterations),
-            ("agentContext.continuation.iterationChars", IterationChars),
-        })
-        {
-            if (value is < 1)
-            {
-                problems.Add($"'{name}' is {value}, and a bound of the continuation record is a positive number");
-            }
-        }
-
-        return problems;
-    }
 }
 
 /// <summary>The bounds of the engine's compaction, under <c>agentContext.compaction</c>: each a positive number, each with its default.</summary>

@@ -288,7 +288,6 @@ public sealed class ArchitectureTests
         ["DssHarness.Core.Secrets.PromptAvailability"] = "whether a prompt can be asked at all, which the console alone knows",
         ["DssHarness.Core.Secrets.MaskedPassword"] = "reading what a person types without echoing it, which only the console can",
         ["DssHarness.Core.Agents.SideTasks.SideTaskTerminal"] = "the console's own terminal for a side-task's chat, which only a front end can show",
-        ["DssHarness.Core.Processes.IsolatedShell"] = "the hand-over of a shell command a program outside the isolation gives, which the program itself answers",
 
         // The renderers of the reports their commands' use cases answer: the text is the report's own, the
         // document kind is the session's, and neither is the command's to write.

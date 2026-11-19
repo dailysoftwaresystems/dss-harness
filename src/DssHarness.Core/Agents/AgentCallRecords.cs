@@ -31,15 +31,6 @@ public sealed class AgentCallRecords : IDisposable
     /// <summary>The folder, in the step's directory, a call's result longer than a page is kept in whole.</summary>
     public const string ToolResultsDirectoryName = "tool-results";
 
-    /// <summary>
-    /// The cap a call's answer was once cut at, its head and tail kept. No call's answer is cut by it: one longer than a
-    /// page is kept whole and answered with its first page (<see cref="Kept"/>).
-    /// </summary>
-    public const int ResultCap = 32 * 1024;
-
-    /// <summary>What a cut answer once kept of its start, a quarter of <see cref="ResultCap"/>: no answer is cut now.</summary>
-    public const int ResultHead = ResultCap / 4;
-
     private readonly IFileSystem _fileSystem;
     private readonly AgentRun _run;
     private readonly TimeProvider _clock;

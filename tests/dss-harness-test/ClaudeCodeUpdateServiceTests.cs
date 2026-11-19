@@ -242,9 +242,9 @@ public sealed class ClaudeCodeUpdateServiceTests
     }
 
     /// <summary>
-    /// An npm install through a slow proxy that takes twenty minutes is waited for to its end - never ended at ten - each
-    /// five minutes of it told as a line of the asker's command, and the Claude Code it leaves is ready. Red where the
-    /// change is bounded (ChangeBudget), or a question is (AskBudget).
+    /// An npm install through a slow proxy that takes twenty minutes is waited for to its end - no question and no change
+    /// of it bounded by a time of its own - each five minutes of it told as a line of the asker's command, and the Claude
+    /// Code it leaves is ready.
     /// </summary>
     [Fact]
     public async Task ATwentyMinuteNpmInstall_IsWaitedAndTold()

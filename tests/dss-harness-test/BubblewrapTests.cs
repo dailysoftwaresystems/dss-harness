@@ -77,21 +77,6 @@ public sealed class BubblewrapTests
     }
 
     /// <summary>
-    /// A command handed over writes the one file it ends by writing its working directory to in place - bound alone - and
-    /// nothing removes it, puts a link in its stead or writes beside it in Claude Code's own temporary directory.
-    /// </summary>
-    [Fact]
-    public async Task ACommandHandedOver_WritesItsEndFileInPlace_AndNothingElseThere()
-    {
-        using var temp = new TempDirectory();
-        using var home = new TempDirectory();
-        var platform = RealIsolation.Platform();
-        await ProvedAsync(platform, temp.Path);
-
-        await RealIsolation.EndFileWrittenInPlaceAsync(await RealIsolation.StepLaunchAsync(temp, home, platform));
-    }
-
-    /// <summary>
     /// A Claude Code launch's outer layer holds its process alone: a command run inside it reads no file of a credential
     /// slot and writes neither git's hooks nor anything of the launch's own records, which stay sealed, but Claude Code's
     /// own directory and its own temporary directory in the launch's records; no layer is started inside it, for every

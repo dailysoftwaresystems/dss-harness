@@ -477,22 +477,6 @@ public sealed class SandboxExecTests
         Assert.False(File.Exists(Path.Combine(launch.Worktree, "hard")));
     }
 
-    /// <summary>
-    /// A command handed over writes the one file it ends by writing its working directory to in place - its data alone - and
-    /// nothing removes it, puts a link in its stead, by its name or by a rename onto it, or writes beside it in Claude Code's
-    /// own temporary directory.
-    /// </summary>
-    [Fact]
-    public async Task ACommandHandedOver_WritesItsEndFileInPlace_AndNothingElseThere()
-    {
-        using var temp = new TempDirectory();
-        using var home = new TempDirectory();
-        var platform = RealIsolation.Platform();
-        await ProvedAsync(platform, temp.Path);
-
-        await RealIsolation.EndFileWrittenInPlaceAsync(await RealIsolation.StepLaunchAsync(temp, home, platform));
-    }
-
     /// <summary>The sandbox the probe proved: the test skipped where this is not macOS.</summary>
     private static Task<IIsolationMechanism> ProvedAsync(IsolationPlatform platform, string tree)
         => RealIsolation.ProvedAsync(platform, tree, OperatingSystem.IsMacOS(), "macOS's sandbox isolates an agent's commands on macOS alone.", "sandbox of macOS's");
