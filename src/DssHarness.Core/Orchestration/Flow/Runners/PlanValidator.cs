@@ -8,7 +8,9 @@ namespace DssHarness.Core.Orchestration.Flow;
 
 /// <summary>
 /// The machine's check of a plan's work items before an agent is started on any of them (part 04, "What
-/// <c>validate-plan</c> checks"): at least one and at most <see cref="MostItems"/>; each of the shape a work item has;
+/// <c>validate-plan</c> checks"): at least one, and as many as the work needs - no count of items is refused, for each is
+/// sized to one builder's cycle and a round runs them in waves of the run's open agents (<c>maxOpenAgents</c>); each of
+/// the shape a work item has;
 /// every name valid and used once - in the list, and across the run where the list opens a round, for a work item is
 /// known by its name alone; no path owned by two items; each item's forbidden paths kept by its own owned
 /// paths; the path budget of the worktree each would get, with the copies and workers its legs keep inside it and the
@@ -25,9 +27,6 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// <param name="platform">This machine: its operating system, and how the tree's names compare.</param>
 public sealed class PlanValidator(IFileSystem fileSystem, IPathBudget pathBudget, IHostPlatform platform)
 {
-    /// <summary>The most work items a plan holds.</summary>
-    public const int MostItems = 8;
-
     /// <summary>The lists every work item has, beside its name and the paths it owns and must not touch.</summary>
     private static readonly string[] Lists = ["reuses", "creates", "replaces"];
 
@@ -39,7 +38,6 @@ public sealed class PlanValidator(IFileSystem fileSystem, IPathBudget pathBudget
     /// <param name="context">The repository and its configuration.</param>
     /// <param name="run">The run's name, which names its agents' worktrees' directory.</param>
     /// <param name="definition">The workflow, whose leg steps say which copies a worktree keeps.</param>
-    /// <param name="mostItems">Whether the list is held to the bound of <see cref="MostItems"/>: a plan's list and a round's own are; what updates place in a round may come to hold more.</param>
     /// <param name="noItems">Whether a list of no work item is a problem: one that carries only what updates placed is not.</param>
     /// <param name="carried">
     /// The names of the work items earlier rounds of the run carry, which no item of the list may take: a work item is
@@ -49,7 +47,7 @@ public sealed class PlanValidator(IFileSystem fileSystem, IPathBudget pathBudget
     /// group with no loop around it carries the owed work alone, its own items built by the round before.
     /// </param>
     /// <returns>Every problem of the plan, in the order of its items; none where it passes.</returns>
-    public IReadOnlyList<string> Check(IReadOnlyList<JsonNode?> items, HarnessContext context, string run, WorkflowDefinition definition, bool mostItems = true, bool noItems = true, IReadOnlyCollection<string>? carried = null)
+    public IReadOnlyList<string> Check(IReadOnlyList<JsonNode?> items, HarnessContext context, string run, WorkflowDefinition definition, bool noItems = true, IReadOnlyCollection<string>? carried = null)
     {
         ArgumentNullException.ThrowIfNull(items);
         ArgumentNullException.ThrowIfNull(context);
@@ -62,12 +60,6 @@ public sealed class PlanValidator(IFileSystem fileSystem, IPathBudget pathBudget
         }
 
         var problems = new List<string>();
-
-        if (mostItems && items.Count > MostItems)
-        {
-            problems.Add(MostItemsProblem(items.Count));
-        }
-
         var read = new List<Item>();
 
         foreach (var (node, at) in items.Select((node, at) => (node, at)))
@@ -127,10 +119,6 @@ public sealed class PlanValidator(IFileSystem fileSystem, IPathBudget pathBudget
     /// <summary>What says a work item a round opens with takes the name <paramref name="name"/>, which an earlier round's item carries.</summary>
     private static string ReusedProblem(string name)
         => $"work item '{name}' is named as a work item an earlier round of the run carries, and a work item is known by its name across the run - its tests and its updates are kept under it: a further item is named for what it settles, and one that does that item again is a changed piece of it";
-
-    /// <summary>What says a list of work items holds more than a plan may: <paramref name="count"/> is how many it holds.</summary>
-    public static string MostItemsProblem(int count)
-        => $"the plan holds {count.ToString(CultureInfo.InvariantCulture)} work items, and a plan holds at most {MostItems.ToString(CultureInfo.InvariantCulture)}, each one builder's cycle: merge the smallest, or leave some to a later run";
 
     /// <summary>
     /// Checks the pieces of a plan update, as the plan's scope concluded them, with the items the plan holds: each
@@ -231,7 +219,7 @@ public sealed class PlanValidator(IFileSystem fileSystem, IPathBudget pathBudget
             .Concat(held.Select(piece => piece.Item))
             .ToList();
 
-        problems.AddRange(Check(joined, context, run, definition, mostItems: false, noItems: false));
+        problems.AddRange(Check(joined, context, run, definition, noItems: false));
 
         return problems;
     }

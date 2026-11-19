@@ -350,7 +350,7 @@ public sealed partial class HelpTests
             prose,
             StringComparison.Ordinal);
         Assert.Contains(
-            "validate-plan checks the work items its items yields and answers ok, problems and the items, never a failure: at least one item and at most 8;",
+            "validate-plan checks the work items its items yields and answers ok, problems and the items, never a failure: at least one item, and as many as the work needs - no count is refused, for a round runs its items in waves of the run's maxOpenAgents;",
             prose,
             StringComparison.Ordinal);
         Assert.Contains(

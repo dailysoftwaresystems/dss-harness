@@ -490,16 +490,26 @@ public sealed class FlowStepRunnerTests : IDisposable
         Assert.Empty(await CheckAsync(harness, repository, Item("one"), creates));
     }
 
-    /// <summary>Each check of a list, worded once: none, too many, the wrong shape, a name, a name twice, a path owned twice, a forbidden path owned, the lists.</summary>
+    /// <summary>
+    /// A plan holds as many work items as the work needs: thirty, each owning its own paths, pass the check, for no count of
+    /// items is refused - each is sized to one builder's cycle by the plan, and a round runs them in waves of the run's open
+    /// agents.
+    /// </summary>
+    [Fact]
+    public async Task AThirtyItemPlan_PassesTheCheck()
+    {
+        var (harness, repository) = await RepositoryAsync();
+
+        Assert.Empty(await CheckAsync(harness, repository, [.. Enumerable.Range(1, 30).Select(at => (JsonNode?)Item($"item-{at}", $"src/{at}/**"))]));
+    }
+
+    /// <summary>Each check of a list, worded once: none, the wrong shape, a name, a name twice, a path owned twice, a forbidden path owned, the lists.</summary>
     [Fact]
     public async Task EachBreachOfAPlan_IsAProblem()
     {
         var (harness, repository) = await RepositoryAsync();
 
         Assert.Equal([PlanValidator.NoItems], await CheckAsync(harness, repository));
-        Assert.Contains(
-            "the plan holds 9 work items, and a plan holds at most 8, each one builder's cycle: merge the smallest, or leave some to a later run",
-            await CheckAsync(harness, repository, [.. Enumerable.Range(1, 9).Select(at => (JsonNode?)Item($"item-{at}", $"src/{at}/**"))]));
 
         var shapeless = Item("shapeless");
         shapeless.Remove("reuses");
@@ -786,8 +796,8 @@ public sealed class FlowStepRunnerTests : IDisposable
 
     /// <summary>
     /// The check that opens a round checks one list - its own items and every work item plan updates owe it - and its
-    /// output items is that list, so the group expands from what was checked; the bound of 8 is the round's own list's
-    /// alone, and a round may come to hold more by what updates place in it.
+    /// output items is that list, so the group expands from what was checked; no count of items is refused, of a round's
+    /// own list or of what updates place in it.
     /// </summary>
     [Fact]
     public async Task TheCheckThatOpensARound_ChecksItsOwnItemsAndTheOwedOnesAsOneList()
@@ -820,15 +830,16 @@ public sealed class FlowStepRunnerTests : IDisposable
             ["work items 'one' and 'owed' both own what 'src/one/**' and 'src/one/**' match: no file is written by two items, so give it to one"],
             [.. colliding.Output["problems"]!.AsArray().Select(problem => problem!.GetValue<string>())]);
 
-        var tooMany = await runner.RunAsync(Run(step, repository.Path, new Dictionary<string, FlowValue>
+        // A round's own list holds as many items as its plan gave: thirty, and none owed, open a round with no problem.
+        var thirty = await runner.RunAsync(Run(step, repository.Path, new Dictionary<string, FlowValue>
         {
-            ["items"] = FlowValue.Of(new JsonArray([.. own.Select(item => item?.DeepClone()), Item("ninth", "src/9/**")])),
+            ["items"] = FlowValue.Of(new JsonArray([.. Enumerable.Range(1, 30).Select(at => (JsonNode?)Item($"item-{at}", $"src/{at}/**"))])),
             ["owed"] = FlowValue.Of(new JsonArray()),
         }), Token);
 
         Assert.Equal(
-            [PlanValidator.MostItemsProblem(9)],
-            [.. tooMany.Output!["problems"]!.AsArray().Select(problem => problem!.GetValue<string>())]);
+            (true, 30),
+            ((bool)thirty.Output!["ok"]!, thirty.Output["items"]!.AsArray().Count));
     }
 
     /// <summary>

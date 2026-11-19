@@ -46,8 +46,7 @@ public sealed class PlanCheckRunner(IHarnessContextLoader contextLoader, IHostPl
         // The items plan updates owe the round this check opens, where it opens one: they join its own as one list,
         // checked together, and the group expands from what was checked. An owed work item replaces the one of its
         // name the round's own list holds - that list was written before the update that owes this one, and what the
-        // update changed is the item it now owes - so the list holds one item of each name. The count of items a plan
-        // may have is the round's own list's alone, never the two together.
+        // update changed is the item it now owes - so the list holds one item of each name.
         List<JsonNode?>? owed = null;
         var opening = false;
 
@@ -63,11 +62,6 @@ public sealed class PlanCheckRunner(IHarnessContextLoader contextLoader, IHostPl
 
         if (opening)
         {
-            if (items.Count > PlanValidator.MostItems)
-            {
-                problems.Add(PlanValidator.MostItemsProblem(items.Count));
-            }
-
             var owedNames = owed!.Select(FlowWorkItems.NameOf).OfType<string>().ToList();
 
             checkedItems = new JsonArray(
@@ -84,7 +78,6 @@ public sealed class PlanCheckRunner(IHarnessContextLoader contextLoader, IHostPl
                 context,
                 place.Run,
                 place.Definition,
-                mostItems: false,
                 carried: owedAlone ? [] : [.. carried.Where(name => !owedNames.Contains(name, StringComparer.Ordinal))]));
         }
         else

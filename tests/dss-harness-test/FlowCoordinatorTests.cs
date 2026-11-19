@@ -1603,6 +1603,63 @@ public sealed class FlowCoordinatorTests
         _ = await session.WaitAsync(TimeSpan.FromSeconds(30), cancel);
     }
 
+    /// <summary>
+    /// A plan of thirty work items runs whole, in waves of the run's open agents: each item makes an agent and deletes it,
+    /// and with maxOpenAgents 4 four agents are made and nothing more while their deletions are held - the fifth waits
+    /// for a slot - and once the deletions go on, every item is made and deleted and the run ends done.
+    /// </summary>
+    [Fact]
+    public async Task AThirtyItemPlan_RunsInWaves()
+    {
+        var definition = Parse("""
+            name: flow
+            maxOpenAgents: 4
+            steps:
+              - name: plan
+                type: orient
+              - name: items
+                forEach: plan.list
+                dependsOn: [plan]
+                steps:
+                  - name: maker
+                    type: create-agent
+                    agent: worker.md
+                  - name: drop
+                    type: delete-agent
+                    of: maker
+                    dependsOn: [maker]
+            """);
+        var cancel = TestContext.Current.CancellationToken;
+        var list = new JsonArray([.. Enumerable.Range(1, 30).Select(item => (JsonNode?)$"item-{item}")]);
+        var fourDropping = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var dropping = 0;
+        var runner = new FakeRunner().On("plan", FlowStepResult.Ended(passed: true, HarnessExit.Success, output: new JsonObject { ["list"] = list }));
+        var drops = runner.Hold("drop", _ =>
+        {
+            if (Interlocked.Increment(ref dropping) == 4)
+            {
+                fourDropping.TrySetResult();
+            }
+        });
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+
+        var session = coordinator.RunAsync(cancel);
+
+        await fourDropping.Task.WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        await coordinator.SettledAsync(cancel);
+
+        // Four agents are open while their deletions are held: the first wave, and no fifth making.
+        Assert.Equal((4, 4), (Count(".maker"), Count(".drop")));
+
+        drops.Done();
+        var end = await session.WaitAsync(TimeSpan.FromSeconds(60), cancel);
+
+        Assert.Equal(FlowRunStatus.Done, end.Status);
+        Assert.Equal((30, 30), (Count(".maker"), Count(".drop")));
+
+        int Count(string step) => runner.Started.Count(started => started.EndsWith(step, StringComparison.Ordinal));
+    }
+
     /// <summary>A leg that works in the tree itself holds it to that leg's end: a copy made alone does not let the tree go.</summary>
     [Fact]
     public async Task ALegInTheTreeItself_HoldsTheTreeToItsEnd()

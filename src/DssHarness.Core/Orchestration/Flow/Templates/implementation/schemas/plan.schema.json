@@ -51,7 +51,7 @@
     },
     "items": {
       "type": "array",
-      "description": "The work items, at most 8. Each is sized to one builder's cycle: as much work as one agent builds whole in a single sitting, with its tests - never more than that, and never a sliver of it. Items run side by side, so none may need another's result.",
+      "description": "The work items, as many as the work needs. Each is sized to one builder's cycle: as much work as one agent builds whole in a single sitting, with its tests - never more than that, and never a sliver of it. Items run side by side, so none may need another's result.",
       "items": {
         "$ref": "#/$defs/workItem"
       }
