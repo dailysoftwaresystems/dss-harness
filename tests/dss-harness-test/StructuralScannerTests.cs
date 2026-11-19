@@ -427,18 +427,18 @@ public sealed class StructuralScannerTests
     }
 
     /// <summary>
-    /// A string, a template, a regular expression and an element the text ends in are read to its end, and elements
-    /// nested past the scanner's depth stop being read: never an exception, and every token where the text has it.
+    /// A string, a template, a regular expression and an element the text ends in are read to its end as one token,
+    /// however deep the elements it holds nest in each other's code - each one read in its turn, none left unread at a
+    /// depth: never an exception, and every token where the text has it.
     /// </summary>
     [Fact]
-    public void JavaScriptsLexer_ReadsUnendedTexts_AndElementsTooDeep_ToTheEnd()
+    public void JavaScriptsLexer_ReadsUnendedTexts_AndElementsNestedDeep_ToTheEnd()
     {
         foreach (var text in (string[])["a = 'abc", "a = `x ${b", "a = /re", "a = <div {b", "a = <div>", "a = <a>{" + string.Concat(Enumerable.Repeat("<a>{", 500))])
         {
             var scan = JsLexer.Scan(text, markup: true).Scan;
 
-            Assert.Equal(["a", "="], Enumerable.Range(0, 2).Select(at => scan.Text(at)));
-            Assert.Equal(text.Length, scan[scan.Count - 1].End);
+            Assert.Equal(["a", "=", text[4..]], Enumerable.Range(0, scan.Count).Select(at => scan.Text(at)));
         }
     }
 

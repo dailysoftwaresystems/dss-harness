@@ -31,15 +31,21 @@ internal static class DartLexer
     /// <param name="start">Where the part begins.</param>
     /// <param name="end">Where it ends.</param>
     /// <param name="lines">The text's lines.</param>
-    public static InterpolatedText Scan(string text, int start, int end, CodeLineIndex lines)
+    /// <param name="closes">
+    /// What the scans of the text before this one read of its literals - the <see cref="InterpolatedText.Closes"/> of the
+    /// scan whose literal holds the part - so each literal the part holds that they read is passed over at once; none for
+    /// a scan of its own.
+    /// </param>
+    public static InterpolatedText Scan(string text, int start, int end, CodeLineIndex lines, ScanCloses? closes = null)
     {
-        var lexing = new Lexing(text, lines);
+        var lexing = new Lexing(text, lines, closes);
+        lexing.Closes.Scanned(start, end);
         lexing.Run(start, end);
-        return new InterpolatedText(new ScannedText(text, lexing.Tokens, lexing.Comments, literals: lexing.Literals), lexing.Interpolations, lines);
+        return new InterpolatedText(new ScannedText(text, lexing.Tokens, lexing.Comments, literals: lexing.Literals), lexing.Interpolations, lines) { Closes = lexing.Closes };
     }
 
     /// <summary>One run of the lexer over a text.</summary>
-    private sealed class Lexing(string text, CodeLineIndex lines) : ScanLexing(lines)
+    private sealed class Lexing(string text, CodeLineIndex lines, ScanCloses? closes) : ScanLexing(lines, closes)
     {
         public void Run(int start, int end)
         {
@@ -137,12 +143,27 @@ internal static class DartLexer
         /// braces, comments and strings of their own, and each bare <c>$name</c> (<see cref="ScanLexing.BareHole"/>) - read
         /// with a stack of what it is in, never a call into itself, so no nesting reaches past the reader's stack; its value's
         /// parts between its quotes and its holes, a raw one's as written. A string of one line left open ends at its line,
-        /// and what holds it with it.
+        /// and what holds it with it. A string a scan of the text before this one read is taken as it was read
+        /// (<see cref="ScanCloses"/>), and passed over at once; what this reading finds of it, and of each string it holds,
+        /// is kept for the scans of its code.
         /// </summary>
         private int Literal(int start, int quote, bool raw, int end)
         {
+            if (Closes.Of(start, end) is { Tags: null } read)
+            {
+                KeepLiteral(start, new ScanLiteral(read.Parts, raw ? ScanEscapes.None : ScanEscapes.Dart) { Interpolated = read.Holes, LeftOpen = read.LeftOpen });
+
+                foreach (var (from, to) in read.Spans)
+                {
+                    Interpolated(start, from, to);
+                }
+
+                Add(ScanTokenKind.Text, start, read.End);
+                return read.End;
+            }
+
             var literals = new LiteralStack<Quote>(this, start);
-            var at = Open(literals, quote, raw, end);
+            var at = Open(literals, start, quote, raw, end);
 
             while (at < end && literals.Open)
             {
@@ -156,7 +177,9 @@ internal static class DartLexer
                     }
                     else if (character is '\'' or '"')
                     {
-                        at = Open(literals, at, raw: at > 0 && text[at - 1] == 'r' && (at < 2 || !IsNamePart(text[at - 2])), end);
+                        // A raw string's token begins at its r, as a scan of this code reads it.
+                        var nestedRaw = at > 0 && text[at - 1] == 'r' && (at < 2 || !IsNamePart(text[at - 2]));
+                        at = Open(literals, nestedRaw ? at - 1 : at, at, nestedRaw, end);
                     }
                     else
                     {
@@ -185,8 +208,9 @@ internal static class DartLexer
                 }
                 else if (character == top.Mark && (!top.Triple || (at + 2 < end && text[at + 1] == character && text[at + 2] == character)))
                 {
-                    literals.CloseLiteral(at);
-                    at += top.Triple ? 3 : 1;
+                    var past = at + (top.Triple ? 3 : 1);
+                    literals.CloseLiteral(at, past);
+                    at = past;
                 }
                 else if (!top.Triple && LineBreakAt(text, at, end) > 0)
                 {
@@ -201,21 +225,23 @@ internal static class DartLexer
             at = Math.Min(at, end);
             literals.End(at);
             KeepLiteral(start, new ScanLiteral(literals.Parts, raw ? ScanEscapes.None : ScanEscapes.Dart) { Interpolated = literals.Holes, LeftOpen = literals.Open });
+            Closes.Keep(start, new ScanLiteralRead(at, literals.Parts, literals.Spans) { Holes = literals.Holes, LeftOpen = literals.Open });
             Add(ScanTokenKind.Text, start, at);
             return at;
         }
 
         /// <summary>
-        /// Opens the string whose first quote is at <paramref name="quote"/> on <paramref name="literals"/>; answers where its
-        /// text begins - a triple-quoted one's past a first line of white space alone, which Dart leaves out of its value.
+        /// Opens the string whose token begins at <paramref name="start"/> - a raw one's at its r - and whose first quote is at
+        /// <paramref name="quote"/> on <paramref name="literals"/>; answers where its text begins - a triple-quoted one's past
+        /// a first line of white space alone, which Dart leaves out of its value.
         /// </summary>
-        private int Open(LiteralStack<Quote> literals, int quote, bool raw, int end)
+        private int Open(LiteralStack<Quote> literals, int start, int quote, bool raw, int end)
         {
             var mark = text[quote];
             var triple = quote + 2 < end && text[quote + 1] == mark && text[quote + 2] == mark;
             var content = quote + (triple ? 3 : 1);
 
-            literals.OpenLiteral(new Quote(mark, triple, raw), triple ? PastBlankFirstLine(content, end) : content);
+            literals.OpenLiteral(new Quote(mark, triple, raw), start, triple ? PastBlankFirstLine(content, end) : content);
             return content;
         }
 

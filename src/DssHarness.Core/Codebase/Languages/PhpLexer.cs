@@ -39,13 +39,19 @@ internal static class PhpLexer
     /// <param name="start">Where the part begins.</param>
     /// <param name="end">Where it ends.</param>
     /// <param name="lines">The text's lines.</param>
-    public static InterpolatedText Scan(string text, int start, int end, CodeLineIndex lines) => Scan(text, start, end, lines, code: true);
+    /// <param name="closes">
+    /// What the scans of the text before this one read of its literals - the <see cref="InterpolatedText.Closes"/> of the
+    /// scan whose literal holds the part - so each literal the part holds that they read is passed over at once; none for
+    /// a scan of its own.
+    /// </param>
+    public static InterpolatedText Scan(string text, int start, int end, CodeLineIndex lines, ScanCloses? closes = null) => Scan(text, start, end, lines, code: true, closes);
 
-    private static InterpolatedText Scan(string text, int start, int end, CodeLineIndex lines, bool code)
+    private static InterpolatedText Scan(string text, int start, int end, CodeLineIndex lines, bool code, ScanCloses? closes = null)
     {
-        var lexing = new Lexing(text, lines);
+        var lexing = new Lexing(text, lines, closes);
+        lexing.Closes.Scanned(start, end);
         lexing.Run(start, end, code);
-        return new InterpolatedText(new ScannedText(text, lexing.Tokens, lexing.Comments, closer: "?>", literals: lexing.Literals), lexing.Interpolations, lines);
+        return new InterpolatedText(new ScannedText(text, lexing.Tokens, lexing.Comments, closer: "?>", literals: lexing.Literals), lexing.Interpolations, lines) { Closes = lexing.Closes };
     }
 
     /// <summary>Whether <paramref name="character"/> may begin a PHP name: a letter - any past ASCII among them - or <c>_</c>, and no <c>$</c>, which only a variable's name is written after.</summary>
@@ -55,7 +61,7 @@ internal static class PhpLexer
     private static bool InName(char character) => char.IsLetterOrDigit(character) || character == '_' || character > '\u007f';
 
     /// <summary>One run of the lexer over a text.</summary>
-    private sealed class Lexing(string text, CodeLineIndex lines) : ScanLexing(lines)
+    private sealed class Lexing(string text, CodeLineIndex lines, ScanCloses? closes) : ScanLexing(lines, closes)
     {
         public void Run(int start, int end, bool code)
         {
@@ -270,7 +276,8 @@ internal static class PhpLexer
         /// A heredoc or a nowdoc at <paramref name="at"/>'s <c>&lt;&lt;&lt;</c>: its label - bare, in double quotes, or a
         /// nowdoc's in single ones - and its lines to the one that begins, past white space, with the label and no name's
         /// character after it, one token; a heredoc's interpolations said as a double-quoted string's are. Answers where the
-        /// text goes on; 0 where no label follows, so the <c>&lt;</c>s are punctuators.
+        /// text goes on; 0 where no label follows, so the <c>&lt;</c>s are punctuators. One a scan of the text before this
+        /// one read is taken as it was read (<see cref="ScanCloses"/>).
         /// </summary>
         private int Heredoc(int at, int end)
         {
@@ -282,6 +289,25 @@ internal static class PhpLexer
             }
 
             var quote = label < end && text[label] is '\'' or '"' ? text[label] : '\0';
+
+            if (Closes.Of(at, end) is { Tags: null } read)
+            {
+                KeepLiteral(at, new ScanLiteral(read.Parts, quote == '\'' ? ScanEscapes.None : ScanEscapes.PhpHeredoc)
+                {
+                    Interpolated = read.Holes,
+                    Indent = read.Indent,
+                    Content = read.Content,
+                    LeftOpen = read.LeftOpen,
+                });
+
+                foreach (var (from, to) in read.Spans)
+                {
+                    Interpolated(at, from, to);
+                }
+
+                Add(ScanTokenKind.Text, at, read.End);
+                return read.End;
+            }
             var name = quote == '\0' ? label : label + 1;
 
             if (name >= end || !StartsName(text[name]))
@@ -351,12 +377,14 @@ internal static class PhpLexer
 
             if (quote == '\'')
             {
-                KeepLiteral(at, new ScanLiteral([Part(body, content)], ScanEscapes.None) { Indent = indent, Content = body, LeftOpen = close == end });
+                var parts = (ScanLiteralPart[])[Part(body, content)];
+                KeepLiteral(at, new ScanLiteral(parts, ScanEscapes.None) { Indent = indent, Content = body, LeftOpen = close == end });
+                Closes.Keep(at, new ScanLiteralRead(closeEnd, parts, []) { Indent = indent, Content = body, LeftOpen = close == end });
                 Add(ScanTokenKind.Text, at, closeEnd);
                 return closeEnd;
             }
 
-            Literal(at, body, '\0', content, end, indent, leftOpen: close == end);
+            Literal(at, body, '\0', content, end, indent, leftOpen: close == end, closeEnd);
             Add(ScanTokenKind.Text, at, closeEnd);
             return closeEnd;
         }
@@ -375,11 +403,28 @@ internal static class PhpLexer
         /// (<c>{$...}</c> from its <c>$</c>, <c>${...}</c> after its brace, a bare <c>$name</c> as
         /// <see cref="ScanLexing.BareHole"/> reads it), code that may hold braces, comments and strings of its own, read
         /// with a stack of what it is in; its value's parts between its quotes and its holes. A heredoc's token is its
-        /// caller's, and so is whether its label closed it (<paramref name="leftOpen"/>); any other's is added. Answers
-        /// where the text goes on.
+        /// caller's, ending at <paramref name="closeEnd"/>, and so is whether its label closed it
+        /// (<paramref name="leftOpen"/>); any other's is added. A string a scan of the text before this one read is taken
+        /// as it was read (<see cref="ScanCloses"/>), and passed over at once; what this reading finds of it, and of each
+        /// string its code holds, is kept for the scans of that code. Answers where the text goes on.
         /// </summary>
-        private int Literal(int start, int from, char mark, int stop, int end, int indent = 0, bool leftOpen = false)
+        private int Literal(int start, int from, char mark, int stop, int end, int indent = 0, bool leftOpen = false, int closeEnd = -1)
         {
+            if (mark != '\0' && Closes.Of(start, end) is { Tags: null } read)
+            {
+                KeepLiteral(start, mark == '\''
+                    ? new ScanLiteral(read.Parts, ScanEscapes.PhpSingle) { LeftOpen = read.LeftOpen }
+                    : new ScanLiteral(read.Parts, mark == '"' ? ScanEscapes.PhpDouble : ScanEscapes.PhpBacktick) { Interpolated = read.Holes, Content = from, LeftOpen = read.LeftOpen });
+
+                foreach (var (code, past) in read.Spans)
+                {
+                    Interpolated(start, code, past);
+                }
+
+                Add(ScanTokenKind.Text, start, read.End);
+                return read.End;
+            }
+
             if (mark == '\'')
             {
                 var at = from;
@@ -396,7 +441,7 @@ internal static class PhpLexer
             }
 
             var literals = new LiteralStack<char>(this, start);
-            literals.OpenLiteral(mark, from);
+            literals.OpenLiteral(mark, start, from);
             var index = from;
 
             while (index < stop && literals.Open)
@@ -413,7 +458,7 @@ internal static class PhpLexer
 
                     if (character is '\'' or '"')
                     {
-                        literals.OpenLiteral(character, index + 1);
+                        literals.OpenLiteral(character, index, index + 1);
                     }
 
                     index++;
@@ -446,7 +491,7 @@ internal static class PhpLexer
                 }
                 else if (top != '\0' && character == top)
                 {
-                    literals.CloseLiteral(index);
+                    literals.CloseLiteral(index, index + 1);
                     index++;
                 }
                 else
@@ -459,7 +504,9 @@ internal static class PhpLexer
             literals.End(index);
 
             var escapes = mark switch { '"' => ScanEscapes.PhpDouble, '`' => ScanEscapes.PhpBacktick, _ => ScanEscapes.PhpHeredoc };
-            KeepLiteral(start, new ScanLiteral(literals.Parts, escapes) { Interpolated = literals.Holes, Indent = indent, Content = from, LeftOpen = mark == '\0' ? leftOpen : literals.Open });
+            var open = mark == '\0' ? leftOpen : literals.Open;
+            KeepLiteral(start, new ScanLiteral(literals.Parts, escapes) { Interpolated = literals.Holes, Indent = indent, Content = from, LeftOpen = open });
+            Closes.Keep(start, new ScanLiteralRead(mark == '\0' ? closeEnd : index, literals.Parts, literals.Spans) { Holes = literals.Holes, Indent = indent, Content = from, LeftOpen = open });
 
             if (mark != '\0')
             {
