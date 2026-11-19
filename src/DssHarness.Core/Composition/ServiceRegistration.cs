@@ -28,6 +28,7 @@ using DssHarness.Core.SetUps;
 using DssHarness.Core.Sync;
 using DssHarness.Core.Testing;
 using DssHarness.Core.Tools;
+using DssHarness.Core.Waiting;
 using DssHarness.Core.Worktrees;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -120,7 +121,13 @@ public static class ServiceRegistration
             ? HomeShorthand.Of(provider.GetRequiredService<IHostPlatform>, provider.GetRequiredService<IFileSystem>())
             : HomeShorthand.None);
         services.AddSingleton<IHarnessOutput>(output ?? (provider => new ConsoleHarnessOutput(verbose, provider.GetRequiredService<HomeShorthand>(), operation, options.Parent)));
-        services.AddSingleton<IFileSystem, PhysicalFileSystem>();
+
+        // A wait a rename makes on a file another program holds is told to the running operation's teller, looked up as
+        // each wait tells: the output itself reads the file system (its home shorthand), so the file system never asks
+        // for the output.
+        services.AddSingleton<IFileSystem>(provider => new PhysicalFileSystem(
+            provider.GetRequiredService<IFilePermissions>(),
+            static told => Waits.Told(told)));
         services.AddSingleton<IProcessContext, ProcessContext>();
         services.AddSingleton<IProcessRunner, ProcessRunner>();
 
@@ -240,7 +247,9 @@ public static class ServiceRegistration
         // probe, and the owner that builds each launch's profiles from its ground and decides by agentPolicy.isolation.
         services.AddSingleton<IIsolationPlatform>(provider => new IsolationPlatform(
             provider.GetRequiredService<IHostPlatform>(),
-            provider.GetRequiredService<IProcessRunner>()));
+            provider.GetRequiredService<IProcessRunner>(),
+            told: static told => Waits.Told(told),
+            clock: provider.GetRequiredService<TimeProvider>()));
         services.AddSingleton<Agents.Isolation.IAgentIsolation>(provider => new Agents.Isolation.AgentIsolation(
             provider.GetRequiredService<IIsolationPlatform>(),
             provider.GetRequiredService<Git.IGitClient>(),
@@ -250,7 +259,8 @@ public static class ServiceRegistration
             claudeCode: new Agents.Isolation.ClaudeCodeDirectories(
                 provider.GetRequiredService<IFileSystem>(),
                 provider.GetRequiredService<IHostPlatform>(),
-                provider.GetRequiredService<DssHarness.Core.Secrets.AgentKeyStore>())));
+                provider.GetRequiredService<DssHarness.Core.Secrets.AgentKeyStore>()),
+            clock: provider.GetRequiredService<TimeProvider>()));
 
         // The one rule a command tells it runs under an agent by - the agent's mark, or a process of this tool's above it
         // in the process tree - which run-side-task refuses itself by and the fetch of a remote workflow reads the cache
@@ -379,7 +389,8 @@ public static class ServiceRegistration
         services.AddSingleton(provider => new SshWakeWindow(
             provider.GetRequiredService<INameLookup>(),
             TimeProvider.System,
-            SshWakeWindow.DefaultPollDelay));
+            SshWakeWindow.DefaultPollDelay,
+            provider.GetRequiredService<IHarnessOutput>()));
         services.AddSingleton<LocalProgramResolver>();
         services.AddSingleton<ProgramFloors>();
         services.AddSingleton<IHostProgramResolver, HostProgramResolver>();

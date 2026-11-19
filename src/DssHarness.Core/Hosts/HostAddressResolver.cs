@@ -188,7 +188,7 @@ public sealed class HostAddressResolver(INameLookup lookup, TimeProvider clock, 
                         return new RetryTry<IReadOnlyList<string>>.Final(ex.Said);
                     }
                 },
-                new RetryWatch($"'{address}' to resolve", _ => { }, _pace, Bound: null, _clock),
+                new RetryWatch($"'{address}' to resolve", Waits.Told, _pace, Bound: null, _clock),
                 cancellationToken)
             .ConfigureAwait(false);
 

@@ -142,7 +142,7 @@ public abstract record IsolationDecision(string Mode, IIsolationMechanism? Mecha
     /// The look <see cref="AfterwardAsync(CancellationToken)"/> makes, each wait of it - git listing a repository's refs,
     /// however many there are - told through <paramref name="told"/> every <see cref="Waits.SaidEvery"/> it lasts.
     /// </summary>
-    /// <param name="told">Told where a wait of the look stands; nothing is told where none is given.</param>
+    /// <param name="told">Told where a wait of the look stands; the running operation's teller (<see cref="Waits.Told"/>) where none is given.</param>
     /// <param name="cancellationToken">Stops the look, which lasts as long as git takes to answer it.</param>
     public Task<string?> AfterwardAsync(Action<WaitTold>? told, CancellationToken cancellationToken)
         => _after?.Invoke(told, cancellationToken) ?? Task.FromResult<string?>(null);
@@ -858,7 +858,8 @@ public sealed class AgentIsolation(
     /// operation's state in each tree's own git directory, with what it holds; and every replacement of each repository,
     /// listed by git - whatever keeps its refs, loose files, <c>packed-refs</c> or a reftable - so nothing the work wrote is
     /// read by the tool itself, and git waited for to its end, however many refs it lists (<see cref="Waits.ForAsync"/>),
-    /// each wait told through <paramref name="told"/>.
+    /// each wait told through <paramref name="told"/>, or the running operation's teller (<see cref="Waits.Told"/>) where none
+    /// is given.
     /// </summary>
     private async Task<Left> LeftAsync(IReadOnlyList<(string Tree, string GitDirectory, string CommonDirectory, bool Reftable)> written, Action<WaitTold>? told, CancellationToken cancellationToken)
     {
@@ -889,7 +890,7 @@ public sealed class AgentIsolation(
         {
             var listing = await Waits.ForAsync(
                 token => git.RunAsync(tree, ["for-each-ref", "--format=%(objectname) %(refname)", ReplaceRefs], cancellationToken: token),
-                new WaitWatch($"git to list the replacements of '{common}'", told ?? (_ => { }), Bound: null, _clock),
+                new WaitWatch($"git to list the replacements of '{common}'", told ?? Waits.Told, Bound: null, _clock),
                 cancellationToken).ConfigureAwait(false);
 
             // Only the caller's stop ends the wait short of git's answer: no bound of the tool's own stands on it.

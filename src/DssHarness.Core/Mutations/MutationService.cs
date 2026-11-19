@@ -218,7 +218,7 @@ public sealed class MutationService(
             new WorkerSite(_fileSystem, _clock),
             new ArmBuilder(_buildService, _processRunner, _buildDirectoryGuard, _fileSystem),
             new ArmTestRunner(_phaseRunner, _fileSystem, _clock),
-            new CtestDescription(_processRunner, _fileSystem, _platform),
+            new CtestDescription(_processRunner, _fileSystem, _platform, _output, _clock),
             _pathBudget,
             _fileSystem,
             _output,
