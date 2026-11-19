@@ -390,7 +390,9 @@ public sealed partial class HelpTests
         Assert.Contains(
             "A path given to --pull that ends with '/' names a directory: every file below it is brought back, each checked as a file named is and "
             + "each named in the report, as the path a later command takes. The host that holds it lists it first, and a directory that is not "
-            + "there, holds no file, holds more than 256 files or more than 1024 MiB together fails the pull before any file crosses",
+            + "there or holds no file fails the pull before any file crosses. Every file below it is brought back, however many and however much "
+            + "they hold together, each in a request of its own; what the files listed hold is weighed against the room free where they land, and "
+            + "a pull with no room for them fails before any crosses, naming both.",
             text,
             StringComparison.Ordinal);
         Assert.Contains(

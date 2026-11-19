@@ -1598,14 +1598,13 @@ public sealed class SyncServiceTests
 
     /// <summary>
     /// A directory a pull names is weighed where it is, before any file crosses - a file named before it among them: one
-    /// that is not there, one that is a file, one holding no file, one holding more files than a pull brings back from a
-    /// directory, and the whole copy, each said by name. Never a refusal, as for a file named that is not there.
+    /// that is not there, one that is a file, one holding no file, and the whole copy, each said by name. Never a refusal,
+    /// as for a file named that is not there.
     /// </summary>
     [Theory]
     [InlineData("absent/", HarnessExit.CommandFailed, "'absent/' is not in '", "nothing is at that path there.")]
     [InlineData("beside.txt/", HarnessExit.CommandFailed, "'beside.txt/' names a directory, and a file is at that path in '", "name it without the separator at its end.")]
     [InlineData("empty/", HarnessExit.CommandFailed, "'empty/' holds no file in '", ": nothing to bring back from it.")]
-    [InlineData("many/", HarnessExit.CommandFailed, "'many/' holds more than 256 files in '", "or keep them as one archive.")]
     [InlineData("./", HarnessExit.UsageError, "--pull './' names the whole copy, which a pull never brings back", "name a directory in it, or the files.")]
     public async Task ADirectoryThePullNamesThatItCannotBringBack_IsSaidByName_BeforeAnyFileCrosses(string path, int exit, string starts, string ends)
     {
@@ -1619,13 +1618,7 @@ public sealed class SyncServiceTests
         {
             await service.SyncAsync(temp.Path, SyncKit.Transport(harness), copy, new SyncOptions(), cancellationToken);
             Directory.CreateDirectory(Path.Combine(copy, "empty", "deeper"));
-            Directory.CreateDirectory(Path.Combine(copy, "many"));
             await File.WriteAllTextAsync(Path.Combine(copy, "beside.txt"), "beside\n", cancellationToken);
-
-            for (var index = 0; index <= SyncServe.MostFilesPulledFromADirectory; index++)
-            {
-                await File.WriteAllTextAsync(Path.Combine(copy, "many", $"{index}.txt"), "x", cancellationToken);
-            }
 
             var failure = await Assert.ThrowsAsync<HarnessException>(() => service.PullAsync(
                 SyncKit.Transport(harness), copy, landing, ["beside.txt", path], [], cancellationToken));
@@ -1705,37 +1698,44 @@ public sealed class SyncServiceTests
     }
 
     /// <summary>
-    /// A directory holding as many files as a pull brings back from one is listed, in the order of its paths; one whose
-    /// files hold more together than a pull brings back from a directory, or one file no request can carry, is refused
-    /// where it is, by its sizes alone, with no file read.
+    /// A directory of a thousand files holding three gigabytes together is listed whole, in the order of its paths, by
+    /// their sizes alone with no file read, and a pull of it is weighed against the room where it lands: one with no room
+    /// for it fails before any file crosses, naming both. Held to 256 files and a gigabyte, a step's directory of
+    /// outputs that size was refused where it was. One file no request can carry is still refused where it is.
     /// </summary>
     [Fact]
-    public async Task ADirectoryListedForAPull_IsBoundedByItsFilesNumberAndSizes_WithNoFileRead()
+    public async Task APullOfAThousandFilesAndThreeGigabytes_IsWhole()
     {
+        const int Files = 1_000;
         using var temp = new TempDirectory();
         var cancellationToken = TestContext.Current.CancellationToken;
         var harness = new HarnessFactory();
         Directory.CreateDirectory(temp.Combine("out"));
 
-        for (var index = 0; index < SyncServe.MostFilesPulledFromADirectory; index++)
+        for (var index = 0; index < Files; index++)
         {
-            await File.WriteAllTextAsync(temp.Combine("out", $"{index:000}.txt"), "x", cancellationToken);
+            await File.WriteAllTextAsync(temp.Combine("out", $"{index:0000}.txt"), "x", cancellationToken);
         }
 
-        var listing = await SyncKit.Transport(harness).ListFilesAsync(temp.Path, "out", null, cancellationToken);
+        // Each file three megabytes and a little more, as the listing reads their sizes: three gigabytes together.
+        var each = (3L * 1024 * 1024) + 1;
+        var sized = new SizedFiles(harness.FileSystem, file: null, each);
+        var listing = await SyncKit.Transport(harness, sized).ListFilesAsync(temp.Path, "out", null, cancellationToken);
 
-        Assert.Equal(SyncServe.MostFilesPulledFromADirectory, listing.Files.Count);
-        Assert.Equal(new SyncListedFile("out/000.txt", 1), listing.Files[0]);
+        Assert.Equal(Files, listing.Files.Count);
+        Assert.Equal(new SyncListedFile("out/0000.txt", each), listing.Files[0]);
+        Assert.Equal(each * Files, listing.Files.Sum(file => file.Length));
         Assert.Equal(listing.Files.Select(file => file.Path).Order(StringComparer.Ordinal), listing.Files.Select(file => file.Path));
 
-        // Each file one a request carries, and all of them together past what a directory brings back.
-        var each = (SyncServe.LargestDirectoryPulled / SyncServe.MostFilesPulledFromADirectory) + 1;
-        var sized = new SizedFiles(harness.FileSystem, file: null, each);
-        var heavy = await Assert.ThrowsAsync<HarnessException>(() => SyncKit.Transport(harness, sized).ListFilesAsync(temp.Path, "out", null, cancellationToken));
+        // Where it lands has less room than that: refused before any file crosses.
+        var landing = temp.Combine("landing");
+        var cramped = new Cramped(harness.FileSystem, free: (each * Files) - 1);
+        var service = SyncKit.Service(harness, fileSystem: cramped);
+        var refusal = await Assert.ThrowsAsync<HarnessException>(() => service.PullAsync(SyncKit.Transport(harness, sized), temp.Path, landing, ["out/"], [], cancellationToken));
 
-        Assert.Equal(HarnessExit.CommandFailed, heavy.ExitCode);
-        Assert.StartsWith($"'out/' holds {each * SyncServe.MostFilesPulledFromADirectory} bytes in '", heavy.Message, StringComparison.Ordinal);
-        Assert.Contains($"past the {SyncServe.LargestDirectoryPulled} a pull brings back from one directory", heavy.Message, StringComparison.Ordinal);
+        Assert.Equal(HarnessExit.CommandFailed, refusal.ExitCode);
+        Assert.StartsWith($"the files a pull names hold {DiskSpace.Size(each * Files)}, and '{landing}' has ", refusal.Message, StringComparison.Ordinal);
+        Assert.False(Directory.Exists(landing), "A file crossed before the room was weighed.");
 
         var huge = new SizedFiles(harness.FileSystem, temp.Combine("out", "000.txt"), SyncServe.LargestFile + 1);
         var large = await Assert.ThrowsAsync<HarnessException>(() => SyncKit.Transport(harness, huge).ListFilesAsync(temp.Path, "out", null, cancellationToken));
@@ -1846,6 +1846,12 @@ public sealed class SyncServiceTests
     private sealed class LinkedFile(IFileSystem inner, string file) : PassThroughFileSystem(inner)
     {
         public override bool IsLink(string path) => string.Equals(path, file, StringComparison.OrdinalIgnoreCase) || base.IsLink(path);
+    }
+
+    /// <summary>The real file system, except that every place on it has <paramref name="free"/> bytes free.</summary>
+    private sealed class Cramped(IFileSystem inner, long free) : PassThroughFileSystem(inner)
+    {
+        public override DiskSpace SpaceAt(string path) => new(free, free * 2, "/cramped");
     }
 
     /// <summary>The real file system, except that <paramref name="file"/> - every file, where null - is listed as holding <paramref name="length"/> bytes.</summary>

@@ -643,7 +643,7 @@ public sealed class SyncService(
                 // What a pull reads follows the links along each path named, and never reaches a place the isolation hides.
                 var hidden = _isolation.Hidden(context.Config, context.Layout.MainCheckoutRoot);
                 var brought = options.DryRun
-                    ? await ListedForPullAsync(transport, destination, pull, hidden, cancellationToken).ConfigureAwait(false)
+                    ? (await ListedForPullAsync(transport, destination, pull, hidden, cancellationToken).ConfigureAwait(false)).Listed
                     : await PullAsync(transport, destination, context.Layout.RepositoryRoot, pull, hidden, cancellationToken).ConfigureAwait(false);
 
                 pulled += brought.Files.Count;
@@ -1490,8 +1490,16 @@ public sealed class SyncService(
         ArgumentNullException.ThrowIfNull(hidden);
 
         // Every directory is listed, and refused where it is not one a pull brings back, before any file crosses.
-        var listed = await ListedForPullAsync(transport, sourceRoot, paths, hidden, cancellationToken).ConfigureAwait(false);
+        var (listed, bytes) = await ListedForPullAsync(transport, sourceRoot, paths, hidden, cancellationToken).ConfigureAwait(false);
         var brought = new List<string>();
+
+        // However many files and however much they hold: weighed against the room where they land, before any crosses, so
+        // a pull this machine has no room for stops before it fills the disk rather than part way through.
+        if (bytes > 0)
+        {
+            RefuseWithoutRoomFor(bytes, destinationRoot);
+            _output.Info(CommandName, $"{transport.Host}: bringing back {ReportText.Counted(listed.Files.Count, "file")}, {DiskSpace.Size(bytes)} listed, into '{destinationRoot}'");
+        }
 
         foreach (var path in listed.Files)
         {
@@ -1512,6 +1520,35 @@ public sealed class SyncService(
         }
 
         return new SyncPull(brought, listed.Links);
+    }
+
+    /// <summary>
+    /// Refuses a pull of <paramref name="bytes"/> where the file system <paramref name="destinationRoot"/> is on has less
+    /// room free, before any file crosses; one whose room cannot be read is let go on, as a write that finds no room
+    /// fails by name, and said.
+    /// </summary>
+    /// <exception cref="HarnessException">The files listed hold more than the room free there.</exception>
+    private void RefuseWithoutRoomFor(long bytes, string destinationRoot)
+    {
+        DiskSpace room;
+
+        try
+        {
+            room = _fileSystem.SpaceAt(destinationRoot);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            _output.Warn(CommandName, $"the room free under '{destinationRoot}' could not be read, so the pull goes on without it weighed: {ex.Message.TrimEnd('.')}");
+            return;
+        }
+
+        if (bytes > room.FreeBytes)
+        {
+            throw new HarnessException(
+                HarnessExit.CommandFailed,
+                $"the files a pull names hold {DiskSpace.Size(bytes)}, and '{destinationRoot}' has {room.Describe()}: make room there, or name "
+                + "less. Nothing was brought back.");
+        }
     }
 
     /// <summary>
@@ -1539,8 +1576,9 @@ public sealed class SyncService(
     /// <param name="paths">The paths a pull names, relative to the copy's root.</param>
     /// <param name="hidden">The places the isolation hides, which no directory named stands in.</param>
     /// <param name="cancellationToken">Stops the listing.</param>
-    /// <exception cref="HarnessException">A directory named is the whole copy, is not a directory, stands in a hidden place, or holds no file or too much.</exception>
-    private static async Task<SyncPull> ListedForPullAsync(
+    /// <returns>What it brings back, and how many bytes the files of the directories named hold together, each file once.</returns>
+    /// <exception cref="HarnessException">A directory named is the whole copy, is not a directory, stands in a hidden place, or holds no file.</exception>
+    private static async Task<(SyncPull Listed, long Bytes)> ListedForPullAsync(
         ISyncTransport transport,
         string sourceRoot,
         IReadOnlyList<string> paths,
@@ -1549,6 +1587,7 @@ public sealed class SyncService(
     {
         var files = new List<string>();
         var links = new List<string>();
+        var sizes = new Dictionary<string, long>(StringComparer.Ordinal);
 
         foreach (var path in paths)
         {
@@ -1586,9 +1625,14 @@ public sealed class SyncService(
 
             files.AddRange(listing.Files.Select(file => file.Path));
             links.AddRange(listing.Links);
+
+            foreach (var file in listing.Files)
+            {
+                sizes[file.Path] = file.Length;
+            }
         }
 
-        return new SyncPull([.. files.Distinct(StringComparer.Ordinal)], [.. links.Distinct(StringComparer.Ordinal)]);
+        return (new SyncPull([.. files.Distinct(StringComparer.Ordinal)], [.. links.Distinct(StringComparer.Ordinal)]), sizes.Values.Sum());
     }
 
     /// <summary>

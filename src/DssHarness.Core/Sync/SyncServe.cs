@@ -325,17 +325,6 @@ public static class SyncServe
     /// </summary>
     public const string List = "list";
 
-    /// <summary>The most files a pull brings back from one directory it names.</summary>
-    /// <remarks>
-    /// A file read back crosses in a request of its own, and a request is a session on a host reached over ssh: a
-    /// directory named is a step's kept outputs, tens of files, never a build tree. A budget somebody chose, as
-    /// <see cref="LargestBatch"/> is, checked on the side that holds the directory, before a file of it is read.
-    /// </remarks>
-    public const int MostFilesPulledFromADirectory = 256;
-
-    /// <summary>The most bytes the files of one directory a pull names hold together, checked as their number is.</summary>
-    public const long LargestDirectoryPulled = 1024L * 1024 * 1024;
-
     /// <summary>Removes a whole copy the harness made, as deleting the worktree it holds asks.</summary>
     public const string RemoveCopy = "remove-copy";
 

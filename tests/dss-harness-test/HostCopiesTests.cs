@@ -26,6 +26,52 @@ public sealed class HostCopiesTests
     private static readonly HostId Mac = HostId.Ssh("mac");
 
     /// <summary>
+    /// The record of which hosts hold a copy of which worktree is waited for while another process's change of it lasts,
+    /// however long - a change held up behind a disk that crawls, a machine paging hard - and read once it is let go: no
+    /// window of the code's own refuses it. Held to thirty seconds, a sync beside a long change of the record was refused
+    /// as one that could not take it, though the holder lived and let go a moment later.
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task HostCopies_WaitsWhileTheHolderLives()
+    {
+        using var temp = new TempDirectory();
+        using var held = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = new HarnessFactory();
+        var layout = new HarnessLayout(temp.Path, temp.Path);
+        var record = new HostCopyRecord(harness.FileSystem, harness.Platform.PathComparison);
+
+        // Another change of the record, on a thread of its own as another process's would be, holding it until let go.
+        var holder = Task.Factory.StartNew(
+            () => MachineWideFile.Update(
+                Path.GetFullPath(HostCopyRecord.PathOf(layout)),
+                Timeout.InfiniteTimeSpan,
+                () =>
+                {
+                    held.Set();
+                    release.Wait(cancellationToken);
+                    return 0;
+                }),
+            cancellationToken,
+            TaskCreationOptions.LongRunning,
+            TaskScheduler.Default);
+
+        held.Wait(cancellationToken);
+
+        var reading = Task.Factory.StartNew(() => record.All(layout), cancellationToken, TaskCreationOptions.LongRunning, TaskScheduler.Default);
+
+        // Past the thirty seconds a change of the record was once given, it is still waited for.
+        await Task.Delay(TimeSpan.FromSeconds(31), cancellationToken);
+        Assert.False(reading.IsCompleted, $"the record was not waited for while its holder lived: {reading.Exception?.InnerException?.Message}");
+
+        release.Set();
+
+        Assert.Empty(await reading.WaitAsync(TimeSpan.FromSeconds(30), cancellationToken));
+        await holder.WaitAsync(TimeSpan.FromSeconds(30), cancellationToken);
+    }
+
+    /// <summary>
     /// A worktree's copy is kept beside the main checkout's copy, so that copy is the one it is of; any other copy - the
     /// main checkout's, or one named as no worktree's copy is - is its own.
     /// </summary>

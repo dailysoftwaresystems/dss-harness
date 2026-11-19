@@ -1222,27 +1222,15 @@ public sealed class LocalSyncTransport(
             throw new HarnessException(HarnessExit.CommandFailed, Hidden(named, opened, root, place));
         }
 
-        var most = SyncServe.MostFilesPulledFromADirectory;
-
-        // One more than may cross, and no further: a directory holding a build tree is refused without every file of it
-        // being listed.
-        var walked = _fileSystem.EnumerateWrittenFiles(directory).Take(most + 1).ToList();
-
-        cancellationToken.ThrowIfCancellationRequested();
-
-        if (walked.Count > most)
-        {
-            throw new HarnessException(
-                HarnessExit.CommandFailed,
-                $"'{named}' holds more than {most.ToString(CultureInfo.InvariantCulture)} files in '{root}', the most a pull brings back from one "
-                + "directory, each in a request of its own: name a directory that holds fewer, or the files, or keep them as one archive.");
-        }
-
+        // Every file below it, however many and however much they hold together: what a pull brings back is what was
+        // named, and the side it comes to weighs the room it takes there (SyncService.PullAsync).
         var files = new List<SyncListedFile>();
         var links = new List<string>();
 
-        foreach (var file in walked)
+        foreach (var file in _fileSystem.EnumerateWrittenFiles(directory))
         {
+            cancellationToken.ThrowIfCancellationRequested();
+
             var relative = ManifestBuilder.Relative(expanded, file.Path);
 
             if (_fileSystem.IsLink(file.Path))
@@ -1260,15 +1248,6 @@ public sealed class LocalSyncTransport(
         if (files.FirstOrDefault(file => file.Length > SyncServe.LargestFile) is { } large)
         {
             throw new HarnessException(HarnessExit.CommandFailed, SyncServe.TooLargeToCarry(large.Length, large.Path, "this host"));
-        }
-
-        if (files.Sum(file => file.Length) is var bytes && bytes > SyncServe.LargestDirectoryPulled)
-        {
-            throw new HarnessException(
-                HarnessExit.CommandFailed,
-                $"'{named}' holds {bytes.ToString(CultureInfo.InvariantCulture)} bytes in '{root}', past the "
-                + $"{SyncServe.LargestDirectoryPulled.ToString(CultureInfo.InvariantCulture)} a pull brings back from one directory: name a directory "
-                + "that holds less, or the files, or keep the smaller thing a later step actually reads.");
         }
 
         return new SyncDirectoryListing([.. files.OrderBy(file => file.Path, StringComparer.Ordinal)])

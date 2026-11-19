@@ -302,6 +302,28 @@ public sealed class HostProbesTests
     }
 
     /// <summary>
+    /// An address behind five labels stacked before it - an interface's name, an alias, a bridge, a tunnel and a scope, as
+    /// a tool that labels addresses prints them - is the address, read by one pass over the colons as the token's grammar
+    /// has it, and named as the configuration declares the host. Held to two labels, an address behind more was left as
+    /// ssh wrote it, the resolved address in the reader's line.
+    /// </summary>
+    [Fact]
+    public void FiveLabels_GiveTheAddress()
+    {
+        var resolved = new HostConnection
+        {
+            Host = HostId.Ssh("mac"),
+            Address = "mac.invalid",
+            Pin = new SshPin("192.0.2.10", "mac.invalid"),
+            Resolved = Learnt("192.0.2.10", "fe80::1c2b:3d4e:5f60:7182%12"),
+        };
+
+        Assert.Equal(
+            "one:two:three:four:five:mac.invalid and eth0:lo:br0:wg0:tun0:mac.invalid",
+            HostProbes.AsConfigured("one:two:three:four:five:192.0.2.10 and eth0:lo:br0:wg0:tun0:fe80::1c2b:3d4e:5f60:7182%12", resolved));
+    }
+
+    /// <summary>
     /// What only looks like one of the addresses is left as it is - another address, one beginning with it, and a
     /// version or a number that would parse as it: '192.0.522' and '3221225994' are both 192.0.2.10 to a parser - and so
     /// is one of them standing where no word of its own sets it apart: before a URL's escape.

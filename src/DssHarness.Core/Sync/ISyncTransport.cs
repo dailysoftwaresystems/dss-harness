@@ -298,9 +298,8 @@ public interface ISyncTransport
 
     /// <summary>
     /// What one directory of the copy holds, for a pull that names it: every file below it with its size, and every link
-    /// below it, which is neither followed nor read. Bounded where the directory is, before any file of it is read: no
-    /// more than <see cref="SyncServe.MostFilesPulledFromADirectory"/> files, no more than
-    /// <see cref="SyncServe.LargestDirectoryPulled"/> bytes together, and no file past <see cref="SyncServe.LargestFile"/>.
+    /// below it, which is neither followed nor read: every one, however many and however much they hold together, and
+    /// refused where the directory is, before any file of it is read, only where a file is past <see cref="SyncServe.LargestFile"/>.
     /// The directory named is reached as its path is spelt, a link along it followed, where <paramref name="hidden"/> is
     /// given - never into a place it names - and through no link where it is null.
     /// </summary>
