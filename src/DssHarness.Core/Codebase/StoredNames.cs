@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using DssHarness.Core.Walks;
 
 namespace DssHarness.Core.Codebase;
 
@@ -133,8 +134,8 @@ internal readonly record struct StoredName(string Rest, int Kept = 0, string? Fi
 
     /// <summary>
     /// Makes each of <paramref name="count"/> items after the item it is written against, where it is written against one:
-    /// in an order where every item's base is made before it - the bases followed on a stack of their own, however long
-    /// their chain, and each item made once.
+    /// every item's base made before it, each item once, as a <see cref="Memo{TKey, TAnswer}"/> answers what depends on
+    /// another - on a stack of its own, however long the chain of bases.
     /// </summary>
     /// <param name="count">How many items there are.</param>
     /// <param name="baseOf">The place of the item an item is written against, or none.</param>
@@ -146,43 +147,23 @@ internal readonly record struct StoredName(string Rest, int Kept = 0, string? Fi
         ArgumentNullException.ThrowIfNull(baseOf);
         ArgumentNullException.ThrowIfNull(make);
 
-        // 1 while an item waits on its base, 2 once it is made.
-        var state = new byte[count];
-        var waiting = new Stack<int>();
-
-        for (var start = 0; start < count; start++)
-        {
-            if (state[start] == 2)
+        var made = new Memo<int, bool>(
+            at => baseOf(at) switch
             {
-                continue;
-            }
-
-            waiting.Push(start);
-            state[start] = 1;
-
-            while (waiting.TryPeek(out var at))
+                null => [],
+                { } under when under >= 0 && under < count => [under],
+                { } under => throw new JsonException(string.Create(CultureInfo.InvariantCulture, $"{what} {at} is written against {what} {under}, and there are {count}")),
+            },
+            (at, _) =>
             {
-                if (baseOf(at) is { } under && (under < 0 || under >= count))
-                {
-                    throw new JsonException(string.Create(CultureInfo.InvariantCulture, $"{what} {at} is written against {what} {under}, and there are {count}"));
-                }
-
-                if (baseOf(at) is { } next && state[next] != 2)
-                {
-                    if (state[next] == 1)
-                    {
-                        throw new JsonException(string.Create(CultureInfo.InvariantCulture, $"{what} {at} is written against {what} {next}, which is written against it in turn"));
-                    }
-
-                    state[next] = 1;
-                    waiting.Push(next);
-                    continue;
-                }
-
                 make(at);
-                state[at] = 2;
-                waiting.Pop();
-            }
+                return true;
+            },
+            at => throw new JsonException(string.Create(CultureInfo.InvariantCulture, $"{what} {at} is written, through what it is written against, against itself")));
+
+        for (var at = 0; at < count; at++)
+        {
+            made.Of(at);
         }
     }
 }

@@ -536,7 +536,7 @@ public sealed class CodebaseGraphRecordsTests
             Refused([.. lines[..3], Json(new CodeGraphEdgeLine(0, 7, CodeEdgeKinds.Contains, 1, CodeConfidences.Exact)), .. lines[4..]]),
             StringComparison.Ordinal);
         Assert.Contains(
-            "node 1 is written against node 0, which is written against it in turn",
+            "node 0 is written, through what it is written against, against itself",
             Refused(
                 lines[0],
                 Json(new CodeGraphSymbolLine(new StoredName("ile:a.toy", Kept: 1, At: 1), "abcdef", CodeNodeKinds.File, ["a.toy"])),
@@ -599,7 +599,7 @@ public sealed class CodebaseGraphRecordsTests
         Assert.Contains("a name keeps 99 characters of a name of 9", Refused(text.Replace("[9,\".beta\"]", "[99,\".beta\"]", StringComparison.Ordinal)), StringComparison.Ordinal);
         Assert.Contains("node 0's id keeps characters of a parent it has none of", Refused(text.Replace("\"id\":\"toy:Alpha\"", "\"id\":[3,\":Alpha\"]", StringComparison.Ordinal)), StringComparison.Ordinal);
         Assert.Contains(
-            "node 1 is written against node 0, which is written against it in turn",
+            "node 0 is written, through what it is written against, against itself",
             Refused(text.Replace("\"signature\":\"class Alpha\"", "\"signature\":\"class Alpha\",\"parent\":1", StringComparison.Ordinal)),
             StringComparison.Ordinal);
 
@@ -624,7 +624,7 @@ public sealed class CodebaseGraphRecordsTests
         {
             var text = string.Concat(Enumerable.Repeat("{\"a\":", depth)) + "1" + new string('}', depth);
             var lines = CodeFileText.Lines(text);
-            var extract = new JsonExtractor().Extract(new CodeFileInput("deep.json", text)).WithDigests(lines);
+            var extract = new JsonExtractor().Extract(new CodeFileInput("deep.json", text)).WithDigests(text);
             var file = layout.GraphExtractFile(CodeGraphIds.ExtractName(Blob, "deep.json", "json", 1));
 
             store.WriteGraphExtract(file, new CodeGraphStoredExtract(CodeGraphManifest.CurrentSchema, "json", 1, Blob, "deep.json", lines.Count, extract));
