@@ -95,9 +95,6 @@ public sealed class OrchestrationStore(IFileSystem fileSystem, IHarnessOutput ou
     /// <summary>What an agent's view of a run's codebase graph is, as its refusals name it.</summary>
     public const string GraphViewKind = "an agent's view of the run's codebase graph";
 
-    /// <summary>How long one read-decide-write waits for another process's.</summary>
-    private static readonly TimeSpan Window = TimeSpan.FromSeconds(30);
-
     private readonly IFileSystem _fileSystem = fileSystem;
     private readonly IHarnessOutput _output = output;
 
@@ -273,10 +270,11 @@ public sealed class OrchestrationStore(IFileSystem fileSystem, IHarnessOutput ou
     /// </summary>
     /// <param name="orchestrator">The orchestrator.</param>
     /// <param name="work">The reading, the decision and the writing, all synchronous.</param>
-    public T Exclusively<T>(OrchestratorLayout orchestrator, Func<T> work)
+    /// <param name="cancellationToken">Ends a wait for another process's decision, before the work begins.</param>
+    public T Exclusively<T>(OrchestratorLayout orchestrator, Func<T> work, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(orchestrator);
-        return MachineWideFile.Update(orchestrator.RecordFile, Window, work);
+        return WhileHeld(orchestrator.RecordFile, work, cancellationToken);
     }
 
     /// <summary>
@@ -287,13 +285,26 @@ public sealed class OrchestrationStore(IFileSystem fileSystem, IHarnessOutput ou
     /// </summary>
     /// <param name="layout">The repository.</param>
     /// <param name="work">The reading, the decision and the writing, all synchronous.</param>
-    public T AcrossRuns<T>(HarnessLayout layout, Func<T> work)
+    /// <param name="cancellationToken">Ends a wait for another process's decision, before the work begins.</param>
+    public T AcrossRuns<T>(HarnessLayout layout, Func<T> work, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(layout);
         ArgumentNullException.ThrowIfNull(work);
 
-        return MachineWideFile.Update(RunsSectionFile(layout), Window, work);
+        return WhileHeld(RunsSectionFile(layout), work, cancellationToken);
     }
+
+    /// <summary>
+    /// Runs <paramref name="work"/> with no other process inside the same section of <paramref name="path"/>, waiting for
+    /// another process's for as long as it holds it - a holder that ended holding it is let go by the system - told every
+    /// five minutes naming the file, and ended by <paramref name="cancellationToken"/>; never refused for how long another
+    /// took (<see cref="MachineWideFile.UpdateWhileHeld{T}"/>).
+    /// </summary>
+    /// <param name="path">The file the section is of.</param>
+    /// <param name="work">The reading, the decision and the writing, all synchronous.</param>
+    /// <param name="cancellationToken">Ends the wait, before the work begins.</param>
+    private T WhileHeld<T>(string path, Func<T> work, CancellationToken cancellationToken)
+        => MachineWideFile.UpdateWhileHeld(path, told => _output.Info(Hosts.ToolPackage.Id, told.Line()), TimeProvider.System, work, cancellationToken);
 
     /// <summary>The file that names the repository's one section across its runs (<see cref="AcrossRuns{T}"/>).</summary>
     /// <param name="layout">The repository.</param>
@@ -946,15 +957,15 @@ public sealed class OrchestrationStore(IFileSystem fileSystem, IHarnessOutput ou
     /// <param name="orchestrator">The run's orchestrator.</param>
     /// <param name="reads">The digest of the steps' read rules; null for steps no read rule narrows.</param>
     /// <param name="make">Makes the map and what it was made from; null where there is nothing to make it of.</param>
-    /// <exception cref="HarnessException">Another process held the map past the window (<see cref="HarnessExit.Refused"/>).</exception>
-    public string? MapOnce(OrchestratorLayout orchestrator, string? reads, Func<(string Text, System.Text.Json.Nodes.JsonNode Meta)?> make)
+    /// <param name="cancellationToken">Ends a wait for another process making the map, before anything is read or made.</param>
+    public string? MapOnce(OrchestratorLayout orchestrator, string? reads, Func<(string Text, System.Text.Json.Nodes.JsonNode Meta)?> make, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(orchestrator);
         ArgumentNullException.ThrowIfNull(make);
 
         var map = orchestrator.GraphMapFileOf(reads);
 
-        return MachineWideFile.Update(map, Window, () =>
+        return WhileHeld(map, () =>
         {
             if (_fileSystem.FileExists(map))
             {
@@ -971,7 +982,7 @@ public sealed class OrchestrationStore(IFileSystem fileSystem, IHarnessOutput ou
             _fileSystem.WriteAllTextAtomic(map, made.Text);
 
             return made.Text;
-        });
+        }, cancellationToken);
     }
 
     /// <summary>Appends one sync's line to the graph's <c>sync.jsonl</c>, whole and on the disk before it returns.</summary>

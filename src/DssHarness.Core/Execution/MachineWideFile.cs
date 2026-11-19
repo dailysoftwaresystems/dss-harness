@@ -199,6 +199,70 @@ internal static class MachineWideFile
     }
 
     /// <summary>
+    /// Runs <paramref name="work"/> with no other process inside the same file's update, as
+    /// <see cref="Update{T}(string, TimeSpan, Func{T})"/> does - the same mutex - but waiting for another process's update
+    /// of the file for as long as that process holds it: the system lets go a mutex whose holder ended holding it, so the
+    /// wait ends where the holder lets go or dies, never at a number of the code's own. It is the one wait every wait is
+    /// (<see cref="Waits.ForAsync{T}"/>): told every <see cref="Waits.SaidEvery"/> as waiting for another process's change
+    /// of the file, by its path, and ended by <paramref name="cancellationToken"/>.
+    /// </summary>
+    /// <remarks>
+    /// The mutex is taken by a hold on a thread of its own (<see cref="MachineWideMutex.HoldAsync"/>), which keeps it until
+    /// the hold is let go: the work, synchronous, runs on the calling thread meanwhile, and the hold lets the mutex go from
+    /// whichever thread ends it.
+    /// </remarks>
+    /// <typeparam name="T">What the work answers.</typeparam>
+    /// <param name="path">The file being updated, which names the mutex.</param>
+    /// <param name="tell">Told where the wait stands, in the one form a wait is told in (<see cref="WaitTold.Line"/>).</param>
+    /// <param name="clock">The clock the wait is measured on.</param>
+    /// <param name="work">The read, the decision and the write.</param>
+    /// <param name="cancellationToken">Ends the wait, before the work begins.</param>
+    /// <exception cref="OperationCanceledException">The token ended the wait; nothing was changed.</exception>
+    public static T UpdateWhileHeld<T>(string path, Action<WaitTold> tell, TimeProvider clock, Func<T> work, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        ArgumentNullException.ThrowIfNull(tell);
+        ArgumentNullException.ThrowIfNull(clock);
+        ArgumentNullException.ThrowIfNull(work);
+
+        var name = NameFor(path);
+        var held = HeldHere.Value!;
+
+        // A work under this file's hold that updates the file again goes on inside the hold, as a mutex its thread holds
+        // is taken again at once: the hold is another thread's, and a wait on it would wait on itself for ever.
+        if (held.Contains(name))
+        {
+            return work();
+        }
+
+        var end = Waits.ForAsync(
+                token => MachineWideMutex.HoldAsync(name, $"'{path}'", Timeout.InfiniteTimeSpan, token),
+                new WaitWatch($"another process's change of '{path}'", tell, Bound: null, clock),
+                cancellationToken)
+            .GetAwaiter()
+            .GetResult();
+
+        // A hold is null only where the wait ended without taking the mutex, which no bound ends: the caller's token did.
+        using var hold = end.Value ?? throw new OperationCanceledException(cancellationToken);
+        held.Add(name);
+
+        try
+        {
+            return work();
+        }
+        finally
+        {
+            held.Remove(name);
+        }
+    }
+
+    /// <summary>
+    /// The files whose work under <see cref="UpdateWhileHeld{T}"/> runs on this thread now, by their mutex's name: the
+    /// work is synchronous, so the thread it runs on is the one that asks again.
+    /// </summary>
+    private static readonly ThreadLocal<HashSet<string>> HeldHere = new(() => new HashSet<string>(StringComparer.Ordinal));
+
+    /// <summary>
     /// One mutex per file, however its path is spelled.
     /// </summary>
     /// <remarks>

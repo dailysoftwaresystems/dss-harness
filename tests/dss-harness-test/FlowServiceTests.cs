@@ -574,7 +574,7 @@ public sealed class FlowServiceTests
             _ = SpinWait.SpinUntil(() => amending.IsCompleted, TimeSpan.FromSeconds(2));
             store.WriteOwner(run, new RunOwner(identity.CurrentMachine, identity.CurrentId, DateTimeOffset.UtcNow, identity.Current));
             return true;
-        });
+        }, Token);
 
         var amended = await amending!.WaitAsync(Bound, Token);
 
