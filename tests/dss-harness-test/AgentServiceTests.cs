@@ -1859,71 +1859,30 @@ public sealed class AgentServiceTests
     }
 
     /// <summary>
-    /// The search of the main tree's history reads a bounded number of the commits that changed the paths, and says where
-    /// it stopped short of that history: a copy older than it reached is not found stale.
+    /// The search of the main tree's history for a stale copy reads the whole of it, by git's own walk: a copy six hundred
+    /// commits back is found the main tree's own there, and said so. A search cut at a number of commits found none, and
+    /// sent a person to merge by hand what a refresh hands whole.
     /// </summary>
     [Fact]
-    public async Task TheSearchForStaleCopies_SaysWhereItStoppedShortOfTheMainTreesHistory()
+    public async Task ACopySixHundredCommitsBack_IsFoundStale()
     {
         using var temp = new TempDirectory();
         var kit = await OrchestrationKit.PrepareAsync(temp);
+
+        // The kit's first commit holds a.txt as 'one'.
+        var first = (await kit.Harness.GitClient.ResolveCommitAsync(kit.Main, "HEAD", Token))!;
         OrchestrationKit.Write(kit.Main, "a.txt", "one\nsecond\n");
         await kit.Harness.CommitAllAsync(kit.Main, "the second version", Token);
         var worktree = await kit.CreateAgentAsync("ag");
         OrchestrationKit.Write(worktree, "a.txt", "one\n");
-        await CommitManyAsync(kit.Main, "a.txt", TwoChanges.MostCommits + 1);
+        await GitImport.CommitManyAsync(kit.Main, "a.txt", 600, at => $"version {at}\n", Token);
 
         var refused = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", RefreshRequest.Under("a.txt"), apply: true, Token);
 
         Assert.Equal(HarnessExit.Refused, refused.ExitCode);
-        Assert.StartsWith("  a.txt   (a three-way merge of the two", refused.Details![0], StringComparison.Ordinal);
-        Assert.DoesNotContain("its bytes are the main tree's", refused.Details[0], StringComparison.Ordinal);
-        Assert.Contains(
-            "The last 512 commit(s) of the main tree that changed these paths were searched, and its history goes further back: a copy older than that "
-            + "is not found stale.",
-            refused.Details);
+        Assert.StartsWith($"  a.txt   (its bytes are the main tree's at {Core.Output.ReportText.Commit(first)}", refused.Details![0], StringComparison.Ordinal);
+        Assert.DoesNotContain(refused.Details, line => line.Contains("further back", StringComparison.Ordinal));
         Assert.Equal("one\n", OrchestrationKit.Read(worktree, "a.txt"));
-    }
-
-    /// <summary>
-    /// Commits <paramref name="count"/> versions of <paramref name="path"/> onto the main tree's branch at once, through
-    /// git's own importer, and puts the tree's files as its HEAD then holds them.
-    /// </summary>
-    private static async Task CommitManyAsync(string main, string path, int count)
-    {
-        var harness = new HarnessFactory();
-        var head = (await harness.RunGitAsync(main, ["rev-parse", "HEAD"], Token)).StandardOutput.Trim();
-        var branch = (await harness.RunGitAsync(main, ["symbolic-ref", "HEAD"], Token)).StandardOutput.Trim();
-        var stream = new System.Text.StringBuilder();
-
-        for (var at = 1; at <= count; at++)
-        {
-            var content = $"version {at}\n";
-            stream.Append($"commit {branch}\ncommitter Test <test@example.com> {1_700_000_000 + at} +0000\ndata 1\nv\n");
-
-            if (at == 1)
-            {
-                stream.Append($"from {head}\n");
-            }
-
-            stream.Append($"M 100644 inline {path}\ndata {content.Length}\n{content}\n");
-        }
-
-        var import = new System.Diagnostics.ProcessStartInfo("git") { RedirectStandardInput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true };
-
-        foreach (var argument in new[] { "-C", main, "fast-import", "--quiet" })
-        {
-            import.ArgumentList.Add(argument);
-        }
-
-        using var process = System.Diagnostics.Process.Start(import)!;
-        await process.StandardInput.WriteAsync(stream.ToString());
-        process.StandardInput.Close();
-        var error = await process.StandardError.ReadToEndAsync(Token);
-        await process.WaitForExitAsync(Token);
-
-        Assert.True(process.ExitCode == 0, $"git fast-import failed: {error}");
-        await harness.RunGitAsync(main, ["reset", "--hard", "--quiet"], Token);
     }
 
     /// <summary>

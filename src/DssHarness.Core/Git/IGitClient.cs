@@ -125,21 +125,19 @@ public interface IGitClient
 
     /// <summary>
     /// What the history of <paramref name="tip"/> held at each of <paramref name="paths"/>, newest first: every version
-    /// found among the <paramref name="most"/> newest commits that changed any of them - a commit a merge dropped among
-    /// them, since what it held was still that history's - each with a commit that holds it there; and whether that
-    /// history goes further back than was read.
+    /// found among every commit of it that changed any of them - a commit a merge dropped among them, since what it held
+    /// was still that history's - each with a commit that holds it there. The whole history is read, by git's own walk,
+    /// which visits each commit once: no number of commits stops it, so no version is left unread for being old.
     /// </summary>
     /// <param name="directory">A directory inside the repository.</param>
     /// <param name="tip">The commit whose history is read, or a name of it, read as <see cref="ResolveCommitAsync"/> reads it.</param>
     /// <param name="paths">Paths from the repository's root, with forward separators, as git names them, each read literally.</param>
-    /// <param name="most">The most commits read: what bounds the cost, and what <see cref="GitPathHistory.Cut"/> says was hit.</param>
     /// <param name="cancellationToken">Cancels the git processes.</param>
     /// <exception cref="HarnessException">git could not walk the history, or answer for every commit and path.</exception>
     Task<GitPathHistory> ListHeldInHistoryAsync(
         string directory,
         string tip,
         IReadOnlyList<string> paths,
-        int most,
         CancellationToken cancellationToken = default);
 
     /// <summary>
@@ -200,18 +198,53 @@ public interface IGitClient
     Task<byte[]> ReadCheckedOutAsync(string directory, string path, byte[] staged, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Three versions of one text merged as <c>git merge-file</c> merges them, each given as git stores it: clean, with
-    /// the merged bytes and how many hunks each side changed; in conflict, counted and shown, each side under its name and
-    /// what both held between them; or not merged at all, in git's own words, which is an answer and no failure of the
-    /// question. No repository is read or written.
+    /// Three versions of the file at <paramref name="path"/> merged as <c>git merge-file</c> merges them, over files on
+    /// disk and git's store, whatever their size: each brought to the form git stores it in at that path - a blob as it
+    /// is, a file or bytes in hand through the path's clean filters and line-ending rules - and merged in that form.
+    /// Clean, the merged text is written into the repository's objects, as git writes any object, and named by its blob
+    /// id, with how many hunks each side changed; in conflict, every conflict counted by its markers and shown whole,
+    /// each side under its name and what both held between them; or not merged at all, in git's own words - a version git
+    /// could not bring to the form it stores among them, a filter that failed on it - which is an answer and no failure of
+    /// the question. No content passes through this process's memory but the lines of the conflicts it shows.
     /// </summary>
-    /// <param name="ancestor">What both sides held.</param>
-    /// <param name="ours">The side the merge is made into.</param>
-    /// <param name="theirs">The side merged in.</param>
+    /// <param name="directory">The work tree's root, whose attributes and configuration say how the path is stored.</param>
+    /// <param name="path">The path whose rules apply, relative to the root, with forward separators.</param>
+    /// <param name="versions">What both sides held, the side the merge is made into, and the side merged in, in that order.</param>
     /// <param name="names">What the three are called in a conflict's markers.</param>
     /// <param name="cancellationToken">Cancels the git processes.</param>
-    /// <exception cref="HarnessException">git could not be run, or the three could not be written for it to read.</exception>
-    Task<GitTextMerge> MergeTextAsync(byte[] ancestor, byte[] ours, byte[] theirs, GitMergeNames names, CancellationToken cancellationToken = default);
+    /// <exception cref="HarnessException">git could not be run, or the versions could not be written for it to read.</exception>
+    Task<GitTextMerge> MergeAsync(string directory, string path, IReadOnlyList<GitContent> versions, GitMergeNames names, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Hands <paramref name="use"/> the file git would write into the work tree at <paramref name="directory"/> for
+    /// <paramref name="blob"/> checked out at <paramref name="path"/> - the path's smudge filters and line-ending rules
+    /// applied, and the file one that can be run where <paramref name="executable"/> says so and the platform keeps such
+    /// a bit - in a directory of the question's own, removed once <paramref name="use"/> has answered: a merged file of
+    /// any size reaches its trees through a file on disk, never through this process's memory. Nothing in the work tree,
+    /// its index or the repository is written.
+    /// </summary>
+    /// <typeparam name="T">What <paramref name="use"/> answers.</typeparam>
+    /// <param name="directory">The work tree's root, whose attributes and configuration say how the path is checked out.</param>
+    /// <param name="path">The path whose rules apply, relative to the root, with forward separators.</param>
+    /// <param name="blob">The blob, as git stores it, which the repository's objects hold.</param>
+    /// <param name="executable">Whether the file is written as one that can be run.</param>
+    /// <param name="use">Reads the file, given its path; the file is gone once it answers.</param>
+    /// <param name="cancellationToken">Cancels the git processes.</param>
+    /// <exception cref="HarnessException">git could not check it out: a filter that failed, or a blob it does not hold.</exception>
+    Task<T> CheckedOutAsync<T>(string directory, string path, string blob, bool executable, Func<string, Task<T>> use, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Hands <paramref name="use"/> a file holding the bytes of <paramref name="blob"/> as git stores them, unpacked by git
+    /// itself, which converts nothing, in a directory of the question's own removed once <paramref name="use"/> has
+    /// answered: a blob of any size is read from a file on disk, never through this process's memory.
+    /// </summary>
+    /// <typeparam name="T">What <paramref name="use"/> answers.</typeparam>
+    /// <param name="directory">A directory inside the repository.</param>
+    /// <param name="blob">The blob's id.</param>
+    /// <param name="use">Reads the file, given its path; the file is gone once it answers.</param>
+    /// <param name="cancellationToken">Cancels the git process.</param>
+    /// <exception cref="HarnessException">git holds no such blob, or could not be asked.</exception>
+    Task<T> UnpackedAsync<T>(string directory, string blob, Func<string, Task<T>> use, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// The objects <paramref name="objects"/> names, in order, each as its bytes, read by one git process;

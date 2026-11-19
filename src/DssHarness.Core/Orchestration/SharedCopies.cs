@@ -34,18 +34,17 @@ internal sealed class SharedCopies(IFileSystem fileSystem, IFilePermissions perm
 
     /// <summary>
     /// Keeps the bytes of the file at <paramref name="holding"/> under <paramref name="digest"/>, where no copy kept under
-    /// it holds them already; a file above <see cref="TwoChanges.MostBytes"/> is recorded as shared and not kept, since no
-    /// merge is offered above that size either and a copy would serve nothing.
+    /// it holds them already: a file of any size, since a merge of any size starts from them.
     /// </summary>
     /// <param name="digest">The SHA-256 the seed records, which <paramref name="holding"/> must hold.</param>
-    /// <param name="holding">A file that holds those bytes: one of the two trees' copies.</param>
+    /// <param name="holding">A file that holds those bytes: one of the two trees' copies, or a version the main tree's history held.</param>
     /// <param name="cancellationToken">Stops it before the copy is put in place.</param>
-    /// <returns>Why they could not be kept; null where they were, or are already, or where the file is above the bound.</returns>
+    /// <returns>Why they could not be kept; null where they were, or are already.</returns>
     public async Task<string?> KeepAsync(string digest, string holding, CancellationToken cancellationToken)
     {
         try
         {
-            if (await KeptAlreadyAsync(digest, cancellationToken).ConfigureAwait(false) || LengthOf(fileSystem, holding) > TwoChanges.MostBytes)
+            if (await KeptAlreadyAsync(digest, cancellationToken).ConfigureAwait(false))
             {
                 return null;
             }
@@ -62,46 +61,9 @@ internal sealed class SharedCopies(IFileSystem fileSystem, IFilePermissions perm
         }
     }
 
-    /// <summary>
-    /// Keeps <paramref name="contents"/>, bytes in hand that hash to <paramref name="digest"/>, under it, where no copy kept
-    /// under it holds them already: what a search of the main tree's history found for a seed whose bytes no copy was kept
-    /// of, so the search is made once.
-    /// </summary>
-    /// <param name="digest">The SHA-256 the seed records.</param>
-    /// <param name="contents">Bytes proved to hash to it.</param>
-    /// <param name="cancellationToken">Stops it before the copy is put in place.</param>
-    /// <returns>Why they could not be kept; null where they were, or are already, or where they are not those bytes or above the bound.</returns>
-    public async Task<string?> KeepAsync(string digest, byte[] contents, CancellationToken cancellationToken)
-    {
-        ArgumentNullException.ThrowIfNull(contents);
-
-        if (contents.LongLength > TwoChanges.MostBytes || FileContentHash.Of(contents) != digest)
-        {
-            return null;
-        }
-
-        try
-        {
-            if (!await KeptAlreadyAsync(digest, cancellationToken).ConfigureAwait(false))
-            {
-                await WriteAsync(digest, contents, cancellationToken).ConfigureAwait(false);
-            }
-
-            return null;
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            return ex.Message.TrimEnd('.');
-        }
-    }
-
     /// <summary>Whether the copy kept under <paramref name="digest"/> holds its bytes already: kept, and not written again.</summary>
     private async Task<bool> KeptAlreadyAsync(string digest, CancellationToken cancellationToken)
         => await FindAsync(digest, cancellationToken).ConfigureAwait(false) is { Holds: true };
-
-    /// <summary>Writes <paramref name="contents"/> as the copy kept under <paramref name="digest"/>: a new file, proved, that is not run.</summary>
-    private Task WriteAsync(string digest, byte[] contents, CancellationToken cancellationToken)
-        => VerifiedFileCopy.WriteAsync(fileSystem, permissions, contents, layout.SharedFile(agent, digest), executable: false, cancellationToken);
 
     /// <summary>The copy kept under <paramref name="digest"/>, read again and hashed, or null where none was kept.</summary>
     /// <param name="digest">A SHA-256 the seed records.</param>
@@ -180,14 +142,5 @@ internal sealed class SharedCopies(IFileSystem fileSystem, IFilePermissions perm
             return $"the bytes of the files it shared are still kept in '{Directory}', which could not be removed: {ex.Message.TrimEnd('.')}; "
                 + "deleting its orchestrator removes them with its directory";
         }
-    }
-
-    /// <summary>How many bytes the file at <paramref name="path"/> holds, asked without reading them.</summary>
-    /// <param name="fileSystem">Opens the file.</param>
-    /// <param name="path">The file.</param>
-    internal static long LengthOf(IFileSystem fileSystem, string path)
-    {
-        using var stream = fileSystem.OpenRead(path);
-        return stream.Length;
     }
 }

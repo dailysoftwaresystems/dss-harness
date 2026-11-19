@@ -7,6 +7,7 @@ using DssHarness.Core.Git;
 using DssHarness.Core.Mutations;
 using DssHarness.Core.Repository;
 using DssHarness.Core.Results;
+using DssHarness.Core.Text;
 
 namespace DssHarness.Core.Anchors;
 
@@ -49,14 +50,21 @@ public sealed partial class AnchorArmsService : IAnchorArmsService
     /// <summary>The command this use case is the body of, as a refusal names it.</summary>
     public const string CommandName = "check-anchor-arms";
 
-    /// <summary>How many commits of the arms registry's history are read for the ids an A row once declared.</summary>
-    public const int HistoryCommits = 512;
-
     /// <summary>
-    /// A commit as a row spells it in history: its hex, abbreviated to git's seven characters or whole - forty for a
-    /// SHA-1 repository, sixty-four for a SHA-256 one - in either case.
+    /// A commit as a row spells it in history: its hex, abbreviated to as few as git's own least abbreviation - four
+    /// characters - or whole - forty for a SHA-1 repository, sixty-four for a SHA-256 one - in either case. Both bounds are
+    /// git's facts.
     /// </summary>
-    private const string CommitText = "[0-9a-fA-F]{7,64}";
+    private const string CommitText = "[0-9a-fA-F]{4,64}";
+
+    /// <summary>A run id as a citation's tail could spell it, wider than a run id, for <see cref="RunId.TryParse"/> to judge.</summary>
+    private const string RunIdPattern = "[0-9]{8}-[0-9]{6}-[0-9a-fA-F]{8}";
+
+    /// <summary>The arm ids a row may name in a cell: a backticked token of the characters an arm's id takes, as the registry's own rule spells them.</summary>
+    private static readonly Regex NamedIds = LinearRegex.Compile("`(" + MutationRegistryParser.IdCharacterClass + "+)`", RegexOptions.CultureInvariant);
+
+    /// <summary>One character a word is made of, as a regular expression's <c>\w</c> reads it.</summary>
+    private static readonly Regex WordCharacter = LinearRegex.Compile(@"\w", RegexOptions.CultureInvariant);
 
     private readonly IHarnessContextLoader _contextLoader;
     private readonly IAnchorRegistryLocator _locator;
@@ -64,9 +72,8 @@ public sealed partial class AnchorArmsService : IAnchorArmsService
     private readonly ArmListingReader _listings;
     private readonly IGitClient _gitClient;
     private readonly IFileSystem _fileSystem;
-    private readonly int _historyCommits;
 
-    /// <summary>The check over its services, reading the newest <see cref="HistoryCommits"/> commits of the arms registry's history.</summary>
+    /// <summary>The check over its services, reading the arms registry's whole history.</summary>
     /// <param name="contextLoader">Loads the repository and its configuration.</param>
     /// <param name="locator">Finds the two anchor registries.</param>
     /// <param name="registryLock">The anchor registries' lock, held while both are read.</param>
@@ -80,45 +87,14 @@ public sealed partial class AnchorArmsService : IAnchorArmsService
         ArmListingReader listings,
         IGitClient gitClient,
         IFileSystem fileSystem)
-        : this(contextLoader, locator, registryLock, listings, gitClient, fileSystem, HistoryCommits)
     {
-    }
-
-    /// <summary>The check, reading the newest <paramref name="historyCommits"/> commits of the arms registry's history.</summary>
-    /// <param name="contextLoader">Loads the repository and its configuration.</param>
-    /// <param name="locator">Finds the two anchor registries.</param>
-    /// <param name="registryLock">The anchor registries' lock, held while both are read.</param>
-    /// <param name="listings">The one reading of the arms registry a listing is made of.</param>
-    /// <param name="gitClient">Reads the arms registry's history.</param>
-    /// <param name="fileSystem">Reads the anchor registries.</param>
-    /// <param name="historyCommits">How many commits of the arms registry's history are read: one or more.</param>
-    internal AnchorArmsService(
-        IHarnessContextLoader contextLoader,
-        IAnchorRegistryLocator locator,
-        IAnchorRegistryLock registryLock,
-        ArmListingReader listings,
-        IGitClient gitClient,
-        IFileSystem fileSystem,
-        int historyCommits)
-    {
-        ArgumentOutOfRangeException.ThrowIfLessThan(historyCommits, 1);
-
         _contextLoader = contextLoader;
         _locator = locator;
         _registryLock = registryLock;
         _listings = listings;
         _gitClient = gitClient;
         _fileSystem = fileSystem;
-        _historyCommits = historyCommits;
     }
-
-    /// <summary>The arm ids a row may name in a cell: a backticked token of the characters an arm's id takes, as the registry's own rule spells them.</summary>
-    [GeneratedRegex("`(" + MutationRegistryParser.IdCharacterClass + "+)`", RegexOptions.CultureInvariant)]
-    private static partial Regex NamedIds();
-
-    /// <summary>A run id as a citation's tail could spell it, wider than a run id, for <see cref="RunId.TryParse"/> to judge.</summary>
-    [GeneratedRegex(@"[0-9]{8}-[0-9]{6}-[0-9a-fA-F]{8}", RegexOptions.CultureInvariant)]
-    private static partial Regex RunIdText();
 
     public async Task<AnchorArmsReport> CheckAsync(string startDirectory, IReadOnlyList<string>? legNames, CancellationToken cancellationToken = default)
     {
@@ -274,7 +250,7 @@ public sealed partial class AnchorArmsService : IAnchorArmsService
 
     /// <summary>Every backticked token of the shape an arm's id takes, in every cell the row holds, in the order it names them.</summary>
     private static IEnumerable<string> IdsNamedBy(AnchorRow row)
-        => CellsOf(row).SelectMany(cell => NamedIds().Matches(cell).Select(match => match.Groups[1].Value));
+        => CellsOf(row).SelectMany(cell => NamedIds.Matches(cell).Select(match => match.Groups[1].Value));
 
     /// <summary>Every cell the row holds, named and past-the-end alike: a malformed row still says what it says.</summary>
     private static IEnumerable<string> CellsOf(AnchorRow row)
@@ -294,7 +270,7 @@ public sealed partial class AnchorArmsService : IAnchorArmsService
         {
             IReadOnlyList<(int From, int To)> spans = [.. history.SelectMany(form => form(cell))];
 
-            foreach (var match in citations.SelectMany(pattern => pattern.Matches(cell)))
+            foreach (var match in citations.SelectMany(pattern => CitedIn(pattern, cell)))
             {
                 var run = match.Groups["run"].Value;
 
@@ -307,9 +283,32 @@ public sealed partial class AnchorArmsService : IAnchorArmsService
         }
     }
 
-    /// <summary>The citation of a pass word: the word - matched ignoring case - then only whitespace and brackets or punctuation, then a run id.</summary>
+    /// <summary>
+    /// The citation of a pass word: the word - matched ignoring case - then only whitespace and brackets or punctuation,
+    /// as much of it as stands there, then a run id. Matched in linear time (<see cref="LinearRegex"/>), whatever the gap.
+    /// </summary>
     private static Regex CitationOf(string word)
-        => new($"(?<!\\w)(?i:{word})[\\s\\p{{P}}\\p{{S}}]{{0,16}}(?<run>{RunIdText()})", RegexOptions.CultureInvariant);
+        => LinearRegex.Compile($"(?i:{word})[\\s\\p{{P}}\\p{{S}}]*(?<run>{RunIdPattern})", RegexOptions.CultureInvariant);
+
+    /// <summary>
+    /// Each citation <paramref name="pattern"/> finds in <paramref name="cell"/> whose word no word character runs into
+    /// from before - the word whole, not the end of a longer one: a match that is the end of one is passed over, and the
+    /// search goes on from the character after where it began, so none is hidden behind it.
+    /// </summary>
+    private static IEnumerable<Match> CitedIn(Regex pattern, string cell)
+    {
+        for (var match = pattern.Match(cell); match.Success;)
+        {
+            if (match.Index > 0 && WordCharacter.IsMatch(cell.AsSpan(match.Index - 1, 1)))
+            {
+                match = pattern.Match(cell, match.Index + 1);
+                continue;
+            }
+
+            yield return match;
+            match = match.NextMatch();
+        }
+    }
 
     /// <summary>
     /// The spans of history a cell holds for a form: the form with its <c>{commit}</c> and <c>{run}</c> placeholders
@@ -333,28 +332,28 @@ public sealed partial class AnchorArmsService : IAnchorArmsService
             }
 
             pattern.Append(Regex.Escape(form[at..next]));
-            pattern.Append(next == commit ? CommitText : RunIdText().ToString());
+            pattern.Append(next == commit ? CommitText : RunIdPattern);
             at = next + (next == commit ? "{commit}".Length : "{run}".Length);
         }
 
-        var history = new Regex(pattern.ToString(), RegexOptions.CultureInvariant);
+        var history = LinearRegex.Compile(pattern.ToString(), RegexOptions.CultureInvariant);
 
         return cell => [.. history.Matches(cell).Select(match => (match.Index, match.Index + match.Length))];
     }
 
     /// <summary>
     /// Every id an A row of the arms registry ever declared in git history and no A row holds now, with the notes a
-    /// history read in part deserves - cut, shallow, or holding a version that could not be read: it can only say what it
-    /// read.
+    /// history read in part deserves - shallow, or holding a version that could not be read: it can only say what it read.
     /// </summary>
     /// <remarks>
     /// The history is read under every name the registry had - its path now and each it had before a rename git follows -
-    /// in one walk of HEAD's whole history, down both sides of every merge: a version at a former path committed on a
-    /// line the rename's own parent never reached is one the registry held, and one budget of commits covers every name.
-    /// A file that took a former path after the registry left it is read too, and holds no A row of the registry's shape
-    /// unless it is a registry. Every version is read by one git process, as the one reading of a registry's bytes reads
-    /// it (<see cref="RegistryText.TryRead"/>) - as the registry itself is read now: a byte order mark at its start is no
-    /// part of its first row, and a version that is not UTF-8 is noted, never read another way.
+    /// in one walk of HEAD's whole history, down both sides of every merge, with no number of commits that stops it: a
+    /// version at a former path committed on a line the rename's own parent never reached is one the registry held. A
+    /// file that took a former path after the registry left it is read too, and holds no A row of the registry's shape
+    /// unless it is a registry. Each distinct version is read once, however many commits hold it, a batch at a time by one
+    /// git process each, as the one reading of a registry's bytes reads it (<see cref="RegistryText.TryRead"/>) - as the
+    /// registry itself is read now: a byte order mark at its start is no part of its first row, and a version that is not
+    /// UTF-8 is noted, never read another way. The ids it declared are kept in one set.
     /// </remarks>
     private async Task<(HashSet<string> Ids, IReadOnlyList<AnchorFinding> Notes)> RetiredIdsAsync(HarnessContext context, MutationRegistry current, CancellationToken cancellationToken)
     {
@@ -363,48 +362,52 @@ public sealed partial class AnchorArmsService : IAnchorArmsService
         var registry = AnchorRegistryLocator.Normalize(named);
         var renames = await _gitClient.ListRenamesAsync(root, "HEAD", registry, cancellationToken).ConfigureAwait(false);
         IReadOnlyList<string> names = [.. new[] { registry }.Concat(renames.Select(rename => rename.From)).Distinct(StringComparer.Ordinal)];
-        var history = await _gitClient.ListHeldInHistoryAsync(root, "HEAD", names, _historyCommits, cancellationToken).ConfigureAwait(false);
-        var cut = history.Cut;
-        List<(GitHeldAt Version, string Path)> versions = [.. names.SelectMany(path => (history.Held.GetValueOrDefault(path) ?? []).Select(version => (version, path)))];
+        var history = await _gitClient.ListHeldInHistoryAsync(root, "HEAD", names, cancellationToken).ConfigureAwait(false);
 
-        var blobs = await _gitClient.ReadBlobsAsync(root, [.. versions.Select(held => held.Version.Blob)], cancellationToken).ConfigureAwait(false);
+        // Each blob read once, however many commits and names hold it: the newest commit that held it names it in a note.
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        List<(GitHeldAt Version, string Path)> versions = [.. names
+            .SelectMany(path => (history.Held.GetValueOrDefault(path) ?? []).Select(version => (version, path)))
+            .Where(held => seen.Add(held.version.Blob))];
         var declared = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var notes = new List<AnchorFinding>();
 
-        for (var index = 0; index < versions.Count; index++)
+        // Read a batch of blobs at a time, so the history's size costs no more memory than a batch of its versions.
+        var sizes = await _gitClient.ReadBlobSizesAsync(root, [.. versions.Select(held => held.Version.Blob)], cancellationToken).ConfigureAwait(false);
+
+        foreach (var batch in GitClient.SizeBatches(sizes))
         {
-            var (version, path) = versions[index];
+            var blobs = await _gitClient.ReadBlobsAsync(root, [.. batch.Select(at => versions[at].Version.Blob)], cancellationToken).ConfigureAwait(false);
 
-            if (blobs[index] is not { } bytes)
+            for (var index = 0; index < batch.Count; index++)
             {
-                notes.Add(Note($"'{path}' as {version.Commit} holds it could not be read by git: an id only it declared is not known"));
-                continue;
-            }
+                var (version, path) = versions[batch[index]];
 
-            if (!RegistryText.TryRead(bytes, out var text, out var unread, out var line))
-            {
-                notes.Add(Note(
-                    (line is { } number ? $"line {number} of '{path}' as {version.Commit} holds it " : $"'{path}' as {version.Commit} holds it ")
-                    + $"{unread}: an id only it declared is not known"));
-                continue;
-            }
+                if (blobs[index] is not { } bytes)
+                {
+                    notes.Add(Note($"'{path}' as {version.Commit} holds it could not be read by git: an id only it declared is not known"));
+                    continue;
+                }
 
-            foreach (var id in MutationRegistryParser.ArmIdsOf(text.Text))
-            {
-                declared.Add(id);
+                if (!RegistryText.TryRead(bytes, out var text, out var unread, out var line))
+                {
+                    notes.Add(Note(
+                        (line is { } number ? $"line {number} of '{path}' as {version.Commit} holds it " : $"'{path}' as {version.Commit} holds it ")
+                        + $"{unread}: an id only it declared is not known"));
+                    continue;
+                }
+
+                foreach (var id in MutationRegistryParser.ArmIdsOf(text.Text))
+                {
+                    declared.Add(id);
+                }
             }
         }
 
-        var shallow = await _gitClient.IsShallowAsync(root, cancellationToken).ConfigureAwait(false) == true;
-
-        if (cut || shallow)
+        // The whole history is read; only a shallow clone holds less of it than the repository does.
+        if (await _gitClient.IsShallowAsync(root, cancellationToken).ConfigureAwait(false) == true)
         {
-            notes.Add(Note((cut, shallow) switch
-            {
-                (true, true) => $"more commits changed '{named}' than were read, and this clone's history is shallow: an id no A row holds may have been declared before either cut",
-                (true, false) => $"more commits changed '{named}' than were read: an id no A row holds may have been declared before that cut",
-                _ => $"this clone's history is shallow, so commits before where it was cut name no version of '{named}': an id no A row holds may have been declared before the cut",
-            }));
+            notes.Add(Note($"this clone's history is shallow, so commits before where it was cut name no version of '{named}': an id no A row holds may have been declared before the cut"));
         }
 
         return (new HashSet<string>(declared.Where(id => current.Find(id) is null), StringComparer.OrdinalIgnoreCase), notes);

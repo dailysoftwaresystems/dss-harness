@@ -1022,19 +1022,14 @@ public sealed class AgentService(
                     + "weighs, so it merges nothing: check its spelling. Nothing was copied.")));
             }
 
-            // Where the search stopped short of the main tree's whole history, a copy older than it reached is not found stale.
-            IReadOnlyList<string> bound = plan.Capped
-                ? [$"The last {ReportText.Counted(TwoChanges.MostCommits, "commit")} of the main tree that changed these paths were searched, and its history goes "
-                    + "further back: a copy older than that is not found stale."]
-                : [];
-
+            // The main tree's whole history was searched: a copy it never held is not stale, however old.
             if (plan.StaleRefused.Count > 0)
             {
                 return (null, plan.StaleRefused is [var one]
-                    ? RefusedInDry(CommandOutcome.Refused($"{one} Nothing was copied.", bound))
+                    ? RefusedInDry(CommandOutcome.Refused($"{one} Nothing was copied."))
                     : RefusedInDry(CommandOutcome.Refused(
                         $"{ReportText.Counted(plan.StaleRefused.Count, "path")} named with {RefreshRequest.StaleOption} are not proved stale, each said below. Nothing was copied.",
-                        [.. plan.StaleRefused.Select(why => $"  {why}"), .. bound])));
+                        [.. plan.StaleRefused.Select(why => $"  {why}")])));
             }
 
             if (changed.Count > 0)
@@ -1082,7 +1077,6 @@ public sealed class AgentService(
                                 $"  {string.Join(' ', OrchestrationReports.PathArguments(FoldAllowances.MergeOption, mergeable))}",
                             ],
                         says.Count == 1 ? $"{says[0]}; it is not a --force." : $"{string.Join("; ", says)}. None is a --force.",
-                        .. bound,
                     ])));
 
                 // Weighed by the one rule a fold is: a clean merge nobody asked for a consent it lacks, a conflict told apart.

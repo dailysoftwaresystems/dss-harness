@@ -384,6 +384,54 @@ public sealed class AnchorArmsServiceTests
     }
 
     /// <summary>
+    /// A form's commit stands for a commit abbreviated as far as git itself abbreviates one - four hex characters, its
+    /// least - so a pass cited after such a commit is history. Red where a commit takes seven characters at the least.
+    /// </summary>
+    [Fact]
+    public async Task AFourHexCommit_IsRead()
+    {
+        using var temp = new TempDirectory();
+        var (harness, repository, service) = await PrepareAsync(
+            temp,
+            new AnchorSettings
+            {
+                HistoryForms = ["closed at {commit}, passed {run}"],
+            });
+        await harness.AnchorRegistryService.WriteAsync(
+            repository,
+            new AnchorWriteRequest(One, "P1", $"closed at 0a1b, passed {Run}") { Status = "closed" },
+            dryRun: false,
+            Token);
+
+        var report = await service.CheckAsync(repository, null, Token);
+
+        Assert.True(report.Passed, string.Join(" | ", report.Findings.Select(finding => finding.Message)));
+        Assert.Empty(report.Findings);
+    }
+
+    /// <summary>
+    /// A pass word is a citation however much whitespace and punctuation stands between it and the run id: thirty
+    /// separators are read across, as one is. Red where the gap is cut at sixteen.
+    /// </summary>
+    [Fact]
+    public async Task AThirtySeparatorCitationGap_IsRead()
+    {
+        using var temp = new TempDirectory();
+        var (harness, repository, service) = await PrepareAsync(temp);
+        var gap = string.Concat(Enumerable.Repeat(" -", 15));
+        await harness.AnchorRegistryService.WriteAsync(
+            repository,
+            new AnchorWriteRequest(One, "P1", $"the frame shipped; PASSED{gap}{Run} by the sweep") { Status = "closed" },
+            dryRun: false,
+            Token);
+
+        var report = await service.CheckAsync(repository, null, Token);
+
+        Assert.False(report.Passed);
+        Assert.Equal(CitationOf(One, $"PASSED{gap}{Run}"), Assert.Single(report.Findings).Message);
+    }
+
+    /// <summary>
     /// A backticked id no A row holds is an arm where git history shows an A row declared it once - renamed, or retired -
     /// and is a finding; a backticked token that never was an arm is left alone.
     /// </summary>
@@ -562,31 +610,26 @@ public sealed class AnchorArmsServiceTests
     }
 
     /// <summary>
-    /// The history read is bounded: past the commits the check reads, an id declared only before the cut is not reported,
-    /// and the cut is noted whole and fails nothing - while the same history read whole reports it.
+    /// The registry's whole history is read, by git's own walk, with no number of commits that stops it: an id an A row
+    /// declared six hundred commits of the registry ago is still seen retired, and nothing is noted of a cut. Red where
+    /// the history is read to 512 commits.
     /// </summary>
     [Fact]
-    public async Task TheHistoryRead_IsCutAtItsBudget_AndTheCutIsNoted()
+    public async Task AnIdRetiredSixHundredCommitsAgo_IsSeen()
     {
         using var temp = new TempDirectory();
-        var (harness, repository, whole) = await PrepareAsync(
+        var (harness, repository, service) = await PrepareAsync(
             temp,
             registry: Registry.Replace("| one |", "| old-name |", StringComparison.Ordinal));
         RegistryWritten(temp, Registry);
         await harness.CommitAllAsync(repository, "the arm renamed", Token);
+        await GitImport.CommitManyAsync(repository, "arms.md", 600, at => $"{Registry}\n# version {at}\n", Token);
         await CloseAsync(harness, repository, One, "closed with `old-name`");
 
-        var cut = await Service(harness, historyCommits: 1).CheckAsync(repository, null, Token);
+        var report = await service.CheckAsync(repository, null, Token);
 
-        Assert.True(cut.Passed);
-        var note = Assert.Single(cut.Findings);
-
-        Assert.Equal(
-            (AnchorFindingSeverity.Note, "arms.md", 0, "more commits changed 'arms.md' than were read: an id no A row holds may have been declared before that cut"),
-            (note.Severity, note.File, note.LineNumber, note.Message));
-        Assert.Equal(
-            $"anchor '{One}' names arm 'old-name', which no A row of 'arms.md' holds: {Retired}",
-            Assert.Single((await whole.CheckAsync(repository, null, Token)).Findings).Message);
+        Assert.False(report.Passed);
+        Assert.Equal($"anchor '{One}' names arm 'old-name', which no A row of 'arms.md' holds: {Retired}", Assert.Single(report.Findings).Message);
     }
 
     /// <summary>
@@ -938,19 +981,15 @@ public sealed class AnchorArmsServiceTests
             Anchors = anchors ?? new AnchorSettings(),
         };
 
-    /// <summary>
-    /// The check over the harness's own services, its registries' lock <paramref name="registryLock"/> where one is given,
-    /// reading the newest <paramref name="historyCommits"/> commits of the arms registry's history.
-    /// </summary>
-    private static AnchorArmsService Service(HarnessFactory harness, IAnchorRegistryLock? registryLock = null, int historyCommits = AnchorArmsService.HistoryCommits)
+    /// <summary>The check over the harness's own services, its registries' lock <paramref name="registryLock"/> where one is given.</summary>
+    private static AnchorArmsService Service(HarnessFactory harness, IAnchorRegistryLock? registryLock = null)
         => new(
             harness.ContextLoader,
             harness.AnchorRegistryLocator,
             registryLock ?? harness.AnchorRegistryLock,
             new ArmListingReader(SyncKit.Service(harness), harness.FileSystem, harness.Platform),
             harness.GitClient,
-            harness.FileSystem,
-            historyCommits);
+            harness.FileSystem);
 
     /// <summary>Writes the registry and every file it cites.</summary>
     private static void RegistryWritten(TempDirectory temp, string registry)

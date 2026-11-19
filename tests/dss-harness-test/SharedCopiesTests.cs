@@ -102,25 +102,24 @@ public sealed class SharedCopiesTests
     }
 
     /// <summary>
-    /// A file above the bound is recorded as shared like any other and its bytes are not kept - no merge is offered
-    /// above that size either - which is the rule, so nothing is said of it.
+    /// A file of any size is recorded as shared and its bytes kept, since a merge of any size starts from them: one past
+    /// the 16 MiB a copy was once kept up to is kept like any other.
     /// </summary>
     [Fact]
-    public async Task AFileAboveTheBound_IsRecordedAndNotKept()
+    public async Task AFileOfAnySize_IsRecordedAndKept()
     {
         using var temp = new TempDirectory();
         var kit = await OrchestrationKit.PrepareAsync(temp);
-        var large = new byte[TwoChanges.MostBytes + 1];
+        var large = new byte[(40 * 1024 * 1024) + 1];
+        large[^1] = (byte)'\n';
         File.WriteAllBytes(Path.Combine(kit.Main, "large.bin"), large);
-        File.WriteAllBytes(Path.Combine(kit.Main, "at-the-bound.bin"), new byte[TwoChanges.MostBytes]);
 
         var created = await kit.Harness.AgentService.CreateAsync(kit.Main, "o1", "ag", "model-b", false, null, Token);
         var seed = kit.Harness.OrchestrationStore.ReadSeed(kit.Layout, "ag")!;
 
         Assert.True(created.Succeeded, OrchestrationKit.Describe(created));
         Assert.Equal(FileContentHash.Of(large), seed.Paths["large.bin"]);
-        Assert.False(File.Exists(kit.Layout.SharedFile("ag", seed.Paths["large.bin"])));
-        Assert.True(File.Exists(kit.Layout.SharedFile("ag", seed.Paths["at-the-bound.bin"])));
+        Assert.Equal(seed.Paths["large.bin"], FileContentHash.Of(File.ReadAllBytes(kit.Layout.SharedFile("ag", seed.Paths["large.bin"]))));
         Assert.DoesNotContain(created.Details!, line => line.Contains("were not kept", StringComparison.Ordinal));
     }
 
@@ -607,7 +606,6 @@ public sealed class SharedCopiesTests
             File.SetLastWriteTimeUtc(kept, written);
 
             Assert.Null(await copies.KeepAsync(digest, again, Token));
-            Assert.Null(await copies.KeepAsync(digest, System.Text.Encoding.UTF8.GetBytes("shared\n"), Token));
             Assert.Equal(written, File.GetLastWriteTimeUtc(kept));
             Assert.Equal([digest], Directory.EnumerateFiles(copies.Directory).Select(file => Path.GetFileName(file)));
         }

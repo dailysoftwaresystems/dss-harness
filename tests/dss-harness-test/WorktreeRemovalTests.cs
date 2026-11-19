@@ -1461,6 +1461,12 @@ internal sealed class InterceptingGitClient(IGitClient inner) : IGitClient
     /// </summary>
     public Func<string, byte[], HarnessException?>? CheckOutFailure { get; init; }
 
+    /// <summary>
+    /// A failure checking a blob out to a file as a checkout of a path writes it throws instead of asking git, given the
+    /// path and the blob: a filter that fails on it, for one; null asks git.
+    /// </summary>
+    public Func<string, string, HarnessException?>? CheckedOutFailure { get; init; }
+
     public Task<int> CountRepositoryCommitsAsync(
         string gitDirectory,
         IReadOnlyList<string> revisions,
@@ -1544,8 +1550,8 @@ internal sealed class InterceptingGitClient(IGitClient inner) : IGitClient
     public Task<IReadOnlyDictionary<string, GitEntry>> ListEntriesAtAsync(string directory, string commit, IReadOnlyList<string> paths, CancellationToken cancellationToken = default)
         => Call(() => inner.ListEntriesAtAsync(directory, commit, paths, Token(cancellationToken)));
 
-    public Task<GitPathHistory> ListHeldInHistoryAsync(string directory, string tip, IReadOnlyList<string> paths, int most, CancellationToken cancellationToken = default)
-        => Call(() => inner.ListHeldInHistoryAsync(directory, tip, paths, most, Token(cancellationToken)));
+    public Task<GitPathHistory> ListHeldInHistoryAsync(string directory, string tip, IReadOnlyList<string> paths, CancellationToken cancellationToken = default)
+        => Call(() => inner.ListHeldInHistoryAsync(directory, tip, paths, Token(cancellationToken)));
 
     public Task<IReadOnlyList<GitRename>> ListRenamesAsync(string directory, string tip, string path, CancellationToken cancellationToken = default)
         => Call(() => inner.ListRenamesAsync(directory, tip, path, Token(cancellationToken)));
@@ -1561,8 +1567,16 @@ internal sealed class InterceptingGitClient(IGitClient inner) : IGitClient
             ? Task.FromException<byte[]>(failure)
             : Call(() => inner.ReadCheckedOutAsync(directory, path, staged, Token(cancellationToken)));
 
-    public Task<GitTextMerge> MergeTextAsync(byte[] ancestor, byte[] ours, byte[] theirs, GitMergeNames names, CancellationToken cancellationToken = default)
-        => Call(() => inner.MergeTextAsync(ancestor, ours, theirs, names, Token(cancellationToken)));
+    public Task<GitTextMerge> MergeAsync(string directory, string path, IReadOnlyList<GitContent> versions, GitMergeNames names, CancellationToken cancellationToken = default)
+        => Call(() => inner.MergeAsync(directory, path, versions, names, Token(cancellationToken)));
+
+    public Task<T> CheckedOutAsync<T>(string directory, string path, string blob, bool executable, Func<string, Task<T>> use, CancellationToken cancellationToken = default)
+        => CheckedOutFailure?.Invoke(path, blob) is { } failure
+            ? Task.FromException<T>(failure)
+            : Call(() => inner.CheckedOutAsync(directory, path, blob, executable, use, Token(cancellationToken)));
+
+    public Task<T> UnpackedAsync<T>(string directory, string blob, Func<string, Task<T>> use, CancellationToken cancellationToken = default)
+        => Call(() => inner.UnpackedAsync(directory, blob, use, Token(cancellationToken)));
 
     public Task<IReadOnlyList<byte[]?>> ReadBlobsAsync(string directory, IReadOnlyList<string> objects, CancellationToken cancellationToken = default)
     {
