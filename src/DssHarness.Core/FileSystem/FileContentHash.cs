@@ -44,15 +44,33 @@ public static class FileContentHash
     {
         ArgumentNullException.ThrowIfNull(fileSystem);
 
-        await using var stream = fileSystem.OpenRead(path);
-        var hash = await SHA256.HashDataAsync(stream, cancellationToken).ConfigureAwait(false);
+        var stream = fileSystem.OpenRead(path);
 
-        return new FileContent(stream.Length, Convert.ToHexStringLower(hash));
+        await using (stream.ConfigureAwait(false))
+        {
+            var content = await OfStreamAsync(stream, cancellationToken).ConfigureAwait(false);
+
+            return new FileContent(stream.Length, content);
+        }
     }
 
     /// <summary>The same hash, of bytes already in hand.</summary>
     /// <param name="contents">The bytes.</param>
     public static string Of(ReadOnlySpan<byte> contents) => Convert.ToHexStringLower(SHA256.HashData(contents));
+
+    /// <summary>
+    /// The same hash, of what <paramref name="stream"/> holds from where it stands to its end: read a block at a time and
+    /// taken into the hash as it is read, never held whole, so a stream of any length is hashed in the memory of one block.
+    /// </summary>
+    /// <param name="stream">The bytes. It is read to its end and left there, open: its caller owns it.</param>
+    /// <param name="cancellationToken">Stops the read.</param>
+    /// <returns>Lowercase hex SHA-256, as <see cref="Of(ReadOnlySpan{byte})"/> gives of the same bytes.</returns>
+    public static async Task<string> OfStreamAsync(Stream stream, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(stream);
+
+        return Convert.ToHexStringLower(await SHA256.HashDataAsync(stream, cancellationToken).ConfigureAwait(false));
+    }
 
     /// <summary>
     /// The same hash, of the bytes <paramref name="write"/> writes, taken a little at a time as they are written: a record

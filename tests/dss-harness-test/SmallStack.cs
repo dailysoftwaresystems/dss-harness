@@ -3,27 +3,33 @@ using System.Runtime.ExceptionServices;
 namespace DssHarness.Tests;
 
 /// <summary>
-/// Runs a child's work (<see cref="ChildRun"/>) on a thread of a small stack, as a thread is given by default on Windows,
-/// whatever stack the system gave the child's first thread: a walk that recursed once per level of its input passes it a
-/// few thousand levels in, on every system alike, so a test of a deep input goes red on such a revert wherever it runs.
+/// Runs work on a thread of a small stack, as a thread is given by default on Windows, whatever stack the system gave the
+/// first thread. A depth test's child (<see cref="ChildRun"/>) does its reading here, so a reading that recursed once per
+/// level overflows on every system alike: a main thread's own stack is eight megabytes on Linux and macOS, and a recursion
+/// of 100,000 levels of small frames could fit in it there and pass.
 /// </summary>
 internal static class SmallStack
 {
-    /// <summary>The thread's stack: a megabyte.</summary>
+    /// <summary>
+    /// The thread's stack, a megabyte: room for any iterative work and for the runtime's own beneath it, and none for a
+    /// recursion of the 100,000 levels a depth test reads, which would need frames of about ten bytes.
+    /// </summary>
     internal const int Bytes = 1024 * 1024;
 
-    /// <summary>What <paramref name="work"/> answers, run on a thread of <see cref="Bytes"/>; what it throws is thrown here, as thrown.</summary>
-    /// <param name="work">The child's work.</param>
-    internal static string Run(Func<string> work)
+    /// <summary>What <paramref name="work"/> answers, run on a thread of <see cref="Bytes"/> of stack; what it throws is thrown here, as it was thrown.</summary>
+    /// <param name="work">The work.</param>
+    internal static T Run<T>(Func<T> work)
     {
-        string? said = null;
+        ArgumentNullException.ThrowIfNull(work);
+
+        var answer = default(T);
         ExceptionDispatchInfo? thrown = null;
         var thread = new Thread(
             () =>
             {
                 try
                 {
-                    said = work();
+                    answer = work();
                 }
                 catch (Exception ex)
                 {
@@ -36,6 +42,6 @@ internal static class SmallStack
         thread.Join();
         thrown?.Throw();
 
-        return said!;
+        return answer!;
     }
 }
