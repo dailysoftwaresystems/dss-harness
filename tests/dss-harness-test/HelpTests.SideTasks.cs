@@ -57,7 +57,7 @@ public sealed partial class HelpTests
         Assert.Contains(
             $"{HarnessExit.ToolMissing} a client that cannot start where the entry that would serve first is on it - no claude, no npm - or, under agentPolicy.isolation \"required\", a "
                 + $"machine that cannot isolate the agent's commands; {HarnessExit.Incomplete} the install of "
-                + $"Claude Code timed out or could not reach the registry; and in one shot besides, {HarnessExit.CommandFailed} "
+                + $"Claude Code could not reach the registry - an install is waited for to its end, told every {DssHarness.Core.Waiting.Waits.SaidEvery.TotalMinutes} minutes; and in one shot besides, {HarnessExit.CommandFailed} "
                 + "the model failed past its retries and fallback, "
                 + $"{HarnessExit.Incomplete} cut short by the account's limit, a stall or the clock, {HarnessExit.Cancelled} interrupted.",
             prose,

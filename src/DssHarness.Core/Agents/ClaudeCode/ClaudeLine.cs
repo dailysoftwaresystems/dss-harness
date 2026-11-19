@@ -193,7 +193,7 @@ public abstract record ClaudeLine(JsonObject Node)
 
         try
         {
-            node = JsonNode.Parse(line) as JsonObject;
+            node = Json.JsonDepth.ParseNode(line) as JsonObject;
         }
         catch (JsonException)
         {
@@ -394,7 +394,7 @@ public abstract record ClaudeLine(JsonObject Node)
             (int)Number(node["attempt"]),
             (int)Number(node["max_retries"]),
             TimeSpan.FromMilliseconds(Number(node["retry_delay_ms"])),
-            TextOf(node["error"]) ?? TextOf(node["error_status"]) ?? (node["error_status"] is JsonValue status ? status.ToJsonString() : "a failure Claude Code tries again"));
+            TextOf(node["error"]) ?? TextOf(node["error_status"]) ?? (node["error_status"] is JsonValue status ? status.ToJsonString(Written) : "a failure Claude Code tries again"));
 
     /// <summary>A call's result as text: a string as it is, a list of blocks as their texts joined.</summary>
     private static string ResultText(JsonNode? content)
@@ -403,8 +403,14 @@ public abstract record ClaudeLine(JsonObject Node)
             JsonValue value when value.TryGetValue<string>(out var text) => text,
             JsonArray blocks => string.Concat(blocks.OfType<JsonObject>().Select(block => TextOf(block["text"]) ?? string.Empty)),
             null => string.Empty,
-            var other => other.ToJsonString(),
+            var other => other.ToJsonString(Written),
         };
+
+    /// <summary>
+    /// How what Claude Code wrote is written again as JSON - a call's input, a result that is no text, a message the host
+    /// sends: at any depth (<see cref="Json.JsonDepth"/>), for a line read at any depth is written back whole.
+    /// </summary>
+    internal static System.Text.Json.JsonSerializerOptions Written { get; } = Json.JsonDepth.Serializer(new System.Text.Json.JsonSerializerOptions());
 
     private static string? TextOf(JsonNode? node)
         => node is JsonValue value && value.TryGetValue<string>(out var text) ? text : null;

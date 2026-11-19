@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Text.Json;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Hosts;
+using DssHarness.Core.Json;
 using DssHarness.Core.Platform;
 using DssHarness.Core.Processes;
 
@@ -58,7 +59,7 @@ public sealed record ClaudeCodeVersion(SemanticVersion? Version, string? Problem
 /// </summary>
 /// <param name="fileSystem">Reads the package's files, and follows the links a running program was started through.</param>
 /// <param name="processRunner">Asks the program's own version.</param>
-/// <param name="time">Measures <see cref="FollowBudget"/>; the system's clock where none is given.</param>
+/// <param name="time">Measures each wait as it is told (<see cref="ClaudeCodeWaits"/>); the system's clock where none is given.</param>
 public sealed class ClaudeCodeInstall(IFileSystem fileSystem, IProcessRunner processRunner, TimeProvider? time = null)
 {
     /// <summary>The package npm installs, by its own name.</summary>
@@ -67,14 +68,8 @@ public sealed class ClaudeCodeInstall(IFileSystem fileSystem, IProcessRunner pro
     /// <summary>The variable that stops Claude Code's own background update, which every <c>claude</c> this tool starts is given.</summary>
     public const string AutoUpdaterVariable = "DISABLE_AUTOUPDATER";
 
-    /// <summary>How long the program may take to answer its own version.</summary>
-    public static readonly TimeSpan AskBudget = TimeSpan.FromSeconds(30);
-
-    /// <summary>
-    /// How long following the links of one reading's paths may take: a path on a network mount that answers nothing
-    /// never fails, and an update waits on it no longer than this.
-    /// </summary>
-    public static readonly TimeSpan FollowBudget = TimeSpan.FromSeconds(10);
+    /// <summary>What a wait on the following of the machine's processes' paths is told as.</summary>
+    public const string FollowingSubject = "the links of the paths the machine's processes run from to be followed";
 
     /// <summary>What Claude Code's program, and node running its script, call themselves.</summary>
     private const string Claude = "claude";
@@ -128,7 +123,7 @@ public sealed class ClaudeCodeInstall(IFileSystem fileSystem, IProcessRunner pro
 
         try
         {
-            document = JsonDocument.Parse(_fileSystem.ReadAllText(manifest));
+            document = JsonDepth.ParseDocument(_fileSystem.ReadAllText(manifest));
         }
         catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException)
         {
@@ -169,11 +164,15 @@ public sealed class ClaudeCodeInstall(IFileSystem fileSystem, IProcessRunner pro
     }
 
     /// <summary>
-    /// What the program answers of its own version, bounded: the first word of its answer that is a version - Claude
-    /// Code answers <c>2.1.296 (Claude Code)</c> - or how asking it ended where it named none. A program that is not
-    /// there, or cannot be started, is as little answered as one that says nothing, and the answer says which.
+    /// What the program answers of its own version, awaited to its end and told while it lasts: the first word of its
+    /// answer that is a version - Claude Code answers <c>2.1.296 (Claude Code)</c> - or how asking it ended where it named
+    /// none. A program that is not there, or cannot be started, is as little answered as one that says nothing, and the
+    /// answer says which. A cold first start that takes minutes is waited for, never cut.
     /// </summary>
-    public async Task<ClaudeCodeVersion> VersionAsync(string program, CancellationToken cancellationToken = default)
+    /// <param name="program">The program.</param>
+    /// <param name="tell">Told each line of the wait; nothing is told where none is given.</param>
+    /// <param name="cancellationToken">Ends the asking.</param>
+    public async Task<ClaudeCodeVersion> VersionAsync(string program, Action<Waiting.WaitTold>? tell = null, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(program);
 
@@ -181,8 +180,11 @@ public sealed class ClaudeCodeInstall(IFileSystem fileSystem, IProcessRunner pro
 
         try
         {
-            asked = await _processRunner.RunAsync(
-                    new ProcessRequest { FileName = program, Arguments = ["--version"], Environment = EveryStart, Timeout = AskBudget },
+            asked = await ClaudeCodeWaits.ToItsEndAsync(
+                    token => _processRunner.RunAsync(new ProcessRequest { FileName = program, Arguments = ["--version"], Environment = EveryStart }, token),
+                    $"'{program}' to answer its --version",
+                    tell,
+                    _time,
                     cancellationToken)
                 .ConfigureAwait(false);
         }
@@ -215,26 +217,27 @@ public sealed class ClaudeCodeInstall(IFileSystem fileSystem, IProcessRunner pro
     /// macOS node writes it over the process's name and its command line, so the script it runs is no longer named
     /// anywhere - and a claude node runs is npm's;</item>
     /// <item>a process called <c>claude</c> whose program could not be read - another user's on Linux, or one that
-    /// ended -: it cannot be told apart from a session, and a change beside one takes its program from under it;</item>
-    /// <item>a process that could be a session whose paths could not be followed within <see cref="FollowBudget"/>: a
-    /// path on a network mount that answers nothing never fails, and an update waits on it no longer than that.</item>
+    /// ended -: it cannot be told apart from a session, and a change beside one takes its program from under it.</item>
     /// </list>
     /// A <c>claude</c> of any other installation whose program is read is none of these, whatever it is called.
     /// </summary>
     /// <param name="processes">The machine's processes, as one reading of its table holds them.</param>
     /// <param name="root">npm's global packages, as npm says it.</param>
     /// <param name="comparison">How this platform compares paths.</param>
+    /// <param name="tell">Told each line of the wait on the links being followed; nothing is told where none is given.</param>
     /// <param name="cancellationToken">Stops the wait on the links being followed.</param>
     /// <remarks>
     /// Links are followed only for a process that could be a session - one called <c>claude</c> or <c>node</c>, by its
     /// name or its program's - whose text did not already say, every path once per reading and the package's own first,
-    /// off the caller's thread and within <see cref="FollowBudget"/>: a walk of the disk for every path of every process
-    /// let one stale mount in an unrelated program hold the update for good.
+    /// off the caller's thread: a path on a network mount that answers slowly is waited for, told every five minutes, and
+    /// the person's stop ends the wait - a walk of the disk for every path of every process would let one stale mount in
+    /// an unrelated program hold the update, so no other path is walked.
     /// </remarks>
     public async Task<ClaudeCodeSessions> SessionsAsync(
         IReadOnlyList<SampledProcess> processes,
         string root,
         StringComparison comparison,
+        Action<Waiting.WaitTold>? tell = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(processes);
@@ -270,7 +273,7 @@ public sealed class ClaudeCodeInstall(IFileSystem fileSystem, IProcessRunner pro
             return new ClaudeCodeSessions(counted);
         }
 
-        var followed = await FollowAsync([package, .. unsettled.SelectMany(one => one.Paths).Distinct(StringComparer.Ordinal)], cancellationToken)
+        var followed = await FollowAsync([package, .. unsettled.SelectMany(one => one.Paths).Distinct(StringComparer.Ordinal)], tell, cancellationToken)
             .ConfigureAwait(false);
         var reached = followed.GetValueOrDefault(package);
 
@@ -280,12 +283,6 @@ public sealed class ClaudeCodeInstall(IFileSystem fileSystem, IProcessRunner pro
             {
                 counted[process] = null;
             }
-            else if (!followed.ContainsKey(package) || paths.Any(path => !followed.ContainsKey(path)))
-            {
-                counted[process] = string.Create(
-                    CultureInfo.InvariantCulture,
-                    $"whose paths could not be followed within {FollowBudget.TotalSeconds:0} seconds");
-            }
         }
 
         return new ClaudeCodeSessions(counted);
@@ -293,11 +290,11 @@ public sealed class ClaudeCodeInstall(IFileSystem fileSystem, IProcessRunner pro
 
     /// <summary>
     /// <paramref name="paths"/> each made whole with every link along it followed, once each and in order, off the
-    /// caller's thread: what was followed within <see cref="FollowBudget"/>, each path with where it leads - null where
-    /// it names no path this machine reads -, and nothing for a path not reached in time. A following that never ends is
-    /// left to end on its own; nothing waits on it.
+    /// caller's thread, and waited for to the end (<see cref="ClaudeCodeWaits"/>): each path with where it leads - null
+    /// where it names no path this machine reads. A following the caller's stop left behind is left to end on its own,
+    /// for a call into the file system cannot be cut.
     /// </summary>
-    private async Task<IReadOnlyDictionary<string, string?>> FollowAsync(IReadOnlyList<string> paths, CancellationToken cancellationToken)
+    private async Task<IReadOnlyDictionary<string, string?>> FollowAsync(IReadOnlyList<string> paths, Action<Waiting.WaitTold>? tell, CancellationToken cancellationToken)
     {
         var followed = new ConcurrentDictionary<string, string?>(StringComparer.Ordinal);
         var following = Task.Run(
@@ -307,17 +304,12 @@ public sealed class ClaudeCodeInstall(IFileSystem fileSystem, IProcessRunner pro
                 {
                     followed[path] = Followed(path);
                 }
+
+                return true;
             },
             CancellationToken.None);
 
-        try
-        {
-            await following.WaitAsync(FollowBudget, _time, cancellationToken).ConfigureAwait(false);
-        }
-        catch (TimeoutException)
-        {
-            // What was not followed in time is said by its absence from what is answered.
-        }
+        await ClaudeCodeWaits.ToItsEndAsync(token => following.WaitAsync(token), FollowingSubject, tell, _time, cancellationToken).ConfigureAwait(false);
 
         return new Dictionary<string, string?>(followed, StringComparer.Ordinal);
     }

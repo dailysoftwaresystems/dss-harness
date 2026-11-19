@@ -23,21 +23,24 @@ namespace DssHarness.Core.Agents.ClaudeCode;
 /// <param name="filePermissions">Says whether a file the PATH names is one this machine starts, as the runner asks it.</param>
 /// <param name="platform">The system this is.</param>
 /// <param name="environment">Reads an environment variable - the PATH; the process's own where none is given.</param>
+/// <param name="clock">Measures each question of npm and node as it is waited for and told (<see cref="ClaudeCodeWaits"/>); the system's clock where none is given.</param>
 public sealed class NpmClient(
     IProcessRunner processRunner,
     IFileSystem fileSystem,
     IFilePermissions filePermissions,
     IHostPlatform platform,
-    Func<string, string?>? environment = null)
+    Func<string, string?>? environment = null,
+    TimeProvider? clock = null)
 {
-    /// <summary>How long asking npm anything may take, prefix and root alike.</summary>
-    public static readonly TimeSpan AskBudget = TimeSpan.FromSeconds(30);
+    /// <summary>What a wait on npm's answer of where its global packages are is told as.</summary>
+    public const string RootSubject = "npm to say where its global packages are";
 
     private readonly IProcessRunner _processRunner = processRunner;
     private readonly IFileSystem _fileSystem = fileSystem;
     private readonly IFilePermissions _filePermissions = filePermissions;
     private readonly IHostPlatform _platform = platform;
     private readonly Func<string, string?> _environment = environment ?? Environment.GetEnvironmentVariable;
+    private readonly TimeProvider _clock = clock ?? TimeProvider.System;
 
     /// <summary>
     /// One npm to start: the program, and the arguments that lead every command - the <c>npm-cli.js</c> a batch file
@@ -58,12 +61,12 @@ public sealed class NpmClient(
     /// <param name="Problem">Where it did not, how asking it ended, in npm's own words; null where it named one.</param>
     public sealed record NpmRoot(string? Root, string? Problem);
 
-    /// <summary>The request that asks npm where its global packages are, as every reader of the root asks it.</summary>
+    /// <summary>The request that asks npm where its global packages are, as every reader of the root asks it: given no time of its own.</summary>
     public static ProcessRequest RootRequest(NpmProgram npm)
     {
         ArgumentNullException.ThrowIfNull(npm);
 
-        return new ProcessRequest { FileName = npm.Program, Arguments = [.. npm.Leading, "root", "-g"], Timeout = AskBudget };
+        return new ProcessRequest { FileName = npm.Program, Arguments = [.. npm.Leading, "root", "-g"] };
     }
 
     /// <summary>
@@ -76,7 +79,9 @@ public sealed class NpmClient(
             : "npm";
 
     /// <summary>Finds npm: what to start it as, or why there is nothing to start.</summary>
-    public async Task<NpmFound> FindAsync(CancellationToken cancellationToken = default)
+    /// <param name="tell">Told each line of a wait on node's answer, where npm is found as its batch file; nothing is told where none is given.</param>
+    /// <param name="cancellationToken">Ends the finding.</param>
+    public async Task<NpmFound> FindAsync(Action<Waiting.WaitTold>? tell = null, CancellationToken cancellationToken = default)
     {
         var path = _environment(ProcessRunner.PathVariable);
 
@@ -97,7 +102,7 @@ public sealed class NpmClient(
         {
             null => new NpmFound(null, $"no npm is on the PATH. Looked for: {LookedFor}"),
             _ when string.Equals(Path.GetExtension(found), ".cmd", StringComparison.OrdinalIgnoreCase)
-                => await BesideCmdAsync(found, path, cancellationToken).ConfigureAwait(false),
+                => await BesideCmdAsync(found, path, tell, cancellationToken).ConfigureAwait(false),
             _ => new NpmFound(new NpmProgram(found, []), null),
         };
     }
@@ -109,7 +114,7 @@ public sealed class NpmClient(
     /// <c>npm.cmd</c> where the prefix holds none, as <c>npm.cmd</c> itself passes it over. Where node is nowhere, or
     /// the <c>npm-cli.js</c> it would start is not there, nothing can be started, and the answer says which.
     /// </summary>
-    private async Task<NpmFound> BesideCmdAsync(string cmd, string? path, CancellationToken cancellationToken)
+    private async Task<NpmFound> BesideCmdAsync(string cmd, string? path, Action<Waiting.WaitTold>? tell, CancellationToken cancellationToken)
     {
         var beside = Path.GetDirectoryName(cmd) ?? ".";
         var node = Path.Combine(beside, "node.exe");
@@ -127,7 +132,7 @@ public sealed class NpmClient(
         }
 
         var asked = Path.Combine(beside, "node_modules", "npm", "bin", "npm-prefix.js");
-        var prefix = await AskAsync(node, [asked], cancellationToken).ConfigureAwait(false);
+        var prefix = await AskAsync(node, [asked], tell, cancellationToken).ConfigureAwait(false);
 
         if (prefix is { Length: > 0 })
         {
@@ -148,8 +153,11 @@ public sealed class NpmClient(
                 $"'{cmd}' is on the PATH, but the npm-cli.js it starts is in neither the prefix npm names nor beside it ('{own}'). Looked for: {LookedFor}");
     }
 
-    /// <summary>Where npm's global packages are, as npm itself says (<c>npm root -g</c>), or how asking it ended.</summary>
-    public async Task<NpmRoot> RootAsync(NpmProgram npm, CancellationToken cancellationToken = default)
+    /// <summary>Where npm's global packages are, as npm itself says (<c>npm root -g</c>), or how asking it ended: awaited to its end and told while it lasts.</summary>
+    /// <param name="npm">The npm to ask.</param>
+    /// <param name="tell">Told each line of the wait; nothing is told where none is given.</param>
+    /// <param name="cancellationToken">Ends the asking.</param>
+    public async Task<NpmRoot> RootAsync(NpmProgram npm, Action<Waiting.WaitTold>? tell = null, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(npm);
 
@@ -157,7 +165,7 @@ public sealed class NpmClient(
 
         try
         {
-            asked = await _processRunner.RunAsync(RootRequest(npm), cancellationToken).ConfigureAwait(false);
+            asked = await ClaudeCodeWaits.ToItsEndAsync(token => _processRunner.RunAsync(RootRequest(npm), token), RootSubject, tell, _clock, cancellationToken).ConfigureAwait(false);
         }
         catch (ProgramStartException ex)
         {
@@ -186,15 +194,18 @@ public sealed class NpmClient(
     }
 
     /// <summary>
-    /// One bounded question of node, its answer trimmed; null where it would not answer - which <c>npm.cmd</c> itself
-    /// passes over for the <c>npm-cli.js</c> beside it, as this does.
+    /// One question of node, awaited to its end and told while it lasts, its answer trimmed; null where it would not
+    /// answer - which <c>npm.cmd</c> itself passes over for the <c>npm-cli.js</c> beside it, as this does.
     /// </summary>
-    private async Task<string?> AskAsync(string program, IReadOnlyList<string> arguments, CancellationToken cancellationToken)
+    private async Task<string?> AskAsync(string program, IReadOnlyList<string> arguments, Action<Waiting.WaitTold>? tell, CancellationToken cancellationToken)
     {
         try
         {
-            var asked = await _processRunner.RunAsync(
-                    new ProcessRequest { FileName = program, Arguments = arguments, Timeout = AskBudget },
+            var asked = await ClaudeCodeWaits.ToItsEndAsync(
+                    token => _processRunner.RunAsync(new ProcessRequest { FileName = program, Arguments = arguments }, token),
+                    $"'{program}' to say npm's prefix",
+                    tell,
+                    _clock,
                     cancellationToken)
                 .ConfigureAwait(false);
 

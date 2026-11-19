@@ -226,20 +226,61 @@ public sealed class ClaudeCodeUpdateServiceTests
     }
 
     /// <summary>
-    /// The change is bounded by the ten minutes an install is given, and the readings around it by their own half
-    /// minute: a change bounded by a reading's budget would end every install on a slow connection.
+    /// Neither the change nor any question around it - npm's prefix, its root before and since, the program's version - is
+    /// given a time of its own: each runs to its end, told while it lasts, and the caller's stop ends a question.
     /// </summary>
     [Fact]
-    public async Task TheChange_IsBoundedByTheInstallsBudget()
+    public async Task NoQuestionNorTheChange_IsGivenATimeOfItsOwn()
     {
         using var kit = new Kit(package: "2.1.201", program: "2.1.201");
         kit.Runner.OnInstall = () => kit.WritePackage("2.1.287", "2.1.287");
 
         await kit.Service().ReadyAsync(kit.Layout, [], client: null, ClaudeCodeAsker.Run(), Token);
 
+        Assert.Equal(5, kit.Runner.Requests.Count);
+        Assert.All(kit.Runner.Requests, request => Assert.Null(request.Timeout));
+    }
+
+    /// <summary>
+    /// An npm install through a slow proxy that takes twenty minutes is waited for to its end - never ended at ten - each
+    /// five minutes of it told as a line of the asker's command, and the Claude Code it leaves is ready. Red where the
+    /// change is bounded (ChangeBudget), or a question is (AskBudget).
+    /// </summary>
+    [Fact]
+    public async Task ATwentyMinuteNpmInstall_IsWaitedAndTold()
+    {
+        using var kit = new Kit(package: "2.1.201", program: "2.1.201");
+        var clock = new TimerClock();
+        var harness = new HarnessFactory();
+        kit.Runner.InstallRun = async (request, cancellationToken) =>
+        {
+            // Twenty minutes and a little more, so no line is told in the minute it ends.
+            var lasts = TimeSpan.FromMinutes(22);
+
+            if (request.Timeout is { } bound && bound < lasts)
+            {
+                await Task.Delay(bound, clock, cancellationToken);
+                return new ProcessResult(-1, "running postinstall\n", string.Empty, bound, TimedOut: true);
+            }
+
+            await Task.Delay(lasts, clock, cancellationToken);
+            kit.WritePackage("2.1.287", "2.1.287");
+
+            return new ProcessResult(0, "added 1 package in 22m\n", string.Empty, lasts, TimedOut: false);
+        };
+
+        var answer = await ClockDrive.UntilEndedAsync(
+            clock,
+            kit.Service(clock, output: harness.Output).ReadyAsync(kit.Layout, [], client: null, ClaudeCodeAsker.SideTask("slow"), Token),
+            TimeSpan.FromMinutes(1),
+            40,
+            Token);
+        var told = harness.StandardOutput.ToString().Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+        Assert.True(answer.Ready, answer.Message);
         Assert.Equal(
-            [NpmClient.AskBudget, NpmClient.AskBudget, ToolPackage.ChangeBudget, NpmClient.AskBudget, ClaudeCodeInstall.AskBudget],
-            kit.Runner.Requests.Select(request => request.Timeout));
+            [.. new[] { 5, 10, 15, 20 }.Select(minutes => $"run-side-task: has waited {minutes}m00s for {ClaudeCodeUpdateService.ChangeSubject}")],
+            told);
     }
 
     /// <summary>
@@ -460,35 +501,38 @@ public sealed class ClaudeCodeUpdateServiceTests
     }
 
     /// <summary>
-    /// A path whose following never ends - a stale network mount under a node's script - holds the update no longer than
-    /// its bound: the process is counted as one that cannot be told apart from a session, said as that, and nothing waits
-    /// on the file system for good.
+    /// A path slow to follow - a network mount under a node's script that answers late - is waited for, never cut at a
+    /// time of the tool's own: the wait told every five minutes as a line of the asker's command, and once the path is
+    /// followed the process is read as what it is - a node of no installation of Claude Code's - and the update goes on.
+    /// Red where the following is cut at ten seconds (FollowBudget) and the process counted as a session.
     /// </summary>
     [Fact]
-    public async Task APathThatCannotBeFollowedInTime_IsCountedAsThat_AndNothingWaitsForGood()
+    public async Task APathSlowToFollow_IsWaitedForAndTold()
     {
         using var kit = new Kit(package: "2.1.201", program: "2.1.201");
         var clock = new TimerClock();
+        var harness = new HarnessFactory();
         var stale = Path.Combine(kit.Temp.Path, "mnt", "share", "server.js");
+        var told = $"{DssHarness.Core.Orchestration.Flow.FlowService.RunCommand}: has waited 5m00s for {ClaudeCodeInstall.FollowingSubject}";
         kit.Table = new ScriptedTable([[new(6161, 1, "node", null, $"\"{kit.Node}\" \"{stale}\"", kit.Node)]]);
         kit.Files.Stalls = stale;
+        kit.Runner.OnInstall = () => kit.WritePackage("2.1.287", "2.1.287");
 
         try
         {
-            var asked = kit.Service(clock).ReadyAsync(kit.Layout, [], client: null, ClaudeCodeAsker.Run(), Token);
+            var asked = kit.Service(clock, output: harness.Output).ReadyAsync(kit.Layout, [], client: null, ClaudeCodeAsker.Run(), Token);
 
-            // The clock is moved past the bound only once the following stands stalled and the wait on it is armed.
+            // The clock is moved only once the following stands stalled and the wait on it is armed; the path is let go
+            // only once the wait has been told.
             Assert.True(kit.Files.Reached.Wait(TimeSpan.FromSeconds(30), Token), "The stalling path was never followed.");
             await clock.WaitingAsync().WaitAsync(TimeSpan.FromSeconds(30), Token);
-            clock.Advance(ClaudeCodeInstall.FollowBudget);
+            clock.Advance(DssHarness.Core.Waiting.Waits.SaidEvery);
+            Assert.True(SpinWait.SpinUntil(() => harness.StandardOutput.ToString().Contains(told, StringComparison.Ordinal), TimeSpan.FromSeconds(30)), "The wait was never told.");
+            kit.Files.Released.Set();
             var answer = await asked.WaitAsync(TimeSpan.FromSeconds(30), Token);
 
-            Assert.Equal(HarnessExit.Refused, answer.ExitCode);
-            Assert.Equal(
-                "a session of Claude Code is running on this machine (pid 6161 (node, whose paths could not be followed within 10 seconds)); "
-                    + "start the run again when they have ended.",
-                answer.Message);
-            Assert.DoesNotContain(kit.Runner.Ran, line => line.Contains(" install ", StringComparison.Ordinal));
+            Assert.True(answer.Ready, answer.Message);
+            Assert.Contains(kit.Runner.Ran, line => line.Contains(" install ", StringComparison.Ordinal));
         }
         finally
         {
@@ -773,26 +817,6 @@ public sealed class ClaudeCodeUpdateServiceTests
     }
 
     /// <summary>
-    /// An install that did not finish within its ten minutes is said as that - never as a network that was not reached,
-    /// since a step after the install that hangs ends the same way - and what npm holds since is said under it.
-    /// </summary>
-    [Fact]
-    public async Task AnInstallThatDidNotFinishInTime_IsSaidAsThat()
-    {
-        using var kit = new Kit(package: "2.1.201", program: "2.1.201");
-        kit.Runner.Install = new ProcessResult(-1, "running postinstall\n", string.Empty, ToolPackage.ChangeBudget, TimedOut: true);
-
-        var answer = await kit.Service().ReadyAsync(kit.Layout, [], client: null, ClaudeCodeAsker.Run(), Token);
-
-        Assert.Equal(HarnessExit.Incomplete, answer.ExitCode);
-        Assert.Equal(
-            "npm did not finish within 10 minutes and was ended, part way through the download or the step after the install; "
-            + $"running it again can help. Run it by hand: {ClaudeCodeUpdateService.InstallCommand()}.",
-            answer.Message);
-        Assert.Equal([$"npm holds claude 2.1.201 since, and its program '{kit.Program}' answers 2.1.201.", "running postinstall"], answer.Details);
-    }
-
-    /// <summary>
     /// A failed install that left a package whose program does not answer is said to have left half an installation:
     /// the command never stays silent on which of the two a failure left.
     /// </summary>
@@ -1073,7 +1097,7 @@ public sealed class ClaudeCodeUpdateServiceTests
         /// The service over the kit's machine, its bound on following links measured by <paramref name="clock"/> where one
         /// is given, and its process table <paramref name="table"/> where one is given - else the kit's own.
         /// </summary>
-        public ClaudeCodeUpdateService Service(TimeProvider? clock = null, IProcessTable? table = null)
+        public ClaudeCodeUpdateService Service(TimeProvider? clock = null, IProcessTable? table = null, DssHarness.Core.Output.IHarnessOutput? output = null)
             => new(
                 table ?? Table,
                 Runner,
@@ -1083,7 +1107,9 @@ public sealed class ClaudeCodeUpdateServiceTests
                 new HarnessFactory().Identity,
                 keys: new AgentKeyStore(Files, Permissions, Platform),
                 environment: Name,
-                install: clock is null ? null : new ClaudeCodeInstall(Files, Runner, clock));
+                install: clock is null ? null : new ClaudeCodeInstall(Files, Runner, clock),
+                clock: clock,
+                output: output);
 
         /// <summary>Writes the package at <paramref name="version"/>, whose program answers <paramref name="answered"/> - or nothing, where that is null.</summary>
         public void WritePackage(string version, string? answered, bool bin = true)
@@ -1126,6 +1152,9 @@ public sealed class ClaudeCodeUpdateServiceTests
 
         public ProcessResult Install { get; set; } = new(0, "added 1 package in 4s\n", string.Empty, TimeSpan.FromSeconds(4), TimedOut: false);
 
+        /// <summary>How the install runs, where a test scripts how long it takes; <see cref="Install"/> at once where none is given.</summary>
+        public Func<ProcessRequest, CancellationToken, Task<ProcessResult>>? InstallRun { get; set; }
+
         public string? Prefix { get; set; }
 
         public string? Root { get; set; }
@@ -1144,6 +1173,11 @@ public sealed class ClaudeCodeUpdateServiceTests
             Ran.Add(line);
             Stoppable.Add(cancellationToken.CanBeCanceled);
             Requests.Add(request);
+
+            if (InstallRun is { } installing && line.Contains(" install -g ", StringComparison.Ordinal))
+            {
+                return installing(request, cancellationToken);
+            }
 
             return Task.FromResult(line.EndsWith("npm-prefix.js", StringComparison.Ordinal)
                 ? new ProcessResult(0, (Prefix ?? string.Empty) + "\n", string.Empty, TimeSpan.Zero, TimedOut: false)

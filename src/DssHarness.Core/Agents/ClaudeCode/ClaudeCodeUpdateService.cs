@@ -39,15 +39,16 @@ public sealed record ClaudeCodeAnswer(bool Ready, int ExitCode, string Message, 
 /// </summary>
 /// <param name="Noun">What is started again: <c>run</c> or <c>side-task</c>.</param>
 /// <param name="Needing">Which of it needs the client, as a refusal says it after the client's name: <c> (step 'plan')</c>; empty where the asker names none.</param>
-public sealed record ClaudeCodeAsker(string Noun, string Needing)
+/// <param name="Command">The command whose lines tell each wait of the making ready: <c>run-orchestrator</c>, <c>run-side-task</c>.</param>
+public sealed record ClaudeCodeAsker(string Noun, string Needing, string Command)
 {
     /// <summary>A run, <paramref name="needing"/> saying which of its parts needs the client.</summary>
     /// <param name="needing">Which of the run needs the client: <c> (step 'plan')</c>, <c> (the run's reporter)</c>; empty where none is named.</param>
-    public static ClaudeCodeAsker Run(string needing = "") => new("run", needing);
+    public static ClaudeCodeAsker Run(string needing = "") => new("run", needing, Orchestration.Flow.FlowService.RunCommand);
 
     /// <summary>The side-task <paramref name="task"/>.</summary>
     /// <param name="task">The side-task's name.</param>
-    public static ClaudeCodeAsker SideTask(string task) => new("side-task", $" (side-task '{task}')");
+    public static ClaudeCodeAsker SideTask(string task) => new("side-task", $" (side-task '{task}')", SideTasks.SideTaskService.RunCommand);
 }
 
 /// <summary>
@@ -68,6 +69,11 @@ public sealed record ClaudeCodeAsker(string Noun, string Needing)
 /// <param name="environment">Reads an environment variable; the process's own where none is given.</param>
 /// <param name="npm">How npm is found and run; one of its own where none is given.</param>
 /// <param name="install">How the package is read; one of its own where none is given.</param>
+/// <param name="clock">Measures each wait as it is told; the system's clock where none is given.</param>
+/// <param name="output">
+/// Where each wait of the making ready is told, by the asker's command, every five minutes while it lasts - npm, node, the
+/// program's own version, the change; nothing is told where none is given.
+/// </param>
 public sealed class ClaudeCodeUpdateService(
     IProcessTable processes,
     IProcessRunner processRunner,
@@ -78,7 +84,9 @@ public sealed class ClaudeCodeUpdateService(
     AgentKeyStore? keys = null,
     Func<string, string?>? environment = null,
     NpmClient? npm = null,
-    ClaudeCodeInstall? install = null)
+    ClaudeCodeInstall? install = null,
+    TimeProvider? clock = null,
+    Output.IHarnessOutput? output = null)
 {
     /// <summary>The version this tool needs: the stable channel's on the day the client was built, by its number and never a channel's name.</summary>
     public const string Needed = "2.1.287";
@@ -121,9 +129,17 @@ public sealed class ClaudeCodeUpdateService(
     private readonly IProcessIdentity _process = process;
     private readonly AgentKeyStore? _keys = keys;
     private readonly Func<string, string?> _environment = environment ?? Environment.GetEnvironmentVariable;
-    private readonly NpmClient _npm = npm ?? new NpmClient(processRunner, fileSystem, filePermissions, platform, environment);
-    private readonly ClaudeCodeInstall _install = install ?? new ClaudeCodeInstall(fileSystem, processRunner);
+    private readonly NpmClient _npm = npm ?? new NpmClient(processRunner, fileSystem, filePermissions, platform, environment, clock);
+    private readonly ClaudeCodeInstall _install = install ?? new ClaudeCodeInstall(fileSystem, processRunner, clock);
     private readonly ProgramUpdate _updates = new(processRunner, platform);
+    private readonly TimeProvider _clock = clock ?? TimeProvider.System;
+    private readonly Output.IHarnessOutput? _output = output;
+
+    /// <summary>What a wait of the change is told as: the command that runs, to its end.</summary>
+    public static string ChangeSubject => $"'{InstallCommand()}' to end";
+
+    /// <summary>How each wait of the making ready <paramref name="asker"/> asked for is told: a line of its command.</summary>
+    private Action<Waiting.WaitTold> Tell(ClaudeCodeAsker asker) => told => _output?.Info(asker.Command, told.Line());
 
     /// <summary>
     /// Whether a program a person names is one this tool does not start as Claude Code: a batch file (<see cref="BatchFiles"/>),
@@ -181,6 +197,8 @@ public sealed class ClaudeCodeUpdateService(
         ArgumentNullException.ThrowIfNull(appointed);
         ArgumentNullException.ThrowIfNull(asker);
 
+        var tell = Tell(asker);
+
         // A program a person named is that person's own choice: started as named, asked nothing of npm, and neither
         // installed, nor updated, nor second-guessed by this tool. The slot need hold no such name; where its files do
         // not read, or the name it holds cannot be taken from them, that is the configuration's problem - refused as
@@ -201,12 +219,12 @@ public sealed class ClaudeCodeUpdateService(
                 var named = _keys.Value(layout, appointed, executable);
 
                 return named is { Problem: null, Value: { Length: > 0 } namedProgram }
-                    ? await NamedAsync(namedProgram, executable, cancellationToken).ConfigureAwait(false)
+                    ? await NamedAsync(namedProgram, executable, tell, cancellationToken).ConfigureAwait(false)
                     : Refused(HarnessExit.ConfigInvalid, named.Problem ?? $"the slot declares {executable} and gave no value for it");
             }
         }
 
-        var found = await _npm.FindAsync(cancellationToken).ConfigureAwait(false);
+        var found = await _npm.FindAsync(tell, cancellationToken).ConfigureAwait(false);
 
         if (found.Npm is not { } npm)
         {
@@ -219,7 +237,7 @@ public sealed class ClaudeCodeUpdateService(
                         + $"installing it and bringing it up to date are a run's step's or a side-task's to do. Install Node.js 22 or later, which brings npm, and then run it by hand: {InstallCommand()}");
         }
 
-        var asked = await _npm.RootAsync(npm, cancellationToken).ConfigureAwait(false);
+        var asked = await _npm.RootAsync(npm, tell, cancellationToken).ConfigureAwait(false);
 
         if (asked.Root is not { } root)
         {
@@ -243,7 +261,7 @@ public sealed class ClaudeCodeUpdateService(
         {
             // What the program answers of its own version has to agree with the package's: a pair that disagrees is
             // half an installation, and half an installation is refused as one that did not take.
-            var answered = await _install.VersionAsync(program, cancellationToken).ConfigureAwait(false);
+            var answered = await _install.VersionAsync(program, tell, cancellationToken).ConfigureAwait(false);
 
             if (answered.Version is not { } answer)
             {
@@ -307,7 +325,7 @@ public sealed class ClaudeCodeUpdateService(
                     + $"program from under it. Nothing was changed; with every session of Claude Code ended, run it by hand: {InstallCommand()}");
             }
 
-            var sessions = await _install.SessionsAsync(table.Processes, root, _platform.PathComparison, cancellationToken).ConfigureAwait(false);
+            var sessions = await _install.SessionsAsync(table.Processes, root, _platform.PathComparison, tell, cancellationToken).ConfigureAwait(false);
             var running = _updates.Running(table, sessions.Counts, _process.CurrentId);
 
             if (running.Count > 0)
@@ -328,34 +346,41 @@ public sealed class ClaudeCodeUpdateService(
                 $"another update is changing npm's '{root}' on this machine; run again once it has ended.");
         }
 
+        // The change is given no time of its own: an install through a slow proxy may take twenty minutes, and one ended
+        // part way leaves half an installation. It runs to its end, told every five minutes, and once begun it is never
+        // stopped.
         var change = new ProcessRequest
         {
             FileName = npm.Program,
             Arguments = [.. npm.Leading, "install", "-g", $"{ClaudeCodeInstall.PackageId}@{Needed}"],
-            Timeout = ToolPackage.ChangeBudget,
         };
 
         // What npm holds since is read from the root npm names since, as the root before was: the package and then
         // its program, whether the change ran or not - a change that failed part way can leave half an installation.
         ClaudeCodePackage? since = null;
-        var moved = await _updates.ChangeAsync(
-                hold,
-                change,
-                NpmClient.RootRequest(npm),
-                listing =>
-                {
-                    if (listing.Trim() is not { Length: > 0 } rootSince)
+        var moved = await ClaudeCodeWaits.ToItsEndAsync(
+                _ => _updates.ChangeAsync(
+                    hold,
+                    change,
+                    NpmClient.RootRequest(npm),
+                    listing =>
                     {
-                        return ListedRelease.Unreadable;
-                    }
+                        if (listing.Trim() is not { Length: > 0 } rootSince)
+                        {
+                            return ListedRelease.Unreadable;
+                        }
 
-                    since = _install.Read(rootSince, Needed);
+                        since = _install.Read(rootSince, Needed);
 
-                    return since.Problem is not null ? ListedRelease.Unreadable : ListedRelease.Read(since.Version?.ToString());
-                })
+                        return since.Problem is not null ? ListedRelease.Unreadable : ListedRelease.Read(since.Version?.ToString());
+                    }),
+                ChangeSubject,
+                tell,
+                _clock,
+                CancellationToken.None)
             .ConfigureAwait(false);
         var answeredSince = since is { Program: { } sinceProgram, Problem: null }
-            ? await _install.VersionAsync(sinceProgram, CancellationToken.None).ConfigureAwait(false)
+            ? await _install.VersionAsync(sinceProgram, tell, CancellationToken.None).ConfigureAwait(false)
             : null;
         var output = OutputOf(moved.Ran);
 
@@ -420,7 +445,7 @@ public sealed class ClaudeCodeUpdateService(
     }
 
     /// <summary>A program a person named: read for what it is, and refused where it is not one this tool can start.</summary>
-    private async Task<ClaudeCodeAnswer> NamedAsync(string program, string executable, CancellationToken cancellationToken)
+    private async Task<ClaudeCodeAnswer> NamedAsync(string program, string executable, Action<Waiting.WaitTold> tell, CancellationToken cancellationToken)
     {
         if (IsBatch(program))
         {
@@ -429,7 +454,7 @@ public sealed class ClaudeCodeUpdateService(
                 $"'{program}' is a batch file, which is never started (its arguments would be parsed twice); name the program it starts");
         }
 
-        var answered = await _install.VersionAsync(program, cancellationToken).ConfigureAwait(false);
+        var answered = await _install.VersionAsync(program, tell, cancellationToken).ConfigureAwait(false);
 
         if (answered.Version is not { } version)
         {
@@ -448,30 +473,19 @@ public sealed class ClaudeCodeUpdateService(
     }
 
     /// <summary>
-    /// How a change that npm did not finish is refused, and with which code: not finished within its bound, the
-    /// registry or the download not reached - each a change begun and not finished, which running it again can finish,
-    /// and which exits as every program's update begun and not finished does (<see cref="ProgramUpdate.FailedExit"/>)
-    /// - or anything else npm refused (14: the Claude Code a run needs could not be made ready), a machine that will
-    /// not let it write among them, which the tool never runs sudo to reach past.
+    /// How a change that npm did not finish is refused, and with which code: the registry or the download not reached -
+    /// a change begun and not finished, which running it again can finish, and which exits as every program's update
+    /// begun and not finished does (<see cref="ProgramUpdate.FailedExit"/>) - or anything else npm refused (14: the
+    /// Claude Code a run needs could not be made ready), a machine that will not let it write among them, which the tool
+    /// never runs sudo to reach past. No change is given a time of its own, so none ends for one.
     /// </summary>
     private static (int Code, string Why) Failed(ProcessResult ran, string output)
     {
-        var network = !ran.TimedOut
-            && (output.Contains("ENOTFOUND", StringComparison.Ordinal)
-                || output.Contains("ECONNRESET", StringComparison.Ordinal)
-                || output.Contains("ETIMEDOUT", StringComparison.Ordinal)
-                || output.Contains("network", StringComparison.Ordinal));
+        var network = output.Contains("ENOTFOUND", StringComparison.Ordinal)
+            || output.Contains("ECONNRESET", StringComparison.Ordinal)
+            || output.Contains("ETIMEDOUT", StringComparison.Ordinal)
+            || output.Contains("network", StringComparison.Ordinal);
         var code = ProgramUpdate.FailedExit(ran, network, HarnessExit.ToolMissing);
-
-        if (ran.TimedOut)
-        {
-            return (
-                code,
-                $"npm did not finish within {ToolPackage.ChangeBudget.TotalMinutes.ToString("0", CultureInfo.InvariantCulture)} minutes and was ended, "
-                    + "part way through the download or the step after the install; running it again can help. "
-                    + $"Run it by hand: {InstallCommand()}.");
-        }
-
         var elevated = output.Contains("EACCES", StringComparison.Ordinal);
 
         return (
