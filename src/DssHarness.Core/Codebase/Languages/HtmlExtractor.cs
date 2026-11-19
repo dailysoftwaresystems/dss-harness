@@ -11,7 +11,8 @@ namespace DssHarness.Core.Codebase.Languages;
 /// <c>img src</c> and <c>a href</c> naming a local file by a relative path - one that climbs among them - an import of
 /// it; an <c>on*=</c> handler a call of the function it names; each inline <c>&lt;script&gt;</c> of JavaScript read by
 /// the JavaScript reader as its own program - a module where its type says - and each <c>&lt;style&gt;</c> by the style
-/// sheet's, each embedded as every markup embeds code (<see cref="EmbeddedCode"/>), so its declarations carry the lines
+/// sheet's, in the syntax its <c>lang</c> or <c>type</c> names (<c>text/less</c>, <c>text/x-scss</c>), each embedded as
+/// every markup embeds code (<see cref="EmbeddedCode"/>), so its declarations carry the lines
 /// they stand on and nothing its reader saw is lost.
 /// </summary>
 public sealed class HtmlExtractor : ICodeGraphExtractor
@@ -44,10 +45,11 @@ public sealed class HtmlExtractor : ICodeGraphExtractor
 
     /// <inheritdoc/>
     public CodeGraphExtractorHelp Help { get; } = new(
-        "HTML documents (.html, .htm): each landmark and each element with an id as a section from its start tag to its end tag, a template's content among them, each class and id as a use of the rule that styles it, a custom element as an instantiates of a component of that name, a script src, link href, img src and a href naming a local file by a relative path as an import of it, an on*= handler as a call of the function it names, each inline script of JavaScript read by the JavaScript reader as a program of its own - a module where its type says - and each style element by the style sheet's reader, on the lines they stand on",
+        "HTML documents (.html, .htm): each landmark and each element with an id as a section from its start tag to its end tag, a template's content among them, each class and id as a use of the rule that styles it, a custom element as an instantiates of a component of that name, a script src, link href, img src and a href naming a local file by a relative path as an import of it, an on*= handler as a call of the function it names, each inline script of JavaScript read by the JavaScript reader as a program of its own - a module where its type says - and each style element by the style sheet's reader, in the syntax its lang or type names (CSS where it names none, text/less, text/scss, text/x-scss, text/sass), on the lines they stand on",
         [
             "a style attribute's declarations: no rule of their own",
             "a script of another type - a JSON block, an import map, a template a framework reads: its text read as no code",
+            "a style element of another syntax (lang=\"stylus\", a template's type): its text read as no style sheet",
             "an element with no id and no landmark tag: no node of its own, its lines its enclosing section's",
             "an href or src that names no file of the tree - another site's, a rooted path, an anchor, data: - no import of it",
             "a handler that names no one function - a longer expression - is a use of the name it begins with, and no call",
@@ -149,8 +151,8 @@ public sealed class HtmlExtractor : ICodeGraphExtractor
 
     /// <summary>
     /// The code <paramref name="element"/> holds, read by its language's reader on the lines it stands on: an inline script
-    /// of JavaScript - a module where its type is <c>module</c> - and a style element of CSS; <see langword="null"/> for
-    /// anything else, a script of another type among them.
+    /// of JavaScript - a module where its type is <c>module</c> - and a style element in the syntax it names;
+    /// <see langword="null"/> for anything else, a script or a style of another type among them.
     /// </summary>
     private FileExtract? Embedded(MarkupText markup, MarkupElement element, string path)
     {
@@ -166,9 +168,7 @@ public sealed class HtmlExtractor : ICodeGraphExtractor
             return new JsReading(Language, path, kept, typescript: false, module: string.Equals(ScriptType(element), "module", StringComparison.OrdinalIgnoreCase)).Read();
         }
 
-        return element.Name == "style" && (element.Attribute("type")?.Trim() is null or "" || string.Equals(element.Attribute("type")!.Trim(), "text/css", StringComparison.OrdinalIgnoreCase))
-            ? CssExtractor.Read(Language, new CodeFileInput(path, kept))
-            : null;
+        return element.Name == "style" ? CssExtractor.Read(Language, new CodeFileInput(path, kept), element.Attribute("lang"), element.Attribute("type")) : null;
     }
 
     /// <summary>The type a script is written with: its <c>type</c>, else what a <c>language</c> names, as HTML reads them; empty where it says none.</summary>

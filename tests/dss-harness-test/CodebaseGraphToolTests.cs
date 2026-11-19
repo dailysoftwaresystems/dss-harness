@@ -1324,6 +1324,40 @@ public sealed partial class CodebaseGraphToolTests
         Assert.Distinct(counted);
     }
 
+    /// <summary>
+    /// A result of more than one page is masked by the run's secrets before it is paged and kept: no page of it, and
+    /// nothing the conversation's graph-pages keeps of it, holds the secret a file's lines hold - each marked as the mask
+    /// marks it - while a tool given no mask, a person's own view, serves the lines as the file writes them.
+    /// </summary>
+    [Fact]
+    public async Task AResultOfMoreThanOnePage_IsMaskedBeforeItIsPagedAndKept()
+    {
+        using var tree = await TreeAsync(("src/Hub.cs", HubFile(220).Replace("        Center();\n", "        Center(\"tok-0123456789\");\n", StringComparison.Ordinal)));
+        using var pages = new TempDirectory();
+        var directory = Path.Combine(pages.Path, OrchestratorLayout.StepPagesDirectoryName);
+        var queries = await QueriesAsync(tree);
+        var tool = Tool(tree, queries, sync: false, pages: new GraphPageStore(directory, tree.Harness.FileSystem), mask: new Masking("0123456789"));
+        const string Ask = """{"op":"body","symbols":["Hub"],"full":true}""";
+
+        var first = await AskAsync(tool, Ask);
+        var served = new List<string> { first.Text };
+
+        for (var page = 2; page <= first.Paging!.Pages; page++)
+        {
+            served.Add((await AskAsync(tool, Ask.Replace("}", $",\"page\":{page}}}", StringComparison.Ordinal))).Text);
+        }
+
+        Assert.Equal(4, served.Count);
+        Assert.All(served, text => Assert.DoesNotContain("0123456789", text, StringComparison.Ordinal));
+        Assert.Contains("Center(\"tok-***\");", served[0], StringComparison.Ordinal);
+
+        var kept = File.ReadAllText(Assert.Single(Directory.GetFiles(directory)));
+
+        Assert.DoesNotContain("0123456789", kept, StringComparison.Ordinal);
+        Assert.Contains("tok-***", kept, StringComparison.Ordinal);
+        Assert.Contains("Center(\"tok-0123456789\");", (await AskAsync(Tool(tree, queries, sync: false), Ask)).Text, StringComparison.Ordinal);
+    }
+
     /// <summary>A resumed conversation reads page 2 of what was kept before the pause: the store's file answers a tool made again, serving the result page 1 read.</summary>
     [Fact]
     public async Task AResumedConversation_ReadsPageTwoOfWhatWasKept()
@@ -1662,7 +1696,7 @@ public sealed partial class CodebaseGraphToolTests
         => $"namespace Demo;\n\npublic static class {name}\n{{\n" + string.Concat(Enumerable.Range(0, lines).Select(at => $"    // line {at}\n")) + "}\n";
 
     /// <summary>The tool over <paramref name="queries"/>, reading what the graph lists where no rule is given, and syncing a file again where <paramref name="sync"/>.</summary>
-    internal static CodebaseGraphTool Tool(CodebaseGraphTree tree, CodebaseGraphQueries queries, Func<string, bool>? mayRead = null, Func<string, AgentPolicyAnswer>? mayWrite = null, bool sync = true, GraphNearness? near = null, GraphPageStore? pages = null, IFileSystem? files = null)
+    internal static CodebaseGraphTool Tool(CodebaseGraphTree tree, CodebaseGraphQueries queries, Func<string, bool>? mayRead = null, Func<string, AgentPolicyAnswer>? mayWrite = null, bool sync = true, GraphNearness? near = null, GraphPageStore? pages = null, IFileSystem? files = null, Core.Execution.ILineMask? mask = null)
     {
         var never = CodebaseGraphService.NeverListed(tree.WorktreesRoot);
 
@@ -1675,7 +1709,8 @@ public sealed partial class CodebaseGraphToolTests
             mayWrite ?? (_ => AgentPolicyAnswer.Allow),
             sync ? async (path, _) => new CodebaseGraphQueries((await tree.CheckAsync(null, null, path)).Read) : null,
             near is null ? null : () => near,
-            pages);
+            pages,
+            mask);
     }
 
     /// <summary>

@@ -295,7 +295,7 @@ public sealed class HtmlExtractorTests : CodeGraphExtractorContractTests<HtmlExt
     public void AStyleElement_IsReadByTheStyleSheetsReader()
     {
         var extract = Read("pages/nested.html", Nested);
-        var rule = Assert.Single(extract.Nodes, node => node.SubKind == "rule");
+        var rule = Assert.Single(extract.Nodes, node => node.SubKind == CodeSubKinds.Rule);
 
         Assert.Equal(("html:pages/nested.html#.card", ".card", 6, 6), (rule.Id, rule.Name, rule.Start, rule.End));
     }
@@ -316,6 +316,27 @@ public sealed class HtmlExtractorTests : CodeGraphExtractorContractTests<HtmlExt
         Assert.True(reading.Join(TimeSpan.FromMinutes(2)), "the deep page was not read in two minutes");
 
         Assert.Equal([("body", 1, 4), ("main", 1, 4), ("deep", 3, 3)], extract!.Nodes.Select(node => (node.Name, node.Start, node.End)));
+    }
+
+    /// <summary>
+    /// A style element is read in the syntax its <c>type</c> names, as a browser's Less reads <c>text/less</c>: its
+    /// <c>//</c> comment is no rule and its <c>@pad</c> a variable; one of CSS keeps <c>//</c> as CSS does, and one of a
+    /// syntax no style sheet's reader reads is not read.
+    /// </summary>
+    [Fact]
+    public void AStyleElement_IsReadInTheSyntaxItsTypeNames()
+    {
+        var extract = Read("index.html", "<style type=\"text/less\">\n// .ghost { a: b; }\n@pad: 2px;\n.box { margin: @pad; }\n</style>\n<style type=\"text/x-template\">\n.never { a: b; }\n</style>\n");
+
+        Assert.Equal(
+            [("@pad", CodeSubKinds.StyleVariable, 3), (".box", CodeSubKinds.Rule, 4)],
+            extract.Nodes.Where(node => CodeSubKinds.IsData(node.SubKind)).Select(node => (node.Name, node.SubKind!, node.Start)));
+        Assert.Equal(
+            [("html:index.html#.box", "@pad", 4, CodeQualifierKinds.StyleVariable)],
+            extract.References.Where(reference => reference.Qualifier?.Kind == CodeQualifierKinds.StyleVariable).Select(reference => (reference.From, reference.Name, reference.Line, reference.Qualifier?.Kind)));
+        Assert.Equal(
+            [".ghost"],
+            Read("plain.html", "<style>\n// .ghost { a: b; }\n</style>\n").Nodes.Where(node => CodeSubKinds.IsData(node.SubKind)).Select(node => node.Name));
     }
 
     private static FileExtract Read(string path, string text) => new HtmlExtractor().Extract(new CodeFileInput(path, text));

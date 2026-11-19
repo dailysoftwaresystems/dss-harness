@@ -698,8 +698,15 @@ public static class CodeGraphLinker
                 return Qualified(from, qualifier, reference.Name, Accepts);
             }
 
-            return Scoped(from, reference.Name, Accepts) is { Count: > 0 } scoped ? (scoped, CodeConfidences.Exact) : Beyond(from, reference.Name, Accepts);
+            return Unqualified(from, reference.Name, Accepts);
         }
+
+        /// <summary>
+        /// What <paramref name="name"/> written with no qualifier names: what the scopes <paramref name="from"/> is written
+        /// in declare, nearest first - exact - else what lies beyond them (<see cref="Beyond"/>).
+        /// </summary>
+        private (IReadOnlyList<Declaration> Found, string Confidence) Unqualified(Declaration from, string name, Func<Declaration, bool> accepts)
+            => Scoped(from, name, accepts) is { Count: > 0 } scoped ? (scoped, CodeConfidences.Exact) : Beyond(from, name, accepts);
 
         /// <summary>What the file at <paramref name="path"/> declares that another file imports by the name <paramref name="name"/> besides its own.</summary>
         private IReadOnlyList<Declaration> ExportedNamed(string path, string name)
@@ -774,6 +781,12 @@ public static class CodeGraphLinker
                     return qualifier.Name is { } scope && InScope(OpenKey(scope), name, Own, withBases: false) is { Count: > 0 } held
                         ? (held, CodeConfidences.Exact)
                         : (Distinct(RepositoryNamed(from.File, name).Where(target => target.Node.Scope is null && Own(target))), CodeConfidences.Exact);
+
+                case CodeQualifierKinds.StyleVariable or CodeQualifierKinds.StyleMixin or CodeQualifierKinds.Keyframes:
+                    // A name a style sheet writes where its syntax says what it names - a variable, a mixin, an animation's
+                    // keyframes - is found as a name written alone is: the sheet's own, what it imports, else the
+                    // repository's - of that kind alone, as Takes keeps it.
+                    return Unqualified(from, name, accepts);
 
                 case CodeQualifierKinds.Selector or CodeQualifierKinds.Key:
                     // A selector names a rule, and a key qualifier a configuration key, wherever the repository declares
@@ -2106,10 +2119,11 @@ public static class CodeGraphLinker
 
     /// <summary>
     /// Whether <paramref name="target"/> is something <paramref name="reference"/> can name: of a kind its edge reaches, and
-    /// taking its arity. A node of data - a configuration key, an element, a style rule (<see cref="CodeSubKinds"/>) - is
-    /// reached only by a reference that says it names one: a selector a rule and a key qualifier a key, of the kind it
-    /// names alone, and a use through an import's prefix whatever the file it imports declares - never one that names it
-    /// by its name alone, as code names code: the one place that says what a reference may reach.
+    /// taking its arity. A node of data - a configuration key, an element, a node a style sheet declares
+    /// (<see cref="CodeSubKinds"/>) - is reached only by a reference that says it names one: a selector a rule, a key
+    /// qualifier a key, a style sheet's variable, mixin or keyframes qualifier its kind (<see cref="CodeSubKinds.ReachedBy"/>),
+    /// each of the kind it names alone, and a use through an import's prefix whatever the file it imports declares - never
+    /// one that names it by its name alone, as code names code: the one place that says what a reference may reach.
     /// </summary>
     private static bool Takes(ExtractReference reference, Declaration target)
     {

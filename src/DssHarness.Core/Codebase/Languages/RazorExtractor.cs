@@ -1,6 +1,8 @@
 using System.Text;
 using System.Text.RegularExpressions;
+using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
 
 namespace DssHarness.Core.Codebase.Languages;
 
@@ -17,8 +19,9 @@ namespace DssHarness.Core.Codebase.Languages;
 /// directives taken out - is read by the markup reader every markup file shares (<see cref="MarkupText"/>,
 /// <see cref="MarkupDialect.Razor"/>): a PascalCase or dotted element and a <c>&lt;partial name=</c> an
 /// <c>instantiates</c>, as is an <c>Html.Partial("x")</c> and its kin; an <c>@on*</c> attribute a call of the
-/// component's member it names, and <c>@bind</c> and another <c>@</c> attribute a use of one. The C# is embedded as
-/// every markup embeds code (<see cref="EmbeddedCode"/>).
+/// component's member it names, and <c>@bind</c> and another <c>@</c> attribute a use of one - but of a name the
+/// markup's own C# declares where the attribute stands (<see cref="Declared"/>), which is no member. The C# is embedded
+/// as every markup embeds code (<see cref="EmbeddedCode"/>).
 /// </summary>
 public sealed partial class RazorExtractor : ICodeGraphExtractor
 {
@@ -33,7 +36,7 @@ public sealed partial class RazorExtractor : ICodeGraphExtractor
     };
 
     /// <summary>The statements whose parenthesis holds C#: what the markup reader is not given.</summary>
-    private static readonly HashSet<string> Statements = new(StringComparer.Ordinal) { "if", "for", "foreach", "while", "switch", "lock", "using", "catch" };
+    private static readonly HashSet<string> StatementWords = new(StringComparer.Ordinal) { "if", "for", "foreach", "while", "switch", "lock", "using", "catch" };
 
     /// <inheritdoc/>
     public string Language => "razor";
@@ -49,10 +52,9 @@ public sealed partial class RazorExtractor : ICodeGraphExtractor
 
     /// <inheritdoc/>
     public CodeGraphExtractorHelp Help { get; } = new(
-        "Razor views (.cshtml) and Blazor components (.razor): a component as a type named by its file in its @namespace - else the namespace its directory's path gives, none at the tree's root - a part of its code-behind partial, a view as a section over its lines; the class each compiles to read by the C# reader with the markup blanked - its @code and @functions blocks, an @inject a property of the type it is given, @model its Model property, @inherits and @implements its bases; @using read by the C# reader as a scope import - one a _ViewImports.cshtml or _Imports.razor holds reaching every file of the language under its directory; and its markup read by the reader every markup file shares: a PascalCase element, a partial name= and an Html.Partial(\"x\") as instantiates, an @on* attribute a call of the component's member it names, and @bind and another @ attribute a use of one",
+        "Razor views (.cshtml) and Blazor components (.razor): a component as a type named by its file in its @namespace - else the namespace its directory's path gives, none at the tree's root - a part of its code-behind partial, a view as a section over its lines; the class each compiles to read by the C# reader with the markup blanked - its @code and @functions blocks, an @inject a property of the type it is given, @model its Model property, @inherits and @implements its bases; @using read by the C# reader as a scope import - one a _ViewImports.cshtml or _Imports.razor holds reaching every file of the language under its directory; and its markup read by the reader every markup file shares: a PascalCase element, a partial name= and an Html.Partial(\"x\") as instantiates, an @on* attribute a call of the component's member it names, and @bind and another @ attribute a use of one - but of a name the markup's own C# declares where the attribute stands (an @foreach's, @for's, @using's or catch's variable and a pattern's over the statement's block, a @{ } block's local from where it is declared, a template's context - or the name its Context= gives - inside a component's content, an arrow function's parameter in its own value), which is the markup's and no member",
         [
             "inline C# in the markup - an @x, an @( ), a @{ } block - read as no code, and a component with no @namespace joins its code-behind only where its directory's path names the partial's namespace",
-            "a variable the markup's inline C# declares - an @foreach's item, a template's context - named by an attribute's @x: looked for as the component's member of that name",
             "what a tag helper is, and an element no component of the tree names: an instantiates that resolves nowhere, counted as such",
             "a layout a view or component names by @layout, and the route an @page gives: no reference of them",
             "a generic component's @typeparam: its class read as no generic type",
@@ -116,12 +118,25 @@ public sealed partial class RazorExtractor : ICodeGraphExtractor
             references.Add(new ExtractReference(from, CodeEdgeKinds.Instantiates, ExtractText.Whole(partial.Groups["name"].Value), FileExtract.LineWithin(lines.LineAt(partial.Index), lineCount)));
         }
 
-        var markup = MarkupText.Read(EmbeddedCode.Blanked(outside, razor.Expressions), MarkupDialect.Razor.ClosesAsHtml);
+        var markupText = EmbeddedCode.Blanked(outside, razor.Expressions);
+        var markup = MarkupText.Read(markupText, MarkupDialect.Razor.ClosesAsHtml);
         var qualifier = component ? new ExtractQualifier(CodeQualifierKinds.This) : null;
+        var declared = Declared(text, outside, markupText, razor, markup);
+        var contexts = new HashSet<string>?[markup.Elements.Count];
 
-        foreach (var element in markup.Elements)
+        for (var at = 0; at < markup.Elements.Count; at++)
         {
-            MarkupDialect.Razor.Read(element, from, qualifier, references);
+            var element = markup.Elements[at];
+            var inherited = element.Parent >= 0 ? contexts[element.Parent] : null;
+
+            // A template's context is declared for what a component holds - by the name its Context= gives, else context.
+            contexts[at] = MarkupDialect.Razor.Instantiated(element)
+                ? new HashSet<string>(inherited ?? [], StringComparer.Ordinal) { element.Attribute("context")?.Trim() is { Length: > 0 } named ? named : "context" }
+                : inherited;
+
+            var local = new HashSet<string>(inherited ?? [], StringComparer.Ordinal);
+            local.UnionWith(declared.Where(name => name.From <= element.Start && element.Start < name.To).Select(name => name.Name));
+            MarkupDialect.Razor.Read(element, from, qualifier, references, local.Count > 0 ? local : null);
         }
 
         // The partials its text renders and what its elements say, in the order the file writes them.
@@ -182,6 +197,123 @@ public sealed partial class RazorExtractor : ICodeGraphExtractor
         return string.Join('\n', code);
     }
 
+    /// <summary>
+    /// The names the markup's own C# declares, each with the stretch of the text it is declared over, as Razor compiles
+    /// the markup into one method: a statement's - an <c>@foreach</c>'s item, an <c>@for</c>'s, an <c>@using</c>'s and a
+    /// <c>catch</c>'s variables, a pattern's (<c>@if (x is Item item)</c>) - over the statement to its block's close; and
+    /// a <c>@{ }</c> block's locals from where each is declared to the close of the block of markup that holds the
+    /// <c>@{ }</c> - which opens no scope of its own - or the file's end, a statement inside it over that statement alone.
+    /// Each block is matched by its braces in <paramref name="read"/>, the text the markup reader reads, passing over every
+    /// start tag, whose attributes may hold braces of their own.
+    /// </summary>
+    /// <param name="text">The file's text.</param>
+    /// <param name="outside">The text with its comments, its code blocks and its directives blanked.</param>
+    /// <param name="read">The text the markup reader reads: <paramref name="outside"/> with the C# of its expressions blanked too.</param>
+    /// <param name="razor">What the file holds that is no markup.</param>
+    /// <param name="markup">The markup <paramref name="read"/> holds.</param>
+    private static List<(string Name, int From, int To)> Declared(string text, string outside, string read, Parts razor, MarkupText markup)
+    {
+        var tags = markup.Elements.Select(element => (element.Start, End: Math.Max(element.OpenEnd, element.Start + 1))).OrderBy(tag => tag.Start).ToList();
+        var closes = new Dictionary<int, int>();
+        var blocks = new HashSet<int>();
+        var open = new Stack<int>();
+        var tag = 0;
+
+        for (var at = 0; at < read.Length; at++)
+        {
+            while (tag < tags.Count && tags[tag].End <= at)
+            {
+                tag++;
+            }
+
+            if (tag < tags.Count && tags[tag].Start <= at)
+            {
+                at = tags[tag].End - 1;
+                continue;
+            }
+
+            if (read[at] == '{')
+            {
+                open.Push(at);
+
+                if (at > 0 && read[at - 1] == '@' && (at < 2 || read[at - 2] != '@'))
+                {
+                    blocks.Add(at);
+                }
+            }
+            else if (read[at] == '}' && open.Count > 0)
+            {
+                closes[open.Pop()] = at;
+            }
+        }
+
+        var declared = new List<(string Name, int From, int To)>();
+
+        // The close of the block that holds the offset: the innermost pair of braces around it a @{ } opens none of.
+        int Holding(int offset)
+            => closes.Where(pair => pair.Key < offset && pair.Value > offset && !blocks.Contains(pair.Key)).Select(pair => (int?)pair.Value).Max() is { } close ? close : text.Length;
+
+        foreach (var (word, parenthesis, close) in razor.Statements)
+        {
+            var body = Skipped(read, Math.Min(close + 1, read.Length));
+            var to = body < read.Length && read[body] == '{' && closes.TryGetValue(body, out var end) ? end : Holding(parenthesis);
+            var header = text[(parenthesis + 1)..Math.Min(close, text.Length)];
+            var statement = SyntaxFactory.ParseStatement(word == "catch" ? $"try {{ }} catch ({header}) {{ }}" : $"{word} ({header}) {{ }}");
+
+            declared.AddRange(Names(statement).Select(name => (name.Name, parenthesis, to)));
+        }
+
+        foreach (var brace in blocks)
+        {
+            var end = closes.TryGetValue(brace, out var closed) ? closed : read.Length;
+            var code = new StringBuilder(outside[(brace + 1)..end]);
+
+            // The markup the block holds is no C#: blanked, so the block is read as the statements around it.
+            foreach (var element in markup.Elements.Where(element => element.Start > brace && element.Start < end))
+            {
+                for (var at = element.Start; at < Math.Min(element.End, end); at++)
+                {
+                    code[at - brace - 1] = ' ';
+                }
+            }
+
+            var root = SyntaxFactory.ParseStatement($"{{{code}}}");
+            var holding = Holding(brace);
+
+            foreach (var (name, from, to) in Names(root))
+            {
+                declared.Add((name, brace + from, to is { } inner ? brace + inner : holding));
+            }
+        }
+
+        return declared;
+    }
+
+    /// <summary>
+    /// The names <paramref name="node"/> declares - a variable's, a loop's, a pattern's, a catch's - each with where it is
+    /// declared and where what it is declared in ends within <paramref name="node"/>'s text, <see langword="null"/> where
+    /// that is <paramref name="node"/>'s own block, which opens no scope: a lambda's and a local function's own are none.
+    /// </summary>
+    private static IEnumerable<(string Name, int From, int? To)> Names(SyntaxNode node)
+    {
+        foreach (var held in node.DescendantNodesAndSelf(child => child is not (AnonymousFunctionExpressionSyntax or LocalFunctionStatementSyntax)))
+        {
+            var (token, scope) = held switch
+            {
+                VariableDeclaratorSyntax variable => (variable.Identifier, variable.Parent?.Parent is LocalDeclarationStatementSyntax ? variable.Parent.Parent.Parent : variable.Parent?.Parent),
+                ForEachStatementSyntax loop => (loop.Identifier, loop),
+                SingleVariableDesignationSyntax designation => (designation.Identifier, designation.FirstAncestorOrSelf<StatementSyntax>()?.Parent),
+                CatchDeclarationSyntax caught => (caught.Identifier, caught.Parent),
+                _ => (default(SyntaxToken), (SyntaxNode?)null),
+            };
+
+            if (token.ValueText is { Length: > 0 } name)
+            {
+                yield return (name, token.SpanStart, scope is null || scope == node ? null : scope.Span.End);
+            }
+        }
+    }
+
     /// <summary>Each <c>@using</c> as the C# directive it is, on the line it stands on, and every other line blank; <see langword="null"/> where the file holds none.</summary>
     private static string? Usings(string text, Parts razor)
     {
@@ -200,6 +332,17 @@ public sealed partial class RazorExtractor : ICodeGraphExtractor
         }
 
         return string.Join('\n', code);
+    }
+
+    /// <summary>Where the first character past <paramref name="at"/> that is no white space stands, line breaks among it.</summary>
+    private static int Skipped(string text, int at)
+    {
+        while (at < text.Length && char.IsWhiteSpace(text[at]))
+        {
+            at++;
+        }
+
+        return at;
     }
 
     /// <summary>The index of the line <paramref name="offset"/> stands on.</summary>
@@ -252,14 +395,19 @@ public sealed partial class RazorExtractor : ICodeGraphExtractor
     /// What a Razor file holds that is no markup, as Razor reads it from the top: its comments (<c>@* *@</c>), its code
     /// blocks (<c>@code</c> and <c>@functions</c>, the brace on their line or a later one), the directives a line begins
     /// with, and the C# of its explicit expressions and of its statements' parentheses - each block and parenthesis
-    /// closed where C#'s own lexer says.
+    /// closed where C#'s own lexer says - each statement by its word and its parenthesis besides.
     /// </summary>
-    private sealed record Parts(List<(int Start, int End)> Comments, List<(int Keyword, int Open, int Close)> Blocks, List<Directive> Directives, List<(int Start, int End)> Expressions)
+    private sealed record Parts(
+        List<(int Start, int End)> Comments,
+        List<(int Keyword, int Open, int Close)> Blocks,
+        List<Directive> Directives,
+        List<(int Start, int End)> Expressions,
+        List<(string Word, int Open, int Close)> Statements)
     {
         /// <summary>The parts <paramref name="text"/> holds.</summary>
         public static Parts Of(string text)
         {
-            var parts = new Parts([], [], [], []);
+            var parts = new Parts([], [], [], [], []);
             var lines = CodeFileText.LineIndex(text);
 
             for (var at = 0; at < text.Length;)
@@ -319,10 +467,11 @@ public sealed partial class RazorExtractor : ICodeGraphExtractor
                     }
                 }
 
-                if (Statements.Contains(word) && Skipped(text, after) is var parenthesis && parenthesis < text.Length && text[parenthesis] == '(')
+                if (StatementWords.Contains(word) && Skipped(text, after) is var parenthesis && parenthesis < text.Length && text[parenthesis] == '(')
                 {
                     var close = CSharpExtractor.Closing(text, parenthesis);
                     parts.Expressions.Add((parenthesis, Math.Min(close + 1, text.Length)));
+                    parts.Statements.Add((word, parenthesis, Math.Min(close, text.Length)));
                     at = Math.Min(close + 1, text.Length);
                     continue;
                 }
@@ -346,16 +495,6 @@ public sealed partial class RazorExtractor : ICodeGraphExtractor
             return text[at..end];
         }
 
-        /// <summary>Where the first character past <paramref name="at"/> that is no white space stands, line breaks among it.</summary>
-        private static int Skipped(string text, int at)
-        {
-            while (at < text.Length && char.IsWhiteSpace(text[at]))
-            {
-                at++;
-            }
-
-            return at;
-        }
 
         /// <summary>Whether nothing but white space is before <paramref name="at"/> on its line.</summary>
         private static bool StartsLine(string text, int at)

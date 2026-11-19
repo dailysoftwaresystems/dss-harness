@@ -44,7 +44,7 @@ public sealed class YamlExtractor : ICodeGraphExtractor
             $"a key nested past {DataNodes.MostDepth.ToString(CultureInfo.InvariantCulture)} places of its path, and a file of more than {FileExtract.MostKeys.ToString(CultureInfo.InvariantCulture)} keys and sections: the first {FileExtract.MostKeys.ToString(CultureInfo.InvariantCulture)} are kept, the rest counted, and an answer about the file says how many",
             $"what aliases repeat past {DataNodes.MostRepeated.ToString(CultureInfo.InvariantCulture)} nodes, and what a file nests past {DataNodes.MostNesting.ToString(CultureInfo.InvariantCulture)} levels: counted or not read, the line marked dynamic",
             "what follows the point a file stops reading as YAML - a template's {{ }} among it: what came before is read, the line it stops at marked dynamic",
-            "a key's value past the cut of a summary; a secret a key holds is kept as the file writes it, as reading the file shows it, and an answer masks only the run's own secrets, as every tool's answer does",
+            "a key's value past the cut of a summary",
             "a uses: that names an action or a workflow of a marketplace or of another repository by its owner: no import of it",
         ]);
 

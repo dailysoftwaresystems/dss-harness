@@ -796,8 +796,8 @@ a mark itself or does not lend it its objects is refused, never taken for a main
 `"kind": "worktree"` of a linked one; delete-orchestrator and `delete-worktree <orchestrator>`
 count it among the worktrees below, never as a directory git records nothing at.
 
-It is made by `git init` - no template, the files ref format and the main checkout's object format
-- never by a clone, which would copy the main checkout's refs in as remote-tracking refs that
+It is made by `git init` - no template, the files ref format and the main checkout's object format -
+never by a clone, which would copy the main checkout's refs in as remote-tracking refs that
 dangle once its branches move on and its gc prunes, add a remote, and pick the ref format itself.
 Its `objects/info/alternates` names the main checkout's object directory as git spells it, so it
 reads every object the main checkout holds and writes only into its own store; its configuration
@@ -1508,8 +1508,8 @@ is changed under it before it writes, and the step's output says how long it wai
 written. A fold, and a deletion that folds, called by a step of a run, record in the run's ledger of its folds, under
 that hold and before they let it go, that their write begins and then what it left at each path - through the
 `FoldIntent` their request carries (`FoldLedger.Writing`, `FoldLedger.WrittenAsync`), also where the write throws part
-way; a deletion lets the hold go before its transcripts, its evidence and its worktree's removal. So whatever comes after
-- the verb's answer, a throw, a crash, a side-task's write let in once the hold is let go - the ledger settles the fold by
+way; a deletion lets the hold go before its transcripts, its evidence and its worktree's removal. So whatever comes after -
+the verb's answer, a throw, a crash, a side-task's write let in once the hold is let go - the ledger settles the fold by
 what it recorded, never by the tree after; from the command line there is no ledger and nothing is recorded. The one
 limit is a fold that dies inside its own hold, part way through its write: the next attempt reads what it left from the
 tree, under the lock as well, and marks it so, for a side-task's write made between the death and that read cannot be
@@ -1822,8 +1822,8 @@ run's own recovery's rules (`RecoverRules`) - its `onFailure` pause or stop - an
 checked however deep in other recoveries it sits.
 
 Its `with` values are read once for each scope its steps run in - the block, each item of a
-`forEach`, each iteration of a `repeat`, each raising of a handler, each item a plan update places
-- by one owner (`FillUse`, reading past the use's own boundary, for the values are the caller's),
+`forEach`, each iteration of a `repeat`, each raising of a handler, each item a plan update places -
+by one owner (`FillUse`, reading past the use's own boundary, for the values are the caller's),
 and kept in the record of the instance that scope is (the step record's `inputs`), so a resume
 takes them back and never reads them again over what has run since. Every item's are read before
 any item opens: a value that cannot be read fails the use, saying which input and for which item,
@@ -1983,8 +1983,8 @@ the network keeps the forge from being reached (`offline`: `refuse`, or `last-re
 newest resolution of the ref, warned of where it stands in). A resolution the cache stands in with,
 offline or under an agent, is held to the pin by one rule (`WorkflowRemoteFetcher.CachedResolution`):
 a ref the cache last resolved as a branch is refused where the pin is not `any`, as the forge's own
-answer would be. Only a call that never reached the forge
-- its limit passed, or `gh`'s own words for a name that did not resolve or a connection that did not
+answer would be. Only a call that never reached the forge -
+its limit passed, or `gh`'s own words for a name that did not resolve or a connection that did not
 answer (`GhProcess.Unreached`) - is the network not being there; a forge that answered, refusing the
 credential or naming a repository or ref that is not there, is refused with what `gh` said, and
 nothing stands in for it. A remote workflow's own name inside the run is its cache place,
@@ -2950,8 +2950,8 @@ the run's `web/searches.jsonl` as any step may be told it - masked as below, a r
 and counted - with each address it was asked at and whether its key was sent (`WebSearchRun`) - a later step of the run
 given it under its own rules, each of those addresses decided again, and why a lookup found nothing never kept, nor a
 pause asked for but by what the source answered - each address a source asks for the step decided by the mask - a secret
-behind its escapes too, as `web_fetch` decides (`LineMasks.HoldsUnescaped`, and recorded and told by `RedactUnescaped`)
-- then by the policy's `WebSource` - the `Web(...)` rules, never `webDomains` - and recorded before it is asked, a
+behind its escapes too, as `web_fetch` decides (`LineMasks.HoldsUnescaped`, and recorded and told by `RedactUnescaped`) -
+then by the policy's `WebSource` - the `Web(...)` rules, never `webDomains` - and recorded before it is asked, a
 sitemap source's site decided so before its index is searched and the pages its fill reads by the policy's `WebFill`,
 the configuration's `Web(...)` rules alone, since the index outlives the step, each result held to `Web` and left out
 and counted where refused, each request made counted against `maxPerStep`, each source's `perMinute` and `perDay` held
@@ -2970,8 +2970,8 @@ answer as written before its kind reads it, its form kept - one that still holds
 so no reader's cut parts one - and each text the kind read of it as the step is told it - behind its percent-escapes and
 HTML's character references too - read as a page's reader reads them, every name HTML holds and a number with no `;` -
 at most eight readings deep (`LineMasks.RedactUnescaped`), a text its reader cut short, its cut marked, cut again before
-what could be a secret's start in any reading of it, an escape the cut left unfinished dropped (`LineMasks.RedactHead`)
-- so no half of a secret is told - and each part given in a `<web-search>` block by `WebBlocks`, the one owner of how
+what could be a secret's start in any reading of it, an escape the cut left unfinished dropped (`LineMasks.RedactHead`) -
+so no half of a secret is told - and each part given in a `<web-search>` block by `WebBlocks`, the one owner of how
 text from the web reaches a model, a page's `<web-page>` among them.
 
 This build checks workflow definitions and starts and drives a run of one (see "Running a workflow" below). Each
@@ -3255,8 +3255,8 @@ its common directory), as a leg whose ground writes one says the same on its lin
 result carries what it ran under (`AgentRunResult.Isolation`, `result.json`'s `isolation`, an `AgentIsolationRecord`:
 the mode, and the mechanism with its version, what it leaves reached and what
 its anchors cost, or why there was none), and each side-task turn its own (`SideTaskTurn.Isolation`). The request
-carries the launch's isolation (`AgentStepRequest.Isolation`, on to `AgentRun.Isolation`, what its processes run under
-- `LaunchIsolation.Processes`, `LaunchProcesses` - so a client is handed nothing it could end, the decision released
+carries the launch's isolation (`AgentStepRequest.Isolation`, on to `AgentRun.Isolation`, what its processes run under -
+`LaunchIsolation.Processes`, `LaunchProcesses` - so a client is handed nothing it could end, the decision released
 by its asker once the launch has run): the tool runtime starts each `run_command` inside the commands' profile
 (`LaunchIsolation.ForCommands`, through `PhaseRequest.Isolation`). The claude-code client keeps Claude Code's own
 process apart from its commands where the mechanism takes a command handed to it (`TakesHandedCommands`: bubblewrap and
@@ -3734,8 +3734,8 @@ bound asked for the work (`FlowReports.AskedAtBoundSaidOf`), and who
 was told what, who was not concerned and what was not delivered.
 Each step is handed the run it belongs to (`FlowRunPlace`) and what the engine read for it
 where it starts (`FlowStepRun.Read`: a plan check's `items` and `scope`, the pull request's base `FlowTemplate` fills for
-orient, an anchor check's `rows` or `paths` expression, a fold family step's lists of names - read by `FlowStepKeys.NamesOf`
-- a `ci-wait`'s commit where it names none - the one the run last pushed - a commit's `folds`, the instances of the
+orient, an anchor check's `rows` or `paths` expression, a fold family step's lists of names - read by `FlowStepKeys.NamesOf` -
+a `ci-wait`'s commit where it names none - the one the run last pushed - a commit's `folds`, the instances of the
 steps that fold upstream of it) - and a reason step's `prompt` and `resumePrompt` filled around their skills, as
 pieces (`FlowStepRun.Prompts`) - the agent it works in (`FlowStepRun.WorksIn`)
 or, of `others`, the target whose turn it is (`FlowStepRun.Target`), and its keys' templates filled (`FlowStepTemplates`, the one
@@ -3823,8 +3823,8 @@ HEAD names by then, which a hook or a build working in the main checkout's git d
 moved - to the main checkout's branch on the step's remote, else `FlowCheckout.Remote` - one, which the definition's check
 holds every push step that names a remote to - through `IGitPublisher.PushAsync` -
 `<sha>:refs/heads/<branch>` with `--porcelain`, never forced, its line read for whether the branch moved; the pull
-request is found - among those gh lists from the branch's name, never one from another repository (`isCrossRepository`)
-- or opened through `GhProcess` on the repository `GitRemotes.ForgeAddress` reads from the remote's
+request is found - among those gh lists from the branch's name, never one from another repository (`isCrossRepository`) -
+or opened through `GhProcess` on the repository `GitRemotes.ForgeAddress` reads from the remote's
 address - its host as ssh's configuration names it where the address is over ssh (`SshHostNames`, `ssh -G`), and none,
 leaving gh to read the remotes itself, where it cannot be told - against `FlowCheckout.BaseBranch`, its body the workflow's file the coordinator read and filled where the step
 started (`WorkflowNamedFiles.ReadText`, the one rule the definition's check holds a named file to) and the runner wrote
@@ -4337,9 +4337,12 @@ and solutions `msbuild` keeps) makes its root a section, an element with an id-l
 `.targets`'s `PropertyGroup` children alone, a `.props` or `.targets`'s `Import Project` an import of the file it names.
 No data file nests deeper than `DataNodes.MostNesting` is read past it, the line marked with why. A `$(Name)` an MSBuild
 project's attribute or element text writes - a comment never - is a `uses` of the key of that name an XML file declares
-(the `key` qualifier). A key, an element and a style rule are reached only by a reference that says it names one - a
-`key` qualifier, a `selector` qualifier, a use through an import's prefix - and by the keys' join, never by a name alone
-as code names code (`Takes`, the one place that says what a reference may reach). The linker joins each key to the code
+(the `key` qualifier). A key, an element and every node a style sheet declares - a rule, a keyframes, a mixin, a
+function, a font face, a variable, each of a kind within a kind `CodeSubKinds` owns and no code's kind is spelt as -
+are reached only by a reference that says it names one - a `key` qualifier, a `selector` qualifier, a style sheet's
+`style-variable`, `style-mixin` or `keyframes` qualifier (`CodeSubKinds.ReachedBy`), a use through an import's prefix -
+and by the keys' join, never by a name alone as code names code (`Takes`, the one place that says what a reference may
+reach), so a PHP `$radius` reaches no SCSS `$radius` and a C# `Button()` no mixin `Button`. The linker joins each key to the code
 that names it: a string literal equal to the key's last segment or whole path, and each field or property whose name is
 the segment as a naming policy the repository declares (`codebaseGraph.keyNaming`: `camelCase`, `snake_case`,
 `kebab-case` or `exact`, `camelCase` and `exact` the default) writes it - each a `uses` edge of `candidates`, for nothing
@@ -4448,8 +4451,8 @@ PHP's reader (`PhpReading`, over `PhpLexer`) reads code only between `<?php` or 
 text, each `?>` ending a statement as a semicolon does (`ScannedText.EndsStatement`, the closer a lexer gives) and nothing
 after `__halt_compiler();` read; the lexer keeps a string, a heredoc and a nowdoc whole, saying
 where a double-quoted string's or a heredoc's `{$...}` and `${...}` hold code, and a name with namespaces' separators one
-token. The reader writes PHP's `\` as the model's dot: each namespace - in braces, or ended by its semicolon to the next
-- is an open scope and a node of each file that declares it, each type an open scope in it; each name a reference writes
+token. The reader writes PHP's `\` as the model's dot: each namespace - in braces, or ended by its semicolon to the next -
+is an open scope and a node of each file that declares it, each type an open scope in it; each name a reference writes
 is written out as PHP resolves it, by the file's `use` declarations and its namespace - a class in the namespace that
 names it alone, a function in its namespace and then the global one (a `scope` qualifier) - and each `use` is an import
 of the class it names, its alias the prefix, or of a function's or a constant's namespace, showing its name. A property
@@ -4532,7 +4535,9 @@ What one element says is one rule over a table each kind gives (`MarkupDialect`)
 `.name`, split at ASCII white space as HTML splits a class list, and an id a `uses` of `#id`, looked for among rules
 alone by a qualifier of its own (`selector`); which tag is a component's, an `instantiates`; which attributes name a
 handler - a `calls` of the function its value names alone or calls first, an arrow function's head passed over, else
-a `uses` of the name it begins with - and which bind a value, a `uses` of the name its expression begins with. Code a
+a `uses` of the name it begins with - and which bind a value, a `uses` of the name its expression begins with; a
+parameter of the arrow function a value is, and a name the markup declares where the element stands, is no member's
+and no reference. Code a
 markup file holds is embedded one way (`EmbeddedCode`): its language's own reader is given the host's text with only
 the code kept, so what it declares carries the host's lines, and every field of what it answers - nodes, scopes,
 imports, references, dynamic marks, literals - is merged into the host's extract. `html` (`.html`, `.htm`) makes each
@@ -4542,8 +4547,9 @@ does - named by its id where it has one, the node every reference made outside a
 element (`<my-widget>`) an `instantiates` of a component of that name; a `script src`, `link href`, `img src` and
 `a href` naming a local file by a relative path - one that climbs among them - an import of it; an `on*=` attribute a
 handler; each inline `<script>` of JavaScript read by the JavaScript reader as a program of its own, from where its
-start tag ends - a module where its type is `module`, and one of another type, a template a framework reads, no code
-- and each `<style>` by the style sheet's reader.
+start tag ends - a module where its type is `module`, and one of another type, a template a framework reads, no code -
+and each `<style>` by the style sheet's reader in the syntax its `lang` or its `type` names (`text/less`,
+`text/x-scss`; CSS where it names neither), one of a syntax no style sheet's reader reads read as none.
 
 `css` (`.css`, `.scss`, `.sass`, `.less`) reads a sheet over the structural scanner's core, as the code readers do:
 `CssLexer` cuts it into tokens - a string to its own quote not escaped, an unquoted `url(...)` one token, `/* */` a
@@ -4554,13 +4560,15 @@ first written in SCSS's braces line for line (`CssLexer.Braced`), so one reader 
 each selector - `.btn`, `#main`, `my-widget`, `%placeholder`; no pseudo-class, attribute or `:not()`, but an `:is()`'s
 and a `:where()`'s selectors, and a nested rule's `&__title` written onto its parent's names - is a member SubKind
 `rule` named as CSS reads it, escapes read, over its own rule's lines, inside an `@media`, `@supports`, `@layer` or
-any other at-rule's block too; each custom property, `@property` and SCSS or Less variable a `constant`; each
-`@mixin`, `@function`, `@keyframes` and `@font-face` a member of its own SubKind; a selector an interpolation writes
-no node, marked dynamic. A `var(--x)`, a `$x` and a Less `@x` are uses of the constant, an `@include` and a Less
-mixin call uses of the mixin, an `@extend` and a Less `:extend` an `inherits` of the rule it names - looked for among
-rules by the `selector` qualifier, as a document's classes are - and a Tailwind `@apply` and a CSS module's
-`composes` uses of the rules of the classes they name; each is made from the node that holds it, and only what no
-node holds from the sheet's first node. An `@import`, `@use` and `@forward` naming a file of the tree is an import of
+any other at-rule's block too; each custom property, `@property` and SCSS or Less variable a `style-variable`; each
+`@mixin` a `style-mixin`, `@function` a `style-function`, `@keyframes` a `keyframes` and `@font-face` a `font-face`;
+a selector an interpolation writes no node, marked dynamic. A `var(--x)`, a `$x` and a Less `@x` are uses of the
+variable (the `style-variable` qualifier), an `@include` a use of the mixin (`style-mixin`), a name an `animation` or an
+`animation-name` gives - not one of the shorthand's own words - a use of the keyframes (`keyframes`), each looked for
+as a name the sheet writes alone is, among that kind alone; a Less mixin call a use of the rule it names, an `@extend`
+and a Less `:extend` an `inherits` of the rule it names - looked for among rules by the `selector` qualifier, as a
+document's classes are - and a Tailwind `@apply` and a CSS module's `composes` uses of the rules of the classes they
+name; each is made from the node that holds it, and only what no node holds from the sheet's first node. An `@import`, `@use` and `@forward` naming a file of the tree is an import of
 it, each file it may be tried in the order its language tries them - Sass's partials, extensions and index files a
 fallback each, Less's `.less` - none of a package, a URL or one of Sass's own modules; a `@use` is reached by its
 namespace, the import's prefix, and a `@forward` is an export with its `show` and `hide`. A sheet named as a CSS module
@@ -4583,7 +4591,12 @@ Each `@using` is read by the C# reader too, so a static one imports its type and
 markup - Razor's comments, the code, the directives and the C# of its expressions taken out - is read by the markup
 reader: a PascalCase or dotted element and a `<partial name=` are instantiates, as is an `Html.Partial("x")` and its
 kin (`PartialAsync`, `RenderPartial`); an `@on*` attribute, `@bind:after` and `@bind:set` a call of the component's
-member it names, and `@bind`, `@bind-Value` and another `@` attribute a use of one. A `_ViewImports.cshtml` and an
+member it names, and `@bind`, `@bind-Value` and another `@` attribute a use of one - but of a name the markup's own C#
+declares where the attribute stands, which is the markup's and no member: an `@foreach`'s, `@for`'s, `@using`'s or
+`catch`'s variable and a pattern's over its statement's block, a `@{ }` block's local from where it is declared to the
+close of the block of markup that holds it, as Razor compiles the markup into one method and a `@{ }` opens no scope
+of its own, and a template's `context` - or the name its `Context=` gives - inside a component's content, each read
+by the C# parser and each block matched by its braces past every start tag. A `_ViewImports.cshtml` and an
 `_Imports.razor` declare each `@using` they hold for the whole of their directory's subtree: an import of the
 `directory` form, which the linker applies to every file of the language under it, and to no file of another
 language or outside it.
@@ -4591,8 +4604,9 @@ language or outside it.
 A Vue single-file component (`.vue`) is one implementation, `vue`: the component a type named by its file in
 PascalCase, as Vue names it, qualified by the file's path - the scope its script declares in, so the script's
 declarations are its members - and exported `default`, so `import Foo from './Foo.vue'` binds to it (the JavaScript
-reader binds a default import of a single-file component to what it exports by default, and one of a style sheet or
-an image to nothing by a name) and `Foo.x` to its member `x`. Its `<script>` and `<script setup>` - TypeScript where
+reader binds a default import of a single-file component to what it exports by default, one of a CSS module or of data
+to its prefix alone, so a member through it is what the file declares and exports, and one of any other style sheet
+to nothing) and `Foo.x` to its member `x`. Its `<script>` and `<script setup>` - TypeScript where
 their own start tag says `lang="ts"` - are read by the JavaScript reader as the one module Vue compiles them to, the
 script's default export the component itself, each of its own declarations that export's options object names a
 member the component shows whoever imports it. Its `<template>` is read by the markup reader, nested templates among
@@ -4601,8 +4615,9 @@ its modifiers among them, a call of the handler it names; a `v-bind`, `:` attrib
 expression (`v-model`, `v-if`, a directive of the component's own), a `v-for`'s list and `{{ }}` a use of the name its
 expression begins with - each looked for as the template compiles it, a member of the component (`this`), but a name
 a `v-for`'s aliases or a `v-slot`'s value declares where it stands, the template's own and no member - and each class
-and id a use of the rule that styles it. Its `<style>` blocks - scoped among them - are read by the style
-sheet's reader, which the css implementation answers for another language's file as the C# reader does.
+and id a use of the rule that styles it. Its `<style>` blocks - scoped among them - are read by the style sheet's
+reader in the syntax each block's `lang` names - CSS where it names none, `scss`, `sass` or `less`, one of another
+(`stylus`) read as none - which the css implementation answers for another language's file as the C# reader does.
 
 A sync (`ICodebaseGraphService.SyncAsync`) lists the main checkout by three calls of `IGitClient` that take no lock -
 `ListIndexAsync` (`ls-files --stage -v -z`, the one reading of the index the whole tool shares), `ListWorkingFilesAsync`
@@ -4635,8 +4650,8 @@ least three command lines, each having git read the whole index - by one listing
 check never has git hash a file it was not given): one the listing no longer gives the blob it was read under, or that
 went, is unreadable and keeps nothing. Every file whose size or bytes decided its entry, one too large among them, is then held to how its read
 saw it stand: one whose size or time moved while it was read, or by the time that listing is done - truncated and
-written again whole, grown past `maxFileBytes` and back, so git lists it clean again under the blob it was read under
-- keeps nothing either; so an extract is never stored under a blob its bytes were not. The listing is asked
+written again whole, grown past `maxFileBytes` and back, so git lists it clean again under the blob it was read under -
+keeps nothing either; so an extract is never stored under a blob its bytes were not. The listing is asked
 again, not a hash, because the blob a file is read under is the listing's - the index's where git finds the file
 clean, which for one git would clean otherwise than the index holds it is no hash of what it holds - so a file that
 needs renormalizing is never taken for one that changed, and no clean filter runs over a file git found clean, a
@@ -4750,7 +4765,12 @@ resumed conversation, or a step that goes on with the work (whose continuation r
 word for word), which reads the `graph-pages/` of the instances it goes on from where its own holds nothing; a page asked
 after the view moved to another digest, or with no result of page 1 that reads under its read rules, is made again on the
 graph as it stands and its header says which, a refused one after its range; a result whose file could not be written is
-held in memory alone, and the page that computed it says a later page may be counted again. A page counts as viewed,
+held in memory alone, and the page that computed it says a later page may be counted again. The graph masks nothing
+as it reads and stores - a literal, a key's value, an element's text, a line of a file are kept as the file writes
+them - and a run's secrets are masked where the graph reaches the run: each answer of the tool, as every tool's answer
+is (`AgentToolRuntime`), the codebase part of a message, as every message is, and a result of more than one page as
+the tool computes it (`CodebaseGraphTool`'s mask, from the step's or the side-task's), before it is paged and kept, so
+no page and no `graph-pages/` file holds one; the verb, a person's own view, keeps nothing and masks nothing. A page counts as viewed,
 for the edit check, the files whose lines it served, each as its lines were read (`GraphFileRead`), never as the file
 stands when the page is given. The last page of every answer ends naming the files whose extract the view no longer
 holds (`CodebaseGraphQueries.Unheld`), whose declarations no answer gives. Where the graph is not sure - no node
@@ -8546,8 +8566,8 @@ null where entries or tables go, an entry with a key and nothing it was judged o
 an entry was judged on (a target named by no digest, a run-time read named by no hash, a compiler
 that is no compiler) - or one a newer build wrote (its `format` above this build's) is never written:
 every arm of its leg is pending, a sweep
-of that leg says so once as a warning naming the file - delete it to start again, or update the tool
-- and once on the leg's line, and records none; so is a record that cannot be written. Either is the
+of that leg says so once as a warning naming the file - delete it to start again, or update the tool -
+and once on the leg's line, and records none; so is a record that cannot be written. Either is the
 record's, never the arm's: its verdict stands as reached. A sweep typed on this machine names the
 record once, in its lines and in its ledger's document (`mutationRecord`), as a listing does.
 `clean`, a deleted worktree and a removed

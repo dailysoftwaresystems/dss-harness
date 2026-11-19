@@ -29,6 +29,7 @@ public sealed class SideTaskGraph
     private readonly SideTaskLayout layout;
     private readonly string map;
     private readonly string mapMeta;
+    private readonly Execution.ILineMask? mask;
     private CodebaseGraphQueries? queries;
 
     /// <summary>The side-task's graph over its records, not yet opened.</summary>
@@ -41,6 +42,7 @@ public sealed class SideTaskGraph
     /// <param name="repository">The repository whose main checkout is the graph's base.</param>
     /// <param name="layout">The side-task's own layout.</param>
     /// <param name="worktreesRoot">The configured worktrees root, which the tool's state paths name.</param>
+    /// <param name="mask">The secrets the side-task holds, as its records and answers are masked by: what its graph tool keeps of an answer holds none.</param>
     public SideTaskGraph(
         ICodebaseGraphService graph,
         IFileSystem files,
@@ -50,7 +52,8 @@ public sealed class SideTaskGraph
         TimeProvider clock,
         HarnessLayout repository,
         SideTaskLayout layout,
-        string worktreesRoot)
+        string worktreesRoot,
+        Execution.ILineMask? mask = null)
     {
         this.graph = graph;
         this.files = files;
@@ -59,6 +62,7 @@ public sealed class SideTaskGraph
         this.store = store;
         this.clock = clock;
         this.layout = layout;
+        this.mask = mask;
         map = layout.MapFile;
         mapMeta = layout.MapMetaFile;
         request = new CodebaseGraphSync(repository, layout.AsGraph, CodebaseGraphShape.Default, worktreesRoot, Rebuild: false, $"the side-task '{layout.Name}' opened");
@@ -190,6 +194,7 @@ public sealed class SideTaskGraph
             path => policy.Write(Full(path)),
             async (path, cancellationToken) => new CodebaseGraphQueries((await graph.CheckAsync(request, [path], cancellationToken).ConfigureAwait(false)).Read),
             () => near,
-            pages: new GraphPageStore(Path.Combine(layout.Directory, OrchestratorLayout.StepPagesDirectoryName), files, reads));
+            pages: new GraphPageStore(Path.Combine(layout.Directory, OrchestratorLayout.StepPagesDirectoryName), files, reads),
+            mask: mask);
     }
 }

@@ -35,7 +35,7 @@ public sealed class JsonExtractor : ICodeGraphExtractor
         [
             "what JSON5 writes that JSON does not - an unquoted name, a single-quoted string, a hexadecimal number: where the reader stops, nothing in it is read, the line it stops at marked dynamic with the reader's reason",
             $"a key nested past {DataNodes.MostDepth.ToString(CultureInfo.InvariantCulture)} places of its path, and a file of more than {FileExtract.MostKeys.ToString(CultureInfo.InvariantCulture)} keys and sections: the first {FileExtract.MostKeys.ToString(CultureInfo.InvariantCulture)} are kept, the rest counted, and an answer about the file says how many",
-            "a key's value past the cut of a summary; a secret a key holds is kept as the file writes it, as reading the file shows it, and an answer masks only the run's own secrets, as every tool's answer does",
+            "a key's value past the cut of a summary",
             "a $ref of a pointer into this file, of an address with a scheme (https:, urn:) or of a rooted path: no import",
             "the named manifests - package.json, tsconfig.json, jsconfig.json, composer.json - which their own extractors read",
         ]);

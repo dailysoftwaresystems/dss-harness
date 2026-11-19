@@ -132,9 +132,11 @@ public static class CodeEdgeKinds
 
 /// <summary>
 /// The kinds within a kind the linker reads, of the nodes of data files and style sheets - a configuration key, an
-/// element, a style rule - which no reference reaches by its name alone: only one whose qualifier says it names one
-/// (<see cref="ReachedBy"/>), or an import's prefix, which names what the file it imports declares. Every other kind
-/// within a kind is its implementation's to name freely.
+/// element, each node a style sheet declares - which no reference reaches by its name alone: only one whose qualifier
+/// says it names one (<see cref="ReachedBy"/>), or an import's prefix, which names what the file it imports declares.
+/// Every kind a style sheet's node is of is one of these, spelt so no code's kind is, so a name code writes - a PHP
+/// <c>$radius</c>, a C# <c>Button()</c> - reaches none of them. Every other kind within a kind is its implementation's
+/// to name freely.
 /// </summary>
 public static class CodeSubKinds
 {
@@ -148,23 +150,48 @@ public static class CodeSubKinds
     /// <summary>An element of an XML file named by an id-like attribute: data, which no reference reaches by its name alone.</summary>
     public const string Element = "element";
 
-    /// <summary>A style sheet's rule - a selector's simple part, a <c>@keyframes</c> name: reached by a selector.</summary>
+    /// <summary>
+    /// A style sheet's rule - a selector's simple part, <c>.btn</c>, <c>#main</c>, an element: reached by a selector -
+    /// markup's <c>class</c> and <c>id</c>, a sheet's <c>@extend</c>, <c>@apply</c> and <c>composes</c>.
+    /// </summary>
     public const string Rule = "rule";
+
+    /// <summary>A style sheet's <c>@keyframes</c>, by its animation's name: reached by an animation that names it.</summary>
+    public const string Keyframes = "keyframes";
+
+    /// <summary>A Sass <c>@mixin</c>: reached by an <c>@include</c> of it.</summary>
+    public const string StyleMixin = "style-mixin";
+
+    /// <summary>A Sass <c>@function</c>: reached through an import's prefix alone.</summary>
+    public const string StyleFunction = "style-function";
+
+    /// <summary>A style sheet's <c>@font-face</c>, by the family it names: reached through an import's prefix alone.</summary>
+    public const string FontFace = "font-face";
+
+    /// <summary>
+    /// A style sheet's variable - a custom property (<c>--x</c>, an <c>@property</c>'s among them), a Sass variable
+    /// (<c>$x</c>), a Less variable or detached ruleset (<c>@x</c>): reached by a value that names it.
+    /// </summary>
+    public const string StyleVariable = "style-variable";
 
     /// <summary>Whether <paramref name="subKind"/> is a data file's or a style sheet's, which no reference reaches by its name alone.</summary>
     /// <param name="subKind">A node's kind within its kind, or <see langword="null"/>.</param>
-    public static bool IsData(string? subKind) => subKind is Key or Element or Rule;
+    public static bool IsData(string? subKind) => subKind is Key or Element or Rule or Keyframes or StyleMixin or StyleFunction or FontFace or StyleVariable;
 
     /// <summary>
     /// The kind within a kind a reference of the qualifier <paramref name="qualifier"/> reaches alone: a rule for a
-    /// selector, a key for a key qualifier; <see langword="null"/> for every other, which reaches no node of data by its
-    /// name alone.
+    /// selector, a key for a key qualifier, and for each qualifier a style sheet writes where its syntax says what a name
+    /// names - a variable, a mixin, an animation's keyframes - that kind; <see langword="null"/> for every other, which
+    /// reaches no node of data by its name alone.
     /// </summary>
     /// <param name="qualifier">The kind of a reference's qualifier (<see cref="CodeQualifierKinds"/>), or <see langword="null"/>.</param>
     public static string? ReachedBy(string? qualifier) => qualifier switch
     {
         CodeQualifierKinds.Selector => Rule,
         CodeQualifierKinds.Key => Key,
+        CodeQualifierKinds.StyleVariable => StyleVariable,
+        CodeQualifierKinds.StyleMixin => StyleMixin,
+        CodeQualifierKinds.Keyframes => Keyframes,
         _ => null,
     };
 }

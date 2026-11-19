@@ -109,6 +109,7 @@ public sealed class FlowStepGraph
     /// <param name="record">The agent's record, whose worktree names its view.</param>
     /// <param name="ground">The step's ground, whose capabilities name what the tool may do and whose rules every answer, the map's included, is held to.</param>
     /// <param name="prompt">The step's filled prompt, the task text the pack is seeded from.</param>
+    /// <param name="mask">The secrets the run holds, as the step's records and answers are masked by: what the step's graph tool keeps of an answer holds none.</param>
     /// <param name="cancellationToken">Stops the reading of the view.</param>
     public static async Task<FlowStepGraph?> OfAsync(
         ICodebaseGraphService graph,
@@ -127,6 +128,7 @@ public sealed class FlowStepGraph
         AgentRecord record,
         AgentPolicyGround ground,
         string prompt,
+        Execution.ILineMask? mask,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(graph);
@@ -149,7 +151,7 @@ public sealed class FlowStepGraph
 
             return mode == "off"
                 ? null
-                : await ServedAsync(graph, store, fileSystem, platform, git, clock, output, run, place, context, layout, mode, root, agent, record, ground, prompt, cancellationToken).ConfigureAwait(false);
+                : await ServedAsync(graph, store, fileSystem, platform, git, clock, output, run, place, context, layout, mode, root, agent, record, ground, prompt, mask, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -179,6 +181,7 @@ public sealed class FlowStepGraph
         AgentRecord record,
         AgentPolicyGround ground,
         string prompt,
+        Execution.ILineMask? mask,
         CancellationToken cancellationToken)
     {
         // The view the step is served: the agent's where it has a worktree, the base where it reads. The engine syncs it
@@ -284,7 +287,8 @@ public sealed class FlowStepGraph
                 path => policy.Write(Path.Combine(tree, path.Replace('/', Path.DirectorySeparatorChar))),
                 async (path, token) => new CodebaseGraphQueries((await graph.CheckAsync(request, [path], token).ConfigureAwait(false)).Read),
                 near: () => served.made?.Near,
-                pages: PagesOf(fileSystem, layout, run, directory, ground));
+                pages: PagesOf(fileSystem, layout, run, directory, ground),
+                mask: mask);
 
             served.support = new AgentGraphSupport(
                 tool,

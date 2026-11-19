@@ -1860,7 +1860,7 @@ public sealed class CodeGraphLinkerTests
         reader = "t:Reader";
         Case(
             "a configuration key",
-            [new CodeGraphFile("reader.t", "t", Extract([Type("Reader"), Value("Reader.Timeout", null) with { Parent = "t:Reader" }]) with { Literals = [new ExtractLiteral("timeout", 1)] })],
+            [new CodeGraphFile("reader.t", "t", Extract([Type("Reader"), Value("Reader.Timeout", null) with { Parent = "t:Reader" }]) with { Literals = [new ExtractLiteral("timeout", 1) { Node = "t:Reader" }] })],
             null,
             new CodeGraphFile("app.json", "json", Extract([new ExtractNode("json:app.json#timeout", CodeNodeKinds.Member, "timeout", "timeout", 1, 1, "timeout") { SubKind = CodeSubKinds.Key }])));
 
@@ -2561,6 +2561,95 @@ public sealed class CodeGraphLinkerTests
     }
 
     /// <summary>
+    /// No node a style sheet declares - a variable, a mixin, a function, keyframes, a font face, a rule - is reached by a
+    /// name code writes: a PHP <c>$radius</c> and a C# <c>Button()</c> find the code's own of those names, unique, and a
+    /// name the code declares nowhere - <c>spin</c>, <c>darken()</c>, <c>Brand</c>, <c>--gap</c>, <c>.btn</c> - finds
+    /// nothing, the sheet's nodes of each name beside them.
+    /// </summary>
+    [Fact]
+    public void AStyleSheetsNodes_AreReachedByNoNameCodeWrites()
+    {
+        static ExtractNode Styled(string name, string subKind) => new($"css:site.scss#{name}", CodeNodeKinds.Member, name, name, 1, 1, name) { SubKind = subKind };
+
+        var linked = CodeGraphLinker.Link(
+        [
+            File("app.t", [Member("Go", 0), Member("Button", 0), Value("$radius", null)],
+            [
+                Call("Go", "Button", 0),
+                Ref("Go", CodeEdgeKinds.Uses, "$radius") with { Line = 2 },
+                Ref("Go", CodeEdgeKinds.Uses, "spin") with { Line = 3 },
+                Call("Go", "darken", 2) with { Line = 4 },
+                Ref("Go", CodeEdgeKinds.Uses, "Brand") with { Line = 5 },
+                Ref("Go", CodeEdgeKinds.Uses, "--gap") with { Line = 6 },
+                Ref("Go", CodeEdgeKinds.Uses, ".btn") with { Line = 7 },
+            ]),
+            new CodeGraphFile("site.scss", "css", Extract(
+            [
+                Styled("$radius", CodeSubKinds.StyleVariable),
+                Styled("--gap", CodeSubKinds.StyleVariable),
+                Styled("Button", CodeSubKinds.StyleMixin),
+                Styled("darken", CodeSubKinds.StyleFunction) with { MinArity = 2, MaxArity = 2 },
+                Styled("spin", CodeSubKinds.Keyframes),
+                Styled("Brand", CodeSubKinds.FontFace),
+                Styled(".btn", CodeSubKinds.Rule),
+            ])),
+        ]);
+
+        Assert.Equal(
+            [
+                new CodeEdge("t:Go", "t:Button", CodeEdgeKinds.Calls, 1, CodeConfidences.Unique),
+                new CodeEdge("t:Go", "t:$radius", CodeEdgeKinds.Uses, 2, CodeConfidences.Unique),
+            ],
+            linked.Edges.Where(edge => edge.From == "t:Go").OrderBy(edge => edge.Line));
+    }
+
+    /// <summary>
+    /// A style sheet's own references reach its nodes through the qualifiers that say what each names, each among its
+    /// kind alone: <c>$radius</c> the variable, an <c>@include button</c> the mixin, an animation's <c>spin</c> the
+    /// keyframes and an <c>@extend .btn</c> the rule - none the code's of those names - and a qualifier that names another
+    /// kind - a mixin <c>spin</c> - none of them.
+    /// </summary>
+    [Fact]
+    public void AStyleSheetsReferences_ReachItsNodes_ThroughQualifiersThatSayWhatTheyName()
+    {
+        static ExtractNode Styled(string name, string subKind) => new($"css:site.scss#{name}", CodeNodeKinds.Member, name, name, 1, 9, name) { SubKind = subKind };
+        static ExtractReference Styling(string kind, string name, int line, string? qualifier)
+            => new("css:site.scss#.card", kind, name, line) { Qualifier = qualifier is null ? null : new ExtractQualifier(qualifier) };
+
+        var linked = CodeGraphLinker.Link(
+        [
+            new CodeGraphFile("site.scss", "css", Extract(
+            [
+                Styled(".card", CodeSubKinds.Rule),
+                Styled("$radius", CodeSubKinds.StyleVariable),
+                Styled("button", CodeSubKinds.StyleMixin),
+                Styled("spin", CodeSubKinds.Keyframes),
+                Styled(".btn", CodeSubKinds.Rule),
+            ]) with
+            {
+                References =
+                [
+                    Styling(CodeEdgeKinds.Uses, "$radius", 2, CodeQualifierKinds.StyleVariable),
+                    Styling(CodeEdgeKinds.Uses, "button", 3, CodeQualifierKinds.StyleMixin),
+                    Styling(CodeEdgeKinds.Uses, "spin", 4, CodeQualifierKinds.Keyframes),
+                    Styling(CodeEdgeKinds.Inherits, ".btn", 5, CodeQualifierKinds.Selector),
+                    Styling(CodeEdgeKinds.Uses, "spin", 6, CodeQualifierKinds.StyleMixin),
+                ],
+            }),
+            File("app.t", [Member("button", 0), Value("$radius", null), Value("spin", null)]),
+        ]);
+
+        Assert.Equal(
+            [
+                new CodeEdge("css:site.scss#.card", "css:site.scss#$radius", CodeEdgeKinds.Uses, 2, CodeConfidences.Unique),
+                new CodeEdge("css:site.scss#.card", "css:site.scss#button", CodeEdgeKinds.Uses, 3, CodeConfidences.Unique),
+                new CodeEdge("css:site.scss#.card", "css:site.scss#spin", CodeEdgeKinds.Uses, 4, CodeConfidences.Unique),
+                new CodeEdge("css:site.scss#.card", "css:site.scss#.btn", CodeEdgeKinds.Inherits, 5, CodeConfidences.Exact),
+            ],
+            linked.Edges.Where(edge => edge.From == "css:site.scss#.card").OrderBy(edge => edge.Line));
+    }
+
+    /// <summary>
     /// The keys' join is bounded as a reference is: a literal, or a value's name, that names more than
     /// <see cref="CodeConfidences.MostCandidates"/> keys - a <c>name</c> every file of data holds - joins none of them,
     /// and one that names that many joins each.
@@ -2622,7 +2711,7 @@ public sealed class CodeGraphLinkerTests
     [Fact]
     public void AClassADocumentWrites_IsAUseOfTheRuleOfThatName_AmongRulesAlone()
     {
-        var rule = new ExtractNode("css:site.css#.btn", CodeNodeKinds.Member, ".btn", ".btn", 8, 11, ".btn") { SubKind = "rule" };
+        var rule = new ExtractNode("css:site.css#.btn", CodeNodeKinds.Member, ".btn", ".btn", 8, 11, ".btn") { SubKind = CodeSubKinds.Rule };
         var member = new ExtractNode("c:Helper", CodeNodeKinds.Member, ".btn", "Helper..btn", 1, 1, ".btn");
         var page = new ExtractNode("html:index.html#body", CodeNodeKinds.Section, "body", "index.html#body", 1, 9, "body");
 

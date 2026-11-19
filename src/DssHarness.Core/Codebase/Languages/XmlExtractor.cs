@@ -46,7 +46,7 @@ public sealed partial class XmlExtractor : ICodeGraphExtractor
             "a key that is no .resx's data or .props's property - an app.config's <add key=\"x\" value=\"y\"/> among them: an element node, which the keys' join does not reach",
             "an element a XAML view names by x:Name, as its code-behind names the field the build generates for it: no reference of the code reaches the element, which code reaches by no name alone",
             "an Import Project= of any file but a .props or a .targets: no import",
-            "an element's text past the cut of a summary; a secret its text holds is kept as the file writes it, as reading the file shows it, and an answer masks only the run's own secrets, as every tool's answer does",
+            "an element's text past the cut of a summary",
         ]);
 
     /// <inheritdoc/>

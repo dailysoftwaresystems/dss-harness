@@ -15,8 +15,10 @@ namespace DssHarness.Core.Codebase.Languages;
 /// modifiers among them, a call of the handler it names; a <c>v-bind</c>, <c>:</c> attribute, another directive's
 /// expression - <c>v-model</c>, <c>v-if</c> - a <c>v-for</c>'s list or <c>{{ }}</c> a use of the name its expression
 /// begins with - each a member of the component, looked for on it as the template compiles them, but a name a
-/// <c>v-for</c> or a <c>v-slot</c> declares where it stands - and each class and id a use of the rule that styles it. Each style block - scoped among them - is read by the style
-/// sheet's reader; the script and styles are embedded as every markup embeds code (<see cref="EmbeddedCode"/>).
+/// <c>v-for</c> or a <c>v-slot</c> declares where it stands - and each class and id a use of the rule that styles it.
+/// Each style block - scoped among them - is read by the style sheet's reader in the syntax its <c>lang</c> names: CSS,
+/// SCSS, Sass's indented syntax or Less. The script and styles are embedded as every markup embeds code
+/// (<see cref="EmbeddedCode"/>).
 /// </summary>
 public sealed partial class VueExtractor : ICodeGraphExtractor
 {
@@ -37,11 +39,11 @@ public sealed partial class VueExtractor : ICodeGraphExtractor
 
     /// <inheritdoc/>
     public CodeGraphExtractorHelp Help { get; } = new(
-        "Vue single-file components (.vue): the component a type named by its file and qualified by its path, exported default, so an import of it binds to it and a member through it to its script's declaration; its script blocks - TypeScript where lang=\"ts\" - read by the JavaScript reader as the one module Vue compiles them to, its default export the component itself; its template's component tags - <FooBar> and <foo-bar> alike - as instantiates, its v-on and @ attributes as calls and its v-bind, :, v-model, v-if and every other directive's expression, a v-for's list and {{ }} as uses of the component's members - a v-for's alias and a v-slot's name the template's own, no member - and its classes and ids as uses of the rules that style them; and each style block read by the style sheet's reader",
+        "Vue single-file components (.vue): the component a type named by its file and qualified by its path, exported default, so an import of it binds to it and a member through it to its script's declaration; its script blocks - TypeScript where lang=\"ts\" - read by the JavaScript reader as the one module Vue compiles them to, its default export the component itself; its template's component tags - <FooBar> and <foo-bar> alike - as instantiates, its v-on and @ attributes as calls and its v-bind, :, v-model, v-if and every other directive's expression, a v-for's list and {{ }} as uses of the component's members - a v-for's alias and a v-slot's name the template's own, no member - and its classes and ids as uses of the rules that style them; and each style block read by the style sheet's reader in the syntax its lang names - CSS where it names none, scss, sass, less",
         [
             "a template expression past the name it begins with, and one that begins with none - an object, a literal: no reference of what it holds",
             "a template written in another language (lang=\"pug\"): not read",
-            "a style block's SCSS, Less and its framework-specific syntaxes: read as the style sheet's reader reads them",
+            "a style block of another language (lang=\"stylus\"): not read",
             "a script block that names its file by src: not read, and no import of it",
             "a component with no script block: the type alone, and nothing of its own members",
         ]);
@@ -85,7 +87,8 @@ public sealed partial class VueExtractor : ICodeGraphExtractor
         }
 
         embedded.AddRange(blocks.Where(block => block.Name == "style" && block.Close > block.OpenEnd)
-            .Select(style => CssExtractor.Read(Language, new CodeFileInput(input.Path, EmbeddedCode.Kept(markup.Text, [(style.OpenEnd, style.Close)])))));
+            .Select(style => CssExtractor.Read(Language, new CodeFileInput(input.Path, EmbeddedCode.Kept(markup.Text, [(style.OpenEnd, style.Close)])), style.Attribute("lang"), style.Attribute("type")))
+            .OfType<FileExtract>());
 
         return EmbeddedCode.Merged(new FileExtract([component]) { References = references }, embedded);
     }

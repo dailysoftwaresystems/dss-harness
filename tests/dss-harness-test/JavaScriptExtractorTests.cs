@@ -506,8 +506,9 @@ public sealed class JavaScriptExtractorTests : CodeGraphExtractorContractTests<J
 
     /// <summary>
     /// A default import of a single-file component binds the component it exports by default, as one of a script does -
-    /// a member through it is that export's - while one of a file that exports nothing by a name, a style sheet, binds its
-    /// prefix alone.
+    /// a member through it is that export's - one of a CSS module or of data, which export nothing by a name, binds its
+    /// prefix alone, a member through it what the file declares and exports, and one of any other style sheet binds
+    /// nothing: its prefix lets no name through.
     /// </summary>
     [Fact]
     public void ADefaultImportOfAComponent_BindsItsDefaultExport_AndOneOfAStyleSheetNone()
@@ -515,18 +516,22 @@ public sealed class JavaScriptExtractorTests : CodeGraphExtractorContractTests<J
         var extract = Read("src/main.js", """
             import Cart from './Cart.vue';
             import styles from './site.css';
+            import classes from './Cart.module.scss';
+            import config from './config.yaml';
 
             export function go() {
               Cart.open();
               styles.paint();
+              classes.wide();
+              config.load();
             }
             """);
 
         Assert.Equal(
-            [("./Cart.vue", "Cart", "default"), ("./site.css", "styles", null)],
+            [("./Cart.vue", "Cart", "default"), ("./site.css", "styles", ""), ("./Cart.module.scss", "classes", null), ("./config.yaml", "config", null)],
             extract.Imports.Select(import => (import.Target, import.Prefix, import.Show is null ? null : string.Join(',', import.Show))));
         Assert.Equal(
-            [("open", "named", "Cart.default"), ("paint", "prefix", "styles")],
+            [("open", "named", "Cart.default"), ("paint", "prefix", "styles"), ("wide", "prefix", "classes"), ("load", "prefix", "config")],
             extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Calls).Select(reference => (reference.Name, reference.Qualifier?.Kind, reference.Qualifier?.Name)));
     }
 

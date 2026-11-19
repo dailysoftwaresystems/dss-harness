@@ -321,5 +321,80 @@ public sealed class RazorExtractorTests : CodeGraphExtractorContractTests<RazorE
         Assert.Contains(new CodeEdge("razor:Shop.Web.Cart", "csharp:Shop.Web.Cart", CodeEdgeKinds.PartOf, 1, CodeConfidences.Exact), linked.Edges);
     }
 
+    /// <summary>
+    /// A name the markup's own C# declares where an attribute stands is the markup's, no member of the component: an
+    /// <c>@foreach</c>'s item inside its block and a member past it, a <c>@{ }</c> block's local from where it is declared
+    /// and a member before it, a pattern's variable inside its <c>@if</c>, an arrow function's parameter in its own value,
+    /// and a template's <c>context</c> - or the name its <c>Context=</c> gives, past which <c>context</c> is a member again -
+    /// inside a component's content.
+    /// </summary>
+    [Fact]
+    public void ANameTheMarkupsCodeDeclares_IsItsOwn_AndNoMember()
+    {
+        var extract = Read("Shared/List.razor", """
+            @foreach (var item in Items)
+            {
+                <Row Item="@item" Label="@label" />
+            }
+            <Row Item="@item" />
+            @{ var label = "x"; }
+            <Row Label="@label" @onclick="e => e.Stop()" />
+            @if (Current is string product)
+            {
+                <Row Item="@product" />
+            }
+            <Grid Items="@Items">
+                <Cell Value="@context" />
+            </Grid>
+            <Grid Items="@Items" Context="row">
+                <Cell Value="@row" Other="@context" />
+            </Grid>
+            @code {
+                private string item = "";
+                private string label = "";
+                private string product = "";
+                private string context = "";
+                private string row = "";
+                private string[] Items = [];
+                private object Current = "";
+            }
+            """);
+
+        Assert.Equal(
+            [("label", 3), ("item", 5), ("Items", 12), ("Items", 15), ("context", 16)],
+            extract.References.Where(reference => reference.From == "razor:Shared.List" && reference.Kind is CodeEdgeKinds.Uses or CodeEdgeKinds.Calls).Select(reference => (reference.Name, reference.Line)));
+    }
+
+    /// <summary>
+    /// An <c>@inject</c> declares a property of the component, of the type it is given - a reference of that type, no use
+    /// of it - and a use of the property by its name, in the markup and in the <c>@code</c> block alike, binds to it.
+    /// </summary>
+    [Fact]
+    public void AnInjectedService_IsAPropertyOfTheComponent_AndEachUseOfItBindsToIt()
+    {
+        var extract = Read("Shared/Checkout.razor", """
+            @inject CartService Carts
+            <Summary Total="@Carts.Total" />
+            @code {
+                private void Pay()
+                {
+                    Carts.Add(1);
+                }
+            }
+            """);
+
+        Assert.Equal(("property", 1), (Assert.Single(extract.Nodes, node => node.Id == "razor:Shared.Checkout.Carts").SubKind, 1));
+        Assert.Equal([(CodeEdgeKinds.References, "CartService")], extract.References.Where(reference => reference.From == "razor:Shared.Checkout.Carts").Select(reference => (reference.Kind, reference.Name)));
+
+        var linked = CodeGraphLinker.Link([new CodeGraphFile("Shared/Checkout.razor", "razor", extract)]);
+
+        Assert.Equal(
+            [
+                new CodeEdge("razor:Shared.Checkout", "razor:Shared.Checkout.Carts", CodeEdgeKinds.Uses, 2, CodeConfidences.Exact),
+                new CodeEdge("razor:Shared.Checkout.Pay()", "razor:Shared.Checkout.Carts", CodeEdgeKinds.Uses, 6, CodeConfidences.Exact),
+            ],
+            linked.Edges.Where(edge => edge.To == "razor:Shared.Checkout.Carts" && edge.Kind == CodeEdgeKinds.Uses).OrderBy(edge => edge.Line));
+    }
+
     private static FileExtract Read(string path, string text) => new RazorExtractor().Extract(new CodeFileInput(path, text));
 }

@@ -300,5 +300,29 @@ public sealed class VueExtractorTests : CodeGraphExtractorContractTests<VueExtra
         Assert.Equal(9, Assert.Single(extract.Dynamic).Line);
     }
 
+    /// <summary>
+    /// A style block is read in the syntax its <c>lang</c> names: a SCSS block's <c>//</c> comment is no rule, its
+    /// <c>$radius</c> a variable, and the rule that writes it a use of it, so the template's class reaches the rule and the
+    /// rule the variable; a block of a syntax no style sheet's reader reads is not read.
+    /// </summary>
+    [Fact]
+    public void AStyleBlock_IsReadInTheSyntaxItsLangNames()
+    {
+        var extract = Read("src/Card.vue", "<template>\n  <div class=\"card\"></div>\n</template>\n<style lang=\"scss\" scoped>\n// .ghost { a: b; }\n$radius: 4px;\n.card { border-radius: $radius; }\n</style>\n<style lang=\"stylus\">\n.plain\n  a b\n</style>\n");
+
+        Assert.Equal(
+            [("$radius", CodeSubKinds.StyleVariable, 6), (".card", CodeSubKinds.Rule, 7)],
+            extract.Nodes.Where(node => CodeSubKinds.IsData(node.SubKind)).Select(node => (node.Name, node.SubKind!, node.Start)));
+
+        var linked = CodeGraphLinker.Link([new CodeGraphFile("src/Card.vue", "vue", extract)]);
+
+        Assert.Equal(
+            [
+                new CodeEdge("vue:src/Card.vue", "vue:src/Card.vue#.card", CodeEdgeKinds.Uses, 2, CodeConfidences.Exact),
+                new CodeEdge("vue:src/Card.vue#.card", "vue:src/Card.vue#$radius", CodeEdgeKinds.Uses, 7, CodeConfidences.Unique),
+            ],
+            linked.Edges.Where(edge => edge.Kind == CodeEdgeKinds.Uses).OrderBy(edge => edge.Line));
+    }
+
     private static FileExtract Read(string path, string text) => new VueExtractor().Extract(new CodeFileInput(path, text));
 }

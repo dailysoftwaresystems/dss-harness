@@ -589,8 +589,27 @@ public static class CodeQualifierKinds
     /// </summary>
     public const string Key = "key";
 
+    /// <summary>
+    /// A style sheet's variable, as a value names one - <c>var(--x)</c>, <c>$x</c>, <c>@x</c>: the name looked for among
+    /// style variables alone (<see cref="CodeSubKinds.StyleVariable"/>), found as a name is - the sheet's own, what it
+    /// imports, else the repository's.
+    /// </summary>
+    public const string StyleVariable = CodeSubKinds.StyleVariable;
+
+    /// <summary>
+    /// A Sass mixin, as an <c>@include</c> names one: the name looked for among mixins alone
+    /// (<see cref="CodeSubKinds.StyleMixin"/>), found as a name is.
+    /// </summary>
+    public const string StyleMixin = CodeSubKinds.StyleMixin;
+
+    /// <summary>
+    /// An animation's keyframes, as an <c>animation</c> or <c>animation-name</c> value names them: the name looked for
+    /// among keyframes alone (<see cref="CodeSubKinds.Keyframes"/>), found as a name is.
+    /// </summary>
+    public const string Keyframes = CodeSubKinds.Keyframes;
+
     /// <summary>Every kind.</summary>
-    public static IReadOnlyList<string> All { get; } = [This, Base, Named, Type, Prefix, Value, Scope, Selector, Key];
+    public static IReadOnlyList<string> All { get; } = [This, Base, Named, Type, Prefix, Value, Scope, Selector, Key, StyleVariable, StyleMixin, Keyframes];
 }
 
 /// <summary>A place an implementation saw something it cannot bind, or stopped reading.</summary>

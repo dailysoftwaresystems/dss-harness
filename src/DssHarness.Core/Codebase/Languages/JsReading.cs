@@ -153,6 +153,9 @@ internal sealed class JsReading
     /// <summary>The extensions among those of what is no script whose file is a single-file component, exported by default as the component it is.</summary>
     private static readonly HashSet<string> ComponentExtensions = new(StringComparer.OrdinalIgnoreCase) { ".vue", ".svelte", ".astro" };
 
+    /// <summary>The extensions among those of what is no script whose file is a style sheet.</summary>
+    private static readonly HashSet<string> StyleExtensions = new(StringComparer.OrdinalIgnoreCase) { ".css", ".scss", ".sass", ".less", ".styl" };
+
     private readonly InterpolatedText _text;
     private readonly ScannedText _scan;
     private readonly string _prefix;
@@ -470,10 +473,26 @@ internal sealed class JsReading
             else if (_scan.IsName(clause))
             {
                 // A default import binds what the file exports by default - a single-file component's is the component
-                // it is - but a file of no script kind that is none - a style sheet, an image - exports nothing by a name:
-                // its binding is the import's prefix alone, so a member of what it binds is looked for in what the file
-                // itself declares.
-                Bind(_scan.Text(clause), specifier, ExportsNothing(specifier) ? null : "default", line);
+                // it is. A CSS module's is the object of the names it exports, and a file of no script kind besides - an
+                // image, data - exports nothing by a name: either's binding is the import's prefix alone, so a member of
+                // what it binds is looked for in what the file itself declares and exports. Any other style sheet's is
+                // nothing, so nothing is bound through it.
+                var local = _scan.Text(clause);
+
+                if (!ExportsNothing(specifier))
+                {
+                    Bind(local, specifier, "default", line);
+                }
+                else if (IsStyleSheet(specifier) && !CssExtractor.IsModule(specifier))
+                {
+                    _bindings[local] = new Binding(specifier, null, Prefixed: true);
+                    Run(specifier, line, local, [], export: false);
+                }
+                else
+                {
+                    Bind(local, specifier, null, line);
+                }
+
                 clause = _scan.Next(clause);
             }
             else
@@ -808,11 +827,16 @@ internal sealed class JsReading
     /// single-file component - a style sheet, an image, data - as a bundler imports it.
     /// </summary>
     private static bool ExportsNothing(string specifier)
+        => AssetExtensions.Contains(ExtensionOf(specifier)) && !ComponentExtensions.Contains(ExtensionOf(specifier));
+
+    /// <summary>Whether the file <paramref name="specifier"/> names is a style sheet, as a bundler imports one.</summary>
+    private static bool IsStyleSheet(string specifier) => StyleExtensions.Contains(ExtensionOf(specifier));
+
+    /// <summary>The extension of the file <paramref name="specifier"/> names, with its dot; empty where it has none.</summary>
+    private static string ExtensionOf(string specifier)
     {
         var name = specifier[(specifier.LastIndexOf('/') + 1)..];
-        var extension = name.LastIndexOf('.') is var dot and > 0 ? name[dot..] : string.Empty;
-
-        return AssetExtensions.Contains(extension) && !ComponentExtensions.Contains(extension);
+        return name.LastIndexOf('.') is var dot and > 0 ? name[dot..] : string.Empty;
     }
 
     /// <summary>The specifier the text at <paramref name="at"/> holds; <see langword="null"/> where it is none - empty, interpolated, or left open.</summary>

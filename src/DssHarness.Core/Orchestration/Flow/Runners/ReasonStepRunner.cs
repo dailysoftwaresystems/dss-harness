@@ -263,6 +263,7 @@ public sealed class ReasonStepRunner(
         // <codebase> part of the first message of each launch that begins a conversation of its own, the graph tool
         // offered where its step says tools, its view the one the engine syncs at the step's start. A step whose mode is
         // off is served nothing, and one whose graph cannot be served goes on without it.
+        var mask = launch.Mask(context.Layout, providers, webMask);
         var stepGraph = graphService is null
             ? null
             : await FlowStepGraph.OfAsync(
@@ -282,6 +283,7 @@ public sealed class ReasonStepRunner(
                 agentRecord,
                 ground,
                 filled,
+                mask,
                 cancellationToken).ConfigureAwait(false);
 
         // The conversation this attempt goes on with, where its answers gave it one to go on with: the session the
@@ -335,7 +337,7 @@ public sealed class ReasonStepRunner(
                 definition?.MaxMinutes is { } minutes ? TimeSpan.FromMinutes(minutes) : null,
                 definition?.StallSeconds,
                 place.Definition.HandoffSeconds),
-            Mask: launch.Mask(context.Layout, providers, webMask))
+            Mask: mask)
         {
             RecordDirectory = StepDirectoryOf(layout, run.Instance, agent),
             Ground = ground,

@@ -18,8 +18,19 @@ internal sealed class CssReading
     /// <summary>The pseudo-classes whose arguments are selectors of the element itself, read as the selector's own parts.</summary>
     private static readonly HashSet<string> Alternatives = new(StringComparer.OrdinalIgnoreCase) { "is", "where", "matches", "any", "-webkit-any", "-moz-any", "host", "slotted" };
 
-    /// <summary>The prefixes a vendor writes before an at-rule's word, as <c>@-webkit-keyframes</c>.</summary>
+    /// <summary>The prefixes a vendor writes before an at-rule's word or a property's name, as <c>@-webkit-keyframes</c>.</summary>
     private static readonly string[] Vendors = ["-webkit-", "-moz-", "-ms-", "-o-"];
+
+    /// <summary>
+    /// The words an <c>animation</c>'s value gives a meaning of their own - its easings, its counts, its directions, its
+    /// fills, its states and the values every property takes - which name no keyframes, as CSS reads the shorthand.
+    /// </summary>
+    private static readonly HashSet<string> AnimationWords = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "none", "linear", "ease", "ease-in", "ease-out", "ease-in-out", "step-start", "step-end", "infinite", "normal",
+        "reverse", "alternate", "alternate-reverse", "forwards", "backwards", "both", "running", "paused", "auto",
+        "initial", "inherit", "unset", "revert", "revert-layer",
+    };
 
     private readonly string _language;
     private readonly string _path;
@@ -221,8 +232,14 @@ internal sealed class CssReading
             return null;
         }
 
-        var word = written[1..].ToLowerInvariant();
-        return Vendors.FirstOrDefault(vendor => word.StartsWith(vendor, StringComparison.Ordinal)) is { } vendor ? word[vendor.Length..] : word;
+        return Unvendored(written[1..]);
+    }
+
+    /// <summary><paramref name="word"/> lower-cased, the prefix a vendor writes before it left out.</summary>
+    private static string Unvendored(string word)
+    {
+        var lower = word.ToLowerInvariant();
+        return Vendors.FirstOrDefault(vendor => lower.StartsWith(vendor, StringComparison.Ordinal)) is { } vendor ? lower[vendor.Length..] : lower;
     }
 
     /// <summary>One at-rule, by its <paramref name="word"/>.</summary>
@@ -249,7 +266,7 @@ internal sealed class CssReading
             case "mixin" or "function":
                 if (_scan.IsName(after) && Plain(after) is { } routine)
                 {
-                    var key = Node(routine, word, head, Signature(head), exports: false);
+                    var key = Node(routine, word == "mixin" ? CodeSubKinds.StyleMixin : CodeSubKinds.StyleFunction, head, Signature(head), exports: false);
                     Parameters(after + 1, head.Stop, key);
                     Body(head, frame.Inside(null, null, key, null), [], keyframes: false);
                 }
@@ -280,7 +297,7 @@ internal sealed class CssReading
             case "keyframes":
                 if (Named(after, head.Stop) is { } animation)
                 {
-                    var key = Node(animation, "keyframes", head, Signature(head), exports: true);
+                    var key = Node(animation, CodeSubKinds.Keyframes, head, Signature(head), exports: true);
                     Body(head, frame.Inside(null, null, key, null), [], keyframes: true);
                 }
                 else
@@ -293,7 +310,7 @@ internal sealed class CssReading
             case "font-face":
                 if (head.Opens && FontFamily(head.Stop + 1, head.Close) is { } family)
                 {
-                    var key = Node(family, "font-face", head, Signature(head), exports: false);
+                    var key = Node(family, CodeSubKinds.FontFace, head, Signature(head), exports: false);
                     Body(head, frame.Inside(null, null, key, null), parents, keyframes: false);
                 }
                 else
@@ -306,7 +323,7 @@ internal sealed class CssReading
             case "property":
                 if (_scan.IsName(after) && _scan.Text(after) is ['-', '-', ..] property)
                 {
-                    var key = Node(property, "constant", head, Signature(head), exports: false);
+                    var key = Node(property, CodeSubKinds.StyleVariable, head, Signature(head), exports: false);
                     Body(head, frame.Inside(null, null, key, null), parents, keyframes: false);
                 }
                 else
@@ -406,7 +423,7 @@ internal sealed class CssReading
             return;
         }
 
-        _references.Add((frame.Parent, CodeEdgeKinds.Uses, _scan.Text(at), line, null));
+        _references.Add((frame.Parent, CodeEdgeKinds.Uses, _scan.Text(at), line, new ExtractQualifier(CodeQualifierKinds.StyleMixin)));
         Uses(at + 1, stop, frame.Parent);
     }
 
@@ -735,7 +752,7 @@ internal sealed class CssReading
 
         foreach (var part in read.Parts)
         {
-            var key = Node(part.Name, "rule", head, signature, exports: true);
+            var key = Node(part.Name, CodeSubKinds.Rule, head, signature, exports: true);
             first ??= key;
 
             if (part.Subject)
@@ -1140,12 +1157,17 @@ internal sealed class CssReading
 
         if (name is ['-', '-', ..] or ['$', _, ..] or ['@', _, ..])
         {
-            from = Node(name, "constant", head with { Stop = end, Opens = false }, _scan.Signature(at, end), exports: false);
+            from = Node(name, CodeSubKinds.StyleVariable, head with { Stop = end, Opens = false }, _scan.Signature(at, end), exports: false);
         }
 
         // What an interpolation in the name uses, and what the value does; the name itself is declared, never used.
         Uses(at, colon, from, names: false);
         Uses(colon + 1, end, from);
+
+        if (name is not null && Unvendored(name) is "animation" or "animation-name")
+        {
+            Animated(colon + 1, end, from);
+        }
 
         if (name == "composes")
         {
@@ -1163,6 +1185,34 @@ internal sealed class CssReading
         }
 
         return head.Past;
+    }
+
+    /// <summary>
+    /// An <c>animation</c>'s or an <c>animation-name</c>'s value, from the token at <paramref name="from"/> to
+    /// <paramref name="to"/>: each name or string it writes a use of the keyframes of that name, made from
+    /// <paramref name="by"/> - but a word the shorthand gives a meaning of its own (<see cref="AnimationWords"/>), a
+    /// function's name and what its parentheses hold, and a variable, which <see cref="Uses"/> reads.
+    /// </summary>
+    private void Animated(int from, int to, string? by)
+    {
+        for (var at = from; at < to; at++)
+        {
+            if (_scan.Opens(at))
+            {
+                at = _scan.Bounds(at, to).Past - 1;
+                continue;
+            }
+
+            var named = _scan.IsName(at) && _scan.Text(at) is var word && word[0] is not ('$' or '@') && !word.StartsWith("--", StringComparison.Ordinal)
+                && !AnimationWords.Contains(word) && !(_scan.Is(at + 1, "(") && Adjacent(at + 1))
+                ? CssLexer.Unescaped(word)
+                : _scan[at].Kind == ScanTokenKind.Text && _scan.Text(at) is ['"' or '\'', ..] ? Unquoted(at) : null;
+
+            if (named is { Length: > 0 })
+            {
+                _references.Add((by, CodeEdgeKinds.Uses, named, _scan[at].Line, new ExtractQualifier(CodeQualifierKinds.Keyframes)));
+            }
+        }
     }
 
     /// <summary>A CSS module's <c>composes: a b from "./x.css"</c>: a use of each class it composes, as markup's <c>class</c> is.</summary>
@@ -1210,7 +1260,7 @@ internal sealed class CssReading
                             // Less's @{name}: the variable it names.
                             if (_scan.Source[start..end].Trim() is { Length: > 0 } variable && variable.All(character => char.IsAsciiLetterOrDigit(character) || character is '-' or '_'))
                             {
-                                _references.Add((by, CodeEdgeKinds.Uses, $"@{variable}", token.Line, null));
+                                _references.Add((by, CodeEdgeKinds.Uses, $"@{variable}", token.Line, new ExtractQualifier(CodeQualifierKinds.StyleVariable)));
                             }
 
                             continue;
@@ -1224,7 +1274,11 @@ internal sealed class CssReading
         }
     }
 
-    /// <summary>The use the name at <paramref name="at"/> of <paramref name="scan"/> is, made from <paramref name="by"/>: of a custom property, a variable, a module's variable; none of any other name.</summary>
+    /// <summary>
+    /// The use the name at <paramref name="at"/> of <paramref name="scan"/> is, made from <paramref name="by"/>: of a custom
+    /// property or a variable, a variable's qualifier saying so, a module's variable through its namespace; none of any
+    /// other name.
+    /// </summary>
     private void Used(ScannedText scan, int at, string? by)
     {
         var name = scan.Text(at);
@@ -1236,7 +1290,7 @@ internal sealed class CssReading
 
         var qualifier = name[0] == '$' && at >= 2 && scan.Is(at - 1, ".") && scan[at - 1].End == scan[at].Start && scan.IsName(at - 2) && scan[at - 2].End == scan[at - 1].Start
             ? new ExtractQualifier(CodeQualifierKinds.Prefix, scan.Text(at - 2))
-            : null;
+            : new ExtractQualifier(CodeQualifierKinds.StyleVariable);
 
         _references.Add((by, CodeEdgeKinds.Uses, name, scan[at].Line, qualifier));
     }
@@ -1280,7 +1334,7 @@ internal sealed class CssReading
     /// </summary>
     private static IReadOnlyList<string>? Exported(string name, string subKind)
     {
-        var bare = name[0] is '.' or '#' ? name[1..] : subKind == "keyframes" ? name : string.Empty;
+        var bare = name[0] is '.' or '#' ? name[1..] : subKind == CodeSubKinds.Keyframes ? name : string.Empty;
 
         if (bare.Length == 0)
         {

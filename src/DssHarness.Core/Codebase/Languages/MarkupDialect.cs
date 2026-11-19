@@ -133,11 +133,34 @@ internal sealed partial class MarkupDialect
                 _ => null,
             };
 
-            if (said is var (kind, named) && local?.Contains(named) != true)
+            // A name the markup declares where the element stands is its own, as is a parameter of the arrow function the
+            // value itself is: neither is the member of that name.
+            if (said is var (kind, named) && local?.Contains(named) != true && !Parameters(attribute.Value).Contains(named))
             {
                 references.Add(new ExtractReference(from, kind, named, attribute.Line) { Qualifier = members });
             }
         }
+    }
+
+    /// <summary>Whether <paramref name="element"/>'s tag names a component, an <c>instantiates</c> of it, as this kind's syntax says.</summary>
+    public bool Instantiated(MarkupElement element)
+    {
+        ArgumentNullException.ThrowIfNull(element);
+        return _component(element) is var (component, _) && component.Length > 0;
+    }
+
+    /// <summary>
+    /// The names the head of the arrow function <paramref name="value"/> is - <c>e =&gt; e.Stop()</c>,
+    /// <c>(MouseEventArgs e) =&gt; Pick(e)</c> - declares for its body, each a pattern's name as <see cref="Declared"/>
+    /// reads one; none where it is no arrow function.
+    /// </summary>
+    internal static IReadOnlySet<string> Parameters(string value)
+    {
+        var text = value.Trim().TrimStart('@').Trim();
+
+        return Arrow().Match(text) is { Success: true } arrow
+            ? Bound().Matches(Defaultless().Replace(arrow.Value[..arrow.Value.LastIndexOf("=>", StringComparison.Ordinal)], string.Empty)).Select(bound => bound.Groups["name"].Value).Where(name => name != "async").ToHashSet(StringComparer.Ordinal)
+            : new HashSet<string>(StringComparer.Ordinal);
     }
 
     /// <summary>

@@ -191,9 +191,9 @@ public sealed class CssExtractorTests : CodeGraphExtractorContractTests<CssExtra
 
     /// <summary>
     /// Each simple part of each selector is a rule over its own rule's lines - inside an <c>@media</c> block too, and
-    /// past one - named as CSS reads it, escapes read; each custom property and <c>@property</c> a constant; a
-    /// <c>@keyframes</c> and a <c>@font-face</c> a member of their own; a comment above a rule its summary; a
-    /// <c>var(--x)</c> a use made from the rule that holds it; an <c>@import</c> of a file an import of it; and no
+    /// past one - named as CSS reads it, escapes read; each custom property and <c>@property</c> a style variable; a
+    /// <c>@keyframes</c> and a <c>@font-face</c> a member of their own kind; a comment above a rule its summary; a
+    /// <c>var(--x)</c> a use of the variable made from the rule that holds it; an <c>@import</c> of a file an import of it; and no
     /// pseudo-class, <c>:not()</c> or combinator a part, though an <c>:is()</c>'s selectors are.
     /// </summary>
     [Fact]
@@ -203,16 +203,17 @@ public sealed class CssExtractorTests : CodeGraphExtractorContractTests<CssExtra
 
         Assert.Equal(
             [
-                ("--gap", "constant", 5, 5), (".btn", "rule", 8, 12), (".btn-primary", "rule", 8, 12), ("#main", "rule", 13, 16), ("my-widget", "rule", 13, 16),
-                ("slide-in", "keyframes", 17, 20), (".card", "rule", 22, 24), (".lead", "rule", 26, 28), (".intro", "rule", 26, 28), ("p", "rule", 26, 28),
-                (".sm:hidden", "rule", 29, 31), ("Inter", "font-face", 32, 35), ("--angle", "constant", 36, 40), (".after", "rule", 41, 41),
+                ("--gap", CodeSubKinds.StyleVariable, 5, 5), (".btn", CodeSubKinds.Rule, 8, 12), (".btn-primary", CodeSubKinds.Rule, 8, 12), ("#main", CodeSubKinds.Rule, 13, 16),
+                ("my-widget", CodeSubKinds.Rule, 13, 16), ("slide-in", CodeSubKinds.Keyframes, 17, 20), (".card", CodeSubKinds.Rule, 22, 24), (".lead", CodeSubKinds.Rule, 26, 28),
+                (".intro", CodeSubKinds.Rule, 26, 28), ("p", CodeSubKinds.Rule, 26, 28), (".sm:hidden", CodeSubKinds.Rule, 29, 31), ("Inter", CodeSubKinds.FontFace, 32, 35),
+                ("--angle", CodeSubKinds.StyleVariable, 36, 40), (".after", CodeSubKinds.Rule, 41, 41),
             ],
             extract.Nodes.Select(node => (node.Name, node.SubKind!, node.Start, node.End)));
         Assert.Equal(".btn, .btn-primary", extract.Nodes[1].Signature);
         Assert.Equal(["The primary buttons."], extract.Nodes.Select(node => node.Summary).OfType<string>().Distinct());
         Assert.Equal(
-            [("css:site.css#.btn", CodeEdgeKinds.Uses, "--gap", 11), ("css:site.css#.after", CodeEdgeKinds.Uses, "--angle", 41)],
-            extract.References.Select(reference => (reference.From, reference.Kind, reference.Name, reference.Line)));
+            [("css:site.css#.btn", CodeEdgeKinds.Uses, "--gap", 11, CodeQualifierKinds.StyleVariable), ("css:site.css#.after", CodeEdgeKinds.Uses, "--angle", 41, CodeQualifierKinds.StyleVariable)],
+            extract.References.Select(reference => (reference.From, reference.Kind, reference.Name, reference.Line, reference.Qualifier?.Kind)));
         Assert.Equal([("base.css", 2), ("print.css", 3)], extract.Imports.Select(import => (import.Target, import.Line)));
         Assert.Empty(extract.Dynamic);
     }
@@ -476,12 +477,45 @@ public sealed class CssExtractorTests : CodeGraphExtractorContractTests<CssExtra
         var extract = Read("styles.sass", Sass);
 
         Assert.Equal(
-            [("$gap", "constant", 3, 3), ("bevel", "mixin", 4, 5), (".edge", "rule", 6, 11), (".rim", "rule", 6, 11), (".inner", "rule", 9, 11), (".other", "rule", 12, 13)],
+            [
+                ("$gap", CodeSubKinds.StyleVariable, 3, 3), ("bevel", CodeSubKinds.StyleMixin, 4, 5), (".edge", CodeSubKinds.Rule, 6, 11), (".rim", CodeSubKinds.Rule, 6, 11),
+                (".inner", CodeSubKinds.Rule, 9, 11), (".other", CodeSubKinds.Rule, 12, 13),
+            ],
             extract.Nodes.Select(node => (node.Name, node.SubKind!, node.Start, node.End)));
         Assert.Equal("The sheet's own rules, in the indented syntax.", extract.Nodes[0].Summary);
         Assert.Equal(
-            [("css:styles.sass#bevel", "$r", 5), ("css:styles.sass#.edge", "$gap", 8), ("css:styles.sass#.inner", "bevel", 10)],
-            extract.References.Select(reference => (reference.From, reference.Name, reference.Line)));
+            [
+                ("css:styles.sass#bevel", "$r", 5, CodeQualifierKinds.StyleVariable), ("css:styles.sass#.edge", "$gap", 8, CodeQualifierKinds.StyleVariable),
+                ("css:styles.sass#.inner", "bevel", 10, CodeQualifierKinds.StyleMixin),
+            ],
+            extract.References.Select(reference => (reference.From, reference.Name, reference.Line, reference.Qualifier?.Kind)));
+    }
+
+    /// <summary>
+    /// A name an <c>animation</c> or an <c>animation-name</c> gives - a vendor's prefix left out, a string's among them - is
+    /// a use of the keyframes of that name, through a qualifier that says so: the shorthand's own words, a time, a
+    /// function and what it holds, and a variable are none, and the use reaches the sheet's keyframes and no rule or code of
+    /// that name.
+    /// </summary>
+    [Fact]
+    public void AnAnimationsName_IsAUseOfItsKeyframes()
+    {
+        var extract = Read("a.css", "@keyframes spin { to { a: b; } }\n.spinner {\n  animation: spin 1s cubic-bezier(0, 0, 1, 1) infinite alternate var(--more);\n  -webkit-animation-name: pulse, \"fade\";\n}\n");
+
+        Assert.Equal(
+            [("css:a.css#.spinner", "spin", 3, CodeQualifierKinds.Keyframes), ("css:a.css#.spinner", "pulse", 4, CodeQualifierKinds.Keyframes), ("css:a.css#.spinner", "fade", 4, CodeQualifierKinds.Keyframes)],
+            extract.References.Where(reference => reference.Qualifier?.Kind != CodeQualifierKinds.StyleVariable).Select(reference => (reference.From, reference.Name, reference.Line, reference.Qualifier?.Kind)));
+
+        var linked = CodeGraphLinker.Link(
+        [
+            new CodeGraphFile("a.css", "css", extract),
+            new CodeGraphFile("spin.css", "css", Read("spin.css", "spin { a: b; }\n")),
+            new CodeGraphFile("spin.js", "javascript", new JavaScriptExtractor().Extract(new CodeFileInput("spin.js", "export const spin = 1;\n"))),
+        ]);
+
+        Assert.Equal(
+            [new CodeEdge("css:a.css#.spinner", "css:a.css#spin", CodeEdgeKinds.Uses, 3, CodeConfidences.Unique)],
+            linked.Edges.Where(edge => edge.Kind == CodeEdgeKinds.Uses));
     }
 
     /// <summary>
@@ -512,6 +546,24 @@ public sealed class CssExtractorTests : CodeGraphExtractorContractTests<CssExtra
             linked.Edges.Where(edge => edge.Kind == CodeEdgeKinds.Uses));
     }
 
+    /// <summary>
+    /// A default import of a style sheet that is no CSS module binds nothing, as a bundler gives it nothing by a name: a
+    /// script's <c>styles.button</c> reaches none of the sheet's nodes - its element rule <c>button</c>, its variable - and
+    /// the import of the file is kept.
+    /// </summary>
+    [Fact]
+    public void ADefaultImportOfASheetNoModule_BindsNothing()
+    {
+        var sheet = Read("src/Button.css", "button { a: b; }\n.button { a: b; }\n");
+        var script = new JavaScriptExtractor().Extract(new CodeFileInput("src/app.js", "import styles from './Button.css';\nexport function f() {\n  return styles.button;\n}\n"));
+
+        var linked = CodeGraphLinker.Link([new CodeGraphFile("src/Button.css", "css", sheet), new CodeGraphFile("src/app.js", "javascript", script)]);
+
+        Assert.Equal(
+            [new CodeEdge(CodeGraphIds.FileId("src/app.js"), CodeGraphIds.FileId("src/Button.css"), CodeEdgeKinds.Imports, 1, CodeConfidences.Exact)],
+            linked.Edges.Where(edge => edge.Kind is CodeEdgeKinds.Uses or CodeEdgeKinds.Imports));
+    }
+
     /// <summary>A nested rule's <c>&amp;</c> with a suffix is a part of each of its parent's names with the suffix written on, as SCSS and Less write BEM's.</summary>
     [Fact]
     public void AnAmpersandsSuffix_IsAPartOfItsParentsNameWithTheSuffix()
@@ -521,14 +573,26 @@ public sealed class CssExtractorTests : CodeGraphExtractorContractTests<CssExtra
         Assert.Equal([".card", ".tile", ".card__title", ".tile__title", ".card__title--big", ".tile__title--big", ".lifted"], extract.Nodes.Select(node => node.Name));
     }
 
-    /// <summary>A style block another implementation reads is read in the syntax its <c>lang</c> names, and as CSS where it names none.</summary>
+    /// <summary>
+    /// A style block another implementation reads is read in the syntax its <c>lang</c> names, else its <c>type</c> as
+    /// HTML writes one, as CSS where it names neither, and not at all where it names a syntax no style sheet's reader reads.
+    /// </summary>
     [Fact]
-    public void AStyleBlock_IsReadInTheSyntaxItsLangNames()
+    public void AStyleBlock_IsReadInTheSyntaxItsLangOrTypeNames()
     {
         const string Block = ".a { b: c; }\n// .b { }\n";
 
-        Assert.Equal(["vue:x.vue#.a"], CssExtractor.Read("vue", new CodeFileInput("x.vue", Block), "scss").Nodes.Select(node => node.Id));
-        Assert.Equal(["vue:x.vue#.a", "vue:x.vue#.b"], CssExtractor.Read("vue", new CodeFileInput("x.vue", Block)).Nodes.Select(node => node.Id));
+        string? Ids(string? lang, string? type) => CssExtractor.Read("vue", new CodeFileInput("x.vue", Block), lang, type) is { } read ? string.Join(" ", read.Nodes.Select(node => node.Id)) : null;
+
+        Assert.Equal("vue:x.vue#.a", Ids("scss", null));
+        Assert.Equal("vue:x.vue#.a", Ids("less", "text/css"));
+        Assert.Equal("vue:x.vue#.a", Ids(null, "text/x-scss"));
+        Assert.Equal("vue:x.vue#.a", Ids(null, "text/less"));
+        Assert.Equal("vue:x.vue#.a vue:x.vue#.b", Ids(null, null));
+        Assert.Equal("vue:x.vue#.a vue:x.vue#.b", Ids(null, "text/css"));
+        Assert.Equal("vue:x.vue#.a vue:x.vue#.b", Ids("postcss", null));
+        Assert.Null(Ids("stylus", null));
+        Assert.Null(Ids(null, "text/x-template"));
     }
 
     /// <summary>A sheet of many rules is read in time that grows with its rules alone: one node a name, found by its name.</summary>

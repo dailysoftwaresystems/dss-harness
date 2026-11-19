@@ -166,6 +166,11 @@ public sealed record GraphWholeRead(bool Narrowed, string Text, string? Escape, 
 /// <c>graph-pages</c> directory, a step's or a side-task's - so its later pages, and a resumed or continued
 /// conversation's, are pages of that one result; null where none is kept (the verb).
 /// </param>
+/// <param name="mask">
+/// The secrets of the run the tool serves: a result of more than one page is masked by them as it is computed, before it
+/// is paged and kept, so its pages and what the conversation's records keep of it hold none, as every answer the run is
+/// given holds none (<see cref="AgentToolRuntime"/>); null where the tool serves a person's own view (the verb).
+/// </param>
 public sealed class CodebaseGraphTool(
     CodebaseGraphQueries queries,
     AgentFiles files,
@@ -175,7 +180,8 @@ public sealed class CodebaseGraphTool(
     Func<string, AgentPolicyAnswer>? mayWrite = null,
     Func<string, CancellationToken, Task<CodebaseGraphQueries>>? reExtract = null,
     Func<GraphNearness?>? near = null,
-    GraphPageStore? pages = null)
+    GraphPageStore? pages = null,
+    Execution.ILineMask? mask = null)
 {
     /// <summary>The most characters an answer holds; a page past it ends at a whole entry, and the next holds the rest.</summary>
     public const int MostCharacters = 24 * 1024;
@@ -232,6 +238,7 @@ public sealed class CodebaseGraphTool(
     private readonly SemaphoreSlim _extracting = new(1, 1);
     private readonly SemaphoreSlim _editing = new(1, 1);
     private readonly GraphPageStore? _pages = pages;
+    private readonly Execution.ILineMask? _mask = mask;
     private CodebaseGraphQueries _queries = queries ?? throw new ArgumentNullException(nameof(queries));
 
     /// <summary>How the tree's file system compares names, as it answers for itself: asked once, the tree being the tool's for its life.</summary>
@@ -1322,7 +1329,7 @@ public sealed class CodebaseGraphTool(
         }
 
         var computed = answer is null;
-        answer ??= await compute(cancellationToken).ConfigureAwait(false);
+        answer ??= Masked(await compute(cancellationToken).ConfigureAwait(false));
 
         IReadOnlyList<string> trailing = [.. answer.Trailing, .. UnheldLines()];
         var paged = GraphPages.Assemble(answer.Sections, answer.Leading, trailing, page, asked, MostCharacters, note);
@@ -1354,6 +1361,23 @@ public sealed class CodebaseGraphTool(
             Paging = paged,
         };
     }
+
+    /// <summary>
+    /// <paramref name="answer"/> with every line it shows masked by the run's secrets, where the tool is given them: its
+    /// head and its notes, each section's caption, and each entry's text and the head it goes on under - what its pages
+    /// give and what is kept of it. Its nodes and the files it read are named as the graph names them.
+    /// </summary>
+    private GraphAnswer Masked(GraphAnswer answer)
+        => _mask is not { } mask ? answer : answer with
+        {
+            Leading = [.. answer.Leading.Select(mask.Redact)],
+            Sections = [.. answer.Sections.Select(section => section with
+            {
+                Caption = section.Caption is null ? null : mask.Redact(section.Caption),
+                Entries = [.. section.Entries.Select(entry => entry with { Text = mask.Redact(entry.Text), GoesOn = entry.GoesOn is null ? null : mask.Redact(entry.GoesOn) })],
+            })],
+            Trailing = [.. answer.Trailing.Select(mask.Redact)],
+        };
 
     /// <summary>
     /// A read's answer of one sentence: said as it is, with the notes every answer ends with - one page, so a page past it

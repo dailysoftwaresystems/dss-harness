@@ -5339,8 +5339,14 @@ public static class HelpTopics
             + "and from each field or property its last segment names as codebaseGraph.keyNaming writes it, even where one key alone "
             + $"is so named, for nothing says the code reads that key; a literal or a name that names more than {CodeConfidences.MostCandidates} "
             + "keys joins none. A use is recall and never a doubt: no uses edge is counted, nor makes a node or a file unsure. "
-            + "A configuration key, an element and a style rule are reached only by what names one so - a key's join, an "
-            + "MSBuild $(Name), a selector, a use through an import's prefix - never by a name alone, as code names code. "
+            + "The graph masks nothing as it reads and stores - a literal, a key's value, an element's text are kept as the file "
+            + "writes them - and a run's secrets are masked where the graph reaches the run: each answer of the graph tool and the "
+            + "codebase part of each message, as every answer and message of a run is, and a result of more than one page before "
+            + "it is paged and kept; the verb answers a person's own view, unmasked. "
+            + "A configuration key, an element and every node a style sheet declares - a rule, keyframes, a mixin, a function, "
+            + "a font face, a variable - are reached only by what names one so - a key's join, an MSBuild $(Name), a selector, "
+            + "a sheet's var(--x), $x, @x, @include or animation name, a use through an import's prefix - never by a name "
+            + "alone, as code names code. "
             + "No model writes any of it: every node and edge is read from a file by a program.");
         builder.AppendLine();
         AppendWrapped(

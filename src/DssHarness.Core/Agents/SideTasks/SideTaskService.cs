@@ -496,7 +496,8 @@ public sealed class SideTaskService(
                 _clock,
                 common.Context.Layout,
                 layout,
-                common.Context.Config.Worktrees?.Root ?? WorktreeSettings.DefaultRoot);
+                common.Context.Config.Worktrees?.Root ?? WorktreeSettings.DefaultRoot,
+                common.Mask);
 
             if (!call.NoGraph)
             {
