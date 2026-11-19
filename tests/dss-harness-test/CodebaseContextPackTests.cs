@@ -476,7 +476,7 @@ public sealed class CodebaseContextPackTests
         var unread = CodebaseContextPack.Make(queries, task with { ChangesUnread = "git could not compare\r\n  the tree with it.\n" });
         var undeclared = CodebaseContextPack.Make(queries, task with { Changes = new CodebaseGraphChanges(head, ["README.md"], []) });
 
-        var commit = head[..12];
+        var commit = head;
         Assert.Contains($", 0 file(s) differing from its base {commit}; no change against its base, so packed from the task: 1 node(s) it names", none.Text.Split('\n')[0], StringComparison.Ordinal);
         Assert.Contains("; its changes could not be read (git could not compare the tree with it), so packed from the task: 1 node(s) it names", unread.Text.Split('\n')[0], StringComparison.Ordinal);
         Assert.Contains($", 1 file(s) differing from its base {commit}; no declaration among them changed, so packed from the task: ", undeclared.Text.Split('\n')[0], StringComparison.Ordinal);
@@ -507,7 +507,7 @@ public sealed class CodebaseContextPackTests
         var pack = CodebaseContextPack.Make(new CodebaseGraphQueries(read), new ContextPackRequest("Review it.", All) { From = ContextPackFrom.Changes, Changes = changes });
 
         var first = pack.Text.Split('\n')[0];
-        Assert.Contains($", 1 file(s) differing from its base {based[..12]}; 1 differing file(s) could not be compared: src/Grows.cs (218 bytes, over maxFileBytes (120)), so packed from the task: ", first, StringComparison.Ordinal);
+        Assert.Contains($", 1 file(s) differing from its base {based}; 1 differing file(s) could not be compared: src/Grows.cs (218 bytes, over maxFileBytes (120)), so packed from the task: ", first, StringComparison.Ordinal);
         Assert.DoesNotContain("no declaration", first, StringComparison.Ordinal);
 
         // Beside a file compared, the line says no declaration among the rest changed; one the step may not read is never named.
@@ -515,8 +515,8 @@ public sealed class CodebaseContextPackTests
         var beside = CodebaseContextPack.Make(new CodebaseGraphQueries(read), new ContextPackRequest("Review it.", All) { From = ContextPackFrom.Changes, Changes = some });
         var unreadable = CodebaseContextPack.Make(new CodebaseGraphQueries(read), new ContextPackRequest("Review it.", path => path != "src/Grows.cs") { From = ContextPackFrom.Changes, Changes = some });
 
-        Assert.Contains($", 2 file(s) differing from its base {based[..12]}; 1 differing file(s) could not be compared: src/Grows.cs (218 bytes, over maxFileBytes (120)); no declaration among the rest changed, so packed from the task: ", beside.Text.Split('\n')[0], StringComparison.Ordinal);
-        Assert.Contains($", 1 file(s) differing from its base {based[..12]}; no declaration among them changed, so packed from the task: ", unreadable.Text.Split('\n')[0], StringComparison.Ordinal);
+        Assert.Contains($", 2 file(s) differing from its base {based}; 1 differing file(s) could not be compared: src/Grows.cs (218 bytes, over maxFileBytes (120)); no declaration among the rest changed, so packed from the task: ", beside.Text.Split('\n')[0], StringComparison.Ordinal);
+        Assert.Contains($", 1 file(s) differing from its base {based}; no declaration among them changed, so packed from the task: ", unreadable.Text.Split('\n')[0], StringComparison.Ordinal);
         Assert.DoesNotContain("Grows", unreadable.Text, StringComparison.Ordinal);
     }
 
@@ -535,7 +535,7 @@ public sealed class CodebaseContextPackTests
         Assert.Equal("changed:", lines[1]);
         Assert.EndsWith(" | added", lines[2], StringComparison.Ordinal);
         Assert.Contains("public int Count()", lines[2], StringComparison.Ordinal);
-        Assert.Equal($"removed member Shop.Storage.MemoryOrderStore.All | was src/Storage/MemoryOrderStore.cs:17-17 at {changes!.Base[..12]}", lines[3]);
+        Assert.Equal($"removed member Shop.Storage.MemoryOrderStore.All | was src/Storage/MemoryOrderStore.cs:17-17 at {changes!.Base}", lines[3]);
     }
 
     [Fact]
@@ -654,7 +654,7 @@ public sealed class CodebaseContextPackTests
         var pack = CodebaseContextPack.Make(queries, new ContextPackRequest("Review it.", All) { From = ContextPackFrom.Changes, Changes = changes });
 
         var lines = pack.Text.Split('\n');
-        Assert.Equal(["changed:", $"removed type Wide | was src/Wide.B.cs:1-4 at {based[..12]}"], lines[1..3]);
+        Assert.Equal(["changed:", $"removed type Wide | was src/Wide.B.cs:1-4 at {based}"], lines[1..3]);
         Assert.DoesNotContain("Two", pack.Text, StringComparison.Ordinal);
         Assert.Contains("; packed from those changes first - 1 declaration(s) added, changed or taken out,", lines[0], StringComparison.Ordinal);
     }
@@ -690,7 +690,7 @@ public sealed class CodebaseContextPackTests
 
         var pack = CodebaseContextPack.Make(queries, new ContextPackRequest("Review it.", path => !path.StartsWith("secret/", StringComparison.Ordinal)) { From = ContextPackFrom.Changes, Changes = changes });
 
-        Assert.Contains($", 2 file(s) differing from its base {based[..12]}; packed from those changes first - 3 declaration(s) added, changed or taken out,", pack.Text.Split('\n')[0], StringComparison.Ordinal);
+        Assert.Contains($", 2 file(s) differing from its base {based}; packed from those changes first - 3 declaration(s) added, changed or taken out,", pack.Text.Split('\n')[0], StringComparison.Ordinal);
         Assert.DoesNotContain("secret", pack.Text, StringComparison.Ordinal);
         Assert.DoesNotContain("Through", pack.Text, StringComparison.Ordinal);
         Assert.DoesNotContain("Dropped", pack.Text, StringComparison.Ordinal);

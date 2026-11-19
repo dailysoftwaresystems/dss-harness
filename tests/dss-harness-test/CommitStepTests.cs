@@ -798,7 +798,7 @@ public sealed class CommitStepTests
         var made = await HeadAsync(kit);
         Assert.NotEqual(before, made);
         Assert.Equal(
-            (false, HarnessExit.CommandFailed, $"'commit' made {made[..12]}, and it is not what its folds left alone: it took 'other.txt' besides - a hook, or git, made it so. The commit is left as it is: keep it, or undo it with git reset --soft {before}, then resume, which settles it."),
+            (false, HarnessExit.CommandFailed, $"'commit' made {made}, and it is not what its folds left alone: it took 'other.txt' besides - a hook, or git, made it so. The commit is left as it is: keep it, or undo it with git reset --soft {before}, then resume, which settles it."),
             (swept.Passed, swept.Exit, swept.Error));
         Assert.Equal("a.txt\nother.txt\n", (await kit.Harness.RunGitAsync(kit.Main, ["diff-tree", "-r", "--name-only", "--no-commit-id", "HEAD"], Token)).StandardOutput);
 
@@ -869,7 +869,7 @@ public sealed class CommitStepTests
         var besides = historyAlone ? string.Empty : ", and it took '.github/workflows/x.yml' besides";
         Assert.NotEqual(before, parent);
         Assert.Equal(
-            (false, HarnessExit.CommandFailed, $"'commit' made {onto[..12]}, and it is not what its folds left alone: it stands on {parent[..12]}, not on {before[..12]} alone, the commit the branch named before it{besides} - a hook, or git, made it so. The commit is left as it is: keep it, or undo it with git reset --soft {before}, then resume, which settles it."),
+            (false, HarnessExit.CommandFailed, $"'commit' made {onto}, and it is not what its folds left alone: it stands on {parent}, not on {before} alone, the commit the branch named before it{besides} - a hook, or git, made it so. The commit is left as it is: keep it, or undo it with git reset --soft {before}, then resume, which settles it."),
             (moved.Passed, moved.Exit, moved.Error));
 
         var staged = Assert.Single(kit.Harness.OrchestrationStore.ReadFolds(kit.Layout)!.Commits);

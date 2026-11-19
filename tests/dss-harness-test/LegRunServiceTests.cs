@@ -732,7 +732,7 @@ public sealed class LegRunServiceTests
                 hosts: hosts,
                 transports: transports);
 
-            var commit = (await harness.GitClient.ResolveCommitAsync(temp.Path, "HEAD", token))![..12];
+            var commit = (await harness.GitClient.ResolveCommitAsync(temp.Path, "HEAD", token))!;
             var uncommitted = changes > 0 ? $" with {changes} uncommitted change(s)" : string.Empty;
             var lines = (harness.StandardOutput.ToString() + harness.StandardError.ToString()).Split('\n').Select(line => line.TrimEnd('\r')).ToList();
 

@@ -9,9 +9,6 @@ public static class ReportText
     /// <summary>How many of a list a one-line message names before it counts the rest.</summary>
     public const int NamedLimit = 3;
 
-    /// <summary>How many characters of a commit's id a message shows.</summary>
-    public const int CommitLength = 12;
-
     /// <summary>The letters that, before a final <c>y</c>, leave a noun whole in its plural: <c>key(s)</c>.</summary>
     private const string Vowels = "aeiou";
 
@@ -134,13 +131,17 @@ public static class ReportText
         return Hisses.Any(hiss => noun.EndsWith(hiss, StringComparison.Ordinal)) ? "es" : "s";
     }
 
-    /// <summary>A commit as a message names one: the first <see cref="CommitLength"/> characters of its id.</summary>
+    /// <summary>
+    /// A commit as a message names one: abbreviated as git abbreviates it in the repository the operation works in
+    /// (<see cref="CommitIds"/>), and whole where no repository is known. Only a line a person reads abbreviates it: a
+    /// record or a <c>--json</c> document carries the whole id.
+    /// </summary>
     /// <param name="commit">The commit's id.</param>
     public static string Commit(string commit)
     {
         ArgumentNullException.ThrowIfNull(commit);
 
-        return commit.Length <= CommitLength ? commit : commit[..CommitLength];
+        return CommitIds.Current?.Shown(commit) ?? commit;
     }
 
     /// <summary>
