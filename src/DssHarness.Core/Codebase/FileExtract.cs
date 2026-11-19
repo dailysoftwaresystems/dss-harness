@@ -636,7 +636,7 @@ public sealed record ExtractReference(string From, string Kind, string Name, int
             : !FileExtract.Within(Line, lineCount) ? string.Create(CultureInfo.InvariantCulture, $"it is on line {Line}, outside the file's {lineCount}")
             : Arity is < 0 ? "its arity is below zero"
             : Qualifier is { } qualifier && !CodeQualifierKinds.All.Contains(qualifier.Kind, StringComparer.Ordinal) ? $"its qualifier's kind is '{qualifier.Kind}', which is none of {string.Join(", ", CodeQualifierKinds.All)}"
-            : Qualifier is { Kind: CodeQualifierKinds.Named or CodeQualifierKinds.Type or CodeQualifierKinds.Prefix or CodeQualifierKinds.Own } named && string.IsNullOrWhiteSpace(named.Name) ? "its qualifier names nothing"
+            : Qualifier is { Kind: CodeQualifierKinds.Named or CodeQualifierKinds.Type or CodeQualifierKinds.Prefix or CodeQualifierKinds.Own or CodeQualifierKinds.Module } named && string.IsNullOrWhiteSpace(named.Name) ? "its qualifier names nothing"
             : Qualifier is { Kind: CodeQualifierKinds.Value or CodeQualifierKinds.Scope or CodeQualifierKinds.Key, Name: { } value } && string.IsNullOrWhiteSpace(value) ? "its qualifier's name is empty"
             : null;
 }
@@ -746,8 +746,16 @@ public static class CodeQualifierKinds
     /// </summary>
     public const string Own = "own";
 
+    /// <summary>
+    /// What a CSS module of the reference's own file exports by the reference's name, as a binding of the module reads it
+    /// - a Vue component's <c>$style.red</c>, which its <c>&lt;style module&gt;</c> binds: with the name of the scope the
+    /// module keeps its own names to (<see cref="ExtractNode.SeenIn"/>), each class, id and keyframes of it exported by
+    /// that name, a suffix written onto others' by the names it writes, exact - and nothing else of that name.
+    /// </summary>
+    public const string Module = "module";
+
     /// <summary>Every kind.</summary>
-    public static IReadOnlyList<string> All { get; } = [This, Base, Named, Type, Prefix, Value, Scope, Selector, Key, StyleVariable, StyleMixin, StyleFunction, Keyframes, FontFace, Own];
+    public static IReadOnlyList<string> All { get; } = [This, Base, Named, Type, Prefix, Value, Scope, Selector, Key, StyleVariable, StyleMixin, StyleFunction, Keyframes, FontFace, Own, Module];
 }
 
 /// <summary>A place an implementation saw something it cannot bind, or stopped reading.</summary>

@@ -5352,7 +5352,9 @@ public static class HelpTopics
             + "a sheet's var(--x), $x, @x, @include, function call, animation name or font family, a use through an import's "
             + "prefix, a name an import binds that the file exports the node by (import { btn } from './x.module.css') - never "
             + "by a name alone, as code names code; a sheet's name is looked for nearest first - the sheet's own, what it "
-            + "imports, then the repository's - and a CSS module's class is seen from its own file and its importers alone. "
+            + "imports, then the repository's - and a CSS module's class is seen from its own file and its importers alone, "
+            + "by name from its own sheet's composes or @extend, never by a class markup writes, which the module renames - a "
+            + "Vue component's <style module> class through $style.x alone. "
             + "No model writes any of it: every node and edge is read from a file by a program.");
         builder.AppendLine();
         AppendWrapped(

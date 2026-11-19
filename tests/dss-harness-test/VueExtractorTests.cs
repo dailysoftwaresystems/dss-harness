@@ -594,5 +594,66 @@ public sealed class VueExtractorTests : CodeGraphExtractorContractTests<VueExtra
             linked.Edges.Where(edge => edge.Kind == CodeEdgeKinds.Uses).OrderBy(edge => edge.Line));
     }
 
+    /// <summary>
+    /// A component's <c>&lt;style module&gt;</c> is a CSS module its binding reads: <c>$style.red</c> in the template and
+    /// <c>this.$style.red</c> in a method use the module's <c>.red</c>, and <c>classes.card__title</c> of a block bound as
+    /// <c>classes</c> the suffix its <c>&amp;__title</c> writes onto <c>.card</c> and <c>.tile</c>, each exact through the
+    /// module's exports; the template's own <c>class="red"</c> reaches none of the module's - which the module renames -
+    /// but the <c>&lt;style scoped&gt;</c> rule of that name, the component's own, which no other file's class reaches.
+    /// </summary>
+    [Fact]
+    public void AStyleModule_IsReachedThroughItsBindingAlone_AndAScopedBlockFromItsComponentAlone()
+    {
+        var extract = Read("src/Tag.vue", """
+            <template>
+              <p :class="$style.red" class="red tint"></p>
+              <h2 :class="classes.card__title"></h2>
+            </template>
+            <script>
+            export default {
+              methods: {
+                paint() { return this.$style.red; },
+              },
+            };
+            </script>
+            <style module>
+            .red { color: red; }
+            </style>
+            <style module="classes" lang="scss">
+            .card, .tile { &__title { margin: 0; } }
+            </style>
+            <style scoped>
+            .red { color: crimson; }
+            .tint { opacity: 0.5; }
+            </style>
+            """);
+
+        // Each member a binding reads names the scope its block keeps its own names to.
+        Assert.Equal(
+            [
+                new ExtractReference("vue:src/Tag.vue", CodeEdgeKinds.Uses, "red", 2) { Qualifier = new ExtractQualifier(CodeQualifierKinds.Module, "src/Tag.vue#$style") },
+                new ExtractReference("vue:src/Tag.vue", CodeEdgeKinds.Uses, "card__title", 3) { Qualifier = new ExtractQualifier(CodeQualifierKinds.Module, "src/Tag.vue#classes") },
+                new ExtractReference("vue:src/Tag.vue.paint", CodeEdgeKinds.Uses, "red", 8) { Qualifier = new ExtractQualifier(CodeQualifierKinds.Module, "src/Tag.vue#$style") },
+            ],
+            extract.References.Where(reference => reference.Qualifier?.Kind == CodeQualifierKinds.Module));
+
+        var linked = CodeGraphLinker.Link(
+        [
+            new CodeGraphFile("src/Tag.vue", "vue", extract),
+            new CodeGraphFile("src/other.html", "html", new HtmlExtractor().Extract(new CodeFileInput("src/other.html", "<p class=\"tint red\"></p>\n"))),
+        ]);
+
+        Assert.Equal(
+            [
+                new CodeEdge("vue:src/Tag.vue", "vue:src/Tag.vue#.red", CodeEdgeKinds.Uses, 2, CodeConfidences.Exact),
+                new CodeEdge("vue:src/Tag.vue", "vue:src/Tag.vue#.red~2", CodeEdgeKinds.Uses, 2, CodeConfidences.Exact),
+                new CodeEdge("vue:src/Tag.vue", "vue:src/Tag.vue#.tint", CodeEdgeKinds.Uses, 2, CodeConfidences.Exact),
+                new CodeEdge("vue:src/Tag.vue", "vue:src/Tag.vue#.card&__title", CodeEdgeKinds.Uses, 3, CodeConfidences.Exact),
+                new CodeEdge("vue:src/Tag.vue.paint", "vue:src/Tag.vue#.red", CodeEdgeKinds.Uses, 8, CodeConfidences.Exact),
+            ],
+            linked.Edges.Where(edge => edge.Kind == CodeEdgeKinds.Uses && edge.To.Contains('#', StringComparison.Ordinal))
+                .OrderBy(edge => edge.Line).ThenBy(edge => edge.To, StringComparer.Ordinal));
+    }
+
     private static FileExtract Read(string path, string text) => new VueExtractor().Extract(new CodeFileInput(path, text));
 }

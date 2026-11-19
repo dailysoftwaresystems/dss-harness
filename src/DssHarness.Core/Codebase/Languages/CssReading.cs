@@ -90,6 +90,7 @@ internal sealed class CssReading
     private readonly string _path;
     private readonly StyleSyntax _syntax;
     private readonly StyleScope _scope;
+    private readonly string _kept;
     private readonly InterpolatedText _text;
     private readonly ScannedText _scan;
     private readonly ScanExtract _extract = new();
@@ -127,18 +128,24 @@ internal sealed class CssReading
     /// <param name="text">The sheet's text, at the lines it stands on in its file.</param>
     /// <param name="syntax">What it is written in.</param>
     /// <param name="scope">Whose its names are: the page's, a module's, a scoped component's.</param>
-    public CssReading(string language, string path, string text, StyleSyntax syntax, StyleScope scope)
+    /// <param name="kept">
+    /// The scope a module's or a component's own nodes are kept to, closed, which every declaration of the file is written
+    /// in: the file's own where none is given; a module block's of its own, which a binding of the block names
+    /// (<see cref="CodeQualifierKinds.Module"/>).
+    /// </param>
+    public CssReading(string language, string path, string text, StyleSyntax syntax, StyleScope scope, string? kept = null)
     {
         _language = language;
         _path = path;
         _syntax = syntax;
         _scope = scope;
+        _kept = kept ?? CodeGraphIds.FileId(path);
         _text = CssLexer.Scan(syntax == StyleSyntax.Sass ? CssLexer.Braced(text) : text, syntax, _closes);
         _scan = _text.Scan;
     }
 
-    /// <summary>The scope a module's or a component's own nodes are kept to: the file's own, closed, which every declaration of the file is written in.</summary>
-    private string Kept => CodeGraphIds.FileId(_path);
+    /// <summary>The scope a module's or a component's own nodes are kept to, closed, which every declaration of the file is written in.</summary>
+    private string Kept => _kept;
 
     /// <summary>The sheet's extract.</summary>
     public FileExtract Read()

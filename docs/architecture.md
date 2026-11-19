@@ -4643,10 +4643,12 @@ A sheet named as a CSS module (`x.module.css`) keeps each class, id and keyframe
 but one under `:global` - and exports each by its name and its camel-cased one (`ExtractNode.Exports`; a suffix
 written onto several by the forms of its suffix, matched as its names are), so a script's
 `import styles from './x.module.css'` and its `styles.btn`, or an `import { btn }`, bind to the rule `.btn` through the
-import, by the linker's one rule for an exported name, and no other file's selector reaches it. A style block another
-reader hands the style sheet's reader as a component's `<style scoped>` (`StyleScope.Scoped`) keeps the parts of each
-selector's last compound - the element Vue's attribute marks - and its keyframes to its file, but those under `:deep`,
-`:slotted` or `:global`; one handed as a `<style module>` is read as a CSS module is. `related` answers `styledBy` (the rules that style a node: its `uses`
+import, by the linker's one rule for an exported name, and no other file's selector reaches it - nor a class markup
+writes, which the module renames: what a module keeps to itself and exports is reached by its name from a node of a
+style sheet alone, its own `composes` or `@extend` (`CodeGraphLinker.Takes`). A style block another reader hands the
+style sheet's reader as a component's `<style scoped>` (`StyleScope.Scoped`) keeps the parts of each selector's last
+compound - the element Vue's attribute marks - and its keyframes to its file, but those under `:deep`, `:slotted` or
+`:global`; one handed as a `<style module>` is read as a CSS module is. `related` answers `styledBy` (the rules that style a node: its `uses`
 edges to a rule, SubKind `rule`, alone) and `styles` (what a rule reaches: the nodes whose `uses` edges reach it, asked
 of a rule - of any other node, nothing), so "who uses this class" and "what styles this element" are one call each.
 
@@ -4710,9 +4712,16 @@ with whatever the event gives, a function expression the handler itself, anythin
 `v-for`'s list and `{{ }}` what their expressions read - each name it reads by itself a member of the component
 (`this`), as the template compiles it, but a global Vue's compiler leaves to itself (`Math`) and a name a `v-for`'s
 aliases or a `v-slot`'s pattern declares where it stands, the template's own and no member; a slot's pattern's
-defaults code read once where it is written. Its `<style>` blocks - scoped among them - are read by the style sheet's
-reader in the syntax each block's `lang` names - CSS where it names none, `scss`, `sass` or `less`, one of another
-(`stylus`) read as none - which the css implementation answers for another language's file as the C# reader does.
+defaults code read once where it is written. Its `<style>` blocks are read by the style sheet's reader in the syntax
+each block's `lang` names - CSS where it names none, `scss`, `sass` or `less`, one of another (`stylus`) read as none -
+which the css implementation answers for another language's file as the C# reader does: a `<style scoped>` as the
+component's own (`StyleScope.Scoped`), so its rules are reached from this component's template alone, a `<style
+module>` as a CSS module (`StyleScope.Module`), and any other as the page's. A module block's classes, ids and keyframes
+are kept to a scope of the name it binds them by - `$style` where it gives none - so a member that name reads, in the
+template (`$style.red`) or the script (`this.$style.red`), is a use of what the block exports by that name
+(`CodeQualifierKinds.Module`, naming that scope: `VueExtractor.Bound`), found as an import of a module finds it - a
+suffix written onto others' by the names it writes - exact, and nothing else of that name; the template's
+`class="red"` reaches none of it.
 
 A sync (`ICodebaseGraphService.SyncAsync`) lists the main checkout by three calls of `IGitClient` that take no lock -
 `ListIndexAsync` (`ls-files --stage -v -z`, the one reading of the index the whole tool shares), `ListWorkingFilesAsync`

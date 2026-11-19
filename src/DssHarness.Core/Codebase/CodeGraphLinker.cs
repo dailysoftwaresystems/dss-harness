@@ -685,10 +685,10 @@ public static class CodeGraphLinker
         /// </summary>
         private (IReadOnlyList<Declaration> Found, string Confidence) Found(Declaration from, ExtractReference reference)
         {
-            bool Accepts(Declaration target) => Takes(reference, target, imported: false) && Sees(from, target);
+            bool Accepts(Declaration target) => Takes(from, reference, target, imported: false) && Sees(from, target);
 
             // What an import of the file that declares it makes visible: a name it binds may be data the file exports.
-            bool Imports(Declaration target) => Takes(reference, target, imported: true) && Sees(from, target);
+            bool Imports(Declaration target) => Takes(from, reference, target, imported: true) && Sees(from, target);
 
             // A value of a type the code does not say: through the type of the member it is - nothing the repository
             // declares where that type is not the repository's - else, where no value is so named and an import's prefix
@@ -931,6 +931,13 @@ public static class CodeGraphLinker
                     // The node of its own file its implementation names by id - what a YAML alias or merge repeats, read
                     // once where it is written: that one, exact. Its file changing finds the reference again, so nothing is read.
                     return (_owners[from.File].TryGetValue(qualifier.Name!, out var own) && accepts(own) ? [own] : [], CodeConfidences.Exact);
+
+                case CodeQualifierKinds.Module:
+                    // What a module of its own file exports by the name - a Vue component's $style.red - as an import of the
+                    // module finds it: each node exported so, a suffix written onto others' by the names it writes, of the
+                    // module whose own names are kept to the scope the qualifier names alone; exact.
+                    return (Distinct(ExportedNamed(from.File.Path, name).Concat(Suffixed(from.File, name, exported: true))
+                        .Where(target => target.Node.SeenIn == qualifier.Name && accepts(target))), CodeConfidences.Exact);
 
                 case CodeQualifierKinds.Type:
                     return Typed(from, Containers(from, qualifier.Name!), qualifier.Name!, name, accepts, withSelf: true);
@@ -2645,6 +2652,13 @@ public static class CodeGraphLinker
     private static bool Declared(Declaration prototype, Declaration body)
         => body.File.Language == prototype.File.Language && body.Node.Qualified == prototype.Node.Qualified && TakeAlike(body.Node, prototype.Node);
 
+    /// <summary>
+    /// Whether <paramref name="node"/> is what a CSS module keeps to itself and exports - a class, an id, keyframes the
+    /// module renames, which a script reaches by the names it is exported by (<see cref="ExtractNode.Exports"/>) and no
+    /// class markup writes reaches by its own.
+    /// </summary>
+    private static bool Renamed(ExtractNode node) => CodeSubKinds.IsData(node.SubKind) && node.SeenIn is not null && node.Exports is not null;
+
     /// <summary>Whether a reference of <paramref name="kind"/> names a base of the type it is made in.</summary>
     private static bool IsBase(string kind) => kind is CodeEdgeKinds.Inherits or CodeEdgeKinds.Implements or CodeEdgeKinds.MixesIn;
 
@@ -2659,9 +2673,17 @@ public static class CodeGraphLinker
     /// node standing for a suffix written onto others' (<see cref="ExtractNode.SuffixOf"/>), which no name finds but one
     /// it was matched to stand for - never one that names it by its name alone, as code names code; and a reference to a
     /// node of its own file by its id (<see cref="CodeQualifierKinds.Own"/>) reaches that node, whatever it is: the one
-    /// place that says what a reference may reach.
+    /// place that says what a reference may reach. What a CSS module keeps to itself and exports - a class, an id,
+    /// keyframes (<see cref="Renamed"/>) - is reached by its name only from a node of a style sheet, its own sheet's
+    /// <c>composes</c> or <c>@extend</c>: the module renames it, so a class markup writes - a component's
+    /// <c>class="red"</c> beside its <c>&lt;style module&gt;</c> - reaches none of it; its exports do, through an import
+    /// and through a binding of its own file's module (<see cref="CodeQualifierKinds.Module"/>), which reaches nothing else.
     /// </summary>
-    private static bool Takes(ExtractReference reference, Declaration target, bool imported)
+    /// <param name="from">The declaration the reference is made in.</param>
+    /// <param name="reference">The reference.</param>
+    /// <param name="target">A declaration it may name.</param>
+    /// <param name="imported">Whether the declaration is what an import makes visible.</param>
+    private static bool Takes(Declaration from, ExtractReference reference, Declaration target, bool imported)
     {
         // A reference to a node of its own file by id names that node, whatever kind it is.
         if (reference.Qualifier?.Kind == CodeQualifierKinds.Own)
@@ -2669,9 +2691,16 @@ public static class CodeGraphLinker
             return true;
         }
 
+        // A binding of a module of its own file uses what the module exports, and nothing else.
+        if (reference.Qualifier?.Kind == CodeQualifierKinds.Module)
+        {
+            return reference.Kind == CodeEdgeKinds.Uses && Renamed(target.Node);
+        }
+
         if (CodeSubKinds.ReachedBy(reference.Qualifier?.Kind) is { } reached)
         {
-            return target.Node.Kind == CodeNodeKinds.Member && target.Node.SubKind == reached;
+            return target.Node.Kind == CodeNodeKinds.Member && target.Node.SubKind == reached
+                && (!Renamed(target.Node) || CodeSubKinds.IsData(from.Node.SubKind));
         }
 
         if (CodeSubKinds.IsData(target.Node.SubKind)

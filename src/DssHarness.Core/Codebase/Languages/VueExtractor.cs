@@ -19,14 +19,18 @@ namespace DssHarness.Core.Codebase.Languages;
 /// each <c>{{ }}</c> - read by the JavaScript reader as Vue's compiler compiles it (<see cref="Template"/>), each name it
 /// reads by itself a member of the component, looked for on it as the template compiles them, but Vue's globals and a
 /// name a <c>v-for</c> or a <c>v-slot</c> declares where it stands.
-/// Each style block - scoped among them - is read by the style sheet's reader in the syntax its <c>lang</c> names: CSS,
-/// SCSS, Sass's indented syntax or Less. The script and styles are embedded as every markup embeds code
-/// (<see cref="EmbeddedCode"/>).
+/// Each style block is read by the style sheet's reader in the syntax its <c>lang</c> names: CSS, SCSS, Sass's indented
+/// syntax or Less - a <c>&lt;style scoped&gt;</c> as the component's own, a <c>&lt;style module&gt;</c> as a CSS module whose
+/// classes the name it gives binds, <c>$style</c> where it gives none (<see cref="Bound"/>), any other as the page's. The
+/// script and styles are embedded as every markup embeds code (<see cref="EmbeddedCode"/>).
 /// </summary>
 public sealed partial class VueExtractor : ICodeGraphExtractor
 {
     /// <summary>The name the script's default export is declared by where its expression names none.</summary>
     private const string Default = "default";
+
+    /// <summary>The name a <c>&lt;style module&gt;</c> that gives none binds its classes by, as Vue binds them.</summary>
+    private const string ModuleBinding = "$style";
 
     /// <summary>The globals Vue's template compiler leaves to themselves, as its own list has them: no member of the component.</summary>
     private static readonly HashSet<string> Globals = new(StringComparer.Ordinal)
@@ -50,12 +54,13 @@ public sealed partial class VueExtractor : ICodeGraphExtractor
 
     /// <inheritdoc/>
     public CodeGraphExtractorHelp Help { get; } = new(
-        "Vue single-file components (.vue): the component a type named by its file and qualified by its path, exported default, so an import of it binds to it and a member through it to its script's declaration; its script blocks - TypeScript where lang=\"ts\" - read by the JavaScript reader as the one module Vue compiles them to, its default export the component itself, its options object - or the one defineComponent is given - declaring its members: each prop and injection, method and computed property, each function it holds (data, setup, a lifecycle hook) and each property data() and setup() return a member of the component, as is each prop a <script setup>'s defineProps declares, and each watch key a use of the member it watches; a template, script or style block that names its file by src an import of it; its template's component tags - <FooBar> and <foo-bar> alike - as instantiates and its classes and ids as uses of the rules that style them, and its code read by the JavaScript reader as Vue compiles it - a v-on or @ value that names a member a call of it, a function its handler, anything else statements the event runs with $event; a v-bind, :, v-model, v-if and every other directive's expression, a dynamic argument, a v-for's list and {{ }} what their expressions read - each name read by itself a member of the component, but Vue's globals (Math) and a v-for's alias or a v-slot's name, the template's own, and a slot's defaults read once; and each style block read by the style sheet's reader in the syntax its lang names - CSS where it names none, scss, sass, less",
+        "Vue single-file components (.vue): the component a type named by its file and qualified by its path, exported default, so an import of it binds to it and a member through it to its script's declaration; its script blocks - TypeScript where lang=\"ts\" - read by the JavaScript reader as the one module Vue compiles them to, its default export the component itself, its options object - or the one defineComponent is given - declaring its members: each prop and injection, method and computed property, each function it holds (data, setup, a lifecycle hook) and each property data() and setup() return a member of the component, as is each prop a <script setup>'s defineProps declares, and each watch key a use of the member it watches; a template, script or style block that names its file by src an import of it; its template's component tags - <FooBar> and <foo-bar> alike - as instantiates and its classes and ids as uses of the rules that style them, and its code read by the JavaScript reader as Vue compiles it - a v-on or @ value that names a member a call of it, a function its handler, anything else statements the event runs with $event; a v-bind, :, v-model, v-if and every other directive's expression, a dynamic argument, a v-for's list and {{ }} what their expressions read - each name read by itself a member of the component, but Vue's globals (Math) and a v-for's alias or a v-slot's name, the template's own, and a slot's defaults read once; and each style block read by the style sheet's reader in the syntax its lang names - CSS where it names none, scss, sass, less - a <style scoped>'s rules the component's own, reached from its template alone, and a <style module>'s classes, ids and keyframes bound by the name it gives ($style where it gives none), so $style.red in the template or this.$style.red in the script is a use of what the module exports as red, exact, and a class=\"red\" none of it",
         [
             "a template written in another language (lang=\"pug\"), and one that names its file by src: not read as the component's - the file is read as its own",
             "a style block of another language (lang=\"stylus\"): not read",
             "a component with no script block: the type alone, and nothing of its own members",
             "what a mixin or an extends option adds, a prop defineModel declares and one defineProps is given by a type another file declares: no member of the component",
+            "a module block's classes read through what useCssModule() returns, or by a string ($style['red-x']): no use of them",
         ]);
 
     /// <inheritdoc/>
@@ -107,12 +112,49 @@ public sealed partial class VueExtractor : ICodeGraphExtractor
             embedded.Add(Folded(new JsReading(Language, input.Path, text, typescript, markup: !typescript || languages.Contains("tsx"), module: true, component: true).Read(), input.Path, component.Id));
         }
 
-        embedded.AddRange(blocks.Where(block => block.Name == "style" && block.Attribute("src") is null && block.Close > block.OpenEnd)
-            .Select(style => CssExtractor.Read(Language, new CodeFileInput(input.Path, EmbeddedCode.Kept(markup.Text, markup.Lines, [(style.OpenEnd, style.Close)])), style.Attribute("lang"), style.Attribute("type")))
-            .OfType<FileExtract>());
+        // Each style block: a module's names its own, kept to a scope of its binding's - $style where it gives none -
+        // which the binding names; a scoped one's this component's alone; any other the page's.
+        var bindings = new Dictionary<string, string>(StringComparer.Ordinal);
 
-        return EmbeddedCode.Merged(new FileExtract([component]) { References = references, Imports = imports }, embedded);
+        foreach (var style in blocks.Where(block => block.Name == "style" && block.Attribute("src") is null && block.Close > block.OpenEnd))
+        {
+            var module = style.Attribute("module");
+            var binding = module?.Trim() is { Length: > 0 } named ? named : ModuleBinding;
+            var scope = module is not null ? StyleScope.Module : style.Attribute("scoped") is not null ? StyleScope.Scoped : StyleScope.Global;
+            var kept = module is not null ? $"{input.Path}#{binding}" : null;
+            var text = EmbeddedCode.Kept(markup.Text, markup.Lines, [(style.OpenEnd, style.Close)]);
+
+            if (CssExtractor.Read(Language, new CodeFileInput(input.Path, text), style.Attribute("lang"), style.Attribute("type"), scope, kept) is { } read)
+            {
+                embedded.Add(read);
+
+                if (kept is not null)
+                {
+                    bindings[binding] = kept;
+                }
+            }
+        }
+
+        return Bound(EmbeddedCode.Merged(new FileExtract([component]) { References = references, Imports = imports }, embedded), bindings);
     }
+
+    /// <summary>
+    /// <paramref name="merged"/> with each member a module block's binding reads - <c>$style.red</c> in the template, a
+    /// script's <c>this.$style.red</c>, <c>classes.red</c> of a <c>&lt;style module="classes"&gt;</c> - a use of what that
+    /// block exports by its name, as Vue binds a module's classes, ids and keyframes: through the scope the block keeps
+    /// its own names to (<see cref="CodeQualifierKinds.Module"/>), so the linker finds each by the names the module exports
+    /// it by - a suffix written onto others' by those it writes - and nothing else of that name.
+    /// </summary>
+    /// <param name="merged">The component's extract, every reader's merged.</param>
+    /// <param name="bindings">The scope each module block's own names are kept to, by the name it is bound by.</param>
+    private static FileExtract Bound(FileExtract merged, IReadOnlyDictionary<string, string> bindings)
+        => bindings.Count == 0 ? merged : merged with
+        {
+            References = [.. merged.References.Select(reference => reference is { Kind: CodeEdgeKinds.Uses, Qualifier: { Kind: CodeQualifierKinds.Value, Name: { } binding } }
+                && bindings.TryGetValue(binding, out var kept)
+                    ? reference with { Qualifier = new ExtractQualifier(CodeQualifierKinds.Module, kept) }
+                    : reference)],
+        };
 
     /// <summary>
     /// What the template says, in one walk over its elements and its texts in the order they are written. Each element -
