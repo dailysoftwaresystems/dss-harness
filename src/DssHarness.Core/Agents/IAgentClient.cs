@@ -1123,7 +1123,7 @@ public sealed record AgentMeasureSupport(Func<AgentMeasureCall, CancellationToke
 
         try
         {
-            return System.Text.Json.Nodes.JsonNode.Parse(FileSystem.WholeFiles.ReadAllText(fileSystem, file)) is System.Text.Json.Nodes.JsonObject said
+            return DssHarness.Core.Json.JsonDepth.ParseNode(FileSystem.WholeFiles.ReadAllText(fileSystem, file)) is System.Text.Json.Nodes.JsonObject said
                 && said["cell"] is System.Text.Json.Nodes.JsonValue cell && cell.TryGetValue<string>(out _)
                 && said["result"] is System.Text.Json.Nodes.JsonValue result && result.TryGetValue<string>(out var word)
                 && AgentMeasureAnswer.Results.Contains(word, StringComparer.Ordinal)

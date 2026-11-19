@@ -100,7 +100,7 @@ public sealed class AgentKeySpend(IFileSystem fileSystem, OrchestrationStore sto
     {
         try
         {
-            if (JsonNode.Parse(line) is not { } read)
+            if (DssHarness.Core.Json.JsonDepth.ParseNode(line) is not { } read)
             {
                 return null;
             }

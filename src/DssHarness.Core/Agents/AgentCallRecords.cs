@@ -170,7 +170,7 @@ public sealed class AgentCallRecords : IDisposable
             rule = denied.Rule,
             source = denied.Source.ToString(),
             reason,
-        }));
+        }, JsonStateFile.LineOptions));
 
         await _events.EmitAsync(new PermissionDenied(tool, masked, denied.Rule, SourceOf(denied.Source), reason)).ConfigureAwait(false);
     }
@@ -204,7 +204,7 @@ public sealed class AgentCallRecords : IDisposable
             rule = denied?.Rule,
             source = denied?.Source.ToString(),
             reason = denied is null ? null : _run.Mask.Redact(denied.Reason),
-        }));
+        }, JsonStateFile.LineOptions));
 
         if (denied is not null)
         {
@@ -242,7 +242,7 @@ public sealed class AgentCallRecords : IDisposable
             type,
             bytes,
             failed = failed is null ? null : _run.Mask.RedactUnescaped(failed),
-        }));
+        }, JsonStateFile.LineOptions));
 
         await _events.EmitAsync(new WebRequested(masked, AgentToolRunner.Harness, Allowed: true, status, bytes)).ConfigureAwait(false);
     }
@@ -277,7 +277,7 @@ public sealed class AgentCallRecords : IDisposable
             cached = part.Cached,
             keyMissing = part.KeyMissing is null ? null : _run.Mask.Redact(part.KeyMissing),
             why = answer.Why is null ? null : _run.Mask.Redact(answer.Why),
-        }));
+        }, JsonStateFile.LineOptions));
 
         await _events.EmitAsync(new WebRequested(query, AgentToolRunner.Harness, Allowed: answer.Outcome != Web.Search.WebSearchOutcome.Refused)).ConfigureAwait(false);
 

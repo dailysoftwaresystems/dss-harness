@@ -2,6 +2,7 @@ using System.Reflection;
 using System.Reflection.Emit;
 using System.Reflection.Metadata;
 using System.Reflection.PortableExecutable;
+using System.Text.RegularExpressions;
 using DssHarness.Core.Application;
 
 namespace DssHarness.Tests;
@@ -181,6 +182,270 @@ public sealed class ArchitectureTests
             Assert.True(lines <= Budget, $"{file} holds {lines} lines, past the {Budget} a command's wiring takes");
         }
     }
+
+    /// <summary>
+    /// No regex is made outside the one owner of the code's patterns: every <c>new Regex(</c> and every static
+    /// <c>Regex.IsMatch(</c> outside <c>Text\LinearRegex.cs</c> is a pattern compiled by its own rule, with a timeout
+    /// or an engine of its own, and the linear engine's refusal of what it cannot run in a line never reaches it. The
+    /// owner compiles every pattern the code holds as <c>NonBacktracking</c> with no timeout; nothing else compiles
+    /// one, so the walk holds no exception - a regex made anywhere else goes red here.
+    /// </summary>
+    [Fact]
+    public void NoRegexIsMadeOutsideLinearRegex()
+    {
+        var made = new List<string>();
+
+        foreach (var (relative, lines) in SourcesUnderSrc())
+        {
+            for (var i = 0; i < lines.Count; i++)
+            {
+                var text = lines[i];
+
+                if (text.Contains("new Regex(", StringComparison.Ordinal)
+                    || Regex.Match(text, @"(?<!\.)Regex\.IsMatch\(", RegexOptions.CultureInvariant).Success)
+                {
+                    made.Add($"{relative.Replace('/', '\\')}:{i + 1}: {text.Trim()}");
+                }
+            }
+        }
+
+        made.RemoveAll(line => line.StartsWith("DssHarness.Core\\Text\\LinearRegex.cs:", StringComparison.Ordinal));
+
+        Assert.Empty(made);
+    }
+
+    /// <summary>
+    /// No JSON is parsed or written without the one owner of its options: every <c>JsonSerializer</c> call, every
+    /// <c>JsonDocument.Parse</c> and <c>JsonNode.Parse</c>, and every <c>Utf8JsonReader</c> takes options that hold no
+    /// depth of the reader's own (<c>JsonDepth</c>, or the options of an owner that already wraps it), so a document
+    /// nests as deep as it nests and is refused for what its shape cannot hold, never for how deep. The exceptions
+    /// stand named below, each with why its call bounds nothing; an exception whose file no longer makes a JSON call
+    /// comes off the list.
+    /// </summary>
+    [Fact]
+    public void NoJsonIsParsedWithoutJsonDepth()
+    {
+        var bare = new List<string>();
+
+        foreach (var (relative, lines) in SourcesUnderSrc())
+        {
+            if (JsonDepthExceptions.ContainsKey(relative))
+            {
+                continue;
+            }
+
+            for (var i = 0; i < lines.Count; i++)
+            {
+                var trimmed = lines[i].TrimStart();
+
+                if (trimmed.StartsWith("///", StringComparison.Ordinal) || trimmed.StartsWith("//", StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                if (!JsonCall.Match(lines[i]).Success)
+                {
+                    continue;
+                }
+
+                // The statement runs to the line its semicolon ends, however long its initializer is.
+                var statement = lines[i];
+                var at = i;
+
+                while (!statement.TrimEnd().EndsWith(";", StringComparison.Ordinal) && at + 1 < lines.Count && at - i < 60)
+                {
+                    at++;
+                    statement += " " + lines[at].Trim();
+                }
+
+                if (!JsonOptionsNamed.Match(statement).Success)
+                {
+                    bare.Add($"{relative}:{i + 1}: {lines[i].Trim()}");
+                }
+            }
+        }
+
+        Assert.Empty(bare);
+
+        // Each exception still makes a JSON call, or its reason is stale and it comes off the list.
+        foreach (var relative in JsonDepthExceptions.Keys)
+        {
+            Assert.True(
+                File.ReadLines(Path.Combine(Src(), relative.Replace('\\', Path.DirectorySeparatorChar))).Any(line => JsonCall.Match(line).Success),
+                $"'{relative}' is excepted as \"{JsonDepthExceptions[relative]}\" but makes no JSON call any more; take it off the list.");
+        }
+    }
+
+    /// <summary>
+    /// Every constant named like a cap - Most, Max, Least, Limit, Bound, Budget - is either an external fact the tool
+    /// keeps and names (the design's E1-E11) or a planned rule the record holds (its P1-P21), a page size or a
+    /// partition that loses nothing, a presentation shape, or one retired and left for the owner of its file. The walk
+    /// reads the source itself, so a cap added anywhere under <c>src</c> that no list here names turns this red: whoever
+    /// adds one names it a fact, a plan, or takes it back out - and a listed cap nothing declares any more comes off
+    /// the list the same way.
+    /// </summary>
+    [Fact]
+    public void EveryMostMaxOrLeastConstant_IsANamedFactOrAPlannedRule()
+    {
+        var unnamed = new List<string>();
+        var declaredNames = new HashSet<string>(StringComparer.Ordinal);
+
+        foreach (var (relative, lines) in SourcesUnderSrc())
+        {
+            foreach (var line in lines)
+            {
+                if (CapConstant.Match(line) is { Success: true } one)
+                {
+                    declaredNames.Add($"{relative}|{one.Groups["name"].Value}");
+                }
+            }
+
+            for (var i = 0; i < lines.Count; i++)
+            {
+                if (CapConstant.Match(lines[i]) is not { Success: true } declared
+                    || declared.Groups["type"].Value.Contains("string", StringComparison.Ordinal)
+                    || !CapName.Match(declared.Groups["name"].Value).Success)
+                {
+                    continue;
+                }
+
+                var key = $"{relative}|{declared.Groups["name"].Value}";
+
+                if (!NamedFactsAndPlannedRules.ContainsKey(key))
+                {
+                    unnamed.Add(key);
+                }
+            }
+        }
+
+        Assert.Empty(unnamed);
+        Assert.Empty(NamedFactsAndPlannedRules.Keys.Except(declaredNames).ToList());
+    }
+
+    /// <summary>Every C# file under <c>src</c>, by its path relative to <c>src</c> and its lines.</summary>
+    private static IEnumerable<(string Relative, List<string> Lines)>
+        SourcesUnderSrc() => Directory.EnumerateFiles(Src(), "*.cs", SearchOption.AllDirectories)
+            .Select(path => (Path.GetRelativePath(Src(), path).Replace('/', '\\'), File.ReadAllLines(path).ToList()));
+
+    /// <summary>The repository's <c>src</c> folder, where every file the guards walk lives.</summary>
+    private static string Src() => Path.Combine(Prose.RepositoryRoot(), "src");
+
+    /// <summary>A call that parses or writes JSON by the serializer's or the reader's own rules.</summary>
+    private static readonly Regex JsonCall = new(
+        @"JsonSerializer\.(Deserialize|Serialize|SerializeToNode|SerializeToElement|SerializeToUtf8Bytes)|JsonDocument\.Parse|JsonNode\.Parse|new Utf8JsonReader\(",
+        RegexOptions.CultureInvariant | RegexOptions.ExplicitCapture);
+
+    /// <summary>An options argument: the depth's own owner, or an options-holding name the caller passes.</summary>
+    private static readonly Regex JsonOptionsNamed = new(
+        @"JsonDepth|\bOptions\b|\boptions\b|JsonOptions|LineOptions|LineReading|JsonConfigOptions|\bFrozen\b|\bWritten\b|\bJson\b|\bLine\b|LedgerOptions|_json",
+        RegexOptions.CultureInvariant);
+
+    /// <summary>The files whose JSON calls bound nothing, each with why.</summary>
+    private static readonly Dictionary<string, string> JsonDepthExceptions = new(StringComparer.Ordinal)
+    {
+        // The owner itself: every other call names it.
+        [@"DssHarness.Core\Json\JsonDepth.cs"] = "the one owner of the options every other call is held to name",
+
+        // A literal's writing: a number, a boolean, a null - nothing nests, so no options are passed.
+        [@"DssHarness.Core\Json\JsonPathParser.cs"] = "SerializeToElement of a literal operand, which holds no nesting",
+        [@"DssHarness.Core\Json\JsonPathEvaluator.cs"] = "SerializeToElement of a number, which holds no nesting",
+
+        // A streamed reader whose state is a JsonReaderState(JsonDepth.Reader) made once, outside the loop.
+        [@"DssHarness.Core\Agents\Http\ApiAnswers.cs"] = "a Utf8JsonReader over a refusal's body, its state made of JsonDepth.Reader",
+        [@"DssHarness.Core\Codebase\Languages\JsonOutline.cs"] = "a Utf8JsonReader over a JSON file's bytes, its state made of JsonDepth.Reader",
+
+        // A digest's input: four flat strings, one array, nothing that can nest.
+        [@"DssHarness.Core\Web\Index\SitemapSettings.cs"] = "the writing of four flat strings whose bytes are hashed",
+    };
+
+    /// <summary>A constant a cap's name could hide behind: a number or a time, not a word.</summary>
+    private static readonly Regex CapConstant = new(
+        @"^\s*(?:(?:public|internal|private|protected)\s+)?(?:const|static\s+readonly)\s+(?<type>[\w.<>\[\], ?]+?)\s+(?<name>[A-Za-z_]\w*)\s*=",
+        RegexOptions.CultureInvariant | RegexOptions.ExplicitCapture);
+
+    /// <summary>A name spelled like a cap: the word at its start, or at any hump inside it.</summary>
+    private static readonly Regex CapName = new(
+        @"^(Default)?(Most|Max|Least|Limit|Bound|Budget)|[a-z](Most|Max|Least|Limit|Bound|Budget)",
+        RegexOptions.CultureInvariant);
+
+    /// <summary>
+    /// Every cap the walk finds, by the file it lives in and its name: the external facts (E1-E11), the planned rules
+    /// (P1-P21), the page sizes and partitions that lose nothing, and the retired ones left for the owner of their
+    /// file. A cap not here goes red; a here nothing declares comes off.
+    /// </summary>
+    private static readonly Dictionary<string, string> NamedFactsAndPlannedRules = new(StringComparer.Ordinal)
+    {
+        // External facts, E1-E11, each kept and named as the fact it is.
+        [@"DssHarness.Core\Agents\AgentChildEnvironment.cs|MostTimeoutSeconds"] = "E8: what a timer of milliseconds holds, the runner's and Claude Code's own range",
+        [@"DssHarness.Core\Agents\ClaudeApi\ClaudeApiRequest.cs|MostLeastItems"] = "E10: Claude's structured outputs take minItems 0 or 1 and no maxItems",
+        [@"DssHarness.Core\Codebase\Languages\CFamilyLexer.cs|MostRawDelimiter"] = "E1: the C++ raw-string delimiter is at most 16 characters",
+        [@"DssHarness.Core\Codebase\Languages\MarkupText.cs|MostCharacters"] = "AngleSharp's buffered source is held whole, so a markup text over int.MaxValue characters is unread",
+        [@"DssHarness.Core\Execution\ILineMask.cs|MostReference"] = "E6: WHATWG's longest named character reference is 32 characters with its semicolon",
+        [@"DssHarness.Core\Git\GitMerge.cs|MostConflictsCounted"] = "E5: git-merge-file's exit code is truncated at 127, so the conflicts are counted in the text",
+        [@"DssHarness.Core\Json\JsonPathParser.cs|MostInteger"] = "E7: JSON and JSONPath integers are exact only up to 2^53-1 (I-JSON)",
+        [@"DssHarness.Core\Mutations\PristineJudge.cs|LongestBound"] = "E8: .NET's timer maximum of uint.MaxValue-1 milliseconds",
+        [@"DssHarness.Core\Platform\HostPlatform.cs|WindowsMaxPath"] = "E9: Windows MAX_PATH is 260",
+        [@"DssHarness.Core\Platform\MacSandboxHost.cs|MostPathBytes"] = "E9: macOS PATH_MAX is 1024",
+        [@"DssHarness.Core\Processes\Containment.cs|JobObjectExtendedLimit"] = "E9: the Windows information class a job's limits are set through, the interop's own value",
+        [@"DssHarness.Core\Web\Index\SitemapDocument.cs|MostEntries"] = "E11: a sitemap holds at most 50,000 URLs (sitemaps.org)",
+        [@"DssHarness.Core\Web\Index\SitemapDocument.cs|MostBytes"] = "E11: a sitemap holds at most 50 MiB (sitemaps.org)",
+
+        // Planned rules, P1-P21, the record the user confirmed.
+        [@"DssHarness.Core\Agents\AgentRunner.cs|MostBackoffSeconds"] = "P1: the workflow backoff's ceiling, 900, aliased to the engine's one owner",
+        [@"DssHarness.Core\Agents\ClaudeCode\ClaudeCodeClient.cs|InterruptBound"] = "P11: Claude Code's interrupt has 10 s",
+        [@"DssHarness.Core\Agents\IAgentClient.cs|DefaultHandoffBound"] = "P1: handoffSeconds' default, 180",
+        [@"DssHarness.Core\Agents\Loop\ToolLoop.cs|MostNudges"] = "P12: continue nudges twice",
+        [@"DssHarness.Core\Agents\Loop\ToolLoop.cs|DefaultMaxRetries"] = "P13: maxRetries' default, 6",
+        [@"DssHarness.Core\Agents\Loop\ToolLoop.cs|DefaultMaxRetryWait"] = "P13: maxRetryWaitSeconds' default, 300",
+        [@"DssHarness.Core\Agents\Runtime\AgentTools.cs|MostDeletedEntries"] = "P15: delete_directory refuses more than 2,000 entries",
+        [@"DssHarness.Core\Ci\GhProcess.cs|Limit"] = "P6: a gh call at 5 min",
+        [@"DssHarness.Core\Ci\CiLegsService.cs|DefaultLimit"] = "the ci legs' own default: runs read when nothing says otherwise, the newest one",
+        [@"DssHarness.Core\Configuration\AdmissionSettings.cs|MostSeconds"] = "P18: the admission ceilings, settle and poll at most 3,600 s",
+        [@"DssHarness.Core\Configuration\AdmissionSettings.cs|MostWaitMinutes"] = "P18: maxWaitMinutes at most 10,080",
+        [@"DssHarness.Core\Configuration\AdmissionSettings.cs|DefaultMaxMemoryPercent"] = "P18: the admission defaults, 76%",
+        [@"DssHarness.Core\Configuration\AdmissionSettings.cs|DefaultSettleLeastSeconds"] = "P18: the admission defaults, settle 15-90 s",
+        [@"DssHarness.Core\Configuration\AdmissionSettings.cs|DefaultSettleMostSeconds"] = "P18: the admission defaults, settle 15-90 s",
+        [@"DssHarness.Core\Configuration\AdmissionSettings.cs|DefaultMaxWaitMinutes"] = "P18: the admission defaults, wait 60 min",
+        [@"DssHarness.Core\Configuration\PolicyModels.cs|DefaultMaxDeleteFraction"] = "the default of the user's own safety rule sync.maxDeleteFraction, a refusal that names every deletion, not a cut",
+        [@"DssHarness.Core\Execution\LegAdmission.cs|DropsAtMostEvery"] = "P18: a WSL cache drop at most once a minute, a cadence",
+        [@"DssHarness.Core\Git\GitPublisher.cs|CommitLimit"] = "P6: a commit bounded at 15 min",
+        [@"DssHarness.Core\Git\GitPublisher.cs|PushLimit"] = "P6: a push at 5 min",
+        [@"DssHarness.Core\Orchestration\Flow\AgentSkills.cs|BodyLimit"] = "P8: a skill body over 64,000 characters is refused",
+        [@"DssHarness.Core\Orchestration\Flow\AgentSkills.cs|FileLimit"] = "P8: a skill folder of more than 500 files is refused",
+        [@"DssHarness.Core\Orchestration\Flow\AgentSkills.cs|SizeLimit"] = "P8: a skill folder of more than 16 MB is refused",
+        [@"DssHarness.Core\Orchestration\Flow\WorkflowFileParser.cs|MaxDepth"] = "P1: a workflow's steps nest at most 10 deep",
+        [@"DssHarness.Core\Orchestration\Flow\WorkflowModels.cs|MostVisits"] = "P1: recover.maxVisits 1-99",
+        [@"DssHarness.Core\Orchestration\Flow\WorkflowModels.cs|MostTimeoutMinutes"] = "P1: timeoutMinutes 1-1,440",
+        [@"DssHarness.Core\Orchestration\Flow\WorkflowModels.cs|MostBackoffSeconds"] = "P1: backoffSeconds 1-900, the doubling held at 900",
+        [@"DssHarness.Core\Orchestration\Flow\WorkflowModels.cs|MostGraphPromptTokens"] = "P16: graphPromptTokens 0-20,000",
+        [@"DssHarness.Core\Orchestration\Flow\WorkflowModels.cs|DefaultMaxInstances"] = "P1: maxInstances' default, 5,000",
+        [@"DssHarness.Core\Orchestration\Flow\WorkflowModels.cs|DefaultMaxRetries"] = "P1: retries' default, 3",
+        [@"DssHarness.Core\Orchestration\Flow\WorkflowModels.cs|DefaultMaxVisits"] = "P1: a handler's maxVisits default, 3",
+        [@"DssHarness.Core\Orchestration\Flow\WorkflowModels.cs|DefaultMaxAddedIterations"] = "P1: maxAddedIterations 0-10, default 1",
+        [@"DssHarness.Core\Orchestration\Flow\WorkflowModels.cs|DefaultBlockersLimitRounds"] = "P1: blockersLimitRounds 1-20",
+        [@"DssHarness.Core\Web\Search\WebSearchSources.cs|MostMaxPerStep"] = "P17: maxPerStep 1-1,000",
+        [@"DssHarness.Core\Web\Search\WebSearchSources.cs|DefaultMaxPerStep"] = "P17: maxPerStep's default, 60",
+        [@"DssHarness.Core\Web\Search\Kinds\SitemapKind.cs|MostRefreshDays"] = "a Range: the clock's whole span, refreshDays any number of days",
+        [@"DssHarness.Core\Codebase\CodebaseGraphShape.cs|MostMapTokens"] = "P16: the repository map's tokens 0-2,000",
+
+        // Page sizes and partitions: every entry stays reachable, so none bounds anything.
+        [@"DssHarness.Core\Agents\Runtime\CodebaseGraphTool.cs|MostCharacters"] = "paging: PageRoom.GraphAnswer, the graph answer's page size",
+        [@"DssHarness.Core\Codebase\GraphPages.cs|LeastRoom"] = "paging: PageRoom.Least, the least a page is given",
+        [@"DssHarness.Core\Pages\PageRoom.cs|Least"] = "paging: the least a page is given",
+        [@"DssHarness.Core\Sync\SyncServe.cs|MostFilesInABatch"] = "partition: files cross in batches, every one of them",
+        [@"DssHarness.Core\Web\Index\SitemapFill.cs|MostStaleLines"] = "compaction: fill.jsonl is written anew once its stale lines outnumber those kept, never emptied",
+
+        // Presentation, not a cap: a derived label's shape.
+        [@"DssHarness.Core\Agents\SideTasks\SideTaskService.cs|MostNameCharacters"] = "presentation: the label of a derived side-task name; the prompt is kept whole",
+
+        // The caller's own selection, no ceiling of the tool's.
+        [@"DssHarness.Cli\Commands\CheckCiLegsCommand.cs|LimitOption"] = "the caller's own --limit, a selection the person asks for",
+
+        // Retired: kept only until the owner of the file deletes them (the graph's own folder).
+        [@"DssHarness.Core\Codebase\CodebaseGraphShape.cs|DefaultMaxFileBytes"] = "retired: what maxFileBytes stood at; no file is kept unread by it - left for the codebase folder's owner",
+        [@"DssHarness.Core\Codebase\CodebaseGraphShape.cs|LeastMaxFileBytes"] = "retired: the least maxFileBytes could say; no file is kept unread by it - left for the codebase folder's owner",
+        [@"DssHarness.Core\Codebase\CodebaseGraphShape.cs|MostMaxFileBytes"] = "retired: the most maxFileBytes could say; no file is kept unread by it - left for the codebase folder's owner",
+    };
 
     /// <summary>The namespaces a front end may reach of Core directly.</summary>
     private static readonly string[] AllowedNamespaces =

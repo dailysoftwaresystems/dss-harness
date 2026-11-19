@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using DssHarness.Core.Agents.ClaudeCode;
+using DssHarness.Core.Json;
 
 namespace DssHarness.Core.Agents;
 
@@ -136,7 +137,7 @@ public static class AgentStreamCalls
     {
         try
         {
-            return JsonNode.Parse(input) as JsonObject;
+            return Json.JsonDepth.ParseNode(input) as JsonObject;
         }
         catch (JsonException)
         {
