@@ -4,6 +4,7 @@ using DssHarness.Core.FileSystem;
 using DssHarness.Core.Output;
 using DssHarness.Core.Platform;
 using DssHarness.Core.Results;
+using DssHarness.Core.Walks;
 
 namespace DssHarness.Core.Sync;
 
@@ -67,6 +68,25 @@ public sealed record SyncManifest(string Root, IReadOnlyDictionary<string, SyncE
     }
 }
 
+/// <summary>
+/// What a manifest's walk looks for beside the files it reads, as it reads them (<see cref="IManifestBuilder"/>): what
+/// it meets, told as it meets it, and the withheld directories it goes into only for that - so a tree read for its
+/// manifest is not read again for what its names say.
+/// </summary>
+public interface IManifestLook
+{
+    /// <summary>
+    /// Whether the walk goes into the directory at <paramref name="relativePath"/>, which the manifest withholds: its files
+    /// are met, and none is read into the manifest. Never asked of a link, which is never gone into.
+    /// </summary>
+    /// <param name="relativePath">The directory, relative to the root, with forward separators.</param>
+    bool Enters(string relativePath);
+
+    /// <summary>Told each file and directory the walk meets in a directory it goes into, withheld or not.</summary>
+    /// <param name="relativePath">What it met, relative to the root, with forward separators.</param>
+    void Met(string relativePath);
+}
+
 /// <summary>Builds a manifest of a tree.</summary>
 public interface IManifestBuilder
 {
@@ -76,10 +96,12 @@ public interface IManifestBuilder
     /// Decides whether a relative path is withheld. Consulted on directories as well as files, so a
     /// withheld directory is never walked: walking a build tree to discard it costs the whole tree.
     /// </param>
+    /// <param name="look">What the walk looks for as it reads, and where else it goes for it; <see langword="null"/> where nothing.</param>
     /// <param name="cancellationToken">Stops the walk.</param>
     Task<SyncManifest> BuildAsync(
         string root,
         Func<string, bool> isWithheld,
+        IManifestLook? look = null,
         CancellationToken cancellationToken = default);
 
     /// <summary>
@@ -88,6 +110,7 @@ public interface IManifestBuilder
     /// </summary>
     /// <param name="root">The tree root.</param>
     /// <param name="isWithheld">Decides whether a relative path is withheld, as for <see cref="BuildAsync"/>.</param>
+    /// <param name="look">What the first walk looks for as it reads, as for <see cref="BuildAsync"/>.</param>
     /// <param name="cancellationToken">Stops the walks.</param>
     /// <exception cref="HarnessException">
     /// A file was written after it was hashed, one appeared, or one went, before the second look reached it: the tree
@@ -103,6 +126,7 @@ public interface IManifestBuilder
     Task<SyncManifest> BuildSettledAsync(
         string root,
         Func<string, bool> isWithheld,
+        IManifestLook? look = null,
         CancellationToken cancellationToken = default);
 }
 
@@ -130,30 +154,32 @@ public sealed class ManifestBuilder(IFileSystem fileSystem, IHostPlatform platfo
     public async Task<SyncManifest> BuildAsync(
         string root,
         Func<string, bool> isWithheld,
+        IManifestLook? look = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(isWithheld);
 
-        return (await ReadAsync(root, isWithheld, standings: null, cancellationToken).ConfigureAwait(false)).Manifest;
+        return (await ReadAsync(root, isWithheld, look, standings: null, cancellationToken).ConfigureAwait(false)).Manifest;
     }
 
     /// <inheritdoc/>
     public async Task<SyncManifest> BuildSettledAsync(
         string root,
         Func<string, bool> isWithheld,
+        IManifestLook? look = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(isWithheld);
 
         var standings = new Dictionary<string, FileStanding?>(StringComparer.Ordinal);
-        var (manifest, links) = await ReadAsync(root, isWithheld, standings, cancellationToken).ConfigureAwait(false);
+        var (manifest, links) = await ReadAsync(root, isWithheld, look, standings, cancellationToken).ConfigureAwait(false);
 
         // Every hash is taken by now. The second look lists the tree again and looks at each file, reading no byte.
         var now = new Dictionary<string, FileStanding?>(StringComparer.Ordinal);
 
         if (_fileSystem.DirectoryExists(root))
         {
-            Look(root, root, isWithheld, links, now, cancellationToken);
+            Look(root, isWithheld, links, now, cancellationToken);
         }
 
         var moved = manifest.Entries.Keys
@@ -182,6 +208,7 @@ public sealed class ManifestBuilder(IFileSystem fileSystem, IHostPlatform platfo
     private async Task<(SyncManifest Manifest, HashSet<string> Links)> ReadAsync(
         string root,
         Func<string, bool> isWithheld,
+        IManifestLook? look,
         Dictionary<string, FileStanding?>? standings,
         CancellationToken cancellationToken)
     {
@@ -194,112 +221,129 @@ public sealed class ManifestBuilder(IFileSystem fileSystem, IHostPlatform platfo
 
         var links = new List<string>();
 
-        await WalkAsync(root, root, isWithheld, entries, links, standings, cancellationToken).ConfigureAwait(false);
+        // Each directory once, on the walk's own stack (Walk.Visit): a tree thousands of directories deep is read as a
+        // shallow one is, and no depth of it reaches past this thread's stack. A directory gone into only for what the
+        // look asks reads nothing into the manifest, and nor does any below it.
+        foreach (var directory in Walk.Visit([new Walked(root, ForTheLook: false)], directory => directory.Path, Children, comparer: StringComparer.Ordinal))
+        {
+            foreach (var file in _fileSystem.EnumerateFiles(directory.Path, recursive: false))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                var relative = Relative(root, file);
+
+                look?.Met(relative);
+
+                if (directory.ForTheLook || isWithheld(relative))
+                {
+                    continue;
+                }
+
+                // A link is not followed, for a file as much as for a directory. Opening one reads
+                // whatever it points at, so a link committed to the repository and aimed outside it
+                // would have its target's bytes hashed here and written to another machine under the
+                // link's own name — the repository's content deciding what leaves this machine.
+                if (IsLink(file))
+                {
+                    links.Add(relative);
+                    continue;
+                }
+
+                // Before its bytes: a write between the hash and the look would otherwise be recorded as how it stood.
+                if (standings is not null)
+                {
+                    standings[relative] = _fileSystem.StandingOf(file);
+                }
+
+                entries[relative] = await DescribeAsync(relative, file, cancellationToken).ConfigureAwait(false);
+            }
+        }
 
         links.Sort(StringComparer.Ordinal);
 
         return (new SyncManifest(root, entries) { Links = links }, new HashSet<string>(links, StringComparer.Ordinal));
+
+        // The directories the walk goes into below one, each met as it is listed: those the manifest reads, and those it
+        // withholds that the look goes into. A directory link is never gone into - inside the tree it would lead the walk
+        // round, and one that leaves the tree would put files outside it into the manifest - and is recorded where the
+        // manifest reads its directory.
+        List<Walked> Children(Walked directory)
+        {
+            var children = new List<Walked>();
+
+            foreach (var child in _fileSystem.EnumerateDirectories(directory.Path))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                var relative = Relative(root, child);
+                look?.Met(relative);
+
+                var withheld = directory.ForTheLook || isWithheld(relative);
+
+                if (withheld && look?.Enters(relative) != true)
+                {
+                    continue;
+                }
+
+                if (IsLink(child))
+                {
+                    if (!withheld)
+                    {
+                        links.Add(relative);
+                    }
+
+                    continue;
+                }
+
+                children.Add(new Walked(child, withheld));
+            }
+
+            return children;
+        }
     }
 
     /// <summary>
-    /// The second walk of <see cref="BuildSettledAsync"/>: each file the first walk would read, by how it stands now. A
-    /// path the first found to be a link is passed over by name, and a directory is asked again whether it is one: one
-    /// that became a link is not followed, and the files below it read as gone.
+    /// The second walk of <see cref="BuildSettledAsync"/>: each file the first walk would read, by how it stands now, each
+    /// directory once on the walk's own stack. A path the first found to be a link is passed over by name, and a directory
+    /// is asked again whether it is one: one that became a link is not followed, and the files below it read as gone.
     /// </summary>
     private void Look(
         string root,
-        string directory,
         Func<string, bool> isWithheld,
         HashSet<string> links,
         Dictionary<string, FileStanding?> now,
         CancellationToken cancellationToken)
     {
-        foreach (var file in _fileSystem.EnumerateFiles(directory, recursive: false))
+        foreach (var directory in Walk.Visit([root], directory => directory, Children, comparer: StringComparer.Ordinal))
         {
-            cancellationToken.ThrowIfCancellationRequested();
-
-            var relative = Relative(root, file);
-
-            if (!isWithheld(relative) && !links.Contains(relative))
+            foreach (var file in _fileSystem.EnumerateFiles(directory, recursive: false))
             {
-                now[relative] = _fileSystem.StandingOf(file);
+                cancellationToken.ThrowIfCancellationRequested();
+
+                var relative = Relative(root, file);
+
+                if (!isWithheld(relative) && !links.Contains(relative))
+                {
+                    now[relative] = _fileSystem.StandingOf(file);
+                }
             }
         }
 
-        foreach (var child in _fileSystem.EnumerateDirectories(directory))
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-
-            var relative = Relative(root, child);
-
-            if (!isWithheld(relative) && !links.Contains(relative) && !IsLink(child))
+        List<string> Children(string directory)
+            => [.. _fileSystem.EnumerateDirectories(directory).Where(child =>
             {
-                Look(root, child, isWithheld, links, now, cancellationToken);
-            }
-        }
+                cancellationToken.ThrowIfCancellationRequested();
+
+                var relative = Relative(root, child);
+
+                return !isWithheld(relative) && !links.Contains(relative) && !IsLink(child);
+            })];
     }
 
-    private async Task WalkAsync(
-        string root,
-        string directory,
-        Func<string, bool> isWithheld,
-        Dictionary<string, SyncEntry> entries,
-        List<string> links,
-        Dictionary<string, FileStanding?>? standings,
-        CancellationToken cancellationToken)
-    {
-        foreach (var file in _fileSystem.EnumerateFiles(directory, recursive: false))
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-
-            var relative = Relative(root, file);
-
-            if (isWithheld(relative))
-            {
-                continue;
-            }
-
-            // A link is not followed, for a file as much as for a directory. Opening one reads
-            // whatever it points at, so a link committed to the repository and aimed outside it
-            // would have its target's bytes hashed here and written to another machine under the
-            // link's own name — the repository's content deciding what leaves this machine.
-            if (IsLink(file))
-            {
-                links.Add(relative);
-                continue;
-            }
-
-            // Before its bytes: a write between the hash and the look would otherwise be recorded as how it stood.
-            if (standings is not null)
-            {
-                standings[relative] = _fileSystem.StandingOf(file);
-            }
-
-            entries[relative] = await DescribeAsync(relative, file, cancellationToken).ConfigureAwait(false);
-        }
-
-        foreach (var child in _fileSystem.EnumerateDirectories(directory))
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-
-            var relative = Relative(root, child);
-
-            if (isWithheld(relative))
-            {
-                continue;
-            }
-
-            // A directory link inside a tree makes the walk unbounded, and one that leaves the tree
-            // would put files outside it into the manifest.
-            if (IsLink(child))
-            {
-                links.Add(relative);
-                continue;
-            }
-
-            await WalkAsync(root, child, isWithheld, entries, links, standings, cancellationToken).ConfigureAwait(false);
-        }
-    }
+    /// <summary>A directory the first walk goes into, and whether only for what its look asks, the manifest withholding it.</summary>
+    /// <param name="Path">The directory.</param>
+    /// <param name="ForTheLook">Whether it is gone into only for the look, so none of its files is read into the manifest.</param>
+    private readonly record struct Walked(string Path, bool ForTheLook);
 
     private async Task<SyncEntry> DescribeAsync(string relative, string file, CancellationToken cancellationToken)
     {

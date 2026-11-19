@@ -29,13 +29,43 @@ public sealed class SyncPlanTests
         Assert.Equal(2, plan.Writes.Count);
 
         // And the loss report names it as what it is, ahead of the deletions.
-        Assert.Contains("overwrite kept.c", plan.DescribeLoss());
+        Assert.Contains("overwrite kept.c", plan.DescribeLoss(SyncPlan.DryRunList));
 
         // So does the listing a refusal sends the reader to for the whole of it. Spelled the same as
         // a write there, the lossy half would arrive looking like the half that costs nothing.
         var described = plan.Describe(SyncVerb.Planned);
         Assert.Contains("would overwrite  kept.c", described);
         Assert.Contains("would write  fresh.c", described);
+    }
+
+    /// <summary>
+    /// A refusal over thirty thousand overwrites names every one its message's room holds, worst first, and for the rest
+    /// how many there are and that the dry run's list has them all - which it does, every one by name. Cut at twenty and
+    /// a count, the refusal named twenty files of a copy about to lose thirty thousand, and said nowhere where the rest were.
+    /// </summary>
+    [Fact]
+    public void ThirtyThousandOverwrites_AreNamedWhereTheyFit_AndAllInTheDryRunsList()
+    {
+        const int Files = 30_000;
+        var paths = Enumerable.Range(0, Files).Select(file => $"src/kept-{file:D5}.c").ToList();
+        var plan = SyncPlan.Between(
+            Manifest([.. paths.Select(path => (path, "this tree's"))]),
+            Manifest([.. paths.Select(path => (path, "their own edit"))]),
+            Default);
+
+        var loss = plan.DescribeLoss(SyncPlan.DryRunList);
+        var named = loss.Take(loss.Count - 1).ToList();
+        var rest = Files - named.Count;
+
+        Assert.Equal(Files, plan.Overwrites.Count);
+        Assert.True(named.Count > 20, $"the refusal named {named.Count} of {Files}");
+        Assert.Equal([.. paths.Take(named.Count).Select(path => $"overwrite {path}")], named);
+        Assert.True(named.Sum(line => line.Length + 1) <= DssHarness.Core.Pages.PageRoom.Line, "the names took more than the line's room");
+        Assert.Equal($"and {rest} more (all in {SyncPlan.DryRunList})", loss[^1]);
+
+        Assert.Subset(
+            paths.Select(path => $"would overwrite  {path}").ToHashSet(StringComparer.Ordinal),
+            plan.Describe(SyncVerb.Planned).ToHashSet(StringComparer.Ordinal));
     }
 
     [Fact]

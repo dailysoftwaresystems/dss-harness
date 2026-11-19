@@ -58,9 +58,48 @@ public static class Names
 
         if (named < items.Count)
         {
-            line.Append(" and ").Append((items.Count - named).ToString(CultureInfo.InvariantCulture)).Append(" more (all in ").Append(whole).Append(')');
+            line.Append(More(items.Count - named, whole));
         }
 
         return line.ToString();
     }
+
+    /// <summary>
+    /// <paramref name="items"/> as a message of several lines names them, one to a line: by the rule <see cref="Line"/>
+    /// names them by, each written printable and named in order for as long as the lines named and the line break after
+    /// each fit <paramref name="room"/> characters, and for the rest one line more, <c>and N more (all in </c><paramref name="whole"/><c>)</c>.
+    /// The first item is named whole however wide it is, and a list of none is no lines.
+    /// </summary>
+    /// <param name="items">What to name, in the order it is named.</param>
+    /// <param name="whole">Where the whole list is, as the last line says it after <c>all in</c>, as for <see cref="Line"/>.</param>
+    /// <param name="room">The most characters the lines named and their breaks take; the first is named whatever its width.</param>
+    public static IReadOnlyList<string> Lines(IReadOnlyList<string> items, string whole, int room = PageRoom.Line)
+    {
+        ArgumentNullException.ThrowIfNull(items);
+        ArgumentException.ThrowIfNullOrWhiteSpace(whole);
+        ArgumentOutOfRangeException.ThrowIfNegative(room);
+
+        var lines = new List<string>();
+        long taken = 0;
+
+        foreach (var item in items)
+        {
+            var name = ReportText.Printable(item);
+
+            // Counted as long, so lines of any length are weighed exactly against a room of any size.
+            if (lines.Count > 0 && taken + name.Length + 1 > room)
+            {
+                lines.Add(More(items.Count - lines.Count, whole).TrimStart());
+                break;
+            }
+
+            lines.Add(name);
+            taken += name.Length + 1;
+        }
+
+        return lines;
+    }
+
+    /// <summary>What follows the names given, for the rest: <c> and N more (all in </c><paramref name="whole"/><c>)</c>.</summary>
+    private static string More(int rest, string whole) => $" and {rest.ToString(CultureInfo.InvariantCulture)} more (all in {whole})";
 }

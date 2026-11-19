@@ -8,6 +8,7 @@ using DssHarness.Core.Output;
 using DssHarness.Core.Processes;
 using DssHarness.Core.Repository;
 using DssHarness.Core.Results;
+using DssHarness.Core.Walks;
 
 namespace DssHarness.Core.Sync;
 
@@ -1023,7 +1024,7 @@ public sealed class SyncService(
         {
             _output.Warn(CommandName, $"{transport.Host}: adopting '{destinationRoot}', which this harness did not create.");
 
-            foreach (var line in plan.DescribeLoss(int.MaxValue, destination.Links))
+            foreach (var line in plan.DescribeLoss("these warnings", int.MaxValue, destination.Links))
             {
                 _output.Warn(CommandName, $"{transport.Host}:   {line}");
             }
@@ -1305,12 +1306,18 @@ public sealed class SyncService(
         // Before the tree is read, because it is about this tree and costs nothing.
         await exclusions.RefuseWhenNoLongerIgnoredAsync(_gitClient, root, cancellationToken).ConfigureAwait(false);
 
-        // A rule somebody believes is protecting something, doubted before a deletion rests on it.
-        // A rooted entry that matches nothing here while the name exists deeper reads, to any
-        // reader, as evidence that name is protected.
-        var rooted = exclusions.RootedEntriesMatchingNothing(_fileSystem, root, _platform.PathComparison, cancellationToken);
+        // With the files, so each copy's HEAD is the commit these files were read at, whatever is committed while the
+        // copies are made; and, beside it, how many of the paths the copies are given git calls changed since.
+        var history = await _gitClient.DescribeHistoryAsync(root, context.Config.Sync.WholeHistory, cancellationToken).ConfigureAwait(false);
+        var changed = await _gitClient.ReadStatusAsync(root, cancellationToken).ConfigureAwait(false);
 
-        foreach (var name in rooted.MatchingNothing)
+        // A rule somebody believes is protecting something, doubted before a deletion rests on it: looked for as the tree
+        // is read, so the tree is read once for both. A rooted entry that matches nothing here while the name exists
+        // deeper reads, to any reader, as evidence that name is protected.
+        var rooted = exclusions.SearchRootedEntries(_fileSystem, root);
+        var files = await ReadFilesAsync(root, exclusions.IsWithheldFromTransfer, rooted, cancellationToken).ConfigureAwait(false);
+
+        foreach (var name in rooted.Report().MatchingNothing)
         {
             _output.Warn(
                 CommandName,
@@ -1318,23 +1325,6 @@ public sealed class SyncService(
                 + $"does exist deeper in it, so this entry protects nothing. Write "
                 + $"'{PathPatterns.AnyDepth}{name}' to cover that name wherever it appears.");
         }
-
-        if (rooted.Incomplete is { } unread)
-        {
-            // Said rather than swallowed. The entries this would have named are exactly the ones a
-            // reader believes are protecting something, so "it found none" and "it stopped looking"
-            // must not read the same.
-            _output.Warn(
-                CommandName,
-                $"sync.neverTransfer entries could not all be checked against this tree: {unread}");
-        }
-
-        // With the files, so each copy's HEAD is the commit these files were read at, whatever is committed while the
-        // copies are made; and, beside it, how many of the paths the copies are given git calls changed since.
-        var history = await _gitClient.DescribeHistoryAsync(root, context.Config.Sync.WholeHistory, cancellationToken).ConfigureAwait(false);
-        var changed = await _gitClient.ReadStatusAsync(root, cancellationToken).ConfigureAwait(false);
-
-        var files = await ReadFilesAsync(root, exclusions.IsWithheldFromTransfer, cancellationToken).ConfigureAwait(false);
 
         // Nothing is packed for a tree with no commit; and for one with, only once a copy lacks something of it.
         var packs = history.Commit is null
@@ -1359,11 +1349,11 @@ public sealed class SyncService(
     /// Something listed was gone when it was opened, or a file was written, appeared or went before the second look
     /// reached it (<see cref="LegExit.InputsMoved"/>).
     /// </exception>
-    private async Task<SyncManifest> ReadFilesAsync(string root, Func<string, bool> isWithheld, CancellationToken cancellationToken)
+    private async Task<SyncManifest> ReadFilesAsync(string root, Func<string, bool> isWithheld, IManifestLook? look, CancellationToken cancellationToken)
     {
         try
         {
-            return await _manifestBuilder.BuildSettledAsync(root, isWithheld, cancellationToken).ConfigureAwait(false);
+            return await _manifestBuilder.BuildSettledAsync(root, isWithheld, look, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
         {
@@ -1394,7 +1384,7 @@ public sealed class SyncService(
             throw new HarnessException(LegExit.InputsMoved, $"'{root}' is no longer there to be read. Let it settle, then run again.");
         }
 
-        return await ReadFilesAsync(root, PlainDirectory.IsWithheldFromTransfer, cancellationToken).ConfigureAwait(false);
+        return await ReadFilesAsync(root, PlainDirectory.IsWithheldFromTransfer, look: null, cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc/>
@@ -1607,10 +1597,10 @@ public sealed class SyncService(
     /// <param name="layout">Resolved paths for this repository.</param>
     /// <param name="runId">The run whose artifacts to find.</param>
     /// <remarks>
-    /// Found by walking the actions directory for an <c>artifacts/&lt;run id&gt;</c>, at whatever
-    /// depth the author grouped the action to. Links are not followed: a link inside a tree makes
-    /// the walk unbounded, and one leaving it would carry files the tree does not contain to another
-    /// machine.
+    /// Found by walking the actions directory for an <c>artifacts/&lt;run id&gt;</c>, at whatever depth the author
+    /// grouped the action to, each directory once (<see cref="Walk.Visit"/>), on a stack of the walk's own: no depth of
+    /// grouping is too deep. Links are not followed: one leaving the tree would carry files the tree does not contain to
+    /// another machine, and with none followed no walk of a tree goes round.
     /// </remarks>
     private IReadOnlyList<string> ArtifactsOf(HarnessLayout layout, string runId)
     {
@@ -1622,43 +1612,25 @@ public sealed class SyncService(
         }
 
         var found = new List<string>();
-        Collect(actions, 0);
+
+        foreach (var action in Walk.Visit(Groups(actions), directory => directory, Groups, comparer: StringComparer.Ordinal))
+        {
+            found.AddRange(Runners.KeptOutputs.Under(
+                _fileSystem,
+                layout.RepositoryRoot,
+                Path.Combine(action, HarnessLayout.ActionArtifactsDirectoryName, runId)));
+        }
+
         return [.. found.Order(StringComparer.Ordinal)];
 
-        void Collect(string directory, int depth)
-        {
-            // Deep enough for any grouping somebody writes by hand, and bounded so a tree that is
-            // not one cannot spend the command.
-            if (depth > 32)
-            {
-                return;
-            }
-
-            foreach (var child in _fileSystem.EnumerateDirectories(directory))
-            {
-                if (LinkPaths.IsLink(_fileSystem, child, _platform.PathComparison))
-                {
-                    continue;
-                }
-
-                // Neither of the two directories an action owns holds actions, and no action may
-                // be called either name. The artifacts one holds runs, and walking it would treat
-                // each run directory as an action; the build one holds the working space of runs in
-                // flight and of any that was killed before it could clear its own, which is a whole
-                // build tree to enumerate for something that cannot be in it.
-                if (Runners.ActionPath.Reserved(Path.GetFileName(child)))
-                {
-                    continue;
-                }
-
-                found.AddRange(Runners.KeptOutputs.Under(
-                    _fileSystem,
-                    layout.RepositoryRoot,
-                    Path.Combine(child, HarnessLayout.ActionArtifactsDirectoryName, runId)));
-
-                Collect(child, depth + 1);
-            }
-        }
+        // The directories below one that may be actions or hold them. Neither of the two directories an action owns holds
+        // actions, and no action may be called either name. The artifacts one holds runs, and walking it would treat each
+        // run directory as an action; the build one holds the working space of runs in flight and of any that was killed
+        // before it could clear its own, which is a whole build tree to enumerate for something that cannot be in it.
+        List<string> Groups(string directory)
+            => [.. _fileSystem
+                .EnumerateDirectories(directory)
+                .Where(child => !LinkPaths.IsLink(_fileSystem, child, _platform.PathComparison) && !Runners.ActionPath.Reserved(Path.GetFileName(child)))];
     }
 
     /// <summary>
@@ -1987,7 +1959,7 @@ public sealed class SyncService(
             return plan.Overwrites.Count == 0 && plan.Deletes.Count == 0 && links.Count == 0
                 ? $"{opening} {remedy}"
                 : $"{opening} {remedy} It holds:\n  "
-                    + string.Join("\n  ", plan.DescribeLoss(links: links));
+                    + string.Join("\n  ", plan.DescribeLoss($"'{destinationRoot}' on {transport.Host}", links: links));
         }
 
         if (plan.Overwrites.Count == 0 && plan.Deletes.Count == 0 && links.Count == 0)
@@ -2000,7 +1972,7 @@ public sealed class SyncService(
             + $"overwritten and {plan.Deletes.Count.ToString(CultureInfo.InvariantCulture)} deleted there";
 
         return $"{opening} {verb} is {take}, and {counted}:\n  "
-            + string.Join("\n  ", plan.DescribeLoss(links: links))
+            + string.Join("\n  ", plan.DescribeLoss(SyncPlan.DryRunList, links: links))
             + $"\n{configuration} {survives} Run with '--dry-run' to see all of it. Nothing has been "
             + "changed by this run.";
     }
@@ -2133,7 +2105,7 @@ public sealed class SyncService(
             _output.Warn(
                 CommandName,
                 $"{transport.Host}: {directory.Path}/ held only files this sync does not manage, so it "
-                + $"stayed although the deletion emptied it of everything else: {string.Join(", ", directory.Held)}. "
+                + $"stayed although the deletion emptied it of everything else: {Names.Line(directory.Held, $"'{directory.Path}/' there")}. "
                 + "The copy there differs from this tree until somebody removes it.");
         }
     }
@@ -2217,7 +2189,7 @@ public sealed class SyncService(
         throw new HarnessException(
             HarnessExit.CommandFailed,
             $"The copy at '{destinationRoot}' on {transport.Host} does not match {carrying.Matched} after the "
-            + $"sync: {ReportText.Counted(differing.Count, "file")} still differ: {ReportText.Listed(differing)}. Nothing should be "
+            + $"sync: {ReportText.Counted(differing.Count, "file")} still differ: {Names.Line(differing, SyncPlan.DryRunList)}. Nothing should be "
             + "run against it.");
     }
 

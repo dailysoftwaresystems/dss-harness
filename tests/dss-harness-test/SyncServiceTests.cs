@@ -1642,6 +1642,31 @@ public sealed class SyncServiceTests
     }
 
     /// <summary>
+    /// A directory a deletion emptied that files the sync does not manage keep is answered for with every name it holds,
+    /// in the answer a host's side gives as JSON, and the warning names those its line holds and says the directory has
+    /// the rest. Cut at five, a cache of thirty files was answered for with five of them.
+    /// </summary>
+    [Fact]
+    public async Task EveryNameAKeptDirectoryHolds_IsInItsAnswersJson()
+    {
+        const int Files = 30;
+        using var copy = new TempDirectory();
+        var names = Enumerable.Range(0, Files).Select(file => $"cache-{file:D2}.pyc").ToList();
+
+        foreach (var name in names)
+        {
+            copy.WriteFile($"pkg/{name}", "bytecode");
+        }
+
+        var kept = Assert.Single(await SyncKit.Transport(new HarnessFactory()).RemoveEmptyDirectoriesAsync(copy.Path, ["pkg"], TestContext.Current.CancellationToken));
+        var answer = SyncServe.Answer(new SyncPruneAnswer([kept]));
+
+        Assert.False(kept.Removed);
+        Assert.Equal(names, kept.Held);
+        Assert.All(names, name => Assert.Contains($"\"{name}\"", answer, StringComparison.Ordinal));
+    }
+
+    /// <summary>
     /// A link a copy holds - one a leg's work could have put there, leading to a place hidden from that work - is never
     /// gone through: a file read through it, a directory listed through it, a file written or removed through it and a
     /// directory emptied through it are each refused or passed by, and what it leads to is neither carried back nor touched.
@@ -2099,9 +2124,8 @@ public sealed class SyncServiceTests
     }
 
     /// <summary>
-    /// Links are named however much else the copy has to lose. Appended after the bound that cuts a
-    /// long list, they would be the first thing dropped — in exactly the directory that has the most
-    /// hidden behind them.
+    /// Links are named however much else the copy has to lose. Left among the rest a long list sends its reader to the
+    /// dry run for, they would be the first thing unnamed — in exactly the directory that has the most hidden behind them.
     /// </summary>
     [Fact]
     public async Task ALinkIsNamed_EvenWhenTheRestOfTheLossIsTooLongToPrint()
@@ -2117,7 +2141,8 @@ public sealed class SyncServiceTests
             Directory.CreateDirectory(elsewhere);
             await MirrorAsync(temp.Path, copy, cancellationToken);
 
-            for (var file = 0; file < 25; file++)
+            // More than the refusal's line holds, so the rest are counted and the dry run's list named for them.
+            for (var file = 0; file < 400; file++)
             {
                 await File.WriteAllTextAsync(Path.Combine(copy, $"theirs-{file}.txt"), "x\n", cancellationToken);
             }
@@ -2130,7 +2155,7 @@ public sealed class SyncServiceTests
             var refusal = await Assert.ThrowsAsync<HarnessException>(() => service.SyncAsync(
                 temp.Path, SyncKit.Transport(harness), copy, new SyncOptions(), cancellationToken));
 
-            Assert.Contains("...and", refusal.Message, StringComparison.Ordinal);
+            Assert.Contains($" more (all in {SyncPlan.DryRunList})", refusal.Message, StringComparison.Ordinal);
             Assert.Contains("through   data", refusal.Message, StringComparison.Ordinal);
         }
         finally

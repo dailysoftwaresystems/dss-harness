@@ -267,7 +267,7 @@ public sealed class LocalSyncTransport(
 
         var policy = new PathSet(withheld);
 
-        return _manifestBuilder.BuildAsync(Home(root), policy.Contains, cancellationToken);
+        return _manifestBuilder.BuildAsync(Home(root), policy.Contains, cancellationToken: cancellationToken);
     }
 
     /// <inheritdoc/>
@@ -1063,7 +1063,8 @@ public sealed class LocalSyncTransport(
 
         return Task.FromResult<IReadOnlyList<EmptiedDirectory>>(answered);
 
-        // The first names a directory still holds, as an answer for it gives them.
+        // Every name a directory still holds, in order, as an answer for it gives them: the warning that says what kept it
+        // names those that fit its line, and says where the rest are.
         IReadOnlyList<string> HeldNames(string full)
             => [.. _fileSystem
                 .EnumerateFiles(full, recursive: false)
@@ -1071,15 +1072,8 @@ public sealed class LocalSyncTransport(
                 .Select(Path.GetFileName)
                 .OfType<string>()
                 .Where(name => name.Length > 0)
-                .Order(StringComparer.Ordinal)
-                .Take(HeldNamesReported)];
+                .Order(StringComparer.Ordinal)];
     }
-
-    /// <summary>
-    /// How many of a surviving directory's names are reported. Enough to recognise what kept it
-    /// without printing somebody's whole cache.
-    /// </summary>
-    private const int HeldNamesReported = 5;
 
     /// <inheritdoc/>
     /// <exception cref="HarnessException">No file is at the path: nothing, a directory, or nothing along it.</exception>

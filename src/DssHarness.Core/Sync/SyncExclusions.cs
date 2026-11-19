@@ -16,16 +16,62 @@ namespace DssHarness.Core.Sync;
 /// up: its git repository, its harness configuration, its worktrees and the build directories that
 /// make an incremental build possible.
 /// </remarks>
-/// <summary>
-/// What a look for rooted entries matching nothing found, and whether it could finish looking.
-/// </summary>
+/// <summary>What a look for rooted entries matching nothing found, the whole tree read.</summary>
 /// <param name="MatchingNothing">The entry names that protect nothing here though the name exists deeper.</param>
-/// <param name="Incomplete">
-/// Why the tree could not be read all the way down, or <see langword="null"/> when it was. A check
-/// that stopped early has established nothing about what it did not reach, and saying so is the
-/// difference between this and a clean answer.
-/// </param>
-public sealed record RootedEntryReport(IReadOnlyList<string> MatchingNothing, string? Incomplete);
+public sealed record RootedEntryReport(IReadOnlyList<string> MatchingNothing);
+
+/// <summary>
+/// The search for rooted <c>sync.neverTransfer</c> entries that match nothing (<see cref="SyncExclusions.SearchRootedEntries"/>),
+/// made as the tree's manifest is read: told what the walk meets, and asked which withheld directories it goes into.
+/// </summary>
+public sealed class RootedEntrySearch : IManifestLook
+{
+    private readonly SyncExclusions _exclusions;
+    private readonly IReadOnlySet<string> _absent;
+    private readonly HashSet<string> _found = new(StringComparer.Ordinal);
+
+    /// <summary>A search for <paramref name="absent"/>, by <paramref name="exclusions"/>'s rules.</summary>
+    internal RootedEntrySearch(SyncExclusions exclusions, IReadOnlySet<string> absent)
+    {
+        _exclusions = exclusions;
+        _absent = absent;
+    }
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// The harness's own directory, but for the worktrees root and what an entry covers, and never git's own directory:
+    /// nothing else the manifest withholds is gone into, and nothing at all where no name is looked for.
+    /// </remarks>
+    public bool Enters(string relativePath)
+        => _found.Count < _absent.Count
+            && !string.Equals(Name(relativePath), SyncExclusions.NeverRead, StringComparison.Ordinal)
+            && _exclusions.Searches(relativePath);
+
+    /// <inheritdoc/>
+    public void Met(string relativePath)
+    {
+        // Files as well as directories: '.env' and '.secrets' - the two names this check was written for - are usually
+        // files. Nothing under git's own directory counts: a name there is git's copy of something.
+        if (_found.Count < _absent.Count
+            && _absent.Contains(Name(relativePath))
+            && !UnderGit(relativePath)
+            && _exclusions.Counts(relativePath))
+        {
+            _found.Add(Name(relativePath));
+        }
+    }
+
+    /// <summary>What the search found, once the walk that made it has read the whole tree.</summary>
+    public RootedEntryReport Report() => new([.. _found.Order(StringComparer.Ordinal)]);
+
+    /// <summary>The last part of <paramref name="relativePath"/>.</summary>
+    private static string Name(string relativePath) => relativePath[(relativePath.LastIndexOf('/') + 1)..];
+
+    /// <summary>Whether <paramref name="relativePath"/> lies in a directory git keeps for itself, at the root or in a submodule.</summary>
+    private static bool UnderGit(string relativePath)
+        => relativePath.StartsWith(SyncExclusions.NeverRead + "/", StringComparison.Ordinal)
+            || relativePath.Contains("/" + SyncExclusions.NeverRead + "/", StringComparison.Ordinal);
+}
 
 public sealed class SyncExclusions
 {
@@ -138,13 +184,12 @@ public sealed class SyncExclusions
         => HarnessDirectorySync.Withholds(relativePath) || Matches(_withheld, relativePath);
 
     /// <summary>
-    /// Names every rooted <c>sync.neverTransfer</c> entry that matches nothing here while that name
-    /// exists deeper in the tree.
+    /// The search that names every rooted <c>sync.neverTransfer</c> entry that matches nothing here while that name
+    /// exists deeper in the tree: made as the tree's manifest is read (<see cref="IManifestLook"/>), so the tree is read
+    /// once for both, and answered once that reading is done (<see cref="RootedEntrySearch.Report"/>).
     /// </summary>
-    /// <param name="fileSystem">Reads the tree.</param>
+    /// <param name="fileSystem">Looks at the tree's root for each entry's name.</param>
     /// <param name="root">The tree the entries are relative to.</param>
-    /// <param name="pathComparison">How this platform compares paths, for deciding what is a link.</param>
-    /// <param name="cancellationToken">Stops the walk.</param>
     /// <remarks>
     /// A protective rule that silently matches nothing is worse than no rule, because the name in
     /// the file reads as evidence the thing is protected and any reader stops there. Measured on a
@@ -174,10 +219,9 @@ public sealed class SyncExclusions
     /// generated, fetched or another checkout's, not something anybody wrote into this tree, and it is
     /// where a tree's size is: measured on a consumer's tree, 68,697 of its 69,890 directories lay under
     /// what its <c>sync.neverTransfer</c> names, 63,888 under <c>build</c>, <c>.worktrees</c> and
-    /// <c>.temp</c> alone, and a search that went in spent its whole budget before it reached most of
-    /// the tree, and said so on every sync. The harness's own directory is searched all the same, but
-    /// for the worktrees root and what an entry covers: git ignores most of it by design, it holds this
-    /// tree's connection data, and a <c>.secrets</c> there is the one this was written to find.
+    /// <c>.temp</c> alone. The harness's own directory is searched all the same, but for the worktrees
+    /// root and what an entry covers: git ignores most of it by design, it holds this tree's connection
+    /// data, and a <c>.secrets</c> there is the one this was written to find.
     /// </para>
     /// <para>
     /// Save for what the harness writes there as it works - each run's records, the record of host copies, each
@@ -188,30 +232,13 @@ public sealed class SyncExclusions
     /// write <c>**/build</c>, which would withhold every source directory of that name as well.
     /// </para>
     /// <para>
-    /// The walk skips links, and stops at a depth no tree reaches honestly, because this runs before
-    /// every sync and a check that is only advisory must not be able to end the command it precedes.
-    /// A directory link aimed at an ancestor would otherwise recurse until the stack went, which is a
-    /// failure .NET cannot catch; an unreadable directory anywhere under the root would otherwise
-    /// leave as exit 70 naming an exception.
+    /// The manifest's walk skips links and reads each directory once, on a stack of its own, however deep the tree and
+    /// however many directories it holds: the search reads all of what it goes into, and a name found deep in a tree of a
+    /// million files is named. A directory that cannot be read fails the reading of the tree itself, which no sync goes on
+    /// without, so the search never answers for a tree it did not finish.
     /// </para>
     /// </remarks>
-    public RootedEntryReport RootedEntriesMatchingNothing(
-        IFileSystem fileSystem,
-        string root,
-        StringComparison pathComparison,
-        CancellationToken cancellationToken = default)
-        => RootedEntriesMatchingNothing(fileSystem, root, pathComparison, MostDirectoriesRead, cancellationToken);
-
-    /// <summary>
-    /// <see cref="RootedEntriesMatchingNothing(IFileSystem, string, StringComparison, CancellationToken)"/>,
-    /// reading at most <paramref name="mostDirectoriesRead"/> directories.
-    /// </summary>
-    internal RootedEntryReport RootedEntriesMatchingNothing(
-        IFileSystem fileSystem,
-        string root,
-        StringComparison pathComparison,
-        int mostDirectoriesRead,
-        CancellationToken cancellationToken = default)
+    public RootedEntrySearch SearchRootedEntries(IFileSystem fileSystem, string root)
     {
         ArgumentNullException.ThrowIfNull(fileSystem);
 
@@ -221,65 +248,17 @@ public sealed class SyncExclusions
             .Where(path => !SyncConfig.NeverTransferFloor.Contains(path, StringComparer.Ordinal))
             .ToList();
 
-        if (rooted.Count == 0 || !fileSystem.DirectoryExists(root))
-        {
-            return new RootedEntryReport([], null);
-        }
-
         // Absent from the root is what makes an entry worth looking for deeper. A name that is there
         // is doing its job, whatever else in the tree shares the name.
-        var absent = rooted
-            .Where(name => !fileSystem.DirectoryExists(Path.Combine(root, name))
-                && !fileSystem.FileExists(Path.Combine(root, name)))
-            .ToHashSet(StringComparer.Ordinal);
+        var absent = rooted.Count == 0 || !fileSystem.DirectoryExists(root)
+            ? []
+            : rooted
+                .Where(name => !fileSystem.DirectoryExists(Path.Combine(root, name))
+                    && !fileSystem.FileExists(Path.Combine(root, name)))
+                .ToHashSet(StringComparer.Ordinal);
 
-        if (absent.Count == 0)
-        {
-            return new RootedEntryReport([], null);
-        }
-
-        var found = new HashSet<string>(StringComparer.Ordinal);
-        var budget = mostDirectoriesRead;
-
-        try
-        {
-            Deeper(fileSystem, root, root, pathComparison, absent, found, 0, ref budget, cancellationToken);
-        }
-        catch (BudgetSpent)
-        {
-            return new RootedEntryReport(
-                [.. found.Order(StringComparer.Ordinal)],
-                $"more than {mostDirectoriesRead} directories under '{root}' would have had to be read, though "
-                + "none a sync withholds is read outside the harness's own directory");
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            // What was found still stands; what was not looked at is said rather than implied. A
-            // half-walked tree reported as a clean one is the same silence this check exists to end.
-            return new RootedEntryReport(
-                [.. found.Order(StringComparer.Ordinal)],
-                $"the tree under '{root}' could not be read all the way down: {ex.Message}");
-        }
-
-        return new RootedEntryReport([.. found.Order(StringComparer.Ordinal)], null);
+        return new RootedEntrySearch(this, absent);
     }
-
-    /// <summary>How deep the search for an absent name goes before it stops looking.</summary>
-    /// <remarks>
-    /// A bound rather than a belief. Links are skipped, so an honest tree cannot reach this; a tree
-    /// that does has something the walk should not be following, and stopping is the answer that
-    /// cannot take the sync with it.
-    /// </remarks>
-    private const int DeepestSearch = 64;
-
-    /// <summary>How many directories the search reads before it gives up and says so.</summary>
-    /// <remarks>
-    /// This runs before every sync, and the names it looks for are often not in the tree at all — the
-    /// case where it reads everything it may. A budget keeps an advisory check from costing more than
-    /// the transfer it precedes, and exhausting it is reported rather than returned as "found none".
-    /// Spent only on the directories the search goes into: see <see cref="RootedEntriesMatchingNothing(IFileSystem, string, StringComparison, CancellationToken)"/>.
-    /// </remarks>
-    private const int MostDirectoriesRead = 20_000;
 
     /// <summary>The name of a directory this never reads, wherever it is, whatever the configuration says.</summary>
     /// <remarks>
@@ -287,88 +266,22 @@ public sealed class SyncExclusions
     /// inside it is git's copy of something rather than a file anybody wrote. What else the search
     /// leaves unread is decided by <see cref="Searches"/>.
     /// </remarks>
-    private const string NeverRead = ".git";
-
-    /// <summary>Thrown when the walk has read as many directories as it is allowed to.</summary>
-    private sealed class BudgetSpent : Exception;
-
-    /// <summary>
-    /// Collects the absent names that exist, as a file or a directory, anywhere below
-    /// <paramref name="directory"/> that the search goes into.
-    /// </summary>
-    private void Deeper(
-        IFileSystem fileSystem,
-        string root,
-        string directory,
-        StringComparison pathComparison,
-        IReadOnlySet<string> absent,
-        HashSet<string> found,
-        int depth,
-        ref int budget,
-        CancellationToken cancellationToken)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-
-        if (depth > DeepestSearch || found.Count == absent.Count)
-        {
-            return;
-        }
-
-        if (--budget < 0)
-        {
-            throw new BudgetSpent();
-        }
-
-        // Files as well as directories: '.env' and '.secrets' — the two names this check was written
-        // for — are usually files, and a walk that only looked at directories would never see them.
-        foreach (var file in fileSystem.EnumerateFiles(directory, recursive: false))
-        {
-            if (Path.GetFileName(file) is { Length: > 0 } name && absent.Contains(name) && Counts(Relative(root, file)))
-            {
-                found.Add(name);
-            }
-        }
-
-        foreach (var child in fileSystem.EnumerateDirectories(directory))
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-
-            var name = Path.GetFileName(child);
-            var relative = Relative(root, child);
-
-            if (name is { Length: > 0 } && absent.Contains(name) && Counts(relative))
-            {
-                found.Add(name);
-            }
-
-            if (string.Equals(name, NeverRead, StringComparison.Ordinal)
-                || !Searches(relative)
-                || LinkPaths.IsLink(fileSystem, child, pathComparison))
-            {
-                continue;
-            }
-
-            Deeper(fileSystem, root, child, pathComparison, absent, found, depth + 1, ref budget, cancellationToken);
-        }
-    }
+    internal const string NeverRead = ".git";
 
     /// <summary>
     /// Whether a name found at <paramref name="relativePath"/> counts: not where a <c>sync.neverTransfer</c>
     /// entry, or the worktrees root, covers the path, nor in what the harness writes as it works.
     /// </summary>
-    private bool Counts(string relativePath)
+    internal bool Counts(string relativePath)
         => !Matches(_coveredByConfiguration, relativePath) && !HarnessDirectorySync.IsRunState(relativePath);
 
     /// <summary>
     /// Whether the search goes into the directory at <paramref name="relativePath"/>: where a sync goes,
     /// and anywhere in the harness's own directory a name counts.
     /// </summary>
-    private bool Searches(string relativePath)
+    internal bool Searches(string relativePath)
         => Counts(relativePath)
             && (HarnessDirectorySync.IsAt(relativePath, HarnessLayout.DirectoryName) || !IsWithheldFromTransfer(relativePath));
-
-    /// <summary><paramref name="path"/> relative to <paramref name="root"/>, with forward separators.</summary>
-    private static string Relative(string root, string path) => Normalize(Path.GetRelativePath(root, path));
 
     /// <summary>
     /// Refuses when git has stopped ignoring something the configuration withholds.

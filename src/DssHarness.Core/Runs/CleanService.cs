@@ -384,7 +384,8 @@ public sealed class CleanService(
                     unlisted.Add($"the worktrees deleted since could not be looked for, so none beside them was: {ex.Message.TrimEnd('.')}");
                 }
 
-                looked = ReportText.Listed([.. known.Select(tree => $"'{tree}'")]);
+                // Every tree that fits the line, and the rest where git keeps them all: the main checkout and each worktree.
+                looked = Names.Line([.. known.Select(tree => $"'{tree}'")], "what 'git worktree list' prints");
                 removal = await _localTransport
                     .RemoveFormerWorkersAsync([.. known.Concat(gone).DistinctBy(WorkersOf, _platform.PathComparer())], request.DryRun, cancellationToken)
                     .ConfigureAwait(false);
