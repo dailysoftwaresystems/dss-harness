@@ -999,45 +999,50 @@ public sealed partial class AgentPolicy
             .Distinct(StringComparer.Ordinal)
             .SelectMany(target => places.Distinct(StringComparer.Ordinal).Select(place => (target, place))))
         {
-            IReadOnlyList<string> readings;
-
-            try
+            // A word whose braces spell several places writes one of them per reading of the command: the spellings that
+            // decide it - the names that matter, a witness per guarded place where it may spell a pattern.
+            foreach (var spelled in SpelledAgainst(target, place, _state, dotNames))
             {
-                readings = CommandSpelled(target, place, pattern: true);
-            }
-            catch (Exception exception) when (exception is ArgumentException or System.Security.SecurityException or PathTooLongException)
-            {
-                // A word that is no path names no place a refusal holds.
-                continue;
-            }
+                IReadOnlyList<string> readings;
 
-            foreach (var reading in readings)
-            {
-                AgentPolicyAnswer.Denied? refused;
-
-                if (reading.IndexOfAny(['*', '?', '[']) >= 0)
+                try
                 {
-                    var asked = reading;
-
-                    refused = (_ground.WorktreeRules || _ground.SideTask) && MayMatchGitsOwn(asked, dotNames)
-                        ? new AgentPolicyAnswer.Denied(GitsOwnRule, AgentPolicySource.Builtin, string.Empty)
-                        : _state.Any(state => GlobReaches(asked, state, dotNames) && !OwnPlaceInState(asked, state))
-                            ? new AgentPolicyAnswer.Denied("the tool's own state", AgentPolicySource.Builtin, string.Empty)
-                            : null;
+                    readings = CommandSpelled(spelled, place, pattern: true);
                 }
-                else
+                catch (Exception exception) when (exception is ArgumentException or System.Security.SecurityException or PathTooLongException)
                 {
-                    refused = KeptWriteRefusal(reading, Resolved(reading));
+                    // A word that is no path names no place a refusal holds.
+                    continue;
                 }
 
-                if (refused is { } denied)
+                foreach (var reading in readings)
                 {
-                    return denied with
+                    AgentPolicyAnswer.Denied? refused;
+
+                    if (reading.IndexOfAny(['*', '?', '[']) >= 0)
                     {
-                        Reason = denied.Rule == GitsOwnRule
-                            ? $"'{whole}' writes '{target}', git's own: written by git's verbs and this tool's, never by an agent's command"
-                            : $"'{whole}' writes '{target}', the tool's own state: written by its verbs alone, never by an agent's",
-                    };
+                        var asked = reading;
+
+                        refused = (_ground.WorktreeRules || _ground.SideTask) && MayMatchGitsOwn(asked, dotNames)
+                            ? new AgentPolicyAnswer.Denied(GitsOwnRule, AgentPolicySource.Builtin, string.Empty)
+                            : _state.Any(state => GlobReaches(asked, state, dotNames) && !OwnPlaceInState(asked, state))
+                                ? new AgentPolicyAnswer.Denied("the tool's own state", AgentPolicySource.Builtin, string.Empty)
+                                : null;
+                    }
+                    else
+                    {
+                        refused = KeptWriteRefusal(reading, Resolved(reading));
+                    }
+
+                    if (refused is { } denied)
+                    {
+                        return denied with
+                        {
+                            Reason = denied.Rule == GitsOwnRule
+                                ? $"'{whole}' writes '{target}', git's own: written by git's verbs and this tool's, never by an agent's command"
+                                : $"'{whole}' writes '{target}', the tool's own state: written by its verbs alone, never by an agent's",
+                        };
+                    }
                 }
             }
         }
@@ -1150,7 +1155,7 @@ public sealed partial class AgentPolicy
             .Where(target => target.Length > 0)
             .Distinct(StringComparer.Ordinal)
             .SelectMany(target => places.Distinct(StringComparer.Ordinal).Select(place => (target, place)))
-            .SelectMany(each => (braces ? SpelledAgainst(each.target, each.place, kept) : [each.target]).Select(spelled => (each.target, each.place, spelled))))
+            .SelectMany(each => (braces ? SpelledAgainst(each.target, each.place, kept, dotNames) : [each.target]).Select(spelled => (each.target, each.place, spelled))))
         {
             IReadOnlyList<string> readings;
 
@@ -2015,7 +2020,8 @@ public sealed partial class AgentPolicy
 
                     // What the program there writes - its output redirects, and the files a writer's words name - meets the
                     // refusals every ground keeps on a write, as a file tool's write does: a side-task has no fold after it.
-                    if (CommandWriteRefusal(CommandAnalysis.WriteTargets(reading, start), places, whole, dotNames) is { } written)
+                    // A brace word is kept whole and decided by its pattern.
+                    if (CommandWriteRefusal(CommandAnalysis.WriteTargets(reading, start, braces: false), places, whole, dotNames) is { } written)
                     {
                         return written;
                     }
@@ -4056,7 +4062,7 @@ public sealed partial class AgentPolicy
     /// <param name="pattern">Whether the shell that reads the word expands its pattern: a quoted star is a star.</param>
     private AgentPolicyAnswer.Denied? Named(string word, string? quoted, IReadOnlyList<string> places, bool braces, bool dotNames, bool holds, bool pattern)
     {
-        foreach (var (named, place) in NamedAgainst(word, quoted, places.Distinct().ToList(), braces))
+        foreach (var (named, place) in NamedAgainst(word, quoted, places.Distinct().ToList(), braces, dotNames))
         {
             IReadOnlyList<string> readings;
 
@@ -4127,15 +4133,15 @@ public sealed partial class AgentPolicy
 
     /// <summary>
     /// Each path <paramref name="word"/> names (<see cref="CommandAnalysis.PathsNamed"/>) with each place it is read
-    /// against, for <see cref="Named"/>. A word whose braces pair and spell plain names (<see cref="PlainlySpelled"/>) is
-    /// decided by its pattern, never spelled out: its own readings, then against each place the spellings that decide it
-    /// (<see cref="SpellingsThatDecide"/>) - <c>{a,b}</c> written forty times is decided by one spelling, not 2^40. Every
-    /// other word's spellings are each read, one at a time.
+    /// against, for <see cref="Named"/>. A word whose braces pair is decided by its pattern
+    /// (<see cref="Decisive"/>), never spelled out: its own readings, then against each place the spellings that decide
+    /// it - <c>{a,b}</c> written forty times is decided by one spelling, not 2^40, and a word that may spell a shell
+    /// pattern by a witness per guarded place. Every word whose braces do not pair has its spellings read each, one at a
+    /// time.
     /// </summary>
-    private IEnumerable<(NamedPath Named, string Place)> NamedAgainst(string word, string? quoted, IReadOnlyList<string> places, bool braces)
+    private IEnumerable<(NamedPath Named, string Place)> NamedAgainst(string word, string? quoted, IReadOnlyList<string> places, bool braces, bool dotNames)
     {
-        if (braces && word.Contains('{', StringComparison.Ordinal) && WordPattern.Braces(word, quoted) is { } spelled
-            && PlainlySpelled(word, quoted, spelled) is { } segments)
+        if (braces && word.Contains('{', StringComparison.Ordinal) && WordPattern.Braces(word, quoted) is { } spelled)
         {
             var unreachable = _unreachable.SelectMany(kind => kind.Places).ToList();
 
@@ -4149,14 +4155,9 @@ public sealed partial class AgentPolicy
 
             foreach (var place in places)
             {
-                // A place a pattern of a move reached matches names of its own, so each spelling is read against it.
-                var spellings = place.IndexOfAny(['*', '?', '[']) >= 0
-                    ? spelled.Spellings().Select(spelling => spelling.Word)
-                    : SpellingsThatDecide(segments, place, unreachable);
-
-                foreach (var spelling in spellings)
+                foreach (var (spelling, mask) in Decisive(spelled, place, unreachable, dotNames))
                 {
-                    foreach (var named in CommandAnalysis.PathsNamed(spelling, braces: false))
+                    foreach (var named in CommandAnalysis.PathsNamed(spelling, braces: false, quoted: mask))
                     {
                         yield return (named, place);
                     }
@@ -4177,11 +4178,11 @@ public sealed partial class AgentPolicy
 
     /// <summary>
     /// The words <paramref name="word"/>'s braces spell, read against <paramref name="place"/> by a decision that compares
-    /// what they name with <paramref name="matters"/>: the spellings that decide it where the word is plainly spelled
-    /// (<see cref="SpellingsThatDecide"/>), every spelling, one at a time, where it is not, and the word alone where its
-    /// braces spell nothing.
+    /// what they name with <paramref name="matters"/>: the spellings that decide it (<see cref="Decisive"/>) - the names
+    /// that matter where the word is plainly spelled, a witness per guarded place where it may spell a pattern - every
+    /// spelling, one at a time, where neither reads it, and the word alone where its braces spell nothing.
     /// </summary>
-    private IEnumerable<string> SpelledAgainst(string word, string place, IReadOnlyList<string> matters)
+    private IEnumerable<string> SpelledAgainst(string word, string place, IReadOnlyList<string> matters, bool dotNames)
     {
         if (!word.Contains('{', StringComparison.Ordinal) || CommandAnalysis.BraceGroup(word) is null)
         {
@@ -4189,9 +4190,7 @@ public sealed partial class AgentPolicy
         }
 
         return WordPattern.Braces(word) is { } pattern
-            ? PlainlySpelled(word, null, pattern) is { } segments && place.IndexOfAny(['*', '?', '[']) < 0
-                ? SpellingsThatDecide(segments, place, matters)
-                : pattern.Spellings().Select(spelling => spelling.Word)
+            ? Decisive(pattern, place, matters, dotNames).Select(spelling => spelling.Word)
             : CommandAnalysis.BraceExpansions(word);
     }
 
@@ -4281,27 +4280,31 @@ public sealed partial class AgentPolicy
     /// and no entry has is alike to the decision whichever it is, the decision comparing names and nothing else. The ways
     /// are as many as the names that matter, never the product of every choice.
     /// </summary>
-    private IEnumerable<string> SpellingsThatDecide(IReadOnlyList<(string Before, WordPattern Piece)> segments, string place, IReadOnlyList<string> matters)
+    private IEnumerable<(string Word, string Quoted)> SpellingsThatDecide(IReadOnlyList<(string Before, WordPattern Piece)> segments, string place, IReadOnlyList<string> matters)
     {
-        var ways = new List<string> { string.Empty };
+        var ways = new List<(string Word, string Quoted)> { (string.Empty, string.Empty) };
 
         foreach (var (before, piece) in segments)
         {
+            var mask = MaskOf(piece);
+
             if (!piece.Chooses)
             {
-                var text = before + string.Concat(piece.Parts.OfType<WordPart.Text>().Select(part => part.Spelled));
-                ways = [.. ways.Select(way => way + text)];
+                var spelled = string.Concat(piece.Parts.OfType<WordPart.Text>().Select(part => part.Spelled));
+                ways = [.. ways.Select(way => (
+                    way.Word + before + spelled,
+                    way.Quoted + new string(WordQuoting.Open, before.Length) + (mask.Length == spelled.Length ? mask : new string(WordQuoting.Open, spelled.Length))))];
                 continue;
             }
 
             var matcher = piece.Matcher();
-            var next = new HashSet<string>(StringComparer.Ordinal);
+            var next = new HashSet<(string, string)>();
 
             foreach (var way in ways)
             {
-                foreach (var name in NamesThatDecide(way + before, piece, matcher, place, matters))
+                foreach (var name in NamesThatDecide(way.Word + before, piece, matcher, place, matters))
                 {
-                    next.Add(way + before + name);
+                    next.Add((way.Word + before + name, way.Quoted + new string(WordQuoting.Open, before.Length + name.Length)));
                 }
             }
 
@@ -4309,6 +4312,19 @@ public sealed partial class AgentPolicy
         }
 
         return ways;
+    }
+
+    /// <summary>How each character of a segment's fixed text stands to the shell, where all of it stands one way; empty where it stands none.</summary>
+    private static string MaskOf(WordPattern piece)
+    {
+        var mask = string.Empty;
+
+        foreach (var part in piece.Parts.OfType<WordPart.Text>())
+        {
+            mask += part.Quoted.Length >= part.Spelled.Length ? part.Quoted : new string(WordQuoting.Open, part.Spelled.Length);
+        }
+
+        return mask;
     }
 
     /// <summary>

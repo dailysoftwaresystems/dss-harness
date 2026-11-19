@@ -69,14 +69,18 @@ public static partial class CommandAnalysis
     /// </summary>
     /// <param name="analyzed">The command, as the analysis read it.</param>
     /// <param name="start">Where its program stands among its words: past its environment, or where a wrapper's program is.</param>
+    /// <param name="braces">
+    /// Whether a word's braces are spelled, each word they spell a place of its own; false where the caller decides a
+    /// brace word by its pattern (<see cref="AgentPolicy.SpelledAgainst"/>) rather than by each spelling.
+    /// </param>
     /// <returns>Each place, as spelled; empty where the command writes no file this reads.</returns>
-    public static IReadOnlyList<string> WriteTargets(AnalyzedCommand analyzed, int start)
+    public static IReadOnlyList<string> WriteTargets(AnalyzedCommand analyzed, int start, bool braces = true)
     {
         ArgumentNullException.ThrowIfNull(analyzed);
 
         var targets = analyzed.Redirects
             .Where(redirect => redirect.Operator is ">" or ">>" or "<>")
-            .SelectMany(redirect => PathsNamed(redirect.Target).Where(path => path.Whole).Select(path => path.Path))
+            .SelectMany(redirect => PathsNamed(redirect.Target, braces).Where(path => path.Whole).Select(path => path.Path))
             .ToList();
 
         var words = analyzed.Words;
@@ -108,7 +112,7 @@ public static partial class CommandAnalysis
 
         if (Is(program, [.. CopyWriters]))
         {
-            targets.AddRange(CopyDestinations(program, command).SelectMany(word => PathsNamed(word).Where(path => path.Whole).Select(path => path.Path)));
+            targets.AddRange(CopyDestinations(program, command).SelectMany(word => PathsNamed(word, braces).Where(path => path.Whole).Select(path => path.Path)));
             return targets;
         }
 
@@ -124,7 +128,7 @@ public static partial class CommandAnalysis
 
             // A word that is no option names its paths; an option's word names the values it gives, never itself. A word of
             // text a writer is handed (Set-Content -Value 'see .git/x') is what it writes, not where.
-            targets.AddRange(PathsNamed(word)
+            targets.AddRange(PathsNamed(word, braces)
                 .Where(path => (ended || !word.StartsWith('-') || path.Path != word) && (path.Whole || !word.Any(char.IsWhiteSpace)))
                 .Select(path => path.Path));
         }

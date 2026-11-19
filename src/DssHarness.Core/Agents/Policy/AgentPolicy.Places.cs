@@ -18,7 +18,7 @@ public sealed partial class AgentPolicy
     /// A set of places: <see cref="Base"/>, then each step one of its ways - a run of names, each a segment beneath what
     /// precedes it - or, where the step may be passed, none. A place no move made relative is a form of no steps.
     /// </summary>
-    private sealed class PlaceForm
+    internal sealed class PlaceForm
     {
         private PlaceForm(string @base, IReadOnlyList<PlaceStep> steps)
         {
@@ -204,7 +204,7 @@ public sealed partial class AgentPolicy
     }
 
     /// <summary>One step of a <see cref="PlaceForm"/>: its ways, each a run of names, and whether it may be passed.</summary>
-    private sealed record PlaceStep(IReadOnlyList<IReadOnlyList<string>> Ways, bool Optional);
+    internal sealed record PlaceStep(IReadOnlyList<IReadOnlyList<string>> Ways, bool Optional);
 
     /// <summary>
     /// What a relative path does to a place it is read from, as the system walks it (<see cref="Plain"/>): each segment a
