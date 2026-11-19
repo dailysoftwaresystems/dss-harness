@@ -5,7 +5,6 @@ using DssHarness.Core.Processes;
 using DssHarness.Core.Results;
 using DssHarness.Core.Text;
 using DssHarness.Core.Waiting;
-using DssHarness.Core.Walks;
 
 namespace DssHarness.Core.Build;
 
@@ -579,16 +578,17 @@ internal sealed class NinjaRebuildGraph(
     private readonly Dictionary<Language, Dictionary<string, List<string>?>> _includes = [];
 
     /// <summary>
-    /// What a change to rebuilds what each build line builds, worked out once however many objects reach it; made at the
-    /// first question.
+    /// Everything a change to which rebuilds what each build line asked of builds, through the build lines that build its
+    /// inputs: each answer worked out once, by its own walk, for the line it was asked of alone.
     /// </summary>
-    private Memo<NinjaEdge, HashSet<string>>? _rebuiltFor;
+    private readonly Dictionary<NinjaEdge, HashSet<string>> _rebuiltFor = new(ReferenceEqualityComparer.Instance);
 
     /// <summary>
-    /// What a change to rebuilds what each build line builds, following what each build recorded to the build line that
-    /// builds it too; worked out once however many objects reach it, and made at the first question.
+    /// Everything a change to which rebuilds what each build line asked of builds, through the build lines that build its
+    /// inputs and those that build what its build recorded: each answer worked out once, by its own walk, for the line it
+    /// was asked of alone.
     /// </summary>
-    private Memo<NinjaEdge, HashSet<string>>? _dependedOn;
+    private readonly Dictionary<NinjaEdge, HashSet<string>> _dependedOn = new(ReferenceEqualityComparer.Instance);
 
     /// <summary>The manifest the build lines are read from.</summary>
     public NinjaManifest Manifest => manifest;
@@ -688,53 +688,61 @@ internal sealed class NinjaRebuildGraph(
             return true;
         }
 
-        var own = Own(edge);
-        var through = Producers(edge).Select(RebuiltFor).ToList();
+        var rebuiltFor = RebuiltFor(edge);
 
-        return headers.All(header => own.Contains(header) || through.Exists(rebuiltFor => rebuiltFor.Contains(header)));
+        return headers.All(rebuiltFor.Contains);
     }
 
     /// <summary>Everything a change to which rebuilds what <paramref name="edge"/> builds, however far back.</summary>
-    private HashSet<string> RebuiltFor(NinjaEdge edge) => RebuiltFor(edge, _rebuiltFor ??= Rebuilding(Producers));
+    private HashSet<string> RebuiltFor(NinjaEdge edge) => Answered(_rebuiltFor, edge, Producers);
 
     /// <summary>
     /// Everything a change to which rebuilds what <paramref name="edge"/> builds, however far back, through the build lines
     /// that build its inputs and those that build what its build recorded.
     /// </summary>
     private HashSet<string> DependedOn(NinjaEdge edge)
-        => RebuiltFor(edge, _dependedOn ??= Rebuilding(line => Producers(line).Concat(RecordedProducers(line))));
+        => Answered(_dependedOn, edge, line => Producers(line).Concat(RecordedProducers(line)));
 
     /// <summary>
-    /// Everything a change to which rebuilds what <paramref name="edge"/> builds: what it reads itself, and what rebuilds each
-    /// build line that builds an input of it, however far back, each worked out once by <paramref name="known"/>.
+    /// Everything a change to which rebuilds what <paramref name="edge"/> builds: what it reads itself, and what each build
+    /// line <paramref name="producers"/> names for it reads, and theirs, however far back - kept in <paramref name="answers"/>
+    /// once worked out, so a line asked again is answered from it.
     /// </summary>
     /// <remarks>
-    /// Answered by a memo on a stack of its own (<see cref="Memo{TKey, TAnswer}"/>), never a recursion, so a chain of
-    /// generated inputs however long - each built from the one before - is followed to its start. A build line met again
-    /// while it is still being answered is a cycle, which ninja never builds: it adds nothing there but what it reads itself.
+    /// One walk back from the line, on a stack of its own, each line met once: so a chain of generated inputs however long
+    /// - each built from the one before - is followed to its start in time and memory linear in the lines and the files it
+    /// reaches, and a cycle, which ninja never builds, ends where it meets a line already met. Only the line asked of is
+    /// answered: a set of its own for every line on the way would hold the chain once for each of them.
     /// </remarks>
-    private static HashSet<string> RebuiltFor(NinjaEdge edge, Memo<NinjaEdge, HashSet<string>> known) => known.Of(edge);
+    private HashSet<string> Answered(Dictionary<NinjaEdge, HashSet<string>> answers, NinjaEdge edge, Func<NinjaEdge, IEnumerable<NinjaEdge>> producers)
+    {
+        if (answers.TryGetValue(edge, out var known))
+        {
+            return known;
+        }
 
-    /// <summary>
-    /// The memo of what rebuilds each build line through those <paramref name="producers"/> names for it: its own inputs
-    /// and records, and everything that rebuilds each of those lines.
-    /// </summary>
-    private Memo<NinjaEdge, HashSet<string>> Rebuilding(Func<NinjaEdge, IEnumerable<NinjaEdge>> producers)
-        => new(
-            producers,
-            (edge, through) =>
+        var reached = new HashSet<string>(paths);
+        var met = new HashSet<NinjaEdge>(ReferenceEqualityComparer.Instance) { edge };
+        var waiting = new Stack<NinjaEdge>();
+        waiting.Push(edge);
+
+        while (waiting.TryPop(out var line))
+        {
+            reached.UnionWith(Own(line));
+
+            foreach (var producer in producers(line))
             {
-                var rebuiltFor = Own(edge);
-
-                foreach (var producer in through)
+                if (met.Add(producer))
                 {
-                    rebuiltFor.UnionWith(producer);
+                    waiting.Push(producer);
                 }
+            }
+        }
 
-                return rebuiltFor;
-            },
-            Own,
-            ReferenceEqualityComparer.Instance);
+        answers[edge] = reached;
+
+        return reached;
+    }
 
     /// <summary>What a change to rebuilds what <paramref name="edge"/> builds by itself: its inputs, and what its build recorded.</summary>
     private HashSet<string> Own(NinjaEdge edge)

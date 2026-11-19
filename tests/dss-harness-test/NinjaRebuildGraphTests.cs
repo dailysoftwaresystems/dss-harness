@@ -229,14 +229,15 @@ public sealed class NinjaRebuildGraphTests
     /// <summary>
     /// Ninja's deep inputs are read on explicit stacks and memos, never a recursion a level: a manifest of subninja files
     /// nested twenty thousand deep is read to its deepest, whose build line finds a rule its top file declared; and a chain
-    /// of two thousand generated inputs, each built from the one before, is followed back to the source it starts from -
-    /// on a stack of a megabyte, which a recursion once a level would pass long before. Red with the recursive reading
-    /// put back.
+    /// of forty thousand generated inputs, each built from the one before, is followed back to the source it starts from -
+    /// on a stack of a megabyte, which a recursion once a level would pass long before, and in time linear in the chain,
+    /// which a set held for each line on the way, the chain once for each of them, would not. Red with the recursive
+    /// reading put back.
     /// </summary>
     [Fact]
     public async Task NinjasDeepInputs_AreReadAndFollowed_OnASmallStack()
     {
-        Assert.Equal(new ChildRunAnswer(0, "gen,True,2001", ""), await ChildRun.MethodAsync(typeof(NinjaRebuildGraphTests), nameof(DeepInputs), TestContext.Current.CancellationToken));
+        Assert.Equal(new ChildRunAnswer(0, "gen,True,40001", ""), await ChildRun.MethodAsync(typeof(NinjaRebuildGraphTests), nameof(DeepInputs), TestContext.Current.CancellationToken));
     }
 
     /// <summary>
@@ -246,7 +247,7 @@ public sealed class NinjaRebuildGraphTests
     internal static string DeepInputs() => SmallStack.Run(() =>
     {
         const int Nested = 20_000;
-        const int Chained = 2_000;
+        const int Chained = 40_000;
         using var temp = new TempDirectory();
         var top = new System.Text.StringBuilder("rule gen\n  command = gen $in $out\n\nbuild g1: gen src.txt\n");
 
