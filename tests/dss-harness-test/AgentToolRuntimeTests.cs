@@ -1849,7 +1849,7 @@ public sealed class AgentToolRuntimeTests : IDisposable
             native: (query, _) =>
             {
                 asked.Add(query);
-                return Task.FromResult(NoWire.FailedPart(query, "the lane of WORK_KEY is held"));
+                return Task.FromResult(new AgentNativeAnswer(NoWire.FailedPart(query, "the lane of WORK_KEY is held"), 0));
             });
 
         var answered = await Call(failing, AgentTools.WebSearch, ("query", "group by"), ("sources", new[] { "alpha" }));
@@ -1879,6 +1879,46 @@ public sealed class AgentToolRuntimeTests : IDisposable
     }
 
     /// <summary>
+    /// Each search the provider ran of one ask is a request of the step's search, spent as the ask says how many it ran:
+    /// an ask that ran two of a step with three requests spends them all with its source's own one, and the next search's
+    /// source and native ask are both refused unasked, the bound spent by the searches that were made.
+    /// </summary>
+    [Fact]
+    public async Task WebSearch_EachSearchTheNativeAskRan_IsARequestOfTheStep_SpentAsItRan()
+    {
+        var endpoint = new WebEndpoint(_ => SearchAnswer("""{ "items": [ { "title": "One", "link": "https://one.example.test/" } ] }"""));
+        var asked = 0;
+        using var runtime = Open(
+            capabilities: [AgentCapability.Read, AgentCapability.Web],
+            endpoint: endpoint,
+            webSearch: TwoSources(3),
+            native: (query, _) => Task.FromResult(new AgentNativeAnswer(NoWire.FailedPart(query, "it ran its searches and failed"), ++asked is 1 ? 2 : 0)));
+
+        var first = await Call(runtime, AgentTools.WebSearch, ("query", "group by"), ("sources", new[] { "alpha" }));
+        var second = await Call(runtime, AgentTools.WebSearch, ("query", "group by"), ("sources", new[] { "alpha" }));
+
+        Assert.True(first.Ok);
+        Assert.Equal(1, asked);
+
+        // The first search spent the step's three: alpha's request, the ask's own, and the second search it ran.
+        Assert.False(second.Ok);
+        Assert.Equal(2, Counted(second.Text, "this step's 3 requests of the web search's sources are spent (agentWebSearch.maxPerStep)"));
+    }
+
+    /// <summary>How many times <paramref name="text"/> holds <paramref name="part"/>.</summary>
+    private static int Counted(string text, string part)
+    {
+        var count = 0;
+
+        for (var at = text.IndexOf(part, StringComparison.Ordinal); at >= 0; at = text.IndexOf(part, at + part.Length, StringComparison.Ordinal))
+        {
+            count++;
+        }
+
+        return count;
+    }
+
+    /// <summary>
     /// A runtime opened for a run that carries a native search is given what asks it, and one given an asker carries a
     /// native search: neither is left without the other.
     /// </summary>
@@ -1893,7 +1933,7 @@ public sealed class AgentToolRuntimeTests : IDisposable
             Assert.Throws<ArgumentException>(() => host.Open(run with { NativeSearch = new NoWire() }, _events)).Message);
         Assert.Equal(
             "the run carries no native search, and the runtime was given one to ask (Parameter 'native')",
-            Assert.Throws<ArgumentException>(() => host.Open(run, _events, (query, _) => Task.FromResult(NoWire.FailedPart(query, "never")))).Message);
+            Assert.Throws<ArgumentException>(() => host.Open(run, _events, (query, _) => Task.FromResult(new AgentNativeAnswer(NoWire.FailedPart(query, "never"), 0)))).Message);
     }
 
     /// <summary>A provider's own search the runtime never asks itself: the loop asks it, as the run stands.</summary>

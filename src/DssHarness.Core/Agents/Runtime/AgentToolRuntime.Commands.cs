@@ -324,8 +324,10 @@ public sealed partial class AgentToolRuntime
     /// The provider's own search, asked as one more source of the same search through the client's loop - which asks it
     /// with the entry serving the run, through the gate, and counts what it used - its part recorded as every source's
     /// is; a part that failed never hides the configured sources' answers. The run stopped is no failed part: the stop
-    /// goes on as every stop of the run does. It is one more request of the step's search, counted against
-    /// <c>agentWebSearch.maxPerStep</c> as each source's request is, and refused unasked where the step's are spent.
+    /// goes on as every stop of the run does. The ask is one request of the step's search, refused unasked where the
+    /// step's are spent, and each search the provider ran of it counts as a request too: the provider decides them
+    /// itself, so they are known only once the ask says how many it ran, and spent then - past the bound where the
+    /// provider ran them, for they were made.
     /// </summary>
     /// <param name="native">What asks the provider's own search, as the run stands.</param>
     /// <param name="step">The step's search, whose requests it counts among.</param>
@@ -335,13 +337,24 @@ public sealed partial class AgentToolRuntime
     {
         Tally.Asked();
 
-        var part = step.Take()
-            ? await native(query, cancellationToken).ConfigureAwait(false)
-            : Web.Search.WebSearchPart.NativeRefused(query, Web.Search.HarnessWebSearch.Spent(step));
+        if (!step.Take())
+        {
+            var unasked = Web.Search.WebSearchPart.NativeRefused(query, Web.Search.HarnessWebSearch.Spent(step));
 
-        await _records.WebSearchedAsync(part).ConfigureAwait(false);
+            await _records.WebSearchedAsync(unasked).ConfigureAwait(false);
 
-        return part;
+            return unasked;
+        }
+
+        var asked = await native(query, cancellationToken).ConfigureAwait(false);
+
+        // Every search the ask ran is a request of the step's search: the ask's own request already counted, the rest are
+        // counted here, as the ask says how many it ran.
+        step.Made(asked.Searches);
+
+        await _records.WebSearchedAsync(asked.Part).ConfigureAwait(false);
+
+        return asked.Part;
     }
 
     /// <summary>What records the step's searches: its own records, and its tally of the requests it made.</summary>

@@ -800,6 +800,15 @@ public sealed class WebSearchStep
         }
     }
 
+    /// <summary>
+    /// Records the searches a request already taken made: the provider's own search runs as many as it chose of one ask,
+    /// and each of them is a request of the step's search as any source's is - spent as the ask says how many it ran,
+    /// past the bound where the provider ran them, for they were made. An ask that names none keeps the one request its
+    /// being made spent.
+    /// </summary>
+    /// <param name="searches">How many searches the ask ran in all, its own request one of them.</param>
+    internal void Made(int searches) => Interlocked.Add(ref _spent, Math.Max(searches, 1) - 1);
+
     /// <summary>Gives back what <see cref="Take"/> counted for a request that was never made: a turn the source's pace refused.</summary>
     internal void GiveBack() => Interlocked.Decrement(ref _spent);
 }

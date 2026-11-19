@@ -920,14 +920,19 @@ public interface IAgentNativeSearch
 /// <param name="Failure">The failure the request met, read as every failure of the provider's is; null where it answered.</param>
 public sealed record AgentNativeSearched(Web.Search.WebSearchPart Part, AgentUsage Used, Loop.ChatFailure? Failure = null);
 
+/// <summary>What one ask of a run's native search came to: its part, and how many searches the ask ran.</summary>
+/// <param name="Part">The part the ask came to.</param>
+/// <param name="Searches">How many searches the provider ran of the one ask, as its usage counted them: each one a request of the step's search.</param>
+public sealed record AgentNativeAnswer(Web.Search.WebSearchPart Part, int Searches);
+
 /// <summary>
 /// Asks a run's native search for its tool runtime, as the run stands when the agent asks it: the client's loop, which
 /// knows the entry serving the run then, goes through its gate and counts what the search used.
 /// </summary>
 /// <param name="query">The query, as the agent wrote it.</param>
 /// <param name="cancellationToken">Stops the search: the run's stop and the turn's cut.</param>
-/// <returns>The part the search came to.</returns>
-public delegate Task<Web.Search.WebSearchPart> AgentNativeAsk(string query, CancellationToken cancellationToken);
+/// <returns>What the ask came to - its part, and how many searches it ran, each of them a request of the step's search.</returns>
+public delegate Task<AgentNativeAnswer> AgentNativeAsk(string query, CancellationToken cancellationToken);
 
 /// <summary>
 /// The configuration's entries a run's model is reached by: its provider - the API's address and the currency of its

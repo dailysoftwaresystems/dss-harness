@@ -1543,13 +1543,15 @@ public sealed class ToolLoop(
         /// model and with the key serving the run then, through that key's lane as every request of the conversation goes
         /// (<see cref="LaneTurnAsync"/>: a hold past the longest wait fails the part at once, naming the limit; a shorter one
         /// waited, said as it is waited), a 429 it meets holding the lane's waiters it covers, and what it used counted at
-        /// once, at that entry's prices, to that model's part on that key. A request that never answers in time, or that
-        /// fails on the way, is a part that failed, saying why; the run's stop and the turn's cut go on as stops.
+        /// once, at that entry's prices, to that model's part on that key. The searches the provider ran of the one ask -
+        /// as many as it chose to make - are carried out with the part, for the step's bound counts each of them. A request
+        /// that never answers in time, or that fails on the way, is a part that failed, saying why; the run's stop and the
+        /// turn's cut go on as stops.
         /// </summary>
         /// <param name="native">The provider's own search, which the run carries.</param>
         /// <param name="query">The query, as the agent wrote it.</param>
         /// <param name="cancellationToken">The run's stop and the turn's cut.</param>
-        private async Task<Web.Search.WebSearchPart> NativeSearchAsync(IAgentNativeSearch native, string query, CancellationToken cancellationToken)
+        private async Task<AgentNativeAnswer> NativeSearchAsync(IAgentNativeSearch native, string query, CancellationToken cancellationToken)
         {
             var model = Now.Model;
             var key = Now.Key!;
@@ -1561,7 +1563,7 @@ public sealed class ToolLoop(
 
                 if (held is not null)
                 {
-                    return native.Failed(query, held.Message);
+                    return Failed(native, query, held.Message);
                 }
 
                 AgentNativeSearched searched;
@@ -1591,14 +1593,22 @@ public sealed class ToolLoop(
                     }
                 }
 
-                return searched.Part;
+                // The searches the provider ran, as its usage counted them - the one count both the cost and the step's bound read.
+                return new AgentNativeAnswer(searched.Part, (int)Math.Min(searched.Used.Searches, int.MaxValue));
             }
             catch (Exception ex) when (ex is IOException or System.Net.Http.HttpRequestException or JsonException
                 || (ex is OperationCanceledException && !cancellationToken.IsCancellationRequested))
             {
-                return native.Failed(query, ex is OperationCanceledException ? "the provider did not answer the search in time" : ex.Message);
+                return Failed(native, query, ex is OperationCanceledException ? "the provider did not answer the search in time" : ex.Message);
             }
         }
+
+        /// <summary>
+        /// The failed part of a search of <paramref name="query"/> that names no searches: the ask was made - its request
+        /// the step's to count - and no search of it is known to have run, whatever the provider did before it failed.
+        /// </summary>
+        private static AgentNativeAnswer Failed(IAgentNativeSearch native, string query, string why)
+            => new(native.Failed(query, why), 0);
 
         /// <summary>
         /// Counts what a request used - the run's totals, the model's part, the cost at the model's prices - and holds the
