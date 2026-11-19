@@ -1,3 +1,5 @@
+using System.Runtime.CompilerServices;
+
 namespace DssHarness.Core.Codebase.Languages.Scanning;
 
 /// <summary>One call a scanned text makes: its name, the parenthesis its arguments open and close, and how many it gives.</summary>
@@ -37,9 +39,6 @@ internal sealed record ScanTypeArguments(IReadOnlySet<string> Punctuators, IRead
 /// </summary>
 internal static class ScanCalls
 {
-    /// <summary>The most tokens a type-argument list is read over before it is taken for none.</summary>
-    private const int MostTypeArguments = 256;
-
     /// <summary>
     /// The call whose name is the token at <paramref name="at"/>, where one is: the name, then a list of type arguments
     /// where the language writes them, then <c>(</c>; <see langword="null"/> where the name is one of its keywords, or no
@@ -395,17 +394,34 @@ internal static class ScanCalls
 
     /// <summary>
     /// The index past the <c>&gt;</c> that ends the type-argument list the <c>&lt;</c> at <paramref name="less"/> opens:
-    /// a list of names, numbers, text, the language's punctuators and nested lists and groups; -1 where what follows is
-    /// none - an expression's comparison - or runs past <see cref="MostTypeArguments"/> tokens.
+    /// a list of names, numbers, text, the language's punctuators and nested lists and groups, however long; -1 where what
+    /// follows is none - an expression's comparison. Each list's end is found once for a text and a way of writing them
+    /// (<see cref="AngleTable"/>): the read of one list says where each list nested in it ends, and a later read of a
+    /// list passes over one nested in it whose end is known - or stops where that one was found to be none, for what
+    /// stopped it stops the outer list too - so the lists of a text are read in time linear in its tokens.
     /// </summary>
     /// <param name="scan">The text.</param>
     /// <param name="less">The index of the <c>&lt;</c>.</param>
     /// <param name="types">How the language writes type arguments.</param>
     public static int TypeArgumentsEnd(ScannedText scan, int less, ScanTypeArguments types)
     {
-        var depth = 0;
+        // What no < opens is no list.
+        if (less < 0 || less >= scan.Count || !scan.Is(less, "<"))
+        {
+            return -1;
+        }
 
-        for (var at = less; at < scan.Count && at - less < MostTypeArguments; at++)
+        var ends = AngleTable.Of(scan).EndsOf(types);
+
+        if (ends.TryGetValue(less, out var known))
+        {
+            return known;
+        }
+
+        // The lists this read is inside, innermost last: the first is the one asked for.
+        var open = new List<int>();
+
+        for (var at = less; at < scan.Count; at++)
         {
             var token = scan[at];
 
@@ -420,11 +436,25 @@ internal static class ScanCalls
 
             if (scan.Is(at, "<"))
             {
-                depth++;
+                if (at != less && ends.TryGetValue(at, out var nested))
+                {
+                    if (nested < 0)
+                    {
+                        break;
+                    }
+
+                    at = nested - 1;
+                    continue;
+                }
+
+                open.Add(at);
             }
             else if (scan.Is(at, ">"))
             {
-                if (--depth == 0)
+                ends[open[^1]] = at + 1;
+                open.RemoveAt(open.Count - 1);
+
+                if (open.Count == 0)
                 {
                     return at + 1;
                 }
@@ -433,15 +463,21 @@ internal static class ScanCalls
             {
                 if (scan.Match(at) < 0)
                 {
-                    return -1;
+                    break;
                 }
 
                 at = scan.Match(at);
             }
             else if (!types.Punctuators.Contains(scan.Text(at)) || Conjoins(scan, at, types))
             {
-                return -1;
+                break;
             }
+        }
+
+        // Every list still open where the read stopped stops there too: none of them is one.
+        foreach (var unended in open)
+        {
+            ends[unended] = -1;
         }
 
         return -1;
@@ -449,41 +485,97 @@ internal static class ScanCalls
 
     /// <summary>
     /// The index of the <c>&lt;</c> the <c>&gt;</c> at <paramref name="greater"/> closes, its list a type's arguments by
-    /// <paramref name="types"/>; -1 where none does, or the list runs past <see cref="MostTypeArguments"/> tokens.
+    /// <paramref name="types"/>; -1 where none does. The <c>&lt;</c> is the one the <c>&gt;</c> matches read back over its
+    /// statement - groups passed over whole, back to a statement's end or a brace - as one pass over the text finds every
+    /// <c>&gt;</c>'s (<see cref="AngleTable"/>), however long the list.
     /// </summary>
     /// <param name="scan">The text.</param>
     /// <param name="greater">The index of the <c>&gt;</c>.</param>
     /// <param name="types">How the language writes type arguments where the list stands.</param>
     public static int TypeArgumentsStart(ScannedText scan, int greater, ScanTypeArguments types)
+        => greater >= 0 && greater < scan.Count && AngleTable.Of(scan).Opener(greater) is var less and >= 0 && TypeArgumentsEnd(scan, less, types) == greater + 1 ? less : -1;
+
+    /// <summary>
+    /// What a text's angle brackets are, found once for the text: the <c>&lt;</c> each <c>&gt;</c> matches, read back as a
+    /// list's closer is - its groups passed over whole, a statement's end or a brace ending the read - and, for each way a
+    /// language writes type arguments, where each list a <c>&lt;</c> opens ends (<see cref="TypeArgumentsEnd"/>).
+    /// </summary>
+    private sealed class AngleTable
     {
-        var depth = 0;
+        /// <summary>Each text's table, kept while the text is.</summary>
+        private static readonly ConditionalWeakTable<ScannedText, AngleTable> Tables = new();
 
-        for (var at = greater; at >= 0 && greater - at < MostTypeArguments; at--)
+        private readonly ScannedText _scan;
+        private readonly Dictionary<ScanTypeArguments, Dictionary<int, int>> _ends = new(ReferenceEqualityComparer.Instance);
+        private int[]? _openers;
+
+        private AngleTable(ScannedText scan) => _scan = scan;
+
+        /// <summary>The table of <paramref name="scan"/>, made the first time it is asked for.</summary>
+        public static AngleTable Of(ScannedText scan) => Tables.GetValue(scan, text => new AngleTable(text));
+
+        /// <summary>Where each list a <c>&lt;</c> opens ends, read as <paramref name="types"/> writes them: filled as lists are read.</summary>
+        public Dictionary<int, int> EndsOf(ScanTypeArguments types)
+            => _ends.TryGetValue(types, out var ends) ? ends : _ends[types] = [];
+
+        /// <summary>The index of the <c>&lt;</c> the <c>&gt;</c> at <paramref name="greater"/> matches; -1 where none does.</summary>
+        public int Opener(int greater) => (_openers ??= Openers())[greater];
+
+        /// <summary>
+        /// The <c>&lt;</c> each <c>&gt;</c> matches, in one pass forward: what read back from a <c>&gt;</c> it would meet -
+        /// a <c>&lt;</c> no <c>&gt;</c> between closed, a group's insides passed over and what stood before the group seen
+        /// again past it, nothing past a statement's end or a brace - as a stack of the open <c>&lt;</c>s, kept as a list
+        /// of links so that a group's closer takes back the stack its opener saw, in one step.
+        /// </summary>
+        private int[] Openers()
         {
-            if (scan.Is(at, ">"))
-            {
-                depth++;
-            }
-            else if (scan.Is(at, "<") && --depth == 0)
-            {
-                return TypeArgumentsEnd(scan, at, types) == greater + 1 ? at : -1;
-            }
-            else if (scan.Is(at, ")") || scan.Is(at, "]"))
-            {
-                if (scan.Match(at) < 0)
-                {
-                    return -1;
-                }
+            var openers = new int[_scan.Count];
+            var before = new Dictionary<int, Opened?>();
+            Opened? open = null;
 
-                at = scan.Match(at);
-            }
-            else if (scan.Is(at, ";") || scan.Is(at, "{") || scan.Is(at, "}"))
+            for (var at = 0; at < _scan.Count; at++)
             {
-                return -1;
+                openers[at] = -1;
+
+                if (_scan.Is(at, "<"))
+                {
+                    open = new Opened(at, open);
+                }
+                else if (_scan.Is(at, ">"))
+                {
+                    if (open is not null)
+                    {
+                        openers[at] = open.At;
+                        open = open.Below;
+                    }
+                }
+                else if (_scan.Is(at, "(") || _scan.Is(at, "["))
+                {
+                    before[at] = open;
+                }
+                else if (_scan.Is(at, ")") || _scan.Is(at, "]"))
+                {
+                    // Past a group, a > reads back to its opener and on before it: the stack the opener saw. A closer no
+                    // opener matches stops any read back across it.
+                    open = _scan.Match(at) is var opener and >= 0 && before.TryGetValue(opener, out var seen) ? seen : null;
+                }
+                else if (_scan.Is(at, ";") || _scan.Is(at, "{") || _scan.Is(at, "}"))
+                {
+                    // A brace a closer matches is passed over from that closer, as a group's opener is.
+                    if (_scan.Is(at, "{"))
+                    {
+                        before[at] = open;
+                    }
+
+                    open = null;
+                }
             }
+
+            return openers;
         }
 
-        return -1;
+        /// <summary>One open <c>&lt;</c>, and those open below it.</summary>
+        private sealed record Opened(int At, Opened? Below);
     }
 
     /// <summary>

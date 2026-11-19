@@ -493,17 +493,28 @@ public sealed class CExtractorTests : CodeGraphExtractorContractTests<CExtractor
         Assert.Null(Read("a.c", "int x;\n").Generated);
     }
 
-    /// <summary>Declarations nested deeper than a reader reads are marked and passed over, never the end of the reading.</summary>
+    /// <summary>
+    /// Declarations nested five thousand blocks deep are read whole from a stack of a megabyte - each block's walked on the
+    /// reader's stack of walks (<see cref="ScanStack"/>), never by a call a block - marking nothing dynamic: the type named
+    /// at the bottom, its field and the member declared of it are its holder's, and the declarations after it are read.
+    /// </summary>
     [Fact]
-    public void DeclarationsNestedTooDeep_AreMarked_AndPassedOver()
+    public async Task ABlockFiveThousandDeep_IsReadWhole()
     {
-        var depth = ScanFrame.MostDepth + 10;
-        var text = string.Concat(Enumerable.Range(0, depth).Select(at => $"struct s{at} {{ ")) + "int x; " + new string('}', depth) + ";\nint after(void);\n";
+        Assert.Equal(
+            new ChildRunAnswer(0, "c:after c:outer c:outer.in c:outer.inner c:outer.inner.x", ""),
+            await ChildRun.MethodAsync(typeof(CExtractorTests), nameof(BlockFiveThousandDeep), TestContext.Current.CancellationToken));
+    }
+
+    /// <summary>The child of <see cref="ABlockFiveThousandDeep_IsReadWhole"/>: the ids of the nodes read, in order.</summary>
+    internal static string BlockFiveThousandDeep() => SmallStack.Run(() =>
+    {
+        var text = "struct outer { " + string.Concat(Enumerable.Repeat("struct { ", 5_000)) + "struct inner { int x; } in; " + string.Concat(Enumerable.Repeat("}; ", 5_000)) + "};\nint after(void);\n";
         var extract = Read("n.h", text);
 
-        Assert.Contains(extract.Dynamic, dynamic => dynamic.Why == $"declarations nested more than {ScanFrame.MostDepth} blocks deep, which are not read");
-        Assert.Single(extract.Nodes, node => node.Id == "c:after");
-    }
+        Assert.Empty(extract.Dynamic);
+        return string.Join(' ', extract.Nodes.Select(node => node.Id).Order(StringComparer.Ordinal));
+    });
 
     /// <summary>
     /// A typedef's struct or a function whose head is written under each branch of a conditional over one body is one
