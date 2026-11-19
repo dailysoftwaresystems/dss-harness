@@ -2307,9 +2307,9 @@ public sealed partial class AgentPolicy
                 var given = CommandAnalysis.Patterned(value, mask.Length == words[at].Length ? mask[(equals + 1)..] : null, known => ValuesOf(known, places));
 
                 if (!given.Chooses
-                    && CommandAnalysis.Expansion(value, mask.Length == words[at].Length ? mask[(equals + 1)..] : null) is null
                     && value.Contains('{', StringComparison.Ordinal)
-                    && WordPattern.Braces(value, mask.Length == words[at].Length ? mask[(equals + 1)..] : null) is { } braces)
+                    && WordPattern.Braces(value, mask.Length == words[at].Length ? mask[(equals + 1)..] : null) is { } braces
+                    && !CommandAnalysis.MayExpand(braces))
                 {
                     given = braces;
                 }
@@ -2996,9 +2996,8 @@ public sealed partial class AgentPolicy
 
         // A command that runs a program which fetches from the network is decided as a web request
         // too, by each address it names - and where the web is held to rules, one whose addresses
-        // are in a file this does not read is denied. Read once of the command whole, for every
-        // program of it is denied by an address it names as the command is.
-        foreach (var address in CommandAnalysis.WebAddresses(command, CommandAnalysis.QuotedOf(analyzed, environment)))
+        // are in a file this does not read is denied.
+        foreach (var address in CommandAnalysis.WebAddresses(words, spelled))
         {
             if (WebDecided(address, whole, domains: true, agentRules: true).Refusal() is { } denied)
             {
@@ -3006,7 +3005,7 @@ public sealed partial class AgentPolicy
             }
         }
 
-        if (CommandAnalysis.WebAddressesUnread(command) is { } unread && (!_ground.Web || _webDomains.Count > 0 || _rules.Any(pair => pair.Rule.Verb is AgentRuleVerb.Web)))
+        if (CommandAnalysis.WebAddressesUnread(words) is { } unread && (!_ground.Web || _webDomains.Count > 0 || _rules.Any(pair => pair.Rule.Verb is AgentRuleVerb.Web)))
         {
             return new AgentPolicyAnswer.Denied(
                 _ground.Web ? "the web rules" : "the web capability",

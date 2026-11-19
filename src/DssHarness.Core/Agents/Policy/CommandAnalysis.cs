@@ -307,7 +307,7 @@ public static partial class CommandAnalysis
         var naming = Is(program, "export", "declare", "typeset", "local", "readonly");
         var setting = Is(program, "set", "setenv", "setx");
         var items = Is(program, ["Set-Item", "si", "New-Item", "ni", "Set-Content", "sc", "Add-Content", "ac", .. ItemMovers]);
-        List<string> rest = items ? [.. words.Skip(environment + 1)] : [];
+        List<string> rest = naming || setting || items ? [.. words.Skip(environment + 1)] : [];
 
         if (naming || setting || items)
         {
@@ -2682,6 +2682,21 @@ public static partial class CommandAnalysis
     private static IReadOnlyList<string>? ScriptFile(string file, string name, IReadOnlyList<ShellRedirect> redirects, bool program, Func<string, string>? spelled = null, string? quoted = null, Action<string>? seen = null, bool inputGiven = true)
     {
         seen?.Invoke(file);
+
+        // A word whose braces spell several files names each of them: none an expansion names is a script this reads,
+        // and none of what they spell either.
+        if (WordPattern.Braces(file, quoted) is { } braced)
+        {
+            foreach (var (word, mask) in braced.Spellings())
+            {
+                if (Unread(word, mask) is { } each)
+                {
+                    throw new NotSupportedException($"'{word}' names the script it runs by {each}, which this does not read");
+                }
+            }
+
+            return null;
+        }
 
         return Folded(file) is "/dev/stdin" or "/dev/fd/0" or "/proc/self/fd/0" ? Input(name, redirects, program, spelled, inputGiven, seen)
             : program && Unread(file, quoted) is { } unread ? throw new NotSupportedException($"'{file}' names the script it runs by {unread}, which this does not read")
