@@ -3,6 +3,7 @@ using System.Text.Json.Nodes;
 using DssHarness.Core.Execution;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Hosts;
+using DssHarness.Core.Json;
 using DssHarness.Core.Output;
 using DssHarness.Core.Platform;
 using DssHarness.Core.Results;
@@ -207,7 +208,7 @@ public sealed class CommandSession : IAsyncDisposable
     {
         try
         {
-            if (JsonNode.Parse(document) is JsonObject root && root.ContainsKey("exitCode"))
+            if (JsonDepth.ParseNode(document) is JsonObject root && root.ContainsKey("exitCode"))
             {
                 root["exitCode"] = HarnessExit.InternalError;
                 return root.ToJsonString(ReportJson.Options);
@@ -488,7 +489,7 @@ public sealed class CommandSession : IAsyncDisposable
 
         try
         {
-            if (JsonNode.Parse(document) is not JsonObject parsed)
+            if (JsonDepth.ParseNode(document) is not JsonObject parsed)
             {
                 return document;
             }

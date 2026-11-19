@@ -162,6 +162,13 @@ public sealed record LegEntry
     public IReadOnlyList<string> UnselectedSteps { get; init; } = [];
 
     /// <summary>
+    /// Every item the verdict's detail stands for, whole and in order (<see cref="ReachedVerdict.Named"/>): the detail
+    /// names as many as fit its line, and the rest are here, in the ledger and as the leg's <c>named</c> in
+    /// <c>--json</c>. Empty where the detail names no list.
+    /// </summary>
+    public IReadOnlyList<string> Named { get; init; } = [];
+
+    /// <summary>
     /// The compilers CMake configured the leg's build with, as it reported them: named on its line
     /// with whatever verdict it reached, so every verdict says which compiler produced what it judged.
     /// </summary>

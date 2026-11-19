@@ -325,7 +325,7 @@ public sealed class LegAdmission(
 
                 if (!standing.Holding)
                 {
-                    var whose = own ? $", each its own command's, which does not count against the {Said(rule.MaxWait)} it may wait" : string.Empty;
+                    var whose = own ? $", each its own command's, which does not count against the {LedgerReport.SaidDuration(rule.MaxWait)} it may wait" : string.Empty;
 
                     if (heldBy is null || !heldBy.SequenceEqual(standing.Holders) || ownSaid != own)
                     {
@@ -443,7 +443,7 @@ public sealed class LegAdmission(
 
                     var settling = Waits.Shorter(_settle(rule.SettleLeast, rule.SettleMost), Remaining());
 
-                    Say($"memory {reading.Describe()}; another leg holds a slot, so it looks again in {Said(settling)}");
+                    Say($"memory {reading.Describe()}; another leg holds a slot, so it looks again in {LedgerReport.SaidDuration(settling)}");
 
                     // Waited whole - the memory is read again only once all of it has passed - in pieces no longer than a
                     // wait goes without saying where it stands.
@@ -458,7 +458,7 @@ public sealed class LegAdmission(
 
                         if (left > TimeSpan.Zero)
                         {
-                            Say($"another leg holds a slot, so it still looks again in {Said(left)}{After()}");
+                            Say($"another leg holds a slot, so it still looks again in {LedgerReport.SaidDuration(left)}{After()}");
                         }
                     }
                     while (left > TimeSpan.Zero);
@@ -662,11 +662,11 @@ public sealed class LegAdmission(
 
         // How long the leg has waited, and what of it did not count, as a line says it.
         string Counted() => excused > TimeSpan.Zero
-            ? $"{Waited(started)} ({Said(excused)} of it behind its own command's legs, which does not count)"
+            ? $"{Waited(started)} ({LedgerReport.SaidDuration(excused)} of it behind its own command's legs, which does not count)"
             : Waited(started);
 
         // How long the leg has waited, of the time it may: what a line said again adds.
-        string After() => $", after {Counted()} of the {Said(rule.MaxWait)} it may wait";
+        string After() => $", after {Counted()} of the {LedgerReport.SaidDuration(rule.MaxWait)} it may wait";
     }
 
     /// <summary>
@@ -765,8 +765,5 @@ public sealed class LegAdmission(
 
     private double Seconds(long started) => LedgerReport.Seconds(_clock.GetElapsedTime(started));
 
-    private string Waited(long started) => Said(_clock.GetElapsedTime(started));
-
-    /// <summary>A time as a line says it, as the ledger's table does, and a time of none as <c>0s</c>.</summary>
-    private static string Said(TimeSpan time) => LedgerReport.FormatDuration(time) is { Length: > 0 } said ? said : "0s";
+    private string Waited(long started) => LedgerReport.SaidDuration(_clock.GetElapsedTime(started));
 }

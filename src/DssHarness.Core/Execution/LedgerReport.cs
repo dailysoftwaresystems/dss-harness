@@ -68,6 +68,9 @@ public sealed record LedgerLine(
     /// <summary>The steps of the runner's action the run did not select, by name.</summary>
     public IReadOnlyList<string> UnselectedSteps { get; init; } = [];
 
+    /// <summary>Every item the detail stands for, whole, as <see cref="LegEntry.Named"/> says.</summary>
+    public IReadOnlyList<string> Named { get; init; } = [];
+
     /// <summary>The last lines the leg's last phase that did not pass printed, as <see cref="LegEntry.LogTail"/> says.</summary>
     public IReadOnlyList<string> LogTail { get; init; } = [];
 
@@ -389,6 +392,7 @@ public sealed class LedgerReport
                     RanSteps = entry.RanSteps,
                     ManualSteps = entry.ManualSteps,
                     UnselectedSteps = entry.UnselectedSteps,
+                    Named = entry.Named,
                     LogTail = entry.LogTail,
                     TailPhase = entry.TailPhase,
                     Compilers = entry.Compilers,
@@ -437,6 +441,14 @@ public sealed class LedgerReport
             ? string.Create(CultureInfo.InvariantCulture, $"{(int)rounded.TotalMinutes}m{rounded.Seconds:00}s")
             : string.Create(CultureInfo.InvariantCulture, $"{(int)rounded.TotalSeconds}s");
     }
+
+    /// <summary>
+    /// A duration as a sentence says it - a wait, a pause, what is left of a bound: as the table writes it
+    /// (<see cref="FormatDuration"/>), and a duration of none as <c>0s</c>, where the table leaves a leg that took none
+    /// blank. The one spelling of a duration in a line, beside the table's.
+    /// </summary>
+    /// <param name="duration">The duration.</param>
+    public static string SaidDuration(TimeSpan duration) => FormatDuration(duration) is { Length: > 0 } said ? said : "0s";
 
     /// <summary>
     /// The table, heading first: <c>LEG / VERDICT / DURATION / DETAIL</c>; nothing when no leg has a row.
@@ -825,6 +837,9 @@ public sealed class LedgerReport
                 RanSteps = line.RanSteps.Count > 0 ? line.RanSteps : null,
                 ManualSteps = line.ManualSteps.Count > 0 ? line.ManualSteps : null,
                 UnselectedSteps = line.UnselectedSteps.Count > 0 ? line.UnselectedSteps : null,
+
+                // Only where the detail stands for a list: every item of it, whole, where the line names those that fit.
+                Named = line.Named.Count > 0 ? line.Named : null,
 
                 // Only for a leg that has one: a phase of its own did not pass.
                 LogTail = line.LogTail.Count > 0 ? line.LogTail : null,

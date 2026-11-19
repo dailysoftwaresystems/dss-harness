@@ -53,6 +53,38 @@ public static class ReportText
         string noun,
         Func<string, string, string> one,
         Func<string, string, string, string> many)
+        => FailedInOneLine(failed, noun, one, many, Listed);
+
+    /// <summary>
+    /// What failed for each of <paramref name="failed"/>, said in one line as the other overload says it, naming as many of
+    /// the items as fit the line and saying the rest are in <paramref name="whole"/> (<see cref="Names.Line"/>): never a
+    /// few of them and a count, where the whole list is kept elsewhere for the line to point at.
+    /// </summary>
+    /// <param name="failed">Each item that failed, with why, in the order they are named.</param>
+    /// <param name="noun">What an item is, as one of them is called, to count them by.</param>
+    /// <param name="one">The line for one item, given it and why.</param>
+    /// <param name="many">The line for more, given how many, the items named, and why.</param>
+    /// <param name="whole">Where every item is kept, as the line says it after <c>all in</c>: a record's path, a <c>--json</c> member.</param>
+    /// <returns>No line where nothing failed, and one otherwise.</returns>
+    public static IReadOnlyList<string> FailedInOneLine(
+        IReadOnlyList<(string Item, string Why)> failed,
+        string noun,
+        Func<string, string, string> one,
+        Func<string, string, string, string> many,
+        string whole)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(whole);
+
+        return FailedInOneLine(failed, noun, one, many, items => Names.Line(items, whole));
+    }
+
+    /// <summary>The one line of what failed, its items named by <paramref name="named"/>.</summary>
+    private static IReadOnlyList<string> FailedInOneLine(
+        IReadOnlyList<(string Item, string Why)> failed,
+        string noun,
+        Func<string, string, string> one,
+        Func<string, string, string, string> many,
+        Func<IReadOnlyList<string>, string> named)
     {
         ArgumentNullException.ThrowIfNull(failed);
         ArgumentNullException.ThrowIfNull(one);
@@ -71,7 +103,7 @@ public static class ReportText
         var others = failed.Select(item => item.Why).Distinct(StringComparer.Ordinal).Count() - 1;
         var why = others == 0 ? failed[0].Why : $"{failed[0].Why}; and {Counted(others, "other reason")}";
 
-        return [many(Counted(failed.Count, noun), Listed([.. failed.Select(item => item.Item)]), why)];
+        return [many(Counted(failed.Count, noun), named([.. failed.Select(item => item.Item)]), why)];
     }
 
     /// <summary>

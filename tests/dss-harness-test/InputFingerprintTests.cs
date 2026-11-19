@@ -51,6 +51,84 @@ public sealed class InputFingerprintTests
         Assert.Equal(LegExit.InputsMoved, Verdicts.ExitCodeFor(comparison.Verdict()!.Verdict));
     }
 
+    /// <summary>
+    /// Many inputs that changed are each named where the detail has room for them - never three and a count - and the
+    /// verdict carries every one of them whole, for the leg's line to keep in the ledger and --json, where the detail
+    /// says the rest are. Forty here, which three names and "37 more" would have stood for.
+    /// </summary>
+    [Fact]
+    public async Task ManyInputsThatChanged_AreNamedWhereTheyFit_AndTheVerdictCarriesThemAll()
+    {
+        using var temp = new TempDirectory();
+        var fingerprint = Create();
+        var inputs = Enumerable.Range(0, 40).Select(index => $"in/{index:00}.txt").ToList();
+
+        foreach (var input in inputs)
+        {
+            temp.WriteFile(input, "before");
+        }
+
+        var before = await fingerprint.TakeAsync(temp.Path, inputs, TestContext.Current.CancellationToken);
+
+        foreach (var input in inputs)
+        {
+            temp.WriteFile(input, "after!");
+        }
+
+        var after = await fingerprint.TakeAsync(temp.Path, inputs, TestContext.Current.CancellationToken);
+        var verdict = InputFingerprint.Compare(before, after).Verdict()!;
+
+        Assert.Equal((LegVerdict.InputsMoved, $"40 inputs changed: {string.Join(", ", inputs)}"), (verdict.Verdict, verdict.Detail));
+        Assert.Equal(inputs, verdict.Named);
+
+        // Decided among a leg's verdicts, the list goes with the detail that stands for it.
+        var decided = new LegGuardReport(InputFingerprint.Compare(before, after), null).Decide("leg", [ReachedVerdict.Of(LegVerdict.Passed)]);
+
+        Assert.Equal((LegVerdict.InputsMoved, inputs), (decided.Verdict, (IReadOnlyList<string>)decided.Named));
+    }
+
+    /// <summary>
+    /// Inputs past what a detail's line holds are counted, with where every one of them is: the leg's line, which keeps
+    /// the verdict's whole list.
+    /// </summary>
+    [Fact]
+    public async Task InputsPastTheLinesRoom_AreCounted_SayingWhereTheyAllAre()
+    {
+        using var temp = new TempDirectory();
+        var fingerprint = Create();
+        var wide = new string('w', 200);
+        var inputs = Enumerable.Range(0, 30).Select(index => $"in/{wide}{index:00}.txt").ToList();
+
+        foreach (var input in inputs)
+        {
+            temp.WriteFile(input, "before");
+        }
+
+        var before = await fingerprint.TakeAsync(temp.Path, inputs, TestContext.Current.CancellationToken);
+
+        foreach (var input in inputs)
+        {
+            temp.WriteFile(input, "after!");
+        }
+
+        var verdict = InputFingerprint.Compare(before, await fingerprint.TakeAsync(temp.Path, inputs, TestContext.Current.CancellationToken)).Verdict()!;
+        // As many as the line's room holds, ", " between two, the first whatever its width.
+        var (fits, width) = (1, inputs[0].Length);
+
+        while (fits < inputs.Count && width + 2 + inputs[fits].Length <= DssHarness.Core.Pages.PageRoom.Line)
+        {
+            width += 2 + inputs[fits].Length;
+            fits++;
+        }
+
+        Assert.InRange(fits, 2, inputs.Count - 1);
+
+        Assert.Equal(
+            $"30 inputs changed: {string.Join(", ", inputs.Take(fits))} and {inputs.Count - fits} more (all in {InputFingerprint.WholeList})",
+            verdict.Detail);
+        Assert.Equal(inputs, verdict.Named);
+    }
+
     [Fact]
     public async Task AFileOfTheSameSizeWithOtherContent_IsStillAChange()
     {

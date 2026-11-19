@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using DssHarness.Core.Json;
 using DssHarness.Core.Platform;
 
 namespace DssHarness.Core.Processes;
@@ -49,7 +50,7 @@ public static partial class IsolatedShell
     /// <summary>The word a receipt is named after at a command's head: <c>: dssharness-receipt &lt;receipt&gt;; &lt;command&gt;</c>.</summary>
     public const string ReceiptWord = "dssharness-receipt";
 
-    private static readonly JsonSerializerOptions Options = new(JsonSerializerDefaults.Web) { WriteIndented = true };
+    private static readonly JsonSerializerOptions Options = JsonDepth.Serializer(new(JsonSerializerDefaults.Web) { WriteIndented = true });
 
     /// <summary>The isolation's file: the mechanism this machine proved, the profile, and how the program hands its commands over.</summary>
     /// <param name="isolation">The launch's isolation.</param>

@@ -1,6 +1,7 @@
 using System.Text.Json;
 using DssHarness.Core.Configuration;
 using DssHarness.Core.FileSystem;
+using DssHarness.Core.Json;
 using DssHarness.Core.Platform;
 using DssHarness.Core.Waiting;
 
@@ -36,7 +37,7 @@ public sealed record HoldAwakeState(
 /// </param>
 public sealed class HoldAwakeStore(IFileSystem fileSystem, Func<string> path)
 {
-    private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
+    private static readonly JsonSerializerOptions JsonOptions = JsonDepth.Serializer(new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
 
     private readonly IFileSystem _fileSystem = fileSystem;
     private readonly Lazy<string> _location = new(path);

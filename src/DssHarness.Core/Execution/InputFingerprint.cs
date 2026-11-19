@@ -87,8 +87,8 @@ public sealed record InputComparison(InputChange Change, IReadOnlyList<string> C
     public ReachedVerdict? Verdict() => Change switch
     {
         InputChange.Unchanged => null,
-        InputChange.Moved => ReachedVerdict.Of(LegVerdict.InputsMoved, Detail),
-        InputChange.Unmeasured => ReachedVerdict.Of(LegVerdict.Unmeasured, Detail),
+        InputChange.Moved => ReachedVerdict.Of(LegVerdict.InputsMoved, Detail) with { Named = Changed },
+        InputChange.Unmeasured => ReachedVerdict.Of(LegVerdict.Unmeasured, Detail) with { Named = Changed },
         _ => throw new ArgumentOutOfRangeException(nameof(Change), Change, "This build cannot weigh that input change."),
     };
 }
@@ -253,7 +253,7 @@ public sealed class InputFingerprint
             return new InputComparison(
                 InputChange.Unmeasured,
                 unmeasured,
-                $"{Describe(unmeasured.Count, "input")} could not be read: {ReportText.Listed(unmeasured)}");
+                $"{Describe(unmeasured.Count, "input")} could not be read: {Names.Line(unmeasured, WholeList)}");
         }
 
         if (watch?.Failure is { } failure)
@@ -275,7 +275,7 @@ public sealed class InputFingerprint
             : new InputComparison(
                 InputChange.Moved,
                 moved,
-                $"{Describe(moved.Count, "input")} changed: {ReportText.Listed(moved)}");
+                $"{Describe(moved.Count, "input")} changed: {Names.Line(moved, WholeList)}");
     }
 
     private static IEnumerable<string> Differences(InputSnapshot before, InputSnapshot after)
@@ -330,6 +330,12 @@ public sealed class InputFingerprint
     }
 
     private static string Describe(int count, string noun) => count == 1 ? $"1 {noun}" : $"{count} {noun}s";
+
+    /// <summary>
+    /// Where a comparison's whole list of inputs is, as its detail says after <c>all in</c>: the leg's line in the
+    /// ledger, which keeps every one (<see cref="ReachedVerdict.Named"/>).
+    /// </summary>
+    internal const string WholeList = "the leg's named, in the ledger and --json";
 
     /// <summary>Forward slashes everywhere, so one input is one name in the report on every platform.</summary>
     private static string Normalize(string path) => path.Replace('\\', '/').TrimStart('/');
