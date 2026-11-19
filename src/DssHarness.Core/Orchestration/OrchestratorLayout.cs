@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using DssHarness.Core.Repository;
 
 namespace DssHarness.Core.Orchestration;
@@ -401,7 +403,11 @@ public sealed record OrchestratorLayout(string Name, string Directory)
     /// <param name="id">The conversation's id.</param>
     public string AgentSessionDirectory(string agent, string id) => SessionDirectoryIn(AgentSessionsDirectory(agent), id);
 
-    /// <summary>Where one conversation is kept among an agent's: its own directory in <paramref name="sessions"/>, by its id.</summary>
+    /// <summary>
+    /// Where one conversation is kept among an agent's: its own directory in <paramref name="sessions"/>, named by
+    /// <see cref="SessionDirectoryName"/> - the one owner of how a conversation's id names its directory, so the run that
+    /// keeps a conversation and the one that goes on with it find the same directory.
+    /// </summary>
     /// <param name="sessions">The agent's sessions directory (<see cref="AgentSessionsDirectory"/>).</param>
     /// <param name="id">The conversation's id: <see cref="IsSessionId"/>.</param>
     /// <exception cref="ArgumentException">The id is no conversation's id, and would name another directory.</exception>
@@ -410,17 +416,38 @@ public sealed record OrchestratorLayout(string Name, string Directory)
         ArgumentNullException.ThrowIfNull(sessions);
 
         return IsSessionId(id)
-            ? Path.Combine(sessions, id)
+            ? Path.Combine(sessions, SessionDirectoryName(id))
             : throw new ArgumentException($"'{id}' is no conversation's id: {SessionIdShape}.", nameof(id));
     }
 
-    /// <summary>What a conversation's id is, as a refusal says it.</summary>
-    public const string SessionIdShape = "letters, digits, '-' and '_', at most 64";
+    /// <summary>
+    /// The name of the directory a conversation is kept in: its id, where the id is no longer than a SHA-256 digest is
+    /// written - every directory an earlier release made is so found where it made it - and otherwise the id's SHA-256
+    /// digest, in lower-case hexadecimal. A provider's ids are its own and of any length, and a directory's name is held
+    /// to what the file system takes; named by its digest, an id of any length names a directory every file system takes,
+    /// one id always the same one.
+    /// </summary>
+    /// <param name="id">The conversation's id: <see cref="IsSessionId"/>.</param>
+    public static string SessionDirectoryName(string id)
+    {
+        ArgumentNullException.ThrowIfNull(id);
 
-    /// <summary>Whether <paramref name="id"/> is a conversation's id, which names its directory: the engine's own, and a handed one alike.</summary>
+        return id.Length <= SHA256.HashSizeInBytes * 2
+            ? id
+            : Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(id)));
+    }
+
+    /// <summary>What a conversation's id is, as a refusal says it.</summary>
+    public const string SessionIdShape = "letters, digits, '-' and '_'";
+
+    /// <summary>
+    /// Whether <paramref name="id"/> is a conversation's id - the engine's own, and a handed one alike: at least one
+    /// character, each a letter, a digit, <c>-</c> or <c>_</c>, as many as it has. Its directory is named by
+    /// <see cref="SessionDirectoryName"/>, so no length of the id is refused for the directory it names.
+    /// </summary>
     /// <param name="id">The id.</param>
     public static bool IsSessionId(string? id)
-        => id is { Length: > 0 and <= 64 } && id.All(character => char.IsAsciiLetterOrDigit(character) || character is '-' or '_');
+        => id is { Length: > 0 } && id.All(character => char.IsAsciiLetterOrDigit(character) || character is '-' or '_');
 
     /// <summary>
     /// The handoff of one step <paramref name="agent"/> ran, kept in the step's own directory: what its agent said when

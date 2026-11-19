@@ -1052,8 +1052,7 @@ public sealed class ToolLoopTests : IDisposable
     [InlineData("noSessions", "ConfigurationWrong", "the run was given no place to keep its conversation")]
     [InlineData("otherEntry", "ConfigurationWrong", "the step runs on 'claude-sonnet-5-5', and the model's entry it was given is 'claude-opus-5-5'")]
     [InlineData("noMaxOutput", "ConfigurationWrong", "the entry of 'claude-opus-5-5' says no maxOutputTokens, and a request asks for at most that many")]
-    [InlineData("longSession", "ConfigurationWrong", "the conversation it was handed is named 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', which is no conversation's id: letters, digits, '-' and '_', at most 64")]
-    [InlineData("badSession", "ConfigurationWrong", "the conversation it was handed is named '../other', which is no conversation's id: letters, digits, '-' and '_', at most 64")]
+    [InlineData("badSession", "ConfigurationWrong", "the conversation it was handed is named '../other', which is no conversation's id: letters, digits, '-' and '_'")]
     [InlineData("otherClient", "ConfigurationWrong", "the conversation it was handed is client 'claude-code''s, and a conversation is gone on with by the client that began it")]
     [InlineData("search", "ConfigurationWrong", "the run's step has sources to search, and its host was given no web search to search them with")]
     public async Task ARunTheLoopCannotSignKeepOrServe_NeverStarts(string kind, string because, string why)
@@ -1067,7 +1066,6 @@ public sealed class ToolLoopTests : IDisposable
             "noModel" => Run() with { Model = null },
             "noSessions" => Run() with { SessionsDirectory = null },
             "otherEntry" => Run() with { Model = "claude-sonnet-5-5" },
-            "longSession" => Run(conversation: new AgentSessionRef("claude-api", "anthropic", new string('a', 65))),
             "noMaxOutput" => Run(),
             "search" => Run() with { WebSearch = new AgentWebSearch([WebSearchFixtures.Source("alpha", """{ "kind": "json-api", "url": "https://alpha.example.test/?q={query}", "items": "$.items", "title": "{@.title}", "link": "{@.link}" }""")], 8, 60, new Dictionary<string, DssHarness.Core.Web.Search.WebSearchKey>()) },
             _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, "no such run"),

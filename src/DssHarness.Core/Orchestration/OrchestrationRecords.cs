@@ -3,6 +3,7 @@ using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using DssHarness.Core.Platform;
 using DssHarness.Core.Repository;
+using DssHarness.Core.Text;
 using DssHarness.Core.Worktrees;
 
 namespace DssHarness.Core.Orchestration;
@@ -577,31 +578,35 @@ public static partial class OrchestrationRules
     public static string? ParallelProblem(int? parallel)
         => parallel is < 1 ? $"parallel is {parallel}: at least one agent must be allowed at once" : null;
 
-    /// <summary>What is wrong with a model's name: printable, with no space, at most 200 characters, as model ids are.</summary>
+    /// <summary>
+    /// What is wrong with a model's name: at least one character, each printable and none a space, as a model's id is
+    /// written. A provider's ids are its own, so a name of any length is taken and kept whole: no count of characters is
+    /// what makes one a model's name.
+    /// </summary>
     /// <param name="model">The model.</param>
     public static string? ModelProblem(string? model)
-        => model is not null && ModelPattern().IsMatch(model)
+        => model is not null && ModelPattern.IsMatch(model)
             ? null
-            : $"'{model}' is not a model's name: printable characters with no space, at most 200";
+            : $"'{model}' is not a model's name: printable characters with no space";
 
     /// <summary>
-    /// What is wrong with a Claude session's id - a session's, or a subagent's: letters, digits, hyphens and
-    /// underscores, at most 128, never beginning with a hyphen or an underscore. It names a transcript's file, so it
-    /// can never name a path.
+    /// What is wrong with a Claude session's id - a session's, or a subagent's: letters, digits, hyphens and underscores,
+    /// never beginning with a hyphen or an underscore, of any length. It names a transcript's file, so it can never name a
+    /// path; how long that file's name may be is the file system's that holds the file Claude made, never the record's.
     /// </summary>
     /// <param name="session">The id, or null where none is recorded.</param>
     public static string? SessionProblem(string? session)
-        => session is null || SessionPattern().IsMatch(session)
+        => session is null || SessionPattern.IsMatch(session)
             ? null
-            : $"'{session}' is not a Claude session's id: letters, digits, hyphens and underscores, at most 128, beginning with a letter or a digit";
+            : $"'{session}' is not a Claude session's id: letters, digits, hyphens and underscores, beginning with a letter or a digit";
 
     /// <summary>Whether <paramref name="id"/> is an id git gives an object - a commit's, a blob's: forty or sixty-four lower-case hexadecimal characters.</summary>
     /// <param name="id">The id.</param>
-    public static bool IsObjectId(string? id) => id is not null && CommitPattern().IsMatch(id);
+    public static bool IsObjectId(string? id) => id is not null && CommitPattern.IsMatch(id);
 
     /// <summary>Whether <paramref name="digest"/> is a SHA-256 digest: sixty-four lower-case hexadecimal characters.</summary>
     /// <param name="digest">The digest.</param>
-    public static bool IsDigest(string? digest) => digest is not null && DigestPattern().IsMatch(digest);
+    public static bool IsDigest(string? digest) => digest is not null && DigestPattern.IsMatch(digest);
 
     /// <summary>
     /// Whether <paramref name="id"/> is a record's id a run numbers - a letter, then a count from 1, written plain: a
@@ -650,15 +655,15 @@ public static partial class OrchestrationRules
             ? $"{what}, '{path}', is not a path relative to the tree, spelt with forward slashes"
             : null;
 
-    [GeneratedRegex(@"^[\x21-\x7E]{1,200}\z", RegexOptions.CultureInvariant)]
-    private static partial Regex ModelPattern();
+    /// <summary>A model's name: printable characters, none a space, as many as it has.</summary>
+    private static readonly Regex ModelPattern = LinearRegex.Compile(@"^[\x21-\x7E]+\z");
 
-    [GeneratedRegex(@"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}\z", RegexOptions.CultureInvariant)]
-    private static partial Regex SessionPattern();
+    /// <summary>A Claude session's id: a letter or a digit, then letters, digits, hyphens and underscores, as many as it has.</summary>
+    private static readonly Regex SessionPattern = LinearRegex.Compile(@"^[A-Za-z0-9][A-Za-z0-9_-]*\z");
 
-    [GeneratedRegex(@"^[0-9a-f]{40}([0-9a-f]{24})?\z", RegexOptions.CultureInvariant)]
-    private static partial Regex CommitPattern();
+    /// <summary>An id git gives an object: forty lower-case hexadecimal characters, a SHA-1's, or sixty-four, a SHA-256's - the lengths git's two hashes are.</summary>
+    private static readonly Regex CommitPattern = LinearRegex.Compile(@"^[0-9a-f]{40}([0-9a-f]{24})?\z");
 
-    [GeneratedRegex(@"^[0-9a-f]{64}\z", RegexOptions.CultureInvariant)]
-    private static partial Regex DigestPattern();
+    /// <summary>A SHA-256 digest: sixty-four lower-case hexadecimal characters, the length the hash is.</summary>
+    private static readonly Regex DigestPattern = LinearRegex.Compile(@"^[0-9a-f]{64}\z");
 }

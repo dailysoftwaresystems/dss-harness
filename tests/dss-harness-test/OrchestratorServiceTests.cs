@@ -472,6 +472,43 @@ public sealed class OrchestratorServiceTests
         Assert.StartsWith("No orchestrator named 'nope'.", unknown.Message);
     }
 
+    /// <summary>
+    /// A provider's ids are its own, of any length: an orchestrator made on a three-hundred-character model, recording a
+    /// three-hundred-character Claude session, keeps both whole; and a conversation whose id is as long is kept in the
+    /// directory its id's SHA-256 digest names, which every file system takes, while an id no longer than a digest still
+    /// names its own directory, where an earlier release kept it.
+    /// </summary>
+    [Fact]
+    public async Task AThreeHundredCharacterProviderId_IsAccepted()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var model = "accounts/acme/models/" + new string('m', 279);
+        var session = new string('s', 300);
+
+        var made = await kit.Harness.OrchestratorService.CreateAsync(kit.Main, "o2", model, null, session, Token);
+
+        Assert.True(made.Succeeded, OrchestrationKit.Describe(made));
+        var record = kit.Harness.OrchestrationStore.ReadOrchestrator(OrchestratorLayout.Of(new HarnessLayout(kit.Main, kit.Main), "o2"))!;
+        Assert.Equal((300, model, session), (record.Model.Length, record.Model, record.Session));
+
+        var conversation = new string('c', 300);
+        var sessions = Path.Combine(temp.Path, OrchestratorLayout.SessionsDirectoryName);
+        var digest = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(conversation)));
+        var kept = OrchestratorLayout.SessionDirectoryIn(sessions, conversation);
+
+        Assert.True(OrchestratorLayout.IsSessionId(conversation));
+        Assert.Equal(Path.Combine(sessions, digest), kept);
+
+        // The directory is one the file system takes, and holds the conversation.
+        Directory.CreateDirectory(kept);
+        File.WriteAllText(Path.Combine(kept, "conversation.jsonl"), "{}\n");
+        Assert.True(File.Exists(Path.Combine(OrchestratorLayout.SessionDirectoryIn(sessions, conversation), "conversation.jsonl")));
+
+        Assert.Equal(Path.Combine(sessions, "conv-1"), OrchestratorLayout.SessionDirectoryIn(sessions, "conv-1"));
+        Assert.Equal(Path.Combine(sessions, new string('a', 64)), OrchestratorLayout.SessionDirectoryIn(sessions, new string('a', 64)));
+    }
+
     /// <summary>An orchestrator allowing no agent at all is a usage error.</summary>
     [Fact]
     public async Task AnOrchestratorAllowingNoAgent_IsAUsageError()
