@@ -14,10 +14,10 @@ public sealed class InotifyHoldersTests
 
     /// <summary>
     /// The instances' sentence names the limit, how many /proc shows held, and this user's processes holding them, the
-    /// most first, three named and the rest counted - each by its pid and its name.
+    /// most first, every one that fits its line named - each by its pid and its name - never three and a count.
     /// </summary>
     [Fact]
-    public void InstancesAllTaken_SaysTheLimit_AndThisUsersHolders_TheMostFirst_ThreeNamed()
+    public void InstancesAllTaken_SaysTheLimit_AndThisUsersHolders_TheMostFirst_EveryOneNamed()
     {
         using var proc = Proc();
         Process(proc, 4242, "dssharness", instances: [2, 0, 1]);
@@ -31,7 +31,8 @@ public sealed class InotifyHoldersTests
         Assert.Equal(
             "the inputs could not be watched, so none of this work was run: this user's inotify instances are all taken - "
             + "fs.inotify.max_user_instances is 128, and /proc shows 10 held: 4 by pid 5151 (node), 3 by pid 4242 "
-            + "(dssharness), 1 by pid 12 (code) and 2 more. This process needs one, however many legs it runs.",
+            + "(dssharness), 1 by pid 12 (code), 1 by pid 13 (watchman), 1 by pid 77 (dotnet). This process needs one, however "
+            + "many legs it runs.",
             refused.Message);
     }
 

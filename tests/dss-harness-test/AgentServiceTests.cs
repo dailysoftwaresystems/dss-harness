@@ -2213,7 +2213,7 @@ public sealed class AgentServiceTests
         foreach (var refusal in new[] { refreshed, seeded })
         {
             Assert.Equal(HarnessExit.Refused, refusal.ExitCode);
-            Assert.Contains("4 path(s) of its own - docs/elsewhere, docs/mine.md, linked and 1 more -", refusal.Message);
+            Assert.Contains("4 path(s) of its own - docs/elsewhere, docs/mine.md, linked, notes -", refusal.Message);
             Assert.EndsWith("Nothing was written.", refusal.Message, StringComparison.Ordinal);
         }
 
