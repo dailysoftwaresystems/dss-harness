@@ -54,7 +54,13 @@ public sealed class AdmissionSettings
     /// <summary>The room, in GiB, a heavy leg's build leaves free on each filesystem it fills when a section says nothing.</summary>
     public const double DefaultMinFreeGiB = 2;
 
-    /// <summary>The most room, in GiB, a section may keep free: a tebibyte.</summary>
+    /// <summary>
+    /// The GiB a count of bytes holds: 2^33, past which <see cref="MinFreeGiB"/> in bytes would pass a 64-bit count's
+    /// range - the type's own bound, not one of the tool's, for no filesystem is weighed in more bytes than a count holds.
+    /// </summary>
+    public const double CountedGiB = 8589934592;
+
+    /// <summary>The ceiling minFreeGiB once had, a tebibyte, which bounds nothing now (<see cref="CountedGiB"/>); kept only until nothing names it.</summary>
     public const double MostMinFreeGiB = 1024;
 
     /// <summary>

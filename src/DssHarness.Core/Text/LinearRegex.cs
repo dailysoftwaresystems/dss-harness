@@ -63,14 +63,31 @@ public static class LinearRegex
     /// <param name="refusal">Why the pattern is refused, as a sentence that names it; where it compiled, <see langword="null"/>.</param>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="options"/> holds a value .NET does not define.</exception>
     public static bool TryCompile(string pattern, RegexOptions options, [NotNullWhen(true)] out Regex? regex, [NotNullWhen(false)] out string? refusal)
+        => TryCompile(pattern, options, null, out regex, out refusal);
+
+    /// <summary>
+    /// The regular expression <paramref name="pattern"/> is, where it is .NET's writing of a pattern written in another
+    /// dialect - a schema's ECMA-262, JSONPath's I-Regexp - as <see cref="TryCompile(string, RegexOptions, out Regex?, out string?)"/>
+    /// makes one, its refusal naming the pattern as <paramref name="written"/> writes it: the one its reader wrote, never
+    /// the writing they did not. A pattern that is no regular expression .NET reads is refused naming it so too, since
+    /// .NET's own words would name the writing and an offset into it.
+    /// </summary>
+    /// <param name="pattern">The pattern, in .NET's grammar.</param>
+    /// <param name="options">The options asked beside the linear engine's own.</param>
+    /// <param name="written">The pattern as its reader wrote it, which a refusal names; <paramref name="pattern"/> itself where null.</param>
+    /// <param name="regex">The regular expression, where it compiled.</param>
+    /// <param name="refusal">Why the pattern is refused, as a sentence that names it; where it compiled, <see langword="null"/>.</param>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="options"/> holds a value .NET does not define.</exception>
+    public static bool TryCompile(string pattern, RegexOptions options, string? written, [NotNullWhen(true)] out Regex? regex, [NotNullWhen(false)] out string? refusal)
     {
         ArgumentNullException.ThrowIfNull(pattern);
 
         regex = null;
+        var named = written ?? pattern;
 
         if (OptionsLacked(options) is { } asked)
         {
-            refusal = $"The pattern '{pattern}' is asked for {asked}, which .NET's linear-time matcher lacks.";
+            refusal = $"The pattern '{named}' is asked for {asked}, which .NET's linear-time matcher lacks.";
             return false;
         }
 
@@ -82,14 +99,14 @@ public static class LinearRegex
         }
         catch (RegexParseException ex)
         {
-            refusal = ex.Message;
+            refusal = written is null ? ex.Message : $"The pattern '{written}' is no regular expression .NET reads.";
             return false;
         }
         catch (NotSupportedException ex)
         {
             refusal = Constructs.TryGetValue(ex.Message, out var construct)
-                ? $"The pattern '{pattern}' holds {construct}, which .NET's linear-time matcher lacks."
-                : $"The pattern '{pattern}' is refused by .NET's linear-time matcher: {ex.Message}";
+                ? $"The pattern '{named}' holds {construct}, which .NET's linear-time matcher lacks."
+                : $"The pattern '{named}' is refused by .NET's linear-time matcher: {ex.Message}";
             return false;
         }
     }

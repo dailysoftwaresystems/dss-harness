@@ -94,7 +94,7 @@ public static partial class HelpTopics
         builder.AppendLine($"  pollSeconds       the time between looks while a leg waits, at least 1 ({AdmissionSettings.DefaultPollSeconds})");
         builder.AppendLine($"  maxWaitMinutes    how long a leg waits before it is not-admitted, above 0 ({AdmissionSettings.DefaultMaxWaitMinutes})");
         builder.AppendLine("  minFreeGiB        the room a heavy leg's build leaves free on each filesystem it");
-        builder.AppendLine($"                    fills, from 0 to {AdmissionSettings.MostMinFreeGiB}; 0 stops no build ({AdmissionSettings.DefaultMinFreeGiB})");
+        builder.AppendLine($"                    fills, from 0, however large; 0 stops no build ({AdmissionSettings.DefaultMinFreeGiB})");
         builder.AppendLine("  reclaimIdleBuilds true or false: whether a leg short of room first removes other");
         builder.AppendLine("                    trees' idle builds on the same filesystem (false)");
         builder.AppendLine();

@@ -4,6 +4,7 @@ using System.Text.RegularExpressions;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Processes;
 using DssHarness.Core.Repository;
+using DssHarness.Core.Waiting;
 
 namespace DssHarness.Core.Platform;
 
@@ -64,6 +65,11 @@ public interface IIsolationPlatform
 /// <param name="self">The program that is this tool, as Windows' mechanism starts it again; this process's own where left out.</param>
 /// <param name="userWrites">Whether this user may write a place - a file, or a directory's entries; the system's own answer where left out.</param>
 /// <param name="landlock">The kernel's version of Landlock; the kernel's own answer where left out.</param>
+/// <param name="told">
+/// Told while a program of the probe runs, every <see cref="Waits.SaidEvery"/>, naming it; nothing is told where none is
+/// given.
+/// </param>
+/// <param name="clock">Times the probe's waits; the system's clock where left out.</param>
 public sealed partial class IsolationPlatform(
     IHostPlatform platform,
     IProcessRunner runner,
@@ -72,8 +78,12 @@ public sealed partial class IsolationPlatform(
     WindowsContainerHost? windows = null,
     Func<(string Program, IReadOnlyList<string> Prefix)>? self = null,
     Func<string, bool>? userWrites = null,
-    Func<int>? landlock = null) : IIsolationPlatform
+    Func<int>? landlock = null,
+    Action<WaitTold>? told = null,
+    TimeProvider? clock = null) : IIsolationPlatform
 {
+    private readonly Action<WaitTold> _told = told ?? (static _ => { });
+    private readonly TimeProvider _clock = clock ?? TimeProvider.System;
     private readonly MacSandboxHost _mac = mac ?? MacSandboxHost.ThisMachine;
     private readonly WindowsContainerHost _windows = windows ?? WindowsContainerHost.ThisMachine;
     private readonly Func<(string Program, IReadOnlyList<string> Prefix)> _self = self ?? DetachedProcessLauncher.Self;
@@ -116,9 +126,6 @@ public sealed partial class IsolationPlatform(
 
     /// <summary>What a probe that failed by another case of a name says, which its remedy is told by.</summary>
     private const string AnotherCase = "another case";
-
-    /// <summary>How long the version's question and the probe may take.</summary>
-    private static readonly TimeSpan ProbeBound = TimeSpan.FromSeconds(30);
 
     private readonly Func<string?> _path = path ?? (() => Environment.GetEnvironmentVariable("PATH"));
     private readonly Lock _gate = new();
@@ -386,7 +393,7 @@ public sealed partial class IsolationPlatform(
 
         try
         {
-            answered = await runner.RunAsync(new ProcessRequest { FileName = program, Arguments = ["--version"], Timeout = ProbeBound }, cancellationToken).ConfigureAwait(false);
+            answered = await ProbeRunAsync(new ProcessRequest { FileName = program, Arguments = ["--version"] }, cancellationToken).ConfigureAwait(false);
         }
         catch (ProgramStartException ex)
         {
@@ -395,7 +402,7 @@ public sealed partial class IsolationPlatform(
 
         var line = answered.StandardOutput.Trim();
 
-        if (answered.ExitCode != 0 || VersionShape().Match(line) is not { Success: true } matched || !System.Version.TryParse(matched.Groups[1].Value, out var version))
+        if (answered.ExitCode != 0 || VersionShape.Match(line) is not { Success: true } matched || !System.Version.TryParse(matched.Groups[1].Value, out var version))
         {
             return (null, $"bubblewrap '{program}' answered no version to '--version' (exit {answered.ExitCode.ToString(CultureInfo.InvariantCulture)}: '{FirstLine(line.Length > 0 ? line : answered.StandardError)}')");
         }
@@ -596,26 +603,41 @@ public sealed partial class IsolationPlatform(
     {
         try
         {
-            var result = await runner.RunAsync(
+            var result = await ProbeRunAsync(
                 new ProcessRequest
                 {
                     FileName = program,
                     Arguments = arguments,
                     WorkingDirectory = probe,
-                    Timeout = ProbeBound,
                     Contained = true,
                     Isolation = isolation,
                 },
                 cancellationToken).ConfigureAwait(false);
 
-            return result.TimedOut
-                ? (null, $"did not end within {ProbeBound.TotalSeconds.ToString(CultureInfo.InvariantCulture)} s")
-                : (result, null);
+            return (result, null);
         }
         catch (ProgramStartException ex)
         {
             return (null, $"could not be started: {ex.Message.TrimEnd('.')}");
         }
+    }
+
+    /// <summary>
+    /// Runs one program of the probe - bubblewrap's version asked, a trial inside the mechanism - to its end, however long
+    /// that takes (<see cref="Waits.ForAsync"/>): told every <see cref="Waits.SaidEvery"/> while it runs, naming the
+    /// program, and ended only by <paramref name="cancellationToken"/>. No bound of the tool's own ends it: a machine whose
+    /// first start of a sandbox is slow - a cold disk, a scanner reading every program - proves its mechanism all the same,
+    /// and one whose trial never ends is the person's to stop.
+    /// </summary>
+    /// <exception cref="OperationCanceledException"><paramref name="cancellationToken"/> ended it.</exception>
+    private async Task<ProcessResult> ProbeRunAsync(ProcessRequest request, CancellationToken cancellationToken)
+    {
+        var end = await Waits.ForAsync(
+            token => runner.RunAsync(request, token),
+            new WaitWatch($"the isolation probe's '{request.FileName}' to end", _told, Bound: null, _clock),
+            cancellationToken).ConfigureAwait(false);
+
+        return end.Kind == WaitEndKind.Done ? end.Value! : throw new OperationCanceledException(cancellationToken);
     }
 
     /// <summary>Removes the probe's places; any left behind under the tree's runs are harmless.</summary>
@@ -704,6 +726,5 @@ public sealed partial class IsolationPlatform(
     private static extern int Access([MarshalAs(UnmanagedType.LPUTF8Str)] string path, int mode);
 
     /// <summary>What <c>bwrap --version</c> answers: <c>bubblewrap 0.9.0</c>.</summary>
-    [GeneratedRegex(@"^bubblewrap\s+(\d+\.\d+(?:\.\d+)?)", RegexOptions.CultureInvariant)]
-    private static partial Regex VersionShape();
+    private static readonly Regex VersionShape = Text.LinearRegex.Compile(@"^bubblewrap\s+(\d+\.\d+(?:\.\d+)?)");
 }

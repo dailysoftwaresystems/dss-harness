@@ -70,8 +70,9 @@ public sealed class ExpectedException
 /// outcome compared with what the check expects.
 /// </summary>
 /// <remarks>
-/// A check is one level deep and cannot recurse: the runner it names is never the one carrying it,
-/// and a runner reached this way may carry no checks of its own.
+/// The runner it names may carry checks of its own, to any depth - a check of a check confirms the
+/// runner it gates as any check does - and never leads back to the one carrying it: the runner a
+/// check names is never that one, and no chain of checks returns to it, so a check never recurses.
 /// </remarks>
 public sealed class RunCheck
 {

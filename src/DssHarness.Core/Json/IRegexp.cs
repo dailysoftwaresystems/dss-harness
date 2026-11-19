@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Globalization;
 using System.Text;
 using System.Text.RegularExpressions;
+using DssHarness.Core.Text;
 
 namespace DssHarness.Core.Json;
 
@@ -29,15 +30,6 @@ namespace DssHarness.Core.Json;
 /// </remarks>
 internal static class IRegexp
 {
-    /// <summary>How many patterns are kept read, each once: a filter asks its pattern of every value it is given.</summary>
-    private const int MostKept = 256;
-
-    /// <summary>
-    /// The longest pattern read: 4 KiB. A pattern may be a value of the document a query reads, and is written out longer
-    /// and kept read; a longer one is no pattern this matches with, as RFC 9485 lets an implementation say.
-    /// </summary>
-    private const int MostPattern = 4096;
-
     /// <summary>
     /// The code unit that leads a character past U+FFFF of the first general category in the text a pattern is matched
     /// against, each other category's the one after it in <see cref="UnicodeCategory"/>'s order: low surrogates, which never
@@ -57,28 +49,23 @@ internal static class IRegexp
     /// <summary>A character that is neither a line feed nor a carriage return: one code unit that is no surrogate, or a pair led by its category.</summary>
     private static readonly string AnyButNewline = $@"(?:[^\n\r\uD800-\uDFFF]|{Tags(AllCategories)}{Pair})";
 
+    /// <summary>
+    /// Every pattern read, each once, kept for the process's life: a filter asks its pattern of every value it is given, and
+    /// none of them reads it again. A pattern that is no I-Regexp is kept too, as the nothing it matches.
+    /// </summary>
     private static readonly ConcurrentDictionary<(string Pattern, bool Whole), Regex?> Read = new();
 
-    /// <summary>Whether <paramref name="text"/> is matched by <paramref name="pattern"/>, whole or somewhere in it; never where the pattern is no I-Regexp.</summary>
+    /// <summary>
+    /// Whether <paramref name="text"/> is matched by <paramref name="pattern"/>, whole or somewhere in it; never where the
+    /// pattern is no I-Regexp. A pattern of any length is read, its groups nested to any depth: the grammar is read on a
+    /// stack of its own.
+    /// </summary>
     /// <param name="pattern">The I-Regexp.</param>
     /// <param name="text">The text.</param>
     /// <param name="whole">Whether the whole text must match (<c>match</c>), or a part of it (<c>search</c>).</param>
     public static bool Matches(string pattern, string text, bool whole)
     {
-        if (pattern.Length > MostPattern)
-        {
-            return false;
-        }
-
-        if (!Read.TryGetValue((pattern, whole), out var regex))
-        {
-            regex = Compiled(pattern, whole);
-
-            if (Read.Count < MostKept)
-            {
-                Read.TryAdd((pattern, whole), regex);
-            }
-        }
+        var regex = Read.GetOrAdd((pattern, whole), static key => Compiled(key.Pattern, key.Whole));
 
         return regex is not null && regex.IsMatch(Tagged(text));
     }
@@ -99,6 +86,11 @@ internal static class IRegexp
         }
     }
 
+    /// <summary>
+    /// The regular expression <paramref name="pattern"/> is, matched by .NET's linear-time engine (<see cref="LinearRegex"/>);
+    /// <see langword="null"/> where it is no I-Regexp, or one past the bounds that engine builds its automaton within - the
+    /// engine's own fact, which RFC 9485 lets an implementation say - and so no pattern this matches with.
+    /// </summary>
     private static Regex? Compiled(string pattern, bool whole)
     {
         if (ToDotNet(pattern) is not { } written)
@@ -106,15 +98,7 @@ internal static class IRegexp
             return null;
         }
 
-        try
-        {
-            return new Regex(whole ? $@"\A(?:{written})\z" : written, RegexOptions.CultureInvariant | RegexOptions.NonBacktracking);
-        }
-        catch (Exception ex) when (ex is ArgumentException or NotSupportedException)
-        {
-            // A quantifier .NET's linear matcher will not build - one past its bounds - is no pattern this matches with.
-            return null;
-        }
+        return LinearRegex.TryCompile(whole ? $@"\A(?:{written})\z" : written, RegexOptions.None, pattern, out var regex, out _) ? regex : null;
     }
 
     /// <summary>
@@ -188,41 +172,59 @@ internal static class IRegexp
     private static string Escaped(char character)
         => char.IsAsciiLetterOrDigit(character) ? character.ToString() : $"\\u{(int)character:X4}";
 
-    /// <summary>Reads I-Regexp by RFC 9485's grammar (section 5.3) and writes .NET's pattern of it.</summary>
+    /// <summary>
+    /// Reads I-Regexp by RFC 9485's grammar (section 5.3) and writes .NET's pattern of it, in one pass and into one text: a
+    /// group's <c>(</c> written as <c>(?:</c> where it opens, and its <c>)</c> - with the quantifier after it - where it
+    /// closes, so groups nest as deep as a pattern writes them, counted, and nothing is written twice.
+    /// </summary>
     private sealed class Reader(string pattern)
     {
-        /// <summary>How deep groups nest at most: a pattern may come from the document a query reads, and each group is read within the one around it.</summary>
-        private const int MostDepth = 64;
-
         private int _at;
-        private int _depth;
 
+        /// <summary>Whether the whole pattern was read: a <c>)</c> no group opened ends the reading before its end.</summary>
         public bool Done => _at == pattern.Length;
 
-        /// <summary><c>i-regexp = branch *( "|" branch )</c>.</summary>
+        /// <summary>
+        /// <c>i-regexp = branch *( "|" branch )</c>, each <c>branch = *( atom [ quantifier ] )</c>, an atom a group of an
+        /// i-regexp of its own: read until the pattern ends or a <c>)</c> closes no group.
+        /// </summary>
+        /// <exception cref="FormatException">It is no I-Regexp.</exception>
         public string ReadAlternatives()
         {
-            var written = new StringBuilder(ReadBranch());
+            var written = new StringBuilder(pattern.Length);
+            var open = 0;
 
-            while (At('|'))
+            while (_at < pattern.Length)
             {
-                _at++;
-                written.Append('|').Append(ReadBranch());
+                switch (pattern[_at])
+                {
+                    case '|':
+                        _at++;
+                        written.Append('|');
+                        break;
+
+                    case '(':
+                        _at++;
+                        open++;
+                        written.Append("(?:");
+                        break;
+
+                    case ')' when open == 0:
+                        return written.ToString();
+
+                    case ')':
+                        _at++;
+                        open--;
+                        written.Append(')').Append(ReadQuantifier());
+                        break;
+
+                    default:
+                        written.Append(ReadAtom()).Append(ReadQuantifier());
+                        break;
+                }
             }
 
-            return written.ToString();
-        }
-
-        private string ReadBranch()
-        {
-            var written = new StringBuilder();
-
-            while (_at < pattern.Length && !At('|') && !At(')'))
-            {
-                written.Append(ReadAtom()).Append(ReadQuantifier());
-            }
-
-            return written.ToString();
+            return open == 0 ? written.ToString() : throw new FormatException("')' is missing");
         }
 
         private string ReadQuantifier()
@@ -272,25 +274,13 @@ internal static class IRegexp
                 : throw new FormatException("a quantifier's bound is a number");
         }
 
-        /// <summary><c>atom = NormalChar / charClass / ( "(" i-regexp ")" )</c>.</summary>
+        /// <summary><c>atom = NormalChar / charClass</c>: an atom that is no group, which <see cref="ReadAlternatives"/> reads.</summary>
         private string ReadAtom()
         {
             var character = pattern[_at];
 
             switch (character)
             {
-                case '(':
-                    if (++_depth > MostDepth)
-                    {
-                        throw new FormatException($"its groups nest deeper than {MostDepth}");
-                    }
-
-                    _at++;
-                    var inner = ReadAlternatives();
-                    Expect(')');
-                    _depth--;
-                    return $"(?:{inner})";
-
                 case '.':
                     _at++;
                     return AnyButNewline;
@@ -309,7 +299,7 @@ internal static class IRegexp
                 case '\\':
                     return ReadEscape();
 
-                case ')' or '*' or '+' or '?' or ']' or '{' or '|' or '}':
+                case '*' or '+' or '?' or ']' or '{' or '}':
                     throw new FormatException($"'{character}' stands alone");
 
                 default:

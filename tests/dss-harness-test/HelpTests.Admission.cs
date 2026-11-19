@@ -58,7 +58,7 @@ public sealed partial class HelpTests
             $"([{string.Join(", ", AdmissionSettings.DefaultSettleSeconds)}])",
             $"({AdmissionSettings.DefaultPollSeconds})",
             string.Create(CultureInfo.InvariantCulture, $"({AdmissionSettings.DefaultMaxWaitMinutes})"),
-            string.Create(CultureInfo.InvariantCulture, $"from 0 to {AdmissionSettings.MostMinFreeGiB}; 0 stops no build ({AdmissionSettings.DefaultMinFreeGiB})"),
+            string.Create(CultureInfo.InvariantCulture, $"from 0, however large; 0 stops no build ({AdmissionSettings.DefaultMinFreeGiB})"),
             $"at most {AdmissionSettings.MostSeconds}",
             string.Create(CultureInfo.InvariantCulture, $"at most {AdmissionSettings.MostWaitMinutes} minutes"),
             $"exit {LegExit.NotAdmitted}",

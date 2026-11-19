@@ -2288,8 +2288,8 @@ public sealed class ConfigStoreTests
     [InlineData("""{ "defaults": { "admission": { "pollSeconds": 3601 } } }""", "defaults.admission pollSeconds must be from 1 to 3600, found 3601")]
     [InlineData("""{ "defaults": { "admission": { "settleSeconds": [-1, 5] } } }""", "found [-1, 5]")]
     [InlineData("""{ "defaults": { "admission": { "heavyLegs": -2 } } }""", "defaults.admission heavyLegs must be at least 1, found -2")]
-    [InlineData("""{ "defaults": { "admission": { "minFreeGiB": -0.5 } } }""", "defaults.admission minFreeGiB must be from 0 to 1024, found -0.5")]
-    [InlineData("""{ "hosts": { "local": { "admission": { "minFreeGiB": 1024.5 } } } }""", "hosts.local admission minFreeGiB must be from 0 to 1024, found 1024.5")]
+    [InlineData("""{ "defaults": { "admission": { "minFreeGiB": -0.5 } } }""", "defaults.admission minFreeGiB must be from 0 and under 8589934592, the GiB a count of bytes holds, found -0.5")]
+    [InlineData("""{ "hosts": { "local": { "admission": { "minFreeGiB": 1e10 } } } }""", "hosts.local admission minFreeGiB must be from 0 and under 8589934592, the GiB a count of bytes holds, found 10000000000")]
     public void Admission_ThatNoMachineCouldAdmitBy_IsRefused(string json, string expected)
         => Assert.Contains(expected, LoadInvalid(json).Message, StringComparison.Ordinal);
 
@@ -3618,6 +3618,129 @@ public sealed class ConfigStoreTests
         Assert.Equal(["gov", "stackoverflow"], search.Chosen(null).Select(source => source.Name));
         Assert.False(search.Find("npm")!.Enabled);
     }
+
+    /// <summary>How deep the deep configuration's free value nests: objects in objects, a number at the bottom.</summary>
+    private const int DeepConfig = 10_000;
+
+    /// <summary>
+    /// A floor has no ceiling of the tool's own: 2,000 GiB - more than the tebibyte it was once held under - loads and is
+    /// the rule in bytes, and only a number of GiB whose bytes no count holds is refused, saying so.
+    /// </summary>
+    [Fact]
+    public void MinFreeGiBOfTwoThousand_IsAccepted()
+    {
+        var config = LoadValid("""{ "defaults": { "admission": { "minFreeGiB": 2000 } } }""");
+
+        Assert.Equal(2000L << 30, AdmissionSettings.RuleFor(null, config.Defaults.Admission)!.MinFreeBytes);
+        Assert.Contains(
+            "defaults.admission minFreeGiB must be from 0 and under 8589934592, the GiB a count of bytes holds, found 8589934592",
+            LoadInvalid("""{ "defaults": { "admission": { "minFreeGiB": 8589934592 } } }""").Message,
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A run check may name a runner that carries checks of its own, and that one's checks another again, to any depth: a
+    /// chain three deep is no problem of the file's. Only a chain that leads back to the runner carrying a check is
+    /// refused, at each check on it, naming the runner it leads back to: its runs would never end, and the runner would
+    /// confirm itself.
+    /// </summary>
+    [Fact]
+    public void ChecksThreeDeep_AreAccepted_ACycleIsRefused()
+    {
+        static RunnerConfig Checking(string action, params string[] checks) => new()
+        {
+            Action = action,
+            ExpectedExceptions = checks.Length == 0
+                ? []
+                : [ExpectedExceptionMatcherTests.Entry(messages: ["the device was busy"], runChecks: [.. checks.Select(name => new RunCheck { PredefinedRunner = name })])],
+        };
+
+        var deep = new HarnessConfig
+        {
+            PredefinedRunners =
+            {
+                ["a"] = Checking("a/a.yml", "b"),
+                ["b"] = Checking("b/b.yml", "c"),
+                ["c"] = Checking("c/c.yml", "d"),
+                ["d"] = Checking("d/d.yml"),
+            },
+        };
+        var cycle = new HarnessConfig
+        {
+            PredefinedRunners =
+            {
+                ["a"] = Checking("a/a.yml", "b"),
+                ["b"] = Checking("b/b.yml", "c"),
+                ["c"] = Checking("c/c.yml", "a"),
+            },
+        };
+
+        Assert.DoesNotContain(HarnessConfigValidator.Validate(deep), problem => problem.Contains("runChecks", StringComparison.Ordinal));
+        Assert.Equal(
+            [
+                "predefined runner 'a' expectedExceptions[0] runChecks[0] names predefined runner 'b', whose run checks lead back to 'a', so the check would confirm itself",
+                "predefined runner 'b' expectedExceptions[0] runChecks[0] names predefined runner 'c', whose run checks lead back to 'b', so the check would confirm itself",
+                "predefined runner 'c' expectedExceptions[0] runChecks[0] names predefined runner 'a', whose run checks lead back to 'c', so the check would confirm itself",
+            ],
+            HarnessConfigValidator.Validate(cycle).Where(problem => problem.Contains("runChecks", StringComparison.Ordinal)));
+    }
+
+    /// <summary>
+    /// A configuration's patterns are compiled to .NET's linear-time matcher, never matched against a clock: a construct
+    /// that matcher lacks - a backreference - is refused where the file is read, naming the pattern and the construct,
+    /// where a pattern timed by a second's timeout was taken as it was.
+    /// </summary>
+    [Fact]
+    public void ConfigPatterns_AreLinear()
+    {
+        Assert.Contains(
+            @"ci.legJobPattern is not a valid regular expression: The pattern '^unit (?<leg>a)\1$' holds a backreference, which .NET's linear-time matcher lacks.",
+            LoadInvalid("""{ "ci": { "legJobPattern": "^unit (?<leg>a)\\1$" } }""").Message,
+            StringComparison.Ordinal);
+
+        // A pattern a backtracking matcher takes exponential time over is one the linear matcher reads like any other.
+        Assert.Equal(@"^unit (?<leg>(a|aa)+)$", LoadValid("""{ "ci": { "legJobPattern": "^unit (?<leg>(a|aa)+)$" } }""").Ci.LegJobPattern);
+    }
+
+    /// <summary>
+    /// A config.json nested ten thousand deep is read wherever its shape holds any depth - a client's requestExtras, read
+    /// whole - and refused where a typed place cannot hold what is written there, for that shape and never for the
+    /// depth. Read in a child on a small stack, so a reading that recursed would end that child, never this run.
+    /// </summary>
+    [Fact]
+    public async Task ATenThousandDeepConfig_IsReadOrRefusedByShape()
+    {
+        var answer = await ChildRun.MethodAsync(typeof(ConfigStoreTests), nameof(ReadDeepConfigs), TestContext.Current.CancellationToken);
+
+        Assert.Equal(
+            new ChildRunAnswer(
+                0,
+                "requestExtras: 10001 places, the deepest 10000 deep\n"
+                + "maxDeleteFraction: refused at $.sync.maxDeleteFraction, never for its depth\n",
+                string.Empty),
+            answer);
+    }
+
+    /// <summary>
+    /// <see cref="ATenThousandDeepConfig_IsReadOrRefusedByShape"/>'s child: a value <see cref="DeepConfig"/> objects deep as a
+    /// client's requestExtras, read and walked, and the same value where a number belongs, refused.
+    /// </summary>
+    private static string ReadDeepConfigs() => SmallStack.Run(() =>
+    {
+        using var temp = new TempDirectory();
+        var deep = string.Concat(Enumerable.Repeat("{\"a\":", DeepConfig)) + "0" + new string('}', DeepConfig);
+
+        var extras = CreateStore().Load(temp.WriteFile("extras.json", $$"""{ "agentClients": { "claude-api": { "requestExtras": {{deep}} } } }"""))
+            .AgentClients["claude-api"].RequestExtras!.Value;
+        var places = DssHarness.Core.Json.JsonWalk.Descendants(extras).ToList();
+
+        var refused = Assert.Throws<ConfigException>(() => CreateStore().Load(temp.WriteFile("typed.json", $$"""{ "sync": { "maxDeleteFraction": {{deep}} } }"""))).Message;
+        var shape = refused.Contains("$.sync.maxDeleteFraction", StringComparison.Ordinal) && !refused.Contains("depth", StringComparison.OrdinalIgnoreCase)
+            ? "refused at $.sync.maxDeleteFraction, never for its depth"
+            : refused;
+
+        return $"requestExtras: {places.Count} places, the deepest {places.Max(place => place.Place.Depth)} deep\nmaxDeleteFraction: {shape}\n";
+    });
 
     private static ConfigException LoadInvalid(string json)
     {

@@ -148,14 +148,123 @@ internal sealed class UnixHeld : IHeldNative
     /// <inheritdoc/>
     public IReadOnlyList<HeldName> Entries(SafeFileHandle directory, string path)
     {
-        // On Linux the descriptor's own link under /proc names the directory it holds, whatever was put at its path since; on
-        // macOS the path the system keeps for it is listed, and every entry it names is acted on in the directory held alone.
-        var listed = OperatingSystem.IsLinux()
-            ? $"/proc/self/fd/{directory.DangerousGetHandle().ToInt32()}"
-            : OpenedFiles.FinalPath(directory);
-
-        return HeldDirectory.Listed(listed, path);
+        // On Linux the descriptor's own link under /proc names the directory it holds, whatever was put at its path since,
+        // in a path as short however deep it is. On macOS, whose descriptors have no such link and whose path for one is
+        // bounded by MAXPATHLEN, the directory is read by a descriptor of its own, opened from the one held.
+        return OperatingSystem.IsLinux()
+            ? HeldDirectory.Listed($"/proc/self/fd/{directory.DangerousGetHandle().ToInt32()}", path)
+            : MacEntries(directory, path);
     }
+
+    /// <inheritdoc/>
+    public byte[]? IdentityOf(SafeFileHandle directory, string path)
+    {
+        var (device, inode) = UnixFiles.IdentityOf(directory, path);
+        var identity = new byte[16];
+        BitConverter.TryWriteBytes(identity.AsSpan(0, 8), device);
+        BitConverter.TryWriteBytes(identity.AsSpan(8), inode);
+
+        return identity;
+    }
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// By <c>..</c> of the directory below, which names the directory it stands in now: where it was moved into another,
+    /// that one answers, which <paramref name="identity"/> tells apart.
+    /// </remarks>
+    public SafeFileHandle OpenAbove(SafeFileHandle child, byte[] identity, string path)
+    {
+        var descriptor = At(child, "..", ReadOnly | OnlyDirectory | NoFollow | CloseOnExec | NonBlocking);
+
+        if (descriptor < 0)
+        {
+            throw Failed(Marshal.GetLastPInvokeError(), path);
+        }
+
+        var above = Owned(descriptor);
+
+        if (IdentityOf(above, path) is { } reached && reached.AsSpan().SequenceEqual(identity))
+        {
+            return above;
+        }
+
+        above.Dispose();
+        throw new IOException($"'{path}' is no longer the directory a directory being removed below it stood in: it was moved while that was emptied, so nothing more is removed through it");
+    }
+
+    /// <summary>
+    /// The entries of the directory <paramref name="directory"/> holds, on macOS: read by a descriptor of its own, opened
+    /// from the one held (<c>openat</c> of <c>.</c>, <c>fdopendir</c>, <c>readdir</c>), each with what it is itself - by the
+    /// type the listing gives, or by opening it as itself where the listing gives none.
+    /// </summary>
+    private List<HeldName> MacEntries(SafeFileHandle directory, string path)
+    {
+        var descriptor = At(directory, ".", ReadOnly | OnlyDirectory | CloseOnExec);
+
+        if (descriptor < 0)
+        {
+            throw Failed(Marshal.GetLastPInvokeError(), path);
+        }
+
+        var stream = OpenDirectoryStream(descriptor);
+
+        if (stream == IntPtr.Zero)
+        {
+            var error = Marshal.GetLastPInvokeError();
+            Owned(descriptor).Dispose();
+            throw Failed(error, path);
+        }
+
+        try
+        {
+            var entries = new List<HeldName>();
+
+            while (true)
+            {
+                // errno cleared, since readdir leaves it as it was at the listing's end and sets it only on a fault.
+                Marshal.SetLastSystemError(0);
+                var entry = ReadDirectoryStream(stream);
+
+                if (entry == IntPtr.Zero)
+                {
+                    var error = Marshal.GetLastPInvokeError();
+                    return error == 0 ? entries : throw Failed(error, path);
+                }
+
+                // struct dirent with 64-bit inodes, as macOS lays it out: d_ino and d_seekoff, d_reclen, d_namlen at 18,
+                // d_type at 20, d_name at 21.
+                var name = Marshal.PtrToStringUTF8(entry + 21, (ushort)Marshal.ReadInt16(entry, 18));
+
+                if (name is "." or "..")
+                {
+                    continue;
+                }
+
+                entries.Add(new HeldName(name, Marshal.ReadByte(entry, 20) switch
+                {
+                    4 => PathKind.Directory,
+                    10 => PathKind.Link,
+                    0 => KindOf(directory, name, Path.Join(path, name)),
+                    _ => PathKind.File,
+                }));
+            }
+        }
+        finally
+        {
+            _ = CloseDirectoryStream(stream);
+        }
+    }
+
+    /// <summary>
+    /// <c>fdopendir</c>, by the name macOS gives the one of 64-bit inodes: <c>fdopendir$INODE64</c> on Intel, plain on
+    /// Apple's own processors, whose C library has only that one.
+    /// </summary>
+    private static IntPtr OpenDirectoryStream(int descriptor)
+        => RuntimeInformation.ProcessArchitecture == Architecture.X64 ? FdOpenDir64(descriptor) : FdOpenDir(descriptor);
+
+    /// <summary><c>readdir</c>, by the name macOS gives the one of 64-bit inodes, as <see cref="OpenDirectoryStream"/> names its pair.</summary>
+    private static IntPtr ReadDirectoryStream(IntPtr stream)
+        => RuntimeInformation.ProcessArchitecture == Architecture.X64 ? ReadDir64(stream) : ReadDir(stream);
 
     /// <inheritdoc/>
     public SafeFileHandle OpenFile(SafeFileHandle parent, string name, string path)
@@ -458,6 +567,26 @@ internal sealed class UnixHeld : IHeldNative
     [DllImport("libc", EntryPoint = "statx", SetLastError = true)]
     [DefaultDllImportSearchPaths(DllImportSearchPath.SafeDirectories)]
     private static extern int Statx(int directory, [MarshalAs(UnmanagedType.LPUTF8Str)] string path, int flags, uint mask, byte[] status);
+
+    [DllImport("libc", EntryPoint = "fdopendir$INODE64", SetLastError = true)]
+    [DefaultDllImportSearchPaths(DllImportSearchPath.SafeDirectories)]
+    private static extern IntPtr FdOpenDir64(int descriptor);
+
+    [DllImport("libc", EntryPoint = "fdopendir", SetLastError = true)]
+    [DefaultDllImportSearchPaths(DllImportSearchPath.SafeDirectories)]
+    private static extern IntPtr FdOpenDir(int descriptor);
+
+    [DllImport("libc", EntryPoint = "readdir$INODE64", SetLastError = true)]
+    [DefaultDllImportSearchPaths(DllImportSearchPath.SafeDirectories)]
+    private static extern IntPtr ReadDir64(IntPtr stream);
+
+    [DllImport("libc", EntryPoint = "readdir", SetLastError = true)]
+    [DefaultDllImportSearchPaths(DllImportSearchPath.SafeDirectories)]
+    private static extern IntPtr ReadDir(IntPtr stream);
+
+    [DllImport("libc", EntryPoint = "closedir", SetLastError = true)]
+    [DefaultDllImportSearchPaths(DllImportSearchPath.SafeDirectories)]
+    private static extern int CloseDirectoryStream(IntPtr stream);
 
     [DllImport("libc", EntryPoint = "renameatx_np", SetLastError = true)]
     [DefaultDllImportSearchPaths(DllImportSearchPath.SafeDirectories)]

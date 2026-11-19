@@ -17,12 +17,14 @@ namespace DssHarness.Core.FileSystem;
 /// included, as is a member the type needs that the file leaves out, rather than either being read in as nothing and
 /// failing later in whatever trusts it - a member that may be left out says so by having a default. Written indented, camelCase,
 /// without the members that are null, and with paths and names written as they are rather than escaped - a person reads
-/// these files as often as the tool does. An enumeration is written by its name.
+/// these files as often as the tool does. An enumeration is written by its name. A record is read and written at any
+/// depth (<see cref="Json.JsonDepth"/>): what one holds as JSON of its own - an answer, a schema - nests as deep as it does,
+/// and a record refuses only what its own shape cannot hold.
 /// </remarks>
 public static class JsonStateFile
 {
     /// <summary>The options a state file is written and read with.</summary>
-    public static JsonSerializerOptions Options { get; } = new()
+    public static JsonSerializerOptions Options { get; } = Json.JsonDepth.Serializer(new()
     {
         WriteIndented = true,
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
@@ -34,7 +36,7 @@ public static class JsonStateFile
         RespectNullableAnnotations = true,
         RespectRequiredConstructorParameters = true,
         NewLine = "\n",
-    };
+    });
 
     /// <summary>The same, one object to a line: a log's entries, each appended whole.</summary>
     public static JsonSerializerOptions LineOptions { get; } = new(Options) { WriteIndented = false };

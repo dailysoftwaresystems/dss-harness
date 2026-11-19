@@ -91,8 +91,8 @@ public sealed class HarnessConfig
 
     /// <summary>
     /// The runners a run of <paramref name="runner"/> has write the tree it works in (<c>writesTree</c>), in order: the
-    /// runner itself where it says so, then each runner its run checks name that does - each once, as
-    /// <see cref="RunnerConfig.RunCheckRunners"/> names it, for a run check runs within the run's legs and writes where
+    /// runner itself where it says so, then each runner its run checks name, to any depth, that does - each once, as
+    /// <see cref="RunnerConfig.RunCheckRunners(IReadOnlyDictionary{string, RunnerConfig}, string)"/> names it, for a run check runs within the run's legs and writes where
     /// they work. Empty where none writes, and for a runner nobody declared, which is refused where it is run. The one
     /// answer the definition's check (V24), the run command's placement refusals, a run step's claim and where its legs
     /// work all read.
@@ -110,7 +110,7 @@ public sealed class HarnessConfig
         return
         [
             .. declared.WritesTree ? [(runner, false)] : Array.Empty<(string, bool)>(),
-            .. declared.RunCheckRunners()
+            .. RunnerConfig.RunCheckRunners(PredefinedRunners, runner)
                 .Where(check => PredefinedRunners.TryGetValue(check, out var checkRunner) && checkRunner.WritesTree)
                 .Select(check => (check, true)),
         ];

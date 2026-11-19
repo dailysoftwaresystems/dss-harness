@@ -78,11 +78,11 @@ internal static partial class VisualStudioToolsets
     /// their line, or three, naming one - each of ASCII digits, joined by dots.
     /// </summary>
     /// <param name="toolsVersion">What a developer environment declares.</param>
-    public static bool IsToolsVersion(string toolsVersion) => ToolsVersionPattern().IsMatch(toolsVersion);
+    public static bool IsToolsVersion(string toolsVersion) => ToolsVersionPattern.IsMatch(toolsVersion);
 
     /// <summary>Whether <paramref name="name"/> is a toolset's, as <c>VC\Tools\MSVC</c> names one: three numbers of ASCII digits, joined by dots.</summary>
     /// <param name="name">A directory's name.</param>
-    public static bool IsToolset(string name) => ToolsetPattern().IsMatch(name);
+    public static bool IsToolset(string name) => ToolsetPattern.IsMatch(name);
 
     /// <summary>
     /// Whether <paramref name="toolset"/>, a directory under <c>VC\Tools\MSVC</c>, is one
@@ -140,10 +140,8 @@ internal static partial class VisualStudioToolsets
     }
 
     /// <summary>What a developer environment may declare: two or three numbers of ASCII digits, joined by dots.</summary>
-    [GeneratedRegex(@"^[0-9]+\.[0-9]+(\.[0-9]+)?\z", RegexOptions.CultureInvariant)]
-    private static partial Regex ToolsVersionPattern();
+    private static readonly Regex ToolsVersionPattern = Text.LinearRegex.Compile(@"^[0-9]+\.[0-9]+(\.[0-9]+)?\z");
 
     /// <summary>A toolset's directory under <c>VC\Tools\MSVC</c>: three numbers of ASCII digits, joined by dots.</summary>
-    [GeneratedRegex(@"^[0-9]+\.[0-9]+\.[0-9]+\z", RegexOptions.CultureInvariant)]
-    private static partial Regex ToolsetPattern();
+    private static readonly Regex ToolsetPattern = Text.LinearRegex.Compile(@"^[0-9]+\.[0-9]+\.[0-9]+\z");
 }

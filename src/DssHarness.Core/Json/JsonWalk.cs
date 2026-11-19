@@ -231,6 +231,193 @@ public static class JsonWalk
         }
     }
 
+    /// <summary>
+    /// A copy of <paramref name="node"/> and everything under it, made on a stack of its own - what
+    /// <see cref="JsonNode.DeepClone"/> makes, which goes one call per level and overflows the stack on a deep document.
+    /// Each node is given to the one that holds it once everything under it is made, while that holder has no parent of its
+    /// own yet, so the making is linear in what the document holds at any depth.
+    /// </summary>
+    /// <param name="node">The node to copy; <see langword="null"/> for JSON's null, which is copied as itself.</param>
+    /// <returns>The copy, held by nothing; members in the order the node holds them.</returns>
+    public static JsonNode? Copy(JsonNode? node)
+    {
+        if (node is not (JsonObject or JsonArray))
+        {
+            return node?.DeepClone();
+        }
+
+        var open = new Stack<Copying>();
+        open.Push(Copying.Of(node, null, -1)!);
+
+        while (true)
+        {
+            var copying = open.Peek();
+
+            if (copying.Next(out var name, out var index, out var child))
+            {
+                if (Copying.Of(child, name, index) is { } inner)
+                {
+                    open.Push(inner);
+                }
+                else
+                {
+                    copying.Add(name, child?.DeepClone());
+                }
+
+                continue;
+            }
+
+            open.Pop();
+
+            if (!open.TryPeek(out var holder))
+            {
+                return copying.Made;
+            }
+
+            holder.Add(copying.Name, copying.Made);
+        }
+    }
+
+    /// <summary>
+    /// Whether <paramref name="left"/> and <paramref name="right"/> are the same JSON, as <see cref="JsonNode.DeepEquals"/>
+    /// says - an object's members by name, in any order, an array's items in order, and two values as .NET compares them -
+    /// compared on a stack of its own, so documents of any depth are compared.
+    /// </summary>
+    /// <param name="left">One node; <see langword="null"/> for JSON's null.</param>
+    /// <param name="right">The other.</param>
+    public static bool Same(JsonNode? left, JsonNode? right)
+    {
+        var pairs = new Stack<(JsonNode? Left, JsonNode? Right)>();
+        pairs.Push((left, right));
+
+        while (pairs.TryPop(out var pair))
+        {
+            switch (pair)
+            {
+                case (JsonObject one, JsonObject other):
+                    if (one.Count != other.Count)
+                    {
+                        return false;
+                    }
+
+                    foreach (var (name, value) in one)
+                    {
+                        if (!other.TryGetPropertyValue(name, out var otherValue))
+                        {
+                            return false;
+                        }
+
+                        pairs.Push((value, otherValue));
+                    }
+
+                    break;
+
+                case (JsonArray one, JsonArray other):
+                    if (one.Count != other.Count)
+                    {
+                        return false;
+                    }
+
+                    for (var index = 0; index < one.Count; index++)
+                    {
+                        pairs.Push((one[index], other[index]));
+                    }
+
+                    break;
+
+                case (JsonObject or JsonArray, _) or (_, JsonObject or JsonArray):
+                    return false;
+
+                // Two values, or JSON's null: .NET's own comparison, which goes down nothing.
+                default:
+                    if (!JsonNode.DeepEquals(pair.Left, pair.Right))
+                    {
+                        return false;
+                    }
+
+                    break;
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// An object or an array being copied (<see cref="Copy"/>): what it is copied from, gone through one member or item at a
+    /// time, the copy made so far, and where the copy goes in the one that holds it.
+    /// </summary>
+    private sealed class Copying
+    {
+        private readonly IEnumerator<KeyValuePair<string, JsonNode?>>? _members;
+        private readonly IEnumerator<JsonNode?>? _items;
+        private int _index;
+
+        private Copying(JsonNode made, string? name, int index, IEnumerator<KeyValuePair<string, JsonNode?>>? members, IEnumerator<JsonNode?>? items)
+        {
+            Made = made;
+            Name = name;
+            Index = index;
+            _members = members;
+            _items = items;
+        }
+
+        /// <summary>The copy, made so far.</summary>
+        public JsonNode Made { get; }
+
+        /// <summary>The member's name the copy goes under in the object that holds it; <see langword="null"/> for an item, or the root.</summary>
+        public string? Name { get; }
+
+        /// <summary>The item's index the copy goes at in the array that holds it; -1 for a member, or the root.</summary>
+        public int Index { get; }
+
+        /// <summary>
+        /// The copying of <paramref name="node"/>, where it is an object or an array; <see langword="null"/> otherwise. The copy
+        /// is given options of its own, as <see cref="JsonDepth.ParseNode"/> gives a node: one made with none would ask its
+        /// holder for them, a call a level, and asking the node copied would ask up its own holders.
+        /// </summary>
+        public static Copying? Of(JsonNode? node, string? name, int index) => node switch
+        {
+            JsonObject members => new Copying(new JsonObject(CopiedOptions), name, index, members.GetEnumerator(), null),
+            JsonArray items => new Copying(new JsonArray(CopiedOptions), name, index, null, items.GetEnumerator()),
+            _ => null,
+        };
+
+        /// <summary>The options every object and array a copy makes is given: .NET's own.</summary>
+        private static readonly JsonNodeOptions CopiedOptions = new();
+
+        /// <summary>The next member or item to copy; <see langword="false"/> where none is left.</summary>
+        public bool Next(out string? name, out int index, out JsonNode? child)
+        {
+            if (_members is not null && _members.MoveNext())
+            {
+                (name, index, child) = (_members.Current.Key, -1, _members.Current.Value);
+                return true;
+            }
+
+            if (_items is not null && _items.MoveNext())
+            {
+                (name, index, child) = (null, _index++, _items.Current);
+                return true;
+            }
+
+            (name, index, child) = (null, -1, null);
+            return false;
+        }
+
+        /// <summary>Puts <paramref name="copy"/> in the copy made so far: under <paramref name="name"/> in an object, last in an array.</summary>
+        public void Add(string? name, JsonNode? copy)
+        {
+            if (Made is JsonObject members)
+            {
+                members.Add(name!, copy);
+            }
+            else
+            {
+                ((JsonArray)Made).Add(copy);
+            }
+        }
+    }
+
     /// <summary>The elements directly under one object or array, gone through one at a time, with the place each is at.</summary>
     private sealed class ElementsUnder
     {

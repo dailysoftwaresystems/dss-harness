@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 using DssHarness.Core.Results;
+using DssHarness.Core.Waiting;
 
 namespace DssHarness.Core.Platform;
 
@@ -19,11 +20,11 @@ namespace DssHarness.Core.Platform;
 /// </remarks>
 public static class MachineWideMutex
 {
-    /// <summary>How many times opening a mutex is tried before it is given up on.</summary>
-    internal const int Attempts = 5;
-
-    /// <summary>How long the first retry waits; each after it waits that much longer than the one before.</summary>
-    internal static readonly TimeSpan Backoff = TimeSpan.FromMilliseconds(25);
+    /// <summary>
+    /// How long the first wait before an open the system failed is tried again lasts; each wait after it lasts twice the
+    /// one before, up to <see cref="Waits.SaidEvery"/>.
+    /// </summary>
+    internal static readonly TimeSpan FirstWait = TimeSpan.FromMilliseconds(25);
 
     /// <summary>
     /// The name one subject contends under, however its paths are spelled.
@@ -36,7 +37,9 @@ public static class MachineWideMutex
     /// </param>
     /// <remarks>
     /// Global, so a run started in another terminal session contends for the same subject rather
-    /// than quietly getting a lock of its own.
+    /// than quietly getting a lock of its own. The digest is cut to its first sixteen bytes, as every version of this tool
+    /// cuts it: 128 bits name a subject as surely as the whole digest does, and a version naming the same subject another
+    /// way would take a lock of its own beside one an older version holds, so the spelling is kept as it is for good.
     /// </remarks>
     public static string NameFor(string prefix, IEnumerable<string> paths, bool ignoreCase)
     {
@@ -57,62 +60,77 @@ public static class MachineWideMutex
     /// <param name="name">The name, from <see cref="NameFor"/>.</param>
     /// <param name="subject">What is being locked, named in a refusal.</param>
     /// <exception cref="HarnessException">
-    /// The mutex belongs to another user on this machine, or could not be opened in <see cref="Attempts"/>
-    /// tries. Reported rather than worked around: the alternative is proceeding without the lock, which is
-    /// the state the lock exists to prevent.
+    /// The mutex belongs to another user on this machine, or the system refused to open it the same way twice. Reported
+    /// rather than worked around: the alternative is proceeding without the lock, which is the state the lock exists to
+    /// prevent.
     /// </exception>
     /// <remarks>
-    /// An open the system failed with an I/O error is tried again, <see cref="Attempts"/> times in all and a
-    /// little later each time. The one measured is a race: on Linux and macOS the runtime keeps a named
-    /// mutex under a directory it creates the first time one is opened, and processes opening theirs at
-    /// that moment race to create it. In WSL, 16 processes started together on a fresh
-    /// <c>/tmp/.dotnet</c>, twenty times over, failed 54 and then 66 of their 320 openings, the runtime
-    /// saying a stat of the directory found nothing - a consumer saw its mkdir find one already there -
-    /// and none with the retry: the loser finds the directory the next time it looks. Without it, the leg
-    /// whose run lost the race ended with an internal error, reported as a host that could not be reached.
-    /// An error that lasts - a full disk, a directory nobody may write - costs the tries, a quarter of a
-    /// second, and is then said as unavailable rather than as a refusal: this machine cannot run anything
-    /// until it opens, and a machine running a leg for another is one host of many, whose trouble is its own.
+    /// An open the system failed with an I/O error is tried again (<see cref="Retrying"/>), a little later each time,
+    /// while the system says something new; no count of tries ends it. The one measured is a race: on Linux and macOS the
+    /// runtime keeps a named mutex under a directory it creates the first time one is opened, and processes opening theirs
+    /// at that moment race to create it. In WSL, 16 processes started together on a fresh <c>/tmp/.dotnet</c>, twenty times
+    /// over, failed 54 and then 66 of their 320 openings, the runtime saying a stat of the directory found nothing - a
+    /// consumer saw its mkdir find one already there - and none with the retry: the loser finds the directory the next
+    /// time it looks. Without it, the leg whose run lost the race ended with an internal error, reported as a host that
+    /// could not be reached. An error that lasts - a full disk, a directory nobody may write - says the same the second
+    /// time, which ends the tries, and is then said as unavailable rather than as a refusal: this machine cannot run
+    /// anything until it opens, and a machine running a leg for another is one host of many, whose trouble is its own.
     /// </remarks>
     public static Mutex Open(string name, string subject)
-        => Open(name, subject, () => new Mutex(initiallyOwned: false, name), Thread.Sleep);
+        => Open(name, subject, () => new Mutex(initiallyOwned: false, name), TimeProvider.System);
 
-    /// <summary>Opens a mutex through <paramref name="create"/>, pausing through <paramref name="pause"/> between tries.</summary>
+    /// <summary>Opens a mutex through <paramref name="create"/>, waiting on <paramref name="clock"/> between tries.</summary>
     /// <param name="name">The name, from <see cref="NameFor"/>.</param>
     /// <param name="subject">What is being locked, named in a refusal.</param>
     /// <param name="create">Opens the mutex.</param>
-    /// <param name="pause">Waits between two tries.</param>
-    /// <exception cref="HarnessException">The mutex belongs to another user, or could not be opened in <see cref="Attempts"/> tries.</exception>
-    internal static Mutex Open(string name, string subject, Func<Mutex> create, Action<TimeSpan> pause)
+    /// <param name="clock">Times the waits between two tries: a test's where it stands in for the clock.</param>
+    /// <exception cref="HarnessException">The mutex belongs to another user, or the system refused to open it the same way twice.</exception>
+    internal static Mutex Open(string name, string subject, Func<Mutex> create, TimeProvider clock)
     {
         ArgumentNullException.ThrowIfNull(create);
-        ArgumentNullException.ThrowIfNull(pause);
+        ArgumentNullException.ThrowIfNull(clock);
 
-        for (var attempt = 1; ; attempt++)
+        Exception? failure = null;
+
+        // Opened where it is asked for: a mutex is waited on by the thread that holds it, and the tries are made on the
+        // caller's, each wait between them a moment.
+        var end = Retrying.RunAsync(
+            (_, _) => Task.FromResult(Tried()),
+            new RetryWatch($"the lock '{name}' on {subject} to open", static _ => { }, FirstWait, Bound: null, clock),
+            CancellationToken.None).GetAwaiter().GetResult();
+
+        return end.Kind switch
+        {
+            RetryEndKind.Done => end.Value!,
+            RetryEndKind.Final => throw new HarnessException(
+                HarnessExit.Refused,
+                $"The lock '{name}' on {subject} belongs to another user on this machine, so nothing it guards was read or changed.",
+                failure),
+            _ => throw new HarnessException(
+                HarnessExit.HostUnavailable,
+                $"The lock '{name}' on {subject} could not be opened, the system refusing it the same way twice, saying: "
+                + $"{end.Failure?.TrimEnd('.')}. Nothing it guards was read or changed, and nothing can run on this machine until "
+                + "it opens: fix what the system said, and run the command again.",
+                failure),
+        };
+
+        RetryTry<Mutex> Tried()
         {
             try
             {
-                return create();
+                return new RetryTry<Mutex>.Done(create());
             }
             catch (UnauthorizedAccessException ex)
             {
-                throw new HarnessException(
-                    HarnessExit.Refused,
-                    $"The lock '{name}' on {subject} belongs to another user on this machine, so nothing it guards was read or changed.",
-                    ex);
-            }
-            catch (IOException) when (attempt < Attempts)
-            {
-                pause(Backoff * attempt);
+                failure = ex;
+                return new RetryTry<Mutex>.Final(ex.Message);
             }
             catch (IOException ex)
             {
-                throw new HarnessException(
-                    HarnessExit.HostUnavailable,
-                    $"The lock '{name}' on {subject} could not be opened in {Attempts} tries, the last saying: "
-                    + $"{ex.Message.TrimEnd('.')}. Nothing it guards was read or changed, and nothing can run on this machine until "
-                    + "it opens: fix what the system said, and run the command again.",
-                    ex);
+                // What the system said is the failure and its state alike: said again, it is the same failure, which a
+                // further try would meet a third time.
+                failure = ex;
+                return new RetryTry<Mutex>.Failed(ex.Message, ex.Message);
             }
         }
     }

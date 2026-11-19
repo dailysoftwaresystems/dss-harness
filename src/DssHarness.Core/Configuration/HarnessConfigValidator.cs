@@ -11,6 +11,7 @@ using DssHarness.Core.Repository;
 using DssHarness.Core.Results;
 using DssHarness.Core.Runners;
 using DssHarness.Core.Testing;
+using DssHarness.Core.Text;
 using DssHarness.Core.Tools;
 using DssHarness.Core.Worktrees;
 
@@ -30,6 +31,21 @@ public static partial class HarnessConfigValidator
 {
     /// <summary>Schema versions this build understands.</summary>
     private static readonly int[] SupportedVersions = [1];
+
+    /// <summary>An anchor id's prefix: letters and digits, starting with a letter.</summary>
+    private static readonly Regex IdPrefixPattern = LinearRegex.Compile(@"^[A-Za-z][A-Za-z0-9]*\z");
+
+    /// <summary>A placeholder of a history form, <c>{name}</c>, the name captured.</summary>
+    private static readonly Regex PlaceholderPattern = LinearRegex.Compile(@"\{([^}]*)\}");
+
+    /// <summary>A commit template's variable: letters, digits, hyphens and underscores, starting with a letter.</summary>
+    private static readonly Regex VariableNamePattern = LinearRegex.Compile(@"^[A-Za-z][A-Za-z0-9_-]*\z");
+
+    /// <summary>A host's name: letters, digits, dots, hyphens and underscores, starting with a letter, a digit or an underscore.</summary>
+    private static readonly Regex HostNamePattern = LinearRegex.Compile(@"^[A-Za-z0-9_][A-Za-z0-9._-]*\z");
+
+    /// <summary>A CMake language name, such as <c>C</c>, <c>CXX</c> or <c>Fortran</c>.</summary>
+    private static readonly Regex CMakeLanguagePattern = LinearRegex.Compile(@"^[A-Za-z][A-Za-z0-9_]*\z");
 
     /// <summary>Adapters a project may declare.</summary>
     private static readonly string[] ProjectTypes = ["cmake", "dotnet", "dart"];
@@ -184,10 +200,14 @@ public static partial class HarnessConfigValidator
 
         RequireAboveZeroAtMost(admission.MaxWaitMinutes, AdmissionSettings.MostWaitMinutes, $"{owner} maxWaitMinutes", problems);
 
-        // 0 is allowed, and stops no build: a floor is a rule a machine may do without, where a limit of none is not.
-        if (admission.MinFreeGiB is { } floor && !(double.IsFinite(floor) && floor >= 0 && floor <= AdmissionSettings.MostMinFreeGiB))
+        // 0 is allowed, and stops no build: a floor is a rule a machine may do without, where a limit of none is not. No
+        // ceiling of the tool's own: a floor is weighed in bytes, so it is any number of GiB whose bytes a count holds, and
+        // one above what the disk holds is said where the build is stopped for it.
+        if (admission.MinFreeGiB is { } floor && !(double.IsFinite(floor) && floor >= 0 && floor < AdmissionSettings.CountedGiB))
         {
-            problems.Add($"{owner} minFreeGiB must be from 0 to {Number(AdmissionSettings.MostMinFreeGiB)}, found {Number(floor)}");
+            problems.Add(
+                $"{owner} minFreeGiB must be from 0 and under {Number(AdmissionSettings.CountedGiB)}, the GiB a count of bytes holds, "
+                + $"found {Number(floor)}");
         }
     }
 
@@ -278,7 +298,7 @@ public static partial class HarnessConfigValidator
                 + "an anchor moves it from one to the other, so they must differ");
         }
 
-        if (!Regex.IsMatch(anchors.IdPrefix, @"^[A-Za-z][A-Za-z0-9]*\z", RegexOptions.CultureInvariant))
+        if (!IdPrefixPattern.IsMatch(anchors.IdPrefix))
         {
             problems.Add($"anchors.idPrefix '{anchors.IdPrefix}' must be letters and digits, starting with a letter");
         }
@@ -321,7 +341,7 @@ public static partial class HarnessConfigValidator
                 problems.Add("anchors.historyForms names a form that is empty or whitespace; a form is a pattern with {commit} and {run} placeholders");
             }
 
-            foreach (var placeholder in Regex.Matches(form, @"\{([^}]*)\}", RegexOptions.CultureInvariant).Select(match => match.Groups[1].Value).Where(name => name != "commit" && name != "run"))
+            foreach (var placeholder in PlaceholderPattern.Matches(form).Select(match => match.Groups[1].Value).Where(name => name != "commit" && name != "run"))
             {
                 problems.Add($"anchors.historyForms names '{{{placeholder}}}', which is no placeholder: '{{commit}}' for a commit and '{{run}}' for a run id are the two a form takes");
             }
@@ -875,7 +895,7 @@ public static partial class HarnessConfigValidator
 
             foreach (var (language, id) in toolchain.CompilerId)
             {
-                if (!CMakeLanguagePattern().IsMatch(language))
+                if (!CMakeLanguagePattern.IsMatch(language))
                 {
                     problems.Add(
                         $"toolchain '{name}' compilerId names language '{language}', which is not a CMake "
@@ -1868,13 +1888,13 @@ public static partial class HarnessConfigValidator
         {
             problems.Add($"{owner} names the runner that carries it, so the check would confirm itself");
         }
-        else if (config.PredefinedRunners[target].ExpectedExceptions.Any(entry => entry.RunChecks.Count > 0))
+        else if (RunnerConfig.RunCheckRunners(config.PredefinedRunners, target).Any(reached => SameName(reached, runnerName)))
         {
-            // One level deep, so a check can never recurse and a confirmation can never be
-            // confirmed by the thing it confirms.
+            // A check of a check is a check like any other, to any depth; only a chain of them that leads back to the runner
+            // carrying this one is refused, for its runs would never end and the runner would confirm itself.
             problems.Add(
-                $"{owner} names predefined runner '{target}', which carries run checks of its own; "
-                + "a check is one level deep");
+                $"{owner} names predefined runner '{target}', whose run checks lead back to '{runnerName}', "
+                + "so the check would confirm itself");
         }
 
         if (check.MinStepsInFailureWindow < 0)
@@ -1922,7 +1942,7 @@ public static partial class HarnessConfigValidator
 
         foreach (var (name, variable) in commit.Variables)
         {
-            if (!Regex.IsMatch(name, @"^[A-Za-z][A-Za-z0-9_-]*\z", RegexOptions.CultureInvariant))
+            if (!VariableNamePattern.IsMatch(name))
             {
                 problems.Add(
                     $"commit.variables '{name}' must be letters, digits, hyphens and underscores, starting with a letter");
@@ -1992,23 +2012,24 @@ public static partial class HarnessConfigValidator
     }
 
     /// <summary>
-    /// Compiles <paramref name="pattern"/>, reporting the failure rather than throwing, so a caller
-    /// can go on to ask what the compiled pattern matches.
+    /// Compiles <paramref name="pattern"/> as every pattern is matched (<see cref="LinearRegex"/>), reporting the refusal
+    /// rather than throwing (<see cref="PatternProblem"/>), so a caller can go on to ask what the compiled pattern matches.
     /// </summary>
     private static bool TryCompile(string pattern, string setting, List<string> problems, out Regex regex)
     {
-        try
+        if (LinearRegex.TryCompile(pattern, RegexOptions.None, out var compiled, out var refusal))
         {
-            regex = new Regex(pattern, RegexOptions.None, TimeSpan.FromSeconds(1));
+            regex = compiled;
             return true;
         }
-        catch (ArgumentException ex)
-        {
-            problems.Add($"{setting} is not a valid regular expression: {ex.Message}");
-            regex = null!;
-            return false;
-        }
+
+        problems.Add(Refused(setting, refusal));
+        regex = null!;
+        return false;
     }
+
+    /// <summary>A pattern refused, said of <paramref name="setting"/> in the linear engine's words (<see cref="LinearRegex"/>).</summary>
+    private static string Refused(string setting, string refusal) => $"{setting} is not a valid regular expression: {refusal}";
 
     /// <summary>Checks the parts of a test section that can be wrong without being malformed.</summary>
     private static void ValidateTest(HarnessConfig config, TestConfig? test, string owner, List<string> problems)
@@ -2307,7 +2328,7 @@ public static partial class HarnessConfigValidator
     /// </summary>
     private static void CheckHostName(string name, string owner, List<string> problems)
     {
-        if (!Regex.IsMatch(name, @"^[A-Za-z0-9_][A-Za-z0-9._-]*\z", RegexOptions.CultureInvariant))
+        if (!HostNamePattern.IsMatch(name))
         {
             problems.Add(
                 $"{owner} is not a usable name: use letters, digits, dots, hyphens and underscores, "
@@ -2370,10 +2391,6 @@ public static partial class HarnessConfigValidator
         return normalized.StartsWith($"{{{LegPathNames.BuildDirectory}}}", StringComparison.Ordinal)
             && PathPatterns.Normalize(normalized[(LegPathNames.BuildDirectory.Length + 2) ..]) is "" or ".";
     }
-
-    /// <summary>A CMake language name, such as <c>C</c>, <c>CXX</c> or <c>Fortran</c>.</summary>
-    [GeneratedRegex(@"^[A-Za-z][A-Za-z0-9_]*\z", RegexOptions.CultureInvariant)]
-    private static partial Regex CMakeLanguagePattern();
 
     /// <summary>Refuses each name in one of a tool's scopes that names nothing declared.</summary>
     private static void RequireDeclared(
@@ -2442,18 +2459,9 @@ public static partial class HarnessConfigValidator
             return;
         }
 
-        try
+        if (TryCompile(pattern, setting, problems, out var regex) && !regex.GetGroupNames().Contains(group, StringComparer.Ordinal))
         {
-            var regex = new Regex(pattern, RegexOptions.None, TimeSpan.FromSeconds(1));
-
-            if (!regex.GetGroupNames().Contains(group, StringComparer.Ordinal))
-            {
-                problems.Add($"{setting} has no named group '{group}' {purpose}");
-            }
-        }
-        catch (ArgumentException ex)
-        {
-            problems.Add($"{setting} is not a valid regular expression: {ex.Message}");
+            problems.Add($"{setting} has no named group '{group}' {purpose}");
         }
     }
 
@@ -2551,7 +2559,9 @@ public static partial class HarnessConfigValidator
     /// <summary>
     /// Why <paramref name="pattern"/> is no regular expression this tool can run, said of <paramref name="setting"/>, or
     /// <see langword="null"/> where it compiles: the one check a pattern a file declares is held to, a pattern of
-    /// config.json and of an action file alike, so the two files are refused for one mistake in one way.
+    /// config.json and of an action file alike, so the two files are refused for one mistake in one way. Every pattern is
+    /// matched in time linear in its text, with no timeout (<see cref="LinearRegex"/>): one that holds what that matcher
+    /// lacks - a backreference, a lookaround - is refused here, naming it, never cut short where it is run.
     /// </summary>
     /// <param name="pattern">The pattern, as written.</param>
     /// <param name="setting">What the problem calls the setting that declares it.</param>
@@ -2559,14 +2569,6 @@ public static partial class HarnessConfigValidator
     {
         ArgumentNullException.ThrowIfNull(pattern);
 
-        try
-        {
-            _ = new Regex(pattern, RegexOptions.None, TimeSpan.FromSeconds(1));
-            return null;
-        }
-        catch (ArgumentException ex)
-        {
-            return $"{setting} is not a valid regular expression: {ex.Message}";
-        }
+        return LinearRegex.TryCompile(pattern, RegexOptions.None, out _, out var refusal) ? null : Refused(setting, refusal);
     }
 }

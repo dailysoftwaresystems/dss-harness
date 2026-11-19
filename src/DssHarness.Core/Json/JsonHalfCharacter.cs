@@ -17,13 +17,17 @@ public static class JsonHalfCharacter
     /// its parser then says as it says any text it cannot read.
     /// </summary>
     /// <param name="json">The JSON text.</param>
-    /// <param name="options">How it is read: comments and trailing commas where its reader allows them.</param>
+    /// <param name="options">
+    /// How it is read: comments and trailing commas where its reader allows them. It is read at any depth
+    /// (<see cref="JsonDepth"/>) whatever depth these say, as its parser reads it, so a key nested past a depth of the
+    /// reader's own is looked at too.
+    /// </param>
     public static (int Line, string Spelt)? Find(string json, JsonReaderOptions options = default)
     {
         ArgumentNullException.ThrowIfNull(json);
 
         var bytes = Encoding.UTF8.GetBytes(json);
-        var reader = new Utf8JsonReader(bytes, options);
+        var reader = new Utf8JsonReader(bytes, JsonDepth.Reader with { CommentHandling = options.CommentHandling, AllowTrailingCommas = options.AllowTrailingCommas });
 
         try
         {

@@ -242,9 +242,18 @@ public sealed record SyncPlan(
                 + "sync.maxDeleteFraction or run with --dry-run to see the list.",
         };
 
+        // Every deletion is named: the sync command's reader is given those that fit the line and sent to the dry run's
+        // list for the rest, and a sweep's reader, who has no dry run to run, is given every one here. The share the bound
+        // would have to allow is said as the setting is written, rounded up, so it is the value that lets this sync go on.
+        var deleted = Deletes.Order(StringComparer.Ordinal).ToList();
+        var named = reader == SyncBoundReader.Sweep
+            ? Names.Line(deleted, "this refusal", room: int.MaxValue)
+            : Names.Line(deleted, "the list --dry-run prints");
+        var needed = (Math.Ceiling(share * 100) / 100).ToString("0.##", CultureInfo.InvariantCulture);
+
         return $"This sync would delete {Deletes.Count} of the {ReportText.Counted(destination.Entries.Count, "file")} in "
-            + $"'{destination.Root}', which is {share:P0} of it and over the {maxDeleteFraction:P0} "
-            + $"sync.maxDeleteFraction allows. {check}";
+            + $"'{destination.Root}': {named}. That is {share:P0} of it, over the {maxDeleteFraction:P0} "
+            + $"sync.maxDeleteFraction allows, which would have to be {needed} or more for it to go on. {check}";
     }
 
     /// <summary>The lines <c>--dry-run</c> prints, and the same lines a real sync reports afterwards.</summary>

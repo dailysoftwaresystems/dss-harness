@@ -26,6 +26,10 @@ public static class JsonConfigOptions
     {
         var options = new JsonSerializerOptions
         {
+            // At any depth (JsonDepth): what the file holds as JSON of its own - a request's extra fields - nests as deep
+            // as it is written, and a key is refused only where its own shape cannot hold what it is given.
+            MaxDepth = Json.JsonDepth.Unbounded,
+
             PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
             PropertyNameCaseInsensitive = true,
             WriteIndented = true,
