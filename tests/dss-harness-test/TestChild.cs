@@ -75,6 +75,7 @@ internal static class TestChild
             "claude-code" => ClaudeCode(standardOutput, arguments),
             "flow-interrupted" => FlowServiceTests.InterruptedChild(standardOutput, arguments),
             StructuralScannerTests.AssertionsChild => StructuralScannerTests.AssertionsOnASmallStack(standardOutput, arguments),
+            ChildRun.Mode => ChildRun.Run(standardOutput, standardError, arguments),
             "exit" => int.Parse(arguments[0], CultureInfo.InvariantCulture),
             _ => 99,
         };
