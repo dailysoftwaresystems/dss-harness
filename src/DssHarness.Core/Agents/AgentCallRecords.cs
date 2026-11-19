@@ -422,6 +422,45 @@ public sealed class ResultLines : IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// A writer of the answer as text rather than as lines, however its writes part it: what a reader that writes text - a
+    /// page the web is read into - writes the answer through. Each line it is given, up to a line feed, a carriage return
+    /// before it dropped, is written as <see cref="LineAsync"/> writes one; what follows the last line feed, once the
+    /// writer is ended (<see cref="ResultLinesWriter.EndAsync"/>).
+    /// </summary>
+    /// <param name="cancellationToken">Stops a wait for the file's writer.</param>
+    public ResultLinesWriter Writer(CancellationToken cancellationToken) => new(this, cancellationToken);
+
+    /// <summary>
+    /// Writes the call's file again, once the answer has ended past a page, as <paramref name="write"/> makes it of what the
+    /// file holds: the answer's lines read a piece at a time, never held whole, and what is written about them the
+    /// caller's, masked by it. The file is put in place whole (<see cref="IFileSystem.WriteAtomic"/>), on a thread of its
+    /// own, as the answer's lines were.
+    /// </summary>
+    /// <param name="write">Writes the file anew, given what it held and where the new one is written.</param>
+    /// <exception cref="InvalidOperationException">The answer has not ended, or its lines fit a page and it has no file.</exception>
+    public Task RewriteAsync(Action<TextReader, TextWriter> write)
+    {
+        ArgumentNullException.ThrowIfNull(write);
+
+        if (!_ended || File is not { } file)
+        {
+            throw new InvalidOperationException("Only an answer that has ended past a page has a file to write again.");
+        }
+
+        return Task.Factory.StartNew(
+            () => _fileSystem.WriteAtomic(file, stream =>
+            {
+                using var reader = new StreamReader(_fileSystem.OpenRead(file), Utf8NoMark);
+                using var writer = new StreamWriter(stream, Utf8NoMark, leaveOpen: true);
+
+                write(reader, writer);
+            }),
+            CancellationToken.None,
+            TaskCreationOptions.LongRunning,
+            TaskScheduler.Default);
+    }
+
     /// <summary>Ends the answer: once it returns, every line is in the call's file, where the answer passed a page.</summary>
     public async Task EndAsync()
     {
@@ -482,5 +521,109 @@ public sealed class ResultLines : IAsyncDisposable
             _pieces.Writer.TryComplete(ex);
             throw;
         }
+    }
+}
+
+/// <summary>
+/// A call's answer written as text (<see cref="ResultLines.Writer"/>): each line it is given, up to a line feed, a carriage
+/// return before it dropped, written into the answer as it ends, and what follows the last line feed once the writer is
+/// ended - so a text of any length costs a line of memory, and the answer's lines join back into the text it was given.
+/// </summary>
+public sealed class ResultLinesWriter : TextWriter
+{
+    private static readonly UTF8Encoding Utf8NoMark = new(encoderShouldEmitUTF8Identifier: false);
+
+    private readonly ResultLines _lines;
+    private readonly CancellationToken _cancellationToken;
+    private readonly StringBuilder _line = new();
+    private bool _written;
+
+    /// <summary>A writer into <paramref name="lines"/>, whose waits for the file's writer <paramref name="cancellationToken"/> stops.</summary>
+    internal ResultLinesWriter(ResultLines lines, CancellationToken cancellationToken)
+    {
+        _lines = lines;
+        _cancellationToken = cancellationToken;
+    }
+
+    /// <inheritdoc/>
+    public override Encoding Encoding => Utf8NoMark;
+
+    /// <inheritdoc/>
+    public override void Write(char value) => Write([value]);
+
+    /// <inheritdoc/>
+    public override void Write(char[] buffer, int index, int count) => Write(buffer.AsSpan(index, count));
+
+    /// <inheritdoc/>
+    public override void Write(string? value) => Write(value.AsSpan());
+
+    /// <inheritdoc/>
+    public override void Write(ReadOnlySpan<char> buffer)
+    {
+        // A writer that writes as it goes - a page's text, made a line at a time - waits here while the file's writer is
+        // behind, as one that writes asynchronously waits with it.
+        foreach (var line in Taken(buffer))
+        {
+            _lines.LineAsync(line, _cancellationToken).AsTask().GetAwaiter().GetResult();
+        }
+    }
+
+    /// <inheritdoc/>
+    public override Task WriteAsync(char value) => WriteAsync(new[] { value }.AsMemory(), _cancellationToken);
+
+    /// <inheritdoc/>
+    public override Task WriteAsync(string? value) => WriteAsync((value ?? string.Empty).AsMemory(), _cancellationToken);
+
+    /// <inheritdoc/>
+    public override Task WriteAsync(char[] buffer, int index, int count) => WriteAsync(buffer.AsMemory(index, count), _cancellationToken);
+
+    /// <inheritdoc/>
+    public override async Task WriteAsync(ReadOnlyMemory<char> buffer, CancellationToken cancellationToken = default)
+    {
+        foreach (var line in Taken(buffer.Span))
+        {
+            await _lines.LineAsync(line, _cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>Writes what follows the last line feed as the answer's last line, where anything was written: the text ends.</summary>
+    public async Task EndAsync()
+    {
+        if (_written)
+        {
+            await _lines.LineAsync(_line.ToString(), _cancellationToken).ConfigureAwait(false);
+            _line.Clear();
+        }
+    }
+
+    /// <summary>The lines <paramref name="buffer"/> ends, the one held before it first, each with its carriage return dropped; the rest held.</summary>
+    private List<string> Taken(ReadOnlySpan<char> buffer)
+    {
+        var ended = new List<string>();
+
+        if (buffer.IsEmpty)
+        {
+            return ended;
+        }
+
+        _written = true;
+
+        while (buffer.IndexOf('\n') is var feed and >= 0)
+        {
+            _line.Append(buffer[..feed]);
+
+            if (_line.Length > 0 && _line[^1] == '\r')
+            {
+                _line.Length--;
+            }
+
+            ended.Add(_line.ToString());
+            _line.Clear();
+            buffer = buffer[(feed + 1)..];
+        }
+
+        _line.Append(buffer);
+
+        return ended;
     }
 }

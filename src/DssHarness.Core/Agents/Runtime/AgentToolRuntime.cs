@@ -15,6 +15,7 @@ using DssHarness.Core.Platform;
 using DssHarness.Core.Processes;
 using DssHarness.Core.Results;
 using DssHarness.Core.Schemas;
+using DssHarness.Core.Waiting;
 using DssHarness.Core.Web;
 
 namespace DssHarness.Core.Agents.Runtime;
@@ -247,6 +248,9 @@ public sealed partial class AgentToolRuntime : IDisposable
                 new SearchRecords(this))
             {
                 Stall = run.Limits.StallSeconds is { } stall and > 0 ? TimeSpan.FromSeconds(stall) : null,
+
+                // Told where the running operation says everything else, looked up as each wait tells.
+                Tell = static told => Waits.Told(told),
             }
             : null;
 
@@ -557,7 +561,7 @@ public sealed partial class AgentToolRuntime : IDisposable
             AgentTools.DeleteDirectory => await DeleteDirectory(input).ConfigureAwait(false),
             AgentTools.MovePath => await MovePath(input).ConfigureAwait(false),
             AgentTools.RunCommand => await RunCommandAsync(call.Id, input, cancellationToken).ConfigureAwait(false),
-            AgentTools.WebFetch => await FetchAsync(input, cancellationToken).ConfigureAwait(false),
+            AgentTools.WebFetch => await FetchAsync(call.Id, input, cancellationToken).ConfigureAwait(false),
             AgentTools.WebSearch => await WebSearchAsync(input, cancellationToken).ConfigureAwait(false),
             AgentGraphSupport.ToolName => await GraphAsync(input, cancellationToken).ConfigureAwait(false),
             AgentMeasureSupport.ToolName => await MeasureAsync(call.Id, input, cancellationToken).ConfigureAwait(false),

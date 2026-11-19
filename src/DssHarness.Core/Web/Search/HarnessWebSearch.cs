@@ -666,7 +666,9 @@ public sealed class HarnessWebSearch(WebSearchKinds kinds, HarnessFetch fetch, W
     private void Pause(WebSearchStep step, WebSearchSource source, WebLimit? limit, WebSearchAnswer? answer, string asker, TimeSpan unsaid)
         => Pause(step, source, limit?.Until, answer, asker, limit is { Said: false } ? unsaid : null);
 
-    private static string Spent(WebSearchStep step)
+    /// <summary>What a request the step's search may no longer make is refused with: the step's requests are spent.</summary>
+    /// <param name="step">The step's search.</param>
+    internal static string Spent(WebSearchStep step)
         => $"this step's {step.MaxPerStep.ToString("N0", CultureInfo.InvariantCulture)} requests of the web search's sources are spent (agentWebSearch.maxPerStep)";
 }
 
@@ -813,8 +815,17 @@ public sealed class WebSearchStep
 /// <param name="KeyMissing">Why it was asked without its key, where it names one and the step had none.</param>
 public sealed record WebSearchPart(string Source, string Kind, int Version, string Query, WebSearchAnswer Answer, int Withheld, bool Cached, string? KeyMissing)
 {
+    /// <summary>The name, and the kind, of the part the provider's own search answers beside the configured sources'.</summary>
+    public const string Native = "native";
+
     /// <summary>The page of the source's results it answers, from 1.</summary>
     public int Page { get; init; } = 1;
+
+    /// <summary>The provider's own search's part of <paramref name="query"/>, refused unasked, for <paramref name="why"/>.</summary>
+    /// <param name="query">The query, as the agent wrote it.</param>
+    /// <param name="why">Why it was not asked.</param>
+    internal static WebSearchPart NativeRefused(string query, string why)
+        => new(Native, Native, Version: 1, query, WebSearchAnswer.Refused(why), Withheld: 0, Cached: false, KeyMissing: null);
 }
 
 /// <summary>What a search came to: each source's part, in the step's order, or why it asked none.</summary>

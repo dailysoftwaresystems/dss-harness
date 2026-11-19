@@ -26,13 +26,40 @@ public static class WebBlocks
         ArgumentNullException.ThrowIfNull(address);
         ArgumentNullException.ThrowIfNull(text);
 
-        return $"<web-page url=\"{Attribute(address)}\" status=\"{status?.ToString(System.Globalization.CultureInfo.InvariantCulture)}\">\n{PageLead}\n{Inside(text)}\n</web-page>";
+        return $"{PageHead(address, status)}{Inside(text)}{PageEnd}";
     }
 
     /// <summary>
-    /// Writes a page into <paramref name="into"/> as <see cref="Page"/> gives it - its block's head, its text, its block's
-    /// end - the text written by <paramref name="text"/> through a writer that writes every tag a block is made of as text
-    /// as it passes, however the writes part it: a page kept as it is read, never held as one text.
+    /// Writes a page into <paramref name="into"/> as <see cref="Page(string, int?, string)"/> gives it - its block's head,
+    /// its text, its block's end - the text written by <paramref name="text"/> through a writer that writes every tag a
+    /// block is made of as text as it passes, however the writes part it: a page that lies in a file, put inside its block
+    /// a piece at a time.
+    /// </summary>
+    /// <param name="into">Where the block is written.</param>
+    /// <param name="address">The address it was read from, its redirects followed.</param>
+    /// <param name="status">The status it answered; none where none was read.</param>
+    /// <param name="text">Writes its text into the writer it is given.</param>
+    public static void Page(TextWriter into, string address, int? status, Action<TextWriter> text)
+    {
+        ArgumentNullException.ThrowIfNull(into);
+        ArgumentNullException.ThrowIfNull(address);
+        ArgumentNullException.ThrowIfNull(text);
+
+        into.Write(PageHead(address, status));
+
+        using (var inside = new InsideWriter(into))
+        {
+            text(inside);
+            inside.End();
+        }
+
+        into.Write(PageEnd);
+    }
+
+    /// <summary>
+    /// Writes a page into <paramref name="into"/> as <see cref="Page(string, int?, string)"/> gives it - its block's head,
+    /// its text, its block's end - the text written by <paramref name="text"/> through a writer that writes every tag a
+    /// block is made of as text as it passes, however the writes part it: a page kept as it is read, never held as one text.
     /// </summary>
     /// <param name="into">Where the block is written.</param>
     /// <param name="address">The address it was read from, its redirects followed.</param>
@@ -44,7 +71,7 @@ public static class WebBlocks
         ArgumentNullException.ThrowIfNull(address);
         ArgumentNullException.ThrowIfNull(text);
 
-        await into.WriteAsync($"<web-page url=\"{Attribute(address)}\" status=\"{status?.ToString(System.Globalization.CultureInfo.InvariantCulture)}\">\n{PageLead}\n").ConfigureAwait(false);
+        await into.WriteAsync(PageHead(address, status)).ConfigureAwait(false);
 
         using (var inside = new InsideWriter(into))
         {
@@ -52,8 +79,15 @@ public static class WebBlocks
             inside.End();
         }
 
-        await into.WriteAsync("\n</web-page>").ConfigureAwait(false);
+        await into.WriteAsync(PageEnd).ConfigureAwait(false);
     }
+
+    /// <summary>What a page's block ends with, after its text.</summary>
+    private const string PageEnd = "\n</web-page>";
+
+    /// <summary>A page's block's head, up to its text: the tag, with its address and its status, and the lead.</summary>
+    private static string PageHead(string address, int? status)
+        => $"<web-page url=\"{Attribute(address)}\" status=\"{status?.ToString(System.Globalization.CultureInfo.InvariantCulture)}\">\n{PageLead}\n";
 
     /// <summary>What <paramref name="source"/> answered <paramref name="query"/>: <paramref name="text"/>, its results or what it came to.</summary>
     /// <param name="query">The query, as the agent wrote it.</param>

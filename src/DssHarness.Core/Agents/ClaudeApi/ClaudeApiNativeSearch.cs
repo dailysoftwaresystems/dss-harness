@@ -39,7 +39,7 @@ public sealed class ClaudeApiNativeSearch(ApiConnection connection, string api, 
     public const string ToolType = "web_search_20250305";
 
     /// <summary>How the part names its source, beside the configured sources' own names.</summary>
-    public const string SourceName = "native";
+    public const string SourceName = Web.Search.WebSearchPart.Native;
 
     /// <summary>What the request asks of the model: the search alone, for its answer's text is never read.</summary>
     public const string Asked = "Search the web for this. Only the search's own results are read, never your answer, so write nothing after searching:";

@@ -4,6 +4,7 @@ using System.Text.Json.Nodes;
 using DssHarness.Core.Agents.Policy;
 using DssHarness.Core.Execution;
 using DssHarness.Core.Processes;
+using DssHarness.Core.Waiting;
 using DssHarness.Core.Web;
 
 namespace DssHarness.Core.Agents.Runtime;
@@ -193,9 +194,15 @@ public sealed partial class AgentToolRuntime
     /// <summary>
     /// <c>web_fetch</c>: a page fetched by the harness's own fetch, each address - the first and each redirect - refused
     /// where it holds a secret, asked of the policy and recorded before it is asked, and what each was answered recorded;
-    /// the text given inside a block that says where it is from and what it is.
+    /// the text given inside a block that says where it is from and what it is. The text is written into the call's answer
+    /// as it is read, a line at a time and each line masked (<see cref="ResultLines"/>), so the text of a page of any size is
+    /// never held whole: one that passes a page is kept whole in the call's file, put inside its block where it lies, and
+    /// given a page at a time.
     /// </summary>
-    private async Task<Answer> FetchAsync(JsonObject input, CancellationToken cancellationToken)
+    /// <param name="callId">The call's id, which names its answer's file.</param>
+    /// <param name="input">The call's input.</param>
+    /// <param name="cancellationToken">The hard stop.</param>
+    private async Task<Answer> FetchAsync(string callId, JsonObject input, CancellationToken cancellationToken)
     {
         var url = Text(input, "url")!;
         var secret = SecretAddress;
@@ -223,11 +230,17 @@ public sealed partial class AgentToolRuntime
             },
             hop => _records.WebAnsweredAsync(AgentTools.WebFetch, "fetch", hop.Address, hop.Status, hop.Type, hop.Bytes, hop.Failure))
         {
-            // An answer's silence ends at the step's stall bound, as a command's does; one that goes on coming is read whole.
+            // An answer's silence ends at the step's stall bound, as a command's does; one that goes on coming is read whole,
+            // its wait told where the running operation says everything else.
             Stall = _run.Limits.StallSeconds is { } stall and > 0 ? TimeSpan.FromSeconds(stall) : null,
+            Tell = Waits.Told,
         };
 
-        var fetched = await _host.Fetch.FetchAsync(url, gate, cancellationToken).ConfigureAwait(false);
+        // The block's head names the address the redirects ended at and the status it answered, known once the text is
+        // read: so the text is written first, and its block about it once the fetch has ended.
+        await using var lines = _records.Lines(callId);
+        using var text = lines.Writer(cancellationToken);
+        var fetched = await _host.Fetch.FetchAsync(url, WebFetchAsk.Page with { Into = text }, gate, cancellationToken).ConfigureAwait(false);
 
         if (fetched.Denial is { } denied)
         {
@@ -241,9 +254,34 @@ public sealed partial class AgentToolRuntime
             return Answer.Failed(_run.Mask.RedactUnescaped($"'{fetched.Address}' was not read: {failure}"));
         }
 
-        // A page cannot end its own block, or open one that seems another's: its own tags are written as text.
-        return Answer.Done(WebBlocks.Page(fetched.Address, fetched.Status, fetched.Text!));
+        await text.EndAsync().ConfigureAwait(false);
+        await lines.EndAsync().ConfigureAwait(false);
+
+        // A page cannot end its own block, or open one that seems another's: its own tags are written as text. The address
+        // is masked behind its escapes before the block writes it as an attribute, past which a secret no longer reads as
+        // itself.
+        var address = _run.Mask.RedactUnescaped(fetched.Address);
+
+        if (lines.Text is { } whole)
+        {
+            return Answer.Done(WebBlocks.Page(address, fetched.Status, whole));
+        }
+
+        await lines.RewriteAsync((page, into) => WebBlocks.Page(into, address, fetched.Status, inside =>
+        {
+            var chunk = new char[PieceOfAPage];
+
+            while (page.Read(chunk, 0, chunk.Length) is var read and > 0)
+            {
+                inside.Write(chunk, 0, read);
+            }
+        })).ConfigureAwait(false);
+
+        return Answer.Kept(ok: true, await _results.FirstPageAsync(callId, cancellationToken).ConfigureAwait(false), lines.File!);
     }
+
+    /// <summary>How many characters of a page kept in its call's file are put inside its block at a time.</summary>
+    private const int PieceOfAPage = 81920;
 
     /// <summary>
     /// <c>web_search</c>: the query asked of the step's sources - those it names, else every one - by the harness's own
@@ -276,7 +314,7 @@ public sealed partial class AgentToolRuntime
 
         if (_native is { } native)
         {
-            searched = searched with { Parts = [.. searched.Parts, await NativeAsync(native, query, cancellationToken).ConfigureAwait(false)] };
+            searched = searched with { Parts = [.. searched.Parts, await NativeAsync(native, step, query, cancellationToken).ConfigureAwait(false)] };
         }
 
         return searched.Answered ? Answer.Done(searched.Text) : Answer.Failed($"no source answered the search:\n\n{searched.Text}");
@@ -286,16 +324,20 @@ public sealed partial class AgentToolRuntime
     /// The provider's own search, asked as one more source of the same search through the client's loop - which asks it
     /// with the entry serving the run, through the gate, and counts what it used - its part recorded as every source's
     /// is; a part that failed never hides the configured sources' answers. The run stopped is no failed part: the stop
-    /// goes on as every stop of the run does.
+    /// goes on as every stop of the run does. It is one more request of the step's search, counted against
+    /// <c>agentWebSearch.maxPerStep</c> as each source's request is, and refused unasked where the step's are spent.
     /// </summary>
     /// <param name="native">What asks the provider's own search, as the run stands.</param>
+    /// <param name="step">The step's search, whose requests it counts among.</param>
     /// <param name="query">The query, as the agent wrote it.</param>
     /// <param name="cancellationToken">Stops the search.</param>
-    private async Task<Web.Search.WebSearchPart> NativeAsync(AgentNativeAsk native, string query, CancellationToken cancellationToken)
+    private async Task<Web.Search.WebSearchPart> NativeAsync(AgentNativeAsk native, Web.Search.WebSearchStep step, string query, CancellationToken cancellationToken)
     {
         Tally.Asked();
 
-        var part = await native(query, cancellationToken).ConfigureAwait(false);
+        var part = step.Take()
+            ? await native(query, cancellationToken).ConfigureAwait(false)
+            : Web.Search.WebSearchPart.NativeRefused(query, Web.Search.HarnessWebSearch.Spent(step));
 
         await _records.WebSearchedAsync(part).ConfigureAwait(false);
 
