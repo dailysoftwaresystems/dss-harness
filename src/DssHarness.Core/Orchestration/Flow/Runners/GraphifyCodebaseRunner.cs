@@ -82,7 +82,7 @@ public sealed class GraphifyCodebaseRunner(
             return FlowStepResult.Ended(
                 passed: false,
                 HarnessExit.CommandFailed,
-                $"the graph has {ReportText.Counted(unreadable.Count, "file")} it could not read, and the step says failOn: incomplete: {ReportText.Listed([.. unreadable.Select(file => $"{file.Path} ({file.Why})")])}",
+                $"the graph has {ReportText.Counted(unreadable.Count, "file")} it could not read, and the step says failOn: incomplete: {Names.Line([.. unreadable.Select(file => $"{file.Path} ({file.Why})")], $"the view '{synced.View}', its files of state {CodeFileStates.Unreadable}")}",
                 output);
         }
 

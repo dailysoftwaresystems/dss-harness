@@ -497,7 +497,7 @@ public static class WorkflowTemplates
         var before = created.Count == 0
             ? $"None of the implementation workflow's {ReportText.Counted(missing, "missing file")} was written"
             : $"{created.Count} of the implementation workflow's {ReportText.Counted(missing, "missing file")} were written "
-                + $"before it, and stay: {ReportText.Listed(created)}";
+                + $"before it, and stay: {Names.Line(created, $"'{HarnessLayout.WorkflowsDirectoryRelative}/{ShippedWorkflowName}'")}";
 
         return $"'{file}' could not be written: {why.TrimEnd('.')}. {before}; run '{ToolPackage.Command} init' again "
             + "once it can be, which writes what is still missing and keeps every file there.";

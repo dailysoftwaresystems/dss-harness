@@ -85,12 +85,14 @@ public sealed class EndedChildSessions : IDocumentFacts
     {
         ArgumentNullException.ThrowIfNull(ended);
 
-        return ReportText.Listed([
+        return Names.Line(
+            [
             .. new[] { false, true }
                 .Select(group => (Group: group, Count: ended.Count(session => session.Group == group)))
                 .Where(kind => kind.Count > 0)
                 .Select(kind => ReportText.Counted(kind.Count, LeftSessions.Noun(kind.Group))),
-        ]);
+            ],
+            $"--json {Member}");
     }
 
     /// <summary>Keeps a session or a group a sweep of this operation ended.</summary>

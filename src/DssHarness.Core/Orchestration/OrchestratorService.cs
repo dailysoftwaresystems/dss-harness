@@ -313,7 +313,7 @@ public sealed class OrchestratorService(
             if (below.Worktrees.Count > 0)
             {
                 return CommandOutcome.Refused(
-                    $"Orchestrator '{name}' was not deleted: worktrees are left below '{group}' - {ReportText.Listed(below.Worktrees)}. Delete each with "
+                    $"Orchestrator '{name}' was not deleted: worktrees are left below '{group}' - {Names.Line(below.Worktrees, "git worktree list")}. Delete each with "
                     + $"{OrchestrationReports.Line(WorktreeService.DeleteCommand, "<address>")} first. Nothing was changed.");
             }
 

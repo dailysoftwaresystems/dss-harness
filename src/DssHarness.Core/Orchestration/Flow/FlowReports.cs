@@ -317,7 +317,7 @@ public static class FlowReports
         if (ignored.Count > 0)
         {
             left.Add(
-                $"{ReportText.Counted(ignored.Count, "path")} folded, ignored by git, never committed: {ReportText.Listed([.. ignored.Select(path => $"'{path}'")])} - "
+                $"{ReportText.Counted(ignored.Count, "path")} folded, ignored by git, never committed: {Names.Line([.. ignored.Select(path => $"'{path}'")], "the ignored of each commit step's record")} - "
                 + "the run commits no path git ignores, and committing one, or leaving it out, is a person's");
         }
 

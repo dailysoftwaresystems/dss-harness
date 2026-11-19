@@ -1867,10 +1867,12 @@ public sealed class FlowService(
         {
             var amendments = ids.Count(Amendments.Contains);
 
-            return ReportText.Listed([
-                .. ids.Count - amendments > 0 ? [ReportText.Counted(ids.Count - amendments, "answer")] : Array.Empty<string>(),
-                .. amendments > 0 ? [ReportText.Counted(amendments, "amendment")] : Array.Empty<string>(),
-            ]);
+            return Names.Line(
+                [
+                    .. ids.Count - amendments > 0 ? [ReportText.Counted(ids.Count - amendments, "answer")] : Array.Empty<string>(),
+                    .. amendments > 0 ? [ReportText.Counted(amendments, "amendment")] : Array.Empty<string>(),
+                ],
+                $"the run's {OrchestratorLayout.InboxFileName}");
         }
     }
 

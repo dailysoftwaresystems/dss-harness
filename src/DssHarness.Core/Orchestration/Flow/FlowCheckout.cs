@@ -51,7 +51,7 @@ public sealed record FlowCheckout(
     public string? NotARemote(string remote)
         => Remotes.Contains(remote, StringComparer.Ordinal)
             ? null
-            : $"'{remote}', which is not a remote of this repository ({(HasRemote ? ReportText.Listed(Remotes) : "it has none")})";
+            : $"'{remote}', which is not a remote of this repository ({(HasRemote ? Names.Line(Remotes, "git remote") : "it has none")})";
 
     /// <summary>
     /// The branch the run's pull request is opened against (<c>orient.baseBranch</c>): the flow's <c>pull-request</c>
