@@ -1,3 +1,4 @@
+using System.Globalization;
 using DssHarness.Core.Codebase;
 using DssHarness.Core.Codebase.Languages;
 
@@ -445,7 +446,7 @@ public sealed class DartExtractorTests : CodeGraphExtractorContractTests<DartExt
                 ("five", "type", "Shape"), ("filled", "named", "List"), ("Shape", null, null), ("six", "type", "Shape"), ("seven", "value", "widget.controller"),
                 ("Paint", null, null), ("eight", "type", "Paint"), ("nine", "type", "Paint"), ("ten", "type", "Shape"), ("eleven", "type", "Shape"),
             ],
-            extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Calls).Select(reference => (reference.Name, reference.Qualifier?.Kind, reference.Qualifier?.Name)));
+            extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Calls).Select(reference => (reference.Name, reference.Qualifier?.Kind, extract.Written(reference.Qualifier))));
     }
 
     /// <summary>A constructor named after a type's arguments makes that type: a local given what it makes, and a call on its result, are of it.</summary>
@@ -462,7 +463,7 @@ public sealed class DartExtractorTests : CodeGraphExtractorContractTests<DartExt
 
         Assert.Equal(
             [("create", "named", "Cache"), ("get", "type", "Cache"), ("create", "named", "Cache"), ("put", "type", "Cache")],
-            extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Calls).Select(reference => (reference.Name, reference.Qualifier?.Kind, reference.Qualifier?.Name)));
+            extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Calls).Select(reference => (reference.Name, reference.Qualifier?.Kind, extract.Written(reference.Qualifier))));
     }
 
     /// <summary>
@@ -492,7 +493,7 @@ public sealed class DartExtractorTests : CodeGraphExtractorContractTests<DartExt
                 (CodeEdgeKinds.Instantiates, "Square", null, null), (CodeEdgeKinds.Instantiates, "Square", null, null), (CodeEdgeKinds.Calls, "unit", "named", "Square"),
                 (CodeEdgeKinds.Instantiates, "Square", "prefix", "p"), (CodeEdgeKinds.Calls, "unit", "named", "p.Square"), (CodeEdgeKinds.Calls, "unit", "named", "Square"),
             ],
-            extract.References.Select(reference => (reference.Kind, reference.Name, reference.Qualifier?.Kind, reference.Qualifier?.Name)));
+            extract.References.Select(reference => (reference.Kind, reference.Name, reference.Qualifier?.Kind, extract.Written(reference.Qualifier))));
     }
 
     /// <summary>
@@ -693,7 +694,7 @@ public sealed class DartExtractorTests : CodeGraphExtractorContractTests<DartExt
                 (CodeEdgeKinds.References, "Line", ""), (CodeEdgeKinds.Uses, "start", "type Line"), (CodeEdgeKinds.References, "Point", ""), (CodeEdgeKinds.Calls, "move", "type Point"),
                 (CodeEdgeKinds.References, "Circle", ""), (CodeEdgeKinds.Uses, "radius", "type Circle"), (CodeEdgeKinds.Calls, "round", ""), (CodeEdgeKinds.References, "Triangle", ""),
             ],
-            extract.References.Select(reference => (reference.Kind, reference.Name, $"{reference.Qualifier?.Kind} {reference.Qualifier?.Name}".Trim())));
+            extract.References.Select(reference => (reference.Kind, reference.Name, $"{reference.Qualifier?.Kind} {extract.Written(reference.Qualifier)}".Trim())));
     }
 
     /// <summary>A local function is no node and no call of another's name: what it calls is its holder's, and a call of it is none.</summary>
@@ -773,25 +774,69 @@ public sealed class DartExtractorTests : CodeGraphExtractorContractTests<DartExt
     }
 
     /// <summary>
-    /// Declarations, interpolations and test groups nested past the reader's stack are read no deeper, never overflow it,
-    /// and are marked dynamic where they stop being read.
+    /// Types nested five thousand deep are read whole - each a node, the innermost's method's body read, the function after
+    /// them read, nothing marked - in a child given a small stack: a reading of a type's members that recursed a frame a type
+    /// would overflow it, and end the child.
     /// </summary>
     [Fact]
-    public void NestingPastTheReadersStack_IsReadNoDeeper_AndMarked()
-    {
-        var depth = 400;
-        var interpolated = Read("lib/a.dart", "void go() { print(" + string.Concat(Enumerable.Repeat("'${f(", depth)) + string.Concat(Enumerable.Repeat(")}'", depth)) + "); }");
-        var grouped = Read("test/a_test.dart", "void main() { " + string.Concat(Enumerable.Repeat("group('g', () { ", depth)) + "test('t', () {});" + string.Concat(Enumerable.Repeat("}); ", depth)) + "}");
-        var declared = Read("lib/b.dart", string.Concat(Enumerable.Repeat("class A { ", depth)) + new string('}', depth) + "\nvoid after() {}\n");
+    public async Task ABlockFiveThousandDeep_IsReadWhole()
+        => Assert.Equal(new ChildRunAnswer(0, "5000 work 0 True", ""), await ChildRun.MethodAsync(typeof(DartExtractorTests), nameof(TypesFiveThousandDeep), TestContext.Current.CancellationToken));
 
-        Assert.InRange(interpolated.References.Count, 2, ScanDepth + 2);
-        Assert.Equal("code nested more than 64 interpolations and test groups deep, which is not read", Assert.Single(interpolated.Dynamic).Why);
-        Assert.InRange(grouped.Nodes.Count(node => node.Test), 1, ScanDepth + 1);
-        Assert.Equal("code nested more than 64 interpolations and test groups deep, which is not read", Assert.Single(grouped.Dynamic).Why);
-        Assert.InRange(declared.Nodes.Count(node => node.Name == "A"), 1, ScanDepth + 1);
-        Assert.Equal("declarations nested more than 64 blocks deep, which are not read", Assert.Single(declared.Dynamic).Why);
-        Assert.Single(declared.Nodes, node => node.Id == "dart:lib/b.dart.after");
-    }
+    /// <summary>
+    /// The child of <see cref="ABlockFiveThousandDeep_IsReadWhole"/>: how many types it reads, what the innermost's method
+    /// calls, how many places it marks dynamic, and whether it reads the function after them.
+    /// </summary>
+    internal static string TypesFiveThousandDeep() => SmallStack.Run(() =>
+    {
+        var extract = Read("lib/b.dart", string.Concat(Enumerable.Repeat("class A { ", Deep)) + "void go() { work(); } " + new string('}', Deep) + "\nvoid after() {}\n");
+        var go = Assert.Single(extract.Nodes, node => node.Name == "go").Id;
+
+        return string.Create(CultureInfo.InvariantCulture, $"{extract.Nodes.Count(node => node.Name == "A")} {string.Join(',', Calls(extract, go))} {extract.Dynamic.Count} {extract.Nodes.Any(node => node.Id == "dart:lib/b.dart.after")}");
+    });
+
+    /// <summary>
+    /// Interpolations nested five thousand deep - each a call whose argument is a string of the next - are read whole, each
+    /// a run of code read in its turn, nothing marked, in a child given a small stack: a reading that recursed a frame an
+    /// interpolation would overflow it.
+    /// </summary>
+    [Fact]
+    public async Task AnInterpolationFiveThousandDeep_IsReadWhole()
+        => Assert.Equal(new ChildRunAnswer(0, "5001 print 5000 0", ""), await ChildRun.MethodAsync(typeof(DartExtractorTests), nameof(InterpolationsFiveThousandDeep), TestContext.Current.CancellationToken));
+
+    /// <summary>
+    /// The child of <see cref="AnInterpolationFiveThousandDeep_IsReadWhole"/>: how many calls the function makes, its first,
+    /// how many of them are of f, and how many places it marks dynamic.
+    /// </summary>
+    internal static string InterpolationsFiveThousandDeep() => SmallStack.Run(() =>
+    {
+        var extract = Read("lib/a.dart", "void go() { print(" + string.Concat(Enumerable.Repeat("'${f(", Deep)) + string.Concat(Enumerable.Repeat(")}'", Deep)) + "); }");
+        var calls = Calls(extract, "dart:lib/a.dart.go").ToList();
+
+        return string.Create(CultureInfo.InvariantCulture, $"{calls.Count} {calls[0]} {calls.Count(call => call == "f")} {extract.Dynamic.Count}");
+    });
+
+    /// <summary>
+    /// Test groups nested five thousand deep are read whole - each a node held by the one it is in, the innermost test's
+    /// calls its own, nothing marked - in a child given a small stack: a reading that recursed a frame a group would
+    /// overflow it.
+    /// </summary>
+    [Fact]
+    public async Task ATestGroupFiveThousandDeep_IsReadWhole()
+        => Assert.Equal(new ChildRunAnswer(0, "5000 True work 0", ""), await ChildRun.MethodAsync(typeof(DartExtractorTests), nameof(TestGroupsFiveThousandDeep), TestContext.Current.CancellationToken));
+
+    /// <summary>
+    /// The child of <see cref="ATestGroupFiveThousandDeep_IsReadWhole"/>: how many groups it reads, whether each but the
+    /// first is held by the group before it, what the innermost test calls, and how many places it marks dynamic.
+    /// </summary>
+    internal static string TestGroupsFiveThousandDeep() => SmallStack.Run(() =>
+    {
+        var extract = Read("test/a_test.dart", "void main() { " + string.Concat(Enumerable.Repeat("group('g', () { ", Deep)) + "test('t', () { work(); });" + string.Concat(Enumerable.Repeat("}); ", Deep)) + "}");
+        var groups = extract.Nodes.Where(node => node.SubKind == "testGroup").ToList();
+        var test = Assert.Single(extract.Nodes, node => node.SubKind == "test");
+        var held = groups.Skip(1).Select((group, at) => group.Parent == groups[at].Id).All(holds => holds) && test.Parent == groups[^1].Id;
+
+        return string.Create(CultureInfo.InvariantCulture, $"{groups.Count} {held} {string.Join(',', Calls(extract, test.Id))} {extract.Dynamic.Count}");
+    });
 
     /// <summary>
     /// Any name but a reserved word's names a function, a method or a local - of, show, get, on among them - and a
@@ -828,7 +873,7 @@ public sealed class DartExtractorTests : CodeGraphExtractorContractTests<DartExt
         Assert.Equal(["render"], Calls(extract, "dart:lib/t.dart.Theme2.show"));
         Assert.Equal(
             [("Theme2", null, null), ("on", "type", "Theme2"), ("when", "type", "AsyncValue"), ("new", "named", "Theme2")],
-            extract.References.Where(reference => reference is { From: "dart:lib/t.dart.Theme2.go", Kind: CodeEdgeKinds.Calls }).Select(reference => (reference.Name, reference.Qualifier?.Kind, reference.Qualifier?.Name)));
+            extract.References.Where(reference => reference is { From: "dart:lib/t.dart.Theme2.go", Kind: CodeEdgeKinds.Calls }).Select(reference => (reference.Name, reference.Qualifier?.Kind, extract.Written(reference.Qualifier))));
         Assert.DoesNotContain(extract.References, reference => reference.Name == "hidden");
     }
 
@@ -911,7 +956,8 @@ public sealed class DartExtractorTests : CodeGraphExtractorContractTests<DartExt
         Assert.DoesNotContain(noStub.Edges, edge => edge is { From: "dart:lib/main.dart.main", To: "dart:lib/src/types.dart.Hidden" });
     }
 
-    private const int ScanDepth = 64;
+    /// <summary>How deep the depth tests nest what they read.</summary>
+    private const int Deep = 5_000;
 
     /// <summary>A script tag on the first line is kept apart, so the declaration below it is read, and is no summary of it.</summary>
     [Fact]
@@ -1007,30 +1053,55 @@ public sealed class DartExtractorTests : CodeGraphExtractorContractTests<DartExt
                 (Show, "prefix", 13, ""), (Show, "id", 13, ""), (Show, "kRed", 14, ""), (Show, "kBlue", 15, ""), (Show, "width", 16, ""), (Show, "darkColor", 16, ""), (Show, "config", 17, ""),
                 (Show, "verbose", 17, "value config"), (Show, "darkColor", 20, ""), (Show, "lightColor", 20, ""),
             ],
-            extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Uses).Select(reference => (reference.From, reference.Name, reference.Line, $"{reference.Qualifier?.Kind} {reference.Qualifier?.Name}".Trim())));
+            extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Uses).Select(reference => (reference.From, reference.Name, reference.Line, $"{reference.Qualifier?.Kind} {extract.Written(reference.Qualifier)}".Trim())));
     }
 
     /// <summary>
-    /// A call's receiver of <see cref="FileExtract.MostReceiverNames"/> names is read by them all, and one of more is a
-    /// value of no name the code types; and an import whose string its line leaves open names nothing.
+    /// A call's receiver of any number of names is read by them all, and one that begins at a local declared
+    /// <c>dynamic</c> is a value of no name, its call marked dynamic, however many names follow it; and an import whose
+    /// string its line leaves open names nothing.
     /// </summary>
     [Fact]
-    public void AReceiverOfMoreNamesThanTheMost_IsAValueOfNoName_AndAnImportLeftOpenNamesNothing()
+    public void AReceiverOfAnyNames_IsReadByThemAll_AndAnImportLeftOpenNamesNothing()
     {
         var extract = Read("lib/run.dart", """
             import 'open.dart
             import 'closed.dart';
 
-            void run() {
+            void run(dynamic d) {
               a.b.c.d.e.f.g.h.go();
               a.b.c.d.e.f.g.h.i.go();
+              d.x.y.go();
             }
             """);
 
         Assert.Equal(
-            [(5, "value a.b.c.d.e.f.g.h"), (6, "value")],
-            extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Calls).Select(reference => (reference.Line, $"{reference.Qualifier?.Kind} {reference.Qualifier?.Name}".Trim())));
+            [(5, "value a.b.c.d.e.f.g.h"), (6, "value a.b.c.d.e.f.g.h.i"), (7, "value")],
+            extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Calls).Select(reference => (reference.Line, $"{reference.Qualifier?.Kind} {extract.Written(reference.Qualifier)}".Trim())));
+        Assert.Equal([(7, "a call on the dynamic value d")], extract.Dynamic.Select(dynamic => (dynamic.Line, dynamic.Why)));
         Assert.Equal([("closed.dart", 2)], extract.Imports.Select(import => (import.Target, import.Line)));
+    }
+
+    /// <summary>
+    /// A receiver of sixty names is written as links: the use of its second name names its first, and the use of each name
+    /// from the third on and the call each link to the use of the name before - each read once, from the use before it -
+    /// and its sixty names are read back whole.
+    /// </summary>
+    [Fact]
+    public void ASixtyNameChain_IsWrittenAsLinks()
+    {
+        var names = Enumerable.Range(1, 60).Select(at => string.Create(CultureInfo.InvariantCulture, $"n{at}")).ToList();
+        var text = $"void run() {{ {string.Join('.', names)}.go(); }}\n";
+        var extract = Read("lib/chain.dart", text);
+
+        Assert.Equal([.. names, "go"], extract.References.Select(reference => reference.Name));
+        Assert.Null(extract.References[0].Qualifier);
+        Assert.Equal(new ExtractQualifier(CodeQualifierKinds.Value, "n1"), extract.References[1].Qualifier);
+        Assert.Equal(
+            Enumerable.Range(1, 59).Select(link => new ExtractQualifier(CodeQualifierKinds.Value) { Link = link }),
+            extract.References.Skip(2).Select(reference => reference.Qualifier));
+        Assert.Equal(string.Join('.', names), extract.Written(extract.References[^1].Qualifier));
+        Assert.Null(extract.Problem("dart", CodeFileText.Lines(text).Count));
     }
 
     /// <summary>
@@ -1118,7 +1189,7 @@ public sealed class DartExtractorTests : CodeGraphExtractorContractTests<DartExt
             [
                 ("red", "named Color", 3), ("kOne", "", 6), ("kTwo", "", 7), ("green", "named Color", 8), ("pairs", "", 11),
             ],
-            extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Uses).Select(reference => (reference.Name, $"{reference.Qualifier?.Kind} {reference.Qualifier?.Name}".Trim(), reference.Line)));
+            extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Uses).Select(reference => (reference.Name, $"{reference.Qualifier?.Kind} {extract.Written(reference.Qualifier)}".Trim(), reference.Line)));
         Assert.Equal(["red", "one", "admin role", "admin", "two"], LiteralRow.Of(extract).Select(literal => literal.Value));
     }
 
