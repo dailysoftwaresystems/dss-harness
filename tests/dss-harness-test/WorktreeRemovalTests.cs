@@ -1400,6 +1400,7 @@ internal sealed class UndeletableFileSystem(IFileSystem inner) : PassThroughFile
 internal sealed class InterceptingGitClient(IGitClient inner) : IGitClient
 {
     private readonly List<(string[] Arguments, bool Cancellable)> _runs = [];
+    private readonly List<(string[] Arguments, IReadOnlyDictionary<string, string>? Values)> _remoteRuns = [];
 
     /// <summary>Runs at the start of every call.</summary>
     public Action? BeforeEveryCall { get; init; }
@@ -1412,6 +1413,9 @@ internal sealed class InterceptingGitClient(IGitClient inner) : IGitClient
 
     /// <summary>Runs before each read of blobs' bytes, with the objects asked for.</summary>
     public Action<IReadOnlyList<string>>? BeforeReadBlobs { get; init; }
+
+    /// <summary>What a read of blobs' bytes answers instead, given the objects asked for and what git read; null keeps git's answer.</summary>
+    public Func<IReadOnlyList<string>, IReadOnlyList<byte[]?>, IReadOnlyList<byte[]?>?>? AfterReadBlobs { get; init; }
 
     /// <summary>Runs before each arbitrary git command, with its arguments.</summary>
     public Action<IReadOnlyList<string>>? BeforeRun { get; init; }
@@ -1578,10 +1582,12 @@ internal sealed class InterceptingGitClient(IGitClient inner) : IGitClient
     public Task<T> UnpackedAsync<T>(string directory, string blob, Func<string, Task<T>> use, CancellationToken cancellationToken = default)
         => Call(() => inner.UnpackedAsync(directory, blob, use, Token(cancellationToken)));
 
-    public Task<IReadOnlyList<byte[]?>> ReadBlobsAsync(string directory, IReadOnlyList<string> objects, CancellationToken cancellationToken = default)
+    public async Task<IReadOnlyList<byte[]?>> ReadBlobsAsync(string directory, IReadOnlyList<string> objects, CancellationToken cancellationToken = default)
     {
         BeforeReadBlobs?.Invoke(objects);
-        return Call(() => inner.ReadBlobsAsync(directory, objects, Token(cancellationToken)));
+        var read = await Call(() => inner.ReadBlobsAsync(directory, objects, Token(cancellationToken)));
+
+        return AfterReadBlobs?.Invoke(objects, read) ?? read;
     }
 
     public Task<IReadOnlyList<long?>> ReadBlobSizesAsync(string directory, IReadOnlyList<string> objects, CancellationToken cancellationToken = default)
@@ -1786,6 +1792,40 @@ internal sealed class InterceptingGitClient(IGitClient inner) : IGitClient
     {
         BeforeEveryCall?.Invoke();
         return inner.RunWithHooksAsync(directory, arguments, limit, isolation, values, cancellationToken);
+    }
+
+    /// <summary>Every git command that reached a remote, with the values set in its environment, in order.</summary>
+    public IReadOnlyList<(string[] Arguments, IReadOnlyDictionary<string, string>? Values)> RemoteRuns
+    {
+        get
+        {
+            lock (_remoteRuns)
+            {
+                return [.. _remoteRuns];
+            }
+        }
+    }
+
+    /// <summary>Answers a command that reaches a remote instead of git, given its arguments; null asks git.</summary>
+    public Func<IReadOnlyList<string>, GitCommandResult?>? InsteadOfRemote { get; init; }
+
+    public Task<GitCommandResult> RunRemoteAsync(
+        string directory,
+        IReadOnlyList<string> arguments,
+        IReadOnlyDictionary<string, string>? values,
+        string? standardInput,
+        CancellationToken cancellationToken = default)
+    {
+        BeforeEveryCall?.Invoke();
+
+        lock (_remoteRuns)
+        {
+            _remoteRuns.Add(([.. arguments], values));
+        }
+
+        return InsteadOfRemote?.Invoke(arguments) is { } answer
+            ? Task.FromResult(answer)
+            : inner.RunRemoteAsync(directory, arguments, values, standardInput, cancellationToken);
     }
 
     public Task<GitCredential?> CredentialAsync(string directory, string url, CancellationToken cancellationToken = default)

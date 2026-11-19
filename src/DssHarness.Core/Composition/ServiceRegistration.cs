@@ -329,7 +329,8 @@ public static class ServiceRegistration
         // and the one fetcher that fills it, read by the workflow check, the runs and the export alike.
         services.AddSingleton(provider => new WorkflowCache(provider.GetRequiredService<IFileSystem>(), WorkflowCache.DefaultDirectory));
         services.AddSingleton(provider => new WorkflowRemoteFetcher(
-            provider.GetRequiredService<GhProcess>(),
+            provider.GetRequiredService<IGitClient>(),
+            provider.GetRequiredService<IFileSystem>(),
             provider.GetRequiredService<WorkflowCache>(),
             provider.GetRequiredService<AgentAncestry>(),
             provider.GetRequiredService<IHarnessOutput>(),

@@ -2868,7 +2868,7 @@ public sealed class AgentService(
 
             try
             {
-                read = System.Text.Json.Nodes.JsonNode.Parse(record);
+                read = Json.JsonDepth.ParseNode(record);
             }
             catch (System.Text.Json.JsonException ex)
             {

@@ -788,6 +788,24 @@ public interface IGitClient
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Runs a git subcommand that reaches a remote - a listing of its refs, a fetch - with <paramref name="values"/> set in
+    /// its environment, where a credential is handed and no command line carries it, its messages in git's own words
+    /// untranslated, and no limit of time: a transfer of any size runs until it ends, or until it is stopped. It runs
+    /// none of the repository's hooks.
+    /// </summary>
+    /// <param name="directory">The directory git runs in.</param>
+    /// <param name="arguments">Its arguments.</param>
+    /// <param name="values">Variables set in its environment, by name; null for none.</param>
+    /// <param name="standardInput">What git reads on its standard input - the objects a fetch asks for by id; null for nothing.</param>
+    /// <param name="cancellationToken">Stops git.</param>
+    Task<GitCommandResult> RunRemoteAsync(
+        string directory,
+        IReadOnlyList<string> arguments,
+        IReadOnlyDictionary<string, string>? values,
+        string? standardInput,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// The credential the helpers git's configuration names give for <paramref name="url"/>, asked as git asks before it
     /// connects (<c>git credential fill</c>) with nobody there to type one; null where none gives one.
     /// </summary>
