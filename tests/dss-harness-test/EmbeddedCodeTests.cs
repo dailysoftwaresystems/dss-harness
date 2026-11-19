@@ -60,6 +60,39 @@ public sealed class EmbeddedCodeTests
     }
 
     /// <summary>
+    /// Moving an extract's ids moves every field that names a node: a node's id, its parent and each node its name is
+    /// written onto, the node a reference is made from and the node of its own file its qualifier names by id, and the
+    /// node a literal is held by - and leaves a qualifier that names a value, no node, as it is.
+    /// </summary>
+    [Fact]
+    public void MovingAnExtractsIds_MovesEveryFieldThatNamesANode()
+    {
+        var read = new FileExtract(
+        [
+            new ExtractNode("css:a.css#.a", CodeNodeKinds.Member, ".a", ".a", 1, 1, ".a") { SubKind = CodeSubKinds.Rule },
+            new ExtractNode("css:a.css#.a&-x", CodeNodeKinds.Member, "&-x", "&-x", 1, 1, "&-x") { SubKind = CodeSubKinds.Rule, Parent = "css:a.css#.a", SuffixOf = ["css:a.css#.a"] },
+        ])
+        {
+            References =
+            [
+                new ExtractReference("css:a.css#.a&-x", CodeEdgeKinds.Uses, "a", 1) { Qualifier = new ExtractQualifier(CodeQualifierKinds.Own, "css:a.css#.a") },
+                new ExtractReference("css:a.css#.a", CodeEdgeKinds.Uses, "b", 1) { Qualifier = new ExtractQualifier(CodeQualifierKinds.Value, "css:a.css#.a") },
+            ],
+            Literals = [new ExtractLiteral("red", 1) { Node = "css:a.css#.a" }],
+        };
+
+        var moved = read.Renamed(id => $"{id}~2");
+
+        Assert.Equal(
+            [("css:a.css#.a~2", null, null), ("css:a.css#.a&-x~2", "css:a.css#.a~2", "css:a.css#.a~2")],
+            moved.Nodes.Select(node => (node.Id, node.Parent, node.SuffixOf is { } onto ? string.Join(',', onto) : null)));
+        Assert.Equal(
+            [("css:a.css#.a&-x~2", "css:a.css#.a~2"), ("css:a.css#.a~2", "css:a.css#.a")],
+            moved.References.Select(reference => (reference.From, reference.Qualifier!.Name)));
+        Assert.Equal(["css:a.css#.a~2"], moved.Literals!.Select(literal => literal.Node));
+    }
+
+    /// <summary>
     /// The text an embedded reader is given keeps each range of code on the host's line it stands on - the line breaks
     /// between kept, nothing else - and two ranges on one line apart by a space, so no token of one runs into the next.
     /// </summary>
