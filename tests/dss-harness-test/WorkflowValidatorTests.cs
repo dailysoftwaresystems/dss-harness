@@ -4147,25 +4147,44 @@ public sealed class WorkflowValidatorTests
     }
 
     /// <summary>
-    /// Every expression ends: one nested past what the grammar's guard allows - a long chain of '!', empty(...) inside
-    /// empty(...), any(...) inside any(...), a path of a hundred thousand names - is refused with the depth it went
-    /// past, through the grammar and through the validator alike, and never spends the stack of the process that reads it.
+    /// An expression nests as deep as it is written, and the validator checks it whole: a condition of ten thousand terms
+    /// nested ten thousand deep, a hundred thousand '!', a group and an empty(...) inside each other that deep are each a
+    /// when the definition holds with no problem. They are checked in a child on a small stack, so a check that recursed
+    /// once a level would end that child, never this run - and a bound on the nesting would refuse them.
     /// </summary>
-    [Theory]
-    [InlineData("a hundred thousand '!'")]
-    [InlineData("a hundred empty(...) inside each other")]
-    [InlineData("a hundred any(...) inside each other")]
-    [InlineData("a path of a hundred thousand names")]
-    public void AnExpressionNestedTooDeep_IsRefused_AndNeverSpendsTheStack(string nested)
+    [Fact]
+    public async Task AnExpressionNestedAHundredThousandDeep_IsCheckedWhole()
     {
-        var expression = TooDeep(nested);
-
-        Assert.Equal($"the expression nests more than {FlowExpression.MostNesting} deep", FlowExpression.GrammarProblem(expression));
-        Assert.Throws<ArgumentException>(() => FlowExpression.Parse(expression));
+        var answer = await ChildRun.MethodAsync(typeof(WorkflowValidatorTests), nameof(CheckDeep), TestContext.Current.CancellationToken);
 
         Assert.Equal(
-            [$"'gate.when' is not written whole: the expression nests more than {FlowExpression.MostNesting} deep, and nothing past there would be checked"],
-            Problems($"""
+            new ChildRunAnswer(0, "condition: no problem\nnot: no problem\ngroup: no problem\nempty: no problem\n", string.Empty),
+            answer);
+    }
+
+    /// <summary>The child's side of <see cref="AnExpressionNestedAHundredThousandDeep_IsCheckedWhole"/>: each deep when checked on a small stack, its problems said a line each.</summary>
+    private static string CheckDeep() => SmallStack.Run(() =>
+    {
+        var condition = "true && true";
+
+        for (var term = 0; term < 9_998; term++)
+        {
+            condition = $"true && ({condition})";
+        }
+
+        var deep = new (string Name, string Expression)[]
+        {
+            ("condition", condition),
+            ("not", new string('!', 100_000) + "true"),
+            ("group", new string('(', 100_000) + "true" + new string(')', 100_000)),
+            ("empty", string.Concat(Enumerable.Repeat("empty(", 100_000)) + "true" + new string(')', 100_000)),
+        };
+
+        var said = new StringBuilder();
+
+        foreach (var (name, expression) in deep)
+        {
+            var problems = Problems($"""
                 name: flow
                 steps:
                   - name: plan
@@ -4174,28 +4193,13 @@ public sealed class WorkflowValidatorTests
                     type: orient
                     dependsOn: [plan]
                     when: '{expression}'
-                """));
-    }
+                """);
 
-    /// <summary>An expression nested past the guard by the construct <paramref name="nested"/> names, built here so no test's name carries it.</summary>
-    internal static string TooDeep(string nested)
-    {
-        var any = "plan.ok";
-
-        for (var level = 0; level < 100; level++)
-        {
-            any = $"any(plan.items, {any})";
+            said.Append(System.Globalization.CultureInfo.InvariantCulture, $"{name}: {(problems.Count == 0 ? "no problem" : string.Join("; ", problems))}\n");
         }
 
-        return nested switch
-        {
-            "a hundred thousand '!'" => new string('!', 100_000) + "plan.ok",
-            "a hundred empty(...) inside each other" => string.Concat(Enumerable.Repeat("empty(", 100)) + "plan.ok" + new string(')', 100),
-            "a hundred any(...) inside each other" => any,
-            "a path of a hundred thousand names" => "plan" + string.Concat(Enumerable.Repeat(".ok", 99_999)),
-            _ => throw new ArgumentOutOfRangeException(nameof(nested), nested, "no such nesting"),
-        };
-    }
+        return said.ToString();
+    });
 
     /// <summary>
     /// The grammar itself beside wholeness: what the engine will one day read must parse today, with the column it
