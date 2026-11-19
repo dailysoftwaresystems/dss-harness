@@ -1,6 +1,7 @@
 using System.Reflection;
 using System.Text.Json;
 using DssHarness.Core.Codebase;
+using DssHarness.Core.Codebase.Languages;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Orchestration;
 using DssHarness.Core.Repository;
@@ -457,7 +458,9 @@ public sealed class CodebaseGraphRecordsTests
 
     /// <summary>
     /// A link result is kept as lines: its head, counting what follows, then each node, each edge and each count of what a
-    /// node's references named outside the repository, on a line of its own - and reads back as it was written.
+    /// node's references named outside the repository, on a line of its own - a node's id written against the shorter id of
+    /// the node that contains it where that is shorter, an edge and a count naming each node by its place - and reads back
+    /// as it was written, each id the whole of it.
     /// </summary>
     [Fact]
     public void ALinkResult_IsKeptAsLines_ItsHeadCountingWhatFollows()
@@ -471,20 +474,40 @@ public sealed class CodebaseGraphRecordsTests
         Assert.Equal(
             [
                 Json(new CodeGraphSymbolsHead(CodeGraphManifest.CurrentSchema, "digest", CodeGraphLinker.Revision, 2, 1, 1)),
-                Json(symbols.Nodes[0]),
-                Json(symbols.Nodes[1]),
-                Json(symbols.Edges[0]),
-                Json(new CodeGraphCount("toy:A", 1)),
+                Json(new CodeGraphSymbolLine(new StoredName("file:a.toy"), "abcdef", CodeNodeKinds.File, ["a.toy"])),
+                Json(new CodeGraphSymbolLine(new StoredName("toy:A"), "123456", CodeNodeKinds.Type, ["a.toy"])),
+                Json(new CodeGraphEdgeLine(0, 1, CodeEdgeKinds.Contains, 1, CodeConfidences.Exact)),
+                Json(new CodeGraphCountLine(1, 1)),
                 "",
             ],
             File.ReadAllText(layout.GraphSymbolsFile).Split('\n'));
         Assert.Equal(Json(symbols), Json(store.ReadGraphSymbols(layout)!));
+
+        // A node whose id goes on from its container's is written as what it keeps of that one and the rest - where that
+        // is shorter than the id whole, which it is not for a container's id of five characters.
+        var nested = symbols with
+        {
+            Nodes = [.. symbols.Nodes, new("toy:A.Inner", "654321", CodeNodeKinds.Type, ["a.toy"]), new("toy:A.Inner.Deepest", "fedcba", CodeNodeKinds.Type, ["a.toy"])],
+            Edges =
+            [
+                .. symbols.Edges,
+                new CodeEdge("toy:A", "toy:A.Inner", CodeEdgeKinds.Contains, 2, CodeConfidences.Exact),
+                new CodeEdge("toy:A.Inner", "toy:A.Inner.Deepest", CodeEdgeKinds.Contains, 3, CodeConfidences.Exact),
+            ],
+        };
+
+        store.WriteGraphSymbols(layout, nested);
+
+        var written = File.ReadAllLines(layout.GraphSymbolsFile);
+        Assert.Equal(Json(new CodeGraphSymbolLine(new StoredName("toy:A.Inner"), "654321", CodeNodeKinds.Type, ["a.toy"])), written[3]);
+        Assert.Equal(Json(new CodeGraphSymbolLine(new StoredName(".Deepest", Kept: 11, At: 2), "fedcba", CodeNodeKinds.Type, ["a.toy"])), written[4]);
+        Assert.Equal(Json(nested), Json(store.ReadGraphSymbols(layout)!));
     }
 
     /// <summary>
     /// A link result's file of fewer or more lines than its head counts, a line that does not read as what it is there, a
-    /// head that counts fewer than none of a kind and a node counted twice are each refused, naming the line where there is
-    /// one.
+    /// head that counts fewer than none of a kind, a node counted twice, an edge naming a node by no place of one and ids
+    /// written against each other or against no node are each refused, naming the line where there is one.
     /// </summary>
     [Fact]
     public void ALinkResultsFile_OfOtherLinesThanItsHeadCounts_IsRefused_NamingTheLine()
@@ -508,12 +531,135 @@ public sealed class CodebaseGraphRecordsTests
         Assert.Contains("line 2, a node, does not read: ", Refused([lines[0], "{\"id\":\"toy:B\"}", .. lines[2..]]), StringComparison.Ordinal);
         Assert.Contains("its head counts fewer than no lines of a kind", Refused([Json(head with { Edges = -1 }), .. lines[1..]]), StringComparison.Ordinal);
         Assert.Contains("it counts the node 'toy:A' twice", Refused([Json(head with { External = 2 }), .. lines[1..], lines[^1]]), StringComparison.Ordinal);
+        Assert.Contains(
+            "an edge names node 7, and it holds 2",
+            Refused([.. lines[..3], Json(new CodeGraphEdgeLine(0, 7, CodeEdgeKinds.Contains, 1, CodeConfidences.Exact)), .. lines[4..]]),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "node 1 is written against node 0, which is written against it in turn",
+            Refused(
+                lines[0],
+                Json(new CodeGraphSymbolLine(new StoredName("ile:a.toy", Kept: 1, At: 1), "abcdef", CodeNodeKinds.File, ["a.toy"])),
+                Json(new CodeGraphSymbolLine(new StoredName("oy:A", Kept: 1, At: 0), "123456", CodeNodeKinds.Type, ["a.toy"])),
+                lines[3],
+                lines[4]),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "node 1 is written against node 9, and there are 2",
+            Refused(lines[0], lines[1], Json(new CodeGraphSymbolLine(new StoredName("oy:A", Kept: 1, At: 9), "123456", CodeNodeKinds.Type, ["a.toy"])), lines[3], lines[4]),
+            StringComparison.Ordinal);
 
         // One an older linker wrote - its head counting what references named ambiguously, and those counts after the
         // others - is no link result this build reads, and is refused: the next sync links the graph again.
         var older = Json(head).Replace("\"external\":1", "\"external\":1,\"unresolved\":1", StringComparison.Ordinal);
         Assert.NotEqual(Json(head), older);
-        Assert.Contains("unresolved", Refused([older, .. lines[1..], Json(new CodeGraphCount("file:a.toy", 2))]), StringComparison.Ordinal);
+        Assert.Contains("unresolved", Refused([older, .. lines[1..], Json(new CodeGraphCountLine(0, 2))]), StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// An extract's names are written against its nodes' parents' where that is shorter - an id and a qualified name as
+    /// what they keep of the parent's and the rest, a name that would keep too little whole - and a scope's against its
+    /// parent's where the two can never be written against each other, so scopes that are each other's parents - a Dart
+    /// library and its part - are kept by name; never between the two halves of a surrogate pair, and read back as they
+    /// were. One that keeps more than its base holds, or keeps some of a parent its node has none of, and nodes declared
+    /// inside each other, are refused.
+    /// </summary>
+    [Fact]
+    public void AnExtractsNames_AreWrittenAgainstTheirParents_AndOnesThatDoNotRead_AreRefused()
+    {
+        var extract = new FileExtract(
+        [
+            new ExtractNode("toy:Alpha", CodeNodeKinds.Type, "Alpha", "Alpha", 1, 3, "class Alpha"),
+            new ExtractNode("toy:Alpha.beta", CodeNodeKinds.Member, "beta", "Alpha.beta", 2, 2, "Alpha.beta") { Parent = "toy:Alpha" },
+        ])
+        {
+            Scopes =
+            [
+                new ExtractScope("Alpha", Open: true),
+                new ExtractScope("Alpha.Inner", Open: true) { Parent = "Alpha" },
+                new ExtractScope("lib/shapes.dart", Open: true) { Parent = "shapes" },
+                new ExtractScope("shapes", Open: true) { Parent = "lib/shapes.dart" },
+            ],
+        };
+        var text = Json(extract);
+
+        Assert.Contains("\"id\":[9,\".beta\"]", text, StringComparison.Ordinal);
+        Assert.Contains("\"qualified\":[5,\".beta\"]", text, StringComparison.Ordinal);
+        Assert.Contains("\"signature\":\"Alpha.beta\"", text, StringComparison.Ordinal);
+        Assert.Contains("{\"name\":[5,\".Inner\"],\"open\":true,\"parentAt\":0}", text, StringComparison.Ordinal);
+        Assert.Contains("{\"name\":\"lib/shapes.dart\",\"open\":true,\"parentAt\":3}", text, StringComparison.Ordinal);
+        Assert.Contains("{\"name\":\"shapes\",\"open\":true,\"parent\":\"lib/shapes.dart\"}", text, StringComparison.Ordinal);
+        Assert.Equal(
+            [("Alpha", null), ("Alpha.Inner", "Alpha"), ("lib/shapes.dart", "shapes"), ("shapes", "lib/shapes.dart")],
+            JsonSerializer.Deserialize<FileExtract>(text, JsonStateFile.LineOptions)!.Scopes.Select(scope => (scope.Name, scope.Parent)));
+        Assert.Equal(text, Json(JsonSerializer.Deserialize<FileExtract>(text, JsonStateFile.LineOptions)));
+
+        static string Refused(string written) => Assert.Throws<JsonException>(() => JsonSerializer.Deserialize<FileExtract>(written, JsonStateFile.LineOptions)).Message;
+
+        Assert.Contains("a name keeps 99 characters of a name of 9", Refused(text.Replace("[9,\".beta\"]", "[99,\".beta\"]", StringComparison.Ordinal)), StringComparison.Ordinal);
+        Assert.Contains("node 0's id keeps characters of a parent it has none of", Refused(text.Replace("\"id\":\"toy:Alpha\"", "\"id\":[3,\":Alpha\"]", StringComparison.Ordinal)), StringComparison.Ordinal);
+        Assert.Contains(
+            "node 1 is written against node 0, which is written against it in turn",
+            Refused(text.Replace("\"signature\":\"class Alpha\"", "\"signature\":\"class Alpha\",\"parent\":1", StringComparison.Ordinal)),
+            StringComparison.Ordinal);
+
+        var kept = new string('p', 20);
+        Assert.Equal(new StoredName("\U0001F600x", 20), StoredName.Against($"{kept}\U0001F600x", [("id", $"{kept}\U0001F601")]));
+    }
+
+    /// <summary>
+    /// A file nested thousands deep - each node's id and qualified name its whole path - is kept in an extract and a link
+    /// result that grow with its depth and not with the square of it, each name written against its parent's and each id
+    /// against its container's: twice as deep is about twice the bytes, a few hundred a level; and each reads back to the
+    /// very ids, names and handles the reader and the link gave. Names written whole come to four times the bytes for twice
+    /// the depth, and thousands a level.
+    /// </summary>
+    [Fact]
+    public void ADeepFilesExtractAndLinkResult_GrowWithItsDepth_AndReadBackTheSameIds()
+    {
+        using var directory = new TempDirectory();
+        var (store, layout) = Store(directory);
+
+        (long Extract, long Symbols) Kept(int depth)
+        {
+            var text = string.Concat(Enumerable.Repeat("{\"a\":", depth)) + "1" + new string('}', depth);
+            var lines = CodeFileText.Lines(text);
+            var extract = new JsonExtractor().Extract(new CodeFileInput("deep.json", text)).WithDigests(lines);
+            var file = layout.GraphExtractFile(CodeGraphIds.ExtractName(Blob, "deep.json", "json", 1));
+
+            store.WriteGraphExtract(file, new CodeGraphStoredExtract(CodeGraphManifest.CurrentSchema, "json", 1, Blob, "deep.json", lines.Count, extract));
+            var read = store.ReadGraphExtract(file)!.Extract;
+
+            Assert.Equal(depth, read.Nodes.Count);
+            Assert.Equal(
+                extract.Nodes.Select(node => (node.Id, node.Qualified, node.Signature, node.Scope, node.Parent)),
+                read.Nodes.Select(node => (node.Id, node.Qualified, node.Signature, node.Scope, node.Parent)));
+
+            var linked = CodeGraphLinker.Link([new CodeGraphFile("deep.json", "json", extract)]);
+            var handles = CodeGraphIds.Handles(linked.Symbols.Select(symbol => symbol.Id));
+            var symbols = new CodeGraphSymbolsFile(
+                CodeGraphManifest.CurrentSchema,
+                "digest",
+                CodeGraphLinker.Revision,
+                [.. linked.Symbols.Select(symbol => new CodeGraphSymbolEntry(symbol.Id, handles[symbol.Id], symbol.Kind, symbol.Paths))],
+                linked.Edges,
+                linked.External);
+
+            store.WriteGraphSymbols(layout, symbols);
+            var back = store.ReadGraphSymbols(layout)!;
+
+            Assert.Equal(symbols.Nodes.Select(node => (node.Id, node.Handle)), back.Nodes.Select(node => (node.Id, node.Handle)));
+            Assert.Equal(symbols.Edges, back.Edges);
+            return (new FileInfo(file).Length, new FileInfo(layout.GraphSymbolsFile).Length);
+        }
+
+        var half = Kept(2_500);
+        var whole = Kept(5_000);
+
+        Assert.InRange((double)whole.Extract / half.Extract, 1.8, 2.3);
+        Assert.InRange((double)whole.Symbols / half.Symbols, 1.8, 2.3);
+        Assert.InRange(whole.Extract, 1, 5_000L * 600);
+        Assert.InRange(whole.Symbols, 1, 5_000L * 300);
     }
 
     /// <summary>

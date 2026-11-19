@@ -33,7 +33,9 @@ namespace DssHarness.Core.Codebase.Languages;
 /// which a value nearer may be - else a value whose type the file does not say, by the name it is written as where it
 /// is one: the linker finds the member it is, and the call through that member's type, or by its name alone. A chain of
 /// two names or more, of any length, is written as a link to the use made for its last name (<see cref="ExtractQualifier.Link"/>),
-/// each name's use linked to the one before it, so no reference writes the names before it again. A variable is seen
+/// each name's use linked to the one before it, so no reference writes the names before it again - past a variable of a
+/// declared type, its first name's use qualified by that type, so the chain is read through each name's type as one past a
+/// field is. A variable is seen
 /// where C# scopes it - a block's, a statement's, a lambda's, a clause's - and hides a field of its name there alone. A
 /// type a declaration names is a type qualifier's. A field, a property and an event say the type their value is declared
 /// with, and an extension method the type it extends. What it cannot bind - a call on a <c>dynamic</c> value, a member
@@ -1737,10 +1739,11 @@ public sealed class CSharpExtractor : ICodeGraphExtractor
         /// <summary>
         /// What a call's or a use's <paramref name="receiver"/> is - the one owner of it for both: <c>this</c> and
         /// <c>base</c>; a type it is made or cast as; a variable, parameter or field the member reads, by the type it is
-        /// declared with - each a type qualifier - a field's chain of members by its names, for the linker to follow, or a
-        /// value of no said type; a name no variable has, as a named qualifier - a type's, a namespace's or a value's - where
-        /// it begins with a capital letter, else as a value of another file by its name; anything else a value of no said
-        /// type. A chain of two names or more is written as a link to the use of its last (<see cref="Chained"/>).
+        /// declared with - each a type qualifier - a chain of members past a variable or a field, of any length, for the
+        /// linker to follow through the type of each, or a value of no said type; a name no variable has, as a named
+        /// qualifier - a type's, a namespace's or a value's - where it begins with a capital letter, else as a value of
+        /// another file by its name; anything else a value of no said type. A chain of two names or more is written as a link
+        /// to the use of its last (<see cref="Chained"/>).
         /// <paramref name="writes"/> says whether the qualifier writes the receiver's chain - its names, by a name or a link.
         /// </summary>
         private ExtractQualifier Receiver(ExpressionSyntax? receiver, Walked walk, out bool writes)
@@ -1770,10 +1773,19 @@ public sealed class CSharpExtractor : ICodeGraphExtractor
                 return new ExtractQualifier(CodeQualifierKinds.Value);
             }
 
-            // A field named through this is the field, whatever variable the member names alike.
+            // A field named through this is the field, whatever variable the member names alike. A variable of a declared type
+            // is a value of that type: its one name's qualifier the type, and a chain of any length past it a link to the use
+            // of its last name, the use of its first qualified by the type - so the linker reads each name through the type of
+            // the one before, as it reads a field's.
             if (!chain.ThroughThis && walk.Known.Local(chain.Head, out var local))
             {
-                return local is not null && chain.Count == 1 ? new ExtractQualifier(CodeQualifierKinds.Type, local) : new ExtractQualifier(CodeQualifierKinds.Value);
+                if (local is null)
+                {
+                    return new ExtractQualifier(CodeQualifierKinds.Value);
+                }
+
+                writes = true;
+                return chain.Count == 1 ? new ExtractQualifier(CodeQualifierKinds.Type, local) : Chained(CodeQualifierKinds.Value, receiver!, chain, walk);
             }
 
             if (walk.Known.Fields.TryGetValue(chain.Head, out var field) && field is not null && chain.Count == 1)

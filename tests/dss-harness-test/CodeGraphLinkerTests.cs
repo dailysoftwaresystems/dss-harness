@@ -3000,6 +3000,49 @@ public sealed class CodeGraphLinkerTests
     }
 
     /// <summary>
+    /// A chain on a variable of a declared type - a local's, a parameter's - is read through that type however many names
+    /// it holds, as the C# reader writes it: each name's use the value of the type of the name before it, the call on its
+    /// end the method of the last type, each exact, though another type holds a method of the call's name. A chain past
+    /// one name read as a value of no type uses no name, and finds the call by its name alone, among both.
+    /// </summary>
+    [Fact]
+    public void AChainOnATypedVariable_IsReadThroughItsType_HoweverManyNamesItHolds()
+    {
+        const string Text = """
+            namespace app;
+            class Foo { public Mid A; }
+            class Mid { public Low B; }
+            class Low { public void Bar() { } }
+            class Other { public void Bar() { } }
+            class Use
+            {
+                void Go(Foo given)
+                {
+                    Foo f = given;
+                    f.A.B.Bar();
+                    given.A.B.Bar();
+                }
+            }
+            """;
+        var linked = Link(new CodeGraphFile("src/Use.cs", "csharp", new CSharpExtractor().Extract(new CodeFileInput("src/Use.cs", Text))));
+
+        static IEnumerable<(string To, string Kind, int Line, string Confidence)> Ordered(IEnumerable<(string To, string Kind, int Line, string Confidence)> edges)
+            => edges.OrderBy(edge => edge.Line).ThenBy(edge => edge.To, StringComparer.Ordinal);
+
+        Assert.Equal(
+            Ordered(
+            [
+                .. new[] { 11, 12 }.SelectMany(line => new[]
+                {
+                    ("csharp:app.Foo.A", CodeEdgeKinds.Uses, line, CodeConfidences.Exact),
+                    ("csharp:app.Mid.B", CodeEdgeKinds.Uses, line, CodeConfidences.Exact),
+                    ("csharp:app.Low.Bar()", CodeEdgeKinds.Calls, line, CodeConfidences.Exact),
+                }),
+            ]),
+            Ordered(linked.Edges.Where(edge => edge is { From: "csharp:app.Use.Go(Foo)", Kind: CodeEdgeKinds.Uses or CodeEdgeKinds.Calls }).Select(edge => (edge.To, edge.Kind, edge.Line, edge.Confidence))));
+    }
+
+    /// <summary>
     /// A chain is stepped a link at a time, each once: the use of each name and the call on its end read the links before
     /// them once, a second statement that writes the same chain from the same declaration steps none of it again, and
     /// another declaration that writes it steps it for itself - three links twice, counted. A chain read again from its
@@ -3029,6 +3072,65 @@ public sealed class CodeGraphLinkerTests
             ],
             linked.Edges.Where(edge => edge.Kind is CodeEdgeKinds.Uses or CodeEdgeKinds.Calls && edge.Confidence == CodeConfidences.Exact).Select(edge => (edge.From, edge.To, edge.Kind, edge.Line)));
         Assert.Empty(linked.External);
+    }
+
+    /// <summary>
+    /// A chain of ten thousand names written as links, none a value - a type's whole qualified name, a name before each -
+    /// is looked for a link at a time, the chain before each name carried as that one's and never written out: the call on
+    /// its end is the type's method, exact, and what the link keeps of the keys it read grows with the names, not with the
+    /// square of them, in bounded time. A link whose chain was looked for by its names written out keeps each of the ten
+    /// thousand chains' text.
+    /// </summary>
+    [Fact]
+    public void ANamedChainOfTenThousandLinks_IsLookedForALinkAtATime_ItsNamesNeverWrittenOut()
+    {
+        const int Links = 10_000;
+        var names = Enumerable.Range(0, Links + 1).Select(at => $"N{at}").ToList();
+        var deepest = string.Join('.', names);
+        var references = new List<ExtractReference> { new("t:Go", CodeEdgeKinds.Uses, names[1], 1) { Qualifier = Named(names[0]) } };
+
+        for (var at = 2; at <= Links; at++)
+        {
+            references.Add(new ExtractReference("t:Go", CodeEdgeKinds.Uses, names[at], 1) { Qualifier = new ExtractQualifier(CodeQualifierKinds.Named) { Link = at - 2 } });
+        }
+
+        references.Add(Call("Go", "Run", 0, new ExtractQualifier(CodeQualifierKinds.Named) { Link = Links - 1 }));
+
+        var watch = Stopwatch.StartNew();
+        var linked = Link(File("deep.t", [Type(deepest), Member($"{deepest}.Run", 0)]), File("use.t", [Member("Go", 0)], references));
+        watch.Stop();
+
+        Assert.Equal([new CodeEdge("t:Go", $"t:{deepest}.Run", CodeEdgeKinds.Calls, 1, CodeConfidences.Exact)], linked.Edges.Where(edge => edge.Kind == CodeEdgeKinds.Calls));
+        Assert.InRange(linked.Memory!.Keys.Characters, deepest.Length, 20L * deepest.Length);
+        Assert.True(watch.Elapsed < TimeSpan.FromSeconds(5), $"linking a chain of {Links} names took {watch.Elapsed}");
+    }
+
+    /// <summary>
+    /// What a file imported makes visible through the files it exports is walked once for the name it is asked for, and
+    /// kept: a thousand calls of an extension two thousand exports away, each from a declaration of its own, walk the two
+    /// thousand files once, and each finds the extension. A walk made for each call visits them a thousand times.
+    /// </summary>
+    [Fact]
+    public void WhatAnImportExposes_IsWalkedOnceForAName_HoweverManyCallsAskIt()
+    {
+        const int Depth = 2_000;
+        const int Calls = 1_000;
+
+        var linked = CodeGraphLinker.Link(
+        [
+            .. Enumerable.Range(0, Depth).Select(at => File($"f{at}.t", [], imports: [Import(CodeImportForms.Relative, $"f{at + 1}.t") with { Export = true }])),
+            File($"f{Depth}.t", [Type("lib.Ext"), Member("lib.Ext.Shout", 0) with { Extends = "app.Thing" }], scopes: [Open("lib")]),
+            File("app.t",
+                [Type("app.Thing"), .. Enumerable.Range(0, Calls).Select(at => Member($"app.Thing.Go{at}", 0) with { Parent = "t:app.Thing" })],
+                [.. Enumerable.Range(0, Calls).Select(at => Call($"app.Thing.Go{at}", "Shout", 0, new ExtractQualifier(CodeQualifierKinds.This)))],
+                [Open("app")],
+                [Import(CodeImportForms.Relative, "f0.t")]),
+        ]);
+
+        Assert.Equal(
+            Enumerable.Range(0, Calls).Select(at => ($"t:app.Thing.Go{at}", CodeConfidences.Unique)).OrderBy(edge => edge.Item1, StringComparer.Ordinal),
+            linked.Edges.Where(edge => edge is { Kind: CodeEdgeKinds.Calls, To: "t:lib.Ext.Shout" }).Select(edge => (edge.From, edge.Confidence)).OrderBy(edge => edge.From, StringComparer.Ordinal));
+        Assert.Equal(Depth + 1, linked.ExposedFiles);
     }
 
     /// <summary>

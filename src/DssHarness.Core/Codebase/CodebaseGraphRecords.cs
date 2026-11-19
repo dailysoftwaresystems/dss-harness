@@ -270,34 +270,63 @@ public sealed record CodeGraphSymbolsFile(
 
     /// <summary>
     /// Writes it as lines: its head, which counts what follows, then each node, each edge and each node's count of what its
-    /// references named outside the repository, in that order.
+    /// references named outside the repository, in that order. A node's id is written against the id of the node that
+    /// contains it, where that one is shorter (<see cref="StoredName"/>), and an edge and a count name each node by its place
+    /// among the nodes - so the file grows with the graph, never with the square of how deep a file nests its declarations.
     /// </summary>
     /// <param name="lines">The file's lines.</param>
+    /// <exception cref="InvalidOperationException">An edge or a count names a node it holds none of, which <see cref="Problem"/> refuses first.</exception>
     public void Write(JsonLineWriter lines)
     {
         ArgumentNullException.ThrowIfNull(lines);
 
         lines.Write(new CodeGraphSymbolsHead(Schema, Graph, Linker, Nodes.Count, Edges.Count, External.Count));
 
-        foreach (var node in Nodes)
+        var places = new Dictionary<string, int>(StringComparer.Ordinal);
+
+        for (var at = 0; at < Nodes.Count; at++)
         {
-            lines.Write(node);
+            places.TryAdd(Nodes[at].Id, at);
+        }
+
+        var holders = new Dictionary<string, string>(StringComparer.Ordinal);
+
+        foreach (var edge in Edges.Where(edge => edge.Kind == CodeEdgeKinds.Contains))
+        {
+            holders.TryAdd(edge.To, edge.From);
+        }
+
+        int Place(string id) => places.TryGetValue(id, out var at) ? at : throw new InvalidOperationException($"the link result names the node '{id}', which it holds none of");
+
+        for (var at = 0; at < Nodes.Count; at++)
+        {
+            var node = Nodes[at];
+
+            var id = holders.TryGetValue(node.Id, out var holder) && places.TryGetValue(holder, out var under) && StoredName.Precedes(Nodes[under].Id, under, node.Id, at)
+                ? StoredName.Against(node.Id, under, Nodes[under].Id)
+                : new StoredName(node.Id);
+
+            lines.Write(new CodeGraphSymbolLine(id, node.Handle, node.Kind, node.Paths));
         }
 
         foreach (var edge in Edges)
         {
-            lines.Write(edge);
+            lines.Write(new CodeGraphEdgeLine(Place(edge.From), Place(edge.To), edge.Kind, edge.Line, edge.Confidence));
         }
 
         foreach (var (node, count) in External)
         {
-            lines.Write(new CodeGraphCount(node, count));
+            lines.Write(new CodeGraphCountLine(Place(node), count));
         }
     }
 
-    /// <summary>Reads it from the lines <see cref="Write"/> wrote, refusing a file of fewer or more lines than its head counts.</summary>
+    /// <summary>
+    /// Reads it from the lines <see cref="Write"/> wrote, refusing a file of fewer or more lines than its head counts: each
+    /// node's id made again from the one it is written against, and each edge and count given the very id of the node it
+    /// names by its place.
+    /// </summary>
     /// <param name="lines">The file's lines.</param>
-    /// <exception cref="JsonException">A line does not read as what it is, or the file holds another number of lines.</exception>
+    /// <exception cref="JsonException">A line does not read as what it is, names a node by no place of one, or the file holds another number of lines.</exception>
     public static CodeGraphSymbolsFile Read(JsonLineReader lines)
     {
         ArgumentNullException.ThrowIfNull(lines);
@@ -309,40 +338,51 @@ public sealed record CodeGraphSymbolsFile(
             throw new JsonException("its head counts fewer than no lines of a kind");
         }
 
-        var nodes = new List<CodeGraphSymbolEntry>();
-        var edges = new List<CodeEdge>();
+        var written = new List<CodeGraphSymbolLine>();
 
         for (var at = 0; at < head.Nodes; at++)
         {
-            nodes.Add(lines.Next<CodeGraphSymbolEntry>("a node"));
+            written.Add(lines.Next<CodeGraphSymbolLine>("a node"));
         }
+
+        var ids = new string[written.Count];
+
+        StoredName.InBaseOrder(
+            written.Count,
+            at => written[at].Id.At,
+            at => ids[at] = written[at].Id.Field is null
+                ? written[at].Id.Text(written[at].Id.At is { } under ? ids[under] : null)
+                : throw new JsonException(string.Create(CultureInfo.InvariantCulture, $"node {at}'s id is written against a field, and a node's id is written against another node's")),
+            "node");
+
+        string IdAt(int place, string what)
+            => place >= 0 && place < ids.Length ? ids[place] : throw new JsonException(string.Create(CultureInfo.InvariantCulture, $"{what} names node {place}, and it holds {ids.Length}"));
+
+        var nodes = written.Select((line, at) => new CodeGraphSymbolEntry(ids[at], line.Handle, line.Kind, line.Paths)).ToList();
+        var edges = new List<CodeEdge>();
 
         for (var at = 0; at < head.Edges; at++)
         {
-            edges.Add(lines.Next<CodeEdge>("an edge"));
+            var edge = lines.Next<CodeGraphEdgeLine>("an edge");
+            edges.Add(new CodeEdge(IdAt(edge.From, "an edge"), IdAt(edge.To, "an edge"), edge.Kind, edge.Line, edge.Confidence));
         }
 
-        var external = Counts(lines, head.External, "a count of what a node's references named outside the repository");
-        lines.End();
+        var external = new Dictionary<string, int>(StringComparer.Ordinal);
 
-        return new CodeGraphSymbolsFile(head.Schema, head.Graph, head.Linker, nodes, edges, external);
-    }
-
-    private static Dictionary<string, int> Counts(JsonLineReader lines, int count, string what)
-    {
-        var counts = new Dictionary<string, int>(StringComparer.Ordinal);
-
-        for (var at = 0; at < count; at++)
+        for (var at = 0; at < head.External; at++)
         {
-            var line = lines.Next<CodeGraphCount>(what);
+            var line = lines.Next<CodeGraphCountLine>("a count of what a node's references named outside the repository");
+            var node = IdAt(line.Node, "a count of what a node's references named outside the repository");
 
-            if (!counts.TryAdd(line.Node, line.Count))
+            if (!external.TryAdd(node, line.Count))
             {
-                throw new JsonException($"it counts the node '{line.Node}' twice");
+                throw new JsonException($"it counts the node '{node}' twice");
             }
         }
 
-        return counts;
+        lines.End();
+
+        return new CodeGraphSymbolsFile(head.Schema, head.Graph, head.Linker, nodes, edges, external);
     }
 }
 
@@ -355,10 +395,25 @@ public sealed record CodeGraphSymbolsFile(
 /// <param name="External">How many counts of what references named outside the repository follow them.</param>
 public sealed record CodeGraphSymbolsHead(int Schema, string Graph, int Linker, int Nodes, int Edges, int External);
 
-/// <summary>One node's count, on a line of a link result's file.</summary>
-/// <param name="Node">The node's id.</param>
+/// <summary>One node of a link result, on a line of its file: its id, whole or written against the id of the node that contains it.</summary>
+/// <param name="Id">Its id, as <see cref="CodeGraphSymbolsFile.Write"/> writes it.</param>
+/// <param name="Handle">Its handle.</param>
+/// <param name="Kind">Its kind.</param>
+/// <param name="Paths">The files that declare it.</param>
+internal sealed record CodeGraphSymbolLine(StoredName Id, string Handle, string Kind, IReadOnlyList<string> Paths);
+
+/// <summary>One edge of a link result, on a line of its file: each node it joins by its place among the file's nodes.</summary>
+/// <param name="From">The place of the node it leaves.</param>
+/// <param name="To">The place of the node it reaches.</param>
+/// <param name="Kind">Its kind.</param>
+/// <param name="Line">The line of the source file it was seen at.</param>
+/// <param name="Confidence">How sure it is.</param>
+internal sealed record CodeGraphEdgeLine(int From, int To, string Kind, int Line, string Confidence);
+
+/// <summary>One node's count, on a line of a link result's file: the node by its place among the file's nodes.</summary>
+/// <param name="Node">The node's place.</param>
 /// <param name="Count">The count.</param>
-public sealed record CodeGraphCount(string Node, int Count);
+internal sealed record CodeGraphCountLine(int Node, int Count);
 
 /// <summary>One node of a link result.</summary>
 /// <param name="Id">Its id.</param>

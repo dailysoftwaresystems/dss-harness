@@ -383,6 +383,41 @@ public sealed class RazorExtractorTests : CodeGraphExtractorContractTests<RazorE
     }
 
     /// <summary>
+    /// A component with no <c>@namespace</c> of its own is in the nearest <c>_Imports.razor</c>'s above it, each directory
+    /// past that one a name after it, as Razor compiles it: a C# use of that name finds it, exact, and its code-behind
+    /// partial of that namespace is a part of it as one of its name is, exact - its id the one its path gives, so what is
+    /// shown of it never moves; and a link made again once the <c>@namespace</c> changed finds the use again, the whole
+    /// link of the files.
+    /// </summary>
+    [Fact]
+    public void AComponent_IsInTheNearestImportsFilesNamespace_EachDirectoryPastItANameAfterIt()
+    {
+        static CodeGraphFile Imports(string space) => new("Pages/_Imports.razor", "razor", Read("Pages/_Imports.razor", $"@namespace {space}\n@using Shop.Models\n"));
+        static CodeGraphFile CSharp(string path, string text) => new(path, "csharp", new CSharpExtractor().Extract(new CodeFileInput(path, text)));
+
+        var imports = Imports("Shop.Pages");
+        var component = new CodeGraphFile("Pages/Sub/Cart.razor", "razor", Read("Pages/Sub/Cart.razor", "<p>Cart</p>\n"));
+        var use = CSharp("App/Use.cs", "namespace App;\nclass Use { Shop.Pages.Sub.Cart cart; }\n");
+
+        var linked = CodeGraphLinker.Link([imports, component, use]);
+        var joined = CodeGraphLinker.Link([imports, component, CSharp("Pages/Sub/Cart.razor.cs", "namespace Shop.Pages.Sub;\npublic partial class Cart { }\n")]);
+
+        Assert.Contains(linked.Symbols, symbol => symbol.Id == "razor:Pages.Sub.Cart");
+        Assert.Equal(
+            [(CodeEdgeKinds.References, CodeConfidences.Exact)],
+            linked.Edges.Where(edge => edge is { From: "csharp:App.Use.cart", To: "razor:Pages.Sub.Cart" }).Select(edge => (edge.Kind, edge.Confidence)));
+        Assert.Equal(
+            [("csharp:Shop.Pages.Sub.Cart", CodeConfidences.Exact)],
+            joined.Edges.Where(edge => edge is { Kind: CodeEdgeKinds.PartOf, From: "razor:Pages.Sub.Cart" }).Select(edge => (edge.To, edge.Confidence)));
+
+        var moved = Imports("Store.Pages");
+        var again = CodeGraphLinker.Relink(linked, [moved, component, use]);
+
+        Assert.Equal(CodeGraphLinker.Link([moved, component, use]).Edges, again.Edges);
+        Assert.DoesNotContain(again.Edges, edge => edge is { From: "csharp:App.Use.cart", To: "razor:Pages.Sub.Cart" });
+    }
+
+    /// <summary>
     /// A name the markup's own C# declares where an attribute stands is the markup's, no member of the component: an
     /// <c>@foreach</c>'s item inside its block and a member past it, a <c>@{ }</c> block's local from where it is declared
     /// and a member before it, a pattern's variable inside its <c>@if</c>, an arrow function's parameter in its own value -

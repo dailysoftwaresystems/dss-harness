@@ -552,8 +552,9 @@ public sealed class CSharpExtractorTests : CodeGraphExtractorContractTests<CShar
     /// <summary>
     /// A call is its name, its arguments and what its receiver is: <c>this</c>, <c>base</c>, the type a variable,
     /// parameter, field or property is declared with, a name written as a type's is; else a value of no said type - by
-    /// its name where it is one, a field's chain of members by their names, as the extract writes them - and never an
-    /// unqualified call, which is looked for in the scopes it is written in. A local function, <c>nameof</c> and a value
+    /// its name where it is one, a field's chain of members by their names, a variable's by its type and the names after
+    /// it, as the extract writes them - and never an unqualified call, which is looked for in the scopes it is written in.
+    /// A local function, <c>nameof</c> and a value
     /// of a type parameter's type are no call of a declared member.
     /// </summary>
     [Fact]
@@ -626,7 +627,7 @@ public sealed class CSharpExtractorTests : CodeGraphExtractorContractTests<CShar
                 ("Seal", 0, CodeQualifierKinds.Type, "Crate"),
                 ("Go", 0, CodeQualifierKinds.Value, "Inherited"),
                 ("Go", 0, CodeQualifierKinds.Value, "_store.Inner"),
-                ("Open", 0, CodeQualifierKinds.Value, null),
+                ("Open", 0, CodeQualifierKinds.Value, "Crate.Lid"),
                 ("Get", 0, CodeQualifierKinds.Named, "Cache.Instance"),
                 ("Then", 0, CodeQualifierKinds.Value, null),
                 ("Find", 0, null, null),

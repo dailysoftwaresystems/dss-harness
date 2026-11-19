@@ -18,7 +18,7 @@ public sealed class TsconfigExtractor : ICodeGraphExtractor
     public string Language => "tsconfig";
 
     /// <inheritdoc/>
-    public int Version => 1;
+    public int Version => 2;
 
     /// <inheritdoc/>
     public CodeGraphClaims Claims { get; } = new([new("tsconfig.json"), new("jsconfig.json")], []);

@@ -15,8 +15,14 @@ namespace DssHarness.Core.Codebase;
 /// The linker resolves every reference by the same steps for every language - the qualifier's scope, the enclosing
 /// scopes from the inside out, the imports in order, the repository by name and arity (<see cref="CodeGraphLinker"/>) -
 /// so a language says in its extract what its scopes and imports are, and never adds a rule to the linker.
+/// <para>
+/// Its record (<see cref="FileExtractJson"/>) writes each node's names against its parent's and every node a field names
+/// by its place, so what is kept of a file nested any depth grows with the file, never with the square of its depth; read
+/// back, it is the extract written, each name held once.
+/// </para>
 /// </remarks>
 /// <param name="Nodes">Its declarations; the file's own node is the core's, and is not among them.</param>
+[JsonConverter(typeof(FileExtractJson))]
 public sealed record FileExtract(IReadOnlyList<ExtractNode> Nodes)
 {
     /// <summary>An extract that holds nothing: what the fallback gives every file it lists, whose declarations nothing reads.</summary>
@@ -33,6 +39,17 @@ public sealed record FileExtract(IReadOnlyList<ExtractNode> Nodes)
 
     /// <summary>Every reference the file makes, by name, for the linker to resolve.</summary>
     public IReadOnlyList<ExtractReference> References { get; init; } = [];
+
+    /// <summary>
+    /// The scope the path of the file's directory gave what it declares, where the file declares none of its own and its
+    /// language puts it in the one a directory above it names for every file under it (<see cref="ExtractImport.Namespace"/>)
+    /// - a Blazor component with no <c>@namespace</c>, which Razor compiles into the nearest <c>_Imports.razor</c>'s, each
+    /// directory past that one's a name after it. Its names as the dots part them, one a directory, each from the tree's
+    /// root; empty for a file at the root. The linker reads every name that scope begins - the scope, what is declared in it
+    /// and the scopes it is in - in the one that directory gives instead, its ids kept; where no directory above names one,
+    /// as it is. <see langword="null"/> where the file's scopes are its own.
+    /// </summary>
+    public string? FolderScope { get; init; }
 
     /// <summary>
     /// Why the file is generated code, where the implementation knows a generator wrote it; <see langword="null"/> where
@@ -153,6 +170,7 @@ public sealed record FileExtract(IReadOnlyList<ExtractNode> Nodes)
                 : reference.Problem(lineCount) is { } wrong ? $"a reference to '{reference.Name}': {wrong}"
                 : reference.Qualifier is { Kind: CodeQualifierKinds.Own, Name: { } own } && !ids.ContainsKey(own) ? $"a reference to '{reference.Name}' names the node '{own}' of its own file, which it holds no node of"
                 : null).FirstOrDefault(found => found is not null)
+            ?? (FolderScope is { Length: > 0 } folder && folder.Split('.').Any(string.IsNullOrWhiteSpace) ? $"the scope its directory gives it, '{folder}', holds a name that is empty" : null)
             ?? (Generated is { } generated && string.IsNullOrWhiteSpace(generated) ? "it says it is generated and not why" : null)
             ?? (Dynamic ?? []).Select(dynamic => dynamic is null || string.IsNullOrWhiteSpace(dynamic.Why) ? "it marks a line dynamic and not why"
                 : !Within(dynamic.Line, lineCount) ? $"it marks line {dynamic.Line.ToString(CultureInfo.InvariantCulture)} dynamic, outside its {lineCount.ToString(CultureInfo.InvariantCulture)} lines"
@@ -468,6 +486,7 @@ public sealed record FileExtract(IReadOnlyList<ExtractNode> Nodes)
             .Concat((References ?? []).SelectMany(reference => (string?[])[reference.From, reference.Kind, reference.Name, reference.Qualifier?.Kind, reference.Qualifier?.Name]))
             .Concat((Dynamic ?? []).Select(dynamic => dynamic.Why))
             .Concat((Literals ?? []).SelectMany(literal => (string?[])[literal.Value, .. (literal.Places ?? []).Select(place => place?.Node)]))
+            .Append(FolderScope)
             .Append(Generated)
             .OfType<string>();
 
@@ -665,6 +684,15 @@ public sealed record ExtractImport(string Form, string Target, int Line)
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public bool Shares { get; init; }
 
+    /// <summary>
+    /// Whether it is, besides an import of a directory's every file, the scope those files are declared in where one
+    /// declares none of its own (<see cref="FileExtract.FolderScope"/>) - a Blazor <c>_Imports.razor</c>'s
+    /// <c>@namespace</c> - each directory between a file and this one's a name after it, as Razor names one. The nearest
+    /// directory's decides, and the first of a file's.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool Namespace { get; init; }
+
     /// <summary>Whether the import makes <paramref name="name"/> visible, by its filters.</summary>
     /// <param name="name">A simple name.</param>
     public bool Lets(string name)
@@ -681,6 +709,7 @@ public sealed record ExtractImport(string Form, string Target, int Line)
             : Export && Prefix is not null ? "it is an export with a prefix: an export makes names visible by themselves"
             : Shares && Form is CodeImportForms.Scope or CodeImportForms.Directory ? "it is of a scope, and shares its imports: only a file's are shared"
             : Shares && (Export || Prefix is not null || Show is not null || Hide is not null) ? "it shares its imports, and is an export or has a prefix or a filter: what is shared is the file's imports as they are"
+            : Namespace && (Form != CodeImportForms.Directory || Prefix is not null || Show is not null || Hide is not null) ? "it is the scope a directory's files are declared in, and is no import of a directory's whole scope"
             : null;
 }
 

@@ -11,8 +11,10 @@ namespace DssHarness.Core.Codebase.Languages;
 /// <summary>
 /// A Razor view (<c>.cshtml</c>) or a Blazor component (<c>.razor</c>). A component is a <c>type</c> named by its file in
 /// its <c>@namespace</c> - else the namespace its directory's path gives, each part made a C# name as Razor makes it,
-/// none at the tree's root - generic by its <c>@typeparam</c>s, marked a part of its code-behind partial, which the linker
-/// joins to it; a view is a <c>section</c> over its lines. The file is read as Razor's own parser reads it, in one walk
+/// none at the tree's root, which the linker reads in the nearest <c>_Imports.razor</c>'s <c>@namespace</c> above it
+/// instead, each directory past that one a name after it, as Razor compiles it (<see cref="FileExtract.FolderScope"/>) -
+/// generic by its <c>@typeparam</c>s, marked a part of its code-behind partial, which the linker joins to it; a view is a
+/// <c>section</c> over its lines. The file is read as Razor's own parser reads it, in one walk
 /// (<see cref="Syntax"/>), and the class Razor compiles it to is read by the C# reader as one class
 /// (<see cref="EmbeddedCode.CSharp"/>): the code of its <c>@code</c> and <c>@functions</c> blocks its members, an
 /// <c>@inject</c> a property of the type it is given, <c>@model</c> its <c>Model</c> property, <c>@inherits</c> and
@@ -59,7 +61,7 @@ public sealed class RazorExtractor : ICodeGraphExtractor
 
     /// <inheritdoc/>
     public CodeGraphExtractorHelp Help { get; } = new(
-        "Razor views (.cshtml) and Blazor components (.razor): a component as a type named by its file in its @namespace - else the namespace its directory's path gives, none at the tree's root - generic by its @typeparams, a part of its code-behind partial, a view as a section over its lines; the file read as Razor's parser reads it and the class it compiles to read by the C# reader - its @code and @functions blocks, an @inject a property of the type it is given, @model its Model property, @inherits and @implements its bases, @attribute an attribute of it - and every piece of C# its markup holds, each @{ } block, each @if, @foreach, @try and their kin with their else, catch and finally, each @x and @( ) expression, each directive attribute's value (@onclick, @bind), @layout's type and @page's route, read as code of the file's head that sees the class's members: what it calls, makes and uses - a name the markup's own code declares where it stands (a statement's or a pattern's variable, a @{ } block's local, a template's context - or the name its Context= gives - inside a component's content) the markup's and no member; @using read by the C# reader as a scope import - one a _ViewImports.cshtml or _Imports.razor holds reaching every file of the language under its directory, as its @namespace does; and its markup read by the reader every markup file shares: a PascalCase element, a partial name= and an Html.Partial(\"x\") as instantiates, and each class and id as a use of the rule that styles it",
+        "Razor views (.cshtml) and Blazor components (.razor): a component as a type named by its file in its @namespace - else in the nearest _Imports.razor's @namespace above it, each directory past that one a name after it, as Razor compiles it, else in the namespace its directory's path gives, none at the tree's root - generic by its @typeparams, a part of its code-behind partial, a view as a section over its lines; the file read as Razor's parser reads it and the class it compiles to read by the C# reader - its @code and @functions blocks, an @inject a property of the type it is given, @model its Model property, @inherits and @implements its bases, @attribute an attribute of it - and every piece of C# its markup holds, each @{ } block, each @if, @foreach, @try and their kin with their else, catch and finally, each @x and @( ) expression, each directive attribute's value (@onclick, @bind), @layout's type and @page's route, read as code of the file's head that sees the class's members: what it calls, makes and uses - a name the markup's own code declares where it stands (a statement's or a pattern's variable, a @{ } block's local, a template's context - or the name its Context= gives - inside a component's content) the markup's and no member; @using read by the C# reader as a scope import - one a _ViewImports.cshtml or _Imports.razor holds reaching every file of the language under its directory, as its @namespace does; and its markup read by the reader every markup file shares: a PascalCase element, a partial name= and an Html.Partial(\"x\") as instantiates, and each class and id as a use of the rule that styles it",
         [
             "what a tag helper is, and an element no component of the tree names: an instantiates that resolves nowhere, counted as such",
             "a component attribute written without an @ whose parameter is no string - Count=\"Items.Count\" - read as text: the parameter's type is the component's, which the file does not say",
@@ -87,7 +89,8 @@ public sealed class RazorExtractor : ICodeGraphExtractor
         var component = name.EndsWith(".razor", StringComparison.OrdinalIgnoreCase);
         var className = Identifier(name.LastIndexOf('.') is var dot and > 0 ? name[..dot] : name);
         var razor = Syntax.Of(text);
-        var scope = razor.Directives.FirstOrDefault(directive => directive.Name == "namespace" && directive.Rest.Length > 0)?.Rest ?? FolderNamespace(input.Path);
+        var ownNamespace = razor.Directives.FirstOrDefault(directive => directive.Name == "namespace" && directive.Rest.Length > 0)?.Rest;
+        var scope = ownNamespace ?? FolderNamespace(input.Path);
 
         // A generic component's class is named as the C# reader names a generic one: by its count of type parameters.
         var typeParameters = razor.Directives.Where(directive => directive.Name == "typeparam").Select(directive => TypeParameter.Match(directive.Rest)).Where(match => match.Success).ToList();
@@ -211,13 +214,21 @@ public sealed class RazorExtractor : ICodeGraphExtractor
         {
             var read = CSharpExtractor.Read(Language, new CodeFileInput(input.Path, usings));
 
+            // An _Imports.razor's @namespace is the namespace of every component under it that names none of its own, as
+            // well as a scope its files see.
+            var namespaces = name.Equals("_Imports.razor", StringComparison.OrdinalIgnoreCase)
+                ? razor.Directives.Where(directive => directive.Name == "namespace" && directive.Rest.Length > 0).Select(directive => FileExtract.LineWithin(lines.LineAt(directive.Start), lineCount)).ToHashSet()
+                : [];
+
             embedded.Add(Imports.Contains(name)
-                ? read with { Imports = [.. read.Imports.Select(import => import.Form == CodeImportForms.Scope ? import with { Form = CodeImportForms.Directory } : import)] }
+                ? read with { Imports = [.. read.Imports.Select(import => import.Form == CodeImportForms.Scope ? import with { Form = CodeImportForms.Directory, Namespace = namespaces.Contains(import.Line) } : import)] }
                 : read);
         }
 
-        // The partials its code renders and what its elements say, in the order the file writes them.
-        return EmbeddedCode.Merged(new FileExtract(head is null ? [] : [head]) { References = [.. references.OrderBy(reference => reference.Line)] }, embedded);
+        // The partials its code renders and what its elements say, in the order the file writes them. A component that names
+        // no namespace of its own is in the one its directory's path gives until a directory above it names one.
+        return EmbeddedCode.Merged(new FileExtract(head is null ? [] : [head]) { References = [.. references.OrderBy(reference => reference.Line)] }, embedded)
+            with { FolderScope = component && ownNamespace is null ? scope ?? string.Empty : null };
 
         Event Region(long at, string code) => new(at, EventKind.Region, 0, [], new CodeRegion(from, string.Empty, at, code));
 
