@@ -29,8 +29,7 @@ namespace DssHarness.Core.Agents.Policy;
 /// </para>
 /// <para>
 /// What it cannot read whole it refuses, by a <see cref="NotSupportedException"/> naming why, and
-/// the policy denies what it was refused: a script nested past <see cref="Depth"/> levels of going
-/// into, parentheses nested past <see cref="Nesting"/>, a shell that reads its script from its
+/// the policy denies what it was refused: a shell that reads its script from its
 /// input, a program named by an expansion - a variable, a substitution, a pattern, a brace - and an
 /// <c>xargs</c> that hands a shell its script from its input. What it does not see is said in
 /// help, not guessed at: the inside of a script file a command runs, and a program another program
@@ -45,12 +44,6 @@ namespace DssHarness.Core.Agents.Policy;
 /// </remarks>
 public static partial class CommandAnalysis
 {
-    /// <summary>How deep one command goes into the scripts its words name: a shell's <c>-c</c>, a decoded encoded command; a script nested deeper is refused.</summary>
-    public const int Depth = 4;
-
-    /// <summary>How deep the parentheses of one script nest - its substitutions and subshells - before it is refused.</summary>
-    public const int Nesting = 32;
-
     /// <summary>
     /// The commands an argument list runs: the list as it is, and a script one of its words names
     /// gone into, its environment first where it carries one.
@@ -77,7 +70,7 @@ public static partial class CommandAnalysis
         IReadOnlyList<string> spelled = [.. argv.Select(word => string.Concat(word.Select(character
             => splitByItsProgram && ExpandedByItsProgram.Contains(character) ? WordQuoting.Open : WordQuoting.Literal)))];
 
-        return Uncut([.. FromWords(argv, spelled, [], 1, [], inputGiven: inputGiven).Where(command => command.Whole.Count > 0)]);
+        return Uncut([.. Flattened(FromWords(argv, spelled, [], [], inputGiven: inputGiven)).Where(command => command.Whole.Count > 0)]);
     }
 
     /// <summary>
@@ -101,7 +94,7 @@ public static partial class CommandAnalysis
         ArgumentException.ThrowIfNullOrWhiteSpace(shell);
         Uncut([shell]);
 
-        return Uncut([.. FromScript(shell, 1, []).Where(command => command.Whole.Count > 0)]);
+        return Uncut([.. Flattened(FromScript(shell, [])).Where(command => command.Whole.Count > 0)]);
     }
 
     /// <summary>
@@ -946,7 +939,7 @@ public static partial class CommandAnalysis
     }
 
     /// <summary>The ends of a Windows program's name that are folded away: what Windows finds a command by.</summary>
-    private static readonly string[] ProgramEnds = [".exe", ".com", ".cmd", ".bat", ".ps1", ".dll"];
+    internal static readonly IReadOnlyList<string> ProgramEnds = [".exe", ".com", ".cmd", ".bat", ".ps1", ".dll"];
 
     /// <summary>The word as a program's name: its last segment, with a Windows program's end folded away.</summary>
     internal static string Name(string word)
@@ -969,29 +962,21 @@ public static partial class CommandAnalysis
     /// <summary>
     /// The words <paramref name="word"/> stands for once the shell expands its braces - <c>{a,b}c</c>
     /// is <c>ac</c> and <c>bc</c> - so a root action spelled in braces is still one; the word alone
-    /// where it holds none. A word that spells more than <see cref="BraceBound"/> words is refused,
-    /// for a word past the bound would go unread.
+    /// where it holds none. Every word it spells, however many, given one at a time: a caller that stops at the first it
+    /// refuses spells no more, and nothing is held but the words still waiting to be spelled. A question every spelling
+    /// answers alike is asked of the word's pattern instead (<see cref="WordPattern.Braces"/>).
     /// </summary>
-    /// <exception cref="NotSupportedException">The word spells more words than the bound.</exception>
-    internal static IReadOnlyList<string> BraceExpansions(string word)
+    internal static IEnumerable<string> BraceExpansions(string word)
     {
         ArgumentNullException.ThrowIfNull(word);
 
-        var results = new List<string>();
         var pending = new Stack<string>([word]);
 
-        while (pending.Count > 0)
+        while (pending.TryPop(out var current))
         {
-            if (results.Count + pending.Count > BraceBound)
-            {
-                throw new NotSupportedException($"'{word}' spells more than {BraceBound} words by its braces, which this does not read");
-            }
-
-            var current = pending.Pop();
-
             if (BraceGroup(current) is not { } group)
             {
-                results.Add(current);
+                yield return current;
                 continue;
             }
 
@@ -1000,19 +985,14 @@ public static partial class CommandAnalysis
                 pending.Push(current[..group.Open] + alternative + current[(group.Close + 1)..]);
             }
         }
-
-        return results;
     }
-
-    /// <summary>How many words one word's braces may spell before it is refused.</summary>
-    private const int BraceBound = 64;
 
     /// <summary>
     /// The first brace group of a word that holds a comma at its own level, and its alternatives;
     /// null where it holds none. Read in one pass, every brace matched by a stack, so no word's
     /// length makes it slow.
     /// </summary>
-    private static (int Open, int Close, IReadOnlyList<string> Alternatives)? BraceGroup(string word)
+    internal static (int Open, int Close, IReadOnlyList<string> Alternatives)? BraceGroup(string word)
     {
         var open = new Stack<(int At, List<int> Commas)>();
         (int Open, int Close, List<int> Commas)? first = null;
@@ -1065,7 +1045,7 @@ public static partial class CommandAnalysis
     /// of their own where the words' own is gone into, so the files they name are decided. A script the words' program
     /// runs reads the input the program does: the one around it (<paramref name="inputGiven"/>), or its own redirect's.
     /// </summary>
-    private static IEnumerable<AnalyzedCommand> FromWords(IReadOnlyList<string> words, IReadOnlyList<string> quoted, IReadOnlyList<ShellRedirect> redirects, int depth, IReadOnlyList<string> environment, IReadOnlyList<IReadOnlyList<string>>? outerWrappers = null, bool inputGiven = true, int level = 0, string? joined = null)
+    private static IEnumerable<Step> FromWords(IReadOnlyList<string> words, IReadOnlyList<string> quoted, IReadOnlyList<ShellRedirect> redirects, IReadOnlyList<string> environment, IReadOnlyList<IReadOnlyList<string>>? outerWrappers = null, bool inputGiven = true, int level = 0, string? joined = null)
     {
         // A program another starts elsewhere, and every script one runs, stands a level deeper than the words' own command.
         var inner = level + 1;
@@ -1088,15 +1068,10 @@ public static partial class CommandAnalysis
         // Each wrapper's words as they stood before it was stripped, outermost first: what it does to the environment.
         var wrapped = new List<IReadOnlyList<string>>(outerWrappers ?? []);
 
-        // Each wrapper is stripped in turn, here rather than by going into it, so no length of
-        // wrappers overflows the stack.
-        for (var wrappers = 0; ; wrappers++)
+        // Each wrapper is stripped in turn, here rather than by going into it, so no length of wrappers overflows the
+        // stack, however many there are.
+        while (true)
         {
-            if (wrappers > Nesting)
-            {
-                throw new NotSupportedException($"'{string.Join(' ', words)}' wraps its program past {Nesting} times, which this does not read");
-            }
-
             // The assignments before the program are the command's environment, carried to what it runs.
             var assigned = EnvironmentOf(words);
 
@@ -1115,14 +1090,10 @@ public static partial class CommandAnalysis
                 // program one names is read.
                 if (environment.Count > 0 || redirects.Count > 0)
                 {
-                    yield return new AnalyzedCommand(environment, redirects) { Wrappers = wrapped, InputGiven = inputGiven, Level = level, Joined = joined };
+                    yield return Step.Of(new AnalyzedCommand(environment, redirects) { Wrappers = wrapped, InputGiven = inputGiven, Level = level, Joined = joined });
                 }
 
-                foreach (var command in ProgramsNamed(given, depth, environment, wrapped, inner))
-                {
-                    yield return command;
-                }
-
+                yield return Step.Into(ProgramsNamed(given, environment, wrapped, inner));
                 yield break;
             }
 
@@ -1135,7 +1106,7 @@ public static partial class CommandAnalysis
                 // The move is the program's own, and the program stands a level deeper with it.
                 level = inner;
                 inner = level + 1;
-                yield return Moved(directory) with { Level = level };
+                yield return Step.Of(Moved(directory) with { Level = level });
             }
 
             // A script the command names, gone into: sh -c 'a && b' and the words after its script, a
@@ -1145,19 +1116,11 @@ public static partial class CommandAnalysis
             {
                 if (redirects.Count > 0)
                 {
-                    yield return new AnalyzedCommand([], redirects) { Level = level, Joined = joined };
+                    yield return Step.Of(new AnalyzedCommand([], redirects) { Level = level, Joined = joined });
                 }
 
-                foreach (var command in GoneInto(scripts, depth, environment, [.. wrapped, words], scriptsInput, inner))
-                {
-                    yield return command;
-                }
-
-                foreach (var command in ProgramsNamed(given, depth, environment, wrapped, inner))
-                {
-                    yield return command;
-                }
-
+                yield return Step.Into(GoneInto(scripts, environment, [.. wrapped, words], scriptsInput, inner));
+                yield return Step.Into(ProgramsNamed(given, environment, wrapped, inner));
                 yield break;
             }
 
@@ -1165,16 +1128,7 @@ public static partial class CommandAnalysis
             // runs, the words after it among them - its own options among them, read as env reads them.
             if (Is(name, "env") && SplitString(words) is { } split)
             {
-                if (depth > Depth)
-                {
-                    throw Nested(words);
-                }
-
-                foreach (var command in FromWords(SplitInto(split), [], redirects, depth + 1, environment, [.. wrapped, words], inputGiven, level, joined))
-                {
-                    yield return command;
-                }
-
+                yield return Step.Into(FromWords(SplitInto(split), [], redirects, environment, [.. wrapped, words], inputGiven, level, joined), WordsKey(words));
                 yield break;
             }
 
@@ -1183,16 +1137,13 @@ public static partial class CommandAnalysis
             {
                 if (redirects.Count > 0)
                 {
-                    yield return new AnalyzedCommand([], redirects) { Level = level, Joined = joined };
+                    yield return Step.Of(new AnalyzedCommand([], redirects) { Level = level, Joined = joined });
                 }
 
                 // eval's script runs in the shell that reads it, at the level of the words' own command.
                 if (words.Count > 1)
                 {
-                    foreach (var command in GoneInto([string.Join(' ', words.Skip(1))], depth, environment, [.. wrapped, words], scriptsInput, level))
-                    {
-                        yield return command;
-                    }
+                    yield return Step.Into(GoneInto([string.Join(' ', words.Skip(1))], environment, [.. wrapped, words], scriptsInput, level));
                 }
 
                 yield break;
@@ -1231,12 +1182,12 @@ public static partial class CommandAnalysis
             {
                 foreach (var directory in MovesOf([.. words.Skip(at)]))
                 {
-                    yield return Moved(directory);
+                    yield return Step.Of(Moved(directory));
                 }
             }
         }
 
-        yield return new AnalyzedCommand(
+        yield return Step.Of(new AnalyzedCommand(
             environment.Count == 0 ? words : [.. environment, .. words],
             redirects,
             environment.Count == 0 ? masks : [.. environment.Select(_ => string.Empty), .. masks])
@@ -1245,57 +1196,37 @@ public static partial class CommandAnalysis
             InputGiven = inputGiven,
             Level = level,
             Joined = joined,
-        };
+        });
 
         // A program another runs by a variable: the environment's own, and what the command
         // declares (Declarations).
-        foreach (var command in ProgramsNamed([.. given, .. Declarations(words, masks)], depth, environment, [.. wrapped, words], inner))
-        {
-            yield return command;
-        }
+        yield return Step.Into(ProgramsNamed([.. given, .. Declarations(words, masks)], environment, [.. wrapped, words], inner));
 
         // A program git's own settings name, which git runs through the shell: core.pager, core.sshCommand, an
         // alias's '!' line, as the variables above are read.
         if (GitWords(words) is { } git && GitSettingScripts(git, environment) is { Count: > 0 } settings)
         {
-            foreach (var command in GoneInto(settings, depth, environment, [.. wrapped, words], level: inner))
-            {
-                yield return command;
-            }
+            yield return Step.Into(GoneInto(settings, environment, [.. wrapped, words], level: inner));
         }
 
         // The command line gh alias set gives a name, which a later command calls by that name alone.
         if (GhAliasScript(words) is { } aliased)
         {
-            foreach (var command in GoneInto([aliased], depth, environment, [.. wrapped, words], level: inner))
-            {
-                yield return command;
-            }
+            yield return Step.Into(GoneInto([aliased], environment, [.. wrapped, words], level: inner));
         }
 
         // A command the program runs with words it fills in as it runs it - find -exec, fd -x, rg
         // --pre, parallel - is a command of its own, those words expansions, reading the program's input.
         foreach (var executed in Executed(words))
         {
-            if (depth > Depth)
-            {
-                throw Nested(words);
-            }
-
-            foreach (var command in FromWords(executed, [], redirects, depth + 1, environment, [.. wrapped, words], inputGiven, inner))
-            {
-                yield return command;
-            }
+            yield return Step.Into(FromWords(executed, [], redirects, environment, [.. wrapped, words], inputGiven, inner), WordsKey(executed));
         }
 
         // The command lines the program runs besides being run itself - sed's e, ssh's remote command, wsl's, at's job -
         // each a script of its own.
         foreach (var script in ScriptsItRuns(words, masks, redirects, program: true, inputGiven))
         {
-            foreach (var command in GoneInto([script], depth, environment, [.. wrapped, words], scriptsInput, inner))
-            {
-                yield return command;
-            }
+            yield return Step.Into(GoneInto([script], environment, [.. wrapped, words], scriptsInput, inner));
         }
 
         // A shell another program runs with its script among the command's words - find -exec,
@@ -1310,10 +1241,7 @@ public static partial class CommandAnalysis
             {
                 foreach (var script in ScriptsItRuns(rest, restMasks, redirects, program: true, inputGiven))
                 {
-                    foreach (var command in GoneInto([script], depth, environment, [.. wrapped, words], scriptsInput, inner))
-                    {
-                        yield return command;
-                    }
+                    yield return Step.Into(GoneInto([script], environment, [.. wrapped, words], scriptsInput, inner));
                 }
             }
 
@@ -1321,22 +1249,11 @@ public static partial class CommandAnalysis
             // script from its input is refused as the command's own is.
             if (Into(Name(words[at]), rest, restMasks, redirects, program: RunsAt(words, at), inputGiven: inputGiven) is { } innerScripts)
             {
-                foreach (var command in GoneInto(innerScripts, depth, environment, [.. wrapped, words], scriptsInput, inner))
-                {
-                    yield return command;
-                }
+                yield return Step.Into(GoneInto(innerScripts, environment, [.. wrapped, words], scriptsInput, inner));
             }
             else if (Is(Name(words[at]), "env") && SplitString(rest) is { } innerSplit)
             {
-                if (depth > Depth)
-                {
-                    throw Nested(rest);
-                }
-
-                foreach (var command in FromWords(SplitInto(innerSplit), [], redirects, depth + 1, environment, [.. wrapped, rest], inputGiven, inner))
-                {
-                    yield return command;
-                }
+                yield return Step.Into(FromWords(SplitInto(innerSplit), [], redirects, environment, [.. wrapped, rest], inputGiven, inner), WordsKey(rest));
             }
         }
     }
@@ -1366,7 +1283,7 @@ public static partial class CommandAnalysis
     /// environment sets, which git may run so too: each <c>GIT_CONFIG_VALUE_n</c> of a key git runs as a command line
     /// (<see cref="RunsProgram"/>) or of none named, and each such setting <c>GIT_CONFIG_PARAMETERS</c> holds.
     /// </summary>
-    private static IEnumerable<AnalyzedCommand> ProgramsNamed(IReadOnlyList<string> assignments, int depth, IReadOnlyList<string> environment, IReadOnlyList<IReadOnlyList<string>>? wrappers, int level)
+    private static IEnumerable<Step> ProgramsNamed(IReadOnlyList<string> assignments, IReadOnlyList<string> environment, IReadOnlyList<IReadOnlyList<string>>? wrappers, int level)
     {
         var pairs = assignments
             .Select(assignment => new[] { AssignedName(assignment), assignment.Split('=', 2)[1] })
@@ -1409,7 +1326,7 @@ public static partial class CommandAnalysis
             }
         }
 
-        return values.Count == 0 ? [] : GoneInto(values, depth, environment, wrappers, level: level);
+        return values.Count == 0 ? [] : GoneInto(values, environment, wrappers, level: level);
     }
 
     /// <summary>
@@ -1685,17 +1602,14 @@ public static partial class CommandAnalysis
          ".sendmailcmd", ".smtpserver", ".uploadpack", ".receivepack", ".update"];
 
     /// <summary>
-    /// The commands each script runs, one level further in: refused past <see cref="Depth"/>. Each reads the input
+    /// The commands each script runs, one level further in, however deep: each gone into as a step of its own
+    /// (<see cref="Flattened"/>), known by its text, so a script met again while it is still being read - one that runs
+    /// itself - ends there, every command it holds read by the reading that met it first. Each reads the input
     /// <paramref name="inputGiven"/> says the script is given - one it is given where nothing says it is not - and stands
     /// at <paramref name="level"/> and the levels its own subshells add (<see cref="AnalyzedCommand.Level"/>).
     /// </summary>
-    private static IEnumerable<AnalyzedCommand> GoneInto(IReadOnlyList<string> scripts, int depth, IReadOnlyList<string> environment, IReadOnlyList<IReadOnlyList<string>>? wrappers, bool inputGiven = true, int level = 1)
+    private static IEnumerable<Step> GoneInto(IReadOnlyList<string> scripts, IReadOnlyList<string> environment, IReadOnlyList<IReadOnlyList<string>>? wrappers, bool inputGiven = true, int level = 1)
     {
-        if (depth > Depth)
-        {
-            throw Nested(scripts);
-        }
-
         // A script that is a word another program fills in as it runs - a file's name find puts in sh -c's place, what
         // xargs reads - is text this cannot read.
         if (scripts.Contains(InputWord))
@@ -1705,16 +1619,9 @@ public static partial class CommandAnalysis
 
         foreach (var script in scripts)
         {
-            foreach (var command in FromScript(script, depth + 1, environment, wrappers, inputGiven, level))
-            {
-                yield return command;
-            }
+            yield return Step.Into(FromScript(script, environment, wrappers, inputGiven, level), ScriptKey(script));
         }
     }
-
-    /// <summary>The refusal of a script nested past <see cref="Depth"/> levels: a root action inside it would not be seen.</summary>
-    private static NotSupportedException Nested(IReadOnlyList<string> words)
-        => new($"'{string.Join(' ', words)}' is a script nested past {Depth} levels of going into, which this does not read");
 
     /// <summary>
     /// What the shell expands in <paramref name="word"/>, as a refusal names it - a substitution, a variable, a
@@ -1818,7 +1725,7 @@ public static partial class CommandAnalysis
     /// word, or none at all - so a word read without its spelling is refused as an expansion exactly as it was before
     /// any of this was read.
     /// </summary>
-    private static string ClassesOf(string word, string? quoted)
+    internal static string ClassesOf(string word, string? quoted)
     {
         if (quoted is null || quoted.Length < word.Length)
         {
@@ -3431,14 +3338,95 @@ public static partial class CommandAnalysis
     /// command then flattened again - its own words may name a script or carry a wrapper. Each reads the input the
     /// script is given (<paramref name="inputGiven"/>), or the one what stands around it in the script gives it.
     /// </summary>
-    private static IEnumerable<AnalyzedCommand> FromScript(string script, int depth, IReadOnlyList<string> environment, IReadOnlyList<IReadOnlyList<string>>? wrappers = null, bool inputGiven = false, int level = 0)
+    private static IEnumerable<Step> FromScript(string script, IReadOnlyList<string> environment, IReadOnlyList<IReadOnlyList<string>>? wrappers = null, bool inputGiven = false, int level = 0)
     {
         foreach (var command in Script(script, 0))
         {
-            foreach (var flat in FromWords(command.Words, [.. command.Quoted ?? command.Words.Select(_ => string.Empty)], command.Redirects, depth, environment, wrappers, inputGiven || command.InputGiven, level + command.Level, command.Joined))
+            // What a command in the background runs - its own words, a script they name - runs in the background with it.
+            yield return Step.Into(
+                FromWords(command.Words, [.. command.Quoted ?? command.Words.Select(_ => string.Empty)], command.Redirects, environment, wrappers, inputGiven || command.InputGiven, level + command.Level, command.Joined),
+                background: command.Background);
+        }
+    }
+
+    /// <summary>
+    /// One step of reading what a command runs: a command read (<see cref="Command"/>), or what a script or a program
+    /// another runs holds, read next as steps of its own (<see cref="Inner"/>) - known by its text where it is a script
+    /// (<see cref="Script"/>), and run in the background where the command that runs it is (<see cref="Background"/>).
+    /// </summary>
+    private readonly record struct Step(AnalyzedCommand? Command, IEnumerable<Step>? Inner, string? Script, bool Background)
+    {
+        /// <summary>A command read.</summary>
+        public static Step Of(AnalyzedCommand command) => new(command, null, null, false);
+
+        /// <summary>What a script or a program another runs holds, read next.</summary>
+        public static Step Into(IEnumerable<Step> inner, string? script = null, bool background = false) => new(null, inner, script, background);
+    }
+
+    /// <summary>What a script gone into is known by while it is read (<see cref="Flattened"/>): its text, apart from every words' key.</summary>
+    private static string ScriptKey(string script) => "script\n" + script;
+
+    /// <summary>
+    /// What the words of a command line another program splits or fills in are known by while they are read
+    /// (<see cref="Flattened"/>): each word's length and its text, so no two lists of words share one, and none a script's.
+    /// </summary>
+    private static string WordsKey(IReadOnlyList<string> words)
+        => "words\n" + string.Concat(words.Select(word => $"{word.Length.ToString(System.Globalization.CultureInfo.InvariantCulture)}:{word}"));
+
+    /// <summary>
+    /// The commands <paramref name="steps"/> read, in the order a recursive reading would meet them, read on a stack of
+    /// its own: each script or program another runs gone into as its step comes, however deep they nest, so no depth of
+    /// going into overflows the stack or is refused. A script whose text is met again while it is still being read - one
+    /// that runs itself - is not gone into again: the reading in progress reads every command it holds, and what it would
+    /// add is that reading's again. What a command in the background runs is in the background with it.
+    /// </summary>
+    private static IEnumerable<AnalyzedCommand> Flattened(IEnumerable<Step> steps)
+    {
+        var reading = new Stack<(IEnumerator<Step> Steps, string? Script, bool Background)>();
+        var inProgress = new HashSet<string>(StringComparer.Ordinal);
+
+        reading.Push((steps.GetEnumerator(), null, false));
+
+        try
+        {
+            while (reading.Count > 0)
             {
-                // What a command in the background runs - its own words, a script they name - runs in the background with it.
-                yield return command.Background && !flat.Background ? flat with { Background = true } : flat;
+                var (current, script, background) = reading.Peek();
+
+                if (!current.MoveNext())
+                {
+                    reading.Pop();
+                    current.Dispose();
+
+                    if (script is not null)
+                    {
+                        inProgress.Remove(script);
+                    }
+
+                    continue;
+                }
+
+                var step = current.Current;
+
+                if (step.Command is { } command)
+                {
+                    yield return background && !command.Background ? command with { Background = true } : command;
+                    continue;
+                }
+
+                if (step.Inner is not { } inner || (step.Script is { } text && !inProgress.Add(text)))
+                {
+                    continue;
+                }
+
+                reading.Push((inner.GetEnumerator(), step.Script, background || step.Background));
+            }
+        }
+        finally
+        {
+            while (reading.TryPop(out var left))
+            {
+                left.Steps.Dispose();
             }
         }
     }

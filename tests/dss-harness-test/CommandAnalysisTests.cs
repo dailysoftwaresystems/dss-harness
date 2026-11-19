@@ -300,40 +300,66 @@ public sealed class CommandAnalysisTests
         Assert.Equal([["sudo", "x"]], Commands($"pwsh -EncodedCommand {encoded}"));
     }
 
+    /// <summary>
+    /// A script gone into is read however deep it nests: fifty evals, each reading the words after it as its script, are
+    /// read to the command at their heart, and so are eight shells each running the next as its -c script. Red with
+    /// <c>Depth</c> 4, which refused the fifth going-in.
+    /// </summary>
     [Fact]
-    public void GoingInStopsAtFourLevels_AndAScriptNestedDeeperIsRefused()
+    public void AScriptWrappedFiftyDeep_IsDecidedWhole()
     {
+        Assert.Contains(["sudo", "x"], Commands(string.Concat(Enumerable.Repeat("eval ", 50)) + "sudo x"));
+
         var script = "sudo x";
 
-        for (var level = 0; level < 4; level++)
+        for (var level = 0; level < 8; level++)
         {
             script = $"sh -c \"{script.Replace("\\", "\\\\").Replace("\"", "\\\"")}\"";
         }
 
         Assert.Equal([["sudo", "x"]], Commands(script));
-
-        var deeper = $"sh -c \"{script.Replace("\\", "\\\\").Replace("\"", "\\\"")}\"";
-
-        // The fifth going-in is not made, and what it would hide is not left as words: refused.
-        var refused = Assert.Throws<NotSupportedException>(() => Commands(deeper));
-
-        Assert.Contains("is a script nested past 4 levels of going into, which this does not read", refused.Message, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// A script that runs itself ends where it is met again while it is still being read: a pager git runs whose command
+    /// is that git again, the variable carried in, is read once, every command it holds read by the reading that met it
+    /// first. Red with <c>Depth</c> 4, which refused the loop as a script nested past its levels.
+    /// </summary>
     [Fact]
-    public void ParenthesesNestedPastTheBound_AreRefused_NeverACrash()
+    public void AScriptThatEvaluatesItself_EndsAtTheRevisit()
     {
-        var deep = string.Concat(Enumerable.Repeat("( ", 20000)) + "sudo x" + string.Concat(Enumerable.Repeat(")", 20000));
-        var substituted = string.Concat(Enumerable.Repeat("echo $(", 20000)) + "x" + string.Concat(Enumerable.Repeat(")", 20000));
+        Assert.Contains(["git", "-p", "log"], Commands("GIT_PAGER='git -p log' git -p log"));
+        Assert.Contains(["sudo", "id"], Commands("GIT_PAGER='sudo id; git -p log' git -p log"));
+    }
 
-        Assert.Contains("nest past 32 levels", Assert.Throws<NotSupportedException>(() => Commands(deep)).Message, StringComparison.Ordinal);
-        Assert.Contains("nest past 32 levels", Assert.Throws<NotSupportedException>(() => Commands(substituted)).Message, StringComparison.Ordinal);
+    /// <summary>
+    /// A substitution five hundred deep, and parentheses and arithmetic as deep, are read on a stack of a megabyte - each
+    /// reader's nesting gone into through DeepCalls, never refused. Red with <c>Nesting</c> 32.
+    /// </summary>
+    [Fact]
+    public async Task ASubstitutionFiveHundredDeep_IsRead()
+    {
+        Assert.Equal(new ChildRunAnswer(0, "read", ""), await ChildRun.MethodAsync(typeof(CommandAnalysisTests), nameof(ReadFiveHundredDeep), TestContext.Current.CancellationToken));
+    }
+
+    /// <summary>The child of <see cref="ASubstitutionFiveHundredDeep_IsRead"/>: each deep script read, on a small stack.</summary>
+    internal static string ReadFiveHundredDeep() => SmallStack.Run(() =>
+    {
+        const int Deep = 500;
+        var substituted = string.Concat(Enumerable.Repeat("echo $(", Deep)) + "sudo x" + string.Concat(Enumerable.Repeat(")", Deep));
+        var parenthesized = string.Concat(Enumerable.Repeat("( ", Deep)) + "sudo x" + string.Concat(Enumerable.Repeat(")", Deep));
+        var arithmetic = "echo " + string.Concat(Enumerable.Repeat("$((", Deep)) + "1" + string.Concat(Enumerable.Repeat("))", Deep));
+
+        Assert.Contains(["sudo", "x"], Commands(substituted));
+        Assert.Equal([["sudo", "x"]], Commands(parenthesized));
+        Assert.Equal("echo", Assert.Single(Commands(arithmetic))[0]);
 
         // Arithmetic's parentheses are counted, never gone into: however deep, it is let's expression and runs nothing of its own.
         Assert.Equal(
-            [["let", string.Concat(Enumerable.Repeat("(", 19998)) + "1" + string.Concat(Enumerable.Repeat(")", 19998))]],
-            Commands(string.Concat(Enumerable.Repeat("(", 20000)) + "1" + string.Concat(Enumerable.Repeat(")", 20000))));
-    }
+            [["let", string.Concat(Enumerable.Repeat("(", Deep - 2)) + "1" + string.Concat(Enumerable.Repeat(")", Deep - 2))]],
+            Commands(string.Concat(Enumerable.Repeat("(", Deep)) + "1" + string.Concat(Enumerable.Repeat(")", Deep))));
+        return "read";
+    });
 
     [Fact]
     public void TheInsideOfAScriptFileIsNotRead()
@@ -455,19 +481,15 @@ public sealed class CommandAnalysisTests
         Assert.Throws<NotSupportedException>(() => Commands((IReadOnlyList<string>)["pwsh", "-c", "echo `u{D800}"]));
         Assert.Throws<NotSupportedException>(() => Commands((IReadOnlyList<string>)["pwsh", "-c", "echo `u{110000}"]));
 
-        // Invoke-Expression's one string is a script of its own, to four levels as a script gone into is.
+        // Invoke-Expression's one string is a script of its own, however deep, as a script gone into is.
         var nested = "git status";
 
-        for (var level = 0; level < CommandAnalysis.Depth; level++)
+        for (var level = 0; level < 10; level++)
         {
             nested = $"iex '{nested.Replace("'", "''", StringComparison.Ordinal)}'";
         }
 
         Assert.Contains(["git", "status"], Commands((IReadOnlyList<string>)["pwsh", "-c", nested]));
-        Assert.Contains(
-            $"nest past {CommandAnalysis.Depth} levels",
-            Assert.Throws<NotSupportedException>(() => Commands((IReadOnlyList<string>)["pwsh", "-c", $"iex '{nested.Replace("'", "''", StringComparison.Ordinal)}'"])).Message,
-            StringComparison.Ordinal);
         Assert.Throws<NotSupportedException>(() => Commands((IReadOnlyList<string>)["pwsh", "-c", "echo @'\nx"]));
         Assert.Throws<NotSupportedException>(() => Commands((IReadOnlyList<string>)["pwsh", "-c", "& { echo x"]));
     }
@@ -706,9 +728,9 @@ public sealed class CommandAnalysisTests
         // One that never closes, nested, is read once at each place - in time, never in time doubling with each.
         Assert.Contains(["echo", "$[$[$[$[$[$[$[$[$[$[$[$[$[$[$[$[$[$[$[$[$[$[$[$[$[$[$[$[$[$[$[x"], Commands("echo " + string.Concat(Enumerable.Repeat("$[", 31)) + "x"));
 
-        // Nested past the bound, it is refused, never a crash.
-        var deep = "echo " + string.Concat(Enumerable.Repeat("$((", 20000)) + "1" + string.Concat(Enumerable.Repeat("))", 20000));
-        Assert.Contains("nest past 32 levels", Assert.Throws<NotSupportedException>(() => Commands(deep)).Message, StringComparison.Ordinal);
+        // However deep it nests, it is read, never a crash (ASubstitutionFiveHundredDeep_IsRead reads one on a small stack).
+        var deep = "echo " + string.Concat(Enumerable.Repeat("$((", 2000)) + "1" + string.Concat(Enumerable.Repeat("))", 2000));
+        Assert.Equal("echo", Assert.Single(Commands(deep))[0]);
     }
 
     [Fact]
@@ -906,11 +928,31 @@ public sealed class CommandAnalysisTests
         Assert.Throws<NotSupportedException>(() => Commands("for x in a >b; do y; done"));
     }
 
+    /// <summary>
+    /// A PowerShell wildcard is matched in time linear in the name, however its stars are written: a hundred stars against
+    /// ten thousand characters is answered, never cut off. Red with the one-second timeout of the backtracking matcher,
+    /// which this pattern outran.
+    /// </summary>
     [Fact]
-    public void ABraceThatSpellsPastTheBound_IsRefused()
+    public void PowerShellWildcards_AreLinear()
+    {
+        var hostile = string.Concat(Enumerable.Repeat("*a", 100)) + "*b";
+        var name = new string('a', 10_000);
+
+        Assert.False(CommandAnalysis.WildcardMayMatch(hostile, name));
+        Assert.True(CommandAnalysis.WildcardMayMatch(hostile, name + "B"));
+    }
+
+    /// <summary>
+    /// A brace spells every word it spells, one at a time, however many: none is dropped, and a caller that stops at the
+    /// first takes no more. Red with <c>BraceBound</c>, which refused a word spelling more than 64.
+    /// </summary>
+    [Fact]
+    public void ABraceSpellsEveryWord_OneAtATime()
     {
         Assert.Superset(new HashSet<string> { "ab", "ac" }, CommandAnalysis.BraceExpansions("a{b,c}").ToHashSet());
-        Assert.Throws<NotSupportedException>(() => CommandAnalysis.BraceExpansions("{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}"));
+        Assert.Equal(128, CommandAnalysis.BraceExpansions("{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}").Distinct(StringComparer.Ordinal).Count());
+        Assert.Equal(40, CommandAnalysis.BraceExpansions(string.Concat(Enumerable.Repeat("{a,b}", 40))).First().Length);
     }
 
     [Fact]

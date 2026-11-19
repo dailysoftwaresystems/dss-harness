@@ -142,7 +142,7 @@ public sealed class AgentRunnerTests
             new PassThroughMechanism("bubblewrap", "0.9.0") { Leaves = "abstract Unix sockets" },
             DssHarness.Core.Processes.IsolationProfile.Nothing,
             null,
-            null) { After = _ => Task.FromResult<string?>(Made) };
+            null) { After = (_, _) => Task.FromResult<string?>(Made) };
         var seen = new List<AgentEvent>();
 
         var result = await Runner(client).RunAsync(Step(temp) with { Isolation = leaving }, new Collecting(seen), TestContext.Current.CancellationToken);

@@ -1,3 +1,5 @@
+using DssHarness.Core.Text;
+
 namespace DssHarness.Core.Agents.Policy;
 
 /// <summary>How a command's words touch an environment variable (<see cref="CommandAnalysis.VariableTouched"/>).</summary>
@@ -302,8 +304,12 @@ public static partial class CommandAnalysis
     [System.Text.RegularExpressions.GeneratedRegex(@"(?<![A-Za-z0-9_$])(?<name>\$\{[^}]*\}|\$\([^)]*\)|\$[A-Za-z_][A-Za-z0-9_]*|[A-Za-z_][A-Za-z0-9_]*)\s*(?:\[[^\]]*\]\s*)?(?:(?:[-+*/%&|^]|<<|>>)?=(?!=)|\+\+|--)|(?:\+\+|--)\s*(?<name>\$\{[^}]*\}|\$\([^)]*\)|\$[A-Za-z_][A-Za-z0-9_]*|[A-Za-z_][A-Za-z0-9_]*)")]
     private static partial System.Text.RegularExpressions.Regex ArithmeticAssignment();
 
-    /// <summary>Whether PowerShell's wildcard <paramref name="pattern"/> - a star, a question mark, a bracket - may match <paramref name="name"/>, in any case.</summary>
-    private static bool WildcardMayMatch(string pattern, string name)
+    /// <summary>
+    /// Whether PowerShell's wildcard <paramref name="pattern"/> - a star, a question mark, a bracket - may match
+    /// <paramref name="name"/>, in any case. A wildcard is a regular pattern, matched by the linear matcher
+    /// (<see cref="LinearRegex"/>) in time linear in the name however its stars are written, with no match cut short.
+    /// </summary>
+    internal static bool WildcardMayMatch(string pattern, string name)
     {
         if (pattern.Contains('[', StringComparison.Ordinal))
         {
@@ -312,7 +318,7 @@ public static partial class CommandAnalysis
 
         var expression = "^" + System.Text.RegularExpressions.Regex.Escape(pattern).Replace(@"\*", ".*", StringComparison.Ordinal).Replace(@"\?", ".", StringComparison.Ordinal) + "$";
 
-        return System.Text.RegularExpressions.Regex.IsMatch(name, expression, System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant, TimeSpan.FromSeconds(1));
+        return LinearRegex.Compile(expression, System.Text.RegularExpressions.RegexOptions.IgnoreCase).IsMatch(name);
     }
 
     /// <summary>The parameters of PowerShell's item cmdlets that take a path, by any prefix of two letters or more.</summary>
@@ -494,25 +500,43 @@ public static partial class CommandAnalysis
     }
 
     /// <summary>
-    /// The readings of <paramref name="word"/> with each variable the shell expands in it given a value
-    /// <paramref name="values"/> knows - <c>$NAME</c> and <c>${NAME}</c> where its dollar is not quoted away, a leading
-    /// <c>~</c> the shell expands as <c>HOME</c>'s and a leading <c>~+</c> as <c>PWD</c>'s - each value in turn, the text
-    /// each takes standing to the shell as its dollar did; the word alone where it names none of them. Every other
-    /// expansion stays as it is spelled.
+    /// <paramref name="word"/> as the pattern of its spellings (<see cref="WordPattern"/>), each variable the shell
+    /// expands in it that <paramref name="values"/> knows - <c>$NAME</c> and <c>${NAME}</c> where its dollar is not quoted
+    /// away, a leading <c>~</c> the shell expands as <c>HOME</c>'s and a leading <c>~+</c> as <c>PWD</c>'s - standing for
+    /// the pattern of every value it may hold, each one kept, however many: one choice wherever the variable stands, every
+    /// character it spells standing to the shell as its dollar did. Every other expansion stays as it is spelled. The word
+    /// alone, its one spelling, where it names none of them.
     /// </summary>
     /// <param name="word">The word.</param>
     /// <param name="quoted">How each of its characters stands to the shell, or null where its spelling was not kept.</param>
-    /// <param name="values">The values a name may hold, or null where none is known.</param>
-    /// <exception cref="NotSupportedException">The values spell more readings of the word than <see cref="MaxReadings"/>.</exception>
-    public static IReadOnlyList<(string Word, string Quoted)> Substituted(string word, string? quoted, Func<string, IReadOnlyList<string>?> values)
+    /// <param name="values">The pattern of the values a name may hold, or null where none is known.</param>
+    public static WordPattern Patterned(string word, string? quoted, Func<string, WordPattern?> values)
     {
         ArgumentNullException.ThrowIfNull(word);
         ArgumentNullException.ThrowIfNull(values);
 
         var classes = ClassesOf(word, string.IsNullOrEmpty(quoted) ? null : quoted);
-        var references = new List<(int Start, int End, string Name, char Class)>();
+        var parts = new List<WordPart>();
+        var start = 0;
 
-        for (var at = 0; at < word.Length; at++)
+        // A leading tilde the shell expands is HOME's value, and a leading ~+ PWD's: each pattern known for it, as $HOME
+        // and $PWD are.
+        foreach (var (tilde, name) in new[] { ("~+", "PWD"), ("~", "HOME") })
+        {
+            if (word.StartsWith(tilde, StringComparison.Ordinal)
+                && classes[..tilde.Length].All(character => character == WordQuoting.Open)
+                && (word.Length == tilde.Length || word[tilde.Length] is '/' or '\\')
+                && values(name) is { } known)
+            {
+                parts.Add(new WordPart.Choice(new WordChoice([known]), WordQuoting.Open));
+                start = tilde.Length;
+                break;
+            }
+        }
+
+        var text = start;
+
+        for (var at = start; at < word.Length; at++)
         {
             if (word[at] != '$' || classes[at] == WordQuoting.Literal || at + 1 >= word.Length)
             {
@@ -528,90 +552,72 @@ public static partial class CommandAnalysis
                 end++;
             }
 
-            if (end == begin || (braced && (end >= word.Length || word[end] != '}')))
+            if (end == begin || (braced && (end >= word.Length || word[end] != '}')) || values(word[begin..end]) is not { } given)
             {
                 continue;
             }
 
-            references.Add((at, braced ? end + 1 : end, word[begin..end], classes[at]));
+            if (at > text)
+            {
+                parts.Add(new WordPart.Text(word[text..at], classes[text..at]));
+            }
+
+            parts.Add(new WordPart.Choice(new WordChoice([given]), classes[at]));
+            text = braced ? end + 1 : end;
+            at = text - 1;
         }
 
-        var spelled = (Word: word, Quoted: classes);
-        var readings = new List<(string Word, string Quoted)> { spelled };
-
-        foreach (var name in references.Select(reference => reference.Name).Distinct(StringComparer.Ordinal))
+        if (text < word.Length)
         {
-            if (values(name) is not { Count: > 0 } given)
-            {
-                continue;
-            }
-
-            readings = [.. readings.SelectMany(reading => given.Select(value => Replaced(reading, name, value)))];
-
-            if (readings.Count > MaxReadings)
-            {
-                throw new NotSupportedException($"'{word}' spells more than {MaxReadings} readings by the values its variables may hold, which this does not follow");
-            }
+            parts.Add(new WordPart.Text(word[text..], classes[text..]));
         }
 
-        // A leading tilde the shell expands is HOME's value, and a leading ~+ PWD's: read as each one known for it, as $HOME
-        // and $PWD are.
-        foreach (var (tilde, name) in new[] { ("~", "HOME"), ("~+", "PWD") })
-        {
-            if (values(name) is not { Count: > 0 } known)
-            {
-                continue;
-            }
-
-            readings = [.. readings.SelectMany(reading => reading.Word.StartsWith(tilde, StringComparison.Ordinal)
-                    && reading.Quoted[..tilde.Length].All(character => character == WordQuoting.Open)
-                    && (reading.Word.Length == tilde.Length || reading.Word[tilde.Length] is '/' or '\\')
-                ? known.Select(value => (value + reading.Word[tilde.Length..], new string(WordQuoting.Open, value.Length) + reading.Quoted[tilde.Length..]))
-                : [reading])];
-
-            if (readings.Count > MaxReadings)
-            {
-                throw new NotSupportedException($"'{word}' spells more than {MaxReadings} readings by the values its variables may hold, which this does not follow");
-            }
-        }
-
-        // The word as it is spelled first, then each reading a value gave it.
-        return readings.Count == 1 && readings[0] == spelled ? readings : [spelled, .. readings];
+        return parts.Count == 0 ? WordPattern.Of(word, classes) : new WordPattern(parts);
     }
 
-    /// <summary>The most readings of one word, or of one command, its variables' values are followed to; past them it is not decided, and so denied.</summary>
-    public const int MaxReadings = 16;
-
-    /// <summary><paramref name="reading"/> with each reference to <paramref name="name"/> the shell expands given <paramref name="value"/>, standing as its dollar stood.</summary>
-    private static (string Word, string Quoted) Replaced((string Word, string Quoted) reading, string name, string value)
+    /// <summary>
+    /// Whether a spelling of <paramref name="pattern"/> may hold what the shell expands: a dollar, a cmd percent or a
+    /// backtick anywhere it is not quoted away - in its own text, or in what a choice of it spells - for text the choices
+    /// join may make one the parts alone do not (<c>${D}(id)</c> where <c>D</c> holds a dollar). Read of the pattern's text
+    /// once, whatever its spellings.
+    /// </summary>
+    /// <param name="pattern">The pattern.</param>
+    internal static bool MayExpand(WordPattern pattern)
     {
-        var word = new System.Text.StringBuilder();
-        var mask = new System.Text.StringBuilder();
+        ArgumentNullException.ThrowIfNull(pattern);
 
-        for (var at = 0; at < reading.Word.Length; at++)
+        var waiting = new Stack<(WordPattern Pattern, char? Class)>([(pattern, null)]);
+        var seen = new HashSet<WordChoice>(ReferenceEqualityComparer.Instance);
+
+        while (waiting.TryPop(out var each))
         {
-            if (reading.Word[at] == '$' && reading.Quoted[at] != WordQuoting.Literal)
+            foreach (var part in each.Pattern.Parts)
             {
-                foreach (var spelled in new[] { "${" + name + "}", "$" + name })
+                switch (part)
                 {
-                    var end = at + spelled.Length;
+                    case WordPart.Text text:
+                        for (var at = 0; at < text.Spelled.Length; at++)
+                        {
+                            var stands = each.Class ?? (at < text.Quoted.Length ? text.Quoted[at] : WordQuoting.Open);
 
-                    if (string.CompareOrdinal(reading.Word, at, spelled, 0, spelled.Length) == 0
-                        && (spelled[1] == '{' || end >= reading.Word.Length || !(char.IsAsciiLetterOrDigit(reading.Word[end]) || reading.Word[end] == '_')))
-                    {
-                        word.Append(value);
-                        mask.Append(reading.Quoted[at], value.Length);
-                        at = end - 1;
-                        goto Next;
-                    }
+                            if (text.Spelled[at] is '$' or '%' or '`' && stands != WordQuoting.Literal)
+                            {
+                                return true;
+                            }
+                        }
+
+                        break;
+                    case WordPart.Choice choice when seen.Add(choice.Of):
+                        foreach (var alternative in choice.Of.Alternatives)
+                        {
+                            waiting.Push((alternative, choice.Class ?? each.Class));
+                        }
+
+                        break;
                 }
             }
-
-            word.Append(reading.Word[at]);
-            mask.Append(reading.Quoted[at]);
-            Next:;
         }
 
-        return (word.ToString(), mask.ToString());
+        return false;
     }
 }

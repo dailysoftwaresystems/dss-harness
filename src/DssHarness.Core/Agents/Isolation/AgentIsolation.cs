@@ -8,6 +8,7 @@ using DssHarness.Core.Platform;
 using DssHarness.Core.Processes;
 using DssHarness.Core.Repository;
 using DssHarness.Core.Results;
+using DssHarness.Core.Waiting;
 
 namespace DssHarness.Core.Agents.Isolation;
 
@@ -90,7 +91,7 @@ public sealed record AgentIsolationRecord(string Mode)
 /// an agent, or one of the tool's own executions of an agent's work: the configuration's mode, the mechanism proved on
 /// this machine, or why there is none and what would give one. The one place either is refused, said and recorded, so the
 /// two never answer the same mode two ways; and, once it has run, the one question of whether anything goes on over what
-/// it ran over (<see cref="AfterwardAsync"/>). Disposed once it has run, it takes its temporary directory away.
+/// it ran over (<see cref="AfterwardAsync(CancellationToken)"/>). Disposed once it has run, it takes its temporary directory away.
 /// </summary>
 /// <param name="Mode">The configuration's mode (<see cref="AgentIsolationMode"/>).</param>
 /// <param name="Mechanism">The mechanism, proved on this machine; null where there is none.</param>
@@ -99,13 +100,16 @@ public sealed record AgentIsolationRecord(string Mode)
 public abstract record IsolationDecision(string Mode, IIsolationMechanism? Mechanism, string? Without, string? Remedy) : IDisposable
 {
     private Action? _release;
-    private readonly Func<CancellationToken, Task<string?>>? _after;
+    private readonly Func<Action<WaitTold>?, CancellationToken, Task<string?>>? _after;
 
     /// <summary>What takes its temporary directory away, once, as it is disposed; nothing where it has none.</summary>
     public Action? Release { init => _release = value; }
 
-    /// <summary>What looks, once it has run, at what it left in git's own directories (<see cref="AfterwardAsync"/>); nothing where it ran under no mechanism.</summary>
-    public Func<CancellationToken, Task<string?>>? After { init => _after = value; }
+    /// <summary>
+    /// What looks, once it has run, at what it left in git's own directories (<see cref="AfterwardAsync(Action{WaitTold}?, CancellationToken)"/>),
+    /// telling each wait it makes; nothing where it ran under no mechanism.
+    /// </summary>
+    public Func<Action<WaitTold>?, CancellationToken, Task<string?>>? After { init => _after = value; }
 
     /// <summary>
     /// Whether it may not run: it needs the isolation, there is no mechanism to hold it, and the mode is anything but
@@ -131,8 +135,17 @@ public abstract record IsolationDecision(string Mode, IIsolationMechanism? Mecha
     /// place of an object for every git that reads it - or that git could not say what is there - as a sentence with the
     /// remedy; null where nothing keeps it from going on.
     /// </summary>
-    /// <param name="cancellationToken">Stops the look, which is bounded besides (<see cref="AgentIsolation.AfterwardLimit"/>).</param>
-    public Task<string?> AfterwardAsync(CancellationToken cancellationToken) => _after?.Invoke(cancellationToken) ?? Task.FromResult<string?>(null);
+    /// <param name="cancellationToken">Stops the look, which lasts as long as git takes to answer it.</param>
+    public Task<string?> AfterwardAsync(CancellationToken cancellationToken) => AfterwardAsync(null, cancellationToken);
+
+    /// <summary>
+    /// The look <see cref="AfterwardAsync(CancellationToken)"/> makes, each wait of it - git listing a repository's refs,
+    /// however many there are - told through <paramref name="told"/> every <see cref="Waits.SaidEvery"/> it lasts.
+    /// </summary>
+    /// <param name="told">Told where a wait of the look stands; nothing is told where none is given.</param>
+    /// <param name="cancellationToken">Stops the look, which lasts as long as git takes to answer it.</param>
+    public Task<string?> AfterwardAsync(Action<WaitTold>? told, CancellationToken cancellationToken)
+        => _after?.Invoke(told, cancellationToken) ?? Task.FromResult<string?>(null);
 
     /// <inheritdoc/>
     public void Dispose()
@@ -579,7 +592,7 @@ public interface IAgentIsolation
 /// for any file there breaks every commit git makes on a branch: the path is held absent where the mechanism holds a path
 /// that is not there, and where none can, the ground is refused. Every git directory it
 /// names is pinned for every later git of the tool's in its tree, and what the work leaves in those it writes that no
-/// rule holds - an operation's state, a replacement - is looked at once it has run (<see cref="IsolationDecision.AfterwardAsync"/>).
+/// rule holds - an operation's state, a replacement - is looked at once it has run (<see cref="IsolationDecision.AfterwardAsync(CancellationToken)"/>).
 /// </summary>
 /// <remarks>
 /// A launch or an execution is given no isolation - which the mode turns into a refusal or a notice - where its places
@@ -599,6 +612,7 @@ public interface IAgentIsolation
 /// <param name="environment">Reads this process's environment, for where the user's cache directory, the places the user keeps credentials in and the user's SSH agent are; this process's own where left out.</param>
 /// <param name="pins">Keeps each tree's git directories, as git named them, for every later git of this tool's in it; none where left out.</param>
 /// <param name="claudeCode">Every Claude Code directory on this machine, which an execution hides as a launch does; this machine's own alone, the slot unread, where left out.</param>
+/// <param name="clock">What a wait of the look once the work has run is measured and told on; the system's where left out.</param>
 public sealed class AgentIsolation(
     IIsolationPlatform platform,
     IGitClient git,
@@ -606,8 +620,11 @@ public sealed class AgentIsolation(
     IHostPlatform host,
     Func<string, string?>? environment = null,
     GitDirectoryPins? pins = null,
-    ClaudeCodeDirectories? claudeCode = null) : IAgentIsolation
+    ClaudeCodeDirectories? claudeCode = null,
+    TimeProvider? clock = null) : IAgentIsolation
 {
+    private readonly TimeProvider _clock = clock ?? TimeProvider.System;
+
     /// <summary>The variable the user's SSH agent's socket is named by.</summary>
     public const string SshAgentSocketVariable = "SSH_AUTH_SOCK";
 
@@ -637,12 +654,6 @@ public sealed class AgentIsolation(
     /// operation under way - so what the work leaves of them is looked at once it has run.
     /// </summary>
     public static IReadOnlyList<string> OperationState { get; } = ["rebase-merge", "rebase-apply", "sequencer"];
-
-    /// <summary>How long the look once the work has run may take: what it asks git, a list of a repository's replacements, is answered at once where nothing holds git up.</summary>
-    public static readonly TimeSpan AfterwardLimit = TimeSpan.FromMinutes(1);
-
-    /// <summary>How much of an operation's state is read for what it holds before it is taken as changed whatever it holds.</summary>
-    private const long OperationStateBound = 64L * 1024 * 1024;
 
     private readonly Func<string, string?> _environment = environment ?? Environment.GetEnvironmentVariable;
     private readonly ClaudeCodeDirectories _claudeCode = claudeCode ?? new ClaudeCodeDirectories(fileSystem, host, keys: null, environment);
@@ -750,7 +761,7 @@ public sealed class AgentIsolation(
         // What the work may leave in the git directories it writes that no rule holds is looked at once it has run, against
         // what is there before it starts.
         var writtenTrees = Written(ground, gitPlaces);
-        var before = await LeftAsync(writtenTrees, cancellationToken).ConfigureAwait(false);
+        var before = await LeftAsync(writtenTrees, told: null, cancellationToken).ConfigureAwait(false);
 
         if (before.Unread is { } unreadBefore)
         {
@@ -812,11 +823,11 @@ public sealed class AgentIsolation(
             pins?.Pin(tree, gitDirectory, commonDirectory);
         }
 
-        return new Held(mode, mechanism, built.Profile, built.ClaudeCode, null, null, legacy, temp is null ? null : () => Removed(temp), async token => LeftSince(before, await LeftAsync(writtenTrees, token).ConfigureAwait(false)));
+        return new Held(mode, mechanism, built.Profile, built.ClaudeCode, null, null, legacy, temp is null ? null : () => Removed(temp), async (told, token) => LeftSince(before, await LeftAsync(writtenTrees, told, token).ConfigureAwait(false)));
     }
 
     /// <summary>A decision as the builder makes it, before it is a launch's or an execution's.</summary>
-    private sealed record Held(string Mode, IIsolationMechanism? Mechanism, IsolationProfile? Profile, IsolationProfile? ClaudeCode, string? Without, string? Remedy, IReadOnlyList<string> Legacy, Action? Release, Func<CancellationToken, Task<string?>>? After = null)
+    private sealed record Held(string Mode, IIsolationMechanism? Mechanism, IsolationProfile? Profile, IsolationProfile? ClaudeCode, string? Without, string? Remedy, IReadOnlyList<string> Legacy, Action? Release, Func<Action<WaitTold>?, CancellationToken, Task<string?>>? After = null)
     {
         public static Held None(string mode, string? why, string? remedy) => new(mode, null, null, null, why, remedy, [], null);
     }
@@ -846,9 +857,10 @@ public sealed class AgentIsolation(
     /// What there is in the git directories of <paramref name="written"/> that git started outside would go on with: each
     /// operation's state in each tree's own git directory, with what it holds; and every replacement of each repository,
     /// listed by git - whatever keeps its refs, loose files, <c>packed-refs</c> or a reftable - so nothing the work wrote is
-    /// read by the tool itself, and a ref store that holds git up is answered as unread within <see cref="AfterwardLimit"/>.
+    /// read by the tool itself, and git waited for to its end, however many refs it lists (<see cref="Waits.ForAsync"/>),
+    /// each wait told through <paramref name="told"/>.
     /// </summary>
-    private async Task<Left> LeftAsync(IReadOnlyList<(string Tree, string GitDirectory, string CommonDirectory, bool Reftable)> written, CancellationToken cancellationToken)
+    private async Task<Left> LeftAsync(IReadOnlyList<(string Tree, string GitDirectory, string CommonDirectory, bool Reftable)> written, Action<WaitTold>? told, CancellationToken cancellationToken)
     {
         var comparer = StringComparer.FromComparison(host.PathComparison);
         var operations = new Dictionary<string, string>(comparer);
@@ -875,11 +887,17 @@ public sealed class AgentIsolation(
                      .Where(directory => comparer.Equals(Real(directory.GitDirectory), Real(directory.CommonDirectory)))
                      .DistinctBy(directory => directory.CommonDirectory, comparer))
         {
-            var listed = await git.RunWithinAsync(tree, ["for-each-ref", "--format=%(objectname) %(refname)", ReplaceRefs], AfterwardLimit, cancellationToken).ConfigureAwait(false);
+            var listing = await Waits.ForAsync(
+                token => git.RunAsync(tree, ["for-each-ref", "--format=%(objectname) %(refname)", ReplaceRefs], cancellationToken: token),
+                new WaitWatch($"git to list the replacements of '{common}'", told ?? (_ => { }), Bound: null, _clock),
+                cancellationToken).ConfigureAwait(false);
 
-            if (listed.TimedOut || !listed.Succeeded)
+            // Only the caller's stop ends the wait short of git's answer: no bound of the tool's own stands on it.
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (listing.Value is not { } listed || !listed.Succeeded)
             {
-                return new Left(operations, replacements, $"git could not list the replacements of '{common}' ({(listed.TimedOut ? $"it did not answer within {ReportText.Limit(AfterwardLimit)}" : listed.FailureMessage)})");
+                return new Left(operations, replacements, $"git could not list the replacements of '{common}' ({listing.Value?.FailureMessage ?? "it was stopped"})");
             }
 
             foreach (var line in listed.OutputLines)
@@ -899,9 +917,9 @@ public sealed class AgentIsolation(
 
     /// <summary>
     /// What the operation's state at <paramref name="place"/>, in <paramref name="gitDirectory"/>, holds, as one text that
-    /// differs wherever it does - each file beneath it by its path and its content's hash, read never through a link and
-    /// never past <see cref="OperationStateBound"/> - and a text no other equals where it cannot be read whole: a link, a
-    /// pipe or a device, a file that went while it was read, or more than the bound. Null where nothing is there.
+    /// differs wherever it does - each file beneath it by its path and its content's hash, every byte of it read once as it
+    /// streams, however large, never through a link - and a text no other equals where it cannot be read whole: a link, a
+    /// pipe or a device, a file that went while it was read. Null where nothing is there.
     /// </summary>
     private string? Holding(string gitDirectory, string place)
     {
@@ -923,7 +941,6 @@ public sealed class AgentIsolation(
 
             using var hash = System.Security.Cryptography.IncrementalHash.CreateHash(System.Security.Cryptography.HashAlgorithmName.SHA256);
             var buffer = new byte[81920];
-            var read = 0L;
 
             foreach (var file in files)
             {
@@ -932,13 +949,6 @@ public sealed class AgentIsolation(
 
                 while (stream.Read(buffer) is var count and > 0)
                 {
-                    read += count;
-
-                    if (read > OperationStateBound)
-                    {
-                        throw new IOException($"'{place}' holds more than {OperationStateBound} bytes");
-                    }
-
                     hash.AppendData(buffer, 0, count);
                 }
 
@@ -1147,9 +1157,9 @@ public sealed class AgentIsolation(
 
     /// <summary>
     /// Whether the <see cref="CommonDirectoryFile"/> in <paramref name="gitDirectory"/> leads git nowhere but to that
-    /// directory itself - none there, or one naming it (<see cref="ItsOwnDirectory"/>) - read as git reads it, its line
-    /// ends taken off and a relative path against the directory; never through a link, never more than a line's worth, and
-    /// not where it is a link, a pipe or a device, or could not be read, which leads nowhere it can be told.
+    /// directory itself - none there, or one naming it (<see cref="ItsOwnDirectory"/>) - read as git reads it: whole,
+    /// however long, its line ends at its end taken off and a relative path against the directory; never through a link,
+    /// and not where it is a link, a pipe or a device, or could not be read, which leads nowhere it can be told.
     /// </summary>
     private bool LeadsToItself(string gitDirectory)
     {
@@ -1162,13 +1172,12 @@ public sealed class AgentIsolation(
                 return true;
             }
 
+            // git reads the whole file and takes the line ends at its end off: what is left, any length, is the path.
             using var stream = UnfollowedFiles.OpenRead(fileSystem, gitDirectory, file);
-            var buffer = new byte[4096];
-            var count = stream.ReadAtLeast(buffer, buffer.Length, throwOnEndOfStream: false);
-            var named = System.Text.Encoding.UTF8.GetString(buffer, 0, count).TrimEnd('\r', '\n');
+            using var reader = new StreamReader(stream, new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false), detectEncodingFromByteOrderMarks: false);
+            var named = reader.ReadToEnd().TrimEnd('\r', '\n');
 
-            return count < buffer.Length
-                && named.Length > 0
+            return named.Length > 0
                 && StringComparer.FromComparison(host.PathComparison).Equals(Real(Path.GetFullPath(named, gitDirectory)), Real(gitDirectory));
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
@@ -1475,7 +1484,7 @@ public sealed class AgentIsolation(
     /// <c>lfs/</c> - is read-only to the work, so git add and git fetch fail inside the isolation there, an agent an
     /// earlier version made and a leg pinned to a plain worktree among them. What is left in a git directory it wrote
     /// that no rule holds is looked at once the work has run
-    /// (<see cref="IsolationDecision.AfterwardAsync"/>).
+    /// (<see cref="IsolationDecision.AfterwardAsync(CancellationToken)"/>).
     /// </summary>
     private static IEnumerable<string> GitWritten((string Tree, string GitDirectory, string CommonDirectory, bool Reftable) directory)
         => [directory.GitDirectory];

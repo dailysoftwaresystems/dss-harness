@@ -1,4 +1,5 @@
 using System.Text;
+using DssHarness.Core.Walks;
 
 namespace DssHarness.Core.Agents.Policy;
 
@@ -19,7 +20,7 @@ public static partial class CommandAnalysis
     /// a quote, a parenthesis or a backtick that does not close - is refused.
     /// </summary>
     /// <param name="script">The script.</param>
-    /// <param name="nesting">How deep in parentheses the script stands: refused past <see cref="Nesting"/>.</param>
+    /// <param name="nesting">How deep in parentheses the script stands: the level its commands are read at.</param>
     private static IReadOnlyList<AnalyzedCommand> Script(string script, int nesting)
         => new ShellReader(script, nesting).Read();
 
@@ -97,7 +98,10 @@ public static partial class CommandAnalysis
 
         private int _at;
 
-        /// <summary>How deep in parentheses and substitutions the reader stands: refused past <see cref="Nesting"/>.</summary>
+        /// <summary>
+        /// How deep in parentheses and substitutions the reader stands: the level its commands are read at, never a bound -
+        /// each level is read through <see cref="DeepCalls"/>, so no depth of nesting is refused or overflows the stack.
+        /// </summary>
         private int _depth = nesting;
 
         /// <summary>
@@ -136,11 +140,6 @@ public static partial class CommandAnalysis
 
         public IReadOnlyList<AnalyzedCommand> Read()
         {
-            if (_depth > Nesting)
-            {
-                throw Deep();
-            }
-
             ReadList(ListEnd.Script);
             ReadDocuments();
 
@@ -972,21 +971,22 @@ public static partial class CommandAnalysis
         /// The arithmetic of a <c>$((...))</c>, a <c>((...))</c> or a <c>$[...]</c>, from after its opening to past its close:
         /// its substitutions and expansions read as anywhere, nothing else in it a command, a redirect or a here-document -
         /// its <c>&lt;&lt;</c> shifts. Its close is found as the shell finds it, a quote's parenthesis none; its text is
-        /// read as a double quote's, so a single quote's substitution runs. Nested past <see cref="Nesting"/>, refused.
+        /// read as a double quote's, so a single quote's substitution runs. Each nesting of it is read a level deeper, through
+        /// <see cref="DeepCalls"/>, at any depth.
         /// False, with nothing of it read, where it does not close as arithmetic (<c>$( (a) )</c> is a substitution of a
         /// subshell), as the shell falls back so too.
         /// </summary>
-        private bool ReadArithmetic(bool bracket)
+        private bool ReadArithmetic(bool bracket) => DeepCalls.Run(() => ReadArithmeticDeeper(bracket));
+
+        /// <summary><see cref="ReadArithmetic"/>, a level deeper.</summary>
+        private bool ReadArithmeticDeeper(bool bracket)
         {
             if (_notArithmetic.Contains(_at))
             {
                 return false;
             }
 
-            if (++_depth > Nesting)
-            {
-                throw Deep();
-            }
+            ++_depth;
 
             // A line end inside a substitution reads the documents pending before it: the fall-back reads them again.
             var (at, read, pending, quoted, depth, single) = (_at, _read.Count, _documents.ToList(), _quoted, 0, false);
@@ -1133,7 +1133,7 @@ public static partial class CommandAnalysis
             }
 
             _at = at + 1;
-            var inner = new ShellReader(body.ToString(), _depth + 1).Read();
+            var inner = DeepCalls.Run(() => new ShellReader(body.ToString(), _depth + 1).Read());
             _read.AddRange(inner.Select(Built));
             AppendExpansion(word, howRead, "$(" + body + ")");
         }
@@ -1267,7 +1267,10 @@ public static partial class CommandAnalysis
         }
 
         /// <summary>The substitutions of an expanding here-document's text, each read as the commands it runs; nothing else in it runs.</summary>
-        private void ReadExpansions(string body)
+        private void ReadExpansions(string body) => DeepCalls.Run(() => ReadExpansionsDeeper(body));
+
+        /// <summary><see cref="ReadExpansions"/>, a level deeper.</summary>
+        private void ReadExpansionsDeeper(string body)
         {
             var reader = new ShellReader(body, _depth + 1) { _quoted = true };
             var scratch = new StringBuilder();
@@ -1472,15 +1475,14 @@ public static partial class CommandAnalysis
             }
         }
 
-        /// <summary>Reads what <paramref name="read"/> reads one level deeper: refused past <see cref="Nesting"/>, so no depth of parentheses overflows the stack.</summary>
+        /// <summary>
+        /// Reads what <paramref name="read"/> reads one level deeper, through <see cref="DeepCalls"/>: no depth of parentheses
+        /// is refused, and none overflows the stack.
+        /// </summary>
         private void Deeper(Action read)
         {
-            if (++_depth > Nesting)
-            {
-                throw Deep();
-            }
-
-            read();
+            ++_depth;
+            DeepCalls.Run(read);
             _depth--;
             LeavePipe();
         }
@@ -1493,8 +1495,6 @@ public static partial class CommandAnalysis
                 _piped = -1;
             }
         }
-
-        private static NotSupportedException Deep() => new($"its parentheses nest past {Nesting} levels, which this does not read");
 
         /// <summary>A command another reader read whole, as this reader keeps one: given the input a pipe gives where it stands.</summary>
         private Simple Built(AnalyzedCommand read)

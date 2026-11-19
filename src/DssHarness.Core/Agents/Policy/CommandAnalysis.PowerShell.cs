@@ -1,4 +1,5 @@
 using System.Text;
+using DssHarness.Core.Walks;
 
 namespace DssHarness.Core.Agents.Policy;
 
@@ -60,26 +61,17 @@ public static partial class CommandAnalysis
         private const string Value = "\"${PSVALUE}\"";
 
         private readonly string _script;
-        private readonly int _nesting;
         private int _at;
-        private int _depth;
 
-        /// <param name="script">The script.</param>
-        /// <param name="nesting">How many Invoke-Expression scripts this one stands in: refused past <see cref="Depth"/>, as a script gone into is.</param>
-        public PowerShellReader(string script, int nesting = 0)
+        /// <param name="script">The script: one Invoke-Expression runs is read by a reader of its own, a level deeper, at any depth.</param>
+        public PowerShellReader(string script)
         {
-            if (nesting > Depth)
-            {
-                throw new NotSupportedException($"its Invoke-Expression scripts nest past {Depth} levels, which this does not read");
-            }
-
             if (script.Contains('\0', StringComparison.Ordinal))
             {
                 throw new NotSupportedException("the PowerShell script holds a NUL, which this does not read");
             }
 
             _script = script;
-            _nesting = nesting;
         }
 
         /// <summary>The script's statements, one to a line, for the shell reader.</summary>
@@ -172,18 +164,11 @@ public static partial class CommandAnalysis
             }
         }
 
-        /// <summary>Reads what <paramref name="read"/> reads one level deeper: refused past <see cref="Nesting"/>.</summary>
-        private T Deeper<T>(Func<T> read)
-        {
-            if (++_depth > Nesting)
-            {
-                throw new NotSupportedException($"its parentheses nest past {Nesting} levels, which this does not read");
-            }
-
-            var result = read();
-            _depth--;
-            return result;
-        }
+        /// <summary>
+        /// Reads what <paramref name="read"/> reads one level deeper, through <see cref="DeepCalls"/>: no depth of parentheses
+        /// is refused, and none overflows the stack.
+        /// </summary>
+        private static T Deeper<T>(Func<T> read) => DeepCalls.Run(read);
 
         /// <summary>Reads statements into <paramref name="lines"/> up to <paramref name="close"/>, which it passes; '\0', to the script's end.</summary>
         private void Statements(List<string> lines, char close)
@@ -666,7 +651,7 @@ public static partial class CommandAnalysis
                 throw new NotSupportedException("PowerShell's Invoke-Expression runs a script no one string here spells, which this does not read");
             }
 
-            var read = new PowerShellReader(script, _nesting + 1).Read();
+            var read = DeepCalls.Run(() => new PowerShellReader(script).Read());
             return read.Length == 0 ? "'echo'" : "'echo' $(\n" + read + "\n)";
         }
 

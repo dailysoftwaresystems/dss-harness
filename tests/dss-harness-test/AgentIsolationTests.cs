@@ -1250,6 +1250,115 @@ public sealed class AgentIsolationTests
         Assert.DoesNotContain(leg.Profile.Environment, variable => variable.Key == AgentIsolation.SshAgentSocketVariable);
     }
 
+    /// <summary>
+    /// An operation's state of two hundred megabytes is hashed whole as it streams: left as it was, it is no change, and
+    /// one byte more is. Red with <c>OperationStateBound</c>, which read a state past 64 MiB as unread - a text no other
+    /// equals - so the decision said it changed when nothing did.
+    /// </summary>
+    [Fact]
+    public async Task ATwoHundredMegabyteOperationState_IsHashed()
+    {
+        using var temp = new TempDirectory();
+        using var home = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var config = new HarnessConfig { Worktrees = OrchestrationKit.Settings };
+        var git = Path.Combine(kit.Main, ".git");
+        var isolation = new AgentIsolation(new FixedIsolationPlatform(IsolationAvailability.Of(new PassThroughMechanism())), kit.Harness.GitClient, kit.Harness.FileSystem, new HomedPlatform(home.Path), _ => null);
+        var rebase = Directory.CreateDirectory(Path.Combine(git, "rebase-merge")).FullName;
+        var todo = Path.Combine(rebase, "git-rebase-todo");
+
+        using (var large = File.Create(todo))
+        {
+            large.SetLength(200L * 1024 * 1024);
+        }
+
+        using var leftAsItWas = await isolation.ForExecutionAsync(config, ExecutionGrounds.OfHooks(config, kit.Main, kit.Main, sshAgent: false), kit.Main, Token);
+
+        Assert.Null(await leftAsItWas.AfterwardAsync(Token));
+
+        await File.AppendAllTextAsync(todo, "exec touch more\n", Token);
+
+        Assert.StartsWith($"'{rebase}' changed while it ran", await leftAsItWas.AfterwardAsync(Token), StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A main checkout's commondir is read whole, as git reads it - every line end at its end taken off, however many -
+    /// so one naming itself after five thousand characters of them leads to itself, and the launch is held. Red with the
+    /// 4,096-byte buffer, which read a longer file as leading elsewhere and left the launch with no isolation.
+    /// </summary>
+    [Fact]
+    public async Task AFiveThousandCharacterCommondir_IsReadWhole()
+    {
+        using var temp = new TempDirectory();
+        using var home = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var config = new HarnessConfig { Worktrees = OrchestrationKit.Settings };
+        var layout = new HarnessLayout(kit.Main, kit.Main);
+        var ground = SideTaskPolicy.Ground(layout, config, [], []);
+        var records = SideTaskLayout.Of(layout, "one").Directory;
+        var pointer = Path.Combine(kit.Main, ".git", AgentIsolation.CommonDirectoryFile);
+        AgentIsolation Isolation() => new(new FixedIsolationPlatform(IsolationAvailability.Of(new PassThroughMechanism())), kit.Harness.GitClient, kit.Harness.FileSystem, new HomedPlatform(home.Path), _ => null);
+
+        await File.WriteAllTextAsync(pointer, AgentIsolation.ItsOwnDirectory + new string('\n', 5000), Token);
+        using var named = await Isolation().ForLaunchAsync(config, ground, kit.Main, records, Token);
+
+        Assert.Equal((false, "test"), (named.Refused, named.Mechanism?.Name));
+
+        await File.WriteAllTextAsync(pointer, "/elsewhere/.git" + new string('\n', 5000), Token);
+        using var planted = await Isolation().ForLaunchAsync(config, ground, kit.Main, records, Token);
+
+        Assert.True(planted.Refused);
+    }
+
+    /// <summary>
+    /// The listing of a repository's replacements once the work has run is waited for to its end, however long git takes,
+    /// and told while it is waited for - every five minutes, on the clock the isolation is given - never cut off at a
+    /// limit. Red with <c>AfterwardLimit</c>, which ended the listing after a minute and told nothing while it waited.
+    /// </summary>
+    [Fact]
+    public async Task ForEachRef_IsWaitedAndTold()
+    {
+        using var temp = new TempDirectory();
+        using var home = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var config = new HarnessConfig { Worktrees = OrchestrationKit.Settings };
+        var layout = new HarnessLayout(kit.Main, kit.Main);
+        var ground = SideTaskPolicy.Ground(layout, config, [], []);
+        var records = SideTaskLayout.Of(layout, "one").Directory;
+        var clock = new TimerClock();
+        var holding = false;
+        using var listed = new ManualResetEventSlim();
+        var git = new InterceptingGitClient(kit.Harness.GitClient)
+        {
+            // Once the launch is made, the listing git answers is held until the test lets it go: a git that takes long.
+            AfterRun = (arguments, result) =>
+            {
+                if (Volatile.Read(ref holding) && arguments.Contains("for-each-ref"))
+                {
+                    listed.Wait(TestContext.Current.CancellationToken);
+                }
+
+                return result;
+            },
+        };
+        var isolation = new AgentIsolation(new FixedIsolationPlatform(IsolationAvailability.Of(new PassThroughMechanism())), git, kit.Harness.FileSystem, new HomedPlatform(home.Path), _ => null, clock: clock);
+        var told = new System.Collections.Concurrent.ConcurrentQueue<DssHarness.Core.Waiting.WaitTold>();
+
+        using var launched = await isolation.ForLaunchAsync(config, ground, kit.Main, records, Token);
+        Volatile.Write(ref holding, true);
+        var afterward = launched.AfterwardAsync(told.Enqueue, Token);
+
+        await clock.WaitingAsync().WaitAsync(ClockDrive.Within, Token);
+        Assert.Empty(told);
+
+        clock.Advance(DssHarness.Core.Waiting.Waits.SaidEvery);
+        await clock.WaitingAsync().WaitAsync(ClockDrive.Within, Token);
+        listed.Set();
+
+        Assert.Null(await afterward.WaitAsync(ClockDrive.Within, Token));
+        Assert.Contains("git to list the replacements of", Assert.Single(told).Subject, StringComparison.Ordinal);
+    }
+
     /// <summary>The isolation's own directory under a test's home, as this machine places it.</summary>
     private static string IsolationRoot(string home) => IsolationCaches.Root(home, new HostPlatform().Current, _ => null);
 

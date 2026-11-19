@@ -1394,9 +1394,9 @@ public sealed class CommandWordsPolicyTests
             Assert.False(WindowsNames.MayShorten(segment, name), $"'{segment}' was read as '{name}'");
         }
 
-        Assert.Equal(["/r/GIT~1/x", "/r/.git/x", "/r/.github/x"], WindowsNames.Lengthened("/r/GIT~1/x", [".git", ".github", "runner"], 64));
-        Assert.Equal(["/r/HEAD~1"], WindowsNames.Lengthened("/r/HEAD~1", [".git", ".harness-config"], 64));
-        Assert.Throws<NotSupportedException>(() => WindowsNames.Lengthened("/A~1/B~1/C~1", ["a1", "a2", "a3", "a4", "b1", "b2", "b3", "b4", "c1", "c2", "c3"], 64));
+        Assert.Equal(["/r/GIT~1/x", "/r/.git/x", "/r/.github/x"], WindowsNames.Lengthened("/r/GIT~1/x", [".git", ".github", "runner"]));
+        Assert.Equal(["/r/HEAD~1"], WindowsNames.Lengthened("/r/HEAD~1", [".git", ".harness-config"]));
+        Assert.Equal(5 * 4 * 4, WindowsNames.Lengthened("/A~1/B~1/C~1", ["a1", "a2", "a3", "a4", "b1", "b2", "b3", "c1", "c2", "c3"]).Count());
     }
 
     /// <summary>

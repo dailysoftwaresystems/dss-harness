@@ -131,7 +131,7 @@ public sealed class SetUpConfinement(IReadOnlyList<string> trees, string directo
     /// </summary>
     private string? Named(string word, IReadOnlyList<string> places, bool holds, bool braces = true, string? quoted = null)
     {
-        IReadOnlyList<NamedPath> paths;
+        IEnumerable<NamedPath> paths;
 
         try
         {

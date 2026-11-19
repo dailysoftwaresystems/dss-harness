@@ -144,13 +144,13 @@ public sealed partial class HelpTests
         Assert.Contains("refused as such ('git $VERB' under Run(git push *))", prose, StringComparison.Ordinal);
         Assert.Contains("a file:// address is read as the path it names", prose, StringComparison.Ordinal);
         Assert.Contains(
-            "What it cannot read whole it denies, said here, not guessed at: a script nested past four levels, a shell that reads its "
+            "What it cannot read whole it denies, said here, not guessed at: a shell that reads its "
                 + "script from an input it is given (curl ... | sh), from a process substitution or from another open descriptor (/dev/fd/3, <&3), "
                 + "an env -S string holding a backslash, whose escapes are env's own, an alias it gives, a script another program fills in "
                 + "(find -exec sh -c 'echo {}'), PowerShell's code no word spells (a static method, an instance method "
                 + "but a string's, a collection's or a date's, a function's or an alias's text, a class, using, its stop-parsing --%, "
                 + "a script Invoke-Expression is handed by no one string, and a command line Start-Process, WMI, the task scheduler or Add-Type is handed), and a program named by a variable, a substitution, "
-                + "a pattern or a brace, a brace that spells more than 64 words, an option of git's, gh's, fish's or Windows PowerShell's own before "
+                + "a pattern or a brace, an option of git's, gh's, fish's or Windows PowerShell's own before "
                 + "its command that this does not know, sed running what it reads or a script the shell fills in, at given its job by a file or its "
                 + "input, a configuration file ssh -F names (but none, /dev/null), whose settings may run commands, an env long option that names "
                 + "none of env's or more than one, a script file the string writes and runs whose text no here-document gave - a file the string "
@@ -196,8 +196,8 @@ public sealed partial class HelpTests
             prose,
             StringComparison.Ordinal);
         Assert.Contains(
-            "a cmdlet's quoted ones too, which the cmdlet expands itself; a variable the string sets (p=../..) read in each later word with each "
-                + $"value it gives it, up to {CommandAnalysis.MaxReadings} readings, $PWD and a leading ~+ as each place the command stands in and each value the string gives PWD, a ~- and the directory stack's ~N, ~+N and ~-N as places it does not know where the shell expands them - a word's start, an assignment's value - and as the text they spell where it does not (git log @~1, cat '~1') - and each, beside ~+, a variable wherever a word the shell expands is read, the string able to give it any word - and a ~ as each HOME "
+            "a cmdlet's quoted ones too, which the cmdlet expands itself; a variable the string sets (p=../..) read in each later word with every "
+                + "value it may hold, however many, one value of it in every word that reads it, $PWD and a leading ~+ as each place the command stands in and each value the string gives PWD, a ~- and the directory stack's ~N, ~+N and ~-N as places it does not know where the shell expands them - a word's start, an assignment's value - and as the text they spell where it does not (git log @~1, cat '~1') - and each, beside ~+, a variable wherever a word the shell expands is read, the string able to give it any word - and a ~ as each HOME "
                 + "the string, the command or a command that runs it sets, while a variable it does not set and a substitution are read as the text "
                 + "they spell, for their value is the agent's environment's or a program's, which no word of the string gives;",
             prose,
@@ -451,7 +451,7 @@ public sealed partial class HelpTests
                 + "repository whose refs it wrote, as git lists them whatever keeps them - loose, packed-refs or a reftable - which "
                 + "every git started outside would read in an object's place. Either fails the step, the leg, the commit or the push, "
                 + "naming it and the remedy - remove the state, never continue or abort it, for an abort puts the branch where the "
-                + "state says - as does a git that cannot list the replacements within 1 minute. Every git "
+                + "state says - as does a git that cannot list the replacements, which is waited for to its end however many refs it lists. Every git "
                 + "of this tool's own runs with no file-system monitor, no object replaced "
                 + $"({DssHarness.Core.Git.GitOwnSettings.NoReplaceVariable}=1) and, in a tree an isolated agent or execution works "
                 + "over - a worktree or the main checkout - with the git directories git named before it ran (GIT_DIR, "
