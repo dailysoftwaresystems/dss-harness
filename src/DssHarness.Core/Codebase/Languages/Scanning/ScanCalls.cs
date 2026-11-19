@@ -138,6 +138,42 @@ internal static class ScanCalls
     }
 
     /// <summary>
+    /// The index past the list of type arguments the <c>&lt;</c> at <paramref name="less"/> opens in code, where it opens
+    /// one and no expression's comparison (<see cref="IsTypeArguments"/>) - a call's <c>make&lt;Widget&gt;(</c>, a
+    /// literal's <c>&lt;Item&gt;[]</c>, a scope's <c>Box&lt;T&gt;::</c> - so the names it holds are types a reader references,
+    /// no values the code reads; -1 where it opens none.
+    /// </summary>
+    /// <param name="scan">The text.</param>
+    /// <param name="less">The index of a <c>&lt;</c>.</param>
+    /// <param name="types">How the language writes type arguments.</param>
+    public static int TypeArgumentsAt(ScannedText scan, int less, ScanTypeArguments types)
+        => scan.Is(less, "<") && TypeArgumentsEnd(scan, less, types) is var past and >= 0 && IsTypeArguments(scan, less, past, types) ? past : -1;
+
+    /// <summary>
+    /// Whether the name at <paramref name="at"/> names a label: written after a <c>goto</c>, or after a <c>break</c> or a
+    /// <c>continue</c> on its line - a jump's target, which no value is. A line break after a <c>break</c> ends
+    /// JavaScript's statement, so a name on the next line begins one of its own.
+    /// </summary>
+    /// <param name="scan">The text.</param>
+    /// <param name="at">The index of a name.</param>
+    /// <param name="caseless">Whether the language's words are alike whatever their case, as PHP's are.</param>
+    public static bool NamesLabel(ScannedText scan, int at, bool caseless = false)
+    {
+        var jump = scan.Previous(at);
+
+        if (!scan.IsName(at) || !scan.IsName(jump))
+        {
+            return false;
+        }
+
+        var comparison = caseless ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        var word = scan.Text(jump);
+
+        return word.Equals("goto", comparison)
+            || ((word.Equals("break", comparison) || word.Equals("continue", comparison)) && scan[at].Line == scan[jump].EndLine);
+    }
+
+    /// <summary>
     /// Whether the list the <c>&lt;</c> at <paramref name="less"/> opens, read as a type's arguments to <paramref name="past"/>,
     /// is one, and no expression's comparisons: a literal's, which no operand ends before and its brackets follow - Dart's
     /// <c>&lt;String, int&gt;{}</c>, <c>&lt;int&gt;[]</c> - or one a name stands before, and after it one of the language's

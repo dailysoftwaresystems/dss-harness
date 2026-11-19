@@ -203,7 +203,10 @@ public sealed class VueExtractorTests : CodeGraphExtractorContractTests<VueExtra
 
         Assert.Contains(new CodeEdge("file:src/Cart.vue", "file:src/Billing.vue", CodeEdgeKinds.Imports, 9, CodeConfidences.Exact), linked.Edges);
         Assert.Equal(
-            [new CodeEdge("vue:src/Cart.vue.pay", "vue:src/Billing.vue.charge", CodeEdgeKinds.Calls, 14, CodeConfidences.Exact)],
+            [
+                new CodeEdge("vue:src/Cart.vue.pay", "vue:src/Billing.vue", CodeEdgeKinds.Uses, 14, CodeConfidences.Exact),
+                new CodeEdge("vue:src/Cart.vue.pay", "vue:src/Billing.vue.charge", CodeEdgeKinds.Calls, 14, CodeConfidences.Exact),
+            ],
             linked.Edges.Where(edge => edge.From == "vue:src/Cart.vue.pay" && edge.To.StartsWith("vue:src/Billing.vue", StringComparison.Ordinal)));
         Assert.Equal(
             [new CodeEdge("vue:src/Shop.vue", "vue:src/Billing.vue", CodeEdgeKinds.Uses, 3, CodeConfidences.Exact)],

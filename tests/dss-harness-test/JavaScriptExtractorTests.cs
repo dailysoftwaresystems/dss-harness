@@ -236,6 +236,12 @@ public sealed class JavaScriptExtractorTests : CodeGraphExtractorContractTests<J
                 return GREETING + ' padding ' + `${KIND} part`;
             }
         }
+
+        export const Settings = { retries: 3 };
+
+        export function retry() {
+            return Settings.retries;
+        }
         """;
 
     /// <inheritdoc/>
@@ -250,12 +256,17 @@ public sealed class JavaScriptExtractorTests : CodeGraphExtractorContractTests<J
                 new("javascript:src/reads.js.Reader", CodeNodeKinds.Type, (5, 15)),
                 new("javascript:src/reads.js.Reader.constructor", CodeNodeKinds.Member, (6, 8)),
                 new("javascript:src/reads.js.Reader.take", CodeNodeKinds.Member, (10, 14)),
+                new("javascript:src/reads.js.Settings", CodeNodeKinds.Member, (17, 17)),
+                new("javascript:src/reads.js.retry", CodeNodeKinds.Member, (19, 21)),
             ],
             Edges =
             [
                 // A module's own constant, read bare, and one read inside a template's hole.
                 new("javascript:src/reads.js.Reader.take", "javascript:src/reads.js.GREETING", CodeEdgeKinds.Uses, 13, CodeConfidences.Exact),
                 new("javascript:src/reads.js.Reader.take", "javascript:src/reads.js.KIND", CodeEdgeKinds.Uses, 13, CodeConfidences.Exact),
+
+                // A capitalized constant a member is read through is the value it is.
+                new("javascript:src/reads.js.retry", "javascript:src/reads.js.Settings", CodeEdgeKinds.Uses, 20, CodeConfidences.Exact),
             ],
         },
         new("src/shapes.mjs", Shapes)
@@ -1065,6 +1076,69 @@ public sealed class JavaScriptExtractorTests : CodeGraphExtractorContractTests<J
         Assert.Equal(
             [("total", 2), ("first", 3), ("seen", 4), ("q", 4), ("rest", 4), ("second", 6), ("limit", 7)],
             extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Uses).Select(reference => (reference.Name, reference.Line)));
+    }
+
+    /// <summary>
+    /// The first name of a receiver's chain - a member's or an element's - is a use where it is a value, by what the file
+    /// says of it whatever its case: a constant it declares, a name an import binds, a default import by its export, a
+    /// name it says nothing of and writes as a value's; a type it declares and a namespace an import binds are none.
+    /// </summary>
+    [Fact]
+    public void AReceiversFirstName_IsAUse_WhereTheFileSaysItIsAValue()
+    {
+        var extract = Read("src/h.js", """
+            import Router from 'next/router';
+            import { Config, routes } from './config';
+            import * as tools from './tools';
+            export const Settings = { retries: 3 };
+            export class Store { static size = 1; }
+            export function go(type) {
+              Router.push('/home');
+              const t = Config.timeout + Settings.retries + tools.limit + Store.size;
+              return routes[0] + handlers[type] + t;
+            }
+            """);
+
+        Assert.Equal(
+            [
+                ("default", "prefix", "Router", 7), ("Config", null, null, 8), ("timeout", "named", "Config", 8), ("Settings", null, null, 8), ("retries", "named", "Settings", 8),
+                ("limit", "prefix", "tools", 8), ("size", "named", "Store", 8), ("routes", null, null, 9), ("handlers", null, null, 9),
+            ],
+            extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Uses).Select(reference => (reference.Name, reference.Qualifier?.Kind, reference.Qualifier?.Name, reference.Line)));
+    }
+
+    /// <summary>A label a break or a continue names is no use, where a case's name is one.</summary>
+    [Fact]
+    public void ALabelABreakOrAContinueNames_IsNoUse()
+    {
+        var extract = Read("src/c.js", """
+            export function walk(items, limit) {
+              outer: for (const item of items) {
+                for (const other of items) {
+                  if (other === item) continue outer;
+                  if (!other) break outer;
+                }
+              }
+              switch (items.length) { case LIMIT: return limit; }
+            }
+            """);
+
+        Assert.Equal([("length", 8), ("LIMIT", 8)], extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Uses).Select(reference => (reference.Name, reference.Line)));
+    }
+
+    /// <summary>A String.raw template's value is its text as written, no escape read in it, where another tag's template is read by JavaScript's escapes.</summary>
+    [Fact]
+    public void AStringRawTemplate_KeepsItsTextAsWritten()
+    {
+        var extract = Read("src/n.js", """
+            export function f() {
+              const raw = String.raw`^\d+$ raw pattern`;
+              const tagged = html`tab\tseparated text`;
+              return raw + tagged;
+            }
+            """);
+
+        Assert.Equal(["^\\d+$ raw pattern", "tab\tseparated text"], (extract.Literals ?? []).Select(literal => literal.Value));
     }
 
     private static FileExtract Read(string path, string text) => new JavaScriptExtractor().Extract(new CodeFileInput(path, text));

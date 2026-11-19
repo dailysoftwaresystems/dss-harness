@@ -871,6 +871,15 @@ public sealed class CSharpExtractor : ICodeGraphExtractor
 
                     case BinaryExpressionSyntax binary when binary.IsKind(SyntaxKind.AsExpression) || binary.IsKind(SyntaxKind.IsExpression):
                         Mention(from, binary.Right as TypeSyntax, typeParameters);
+
+                        // x is State.Done tests a constant as often as it does a nested type, which the syntax cannot
+                        // tell apart: a use of its last name too, qualified by the rest, as the pattern x is State.Done
+                        // or State.Failed reads each.
+                        if (binary.IsKind(SyntaxKind.IsExpression) && binary.Right is QualifiedNameSyntax constant)
+                        {
+                            Used(from, constant.Right, Receiver(constant.Left, known));
+                        }
+
                         break;
 
                     case DeclarationPatternSyntax pattern:
@@ -968,9 +977,9 @@ public sealed class CSharpExtractor : ICodeGraphExtractor
         /// Whether <paramref name="read"/> names a value the member reads by the name alone - the first of a receiver's chain
         /// among them, where it is a field of its type's, a name no capital begins or the member a property pattern's path
         /// begins with, a capital else beginning the name of a type or a namespace a member is reached through: not a
-        /// call's callee, not a member of a receiver, nothing the compiler reads as a type or a namespace, no name a named
-        /// argument, an initializer, an anonymous type, a tuple or a pattern declares or sets - those of an initializer and
-        /// a pattern are read as their type's - no discard, and none of its
+        /// call's callee, not a member of a receiver, nothing the compiler reads as a type or a namespace, no label a
+        /// <c>goto</c> names, no name a named argument, an initializer, an anonymous type, a tuple or a pattern declares or
+        /// sets - those of an initializer and a pattern are read as their type's - no discard, and none of its
         /// own locals, parameters, local functions or type parameters, nor a primary constructor's parameter or an extension
         /// block's receiver, of which no member is declared. The syntax alone cannot tell a field of another type from a
         /// value the language itself holds, and a use of either is what the graph wants, resolved or not.
@@ -989,6 +998,9 @@ public sealed class CSharpExtractor : ICodeGraphExtractor
             return read.Parent switch
             {
                 InvocationExpressionSyntax or MemberBindingExpressionSyntax or NameColonSyntax or NameEqualsSyntax or QualifiedNameSyntax or AliasQualifiedNameSyntax => false,
+
+                // A label a goto names is no value; a goto case's constant is one.
+                GotoStatementSyntax jump => !jump.IsKind(SyntaxKind.GotoStatement),
 
                 // A chain's first name is read where it is a value: a field of its type's, a name no type's is, or the member
                 // of the tested type a property pattern's path begins with - { Owner.Name: ... }.
@@ -1807,6 +1819,12 @@ public sealed class CSharpExtractor : ICodeGraphExtractor
 
                 case AliasQualifiedNameSyntax aliased:
                     at = aliased.Name;
+                    continue;
+
+                // A qualified name the parser reads where a type may stand - x is State.Done - is the chain it writes.
+                case QualifiedNameSyntax qualified when qualified.Right.Identifier.ValueText.Length > 0:
+                    names.Add(qualified.Right is GenericNameSyntax right ? Generic(right.Identifier.ValueText, right.TypeArgumentList.Arguments.Count) : qualified.Right.Identifier.ValueText);
+                    at = qualified.Left;
                     continue;
 
                 // `x!` and `(x)` are x.

@@ -4304,18 +4304,28 @@ address roots, references by name with their qualifiers, the string literals the
 does), at most `FileExtract.MostLiterals` kept and the rest counted, each its value as the language reads it: one
 collector (`ExtractLiterals`) keeps them for every reader, the C# reader taking the compiler's value and the scanned
 readers the value `ScanLiteral` decodes from what each lexer saw of the literal's form - a prefix, a raw string's
-delimiter, a triple quote, a heredoc's label and closing indentation - by its language's escapes; an interpolated or
+delimiter, a triple quote, a heredoc's label and closing indentation - by its language's escapes, a `String.raw`
+template's as written; an interpolated or
 template string's constant parts each a literal of its own, its holes read as code, a character constant, a regular
 expression and JSX markup none, a JSX attribute's text one - and five marks - a prototype, a test, a part of a
 declaration other files hold parts of too (`Part`), generated code with why, and each line it saw something it cannot
 bind or stopped reading at (`dynamic`), with why - of which the linker reads the first three. Beside the calls, every
 reader of C#, JavaScript, TypeScript, PHP, Dart, C and C++ gives each member a member reads or writes without calling
-it - a field, a property, a constant, an enum member, any name a `nameof` names, the first name of a receiver's chain
-where the reader takes it for a value, a conditional's branches - as a `uses` reference, qualified as its receiver is
-where the file says, a chain no longer than `FileExtract.MostReceiverNames` names; a declaration is no use - a type it
-is written with, a TypeScript local's annotation (whose types it references), each declarator of `int a = 1, b`, a
-macro's parameter, a function pointer's own parameters, a structured binding, a discard - nor is a type or a namespace
-a member is reached through. A use that names nothing the repository declares is the common case and counts nowhere:
+it - a field, a property, a constant, an enum member, any name a `nameof` names, a `case`'s constant (Dart's pattern
+constants among them), the first name of a receiver's chain - a member's or, in JavaScript and TypeScript, an
+element's - where the reader takes it for a value (JavaScript and TypeScript by what the file says of the name: a
+variable, a function, an import's binding but a namespace's and a type-only one's, whatever its case), a conditional's
+branches - as a `uses` reference, qualified as its receiver is where the file says, a chain no longer than
+`FileExtract.MostReceiverNames` names, and reads an enum member's value as the member's code - C's, C++'s and
+TypeScript's as C#'s, PHP's and Dart's. A type the code writes is no use but a `references` edge, in every reader - a
+declaration's, a cast's, a `sizeof`'s, a template's or a call's type arguments (a C++ template's value argument read as
+code), a parameter's of a lambda, a closure, an arrow or a function a body writes and its return type, an `as`'s or an
+`is`'s, a pattern's, a TypeScript assertion's (`<T>x`) - C and C++ taking a bare name in parentheses for a type's where
+the file knows it as no value, a C# `x is State.Done` both a reference and a use of `Done`, which the syntax cannot tell
+apart; a declaration is no use either - each declarator of `int a = 1, b`, a pattern's variables, a macro's parameter, a
+function pointer's own parameters, a structured binding, a discard - nor is a type or a namespace a member is reached
+through, nor a label a `goto`, a `break` or a `continue` names (`ScanCalls.NamesLabel`), and a member named as a word of
+the language - PHP's `$node->parent`, `FieldType::String` - is its member's use. A use that names nothing the repository declares is the common case and counts nowhere:
 a use is recall, never a doubt, so it makes neither a node `unsure` nor a file's unsureness. A use is looked for as a
 member of any arity or a type (the same steps as a call), and `query-codebase-graph`'s `node` answers a node's `users`
 and `uses` groups beside its callers and callees.
@@ -4776,8 +4786,8 @@ a step it only depends on is never read; a page asked
 after the view moved to another digest, or with no result of page 1 that reads under its read rules, is made again on the
 graph as it stands and its header says which, a refused one after its range; a result whose file could not be written is
 held in memory alone, and the page that computed it says a resumed conversation counts its later pages again. The graph masks nothing
-as it reads and stores - a literal, a key's value, an element's text, a line of a file are kept as the file writes
-them - and a run's secrets are masked where the graph reaches the run: each answer of the tool, as every tool's answer
+as it reads and stores - a literal, a key's value, an element's text, a line of a file are kept unmasked - and a
+run's secrets are masked where the graph reaches the run: each answer of the tool, as every tool's answer
 is (`AgentToolRuntime`), the codebase part of a message, as every message is, and a result of more than one page as
 the tool computes it (`CodebaseGraphTool`'s mask, from the step's or the side-task's), before it is paged and kept, so
 no page and no `graph-pages/` file holds one; the verb, a person's own view, keeps nothing and masks nothing. A page counts as viewed,

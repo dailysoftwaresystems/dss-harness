@@ -4,8 +4,9 @@ namespace DssHarness.Core.Codebase.Languages;
 
 /// <summary>
 /// The lexical rules of C and C++ for the structural scanner: comments (<c>//</c>, its line continued by a backslash,
-/// and <c>/* */</c>) kept apart; string and character literals - with their prefixes, C++'s raw strings, and a C++
-/// user-defined literal's suffix - as one token each, never read as code, each string's value said where it is written
+/// and <c>/* */</c>) kept apart; string and character literals - with their prefixes, raw strings (C++'s, and C's as
+/// GCC's GNU dialects, its default, read them), and a C++ user-defined literal's suffix - as one token each, never read
+/// as code, each string's value said where it is written
 /// and how its escapes read (<see cref="ScanLiteral"/>); a preprocessor line, its continuations and comments with it, as
 /// one directive, marked where it opens, continues or ends a conditional; numbers with their separators; <c>::</c>,
 /// <c>-&gt;</c> and <c>...</c> whole and every other punctuator alone, so <c>&gt;&gt;</c> closes two lists of type
@@ -19,7 +20,7 @@ internal static class CFamilyLexer
     /// <summary>The prefixes of a wide string, whose octal and hex escapes are characters' codes and no bytes.</summary>
     private static readonly HashSet<string> WidePrefixes = new(StringComparer.Ordinal) { "L", "u", "U", "LR", "uR", "UR" };
 
-    /// <summary>The prefixes of a C++ raw string, before its quote.</summary>
+    /// <summary>The prefixes of a raw string, before its quote.</summary>
     private static readonly HashSet<string> RawPrefixes = new(StringComparer.Ordinal) { "R", "LR", "uR", "UR", "u8R" };
 
     /// <summary>The longest delimiter a raw string may have.</summary>
@@ -27,7 +28,7 @@ internal static class CFamilyLexer
 
     /// <summary>Scans <paramref name="text"/> by C's rules, and C++'s where <paramref name="cpp"/>.</summary>
     /// <param name="text">A file's text.</param>
-    /// <param name="cpp">Whether it is C++, whose raw strings C does not have.</param>
+    /// <param name="cpp">Whether it is C++, whose user-defined literals' suffixes C does not have.</param>
     public static ScannedText Scan(string text, bool cpp)
     {
         var lines = CodeFileText.LineIndex(text);
@@ -253,7 +254,7 @@ internal static class CFamilyLexer
 
             var name = text[start..at];
 
-            if (at < end && text[at] == '"' && cpp && RawPrefixes.Contains(name) && Raw(start, at, end) is var raw and > 0)
+            if (at < end && text[at] == '"' && RawPrefixes.Contains(name) && Raw(start, at, end) is var raw and > 0)
             {
                 return raw;
             }
@@ -365,7 +366,8 @@ internal static class CFamilyLexer
         }
 
         /// <summary>
-        /// A C++ raw string whose prefix is at <paramref name="start"/> and quote at <paramref name="quote"/>: to its
+        /// A raw string - C++'s, and C's as GCC's GNU dialects, its default, read one - whose prefix is at
+        /// <paramref name="start"/> and quote at <paramref name="quote"/>: to its
         /// <c>)delimiter"</c>, over any line, its value what the parentheses hold as written; 0 where what follows the
         /// quote is no delimiter and <c>(</c>.
         /// </summary>

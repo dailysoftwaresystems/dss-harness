@@ -1328,6 +1328,42 @@ public sealed class CSharpExtractorTests : CodeGraphExtractorContractTests<CShar
         Assert.Null(extract.WithDigests(new CodeFileInput("X.cs", Text).Lines).Problem("csharp", new CodeFileInput("X.cs", Text).Lines.Count));
     }
 
+    /// <summary>
+    /// A label a goto names is no use, a goto case's constant one; a qualified name an is tests - x is State.Done - is a
+    /// reference to the type it may name and a use of the constant it may be, as each an or pattern tests is.
+    /// </summary>
+    [Fact]
+    public void ALabelAGotoNames_IsNoUse_AndAQualifiedNameAnIsTestsAUseToo()
+    {
+        const string Text = """
+            namespace N;
+            enum State { Done, Failed }
+            class M
+            {
+                const int Two = 2;
+
+                bool F(State s, int x)
+                {
+                    switch (x) { case 1: goto case Two; case 2: goto done; }
+                    done:
+                    if (s is State.Done) return true;
+                    if (s is N.State.Failed) return false;
+                    return s is State.Done or State.Failed;
+                }
+            }
+            """;
+
+        var extract = Extractor.Extract(new CodeFileInput("M.cs", Text));
+
+        Assert.Equal(
+            [
+                (CodeEdgeKinds.References, "State", 7, ""), (CodeEdgeKinds.Uses, "Two", 9, ""), (CodeEdgeKinds.References, "Done", 11, "type State"), (CodeEdgeKinds.Uses, "Done", 11, "named State"),
+                (CodeEdgeKinds.References, "Failed", 12, "type N.State"), (CodeEdgeKinds.Uses, "Failed", 12, "named N.State"),
+                (CodeEdgeKinds.Uses, "Done", 13, "named State"), (CodeEdgeKinds.Uses, "Failed", 13, "named State"),
+            ],
+            extract.References.Where(reference => reference.From == "csharp:N.M.F(State,int)").Select(reference => (reference.Kind, reference.Name, reference.Line, $"{reference.Qualifier?.Kind} {reference.Qualifier?.Name}".Trim())));
+    }
+
     /// <summary>The parser enters the tool with its English resources alone: no satellite of another language is beside the assemblies a build of it holds.</summary>
     [Fact]
     public void TheParser_EntersTheToolWithItsEnglishResourcesAlone()

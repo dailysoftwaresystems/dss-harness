@@ -766,6 +766,88 @@ public sealed class CExtractorTests : CodeGraphExtractorContractTests<CExtractor
             extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Uses).Select(reference => (reference.Name, reference.Line)));
     }
 
+    /// <summary>
+    /// A type a body writes - a declaration's, a cast's, a <c>sizeof</c>'s - is a reference and no use, while a name in
+    /// those parentheses the file declares as a value is one: a <c>sizeof</c> of a table, of a macro, and a parenthesis
+    /// that subtracts. A type's users are what reads it, never each declaration that mentions it.
+    /// </summary>
+    [Fact]
+    public void ATypeABodyWrites_IsAReference_AndAValueInParenthesesAUse()
+    {
+        var extract = Read("src/t.c", """
+            typedef struct node Node;
+            static int table[4];
+            #define LIMIT 4
+
+            int take(void *p)
+            {
+                char buf[16];
+                Node *n = (Node *)p;
+                int s = sizeof(Node) + sizeof(buf) + sizeof(table) + sizeof(LIMIT);
+                struct node *m = (struct node *)p;
+                int d = (s) - 1;
+                return (int)d + (Shape)s;
+            }
+            """);
+
+        Assert.Equal(
+            [
+                (CodeEdgeKinds.References, "Node", 8), (CodeEdgeKinds.References, "Node", 8), (CodeEdgeKinds.References, "Node", 9), (CodeEdgeKinds.Uses, "table", 9),
+                (CodeEdgeKinds.Uses, "LIMIT", 9), (CodeEdgeKinds.References, "node", 10), (CodeEdgeKinds.References, "node", 10), (CodeEdgeKinds.References, "Shape", 12),
+            ],
+            extract.References.Where(reference => reference.From == "c:take").Select(reference => (reference.Kind, reference.Name, reference.Line)));
+    }
+
+    /// <summary>
+    /// An enumerator's value is its enumerator's code, what it reads a use of each name: one of the enumerators before it
+    /// and a macro among them. The values an enumeration is made of are read as C# reads them.
+    /// </summary>
+    [Fact]
+    public void AnEnumeratorsValue_IsTheEnumeratorsCode()
+    {
+        var extract = Read("src/t.c", """
+            enum Kind { One = BASE + 1, Two = One | MASK, Three };
+            """);
+
+        Assert.Equal(
+            [("c:One", "BASE", 1), ("c:Two", "One", 1), ("c:Two", "MASK", 1)],
+            extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Uses).Select(reference => (reference.From, reference.Name, reference.Line)));
+    }
+
+    /// <summary>A label a <c>goto</c> names is a jump's target and no use, while what the code reads around it is one.</summary>
+    [Fact]
+    public void ALabelAGotoNames_IsNoUse()
+    {
+        var extract = Read("src/t.c", """
+            int run(int x)
+            {
+                if (x) goto out;
+                x = LIMIT;
+            out:
+                return x;
+            }
+            """);
+
+        Assert.Equal(
+            [("LIMIT", 4)],
+            extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Uses).Select(reference => (reference.Name, reference.Line)));
+    }
+
+    /// <summary>
+    /// A raw string is read in C as GCC's GNU dialects - its default - read one: its value what its parentheses hold as
+    /// written, its prefix no name the code reads.
+    /// </summary>
+    [Fact]
+    public void ARawString_IsReadAsGccReadsOneInC()
+    {
+        var extract = Read("src/t.c", """
+            const char *pattern = R"(\d+ raw in c)";
+            """);
+
+        Assert.Equal([new ExtractLiteral("\\d+ raw in c", 1) { Node = "c:pattern" }], extract.Literals);
+        Assert.Empty(extract.References);
+    }
+
     private static FileExtract Read(string path, string text) => new CExtractor().Extract(new CodeFileInput(path, text));
 
     private static CodeGraphFile File(string path, string text) => new(path, "c", Read(path, text));
@@ -785,7 +867,7 @@ public sealed class CExtractorTests : CodeGraphExtractorContractTests<CExtractor
 
         static int count = 0;
 
-        enum Kind { One, Two };
+        enum Kind { One, Two = One + 1 };
 
         int take(int local)
         {
@@ -808,9 +890,11 @@ public sealed class CExtractorTests : CodeGraphExtractorContractTests<CExtractor
         {
             Edges =
             [
-                // A file-scope variable read bare, an enum's member in a case, a pointer's value compared, and a
-                // conditional's branch read.
+                // An enumerator's value read by its enumerator, a file-scope variable read bare, a local's type a
+                // reference, an enum's member in a case, a pointer's value compared, and a conditional's branch read.
+                new("c:Two", "c:One", CodeEdgeKinds.Uses, 6, CodeConfidences.Unique),
                 new("c:take", "c:src/reads.c:count", CodeEdgeKinds.Uses, 11, CodeConfidences.Exact),
+                new("c:take", "c:Kind", CodeEdgeKinds.References, 12, CodeConfidences.Unique),
                 new("c:take", "c:One", CodeEdgeKinds.Uses, 12, CodeConfidences.Unique),
                 new("c:take", "c:One", CodeEdgeKinds.Uses, 15, CodeConfidences.Unique),
                 new("c:take", "c:greeting", CodeEdgeKinds.Uses, 18, CodeConfidences.Unique),

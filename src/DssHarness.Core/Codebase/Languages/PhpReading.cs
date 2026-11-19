@@ -918,7 +918,7 @@ internal sealed class PhpReading
             // Its value, and the declaration's attributes - its first property's.
             if (first)
             {
-                TypeReferences(key, typeStart, variable, frame);
+                TypeReferences(_scan, key, typeStart, variable);
                 AttributeArguments(_text, start, head, key, frame.Prefix);
                 first = false;
             }
@@ -1086,12 +1086,12 @@ internal sealed class PhpReading
 
         if (returnStart >= 0)
         {
-            TypeReferences(key, returnStart, returnEnd, frame);
+            TypeReferences(_scan, key, returnStart, returnEnd);
         }
 
         foreach (var (spanStart, spanEnd) in parameters.TypeSpans)
         {
-            TypeReferences(key, spanStart, spanEnd, frame);
+            TypeReferences(_scan, key, spanStart, spanEnd);
         }
 
         foreach (var promoted in parameters.Promoted)
@@ -1268,14 +1268,14 @@ internal sealed class PhpReading
         return string.IsNullOrEmpty(found) ? null : found;
     }
 
-    /// <summary>A <c>references</c> edge from the node of <paramref name="key"/> to each class the type from <paramref name="start"/> to <paramref name="end"/> names that is none of PHP's own.</summary>
-    private void TypeReferences(string key, int start, int end, ScanFrame frame)
+    /// <summary>A <c>references</c> edge from the node of <paramref name="key"/> to each class the type of <paramref name="scan"/> from <paramref name="start"/> to <paramref name="end"/> names that is none of PHP's own.</summary>
+    private void TypeReferences(ScannedText scan, string key, int start, int end)
     {
-        foreach (var index in _scan.Code(start, end))
+        foreach (var index in scan.Code(start, end))
         {
-            if (_scan.IsName(index) && !IsVariable(_scan, index) && !Builtins.Contains(_scan.Text(index)) && ClassName(_scan.Text(index)) is { } named)
+            if (scan.IsName(index) && !IsVariable(scan, index) && !Builtins.Contains(scan.Text(index)) && ClassName(scan.Text(index)) is { } named)
             {
-                Mention(key, CodeEdgeKinds.References, named, _scan[index].Line);
+                Mention(key, CodeEdgeKinds.References, named, scan[index].Line);
             }
         }
     }
@@ -1316,9 +1316,20 @@ internal sealed class PhpReading
 
         string From() => key ?? ScriptKey();
 
+        // Where the type of each parameter of a closure or a function the body writes begins, and where it ends.
+        Dictionary<int, int>? typed = null;
+
         for (var at = from; at < to && at < scan.Count; at++)
         {
             var token = scan[at];
+
+            // A parameter's type - function (Foo|Bar $x, ?Baz &$y) - names classes, no value the code reads.
+            if (typed is not null && typed.Remove(at, out var typedEnd))
+            {
+                TypeReferences(scan, From(), at, Math.Min(typedEnd, to));
+                at = Math.Min(typedEnd, to) - 1;
+                continue;
+            }
 
             if (token.Kind == ScanTokenKind.Text)
             {
@@ -1355,20 +1366,29 @@ internal sealed class PhpReading
                     _extract.Dynamic(token.Line, computed);
                 }
 
-                if (scan.Is(at, "(") && scan.Match(at) is var close and > 0 && (IsWord(scan, scan.Previous(at), "function") || IsWord(scan, scan.Previous(at), "fn")))
+                if (scan.Is(at, "(") && scan.Match(at) is var close and > 0 && OpensSignature(scan, at) && !IsWord(scan, scan.Previous(at), "use"))
                 {
-                    // A closure's or an arrow function's parameters: what it calls is the body's own.
-                    foreach (var (name, type) in ClosureParameters(scan, at, close))
+                    // A closure's, an arrow function's or a function's parameters: what it calls is the body's own, their
+                    // types the classes they name.
+                    foreach (var (name, type, typeStart, typeEnd) in ClosureParameters(scan, at, close))
                     {
                         locals.Types[name] = type;
+
+                        if (typeStart < typeEnd)
+                        {
+                            (typed ??= [])[typeStart] = typeEnd;
+                        }
                     }
                 }
 
                 // A closure's or an arrow function's return type - function (): ?Foo {, fn ($x): A|B => - is its
-                // signature's, and no value the code reads.
+                // signature's, the classes it names, and no value the code reads.
                 if (scan.Is(at, ")") && scan.Is(scan.Next(at), ":") && scan.Match(at) is var opener and >= 0 && OpensSignature(scan, opener))
                 {
-                    at = Math.Min(ReturnTypeEnd(scan, scan.Next(scan.Next(at)), to), to) - 1;
+                    var returnStart = scan.Next(scan.Next(at));
+                    var returnEnd = Math.Min(ReturnTypeEnd(scan, returnStart, to), to);
+                    TypeReferences(scan, From(), returnStart, returnEnd);
+                    at = returnEnd - 1;
                 }
 
                 continue;
@@ -1488,16 +1508,18 @@ internal sealed class PhpReading
     /// <summary>
     /// A member read or written without a call of it - <c>$o-&gt;p</c>, <c>$o?-&gt;p</c>, <c>Color::Red</c> - or a bare
     /// name the code reads, a constant: a use of the member by its name, qualified by what its receiver is where the file
-    /// says. A variable, a word or a type of the language, a name a <c>use</c> or a <c>namespace</c> declares, a type a
-    /// variable follows, one the code writes before a colon - a named argument's, a label's - or before a <c>::</c> - a
-    /// class a member is reached through - is none; one a <c>case</c> or a conditional writes before its colon is a value
-    /// the code reads, and is.
+    /// says. A variable, a word or a type of the language written alone - a member's name is none of them, whatever word
+    /// it spells: <c>$node-&gt;parent</c>, <c>FieldType::String</c> - a class's <c>::class</c>, a name a <c>use</c> or a
+    /// <c>namespace</c> declares, a type a variable follows, a label a <c>goto</c> names, one the code writes before a
+    /// colon - a named argument's, a label's - or before a <c>::</c> - a class a member is reached through - is none; one
+    /// a <c>case</c> or a conditional writes before its colon is a value the code reads, and is.
     /// </summary>
     private void Used(ScannedText scan, int at, int accessor, bool member, Func<string> key, Locals locals, int line)
     {
         var word = scan.Text(at);
 
-        if (NoUses.Contains(word) || (IsVariable(scan, at) && !member))
+        if ((!member && (NoUses.Contains(word) || IsVariable(scan, at) || ScanCalls.NamesLabel(scan, at, caseless: true)))
+            || (scan.Is(accessor, "::") && IsWord(scan, at, "class")))
         {
             return;
         }
@@ -1823,8 +1845,13 @@ internal sealed class PhpReading
         }
     }
 
-    /// <summary>The parameters of a closure or an arrow function whose parentheses are at <paramref name="open"/> and <paramref name="close"/>: each variable with the class its type is, where it writes one.</summary>
-    private IEnumerable<(string Name, string? Type)> ClosureParameters(ScannedText scan, int open, int close)
+    /// <summary>
+    /// The parameters of a closure, an arrow function or a function a body declares, whose parentheses are at
+    /// <paramref name="open"/> and <paramref name="close"/>: each variable with the class its type is, where it writes one
+    /// alone, and where its type is written - from past its attributes and modifiers to its <c>&amp;</c>, its <c>...</c> or
+    /// its variable, <c>Foo|Bar</c>, <c>?Baz</c> - an empty span where it writes none.
+    /// </summary>
+    private IEnumerable<(string Name, string? Type, int TypeStart, int TypeEnd)> ClosureParameters(ScannedText scan, int open, int close)
     {
         foreach (var (start, end) in ScanCalls.Split(scan, open + 1, close, null))
         {
@@ -1835,15 +1862,30 @@ internal sealed class PhpReading
                 continue;
             }
 
+            var typeStart = start;
+
+            while (typeStart < variable && ((scan.Is(typeStart, "#") && scan.Is(scan.Next(typeStart), "[")) || (scan.IsName(typeStart) && Visibilities.Contains(scan.Text(typeStart)))))
+            {
+                typeStart = scan.Is(typeStart, "#") ? Math.Min(scan.Past(scan.Next(typeStart)), variable) : scan.Next(typeStart);
+            }
+
+            var typeEnd = typeStart;
+
+            // A by-reference parameter's & stands against its variable or its ...; an intersection's, Foo&Bar, between types.
+            while (typeEnd < variable && !scan.Is(typeEnd, "...") && !(scan.Is(typeEnd, "&") && (scan.Next(typeEnd) == variable || scan.Is(scan.Next(typeEnd), "..."))))
+            {
+                typeEnd = scan.Next(typeEnd);
+            }
+
             string? type = null;
-            var names = scan.Code(start, variable).Where(index => scan.IsName(index) && !Visibilities.Contains(scan.Text(index))).ToList();
+            var names = scan.Code(typeStart, typeEnd).Where(index => scan.IsName(index)).ToList();
 
             if (names.Count == 1 && !Builtins.Contains(scan.Text(names[0])))
             {
                 type = ClassName(scan.Text(names[0]));
             }
 
-            yield return (scan.Text(variable), type);
+            yield return (scan.Text(variable), type, typeStart, typeEnd);
         }
     }
 

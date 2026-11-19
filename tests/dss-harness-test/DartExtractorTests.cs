@@ -182,8 +182,8 @@ public sealed class DartExtractorTests : CodeGraphExtractorContractTests<DartExt
             int take() {
                 const local = 4;
                 own += local;
-                final which = Kind.one;
-                return '$greeting padding ${which.name} part'.length;
+                final Kind which = Kind.one;
+                return '$greeting padding ${which.name} part'.length + switch (which) { Kind.two => 2, _ => 0 };
             }
         }
         """;
@@ -205,10 +205,13 @@ public sealed class DartExtractorTests : CodeGraphExtractorContractTests<DartExt
             ],
             Edges =
             [
-                // A field read bare, an enum value read through its enum, and a constant read inside a string's $ hole.
+                // A field read bare, a local's type a reference, an enum value read through its enum, a constant read
+                // inside a string's $ hole, and an enum value a switch expression's arm matches by.
                 new("dart:src/reads.dart.Reader.take", "dart:src/reads.dart.Reader.own", CodeEdgeKinds.Uses, 10, CodeConfidences.Exact),
+                new("dart:src/reads.dart.Reader.take", "dart:src/reads.dart.Kind", CodeEdgeKinds.References, 11, CodeConfidences.Exact),
                 new("dart:src/reads.dart.Reader.take", "dart:src/reads.dart.Kind.one", CodeEdgeKinds.Uses, 11, CodeConfidences.Exact),
                 new("dart:src/reads.dart.Reader.take", "dart:src/reads.dart.greeting", CodeEdgeKinds.Uses, 12, CodeConfidences.Exact),
+                new("dart:src/reads.dart.Reader.take", "dart:src/reads.dart.Kind.two", CodeEdgeKinds.Uses, 12, CodeConfidences.Exact),
             ],
         },
         new("lib/shapes.dart", Shapes)
@@ -655,8 +658,10 @@ public sealed class DartExtractorTests : CodeGraphExtractorContractTests<DartExt
     }
 
     /// <summary>
-    /// A pattern names types, which it references, and binds locals: a case's object patterns, an arm of a switch
-    /// expression, a declaration's destructuring; a constant pattern's constructor instantiates; what follows is code.
+    /// A pattern names types, which it references, reads the getters its object patterns' fields name - written out or
+    /// short - as uses of the type it tests, and binds locals: a case's object patterns, an arm of a switch expression, a
+    /// declaration's destructuring; a typed variable's type is a reference too, a constant pattern's constructor
+    /// instantiates; what follows is code.
     /// </summary>
     [Fact]
     public void APatternsTypes_AreReferenced_AndWhatFollowsItIsCode()
@@ -683,12 +688,12 @@ public sealed class DartExtractorTests : CodeGraphExtractorContractTests<DartExt
 
         Assert.Equal(
             [
-                (CodeEdgeKinds.References, "Circle"), (CodeEdgeKinds.Calls, "area"), (CodeEdgeKinds.Instantiates, "Square"), (CodeEdgeKinds.References, "Point"),
-                (CodeEdgeKinds.Calls, "origin"), (CodeEdgeKinds.References, "Line"), (CodeEdgeKinds.Calls, "move"), (CodeEdgeKinds.References, "Circle"),
-                (CodeEdgeKinds.Calls, "round"), (CodeEdgeKinds.References, "Triangle"),
+                (CodeEdgeKinds.References, "Circle", ""), (CodeEdgeKinds.Uses, "radius", "type Circle"), (CodeEdgeKinds.Calls, "area", ""), (CodeEdgeKinds.Instantiates, "Square", ""),
+                (CodeEdgeKinds.References, "Point", ""), (CodeEdgeKinds.Uses, "x", "type Point"), (CodeEdgeKinds.Uses, "y", "type Point"), (CodeEdgeKinds.Calls, "origin", ""),
+                (CodeEdgeKinds.References, "Line", ""), (CodeEdgeKinds.Uses, "start", "type Line"), (CodeEdgeKinds.References, "Point", ""), (CodeEdgeKinds.Calls, "move", "type Point"),
+                (CodeEdgeKinds.References, "Circle", ""), (CodeEdgeKinds.Uses, "radius", "type Circle"), (CodeEdgeKinds.Calls, "round", ""), (CodeEdgeKinds.References, "Triangle", ""),
             ],
-            extract.References.Select(reference => (reference.Kind, reference.Name)));
-        Assert.Equal(new ExtractQualifier(CodeQualifierKinds.Type, "Point"), Assert.Single(extract.References, reference => reference.Name == "move").Qualifier);
+            extract.References.Select(reference => (reference.Kind, reference.Name, $"{reference.Qualifier?.Kind} {reference.Qualifier?.Name}".Trim())));
     }
 
     /// <summary>A local function is no node and no call of another's name: what it calls is its holder's, and a call of it is none.</summary>
@@ -1047,6 +1052,92 @@ public sealed class DartExtractorTests : CodeGraphExtractorContractTests<DartExt
 
         Assert.Equal(
             [("total", 2), ("first", 4), ("limit", 5), ("length", 6)],
+            extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Uses).Select(reference => (reference.Name, reference.Line)));
+    }
+
+    /// <summary>
+    /// A type a body writes is a reference and no use - a typed local's, plain, nullable or with arguments, a record's, a
+    /// closure's parameter's, a local function's return type and parameter's, one of <c>void</c> among them, a cast's, a
+    /// test's, a call's and a collection literal's type arguments - while what the code reads around them is a use.
+    /// </summary>
+    [Fact]
+    public void ATypeABodyWrites_IsAReference_AndNoUse()
+    {
+        var extract = Read("lib/t.dart", """
+            void go(List<Object> xs, Object o) {
+              PlainModel p = make();
+              NullModel? a = null;
+              Map<String, MapModel> m = {};
+              final (RecordModel, int) pair = (p, 1);
+              xs.map((ItemModel item) => item).toList();
+              final l = <ListModel>[];
+              final g = generic<GenModel>(o);
+              final c = o as CastModel;
+              final t = o is TestModel || o is! OtherModel;
+              void local(LocalModel m) {}
+              ReturnModel helper([ParameterModel? given = fallback]) => given!;
+            }
+            """);
+
+        Assert.Equal(
+            [
+                (CodeEdgeKinds.References, "PlainModel", 2), (CodeEdgeKinds.Calls, "make", 2), (CodeEdgeKinds.References, "NullModel", 3), (CodeEdgeKinds.References, "MapModel", 4),
+                (CodeEdgeKinds.References, "RecordModel", 5), (CodeEdgeKinds.Calls, "map", 6), (CodeEdgeKinds.References, "ItemModel", 6), (CodeEdgeKinds.Calls, "toList", 6),
+                (CodeEdgeKinds.References, "ListModel", 7), (CodeEdgeKinds.Calls, "generic", 8), (CodeEdgeKinds.References, "GenModel", 8), (CodeEdgeKinds.References, "CastModel", 9),
+                (CodeEdgeKinds.References, "TestModel", 10), (CodeEdgeKinds.References, "OtherModel", 10), (CodeEdgeKinds.References, "LocalModel", 11),
+                (CodeEdgeKinds.References, "ReturnModel", 12), (CodeEdgeKinds.References, "ParameterModel", 12), (CodeEdgeKinds.Uses, "fallback", 12),
+            ],
+            extract.References.Select(reference => (reference.Kind, reference.Name, reference.Line)));
+    }
+
+    /// <summary>
+    /// A constant a case matches by is a value read - an enum's value by its enum, a constant alone, an if's case's, a
+    /// switch expression's arm's - its strings literals, while a variable a pattern declares is none: a typed one a guard
+    /// and an arm read, a declaration's destructured names wherever they are read.
+    /// </summary>
+    [Fact]
+    public void ACaseConstant_IsAUse_AndAPatternsVariableNone()
+    {
+        var extract = Read("lib/p.dart", """
+            String go(Color c, Object o, int x, (int, int) pair, List<int> xs) {
+              switch (c) {
+                case Color.red:
+                  return 'red';
+              }
+              switch (x) { case kOne: return 'one'; case 'admin role': return 'admin'; }
+              if (x case kTwo) return 'two';
+              final s = switch (o) { int? n when n > 0 => n, Color.green => 1, _ => 0 };
+              var (first, second) = pair;
+              final [head, ...] = xs;
+              for (final (key, value) in pairs) { use(key, value); }
+              return '$first $second $head $s';
+            }
+            """);
+
+        Assert.Equal(
+            [
+                ("red", "named Color", 3), ("kOne", "", 6), ("kTwo", "", 7), ("green", "named Color", 8), ("pairs", "", 11),
+            ],
+            extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Uses).Select(reference => (reference.Name, $"{reference.Qualifier?.Kind} {reference.Qualifier?.Name}".Trim(), reference.Line)));
+        Assert.Equal(["red", "one", "admin role", "admin", "two"], extract.Literals!.Select(literal => literal.Value));
+    }
+
+    /// <summary>A label a <c>break</c> or a <c>continue</c> names is a jump's target and no use, while what the loop reads is one.</summary>
+    [Fact]
+    public void ALabelABreakOrAContinueNames_IsNoUse()
+    {
+        var extract = Read("lib/l.dart", """
+            void go(List<int> xs) {
+              outer:
+              for (final x in xs) {
+                if (x > limit) continue outer;
+                break outer;
+              }
+            }
+            """);
+
+        Assert.Equal(
+            [("limit", 4)],
             extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Uses).Select(reference => (reference.Name, reference.Line)));
     }
 

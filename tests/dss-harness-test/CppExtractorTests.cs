@@ -853,8 +853,8 @@ public sealed class CppExtractorTests : CodeGraphExtractorContractTests<CppExtra
     /// <summary>
     /// A raw string's value is what its parentheses hold as written, its delimiter and its prefix none of it, and a
     /// user-defined literal's suffix is no name the code reads; a parameter's default is its function's code; a structured
-    /// binding's names are its own variables, a type a declaration is written with and a scope a <c>::</c> follows are no
-    /// use, and a conditional's branch is.
+    /// binding's names are its own variables, a type a declaration is written with is a reference and no use, a scope a
+    /// <c>::</c> follows no use, and a conditional's branch is one.
     /// </summary>
     [Fact]
     public void ARawStringIsAsWritten_ASuffixAndABindingAndAScopeAreNoUses_ADefaultIsItsFunctions()
@@ -894,7 +894,7 @@ public sealed class CppExtractorTests : CodeGraphExtractorContractTests<CppExtra
             ],
             extract.Literals);
         Assert.Equal(
-            [(Log, CodeEdgeKinds.Uses, "LIMIT", 7), (Take, CodeEdgeKinds.Uses, "One", 15), (Take, CodeEdgeKinds.Calls, "use", 16), (Take, CodeEdgeKinds.Uses, "COUNT", 17)],
+            [(Log, CodeEdgeKinds.Uses, "LIMIT", 7), (Take, CodeEdgeKinds.References, "Kind", 15), (Take, CodeEdgeKinds.Uses, "One", 15), (Take, CodeEdgeKinds.Calls, "use", 16), (Take, CodeEdgeKinds.Uses, "COUNT", 17)],
             extract.References.Select(reference => (reference.From, reference.Kind, reference.Name, reference.Line)));
     }
 
@@ -916,6 +916,64 @@ public sealed class CppExtractorTests : CodeGraphExtractorContractTests<CppExtra
         Assert.Equal(
             [(3, "value a.b.c.d.e.f.g.h"), (4, "value")],
             extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Calls).Select(reference => (reference.Line, $"{reference.Qualifier?.Kind} {reference.Qualifier?.Name}".Trim())));
+    }
+
+    /// <summary>
+    /// A type C++ writes in a body is a reference and no use - a declaration's with its pointer's, reference's and
+    /// template's marks, a lambda's, a catch's and a range-for's parameter's, a cast's, a named cast's, a call's type
+    /// arguments, a scope's - and a type a brace initializes is made; a template's argument that is a value - a macro's
+    /// arithmetic, a member's address - is read as code, its names uses.
+    /// </summary>
+    [Fact]
+    public void ATypeABodyWrites_IsAReference_AndATemplatesValueArgumentCode()
+    {
+        var extract = Read("src/t.cpp", """
+            #define LIMIT 4
+
+            void take(void *p)
+            {
+                std::vector<VecModel> v;
+                const RefModel& r = make();
+                std::unique_ptr<UniqModel> u;
+                auto a = static_cast<CastModel*>(p);
+                auto s = std::make_shared<MadeModel>();
+                auto l = [](LambdaModel& m) { return m; };
+                auto b = (OldModel *)p;
+                std::array<int, LIMIT / 2> arr;
+                connect<&Listener::receive>(p);
+                auto q = Point{1, 2};
+                for (const Entry& e : entries) { }
+                try { } catch (const Failure& error) { }
+                Box<Inner>::make();
+            }
+            """);
+
+        Assert.Equal(
+            [
+                (CodeEdgeKinds.References, "VecModel", "", 5), (CodeEdgeKinds.References, "RefModel", "", 6), (CodeEdgeKinds.Calls, "make", "", 6),
+                (CodeEdgeKinds.References, "UniqModel", "", 7), (CodeEdgeKinds.References, "CastModel", "", 8), (CodeEdgeKinds.Calls, "make_shared", "named std", 9),
+                (CodeEdgeKinds.References, "MadeModel", "", 9), (CodeEdgeKinds.References, "LambdaModel", "", 10), (CodeEdgeKinds.References, "OldModel", "", 11),
+                (CodeEdgeKinds.Uses, "LIMIT", "", 12), (CodeEdgeKinds.Calls, "connect", "", 13), (CodeEdgeKinds.Uses, "receive", "named Listener", 13),
+                (CodeEdgeKinds.Instantiates, "Point", "", 14), (CodeEdgeKinds.References, "Entry", "", 15), (CodeEdgeKinds.Uses, "entries", "", 15),
+                (CodeEdgeKinds.References, "Failure", "", 16), (CodeEdgeKinds.References, "Inner", "", 17), (CodeEdgeKinds.Calls, "make", "named Box", 17),
+            ],
+            extract.References.Select(reference => (reference.Kind, reference.Name, $"{reference.Qualifier?.Kind} {reference.Qualifier?.Name}".Trim(), reference.Line)));
+    }
+
+    /// <summary>
+    /// An enumerator's value is its enumerator's code - a scoped enumeration's too - what it reads a use: the enumerators
+    /// before it, and a member of another type by its scope.
+    /// </summary>
+    [Fact]
+    public void AnEnumeratorsValue_IsTheEnumeratorsCode()
+    {
+        var extract = Read("src/t.cpp", """
+            enum class Flags { Read = 1, Write = 2, All = Read | Write, Max = Limits::top };
+            """);
+
+        Assert.Equal(
+            [("cpp:Flags.All", "Read", ""), ("cpp:Flags.All", "Write", ""), ("cpp:Flags.Max", "top", "named Limits")],
+            extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Uses).Select(reference => (reference.From, reference.Name, $"{reference.Qualifier?.Kind} {reference.Qualifier?.Name}".Trim())));
     }
 
     private static FileExtract Read(string path, string text) => new CppExtractor().Extract(new CodeFileInput(path, text));
@@ -943,7 +1001,7 @@ public sealed class CppExtractorTests : CodeGraphExtractorContractTests<CppExtra
             static constexpr int count = 0;
         };
 
-        enum class Kind { One, Two };
+        enum class Kind { One, Two = One + 1 };
 
         int take(int local)
         {
@@ -963,8 +1021,11 @@ public sealed class CppExtractorTests : CodeGraphExtractorContractTests<CppExtra
         {
             Edges =
             [
-                // A static read through its struct, and an enum member read through its enum.
+                // An enumerator's value read by its enumerator, a static read through its struct, a local's type a
+                // reference, and an enum member read through its enum.
+                new("cpp:reads.Kind.Two", "cpp:reads.Kind.One", CodeEdgeKinds.Uses, 9, CodeConfidences.Exact),
                 new("cpp:reads.take(int)", "cpp:reads.Table.count", CodeEdgeKinds.Uses, 14, CodeConfidences.Exact),
+                new("cpp:reads.take(int)", "cpp:reads.Kind", CodeEdgeKinds.References, 15, CodeConfidences.Exact),
                 new("cpp:reads.take(int)", "cpp:reads.Kind.One", CodeEdgeKinds.Uses, 15, CodeConfidences.Exact),
                 new("cpp:reads.take(int)", "cpp:reads.greeting", CodeEdgeKinds.Uses, 16, CodeConfidences.Exact),
             ],

@@ -268,10 +268,21 @@ internal static class JsLexer
 
             at = Math.Min(at, end);
             literals.End(at);
-            KeepLiteral(start, new ScanLiteral(literals.Parts, ScanEscapes.JavaScript) { Interpolated = literals.Holes, LeftOpen = literals.Open });
+            KeepLiteral(start, new ScanLiteral(literals.Parts, RawTagged() ? ScanEscapes.None : ScanEscapes.JavaScript) { Interpolated = literals.Holes, LeftOpen = literals.Open });
             Add(ScanTokenKind.Text, start, at);
             return at;
         }
+
+        /// <summary>
+        /// Whether the tokens read last are the standard library's <c>String.raw</c> - no member of something else - whose
+        /// template's value is its text as written, no escape read in it.
+        /// </summary>
+        private bool RawTagged()
+            => Tokens.Count >= 3
+                && text.AsSpan(Tokens[^1].Start, Tokens[^1].Length) is "raw"
+                && text.AsSpan(Tokens[^2].Start, Tokens[^2].Length) is "."
+                && text.AsSpan(Tokens[^3].Start, Tokens[^3].Length) is "String"
+                && (Tokens.Count == 3 || text.AsSpan(Tokens[^4].Start, Tokens[^4].Length) is not ("." or "?."));
 
         /// <summary>Past the string in quotes at <paramref name="start"/>, inside a template's code: no token of it is kept.</summary>
         private int Skipped(int start, int end)

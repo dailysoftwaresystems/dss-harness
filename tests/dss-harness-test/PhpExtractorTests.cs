@@ -234,6 +234,7 @@ public sealed class PhpExtractorTests : CodeGraphExtractorContractTests<PhpExtra
         enum Kind
         {
             case One;
+            case String;
         }
 
         class Reader
@@ -244,7 +245,7 @@ public sealed class PhpExtractorTests : CodeGraphExtractorContractTests<PhpExtra
             {
                 $local = 4;
                 Table::$count += $local + $this->own;
-                $which = Kind::One;
+                $which = Kind::One ?? Kind::String;
                 return strlen(Table::GREETING . ' padding ' . "{$which->name} part");
             }
         }
@@ -257,22 +258,25 @@ public sealed class PhpExtractorTests : CodeGraphExtractorContractTests<PhpExtra
         {
             Nodes =
             [
-                new("php:Reads", CodeNodeKinds.Namespace, (2, 27)),
+                new("php:Reads", CodeNodeKinds.Namespace, (2, 28)),
                 new("php:Reads.Table", CodeNodeKinds.Type, (4, 9)),
                 new("php:Reads.Table.GREETING", CodeNodeKinds.Member, (6, 6)),
                 new("php:Reads.Table.$count", CodeNodeKinds.Member, (8, 8)),
-                new("php:Reads.Kind", CodeNodeKinds.Type, (11, 14)),
+                new("php:Reads.Kind", CodeNodeKinds.Type, (11, 15)),
                 new("php:Reads.Kind.One", CodeNodeKinds.Member, (13, 13)),
-                new("php:Reads.Reader", CodeNodeKinds.Type, (16, 27)),
-                new("php:Reads.Reader.$own", CodeNodeKinds.Member, (18, 18)),
-                new("php:Reads.Reader.take", CodeNodeKinds.Member, (20, 26)),
+                new("php:Reads.Kind.String", CodeNodeKinds.Member, (14, 14)),
+                new("php:Reads.Reader", CodeNodeKinds.Type, (17, 28)),
+                new("php:Reads.Reader.$own", CodeNodeKinds.Member, (19, 19)),
+                new("php:Reads.Reader.take", CodeNodeKinds.Member, (21, 27)),
             ],
             Edges =
             [
-                // A property read through $this - declared with its $ - a constant read through its class, and an enum case.
-                new("php:Reads.Reader.take", "php:Reads.Reader.$own", CodeEdgeKinds.Uses, 23, CodeConfidences.Exact),
-                new("php:Reads.Reader.take", "php:Reads.Table.GREETING", CodeEdgeKinds.Uses, 25, CodeConfidences.Exact),
-                new("php:Reads.Reader.take", "php:Reads.Kind.One", CodeEdgeKinds.Uses, 24, CodeConfidences.Exact),
+                // A property read through $this - declared with its $ - a constant read through its class, and an enum case,
+                // one named as a type of the language among them.
+                new("php:Reads.Reader.take", "php:Reads.Reader.$own", CodeEdgeKinds.Uses, 24, CodeConfidences.Exact),
+                new("php:Reads.Reader.take", "php:Reads.Table.GREETING", CodeEdgeKinds.Uses, 26, CodeConfidences.Exact),
+                new("php:Reads.Reader.take", "php:Reads.Kind.One", CodeEdgeKinds.Uses, 25, CodeConfidences.Exact),
+                new("php:Reads.Reader.take", "php:Reads.Kind.String", CodeEdgeKinds.Uses, 25, CodeConfidences.Exact),
             ],
         },
         new("src/Models/User.php", User)
@@ -854,7 +858,8 @@ public sealed class PhpExtractorTests : CodeGraphExtractorContractTests<PhpExtra
 
     /// <summary>
     /// A word after an arrow or colons is a member's name, whatever word it is - <c>new</c>, <c>catch</c>,
-    /// <c>include</c>, <c>instanceof</c> - and a call of it, never the keyword.
+    /// <c>include</c>, <c>instanceof</c>, <c>function</c> - and a call or a use of it, never the keyword; an anonymous
+    /// class's method's parameter's type is a reference, as any type the body writes is.
     /// </summary>
     [Fact]
     public void AKeywordAfterAnArrowOrColons_IsAMembersName()
@@ -874,7 +879,10 @@ public sealed class PhpExtractorTests : CodeGraphExtractorContractTests<PhpExtra
             """);
 
         Assert.Equal(
-            [("new", "type", "Factory"), ("make", "value", null), ("catch", "value", null), ("handle", "scope", null), ("include", "type", "Blade"), ("include", "value", null), ("instanceof", "value", null), ("build", "value", null), ("Foo", "scope", null)],
+            [
+                ("new", "type", "Factory"), ("make", "value", null), ("catch", "value", null), ("handle", "scope", null), ("include", "type", "Blade"), ("include", "value", null),
+                ("instanceof", "value", null), ("build", "value", null), ("$function", "value", null), ("Foo", "scope", null), ("Foo", "scope", null),
+            ],
             extract.References.Select(reference => (reference.Name, reference.Qualifier?.Kind, reference.Qualifier?.Name)));
         Assert.Empty(extract.Imports);
         Assert.Empty(extract.Dynamic);
@@ -926,8 +934,8 @@ public sealed class PhpExtractorTests : CodeGraphExtractorContractTests<PhpExtra
 
     /// <summary>
     /// A conditional's blocks - <c>if</c>, <c>elseif</c>, <c>else if</c> and <c>else</c> - declare what they hold, as PHP
-    /// declares a function where it is not yet; an anonymous class's calls and an arrow function's typed parameter are the
-    /// body's they are written in.
+    /// declares a function where it is not yet; an anonymous class's calls and an arrow function's typed parameter - its
+    /// type a reference - are the body's they are written in.
     /// </summary>
     [Fact]
     public void AConditionalsBlocksDeclare_AndAnAnonymousClassesCallsAreTheBodys()
@@ -945,7 +953,7 @@ public sealed class PhpExtractorTests : CodeGraphExtractorContractTests<PhpExtra
         Assert.Equal(["php:src/c.php.(script)", "php:f", "php:g", "php:h", "php:i", "php:go"], extract.Nodes.Select(node => node.Id));
         Assert.Equal(["a", "b", "c"], Calls(extract, "php:src/c.php.(script)"));
         Assert.Equal(
-            [("send", "type", "Lib.Mailer"), ("inner", "scope", null)],
+            [("Mailer", "type", "Lib"), ("send", "type", "Lib.Mailer"), ("inner", "scope", null)],
             extract.References.Where(reference => reference.From == "php:go").Select(reference => (reference.Name, reference.Qualifier?.Kind, reference.Qualifier?.Name)));
     }
 
@@ -1279,6 +1287,43 @@ public sealed class PhpExtractorTests : CodeGraphExtractorContractTests<PhpExtra
         Assert.Equal(
             [(6, "value $b.$c.$d.$e.$f.$g.$h"), (7, "value")],
             extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Calls).Select(reference => (reference.Line, $"{reference.Qualifier?.Kind} {reference.Qualifier?.Name}".Trim())));
+    }
+
+    /// <summary>
+    /// A parameter's type a body writes - a closure's, an arrow function's, each member of a union, a by-reference, a
+    /// variadic and an intersection one's - names classes, references and no uses, as a closure's return type does; a
+    /// member named as a word or a type of the language is a use, a class's <c>::class</c> none, and a label a
+    /// <c>goto</c> names none.
+    /// </summary>
+    [Fact]
+    public void AParametersTypeInABody_IsAReference_AMemberNamedAsAWordAUse_AndALabelNone()
+    {
+        var extract = Read("src/V.php", """
+            <?php
+            namespace App;
+
+            class V
+            {
+                public function go($node)
+                {
+                    $f = function (Foo|Bar $x, ?Baz $y, Qux &$z, Many ...$more, A&B $both): ?Ret { return $x; };
+                    $g = fn (Arrowed $v): int => $v;
+                    $k = FieldType::String . $node->parent . $node->object . Foo::class;
+                    if ($node) goto done;
+                    done:
+                    return $k;
+                }
+            }
+            """);
+
+        Assert.Equal(
+            [
+                (CodeEdgeKinds.References, "Foo", 8), (CodeEdgeKinds.References, "Bar", 8), (CodeEdgeKinds.References, "Baz", 8), (CodeEdgeKinds.References, "Qux", 8),
+                (CodeEdgeKinds.References, "Many", 8), (CodeEdgeKinds.References, "A", 8), (CodeEdgeKinds.References, "B", 8), (CodeEdgeKinds.References, "Ret", 8),
+                (CodeEdgeKinds.References, "Arrowed", 9),
+                (CodeEdgeKinds.Uses, "String", 10), (CodeEdgeKinds.Uses, "$parent", 10), (CodeEdgeKinds.Uses, "$object", 10), (CodeEdgeKinds.References, "Foo", 10),
+            ],
+            extract.References.Where(reference => reference.From == "php:App.V.go").Select(reference => (reference.Kind, reference.Name, reference.Line)));
     }
 
     private static FileExtract Read(string path, string text) => new PhpExtractor().Extract(new CodeFileInput(path, text));

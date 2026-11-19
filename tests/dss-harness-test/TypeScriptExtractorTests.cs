@@ -189,6 +189,7 @@ public sealed class TypeScriptExtractorTests : CodeGraphExtractorContractTests<T
 
         export enum Kind {
             One = 'one',
+            Two = One,
         }
 
         export class Reader {
@@ -200,6 +201,8 @@ public sealed class TypeScriptExtractorTests : CodeGraphExtractorContractTests<T
                 return GREETING + ' padding ' + `${Kind.One} part`;
             }
         }
+
+        export type Picked<T> = T extends string ? Reader : Kind;
         """;
 
     /// <inheritdoc/>
@@ -210,18 +213,25 @@ public sealed class TypeScriptExtractorTests : CodeGraphExtractorContractTests<T
             Nodes =
             [
                 new("typescript:src/reads.ts.GREETING", CodeNodeKinds.Member, (1, 1)),
-                new("typescript:src/reads.ts.Kind", CodeNodeKinds.Type, (3, 5)),
+                new("typescript:src/reads.ts.Kind", CodeNodeKinds.Type, (3, 6)),
                 new("typescript:src/reads.ts.Kind.One", CodeNodeKinds.Member, (4, 4)),
-                new("typescript:src/reads.ts.Reader", CodeNodeKinds.Type, (7, 15)),
-                new("typescript:src/reads.ts.Reader.own", CodeNodeKinds.Member, (8, 8)),
-                new("typescript:src/reads.ts.Reader.take", CodeNodeKinds.Member, (10, 14)),
+                new("typescript:src/reads.ts.Kind.Two", CodeNodeKinds.Member, (5, 5)),
+                new("typescript:src/reads.ts.Reader", CodeNodeKinds.Type, (8, 16)),
+                new("typescript:src/reads.ts.Reader.own", CodeNodeKinds.Member, (9, 9)),
+                new("typescript:src/reads.ts.Reader.take", CodeNodeKinds.Member, (11, 15)),
+                new("typescript:src/reads.ts.Picked", CodeNodeKinds.Type, (18, 18)),
             ],
             Edges =
             [
                 // A field read through this, a constant read bare, and an enum member read inside a template's hole.
-                new("typescript:src/reads.ts.Reader.take", "typescript:src/reads.ts.Reader.own", CodeEdgeKinds.Uses, 12, CodeConfidences.Exact),
-                new("typescript:src/reads.ts.Reader.take", "typescript:src/reads.ts.GREETING", CodeEdgeKinds.Uses, 13, CodeConfidences.Exact),
-                new("typescript:src/reads.ts.Reader.take", "typescript:src/reads.ts.Kind.One", CodeEdgeKinds.Uses, 13, CodeConfidences.Exact),
+                new("typescript:src/reads.ts.Reader.take", "typescript:src/reads.ts.Reader.own", CodeEdgeKinds.Uses, 13, CodeConfidences.Exact),
+                new("typescript:src/reads.ts.Reader.take", "typescript:src/reads.ts.GREETING", CodeEdgeKinds.Uses, 14, CodeConfidences.Exact),
+                new("typescript:src/reads.ts.Reader.take", "typescript:src/reads.ts.Kind.One", CodeEdgeKinds.Uses, 14, CodeConfidences.Exact),
+
+                // An enum member's value is its code, and a conditional type's first branch names a type as its second does.
+                new("typescript:src/reads.ts.Kind.Two", "typescript:src/reads.ts.Kind.One", CodeEdgeKinds.Uses, 5, CodeConfidences.Exact),
+                new("typescript:src/reads.ts.Picked", "typescript:src/reads.ts.Reader", CodeEdgeKinds.References, 18, CodeConfidences.Exact),
+                new("typescript:src/reads.ts.Picked", "typescript:src/reads.ts.Kind", CodeEdgeKinds.References, 18, CodeConfidences.Exact),
             ],
         },
         new("src/shapes.ts", Shapes)
@@ -703,6 +713,72 @@ public sealed class TypeScriptExtractorTests : CodeGraphExtractorContractTests<T
         Assert.Equal(
             [(CodeEdgeKinds.References, "Foo", 2), (CodeEdgeKinds.References, "Bar", 2), (CodeEdgeKinds.Uses, "total", 2), (CodeEdgeKinds.References, "Baz", 3), (CodeEdgeKinds.Uses, "size", 4)],
             extract.References.Select(reference => (reference.Kind, reference.Name, reference.Line)));
+    }
+
+    /// <summary>
+    /// A type a body writes names types, no value it reads - an arrow's parameters' and return type's, an optional
+    /// parameter's, a function expression's and its this parameter's, an object's method's, a call's type arguments, an
+    /// assertion's, a generic arrow's constraint - each a reference, a generic arrow's own type parameter none, and a
+    /// parameter's default still code.
+    /// </summary>
+    [Fact]
+    public void ATypeABodyWrites_IsAReference_AndNoUse()
+    {
+        var extract = Read("src/b.ts", """
+            export function total(items: OrderItem[]) {
+              const sum = items.map((item: LineItem) => item.price);
+              const pick = (x: Picked, y?: Maybe): Result => x;
+              const f = function (this: Window, a: ArgModel = DEFAULT_A): FnResult { return a; };
+              const o = { area(s: AreaModel): AreaResult { return s; } };
+              const g = <T extends BaseModel>(x: T): T => x;
+              const [u] = useState<UserModel | null>(null);
+              const c = <CastModel>u;
+              return sum;
+            }
+            """);
+
+        Assert.Equal(
+            [
+                (CodeEdgeKinds.References, "OrderItem", 1), (CodeEdgeKinds.Calls, "map", 2), (CodeEdgeKinds.References, "LineItem", 2), (CodeEdgeKinds.Uses, "price", 2),
+                (CodeEdgeKinds.References, "Picked", 3), (CodeEdgeKinds.References, "Maybe", 3), (CodeEdgeKinds.References, "Result", 3),
+                (CodeEdgeKinds.References, "Window", 4), (CodeEdgeKinds.References, "ArgModel", 4), (CodeEdgeKinds.Uses, "DEFAULT_A", 4), (CodeEdgeKinds.References, "FnResult", 4),
+                (CodeEdgeKinds.References, "AreaModel", 5), (CodeEdgeKinds.References, "AreaResult", 5),
+                (CodeEdgeKinds.References, "BaseModel", 6),
+                (CodeEdgeKinds.Calls, "useState", 7), (CodeEdgeKinds.References, "UserModel", 7),
+                (CodeEdgeKinds.References, "CastModel", 8),
+            ],
+            extract.References.Select(reference => (reference.Kind, reference.Name, reference.Line)));
+    }
+
+    /// <summary>An enum member's value is code read from the member's node: a string enum's values its literals, the members another's value reads its uses.</summary>
+    [Fact]
+    public void AnEnumMembersValue_IsTheMembersCode()
+    {
+        var extract = Read("src/e.ts", """
+            export enum Status { Active = 'active status', Gone = 'gone status' }
+            export enum Flags { Read = 1, Write = 2, All = Read | Write }
+            """);
+
+        Assert.Equal(
+            [new ExtractLiteral("active status", 1) { Node = "typescript:src/e.ts.Status.Active" }, new ExtractLiteral("gone status", 1) { Node = "typescript:src/e.ts.Status.Gone" }],
+            extract.Literals);
+        Assert.Equal(
+            [("typescript:src/e.ts.Flags.All", CodeEdgeKinds.Uses, "Read"), ("typescript:src/e.ts.Flags.All", CodeEdgeKinds.Uses, "Write")],
+            extract.References.Select(reference => (reference.From, reference.Kind, reference.Name)));
+    }
+
+    /// <summary>A conditional type's first branch names a type as its second does, where an object type's key - an optional one's among them - names none.</summary>
+    [Fact]
+    public void AConditionalTypesFirstBranch_IsAReference_AsItsSecondIs()
+    {
+        var extract = Read("src/o.ts", """
+            export type Outcome<T> = T extends Error ? Failure : Success;
+            export type Shaped = { first?: First; second: Second };
+            """);
+
+        Assert.Equal(
+            [("typescript:src/o.ts.Outcome", "Failure"), ("typescript:src/o.ts.Outcome", "Success"), ("typescript:src/o.ts.Shaped", "First"), ("typescript:src/o.ts.Shaped", "Second")],
+            extract.References.Where(reference => reference.Kind == CodeEdgeKinds.References).Select(reference => (reference.From, reference.Name)));
     }
 
     private static FileExtract Read(string path, string text) => new TypeScriptExtractor().Extract(new CodeFileInput(path, text));
