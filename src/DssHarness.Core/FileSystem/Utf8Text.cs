@@ -43,13 +43,21 @@ public static class Utf8Text
         catch (DecoderFallbackException ex)
         {
             text = null;
-            problem = string.Create(
-                CultureInfo.InvariantCulture,
-                $"is not UTF-8: the byte at offset {offset + ex.Index} (0x{ex.BytesUnknown?.FirstOrDefault() ?? 0:X2}) does not form a UTF-8 character");
+            problem = NotUtf8(offset + ex.Index, ex.BytesUnknown?.FirstOrDefault() ?? 0);
 
             return false;
         }
     }
+
+    /// <summary>
+    /// Why bytes spell no UTF-8, as what follows the name of their file: the byte at <paramref name="offset"/>, which is
+    /// <paramref name="unknown"/>, forms no character. The one wording, for bytes read whole and for a file streamed a block
+    /// at a time, whose offsets pass an <see cref="int"/>'s.
+    /// </summary>
+    /// <param name="offset">Where the byte stands, counted as the reader counts its bytes.</param>
+    /// <param name="unknown">The byte.</param>
+    public static string NotUtf8(long offset, byte unknown)
+        => string.Create(CultureInfo.InvariantCulture, $"is not UTF-8: the byte at offset {offset} (0x{unknown:X2}) does not form a UTF-8 character");
 
     /// <summary>The UTF-8 bytes of <paramref name="text"/>, with no byte order mark.</summary>
     /// <param name="text">The text.</param>

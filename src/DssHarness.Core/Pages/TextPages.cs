@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Json.Serialization.Metadata;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Output;
+using DssHarness.Core.Text;
 
 namespace DssHarness.Core.Pages;
 
@@ -374,37 +375,11 @@ public static class TextPages
     }
 
     /// <summary>
-    /// A page's characters cut into its lines, or the pieces of lines its ends hold, without their endings: at each CR LF,
-    /// LF and CR, as a file's lines are cut - an ending the page's characters end with closing its line rather than opening
-    /// another, and a page of no characters an empty text's one empty line.
+    /// A page's characters cut into its lines, or the pieces of lines its ends hold, without their endings, by the one rule
+    /// of where a line ends (<see cref="LineEnds"/>): an ending the page's characters end with closes its line rather than
+    /// opening another, and a page of no characters is an empty text's one empty line.
     /// </summary>
-    private static List<string> Segments(string chars)
-    {
-        var segments = new List<string>();
-        var start = 0;
-
-        for (var at = 0; at < chars.Length; at++)
-        {
-            if (chars[at] is '\r' or '\n')
-            {
-                segments.Add(chars[start..at]);
-
-                if (chars[at] == '\r' && at + 1 < chars.Length && chars[at + 1] == '\n')
-                {
-                    at++;
-                }
-
-                start = at + 1;
-            }
-        }
-
-        if (start < chars.Length || segments.Count == 0)
-        {
-            segments.Add(chars[start..]);
-        }
-
-        return segments;
-    }
+    private static List<string> Segments(string chars) => LineEnds.Spans(chars, (start, end, _) => chars[start..end]);
 
     /// <summary>
     /// A file's text as one pass reads it, a block at a time: its encoding read from its first bytes as
@@ -567,7 +542,7 @@ public static class TextPages
         public async Task<(int Characters, bool Ends)> LineAheadAsync(int most, CancellationToken cancellationToken)
         {
             var available = await AvailableAsync(most, cancellationToken).ConfigureAwait(false);
-            var ending = _chars.AsSpan(_start, available).IndexOfAny('\r', '\n');
+            var ending = LineEnds.IndexOf(_chars.AsSpan(_start, available));
 
             return ending >= 0 ? (ending, true)
                 : available < most ? (available, true)
@@ -601,7 +576,7 @@ public static class TextPages
             var ending = _chars[_start];
             Consume(1);
 
-            if (ending == '\r' && await AvailableAsync(1, cancellationToken).ConfigureAwait(false) > 0 && _chars[_start] == '\n')
+            if (await AvailableAsync(1, cancellationToken).ConfigureAwait(false) > 0 && LineEnds.Joined(ending, _chars[_start]))
             {
                 Consume(1);
             }
@@ -662,9 +637,7 @@ public static class TextPages
                 // sequence the block before began stands before this block's first byte.
                 throw new InvalidDataException(_utf16
                     ? $"'{_path}' is no text this tool reads: {EncodedText.NotUtf16Why}"
-                    : string.Create(
-                        CultureInfo.InvariantCulture,
-                        $"'{_path}' is no text this tool reads: it is not UTF-8: the byte at offset {_decoded + used + ex.Index} (0x{ex.BytesUnknown?.FirstOrDefault() ?? 0:X2}) does not form a UTF-8 character, and is not UTF-16 by its mark either"));
+                    : $"'{_path}' is no text this tool reads: {EncodedText.NotUtf8Why(Utf8Text.NotUtf8(_decoded + used + ex.Index, ex.BytesUnknown?.FirstOrDefault() ?? 0))}");
             }
 
             _decoded += bytes.Length;

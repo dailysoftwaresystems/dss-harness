@@ -75,7 +75,19 @@ public sealed record EncodedText(string Text, TextEncoding Encoding)
 
         return Utf8Text.TryDecode(body, out var text, out var problem)
             ? EncodedTextReading.Of(new EncodedText(text, marked ? TextEncoding.Utf8WithMark : TextEncoding.Utf8))
-            : EncodedTextReading.Unread(binary: false, $"it {problem}, and is not UTF-16 by its mark either");
+            : EncodedTextReading.Unread(binary: false, NotUtf8Why(problem));
+    }
+
+    /// <summary>
+    /// Why a file that is neither UTF-16 by its mark nor UTF-8 is not read, from why its bytes spell no UTF-8
+    /// (<see cref="Utf8Text.NotUtf8"/>): the one wording, for a file read whole and for one streamed.
+    /// </summary>
+    /// <param name="problem">Why its bytes spell no UTF-8, as what follows the name of their file.</param>
+    public static string NotUtf8Why(string problem)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(problem);
+
+        return $"it {problem}, and is not UTF-16 by its mark either";
     }
 
     /// <summary><paramref name="text"/> as the bytes of a file in this text's encoding, its mark first where it was found with one.</summary>

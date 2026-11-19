@@ -70,40 +70,12 @@ public static class CodeFileText
 
     /// <summary>
     /// Each line of <paramref name="text"/> as <see cref="Lines"/> cuts it - at each CR LF, LF and CR, a final ending
-    /// closing the last line, an empty text one empty line - with where its text ends and where its ending does. The one
-    /// cut of a text into lines.
+    /// closing the last line, an empty text one empty line, by the one rule of where a line ends
+    /// (<see cref="Text.LineEnds"/>) - with where its text ends and where its ending does.
     /// </summary>
     /// <param name="text">A file's text.</param>
     public static IReadOnlyList<CodeLineSpan> Spans(string text)
-    {
-        ArgumentNullException.ThrowIfNull(text);
-
-        var lines = new List<CodeLineSpan>();
-        var start = 0;
-
-        for (var at = 0; at < text.Length; at++)
-        {
-            if (text[at] is '\r' or '\n')
-            {
-                var end = at;
-
-                if (text[at] == '\r' && at + 1 < text.Length && text[at + 1] == '\n')
-                {
-                    at++;
-                }
-
-                lines.Add(new CodeLineSpan(start, end, at + 1));
-                start = at + 1;
-            }
-        }
-
-        if (start < text.Length || lines.Count == 0)
-        {
-            lines.Add(new CodeLineSpan(start, text.Length, text.Length));
-        }
-
-        return lines;
-    }
+        => Text.LineEnds.Spans(text, (start, end, next) => new CodeLineSpan(start, end, next));
 
     /// <summary>The first <see cref="ProbeCharacters"/> characters of a file's decoded text, as a claim's content test is given them.</summary>
     /// <param name="text">The file's decoded text.</param>
