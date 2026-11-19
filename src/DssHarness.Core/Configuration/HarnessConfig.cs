@@ -178,7 +178,7 @@ public sealed class HarnessConfig
 
     /// <summary>
     /// Patterns whose every match on a line is pulled out of a build's output when <c>build --time</c>
-    /// runs - a line at a time, the first 10,000 marks of a phase - so timings come from what the build
+    /// runs - a line at a time, every mark of a phase recorded - so timings come from what the build
     /// itself reported rather than from the harness guessing which part of the wall clock was the
     /// build. Configured with none, <c>--time</c> measures the phases itself.
     /// </summary>
@@ -242,9 +242,9 @@ public sealed class HarnessConfig
     public AgentWebSearchConfig? AgentWebSearch { get; init; }
 
     /// <summary>
-    /// What an agent is given of the work it goes on with: the bounds of the continuation record and of the engine's
-    /// compaction. Left out, the defaults hold - each bound a repository changes where its agents work better with more,
-    /// or its models hold less.
+    /// What an agent is given of the work it goes on with: the bounds of the engine's compaction. Left out, the defaults
+    /// hold - each bound a repository changes where its agents work better with more, or its models hold less. The
+    /// continuation record has no bounds: it holds the whole of the work, a page at a time.
     /// </summary>
     public AgentContextConfig? AgentContext { get; init; }
 
@@ -252,21 +252,25 @@ public sealed class HarnessConfig
 }
 
 /// <summary>
-/// What an agent is given of the work it goes on with, under <c>agentContext</c>: the continuation record's bounds and the
-/// compaction's.
-/// How much of earlier work an agent needs is not the same for every repository, so each is a key and not a constant;
-/// the rule that nothing is cut in the middle and that whatever is cut is named is not configurable.
+/// What an agent is given of the work it goes on with, under <c>agentContext</c>: the compaction's bounds. How much of a
+/// conversation a compaction reduces to is not the same for every repository, so each is a key and not a constant.
 /// </summary>
 public sealed class AgentContextConfig
 {
-    /// <summary>The continuation record's bounds. Left out, the defaults hold.</summary>
+    /// <summary>
+    /// The continuation record's bounds, a section no longer read: a file that writes it is refused where it is read,
+    /// naming that the record holds the whole of the work (<see cref="MisplacedKeys"/>), so this is never set from one.
+    /// </summary>
     public AgentContinuationConfig? Continuation { get; init; }
 
     /// <summary>The compaction's bounds. Left out, the defaults hold.</summary>
     public AgentCompactionConfig? Compaction { get; init; }
 }
 
-/// <summary>The bounds of the continuation record, under <c>agentContext.continuation</c>: each a positive number, each with its default.</summary>
+/// <summary>
+/// The bounds the continuation record once had, under the retired <c>agentContext.continuation</c>: refused where a file
+/// writes them (<see cref="MisplacedKeys"/>), for the record holds every step, path and iteration of the work.
+/// </summary>
 public sealed class AgentContinuationConfig
 {
     /// <summary>The most characters of the record's own parts (all but the last iterations): <see cref="Agents.AgentContinuationBounds.DefaultRecordChars"/> where left out.</summary>

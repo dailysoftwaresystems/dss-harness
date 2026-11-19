@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text;
 using System.Text.Json.Nodes;
 using DssHarness.Core.Agents.Policy;
 using DssHarness.Core.Execution;
@@ -25,23 +26,27 @@ public sealed partial class AgentToolRuntime
 
     /// <summary>
     /// <c>run_command</c>: a program and its arguments, never a shell string, decided whole by the policy where it starts,
-    /// run as a phase is - contained, its log kept whole beside the stream, its silence and its time bounded - with the
-    /// environment every child of an agent has, then followed as every write is; the answer how it ended and its output,
-    /// cut as every answer is. A program that started ran, however it exited - grep, rg and git grep exit 1 finding
-    /// nothing - and one refused, or never started, did not.
+    /// run as a phase is - contained, its log kept whole beside the stream, its silence bounded by the step's stall bound
+    /// and its time by the one its call names, else by <c>agentPolicy.commandTimeoutSeconds</c> where it is given, else by
+    /// none of its own - with the environment every child of an agent has, then followed as every write is; the answer how
+    /// it ended and its output whole, or, where its output is longer than a page, the first page of its log, which says how
+    /// <c>read_result</c> gives the rest. A program that started ran, however it exited - grep, rg and git grep exit 1
+    /// finding nothing - and one refused, or never started, did not.
     /// </summary>
     private async Task<Answer> RunCommandAsync(string callId, JsonObject input, CancellationToken cancellationToken)
     {
         var program = Text(input, "program")!;
         IReadOnlyList<string> arguments = input["args"] is JsonArray given ? [.. given.Select(argument => argument!.GetValue<string>())] : [];
         var commands = _run.Commands;
-        var seconds = Number(input, "timeout_seconds") ?? commands.TimeoutSeconds;
+        var asked = Number(input, "timeout_seconds");
         var command = string.Join(' ', [program, .. arguments]);
 
-        if (seconds < 1 || seconds > commands.MaxTimeoutSeconds)
+        if (asked is < 1 or > AgentCommandSettings.MostTimeoutSeconds)
         {
-            return Answer.NotRun($"timeout_seconds is {seconds}, and is 1 to {commands.MaxTimeoutSeconds.ToString(CultureInfo.InvariantCulture)}");
+            return Answer.NotRun($"timeout_seconds is {asked}, and is 1 to {AgentCommandSettings.MostTimeoutSeconds.ToString(CultureInfo.InvariantCulture)}, what a command's timer holds; leave it out to run the command until it ends");
         }
+
+        long? seconds = asked ?? commands.CommandTimeoutSeconds;
 
         if (program.Length == 0)
         {
@@ -93,7 +98,7 @@ public sealed partial class AgentToolRuntime
             WorkingDirectory = directory,
             Environment = AgentChildEnvironment.Of(_host.Environment().Keys, _run.Withheld, commands.KeepEnvironment),
             StandardInput = stdin is not null ? ChildInput.Of(stdin) : null,
-            Timeout = TimeSpan.FromSeconds(seconds),
+            Timeout = seconds is { } bound ? TimeSpan.FromSeconds(bound) : null,
             StallSeconds = _run.Limits.StallSeconds ?? 0,
             Mask = _run.Mask,
             Contained = true,
@@ -135,21 +140,54 @@ public sealed partial class AgentToolRuntime
             _ => $"exit {result.ExitCode.ToString(CultureInfo.InvariantCulture)}",
         };
 
-        string output;
+        var after = $"{ended}, after {result.Duration.TotalSeconds.ToString("0.0", CultureInfo.InvariantCulture)} s";
+        string said;
 
         try
         {
-            output = AgentCallRecords.Cut(result.Output.Lines(), log);
+            said = Whole(result.Output) is { } output
+                ? (output.Length == 0 ? $"{after}; it printed nothing" : $"{after}:\n{output}")
+                : $"{after}; its output is longer than a page, and its log is given a page at a time, the log's own lines first:\n{await _results.FirstPageAsync(callId, cancellationToken).ConfigureAwait(false)}";
         }
         catch (PhaseOutputUnreadException ex)
         {
-            output = $"[its output could not be read back: {ex.Message.TrimEnd('.')}]";
+            said = $"{after}:\n[its output could not be read back: {ex.Message.TrimEnd('.')}]";
+        }
+        catch (InvalidDataException ex)
+        {
+            said = $"{after}:\n[its output, longer than a page, does not read as text, and is in '{log}': {ex.Message.TrimEnd('.')}]";
         }
 
-        return Answer.Kept(
-            result.Stopped == PhaseStop.None && result.ExitCode == 0,
-            output.Length == 0 ? $"{ended}, after {result.Duration.TotalSeconds:0.0} s; it printed nothing" : $"{ended}, after {result.Duration.TotalSeconds:0.0} s:\n{output}",
-            log);
+        return Answer.Kept(result.Stopped == PhaseStop.None && result.ExitCode == 0, said, log);
+    }
+
+    /// <summary>
+    /// A command's output whole, its lines read back from its log while they fit one page of a call's answer
+    /// (<see cref="KeptResults.OnePage(StringBuilder)"/>); null where they pass it - the reading stops there - and the
+    /// answer gives its log a page at a time.
+    /// </summary>
+    private static string? Whole(PhaseOutput output)
+    {
+        var held = new StringBuilder();
+        var first = true;
+
+        foreach (var line in output.Lines())
+        {
+            if (!first)
+            {
+                held.Append('\n');
+            }
+
+            first = false;
+            held.Append(line);
+
+            if (!KeptResults.OnePage(held))
+            {
+                return null;
+            }
+        }
+
+        return held.ToString();
     }
 
     /// <summary>

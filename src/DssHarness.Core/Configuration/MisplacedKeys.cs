@@ -38,8 +38,9 @@ internal static class MisplacedKeys
 
         try
         {
-            // Read as the serializer reads it, so a file it accepts is one this can look through.
-            document = JsonDocument.Parse(json, new JsonDocumentOptions { CommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true });
+            // Read as the serializer reads it - at any depth, its comments and trailing commas let by - so a file it
+            // accepts is one this can look through.
+            document = JsonDocument.Parse(json, Json.JsonDepth.Document with { CommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true });
         }
         catch (JsonException)
         {
@@ -54,8 +55,39 @@ internal static class MisplacedKeys
             keys.AddRange(Web.Search.WebSearchSources.Retired(document.RootElement));
             keys.AddRange(RetiredProviderKeys(document.RootElement));
             keys.AddRange(RetiredClientKeys(document.RootElement));
+            keys.AddRange(RetiredAgentBounds(document.RootElement));
             keys.AddRange(StepKeysOnPhases(document.RootElement));
             return keys;
+        }
+    }
+
+    /// <summary>The time a call of a command could name at most, a key of the plan before 2026-11-19 under <c>agentPolicy</c>.</summary>
+    internal const string MaxCommandTimeoutSeconds = "maxCommandTimeoutSeconds";
+
+    /// <summary>The continuation record's bounds, a section of the plan before 2026-11-19 under <c>agentContext</c>.</summary>
+    internal const string Continuation = "continuation";
+
+    /// <summary>
+    /// The bounds of an agent's work that bounded nothing the work asked: each refused naming what bounds it now, so a
+    /// reader moves what it was there for instead of deleting its line.
+    /// </summary>
+    private static IEnumerable<string> RetiredAgentBounds(JsonElement root)
+    {
+        if (Property(root, "agentPolicy") is { ValueKind: JsonValueKind.Object } policy && Property(policy, MaxCommandTimeoutSeconds) is not null)
+        {
+            yield return $"agentPolicy.{MaxCommandTimeoutSeconds} is no longer read: a call's timeout_seconds names any time a "
+                + $"command's timer holds ({Agents.AgentCommandSettings.MostTimeoutSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture)} s at most), "
+                + "and a command whose call names none runs for agentPolicy.commandTimeoutSeconds where it is given, else until "
+                + "it ends - stopped where it prints nothing for the step's stallSeconds, and by the step's own bounds, its "
+                + "timeoutMinutes and its budget";
+        }
+
+        if (Property(root, "agentContext") is { ValueKind: JsonValueKind.Object } context && Property(context, Continuation) is not null)
+        {
+            yield return $"agentContext.{Continuation} is no longer read: the continuation record holds every step, every changed "
+                + "path and every iteration of the work it goes on with, the last iterations first, nothing of it cut - its first "
+                + $"page in the step's first message and every page of it by {Agents.Runtime.AgentTools.ReadResult} with id "
+                + $"'{Agents.Runtime.KeptResults.ContinuationId}'";
         }
     }
 

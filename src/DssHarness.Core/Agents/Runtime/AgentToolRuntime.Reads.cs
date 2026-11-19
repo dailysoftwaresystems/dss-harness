@@ -7,18 +7,39 @@ using DssHarness.Core.FileSystem;
 using DssHarness.Core.Output;
 using DssHarness.Core.Pages;
 using DssHarness.Core.Repository;
+using DssHarness.Core.Text;
 
 namespace DssHarness.Core.Agents.Runtime;
 
 /// <summary>The tools that read: a file viewed or a directory listed, files found by a pattern, files' text searched, a call's whole result read a page at a time.</summary>
 public sealed partial class AgentToolRuntime
 {
-    /// <summary><c>view_file</c>: a file's lines from a start to an end, numbered, within the view's bounds - its hash recorded for an edit - or a directory's entries.</summary>
+    /// <summary>What a call of <c>search_files</c> naming <c>max_results</c> is refused with: every hit is given, a page at a time.</summary>
+    public const string MaxResultsRetired =
+        "max_results is no longer taken: every matching line is given, a page at a time - the answer's first page says how many pages it holds, and read_result with this call's id and page gives each of the rest";
+
+    /// <summary>
+    /// <c>view_file</c>: a file's numbered lines a page at a time - the pages laid once by streaming the file through its
+    /// decided open, and any page read by seeking to its mark (<see cref="TextPages"/>), so a file of any size, and a line
+    /// of any width, is reachable page by page in the memory of a page - or the lines from a start to an end, within the
+    /// page that holds the start, and how to ask for the rest; its digest recorded for an edit. A directory's entries.
+    /// </summary>
     private async Task<Answer> ViewAsync(JsonObject input, CancellationToken cancellationToken)
     {
         var path = Text(input, "path")!;
         var start = Number(input, "start_line");
         var end = Number(input, "end_line");
+        var page = Number(input, "page");
+
+        if (page is not null && (start is not null || end is not null))
+        {
+            return Answer.NotRun("page and start_line or end_line are two ways to ask for a part of a file: give page alone, or a range");
+        }
+
+        if (page is < 1)
+        {
+            return Answer.NotRun(Paging.BelowTheFirst(page.Value));
+        }
 
         if (start is < 1 || end is < 1)
         {
@@ -42,12 +63,17 @@ public sealed partial class AgentToolRuntime
 
         if (files.DirectoryExists(full))
         {
+            if (page is not null)
+            {
+                return Answer.NotRun($"'{Said(full)}/' is a directory, and page is a file's: its entries are given whole, from start_line to end_line where they are given, a page at a time by read_result where they pass one");
+            }
+
             Tally.Read(full);
             var entries = Entries(full);
 
             return entries.Count == 0
                 ? Answer.Done($"{Said(full)}/ is empty")
-                : Paged($"{Said(full)}/ holds {ReportText.Counted(entries.Count, "entry")}", entries, "entries", start, end, numbered: false);
+                : Listed($"{Said(full)}/ holds {ReportText.Counted(entries.Count, "entry")}", entries, start, end);
         }
 
         if (!files.FileExists(full))
@@ -55,48 +81,55 @@ public sealed partial class AgentToolRuntime
             return Answer.Failed($"there is no file or directory at '{Said(full)}'");
         }
 
-        if (TooLarge(full) is { } large)
+        TextPagesKept kept;
+        string? note;
+
+        try
         {
-            return Answer.Failed(large);
+            (kept, note) = await ViewedAsync(full, cancellationToken).ConfigureAwait(false);
         }
-
-        // Read through the file as it was opened, where it stands decided again before a byte is read.
-        var read = await _host.Files.ReadAsync(full, AgentTools.MostViewedBytes, opened => OpenedPlace(opened, write: false).Denied, cancellationToken).ConfigureAwait(false);
-
-        if (read.Denied is { } moved)
+        catch (AgentReadRefusedException moved)
         {
-            return Answer.Refused(path, moved);
+            return Answer.Refused(path, moved.Denied);
         }
-
-        var bytes = read.Bytes!;
-        var reading = EncodedText.Read(bytes);
-
-        if (!reading.IsRead)
+        catch (InvalidDataException ex)
         {
-            return Answer.Failed($"'{Said(full)}' is {(reading.Binary ? "binary" : "no text this tool reads")}: {reading.Why}");
+            return Answer.Failed(SaidIn(ex, full));
         }
-
-        var lines = CodeFileText.Lines(reading.Text.Text);
 
         // A whole read of a parsed file the graph holds is narrowed (graphReads: narrow): denied with the way to the
         // graph, let by as an escape where the graph is not sure of the file or a wholeFile lifted it - each escape and
         // each denial a line of the run's graph lines, the denial recorded as every denial is. A read denied shows the
-        // agent nothing, so it is neither a view an edit may follow nor a read of the run's.
-        if (start is null && end is null && Narrowed(path, full, lines, reading.Text.Text) is { } narrowed)
+        // agent nothing, so it is neither a view an edit may follow nor a read of the run's. A page or a range is no
+        // whole read.
+        if (start is null && end is null && page is null && Narrowed(path, full, kept.Lines, TokensOf(full)) is { } narrowed)
         {
             return Answer.Refused(path, narrowed);
         }
 
-        // What an edit is checked against: the file as it was when it was viewed, whatever part of it was.
-        _viewed[full] = Hash(bytes);
+        // What an edit is checked against: the file as it was when its pages were laid, whatever part of it was viewed.
+        _viewed[full] = kept.Digest;
         Tally.Read(full);
 
-        if (reading.Text.Text.Length == 0)
+        if (kept.Lines == 1 && files.StandingOf(full) is { } standing && standing.Length == kept.Marks[0].Offset)
         {
             return Answer.Done($"'{Said(full)}' is empty");
         }
 
-        return Paged($"'{Said(full)}' has {ReportText.Counted(lines.Count, "line")}", lines, "lines", start, end, numbered: true);
+        try
+        {
+            return start is null && end is null
+                ? await PageOfAsync(kept, page ?? 1, note, cancellationToken).ConfigureAwait(false)
+                : await RangeAsync(full, kept, start ?? 1, end, note, cancellationToken).ConfigureAwait(false);
+        }
+        catch (AgentReadRefusedException moved)
+        {
+            return Answer.Refused(path, moved.Denied);
+        }
+        catch (InvalidDataException ex)
+        {
+            return Answer.Failed(SaidIn(ex, full));
+        }
     }
 
     /// <summary>
@@ -104,9 +137,10 @@ public sealed partial class AgentToolRuntime
     /// narrow</c>), for a client whose own tool reads the file - Claude Code's <c>Read</c> with no offset and no limit,
     /// asked of the engine before it runs: the same refusal, with the same words and the same two escapes recorded, as
     /// <see cref="ViewAsync"/> answers a whole <c>view_file</c>; null where the read passes plainly or nothing narrows it.
-    /// Nothing is read unless the run narrows its reads and its view holds the file as parsed, unlifted; the file is then
-    /// read as a view reads it - within <see cref="AgentTools.MostViewedBytes"/>, through the file as it was opened - and
-    /// one that is not there, is past the bound or does not read as text is left to the client's own tool to answer.
+    /// Nothing is read unless the run narrows its reads and its view holds the file as parsed, unlifted; the file's lines
+    /// are then counted as a view counts them - its pages laid once by streaming it through its decided open, whatever
+    /// its size - and one that is not there, stands where the reader may not read or does not read as text is left to
+    /// the client's own tool to answer.
     /// </summary>
     /// <param name="path">The file as the agent's tool asked it.</param>
     /// <param name="cancellationToken">Stops the read.</param>
@@ -118,43 +152,37 @@ public sealed partial class AgentToolRuntime
             || ReadPlace(path).Full is not { } full
             || AgentPolicy.Beneath(_run.Workspace.Worktree ?? _run.Workspace.MainCheckout, full, _host.Platform.PathComparison) is not { } relative
             || !tool.MayNarrow(relative)
-            || !_host.FileSystem.FileExists(full)
-            || TooLarge(full) is not null)
+            || !_host.FileSystem.FileExists(full))
         {
             return null;
         }
 
-        AgentFileRead read;
+        TextPagesKept kept;
 
         try
         {
-            read = await _host.Files.ReadAsync(full, AgentTools.MostViewedBytes, opened => OpenedPlace(opened, write: false).Denied, cancellationToken).ConfigureAwait(false);
+            (kept, _) = await ViewedAsync(full, cancellationToken).ConfigureAwait(false);
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
         {
             return null;
         }
 
-        if (read.Bytes is not { } bytes || EncodedText.Read(bytes) is not { IsRead: true } reading)
-        {
-            return null;
-        }
-
-        return Narrowed(path, full, CodeFileText.Lines(reading.Text!.Text), reading.Text.Text);
+        return Narrowed(path, full, kept.Lines, TokensOf(full));
     }
 
     /// <summary>
     /// What a whole read of the file at <paramref name="full"/> is under the narrowing of reads, where the run is given a
     /// graph that narrows (<c>graphReads: narrow</c>): the refusal, recorded as every denial is, where the graph holds
     /// the file as parsed and it is over <see cref="CodebaseGraphTool.NarrowLines"/> lines; an escape let by, recorded,
-    /// where the graph is not sure of the file; null where the read passes plainly - a range, a search and a write are
-    /// never narrowed, and neither is a file the graph does not parse.
+    /// where the graph is not sure of the file; null where the read passes plainly - a range, a page, a search and a write
+    /// are never narrowed, and neither is a file the graph does not parse.
     /// </summary>
     /// <param name="path">The file as the agent's tool asked it.</param>
     /// <param name="full">The file, absolute.</param>
-    /// <param name="lines">The file's lines, as they were read.</param>
-    /// <param name="text">The file's text, as it was read.</param>
-    private AgentPolicyAnswer.Denied? Narrowed(string path, string full, IReadOnlyList<string> lines, string text)
+    /// <param name="lines">How many lines the file holds, as a view counts them.</param>
+    /// <param name="tokens">The file's estimated tokens.</param>
+    private AgentPolicyAnswer.Denied? Narrowed(string path, string full, long lines, int tokens)
     {
         if (_run.Graph is not { Narrow: true, Tool: { } tool } graph)
         {
@@ -168,100 +196,140 @@ public sealed partial class AgentToolRuntime
             return null;
         }
 
-        var whole = tool.WholeRead(relative, lines.Count);
+        var counted = (int)Math.Min(lines, int.MaxValue);
+        var whole = tool.WholeRead(relative, counted);
 
         if (whole.Narrowed)
         {
-            graph.Recorded?.Invoke(new GraphDeniedLine(whole.Path ?? relative, lines.Count, EstimatedTokens.Of(text)));
+            graph.Recorded?.Invoke(new GraphDeniedLine(whole.Path ?? relative, counted, tokens));
             return new AgentPolicyAnswer.Denied("graphReads: narrow", AgentPolicySource.Builtin, whole.Text);
         }
 
         if (whole.Escape is { } escape)
         {
-            graph.Recorded?.Invoke(new GraphEscapeLine(whole.Path ?? relative, lines.Count, EstimatedTokens.Of(text), escape, whole.Text));
+            graph.Recorded?.Invoke(new GraphEscapeLine(whole.Path ?? relative, counted, tokens, escape, whole.Text));
         }
 
         return null;
     }
 
     /// <summary>
-    /// The most a view's notes take - <see cref="LongLine"/> and <see cref="Rest"/> at the widest numbers and word a view
-    /// can hold - which a view leaves of a call's cap for them, so a view is never cut.
+    /// The pages of the file at <paramref name="full"/> as a view gives them, numbered: those kept for it where it stands
+    /// as it did when they were laid, else laid again by streaming it once through its open - the place the open file
+    /// stands at decided again before a byte of it is read, as every page read after is - and what the page given from
+    /// them says after its counts.
     /// </summary>
-    internal static int ViewNotesRoom { get; } = LongLine(int.MaxValue, int.MaxValue, int.MaxValue).Length + Rest("entries", int.MaxValue, int.MaxValue, int.MaxValue).Length;
+    /// <exception cref="AgentReadRefusedException">The open file stands where the reader may not read.</exception>
+    /// <exception cref="InvalidDataException">The file does not read as text.</exception>
+    private Task<(TextPagesKept Kept, string? Note)> ViewedAsync(string full, CancellationToken cancellationToken)
+        => _results.LaidAsync(full, PageKey.Of(AgentTools.ViewFile, new JsonObject { ["path"] = full }), $"{AgentTools.ViewFile} {Said(full)}", numbered: true, OpenToView, cancellationToken);
+
+    /// <summary>A file a view reads opened as itself, where it stands decided again as a read before a byte is read (<see cref="AgentFiles.OpenedOrRefused"/>).</summary>
+    private Stream OpenToView(string file) => _host.Files.OpenedOrRefused(file, opened => OpenedPlace(opened, write: false).Denied);
+
+    /// <summary>The <paramref name="page"/> of a file's pages, its header saying how to ask for the next; a page past the last refused with the file's range.</summary>
+    private async Task<Answer> PageOfAsync(TextPagesKept kept, long page, string? note, CancellationToken cancellationToken)
+    {
+        var answer = await TextPages.PageAsync(OpenToView, kept, page, numbered: true, note, Paging.AskAgain, cancellationToken).ConfigureAwait(false);
+
+        return answer.Refusal is null ? Answer.Page(answer.Text) : Answer.Failed(answer.Text);
+    }
 
     /// <summary>
-    /// What a view gives of <paramref name="items"/> - a file's lines, each numbered, or a directory's entries, under what
-    /// <paramref name="said"/> says of it - from <paramref name="start"/> to <paramref name="end"/> where they are given,
-    /// at most <see cref="AgentTools.MostViewedLines"/> of them and <see cref="AgentTools.MostViewedCharacters"/> characters,
-    /// and how to ask for the rest. One longer than the whole bound is given as far as the bound reaches, and said so.
+    /// The lines of a file from <paramref name="first"/> to <paramref name="end"/> - as far as its last where no end is
+    /// given - within the page that holds the first (<see cref="TextPages.PageOfLine"/>), numbered, and how to ask for the
+    /// rest: the next start, or the next page where the page ends inside a line wider than its room.
     /// </summary>
-    /// <param name="said">What the view says of what it reads, as <c>'a.txt' has 3 line(s)</c>: before a start past its end, and before a directory's entries.</param>
-    /// <param name="items">The lines or the entries, in order.</param>
-    /// <param name="plural">What they are, as the note on the rest names them: <c>lines</c>, <c>entries</c>.</param>
-    /// <param name="start">The first given, from 1; the first where it is null.</param>
-    /// <param name="end">The last given; as far as the bounds reach where it is null.</param>
-    /// <param name="numbered">Whether each is numbered, as a file's lines are.</param>
-    private static Answer Paged(string said, IReadOnlyList<string> items, string plural, long? start, long? end, bool numbered)
+    private async Task<Answer> RangeAsync(string full, TextPagesKept kept, long first, long? end, string? note, CancellationToken cancellationToken)
     {
-        var first = (int)Math.Min(start ?? 1, int.MaxValue);
+        if (first > kept.Lines)
+        {
+            return Answer.Failed($"'{Said(full)}' has {ReportText.Counted(kept.Lines, "line")}: start_line {Count(first)} is past its end");
+        }
 
-        if (first > items.Count)
+        var holding = TextPages.PageOfLine(kept, first);
+        var answer = await TextPages.PageAsync(OpenToView, kept, holding, numbered: true, null, Paging.AskAgain, cancellationToken).ConfigureAwait(false);
+        var mark = kept.Marks[holding - 1];
+        var entries = answer.Sections.SelectMany(section => section.Entries).ToList();
+        var last = Math.Min(end ?? long.MaxValue, kept.Lines);
+        var cut = holding < kept.Marks.Count && kept.Marks[holding].FirstColumn > 0;
+        var builder = new StringBuilder();
+
+        if (note is not null)
+        {
+            builder.Append('[').Append(note).Append("]\n");
+        }
+
+        var shown = first - 1;
+        var goesOn = false;
+
+        // Entry k of the page is of line FirstLine + k: a page's entries are its lines in order, a piece one of its own.
+        for (var at = 0; at < entries.Count; at++)
+        {
+            var line = mark.FirstLine + at;
+
+            if (line < first)
+            {
+                continue;
+            }
+
+            if (line > last)
+            {
+                break;
+            }
+
+            builder.Append(entries[at].Text).Append('\n');
+            shown = line;
+            goesOn = cut && at == entries.Count - 1;
+        }
+
+        if (goesOn)
+        {
+            builder.Append($"[line {Count(shown)} goes on: ask again with page: {Count(holding + 1)}]");
+        }
+        else if (shown < last)
+        {
+            builder.Append(Rest("lines", first, shown, kept.Lines));
+        }
+
+        return Answer.Page(builder.ToString().TrimEnd('\n'));
+    }
+
+    /// <summary>
+    /// A directory's entries, under what <paramref name="said"/> says of it, from <paramref name="start"/> to
+    /// <paramref name="end"/> where they are given: every one, a listing longer than a page given a page at a time by
+    /// <c>read_result</c> as every answer is.
+    /// </summary>
+    private static Answer Listed(string said, IReadOnlyList<string> entries, long? start, long? end)
+    {
+        var first = start ?? 1;
+
+        if (first > entries.Count)
         {
             return Answer.Failed($"{said}: start_line {Count(first)} is past its end");
         }
 
-        var last = (int)Math.Min(Math.Min(end ?? long.MaxValue, items.Count), first + (long)AgentTools.MostViewedLines - 1);
-        var builder = new StringBuilder(numbered ? string.Empty : $"{said}:\n");
-        var shown = first - 1;
+        var last = Math.Min(end ?? long.MaxValue, entries.Count);
+        var builder = new StringBuilder($"{said}:\n");
 
-        for (var at = first; at <= last; at++)
+        for (var at = (int)first; at <= last; at++)
         {
-            var number = numbered ? $"{at}\t" : string.Empty;
-            var text = items[at - 1];
-
-            if (builder.Length + number.Length + text.Length + 1 > AgentTools.MostViewedCharacters)
-            {
-                if (shown >= first)
-                {
-                    break;
-                }
-
-                // The first is longer than the view's whole bound: it is given as far as the bound reaches, and said so.
-                var given = TextCut.Head(text, Math.Max(0, AgentTools.MostViewedCharacters - builder.Length - number.Length));
-                builder.Append(number).Append(given).Append(LongLine(at, text.Length, given.Length));
-                shown = at;
-                break;
-            }
-
-            builder.Append(number).Append(text).Append('\n');
-            shown = at;
-        }
-
-        if (shown < items.Count && (end is null || shown < end))
-        {
-            builder.Append(Rest(plural, first, shown, items.Count));
+            builder.Append(entries[at - 1]).Append('\n');
         }
 
         return Answer.Done(builder.ToString().TrimEnd('\n'));
     }
 
-    /// <summary>What a view says after a line longer than its bound: how long the line is, and how much of it was given.</summary>
-    private static string LongLine(long line, long length, long given)
-        => $"\n[line {Count(line)} is {Count(length)} characters: the first {Count(given)} are given]\n";
-
     /// <summary>What a view says where it stops before what was asked for: what it gave, and how to ask for the rest.</summary>
     private static string Rest(string plural, long first, long shown, long count)
         => $"[{plural} {Count(first)}-{Count(shown)} of {Count(count)}; ask again with start_line {Count(shown + 1)}]";
 
-    /// <summary>
-    /// Why the file at <paramref name="full"/> is held whole by no view or edit - it holds more than
-    /// <see cref="AgentTools.MostViewedBytes"/> - before it is read; null where it may be.
-    /// </summary>
-    private string? TooLarge(string full)
-        => _host.FileSystem.StandingOf(full) is { Length: > AgentTools.MostViewedBytes } standing
-            ? $"'{Said(full)}' holds {DiskSpace.Size(standing.Length)}, past the {DiskSpace.Size(AgentTools.MostViewedBytes)} a view or an edit holds whole: read or search it with a command"
-            : null;
+    /// <summary>The estimated tokens of the file at <paramref name="full"/>, by its bytes as it stands.</summary>
+    private int TokensOf(string full)
+        => _host.FileSystem.StandingOf(full) is { } standing ? EstimatedTokens.OfBytes(Math.Min(standing.Length, (long)int.MaxValue * EstimatedTokens.BytesPerToken)) : 0;
+
+    /// <summary>Why a file does not read, as a view says it: the file named as every answer names a path.</summary>
+    private string SaidIn(InvalidDataException ex, string full) => ex.Message.Replace($"'{full}'", $"'{Said(full)}'", StringComparison.Ordinal);
 
     /// <summary>A directory's entries, a directory's name ending with a separator, in ordinal order.</summary>
     private List<string> Entries(string directory)
@@ -273,8 +341,12 @@ public sealed partial class AgentToolRuntime
             .Order(StringComparer.Ordinal)];
     }
 
-    /// <summary><c>find_files</c>: the files under a directory whose path matches a pattern, those the agent may not read left out and counted.</summary>
-    private async Task<Answer> FindAsync(JsonObject input, CancellationToken cancellationToken)
+    /// <summary>
+    /// <c>find_files</c>: every file under a directory whose path matches a pattern, written a line at a time into the
+    /// call's answer as it is found - a page of it given, every page of it by <c>read_result</c> - those the agent may not
+    /// read left out and counted.
+    /// </summary>
+    private async Task<Answer> FindAsync(string callId, JsonObject input, CancellationToken cancellationToken)
     {
         var text = Text(input, "pattern")!;
 
@@ -299,9 +371,9 @@ public sealed partial class AgentToolRuntime
             return Answer.NotRun($"there is no directory at '{Said(directory)}'");
         }
 
-        var found = new List<string>();
         var refused = 0;
         var listing = await _host.Files.ListAsync(directory, cancellationToken).ConfigureAwait(false);
+        await using var lines = _records.Lines(callId);
 
         foreach (var file in listing.Files)
         {
@@ -320,61 +392,49 @@ public sealed partial class AgentToolRuntime
                 continue;
             }
 
-            found.Add(Said(full));
+            await lines.LineAsync(Said(full), cancellationToken).ConfigureAwait(false);
         }
 
-        var builder = new StringBuilder();
-        builder.AppendJoin('\n', found.Take(AgentTools.MostFound));
-
-        if (found.Count == 0)
+        if (lines.Count == 0)
         {
-            builder.Append($"no file under '{Said(directory)}' matches '{text}'");
-        }
-
-        if (found.Count > AgentTools.MostFound)
-        {
-            builder.Append($"\n[{ReportText.Counted(found.Count - AgentTools.MostFound, "more file")} not shown: narrow the pattern or the directory]");
+            await lines.LineAsync($"no file under '{Said(directory)}' matches '{text}'", cancellationToken).ConfigureAwait(false);
         }
 
         if (refused > 0)
         {
-            builder.Append('\n').Append(AgentListing.Refused(refused));
+            await lines.LineAsync(AgentListing.Refused(refused), cancellationToken).ConfigureAwait(false);
         }
 
         foreach (var note in listing.LeftOut(SaidIn(directory)))
         {
-            builder.Append('\n').Append(note);
+            await lines.LineAsync(note, cancellationToken).ConfigureAwait(false);
         }
 
-        return Answer.Done(builder.ToString());
+        return await EndedAsync(callId, lines, ok: true, cancellationToken).ConfigureAwait(false);
     }
 
-    /// <summary><c>search_files</c>: the lines under a directory a pattern matches, by the one search the runtime runs.</summary>
-    private async Task<Answer> SearchAsync(JsonObject input, CancellationToken cancellationToken)
+    /// <summary>
+    /// <c>search_files</c>: every line under a directory a pattern matches - the pattern matched in time linear in each
+    /// line (<see cref="LinearRegex"/>), every file read whatever its size, a line at a time - written into the call's
+    /// answer as each hit is found, with as many lines of context around it as are asked: a page of it given, every page
+    /// of it by <c>read_result</c>.
+    /// </summary>
+    private async Task<Answer> SearchAsync(string callId, JsonObject input, CancellationToken cancellationToken)
     {
         var text = Text(input, "pattern")!;
-        var context = Number(input, "context") ?? 0;
-        var most = Number(input, "max_results") ?? AgentTools.DefaultSearchResults;
+        var asked = Number(input, "context") ?? 0;
 
-        if (context is < 0 or > AgentTools.MostSearchContext)
+        if (asked < 0)
         {
-            return Answer.NotRun($"context is {context}, and is 0 to {AgentTools.MostSearchContext}");
+            return Answer.NotRun($"context is {Count(asked)}, and is 0 or more");
         }
 
-        if (most is < 1 or > AgentTools.MostSearchResults)
-        {
-            return Answer.NotRun($"max_results is {most}, and is 1 to {AgentTools.MostSearchResults}");
-        }
+        // More lines than a file holds are as many as it holds: a count past an int's is every line around a hit.
+        var context = (int)Math.Min(asked, int.MaxValue);
 
-        Regex pattern;
-
-        try
+        if (!LinearRegex.TryCompile(text, Flag(input, "case_insensitive") ? RegexOptions.IgnoreCase : RegexOptions.None, out var pattern, out var refusal))
         {
-            pattern = new Regex(text, RegexOptions.CultureInvariant | (Flag(input, "case_insensitive") ? RegexOptions.IgnoreCase : RegexOptions.None), AgentFiles.PatternBound);
-        }
-        catch (ArgumentException ex)
-        {
-            return Answer.NotRun($"pattern '{text}' is no .NET regular expression: {ex.Message.TrimEnd('.')}");
+            return Answer.NotRun($"{refusal.TrimEnd('.')}: write it without that");
         }
 
         GlobPattern? glob = null;
@@ -404,24 +464,71 @@ public sealed partial class AgentToolRuntime
             return Answer.NotRun($"there is no directory at '{Said(directory)}'");
         }
 
-        AgentSearch search;
+        await using var lines = _records.Lines(callId);
+        var any = false;
 
-        try
+        async ValueTask Found(AgentSearchHit hit, CancellationToken token)
         {
-            search = await _host.Files.SearchAsync(directory, pattern, glob, _host.Platform.PathComparison, (int)context, (int)most, AgentFiles.MostSearchedBytes, MayRead, cancellationToken).ConfigureAwait(false);
-        }
-        catch (RegexMatchTimeoutException)
-        {
-            return Answer.Failed($"pattern '{text}' took longer than {AgentFiles.PatternBound.TotalSeconds} s on a file's text: make it simpler");
+            var said = Said(Path.Combine(directory, hit.Path.Replace('/', Path.DirectorySeparatorChar)));
+
+            if (context > 0 && any)
+            {
+                await lines.LineAsync("--", token).ConfigureAwait(false);
+            }
+
+            any = true;
+
+            foreach (var line in hit.Before)
+            {
+                await lines.LineAsync($"{said}-{Count(line.Line)}- {line.Text}", token).ConfigureAwait(false);
+            }
+
+            await lines.LineAsync($"{said}:{Count(hit.Line)}: {hit.Text}", token).ConfigureAwait(false);
+
+            foreach (var line in hit.After)
+            {
+                await lines.LineAsync($"{said}-{Count(line.Line)}- {line.Text}", token).ConfigureAwait(false);
+            }
         }
 
-        return Answer.Done(Rendered(search, directory, (int)context));
+        var search = await _host.Files.SearchAsync(directory, pattern, glob, _host.Platform.PathComparison, context, MayRead, Found, cancellationToken).ConfigureAwait(false);
+
+        if (search.Found == 0)
+        {
+            await lines.LineAsync($"no line matches, in {ReportText.Counted(search.Searched, "file")} read", cancellationToken).ConfigureAwait(false);
+        }
+
+        foreach (var note in search.LeftOut(SaidIn(directory)))
+        {
+            await lines.LineAsync(note, cancellationToken).ConfigureAwait(false);
+        }
+
+        return await EndedAsync(callId, lines, ok: true, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// The answer a call written a line at a time comes to, once its last line is written: the lines whole where they fit
+    /// a page; else the first page of the call's file, which holds every one, its header saying how <c>read_result</c>
+    /// gives the next and where the whole is.
+    /// </summary>
+    private async Task<Answer> EndedAsync(string callId, ResultLines lines, bool ok, CancellationToken cancellationToken)
+    {
+        await lines.EndAsync().ConfigureAwait(false);
+
+        if (lines.Text is { } whole)
+        {
+            return ok ? Answer.Done(whole) : Answer.Failed(whole);
+        }
+
+        return Answer.Kept(ok, await _results.FirstPageAsync(callId, cancellationToken).ConfigureAwait(false), lines.File!);
     }
 
     /// <summary>
     /// <c>read_result</c>: a page of the whole result of a call of this conversation, by the call's id, from the file its
-    /// records keep it in (<see cref="KeptResults"/>) - page 1 where none is asked, a page past the last refused with the
-    /// result's range, a page below the first as the graph refuses it, and an id no result is kept for named.
+    /// records keep it in (<see cref="KeptResults"/>) - a message of the step's stored stream a compaction gave by its id,
+    /// and the continuation record the conversation began with, among them - page 1 where none is asked, a page past the
+    /// last refused with the result's range, a page below the first as the graph refuses it, and an id no result is kept
+    /// for named.
     /// </summary>
     private async Task<Answer> ReadResultAsync(JsonObject input, CancellationToken cancellationToken)
     {
@@ -437,7 +544,7 @@ public sealed partial class AgentToolRuntime
 
         try
         {
-            answer = id.Length == 0 ? null : await _results.ReadAsync(id, page, cancellationToken).ConfigureAwait(false);
+            answer = await _results.ReadAsync(id, page, cancellationToken).ConfigureAwait(false);
         }
         catch (InvalidDataException ex)
         {
@@ -445,53 +552,8 @@ public sealed partial class AgentToolRuntime
         }
 
         return answer is null ? Answer.Failed(KeptResults.NoneKept(id))
-            : answer.Refusal is null ? Answer.Done(answer.Text)
+            : answer.Refusal is null ? Answer.Page(answer.Text)
             : Answer.Failed(answer.Text);
-    }
-
-    /// <summary>A search's hits as the model reads them: <c>path:line: text</c>, its context as <c>path-line- text</c>, groups apart; then what it did not give.</summary>
-    private string Rendered(AgentSearch search, string directory, int context)
-    {
-        var builder = new StringBuilder();
-
-        foreach (var hit in search.Hits)
-        {
-            var said = Said(Path.Combine(directory, hit.Path.Replace('/', Path.DirectorySeparatorChar)));
-
-            if (context > 0 && builder.Length > 0)
-            {
-                builder.Append("--\n");
-            }
-
-            foreach (var line in hit.Before)
-            {
-                builder.Append($"{said}-{line.Line}- {line.Text}\n");
-            }
-
-            builder.Append($"{said}:{hit.Line}: {hit.Text}\n");
-
-            foreach (var line in hit.After)
-            {
-                builder.Append($"{said}-{line.Line}- {line.Text}\n");
-            }
-        }
-
-        if (search.Hits.Count == 0)
-        {
-            builder.Append($"no line matches, in {ReportText.Counted(search.Searched, "file")} read\n");
-        }
-
-        if (search.More > 0)
-        {
-            builder.Append($"[{ReportText.Counted(search.More, "more matching line")} not shown: narrow the search, or raise max_results]\n");
-        }
-
-        foreach (var note in search.LeftOut(SaidIn(directory)))
-        {
-            builder.Append(note).Append('\n');
-        }
-
-        return builder.ToString().TrimEnd('\n');
     }
 
     /// <summary>How a place under <paramref name="directory"/> is said, from its path relative to it, as every path an answer gives is said.</summary>

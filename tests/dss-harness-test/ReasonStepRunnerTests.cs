@@ -1005,7 +1005,7 @@ public sealed class ReasonStepRunnerTests
         Assert.DoesNotContain("src/one.cs", account, StringComparison.Ordinal);
         Assert.Contains("The files the attempt wrote:", account, StringComparison.Ordinal);
         Assert.Contains("- src/two.cs (create_file)", account, StringComparison.Ordinal);
-        Assert.Contains("The last commands it ran and how each ended:", account, StringComparison.Ordinal);
+        Assert.Contains("The commands it ran and how each ended, in order:", account, StringComparison.Ordinal);
         Assert.Contains("- dotnet test (failed)", account, StringComparison.Ordinal);
         Assert.Contains("The agent's last messages, word for word:", account, StringComparison.Ordinal);
         Assert.Contains("I wrote the file.", account, StringComparison.Ordinal);

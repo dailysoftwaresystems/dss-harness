@@ -62,14 +62,14 @@ public sealed class AgentChildEnvironmentTests
     public void TheCommandKeys_AreRefused_EachByItsKey()
     {
         Assert.Empty(AgentChildEnvironment.Problems(null, []));
-        Assert.Empty(AgentChildEnvironment.Problems(new AgentPolicyConfig { KeepEnvironment = ["GITHUB_TOKEN"], CommandTimeoutSeconds = 60, MaxCommandTimeoutSeconds = 60 }, []));
+        Assert.Empty(AgentChildEnvironment.Problems(new AgentPolicyConfig { KeepEnvironment = ["GITHUB_TOKEN"], CommandTimeoutSeconds = 60 }, []));
 
+        // A time past the hour once the most a call could name is a time a command runs for, as any a timer holds.
         Assert.Equal(
             [
                 "agentPolicy.keepEnvironment[0] 'NOT A NAME' is no variable's name ([A-Za-z_][A-Za-z0-9_]*)",
                 "agentPolicy.keepEnvironment[1] 'ZAI_API_KEY' is a name the configuration appoints a value of the slot for, which no child of an agent is ever given",
                 "agentPolicy.keepEnvironment[2] 'PATH' gives back nothing: a child loses only the names the configuration appoints and those ending _API_KEY, _SECRET, _SECRET_KEY, _ACCESS_KEY, _PRIVATE_KEY, _PASSWORD, _TOKEN",
-                "agentPolicy.commandTimeoutSeconds (4000) is past agentPolicy.maxCommandTimeoutSeconds (3600), the most a call may name",
             ],
             AgentChildEnvironment.Problems(new AgentPolicyConfig { KeepEnvironment = ["NOT A NAME", "ZAI_API_KEY", "PATH"], CommandTimeoutSeconds = 4000 }, ["ZAI_API_KEY"]));
 
@@ -77,16 +77,15 @@ public sealed class AgentChildEnvironmentTests
             [
                 "agentPolicy.keepEnvironment is given empty: leave the key out to give no name back",
                 "agentPolicy.commandTimeoutSeconds is 0, and a command runs for one second at least",
-                "agentPolicy.maxCommandTimeoutSeconds is -1, and a command runs for one second at least",
             ],
-            AgentChildEnvironment.Problems(new AgentPolicyConfig { KeepEnvironment = [], CommandTimeoutSeconds = 0, MaxCommandTimeoutSeconds = -1 }, []));
+            AgentChildEnvironment.Problems(new AgentPolicyConfig { KeepEnvironment = [], CommandTimeoutSeconds = 0 }, []));
 
         Assert.Equal(
             [
-                $"agentPolicy.maxCommandTimeoutSeconds is {AgentCommandSettings.MostTimeoutSeconds + 1}, past the 2147483 a command's timer holds",
+                $"agentPolicy.commandTimeoutSeconds is {AgentCommandSettings.MostTimeoutSeconds + 1}, past the 2147483 a command's timer holds",
             ],
-            AgentChildEnvironment.Problems(new AgentPolicyConfig { MaxCommandTimeoutSeconds = AgentCommandSettings.MostTimeoutSeconds + 1 }, []));
-        Assert.Empty(AgentChildEnvironment.Problems(new AgentPolicyConfig { CommandTimeoutSeconds = AgentCommandSettings.MostTimeoutSeconds, MaxCommandTimeoutSeconds = AgentCommandSettings.MostTimeoutSeconds }, []));
+            AgentChildEnvironment.Problems(new AgentPolicyConfig { CommandTimeoutSeconds = AgentCommandSettings.MostTimeoutSeconds + 1 }, []));
+        Assert.Empty(AgentChildEnvironment.Problems(new AgentPolicyConfig { CommandTimeoutSeconds = AgentCommandSettings.MostTimeoutSeconds }, []));
     }
 
     /// <summary>
@@ -129,18 +128,70 @@ public sealed class AgentChildEnvironmentTests
         Assert.Contains("agentPolicy.commandTimeoutSeconds is 0, and a command runs for one second at least", failure.Message, StringComparison.Ordinal);
     }
 
-    /// <summary>What the configuration says of an agent's commands, each key left out taking its default.</summary>
+    /// <summary>
+    /// What the configuration says of an agent's commands: no time of a command's where it names none - no default stands
+    /// in - and the time it names where it does.
+    /// </summary>
     [Fact]
-    public void TheCommandSettings_TakeTheirDefaults()
+    public void TheCommandSettings_HoldNoTimeOfTheirOwn()
     {
         Assert.Equal(AgentCommandSettings.Default, AgentCommandSettings.Of(null) with { KeepEnvironment = AgentCommandSettings.Default.KeepEnvironment });
         Assert.Empty(AgentCommandSettings.Of(null).KeepEnvironment);
-        Assert.Equal(120, AgentCommandSettings.Of(new AgentPolicyConfig()).TimeoutSeconds);
-        Assert.Equal(3600, AgentCommandSettings.Of(new AgentPolicyConfig()).MaxTimeoutSeconds);
+        Assert.Null(AgentCommandSettings.Of(new AgentPolicyConfig()).CommandTimeoutSeconds);
 
-        var given = AgentCommandSettings.Of(new AgentPolicyConfig { KeepEnvironment = ["A_TOKEN"], CommandTimeoutSeconds = 5, MaxCommandTimeoutSeconds = 9 });
+        var given = AgentCommandSettings.Of(new AgentPolicyConfig { KeepEnvironment = ["A_TOKEN"], CommandTimeoutSeconds = 5 });
         Assert.Equal(["A_TOKEN"], given.KeepEnvironment);
-        Assert.Equal(5, given.TimeoutSeconds);
-        Assert.Equal(9, given.MaxTimeoutSeconds);
+        Assert.Equal(5, given.CommandTimeoutSeconds);
+    }
+
+    /// <summary>
+    /// agentPolicy.maxCommandTimeoutSeconds is retired: a configuration that names it is refused, the refusal naming what
+    /// bounds a command now - a call's timeout_seconds up to what a timer holds, commandTimeoutSeconds, the step's
+    /// stallSeconds and its own bounds - and nothing of it is read.
+    /// </summary>
+    [Fact]
+    public void MaxCommandTimeoutSeconds_IsRefusedNamingWhatBoundsACommand()
+    {
+        using var temp = new TempDirectory();
+        var path = Path.Combine(temp.Path, ".harness-config", "config.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, """{ "agentPolicy": { "commandTimeoutSeconds": 60, "maxCommandTimeoutSeconds": 3600 } }""");
+        var store = new JsonConfigStore(new PassThroughFileSystem(new PhysicalFileSystem(FilePermissionsFactory.Create())));
+
+        var failure = Assert.Throws<ConfigException>(() => store.Load(path));
+
+        Assert.Contains(
+            "agentPolicy.maxCommandTimeoutSeconds is no longer read: a call's timeout_seconds names any time a command's timer holds (2147483 s at most), "
+                + "and a command whose call names none runs for agentPolicy.commandTimeoutSeconds where it is given, else until it ends - stopped where it "
+                + "prints nothing for the step's stallSeconds, and by the step's own bounds, its timeoutMinutes and its budget",
+            failure.Message,
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// agentContext.continuation is retired, every key of it: a configuration that names it is refused, the refusal naming
+    /// what replaces its bounds - the record holding everything, its pages by read_result.
+    /// </summary>
+    [Fact]
+    public void TheContinuationKeys_AreRefusedNamingTheirReplacement()
+    {
+        using var temp = new TempDirectory();
+        var path = Path.Combine(temp.Path, ".harness-config", "config.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        var store = new JsonConfigStore(new PassThroughFileSystem(new PhysicalFileSystem(FilePermissionsFactory.Create())));
+
+        foreach (var keys in new[] { """{ "recordChars": 60000 }""", """{ "lastIterations": 3, "iterationChars": 120000 }""", "{}" })
+        {
+            File.WriteAllText(path, $$"""{ "agentContext": { "continuation": {{keys}} } }""");
+
+            var failure = Assert.Throws<ConfigException>(() => store.Load(path));
+
+            Assert.Contains(
+                "agentContext.continuation is no longer read: the continuation record holds every step, every changed path and every iteration of the work "
+                    + "it goes on with, the last iterations first, nothing of it cut - its first page in the step's first message and every page of it by "
+                    + $"read_result with id '{DssHarness.Core.Agents.Runtime.KeptResults.ContinuationId}'",
+                failure.Message,
+                StringComparison.Ordinal);
+        }
     }
 }

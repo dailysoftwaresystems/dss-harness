@@ -15,8 +15,9 @@ namespace DssHarness.Tests;
 
 /// <summary>
 /// The engine's compaction: the reduction the engine works out from the stored stream - the same input
-/// always the same record, no model in it - the run context and the task whole, the last iterations word for word by
-/// the continuation record's rule, the earlier messages reduced with their calls one line and their results left out,
+/// always the same record, no model in it - the run context and the task whole, the last iterations word for word, the
+/// earlier messages reduced with their calls one line and their results left out, one too long for the part given by
+/// reference,
 /// and the new conversation it begins, on every client.
 /// </summary>
 public sealed class AgentCompactionTests : IDisposable
@@ -387,29 +388,66 @@ public sealed class AgentCompactionTests : IDisposable
         Assert.DoesNotContain(new string('x', 401), compacted.Record, StringComparison.Ordinal);
     }
 
-    /// <summary>Where the reduced part is over its bound, the oldest messages of the agent are cut to their first 2,000 characters each, oldest first, and the record says how many were.</summary>
+    /// <summary>
+    /// A message older than the last iterations and longer than the whole reduced part - an agent's 250,000-character
+    /// analysis, past the 200,000 the part holds - is given by reference, never cut: the record names it by the id
+    /// read_result reads it by, and read_result gives it whole from the stored stream, a page at a time; a message after
+    /// it that fits stays whole in its place.
+    /// </summary>
     [Fact]
-    public void OverItsBound_TheOldestMessagesAreCut_AndSaid()
+    public async Task AnOldMessageLongerThanTheReducedPart_IsGivenByReference()
     {
-        var first = new string('a', 3_000);
-        var second = new string('b', 3_000);
+        var analysis = string.Concat(Enumerable.Range(0, 250_000 / 10).Select(at => at.ToString("D9", System.Globalization.CultureInfo.InvariantCulture) + " "));
         var stream = new AgentEvent[]
         {
             new RunStarted(1),
             new MessageSent("do the work", AgentMessageKind.FirstPrompt),
             new TurnStarted(1),
-            new AssistantMessage(first, []),
+            new AssistantMessage(analysis, []),
             new TurnStarted(2),
-            new AssistantMessage(second, []),
+            new AssistantMessage("the second, whole", []),
             new TurnStarted(3),
             new AssistantMessage("last", []),
         };
 
-        var compacted = AgentCompaction.Reduce(stream, new AgentContinuationBounds(LastIterations: 1), new AgentCompactionBounds(ReducedChars: 5_200));
+        var compacted = AgentCompaction.Reduce(stream, new AgentCompactionBounds());
+        var id = StoredStream.MessageId(analysis);
 
-        Assert.Contains("1 of the oldest messages were cut to their first 2000 characters each.", compacted.Record, StringComparison.Ordinal);
-        Assert.Contains(TextCut.Head(first, 2_000), compacted.Record, StringComparison.Ordinal);
-        Assert.Contains(second, compacted.Record, StringComparison.Ordinal);
+        Assert.DoesNotContain(analysis[..2_000], compacted.Record, StringComparison.Ordinal);
+        Assert.Contains($"iteration 1: [a message of 250,000 characters, given whole by read_result with id '{id}']", compacted.Record, StringComparison.Ordinal);
+        Assert.Contains("iteration 2: the second, whole", compacted.Record, StringComparison.Ordinal);
+        Assert.Contains("1 of the oldest messages are given by reference, each whole: read_result with the id it names gives it a page at a time.", compacted.Record, StringComparison.Ordinal);
+
+        // read_result gives it whole, from the step's stored stream, the pieces of its one line read one after another.
+        var step = Directory.CreateDirectory(_temp.Combine("step")).FullName;
+
+        using (var writer = File.CreateText(Path.Combine(step, StoredStream.FileName)))
+        {
+            foreach (var @event in stream)
+            {
+                writer.WriteLine(JsonSerializer.SerializeToNode(@event, typeof(AgentEvent), JsonStateFile.LineOptions)!.ToJsonString(JsonStateFile.LineOptions));
+            }
+        }
+
+        var results = KeptResults.Of(new PhysicalFileSystem(FilePermissionsFactory.Create()), step);
+        var first = await results.ReadAsync(id, 1, Token);
+        var pages = first!.Pages;
+        var given = new System.Text.StringBuilder();
+
+        for (var page = 1; page <= pages; page++)
+        {
+            var body = (await results.ReadAsync(id, page, Token))!.Text.Split('\n')[1];
+            given.Append(body.StartsWith('…') ? body[1..] : body);
+
+            if (given[^1] == '…')
+            {
+                given.Length--;
+            }
+        }
+
+        Assert.True(pages > 1);
+        Assert.Equal(analysis, given.ToString());
+        Assert.Null(await results.ReadAsync(StoredStream.MessageId("never written"), 1, Token));
     }
 
     /// <summary>The bounds read from the configuration, each at its default where it says none, and one that is not a positive number refuses the file.</summary>

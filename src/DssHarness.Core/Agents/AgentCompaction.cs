@@ -17,7 +17,10 @@ public sealed record AgentCompactionBounds(int ReducedChars = AgentCompactionBou
     /// <summary>The most characters of a call's input in a reduced line where <c>callInputChars</c> says none.</summary>
     public const int DefaultCallInputChars = 400;
 
-    /// <summary>Where the reduced part is over its bound, the oldest messages of the agent are cut to their first this many characters each, oldest first.</summary>
+    /// <summary>How many of the last iterations a compaction keeps word for word, whatever their size: the rule of the record it makes.</summary>
+    public const int LastIterations = 3;
+
+    /// <summary>The characters the oldest messages were once cut to where the reduced part was over its bound: none is cut now, each given by reference instead.</summary>
     public const int OldestMessageChars = 2_000;
 
     /// <summary>The bounds the configuration gives, each at its default where it says none.</summary>
@@ -57,8 +60,10 @@ public sealed record AgentCompacted(string Record, int KeptWordForWord, int Redu
 /// input always giving the same output, no model in it - the run context and the task whole as they were sent, the
 /// last iterations word for word by the continuation record's rule, every earlier message of the agent its text whole
 /// with its thinking left out, every earlier call one line, every earlier result left out, and every message the
-/// engine sent since the first whole. It begins a new conversation, on every client: the record is the first message
-/// of one, and the old is kept whole and never sent again.
+/// engine sent since the first whole - where that is more than the reduced part's bound, the oldest of the agent's
+/// messages given by reference instead, each by the id <c>read_result</c> gives it whole by from the stored stream
+/// (<see cref="StoredStream.MessageId"/>), never cut. It begins a new conversation, on every client: the record is the
+/// first message of one, and the old is kept whole and never sent again.
 /// </summary>
 public static class AgentCompaction
 {
@@ -78,12 +83,28 @@ public static class AgentCompaction
     /// each record is the attempt's first prompt and its items once, never the records before it again.
     /// </summary>
     /// <param name="attempt">The attempt's events (<see cref="AgentAttempt.Of"/>): every run of it, from its first prompt on.</param>
-    /// <param name="continuation">The continuation record's bounds, whose rule and bounds the last iterations are kept by.</param>
+    /// <param name="continuation">How many of the last iterations are kept word for word (<see cref="AgentContinuationBounds.LastIterations"/>).</param>
     /// <param name="bounds">The compaction's bounds.</param>
     public static AgentCompacted Reduce(IReadOnlyList<AgentEvent> attempt, AgentContinuationBounds continuation, AgentCompactionBounds bounds)
     {
-        ArgumentNullException.ThrowIfNull(attempt);
         ArgumentNullException.ThrowIfNull(continuation);
+
+        return Reduce(attempt, bounds, continuation.LastIterations);
+    }
+
+    /// <summary>
+    /// Works the compaction of an attempt out, as <see cref="Reduce(IReadOnlyList{AgentEvent}, AgentContinuationBounds, AgentCompactionBounds)"/>
+    /// does, its last <see cref="AgentCompactionBounds.LastIterations"/> iterations word for word.
+    /// </summary>
+    /// <param name="attempt">The attempt's events (<see cref="AgentAttempt.Of"/>): every run of it, from its first prompt on.</param>
+    /// <param name="bounds">The compaction's bounds.</param>
+    public static AgentCompacted Reduce(IReadOnlyList<AgentEvent> attempt, AgentCompactionBounds bounds)
+        => Reduce(attempt, bounds, AgentCompactionBounds.LastIterations);
+
+    /// <summary>The compaction of an attempt, its last <paramref name="last"/> iterations word for word.</summary>
+    private static AgentCompacted Reduce(IReadOnlyList<AgentEvent> attempt, AgentCompactionBounds bounds, int last)
+    {
+        ArgumentNullException.ThrowIfNull(attempt);
         ArgumentNullException.ThrowIfNull(bounds);
 
         // The first prompt as it was sent - the run context and the task whole; the calls' answers, joined to the
@@ -96,27 +117,28 @@ public static class AgentCompaction
         var sizeBefore = items.Sum(item => (long)(item.Engine?.Text.Length ?? (item.Agent!.Text.Length + (item.Agent.Thinking?.Length ?? 0))))
             + answers.Values.Sum(answer => (long)(answer.Result.Length + answer.Input.Length));
 
-        // The last iterations word for word, by the continuation record's rule; the items before them are the reduced.
+        // The last iterations word for word; the items before them are the reduced.
         var agents = items.Where(item => item.Agent is not null).ToList();
-        var kept = Math.Min(continuation.LastIterations, agents.Count);
+        var kept = Math.Min(Math.Max(0, last), agents.Count);
         var reducedItems = items.Take(FirstOfTheLast(items, agents, kept)).ToList();
-        var wordForWord = AgentContinuation.WordForWord(attempt, continuation with { IterationChars = 0, LastIterations = kept }, copies: null);
+        var wordForWord = AgentContinuation.WordForWord(attempt, kept);
 
-        // Where the reduced part is over its bound, the oldest messages of the agent are cut to their first
-        // characters each, oldest first, until it fits - and the record says how many were.
-        var cut = 0;
+        // Where the reduced part is over its bound, the oldest messages of the agent are given by reference instead,
+        // oldest first, until it fits - each whole in the stored stream, by the id read_result gives it by - and the
+        // record says how many were. Nothing of one is cut.
+        var referenced = 0;
         string reduced;
 
         while (true)
         {
-            reduced = Reduced(reducedItems, answers, bounds, cut);
+            reduced = Reduced(reducedItems, answers, bounds, referenced);
 
-            if (reduced.Length <= bounds.ReducedChars || cut >= reducedItems.Count(item => item.Agent is not null))
+            if (reduced.Length <= bounds.ReducedChars || referenced >= reducedItems.Count(item => item.Agent is not null))
             {
                 break;
             }
 
-            cut++;
+            referenced++;
         }
 
         var written = new StringBuilder();
@@ -134,10 +156,10 @@ public static class AgentCompaction
             written.Append(reduced.TrimEnd());
             written.AppendLine();
 
-            if (cut > 0)
+            if (referenced > 0)
             {
                 written.AppendLine();
-                written.AppendLine(CultureInfo.InvariantCulture, $"{cut} of the oldest messages were cut to their first {AgentCompactionBounds.OldestMessageChars} characters each.");
+                written.AppendLine(CultureInfo.InvariantCulture, $"{referenced} of the oldest messages are given by reference, each whole: {Runtime.AgentTools.ReadResult} with the id it names gives it a page at a time.");
             }
 
             written.AppendLine();
@@ -181,8 +203,8 @@ public static class AgentCompaction
         return items.Count;
     }
 
-    /// <summary>The reduced part: every earlier message of the agent its text whole (its thinking left out, and its first <paramref name="cut"/> oldest cut at the bound), each call of it one line, every result left out, the engine's messages since the first whole, in the stream's order.</summary>
-    private static string Reduced(List<AgentAttemptItem> items, IReadOnlyDictionary<string, ToolCallFinished> answers, AgentCompactionBounds bounds, int cut)
+    /// <summary>The reduced part: every earlier message of the agent its text whole (its thinking left out, and its first <paramref name="referenced"/> oldest given by reference), each call of it one line, every result left out, the engine's messages since the first whole, in the stream's order.</summary>
+    private static string Reduced(List<AgentAttemptItem> items, IReadOnlyDictionary<string, ToolCallFinished> answers, AgentCompactionBounds bounds, int referenced)
     {
         var written = new StringBuilder();
         var agents = 0;
@@ -197,8 +219,7 @@ public static class AgentCompaction
             }
 
             var agent = item.Agent!;
-            var oldest = agents < cut;
-            var text = oldest ? TextCut.Head(agent.Text, AgentCompactionBounds.OldestMessageChars).TrimEnd() : agent.Text.TrimEnd();
+            var text = agents < referenced ? Reference(agent.Text) : agent.Text.TrimEnd();
             agents++;
 
             written.AppendLine(CultureInfo.InvariantCulture, $"iteration {item.Turn}: {text}");
@@ -214,6 +235,10 @@ public static class AgentCompaction
 
         return written.ToString();
     }
+
+    /// <summary>A message of the agent's given by reference: how long it is, and the id <c>read_result</c> gives it whole by.</summary>
+    private static string Reference(string text)
+        => string.Create(CultureInfo.InvariantCulture, $"[a message of {text.Length:N0} characters, given whole by {Runtime.AgentTools.ReadResult} with id '{StoredStream.MessageId(text)}']");
 
     /// <summary>A call's input as a reduced line holds it: cut at the bound.</summary>
     private static string Input(string input, AgentCompactionBounds bounds)

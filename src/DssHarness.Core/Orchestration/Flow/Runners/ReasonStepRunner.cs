@@ -40,7 +40,7 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// <param name="clock">Tells the week a balanced key's spend is counted for.</param>
 /// <param name="isolation">Decides the operating system's isolation the step's agent runs under.</param>
 /// <param name="gitClient">Asks git, for the paths an agent's worktree holds that no fold has taken.</param>
-/// <param name="configStore">Reads the repository's configuration, for the bounds of the engine's own account of a stream.</param>
+/// <param name="configStore">Once read the bounds of the engine's own account of a stream, whose keys are retired: read no more.</param>
 /// <param name="updates">Makes the Claude Code a run needs ready, where the step's order holds the client that starts one.</param>
 /// <param name="graphService">The one graph service every graph is read and written by, for the step's serving of the run's graph; null where none is given, and no step is served.</param>
 /// <param name="graphClock">Times the graph tool's searches; the machine's clock where none is given.</param>
@@ -61,7 +61,9 @@ public sealed class ReasonStepRunner(
     Application.Legs.ITestLegs tests,
     ChildSessions children,
     Git.IGitClient? gitClient = null,
+#pragma warning disable CS9113 // No longer read, for the continuation keys it read bounds by are retired; kept while a caller still passes it.
     Configuration.IConfigStore? configStore = null,
+#pragma warning restore CS9113
     ClaudeCodeUpdateService? updates = null,
     Codebase.ICodebaseGraphService? graphService = null,
     TimeProvider? graphClock = null) : IFlowStepTypeRunner, IFlowHandoffRunner
@@ -610,21 +612,9 @@ public sealed class ReasonStepRunner(
             .Select(source => new AgentContinuedStep(source.Instance, "done", string.Empty))
             .ToList();
 
-        return AgentStreamAccount.Of(stream, before, BoundsOf(place).LastIterations);
-    }
-
-    /// <summary>The repository's bounds of a continuation record, read where the step starts; the defaults where its configuration cannot be read, for the engine's account never refuses a pause.</summary>
-    /// <param name="place">The run's place, whose repository holds the configuration.</param>
-    private AgentContinuationBounds BoundsOf(FlowRunPlace place)
-    {
-        try
-        {
-            return AgentContinuationBounds.Of(configStore?.Load(new HarnessLayout(place.Repository, place.Repository).ConfigFile).AgentContext?.Continuation);
-        }
-        catch (Configuration.ConfigException)
-        {
-            return new AgentContinuationBounds();
-        }
+        // Its last messages word for word, as many as the compaction keeps of its last iterations: every message is in
+        // the continuation record whole, which the account is a part of.
+        return AgentStreamAccount.Of(stream, before, AgentCompactionBounds.LastIterations);
     }
 
     /// <summary>
@@ -916,7 +906,7 @@ public sealed class ReasonStepRunner(
     /// <param name="layout">The run's own paths.</param>
     /// <param name="agent">The agent the step works as.</param>
     /// <param name="handed">Where the step's agent is handed what it reads, the copies put under it.</param>
-    /// <param name="context">The repository's context, whose configuration bounds the record.</param>
+    /// <param name="context">The repository's context.</param>
     /// <param name="cancellationToken">Stops the reading of the worktree.</param>
     private async Task<string?> ContinuationOfAsync(FlowStepRun run, OrchestratorLayout layout, string agent, string handed, HarnessContext context, CancellationToken cancellationToken)
     {
@@ -938,10 +928,11 @@ public sealed class ReasonStepRunner(
             RedLegsOf(layout, agent),
             CutOff: run.Handoff is not null);
 
-        return new AgentContinuation(fileSystem, harnessOutput).Render(
+        return await new AgentContinuation(fileSystem, harnessOutput).RenderAsync(
             work,
             handed,
-            AgentContinuationBounds.Of(context.Config.AgentContext?.Continuation));
+            StepDirectoryOf(layout, run.Instance, agent),
+            cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -954,7 +945,7 @@ public sealed class ReasonStepRunner(
     /// <param name="agent">The agent the step works as.</param>
     /// <param name="run">The step.</param>
     /// <param name="handed">Where the step's agent is handed what it reads, the copies put under it.</param>
-    /// <param name="context">The repository's context, whose configuration bounds the record.</param>
+    /// <param name="context">The repository's context.</param>
     /// <param name="cancellationToken">Stops the reading of the worktree.</param>
     private async Task<string?> OwnContinuationOfAsync(OrchestratorLayout layout, string agent, FlowStepRun run, string handed, HarnessContext context, CancellationToken cancellationToken)
     {
@@ -965,10 +956,11 @@ public sealed class ReasonStepRunner(
             RedLegsOf(layout, agent),
             CutOff: false);
 
-        return new AgentContinuation(fileSystem, harnessOutput).Render(
+        return await new AgentContinuation(fileSystem, harnessOutput).RenderAsync(
             work,
             handed,
-            AgentContinuationBounds.Of(context.Config.AgentContext?.Continuation));
+            StepDirectoryOf(layout, run.Instance, agent),
+            cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>Where one source of the work the step goes on with keeps its records.</summary>
@@ -1180,10 +1172,7 @@ public sealed class ReasonStepRunner(
     {
         var window = AgentAttempt.Of(stream, attempt);
 
-        return window.Count == 0 ? null : AgentCompaction.Reduce(
-            window,
-            AgentContinuationBounds.Of(context.Config.AgentContext?.Continuation),
-            AgentCompactionBounds.Of(context.Config.AgentContext?.Compaction));
+        return window.Count == 0 ? null : AgentCompaction.Reduce(window, AgentCompactionBounds.Of(context.Config.AgentContext?.Compaction));
     }
 
     /// <summary>

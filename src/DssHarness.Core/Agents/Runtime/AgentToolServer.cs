@@ -88,7 +88,7 @@ public sealed class AgentToolServer(AgentToolRuntime runtime)
                 {
                     ["name"] = tool.Name,
                     ["description"] = tool.Description,
-                    ["inputSchema"] = JsonNode.Parse(tool.Schema),
+                    ["inputSchema"] = Json.JsonDepth.ParseNode(tool.Schema),
                 })]),
             })),
             "tools/call" => CallOf(asked, request["params"] as JsonObject),

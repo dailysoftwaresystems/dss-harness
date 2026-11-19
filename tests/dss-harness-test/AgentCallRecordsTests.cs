@@ -1,6 +1,7 @@
 using System.Text.Json.Nodes;
 using DssHarness.Core.Agents;
 using DssHarness.Core.Agents.Policy;
+using DssHarness.Core.Agents.Runtime;
 using DssHarness.Core.Execution;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Platform;
@@ -9,7 +10,7 @@ namespace DssHarness.Tests;
 
 /// <summary>
 /// What a step's calls leave beside its stored stream, on every client: a denial's line and event, a request of the web's
-/// lines and event, a result too large for its event kept whole and cut.
+/// lines and event, a result longer than a page kept whole and given as its first page.
 /// </summary>
 public sealed class AgentCallRecordsTests : IDisposable
 {
@@ -17,24 +18,42 @@ public sealed class AgentCallRecordsTests : IDisposable
 
     public void Dispose() => _temp.Dispose();
 
-    /// <summary>A result no longer than the cap is carried whole and kept in no file; a longer one is its head and its tail, the whole kept.</summary>
+    /// <summary>
+    /// A result that is one page is carried whole and kept in no file; a longer one is kept whole in its call's file and
+    /// carried as its first page, whose header says how many pages it holds, how read_result gives the next and where the
+    /// whole is - and read_result's pages after it go on where it ends, every line of the result given once.
+    /// </summary>
     [Fact]
-    public void AResultPastTheCap_IsItsHeadAndItsTail_TheWholeKept()
+    public async Task AnAnswerLongerThanAPage_GivesPageOne_TheWholeKept()
     {
         using var records = Records(out var events, out var run);
 
-        var small = new string('s', AgentCallRecords.ResultCap);
+        var small = new string('s', KeptResults.Room - 1);
         Assert.Equal((small, (string?)null), records.Kept("call-1", small));
-        Assert.Equal(small, AgentCallRecords.Cut(small, "f"));
 
-        var whole = string.Concat(Enumerable.Range(0, AgentCallRecords.ResultCap / 8).Select(at => at.ToString("D8", System.Globalization.CultureInfo.InvariantCulture))) + "tail-end";
+        var lines = Enumerable.Range(1, 20_000).Select(at => $"line {at.ToString("D6", System.Globalization.CultureInfo.InvariantCulture)} of the answer").ToList();
+        var whole = string.Join('\n', lines);
         var (shown, file) = records.Kept("call-2", whole);
 
         Assert.Equal(AgentCallRecords.ResultFile(run.StepDirectory, "call-2"), file);
         Assert.Equal(whole, File.ReadAllText(file!));
-        Assert.Equal(
-            $"{whole[..AgentCallRecords.ResultHead]}\n[{whole.Length - AgentCallRecords.ResultCap} characters left out: the whole result is '{file}']\n{whole[^(AgentCallRecords.ResultCap - AgentCallRecords.ResultHead)..]}",
-            shown);
+
+        var header = shown.Split('\n')[0];
+        var pages = int.Parse(header.Split(' ')[3], System.Globalization.CultureInfo.InvariantCulture);
+        Assert.Equal($"page 1 of {pages} · 20000 results · ask read_result with id: 'call-2', page: 2 for the next · the whole is '{file}'", header);
+        Assert.True(pages > 1);
+        Assert.True(shown.Length <= DssHarness.Core.Pages.PageRoom.ModelAnswer, $"page 1 is {shown.Length} characters");
+
+        var given = shown.Split('\n').Skip(1).ToList();
+        var results = KeptResults.Of(new PhysicalFileSystem(FilePermissionsFactory.Create()), run.StepDirectory);
+
+        for (var page = 2; page <= pages; page++)
+        {
+            var answer = await results.ReadAsync("call-2", page, TestContext.Current.CancellationToken);
+            given.AddRange(answer!.Text.Split('\n').Skip(1));
+        }
+
+        Assert.Equal(lines, given);
         Assert.Empty(events.All);
     }
 
@@ -47,47 +66,85 @@ public sealed class AgentCallRecordsTests : IDisposable
         var (shown, _) = records.Kept("c", "the key is hunter2");
         Assert.Equal("the key is ***", shown);
 
-        var (cut, file) = records.Kept("d", "hunter2" + new string('x', AgentCallRecords.ResultCap));
-        Assert.StartsWith("***", cut, StringComparison.Ordinal);
+        var (first, file) = records.Kept("d", "hunter2\n" + string.Join('\n', Enumerable.Repeat(new string('x', 100), KeptResults.Room / 50)));
+        Assert.Contains("\n***\n", first, StringComparison.Ordinal);
+        Assert.DoesNotContain("hunter2", first, StringComparison.Ordinal);
         Assert.DoesNotContain("hunter2", File.ReadAllText(file!), StringComparison.Ordinal);
     }
 
-    /// <summary>The lines of a result cut as a result cut whole is, never held whole: the same text either way.</summary>
+    /// <summary>
+    /// A call's result file is named by the full digest of its id (PageKey.OfCall), so two ids that share their first 96
+    /// characters - once the whole of a name - keep two results; an id of no character is an id as any other.
+    /// </summary>
     [Fact]
-    public void LinesCut_AreTheWholeCut()
+    public void TwoCallIdsSharingNinetySixCharacters_KeepTwoResults()
     {
-        foreach (var count in new[] { 1, 10, 4096, 9000, 40000 })
-        {
-            var lines = Enumerable.Range(0, count).Select(at => $"line {at}").ToList();
-            Assert.Equal(AgentCallRecords.Cut(string.Join('\n', lines), "f"), AgentCallRecords.Cut(lines, "f"));
-        }
+        Assert.Equal(Path.Combine("s", "tool-results", DssHarness.Core.Pages.PageKey.OfCall("call_01-x") + ".txt"), AgentCallRecords.ResultFile("s", "call_01-x"));
+        Assert.Equal(Path.Combine("s", "tool-results", DssHarness.Core.Pages.PageKey.OfCall("../:\\.x") + ".txt"), AgentCallRecords.ResultFile("s", "../:\\.x"));
+        Assert.Equal(Path.Combine("s", "tool-results", DssHarness.Core.Pages.PageKey.OfCall(string.Empty) + ".txt"), AgentCallRecords.ResultFile("s", string.Empty));
+
+        var shared = new string('a', 96);
+        Assert.NotEqual(AgentCallRecords.ResultFile("s", shared + "1"), AgentCallRecords.ResultFile("s", shared + "2"));
+
+        using var records = Records(out _, out var run);
+        var one = string.Join('\n', Enumerable.Repeat("one", KeptResults.Room));
+        var two = string.Join('\n', Enumerable.Repeat("two", KeptResults.Room));
+        var (_, first) = records.Kept(shared + "1", one);
+        var (_, second) = records.Kept(shared + "2", two);
+
+        Assert.NotEqual(first, second);
+        Assert.Equal((one, two), (File.ReadAllText(first!), File.ReadAllText(second!)));
+
+        // What the step keeps of a call apart from its result is named by its id itself where it reads as itself, else by its digest.
+        Assert.Equal("toolu_01-x", AgentCallRecords.NameOf("toolu_01-x"));
+        Assert.Equal(DssHarness.Core.Pages.PageKey.OfCall(shared + "1"), AgentCallRecords.NameOf(shared + "1"));
+        Assert.NotEqual(AgentCallRecords.NameOf(shared + "1"), AgentCallRecords.NameOf(shared + "2"));
+        Assert.Equal("call", AgentCallRecords.NameOf(string.Empty));
     }
 
-    /// <summary>No pair of surrogates is cut, at the head or at the tail.</summary>
+    /// <summary>
+    /// An answer written a line at a time is held while it is one page, and from the line that passes it written on into
+    /// its call's file whole, each line masked, what was held first: the same file a whole answer's keeping writes.
+    /// </summary>
     [Fact]
-    public void ACut_NeverPartsAPairOfSurrogates()
+    public async Task AnAnswerWrittenALineAtATime_IsHeldToAPage_TheRestWrittenOn()
     {
-        var pair = "\U0001F600";
-        var text = new string('a', AgentCallRecords.ResultHead - 1) + pair + new string('b', AgentCallRecords.ResultCap) + pair + new string('c', AgentCallRecords.ResultCap - AgentCallRecords.ResultHead - 1);
-        var cut = AgentCallRecords.Cut(text, "f");
+        using var records = Records(out _, out var run, new Masking("hunter2", "***"));
+        var token = TestContext.Current.CancellationToken;
 
-        for (var at = 0; at < cut.Length; at++)
+        await using (var short_ = records.Lines("short"))
         {
-            Assert.False(char.IsHighSurrogate(cut[at]) && (at + 1 == cut.Length || !char.IsLowSurrogate(cut[at + 1])), $"a high surrogate stands alone at {at}");
-            Assert.False(char.IsLowSurrogate(cut[at]) && (at == 0 || !char.IsHighSurrogate(cut[at - 1])), $"a low surrogate stands alone at {at}");
+            await short_.LineAsync("a", token);
+            await short_.LineAsync("b hunter2", token);
+            await short_.EndAsync();
+            Assert.Equal(("a\nb ***", (string?)null, 2L), (short_.Text, short_.File, short_.Count));
         }
 
-        Assert.StartsWith(new string('a', AgentCallRecords.ResultHead - 1) + "\n[", cut, StringComparison.Ordinal);
-    }
+        var lines = Enumerable.Range(0, 5_000).Select(at => $"hit {at} hunter2").ToList();
 
-    /// <summary>A call's id names its file with every character no file name holds on every system made '_'.</summary>
-    [Fact]
-    public void ACallsId_NamesItsFile_AsEverySystemHoldsIt()
-    {
-        Assert.Equal(Path.Combine("s", "tool-results", "call_01-x.txt"), AgentCallRecords.ResultFile("s", "call_01-x"));
-        Assert.Equal(Path.Combine("s", "tool-results", "______x.txt"), AgentCallRecords.ResultFile("s", "../:\\.x"));
-        Assert.Equal(Path.Combine("s", "tool-results", "call.txt"), AgentCallRecords.ResultFile("s", string.Empty));
-        Assert.Equal(96 + ".txt".Length, Path.GetFileName(AgentCallRecords.ResultFile("s", new string('a', 200))).Length);
+        await using (var long_ = records.Lines("long"))
+        {
+            foreach (var line in lines)
+            {
+                await long_.LineAsync(line, token);
+            }
+
+            await long_.EndAsync();
+            Assert.Null(long_.Text);
+            Assert.Equal(AgentCallRecords.ResultFile(run.StepDirectory, "long"), long_.File);
+            Assert.Equal(string.Join('\n', lines.Select(line => line.Replace("hunter2", "***", StringComparison.Ordinal))), File.ReadAllText(long_.File!));
+        }
+
+        // One abandoned before its end leaves no file.
+        await using (var abandoned = records.Lines("abandoned"))
+        {
+            foreach (var line in lines)
+            {
+                await abandoned.LineAsync(line, token);
+            }
+        }
+
+        Assert.False(File.Exists(AgentCallRecords.ResultFile(run.StepDirectory, "abandoned")));
     }
 
     /// <summary>A denial is a line of denials.jsonl and an event, masked, its source as the event names it.</summary>
@@ -222,15 +279,6 @@ public sealed class AgentCallRecordsTests : IDisposable
         Assert.Equal(
             "web-search source 'beta' answered what its kind 'feed' (version 1) could not read: its answer is no feed: ***",
             Assert.Single(events.All.OfType<Notice>()).Text);
-    }
-
-    /// <summary>Lines cut begin with the first, an empty one among them: a command that printed a blank line first printed it.</summary>
-    [Fact]
-    public void LinesCut_KeepAnEmptyFirstLine()
-    {
-        Assert.Equal("\na", AgentCallRecords.Cut(["", "a"], "f"));
-        Assert.Equal("\n", AgentCallRecords.Cut(["", ""], "f"));
-        Assert.Equal(string.Empty, AgentCallRecords.Cut([""], "f"));
     }
 
     /// <summary>A record opens its file at its first line: a step that refused nothing and asked no page has neither file.</summary>

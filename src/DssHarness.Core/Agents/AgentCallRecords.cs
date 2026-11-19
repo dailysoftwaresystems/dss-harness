@@ -1,10 +1,10 @@
-using System.Globalization;
 using System.Text;
 using System.Text.Json;
+using System.Threading.Channels;
 using DssHarness.Core.Agents.Policy;
 using DssHarness.Core.Execution;
 using DssHarness.Core.FileSystem;
-using DssHarness.Core.Output;
+using DssHarness.Core.Pages;
 
 namespace DssHarness.Core.Agents;
 
@@ -13,10 +13,10 @@ namespace DssHarness.Core.Agents;
 /// <see cref="PermissionDenied"/>; each request of the web a line of <c>web.jsonl</c> when it is decided, before anything
 /// leaves the machine, another when it is answered, and a <see cref="WebRequested"/>; each web search source's part a line
 /// of it too, whether or not it sent a request, and a <see cref="WebRequested"/> - a <see cref="Notice"/> where its
-/// answer could not be read; a result too large for its event
-/// kept whole in <c>tool-results/</c>, its event carrying its first quarter and its last three quarters of
-/// <see cref="ResultCap"/>. The one owner of those records, so a denial, a page and a long result read alike whoever ran
-/// the call: Claude Code's client, or the harness's own tool runtime.
+/// answer could not be read; and a result longer than one page of a tool's answer kept whole in <c>tool-results/</c>, its
+/// call answered with the result's first page, which says how <c>read_result</c> gives the rest
+/// (<see cref="Runtime.KeptResults"/>). The one owner of those records, so a denial, a page and a long result read alike
+/// whoever ran the call: Claude Code's client, or the harness's own tool runtime.
 /// </summary>
 /// <remarks>Every text is masked before it is written or emitted. Each file is opened when its first line is written, and
 /// held until disposed: one writer of each, as <see cref="AppendLog"/> holds it.</remarks>
@@ -28,20 +28,17 @@ public sealed class AgentCallRecords : IDisposable
     /// <summary>Each request of the web, when it is decided and when it is answered, and each web search source's part, one line each.</summary>
     public const string WebFileName = "web.jsonl";
 
-    /// <summary>The folder, in the step's directory, a call's result too large for its event is kept in whole.</summary>
+    /// <summary>The folder, in the step's directory, a call's result longer than a page is kept in whole.</summary>
     public const string ToolResultsDirectoryName = "tool-results";
 
     /// <summary>
-    /// The largest result a call's event carries whole, in characters; a larger one is kept whole in a file beside the
-    /// stream, and its event carries its first quarter and its last three quarters of this, with what was left out between.
+    /// The cap a call's answer was once cut at, its head and tail kept. No call's answer is cut by it: one longer than a
+    /// page is kept whole and answered with its first page (<see cref="Kept"/>).
     /// </summary>
     public const int ResultCap = 32 * 1024;
 
-    /// <summary>How much of a result too large for its event is kept from its start: a quarter of <see cref="ResultCap"/>.</summary>
+    /// <summary>What a cut answer once kept of its start, a quarter of <see cref="ResultCap"/>: no answer is cut now.</summary>
     public const int ResultHead = ResultCap / 4;
-
-    /// <summary>The longest a call's id is in the name of its result's file; what is past it is cut.</summary>
-    private const int MostIdInName = 96;
 
     private readonly IFileSystem _fileSystem;
     private readonly AgentRun _run;
@@ -71,94 +68,52 @@ public sealed class AgentCallRecords : IDisposable
         _web = new Lazy<AppendLog>(() => Opened(WebFileName), LazyThreadSafetyMode.ExecutionAndPublication);
     }
 
-    /// <summary>The file a call's whole result is kept in, beside the stream: its id as a call's file is named (<see cref="NameOf"/>).</summary>
+    /// <summary>
+    /// The file a call's whole result is kept in, beside the stream: named by the call's whole id, as the key its pages are
+    /// kept under spells it (<see cref="PageKey.OfCall"/>), so two ids however long are two files - an id of no character
+    /// among them, which is an id as any other.
+    /// </summary>
     /// <param name="stepDirectory">The step's directory.</param>
     /// <param name="callId">The call's id, as its client named it.</param>
     public static string ResultFile(string stepDirectory, string callId)
     {
         ArgumentNullException.ThrowIfNull(stepDirectory);
+        ArgumentNullException.ThrowIfNull(callId);
 
-        return Path.Combine(stepDirectory, ToolResultsDirectoryName, NameOf(callId) + ".txt");
+        return Path.Combine(stepDirectory, ToolResultsDirectoryName, PageKey.OfCall(callId) + ".txt");
     }
 
     /// <summary>
-    /// A call's id as the name of what the step keeps of the call - its result's file, a measure call's folder: the id,
-    /// every character no file name holds on every system made <c>_</c>, cut past <see cref="MostIdInName"/> characters;
-    /// <c>call</c> for an id that holds none.
+    /// A call's id as the name of what the step keeps of the call apart from its result - a measure call's folder: the id
+    /// itself where every character of it is a letter, a digit, <c>-</c> or <c>_</c> and it is shorter than a digest's name
+    /// and not spelt as one, so a provider's id reads as itself; else the name its digest spells (<see cref="PageKey.OfCall"/>),
+    /// so two ids are never one name, however long or however spelt; <c>call</c> for an id that holds none.
     /// </summary>
     /// <param name="callId">The call's id, as its client named it.</param>
     public static string NameOf(string callId)
     {
         ArgumentNullException.ThrowIfNull(callId);
 
-        var name = new string([.. callId.Take(MostIdInName).Select(character => char.IsAsciiLetterOrDigit(character) || character is '-' or '_' ? character : '_')]);
+        if (callId.Length == 0)
+        {
+            return "call";
+        }
 
-        return name.Length == 0 ? "call" : name;
+        var digest = PageKey.OfCall(callId);
+
+        return callId.Length < digest.Length
+            && !callId.StartsWith(PageKey.CallPrefix, StringComparison.Ordinal)
+            && callId.All(character => char.IsAsciiLetterOrDigit(character) || character is '-' or '_')
+                ? callId
+                : digest;
     }
 
     /// <summary>
-    /// <paramref name="text"/> as a call's event carries it: whole where it is no longer than <see cref="ResultCap"/>;
-    /// otherwise its first <see cref="ResultHead"/> characters and its last of the rest of the cap, never a pair of
-    /// surrogates cut, with what was left out between - and the whole kept in <paramref name="file"/>.
-    /// </summary>
-    /// <param name="text">The result, masked.</param>
-    /// <param name="file">The file the whole is kept in, where it is cut.</param>
-    public static string Cut(string text, string file)
-    {
-        ArgumentNullException.ThrowIfNull(text);
-        ArgumentNullException.ThrowIfNull(file);
-
-        if (text.Length <= ResultCap)
-        {
-            return text;
-        }
-
-        var head = TextCut.Head(text, ResultHead);
-        var tail = TextCut.Tail(text, ResultCap - ResultHead);
-
-        return Told(head, text.Length - head.Length - tail.Length, file, tail);
-    }
-
-    /// <summary>
-    /// What a call's event carries of a result read a line at a time from <paramref name="file"/>, which holds it whole: as
-    /// <see cref="Cut(string, string)"/> carries it, read once and never held whole, so a command's output of any size costs the cap.
-    /// </summary>
-    /// <param name="lines">The result's lines, masked, in order.</param>
-    /// <param name="file">The file that holds the whole.</param>
-    public static string Cut(IEnumerable<string> lines, string file)
-    {
-        ArgumentNullException.ThrowIfNull(lines);
-        ArgumentNullException.ThrowIfNull(file);
-
-        // The head holds the cap, which the whole fits in where it is given whole; the tail holds the end of everything.
-        var head = new StringBuilder();
-        var tail = new Processes.StreamTail(ResultCap - ResultHead);
-        long total = 0;
-        var first = true;
-
-        foreach (var line in lines)
-        {
-            var text = first ? line : "\n" + line;
-            first = false;
-            total += text.Length;
-            tail.Add(text);
-            head.Append(text.AsSpan(0, Math.Min(text.Length, ResultCap - head.Length)));
-        }
-
-        if (total <= ResultCap)
-        {
-            return head.ToString();
-        }
-
-        var kept = TextCut.Head(head.ToString(), ResultHead);
-        var end = tail.ToString();
-
-        return Told(kept, (int)Math.Min(int.MaxValue, total - kept.Length - end.Length), file, end);
-    }
-
-    /// <summary>
-    /// <paramref name="result"/> as its call's event carries it, masked, and where it is too large for its event kept whole
-    /// in its call's file (<see cref="ResultFile"/>): what the event carries, and the file where one was written.
+    /// <paramref name="result"/> as its call is answered and its event carries it, masked: whole where it is one page of a
+    /// tool's answer to a model (<see cref="Runtime.KeptResults.Room"/>); else kept whole in its call's file
+    /// (<see cref="ResultFile"/>) and given as its first page, whose header says how many pages it holds and how
+    /// <c>read_result</c> gives the next, and names the file - nothing of it cut. What is given, and the file where one was
+    /// written.
     /// </summary>
     /// <param name="callId">The call's id.</param>
     /// <param name="result">The result, as the call answered it.</param>
@@ -169,16 +124,38 @@ public sealed class AgentCallRecords : IDisposable
 
         var masked = _run.Mask.Redact(result);
 
-        if (masked.Length <= ResultCap)
+        if (Runtime.KeptResults.OnePage(masked))
         {
             return (masked, null);
         }
 
+        // The bytes the file holds are the bytes page 1 is laid from: the pages read_result gives later are laid from
+        // the file, the same bytes, so its page 2 goes on where this page 1 ends.
+        var bytes = Encoding.UTF8.GetBytes(masked);
         var file = ResultFile(_run.StepDirectory, callId);
-        _fileSystem.CreateDirectory(Path.GetDirectoryName(file)!);
-        _fileSystem.WriteAllTextAtomic(file, masked);
 
-        return (Cut(masked, file), file);
+        if (Runtime.KeptResults.FirstPageOf(bytes, callId, file) is not { } first)
+        {
+            return (masked, null);
+        }
+
+        _fileSystem.CreateDirectory(Path.GetDirectoryName(file)!);
+        _fileSystem.WriteAtomic(file, stream => stream.Write(bytes));
+
+        return (first, file);
+    }
+
+    /// <summary>
+    /// A writer of the call <paramref name="callId"/>'s answer a line at a time, each line masked: held while the answer
+    /// is one page of a tool's answer, and from the line that passes it written on into the call's file
+    /// (<see cref="ResultFile"/>), so an answer of any length costs a page of memory (<see cref="ResultLines"/>).
+    /// </summary>
+    /// <param name="callId">The call's id.</param>
+    public ResultLines Lines(string callId)
+    {
+        ArgumentNullException.ThrowIfNull(callId);
+
+        return new ResultLines(_fileSystem, _run.Mask, ResultFile(_run.StepDirectory, callId));
     }
 
     /// <summary>Records a call refused: a line of <c>denials.jsonl</c>, then a <see cref="PermissionDenied"/>, each masked.</summary>
@@ -350,8 +327,160 @@ public sealed class AgentCallRecords : IDisposable
             AgentPolicySource.ClaudeCode => AgentPermissionSource.ClaudeCode,
             _ => AgentPermissionSource.Builtin,
         };
+}
 
-    /// <summary>The event's text of a result cut: its head, what was left out and where the whole is, its tail.</summary>
-    private static string Told(string head, long leftOut, string file, string tail)
-        => string.Create(CultureInfo.InvariantCulture, $"{head}\n[{leftOut} characters left out: the whole result is '{file}']\n{tail}");
+/// <summary>
+/// A call's answer written a line at a time (<see cref="AgentCallRecords.Lines"/>), each line masked as it is written: the
+/// lines held while they fit one page of a tool's answer to a model (<see cref="Runtime.KeptResults.Room"/>), and from the
+/// line that passes it every line written on into the call's file, the lines held before it first - so an answer of any
+/// length, a search of a million hits among them, is never held whole. The file is written whole and put in place when
+/// the answer ends (<see cref="IFileSystem.WriteAtomic"/>), by a writer of its own that takes the lines as they come, a
+/// producer that outruns it waiting; an answer abandoned before its end leaves no file. Once every line is written, the
+/// answer is the lines whole where they fit a page (<see cref="Text"/>), else the call's file, which holds every one
+/// (<see cref="File"/>).
+/// </summary>
+public sealed class ResultLines : IAsyncDisposable
+{
+    /// <summary>How many pieces of the answer wait for its file's writer before a producer waits with them: none is ever dropped.</summary>
+    private const int Waiting = 256;
+
+    private static readonly UTF8Encoding Utf8NoMark = new(encoderShouldEmitUTF8Identifier: false);
+
+    private readonly IFileSystem _fileSystem;
+    private readonly ILineMask _mask;
+    private readonly string _file;
+    private readonly StringBuilder _held = new();
+    private readonly Channel<string> _pieces = Channel.CreateBounded<string>(
+        new BoundedChannelOptions(Waiting) { SingleReader = true, SingleWriter = true, FullMode = BoundedChannelFullMode.Wait });
+
+    private Task? _writing;
+    private bool _first = true;
+    private volatile bool _ended;
+
+    /// <summary>A writer of the answer whose file, once it passes a page, is <paramref name="file"/>.</summary>
+    internal ResultLines(IFileSystem fileSystem, ILineMask mask, string file)
+    {
+        _fileSystem = fileSystem;
+        _mask = mask;
+        _file = file;
+    }
+
+    /// <summary>How many lines were written, every one counted.</summary>
+    public long Count { get; private set; }
+
+    /// <summary>The answer whole, where its lines fit one page; null where they passed it and are in <see cref="File"/>.</summary>
+    public string? Text => _writing is null ? _held.ToString() : null;
+
+    /// <summary>The call's file, which holds every line once the answer ends, where they passed a page; null where they fit one.</summary>
+    public string? File => _writing is null ? null : _file;
+
+    /// <summary>Writes <paramref name="line"/>, masked: held while the answer fits a page, else written on into the call's file.</summary>
+    /// <param name="line">One line of the answer, with no line ending in it.</param>
+    /// <param name="cancellationToken">Stops a wait for the file's writer.</param>
+    public async ValueTask LineAsync(string line, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(line);
+
+        var masked = _mask.Redact(line);
+        Count++;
+
+        if (_writing is not null)
+        {
+            await HandAsync("\n" + masked, cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        if (!_first)
+        {
+            _held.Append('\n');
+        }
+
+        _first = false;
+        _held.Append(masked);
+
+        // Past a page, everything held so far goes to the file, and every line after it is written there as it comes.
+        if (!Runtime.KeptResults.OnePage(_held))
+        {
+            _writing = Task.Factory.StartNew(Write, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
+            await HandAsync(_held.ToString(), cancellationToken).ConfigureAwait(false);
+            _held.Clear();
+        }
+    }
+
+    /// <summary>Hands <paramref name="piece"/> to the file's writer, waiting while it is behind: a writer that failed raises why.</summary>
+    private async ValueTask HandAsync(string piece, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await _pieces.Writer.WriteAsync(piece, cancellationToken).ConfigureAwait(false);
+        }
+        catch (ChannelClosedException)
+        {
+            // Closed by the writer that failed: what it failed with is the answer's.
+            await _writing!.ConfigureAwait(false);
+            throw;
+        }
+    }
+
+    /// <summary>Ends the answer: once it returns, every line is in the call's file, where the answer passed a page.</summary>
+    public async Task EndAsync()
+    {
+        _ended = true;
+        _pieces.Writer.TryComplete();
+
+        if (_writing is { } writing)
+        {
+            await writing.ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>Lets the file's writer go: an answer not ended leaves no file.</summary>
+    public async ValueTask DisposeAsync()
+    {
+        if (!_ended)
+        {
+            _pieces.Writer.TryComplete();
+
+            if (_writing is { } writing)
+            {
+                await writing.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Writes the call's file whole from the pieces as they come, on a thread of its own that waits for each, and puts it in
+    /// place once the answer ends - leaving the file as it was where the answer was abandoned.
+    /// </summary>
+    private void Write()
+    {
+        try
+        {
+            _fileSystem.CreateDirectory(Path.GetDirectoryName(_file)!);
+            _fileSystem.WriteAtomic(_file, stream =>
+            {
+                using var writer = new StreamWriter(stream, Utf8NoMark, leaveOpen: true);
+                var reader = _pieces.Reader;
+
+                while (reader.WaitToReadAsync().AsTask().GetAwaiter().GetResult())
+                {
+                    while (reader.TryRead(out var piece))
+                    {
+                        writer.Write(piece);
+                    }
+                }
+
+                if (!_ended)
+                {
+                    throw new OperationCanceledException("the answer was abandoned before its end, and its file is not put in place");
+                }
+            });
+        }
+        catch (Exception ex)
+        {
+            // A producer waiting on a writer that stopped is let go, and told why.
+            _pieces.Writer.TryComplete(ex);
+            throw;
+        }
+    }
 }

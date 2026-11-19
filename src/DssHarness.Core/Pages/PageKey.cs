@@ -38,10 +38,10 @@ public static class PageKey
     /// The key a call's whole result is kept under: <see cref="CallPrefix"/> and the full digest of the call's id, so two
     /// ids however long are two keys, and none is an ask's (<see cref="Of"/>).
     /// </summary>
-    /// <param name="id">The call's id, as its client named it.</param>
+    /// <param name="id">The call's id, as its client named it: an empty one among them, which is an id as any other.</param>
     public static string OfCall(string id)
     {
-        ArgumentException.ThrowIfNullOrEmpty(id);
+        ArgumentNullException.ThrowIfNull(id);
 
         return CallPrefix + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(id))).ToLowerInvariant();
     }

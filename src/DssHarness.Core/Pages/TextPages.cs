@@ -158,15 +158,35 @@ public static class TextPages
     /// <param name="numbered">Whether each line is numbered, as a page of it says it.</param>
     /// <param name="cancellationToken">Stops the read.</param>
     /// <exception cref="InvalidDataException">The file does not read as text, with why, in <see cref="EncodedText"/>'s words.</exception>
-    public static async Task<TextPagesKept> LayAsync(IFileSystem fileSystem, string path, string key, string asked, int room, bool numbered, CancellationToken cancellationToken)
+    public static Task<TextPagesKept> LayAsync(IFileSystem fileSystem, string path, string key, string asked, int room, bool numbered, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(fileSystem);
+
+        return LayAsync(fileSystem.OpenRead, path, key, asked, room, numbered, cancellationToken);
+    }
+
+    /// <summary>
+    /// Lays the pages of the text at <paramref name="path"/> as <see cref="LayAsync(IFileSystem, string, string, string, int, bool, CancellationToken)"/>
+    /// lays them, the file opened by <paramref name="open"/>: a reader that decides where an open file stands before a
+    /// byte of it is read opens it so, and a text held in memory is laid from a stream over its bytes.
+    /// </summary>
+    /// <param name="open">Opens the file at a path to read, from its start.</param>
+    /// <param name="path">The file, absolute.</param>
+    /// <param name="key">The ask the pages are kept for (<see cref="PageKey"/>).</param>
+    /// <param name="asked">How the pages name what was asked, for a page past the last to say.</param>
+    /// <param name="room">The characters a page gives its lines (<see cref="PageRoom.For"/>), <see cref="PageRoom.Least"/> at the least.</param>
+    /// <param name="numbered">Whether each line is numbered, as a page of it says it.</param>
+    /// <param name="cancellationToken">Stops the read.</param>
+    /// <exception cref="InvalidDataException">The file does not read as text, with why, in <see cref="EncodedText"/>'s words.</exception>
+    public static async Task<TextPagesKept> LayAsync(Func<string, Stream> open, string path, string key, string asked, int room, bool numbered, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(open);
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
         ArgumentException.ThrowIfNullOrWhiteSpace(key);
         ArgumentException.ThrowIfNullOrWhiteSpace(asked);
         ArgumentOutOfRangeException.ThrowIfLessThan(room, PageRoom.Least);
 
-        var stream = fileSystem.OpenRead(path);
+        var stream = open(path);
 
         await using (stream.ConfigureAwait(false))
         {
@@ -255,10 +275,31 @@ public static class TextPages
     /// <param name="note">What the header says after its counts, and a refusal after its range; null where nothing is said.</param>
     /// <param name="cancellationToken">Stops the read.</param>
     /// <exception cref="InvalidDataException">The page's bytes no longer read as they were laid.</exception>
-    public static async Task<PageAnswer<TextEntry>> PageAsync(IFileSystem fileSystem, TextPagesKept kept, long page, bool numbered, string? note, CancellationToken cancellationToken)
+    public static Task<PageAnswer<TextEntry>> PageAsync(IFileSystem fileSystem, TextPagesKept kept, long page, bool numbered, string? note, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(fileSystem);
+
+        return PageAsync(fileSystem.OpenRead, kept, page, numbered, note, Paging.AskAgain, cancellationToken);
+    }
+
+    /// <summary>
+    /// The text's <paramref name="page"/> as <see cref="PageAsync(IFileSystem, TextPagesKept, long, bool, string?, CancellationToken)"/>
+    /// gives it, the file opened by <paramref name="open"/>, its header saying the next page is asked for as
+    /// <paramref name="ask"/> says (<see cref="Paging.Header"/>).
+    /// </summary>
+    /// <param name="open">Opens the file at a path to read, from its start.</param>
+    /// <param name="kept">The text's pages, as they were laid.</param>
+    /// <param name="page">The page asked, from 1: one past what an int counts is past the last, said by its own number.</param>
+    /// <param name="numbered">Whether each line is numbered: as the pages were laid.</param>
+    /// <param name="note">What the header says after its counts, and a refusal after its range; null where nothing is said.</param>
+    /// <param name="ask">How the header says the next page is asked for, before its <c>page</c>.</param>
+    /// <param name="cancellationToken">Stops the read.</param>
+    /// <exception cref="InvalidDataException">The page's bytes no longer read as they were laid.</exception>
+    public static async Task<PageAnswer<TextEntry>> PageAsync(Func<string, Stream> open, TextPagesKept kept, long page, bool numbered, string? note, string ask, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(open);
         ArgumentNullException.ThrowIfNull(kept);
+        ArgumentException.ThrowIfNullOrWhiteSpace(ask);
         ArgumentOutOfRangeException.ThrowIfLessThan(page, 1);
 
         if (kept.Problem() is { } problem)
@@ -284,7 +325,7 @@ public static class TextPages
         var cut = next is { FirstColumn: > 0 };
         string chars;
 
-        var stream = fileSystem.OpenRead(kept.Path);
+        var stream = open(kept.Path);
 
         await using (stream.ConfigureAwait(false))
         {
@@ -319,7 +360,7 @@ public static class TextPages
 
         var said = new List<string>();
 
-        if (Paging.HeaderLine(given, pages, kept.Lines, note) is { } header)
+        if (Paging.HeaderLine(given, pages, kept.Lines, note, ask) is { } header)
         {
             said.Add(header);
         }
@@ -373,6 +414,14 @@ public static class TextPages
 
         return low + 1;
     }
+
+    /// <summary>
+    /// The strict encoding the bytes a text's file begins with say, and how many of them its mark is - the rule a text's
+    /// pages are laid by, <see cref="EncodedText"/>'s with its NUL apart: what every reader that streams a file's text
+    /// decodes it by, so a text it reads is the text its pages give.
+    /// </summary>
+    /// <param name="start">The file's first bytes, four at the least where it holds them.</param>
+    internal static (Encoding Encoding, int Preamble) EncodingOf(ReadOnlySpan<byte> start) => TextSource.EncodingOf(start);
 
     /// <summary>
     /// A page's characters cut into its lines, or the pieces of lines its ends hold, without their endings, by the one rule

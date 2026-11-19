@@ -40,6 +40,9 @@ public static class Paging
     /// <param name="asked">The page asked.</param>
     public static string BelowTheFirst(long asked) => $"page is {asked.ToString(CultureInfo.InvariantCulture)}: pages start at 1";
 
+    /// <summary>How a header says the next page is asked for where the tool that gave the answer is asked it again: with its <c>page</c>.</summary>
+    public const string AskAgain = "ask again with";
+
     /// <summary>
     /// The header of a page of more than one: which page, the exact total, and how to ask for the next - or that this is
     /// the last.
@@ -47,10 +50,15 @@ public static class Paging
     /// <param name="page">The page, from 1.</param>
     /// <param name="pages">How many pages the answer holds.</param>
     /// <param name="total">How many results the whole answer holds.</param>
-    public static string Header(int page, int pages, long total)
+    /// <param name="ask">
+    /// How the next page is asked for, before its <c>page</c>: <see cref="AskAgain"/> where the tool that gave the answer
+    /// gives its pages, else the tool that does and what it is asked with - a call's answer whose later pages another tool
+    /// reads.
+    /// </param>
+    public static string Header(int page, int pages, long total, string ask = AskAgain)
         => page == pages
             ? $"page {Number(page)} of {Number(pages)} · the last"
-            : $"page {Number(page)} of {Number(pages)} · {Number(total)} results · ask again with page: {Number(page + 1)} for the next";
+            : $"page {Number(page)} of {Number(pages)} · {Number(total)} results · {ask} page: {Number(page + 1)} for the next";
 
     /// <summary>
     /// The answer's pages, filled once from its sections: each page takes of every section, in its order, whole entries up
@@ -116,8 +124,8 @@ public static class Paging
     internal static string Said(string? note) => note is null ? string.Empty : $" · {note}";
 
     /// <summary>The first line of a page: its header and its note, where it holds more than one page or says a note; null where it has none.</summary>
-    internal static string? HeaderLine(int page, int pages, long total, string? note)
-        => pages > 1 || note is not null ? Header(page, pages, total) + Said(note) : null;
+    internal static string? HeaderLine(int page, int pages, long total, string? note, string ask = AskAgain)
+        => pages > 1 || note is not null ? Header(page, pages, total, ask) + Said(note) : null;
 
     /// <summary>What a page past the last says: the page asked, of what, and the answer's range, with the note after it.</summary>
     internal static string PastTheLastSaid(long page, int pages, string asked, string? note)
