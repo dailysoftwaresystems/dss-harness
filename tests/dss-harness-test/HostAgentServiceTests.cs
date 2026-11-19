@@ -292,8 +292,9 @@ public sealed class HostAgentServiceTests
 
     /// <summary>
     /// The architecture names the cut a note crosses by - pieces of at most <see cref="HostAgentProtocol.NotePiece"/>
-    /// bytes, each small enough that its whole line fits what the machine that asked hands lines on in
-    /// (<see cref="ProcessRunner.LongestLine"/>) - in the words the protocol owns, and names no other cut.
+    /// bytes, each small enough that its whole line fits the protocol's own longest note line
+    /// (<see cref="HostAgentProtocol.NoteLineLength"/>), which every build hands on whole - in the words the protocol owns,
+    /// and names no other cut.
     /// </summary>
     [Fact]
     public void TheArchitecture_SaysTheCutANoteCrossesBy_InTheProtocolsOwnWords()
@@ -302,8 +303,8 @@ public sealed class HostAgentServiceTests
 
         Assert.Contains(
             "carrying the text as base64 pieces of at most `NotePiece` bytes - each small enough that its whole line "
-                + "fits what that machine hands lines on in as it reads the host's standard error kept as a tail "
-                + "(`ProcessRunner.LongestLine`), so no piece is cut in two on the way",
+                + "fits the protocol's own longest note line (`NoteLineLength`, 32,768 characters), which every build hands "
+                + "on whole as it reads the host's standard error kept as a tail, so no piece is cut in two on the way",
             architecture,
             StringComparison.Ordinal);
 
