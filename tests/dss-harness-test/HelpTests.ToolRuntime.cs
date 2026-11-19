@@ -120,8 +120,7 @@ public sealed partial class HelpTests
             StringComparison.Ordinal);
         Assert.Contains("the run's reporter is given those that read and no other.", readme, StringComparison.Ordinal);
         Assert.Contains(
-            "built for the API clients to give their agents in place of a client's own - the `claude-api` and `glm` clients below - and serving the `claude-code` client the web's through the engine's tool server, and its file tools there too "
-                + "where Claude Code's own process runs apart from the isolation:",
+            "built for the API clients to give their agents in place of a client's own - the `claude-api` and `glm` clients below - and serving the `claude-code` client every one of them through the engine's tool server:",
             readme,
             StringComparison.Ordinal);
         Assert.Contains($"its links followed (one whose links cannot be followed refused as {DssHarness.Core.Agents.Policy.AgentPolicy.UndecidedRule}) and held to the agent's roots", readme, StringComparison.Ordinal);
@@ -143,7 +142,7 @@ public sealed partial class HelpTests
             StringComparison.Ordinal);
         Assert.Contains($"(ending {string.Join(", ", suffixes[..^1])} or {suffixes[^1]}) but those `agentPolicy.keepEnvironment` gives back.", readme, StringComparison.Ordinal);
         Assert.Contains(
-            "`http` and `https` alone, its redirects followed, text alone (`text/*`, "
+            "`http` and `https` alone, its redirects followed to their end or their first revisit, read for as long as it moves - the step's `stallSeconds` a silence, never a time an answer takes - and whole, text alone (`text/*`, "
                 + $"{string.Join(", ", DssHarness.Core.Web.HarnessFetch.TextTypes.Select(type => $"`{type}`"))} and every `+json` and `+xml` type)",
             readme,
             StringComparison.Ordinal);

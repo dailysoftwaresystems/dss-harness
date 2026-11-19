@@ -302,9 +302,8 @@ public sealed class HostAgentServiceTests
         var architecture = Prose.Document("docs", "architecture.md");
 
         Assert.Contains(
-            "carrying the text as base64 pieces of at most `NotePiece` bytes - each small enough that its whole line "
-                + "fits the protocol's own longest note line (`NoteLineLength`, 32,768 characters), which every build hands "
-                + "on whole as it reads the host's standard error kept as a tail, so no piece is cut in two on the way",
+            "carrying the text as base64 pieces sized by `HostAgentProtocol.NoteLineLength` "
+                + "(32 KiB), the protocol's own longest line, so no piece is cut in two on the way",
             architecture,
             StringComparison.Ordinal);
 

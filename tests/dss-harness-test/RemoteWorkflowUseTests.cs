@@ -2321,15 +2321,15 @@ public sealed class RemoteWorkflowUseTests
 
         foreach (var said in new[]
         {
-            $"given to its calls as `{GhProcess.TokenVariable}` for a `*.ghe.com` host and `{GhProcess.EnterpriseTokenVariable}` for any other, every other token of the machine's taken away",
+            "`workflowSources.hosts` names each GitHub Enterprise host with its one credential, `\"credential\": {\"from\": \"env\", \"name\": \"<VARIABLE>\"}`, handed to git in its environment with every helper git's configuration names cleared, and none of the machine's - a host with none, or whose variable is not set, is refused before anything is asked of it - while github.com is reached with the helpers git's configuration names, the machine's own login;",
             "each blob as its bytes at `blobs/<first 2 hex>/<remaining 38 hex>`",
-            "or one of the first 20 tags and branches the forge lists, reaches it",
-            $"`workflow-cache prune --unused-days N`, the days required and from 0 to {WorkflowCache.MostUnusedDays.ToString("N0", CultureInfo.InvariantCulture)},",
+            "every branch and tag listed by git itself in one call (`git ls-remote`)",
+            "`workflow-cache prune --unused-days N`, the days required, 0 or more - any number, those reaching back past the clock's start putting the cut-off there -",
             $"every blob an entry it keeps holds kept, and no blob removed at all while a file of the cache's own could not be read; a file it could not remove or read is said, and the pruning ends incomplete ({HarnessExit.Incomplete})",
             "`offline` says what happens where the network keeps the forge from being reached",
             "in `remote-workflows/` of its own directory",
-            $"the forge not reached with nothing standing in ({HarnessExit.Incomplete} where the call's limit passed, {HarnessExit.CommandFailed} where `gh` said no connection was made)",
-            $"or whose lock another process held past its window ({WorkflowCache.FailedExit})",
+            $"the forge not reached with nothing standing in (20, git saying it made no connection), git failing otherwise or answering what does not read (20), and the workflow cache that could not be named, written or read, or whose lock could not be taken ({WorkflowCache.FailedExit})",
+            "or its lock could not be taken",
             "both name it in `--json`, as `cache`, on every exit",
             "a `--from` that names no remote workflow, is a usage error (10)",
             "as the check a resume goes through reads them there first - the cache, and then the forge, asked only for a use the copy does not hold whole: neither a pruning of the cache, the network not being there, nor a tag deleted or a branch pushed over since takes a file from a run that started or refuses it",
