@@ -1278,10 +1278,9 @@ public sealed class CSharpExtractorTests : CodeGraphExtractorContractTests<CShar
         var extract = Extractor.Extract(new CodeFileInput("src/Reads.cs", Reads));
         var linked = CodeGraphLinker.Link([new CodeGraphFile("src/Reads.cs", "csharp", extract)]);
 
-        // text.Length names a member the file does not declare: no edge, and neither an external nor an unresolved count.
+        // text.Length names a member the file does not declare: no edge, and no external count.
         Assert.DoesNotContain(linked.Edges, edge => edge.To.EndsWith(".Length", StringComparison.Ordinal));
         Assert.Equal(0, linked.External.GetValueOrDefault("csharp:Reads.Reader.Take()"));
-        Assert.Equal(0, linked.Unresolved.GetValueOrDefault("csharp:Reads.Reader.Take()"));
     }
 
     /// <summary>

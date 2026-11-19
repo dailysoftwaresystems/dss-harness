@@ -5,16 +5,13 @@ namespace DssHarness.Core.Codebase.Languages;
 
 /// <summary>
 /// A JSON file as a project file's implementation reads it: its values, each with the line it begins on as the core
-/// counts lines (<see cref="CodeFileText.Lines"/>) - what <see cref="JsonDocument"/> does not keep - read once, bounded
-/// in depth, and the line it stops at where it is no JSON.
+/// counts lines (<see cref="CodeFileText.Lines"/>) - what <see cref="JsonDocument"/> does not keep - read once, however
+/// deep it nests, on a stack of the reader's own, and the line it stops at where it is no JSON.
 /// </summary>
 internal static class JsonOutline
 {
     /// <summary>What a file that is no object gives, as an extractor's help says it.</summary>
-    public const string Unread = "a file that is no JSON object - one that does not parse, nests past the reader's bounds or holds another value: nothing in it is read, the line it stops at marked dynamic";
-
-    /// <summary>How deep a project file's values are read: as deep as a data file's (<see cref="DataNodes.MostNesting"/>), which no project file nests past.</summary>
-    private const int MostDepth = DataNodes.MostNesting;
+    public const string Unread = "a file that is no JSON object - one that does not parse or holds another value: nothing in it is read, the line it stops at marked dynamic";
 
     /// <summary>Why a file that stops parsing is no object.</summary>
     private const string NoJson = "the file stops reading as JSON here";
@@ -66,7 +63,9 @@ internal static class JsonOutline
         {
             CommentHandling = lenient ? JsonCommentHandling.Skip : JsonCommentHandling.Disallow,
             AllowTrailingCommas = lenient,
-            MaxDepth = MostDepth,
+
+            // As deep as the file nests: the values are read on a stack of the reader's own, not the call's.
+            MaxDepth = int.MaxValue,
         });
 
         stop = null;
@@ -148,51 +147,99 @@ internal static class JsonOutline
         return (at >= 0 ? message[..at] : message).Trim().TrimEnd('.');
     }
 
-    /// <summary>The value the reader stands at the first token of, read to its last.</summary>
+    /// <summary>
+    /// The value the reader stands at the first token of, read to its last: each object and array it holds opened on a
+    /// stack of its own and closed where the reader closes it, so no nesting of the file is recursed through.
+    /// </summary>
     private static JsonOutlineValue Value(ref Utf8JsonReader reader, Positions positions)
     {
-        var line = positions.LineAt(reader.TokenStartIndex);
+        // Each object or array open, with the line it begins on, what it holds so far, and the name and line of the property
+        // it is the value of in the one that holds it.
+        var open = new Stack<Open>();
+        JsonOutlineValue? done = null;
+        string? name = null;
+        var nameLine = 0;
 
-        switch (reader.TokenType)
+        while (true)
         {
-            case JsonTokenType.StartObject:
-                var properties = new List<JsonOutlineProperty>();
+            var line = positions.LineAt(reader.TokenStartIndex);
+            JsonOutlineValue? value = null;
 
-                while (reader.Read() && reader.TokenType == JsonTokenType.PropertyName)
+            switch (reader.TokenType)
+            {
+                case JsonTokenType.PropertyName:
+                    name = reader.GetString()!;
+                    nameLine = line;
+                    break;
+
+                case JsonTokenType.StartObject or JsonTokenType.StartArray:
+                    open.Push(new Open(reader.TokenType == JsonTokenType.StartObject, line, name, nameLine));
+                    name = null;
+                    break;
+
+                case JsonTokenType.EndObject or JsonTokenType.EndArray:
+                    var closed = open.Pop();
+                    value = closed.Object
+                        ? new JsonOutlineValue(JsonValueKind.Object, closed.Line, null, closed.Properties, null) { End = line }
+                        : new JsonOutlineValue(JsonValueKind.Array, closed.Line, null, null, closed.Items) { End = line };
+                    (name, nameLine) = (closed.Name, closed.NameLine);
+                    break;
+
+                case JsonTokenType.String:
+                    value = new JsonOutlineValue(JsonValueKind.String, line, reader.GetString(), null, null) { End = line };
+                    break;
+
+                default:
+                    // The raw text of a number, a true, a false or a nothing, as the file writes it: a data file's key holds
+                    // it as its value.
+                    var raw = Encoding.UTF8.GetString(reader.ValueSpan);
+                    value = new JsonOutlineValue(reader.TokenType switch
+                    {
+                        JsonTokenType.Number => JsonValueKind.Number,
+                        JsonTokenType.True => JsonValueKind.True,
+                        JsonTokenType.False => JsonValueKind.False,
+                        _ => JsonValueKind.Null,
+                    }, line, raw.Length > 0 ? raw : null, null, null) { End = line };
+                    break;
+            }
+
+            if (value is not null)
+            {
+                if (!open.TryPeek(out var holder))
                 {
-                    var name = reader.GetString()!;
-                    var at = positions.LineAt(reader.TokenStartIndex);
-                    reader.Read();
-                    properties.Add(new JsonOutlineProperty(name, at, Value(ref reader, positions)));
+                    done = value;
+                }
+                else if (holder.Object)
+                {
+                    holder.Properties.Add(new JsonOutlineProperty(name!, nameLine, value));
+                }
+                else
+                {
+                    holder.Items.Add(value);
                 }
 
-                return new JsonOutlineValue(JsonValueKind.Object, line, null, properties, null) { End = positions.LineAt(reader.TokenStartIndex) };
+                name = null;
+            }
 
-            case JsonTokenType.StartArray:
-                var items = new List<JsonOutlineValue>();
+            if (done is not null)
+            {
+                return done;
+            }
 
-                while (reader.Read() && reader.TokenType != JsonTokenType.EndArray)
-                {
-                    items.Add(Value(ref reader, positions));
-                }
-
-                return new JsonOutlineValue(JsonValueKind.Array, line, null, null, items) { End = positions.LineAt(reader.TokenStartIndex) };
-
-            case JsonTokenType.String:
-                return new JsonOutlineValue(JsonValueKind.String, line, reader.GetString(), null, null) { End = line };
-
-            default:
-                // The raw text of a number, a true, a false or a nothing, as the file writes it: a data file's key holds
-                // it as its value.
-                var raw = Encoding.UTF8.GetString(reader.ValueSpan);
-                return new JsonOutlineValue(reader.TokenType switch
-                {
-                    JsonTokenType.Number => JsonValueKind.Number,
-                    JsonTokenType.True => JsonValueKind.True,
-                    JsonTokenType.False => JsonValueKind.False,
-                    _ => JsonValueKind.Null,
-                }, line, raw.Length > 0 ? raw : null, null, null) { End = line };
+            if (!reader.Read())
+            {
+                // The reader says where a text ends before its value does.
+                throw new JsonException("the text ends before its value does");
+            }
         }
+    }
+
+    /// <summary>An object or an array the reader has opened: what it is, the line it begins on, what it holds so far, and the property of the one that holds it it is the value of.</summary>
+    private sealed record Open(bool Object, int Line, string? Name, int NameLine)
+    {
+        public List<JsonOutlineProperty> Properties { get; } = [];
+
+        public List<JsonOutlineValue> Items { get; } = [];
     }
 
     /// <summary>

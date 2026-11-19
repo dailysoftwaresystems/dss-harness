@@ -135,6 +135,26 @@ public sealed class CodebaseGraphRecordsTests
     }
 
     /// <summary>
+    /// An extract whose nodes nest a hundred thousand deep is checked in time to its nodes: each node's holders are walked
+    /// up once, a node found to end at the root never walked up again.
+    /// </summary>
+    [Fact]
+    public void AnExtractNestedAHundredThousandDeep_IsCheckedInTimeToItsNodes()
+    {
+        const int Depth = 100_000;
+        var nodes = Enumerable.Range(0, Depth).Select(at => new ExtractNode($"toy:N{at}", CodeNodeKinds.Section, $"N{at}", $"N{at}", 1, 1, $"N{at}") { Parent = at == 0 ? null : $"toy:N{at - 1}" }).ToList();
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+
+        Assert.Null(new FileExtract(nodes).Problem("toy", 1));
+        Assert.True(watch.Elapsed < TimeSpan.FromSeconds(5), $"the check took {watch.Elapsed}");
+
+        // One that comes round to itself through its holders is still refused.
+        nodes[0] = nodes[0] with { Parent = $"toy:N{Depth - 1}" };
+
+        Assert.Equal("its node 'toy:N0' is declared inside itself, through 'toy:N0'", new FileExtract(nodes).Problem("toy", 1));
+    }
+
+    /// <summary>
     /// A path a project file writes relative to its own directory is made one clean path - its <c>.</c> and <c>..</c> out,
     /// a <c>..</c> kept where it climbs above that directory - and a line a reader names is the file's nearest one.
     /// </summary>
@@ -248,8 +268,7 @@ public sealed class CodebaseGraphRecordsTests
             CodeGraphLinker.Revision,
             [new("file:src/a.toy", "abcdef", CodeNodeKinds.File, ["src/a.toy"]), new("toy:A", "123456", CodeNodeKinds.Type, ["src/a.toy"])],
             [new CodeEdge("file:src/a.toy", "toy:A", CodeEdgeKinds.Contains, 1, CodeConfidences.Exact)],
-            new Dictionary<string, int> { ["toy:A"] = 1 },
-            new Dictionary<string, int> { ["toy:A"] = 2 });
+            new Dictionary<string, int> { ["toy:A"] = 1 });
 
         store.WriteGraphSymbols(layout, symbols);
         Assert.Equal(Json(symbols), Json(store.ReadGraphSymbols(layout)!));
@@ -342,6 +361,17 @@ public sealed class CodebaseGraphRecordsTests
             (manifest with { Files = new Dictionary<string, CodeGraphFileEntry> { ["src/a.toy"] = files["src/a.toy"] with { Extract = "aa/x.json" } } }).Problem());
         Assert.Equal("its digest is not the digest of what it says", (manifest with { Digest = "0" }).Problem());
 
+        // Its key naming is held to the shape's one rule of a sound keyNaming - the one the definition's check words for its
+        // block - a policy named twice among it.
+        Assert.Equal("its keyNaming names no policy", (manifest with { KeyNaming = [] }).Problem());
+        Assert.Equal("its keyNaming names 'camelCase' more than once", (manifest with { KeyNaming = ["camelCase", "PascalCase", "camelCase"] }).Problem());
+        Assert.Equal("its keyNaming names 'PascalCase', which is none of 'camelCase', 'snake_case', 'kebab-case', 'exact'", (manifest with { KeyNaming = ["PascalCase"] }).Problem());
+        Assert.Null((manifest with { KeyNaming = ["snake_case", "exact"] }).Problem());
+        Assert.Equal(
+            [(KeyNamingFault.Twice, "camelCase"), (KeyNamingFault.Twice, "PascalCase"), (KeyNamingFault.Unknown, "PascalCase")],
+            CodebaseGraphShape.NamingProblems(["camelCase", "PascalCase", "camelCase", "PascalCase"]));
+        Assert.Throws<ArgumentException>(() => CodebaseGraphShape.NamingOf(["exact", "exact"]));
+
         // When it was synced and the tool that synced it are not what the link result is made from.
         Assert.Equal(manifest.Digest, CodeGraphManifest.DigestOf(extractors, new Dictionary<string, CodeGraphFileEntry>(files)));
         Assert.Null((manifest with { Tool = "2.0.0", SyncedAt = DateTimeOffset.UtcNow }).Problem());
@@ -398,7 +428,6 @@ public sealed class CodebaseGraphRecordsTests
             CodeGraphLinker.Revision,
             [new("file:a.toy", "abcdef", CodeNodeKinds.File, ["a.toy"]), new("toy:A", "123456", CodeNodeKinds.Type, ["a.toy"])],
             [new CodeEdge("file:a.toy", "toy:A", CodeEdgeKinds.Contains, 1, CodeConfidences.Exact)],
-            new Dictionary<string, int>(),
             new Dictionary<string, int>());
 
         Assert.Null(symbols.Problem());
@@ -419,15 +448,14 @@ public sealed class CodebaseGraphRecordsTests
             "it counts 1 of what the references of 'toy:Z' named outside the repository, and that is no count of one of its nodes",
             (symbols with { External = new Dictionary<string, int> { ["toy:Z"] = 1 } }).Problem());
         Assert.Equal(
-            "it counts -1 of what the references of 'toy:A' named ambiguously, and that is no count of one of its nodes",
-            (symbols with { Unresolved = new Dictionary<string, int> { ["toy:A"] = -1 } }).Problem());
-        Assert.Null((symbols with { External = new Dictionary<string, int> { ["toy:A"] = 0 }, Unresolved = new Dictionary<string, int> { ["file:a.toy"] = 2 } }).Problem());
+            "it counts -1 of what the references of 'toy:A' named outside the repository, and that is no count of one of its nodes",
+            (symbols with { External = new Dictionary<string, int> { ["toy:A"] = -1 } }).Problem());
+        Assert.Null((symbols with { External = new Dictionary<string, int> { ["toy:A"] = 0, ["file:a.toy"] = 2 } }).Problem());
     }
 
     /// <summary>
-    /// A link result is kept as lines: its head, counting what follows, then each node, each edge, each count of what a
-    /// node's references named outside the repository and each of what they named ambiguously, on a line of its own - and
-    /// reads back as it was written.
+    /// A link result is kept as lines: its head, counting what follows, then each node, each edge and each count of what a
+    /// node's references named outside the repository, on a line of its own - and reads back as it was written.
     /// </summary>
     [Fact]
     public void ALinkResult_IsKeptAsLines_ItsHeadCountingWhatFollows()
@@ -440,12 +468,11 @@ public sealed class CodebaseGraphRecordsTests
 
         Assert.Equal(
             [
-                Json(new CodeGraphSymbolsHead(CodeGraphManifest.CurrentSchema, "digest", CodeGraphLinker.Revision, 2, 1, 1, 1)),
+                Json(new CodeGraphSymbolsHead(CodeGraphManifest.CurrentSchema, "digest", CodeGraphLinker.Revision, 2, 1, 1)),
                 Json(symbols.Nodes[0]),
                 Json(symbols.Nodes[1]),
                 Json(symbols.Edges[0]),
                 Json(new CodeGraphCount("toy:A", 1)),
-                Json(new CodeGraphCount("file:a.toy", 2)),
                 "",
             ],
             File.ReadAllText(layout.GraphSymbolsFile).Split('\n'));
@@ -464,7 +491,7 @@ public sealed class CodebaseGraphRecordsTests
         var (store, layout) = Store(directory);
         store.WriteGraphSymbols(layout, Symbols());
         var lines = File.ReadAllLines(layout.GraphSymbolsFile);
-        var head = new CodeGraphSymbolsHead(CodeGraphManifest.CurrentSchema, "digest", CodeGraphLinker.Revision, 2, 1, 1, 1);
+        var head = new CodeGraphSymbolsHead(CodeGraphManifest.CurrentSchema, "digest", CodeGraphLinker.Revision, 2, 1, 1);
 
         string Refused(params string[] written)
         {
@@ -473,12 +500,18 @@ public sealed class CodebaseGraphRecordsTests
         }
 
         Assert.Equal(Json(head), lines[0]);
-        Assert.Contains("it ends after line 5, where a count of what a node's references named ambiguously was to be", Refused(lines[..^1]), StringComparison.Ordinal);
-        Assert.Contains("it goes on past line 6, where it was to end", Refused([.. lines, lines[^1]]), StringComparison.Ordinal);
+        Assert.Contains("it ends after line 4, where a count of what a node's references named outside the repository was to be", Refused(lines[..^1]), StringComparison.Ordinal);
+        Assert.Contains("it goes on past line 5, where it was to end", Refused([.. lines, lines[^1]]), StringComparison.Ordinal);
         Assert.Contains("line 4, an edge, does not read: it holds null", Refused([.. lines[..3], "null", .. lines[4..]]), StringComparison.Ordinal);
         Assert.Contains("line 2, a node, does not read: ", Refused([lines[0], "{\"id\":\"toy:B\"}", .. lines[2..]]), StringComparison.Ordinal);
         Assert.Contains("its head counts fewer than no lines of a kind", Refused([Json(head with { Edges = -1 }), .. lines[1..]]), StringComparison.Ordinal);
-        Assert.Contains("it counts the node 'toy:A' twice", Refused([Json(head with { External = 2, Unresolved = 0 }), .. lines[1..^1], lines[^2]]), StringComparison.Ordinal);
+        Assert.Contains("it counts the node 'toy:A' twice", Refused([Json(head with { External = 2 }), .. lines[1..], lines[^1]]), StringComparison.Ordinal);
+
+        // One an older linker wrote - its head counting what references named ambiguously, and those counts after the
+        // others - is no link result this build reads, and is refused: the next sync links the graph again.
+        var older = Json(head).Replace("\"external\":1", "\"external\":1,\"unresolved\":1", StringComparison.Ordinal);
+        Assert.NotEqual(Json(head), older);
+        Assert.Contains("unresolved", Refused([older, .. lines[1..], Json(new CodeGraphCount("file:a.toy", 2))]), StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -530,15 +563,14 @@ public sealed class CodebaseGraphRecordsTests
     /// <summary>A record as the store writes it, on one line.</summary>
     private static string Json<T>(T record) => JsonSerializer.Serialize(record, JsonStateFile.LineOptions);
 
-    /// <summary>A link result of two nodes, an edge between them and a count of each kind.</summary>
+    /// <summary>A link result of two nodes, an edge between them and a count of what one's references named outside the repository.</summary>
     private static CodeGraphSymbolsFile Symbols() => new(
         CodeGraphManifest.CurrentSchema,
         "digest",
         CodeGraphLinker.Revision,
         [new("file:a.toy", "abcdef", CodeNodeKinds.File, ["a.toy"]), new("toy:A", "123456", CodeNodeKinds.Type, ["a.toy"])],
         [new CodeEdge("file:a.toy", "toy:A", CodeEdgeKinds.Contains, 1, CodeConfidences.Exact)],
-        new Dictionary<string, int> { ["toy:A"] = 1 },
-        new Dictionary<string, int> { ["file:a.toy"] = 2 });
+        new Dictionary<string, int> { ["toy:A"] = 1 });
 
     /// <summary>The real file system, noting the most bytes any one read of a file asked for, and any one write of one gave.</summary>
     private sealed class Transfers(IFileSystem inner) : PassThroughFileSystem(inner)

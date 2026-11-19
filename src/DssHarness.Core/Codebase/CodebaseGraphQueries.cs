@@ -641,15 +641,14 @@ public sealed class CodebaseGraphQueries
 
     /// <summary>
     /// Whether a node an answer names makes the answer not sure, so it adds a text search: its file carries a
-    /// <c>generated</c> or a <c>dynamic</c> mark, or it has external or unresolved callees. An edge of <c>candidates</c>
-    /// an answer gives makes it not sure too, judged where the answer gives it - but a use's, which is recall
+    /// <c>generated</c> or a <c>dynamic</c> mark, or it has external callees. An edge of <c>candidates</c> an answer gives
+    /// makes it not sure too, judged where the answer gives it - but a use's, which is recall
     /// (<see cref="CodeEdgeKinds.Recall"/>).
     /// </summary>
     /// <param name="id">A node's id, the view's.</param>
     public bool Unsure(string id)
         => (_nodes.TryGetValue(id, out var at) && at.Count > 0 && (Generated(at[0].Path) || Dynamic(at[0].Path)))
-            || _read.Symbols.External.GetValueOrDefault(id) > 0
-            || _read.Symbols.Unresolved.GetValueOrDefault(id) > 0;
+            || _read.Symbols.External.GetValueOrDefault(id) > 0;
 
     /// <summary>
     /// Whether <paramref name="edge"/>, which an answer gives, makes the answer not sure: it is of <c>candidates</c>, or
@@ -694,8 +693,7 @@ public sealed class CodebaseGraphQueries
     /// <summary>
     /// Why the graph is not sure of the file at <paramref name="path"/> - a whole read of it is let past the narrowing
     /// as an escape <c>lowConfidence</c> - or null where it is sure: the file carries a <c>dynamic</c> mark, is marked
-    /// <c>generated</c>, or more than a quarter of the references its nodes make are edges of <c>candidates</c> or were
-    /// left unresolved by the linker.
+    /// <c>generated</c>, or more than a quarter of the references its nodes make are edges of <c>candidates</c>.
     /// </summary>
     /// <param name="path">A file's path, relative to the tree, as an agent or the tool spells it.</param>
     public string? UnsureOfFile(string path)
@@ -737,22 +735,17 @@ public sealed class CodebaseGraphQueries
                     unsure++;
                 }
             }
-
-            var unresolved = _read.Symbols.Unresolved.GetValueOrDefault(id);
-            edges += unresolved;
-            unsure += unresolved;
         }
 
         return edges > 0 && unsure * 4 > edges
-            ? $"more than a quarter of its {edges.ToString(CultureInfo.InvariantCulture)} references the linker left candidates or unresolved"
+            ? $"more than a quarter of its {edges.ToString(CultureInfo.InvariantCulture)} references the linker left candidates"
             : null;
     }
 
     /// <summary>
     /// What an answer about the file at <paramref name="path"/> says the graph does not hold of it, a line each: the state
     /// it is held in where no implementation read it, with why; where its implementation stopped reading it or could not
-    /// bind it, by line and why - the first, where there are several; the keys and elements, and the string literals, its
-    /// extract counts past those it keeps - each one line, the file's path and each why printable
+    /// bind it, by line and why - the first, where there are several - each one line, the file's path and each why printable
     /// (<see cref="ReportText.Printable"/>). None where the graph holds the whole of it, or where the view holds no such
     /// file.
     /// </summary>
@@ -787,11 +780,6 @@ public sealed class CodebaseGraphQueries
                 : $"{ReportText.Counted(dynamic.Count, "place")} the graph cannot bind, the first at line {first.Line.ToString(CultureInfo.InvariantCulture)}: {ReportText.Printable(first.Why)}");
         }
 
-        if (extract is { KeysBeyond: > 0 } keyed)
-        {
-            lines.Add($"{keyed.KeysBeyond.ToString(CultureInfo.InvariantCulture)} of its keys and elements are in no node: past the {FileExtract.MostKeys.ToString(CultureInfo.InvariantCulture)} nodes its extract keeps, or nested deeper than its reader reads keys");
-        }
-
         return lines;
     }
 
@@ -804,14 +792,9 @@ public sealed class CodebaseGraphQueries
     {
         ArgumentNullException.ThrowIfNull(card);
 
-        var key = string.Equals(card.SubKind, CodeSubKinds.Key, StringComparison.Ordinal);
-
-        if (!key && !string.Equals(card.Kind, CodeNodeKinds.File, StringComparison.Ordinal))
-        {
-            return [];
-        }
-
-        return Unread(card.Path);
+        return string.Equals(card.SubKind, CodeSubKinds.Key, StringComparison.Ordinal) || string.Equals(card.Kind, CodeNodeKinds.File, StringComparison.Ordinal)
+            ? Unread(card.Path)
+            : [];
     }
 
     /// <summary>The nodes in the file at <paramref name="path"/>, as a text hit is turned to a card where one covers its line.</summary>

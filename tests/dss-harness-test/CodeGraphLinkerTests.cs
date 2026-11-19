@@ -248,13 +248,13 @@ public sealed class CodeGraphLinkerTests
     }
 
     /// <summary>
-    /// Last, the repository by name and arity: one is unique; two to five are an edge to each, candidates; more are counted
-    /// unresolved; none is counted external.
+    /// Last, the repository by name and arity: one is unique; two or more are an edge to each, candidates, however many -
+    /// a hundred among them, none dropped; none is counted external.
     /// </summary>
     [Fact]
-    public void TheRepository_FindsByNameAndArity_UniqueCandidatesUnresolvedOrExternal()
+    public void TheRepository_FindsByNameAndArity_UniqueCandidatesOrExternal()
     {
-        var many = Enumerable.Range(1, CodeConfidences.MostCandidates + 1).Select(at => File($"m{at}.t", [Member($"m{at}.Many", 0) with { Scope = $"m{at}" }], scopes: [Open($"m{at}")]));
+        var many = Enumerable.Range(1, 100).Select(at => File($"m{at}.t", [Member($"m{at}.Many", 0) with { Scope = $"m{at}" }], scopes: [Open($"m{at}")]));
         var linked = Link([
             File("one.t", [Member("one.Single", 1) with { Scope = "one" }, Member("one.Single2", 2) with { Scope = "one", Name = "Single" }], scopes: [Open("one")]),
             File("two.t", [Member("two.Pair", 0) with { Scope = "two" }], scopes: [Open("two")]),
@@ -273,8 +273,9 @@ public sealed class CodeGraphLinkerTests
         Assert.Contains(new CodeEdge("t:Go", "t:one.Single2", CodeEdgeKinds.Calls, 1, CodeConfidences.Unique), linked.Edges);
         Assert.Contains(new CodeEdge("t:Go", "t:two.Pair", CodeEdgeKinds.Calls, 2, CodeConfidences.Candidates), linked.Edges);
         Assert.Contains(new CodeEdge("t:Go", "t:three.Pair", CodeEdgeKinds.Calls, 2, CodeConfidences.Candidates), linked.Edges);
-        Assert.DoesNotContain(linked.Edges, edge => edge.Line == 3 && edge.Kind == CodeEdgeKinds.Calls);
-        Assert.Equal(1, linked.Unresolved["t:Go"]);
+        Assert.Equal(
+            [.. Enumerable.Range(1, 100).Select(at => $"t:m{at}.Many").Order(StringComparer.Ordinal)],
+            linked.Edges.Where(edge => edge is { Line: 3, Kind: CodeEdgeKinds.Calls, Confidence: CodeConfidences.Candidates }).Select(edge => edge.To).Order(StringComparer.Ordinal));
         Assert.Equal(2, linked.External["t:Go"]);
         Assert.Equal(5, linked.References);
     }
@@ -1146,25 +1147,26 @@ public sealed class CodeGraphLinkerTests
     }
 
     /// <summary>
-    /// Exactly <see cref="CodeConfidences.MostCandidates"/> declarations of a name are an edge to each; an import by a
-    /// path's ending that names that many files is an edge to each, and one that names more is counted unresolved.
+    /// Every declaration of a name is an edge to each, however many; an import by a path's ending is an edge to each file
+    /// it names, however many - none counted anywhere, none dropped.
     /// </summary>
     [Fact]
-    public void TheMostCandidates_AreEachAnEdge_AndAnEndingNamingMoreIsUnresolved()
+    public void EveryCandidate_IsAnEdge_AndAnEndingIsAnImportOfEachFileItNames()
     {
-        var most = CodeConfidences.MostCandidates;
-        var five = Enumerable.Range(1, most).Select(at => File($"f{at}/five.h", [Member($"f{at}.Five", 0) with { Scope = $"f{at}" }], scopes: [Open($"f{at}")]));
-        var six = Enumerable.Range(1, most + 1).Select(at => File($"s{at}/six.h", []));
+        var five = Enumerable.Range(1, 5).Select(at => File($"f{at}/five.h", [Member($"f{at}.Five", 0) with { Scope = $"f{at}" }], scopes: [Open($"f{at}")]));
+        var many = Enumerable.Range(1, 40).Select(at => File($"s{at}/many.h", []));
         var linked = Link([
             .. five,
-            .. six,
-            File("use.t", [Member("Go", 0)], [Call("Go", "Five", 0)], imports: [Import(CodeImportForms.Ending, "five.h"), Import(CodeImportForms.Ending, "six.h") with { Line = 2 }]),
+            .. many,
+            File("use.t", [Member("Go", 0)], [Call("Go", "Five", 0)], imports: [Import(CodeImportForms.Ending, "five.h"), Import(CodeImportForms.Ending, "many.h") with { Line = 2 }]),
         ]);
 
-        Assert.Equal(most, linked.Edges.Count(edge => edge is { From: "t:Go", Kind: CodeEdgeKinds.Calls, Confidence: CodeConfidences.Candidates }));
-        Assert.Equal(most, linked.Edges.Count(edge => edge is { From: "file:use.t", Kind: CodeEdgeKinds.Imports, Line: 1, Confidence: CodeConfidences.Candidates }));
-        Assert.DoesNotContain(linked.Edges, edge => edge is { From: "file:use.t", Line: 2 });
-        Assert.Equal(1, linked.Unresolved["file:use.t"]);
+        Assert.Equal(5, linked.Edges.Count(edge => edge is { From: "t:Go", Kind: CodeEdgeKinds.Calls, Confidence: CodeConfidences.Candidates }));
+        Assert.Equal(5, linked.Edges.Count(edge => edge is { From: "file:use.t", Kind: CodeEdgeKinds.Imports, Line: 1, Confidence: CodeConfidences.Candidates }));
+        Assert.Equal(
+            [.. Enumerable.Range(1, 40).Select(at => $"file:s{at}/many.h").Order(StringComparer.Ordinal)],
+            linked.Edges.Where(edge => edge is { From: "file:use.t", Kind: CodeEdgeKinds.Imports, Line: 2, Confidence: CodeConfidences.Candidates }).Select(edge => edge.To).Order(StringComparer.Ordinal));
+        Assert.Empty(linked.External);
     }
 
     /// <summary>
@@ -1516,7 +1518,6 @@ public sealed class CodeGraphLinkerTests
                 Assert.Equal(whole.Edges, again.Edges);
                 Assert.Equal(whole.Symbols, again.Symbols, SymbolComparer.Instance);
                 Assert.Equal([.. whole.External], [.. again.External]);
-                Assert.Equal([.. whole.Unresolved], [.. again.Unresolved]);
 
                 (tree, linked) = (after, again);
             }
@@ -1579,14 +1580,13 @@ public sealed class CodeGraphLinkerTests
         Again(before, after);
     }
 
-    /// <summary>What the references of the declaration <paramref name="reader"/> found in <paramref name="linked"/>: its edges, and its counts of names found nowhere and of several.</summary>
+    /// <summary>What the references of the declaration <paramref name="reader"/> found in <paramref name="linked"/>: its edges, and its count of names found nowhere.</summary>
     private static string Found(CodeGraphLinked linked, string reader)
         => string.Join(
             '\n',
             linked.Edges.Where(edge => edge.From == reader)
                 .Select(edge => $"{edge.To} {edge.Kind} {edge.Confidence}")
-                .Append($"external {linked.External.GetValueOrDefault(reader)}")
-                .Append($"unresolved {linked.Unresolved.GetValueOrDefault(reader)}"));
+                .Append($"external {linked.External.GetValueOrDefault(reader)}"));
 
     /// <summary>Every thing <see cref="Reading"/> changes alone.</summary>
     public static TheoryData<string> ThingsAFindingReads() => [.. Reading().Keys];
@@ -1885,7 +1885,6 @@ public sealed class CodeGraphLinkerTests
         Assert.Equal(whole.Edges, again.Edges);
         Assert.Equal(whole.Symbols, again.Symbols, SymbolComparer.Instance);
         Assert.Equal([.. whole.External], [.. again.External]);
-        Assert.Equal([.. whole.Unresolved], [.. again.Unresolved]);
         Assert.True(again.References <= whole.References);
         return again;
     }
@@ -1943,15 +1942,15 @@ public sealed class CodeGraphLinkerTests
             nodes.Add(new ExtractNode($"t:{path}.Go", CodeNodeKinds.Member, "Go", "Go", 1, 1, "Go") { MinArity = 0, MaxArity = 0 });
         }
 
-        // Now and then data - a configuration key, an element, a style rule - of a name code names too, and a type that
-        // says it is a part of a declaration other files hold parts of.
+        // Now and then data - a configuration key, an element, a style rule, a variable, a mixin, keyframes - of a name code
+        // names too, and a type that says it is a part of a declaration other files hold parts of.
         for (var data = Chance(random, 2) ? random.Next(1, 3) : 0; data > 0; data--)
         {
             var name = Pick(random, RandomData);
 
             if (nodes.All(node => node.Id != $"t:{path}#{name}"))
             {
-                nodes.Add(new ExtractNode($"t:{path}#{name}", CodeNodeKinds.Member, name, name, 1, 1, name) { SubKind = Pick(random, [CodeSubKinds.Key, CodeSubKinds.Key, CodeSubKinds.Element, CodeSubKinds.Rule]) });
+                nodes.Add(new ExtractNode($"t:{path}#{name}", CodeNodeKinds.Member, name, name, 1, 1, name) { SubKind = Pick(random, RandomDataKinds) });
             }
         }
 
@@ -1969,7 +1968,7 @@ public sealed class CodeGraphLinkerTests
 
         for (var made = nodes.Count == 0 ? 0 : random.Next(0, 9); made > 0; made--)
         {
-            references.Add(RandomReference(random, Pick(random, nodes).Id, made));
+            references.Add(RandomReference(random, Pick(random, nodes).Id, made, Pick(random, nodes).Id));
         }
 
         return new CodeGraphFile(path, Chance(random, 12) ? "u" : "t", new FileExtract(nodes)
@@ -1984,6 +1983,9 @@ public sealed class CodeGraphLinkerTests
 
     /// <summary>The names a tree made at random gives its data and its literals: some a member's name is, as a naming policy writes it.</summary>
     private static readonly string[] RandomData = ["run", "stop", "Run", "Make", "next_one", "timeout"];
+
+    /// <summary>The kinds of data a tree made at random declares, a key the likeliest: each a kind a reference may reach only as <c>Takes</c> lets it.</summary>
+    private static readonly string[] RandomDataKinds = [CodeSubKinds.Key, CodeSubKinds.Key, CodeSubKinds.Element, CodeSubKinds.Rule, CodeSubKinds.StyleVariable, CodeSubKinds.StyleMixin, CodeSubKinds.Keyframes];
 
     /// <summary>
     /// Adds a type of a scope <paramref name="declared"/> holds, of a type <paramref name="nodes"/> holds - a nested one -
@@ -2066,12 +2068,17 @@ public sealed class CodeGraphLinkerTests
             },
         };
 
-    private static ExtractReference RandomReference(Random random, string from, int line)
+    /// <summary>A reference made at random from <paramref name="from"/>, now and then of a style sheet's kind or to <paramref name="own"/>, a node of its own file.</summary>
+    private static ExtractReference RandomReference(Random random, string from, int line, string own)
         => new(from, Pick(random, [CodeEdgeKinds.Calls, CodeEdgeKinds.Calls, CodeEdgeKinds.References, CodeEdgeKinds.Uses]), Pick(random, [.. RandomNames, .. RandomData]), line)
         {
             Arity = random.Next(0, 2),
-            Qualifier = random.Next(12) switch
+            Qualifier = random.Next(16) switch
             {
+                12 => new ExtractQualifier(CodeQualifierKinds.StyleVariable),
+                13 => new ExtractQualifier(CodeQualifierKinds.StyleMixin),
+                14 => new ExtractQualifier(CodeQualifierKinds.Keyframes),
+                15 => new ExtractQualifier(CodeQualifierKinds.Own, own),
                 0 or 1 => null,
                 2 => new ExtractQualifier(CodeQualifierKinds.Named, Dotted(random)),
                 3 => new ExtractQualifier(CodeQualifierKinds.Type, Dotted(random)),
@@ -2127,7 +2134,7 @@ public sealed class CodeGraphLinkerTests
     /// <summary>
     /// <paramref name="tree"/> with one small change of one file made at random: a value's type, what a member extends, a
     /// scope's parent or whether it is closed, an import, an address root, a base, a declaration come or gone, what holds
-    /// one, lines moved, a language - or a file come, gone or made anew.
+    /// one, the kind of data one is, lines moved, a language - or a file come, gone or made anew.
     /// </summary>
     private static CodeGraphFile[] Changed(Random random, CodeGraphFile[] tree)
     {
@@ -2302,7 +2309,13 @@ public sealed class CodeGraphLinkerTests
                 break;
 
             case 11 when nodes.Count > 0:
-                references.Add(RandomReference(random, Pick(random, nodes).Id, references.Count + 1));
+                references.Add(RandomReference(random, Pick(random, nodes).Id, references.Count + 1, Pick(random, nodes).Id));
+                break;
+
+            case 19:
+                // Data made another kind under its id - a mixin become a function, a key an element - which what may reach
+                // it reads.
+                Each(node => CodeSubKinds.IsData(node.SubKind) && Chance(random, 2), node => node with { SubKind = Pick(random, RandomDataKinds) });
                 break;
 
             default:
@@ -2448,7 +2461,6 @@ public sealed class CodeGraphLinkerTests
         Assert.Contains(new CodeEdge("c:Reader.ByPath", "json:app.json#targets.x64.callingConvention", CodeEdgeKinds.Uses, 5, CodeConfidences.Candidates), linked.Edges);
         Assert.Contains(new CodeEdge("c:Reader.CallingConvention", "json:app.json#targets.x64.callingConvention", CodeEdgeKinds.Uses, 6, CodeConfidences.Candidates), linked.Edges);
         Assert.Empty(linked.External);
-        Assert.Empty(linked.Unresolved);
     }
 
     /// <summary>
@@ -2656,25 +2668,139 @@ public sealed class CodeGraphLinkerTests
     }
 
     /// <summary>
-    /// The keys' join is bounded as a reference is: a literal, or a value's name, that names more than
-    /// <see cref="CodeConfidences.MostCandidates"/> keys - a <c>name</c> every file of data holds - joins none of them,
-    /// and one that names that many joins each.
+    /// The keys' join joins every key a literal or a value's name names, however many: a <c>name</c> a hundred files of
+    /// data hold is joined to each of them, of <c>candidates</c>, and so are the copies of one path - one key in each
+    /// locale's file, in each environment's - none dropped.
     /// </summary>
     [Fact]
-    public void AKeysJoin_OfANameMoreKeysHoldThanTheMostCandidates_JoinsNone()
+    public void AKeysJoin_JoinsEveryKeyANameNames_HoweverManyHoldIt()
     {
-        static CodeGraphFile[] Tree(int keys)
+        static CodeGraphFile[] Tree(int keys, string path)
             =>
             [
-                .. Enumerable.Range(0, keys).Select(at => new CodeGraphFile($"k{at}.json", "json", new FileExtract([new ExtractNode($"json:k{at}.json#name", CodeNodeKinds.Member, "name", "name", 1, 1, "name") { SubKind = CodeSubKinds.Key }]))),
-                new CodeGraphFile("reader.c", "c", new FileExtract([Type("Reader") with { End = 3 }, Value("Reader.Name", "string") with { Parent = "t:Reader" }]) { Literals = [new ExtractLiteral("name", 3)] }),
+                .. Enumerable.Range(0, keys).Select(at => new CodeGraphFile($"k{at}.json", "json", new FileExtract([new ExtractNode($"json:k{at}.json#{path}", CodeNodeKinds.Member, path.Split('.')[^1], path, 1, 1, path) { SubKind = CodeSubKinds.Key }]))),
+                new CodeGraphFile("reader.c", "c", new FileExtract([Type("Reader") with { End = 3 }, Value("Reader.Name", "string") with { Parent = "t:Reader" }]) { Literals = [new ExtractLiteral(path, 3)] }),
             ];
 
-        var most = CodeGraphLinker.Link(Tree(CodeConfidences.MostCandidates)).Edges.Where(edge => edge.Kind == CodeEdgeKinds.Uses).ToList();
+        var named = CodeGraphLinker.Link(Tree(100, "name")).Edges.Where(edge => edge.Kind == CodeEdgeKinds.Uses).ToList();
 
-        Assert.Equal(2 * CodeConfidences.MostCandidates, most.Count);
-        Assert.All(most, edge => Assert.Equal(CodeConfidences.Candidates, edge.Confidence));
-        Assert.DoesNotContain(CodeGraphLinker.Link(Tree(CodeConfidences.MostCandidates + 1)).Edges, edge => edge.Kind == CodeEdgeKinds.Uses);
+        Assert.Equal(
+            [.. Enumerable.Range(0, 100).SelectMany(at => new[] { $"file:reader.c json:k{at}.json#name", $"t:Reader.Name json:k{at}.json#name" }).Order(StringComparer.Ordinal)],
+            named.Select(edge => $"{edge.From} {edge.To}").Order(StringComparer.Ordinal));
+        Assert.All(named, edge => Assert.Equal(CodeConfidences.Candidates, edge.Confidence));
+
+        var copies = CodeGraphLinker.Link(Tree(6, "checkout.title")).Edges.Where(edge => edge.Kind == CodeEdgeKinds.Uses).ToList();
+
+        Assert.Equal(
+            [.. Enumerable.Range(0, 6).Select(at => $"file:reader.c json:k{at}.json#checkout.title").Order(StringComparer.Ordinal)],
+            copies.Select(edge => $"{edge.From} {edge.To}").Order(StringComparer.Ordinal));
+    }
+
+    /// <summary>
+    /// A literal names a key by the path .NET's configuration spells it by too - a colon between its places, or a double
+    /// underscore as an environment variable writes one, a place of digits an item - and a string that is no such spelling,
+    /// one with an empty place among them, names none by it.
+    /// </summary>
+    [Fact]
+    public void ALiteral_NamesAKeyByThePathDotNetsConfigurationSpellsItBy()
+    {
+        static ExtractNode Key(string path) => new($"json:appsettings.json#{path}", CodeNodeKinds.Member, path.Split('.')[^1], path, 1, 1, path) { SubKind = CodeSubKinds.Key };
+
+        var linked = CodeGraphLinker.Link(
+        [
+            new CodeGraphFile("appsettings.json", "json", new FileExtract([Key("Payments.TimeoutSeconds"), Key("Limits[1].Value")])),
+            new CodeGraphFile("reader.c", "c", new FileExtract([Type("Reader") with { End = 5 }])
+            {
+                Literals =
+                [
+                    new ExtractLiteral("Payments:TimeoutSeconds", 1),
+                    new ExtractLiteral("Payments__TimeoutSeconds", 2),
+                    new ExtractLiteral("Limits:1:Value", 3),
+                    new ExtractLiteral("Payments::TimeoutSeconds", 4),
+                    new ExtractLiteral("Limits:01:Value", 5),
+                ],
+            }),
+        ]);
+
+        Assert.Equal(
+            [("json:appsettings.json#Payments.TimeoutSeconds", 1), ("json:appsettings.json#Payments.TimeoutSeconds", 2), ("json:appsettings.json#Limits[1].Value", 3)],
+            linked.Edges.Where(edge => edge.Kind == CodeEdgeKinds.Uses).Select(edge => (edge.To, edge.Line)));
+        Assert.Equal(
+            ["Payments.TimeoutSeconds", "Payments.TimeoutSeconds", "Limits[1].Value", null, "Limits.01.Value", null, null],
+            new[] { "Payments:TimeoutSeconds", "Payments__TimeoutSeconds", "Limits:1:Value", "Payments::TimeoutSeconds", "Limits:01:Value", "Payments.TimeoutSeconds", ":x" }.Select(CodeKeyPaths.Dotted));
+    }
+
+    /// <summary>
+    /// A literal's path that runs through what a YAML file repeats by reference reaches the key it runs on into: through a
+    /// mapping's merge to the merged mapping's key, and through an alias to its anchor's - the longest part of the path the
+    /// file holds deciding, so a key the merging mapping writes itself shadows the merged one's; and references that come
+    /// round to themselves end there, naming nothing more.
+    /// </summary>
+    [Fact]
+    public void ALiteralsPath_RunsThroughAYamlAliasOrMerge_ToTheKeyItReaches()
+    {
+        const string Config = """
+            defaults: &defaults
+              timeout: 30
+              retry:
+                count: 3
+            job:
+              <<: *defaults
+              timeout: 60
+            copy: *defaults
+            """;
+        var yaml = new DssHarness.Core.Codebase.Languages.YamlExtractor().Extract(new CodeFileInput("config.yml", Config));
+
+        string[] Reached(params string[] literals)
+            => [.. CodeGraphLinker.Link(
+                [
+                    new CodeGraphFile("config.yml", "yaml", yaml),
+                    new CodeGraphFile("reader.c", "c", new FileExtract([Type("Reader") with { End = literals.Length }]) { Literals = [.. literals.Select((literal, at) => new ExtractLiteral(literal, at + 1))] }),
+                ]).Edges.Where(edge => edge is { Kind: CodeEdgeKinds.Uses, Confidence: CodeConfidences.Candidates }).Select(edge => $"{edge.Line} {edge.To}")];
+
+        Assert.Equal(["1 yaml:config.yml#defaults.retry.count"], Reached("job.retry.count"));
+        Assert.Equal(["1 yaml:config.yml#job.timeout"], Reached("job.timeout"));
+        Assert.Equal(["1 yaml:config.yml#defaults.timeout"], Reached("copy.timeout"));
+        Assert.Equal(["1 yaml:config.yml#defaults.retry.count"], Reached("copy.retry.count"));
+        Assert.Equal(["1 yaml:config.yml#defaults.retry.count"], Reached("job:retry:count"));
+        Assert.Empty(Reached("job.retry.none"));
+
+        // Two sections of a file of data that each refer to the other: a path through them ends where it comes round.
+        static ExtractNode Section(string path) => new($"d:ring.d#{path}", CodeNodeKinds.Section, path, $"ring.d#{path}", 1, 1, path);
+
+        var ring = new CodeGraphFile("ring.d", "d", new FileExtract([Section("x"), Section("y"), new ExtractNode("d:ring.d#y.z", CodeNodeKinds.Member, "z", "y.z", 1, 1, "y.z") { SubKind = CodeSubKinds.Key, Parent = "d:ring.d#y" }])
+        {
+            References =
+            [
+                new ExtractReference("d:ring.d#x", CodeEdgeKinds.Uses, "y", 1) { Qualifier = new ExtractQualifier(CodeQualifierKinds.Own, "d:ring.d#y") },
+                new ExtractReference("d:ring.d#y", CodeEdgeKinds.Uses, "x", 1) { Qualifier = new ExtractQualifier(CodeQualifierKinds.Own, "d:ring.d#x") },
+            ],
+        });
+        var around = CodeGraphLinker.Link([ring, new CodeGraphFile("reader.c", "c", new FileExtract([Type("Reader") with { End = 2 }]) { Literals = [new ExtractLiteral("x.w", 1), new ExtractLiteral("x.z", 2)] })]);
+
+        Assert.Equal([("d:ring.d#y.z", 2)], around.Edges.Where(edge => edge.Kind == CodeEdgeKinds.Uses && edge.From == "file:reader.c").Select(edge => (edge.To, edge.Line)));
+    }
+
+    /// <summary>
+    /// What a file imports is found through the files it exports however long their chain, each file once: a name declared
+    /// at the end of five thousand files that each export the next is found from the first - on a thread whose stack is a
+    /// fraction of what following the chain by recursion would take.
+    /// </summary>
+    [Fact]
+    public void ANameAtTheEndOfALongChainOfExports_IsFound_OnAStackOfItsOwn()
+    {
+        const int Chain = 5000;
+        var files = Enumerable.Range(0, Chain)
+            .Select(at => File($"e/{at}.t", at == Chain - 1 ? [Member("Far", 0)] : [], imports: [new ExtractImport(CodeImportForms.Relative, $"{at + 1}.t", 1) { Export = true }]))
+            .Append(File("use.t", [Member("Go", 0)], [Call("Go", "Far", 0)], imports: [Import(CodeImportForms.Relative, "e/0.t")]))
+            .ToArray();
+        CodeGraphLinked? linked = null;
+        var thread = new Thread(() => linked = CodeGraphLinker.Link(files), 256 * 1024);
+
+        thread.Start();
+        thread.Join();
+
+        Assert.Contains(new CodeEdge("t:Go", "t:Far", CodeEdgeKinds.Calls, 1, CodeConfidences.Unique), linked!.Edges);
     }
 
     /// <summary>

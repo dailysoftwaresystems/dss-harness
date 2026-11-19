@@ -2995,19 +2995,15 @@ public static class WorkflowValidator
                 _problems.Add($"{lead}codebaseGraph.generated is '{generated}', which is none of {string.Join(", ", Codebase.CodebaseGraphShape.GeneratedValues.Select(value => $"'{value}'"))}: generated code's declarations are kept, its file's entry naming why it is generated, or left out with the file listed");
             }
 
-            if (graph.KeyNaming is { Count: 0 })
+            // The shape owns what a sound keyNaming is; the block's refusal words each fault for the one who wrote it.
+            foreach (var (fault, naming) in graph.KeyNaming is { } keyNaming ? Codebase.CodebaseGraphShape.NamingProblems(keyNaming) : [])
             {
-                _problems.Add($"{lead}codebaseGraph.keyNaming is given empty, which is never read as no key joined: name its policies, or leave the key out for {string.Join(" and ", Codebase.CodebaseGraphShape.DefaultKeyNaming)}");
-            }
-
-            foreach (var twice in (graph.KeyNaming ?? []).GroupBy(naming => naming, StringComparer.Ordinal).Where(group => group.Count() > 1))
-            {
-                _problems.Add($"{lead}codebaseGraph.keyNaming names '{twice.Key}' more than once");
-            }
-
-            foreach (var unknown in (graph.KeyNaming ?? []).Where(naming => !Codebase.CodebaseGraphShape.NamingValues.Contains(naming, StringComparer.Ordinal)).Distinct(StringComparer.Ordinal))
-            {
-                _problems.Add($"{lead}codebaseGraph.keyNaming names '{unknown}', which is none of {string.Join(", ", Codebase.CodebaseGraphShape.NamingValues.Select(value => $"'{value}'"))}: how a configuration key's last segment is written in the code that reads it");
+                _problems.Add(fault switch
+                {
+                    Codebase.KeyNamingFault.None => $"{lead}codebaseGraph.keyNaming is given empty, which is never read as no key joined: name its policies, or leave the key out for {string.Join(" and ", Codebase.CodebaseGraphShape.DefaultKeyNaming)}",
+                    Codebase.KeyNamingFault.Twice => $"{lead}codebaseGraph.keyNaming names '{naming}' more than once",
+                    _ => $"{lead}codebaseGraph.keyNaming names '{naming}', which is none of {Codebase.CodebaseGraphShape.NamingList}: how a configuration key's last segment is written in the code that reads it",
+                });
             }
 
             if (graph.Claims is { } claims)

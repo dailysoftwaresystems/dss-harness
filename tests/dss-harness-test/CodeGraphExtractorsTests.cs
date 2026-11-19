@@ -251,10 +251,10 @@ public sealed class CodeGraphExtractorsTests
         var policies = string.Join(", ", CodebaseGraphShape.NamingValues.SkipLast(1).Select(naming => $"`{naming}`")) + $" or `{CodebaseGraphShape.NamingValues[^1]}`";
 
         Assert.Contains($"(`codebaseGraph.keyNaming`: {policies}, {defaults} the default)", architecture, StringComparison.Ordinal);
-        Assert.Contains($"a literal or a name that names more than `CodeConfidences.MostCandidates` keys joins none", architecture, StringComparison.Ordinal);
+        Assert.Contains("every key a literal or a name names is joined, however many keys share it", architecture, StringComparison.Ordinal);
         Assert.Contains("A file goes to the claimants of its exact name, else of an ending `codebaseGraph.claims` maps, else of its extension, else to the fallback", architecture, StringComparison.Ordinal);
         Assert.Contains("by its exact name, else by an ending codebaseGraph.claims maps, else by its extension, else by the fallback", help, StringComparison.Ordinal);
-        Assert.Contains($"a literal or a name that names more than {CodeConfidences.MostCandidates} keys joins none", help, StringComparison.Ordinal);
+        Assert.Contains("every key a literal or a name names is joined, however many keys share it", help, StringComparison.Ordinal);
     }
 
     /// <summary>

@@ -4332,31 +4332,41 @@ member of any arity or a type (the same steps as a call), and `query-codebase-gr
 and `uses` groups beside its callers and callees.
 
 The data a repository's code is configured by is read too, every data file's nodes made by one owner (`DataNodes`):
-a key a member node of SubKind `key`, an element one of SubKind `element`, each counted against `FileExtract.MostKeys`
-with the rest counted in `KeysBeyond`, a summary and a signature put on one line and cut, so no data file's extract is
-one the core refuses. `json` (`.json`, `.jsonc`, `.json5`, the named manifests keeping their own extractors) and `yaml`
-(`.yml`, `.yaml`, but `pubspec.yaml`) each make every scalar key anywhere in the file down to `DataNodes.MostDepth`
-places of its path a key named by its path (`targets.x64.callingConvention`, an item by its place `limits[1].value`, an
-empty name in brackets `packages[""].name`), its value as its summary, and each top-level member that holds others a
-section over its lines. JSON stops where its reader does, nothing of the file read, and reads a `$schema` or `$ref`
-naming another file by a relative path - its `#` pointer left out - as an import of it. YAML follows anchors and
-aliases - what they repeat bounded by `DataNodes.MostRepeated` visits, an alias itself one, each node reached through
-one and each key a merge reads through one, whoever reads it; past the budget what is left counted whole at the place it
-stands, the line marked - reads merge keys, one or a list, a mapping merged twice in one merged once, and counts what it
-does not read from what the text writes, once a node, spending none of that budget: a merged mapping's keys less those of
-a name the merging mapping or an earlier merged one gives, told by comparing names at most `YamlExtractor.MostCompared`
-times a file, past which a name two of them hold is counted once for each and the line marked. Once an extract is full a
-walk asks no member more of any value: what each holds past that point is counted whole. YAML makes each document of a
-file of several a section by its place (`[0]`), reads a GitHub
-Actions workflow's jobs and steps as sections, a step's local `uses:` an import of its `action.yml` and a job's an import
-of the workflow file it names, and keeps what it read before the place it stops reading, marked. An empty JSON or YAML
+a key a member node of SubKind `key`, an element one of SubKind `element`, a container a section inside the section that
+holds it - every one the file holds, however many and however deep, walked on a stack of the walk's own and never by
+recursion - a summary and a signature put on one line and cut, so no data file's extract is one the core refuses. A
+key's path is written, and read back, by one owner (`CodeKeyPaths`): each name joined by a dot, an item's place and a
+name empty, of white space or holding a control character in brackets, quoted as `ReportText.Quoted` writes it, so a
+path is always one line (`targets.x64.callingConvention`, `limits[1].value`, `packages[""].name`,
+`messages["Sure?\nIt cannot be undone."]`).
+`json` (`.json`, `.jsonc`, `.json5`, the named manifests keeping their own extractors) and `yaml` (`.yml`, `.yaml`, but
+`pubspec.yaml`) each make every scalar key anywhere in the file a key named by its path, its value as its summary, and
+each member that holds others a section over its lines. JSON is read on a stack of the reader's own however deep it
+nests (`JsonOutline`), stops where its reader does, nothing of the file read, and reads a `$schema` or `$ref` naming
+another file by a relative path - its `#` pointer left out - as an import of it. YAML reads what it repeats by reference
+once, where it is written (`YamlReading.Written` keeps an alias as the node its anchor names, never that node again): an
+alias is a key whose value is the alias, with a reference to the node its anchor names (`CodeQualifierKinds.Own`, a
+node of the file's own by its id, which the linker makes a `uses` edge of `exact`); a merge key is no key of its own,
+its mapping a reference to each mapping it merges, in order - one or a list, a mapping merged twice in one merged once -
+and a mapping written in the merge key's place is read there, at `<<`. So aliases that repeat one another, or one wide
+anchor aliased a hundred thousand times, are as many nodes as the file writes, and a workflow's jobs and steps are read
+once each however many aliases and merges reach them. YAML makes each document of a file of several a section by its
+place (`[0]`), names a GitHub Actions workflow's steps by their `name:` (else `step` and its place), reads a step's
+local `uses:` as an import of its `action.yml` and a job's as an import of the workflow file it names, each `uses:` once
+on the line it is written on, and keeps what it read before the place it stops reading, marked. An empty JSON or YAML
 file, or one of comments alone, is no stop. `xml` (`.xml`, `.config`, `.props`, `.targets`, `.resx`, `.xaml`, `.manifest`, `.nuspec`, but the MSBuild projects
-and solutions `msbuild` keeps) makes its root a section, an element with an id-like attribute (`name`, `key`, `id`,
-`x:Name`) an element named by its path and that attribute, and keys of a `.resx`'s `data name=` and of a `.props` or
-`.targets`'s `PropertyGroup` children alone, a `.props` or `.targets`'s `Import Project` an import of the file it names.
-No data file nests deeper than `DataNodes.MostNesting` is read past it, the line marked with why. A `$(Name)` an MSBuild
-project's attribute or element text writes - a comment never - is a `uses` of the key of that name an XML file declares
-(the `key` qualifier). A key, an element and every node a style sheet declares - a rule, a keyframes, a mixin, a
+and solutions `msbuild` keeps) reads every element however deep, makes its root a section, an element with an id-like
+attribute (`name`, `key`, `id`, `x:Name`) an element named by its path and that attribute - the path told only where a
+node is named by it, so elements that name nothing cost no more than their reading - and keys of a `.resx`'s
+`data name=`, of a `.props` or `.targets`'s `PropertyGroup` children and of a `.config`'s `appSettings` `<add key>` and
+`connectionStrings` `<add name>` (`appSettings.Timeout`, `connectionStrings.Main`, the value or connection string the
+summary), a `.props` or `.targets`'s `Import Project` an import of the file it names. A `.xaml` view's elements it names
+by `x:Name` are fields of its `x:Class` type, of the element's type, as the build generates them, so the code-behind
+reaches one by the field's name as it reaches a field of its own. An MSBuild project's own `PropertyGroup` properties
+are keys of the project's alone, in a closed scope no other file sees, and a `$(Name)` its attribute or element text
+writes - a comment never - is a `uses` of the property it reads (the `key` qualifier): the project's own of that name -
+those declared before it, where it is read as properties are, in a `PropertyGroup` or an `Import`, every one where it
+is read once all are - else the key of that name an XML file declares. A key, an element and every node a style sheet declares - a rule, a keyframes, a mixin, a
 function, a font face, a variable, each of a kind within a kind `CodeSubKinds` owns and no code's kind is spelt as -
 are reached only by a reference that says it names one - a `key` qualifier, a `selector` qualifier, a style sheet's
 `style-variable`, `style-mixin`, `style-function`, `keyframes` or `font-face` qualifier (`CodeSubKinds.ReachedBy`), a
@@ -4364,11 +4374,15 @@ use through an import's prefix, a use an import makes visible by a name the file
 (`import { btn } from './x.module.css'`) - and by the keys' join, never by a name alone as code names code (`Takes`, the
 one place that says what a reference may reach), so a PHP `$radius` reaches no SCSS `$radius` and a C# `Button()` no
 mixin `Button`. The linker joins each key to the code
-that names it: a string literal equal to the key's last segment or whole path, and each field or property whose name is
-the segment as a naming policy the repository declares (`codebaseGraph.keyNaming`: `camelCase`, `snake_case`,
-`kebab-case` or `exact`, `camelCase` and `exact` the default) writes it - each a `uses` edge of `candidates`, for nothing
-says the code reads that key, and a literal or a name that names more than `CodeConfidences.MostCandidates` keys joins
-none; the join is derived whole at every link, so a changed policy links again and reads no file again. A `.xaml` root's `x:Class` and a C# `partial` type say they
+that names it: a string literal equal to the key's last segment, its whole path, the path as .NET's configuration spells
+it (`Payments:TimeoutSeconds`, `Payments__TimeoutSeconds`, `Limits:1:Value`, read by `CodeKeyPaths.Dotted`) or a path
+that runs through a YAML alias or merge to it - the longest part of the path its file holds deciding, a mapping's own
+key shadowing a merged one's, each place looked for once and a path that comes round to itself through its references
+ending there - and each field or property whose name is the segment as a naming policy the repository declares
+(`codebaseGraph.keyNaming`: `camelCase`, `snake_case`, `kebab-case` or `exact`, `camelCase` and `exact` the default)
+writes it - each a `uses` edge of `candidates`, for nothing says the code reads that key; every key a literal or a name
+names is joined, however many keys share it, and a key its file keeps to itself - an MSBuild project's own property -
+is joined to none. The join is derived whole at every link, so a changed policy links again and reads no file again. A `.xaml` root's `x:Class` and a C# `partial` type say they
 are parts of one declaration (`ExtractNode.Part`), and the linker derives `partOf` between the parts of one qualified
 name - ids stay per language - which every walk that reads members - the `node` operation, a `related` walk, a type's
 outline, the spans a body is served from - walks as one. A repository may map further file name endings to an
@@ -4539,8 +4553,11 @@ among them; every other reference keeps its finding, and `References` counts wha
 names the same file from every file of its language. An interface's member dispatches, for each type that implements it -
 itself or through a base, the interface itself or one extending it - to the member with a body that answers it: the type's
 own, else its nearest base's it inherits or mixes in, never an interface's own, which has none. A dispatch is as sure as
-the least sure edge on its way up, each of several bases that answer alike is one of the candidates (none past
-`CodeConfidences.MostCandidates`), and an edge found more than one way is listed once, as sure as its surest finding.
+the least sure edge on its way up, each of several bases that answer alike is one of the candidates, however many, and
+an edge found more than one way is listed once, as sure as its surest finding. Every declaration a reference may be is
+an edge of its own - two or more of `candidates`, none picked and none dropped, however many - through the name index,
+so no reference is counted as naming too many, and a link result counts only what references named outside the
+repository.
 A linker that answers otherwise raises `CodeGraphLinker.Revision`,
 which every link result names: a graph linked by another revision is linked again, though no file changed and none is
 read again.
@@ -4827,9 +4844,9 @@ no page and no `graph-pages/` file holds one; the verb, a person's own view, kee
 for the edit check, the files whose lines it served, each as its lines were read (`GraphFileRead`), never as the file
 stands when the page is given. The last page of every answer ends naming the files whose extract the view no longer
 holds (`CodebaseGraphQueries.Unheld`), whose declarations no answer gives. Where the graph is not sure - no node
-matched, a name it does not hold, an edge of `candidates` - in a `node`, outside its groups of recall
-(`GraphEdges.Groups`), a use being never a doubt - a node named with external or unresolved callees or in a file
-`dynamic` or generated - the answer adds the lines that hold the name as a whole word, searched by
+matched, a name it does not hold, an edge of `candidates` - in a `node`, but a use's, which is recall and never a doubt
+(`CodeEdgeKinds.Recall`, the one rule `CodebaseGraphQueries.Doubts` judges an edge an answer gives by) - a node named
+with external callees or in a file `dynamic` or generated - the answer adds the lines that hold the name as a whole word, searched by
 `AgentFiles.SearchAsync` as `search_files` searches - but in every file whatever it holds, the whole word matched in time
 linear in a line and so never timed, each hit's line whole - a section of their own at `CodebaseGraphTool.TextHits` a page of
 each word, a body's among them, all of them paged - none left out - and saying what it did not read in the notes the
@@ -4870,7 +4887,7 @@ given, its changes, its read rule and cap), so the same step on the same tree is
 the prompt names exactly - a symbol or a path in backquotes (a path standing for its declarations), a qualified name
 or its last parts, a handle, a `path:line` as a stack frame or a compiler writes one, the longest of an absolute or a
 foreign path's endings the view holds or the one file it holds that ends with it - each a weight of 4 (a name several readable nodes
-carry, up to `CodeConfidences.MostCandidates`, 2 each), a working set's nodes 4 and an edited one 5, a named file's
+carry seeds every one of them, however many, sharing the 2 a name written weighs among them), a working set's nodes 4 and an edited one 5, a named file's
 declarations (`CodeNodeKinds.Declarations`) 3, the declarations of the files the step's `writes` covers
 (`AgentPolicy.StepWrites`) 2, and the ten nodes the prompt's words match best (`find`'s ranking, over declarations) 2 -
 beside which every site and home of the classes of the work item the step is an instance of seeds the pack
@@ -4929,8 +4946,8 @@ graph that cannot be served - its records, its map, a line of it - is said, and 
 narrowed (`graphReads: narrow`, the default) deny a whole `view_file` on the two API clients, and a whole `Read` on
 Claude Code, of a file the view holds as parsed over `CodebaseGraphTool.NarrowLines` lines, with the way to the graph in
 the refusal; a range, a search and a write pass; a file the graph is not sure of
-(`CodebaseGraphQueries.UnsureOfFile`: a `dynamic` mark, generated, or more than a quarter of its references `candidates`
-or unresolved) passes as an escape `lowConfidence`, and `graph`'s `wholeFile` lifts the narrowing for one file the view
+(`CodebaseGraphQueries.UnsureOfFile`: a `dynamic` mark, generated, or more than a quarter of its references `candidates`)
+passes as an escape `lowConfidence`, and `graph`'s `wholeFile` lifts the narrowing for one file the view
 holds as parsed for the rest of the step, an escape `stated` with the agent's reason and the lines and tokens the view
 read the file as - a path it holds no parsed file at a usage line, nothing read. A read the narrowing denies is no view
 an edit may follow, nor a read of the run's. Claude Code's whole `Read` is asked of the same owner

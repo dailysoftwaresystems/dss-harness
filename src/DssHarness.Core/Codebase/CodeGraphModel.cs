@@ -224,15 +224,11 @@ public static class CodeConfidences
     public const string Unique = "unique";
 
     /// <summary>
-    /// Two to <see cref="MostCandidates"/> declarations have that name and arity: an edge to each, none picked. A name
-    /// with more is counted unresolved - a use's counted nowhere, for a use is recall. The keys' join is candidates
-    /// whatever it finds, one key among them, for nothing says the code reads that key; a literal or a member that names
-    /// more than <see cref="MostCandidates"/> keys joins none.
+    /// Two or more declarations have that name and arity: an edge to each, none picked and none dropped, however many
+    /// they are. The keys' join is candidates whatever it finds, one key among them, for nothing says the code reads that
+    /// key; a literal or a member is joined to every key it names.
     /// </summary>
     public const string Candidates = "candidates";
-
-    /// <summary>The most declarations a reference is made an edge to each of - the most keys a literal or a member is joined to; past it, it is counted unresolved, a use and the keys' join nowhere.</summary>
-    public const int MostCandidates = 5;
 
     /// <summary>Every confidence an edge may carry, the surest first.</summary>
     public static IReadOnlyList<string> All { get; } = [Exact, Unique, Candidates];

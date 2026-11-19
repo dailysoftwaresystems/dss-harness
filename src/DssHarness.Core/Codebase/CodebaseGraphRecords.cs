@@ -199,15 +199,13 @@ public sealed record CodeGraphStoredExtract(int Schema, string Language, int Ver
 /// <param name="Nodes">Every node.</param>
 /// <param name="Edges">Every edge.</param>
 /// <param name="External">For each node, how many of its references named nothing the repository declares.</param>
-/// <param name="Unresolved">For each node, how many of its references named more declarations than an edge lists.</param>
 public sealed record CodeGraphSymbolsFile(
     int Schema,
     string Graph,
     int Linker,
     IReadOnlyList<CodeGraphSymbolEntry> Nodes,
     IReadOnlyList<CodeEdge> Edges,
-    IReadOnlyDictionary<string, int> External,
-    IReadOnlyDictionary<string, int> Unresolved)
+    IReadOnlyDictionary<string, int> External)
 {
     /// <summary>What is wrong with this link result; <see langword="null"/> where nothing is.</summary>
     public string? Problem()
@@ -259,27 +257,24 @@ public sealed record CodeGraphSymbolsFile(
             return $"its edge '{wrong?.From}' -> '{wrong?.To}' ({wrong?.Kind}, {wrong?.Confidence}) is not one between its nodes of a kind and a confidence an edge has";
         }
 
-        foreach (var (what, counts) in new[] { ("outside the repository", External), ("ambiguously", Unresolved) })
+        if (External.FirstOrDefault(count => !ids.Contains(count.Key) || count.Value < 0) is { Key: not null } bad)
         {
-            if (counts.FirstOrDefault(count => !ids.Contains(count.Key) || count.Value < 0) is { Key: not null } bad)
-            {
-                return $"it counts {bad.Value.ToString(CultureInfo.InvariantCulture)} of what the references of '{bad.Key}' named {what}, and that is no count of one of its nodes";
-            }
+            return $"it counts {bad.Value.ToString(CultureInfo.InvariantCulture)} of what the references of '{bad.Key}' named outside the repository, and that is no count of one of its nodes";
         }
 
         return null;
     }
 
     /// <summary>
-    /// Writes it as lines: its head, which counts what follows, then each node, each edge, each node's count of what its
-    /// references named outside the repository and each node's count of what they named ambiguously, in that order.
+    /// Writes it as lines: its head, which counts what follows, then each node, each edge and each node's count of what its
+    /// references named outside the repository, in that order.
     /// </summary>
     /// <param name="lines">The file's lines.</param>
     public void Write(JsonLineWriter lines)
     {
         ArgumentNullException.ThrowIfNull(lines);
 
-        lines.Write(new CodeGraphSymbolsHead(Schema, Graph, Linker, Nodes.Count, Edges.Count, External.Count, Unresolved.Count));
+        lines.Write(new CodeGraphSymbolsHead(Schema, Graph, Linker, Nodes.Count, Edges.Count, External.Count));
 
         foreach (var node in Nodes)
         {
@@ -295,11 +290,6 @@ public sealed record CodeGraphSymbolsFile(
         {
             lines.Write(new CodeGraphCount(node, count));
         }
-
-        foreach (var (node, count) in Unresolved)
-        {
-            lines.Write(new CodeGraphCount(node, count));
-        }
     }
 
     /// <summary>Reads it from the lines <see cref="Write"/> wrote, refusing a file of fewer or more lines than its head counts.</summary>
@@ -311,7 +301,7 @@ public sealed record CodeGraphSymbolsFile(
 
         var head = lines.Next<CodeGraphSymbolsHead>("its head");
 
-        if (head is { Nodes: < 0 } or { Edges: < 0 } or { External: < 0 } or { Unresolved: < 0 })
+        if (head is { Nodes: < 0 } or { Edges: < 0 } or { External: < 0 })
         {
             throw new JsonException("its head counts fewer than no lines of a kind");
         }
@@ -330,10 +320,9 @@ public sealed record CodeGraphSymbolsFile(
         }
 
         var external = Counts(lines, head.External, "a count of what a node's references named outside the repository");
-        var unresolved = Counts(lines, head.Unresolved, "a count of what a node's references named ambiguously");
         lines.End();
 
-        return new CodeGraphSymbolsFile(head.Schema, head.Graph, head.Linker, nodes, edges, external, unresolved);
+        return new CodeGraphSymbolsFile(head.Schema, head.Graph, head.Linker, nodes, edges, external);
     }
 
     private static Dictionary<string, int> Counts(JsonLineReader lines, int count, string what)
@@ -361,8 +350,7 @@ public sealed record CodeGraphSymbolsFile(
 /// <param name="Nodes">How many nodes follow.</param>
 /// <param name="Edges">How many edges follow them.</param>
 /// <param name="External">How many counts of what references named outside the repository follow them.</param>
-/// <param name="Unresolved">How many counts of what references named ambiguously follow them.</param>
-public sealed record CodeGraphSymbolsHead(int Schema, string Graph, int Linker, int Nodes, int Edges, int External, int Unresolved);
+public sealed record CodeGraphSymbolsHead(int Schema, string Graph, int Linker, int Nodes, int Edges, int External);
 
 /// <summary>One node's count, on a line of a link result's file.</summary>
 /// <param name="Node">The node's id.</param>

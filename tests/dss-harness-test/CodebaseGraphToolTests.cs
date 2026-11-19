@@ -390,24 +390,19 @@ public sealed partial class CodebaseGraphToolTests
 
     /// <summary>
     /// What the graph does not hold of a file is said where an answer gives the file, before what it holds: an outline of
-    /// a data file that stopped reading says the line and why, one of a file past the keys an extract keeps says how many
-    /// are in no node, and a node of one of its keys says so of its file.
+    /// a data file that stopped reading says the line and why, and a node of one of its keys says so of its file.
     /// </summary>
     [Fact]
     public async Task AnAnswerAboutAFile_SaysWhatTheGraphDoesNotHoldOfIt()
     {
-        var many = "{\n" + string.Join(",\n", Enumerable.Range(0, FileExtract.MostKeys + 2).Select(at => $"  \"k{at}\": {at}")) + "\n}\n";
-        using var tree = await TreeAsync(("config/broken.yml", "first: 1\nsecond: @x\n"), ("config/many.json", many));
+        using var tree = await TreeAsync(("config/broken.yml", "first: 1\nsecond: @x\n"));
         var queries = await QueriesAsync(tree);
         var tool = Tool(tree, queries);
         var stopped = Assert.Single(queries.Unread("config/broken.yml"));
-        const string Beyond = "2 of its keys and elements are in no node: past the 5000 nodes its extract keeps, or nested deeper than its reader reads keys";
 
         Assert.StartsWith("line 2: the file stops reading as YAML here (", stopped, StringComparison.Ordinal);
         Assert.Equal(["outline of config/broken.yml (1 declaration(s)):", stopped], (await AskAsync(tool, """{"op":"outline","path":"config/broken.yml"}""")).Text.Split('\n')[..2]);
-        Assert.Equal([Beyond], queries.Unread("config/many.json"));
-        Assert.Contains(Beyond, (await AskAsync(tool, """{"op":"outline","path":"config/many.json"}""")).Text.Split('\n'));
-        Assert.Contains(Beyond, (await AskAsync(tool, """{"op":"node","symbol":"k0"}""")).Text.Split('\n'));
+        Assert.Contains(stopped, (await AskAsync(tool, """{"op":"node","symbol":"first"}""")).Text.Split('\n'));
         Assert.Empty(queries.Unread("src/Shapes.cs"));
     }
 
@@ -1127,14 +1122,14 @@ public sealed partial class CodebaseGraphToolTests
     }
 
     /// <summary>
-    /// Where the graph is not sure - a node in a <c>dynamic</c> or generated file, one with unresolved callees, a name the view
+    /// Where the graph is not sure - a node in a <c>dynamic</c> or generated file, one whose callees are candidates, a name the view
     /// does not hold - the answer adds the lines that hold the name, at most 20, saying how many more there were and what it
     /// did not read, each line cut whole within its bound; a path or a <c>path:line</c> is searched for by no word.
     /// </summary>
     [Fact]
     public async Task TheTextSearch_IsAddedWhereTheGraphIsNotSure_BoundedAndSayingWhatItLeftOut()
     {
-        var many = string.Concat(Enumerable.Range(1, CodeConfidences.MostCandidates + 1).Select(at => $"public sealed class G{at}\n{{\n    public void Go()\n    {{\n    }}\n}}\n\n"));
+        var many = string.Concat(Enumerable.Range(1, 6).Select(at => $"public sealed class G{at}\n{{\n    public void Go()\n    {{\n    }}\n}}\n\n"));
         using var tree = await TreeAsync(
             ("src/Loose.cs", "namespace Demo;\n\npublic static class Loose\n{\n    public static void Fly(dynamic bird)\n    {\n        bird.Flap();\n        Geometry.Twice(bird);\n    }\n}\n"),
             ("src/Lost.cs", "namespace Demo;\n\npublic static class Lost\n{\n    public static void Wander()\n    {\n        Vanished();\n    }\n}\n"),

@@ -94,35 +94,37 @@ public sealed class JsonExtractorTests : CodeGraphExtractorContractTests<JsonExt
 
     /// <summary>
     /// Each scalar key anywhere in the file is a key node named by its path - an array item's path holding its place -
-    /// with its value as its summary; each top-level member that holds others is a section over its own lines, to its
-    /// closing bracket - the last one's never the file's; and a <c>$schema</c> or an external <c>$ref</c> naming a file by
-    /// a relative path is an import of it.
+    /// with its value as its summary; each member that holds others is a section over its own lines, to its closing
+    /// bracket - the last one's never the file's - inside the section that holds it; and a <c>$schema</c> or an external
+    /// <c>$ref</c> naming a file by a relative path is an import of it.
     /// </summary>
     [Fact]
-    public void EachScalarKeyIsAKeyNodeNamedByItsPath_AndEachTopLevelHolderASection()
+    public void EachScalarKeyIsAKeyNodeNamedByItsPath_AndEachHolderASectionInsideItsOwn()
     {
         var extract = Read("appsettings.json", AppSettings);
 
         Assert.Equal(
             [
-                ("targets", null, 4, 9),
-                ("limits", null, 10, 13),
-                ("logging", null, 14, 16),
+                ("targets", null, 4, 9, null),
+                ("x64", null, 5, 8, "json:appsettings.json#targets"),
+                ("limits", null, 10, 13, null),
+                ("[0]", null, 11, 11, "json:appsettings.json#limits"),
+                ("[1]", null, 12, 12, "json:appsettings.json#limits"),
+                ("logging", null, 14, 16, null),
             ],
-            extract.Nodes.Where(node => node.Kind == CodeNodeKinds.Section).Select(node => (node.Name, node.SubKind, node.Start, node.End)));
+            extract.Nodes.Where(node => node.Kind == CodeNodeKinds.Section).Select(node => (node.Name, node.SubKind, node.Start, node.End, node.Parent)));
 
         var key = Assert.Single(extract.Nodes, node => node.Id == "json:appsettings.json#targets.x64.callingConvention");
 
         Assert.Equal(("callingConvention", "targets.x64.callingConvention", "cdecl"), (key.Name, key.Qualified, key.Summary));
-        Assert.Equal("json:appsettings.json#targets", key.Parent);
+        Assert.Equal("json:appsettings.json#targets.x64", key.Parent);
 
         var inner = Assert.Single(extract.Nodes, node => node.Id == "json:appsettings.json#limits[1].value");
 
-        Assert.Equal(("value", "4"), (inner.Name, inner.Summary));
+        Assert.Equal(("value", "4", "json:appsettings.json#limits[1]"), (inner.Name, inner.Summary, inner.Parent));
         Assert.Equal([("appsettings.schema.json", 2)], extract.Imports.Select(import => (CodeGraphIds.FileName(import.Target), import.Line)));
         Assert.All(extract.Imports, import => Assert.Equal(CodeImportForms.Relative, import.Form));
         Assert.Empty(extract.Dynamic);
-        Assert.Equal(0, extract.KeysBeyond);
     }
 
     /// <summary>A local <c>$ref</c> pointer names no file, and neither does a URL: neither is an import, but each is a key like any other.</summary>
@@ -183,8 +185,9 @@ public sealed class JsonExtractorTests : CodeGraphExtractorContractTests<JsonExt
             [
                 ("json:package-lock.json#lockfileVersion", "lockfileVersion", "lockfileVersion", "3", (string?)null),
                 ("json:package-lock.json#packages", "packages", "package-lock.json#packages", null, null),
-                ("json:package-lock.json#packages[\"\"].name", "name", "packages[\"\"].name", "billing", "json:package-lock.json#packages"),
-                ("json:package-lock.json#packages[\"\"].usage", "usage", "packages[\"\"].usage", "run: make", "json:package-lock.json#packages"),
+                ("json:package-lock.json#packages[\"\"]", "[\"\"]", "package-lock.json#packages[\"\"]", null, "json:package-lock.json#packages"),
+                ("json:package-lock.json#packages[\"\"].name", "name", "packages[\"\"].name", "billing", "json:package-lock.json#packages[\"\"]"),
+                ("json:package-lock.json#packages[\"\"].usage", "usage", "packages[\"\"].usage", "run: make", "json:package-lock.json#packages[\"\"]"),
                 ("json:package-lock.json#[\"\"]", "[\"\"]", "package-lock.json#[\"\"]", null, null),
                 ("json:package-lock.json#[\"\"].a", "a", "[\"\"].a", "1", "json:package-lock.json#[\"\"]"),
             ],
@@ -277,12 +280,37 @@ public sealed class JsonExtractorTests : CodeGraphExtractorContractTests<JsonExt
             extract.Nodes.Select(node => (node.Id, node.Start, node.End)));
         Assert.Null(extract.WithDigests(CodeFileText.Lines(Text)).Problem("json", CodeFileText.Lines(Text).Count));
 
-        // A list of records is a section and a key a record while the extract has room for both, sections counted against
-        // FileExtract.MostKeys as keys are, and every key past them counted.
-        var records = Read("records.json", $"[{string.Join(",\n", Enumerable.Range(0, FileExtract.MostKeys + 10).Select(at => $"{{\"id\": {at}}}"))}]");
+        // A list of records is a section and a key a record, however many: none is left out, and each key is inside its
+        // own record's section.
+        var records = Read("records.json", $"[{string.Join(",\n", Enumerable.Range(0, 12_000).Select(at => $"{{\"id\": {at}}}"))}]");
 
-        Assert.Equal((FileExtract.MostKeys / 2, FileExtract.MostKeys / 2), (records.Nodes.Count(node => node.Kind == CodeNodeKinds.Section), records.Nodes.Count(node => node.Kind == CodeNodeKinds.Member)));
-        Assert.Equal(FileExtract.MostKeys + 10 - (FileExtract.MostKeys / 2), records.KeysBeyond);
+        Assert.Equal(
+            [.. Enumerable.Range(0, 12_000).SelectMany(at => new[] { ($"json:records.json#[{at}]", (string?)null), ($"json:records.json#[{at}].id", $"json:records.json#[{at}]") })],
+            records.Nodes.Select(node => (node.Id, node.Parent)));
+    }
+
+    /// <summary>
+    /// A file that nests thousands of levels deep is read whole, each level a section inside the one before and the key at
+    /// the bottom named by its whole path - on a thread whose stack is a fraction of what reading it by recursion would
+    /// take, so nothing of it is read by the call's own.
+    /// </summary>
+    [Fact]
+    public void AFileNestedThousandsDeep_IsReadWhole_OnAStackOfItsOwn()
+    {
+        const int Depth = 3000;
+        var text = string.Concat(Enumerable.Repeat("{\"a\":", Depth)) + "1" + new string('}', Depth);
+        FileExtract? extract = null;
+        var thread = new Thread(() => extract = Read("deep.json", text), 256 * 1024);
+
+        thread.Start();
+        thread.Join();
+
+        Assert.Equal(Depth, extract!.Nodes.Count);
+        Assert.Equal(Depth - 1, extract.Nodes.Count(node => node.Kind == CodeNodeKinds.Section));
+        Assert.Equal((string.Join('.', Enumerable.Repeat("a", Depth)), "1"), (extract.Nodes[^1].Qualified, extract.Nodes[^1].Summary));
+        Assert.Equal(extract.Nodes[^2].Id, extract.Nodes[^1].Parent);
+        Assert.Empty(extract.Dynamic);
+        Assert.Null(extract.WithDigests(CodeFileText.Lines(text)).Problem("json", 1));
     }
 
     /// <summary>The named manifests keep their own extractors: an exact name wins over the json extension.</summary>

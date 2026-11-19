@@ -83,25 +83,52 @@ public sealed record CodebaseGraphShape(
     /// order <see cref="NamingValues"/> lists them: the default where it is <see langword="null"/>.
     /// </summary>
     /// <param name="keyNaming">The policies a shape holds, or null for the default.</param>
-    /// <exception cref="ArgumentException"><paramref name="keyNaming"/> names none, or one the graph joins no key by: what the definition's check and a manifest's refuse.</exception>
+    /// <exception cref="ArgumentException"><paramref name="keyNaming"/> names none, one twice, or one the graph joins no key by: what the definition's check and a manifest's refuse.</exception>
     public static IReadOnlyList<string> NamingOf(IReadOnlyList<string>? keyNaming)
         => keyNaming is null ? DefaultKeyNaming
             : NamingProblem(keyNaming) is { } wrong ? throw new ArgumentException($"the key naming {wrong}", nameof(keyNaming))
             : Named(keyNaming);
 
     /// <summary>
-    /// What is wrong with <paramref name="keyNaming"/> as the policies a key is joined by - it names none, or one the graph
-    /// joins no key by - said to follow its subject; <see langword="null"/> where nothing is.
+    /// The first thing wrong with <paramref name="keyNaming"/> as the policies a key is joined by (<see cref="NamingProblems"/>),
+    /// said to follow its subject; <see langword="null"/> where nothing is.
     /// </summary>
     /// <param name="keyNaming">The policies a block or a manifest names.</param>
     public static string? NamingProblem(IReadOnlyList<string> keyNaming)
+        => NamingProblems(keyNaming) is [var first, ..] ? Worded(first) : null;
+
+    /// <summary>
+    /// Everything wrong with <paramref name="keyNaming"/> as the policies a key is joined by, in order: it names none; it
+    /// names one more than once, each such once; it names one the graph joins no key by, each such once. The one rule of a
+    /// sound <c>keyNaming</c>, which the definition's check words for its block and a manifest's and a shape's read whole.
+    /// </summary>
+    /// <param name="keyNaming">The policies a block or a manifest names.</param>
+    public static IReadOnlyList<(KeyNamingFault Fault, string? Naming)> NamingProblems(IReadOnlyList<string> keyNaming)
     {
         ArgumentNullException.ThrowIfNull(keyNaming);
 
-        return keyNaming.Count == 0 ? "names no policy"
-            : keyNaming.FirstOrDefault(naming => !NamingValues.Contains(naming, StringComparer.Ordinal)) is { } unknown ? $"names '{unknown}', which is none of {string.Join(", ", NamingValues.Select(value => $"'{value}'"))}"
-            : null;
+        if (keyNaming.Count == 0)
+        {
+            return [(KeyNamingFault.None, null)];
+        }
+
+        return
+        [
+            .. keyNaming.GroupBy(naming => naming, StringComparer.Ordinal).Where(named => named.Count() > 1).Select(named => (KeyNamingFault.Twice, (string?)named.Key)),
+            .. keyNaming.Where(naming => !NamingValues.Contains(naming, StringComparer.Ordinal)).Distinct(StringComparer.Ordinal).Select(naming => (KeyNamingFault.Unknown, (string?)naming)),
+        ];
     }
+
+    /// <summary>A fault of <see cref="NamingProblems"/>, said to follow its subject.</summary>
+    private static string Worded((KeyNamingFault Fault, string? Naming) problem) => problem.Fault switch
+    {
+        KeyNamingFault.None => "names no policy",
+        KeyNamingFault.Twice => $"names '{problem.Naming}' more than once",
+        _ => $"names '{problem.Naming}', which is none of {NamingList}",
+    };
+
+    /// <summary>Every policy <c>keyNaming</c> may say, each quoted, as a refusal lists them.</summary>
+    public static string NamingList => string.Join(", ", NamingValues.Select(value => $"'{value}'"));
 
     /// <summary>
     /// <paramref name="keyNaming"/> each once: those of <see cref="NamingValues"/> in its order, then any other in the order
@@ -200,4 +227,17 @@ public sealed record CodebaseGraphShape(
     /// <summary>Whether the implementation named <paramref name="language"/> is used.</summary>
     /// <param name="language">An implementation's name.</param>
     public bool Uses(string language) => Languages is null || Languages.Contains(language, StringComparer.Ordinal);
+}
+
+/// <summary>What is wrong with a <c>keyNaming</c> list (<see cref="CodebaseGraphShape.NamingProblems"/>).</summary>
+public enum KeyNamingFault
+{
+    /// <summary>It names no policy.</summary>
+    None,
+
+    /// <summary>It names a policy more than once.</summary>
+    Twice,
+
+    /// <summary>It names one the graph joins no key by.</summary>
+    Unknown,
 }

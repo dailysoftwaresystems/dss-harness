@@ -213,9 +213,29 @@ public sealed class CodebaseContextPackTests
         Assert.DoesNotContain("secret/", pack.Text, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// A name several nodes the step may read carry seeds every one of them, however many, the weight of a name written
+    /// shared among them: of twelve, the ten the prompt's words match best weigh more as a word match than as a twelfth of
+    /// the name, and say so, and the other two say they are one of the twelve so named - one the step may not read none of
+    /// them, and counted left out; of two, a word match of each weighs more than its half.
+    /// </summary>
     [Fact]
-    public async Task ANameSeveralNodesCarry_SeedsEach_WhereAnEdgeCouldNameThemAll_AndNoneWhereMore()
+    public async Task ANameSeveralNodesCarry_SeedsEveryOneTheStepMayRead_SharingTheWeightOfAName()
     {
+        var many = string.Concat(Enumerable.Range(1, 12).Select(at => $"public class G{at}\n{{\n    public void Go()\n    {{\n    }}\n}}\n\n"));
+        using var crowded = await TreeAsync(("src/G.cs", many), ("secret/H.cs", "public class H\n{\n    public void Go()\n    {\n    }\n}\n"));
+        var crowdedQueries = await QueriesAsync(crowded);
+
+        var all = CodebaseContextPack.Make(crowdedQueries, new ContextPackRequest("see `Go`", path => !path.StartsWith("secret/", StringComparison.Ordinal)));
+
+        Assert.Equal(
+            [.. Enumerable.Range(1, 12).Select(at => $"csharp:G{at}.Go()").Order(StringComparer.Ordinal)],
+            all.Seeds.Select(seed => seed.Id).Where(id => id.EndsWith(".Go()", StringComparison.Ordinal)).Order(StringComparer.Ordinal));
+        Assert.Equal(
+            [("matches the task", 10), ("one of 12 named 'Go'", 2)],
+            all.Seeds.Where(seed => seed.Id.EndsWith(".Go()", StringComparison.Ordinal)).GroupBy(seed => seed.Why).Select(why => (why.Key, why.Count())).OrderBy(why => why.Key, StringComparer.Ordinal));
+        Assert.True(all.Refused > 0);
+
         using var tree = await TreeAsync(
             ("src/A.cs", "public class A\n{\n    public void Go()\n    {\n    }\n}\n"),
             ("src/B.cs", "public class B\n{\n    public void Go()\n    {\n    }\n}\n"));
@@ -223,29 +243,7 @@ public sealed class CodebaseContextPackTests
 
         var pack = CodebaseContextPack.Make(queries, new ContextPackRequest("see `Go`", All));
 
-        Assert.EndsWith(" | one of 2 named 'Go'", Line(pack, queries, "A.Go"), StringComparison.Ordinal);
-        Assert.EndsWith(" | one of 2 named 'Go'", Line(pack, queries, "B.Go"), StringComparison.Ordinal);
-
-        var many = string.Concat(Enumerable.Range(1, CodeConfidences.MostCandidates + 1).Select(at => $"public class G{at}\n{{\n    public void Go()\n    {{\n    }}\n}}\n\n"));
-        using var crowded = await TreeAsync(("src/G.cs", many));
-        var crowdedQueries = await QueriesAsync(crowded);
-
-        var none = CodebaseContextPack.Make(crowdedQueries, new ContextPackRequest("see `Go`", All));
-
-        Assert.DoesNotContain(" named 'Go'", none.Text, StringComparison.Ordinal);
-        Assert.Contains("matches the task", none.Text, StringComparison.Ordinal);
-
-        // A node the step may not read is no candidate, and is counted left out.
-        using var hidden = await TreeAsync(
-            ("src/A.cs", "public class A\n{\n    public void Go()\n    {\n    }\n}\n"),
-            ("src/B.cs", "public class B\n{\n    public void Go()\n    {\n    }\n}\n"),
-            ("secret/C.cs", "public class C\n{\n    public void Go()\n    {\n    }\n}\n"));
-        var hiddenQueries = await QueriesAsync(hidden);
-
-        var readable = CodebaseContextPack.Make(hiddenQueries, new ContextPackRequest("see `Go`", path => !path.StartsWith("secret/", StringComparison.Ordinal)));
-
-        Assert.EndsWith(" | one of 2 named 'Go'", Line(readable, hiddenQueries, "A.Go"), StringComparison.Ordinal);
-        Assert.True(readable.Refused > 0);
+        Assert.Equal([("csharp:A.Go()", "matches the task"), ("csharp:B.Go()", "matches the task")], pack.Seeds.Select(seed => (seed.Id, seed.Why)));
     }
 
     [Fact]

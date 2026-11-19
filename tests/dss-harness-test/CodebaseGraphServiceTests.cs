@@ -1868,6 +1868,32 @@ public sealed class CodebaseGraphServiceTests
     }
 
     /// <summary>
+    /// A link result an older linker wrote - its head counting what references named ambiguously, those counts after the
+    /// others - is no link result this build reads: the next process links the graph again, though no file changed, reading
+    /// no file again, and what it writes counts nothing of the kind.
+    /// </summary>
+    [Fact]
+    public async Task ALinkResultAnOlderLinkerWrote_IsLinkedAgain_ByTheNextProcess()
+    {
+        using var graph = await Graph.CreateAsync();
+        graph.Write("a.toy", "class A\ncall B\n");
+        graph.Write("b.toy", "class B\n");
+        await graph.CommitAsync();
+        await graph.SyncAsync();
+        var lines = File.ReadAllText(graph.Run.GraphSymbolsFile).TrimEnd('\n').Split('\n');
+        lines[0] = lines[0][..^1] + ",\"unresolved\":1}";
+        File.WriteAllText(graph.Run.GraphSymbolsFile, string.Concat(lines.Append("{\"node\":\"toy:A\",\"count\":1}").Select(line => line + "\n")));
+        var reads = graph.Toy.Reads;
+
+        var synced = await graph.Restarted().SyncAsync();
+
+        Assert.Equal((0, null), (synced.Extracted, synced.Rebuilt));
+        Assert.Equal(reads, graph.Toy.Reads);
+        Assert.Contains(graph.Symbols().Edges, edge => edge is { From: "toy:A", To: "toy:B" });
+        Assert.DoesNotContain("unresolved", File.ReadAllText(graph.Run.GraphSymbolsFile), StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// A link result a crash left of an earlier manifest - the manifest written, its link result not - is linked again by
     /// the next process, though no file changed, and no file is read again.
     /// </summary>

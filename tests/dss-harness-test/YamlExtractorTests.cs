@@ -75,17 +75,21 @@ public sealed class YamlExtractorTests : CodeGraphExtractorContractTests<YamlExt
             [
                 new("yaml:.github/workflows/anchored.yml#jobs.build.steps[0]", CodeNodeKinds.Section, (6, 7)),
                 new("yaml:.github/workflows/anchored.yml#jobs.test", CodeNodeKinds.Section, (9, 13)),
-                new("yaml:.github/workflows/anchored.yml#jobs.test.steps[0]", CodeNodeKinds.Section, (12, 12)),
-                new("yaml:.github/workflows/anchored.yml#jobs.test.steps[0].uses", CodeNodeKinds.Member, (12, 12)),
-                new("yaml:.github/workflows/anchored.yml#jobs.copy", CodeNodeKinds.Section, (16, 16)),
+                new("yaml:.github/workflows/anchored.yml#jobs.test.steps[0]", CodeNodeKinds.Member, (12, 12)),
+                new("yaml:.github/workflows/anchored.yml#jobs.copy", CodeNodeKinds.Member, (16, 16)),
                 new("yaml:.github/workflows/anchored.yml#description", CodeNodeKinds.Member, (17, 17)),
+            ],
+            Edges =
+            [
+                new("yaml:.github/workflows/anchored.yml#jobs.test.steps[0]", "yaml:.github/workflows/anchored.yml#jobs.build.steps[0]", CodeEdgeKinds.Uses, 12, CodeConfidences.Exact),
+                new("yaml:.github/workflows/anchored.yml#jobs.copy", "yaml:.github/workflows/anchored.yml#jobs.again", CodeEdgeKinds.Uses, 16, CodeConfidences.Exact),
             ],
         },
     ];
 
     /// <summary>
-    /// A workflow whose steps and jobs alias others - a step of one job written again in another, a job copied whole -
-    /// and a key whose plain value is written on the line after it.
+    /// A workflow whose steps and jobs alias others - a step of one job named again in another, a job copied whole - each
+    /// alias a key and a uses edge to what its anchor names, and a key whose plain value is written on the line after it.
     /// </summary>
     private const string Anchored = """
         on: push
@@ -109,43 +113,54 @@ public sealed class YamlExtractorTests : CodeGraphExtractorContractTests<YamlExt
         """;
 
     /// <summary>
-    /// Each scalar key anywhere in the file is a key node named by its path with its value as its summary; an anchor's
-    /// keys are read through the alias that names it, a merge key's mapping as the merging one's own; and a sequence
-    /// item's path holds its place.
+    /// Each scalar key anywhere in the file is a key node named by its path with its value as its summary, and each member
+    /// that holds others a section inside the one that holds it; an alias is a key whose value is the alias and a merge key
+    /// no key at all, each a reference to the node it repeats, never read again where it is written; and a sequence item's
+    /// path holds its place.
     /// </summary>
     [Fact]
-    public void EachScalarKeyIsAKeyNodeNamedByItsPath_AnchorsFollowedAndMergeKeysRead()
+    public void EachKeyIsANodeNamedByItsPath_AndWhatAnAnchorNamesIsReadOnce()
     {
         var extract = Read("values.yml", Values);
-        var merged = Assert.Single(extract.Nodes, node => node.Id == "yaml:values.yml#service.name");
 
-        Assert.Equal(("name", "service.name", "billing"), (merged.Name, merged.Qualified, merged.Summary));
-
-        var anchor = Assert.Single(extract.Nodes, node => node.Id == "yaml:values.yml#base.level");
-
-        Assert.Equal(("level", "info"), (anchor.Name, anchor.Summary));
-
-        var item = Assert.Single(extract.Nodes, node => node.Id == "yaml:values.yml#steps[0].name");
-
-        Assert.Equal("build", item.Summary);
-        Assert.DoesNotContain(extract.Nodes, node => node.Qualified.Contains("<<", StringComparison.Ordinal));
+        Assert.Equal(
+            [
+                ("yaml:values.yml#base", CodeNodeKinds.Section, 1, 3, null, null),
+                ("yaml:values.yml#base.level", CodeNodeKinds.Member, 2, 2, "info", "yaml:values.yml#base"),
+                ("yaml:values.yml#base.retries", CodeNodeKinds.Member, 3, 3, "3", "yaml:values.yml#base"),
+                ("yaml:values.yml#service", CodeNodeKinds.Section, 4, 6, null, null),
+                ("yaml:values.yml#service.name", CodeNodeKinds.Member, 6, 6, "billing", "yaml:values.yml#service"),
+                ("yaml:values.yml#targets", CodeNodeKinds.Section, 7, 9, null, null),
+                ("yaml:values.yml#targets.x64", CodeNodeKinds.Section, 8, 9, null, "yaml:values.yml#targets"),
+                ("yaml:values.yml#targets.x64.callingConvention", CodeNodeKinds.Member, 9, 9, "cdecl", "yaml:values.yml#targets.x64"),
+                ("yaml:values.yml#steps", CodeNodeKinds.Section, 10, 13, null, null),
+                ("yaml:values.yml#steps[0]", CodeNodeKinds.Section, 11, 12, null, "yaml:values.yml#steps"),
+                ("yaml:values.yml#steps[0].run", CodeNodeKinds.Member, 11, 11, "dotnet build", "yaml:values.yml#steps[0]"),
+                ("yaml:values.yml#steps[0].name", CodeNodeKinds.Member, 12, 12, "build", "yaml:values.yml#steps[0]"),
+                ("yaml:values.yml#steps[1]", CodeNodeKinds.Section, 13, 13, null, "yaml:values.yml#steps"),
+                ("yaml:values.yml#steps[1].run", CodeNodeKinds.Member, 13, 13, "dotnet test", "yaml:values.yml#steps[1]"),
+            ],
+            extract.Nodes.Select(node => (node.Id, node.Kind, node.Start, node.End, node.Summary, node.Parent)));
+        Assert.Equal([("yaml:values.yml#service", "base", 5, "yaml:values.yml#base")], References(extract));
         Assert.Empty(extract.Dynamic);
     }
 
     /// <summary>
     /// A GitHub Actions workflow's jobs are sections over their lines and its steps sections inside them, named by the
-    /// name a step gives itself; a <c>uses:</c> naming a local action is an import of its <c>action.yml</c>, and one
-    /// naming a marketplace action is not.
+    /// name a step gives itself, else by its place; a <c>uses:</c> naming a local action is an import of its
+    /// <c>action.yml</c>, and one naming a marketplace action is not.
     /// </summary>
     [Fact]
     public void AWorkflowsJobsAndStepsAreSections_AndALocalActionIsAnImportOfItsActionYml()
     {
         var extract = Read(".github/workflows/ci.yaml", Workflow);
         var job = Assert.Single(extract.Nodes, node => node.Id == "yaml:.github/workflows/ci.yaml#jobs.build");
-        var step = Assert.Single(extract.Nodes, node => node.Id == $"{job.Id}.steps[1]");
+        var steps = Assert.Single(extract.Nodes, node => node.Id == $"{job.Id}.steps");
 
-        Assert.Equal("deploy", step.Name);
-        Assert.Equal(job.Id, step.Parent);
+        Assert.Equal(
+            [("step 1", 9, 9, steps.Id), ("deploy", 10, 13, steps.Id)],
+            extract.Nodes.Where(node => node.Parent == steps.Id).Select(node => (node.Name, node.Start, node.End, node.Parent)));
+        Assert.Equal((6, 13, "yaml:.github/workflows/ci.yaml#jobs"), (job.Start, job.End, job.Parent));
         Assert.Equal([("../../.github/actions/deploy/action.yml", 11, false), ("../../.github/actions/deploy/action.yaml", 11, true)],
             extract.Imports.Select(import => (import.Target, import.Line, import.Fallback)));
     }
@@ -185,102 +200,62 @@ public sealed class YamlExtractorTests : CodeGraphExtractorContractTests<YamlExt
     }
 
     /// <summary>
-    /// Aliases that repeat one another - a few hundred bytes standing for ten million keys - are read until the extract
-    /// keeps <see cref="FileExtract.MostKeys"/> nodes, and every key past them is counted once a node, never walked again;
-    /// aliases of what holds no key are walked again at most <see cref="DataNodes.MostRepeated"/> nodes, the line marked
-    /// where they stop being read. Each file is read in a moment.
+    /// Aliases that repeat one another - a few hundred bytes standing for ten million keys - are each a reference to the
+    /// node their anchor names: what each anchor names is read once, where it is written, so the file is as many nodes as it
+    /// writes, read in a moment, and marked nowhere.
     /// </summary>
     [Fact]
-    public void AliasesThatRepeatEachOther_AreReadToABound_AndTheRestCounted()
+    public void AliasesThatRepeatEachOther_AreEachAReferenceToTheirAnchor_ReadOnce()
     {
-        static string Bomb(string first)
+        var text = new System.Text.StringBuilder("a: &a [1, 1, 1, 1, 1, 1, 1, 1, 1, 1]\n");
+        var names = new[] { "a", "b", "c", "d", "e", "f", "g" };
+
+        for (var at = 1; at < names.Length; at++)
         {
-            var text = new System.Text.StringBuilder($"a: &a {first}\n");
-
-            foreach (var (name, before) in new[] { ("b", "a"), ("c", "b"), ("d", "c"), ("e", "d"), ("f", "e"), ("g", "f") })
-            {
-                text.Append($"{name}: &{name} [{string.Join(", ", Enumerable.Repeat($"*{before}", 10))}]\n");
-            }
-
-            return text.ToString();
+            text.Append($"{names[at]}: &{names[at]} [{string.Join(", ", Enumerable.Repeat($"*{names[at - 1]}", 10))}]\n");
         }
 
         var watch = System.Diagnostics.Stopwatch.StartNew();
-        var keyed = Read("bomb.yml", Bomb("[1, 1, 1, 1, 1, 1, 1, 1, 1, 1]"));
+        var extract = Read("bomb.yml", text.ToString());
 
-        // Every key the file stands for is a node or counted - 10 + 100 + ... + 10^7 of them - beside the sections a to d,
-        // which the extract keeps before it is full.
-        var keys = Enumerable.Range(1, 7).Sum(level => (long)Math.Pow(10, level));
-
-        Assert.Equal((FileExtract.MostKeys, keys + 4 - FileExtract.MostKeys), (keyed.Nodes.Count, (long)keyed.KeysBeyond));
-        Assert.Empty(keyed.Dynamic);
-
-        var hollow = Read("hollow.yml", Bomb("[]"));
-
-        Assert.Equal(["a", "b", "c", "d", "e", "f", "g"], hollow.Nodes.Select(node => node.Name));
-        Assert.Equal(0, hollow.KeysBeyond);
-        Assert.Equal([new ExtractDynamic(6, $"the file's aliases repeat more than {DataNodes.MostRepeated} nodes, and what they repeat from here on is not read")], hollow.Dynamic);
-        Assert.True(watch.Elapsed < TimeSpan.FromSeconds(10), $"the files took {watch.Elapsed} to read");
-    }
-
-    /// <summary>
-    /// Merge keys that merge one large mapping - each key a merge reads through an alias a visit - spend the file's budget
-    /// of what it repeats as aliases do, a mapping merged twice in one list merged once: past
-    /// <see cref="DataNodes.MostRepeated"/> visits no merge reads more, the line it stops at is marked, and each later
-    /// merge is counted at its first key, its mapping's keys never visited again.
-    /// </summary>
-    [Fact]
-    public void MergesOfOneMappingAgainAndAgain_SpendTheBudgetOfWhatTheFileRepeats()
-    {
-        // Each key of the mapping merged holds an empty list, so no merge makes a node and the extract is never full.
-        var text = new System.Text.StringBuilder($"a: &a {{ {string.Join(", ", Enumerable.Range(0, 1000).Select(at => $"k{at}: []"))} }}\n");
-
-        for (var at = 0; at < 100; at++)
-        {
-            text.Append($"m{at}: {{ <<: [*a, *a] }}\n");
-        }
-
-        var watch = System.Diagnostics.Stopwatch.StartNew();
-        var extract = Read("merges.yml", text.ToString());
-
-        // Each mapping visits the 1,000 keys its one merge gives: m0 to m49 spend the budget, and m50, on line 52, is the
-        // first that merges none.
-        Assert.Equal([new ExtractDynamic(52, $"the file's aliases repeat more than {DataNodes.MostRepeated} nodes, and what they repeat from here on is not read")], extract.Dynamic);
-        Assert.Equal(["a", .. Enumerable.Range(0, 100).Select(at => $"m{at}")], extract.Nodes.Select(node => node.Name));
-        Assert.Equal(0, extract.KeysBeyond);
+        // Each list a section and each of its ten items a key: the first's of 1, every other's an alias of the list before.
+        Assert.Equal(
+            [.. names.SelectMany(name => new[] { name }.Concat(Enumerable.Range(0, 10).Select(item => $"{name}[{item}]")))],
+            extract.Nodes.Select(node => node.Qualified[(node.Qualified.IndexOf('#', StringComparison.Ordinal) + 1)..]));
+        Assert.Equal(
+            [.. names.Skip(1).SelectMany((name, at) => Enumerable.Range(0, 10).Select(item => ($"yaml:bomb.yml#{name}[{item}]", names[at], at + 2, $"yaml:bomb.yml#{names[at]}")))],
+            References(extract));
+        Assert.Empty(extract.Dynamic);
         Assert.True(watch.Elapsed < TimeSpan.FromSeconds(10), $"the file took {watch.Elapsed} to read");
     }
 
     /// <summary>
-    /// An alias of one wide anchor written again and again spends the budget at the alias: once the file has made
-    /// <see cref="DataNodes.MostRepeated"/> visits through its aliases, each later alias is counted where it is written,
-    /// the anchor's members never visited again - a list of thousands of aliases of a list of fifty thousand is read in a
-    /// moment.
+    /// An alias of one wide anchor written again and again is a reference each time, the anchor's fifty thousand items
+    /// never read again: a list of a hundred thousand aliases of it is a key and a reference each, read in a moment.
     /// </summary>
     [Fact]
-    public void AnAliasOfAWideAnchorWrittenAgainAndAgain_IsCountedAtTheAlias_PastTheBudget()
+    public void AnAliasOfAWideAnchorWrittenAgainAndAgain_IsAReferenceEachTime()
     {
-        // The anchor's items are empty lists, which make no node: the extract is never full, so only the budget bounds the
-        // walk.
-        var text = $"a: &a [{string.Join(", ", Enumerable.Repeat("[]", DataNodes.MostRepeated + 1))}]\nb: [{string.Join(", ", Enumerable.Repeat("*a", 5000))}]\n";
+        const int Wide = 50_001;
+        const int Aliases = 100_000;
+        var text = $"a: &a [{string.Join(", ", Enumerable.Repeat("[]", Wide))}]\nb: [{string.Join(", ", Enumerable.Repeat("*a", Aliases))}]\n";
         var watch = System.Diagnostics.Stopwatch.StartNew();
         var extract = Read("wide.yml", text);
 
-        // The first alias and its first 49,999 items are the budget's visits; the rest of it, and every later alias, counted.
-        Assert.Equal([new ExtractDynamic(2, $"the file's aliases repeat more than {DataNodes.MostRepeated} nodes, and what they repeat from here on is not read")], extract.Dynamic);
-        Assert.Equal(["a", "b"], extract.Nodes.Select(node => node.Name));
-        Assert.Equal(0, extract.KeysBeyond);
+        Assert.Equal((1 + Wide + 1 + Aliases, Aliases), (extract.Nodes.Count, extract.References.Count));
+        Assert.All(extract.References, reference => Assert.Equal(new ExtractQualifier(CodeQualifierKinds.Own, "yaml:wide.yml#a"), reference.Qualifier));
+        Assert.Equal(("*a", "yaml:wide.yml#b"), (extract.Nodes[^1].Summary, extract.Nodes[^1].Parent));
+        Assert.Empty(extract.Dynamic);
         Assert.True(watch.Elapsed < TimeSpan.FromSeconds(10), $"the file took {watch.Elapsed} to read");
     }
 
     /// <summary>
-    /// Counting the keys past those an extract keeps spends nothing of the budget a walk reads what aliases repeat by: a
-    /// large CI file of a template every job merges - with a second mapping that shares two of its names, and a key of the
-    /// template each job writes itself - is marked nowhere, and every key it holds is a node or counted, a shadowed one never
-    /// counted twice.
+    /// A large CI file of a template every job merges - with a second mapping that shares two of its names, and a key of
+    /// the template each job writes itself - is each job's own keys and a reference to each mapping it merges, in order: the
+    /// template's keys read once, where it is written, and the file marked nowhere.
     /// </summary>
     [Fact]
-    public void CountingALargeFileOfMerges_SpendsNoneOfTheBudget_AndCountsEveryKeyOnce()
+    public void ALargeFileOfMerges_IsAReferenceToEachMappingMerged_TheTemplateReadOnce()
     {
         const int Jobs = 2500;
         var text = new System.Text.StringBuilder(".defaults: &defaults\n");
@@ -297,57 +272,25 @@ public sealed class YamlExtractorTests : CodeGraphExtractorContractTests<YamlExt
             text.Append($"job{at}:\n  <<: [*defaults, *docker]\n  k0: own\n  script: run {at}\n");
         }
 
+        var watch = System.Diagnostics.Stopwatch.StartNew();
         var extract = Read(".gitlab-ci.yml", text.ToString());
 
-        // Each job holds its own k0 and script, the template's other 24 and the three names of the second it adds: 29.
-        var keys = 25 + 5 + (Jobs * 29L);
-        var kept = extract.Nodes.Count(node => node.Kind == CodeNodeKinds.Member);
-
+        // The two templates and their keys, then each job's section and the two keys it writes itself.
+        Assert.Equal(1 + 25 + 1 + 5 + (Jobs * 3), extract.Nodes.Count);
+        Assert.Equal(
+            [.. Enumerable.Range(0, Jobs).SelectMany(at => new[] { ($"yaml:.gitlab-ci.yml#job{at}", "defaults", 34 + (at * 4), "yaml:.gitlab-ci.yml#.defaults"), ($"yaml:.gitlab-ci.yml#job{at}", "docker", 34 + (at * 4), "yaml:.gitlab-ci.yml#.docker") })],
+            References(extract));
         Assert.Empty(extract.Dynamic);
-        Assert.Equal((FileExtract.MostKeys, keys), (extract.Nodes.Count, kept + (long)extract.KeysBeyond));
-    }
-
-    /// <summary>
-    /// A count of what merges of many large mappings share compares their names at most
-    /// <see cref="YamlExtractor.MostCompared"/> times: past it, a key two of the mappings hold is counted once for each, the
-    /// line of the mapping whose count passed it marked - and the file is read in a moment.
-    /// </summary>
-    [Fact]
-    public void MergesComparedPastTheBound_CountAKeyTwoMappingsHoldOnceForEach_TheLineMarked()
-    {
-        const int Mappings = 128;
-        const int Each = 100;
-        var text = new System.Text.StringBuilder();
-
-        // Each mapping holds the same 100 names and 100 of its own.
-        for (var at = 0; at < Mappings; at++)
-        {
-            text.Append($"s{at}: &s{at} {{ {string.Join(", ", Enumerable.Range(0, Each).Select(name => $"shared{name}: 1").Concat(Enumerable.Range(0, Each).Select(name => $"own{at}_{name}: 1")))} }}\n");
-        }
-
-        // The mapping that merges them all is nested past the depth keys are read at, so it is counted, never walked.
-        text.Append("x:\n a:\n  b:\n   c:\n    d:\n     e:\n      f:\n       g:\n        <<: [")
-            .Append(string.Join(", ", Enumerable.Range(0, Mappings).Select(at => $"*s{at}")))
-            .Append("]\n");
-
-        var watch = System.Diagnostics.Stopwatch.StartNew();
-        var extract = Read("shared.yml", text.ToString());
-        var kept = extract.Nodes.Count(node => node.Kind == CodeNodeKinds.Member);
-
-        // Told whole, the merging mapping holds the 100 names once and each mapping's own 100; past the bound, each
-        // mapping's 200.
-        Assert.Equal([new ExtractDynamic(Mappings + 9, $"the file's merge keys compare more than {YamlExtractor.MostCompared} names, and from here on a key both a mapping and what it merges hold, or two mappings it merges, is counted once for each")], extract.Dynamic);
-        Assert.Equal(Mappings * 2L * Each * 2, kept + (long)extract.KeysBeyond);
         Assert.True(watch.Elapsed < TimeSpan.FromSeconds(10), $"the file took {watch.Elapsed} to read");
     }
 
     /// <summary>
-    /// Aliases that each nest the one before deeper than any file is read are followed no deeper than a file's text is:
-    /// the alias whose node would nest past <see cref="DataNodes.MostNesting"/> levels where it is written is not followed,
-    /// the line it is on marked, and nothing recurses as deep as the chain.
+    /// Aliases that each nest the one before - a chain thousands long - are each a reference to the list before, read on
+    /// a stack of the reader's own; and a file that nests thousands of levels deep is read whole on a thread whose stack is
+    /// a fraction of what reading it by recursion would take.
     /// </summary>
     [Fact]
-    public void AliasesNestingEachOtherPastTheBound_AreNotFollowedPastIt()
+    public void AChainOfAliases_AndAFileNestedThousandsDeep_AreReadWhole()
     {
         var text = new System.Text.StringBuilder("a0: &a0 [1]\n");
 
@@ -356,34 +299,34 @@ public sealed class YamlExtractorTests : CodeGraphExtractorContractTests<YamlExt
             text.Append($"a{at}: &a{at} [*a{at - 1}]\n");
         }
 
-        var extract = Read("chain.yml", text.ToString());
+        var chain = Read("chain.yml", text.ToString());
 
-        // a{k} nests k + 1 lists, and its alias of a{k - 1} two deep: the first not followed is a62's, in a63 on line 64 -
-        // which then nests one list, so the chain begins again, and one in every 63 is not followed.
-        Assert.Equal(
-            new ExtractDynamic(DataNodes.MostNesting, $"the alias '*a{DataNodes.MostNesting - 2}' repeats here what nests more than {DataNodes.MostNesting} mappings and lists deep, and none of it is read"),
-            extract.Dynamic[0]);
-        Assert.Equal(5000 / (DataNodes.MostNesting - 1), extract.Dynamic.Count);
-        Assert.Null(extract.WithDigests(CodeFileText.Lines(text.ToString())).Problem("yaml", CodeFileText.Lines(text.ToString()).Count));
+        Assert.Equal(5001 * 2, chain.Nodes.Count);
+        Assert.Equal([.. Enumerable.Range(1, 5000).Select(at => ($"yaml:chain.yml#a{at}[0]", $"a{at - 1}", at + 1, $"yaml:chain.yml#a{at - 1}"))], References(chain));
+        Assert.Empty(chain.Dynamic);
+        Assert.Null(chain.WithDigests(CodeFileText.Lines(text.ToString())).Problem("yaml", CodeFileText.Lines(text.ToString()).Count));
+
+        const int Depth = 3000;
+        var deep = string.Concat(Enumerable.Repeat("{a: ", Depth)) + "1" + new string('}', Depth);
+        FileExtract? nested = null;
+        var thread = new Thread(() => nested = Read("deep.yml", deep), 256 * 1024);
+
+        thread.Start();
+        thread.Join();
+
+        Assert.Equal((Depth, Depth - 1), (nested!.Nodes.Count, nested.Nodes.Count(node => node.Kind == CodeNodeKinds.Section)));
+        Assert.Equal((string.Join('.', Enumerable.Repeat("a", Depth)), "1"), (nested.Nodes[^1].Qualified, nested.Nodes[^1].Summary));
+        Assert.Empty(nested.Dynamic);
     }
 
     /// <summary>
-    /// A key reached through an alias is on the alias's line, where this place writes it - inside its own section, as the
-    /// anchor's line would not be - and so is a key a merge key brings in through one; a workflow whose jobs alias each
-    /// other is an extract the core holds.
+    /// An alias is a key on its own line, inside its own section, whose value is the alias; a workflow whose jobs alias
+    /// each other is its written jobs' sections and a key for each alias, the anchor's steps named once, where they are
+    /// written - an extract the core holds.
     /// </summary>
     [Fact]
-    public void AKeyReachedThroughAnAlias_IsOnTheAliassLine_InsideItsSection()
+    public void AnAlias_IsAKeyOnItsOwnLine_InsideItsSection()
     {
-        var extract = Read("values.yml", Values);
-
-        Assert.Equal(
-            [("base", 1, 3), ("service", 4, 6), ("targets", 7, 9), ("steps", 10, 13)],
-            extract.Nodes.Where(node => node.Kind == CodeNodeKinds.Section).Select(node => (node.Name, node.Start, node.End)));
-        Assert.Equal(
-            [("service.name", 6), ("service.level", 5), ("service.retries", 5)],
-            extract.Nodes.Where(node => node.Qualified.StartsWith("service.", StringComparison.Ordinal)).Select(node => (node.Qualified, node.Start)));
-
         const string Workflow = """
             on: push
             jobs:
@@ -396,18 +339,22 @@ public sealed class YamlExtractorTests : CodeGraphExtractorContractTests<YamlExt
         var workflow = Read(".github/workflows/twice.yml", Workflow);
 
         Assert.Equal(
-            [("jobs", 2, 7), ("build", 3, 6), ("step 1", 6, 6), ("test", 7, 7), ("step 1", 7, 7)],
+            [("jobs", 2, 7), ("build", 3, 6), ("steps", 5, 6), ("step 1", 6, 6)],
             workflow.Nodes.Where(node => node.Kind == CodeNodeKinds.Section).Select(node => (node.Name, node.Start, node.End)));
+        Assert.Equal(
+            ("*job", 7, "yaml:.github/workflows/twice.yml#jobs"),
+            Assert.Single(workflow.Nodes, node => node.Id == "yaml:.github/workflows/twice.yml#jobs.test") is var test ? (test.Summary, test.Start, test.Parent) : default);
+        Assert.Equal([("yaml:.github/workflows/twice.yml#jobs.test", "job", 7, "yaml:.github/workflows/twice.yml#jobs.build")], References(workflow));
         Assert.Null(workflow.WithDigests(CodeFileText.Lines(Workflow)).Problem("yaml", CodeFileText.Lines(Workflow).Count));
     }
 
     /// <summary>
     /// A file of several documents is each document a section by its place - a Kubernetes file's Deployment and its
-    /// Service each its keys - and a merge key of a list merges each mapping of it at the merging path, the mapping's own
-    /// key winning and an earlier merged one over a later.
+    /// Service each its keys - and a merge key of a list is a reference to each mapping it merges, in order, a mapping
+    /// written in the list read where it is, at <c>&lt;&lt;</c> and its place.
     /// </summary>
     [Fact]
-    public void EachDocumentIsASectionByItsPlace_AndAMergeOfAListMergesEach()
+    public void EachDocumentIsASectionByItsPlace_AndAMergeOfAListRefersToEach()
     {
         var documents = Read("deploy.yaml", "kind: Deployment\nreplicas: 2\n---\nkind: Service\nport: 80\n");
 
@@ -422,16 +369,21 @@ public sealed class YamlExtractorTests : CodeGraphExtractorContractTests<YamlExt
             ],
             documents.Nodes.Select(node => (node.Id, node.Start, node.End)));
 
-        var merged = Read("merge.yml", "a: &a { timeout: 1, retries: 2 }\nb: &b { timeout: 3, level: x }\nc:\n  <<: [*a, *b]\n  retries: 9\n");
+        var merged = Read("merge.yml", "a: &a { timeout: 1, retries: 2 }\nb: &b { timeout: 3, level: x }\nc:\n  <<: [*a, *b, { own: 1 }]\n  retries: 9\n");
 
         Assert.Equal(
-            [("c.retries", "9"), ("c.timeout", "1"), ("c.level", "x")],
-            merged.Nodes.Where(node => node.Qualified.StartsWith("c.", StringComparison.Ordinal)).Select(node => (node.Qualified, node.Summary)));
+            [("c", null), ("c.<<", null), ("c.<<[2]", null), ("c.<<[2].own", "1"), ("c.retries", "9")],
+            merged.Nodes.Where(node => node.Signature.StartsWith('c')).Select(node => (node.Signature, node.Summary)));
+        Assert.Equal(
+            [("yaml:merge.yml#c", "a", 4, "yaml:merge.yml#a"), ("yaml:merge.yml#c", "b", 4, "yaml:merge.yml#b"), ("yaml:merge.yml#c", "<<", 4, "yaml:merge.yml#c.<<[2]")],
+            References(merged));
     }
 
     /// <summary>
     /// A job's <c>uses:</c> naming a reusable workflow of the repository is an import of that workflow's file - no
-    /// <c>action.yml</c> - and a step's naming a local action an import of its <c>action.yml</c>.
+    /// <c>action.yml</c> - and a step's naming a local action an import of its <c>action.yml</c>; a job or a step reached
+    /// through an alias or a merge is read once, on the line its <c>uses:</c> is written on, and a step is named where it is
+    /// written in a job's steps alone.
     /// </summary>
     [Fact]
     public void AJobsUses_IsAnImportOfTheReusableWorkflowsFile()
@@ -446,6 +398,29 @@ public sealed class YamlExtractorTests : CodeGraphExtractorContractTests<YamlExt
             """);
 
         Assert.Equal([("../../.github/workflows/build.yml", 4, false)], extract.Imports.Select(import => (import.Target, import.Line, import.Fallback)));
+
+        var anchored = Read(".github/workflows/anchored.yml", """
+            x-deploy: &deploy
+              uses: ./.github/actions/deploy
+            jobs:
+              one:
+                steps:
+                  - *deploy
+                  - <<: *deploy
+                    name: again
+              two:
+                steps:
+                  - *deploy
+            """);
+
+        Assert.Equal(
+            [("../../.github/actions/deploy/action.yml", 2, false), ("../../.github/actions/deploy/action.yaml", 2, true)],
+            anchored.Imports.Select(import => (import.Target, import.Line, import.Fallback)));
+
+        // A step is named where it is written in a job's steps: what an alias of it names keeps the name of its own place.
+        Assert.Equal(
+            ["x-deploy", "jobs", "one", "steps", "again", "two", "steps"],
+            anchored.Nodes.Where(node => node.Kind == CodeNodeKinds.Section).Select(node => node.Name));
     }
 
     /// <summary>
@@ -463,4 +438,8 @@ public sealed class YamlExtractorTests : CodeGraphExtractorContractTests<YamlExt
     }
 
     private static FileExtract Read(string path, string text) => new YamlExtractor().Extract(new CodeFileInput(path, text));
+
+    /// <summary>Each reference an extract makes, by where it is made from, the name it repeats, its line and the node of its own file it names.</summary>
+    private static IEnumerable<(string From, string Name, int Line, string? To)> References(FileExtract extract)
+        => extract.References.Select(reference => (reference.From, reference.Name, reference.Line, reference.Qualifier?.Kind == CodeQualifierKinds.Own ? reference.Qualifier.Name : null));
 }

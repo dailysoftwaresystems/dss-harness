@@ -24,9 +24,8 @@ namespace DssHarness.Core.Codebase;
 /// declares. A call a type does not hold is a member that extends that type or a base of it, which the call's file
 /// reaches - <c>unique</c>, since no declaration of the type says so. The first place that holds the name decides: one
 /// declaration is an edge <c>exact</c> where the code itself said where to look (a qualifier, an enclosing scope) and
-/// <c>unique</c> where it did not; two to <see cref="CodeConfidences.MostCandidates"/>
-/// are an edge to each, of <c>candidates</c>; more are counted unresolved; none is counted external, a callee the
-/// repository does not declare.
+/// <c>unique</c> where it did not; two or more are an edge to each, of <c>candidates</c>, however many they are - every
+/// declaration it may be, none dropped; none is counted external, a callee the repository does not declare.
 /// </para>
 /// <para>
 /// A node that stands for a suffix written onto others' names (<see cref="ExtractNode.SuffixOf"/>) is found where a name
@@ -163,15 +162,11 @@ public static class CodeGraphLinker
         Suffixes,
     }
 
-    /// <summary>One reference's finding: its edges, whether it named nothing or too much, and every key it read.</summary>
+    /// <summary>One reference's finding: its edges, whether it named nothing, and every key it read.</summary>
     /// <param name="Edges">The edges it makes.</param>
-    /// <param name="Counted">What it is counted as where it makes none: <see cref="External"/>, <see cref="Unresolved"/>, or neither.</param>
+    /// <param name="External">Whether it named nothing the repository declares, so it makes none and is counted external.</param>
     /// <param name="Reads">Every key its finding read, as <see cref="LinkKeys"/> numbers it.</param>
-    internal sealed record Finding(IReadOnlyList<CodeEdge> Edges, int Counted, int[] Reads)
-    {
-        public const int External = 1;
-        public const int Unresolved = 2;
-    }
+    internal sealed record Finding(IReadOnlyList<CodeEdge> Edges, bool External, int[] Reads);
 
     /// <summary>
     /// What one file's references found: in the first pass of the bases, and in the last pass each reference is found in.
@@ -328,6 +323,9 @@ public static class CodeGraphLinker
         /// <summary>The containers each written name ends, as the last way a qualifier is found: looked for once.</summary>
         private readonly Dictionary<string, (IReadOnlyList<Declaration> Value, int[] Reads)> _endings = new(StringComparer.Ordinal);
 
+        /// <summary>What each file imported by path makes visible of each name, its exports followed: found once, every later finding reading it again.</summary>
+        private readonly Dictionary<(string Path, string Name, bool Suffixed), (IReadOnlyList<Declaration> Value, int[] Reads)> _visible = [];
+
         /// <summary>Every member declared to extend a type, by its name: what a call a type does not hold may be.</summary>
         private readonly Dictionary<string, List<Declaration>> _extensions = new(StringComparer.Ordinal);
 
@@ -342,7 +340,6 @@ public static class CodeGraphLinker
 
         private readonly List<CodeEdge> _edges = [];
         private readonly Dictionary<string, int> _external = new(StringComparer.Ordinal);
-        private readonly Dictionary<string, int> _unresolved = new(StringComparer.Ordinal);
 
         /// <summary>
         /// Each type's bases, by id, that a finding looks through now - none in the first pass of the bases - as
@@ -530,7 +527,7 @@ public static class CodeGraphLinker
                 .Concat(_byId.Select(pair => new CodeGraphSymbol(pair.Key, pair.Value[0].Node.Kind, [.. pair.Value.Select(declaration => declaration.File.Path).Distinct(StringComparer.Ordinal)])))
                 .ToList();
 
-            return new CodeGraphLinked(symbols, edges, _external, _unresolved, _resolved.Count)
+            return new CodeGraphLinked(symbols, edges, _external, _resolved.Count)
             {
                 Memory = new LinkMemory(_keys, _byPath, _found.ToDictionary(found => found.Key.Path, found => found.Value, StringComparer.Ordinal), first, final),
             };
@@ -626,13 +623,9 @@ public static class CodeGraphLinker
                 return;
             }
 
-            if (finding.Counted == Finding.External)
+            if (finding.External)
             {
                 Count(_external, from.Id);
-            }
-            else if (finding.Counted == Finding.Unresolved)
-            {
-                Count(_unresolved, from.Id);
             }
         }
 
@@ -665,12 +658,7 @@ public static class CodeGraphLinker
 
                 if (found.Count == 0)
                 {
-                    return new Finding([], Finding.External, [.. _reads]);
-                }
-
-                if (found.Count > CodeConfidences.MostCandidates)
-                {
-                    return new Finding([], Finding.Unresolved, [.. _reads]);
+                    return new Finding([], External: true, [.. _reads]);
                 }
 
                 var sure = found.Count == 1 ? confidence : CodeConfidences.Candidates;
@@ -682,7 +670,7 @@ public static class CodeGraphLinker
                         reference.Kind == CodeEdgeKinds.Calls && target.Node.Kind == CodeNodeKinds.Type ? CodeEdgeKinds.Instantiates : reference.Kind,
                         reference.Line,
                         sure))],
-                    0,
+                    External: false,
                     [.. _reads]);
             }
             finally
@@ -939,6 +927,11 @@ public static class CodeGraphLinker
                 case CodeQualifierKinds.Prefix:
                     return (Prefixed(from, qualifier.Name!, name, imported), CodeConfidences.Exact);
 
+                case CodeQualifierKinds.Own:
+                    // The node of its own file its implementation names by id - what a YAML alias or merge repeats, read
+                    // once where it is written: that one, exact. Its file changing finds the reference again, so nothing is read.
+                    return (_owners[from.File].TryGetValue(qualifier.Name!, out var own) && accepts(own) ? [own] : [], CodeConfidences.Exact);
+
                 case CodeQualifierKinds.Type:
                     return Typed(from, Containers(from, qualifier.Name!), qualifier.Name!, name, accepts, withSelf: true);
 
@@ -1077,34 +1070,47 @@ public static class CodeGraphLinker
 
             return ImportsOf(from.File).Any(made => made.Import.Lets(shown) && (made.Import.Form == CodeImportForms.Scope
                 ? made.Import.Prefix is null && holders.Contains(OpenKey(made.Import.Target))
-                : FilesOf(made.Import, made.File).Any(target => Exposes(target, shown, holders, declaration.File.Path, []))));
+                : FilesOf(made.Import, made.File).Any(target => Exposes(target, shown, holders, declaration.File.Path))));
         }
 
         /// <summary>
-        /// Whether the file at <paramref name="path"/>, imported, makes visible what one of <paramref name="holders"/> holds
+        /// Whether the file at <paramref name="start"/>, imported, makes visible what one of <paramref name="holders"/> holds
         /// or the file <paramref name="declared"/> declares: it is that file, it declares one of those scopes open, or a file
-        /// it exports does - the export's filter letting <paramref name="shown"/> - each file once.
+        /// it exports does - the export's filter letting <paramref name="shown"/> - each file visited once, however its exports
+        /// come round, the files it exports followed on a stack of its own rather than the call's.
         /// </summary>
-        private bool Exposes(string path, string shown, HashSet<string> holders, string declared, HashSet<string> seen)
+        private bool Exposes(string start, string shown, HashSet<string> holders, string declared)
         {
-            if (!seen.Add(path))
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            var pending = new Stack<string>([start]);
+
+            while (pending.TryPop(out var path))
             {
-                return false;
+                if (!seen.Add(path))
+                {
+                    continue;
+                }
+
+                if (path == declared || OpensOf(path).Any(scope => holders.Contains(OpenKey(scope))))
+                {
+                    return true;
+                }
+
+                Touch(Read.Imports, path);
+
+                if (!_byPath.TryGetValue(path, out var file) || file.Extract is null)
+                {
+                    continue;
+                }
+
+                // The files it exports, in the order it exports them: the first pushed last.
+                foreach (var target in Taken(file).Where(export => export.Export && export.Lets(shown)).SelectMany(export => FilesOf(export, file)).Reverse())
+                {
+                    pending.Push(target);
+                }
             }
 
-            if (path == declared || OpensOf(path).Any(scope => holders.Contains(OpenKey(scope))))
-            {
-                return true;
-            }
-
-            Touch(Read.Imports, path);
-
-            if (!_byPath.TryGetValue(path, out var file) || file.Extract is null)
-            {
-                return false;
-            }
-
-            return Taken(file).Any(export => export.Export && export.Lets(shown) && FilesOf(export, file).Any(target => Exposes(target, shown, holders, declared, seen)));
+            return false;
         }
 
         /// <summary>
@@ -1399,7 +1405,6 @@ public static class CodeGraphLinker
                 return InScope(OpenKey(import.Target), name, accepts, withBases: true);
             }
 
-            walked ??= new HashSet<string>(StringComparer.Ordinal);
             return Distinct(FilesOf(import, file).SelectMany(target => Visible(target, name, walked, suffixed)).Where(accepts));
         }
 
@@ -1407,41 +1412,60 @@ public static class CodeGraphLinker
         /// What a file imported by path makes visible named <paramref name="name"/>: its own top-level declarations, those of
         /// the open scopes it declares, those it declares exported by that name (<see cref="ExtractNode.Exports"/>) - a node
         /// standing for a suffix written onto others' exported by one it stands for among them - and what each file it
-        /// exports makes visible, that export's filter applied - each file once, so exports that come round again end. Where
-        /// <paramref name="suffixed"/>, the top-level nodes standing for a suffix written onto others' whose names it is one
-        /// of besides (<see cref="Suffixed"/>).
+        /// exports makes visible, that export's filter applied. Where <paramref name="suffixed"/>, the top-level nodes standing
+        /// for a suffix written onto others' whose names it is one of besides (<see cref="Suffixed"/>). A walk that shares
+        /// <paramref name="walked"/> with walks before it - a style sheet's imports walked as one - visits none of the files
+        /// they reached and adds those it reaches; any other is found once a file, a name and <paramref name="suffixed"/>,
+        /// every later finding of it reading the first one's answer and what it read (<see cref="VisibleFrom"/>).
         /// </summary>
-        private IEnumerable<Declaration> Visible(string path, string name, HashSet<string> seen, bool suffixed = false)
+        private IReadOnlyList<Declaration> Visible(string start, string name, HashSet<string>? walked, bool suffixed)
+            => walked is null
+                ? Cached(_visible, (start, name, suffixed), () => VisibleFrom(start, name, new HashSet<string>(StringComparer.Ordinal), suffixed))
+                : VisibleFrom(start, name, walked, suffixed);
+
+        /// <summary>
+        /// What <see cref="Visible"/> finds from the file at <paramref name="start"/>, the files <paramref name="seen"/> holds
+        /// not visited and each it visits added to it: each file visited once, so exports that come round again end, followed
+        /// on a stack of its own rather than the call's.
+        /// </summary>
+        private List<Declaration> VisibleFrom(string start, string name, HashSet<string> seen, bool suffixed)
         {
-            if (!seen.Add(path))
+            var visible = new List<Declaration>();
+            var pending = new Stack<string>([start]);
+
+            while (pending.TryPop(out var path))
             {
-                return [];
-            }
-
-            var file = _byPath.GetValueOrDefault(path);
-            var own = TopNamed(path, name).Concat(OpensOf(path).SelectMany(scope => ScopeNamed(OpenKey(scope), name))).Concat(ExportedNamed(path, name)).ToList();
-
-            if (file is not null)
-            {
-                own.AddRange(Suffixed(file, name, exported: true));
-
-                if (suffixed)
+                if (!seen.Add(path))
                 {
-                    own.AddRange(Suffixed(file, name, exported: false));
+                    continue;
+                }
+
+                visible.AddRange(TopNamed(path, name).Concat(OpensOf(path).SelectMany(scope => ScopeNamed(OpenKey(scope), name))).Concat(ExportedNamed(path, name)));
+                var file = _byPath.GetValueOrDefault(path);
+
+                if (file is not null)
+                {
+                    visible.AddRange(Suffixed(file, name, exported: true));
+
+                    if (suffixed)
+                    {
+                        visible.AddRange(Suffixed(file, name, exported: false));
+                    }
+                }
+
+                Touch(Read.Imports, path);
+
+                if (file?.Extract is not null)
+                {
+                    // Each exported file in the order the file exports it, a file before what it exports in turn.
+                    foreach (var target in Taken(file).Where(import => import.Export && import.Lets(name)).SelectMany(export => FilesOf(export, file)).Reverse())
+                    {
+                        pending.Push(target);
+                    }
                 }
             }
 
-            Touch(Read.Imports, path);
-
-            if (file?.Extract is not null)
-            {
-                foreach (var export in Taken(file).Where(import => import.Export && import.Lets(name)))
-                {
-                    own.AddRange(FilesOf(export, file).SelectMany(target => Visible(target, name, seen, suffixed)));
-                }
-            }
-
-            return own;
+            return visible;
         }
 
         /// <summary>The files of the tree <paramref name="import"/> names, by its form: found once for each import of each file.</summary>
@@ -1588,13 +1612,6 @@ public static class CodeGraphLinker
                     }
 
                     var targets = FilesOf(import, file);
-
-                    if (targets.Count > CodeConfidences.MostCandidates)
-                    {
-                        Count(_unresolved, from);
-                        continue;
-                    }
-
                     var sure = import.Form == CodeImportForms.Ending
                         ? targets.Count == 1 ? CodeConfidences.Unique : CodeConfidences.Candidates
                         : CodeConfidences.Exact;
@@ -1667,7 +1684,7 @@ public static class CodeGraphLinker
         /// of its kind, name and arity, of the type itself, else of its bases it inherits or mixes in a level at a time, each
         /// level a rank at a time as <see cref="LevelUp"/> ranks it - the first rank that holds one deciding, as sure as the
         /// surest way up to it, a way as sure as the least sure edge on it, and <c>candidates</c> where several in that rank
-        /// answer alike; none past <see cref="CodeConfidences.MostCandidates"/>.
+        /// answer alike, each of them.
         /// </summary>
         private List<(Declaration Answer, string Sure)> Answering(string type, Declaration member, ILookup<string, CodeEdge> bases)
         {
@@ -1694,9 +1711,7 @@ public static class CodeGraphLinker
 
                     if (found.Count > 0)
                     {
-                        return found.Count == 1 ? found
-                            : found.Count <= CodeConfidences.MostCandidates ? [.. found.Select(answer => (answer.Answer, CodeConfidences.Candidates))]
-                            : [];
+                        return found.Count == 1 ? found : [.. found.Select(answer => (answer.Answer, CodeConfidences.Candidates))];
                     }
                 }
 
@@ -1743,7 +1758,7 @@ public static class CodeGraphLinker
                 var bodies = Distinct(definitions[(prototype.File.Language, prototype.Node.Qualified)]
                     .Where(body => body.Id != prototype.Id && Declared(prototype, body) && Sees(prototype.File, body)));
 
-                if (bodies.Count is > 0 and <= CodeConfidences.MostCandidates)
+                if (bodies.Count > 0)
                 {
                     foreach (var body in bodies)
                     {
@@ -1785,12 +1800,14 @@ public static class CodeGraphLinker
 
         /// <summary>
         /// The keys' join: each <c>uses</c> edge a key of a configuration file gains - from the declaration that holds a
-        /// string literal equal to the key's last segment or its whole path, and from each value (a field, a property)
-        /// whose name is the key's last segment as a declared naming policy writes it - of
-        /// <see cref="CodeConfidences.Candidates"/>, for nothing says the code reads that key. A literal or a member's name
-        /// that names more than <see cref="CodeConfidences.MostCandidates"/> keys joins none, as a reference that names more
-        /// declarations is no edge: a word every file of data holds - <c>name</c>, <c>version</c> - says nothing of which
-        /// key is read. A use is recall and never a doubt, so none of it is counted anywhere.
+        /// string literal naming the key, and from each value (a field, a property) whose name is the key's last segment as
+        /// a declared naming policy writes it - of <see cref="CodeConfidences.Candidates"/>, for nothing says the code reads
+        /// that key. A literal names the keys of its last segment, of its whole path, and of the path it spells as .NET's
+        /// configuration does (<see cref="CodeKeyPaths.Dotted"/>), and the keys a path reaches through what its file repeats
+        /// by reference (<see cref="KeyPaths"/>); every key it names is joined, however many they are - a word every file of
+        /// data holds, <c>name</c>, <c>version</c>, joined to each - and the confidence says how sure each is. A key its
+        /// file keeps to itself - an MSBuild project's own property - is no other file's to read, so it joins none. A use is
+        /// recall and never a doubt, so none of it is counted anywhere.
         /// </summary>
         private void Keys()
         {
@@ -1798,7 +1815,7 @@ public static class CodeGraphLinker
             var byPath = new Dictionary<string, List<Declaration>>(StringComparer.Ordinal);
             var byMember = new Dictionary<string, List<Declaration>>(StringComparer.Ordinal);
 
-            foreach (var key in _declarations.Where(declaration => declaration.Node.SubKind == CodeSubKinds.Key).DistinctBy(declaration => declaration.Id, StringComparer.Ordinal))
+            foreach (var key in _declarations.Where(declaration => declaration.Node.SubKind == CodeSubKinds.Key && !declaration.FileOnly).DistinctBy(declaration => declaration.Id, StringComparer.Ordinal))
             {
                 Add(bySegment, key.Node.Name, key);
                 Add(byPath, key.Node.Qualified, key);
@@ -1814,6 +1831,8 @@ public static class CodeGraphLinker
                 return;
             }
 
+            var through = new KeyPaths(_files, _owners);
+
             foreach (var file in _files)
             {
                 if (file.Extract?.Literals is not { Count: > 0 } literals)
@@ -1823,17 +1842,24 @@ public static class CodeGraphLinker
 
                 foreach (var literal in literals)
                 {
-                    var joined = Distinct((bySegment.TryGetValue(literal.Value, out var byName) ? byName : []).Concat(byPath.TryGetValue(literal.Value, out var named) ? named : []));
+                    var spelt = CodeKeyPaths.Dotted(literal.Value);
+                    var joined = Distinct(
+                        (bySegment.TryGetValue(literal.Value, out var byName) ? byName : [])
+                            .Concat(byPath.TryGetValue(literal.Value, out var named) ? named : [])
+                            .Concat(spelt is not null && byPath.TryGetValue(spelt, out var dotted) ? dotted : [])
+                            .Concat(through.Reached(literal.Value))
+                            .Concat(spelt is null ? [] : through.Reached(spelt))
+                            .Where(key => key.Node.SubKind == CodeSubKinds.Key && !key.FileOnly));
 
                     // The node whose code holds the literal, as its implementation said it; the file's own where none does.
-                    foreach (var key in joined.Count <= CodeConfidences.MostCandidates ? joined : [])
+                    foreach (var key in joined)
                     {
                         _edges.Add(new CodeEdge(literal.Node ?? CodeGraphIds.FileId(file.Path), key.Id, CodeEdgeKinds.Uses, literal.Line, CodeConfidences.Candidates));
                     }
                 }
             }
 
-            foreach (var (name, keys) in byMember.Where(named => named.Value.Count <= CodeConfidences.MostCandidates))
+            foreach (var (name, keys) in byMember)
             {
                 // A deserialiser binds a key to a value of its name - a field, a property - and never to a member it calls,
                 // nor to another file's data.
@@ -1843,6 +1869,238 @@ public static class CodeGraphLinker
                     {
                         _edges.Add(new CodeEdge(member.Id, key.Id, CodeEdgeKinds.Uses, member.Node.Start, CodeConfidences.Candidates));
                     }
+                }
+            }
+        }
+
+        /// <summary>
+        /// The keys a path reaches through what its data file repeats by reference: each node of a file that refers to
+        /// another of its own (<see cref="CodeQualifierKinds.Own"/>) - a YAML alias, a mapping that merges others - stands
+        /// for what it refers to, so a path that runs on past it runs on in each node it refers to, in order. Within a file,
+        /// the longest part of the path the file holds a node at decides: a path the file holds whole is what it names, and
+        /// one past a node that refers to none names nothing more - as a mapping's own key shadows the key of a mapping it
+        /// merges. Each place a path is looked for is found once, every later look reading the first one's answer, and a
+        /// place that comes round to itself through its references ends there; the files are followed by a trie of the
+        /// places their references stand at, so a path is read once whatever files hold one.
+        /// </summary>
+        private sealed class KeyPaths
+        {
+            /// <summary>The places of every node each file that refers to its own holds, as a trie, each with the nodes at it and what it refers to.</summary>
+            private readonly Dictionary<CodeGraphFile, Place> _files = new(ReferenceEqualityComparer.Instance);
+
+            /// <summary>The places where a reference stands, of every file: each with the files whose node at it refers on.</summary>
+            private readonly Place _referring = new();
+
+            /// <summary>What each path is in each file, found once.</summary>
+            private readonly Dictionary<(CodeGraphFile File, string Path), IReadOnlyList<Declaration>> _found = [];
+
+            /// <summary>The paths of each file being looked for now, so a path its references bring round again ends.</summary>
+            private readonly HashSet<(CodeGraphFile File, string Path)> _looking = [];
+
+            public KeyPaths(IEnumerable<CodeGraphFile> files, IReadOnlyDictionary<CodeGraphFile, Dictionary<string, Declaration>> owners)
+            {
+                foreach (var file in files)
+                {
+                    if (file.Extract?.References.Where(reference => reference.Qualifier is { Kind: CodeQualifierKinds.Own }).ToList() is not { Count: > 0 } refers)
+                    {
+                        continue;
+                    }
+
+                    var own = owners[file];
+                    var root = new Place();
+
+                    foreach (var node in own.Values.DistinctBy(node => node.Id, StringComparer.Ordinal))
+                    {
+                        if (CodeKeyPaths.OfNode(node.Node, file.Path) is { } path)
+                        {
+                            root.At(path).Nodes.Add(node);
+                        }
+                    }
+
+                    foreach (var reference in refers)
+                    {
+                        if (own.TryGetValue(reference.From, out var from) && own.TryGetValue(reference.Qualifier!.Name!, out var to)
+                            && CodeKeyPaths.OfNode(from.Node, file.Path) is { } at && CodeKeyPaths.OfNode(to.Node, file.Path) is { } target)
+                        {
+                            root.At(at).Refers.Add(target);
+
+                            if (_referring.At(at).Files.Add(file))
+                            {
+                                _referring.At(at).Holding.Add(file);
+                            }
+                        }
+                    }
+
+                    _files[file] = root;
+                }
+            }
+
+            /// <summary>The nodes <paramref name="path"/> reaches through a reference, in every file whose references it runs past.</summary>
+            public IEnumerable<Declaration> Reached(string path)
+            {
+                if (_files.Count == 0)
+                {
+                    return [];
+                }
+
+                var reached = new List<Declaration>();
+                var place = _referring;
+
+                // Each file a node on the path refers on from, nearest the top first: the path is looked for in each.
+                foreach (var (start, end) in CodeKeyPaths.Places(path))
+                {
+                    if (!place.Next.TryGetValue(path[start..end], out var next))
+                    {
+                        break;
+                    }
+
+                    place = next;
+
+                    if (end < path.Length)
+                    {
+                        foreach (var file in place.Holding)
+                        {
+                            reached.AddRange(In(file, path));
+                        }
+                    }
+                }
+
+                return reached;
+            }
+
+            /// <summary>
+            /// What <paramref name="path"/> names in <paramref name="file"/>: the nodes at it, where the file holds it whole;
+            /// else, past the longest part of it the file holds, what the rest names in each node that part refers to - the
+            /// paths it runs on into followed on a stack of their own, each answered once.
+            /// </summary>
+            private IReadOnlyList<Declaration> In(CodeGraphFile file, string path)
+            {
+                if (_found.TryGetValue((file, path), out var known))
+                {
+                    return known;
+                }
+
+                // The path asked for at the bottom, answered by nothing but what it runs on into.
+                var asked = new Looked(null, [path]);
+                var pending = new Stack<Looked>([asked]);
+
+                while (pending.TryPeek(out var looked))
+                {
+                    if (looked.Next == looked.Paths.Count)
+                    {
+                        pending.Pop();
+
+                        if (looked.Key is { } done)
+                        {
+                            _looking.Remove(done);
+                            _found[done] = looked.Found;
+                            pending.Peek().Found.AddRange(looked.Found);
+                        }
+
+                        continue;
+                    }
+
+                    var key = (file, looked.Paths[looked.Next++]);
+
+                    if (_found.TryGetValue(key, out var answered))
+                    {
+                        looked.Found.AddRange(answered);
+                    }
+                    else if (_looking.Add(key))
+                    {
+                        // A path being looked for already has come round to itself through its references: it names nothing more.
+                        var (held, onward) = Look(file, key.Item2);
+
+                        if (onward.Count == 0)
+                        {
+                            _looking.Remove(key);
+                            _found[key] = held;
+                            looked.Found.AddRange(held);
+                        }
+                        else
+                        {
+                            pending.Push(new Looked(key, onward));
+                        }
+                    }
+                }
+
+                return asked.Found;
+            }
+
+            /// <summary>
+            /// What <paramref name="path"/> is in <paramref name="file"/> at a look: the nodes at it, where the file holds it
+            /// whole; else the paths it runs on into, past the longest part of it the file holds, in each node that part refers
+            /// to - none where that part refers to none.
+            /// </summary>
+            private (IReadOnlyList<Declaration> Held, IReadOnlyList<string> Onward) Look(CodeGraphFile file, string path)
+            {
+                var place = _files[file];
+                Place? held = null;
+                var heldEnd = 0;
+                var whole = true;
+
+                foreach (var (start, end) in CodeKeyPaths.Places(path))
+                {
+                    if (!place.Next.TryGetValue(path[start..end], out var next))
+                    {
+                        whole = false;
+                        break;
+                    }
+
+                    place = next;
+
+                    if (place.Nodes.Count > 0)
+                    {
+                        (held, heldEnd) = (place, end);
+                    }
+                }
+
+                return whole && place.Nodes.Count > 0 ? (place.Nodes, [])
+                    : held is null ? ([], [])
+                    : ([], [.. held.Refers.Select(target => target + path[heldEnd..])]);
+            }
+
+            /// <summary>One path looked for, with the paths it runs on into, how many of them are followed, and what they name together.</summary>
+            /// <param name="Key">The file and path, where it is one to answer; <see langword="null"/> for the path asked for, which is answered by what it runs on into.</param>
+            /// <param name="Paths">The paths it runs on into.</param>
+            private sealed record Looked((CodeGraphFile File, string Path)? Key, IReadOnlyList<string> Paths)
+            {
+                public int Next { get; set; }
+
+                public List<Declaration> Found { get; } = [];
+            }
+
+            /// <summary>One place of a trie of paths: the places that follow it, the nodes at it, what they refer to, and the files referring on from it.</summary>
+            private sealed class Place
+            {
+                public Dictionary<string, Place> Next { get; } = new(StringComparer.Ordinal);
+
+                public List<Declaration> Nodes { get; } = [];
+
+                public List<string> Refers { get; } = [];
+
+                public HashSet<CodeGraphFile> Files { get; } = new(ReferenceEqualityComparer.Instance);
+
+                public List<CodeGraphFile> Holding { get; } = [];
+
+                /// <summary>The place <paramref name="path"/> names from this one, made where it is not yet.</summary>
+                public Place At(string path)
+                {
+                    var place = this;
+
+                    foreach (var (start, end) in CodeKeyPaths.Places(path))
+                    {
+                        var text = path[start..end];
+
+                        if (!place.Next.TryGetValue(text, out var next))
+                        {
+                            place.Next[text] = next = new Place();
+                        }
+
+                        place = next;
+                    }
+
+                    return place;
                 }
             }
         }
@@ -2099,8 +2357,8 @@ public static class CodeGraphLinker
         /// name and its id - and, for a type or a scope, under its qualified name, its name's last run and its own scope's -
         /// each scope's parent, its open scopes, its imports with its language, what every file of its language imports, and
         /// its address roots, each whole or not and local or not. A declaration's part is what a finding reads of it, by
-        /// whichever key it was reached: its id, its file's language, its kind, the scope it is declared in and the scope it
-        /// is, the declaration that holds it - which says whether it is its file's top - what it takes, its value's type, what
+        /// whichever key it was reached: its id, its file's language, its kind and its kind within it - what
+        /// <see cref="Takes"/> decides by - the scope it is declared in and the scope it is, the declaration that holds it - which says whether it is its file's top - what it takes, its value's type, what
         /// it extends, the scope it is kept to and the names it is exported by. Its name, its qualified name and each name it is exported by
         /// are keys and no field - a declaration whose name changed leaves one key for another, and a scope's key holds its
         /// qualified name; a line or a body is never read. A file with no extract holds no part: one that gains or loses its extract
@@ -2163,6 +2421,7 @@ public static class CodeGraphLinker
                     node.Id,
                     file.Language ?? None,
                     node.Kind,
+                    node.SubKind ?? None,
                     scopeKey ?? None,
                     own ?? None,
                     node.Parent ?? None,
@@ -2328,11 +2587,18 @@ public static class CodeGraphLinker
     /// the file it imports declares; and a use an import makes visible (<paramref name="imported"/>) by a name the file
     /// that declares the node exports it by - <c>import { btn } from './x.module.css'</c> as <c>styles.btn</c> is, and a
     /// node standing for a suffix written onto others' (<see cref="ExtractNode.SuffixOf"/>), which no name finds but one
-    /// it was matched to stand for - never one that names it by its name alone, as code names code: the one place that
-    /// says what a reference may reach.
+    /// it was matched to stand for - never one that names it by its name alone, as code names code; and a reference to a
+    /// node of its own file by its id (<see cref="CodeQualifierKinds.Own"/>) reaches that node, whatever it is: the one
+    /// place that says what a reference may reach.
     /// </summary>
     private static bool Takes(ExtractReference reference, Declaration target, bool imported)
     {
+        // A reference to a node of its own file by id names that node, whatever kind it is.
+        if (reference.Qualifier?.Kind == CodeQualifierKinds.Own)
+        {
+            return true;
+        }
+
         if (CodeSubKinds.ReachedBy(reference.Qualifier?.Kind) is { } reached)
         {
             return target.Node.Kind == CodeNodeKinds.Member && target.Node.SubKind == reached;
@@ -2436,13 +2702,11 @@ public sealed record CodeGraphSymbol(string Id, string Kind, IReadOnlyList<strin
 /// <param name="Symbols">Every node: each file's, and each declaration's, a declaration of several parts once.</param>
 /// <param name="Edges">Every edge, each once.</param>
 /// <param name="External">For each node, how many of its references named nothing the repository declares.</param>
-/// <param name="Unresolved">For each node, how many of its references named more declarations than an edge lists.</param>
 /// <param name="References">How many references were found: every one by a whole link, those a change could have changed by a link made again.</param>
 public sealed record CodeGraphLinked(
     IReadOnlyList<CodeGraphSymbol> Symbols,
     IReadOnlyList<CodeEdge> Edges,
     IReadOnlyDictionary<string, int> External,
-    IReadOnlyDictionary<string, int> Unresolved,
     int References)
 {
     /// <summary>What the link keeps for one made again from it (<see cref="CodeGraphLinker.Relink"/>).</summary>

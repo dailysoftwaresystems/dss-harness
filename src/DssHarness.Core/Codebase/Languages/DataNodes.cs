@@ -1,45 +1,25 @@
-using System.Globalization;
-using System.Text;
-using DssHarness.Core.Output;
-
 namespace DssHarness.Core.Codebase.Languages;
 
 /// <summary>
 /// The nodes of a data file - JSON's, YAML's, XML's - as one owner makes them: a configuration key a <c>member</c>
-/// SubKind <see cref="CodeSubKinds.Key"/> named by its path with its value as its summary, a container at the file's top a
-/// <c>section</c> over its lines, an XML element a <c>member</c> SubKind <see cref="CodeSubKinds.Element"/>; every one
-/// counted against <see cref="FileExtract.MostKeys"/>, the keys and elements past it - and those nested deeper than
-/// <see cref="MostDepth"/> - counted in <see cref="FileExtract.KeysBeyond"/>; every text fitted to the model's bounds, a
-/// summary and a signature flattened onto one line and cut (<see cref="ExtractText"/>), so no data file's extract is one the
-/// core refuses.
+/// SubKind <see cref="CodeSubKinds.Key"/> named by its path with its value as its summary, a container a <c>section</c>
+/// over its lines inside the section that holds it, an XML element a <c>member</c> SubKind
+/// <see cref="CodeSubKinds.Element"/>, and what the file repeats by reference - a YAML alias, a merge key - a reference to
+/// the node it repeats, read once where it is written (<see cref="CodeQualifierKinds.Own"/>). Every key, container and
+/// element the file holds is a node, however many and however deep, a walk of them followed on a stack of its own; every
+/// text fitted to the model's bounds, a summary and a signature flattened onto one line and cut
+/// (<see cref="ExtractText"/>), so no data file's extract is one the core refuses.
 /// </summary>
 /// <param name="language">The implementation's name, which prefixes every id.</param>
 /// <param name="file">The file's path, relative to the tree with forward separators.</param>
 /// <param name="lineCount">The file's lines (<see cref="CodeFileText.Lines"/>), which every line named is held within.</param>
 internal sealed class DataNodes(string language, string file, int lineCount)
 {
-    /// <summary>How deep a data file's keys are read, in places of their path: a key nested deeper is counted, not kept.</summary>
-    public const int MostDepth = 8;
-
-    /// <summary>
-    /// How deep a data file may nest at all, past which nothing deeper of it is read and the place is marked: a guard against
-    /// a file made to nest without end, whose reading would recurse as deep.
-    /// </summary>
-    public const int MostNesting = 64;
-
-    /// <summary>
-    /// The most visits reading a file makes through what it repeats by reference - a YAML alias, each node reached through
-    /// one, each key a merge reads through one - past which what it repeats is counted, not read, and the place is marked:
-    /// a few hundred bytes of aliases can stand for millions of nodes, and each visit past the budget costs no more than
-    /// its count.
-    /// </summary>
-    public const int MostRepeated = 10 * FileExtract.MostKeys;
-
     private readonly ExtractIds _ids = new();
     private readonly List<ExtractNode> _nodes = [];
+    private readonly Dictionary<string, int> _at = new(StringComparer.Ordinal);
     private readonly List<ExtractDynamic> _dynamic = [];
-    private long _beyond;
-    private int _repeated;
+    private readonly List<ExtractReference> _references = [];
 
     /// <summary>The nodes made, in the order they were made.</summary>
     public IReadOnlyList<ExtractNode> Nodes => _nodes;
@@ -47,40 +27,21 @@ internal sealed class DataNodes(string language, string file, int lineCount)
     /// <summary>The places a walk stopped reading, each with why.</summary>
     public IReadOnlyList<ExtractDynamic> Dynamic => _dynamic;
 
-    /// <summary>How many keys and elements are counted and not kept, at most <see cref="int.MaxValue"/>.</summary>
-    public int Beyond => (int)Math.Min(_beyond, int.MaxValue);
-
-    /// <summary>Whether the extract keeps <see cref="FileExtract.MostKeys"/> nodes already, so every key and element after is counted.</summary>
-    public bool Full => _nodes.Count >= FileExtract.MostKeys;
-
-    /// <summary>Counts <paramref name="keys"/> keys or elements no node is made of.</summary>
-    /// <param name="keys">How many.</param>
-    public void Count(long keys) => _beyond = Sum(_beyond, keys);
+    /// <summary>The references the file makes to nodes of its own: what it repeats by reference, each to the node it repeats.</summary>
+    public IReadOnlyList<ExtractReference> References => _references;
 
     /// <summary>Marks <paramref name="line"/> as a place reading stopped at, with why.</summary>
     /// <param name="line">The line, from 1, held within the file's.</param>
     /// <param name="why">Why reading stopped there.</param>
     public void Stopped(int line, string why) => _dynamic.Add(new ExtractDynamic(FileExtract.LineWithin(line, lineCount), why));
 
-    /// <summary>
-    /// The key at <paramref name="path"/> on <paramref name="line"/>, its value <paramref name="value"/>, inside
-    /// <paramref name="parent"/>: its id, or <see langword="null"/> where the extract is <see cref="Full"/>, the key counted.
-    /// </summary>
-    public string? Key(IReadOnlyList<DataPlace> path, int line, string? value, string? parent)
+    /// <summary>The key at <paramref name="path"/> on <paramref name="line"/>, its value <paramref name="value"/>, inside <paramref name="parent"/>: its id.</summary>
+    public string Key(IReadOnlyList<DataPlace> path, int line, string? value, string? parent)
         => Key(path[^1].Written, PathOf(path), line, value, parent);
 
-    /// <summary>
-    /// The key <paramref name="name"/> - its whole path <paramref name="qualified"/> - on <paramref name="line"/>: its id, or
-    /// <see langword="null"/> where the extract is <see cref="Full"/>, the key counted.
-    /// </summary>
-    public string? Key(string name, string qualified, int line, string? value, string? parent)
+    /// <summary>The key <paramref name="name"/> - its whole path <paramref name="qualified"/> - on <paramref name="line"/>: its id.</summary>
+    public string Key(string name, string qualified, int line, string? value, string? parent)
     {
-        if (Full)
-        {
-            Count(1);
-            return null;
-        }
-
         var at = FileExtract.LineWithin(line, lineCount);
 
         return Add(new ExtractNode(_ids.Next($"{language}:{file}#{ExtractText.Whole(qualified)}"), CodeNodeKinds.Member, ExtractText.Whole(name), ExtractText.Whole(qualified), at, at, ExtractText.Signature(ExtractText.Flat(qualified)))
@@ -91,19 +52,9 @@ internal sealed class DataNodes(string language, string file, int lineCount)
         });
     }
 
-    /// <summary>
-    /// The element <paramref name="name"/> - its whole path <paramref name="qualified"/> - beginning on
-    /// <paramref name="line"/>, inside <paramref name="parent"/>: its id, or <see langword="null"/> where the extract is
-    /// <see cref="Full"/>, the element counted.
-    /// </summary>
-    public string? Element(string name, string qualified, int line, string? parent)
+    /// <summary>The element <paramref name="name"/> - its whole path <paramref name="qualified"/> - beginning on <paramref name="line"/>, inside <paramref name="parent"/>: its id.</summary>
+    public string Element(string name, string qualified, int line, string? parent)
     {
-        if (Full)
-        {
-            Count(1);
-            return null;
-        }
-
         var at = FileExtract.LineWithin(line, lineCount);
 
         return Add(new ExtractNode(_ids.Next($"{language}:{file}#{ExtractText.Whole(qualified)}"), CodeNodeKinds.Member, ExtractText.Whole(name), ExtractText.Whole(qualified), at, at, ExtractText.Signature(ExtractText.Flat(qualified)))
@@ -113,35 +64,30 @@ internal sealed class DataNodes(string language, string file, int lineCount)
         });
     }
 
-    /// <summary>
-    /// The section <paramref name="name"/> at <paramref name="path"/>, over the lines <paramref name="start"/> to
-    /// <paramref name="end"/>, inside <paramref name="parent"/>: its id, or <see langword="null"/> where the extract is
-    /// <see cref="Full"/> - a section holds keys, which are counted.
-    /// </summary>
-    public string? Section(string name, string path, int start, int end, string? parent)
+    /// <summary>The section <paramref name="name"/> at <paramref name="path"/>, over the lines <paramref name="start"/> to <paramref name="end"/>, inside <paramref name="parent"/>: its id.</summary>
+    public string Section(string name, string path, int start, int end, string? parent)
     {
-        if (Full)
-        {
-            return null;
-        }
-
         var from = FileExtract.LineWithin(start, lineCount);
 
         return Add(new ExtractNode(_ids.Next($"{language}:{file}#{ExtractText.Whole(path)}"), CodeNodeKinds.Section, ExtractText.Whole(name), $"{file}#{ExtractText.Whole(path)}", from, Math.Max(from, FileExtract.LineWithin(end, lineCount)), ExtractText.Signature(ExtractText.Flat(path))) { Parent = parent });
     }
 
-    /// <summary>
-    /// <paramref name="node"/>, a node of the file's own kind - a XAML view's type - its id given as the file's other ids
-    /// are: its id, or <see langword="null"/> where the extract is <see cref="Full"/>.
-    /// </summary>
-    public string? Node(ExtractNode node)
-        => Full ? null : Add(node with { Id = _ids.Next(node.Id), Signature = ExtractText.Signature(ExtractText.Flat(node.Signature)) });
+    /// <summary><paramref name="node"/>, a node of the file's own kind - a XAML view's type, a member of it - its id given as the file's other ids are: its id.</summary>
+    public string Node(ExtractNode node)
+        => Add(node with { Id = _ids.Next(node.Id), Signature = ExtractText.Signature(ExtractText.Flat(node.Signature)) });
 
     /// <summary>Sets the last line of the node <paramref name="id"/> made: its lines end there, never before they begin.</summary>
     public void Ends(string id, int end)
     {
-        var at = _nodes.FindLastIndex(node => node.Id == id);
+        var at = _at[id];
         _nodes[at] = _nodes[at] with { End = Math.Max(_nodes[at].Start, FileExtract.LineWithin(end, lineCount)) };
+    }
+
+    /// <summary>Names the node <paramref name="id"/> made <paramref name="name"/>: a workflow's step by the name it gives itself.</summary>
+    public void Rename(string id, string name)
+    {
+        var at = _at[id];
+        _nodes[at] = _nodes[at] with { Name = ExtractText.Whole(name) };
     }
 
     /// <summary>
@@ -150,7 +96,7 @@ internal sealed class DataNodes(string language, string file, int lineCount)
     /// </summary>
     public void Summarize(string id, string value)
     {
-        var at = _nodes.FindLastIndex(node => node.Id == id);
+        var at = _at[id];
 
         if (_nodes[at].Summary is null && SummaryOf(value) is { } summary)
         {
@@ -159,126 +105,121 @@ internal sealed class DataNodes(string language, string file, int lineCount)
     }
 
     /// <summary>
-    /// Walks <paramref name="root"/>, a data file's value: each scalar key a key node named by its path, each container at
-    /// the top a section over its lines, each item of a list placed by its place - nothing deeper than
-    /// <see cref="MostDepth"/> places kept, the keys past it counted, what its reader leaves unread
-    /// (<see cref="IDataValue.Unread"/>) counted, and once the extract is <see cref="Full"/>, what each value holds past that
-    /// point counted whole, never visited a member at a time.
+    /// A reference of the node <paramref name="from"/> to the node <paramref name="to"/> of this file - what it repeats by
+    /// reference, by the name it is repeated by, on <paramref name="line"/>.
+    /// </summary>
+    public void Refers(string from, string to, string name, int line)
+        => _references.Add(new ExtractReference(from, CodeEdgeKinds.Uses, ExtractText.Whole(name), FileExtract.LineWithin(line, lineCount))
+        {
+            Qualifier = new ExtractQualifier(CodeQualifierKinds.Own, to),
+        });
+
+    /// <summary>
+    /// Walks <paramref name="root"/>, a data file's value: each scalar key a key node named by its path, each container a
+    /// section over its lines inside the one that holds it, each item of a list placed by its place, an alias a key whose
+    /// value is the alias and a reference to the node it names, a container that merges others a reference to each - every
+    /// one of them, however many and however deep, on a stack of the walk's own; the references made once the walk has
+    /// placed every node, so each names the node it repeats whatever the order the file writes them in.
     /// </summary>
     /// <param name="root">The file's value.</param>
-    /// <returns>The sections made at the top, by the name of the member each is.</returns>
-    public IReadOnlyDictionary<string, string> Walk(IDataValue root)
+    /// <returns>The nodes made of what the file holds: the sections at its top by the name of the member each is, and each value's node by the value.</returns>
+    public DataWalk Walk(IDataValue root)
     {
         ArgumentNullException.ThrowIfNull(root);
 
         var sections = new Dictionary<string, string>(StringComparer.Ordinal);
-        Walk(root, [], null, sections);
-        return sections;
-    }
+        var made = new Dictionary<object, string>(ReferenceEqualityComparer.Instance);
+        var refers = new List<(string From, object To, string Name, int Line)>();
+        var path = new List<DataPlace>();
+        var pending = new Stack<(IEnumerator<(DataPlace Place, int Line, IDataValue Value)> Members, string? Holder)>();
+        pending.Push((root.Members.GetEnumerator(), null));
 
-    private void Walk(IDataValue value, List<DataPlace> path, string? parent, Dictionary<string, string> sections)
-    {
-        // What of the value's keys the members walked so far hold, so that once the extract is full the rest is counted from
-        // the value's own count: a member past that point is never asked for, so nothing its reader would visit to give it
-        // is visited.
-        long walked = 0;
-        using var members = value.Members.GetEnumerator();
-
-        while (!Full && members.MoveNext())
+        try
         {
-            var (place, line, member) = members.Current;
-            walked = Sum(walked, member.Scalars);
-
-            if (member.Unread)
+            while (pending.TryPeek(out var frame))
             {
-                Count(member.Scalars);
-                continue;
-            }
-
-            path.Add(place);
-
-            try
-            {
-                if (!member.Holds)
+                if (!frame.Members.MoveNext())
                 {
-                    Key(path, line, member.Text, parent);
+                    frame.Members.Dispose();
+                    pending.Pop();
+
+                    // The container just walked leaves the path, the root, which is on none, alone not.
+                    if (pending.Count > 0)
+                    {
+                        path.RemoveAt(path.Count - 1);
+                    }
+
                     continue;
                 }
 
-                var holder = parent;
+                var (place, line, member) = frame.Members.Current;
+                path.Add(place);
+                string id;
 
-                if (path.Count == 1 && Section(place.Written, PathOf(path), line, Math.Max(line, member.End), parent) is { } section)
+                if (member.Alias is { } alias)
                 {
-                    sections.TryAdd(place.Written, section);
-                    holder = section;
+                    id = Key(path, line, $"*{alias.Name}", frame.Holder);
+
+                    if (alias.Target is { } target)
+                    {
+                        refers.Add((id, target, alias.Name, line));
+                    }
                 }
-
-                // A container nested as deep as keys are read holds keys past it, and the extract once full keeps no
-                // more: what it holds is counted, not walked.
-                if (path.Count >= MostDepth || Full)
+                else if (!member.Holds)
                 {
-                    Count(member.Scalars);
+                    id = Key(path, line, member.Text, frame.Holder);
+                }
+                else
+                {
+                    id = Section(place.Written, PathOf(path), line, Math.Max(line, member.End), frame.Holder);
+
+                    if (path.Count == 1)
+                    {
+                        sections.TryAdd(place.Written, id);
+                    }
+
+                    refers.AddRange(member.Merges.Select(merge => (id, merge.Target, merge.Name, merge.Line)));
+                    Made(member, id);
+                    pending.Push((member.Members.GetEnumerator(), id));
                     continue;
                 }
 
-                Walk(member, path, holder, sections);
-            }
-            finally
-            {
+                Made(member, id);
                 path.RemoveAt(path.Count - 1);
             }
         }
-
-        if (Full)
+        finally
         {
-            Count(Math.Max(0, value.Scalars - walked));
+            while (pending.TryPop(out var open))
+            {
+                open.Members.Dispose();
+            }
+        }
+
+        foreach (var (from, to, name, line) in refers)
+        {
+            if (made.TryGetValue(to, out var node))
+            {
+                Refers(from, node, name, line);
+            }
+        }
+
+        return new DataWalk(sections, made);
+
+        void Made(IDataValue value, string id)
+        {
+            if (value.Identity is { } identity)
+            {
+                made.TryAdd(identity, id);
+            }
         }
     }
 
-    /// <summary>
-    /// Whether reading may make one more visit through what the file repeats - an alias, a node reached through one, a key
-    /// a merge reads through one, whoever reads it - the place marked the first time it may not: one budget of
-    /// <see cref="MostRepeated"/> for all of it, which never grants a visit again once spent.
-    /// </summary>
-    /// <param name="line">The line the visit is made from, which the mark names.</param>
-    public bool Repeats(int line)
-    {
-        if (_repeated < MostRepeated)
-        {
-            _repeated++;
-            return true;
-        }
-
-        if (_repeated == MostRepeated)
-        {
-            // Past the budget the count stays where it is, one past: no number of visits refused brings it round again.
-            _repeated++;
-            Stopped(line, $"the file's aliases repeat more than {MostRepeated.ToString(CultureInfo.InvariantCulture)} nodes, and what they repeat from here on is not read");
-        }
-
-        return false;
-    }
-
-    /// <summary><paramref name="count"/> and <paramref name="more"/> added, held at <see cref="long.MaxValue"/>.</summary>
-    internal static long Sum(long count, long more) => more > long.MaxValue - count ? long.MaxValue : count + more;
-
-    /// <summary>
-    /// The path <paramref name="places"/> are: each name joined by a dot, an item's place and a name that is empty, white
-    /// space or holds a control character held in brackets to the place before it - <c>targets.x64.callingConvention</c>,
-    /// <c>limits[1].value</c>, <c>packages[""].name</c>, <c>messages["Sure?\nIt cannot be undone."]</c> - always one line.
-    /// </summary>
+    /// <summary>The path <paramref name="places"/> are, as every reader of data files writes one (<see cref="CodeKeyPaths.Of"/>).</summary>
     public static string PathOf(IReadOnlyList<DataPlace> places)
     {
         ArgumentNullException.ThrowIfNull(places);
-
-        var path = new StringBuilder();
-
-        foreach (var place in places)
-        {
-            _ = place.Bracketed || path.Length == 0 ? path.Append(place.Written) : path.Append('.').Append(place.Written);
-        }
-
-        return path.ToString();
+        return CodeKeyPaths.Of(places.Select(place => (place.Written, place.Bracketed)));
     }
 
     /// <summary><paramref name="value"/> as a node's summary: on one line, cut; <see langword="null"/> where nothing is left of it.</summary>
@@ -286,10 +227,16 @@ internal sealed class DataNodes(string language, string file, int lineCount)
 
     private string Add(ExtractNode node)
     {
+        _at[node.Id] = _nodes.Count;
         _nodes.Add(node);
         return node.Id;
     }
 }
+
+/// <summary>What a walk of a data file made (<see cref="DataNodes.Walk"/>).</summary>
+/// <param name="Sections">The sections at the file's top, by the name of the member each is.</param>
+/// <param name="Made">Each value's node, by the value's own (<see cref="IDataValue.Identity"/>), where it has one.</param>
+internal sealed record DataWalk(IReadOnlyDictionary<string, string> Sections, IReadOnlyDictionary<object, string> Made);
 
 /// <summary>One place of a data file's key path: a name, or an item's place in a list.</summary>
 /// <param name="Name">The name; <see langword="null"/> for an item.</param>
@@ -302,20 +249,11 @@ internal readonly record struct DataPlace(string? Name, int Item)
     /// <summary>The place of the item <paramref name="item"/>, from 0.</summary>
     public static DataPlace At(int item) => new(null, item);
 
-    /// <summary>
-    /// Whether a path holds it in brackets, to the place before it: an item, a name that is empty or white space, which no
-    /// dotted path can hold, and a name that holds a control character - a line break a key written as its source string
-    /// holds - which no one line can.
-    /// </summary>
-    public bool Bracketed => Name is null || string.IsNullOrWhiteSpace(Name) || Name.Any(char.IsControl);
+    /// <summary>Whether a path holds it in brackets, to the place before it (<see cref="CodeKeyPaths.Bracketed"/>).</summary>
+    public bool Bracketed => CodeKeyPaths.Bracketed(Name);
 
-    /// <summary>
-    /// The place as a path writes it, always on one line: a name as it is, one that is bracketed quoted in brackets as
-    /// <see cref="ReportText.Quoted"/> writes it - each control character escaped - and an item <c>[i]</c>.
-    /// </summary>
-    public string Written => Name is null ? $"[{Item.ToString(CultureInfo.InvariantCulture)}]"
-        : Bracketed ? $"[{ReportText.Quoted(Name)}]"
-        : Name;
+    /// <summary>The place as a path writes it (<see cref="CodeKeyPaths.Name"/>, <see cref="CodeKeyPaths.Item"/>).</summary>
+    public string Written => Name is null ? CodeKeyPaths.Item(Item) : CodeKeyPaths.Name(Name);
 }
 
 /// <summary>A value of a data file as a walk of its keys reads it, whatever the file's language (<see cref="DataNodes.Walk(IDataValue)"/>).</summary>
@@ -330,18 +268,18 @@ internal interface IDataValue
     /// <summary>The last line it is written on, from 1: where its content ends, its closing bracket among it.</summary>
     int End { get; }
 
-    /// <summary>
-    /// Whether it stands for what its reader leaves unread - what a file repeats by reference past its budget
-    /// (<see cref="DataNodes.Repeats"/>) - which a walk counts and never reads.
-    /// </summary>
-    bool Unread { get; }
-
-    /// <summary>
-    /// How many scalar keys it holds at any depth, itself one where it holds none: what a walk counts of it where it walks
-    /// it not - as many as its members hold together, so a walk that stops among them counts the rest from it.
-    /// </summary>
-    long Scalars { get; }
-
     /// <summary>Its members or items, in the order the file writes them, each with its place and the line it is written on.</summary>
     IEnumerable<(DataPlace Place, int Line, IDataValue Value)> Members { get; }
+
+    /// <summary>What it is as the file's reader holds it, which a reference to it names; <see langword="null"/> where nothing refers to a value.</summary>
+    object? Identity => null;
+
+    /// <summary>
+    /// What it stands for, where it is an alias - the value its anchor names (<see cref="Identity"/>), null where none is,
+    /// and the anchor's name - which the walk makes a reference to, never reading it again here.
+    /// </summary>
+    (object? Target, string Name)? Alias => null;
+
+    /// <summary>The containers it merges, in order, each by its own (<see cref="Identity"/>), with the name it is merged by and the line it is merged on.</summary>
+    IEnumerable<(object Target, string Name, int Line)> Merges => [];
 }

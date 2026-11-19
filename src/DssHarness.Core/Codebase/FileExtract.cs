@@ -61,19 +61,8 @@ public sealed record FileExtract(IReadOnlyList<ExtractNode> Nodes)
     /// </summary>
     public IReadOnlyList<ExtractLiteral>? Literals { get; init; }
 
-    /// <summary>
-    /// How many configuration keys and elements a data file holds that its extract keeps no node of: those past the
-    /// <see cref="MostKeys"/> nodes it keeps, and those nested deeper than its reader reads keys - which an answer about
-    /// the file says.
-    /// </summary>
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
-    public int KeysBeyond { get; init; }
-
     /// <summary>The shortest a kept string literal is, in characters: a shorter one is not data a search asks for.</summary>
     public const int LeastLiteral = 3;
-
-    /// <summary>The most nodes an extract keeps of one data file - its keys, its sections and its elements alike; the keys and elements past them are counted, not kept.</summary>
-    public const int MostKeys = 5000;
 
     /// <summary>
     /// The most names of a receiver's chain - <c>a.b.c</c> - every implementation reads a reference's qualifier from: a
@@ -128,18 +117,26 @@ public sealed record FileExtract(IReadOnlyList<ExtractNode> Nodes)
         }
 
         // Two nodes of one span may each say the other holds it, and one may name itself: what holds what is a tree, which
-        // whatever walks it up - the type a reference is made in - ends at its root.
+        // whatever walks it up - the type a reference is made in - ends at its root. A node found to end there is never
+        // walked up again, so the whole tree is walked once, however deep it nests.
+        var rooted = new HashSet<string>(StringComparer.Ordinal);
+
         foreach (var node in Nodes ?? [])
         {
-            var seen = new HashSet<string>(StringComparer.Ordinal) { node.Id };
+            var seen = new List<string> { node.Id };
+            var walked = new HashSet<string>(StringComparer.Ordinal) { node.Id };
 
-            for (var parent = node.Parent; parent is not null; parent = ids[parent].Parent)
+            for (var parent = node.Parent; parent is not null && !rooted.Contains(parent); parent = ids[parent].Parent)
             {
-                if (!seen.Add(parent))
+                if (!walked.Add(parent))
                 {
                     return $"its node '{node.Id}' is declared inside itself, through '{parent}'";
                 }
+
+                seen.Add(parent);
             }
+
+            rooted.UnionWith(seen);
         }
 
         if (SuffixProblem(ids) is { } suffixed)
@@ -169,6 +166,7 @@ public sealed record FileExtract(IReadOnlyList<ExtractNode> Nodes)
             ?? (References ?? []).Select(reference => reference is null ? "it holds a reference that is null"
                 : !ids.ContainsKey(reference.From) ? $"a reference to '{reference.Name}' is made from '{reference.From}', which it holds no node of"
                 : reference.Problem(lineCount) is { } wrong ? $"a reference to '{reference.Name}': {wrong}"
+                : reference.Qualifier is { Kind: CodeQualifierKinds.Own, Name: { } own } && !ids.ContainsKey(own) ? $"a reference to '{reference.Name}' names the node '{own}' of its own file, which it holds no node of"
                 : null).FirstOrDefault(found => found is not null)
             ?? (Generated is { } generated && string.IsNullOrWhiteSpace(generated) ? "it says it is generated and not why" : null)
             ?? (Dynamic ?? []).Select(dynamic => dynamic is null || string.IsNullOrWhiteSpace(dynamic.Why) ? "it marks a line dynamic and not why"
@@ -179,7 +177,6 @@ public sealed record FileExtract(IReadOnlyList<ExtractNode> Nodes)
                 : !Within(literal.Line, lineCount) ? $"its literal '{literal.Value}' is on line {literal.Line.ToString(CultureInfo.InvariantCulture)}, outside its {lineCount.ToString(CultureInfo.InvariantCulture)} lines"
                 : literal.Node is { } node && !ids.ContainsKey(node) ? $"its literal '{literal.Value}' is held by '{node}', which it holds no node of"
                 : null).FirstOrDefault(found => found is not null)
-            ?? (KeysBeyond < 0 ? "it counts fewer than no keys past its own" : null)
             ?? (Texts().FirstOrDefault(text => !IsWhole(text)) is { } cut ? $"it holds text that is no whole UTF-16, a surrogate cut from its pair: '{cut}'" : null);
     }
 
@@ -588,7 +585,7 @@ public sealed record ExtractReference(string From, string Kind, string Name, int
             : !FileExtract.Within(Line, lineCount) ? string.Create(CultureInfo.InvariantCulture, $"it is on line {Line}, outside the file's {lineCount}")
             : Arity is < 0 ? "its arity is below zero"
             : Qualifier is { } qualifier && !CodeQualifierKinds.All.Contains(qualifier.Kind, StringComparer.Ordinal) ? $"its qualifier's kind is '{qualifier.Kind}', which is none of {string.Join(", ", CodeQualifierKinds.All)}"
-            : Qualifier is { Kind: CodeQualifierKinds.Named or CodeQualifierKinds.Type or CodeQualifierKinds.Prefix } named && string.IsNullOrWhiteSpace(named.Name) ? "its qualifier names nothing"
+            : Qualifier is { Kind: CodeQualifierKinds.Named or CodeQualifierKinds.Type or CodeQualifierKinds.Prefix or CodeQualifierKinds.Own } named && string.IsNullOrWhiteSpace(named.Name) ? "its qualifier names nothing"
             : Qualifier is { Kind: CodeQualifierKinds.Value or CodeQualifierKinds.Scope or CodeQualifierKinds.Key, Name: { } value } && string.IsNullOrWhiteSpace(value) ? "its qualifier's name is empty"
             : null;
 }
@@ -654,8 +651,9 @@ public static class CodeQualifierKinds
 
     /// <summary>
     /// A configuration key, by its name, as an MSBuild project's <c>$(Name)</c> writes one: the name looked for among keys
-    /// alone (<see cref="CodeSubKinds.Key"/>), wherever the repository declares them; with a name, among the keys of the
-    /// language it names alone - the xml extractor's for MSBuild, an imported <c>.props</c> file's property among them.
+    /// alone (<see cref="CodeSubKinds.Key"/>), wherever the repository declares them - and its own file's, where it keeps
+    /// them to itself; with a name, among the keys of the language it names alone - MSBuild's for a project's own
+    /// properties, the xml extractor's for an imported <c>.props</c> file's.
     /// </summary>
     public const string Key = "key";
 
@@ -690,8 +688,15 @@ public static class CodeQualifierKinds
     /// </summary>
     public const string FontFace = CodeSubKinds.FontFace;
 
+    /// <summary>
+    /// A node of the reference's own file, by its id, which its implementation names where it knows it: the one node it
+    /// names, exact, of whatever kind - a YAML alias to the node its anchor names, a mapping to each mapping its merge key
+    /// merges. The file reads what it repeats once, and each reference to it is this.
+    /// </summary>
+    public const string Own = "own";
+
     /// <summary>Every kind.</summary>
-    public static IReadOnlyList<string> All { get; } = [This, Base, Named, Type, Prefix, Value, Scope, Selector, Key, StyleVariable, StyleMixin, StyleFunction, Keyframes, FontFace];
+    public static IReadOnlyList<string> All { get; } = [This, Base, Named, Type, Prefix, Value, Scope, Selector, Key, StyleVariable, StyleMixin, StyleFunction, Keyframes, FontFace, Own];
 }
 
 /// <summary>A place an implementation saw something it cannot bind, or stopped reading.</summary>

@@ -7,7 +7,7 @@ namespace DssHarness.Core.Codebase.Languages;
 /// blocks, a Razor file's C# - read by that language's own reader and made part of the host's extract: the one way every
 /// markup reader embeds code. The reader is given the host's text with only the code kept, so what it declares carries
 /// the host's lines; and every field of what it answers - nodes, scopes, imports, address roots, references, dynamic
-/// marks, literals, the keys past those kept and why the file is generated - is merged into the host's, so nothing the
+/// marks, literals and why the file is generated - is merged into the host's, so nothing the
 /// embedded reader saw is lost on the way.
 /// </summary>
 internal static class EmbeddedCode
@@ -76,8 +76,8 @@ internal static class EmbeddedCode
     /// <paramref name="host"/> with every field of each of <paramref name="embedded"/> merged into it, in order: each
     /// node's id made unique among those already held - with its place among those alike, as <see cref="ExtractIds"/>
     /// gives it, the nodes it holds and the references it makes following it - each scope once, by its name, the
-    /// imports, address roots, references, dynamic marks and literals after the host's, every one of each, the keys past
-    /// those kept added up, and why the file is generated the host's own, else the first embedded reader's that says.
+    /// imports, address roots, references, dynamic marks and literals after the host's, every one of each, and why the
+    /// file is generated the host's own, else the first embedded reader's that says.
     /// </summary>
     /// <param name="host">The host's own extract: what its reader of markup made.</param>
     /// <param name="embedded">What each reader of the code it embeds made of it.</param>
@@ -103,7 +103,6 @@ internal static class EmbeddedCode
         var references = new List<ExtractReference>(host.References);
         var dynamic = new List<ExtractDynamic>(host.Dynamic);
         var literals = new List<ExtractLiteral>(host.Literals ?? []);
-        var keysBeyond = host.KeysBeyond;
         var generated = host.Generated;
 
         foreach (var extract in embedded)
@@ -132,7 +131,6 @@ internal static class EmbeddedCode
             imports.AddRange(extract.Imports);
             roots.AddRange(extract.AddressRoots);
             dynamic.AddRange(extract.Dynamic);
-            keysBeyond += extract.KeysBeyond;
             generated ??= extract.Generated;
             literals.AddRange(extract.Literals ?? []);
         }
@@ -146,7 +144,6 @@ internal static class EmbeddedCode
             Generated = generated,
             Dynamic = dynamic,
             Literals = literals.Count == 0 ? null : literals,
-            KeysBeyond = keysBeyond,
         };
     }
 }

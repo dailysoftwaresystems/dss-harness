@@ -382,8 +382,8 @@ public static partial class CodebaseContextPack
         /// <summary>
         /// What the prompt names exactly, in the order it names them: each backquoted symbol or path, each
         /// <c>path:line</c> (a stack frame's and a compiler's among them), each qualified name and each handle the view holds.
-        /// A name several nodes the step may read carry seeds each at <see cref="WrittenWeight"/>, where they are no more
-        /// than an edge may name (<see cref="CodeConfidences.MostCandidates"/>); a file seeds its declarations.
+        /// A name several nodes the step may read carry seeds every one of them, however many, sharing the weight of a
+        /// name written (<see cref="WrittenWeight"/>) among them, each its part of it; a file seeds its declarations.
         /// </summary>
         private IEnumerable<(GraphCard Card, double Weight, int Hops, string Why, SeedKind Kind)> Named()
         {
@@ -459,8 +459,8 @@ public static partial class CodebaseContextPack
             return queries.Resolve(name) switch
             {
                 GraphResolve.Found found => [(found.Card, NamedWeight, NamedHops, "named", SeedKind.Named)],
-                GraphResolve.Candidates candidates when candidates.Cards.Where(Reads).ToList() is { Count: > 0 and <= CodeConfidences.MostCandidates } read
-                    => [.. read.Select(card => (card, WrittenWeight, NamedHops, $"one of {Number(read.Count)} named '{name}'", SeedKind.Named))],
+                GraphResolve.Candidates candidates when candidates.Cards.Where(Reads).ToList() is { Count: > 0 } read
+                    => [.. read.Select(card => (card, WrittenWeight / read.Count, NamedHops, $"one of {Number(read.Count)} named '{name}'", SeedKind.Named))],
                 _ => [],
             };
         }

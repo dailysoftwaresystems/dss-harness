@@ -92,8 +92,9 @@ public sealed class MsbuildExtractorTests : CodeGraphExtractorContractTests<Msbu
         var tests = Extractor.Extract(new CodeFileInput("tests/Shapes.Tests/Shapes.Tests.csproj", Tests));
         var solution = Extractor.Extract(new CodeFileInput("Shapes.slnx", Solution));
 
-        var project = Assert.Single(shapes.Nodes);
+        var project = shapes.Nodes[0];
         Assert.Equal(("Shapes.csproj", "src/Shapes/Shapes.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\">", "Shapes on a plane."), (project.Name, project.Qualified, project.Signature, project.Summary));
+        Assert.Equal([("msbuild:src/Shapes/Shapes.csproj#Description", "Shapes on a plane.")], shapes.Nodes.Skip(1).Select(node => (node.Id, node.Summary)));
         Assert.Equal(
             [
                 ("Geometry.csproj", CodeEdgeKinds.ProjectReference, 8),
@@ -188,5 +189,79 @@ public sealed class MsbuildExtractorTests : CodeGraphExtractorContractTests<Msbu
             extract.References.Select(reference => (reference.Name, reference.Line)));
         Assert.All(extract.References, reference => Assert.Equal((CodeEdgeKinds.Uses, new ExtractQualifier(CodeQualifierKinds.Key, "xml")), (reference.Kind, reference.Qualifier)));
         Assert.Equal([10], extract.Dynamic.Select(mark => mark.Line));
+    }
+
+    /// <summary>
+    /// A property the project's own <c>PropertyGroup</c> declares is a key of the project's alone, its value its summary;
+    /// a <c>$(Name)</c> read as properties are - in a <c>PropertyGroup</c> - reads those declared before it, its own
+    /// declaration not among them, and one read once every property is - an item's - reads every one; a name the project
+    /// declares none of before it reads the key an XML file declares. No other file reaches the project's own: another
+    /// project's <c>$(Name)</c> and a C# literal of its name join none of them.
+    /// </summary>
+    [Fact]
+    public void AProjectsOwnProperties_AreItsKeys_WhichItsUsesRead_AndNoOtherFileReaches()
+    {
+        const string Text = """
+            <Project>
+              <PropertyGroup>
+                <Version>1.0</Version>
+                <DefineConstants>$(DefineConstants);TRACE</DefineConstants>
+                <Full>$(Version)-full</Full>
+              </PropertyGroup>
+              <PropertyGroup Condition="'$(Configuration)' == 'Release'">
+                <Version>2.0</Version>
+              </PropertyGroup>
+              <ItemGroup>
+                <None Include="$(Version).txt" />
+              </ItemGroup>
+            </Project>
+            """;
+        const string Props = """
+            <Project>
+              <PropertyGroup>
+                <DefineConstants>DEBUG</DefineConstants>
+              </PropertyGroup>
+            </Project>
+            """;
+
+        var extract = Extractor.Extract(new CodeFileInput("App.csproj", Text));
+
+        Assert.Equal(
+            [
+                ("msbuild:App.csproj#Version", "Version", 3, "1.0"),
+                ("msbuild:App.csproj#DefineConstants", "DefineConstants", 4, "$(DefineConstants);TRACE"),
+                ("msbuild:App.csproj#Full", "Full", 5, "$(Version)-full"),
+                ("msbuild:App.csproj#Version~2", "Version", 8, "2.0"),
+            ],
+            extract.Nodes.Skip(1).Select(node => (node.Id, node.Name, node.Start, node.Summary)));
+        Assert.All(extract.Nodes.Skip(1), node => Assert.Equal((CodeSubKinds.Key, "PropertyGroup", "msbuild:App.csproj"), (node.SubKind, node.Scope, node.Parent)));
+        Assert.Equal([new ExtractScope("PropertyGroup", false)], extract.Scopes);
+        Assert.Equal(
+            [
+                ("DefineConstants", 4, new ExtractQualifier(CodeQualifierKinds.Key, "xml")),
+                ("Version", 5, new ExtractQualifier(CodeQualifierKinds.Own, "msbuild:App.csproj#Version")),
+                ("Configuration", 7, new ExtractQualifier(CodeQualifierKinds.Key, "xml")),
+                ("Version", 11, new ExtractQualifier(CodeQualifierKinds.Key, "msbuild")),
+            ],
+            extract.References.Select(reference => (reference.Name, reference.Line, reference.Qualifier)));
+
+        var other = Extractor.Extract(new CodeFileInput("Other.csproj", "<Project>\n  <ItemGroup>\n    <None Include=\"$(Version)\" />\n  </ItemGroup>\n</Project>\n"));
+        var code = new CSharpExtractor().Extract(new CodeFileInput("src/Read.cs", "namespace App;\n\npublic static class Read\n{\n    public static string Name() => \"Version\";\n}\n"));
+        var linked = CodeGraphLinker.Link(
+        [
+            new CodeGraphFile("App.csproj", "msbuild", extract),
+            new CodeGraphFile("Other.csproj", "msbuild", other),
+            new CodeGraphFile("Directory.Build.props", "xml", new XmlExtractor().Extract(new CodeFileInput("Directory.Build.props", Props))),
+            new CodeGraphFile("src/Read.cs", "csharp", code),
+        ]);
+
+        Assert.Equal(
+            [
+                ("msbuild:App.csproj", "xml:Directory.Build.props#DefineConstants", 4, CodeConfidences.Exact),
+                ("msbuild:App.csproj", "msbuild:App.csproj#Version", 5, CodeConfidences.Exact),
+                ("msbuild:App.csproj", "msbuild:App.csproj#Version", 11, CodeConfidences.Candidates),
+                ("msbuild:App.csproj", "msbuild:App.csproj#Version~2", 11, CodeConfidences.Candidates),
+            ],
+            linked.Edges.Where(edge => edge.Kind == CodeEdgeKinds.Uses).Select(edge => (edge.From, edge.To, edge.Line, edge.Confidence)).OrderBy(edge => edge.Line).ThenBy(edge => edge.To, StringComparer.Ordinal));
     }
 }

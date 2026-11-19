@@ -8,16 +8,22 @@ namespace DssHarness.Core.Codebase.Languages;
 /// named by its file name, its header its root element's line and a project's summary the first sentence of its
 /// <c>&lt;Description&gt;</c>, with a <c>projectReference</c> to each project it names - a project's
 /// <c>&lt;ProjectReference Include&gt;</c>, a solution's <c>&lt;Project Path&gt;</c> - by that project's file name. Each
-/// <c>$(Name)</c> an attribute's value or an element's text writes is a <c>uses</c> of the configuration key of that name
-/// an XML file declares (<see cref="CodeQualifierKinds.Key"/>) - an imported <c>.props</c> or <c>.targets</c> file's
-/// <c>PropertyGroup</c> property among them, which the xml extractor reads - and each <c>&lt;Import Project&gt;</c> an
-/// import of the file it names. The file is read as XML as far as it parses, a comment never, the line it stops at marked
-/// dynamic with the reader's reason; nothing MSBuild evaluates is evaluated.
+/// property a project's own <c>PropertyGroup</c> declares is a key of the project's alone, its value as its summary, in a
+/// closed scope no other file sees. Each <c>$(Name)</c> an attribute's value or an element's text writes is a <c>uses</c>
+/// of the property it reads (<see cref="CodeQualifierKinds.Key"/>): the project's own of that name - those declared before
+/// it, where it is read as the properties are, in a <c>PropertyGroup</c> or an <c>Import</c>, and every one elsewhere,
+/// read once all are - else the key of that name an XML file declares, an imported <c>.props</c> or <c>.targets</c>
+/// file's <c>PropertyGroup</c> property among them, which the xml extractor reads. Each <c>&lt;Import Project&gt;</c> is
+/// an import of the file it names. The file is read as XML as far as it parses, a comment never, the line it stops at
+/// marked dynamic with the reader's reason; nothing MSBuild evaluates is evaluated.
 /// </summary>
 public sealed partial class MsbuildExtractor : ICodeGraphExtractor
 {
-    /// <summary>The language whose keys a <c>$(Name)</c> names: the xml extractor's, which reads a <c>.props</c>'s properties.</summary>
+    /// <summary>The language whose keys a <c>$(Name)</c> names where the project declares no property of the name it reads: the xml extractor's, which reads a <c>.props</c>'s properties.</summary>
     private const string XmlKeys = "xml";
+
+    /// <summary>The closed scope a project's own properties are declared in: the project's alone.</summary>
+    private const string OwnProperties = "PropertyGroup";
 
     /// <inheritdoc/>
     public string Language => "msbuild";
@@ -33,11 +39,11 @@ public sealed partial class MsbuildExtractor : ICodeGraphExtractor
 
     /// <inheritdoc/>
     public CodeGraphExtractorHelp Help { get; } = new(
-        "MSBuild projects (.csproj) and solutions (.slnx): a project node for each, named by its file name, a project's summary from its Description, a projectReference to each project it names that the repository holds, each $(Name) an attribute or an element's text writes a uses of the key of that name an XML file declares - a .props or .targets PropertyGroup's property - and each Import Project an import of the file it names",
+        "MSBuild projects (.csproj) and solutions (.slnx): a project node for each, named by its file name, a project's summary from its Description, a projectReference to each project it names that the repository holds, each property its own PropertyGroup declares a key of the project's alone with its value as its summary, each $(Name) an attribute or an element's text writes a uses of the property it reads - the project's own of that name, those declared before it where it is read as properties are (in a PropertyGroup or an Import), every one elsewhere, else the key of that name an XML file declares, a .props or .targets PropertyGroup's property - and each Import Project an import of the file it names",
         [
-            "what MSBuild evaluates: a reference under a condition is taken whatever the condition, and a property in a path is left as written",
-            "a property the project itself declares in its own PropertyGroup: no key of it here - the xml extractor reads the imported .props and .targets files' as keys",
-            "a $(Name) a comment writes, and a name no XML file declares as a key - a property of the SDK's, one only a C# member or a JSON key is named by: no use",
+            "what MSBuild evaluates: a reference under a condition is taken whatever the condition, a property in a path is left as written, and a property declared under several conditions is an edge of candidates to each declaration a use may read",
+            "a project's own property from any other file - another project, a C# literal of its name: it is the project's alone, and the keys' join never reaches it",
+            "a $(Name) a comment writes, and a name neither the project nor an XML file declares as a key - a property of the SDK's, one only a C# member or a JSON key is named by: no use",
             "a project named by a wildcard, and two projects of one file name, which a reference names both of",
             "a solution in the older .sln form",
             "what follows the point a file stops reading as XML, a line its extract marks dynamic with the reader's reason",
@@ -60,19 +66,40 @@ public sealed partial class MsbuildExtractor : ICodeGraphExtractor
         string? signature = null;
         string? summary = null;
 
+        // The project's own properties, each as its key; those of each name declared so far, the declaration closed; and
+        // each reference in the order written, a use of a property with the declarations it reads where it reads those
+        // declared before it - every one of its name otherwise, told once the whole file is read.
+        var ids = new ExtractIds();
+        var properties = new List<ExtractNode>();
+        var declared = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+        var written = new List<(ExtractReference Reference, IReadOnlyList<string>? Reads)>();
+        var open = new List<string>();
+        (string Id, string Name, int At)? property = null;
+
         var settings = new XmlReaderSettings { DtdProcessing = DtdProcessing.Ignore, IgnoreComments = true, IgnoreProcessingInstructions = true };
 
         // Each $(Name) of the text between start and end as the file writes it - an entity left as written, so a match is
-        // told by the line it stands on - a use of the key of that name an XML file declares.
-        void Uses(int start, int end)
+        // told by the line it stands on - a use of the property of that name it reads: in a PropertyGroup or an Import,
+        // read as properties are, of those declared before it; anywhere else, read once every property is, of any.
+        void Uses(int start, int end, IReadOnlyList<string> elements)
         {
+            var inOrder = elements.Count > 1 && elements[1] is "PropertyGroup" or "Import" or "ImportGroup";
+
             foreach (var match in Used().EnumerateMatches(text.AsSpan(start, end - start)))
             {
                 // The match is $( the name ), its name what its brackets hold.
-                references.Add(new ExtractReference(id, CodeEdgeKinds.Uses, text.Substring(start + match.Index + 2, match.Length - 3), index.LineAt(start + match.Index))
-                {
-                    Qualifier = new ExtractQualifier(CodeQualifierKinds.Key, XmlKeys),
-                });
+                var name = text.Substring(start + match.Index + 2, match.Length - 3);
+                written.Add((new ExtractReference(id, CodeEdgeKinds.Uses, name, index.LineAt(start + match.Index)), inOrder ? [.. declared.GetValueOrDefault(name) ?? []] : null));
+            }
+        }
+
+        // The property open, declared once it closes: a use inside it reads the value before it.
+        void Declared()
+        {
+            if (property is { } closing && open.Count == closing.At)
+            {
+                (declared.TryGetValue(closing.Name, out var held) ? held : declared[closing.Name] = []).Add(closing.Id);
+                property = null;
             }
         }
 
@@ -86,9 +113,9 @@ public sealed partial class MsbuildExtractor : ICodeGraphExtractor
             {
                 // An element's text and a CDATA section, each read where the file writes it: a comment, which the reader
                 // passes over, is never among them.
-                if (reader.NodeType is XmlNodeType.Text or XmlNodeType.CDATA && Offset(index, text, at) is { } written)
+                if (reader.NodeType is XmlNodeType.Text or XmlNodeType.CDATA && Offset(index, text, at) is { } offset)
                 {
-                    Uses(written, Until(text, written, reader.NodeType == XmlNodeType.CDATA ? "]]>" : "<"));
+                    Uses(offset, Until(text, offset, reader.NodeType == XmlNodeType.CDATA ? "]]>" : "<"), open);
                 }
 
                 if (reader.NodeType == XmlNodeType.Text && describing)
@@ -96,7 +123,19 @@ public sealed partial class MsbuildExtractor : ICodeGraphExtractor
                     summary ??= ExtractText.Flat(reader.Value) is { Length: > 0 } described ? ExtractText.Summary(described) : null;
                 }
 
+                // A property's value is its key's summary: its text, flattened and cut.
+                if (reader.NodeType == XmlNodeType.Text && property is not null && properties[^1].Summary is null && ExtractText.Flat(reader.Value) is { Length: > 0 } value)
+                {
+                    properties[^1] = properties[^1] with { Summary = ExtractText.Summary(value) };
+                }
+
                 describing = false;
+
+                if (reader.NodeType == XmlNodeType.EndElement)
+                {
+                    open.RemoveAt(open.Count - 1);
+                    Declared();
+                }
 
                 if (reader.NodeType != XmlNodeType.Element)
                 {
@@ -104,12 +143,27 @@ public sealed partial class MsbuildExtractor : ICodeGraphExtractor
                 }
 
                 var line = FileExtract.LineWithin(at.LineNumber, lines.Count);
+                var element = reader.LocalName;
+                var empty = reader.IsEmptyElement;
+
+                // A property a project's own PropertyGroup declares - one of the root Project's - is a key of the project's alone.
+                if (!solution && open is ["Project", "PropertyGroup"])
+                {
+                    var key = new ExtractNode(ids.Next($"{id}#{ExtractText.Whole(element)}"), CodeNodeKinds.Member, element, element, line, line, ExtractText.Signature(element))
+                    {
+                        SubKind = CodeSubKinds.Key,
+                        Scope = OwnProperties,
+                        Parent = id,
+                    };
+                    properties.Add(key);
+                    property = (key.Id, element, open.Count);
+                }
 
                 // The root element's line, as the project's header.
                 signature ??= ExtractText.Signature(ExtractText.Flat(lines[line - 1]));
                 describing = !solution && reader.LocalName == "Description" && !reader.IsEmptyElement;
 
-                var named = (solution, reader.LocalName) switch
+                var named = (solution, element) switch
                 {
                     (false, "ProjectReference") => reader.GetAttribute("Include"),
                     (true, "Project") => reader.GetAttribute("Path"),
@@ -118,7 +172,7 @@ public sealed partial class MsbuildExtractor : ICodeGraphExtractor
 
                 foreach (var project in (named ?? string.Empty).Split(';').Select(ProjectName).OfType<string>())
                 {
-                    references.Add(new ExtractReference(id, CodeEdgeKinds.ProjectReference, project, line));
+                    written.Add((new ExtractReference(id, CodeEdgeKinds.ProjectReference, project, line), null));
                 }
 
                 if (!solution && reader.LocalName == "Import" && reader.GetAttribute("Project") is { } imported && !string.IsNullOrWhiteSpace(imported))
@@ -127,16 +181,27 @@ public sealed partial class MsbuildExtractor : ICodeGraphExtractor
                 }
 
                 // Each attribute's value, read where the file writes it: MSBuild writes a property into an attribute as
-                // often as into an element's text.
+                // often as into an element's text - read as the element it is written on is.
+                List<string> within = [.. open, element];
+
                 for (var more = reader.MoveToFirstAttribute(); more; more = reader.MoveToNextAttribute())
                 {
-                    if (Offset(index, text, at) is { } attribute && Value(text, attribute) is { } value)
+                    if (Offset(index, text, at) is { } attribute && Value(text, attribute) is { } attributeValue)
                     {
-                        Uses(value.Start, value.End);
+                        Uses(attributeValue.Start, attributeValue.End, within);
                     }
                 }
 
                 reader.MoveToElement();
+
+                if (!empty)
+                {
+                    open.Add(element);
+                }
+                else
+                {
+                    Declared();
+                }
             }
         }
         catch (XmlException ex)
@@ -151,7 +216,37 @@ public sealed partial class MsbuildExtractor : ICodeGraphExtractor
             Summary = summary,
         };
 
-        return new FileExtract([node]) { References = references, Imports = imports, Dynamic = dynamic };
+        // Each use, in the order written: of the project's own property where it reads one - every declaration of the name
+        // by its name in the project's scope, those before it alone by each - else of the key an XML file declares.
+        var own = properties.GroupBy(key => key.Name, StringComparer.Ordinal).ToDictionary(named => named.Key, named => named.Count(), StringComparer.Ordinal);
+
+        foreach (var (reference, reads) in written)
+        {
+            if (reference.Kind != CodeEdgeKinds.Uses)
+            {
+                references.Add(reference);
+            }
+            else if (!own.TryGetValue(reference.Name, out var count) || reads is { Count: 0 })
+            {
+                references.Add(reference with { Qualifier = new ExtractQualifier(CodeQualifierKinds.Key, XmlKeys) });
+            }
+            else if (reads is null || reads.Count == count)
+            {
+                references.Add(reference with { Qualifier = new ExtractQualifier(CodeQualifierKinds.Key, Language) });
+            }
+            else
+            {
+                references.AddRange(reads.Select(read => reference with { Qualifier = new ExtractQualifier(CodeQualifierKinds.Own, read) }));
+            }
+        }
+
+        return new FileExtract([node, .. properties])
+        {
+            Scopes = properties.Count > 0 ? [new ExtractScope(OwnProperties, Open: false)] : [],
+            References = references,
+            Imports = imports,
+            Dynamic = dynamic,
+        };
     }
 
     /// <summary>
