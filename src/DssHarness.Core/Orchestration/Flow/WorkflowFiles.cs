@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using DssHarness.Core.Json;
 using DssHarness.Core.Repository;
 
 namespace DssHarness.Core.Orchestration.Flow;
@@ -77,7 +78,7 @@ public static class WorkflowFiles
     {
         try
         {
-            return text is not null && JsonNode.Parse(text) is JsonObject root ? root : null;
+            return text is not null && JsonDepth.ParseNode(text) is JsonObject root ? root : null;
         }
         catch (JsonException)
         {

@@ -9,6 +9,7 @@ using DssHarness.Core.Ci;
 using DssHarness.Core.Configuration;
 using DssHarness.Core.Execution;
 using DssHarness.Core.FileSystem;
+using DssHarness.Core.Json;
 using DssHarness.Core.Orchestration;
 using DssHarness.Core.Platform;
 using DssHarness.Core.Repository;
@@ -648,7 +649,7 @@ public sealed class ReasonStepRunner(
 
         // The output an answer read against its schema, and the issues it reports there that were before the run - each
         // raising the triage the step's onPreExisting names.
-        var output = result.Status == AgentRunStatus.Completed && result.StructuredOutput is { Length: > 0 } json ? JsonNode.Parse(json) : null;
+        var output = result.Status == AgentRunStatus.Completed && result.StructuredOutput is { Length: > 0 } json ? JsonDepth.ParseNode(json) : null;
 
         return result.Status switch
         {

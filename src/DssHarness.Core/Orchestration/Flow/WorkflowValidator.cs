@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using DssHarness.Core.Anchors;
+using DssHarness.Core.Json;
 using DssHarness.Core.Repository;
 using DssHarness.Core.Schemas;
 
@@ -4202,7 +4203,7 @@ public static class WorkflowValidator
         private static readonly Lazy<IReadOnlyDictionary<string, JsonSchemaSubset.Reading>> BuiltIn = new(() =>
             WorkflowStepTypes.All
                 .Where(type => type.Output is not null)
-                .ToDictionary(type => type.Type, type => JsonSchemaSubset.Read(JsonNode.Parse(type.Output!)!), StringComparer.Ordinal));
+                .ToDictionary(type => type.Type, type => JsonSchemaSubset.Read(JsonDepth.ParseNode(type.Output!)!), StringComparer.Ordinal));
 
         /// <summary>
         /// What each key that holds an expression must yield, and why, where it must be one kind (V16-V19, and the keys

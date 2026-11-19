@@ -5,6 +5,7 @@ using DssHarness.Core.Agents;
 using DssHarness.Core.Agents.Policy;
 using DssHarness.Core.Configuration;
 using DssHarness.Core.FileSystem;
+using DssHarness.Core.Json;
 using DssHarness.Core.Orchestration;
 using DssHarness.Core.Platform;
 using DssHarness.Core.Repository;
@@ -315,7 +316,7 @@ public sealed class AdvisorRunner(
     /// <param name="call">The asking, whose answers the schema named.</param>
     private static FlowAdvice? AdviceOf(AgentRunResult result, FlowAdvisorCall call)
     {
-        if (result.Status != AgentRunStatus.Completed || result.StructuredOutput is not { Length: > 0 } json || JsonNode.Parse(json) is not JsonObject read)
+        if (result.Status != AgentRunStatus.Completed || result.StructuredOutput is not { Length: > 0 } json || JsonDepth.ParseNode(json) is not JsonObject read)
         {
             return null;
         }

@@ -2,6 +2,7 @@ using System.Text;
 using System.Text.Json;
 using DssHarness.Core.Execution;
 using DssHarness.Core.FileSystem;
+using DssHarness.Core.Json;
 using DssHarness.Core.Output;
 using DssHarness.Core.Results;
 
@@ -35,6 +36,9 @@ public sealed class OrchestrationLog(IFileSystem fileSystem, TimeProvider clock,
     /// <summary>What a log is, as <see cref="RecordWritten"/> names the kind of record it is.</summary>
     public const string RecordKind = "an orchestrator's log";
 
+    /// <summary>A log's line as it is written and read: a state file's line (<see cref="JsonStateFile.LineOptions"/>), at whatever depth its message holds.</summary>
+    private static readonly JsonSerializerOptions Line = JsonDepth.Serializer(JsonStateFile.LineOptions);
+
     private readonly IFileSystem _fileSystem = fileSystem;
     private readonly TimeProvider _clock = clock;
     private readonly IHarnessOutput _output = output;
@@ -60,7 +64,7 @@ public sealed class OrchestrationLog(IFileSystem fileSystem, TimeProvider clock,
         var path = orchestrator.LogFile(subject);
         var line = JsonSerializer.Serialize(
             new OrchestrationEvent(_clock.GetUtcNow(), command, HarnessExit.Describe(outcome.ExitCode)?.Name ?? outcome.ExitCode.ToString(System.Globalization.CultureInfo.InvariantCulture), outcome.ExitCode, outcome.Message, outcome.Details is { Count: > 0 } details ? details : null),
-            JsonStateFile.LineOptions);
+            Line);
 
         MachineWideFile.UpdateWhileHeld(path, told => _output.Info(command, told.Line()), _clock, () =>
         {
@@ -130,7 +134,7 @@ public sealed class OrchestrationLog(IFileSystem fileSystem, TimeProvider clock,
 
             try
             {
-                events.Add(JsonSerializer.Deserialize<OrchestrationEvent>(line, JsonStateFile.LineOptions)
+                events.Add(JsonSerializer.Deserialize<OrchestrationEvent>(line, Line)
                     ?? throw new JsonException("it holds null"));
             }
             catch (JsonException ex)
