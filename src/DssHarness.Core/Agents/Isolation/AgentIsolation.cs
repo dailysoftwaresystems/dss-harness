@@ -205,9 +205,9 @@ public sealed record LaunchIsolation(
     /// <summary>
     /// What a Claude Code launch's whole process is denied: where the mechanism takes no command handed to it one by one
     /// (<see cref="IIsolationMechanism.TakesHandedCommands"/>), the commands' profile with the Claude Code directories read,
-    /// for it reads its login there; where it takes them and starts again inside a layer of its own
-    /// (<see cref="IIsolationMechanism.Unnested"/>), the outer layer its commands are each handed into a layer of their own
-    /// from (<see cref="IsolationProfile.Outer"/>). Null where there is no mechanism, or Claude Code's own process runs
+    /// for it reads its login there; where it takes them and holds a layer around a program of its own (bubblewrap), the
+    /// outer layer that holds Claude Code's process alone (<see cref="IsolationProfile.Outer"/>), with a temporary
+    /// directory of its own in the launch's records. Null where there is no mechanism, or Claude Code's own process runs
     /// outside every layer.
     /// </summary>
     public IsolationProfile? ClaudeCode { get; init; }
@@ -630,6 +630,16 @@ public sealed class AgentIsolation(
 
     /// <summary>The directory under a Claude Code directory that holds the shell snapshots its commands source, which stays read.</summary>
     public const string ShellSnapshots = "shell-snapshots";
+
+    /// <summary>
+    /// The directory, in the launch's own, that is Claude Code's own temporary directory inside its outer layer: written
+    /// there alone, handed it as its <c>/tmp</c> and named to it by <c>CLAUDE_CODE_TMPDIR</c> - so its temp is put away
+    /// with the launch's own records, never shared with a command's layer.
+    /// </summary>
+    public const string ClaudeCodeTempDirectory = "claude-tmp";
+
+    /// <summary>The variable that names Claude Code's own temporary directory to it.</summary>
+    public const string ClaudeCodeTempVariable = "CLAUDE_CODE_TMPDIR";
 
     /// <summary>
     /// The file git reads in a git directory as the pointer to the common directory it takes the repository's
@@ -1433,11 +1443,13 @@ public sealed class AgentIsolation(
     /// Code directories and <c>~/.claude.json</c> read alone - written, they would let a command plant what Claude Code runs
     /// outside later, its settings' hooks, its own file's servers, but the files a program reads by itself inside a hidden
     /// directory of the user's credentials still read (<paramref name="readable"/>); where it takes handed commands and
-    /// starts again inside a layer of its own (bubblewrap where its probe proved that), an outer layer: the commands'
-    /// profile with Claude Code's own places written - those directories and that file, without which Claude Code does not
-    /// start - and every other place as the commands' profile holds it: the slots hidden, the machine read-only, git's
-    /// code-running files and the tool's state sealed; null where it takes handed commands and starts none inside (macOS's
-    /// sandbox), and Claude Code's own process runs outside, or for an execution, which has no launch.
+    /// holds a program inside a layer of its own (bubblewrap), an outer layer: the commands' profile with Claude Code's
+    /// own places written - those directories and that file, without which Claude Code does not
+    /// start - and a temporary directory of its own in the launch's own records, handed it as its <c>/tmp</c> and named to
+    /// it by <c>CLAUDE_CODE_TMPDIR</c>, so its temp is put away with the launch and shared with no command's layer; every
+    /// other place as the commands' profile holds it: the slots hidden, the machine read-only, git's code-running files and
+    /// the tool's state sealed; null where it takes handed commands and holds no layer around a program of its own
+    /// (macOS's sandbox), and Claude Code's own process runs outside, or for an execution, which has no launch.
     /// </summary>
     private IsolationProfile? ClaudeCodeOf(IsolationProfile profile, IsolationGround ground, IReadOnlyList<(string place, bool directory)> hidden, IReadOnlyList<string> readable, IIsolationMechanism mechanism, IEqualityComparer<string> comparer)
     {
@@ -1455,13 +1467,25 @@ public sealed class AgentIsolation(
             return null;
         }
 
+        // The outer layer's temporary directory is Claude Code's own, in the launch's own records: nothing else runs inside
+        // it, and what it leaves there is put away with the launch. Made by the launch's client, as its settings are - the
+        // launch's directory is the run's to make.
+        var temp = Real(Path.Combine(ground.LaunchDirectory, ClaudeCodeTempDirectory));
+
         IReadOnlyList<IsolatedWrite> written =
         [
             .. profile.Writes,
+            new(temp, Directory: true, Writable: true),
             .. own.DistinctBy(entry => entry.place, comparer).Select(entry => new IsolatedWrite(Real(entry.place), entry.directory, Writable: true)),
         ];
 
-        return apart with { Writes = IsolationProfiles.Ordered(written, comparer), Outer = true };
+        return apart with
+        {
+            Writes = IsolationProfiles.Ordered(written, comparer),
+            Temp = temp,
+            Environment = [.. apart.Environment.Where(variable => variable.Key != IsolationCaches.TempVariable), new(IsolationCaches.TempVariable, temp), new(ClaudeCodeTempVariable, temp)],
+            Outer = true,
+        };
     }
 
     /// <summary>

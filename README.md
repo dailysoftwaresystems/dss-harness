@@ -1243,8 +1243,8 @@ tree, whose own configuration - an fsmonitor, a filter - git started in that dir
 runs, as it does any repository's.
 
 Under bubblewrap the child has a user namespace of its own that allows no further one
-(`--disable-userns`) - but a `claude-code` launch's outer layer, below, which is left one to make each
-command's own layer in - and a process namespace with its own `/proc`, so no command reaches another
+(`--disable-userns`) - a `claude-code` launch's outer layer among them, for nothing is started
+inside it - and a process namespace with its own `/proc`, so no command reaches another
 process's environment; each place is a mount, each directory above one a mount point no command
 moves; WSL's interoperation sockets and shared directory (`/run/WSL`, `/mnt/wsl`, and `WSL_INTEROP`
 taken from its environment), screen's sessions, the user's runtime directory whole - their service
@@ -1334,10 +1334,7 @@ unread, by its name and by another case of it, a place written by nobody unwritt
 outside every open one unwritten, an open place written - on Windows after MXC's library says this
 Windows has the container (Windows 11 24H2 build 26100.9278 or later, or 26H2 build 26300.9550 or
 later), and followed by each of node, git and Git Bash's `sh` found on this machine started inside it
-and asked to answer, one that does not making none, said with how it ended; on Linux bubblewrap,
-once proved, is started again inside an outer layer of its own around a shell that must end 0, and
-where it does not, it is the mechanism all the same, a `claude-code` launch's own process outside
-every layer, said with how the trial ended. MXC 1.0.1 ends every
+and asked to answer, one that does not making none, said with how it ended. MXC 1.0.1 ends every
 program of Git Bash's with `0xC0000142`, a library that would not start, so where Git Bash is
 installed Windows has none yet; from WSL 2, bubblewrap isolates. `agentPolicy.isolation` says what
 happens where this machine has none: `required`, where nothing is said, starts no agent that may run

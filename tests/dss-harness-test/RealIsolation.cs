@@ -87,6 +87,13 @@ internal static class RealIsolation
         var isolated = await new AgentIsolation(platform, kit.Harness.GitClient, kit.Harness.FileSystem, new HomedPlatform(home.Path))
             .ForLaunchAsync(config, ground, kit.Main, launch, Token);
 
+        // The launch's client makes Claude Code's own temporary directory in its records, as its other pre-makes are, where
+        // the outer layer holds its process.
+        if (isolated.ForClaudeCode is { Profile.Outer: true })
+        {
+            Directory.CreateDirectory(Path.Combine(launch, AgentIsolation.ClaudeCodeTempDirectory));
+        }
+
         return new StepLaunch(kit, worktree, canary, launch, Assert.IsType<ProcessIsolation>(isolated.ForCommands)) { ClaudeCode = isolated.ForClaudeCode, Claude = claude };
     }
 

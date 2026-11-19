@@ -2840,13 +2840,14 @@ public sealed class ClaudeCodeClientTests : IDisposable
     }
 
     /// <summary>
-    /// Under a mechanism that starts again inside a layer of its own - bubblewrap - a launch runs Claude Code's own process in
-    /// its outer layer, its own sandbox off, saying nothing of running outside and handing it no command; where Claude Code
-    /// never ran, its own directory and the file it keeps its state in are made first - the file holding no state - for
-    /// inside the outer layer it could make neither.
+    /// Under a mechanism that holds a layer around a program of its own - bubblewrap - a launch runs Claude Code's own
+    /// process in its outer layer, its own sandbox off, saying nothing of running outside and handing it no command; where
+    /// Claude Code never ran, its own directory and the file it keeps its state in are made first - the file holding no
+    /// state, and its own temporary directory in the launch's records with them - for inside the outer layer it could
+    /// make none of them.
     /// </summary>
     [Fact]
-    public async Task UnderAMechanismThatNests_ALaunchRunsClaudeCodeInItsOuterLayer_MakingWhatItCannotMakeInside()
+    public async Task UnderAMechanismThatHoldsALayerOfItsOwn_ALaunchRunsClaudeCodeInItsOuterLayer_MakingWhatItCannotMakeInside()
     {
         using var kit = new Kit();
         kit.Script([new JsonObject()]);
@@ -2868,6 +2869,7 @@ public sealed class ClaudeCodeClientTests : IDisposable
         Assert.False(request.Environment.ContainsKey("CLAUDE_CODE_SHELL_PREFIX"));
         Assert.False(File.Exists(Path.Combine(kit.StepDirectory, ClaudeShell.FileName)));
         Assert.Equal("{}\n", File.ReadAllText(Path.Combine(kit.ClaudeDirectory, ".claude.json")));
+        Assert.True(Directory.Exists(Path.Combine(kit.StepDirectory, DssHarness.Core.Agents.Isolation.AgentIsolation.ClaudeCodeTempDirectory)), "Claude Code's own temporary directory is made in the launch's records");
         Assert.Empty(sink.Of<Notice>());
     }
 

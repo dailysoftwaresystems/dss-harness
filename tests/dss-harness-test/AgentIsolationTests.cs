@@ -81,11 +81,12 @@ public sealed class AgentIsolationTests
     }
 
     /// <summary>
-    /// A program's outer layer is left a user namespace to make, for each command it hands over is started in a layer of its
-    /// own inside it; every other child is allowed none - its line otherwise the same.
+    /// Every layer of bubblewrap's allows no further namespace, a program's outer layer among them: nothing is started
+    /// inside one, for the program an outer layer holds runs no command of the agent's, and each command runs in a layer
+    /// of its own started outside it - so its line is every child's.
     /// </summary>
     [Fact]
-    public void ABubblewrapOuterLayer_LeavesAUserNamespaceToMake_EveryOtherChildNone()
+    public void ABubblewrapOuterLayer_AllowsNoFurtherNamespace_LikeEveryLayer()
     {
         var mechanism = new Bubblewrap("/usr/bin/bwrap", "0.9.0", []);
         var profile = new IsolationProfile([], [new IsolatedWrite("/r/w", Directory: true, Writable: true)]);
@@ -93,8 +94,8 @@ public sealed class AgentIsolationTests
         var (_, inner) = mechanism.Command(profile, "/bin/sh", ["-c", "true"]);
         var (_, outer) = mechanism.Command(profile with { Outer = true }, "/bin/sh", ["-c", "true"]);
 
+        Assert.Equal(inner, outer);
         Assert.Equal(["--unshare-user", "--disable-userns", "--unshare-pid"], inner.Take(3));
-        Assert.Equal([.. inner.Where(argument => argument != "--disable-userns")], outer);
     }
 
     /// <summary>
@@ -154,11 +155,12 @@ public sealed class AgentIsolationTests
     /// worktree's configuration directory, the tool's state in the worktree, and the git directory's own code-running files,
     /// pointers and submodules: its hooks, its configuration, its replacements, its alternates and its commondir, made
     /// naming the directory itself, and its worktrees/. A place not there inside what it writes is made first; the launch's
-    /// own directory, which no command writes, is not. Under a mechanism that starts again inside a layer of its own, a
+    /// own directory, which no command writes, is not. Under a mechanism that holds a layer around a program of its own, a
     /// Claude Code launch's whole process is given the outer layer: the same profile, the slots still hidden, but Claude
-    /// Code's own directory and file written, and the receipts' directory and its own temporary directory in the launch's -
-    /// every rule parent first. Its records say the mechanism, its pins hold the git directories of the worktree and of the
-    /// main checkout alike, nothing is said of a linked worktree, and its disposal takes the temporary directory away.
+    /// Code's own directory and file written, and a temporary directory of its own in the launch's records - named to it
+    /// by CLAUDE_CODE_TMPDIR - every rule parent first. Its records say the mechanism, its pins hold the git directories
+    /// of the worktree and of the main checkout alike, nothing is said of a linked worktree, and its disposal takes the
+    /// temporary directory away.
     /// </summary>
     [Fact]
     public async Task AStepInItsWorktree_IsGivenTheMachineReadOnly_ItsRootsAndGitWritten_ItsGuardedPlacesSealed()
@@ -239,12 +241,15 @@ public sealed class AgentIsolationTests
         Assert.Equal(new AgentIsolationRecord(AgentIsolationMode.Required) { Mechanism = "test", Version = "1.0" }, isolated.Record);
 
         // Claude Code's whole process, in an outer layer of its own: the slots still hidden, and Claude Code's own
-        // directory and file written beside what the commands write - nothing of the launch's directory, where nothing of
-        // Claude Code's is kept now that it runs no command of its own.
+        // directory and file written beside what the commands write, with a temporary directory of its own in the launch's
+        // records - its /tmp and its CLAUDE_CODE_TMPDIR both, put away with the launch - and nothing else of the launch's
+        // directory, where nothing of Claude Code's is kept now that it runs no command of its own.
         var outer = isolated.ForClaudeCode!.Profile;
+        var claudeTemp = Path.Combine(launch, AgentIsolation.ClaudeCodeTempDirectory);
         IReadOnlyList<IsolatedWrite> outerWrites =
         [
             .. writes,
+            new(claudeTemp, Directory: true, Writable: true),
             new(claude, Directory: true, Writable: true),
             new(claude + ".json", Directory: false, Writable: true),
         ];
@@ -253,7 +258,9 @@ public sealed class AgentIsolationTests
         Assert.Equal([.. HarnessLayout.SecretSlotDirectoriesUnder(kit.Main).Where(Directory.Exists).Select(slot => new IsolatedPath(slot, Directory: true))], outer.Hidden);
         Assert.Equal(outerWrites.OrderBy(write => write.Path, StringComparer.Ordinal), outer.Writes.OrderBy(write => write.Path, StringComparer.Ordinal));
         Assert.Equal(outer.Writes.OrderBy(write => IsolationProfile.Depth(write.Path)), outer.Writes);
-        Assert.Equal((commands.Reads, commands.Temp, commands.Environment), (outer.Reads, outer.Temp, outer.Environment));
+        Assert.Equal(commands.Reads, outer.Reads);
+        Assert.Equal(claudeTemp, outer.Temp);
+        Assert.Equal([new(IsolationCaches.TempVariable, claudeTemp), new(AgentIsolation.ClaudeCodeTempVariable, claudeTemp), .. IsolationCaches.Environment(caches)], outer.Environment);
         Assert.Empty(outer.Reopened);
         Assert.False(commands.Outer);
 

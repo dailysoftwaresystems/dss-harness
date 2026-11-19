@@ -450,6 +450,10 @@ public sealed class ClaudeCodeClient(
                 {
                     files.WriteAllTextAtomic(own.StateFile, "{}\n");
                 }
+
+                // Its own temporary directory, put away with the launch's records: the layer binds it as its /tmp, which
+                // fails where it is not there, and the launch's directory is the run's to make.
+                files.CreateDirectory(Path.Combine(directory, DssHarness.Core.Agents.Isolation.AgentIsolation.ClaudeCodeTempDirectory));
             }
 
             files.WriteAllTextAtomic(settings, ClaudeSettings.Render(_given, run.Ground!, client._platform.PathComparison, isolated: whole is not null));

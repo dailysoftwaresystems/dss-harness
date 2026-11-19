@@ -310,11 +310,10 @@ ignores letter case reaches it by (`HoldsEveryCase`), whether abstract sockets a
 scoped (`Scoped`) and what is left reached where not (`Leaves`), what its anchors cost
 (`AnchorCost`), whether it gives the child a temporary directory of its own (`OwnTemp`), and whether
 it takes a command handed to it from a process apart from it (`TakesHandedCommands`), and why a process inside it
-cannot start it again for each command it hands over (`Unnested`). On Linux the
+cannot be held inside it as an outer layer of its own (`Unnested`). On Linux the
 mechanism is the system's bubblewrap (`Bubblewrap`): the machine bound read-only (`--ro-bind / /`,
 `--dev /dev`), a user namespace of its own allowing no further one (`--unshare-user
---disable-userns`) - but a program's outer layer (`IsolationProfile.Outer`), left one to make each command's own layer
-in - a process namespace with its own `/proc` (`--unshare-pid --proc /proc`, so
+--disable-userns`) - a program's outer layer among them, for nothing is started inside it - a process namespace with its own `/proc` (`--unshare-pid --proc /proc`, so
 `/proc/<id>/root` and `/proc/<id>/environ` reach no process outside), never `--die-with-parent`,
 whose parent would be the thread that started the step; the launch's temporary directory bound at
 `/tmp` and any read root under `/tmp` bound again read-only; then the profile's writes in its order,
@@ -387,11 +386,7 @@ case of its directory's; a place written by nobody unwritten, by either spelling
 every open one unwritten; an open place written - each checked from outside, through `sh` on Linux
 and macOS and through `cmd.exe` on Windows, a run for each, and why not with the remedy where it
 fails (Ubuntu's `apparmor_restrict_unprivileged_userns` named with the `bwrap-userns-restrict`
-profile; on Windows the builds MXC needs, or WSL 2). On Linux bubblewrap, once proved, is started again
-inside an outer layer of its own around a shell that must end 0, as a `claude-code` launch's outer layer starts it for
-each command; where it does not - an AppArmor profile that denies bubblewrap's children every capability, as
-`bwrap-userns-restrict` does - it is the mechanism all the same, its `Unnested` saying how the trial ended, and a
-`claude-code` launch's own process runs outside. On Windows each of node, git and Git Bash's
+profile; on Windows the builds MXC needs, or WSL 2). On Windows each of node, git and Git Bash's
 `sh` - on the PATH outside the tree, `sh` else beside the git found - is then started inside the
 container and must end 0 having said something; one that does not is no mechanism, named with its
 path and how it ended, a status the system ended it with written in hexadecimal, and one not on the

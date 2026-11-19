@@ -190,29 +190,8 @@ public sealed partial class IsolationPlatform(
         }
 
         var mechanism = new Bubblewrap(program, version.Said!, Masked()) { Scoped = _landlock() >= Landlock.ScopedVersion };
-        var proved = await ProvedAsync(mechanism, tree, LinkPaths.Resolve, how => Unproved(mechanism, how), cancellationToken).ConfigureAwait(false);
 
-        return proved.Mechanism is null
-            ? proved
-            : IsolationAvailability.Of(mechanism with { Unnested = await UnnestedAsync(mechanism, cancellationToken).ConfigureAwait(false) });
-    }
-
-    /// <summary>
-    /// Why bubblewrap cannot be started again inside a layer of its own on this machine, as a program's outer layer starts it
-    /// for each command it hands over: the trial runs it, contained and inside an outer layer of its own, around a shell that
-    /// ends 0 - which an AppArmor profile that denies bubblewrap's children every capability, as Ubuntu's
-    /// <c>bwrap-userns-restrict</c> does, keeps from mounting anything; null where it ran.
-    /// </summary>
-    private async Task<string?> UnnestedAsync(Bubblewrap mechanism, CancellationToken cancellationToken)
-    {
-        var (inner, arguments) = mechanism.Command(IsolationProfile.Nothing, "/bin/sh", ["-c", "exit 0"]);
-        var (result, failed) = await TrialRunAsync(new ProcessIsolation(mechanism, IsolationProfile.Nothing with { Outer = true }), "/", inner, arguments, cancellationToken).ConfigureAwait(false);
-        var how = failed
-            ?? (result!.ExitCode != 0
-                ? $"ended {Code(result.ExitCode)}: '{FirstLine(result.StandardError.Trim().Length > 0 ? result.StandardError : result.StandardOutput)}'"
-                : null);
-
-        return how is null ? null : $"bubblewrap {mechanism.Version} ('{mechanism.Program}') starts none inside a layer of its own here: its trial {how}";
+        return await ProvedAsync(mechanism, tree, LinkPaths.Resolve, how => Unproved(mechanism, how), cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>

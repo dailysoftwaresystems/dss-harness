@@ -481,8 +481,8 @@ public sealed partial class HelpTests
             prose,
             StringComparison.Ordinal);
         Assert.Contains(
-            "Under bubblewrap the child has a user namespace of its own that allows no further one - but a claude-code launch's outer "
-                + "layer, below, which is left one to make each command's own layer in - and a process namespace with its own /proc, so "
+            "Under bubblewrap the child has a user namespace of its own that allows no further one - a claude-code launch's outer "
+                + "layer among them, for nothing is started inside it - and a process namespace with its own /proc, so "
                 + "no command reaches another process's environment;",
             prose,
             StringComparison.Ordinal);
@@ -505,16 +505,15 @@ public sealed partial class HelpTests
                 + "deleted relative to its directory held from the writable root it was decided in with no link on the way, so a "
                 + "link a command - one left running in the background among them - puts on a path between the decision and the act "
                 + "reaches nothing. Claude Code's own process runs apart from the agent's commands, reading its login and the key it "
-                + "is handed there. On Linux it runs inside an outer layer of bubblewrap: the machine read-only, every credential slot "
-                + "hidden, git's code-running files and the tool's state sealed as for the commands, and written but its writable "
-                + "roots, its temporary directory, the declared caches, Claude Code's own directories and ~/.claude.json, without "
-                + "which it does not start. Where Claude Code never ran, its directory and .claude.json (holding {}) are made first, "
-                + "for inside it can make neither. Where this machine's bubblewrap cannot start again inside a layer of its own - an "
-                + "AppArmor profile that denies its children every capability, as Ubuntu's bwrap-userns-restrict does - the probe "
-                + "says so, and Claude Code's own process runs outside every layer, as on macOS, whose sandbox starts none inside "
-                + "another, and each launch says so as it starts: there it runs with the user's rights, though no command of the "
-                + "agent's and no file of its runs there. Claude Code's own sandbox is turned off in its settings, for none nests in "
-                + "this tool's.",
+                + "is handed there. On Linux it runs inside an outer layer of bubblewrap, which holds its process alone: the machine "
+                + "read-only, every credential slot hidden, git's code-running files and the tool's state sealed as for the commands, "
+                + "and written but its writable roots, its own temporary directory in the launch's own records - named to it by "
+                + "CLAUDE_CODE_TMPDIR, so its temp is put away with the launch - the declared caches, Claude Code's own directories "
+                + "and ~/.claude.json, without which it does not start. Where Claude Code never ran, its directory and .claude.json "
+                + "(holding {}) are made first, for inside it can make neither. On macOS, whose sandbox starts none inside another, "
+                + "Claude Code's own process runs outside every layer, and each launch says so as it starts: there it runs with the "
+                + "user's rights, though no command of the agent's and no file of its runs there. Claude Code's own sandbox is turned "
+                + "off in its settings, for none nests in this tool's.",
             prose,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -531,10 +530,7 @@ public sealed partial class HelpTests
                 + "case of it, a place written by nobody unwritten by either, a place outside every open one unwritten, an open place "
                 + "written - on Windows after MXC's library says this Windows has the container (Windows 11 24H2 build 26100.9278 or "
                 + "later, or 26H2 build 26300.9550 or later), and followed by each of node, git and Git Bash's sh found on this machine "
-                + "started inside it and asked to answer, one that does not making none, said with how it ended; on Linux bubblewrap, "
-                + "once proved, is started again inside an outer layer of its own around a shell that must end 0, and where it does "
-                + "not, it is the mechanism all the same, a claude-code launch's own process outside every layer, said with how the "
-                + "trial ended. MXC 1.0.1 ends every "
+                + "started inside it and asked to answer, one that does not making none, said with how it ended. MXC 1.0.1 ends every "
                 + "program of Git Bash's with 0xC0000142, a library that would not start, so where Git Bash is installed Windows has "
                 + "none yet; from WSL 2, bubblewrap isolates.",
             prose,

@@ -212,15 +212,15 @@ public sealed partial class HelpTests
             readme,
             StringComparison.Ordinal);
         Assert.Contains(
-            "On Linux Claude Code's own process runs inside an outer layer of bubblewrap: the machine read-only, every credential slot hidden, git's "
-                + "code-running files and the tool's state sealed as for its commands, and written but its writable roots, its temporary directory, the declared "
-                + "caches, Claude Code's own directories and `~/.claude.json`; the mounts it laid are locked into every namespace made inside it, so none is "
-                + "undone there.",
+            "On Linux Claude Code's own process runs inside an outer layer of bubblewrap, which holds its process alone: the machine "
+                + "read-only, every credential slot hidden, git's code-running files and the tool's state sealed as for its commands, and written "
+                + "but its writable roots, its own temporary directory in the launch's own records - named to it by `CLAUDE_CODE_TMPDIR`, so its "
+                + "temp is put away with the launch - the declared caches, Claude Code's own directories and `~/.claude.json`.",
             readme,
             StringComparison.Ordinal);
         Assert.Contains(
-            "and Claude Code's own process runs outside every layer, as on macOS, whose sandbox starts none inside another, and runs nothing of the agent's "
-                + "there. In or out of a layer, Claude Code opens no file of the agent's in its own process:",
+            "On macOS, whose sandbox starts none inside another, Claude Code's own process runs outside every layer, and runs nothing of the "
+                + "agent's there. In or out of a layer, Claude Code opens no file of the agent's in its own process:",
             readme,
             StringComparison.Ordinal);
         Assert.Contains(
