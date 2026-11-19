@@ -79,10 +79,14 @@ public static partial class HelpTopics
         builder.AppendLine("test step that failed at or past its budget is a possible overrun, whose budget is");
         builder.AppendLine("to be re-derived; one that failed before reaching it is a real failure, to be fixed;");
         builder.AppendLine("and one with no budget to measure it against is called neither, and counted apart.");
-        builder.AppendLine($"A green leg past {CiLegsService.WarningFraction * 100:0}% of its budget is warned about. A pattern that does not");
-        builder.AppendLine("compile, or lacks its group, is refused when the file is read; one that runs out of");
-        builder.AppendLine("time, or a budget group that captures anything but a whole number of minutes, is");
-        builder.AppendLine($"refused ({HarnessExit.ConfigInvalid}) when it is matched. Neither is ever read as no match.");
+        builder.AppendLine($"A green leg past {CiLegsService.WarningFraction * 100:0}% of its budget is warned about.");
+        AppendWrapped(
+            builder,
+            "A pattern is matched by .NET's linear-time engine, in time linear in what it reads however it is written, so no "
+            + "match is ever cut short. One that does not compile, or lacks its group, is refused when the file is read; one "
+            + "that holds a construct the linear engine lacks - a backreference, a lookahead or lookbehind - or a budget group "
+            + $"that captures anything but a whole number of minutes, is refused ({HarnessExit.ConfigInvalid}) when it is "
+            + "matched. Neither is ever read as no match.");
         builder.AppendLine();
         builder.AppendLine($"It exits {CiExit.LegRed} when a leg is red, and {CiExit.MatrixDidNotRun} when no job is a leg - the matrix did not run,");
         builder.AppendLine("or legJobPattern matches none of its jobs - which is never read as every leg passing.");

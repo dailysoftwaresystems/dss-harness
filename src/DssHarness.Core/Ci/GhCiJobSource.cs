@@ -1,8 +1,10 @@
 using System.Globalization;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using DssHarness.Core.Json;
 using DssHarness.Core.Output;
 using DssHarness.Core.Results;
+using DssHarness.Core.Text;
 
 namespace DssHarness.Core.Ci;
 
@@ -80,7 +82,7 @@ public sealed class GhCiJobSource(GhProcess gh, TimeSpan? limit = null) : ICiJob
     private const int PageSize = 100;
 
     /// <summary>Where a check that is a job of a workflow run points: the run's id, then the job's.</summary>
-    private static readonly Regex JobAddress = new(@"/actions/runs/(?<run>\d+)/job/(?<job>\d+)", RegexOptions.CultureInvariant, TimeSpan.FromSeconds(1));
+    private static readonly Regex JobAddress = LinearRegex.Compile(@"/actions/runs/(?<run>\d+)/job/(?<job>\d+)");
 
     private readonly GhProcess _gh = gh;
     private readonly TimeSpan? _limit = limit;
@@ -322,7 +324,7 @@ public sealed class GhCiJobSource(GhProcess gh, TimeSpan? limit = null) : ICiJob
     {
         try
         {
-            return JsonDocument.Parse(output);
+            return JsonDepth.ParseDocument(output);
         }
         catch (JsonException ex)
         {

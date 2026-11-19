@@ -46,6 +46,14 @@ public sealed partial class HelpTests
             Prose.Words(result.StandardOutput),
             StringComparison.Ordinal);
         Assert.Equal(UnattendedCommands.Variables.Keys.Order(StringComparer.Ordinal), ["GCM_INTERACTIVE", "GH_PROMPT_DISABLED", "GIT_TERMINAL_PROMPT"]);
+        Assert.Contains(
+            "A pattern is matched by .NET's linear-time engine, in time linear in what it reads however it is written, so no "
+                + "match is ever cut short. One that does not compile, or lacks its group, is refused when the file is read; one "
+                + "that holds a construct the linear engine lacks - a backreference, a lookahead or lookbehind - or a budget group "
+                + $"that captures anything but a whole number of minutes, is refused ({HarnessExit.ConfigInvalid}) when it is "
+                + "matched. Neither is ever read as no match.",
+            Prose.Words(result.StandardOutput),
+            StringComparison.Ordinal);
 
         // The example reads what it says it reads: a leg and its budget from a whole job name, and the leg from one
         // the forge cut short, which it would otherwise not read at all.

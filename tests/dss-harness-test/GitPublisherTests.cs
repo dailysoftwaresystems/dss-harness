@@ -322,7 +322,90 @@ public sealed class GitPublisherTests
         Assert.Equal(("github.example.com", "github.com", null, null, null), (aliased, throughTheWebsPort, unsaid, option, noSsh));
         Assert.Equal(3, requests.Count);
         Assert.Equal(["-G", "work-gh"], requests[0].Arguments);
-        Assert.Equal(SshHostNames.Limit, requests[0].Timeout);
+        Assert.All(requests, request => Assert.Null(request.Timeout));
+    }
+
+    /// <summary>
+    /// ssh is waited for until it says, with no time of the code's own: a configuration whose <c>Match exec</c> runs a
+    /// slow program of the person's is read to its end, the wait told every five minutes while it lasts, and its answer
+    /// taken once it comes. A number of the code's own would have refused a person's slow configuration as no answer.
+    /// </summary>
+    [Fact]
+    public async Task SshDashG_IsWaitedAndTold()
+    {
+        var clock = new TimerClock();
+        var said = new TaskCompletionSource<ProcessResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var requests = new List<ProcessRequest>();
+        var told = new List<string>();
+        var runner = Substitute.For<IProcessRunner>();
+        runner.FindExecutable("ssh").Returns("ssh");
+        runner.RunAsync(Arg.Do<ProcessRequest>(requests.Add), Arg.Any<CancellationToken>()).Returns(said.Task);
+        var output = Substitute.For<DssHarness.Core.Output.IHarnessOutput>();
+        output.Info(SshHostNames.Said, Arg.Do<string>(told.Add));
+
+        var asked = new SshHostNames(runner, output, clock).HostNameAsync("work-gh", Token);
+
+        await clock.WaitingAsync().WaitAsync(ClockDrive.Within, Token);
+
+        for (var tellings = 0; tellings < 3; tellings++)
+        {
+            clock.Advance(DssHarness.Core.Waiting.Waits.SaidEvery);
+            await clock.WaitingAsync().WaitAsync(ClockDrive.Within, Token);
+        }
+
+        said.SetResult(new ProcessResult(0, "user git\nhostname github.example.com\n", string.Empty, TimeSpan.FromMinutes(15), TimedOut: false));
+
+        Assert.Equal("github.example.com", await asked.WaitAsync(ClockDrive.Within, Token));
+        Assert.Null(Assert.Single(requests).Timeout);
+        Assert.Equal(
+            [
+                "has waited 5m00s for ssh -G work-gh to say the host it dials",
+                "has waited 10m00s for ssh -G work-gh to say the host it dials",
+                "has waited 15m00s for ssh -G work-gh to say the host it dials",
+            ],
+            told);
+    }
+
+    /// <summary>
+    /// The branch's open pull request is found however many forks opened one from a branch of the same name: the forge's
+    /// tool lists only as many as it is asked for, so a list that comes back full without the repository's own is asked
+    /// for again, twice as long, until it holds it - here the 1,500th of 2,000 - and a list shorter than asked is every one
+    /// there is. One list of the tool's own length would have answered that none was open, and opened a second.
+    /// </summary>
+    [Fact]
+    public async Task TheBranchsOpenPullRequest_IsFoundAmongTwoThousand()
+    {
+        var open = Enumerable.Range(1, 2_000)
+            .Select(number => $$"""{"number":{{number}},"url":"https://github.com/acme/widgets/pull/{{number}}","isCrossRepository":{{(number == 1_500 ? "false" : "true")}}}""")
+            .ToList();
+        var asked = new List<int>();
+        var runner = Substitute.For<IProcessRunner>();
+        runner.FindExecutable(GhProcess.Executable).Returns(GhProcess.Executable);
+        runner.RunAsync(Arg.Any<ProcessRequest>(), Arg.Any<CancellationToken>()).Returns(call =>
+        {
+            var arguments = call.Arg<ProcessRequest>().Arguments;
+            var at = arguments.ToList().IndexOf("--limit");
+
+            // The tool's own length where none is asked, as gh lists thirty.
+            var most = at < 0 ? 30 : int.Parse(arguments[at + 1], System.Globalization.CultureInfo.InvariantCulture);
+            asked.Add(most);
+
+            return Task.FromResult(new ProcessResult(0, $"[{string.Join(',', open.Take(most))}]", string.Empty, TimeSpan.Zero, TimedOut: false));
+        });
+        var publisher = new GitPublisher(new HarnessFactory().GitClient, new GhProcess(runner, GitLocalVariables.Fixed([]), _ => null));
+        var target = new GitPullRequestTarget("github.com/acme/widgets", "main", "work");
+
+        var found = await publisher.FindPullRequestAsync(Path.GetTempPath(), target, null, Token);
+
+        Assert.Equal(new GitPullRequest(1_500, "https://github.com/acme/widgets/pull/1500"), found);
+        Assert.Equal([100, 200, 400, 800, 1_600], asked);
+
+        // A list shorter than asked is the whole of it: none of the repository's own among it is none open.
+        open[1_499] = open[1_499].Replace("\"isCrossRepository\":false", "\"isCrossRepository\":true", StringComparison.Ordinal);
+        asked.Clear();
+
+        Assert.Null(await publisher.FindPullRequestAsync(Path.GetTempPath(), target, null, Token));
+        Assert.Equal([100, 200, 400, 800, 1_600, 3_200], asked);
     }
 
     /// <summary>A repository with <c>a.txt</c> and <c>gone.txt</c> committed.</summary>
