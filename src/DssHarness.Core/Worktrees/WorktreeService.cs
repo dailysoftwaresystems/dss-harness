@@ -205,14 +205,6 @@ public sealed class WorktreeService(
     /// </summary>
     private const string GitDirectoryName = ".git";
 
-    /// <summary>
-    /// How long an earlier command line waited, after an interruption, for a command past its point of no return before
-    /// it ended the process. A deletion no longer reads it: past its point of no return it goes on to its end, told every
-    /// <see cref="Waits.SaidEvery"/> while it lasts, and only a second interruption ends it. It stays only while another
-    /// file names it.
-    /// </summary>
-    public static readonly TimeSpan DefaultInterruptionGrace = TimeSpan.FromMinutes(2);
-
     private readonly IHarnessContextLoader _contextLoader = contextLoader;
     private readonly IGitClient _gitClient = gitClient;
     private readonly IFileSystem _fileSystem = fileSystem;

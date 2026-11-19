@@ -3,12 +3,6 @@ namespace DssHarness.Core.Configuration;
 /// <summary>Worktree creation policy.</summary>
 public sealed class WorktreeSettings
 {
-    /// <summary>
-    /// The longest worktree name an earlier version allowed where config.json set none. Nothing reads it: a name is held
-    /// to the path budget alone where <see cref="MaxNameLength"/> is not set, and it stays only while another file names it.
-    /// </summary>
-    public const int DefaultMaxNameLength = 10;
-
     /// <summary>The worktrees root used when config.json names none.</summary>
     public const string DefaultRoot = ".harness-config/worktrees";
 

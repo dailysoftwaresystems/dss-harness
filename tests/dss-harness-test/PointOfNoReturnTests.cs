@@ -10,20 +10,10 @@ namespace DssHarness.Tests;
 public sealed class PointOfNoReturnTests
 {
     /// <summary>
-    /// What such a command still does after an interruption is stopped a little before the grace it gives itself ends -
-    /// ten seconds before, or a quarter of a shorter grace - so what is left is said within it.
-    /// </summary>
-    [Theory]
-    [InlineData(120_000, 110_000)]
-    [InlineData(4_000, 3_000)]
-    public void WhatComesAfterAnInterruption_IsStopped_ALittleBeforeItsGraceEnds(int waitedMilliseconds, int stoppedMilliseconds)
-        => Assert.Equal(TimeSpan.FromMilliseconds(stoppedMilliseconds), PointOfNoReturn.StoppedAfter(TimeSpan.FromMilliseconds(waitedMilliseconds)));
-
-    /// <summary>
     /// Every command that finishes what it began once it has written - a removal, a hand-over, a move of an agent's base, a
     /// fold, a host agent, which may be running one of them for another machine, and an update of the installed tool,
-    /// which is read back once it has begun - is waited for after Ctrl+C as long as a deletion expects; a command that
-    /// leaves nothing half written when it stops is not.
+    /// which is read back once it has begun - is waited for after Ctrl+C to the end of what it began, only the second
+    /// interrupt, the hard stop, ending it; a command that leaves nothing half written when it stops is not.
     /// </summary>
     [Theory]
     [InlineData(WorktreeService.DeleteCommand, true)]
@@ -43,9 +33,9 @@ public sealed class PointOfNoReturnTests
         => Assert.Equal(waited, PointOfNoReturn.Commands.Contains(command));
 
     /// <summary>
-    /// A run asked to set up is waited for after Ctrl+C too, for its legs to bring down what they brought up - and only
-    /// where the option is the command's own, never a word after '--', and only for the commands that take it; any
-    /// command on the list is waited for whatever it was given.
+    /// A run asked to set up is waited for after Ctrl+C too, for its legs to bring down what they brought up, each down
+    /// line to its end - and only where the option is the command's own, never a word after '--', and only for the
+    /// commands that take it; any command on the list is waited for whatever it was given.
     /// </summary>
     [Theory]
     [InlineData(new[] { "test", "--set-up" }, true)]

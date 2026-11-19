@@ -7,10 +7,10 @@ namespace DssHarness.Core.Execution;
 
 /// <summary>
 /// The commands that pass a point of no return: once one has written, nothing interrupts it, and what it meets from there
-/// on is answered as a change begun and not finished. An interrupted one goes on with what it began - as every command
-/// goes on until its work has stopped, the command line cutting none off (<see cref="CommandInterrupts"/>) - for as long
-/// as a deletion expects (<see cref="WorktreeService.DefaultInterruptionGrace"/>); the one list, which a host agent reads
-/// for how long a request it serves may finish, so no command that finishes what it began can be left out.
+/// on is answered as a change begun and not finished. An interrupted one goes on with what it began to its end, told while
+/// it lasts - as every command goes on until its work has stopped, the command line cutting none off
+/// (<see cref="CommandInterrupts"/>) - and only a second interruption, the hard stop, ends it. The one list a host agent
+/// reads, so a request it serves that holds one is waited for to its end, never ended part way with nothing said.
 /// </summary>
 public static class PointOfNoReturn
 {
@@ -95,15 +95,6 @@ public static class PointOfNoReturn
             || (LegSetUps.Commands.Contains(command)
                 && commandLine.Skip(1).TakeWhile(argument => argument != "--").Contains(LegSetUps.Option, StringComparer.Ordinal));
     }
-
-    /// <summary>
-    /// How long, from an interruption, what such a command still does may run before it is stopped: a little short of
-    /// <paramref name="grace"/>, the time the command gives itself once interrupted - by ten seconds, or by a quarter of a
-    /// shorter grace - so what is left is said within it.
-    /// </summary>
-    /// <param name="grace">How long the command gives itself once interrupted.</param>
-    public static TimeSpan StoppedAfter(TimeSpan grace)
-        => grace - TimeSpan.FromTicks(Math.Min(TimeSpan.FromSeconds(10).Ticks, grace.Ticks / 4));
 
     /// <summary>
     /// Whether the command <paramref name="commandLine"/> types counts its own interrupts - one of <see cref="PausesSafely"/>

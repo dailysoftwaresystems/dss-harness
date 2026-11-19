@@ -1077,13 +1077,12 @@ history of a repository nested inside one included.
   is gone, by this deletion or before it: left behind, they would keep that commit in the main
   checkout's store for nothing and answer for a later worktree of the same address.
 
-An interruption stops the command cleanly only before its first destructive step. After that
-the deletion goes on, the command says at once that it is under way, and it waits up to two
-minutes for the deletion to finish, as does a host agent running it for another machine. Just
-before the two minutes are up, the deletion is stopped - the harness's own between one entry and
-the next, git where git is running - and the command says what is left. The deletion
-can be left partly done on any platform, and on Linux and macOS the interruption reaches git
-itself; running `delete-worktree <name> --force` then finishes it.
+An interruption stops the command cleanly only before its first destructive step. Once every check has passed, the
+deletion is past its point of no return: an interruption from then on is said at once, and the deletion goes on to its
+end - git, and the harness's own deletion, are given no token the interruption cancels - told every five minutes while
+it lasts (`Waits.SaidEvery`), as it is for a host agent running it for another machine, since a deletion stopped part
+way is a worktree nobody can check again. Only a second interruption, the hard stop, ends it, the process with it; that
+can leave it partly done on any platform, and running `delete-worktree <name> --force` then finishes it.
 
 ## Orchestrators and agents
 
@@ -1096,8 +1095,9 @@ over, on another account or after the last one ended, reads it there. `Orchestra
 is refused, never guessed at - and `OrchestrationLog` appends one JSON line for each run that reached an orchestrator's
 or an agent's record, refusals included: create-orchestrator, create-agent, seed-agent and every `--apply`; a dry run is
 not logged. Each line names its outcome by its exit code's name, the one table of them. A log that cannot take a line
-never replaces what the command did; the command says so instead. Once a command has written, an interruption waits for
-it as long as a deletion expects (`PointOfNoReturn`, the one list the command line reads), and what stops it from there
+never replaces what the command did; the command says so instead. Once a command has written, an interruption lets it go
+on to its end, as a deletion past its point of no return does (`PointOfNoReturn`, the one list the
+command line reads), and what stops it from there
 on is exit 21, naming what is in and how running it again finishes.
 
 **What a dry run answers.** A dry run of refresh-agent, rebase-agent, fold-agent or delete-agent exits with what its
@@ -5665,8 +5665,8 @@ read on its input as one. Eight in a row unheard (`BeatsMissed`), two minutes, a
 what the request started: it looks at that silence four times in the two minutes (`SilenceLooks`),
 so the cancellation comes between two minutes and two and a half after the last beat heard, never
 sooner. It first says why on its error stream - the one sign that can be wrong, so a machine still
-there, whose beats were held up, reads why its run stopped - from another thread and for two
-seconds at most (`HostAgentPatience.Saying`): the console's writer writes where it is called, and
+there, whose beats were held up, reads why its run stopped - from another thread, waited for only
+until the write has begun: the console's writer writes where it is called, and
 one whose reader had stopped reading held the cancellation it came before for as long as the
 connection stood, which is the very machine the beat is there to notice. A request saying a beat
 no machine writes - less than none, or more than an hour (`LongestBeatSeconds`) - is refused
@@ -5674,12 +5674,12 @@ before anything runs. On Linux and macOS a hang-up of the agent's session cancel
 (`HangUp`), rather than ending the agent where it stands with its children left running; Windows
 ends a process whose console closes whatever it answers, so nothing is promised of it there.
 
-What was cancelled is given a minute to stop (`HostAgentPatience.Unwind`), and a command past its
-point of no return (`PointOfNoReturn`) two (`Finishing`), which is what the command line gives one
-interrupted where it was typed: a deletion goes on once cancelled and stops git shortly before
-that time is up to say what is left, and cut off at a minute it was ended part way with nothing
-said. A command that has not stopped by then - one reading to its end the output of something its
-child left running, which never ends - is ended by the agent's last resort
+What was cancelled is waited for while anything it started still runs, however long that takes to stop, looked at every
+second and said every five minutes; a command past its point of no return (`PointOfNoReturn`) is
+waited for to its end, as it is where it is typed and interrupted. A command that has not stopped
+once nothing it started runs - one reading to its end the output of something its child left
+running, or writing a line nobody reads - is ended by the agent's last resort, as it is where the
+agent itself is stopped meanwhile
 (`HostAgentLastResort`): every process the agent started, each with its tree, as the process table
 lists them, then the agent itself, exit 130, whatever the ending of them came to. Which processes
 those are is read from one table: the parent's start and each child's by the same clock - on Linux
@@ -5717,8 +5717,9 @@ would never end, is refused - as is any wait where the table was read by names a
 reading names no process's parent, so such a wait could not be told from one that ends), the
 refusal then saying why the table was. Once the update has begun the command stops neither it nor
 the reading of what it left: both run under no cancellation, and `update-tool` is among the
-commands past a point of no return (`PointOfNoReturn`), which the command line waits two minutes
-for after an interruption, because an update cut off part way leaves a machine with no tool and a
+commands past a point of no return (`PointOfNoReturn`), which goes on after an interruption until
+what it began is done - nothing of the command line's own cuts it off, and only a second
+interrupt, the hard stop, ends it - because an update cut off part way leaves a machine with no tool and a
 command that says nothing of it. A Ctrl+C typed at a terminal on Linux or macOS reaches dotnet
 itself, as it reaches every process of the terminal's: what that leaves is read back and said
 like any other failure of the update. It says the update done only once `dotnet tool list` shows that release, and a failure with
@@ -8066,8 +8067,8 @@ Each line runs as a phase of the leg (`PhaseRunner`): in the leg's environment, 
 `defaults.stallSeconds`, its log `set-up <name> up` or `set-up <name> down` among the leg's
 records. One that does not come up fails the leg, its work never started, and every set-up the leg
 brought up is brought down, the one that failed among them - unless its line never started, which
-brought nothing up. One that does not come down - its line failed, it stalled, or the grace cut it
-off - is said on the leg's line and carried in `--json` as the leg's `setUps`, and the run's last
+brought nothing up. One that does not come down - its line failed or it stalled - is said on the
+leg's line and carried in `--json` as the leg's `setUps`, and the run's last
 line and its document's `setUpsLeftRunning` name the set-up, the leg and the `down` command, with
 its values, that brings it down; where nothing failed the run exits `21`: what it started may
 still run, and is a change begun and not finished. A leg stopped with no line of its own still says
@@ -8075,10 +8076,11 @@ what it did with its set-ups (`LegLedger.SetUpsEnded`), in the run's last line, 
 refusal that ended the run, and a host's leg in that state tells this machine as its host's ledger
 names it (`RemoteLegRunner`). A run asked to set up passes a point of no return
 (`PointOfNoReturn.Holds`), here and on a host (`HostAgentService`): interrupted - while its work
-runs or while a set-up comes up - its legs bring down what they brought up until shortly before
-the command line stops waiting, counted from the interruption (`PointOfNoReturn.StoppedAfter`, as
-an interrupted deletion stops), so a down line still running then is stopped and its set-up said
-as not brought down before the process ends.
+runs or while a set-up comes up - its legs bring down what they brought up, each down line run to
+its end however long it takes and the wait told every five minutes as `<leg>'s set-ups to come
+down`, since a set-up left up runs on after every run that used it. Only a second interruption,
+the hard stop, ends that, the process with it; what it left up is then said by nothing, and its
+`down` command brings it down.
 
 **Legs sharing a set-up share it.** A set-up in one tree of one machine is held by every leg using
 it, in one run or several - or, where it says `"shared": "machine"` (`SetUpConfig.Shared`), in any
