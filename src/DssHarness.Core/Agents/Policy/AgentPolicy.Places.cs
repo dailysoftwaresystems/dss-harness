@@ -39,10 +39,13 @@ public sealed partial class AgentPolicy
         /// <summary>The form of one place.</summary>
         public static PlaceForm Of(string place) => new(place, []);
 
-        /// <summary>Each place of the form with <paramref name="name"/> beneath it: a step that may not be passed takes it on each of its ways, any other step is followed by one of it alone.</summary>
+        /// <summary>
+        /// Each place of the form with <paramref name="name"/> beneath it: a step of one way that may not be passed takes it
+        /// on its way, any other step is followed by one of it alone - so the ways of a step are never multiplied.
+        /// </summary>
         public PlaceForm Appended(string name)
-            => Steps.Count > 0 && !Steps[^1].Optional
-                ? new PlaceForm(Base, [.. Steps.Take(Steps.Count - 1), new PlaceStep([.. Steps[^1].Ways.Select(way => (IReadOnlyList<string>)[.. way, name])], false)])
+            => Steps.Count > 0 && !Steps[^1].Optional && Steps[^1].Ways.Count == 1
+                ? new PlaceForm(Base, [.. Steps.Take(Steps.Count - 1), new PlaceStep([[.. Steps[^1].Ways[0], name]], false)])
                 : new PlaceForm(Base, [.. Steps, new PlaceStep([[name]], false)]);
 
         /// <summary>
@@ -207,7 +210,7 @@ public sealed partial class AgentPolicy
     /// What a relative path does to a place it is read from, as the system walks it (<see cref="Plain"/>): each segment a
     /// name gone beneath, <c>..</c> a step back up, <c>.</c> and an empty one nothing - and, where <paramref name="pattern"/>
     /// says the shell expands it, a segment beginning with a dot that may match <c>..</c> or <c>.</c> any of them
-    /// (<see cref="DotReadings"/>). Null where the path is not relative - rooted, a drive's, a home's - read whole instead.
+    /// (<see cref="ReadingForms"/>). Null where the path is not relative - rooted, a drive's, a home's - read whole instead.
     /// </summary>
     /// <returns>Each segment's alternatives in order: a name, null for a step up, or empty for none.</returns>
     private IReadOnlyList<IReadOnlyList<string?>>? RelativeSteps(string path, bool pattern, bool tildeExpands = true)
@@ -258,10 +261,16 @@ public sealed partial class AgentPolicy
         if (RelativeSteps(path, pattern, tildeExpands) is not { } steps)
         {
             return PlaceForm.Union(forms.Select(form => form.Base).Distinct(StringComparer.Ordinal)
-                .SelectMany(place => pattern ? CommandSpelled(path, place, pattern: true, tildeExpands, lengthen: false) : Spelled(path, place, tildeExpands, lengthen: false))
-                .Select(PlaceForm.Of));
+                .SelectMany(place => Spelled(path, place, tildeExpands, lengthen: false))
+                .SelectMany(whole => ReadingForms(whole, dots: pattern, shorts: false)));
         }
 
+        return Walked(forms, steps);
+    }
+
+    /// <summary>Each form of <paramref name="forms"/> walked through <paramref name="steps"/> (<see cref="RelativeSteps"/>), the forms joined as one where they can be after each.</summary>
+    private static IReadOnlyList<PlaceForm> Walked(IReadOnlyList<PlaceForm> forms, IReadOnlyList<IReadOnlyList<string?>> steps)
+    {
         IReadOnlyList<PlaceForm> reached = PlaceForm.Union(forms);
 
         foreach (var step in steps)
@@ -276,6 +285,73 @@ public sealed partial class AgentPolicy
 
         return reached;
     }
+
+    /// <summary>
+    /// The forms of the places <paramref name="reading"/> reaches, read as the shell and the system read a command's path:
+    /// where <paramref name="dots"/> says so, each segment that begins with a dot and may match <c>..</c> or <c>.</c> read
+    /// as that name too - for a shell that does not skip them (sh, bash before 5.2 or with <c>globskipdots</c> off) matches
+    /// them so - and where <paramref name="shorts"/> does, each short name as each guarded name it may shorten
+    /// (<see cref="WindowsNames.Lengthenings"/>): the reading before its first such segment the base, each segment from it
+    /// a step as the system walks it, so a step back up folds the name before it away (<see cref="Walked"/>) and no
+    /// combination, however many, is spelled out. The reading itself is a place of them.
+    /// </summary>
+    /// <param name="reading">A whole path, made plain (<see cref="Plain"/>).</param>
+    /// <param name="dots">Whether the shell expands the path's patterns.</param>
+    /// <param name="shorts">Whether its short names are read as the guarded names they may shorten.</param>
+    private IReadOnlyList<PlaceForm> ReadingForms(string reading, bool dots, bool shorts)
+    {
+        IReadOnlyList<string?> Alternatives(string name)
+        {
+            if (name == "..")
+            {
+                return [null];
+            }
+
+            if (dots && MayReadAsDots(name))
+            {
+                var expression = SegmentPattern(name);
+
+                return [name, .. expression.IsMatch("..") ? new string?[] { null } : [], .. expression.IsMatch(".") ? new[] { string.Empty } : []];
+            }
+
+            return shorts && name.Contains('~', StringComparison.Ordinal) ? WindowsNames.Lengthenings(name, _guardedNames)[0] : [name];
+        }
+
+        var at = Path.GetPathRoot(reading)?.Length ?? 0;
+
+        while (at < reading.Length)
+        {
+            var end = reading.IndexOfAny(['/', '\\'], at);
+            var segment = end < 0 ? reading[at..] : reading[at..end];
+
+            if (segment.Length > 0 && Alternatives(segment).Count > 1)
+            {
+                var steps = reading[at..].Split(['/', '\\']).Where(name => name.Length > 0 && name != ".").Select(Alternatives).ToList();
+
+                return Walked([PlaceForm.Of(Path.TrimEndingDirectorySeparator(reading[..at]))], steps);
+            }
+
+            if (end < 0)
+            {
+                break;
+            }
+
+            at = end + 1;
+        }
+
+        return [PlaceForm.Of(reading)];
+    }
+
+    /// <summary>Whether a shell that does not skip them may match <c>..</c> or <c>.</c> by <paramref name="segment"/>: one that begins with a dot and holds a pattern after it.</summary>
+    private static bool MayReadAsDots(string segment) => segment.Length > 1 && segment[0] == '.' && segment.IndexOfAny(['*', '?', '['], 1) > 0;
+
+    /// <summary>
+    /// <paramref name="reading"/>, and one place of each way the places it reaches (<see cref="ReadingForms"/>) stand to the
+    /// decisions (<see cref="Representatives"/>): every place it may reach, decided as each would be, never every
+    /// combination spelled out.
+    /// </summary>
+    private IEnumerable<string> ReadAsCommandsRead(string reading, bool dots, bool shorts)
+        => ReadingForms(reading, dots, shorts) is var forms && forms is [{ Steps.Count: 0 }] ? [reading] : [reading, .. Representatives(forms)];
 
     /// <summary>
     /// One place of each way the places <paramref name="forms"/> hold stand to the decisions (<see cref="Reading.Key"/>), in

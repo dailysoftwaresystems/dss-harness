@@ -4478,58 +4478,17 @@ public sealed partial class AgentPolicy
     /// <paramref name="pattern"/> says the shell expands its pattern, each place it reaches with a segment that begins with
     /// a dot and may match <c>..</c> or <c>.</c> (<c>.?</c>, <c>.[.]</c>, <c>.*</c>) read as that name - for a shell that
     /// does not skip them (sh, bash before 5.2 or with <c>globskipdots</c> off) matches them so - each folded away as the
-    /// system walks it; then each short name left read as <see cref="Spelled"/> reads it, where
-    /// <paramref name="lengthen"/> says so.
+    /// system walks it; and each short name read as <see cref="Spelled"/> reads it, where <paramref name="lengthen"/> says
+    /// so - the two read together as the forms of the places they reach (<see cref="ReadingForms"/>), one place of each way
+    /// those stand to the decisions given, never every combination.
     /// </summary>
     private IReadOnlyList<string> CommandSpelled(string path, string directory, bool pattern, bool tildeExpands = true, bool lengthen = true)
     {
         var spelled = Spelled(path, directory, tildeExpands, lengthen: false);
-        IReadOnlyList<string> read = pattern && spelled.Any(reading => reading.IndexOfAny(['*', '?', '[']) >= 0)
-            ? [.. spelled.SelectMany(DotReadings).Distinct(StringComparer.OrdinalIgnoreCase)]
-            : spelled;
+        var dots = pattern && spelled.Any(reading => reading.IndexOfAny(['*', '?', '[']) >= 0);
+        var shorts = OnWindows && lengthen && spelled.Any(reading => reading.Contains('~', StringComparison.Ordinal));
 
-        return OnWindows && lengthen ? [.. read.SelectMany(whole => Lengthenings(whole, rules: false)).Distinct(StringComparer.OrdinalIgnoreCase)] : read;
-    }
-
-    /// <summary>
-    /// <paramref name="reading"/>, and the place it reaches with each of its segments that begins with a dot and may match
-    /// <c>..</c> or <c>.</c> read as each name it may match, in every combination, however many, made whole as
-    /// <see cref="Plain"/> makes a path: the reading as a pattern (<see cref="WordPattern"/>), each such segment a choice of
-    /// itself and the names it matches, spelled one reading at a time and never held all at once.
-    /// </summary>
-    private IEnumerable<string> DotReadings(string reading)
-    {
-        var segments = reading.Split(['/', '\\']);
-        var separator = reading.Contains('\\', StringComparison.Ordinal) ? "\\" : "/";
-        var parts = new List<WordPart>();
-
-        foreach (var (segment, at) in segments.Select((segment, at) => (segment, at)))
-        {
-            if (at > 0)
-            {
-                parts.Add(new WordPart.Text(separator, string.Empty));
-            }
-
-            var names = segment.Length > 1 && segment[0] == '.' && segment.IndexOfAny(['*', '?', '[']) > 0
-                ? new[] { segment, "..", "." }.Where(name => name == segment || SegmentPattern(segment).IsMatch(name)).ToList()
-                : [segment];
-
-            parts.Add(names.Count == 1
-                ? new WordPart.Text(segment, string.Empty)
-                : new WordPart.Choice(new WordChoice([.. names.Select(name => WordPattern.Of(name, string.Empty))])));
-        }
-
-        yield return reading;
-
-        if (!parts.Any(part => part is WordPart.Choice))
-        {
-            yield break;
-        }
-
-        foreach (var spelled in new WordPattern(parts).Spellings().Skip(1))
-        {
-            yield return Plain(spelled.Word, _ground.WorkingDirectory);
-        }
+        return dots || shorts ? [.. spelled.SelectMany(reading => ReadAsCommandsRead(reading, dots, shorts)).Distinct(StringComparer.OrdinalIgnoreCase)] : spelled;
     }
 
     /// <summary>

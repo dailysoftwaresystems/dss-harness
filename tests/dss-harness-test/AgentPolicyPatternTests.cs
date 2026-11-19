@@ -112,6 +112,30 @@ public sealed class AgentPolicyPatternTests
     }
 
     /// <summary>
+    /// A word of forty names each followed by a dot pattern that may match <c>..</c> - 2^40 places, a step back up folding
+    /// the name before it away - is decided as reading every one would decide it, by the forms of the places it reaches: the
+    /// slot beyond them, which only the reading of every pattern as <c>..</c> reaches, is refused, and the same word ending
+    /// in a plain file allowed - in well under a second. Red with the dot readings spelled out one combination at a time,
+    /// which never ends.
+    /// </summary>
+    [Fact]
+    public void FortyDotPatternsAmongNames_AreDecidedByTheFormsTheyReach()
+    {
+        using var temp = new TempDirectory();
+        var worktree = Directory.CreateDirectory(temp.Combine("tree")).FullName;
+        var policy = Policy(new PassThroughFileSystem(new PhysicalFileSystem(FilePermissionsFactory.Create())), worktree);
+        var forty = string.Concat(Enumerable.Range(0, 40).Select(at => $"d{at}/.?/"));
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+
+        var refused = policy.Run($"cat {forty}.harness-config/workflows/.env/keys.env");
+        var allowed = policy.Run($"cat {forty}x.txt");
+
+        Assert.True(clock.Elapsed < TimeSpan.FromSeconds(1), $"deciding forty dot patterns took {clock.Elapsed}");
+        Assert.Equal("the credential slots", Assert.IsType<AgentPolicyAnswer.Denied>(refused).Rule);
+        Assert.Equal(AgentPolicyAnswer.Allow, allowed);
+    }
+
+    /// <summary>
     /// A path of sixty short-name components, each of which may shorten two guarded names, is decided by the ways its 3^60
     /// readings stand to the policy, never one reading at a time, and decided as reading every one would decide it: a
     /// <c>Read</c> rule over one of those names refuses the path whose last name it names and allows the same path ending
