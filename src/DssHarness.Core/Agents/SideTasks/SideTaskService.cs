@@ -150,20 +150,21 @@ public sealed class SideTaskService(
     /// </summary>
     public const string NoAgentStartsOne = "a side-task is a person's own conversation in the person's terminal, with no limit of a run's, and no agent starts one";
 
-    /// <summary>How many words of the first message name a side-task the person did not name.</summary>
+    /// <summary>
+    /// How many words of the first message name a side-task the person did not name: a label, which says what the
+    /// side-task was about at a glance - the message itself is kept whole, and the person gives any name with --name.
+    /// </summary>
     public const int NameWords = 5;
 
-    /// <summary>The longest a derived name's words take.</summary>
+    /// <summary>The longest a derived name's words take: what a label shows at a glance, never a cut of anything kept.</summary>
     public const int MostNameCharacters = 40;
 
-    /// <summary>The longest a side-task's name is.</summary>
-    public const int MostNameLength = 80;
-
-    /// <summary>What a failed agent is asked again before the side-task gives the turn up, as a workflow's own default.</summary>
-    public const int DefaultRetries = 3;
-
-    /// <summary>How long a failed agent's first retry waits, in seconds, as a workflow's own default.</summary>
-    public const int DefaultBackoffSeconds = 30;
+    /// <summary>
+    /// The first wait before a turn whose agent failed is tried again, doubled each try up to the cadence a wait is told at
+    /// (<see cref="Waiting.RetryWatch.FirstWait"/>): a workflow's own pace (<see cref="WorkflowStep.DefaultBackoffSeconds"/>),
+    /// a cadence and never a bound, for a side-task's turn is tried again for as long as it fails in a new way.
+    /// </summary>
+    public static readonly TimeSpan RetryFirstWait = TimeSpan.FromSeconds(WorkflowStep.DefaultBackoffSeconds);
 
     /// <summary>
     /// The system prompt every side-task's agent runs under: no workflow, no step, no output envelope - a conversation
@@ -175,8 +176,11 @@ public sealed class SideTaskService(
         + "There is no workflow, no step and no output shape: your answer is text for the person. "
         + "Every action you ask for is decided and recorded by DssHarness.";
 
-    /// <summary>The rule a side-task's name follows, as a refusal says it.</summary>
-    public const string NameRule = "letters, digits, '-' and '_' only, at most 80 characters, beginning with a letter or a digit";
+    /// <summary>
+    /// The rule a side-task's name follows, as a refusal says it. Its length is the machine's own to bound: a name is taken
+    /// where the machine's paths hold its records (<see cref="SideTaskOwner.ClaimNew"/>).
+    /// </summary>
+    public const string NameRule = "letters, digits, '-' and '_' only, beginning with a letter or a digit";
 
     /// <summary>The line every exit before the side-task was claimed says of its records: none were written.</summary>
     public const string NoRecords = "Records: none were written";
@@ -188,6 +192,9 @@ public sealed class SideTaskService(
     private readonly OrchestrationStore _store = store ?? throw new ArgumentNullException(nameof(store));
     private readonly WebSearchKeys _webKeys = webKeys ?? throw new ArgumentNullException(nameof(webKeys));
     private readonly IFileSystem _fileSystem = fileSystem ?? throw new ArgumentNullException(nameof(fileSystem));
+
+    // This machine's limit on a path's length - the one owner of it - which a new side-task's records are held to.
+    private readonly IPathBudget _paths = new PathBudget(platform ?? throw new ArgumentNullException(nameof(platform)));
 
     // What a side-task is launched with beyond its model - its order, the Claude Code directories its ground keeps it
     // from, the mask, the program - built as a step's launch builds them, by the one builder of each.
@@ -331,7 +338,7 @@ public sealed class SideTaskService(
             sources.On is [_, ..] ? SideTaskPolicy.WebSearch(sources, read) : null,
             _launch.Mask(context.Layout, providers, WebSearchKeys.Mask(sources.On, read)),
             [.. appointed.Select(one => one.Name)]);
-        var owner = new SideTaskOwner(_fileSystem, _store, _identity, _clock);
+        var owner = new SideTaskOwner(_fileSystem, _store, _identity, _paths, _clock);
         var asked = new SideTaskRunsOn(call.Tier, call.Model, effort, effortByModel, call.Client);
 
         return call.Resume is { } again
@@ -354,7 +361,7 @@ public sealed class SideTaskService(
         }
 
         var root = context.Layout.SideTasksDirectory;
-        var owner = new SideTaskOwner(_fileSystem, _store, _identity, _clock);
+        var owner = new SideTaskOwner(_fileSystem, _store, _identity, _paths, _clock);
 
         try
         {
@@ -742,7 +749,7 @@ public sealed class SideTaskService(
     /// <summary>Whether <paramref name="name"/> is a name a side-task's directory may take (<see cref="NameRule"/>).</summary>
     /// <param name="name">The name.</param>
     public static bool IsName(string name)
-        => name is { Length: > 0 and <= MostNameLength }
+        => name is { Length: > 0 }
             && char.IsAsciiLetterOrDigit(name[0])
             && name.All(character => char.IsAsciiLetterOrDigit(character) || character is '-' or '_');
 

@@ -88,12 +88,15 @@ public sealed partial class HelpTests
             prose,
             StringComparison.Ordinal);
         Assert.Contains(
-            "On a tier the later models of its order are followed, and said in the chat: a one shot's turn, and each message of a "
-                + "chat whose client stores its conversations, is tried again on its model "
-                + $"{DssHarness.Core.Agents.SideTasks.SideTaskService.DefaultRetries} times before it moves on, as a step's; a chat's "
-                + "launch held open is never tried again - it moves on at its first failure, a decline, a limit, a refused key or a "
-                + "model that cannot be started - and goes on from the conversation so far, never from its first message, with the "
-                + "messages no turn answered sent on there.",
+            "On a tier the later models of its order are followed, and said in the chat: a turn moves on at its first failure, a "
+                + "decline, a limit, a refused key or a model that cannot be started. A one shot's turn, and each message of a chat "
+                + "whose client stores its conversations, whose agent failed on every model it moved through is tried again - after "
+                + $"{DssHarness.Core.Agents.SideTasks.SideTaskService.RetryFirstWait.TotalSeconds:0} s, the wait doubled each time up "
+                + $"to {DssHarness.Core.Waiting.Waits.SaidEvery.TotalMinutes:0} minutes, each wait said - for as long as it fails in a new way, and ends, said, once a try fails as an "
+                + "earlier one did on the same model: a side-task has no limit of a run's, so no count of tries ends it, and an "
+                + "interrupt ends a wait as it cuts a turn; a failure of the provider's service past its client's own tries, and a "
+                + "refused key, are never tried again. A chat's launch held open is never tried again: it goes on from the "
+                + "conversation so far, never from its first message, with the messages no turn answered sent on there.",
             prose,
             StringComparison.Ordinal);
         Assert.Contains(
