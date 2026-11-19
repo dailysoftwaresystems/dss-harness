@@ -36,7 +36,7 @@ internal static class QueryCodebaseGraphCommand
 
     private static readonly Option<int?> DepthOption = new("--depth")
     {
-        Description = $"How many hops --related walks, 1 to {CodebaseGraphTool.MostDepth}.",
+        Description = "How many hops --related walks, from 1.",
     };
 
     private static readonly Option<string> OutlineOption = new("--outline")
@@ -47,7 +47,7 @@ internal static class QueryCodebaseGraphCommand
 
     private static readonly Option<string[]> BodyOption = new("--body")
     {
-        Description = $"Give the exact lines of nodes, read fresh: 1 to {CodebaseGraphTool.BodySymbols} handles, ids or names.",
+        Description = "Give the exact lines of nodes, read fresh: one or more handles, ids or names.",
         Arity = ArgumentArity.OneOrMore,
         AllowMultipleArgumentsPerToken = true,
     };

@@ -113,17 +113,26 @@ public static class ReportText
 
     /// <summary>
     /// Text as it can appear in a one-line message. A control character in a file name, such as
-    /// a newline, would split the line or reach the terminal raw, so such text is quoted and escaped.
+    /// a newline, would split the line or reach the terminal raw, so such text is quoted and escaped (<see cref="Quoted"/>).
     /// </summary>
     /// <param name="text">The text.</param>
     public static string Printable(string text)
     {
         ArgumentNullException.ThrowIfNull(text);
 
-        if (!text.Any(char.IsControl))
-        {
-            return text;
-        }
+        return text.Any(char.IsControl) ? Quoted(text) : text;
+    }
+
+    /// <summary>
+    /// Text in double quotes on one line, whatever it holds: a newline, a carriage return and a tab written as
+    /// <c>\n</c>, <c>\r</c> and <c>\t</c>, a quote and a backslash escaped, every other control character as
+    /// <c>\uXXXX</c>, and everything else as it is - what <see cref="Printable"/> gives text that holds a control character,
+    /// and what a name no plain spelling holds is written as wherever it is quoted.
+    /// </summary>
+    /// <param name="text">The text.</param>
+    public static string Quoted(string text)
+    {
+        ArgumentNullException.ThrowIfNull(text);
 
         var builder = new StringBuilder("\"");
 
@@ -161,5 +170,57 @@ public static class ReportText
         }
 
         return builder.Append('"').ToString();
+    }
+
+    /// <summary>
+    /// The text <paramref name="printed"/> is the printable form of (<see cref="Printable"/>): the text a quoted form
+    /// stands for, where reading its escapes back gives text whose printable form it is - and else <paramref name="printed"/>
+    /// itself, so a name that only looks quoted, of no control character, is read as it is written.
+    /// </summary>
+    /// <param name="printed">The text as a line writes it.</param>
+    public static string Unprinted(string printed)
+    {
+        ArgumentNullException.ThrowIfNull(printed);
+
+        if (printed.Length < 2 || printed[0] != '"' || printed[^1] != '"')
+        {
+            return printed;
+        }
+
+        var text = new StringBuilder();
+
+        for (var at = 1; at < printed.Length - 1; at++)
+        {
+            if (printed[at] != '\\' || at + 1 >= printed.Length - 1)
+            {
+                text.Append(printed[at]);
+                continue;
+            }
+
+            at++;
+
+            switch (printed[at])
+            {
+                case 'n':
+                    text.Append('\n');
+                    break;
+                case 'r':
+                    text.Append('\r');
+                    break;
+                case 't':
+                    text.Append('\t');
+                    break;
+                case 'u' when at + 4 < printed.Length - 1 && int.TryParse(printed.AsSpan(at + 1, 4), NumberStyles.AllowHexSpecifier, CultureInfo.InvariantCulture, out var code):
+                    text.Append((char)code);
+                    at += 4;
+                    break;
+                default:
+                    text.Append(printed[at]);
+                    break;
+            }
+        }
+
+        var read = text.ToString();
+        return string.Equals(Printable(read), printed, StringComparison.Ordinal) ? read : printed;
     }
 }

@@ -232,7 +232,7 @@ public sealed class CodebaseGraphQueryServiceTests
         var noRelation = await service.QueryAsync(tree.Tree, new CodebaseGraphQuery("run", null) { Related = "Total" }, json: true, Token);
         var strayDepth = await service.QueryAsync(tree.Tree, new CodebaseGraphQuery("run", null) { Node = "Total", Depth = 2 }, json: false, Token);
         var strayRelation = await service.QueryAsync(tree.Tree, new CodebaseGraphQuery("run", null) { Node = "Total", Relation = "callers" }, json: false, Token);
-        var misused = await service.QueryAsync(tree.Tree, new CodebaseGraphQuery("run", null) { Body = ["1", "2", "3", "4", "5", "6", "7", "8", "9"] }, json: true, Token);
+        var misused = await service.QueryAsync(tree.Tree, new CodebaseGraphQuery("run", null) { Body = ["Twice", " "] }, json: true, Token);
         var noneDocument = JsonNode.Parse(Assert.Single(none.Data))!.AsObject();
         var misusedDocument = JsonNode.Parse(Assert.Single(misused.Data))!.AsObject();
 
@@ -256,8 +256,8 @@ public sealed class CodebaseGraphQueryServiceTests
         }
         Assert.Equal((HarnessExit.UsageError, "--relation and --depth are --related's: give them with --related"), (strayDepth.ExitCode, strayDepth.Message));
         Assert.Equal((HarnessExit.UsageError, strayDepth.Message), (strayRelation.ExitCode, strayRelation.Message));
-        Assert.Equal((HarnessExit.UsageError, "op 'body' needs symbols: 1 to 8 handles, ids or names"), (misused.ExitCode, misused.Message));
-        Assert.Equal(("op 'body' needs symbols: 1 to 8 handles, ids or names", "body"), (misusedDocument["summary"]!.GetValue<string>(), misusedDocument["op"]!.GetValue<string>()));
+        Assert.Equal((HarnessExit.UsageError, "op 'body' needs symbols: one or more handles, ids or names, none empty"), (misused.ExitCode, misused.Message));
+        Assert.Equal(("op 'body' needs symbols: one or more handles, ids or names, none empty", "body"), (misusedDocument["summary"]!.GetValue<string>(), misusedDocument["op"]!.GetValue<string>()));
         Assert.Null(misusedDocument["answer"]);
     }
 
@@ -410,18 +410,18 @@ public sealed class CodebaseGraphQueryServiceTests
     /// <summary>A misuse is a usage error (10) told before anything is read - never hidden by a run with no graph (13).</summary>
     [Theory]
     [InlineData("relation", "relation is 'siblings': give one of callers, callees, derived, implementations, references, tests, includedBy, styledBy, styles")]
-    [InlineData("depth", "depth is 9: give 1 to 3")]
+    [InlineData("depth", "depth is 0: hops start at 1")]
     [InlineData("find", "query is empty: the words to match, split at case changes, underscores, digits and dots as a name is.")]
-    [InlineData("body", "op 'body' needs symbols: 1 to 8 handles, ids or names")]
+    [InlineData("body", "op 'body' needs symbols: one or more handles, ids or names, none empty")]
     public async Task TheVerb_TellsAMisuse_BeforeItReadsAnyGraph(string misuse, string usage)
     {
         using var tree = await InitialisedTreeAsync();
         var query = misuse switch
         {
             "relation" => new CodebaseGraphQuery("nope", null) { Related = "Total", Relation = "siblings" },
-            "depth" => new CodebaseGraphQuery("nope", null) { Related = "Total", Relation = "callers", Depth = 9 },
+            "depth" => new CodebaseGraphQuery("nope", null) { Related = "Total", Relation = "callers", Depth = 0 },
             "find" => new CodebaseGraphQuery("nope", null) { Find = " " },
-            _ => new CodebaseGraphQuery("nope", null) { Body = ["1", "2", "3", "4", "5", "6", "7", "8", "9"] },
+            _ => new CodebaseGraphQuery("nope", null) { Body = ["Total", " "] },
         };
 
         var outcome = await Service(tree).QueryAsync(tree.Tree, query, json: true, Token);
@@ -507,8 +507,8 @@ public sealed class CodebaseGraphQueryServiceTests
         Assert.Contains($"{ToolPackage.Command} {CodebaseGraphQueryService.CommandName} <run> runs one of the read operations by hand - --find <query>, --node <symbol>, --related <symbol> --relation <relation> [--depth <n>], --outline [<path or symbol>] or --body <symbol>..., any of them with --page <n> - on the run's graph", topic, StringComparison.Ordinal);
         Assert.Contains("--json the same in one document holding the digest of the graph answered from, the page, the pages, the whole answer's total and the page's entries, each with what it counts toward the total, its section's caption and its node. Each call counts its page on the graph as it stands, keeping nothing: a script that reads page after page compares the digest to know they are of one graph.", topic, StringComparison.Ordinal);
         Assert.Contains($"It ends 0, {HarnessExit.Refused} where the run has no graph, and {HarnessExit.UsageError} for a usage error; no host is asked to run it.", topic, StringComparison.Ordinal);
-        Assert.Contains($"The page that computes an answer of more than one page keeps its whole result - under the digest of the graph the view answers from, its link result and every file as the view holds it, so the step's own writes move it as a fold does, in {Core.Orchestration.OrchestratorLayout.StepPagesDirectoryName}/ under the step's directory or the side-task's, the most recent {GraphPageStore.MostKept} - and a later page, a resumed conversation and a step that goes on with the work read pages of that one result, each under the read rules it was computed under; an answer of one page is never kept, and page 1 never reads what was. A later page asked after the graph moved, or with no result of page 1 that reads, is made again on the graph as it stands, and its header says which.", topic, StringComparison.Ordinal);
-        Assert.Contains($"each path:line with no hash, a section of their own, {CodebaseGraphTool.TextHits} of each word a page, all of them paged - nothing left out - and the files it did not read said", topic, StringComparison.Ordinal);
+        Assert.Contains($"The page that computes an answer of more than one page keeps its whole result - under the digest of the graph the view answers from, its link result and every file as the view holds it, so the step's own writes move it as a fold does, in {Core.Orchestration.OrchestratorLayout.StepPagesDirectoryName}/ under the step's directory or the side-task's, every result kept for the conversation's life whatever it holds, packed - its one line compressed - and put away when the conversation ends: a step done whose work no later step goes on with, every step of a run that is done - and a later page, a resumed conversation and a step that goes on with the work read pages of that one result, each under the read rules it was computed under; an answer of one page is never kept, and page 1 never reads what was. A later page asked after the graph moved, or with no result of page 1 that reads, is made again on the graph as it stands, and its header says which.", topic, StringComparison.Ordinal);
+        Assert.Contains($"searched as search_files searches but in every file whatever it holds and never timed, each path:line with no hash and its line whole, a section of their own, {CodebaseGraphTool.TextHits} of each word a page, all of them paged - nothing left out - and the files it did not read said", topic, StringComparison.Ordinal);
 
         // The workflow key says the maps as the topic does: one for each ground of reads, each kept in its own file.
         Assert.Contains(

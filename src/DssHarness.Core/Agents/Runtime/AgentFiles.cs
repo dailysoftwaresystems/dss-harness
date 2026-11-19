@@ -11,8 +11,9 @@ namespace DssHarness.Core.Agents.Runtime;
 /// The files an agent's tools list and search, and the one search they run: <c>find_files</c> and <c>search_files</c>
 /// list a directory by it. In a git work tree a directory's files are what git lists there - tracked and untracked, git's ignore rules applied; where git
 /// lists nothing - a directory git ignores, or none of git's - the files the directory holds, walked without following a
-/// link. A search reads text alone: a binary file, one past <see cref="MostSearchedBytes"/> and one that is no text this
-/// tool reads are passed over and counted, and one that could not be read is counted apart, with why the first was not.
+/// link. A search reads text alone: a binary file, one past the bytes its caller searches (<c>search_files</c>'s
+/// <see cref="MostSearchedBytes"/>) and one that is no text this tool reads are passed over and counted, and one that
+/// could not be read is counted apart, with why the first was not.
 /// The one way the tools read and write a file's bytes besides (<see cref="ReadAsync"/>, <see cref="Write"/>): a read
 /// through the file as it was opened, where it stands decided again before a byte passes; a write relative to its
 /// directory held from its writable root with no link on the way (<see cref="HeldDirectory"/>). A directory is listed by
@@ -27,7 +28,11 @@ public sealed class AgentFiles(IGitClient git, IFileSystem fileSystem, TimeProvi
     /// <summary>The largest file a search reads: two megabytes.</summary>
     public const long MostSearchedBytes = 2 * 1024 * 1024;
 
-    /// <summary>How long a search's pattern may take on one file's text, its lines together, before the search is refused; each line's match bounded by it too.</summary>
+    /// <summary>
+    /// How long a search's pattern may take on one file's text, its lines together, before the search is refused; each
+    /// line's match bounded by it too. A pattern made with no timeout - one its maker knows matches in time linear in the
+    /// text - is never timed.
+    /// </summary>
     public static readonly TimeSpan PatternBound = TimeSpan.FromSeconds(2);
 
     /// <summary>The refusal a search's own decision stands for, where it only says whether a place may be read: counted, never said.</summary>
@@ -106,11 +111,15 @@ public sealed class AgentFiles(IGitClient git, IFileSystem fileSystem, TimeProvi
     /// <paramref name="context"/> lines on either side, and how many more there were.
     /// </summary>
     /// <param name="directory">The directory, absolute.</param>
-    /// <param name="pattern">The pattern, made with <see cref="PatternBound"/> as its timeout.</param>
+    /// <param name="pattern">
+    /// The pattern, made with <see cref="PatternBound"/> as its timeout; or with none, where it matches in time linear in
+    /// the text, and its file's lines are never timed.
+    /// </param>
     /// <param name="glob">The files searched, by their paths relative to <paramref name="directory"/>; null for every one.</param>
     /// <param name="comparison">How a path is compared with <paramref name="glob"/>.</param>
     /// <param name="context">How many lines before and after each hit are given.</param>
     /// <param name="most">The most hits given.</param>
+    /// <param name="mostBytes">The largest file searched, a larger one passed over and counted: <see cref="long.MaxValue"/> for every file, whatever it holds.</param>
     /// <param name="mayRead">Whether the agent may read a file, by its absolute path.</param>
     /// <param name="cancellationToken">Stops the search.</param>
     /// <exception cref="RegexMatchTimeoutException">The pattern took longer than <see cref="PatternBound"/> on a file.</exception>
@@ -121,6 +130,7 @@ public sealed class AgentFiles(IGitClient git, IFileSystem fileSystem, TimeProvi
         StringComparison comparison,
         int context,
         int most,
+        long mostBytes,
         Func<string, bool> mayRead,
         CancellationToken cancellationToken)
     {
@@ -129,6 +139,9 @@ public sealed class AgentFiles(IGitClient git, IFileSystem fileSystem, TimeProvi
         ArgumentNullException.ThrowIfNull(mayRead);
         ArgumentOutOfRangeException.ThrowIfNegative(context);
         ArgumentOutOfRangeException.ThrowIfLessThan(most, 1);
+        ArgumentOutOfRangeException.ThrowIfNegative(mostBytes);
+
+        var timed = pattern.MatchTimeout != Regex.InfiniteMatchTimeout;
 
         var hits = new List<AgentSearchHit>();
         var more = 0;
@@ -169,7 +182,7 @@ public sealed class AgentFiles(IGitClient git, IFileSystem fileSystem, TimeProvi
                     continue;
                 }
 
-                if (standing.Length > MostSearchedBytes)
+                if (standing.Length > mostBytes)
                 {
                     passed++;
                     continue;
@@ -177,7 +190,7 @@ public sealed class AgentFiles(IGitClient git, IFileSystem fileSystem, TimeProvi
 
                 // Read through the file as it was opened, where it stands decided again as it was before the open: one a
                 // link put on its way since leads to a place the reader may not read is left out as one it may not.
-                var read = await ReadAsync(file, MostSearchedBytes, place => mayRead(place) ? null : NotToBeRead, cancellationToken).ConfigureAwait(false);
+                var read = await ReadAsync(file, mostBytes, place => mayRead(place) ? null : NotToBeRead, cancellationToken).ConfigureAwait(false);
 
                 if (read.Bytes is not { } held)
                 {
@@ -210,7 +223,7 @@ public sealed class AgentFiles(IGitClient git, IFileSystem fileSystem, TimeProvi
                 cancellationToken.ThrowIfCancellationRequested();
 
                 // The file's lines share one bound: many lines each under it would otherwise hold the search for hours.
-                if (_clock.GetElapsedTime(started) > PatternBound)
+                if (timed && _clock.GetElapsedTime(started) > PatternBound)
                 {
                     throw new RegexMatchTimeoutException(lines[at], pattern.ToString(), PatternBound);
                 }
@@ -238,7 +251,7 @@ public sealed class AgentFiles(IGitClient git, IFileSystem fileSystem, TimeProvi
             }
         }
 
-        return new AgentSearch(hits, more, refused, passed, searched, listing, unread, firstUnread);
+        return new AgentSearch(hits, more, refused, passed, searched, listing, unread, firstUnread) { MostBytes = mostBytes };
     }
 
     /// <summary>
@@ -246,12 +259,13 @@ public sealed class AgentFiles(IGitClient git, IFileSystem fileSystem, TimeProvi
     /// once the place the open file stands at (<see cref="IFileSystem.FinalPathOf"/>) is decided again by
     /// <paramref name="refusal"/>, as the path was decided before the open: a link put in place of the file, or of a
     /// directory on its way, after that decision reaches nothing the decision refuses. Opened never to wait - a pipe put
-    /// there is refused before a byte is read (<see cref="IFileSystem.OpenRead"/>) - and read to <paramref name="most"/>
-    /// bytes at most, however much it grew since it was measured. The one way an agent's file tools read a file's bytes. A
-    /// second name of the same file - a hard link - is a place of its own, and decided as one.
+    /// there is refused before a byte is read (<see cref="IFileSystem.OpenRead"/>) - and read to its end, never more than
+    /// <paramref name="most"/> bytes however much it grew since it was measured, held as it is read: nothing is set aside
+    /// for bytes the file does not hold. The one way an agent's file tools read a file's bytes. A second name of the same
+    /// file - a hard link - is a place of its own, and decided as one.
     /// </summary>
     /// <param name="file">The file, absolute, as it was decided.</param>
-    /// <param name="most">The most bytes read; a file holding more is refused, nothing of it given.</param>
+    /// <param name="most">The most bytes read; a file holding more is refused, nothing of it given. <see cref="long.MaxValue"/> reads the file whatever it holds.</param>
     /// <param name="refusal">Why a place may not be read, by its absolute path; null where it may.</param>
     /// <param name="cancellationToken">Stops the read.</param>
     /// <returns>The bytes; or, where the open file stands at a place <paramref name="refusal"/> refuses, why - nothing read.</returns>
@@ -277,13 +291,22 @@ public sealed class AgentFiles(IGitClient git, IFileSystem fileSystem, TimeProvi
                 });
             }
 
-            // One byte past the bound is asked for, so a file grown past it since it was measured is told, never cut.
-            var buffer = new byte[(int)Math.Min(most + 1, int.MaxValue)];
-            var read = await stream.ReadAtLeastAsync(buffer, buffer.Length, throwOnEndOfStream: false, cancellationToken).ConfigureAwait(false);
+            // Read to the end, a byte past the bound told rather than cut: a file grown past it since it was measured is
+            // refused whole.
+            using var held = new MemoryStream();
+            var chunk = new byte[81920];
 
-            return read > most
-                ? throw new IOException($"'{file}' holds more than {DiskSpace.Size(most)} now, past what it held when it was measured, and nothing of it was read")
-                : new AgentFileRead(buffer[..read], null);
+            while (await stream.ReadAsync(chunk, cancellationToken).ConfigureAwait(false) is var read and > 0)
+            {
+                if (read > most - held.Length)
+                {
+                    throw new IOException($"'{file}' holds more than {DiskSpace.Size(most)} now, past what it held when it was measured, and nothing of it was read");
+                }
+
+                held.Write(chunk, 0, read);
+            }
+
+            return new AgentFileRead(held.ToArray(), null);
         }
     }
 
@@ -410,6 +433,9 @@ public sealed record AgentSearch(
     int Unread,
     AgentSearchUnread? FirstUnread)
 {
+    /// <summary>The largest file the search read, a larger one passed over; <see cref="long.MaxValue"/> where it read every file whatever it holds.</summary>
+    public long MostBytes { get; init; } = AgentFiles.MostSearchedBytes;
+
     /// <summary>
     /// What the search did not read, a note each: the files the reader may not read, those passed over, what its listing
     /// left out, and the files it could not read, with why the first was not.
@@ -426,7 +452,9 @@ public sealed record AgentSearch(
 
         if (Passed > 0)
         {
-            yield return $"[{ReportText.Counted(Passed, "file")} passed over: binary, over {DiskSpace.Size(AgentFiles.MostSearchedBytes)}, or no text this tool reads]";
+            yield return MostBytes == long.MaxValue
+                ? $"[{ReportText.Counted(Passed, "file")} passed over: binary, or no text this tool reads]"
+                : $"[{ReportText.Counted(Passed, "file")} passed over: binary, over {DiskSpace.Size(MostBytes)}, or no text this tool reads]";
         }
 
         foreach (var note in Listing.LeftOut(said))

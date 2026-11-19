@@ -3100,7 +3100,9 @@ the stream's `sessionStarted` and on the step's record (`FlowStepResult.Skills`,
 attempts as `FlowStepRecord.Skills`, `step.json`'s `skills[]`, and taken up again by a resume) - the engine having filled every other name into the prompt once and handed it as
 pieces (`FlowStepRun.Prompts`, `FlowTemplate.FillAroundSkills`), so what was filled is never read as a template again
 and a value's braces stand - a skill that cannot be handed refusing the step (12), the work it goes on with rendered
-as its continuation record (`AgentContinuation.Render` over its `FlowStepRun.WorkedFrom`), and the run answered
+as its continuation record (`AgentContinuation.Render` over its `FlowStepRun.GoesOnWith` - the step it resumes, then its
+own earlier visits in the order they went, the newest last, whose stream gives the last iterations; never a step it only
+depends on), and the run answered
 through `IAgentRunner`, its ending mapped to the step's own (`FlowStepResult.AtLimit` for a limit of its own,
 incomplete for a stop, the schema-validated output the step's, with the issues it reports under `preExisting`). The
 step's stream is read by the store's one reader of it (`OrchestrationStore.ReadStepStream`): a whole line that does
@@ -4740,13 +4742,15 @@ from a `CodebaseGraphRead`. Every node an answer names is one line with its hand
 prefix, then the share of the query's words weighed by their rarity, a summary's and a path's words a twentieth as much,
 generated code after every other, a tie by how near the step's own work each node is (`GraphNearness`: its context
 pack or a working set it was given, a file its `writes` covers, a file its agent changed, a path or a name its prompt
-holds) and then by id; `related` gives a hub - more edges of the relation's kinds than the 99th percentile and at least
-`CodebaseGraphQueries.CrowdFloor`, `CodebaseGraphQueries.Crowd` the one rule of it - and does not go through it. No answer of
-a read of the graph is cut: each is pages of whole entries (`Codebase\GraphPages.cs`), an operation's page holding up to
+holds) and then by id; `related` walks as many hops as asked, from 1, going through every node it reaches: it keeps the
+nodes it reached and never reaches one again, so it is linear in the edges it follows, cycles among them, and a hop that
+reaches nothing new ends it; `body` serves each node named once and reads each file once, again only where an extract of it
+found its lines moved, and reads a file whole whatever it holds. No answer of a read of the graph is cut: each is pages of whole entries (`Codebase\GraphPages.cs`), an operation's page holding up to
 its bound (`CodebaseGraphTool.FindLines` and the rest) and every page's entries within `CodebaseGraphTool.MostCharacters`
 less what the pages reserve and the answer's leading lines - an entry wider than that given in pieces at character
 boundaries, never inside a surrogate pair, a page each, each marked with `…` where it goes on or went on, and the page
-that ends inside one saying it goes on; a block's head rides only with its block's first counted line, so the page that
+that ends inside one saying it goes on; the notes an answer ends with follow its last entry within the same room, each
+whole or in pieces, on as many pages as they take, every file whose extract is gone named; a block's head rides only with its block's first counted line, so the page that
 serves a node's lines names it, and a block is told by its node's id, so two overloads are two blocks. An answer of more
 than one page starts with the line `page k of n` - on every page but the last the exact total, counted never estimated,
 and how to ask for the next with `page`, from 1, `offset` and `limit` refused naming it; the last says it is the last -
@@ -4758,14 +4762,20 @@ the view answers from (`CodebaseGraphQueries.Graph`: the link result's manifest 
 blob, state, implementation and extract - so an agent's own writes move it as a fold moves the base; the plan named the
 link result's digest alone, which an agent's view never moves) and the read rules it was computed under
 (`FlowStepGraph.ReadsOf`), in `graph-pages/` (`OrchestratorLayout.StepPagesDirectoryName`) under the step's directory or
-the side-task's, one line a file, the most recent `GraphPageStore.MostKept` on disk and `GraphPageStore.MostHeld` in
-memory; an answer of one page is never kept, and page 1 never reads what was. A later page of the same ask - resolved as
+the side-task's, one file an ask: every result kept for the conversation's life, whatever it holds and however many,
+packed - its one JSON line compressed (`GraphPageStore.Extension`) - in memory and in its file, what a directory keeps for
+an ask read once, and the directory put away whole when the conversation ends (`FlowStepGraph.PutAwayPages`: a step done
+whose work no later step goes on with, `ResumeChain.GoneOnWith`; `FlowStepGraph.PutAwayRunPages`: every step of a run that
+is done; a side-task's go with its records); an answer of one page is never kept, and page 1 never reads what was. A later page of the same ask - resolved as
 the tool resolves it, each node by its id and each default filled in - reads what was kept, in the same process, a
 resumed conversation, or a step that goes on with the work (whose continuation record carries that work's last iterations
-word for word), which reads the `graph-pages/` of the instances it goes on from where its own holds nothing; a page asked
+word for word), which reads the `graph-pages/` of the work it goes on with (`FlowStepRun.GoesOnWith`, the one owner of the
+conversation a step goes on with, which the continuation record and the resume prompt read too), the newest first, where
+its own holds nothing under the digest asked - the nearest kept under it answering - and keeps what it read as its own;
+a step it only depends on is never read; a page asked
 after the view moved to another digest, or with no result of page 1 that reads under its read rules, is made again on the
 graph as it stands and its header says which, a refused one after its range; a result whose file could not be written is
-held in memory alone, and the page that computed it says a later page may be counted again. The graph masks nothing
+held in memory alone, and the page that computed it says a resumed conversation counts its later pages again. The graph masks nothing
 as it reads and stores - a literal, a key's value, an element's text, a line of a file are kept as the file writes
 them - and a run's secrets are masked where the graph reaches the run: each answer of the tool, as every tool's answer
 is (`AgentToolRuntime`), the codebase part of a message, as every message is, and a result of more than one page as
@@ -4777,7 +4787,8 @@ holds (`CodebaseGraphQueries.Unheld`), whose declarations no answer gives. Where
 matched, a name it does not hold, an edge of `candidates` - in a `node`, outside its groups of recall
 (`GraphEdges.Groups`), a use being never a doubt - a node named with external or unresolved callees or in a file
 `dynamic` or generated - the answer adds the lines that hold the name as a whole word, searched by
-`AgentFiles.SearchAsync` as `search_files` searches, a section of their own at `CodebaseGraphTool.TextHits` a page of
+`AgentFiles.SearchAsync` as `search_files` searches - but in every file whatever it holds, the whole word matched in time
+linear in a line and so never timed, each hit's line whole - a section of their own at `CodebaseGraphTool.TextHits` a page of
 each word, a body's among them, all of them paged - none left out - and saying what it did not read in the notes the
 answer ends with (`AgentSearch.LeftOut`), through the read rule the tool is handed, which leaves out and counts every
 node, edge and hit of a file it refuses; a path or a `path:line`

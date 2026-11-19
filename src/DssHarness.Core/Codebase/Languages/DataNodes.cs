@@ -1,6 +1,6 @@
 using System.Globalization;
 using System.Text;
-using System.Text.Json;
+using DssHarness.Core.Output;
 
 namespace DssHarness.Core.Codebase.Languages;
 
@@ -243,9 +243,9 @@ internal sealed class DataNodes(string language, string file, int lineCount)
     }
 
     /// <summary>
-    /// The path <paramref name="places"/> are: each name joined by a dot, an item's place and a name that is empty or white
-    /// space held in brackets to the place before it - <c>targets.x64.callingConvention</c>, <c>limits[1].value</c>,
-    /// <c>packages[""].name</c>.
+    /// The path <paramref name="places"/> are: each name joined by a dot, an item's place and a name that is empty, white
+    /// space or holds a control character held in brackets to the place before it - <c>targets.x64.callingConvention</c>,
+    /// <c>limits[1].value</c>, <c>packages[""].name</c>, <c>messages["Sure?\nIt cannot be undone."]</c> - always one line.
     /// </summary>
     public static string PathOf(IReadOnlyList<DataPlace> places)
     {
@@ -282,12 +282,19 @@ internal readonly record struct DataPlace(string? Name, int Item)
     /// <summary>The place of the item <paramref name="item"/>, from 0.</summary>
     public static DataPlace At(int item) => new(null, item);
 
-    /// <summary>Whether a path holds it in brackets, to the place before it: an item, and a name that is empty or white space, which no dotted path can hold.</summary>
-    public bool Bracketed => Name is null || string.IsNullOrWhiteSpace(Name);
+    /// <summary>
+    /// Whether a path holds it in brackets, to the place before it: an item, a name that is empty or white space, which no
+    /// dotted path can hold, and a name that holds a control character - a line break a key written as its source string
+    /// holds - which no one line can.
+    /// </summary>
+    public bool Bracketed => Name is null || string.IsNullOrWhiteSpace(Name) || Name.Any(char.IsControl);
 
-    /// <summary>The place as a path writes it: a name as it is, an empty or white space one quoted in brackets, an item <c>[i]</c>.</summary>
+    /// <summary>
+    /// The place as a path writes it, always on one line: a name as it is, one that is bracketed quoted in brackets as
+    /// <see cref="ReportText.Quoted"/> writes it - each control character escaped - and an item <c>[i]</c>.
+    /// </summary>
     public string Written => Name is null ? $"[{Item.ToString(CultureInfo.InvariantCulture)}]"
-        : string.IsNullOrWhiteSpace(Name) ? $"[{JsonSerializer.Serialize(Name)}]"
+        : Bracketed ? $"[{ReportText.Quoted(Name)}]"
         : Name;
 }
 

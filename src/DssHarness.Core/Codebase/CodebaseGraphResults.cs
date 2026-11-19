@@ -140,12 +140,6 @@ public sealed record GraphEdges(
 /// <param name="Distance">How many hops from the node asked about, from 1.</param>
 public sealed record GraphReached(GraphCard Card, int Distance)
 {
-    /// <summary>
-    /// How many edges of the kind walked the node has, where it has more than the view's 99th percentile (and at least
-    /// <see cref="CodebaseGraphQueries.CrowdFloor"/>): it is given and not gone through. Null where it was gone through.
-    /// </summary>
-    public int? Crowded { get; init; }
-
     /// <summary>Whether an edge it was reached by is of <c>candidates</c>, and no use: the walk is not sure it goes there.</summary>
     public bool Candidates { get; init; }
 
@@ -304,21 +298,23 @@ public static partial class GraphLines
     /// <summary>
     /// The one line a node is named by in every answer and in the context pack: its handle, kind and signature (its
     /// qualified name where it has none), <c>path:start-end #hash</c>, its summary, and its callers and callees and
-    /// whether its file is generated or dynamic where they say anything.
+    /// whether its file is generated or dynamic where they say anything - each text of the node's own and its path
+    /// printable (<see cref="ReportText.Printable"/>), so the line is one line whatever a file's name holds.
     /// </summary>
     /// <param name="card">The node.</param>
     public static string Of(GraphCard card)
     {
         ArgumentNullException.ThrowIfNull(card);
 
+        var path = ReportText.Printable(card.Path);
         var where = card.Hash is { } hash
-            ? $"{card.Path}:{card.Start.ToString(CultureInfo.InvariantCulture)}-{card.End.ToString(CultureInfo.InvariantCulture)} #{hash}"
-            : $"{card.Path}:{card.Start.ToString(CultureInfo.InvariantCulture)}-{card.End.ToString(CultureInfo.InvariantCulture)}";
-        var line = $"{card.Handle} {card.Kind} {(card.Signature.Length > 0 ? card.Signature : card.Qualified)} | {where}";
+            ? $"{path}:{card.Start.ToString(CultureInfo.InvariantCulture)}-{card.End.ToString(CultureInfo.InvariantCulture)} #{hash}"
+            : $"{path}:{card.Start.ToString(CultureInfo.InvariantCulture)}-{card.End.ToString(CultureInfo.InvariantCulture)}";
+        var line = $"{card.Handle} {card.Kind} {ReportText.Printable(card.Signature.Length > 0 ? card.Signature : card.Qualified)} | {where}";
 
         if (card.Summary is { } summary)
         {
-            line += $" | {summary}";
+            line += $" | {ReportText.Printable(summary)}";
         }
 
         var marks = new List<string>();
@@ -347,7 +343,8 @@ public static partial class GraphLines
     /// <summary>
     /// Where a node line - one <see cref="Of"/> writes, with or without what a pack says after it - says its node stands:
     /// its handle, the line's first word, and the first part after its first that reads as a place, <c>path:start-end</c>
-    /// with <c>#hash</c> where it has one. A signature that holds the separator itself (a default of <c>A | B</c>) is
+    /// with <c>#hash</c> where it has one, its path read back from the printable form <see cref="Of"/> wrote it in
+    /// (<see cref="ReportText.Unprinted"/>). A signature that holds the separator itself (a default of <c>A | B</c>) is
     /// passed over to the place after it, and a place-like text a summary says is never reached, for the place comes
     /// first. Null where the line is no node's: a pack's first or last line, a declaration it says was taken out, a count.
     /// </summary>
@@ -369,7 +366,7 @@ public static partial class GraphLines
             {
                 return new GraphPlace(
                     handle,
-                    place.Groups["path"].Value,
+                    ReportText.Unprinted(place.Groups["path"].Value),
                     int.Parse(place.Groups["start"].Value, CultureInfo.InvariantCulture),
                     int.Parse(place.Groups["end"].Value, CultureInfo.InvariantCulture),
                     place.Groups["hash"].Success ? place.Groups["hash"].Value : null);

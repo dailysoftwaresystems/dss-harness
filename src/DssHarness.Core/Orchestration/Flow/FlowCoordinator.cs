@@ -12717,7 +12717,10 @@ public sealed class FlowCoordinator
             instance.Telling is { } telling && telling.For(attempt) ? telling : null,
             PlanToldOf(instance),
             BudgetLeftUsd: BudgetLeftUsd(),
-            Path: instance.Path);
+            Path: instance.Path)
+        {
+            GoesOnWith = GoesOnWithOf(instance),
+        };
 
     /// <summary>
     /// The handoff the engine writes for <paramref name="instance"/>: its first line says <paramref name="why"/>, and
@@ -12745,8 +12748,7 @@ public sealed class FlowCoordinator
 
         var sources = new List<FlowInstance>();
 
-        // A step that goes on with its own work finds itself here, and is left out below: its earlier visits are its sources.
-        if (instance.Step.Resume is { } resumed && DeclaredOf(instance, resumed, "reason") is { } goesOnWith)
+        if (ResumedOf(instance) is { } goesOnWith)
         {
             sources.Add(goesOnWith);
         }
@@ -12767,16 +12769,59 @@ public sealed class FlowCoordinator
             }
         }
 
-        sources.AddRange(_created
-            .TakeWhile(other => !ReferenceEquals(other, instance))
-            .Where(other => FlowInstanceId.SameStep(other.Id, instance.Id))
-            .Reverse());
+        sources.AddRange(EarlierVisitsOf(instance).Reverse());
 
-        return [.. sources
+        return WorkedFromOf(instance, sources);
+    }
+
+    /// <summary>
+    /// The instances whose conversation a reason step's goes on with (<see cref="FlowStepRun.GoesOnWith"/>), in the order
+    /// that work went, oldest first: the step its resume names, then its own earlier visits of the same work item - each
+    /// went on with the one before it, so the newest, whose last iterations its continuation record carries word for word,
+    /// is last - each a reason step that began, once. None for a step that resumes nothing, whose conversation begins its
+    /// own work however many steps it depends on, and for every other step.
+    /// </summary>
+    private IReadOnlyList<FlowWorkedFrom> GoesOnWithOf(FlowInstance instance)
+    {
+        if (instance.Step.Type != "reason" || instance.Step.Resume is null)
+        {
+            return [];
+        }
+
+        var sources = new List<FlowInstance>();
+
+        if (ResumedOf(instance) is { } resumed)
+        {
+            sources.Add(resumed);
+        }
+
+        sources.AddRange(EarlierVisitsOf(instance));
+        return WorkedFromOf(instance, sources);
+    }
+
+    /// <summary>
+    /// The instance <paramref name="instance"/>'s resume names, as the run holds it now: the reason step the engine finds the
+    /// name at; null where it names none, or none is found. A step that goes on with its own work finds itself here, which
+    /// <see cref="WorkedFromOf(FlowInstance, IReadOnlyList{FlowInstance})"/> leaves out: its earlier visits are its sources.
+    /// </summary>
+    private FlowInstance? ResumedOf(FlowInstance instance)
+        => instance.Step.Resume is { } resumed ? DeclaredOf(instance, resumed, "reason") : null;
+
+    /// <summary>The earlier visits of <paramref name="instance"/>'s step of the same work item, oldest first, as the run made them.</summary>
+    private IEnumerable<FlowInstance> EarlierVisitsOf(FlowInstance instance)
+        => _created
+            .TakeWhile(other => !ReferenceEquals(other, instance))
+            .Where(other => FlowInstanceId.SameStep(other.Id, instance.Id));
+
+    /// <summary>
+    /// <paramref name="sources"/> as a run names them to its step, in their order: each a reason step that began, other than
+    /// <paramref name="instance"/> itself, once - by its id and the agent it works in.
+    /// </summary>
+    private IReadOnlyList<FlowWorkedFrom> WorkedFromOf(FlowInstance instance, IReadOnlyList<FlowInstance> sources)
+        => [.. sources
             .Where(source => !ReferenceEquals(source, instance) && source.Step.Type == "reason" && source.StartedAt is not null)
             .Distinct<FlowInstance>(ReferenceEqualityComparer.Instance)
             .Select(source => new FlowWorkedFrom(source.Id, WorksInOf(source)))];
-    }
 
     /// <summary>The steps <paramref name="instance"/> is or holds: itself, or each member of a group, at every level, as the run holds them now - in each scope the definition's order.</summary>
     private IEnumerable<FlowInstance> ReasonStepsOf(FlowInstance instance)

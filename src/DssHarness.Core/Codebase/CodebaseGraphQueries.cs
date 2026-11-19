@@ -474,16 +474,16 @@ public sealed class CodebaseGraphQueries
     /// <summary>
     /// The nodes reached from <paramref name="id"/> - and every other part of its declaration, a part walked as the node
     /// itself - over <paramref name="relation"/> to <paramref name="depth"/>, by distance, each edge into the kind of node
-    /// the relation enters alone (<see cref="GraphRelations.Into"/>). A node with more edges of the relation's kinds than
-    /// the view's 99th percentile of any of them (and at least <see cref="CrowdFloor"/>) is given and not gone through.
+    /// the relation enters alone (<see cref="GraphRelations.Into"/>). Every node reached is gone through, whatever edges it
+    /// has: the walk knows each node it reached and never reaches it again, so it is linear in the edges it follows, its
+    /// cycles among them, and ends where a hop reaches nothing new, however deep it was asked to go.
     /// </summary>
     /// <param name="id">A node's id, the view's.</param>
     /// <param name="relation">What to follow: one of <see cref="GraphRelations.All"/>.</param>
-    /// <param name="depth">How many hops, 1 to 3.</param>
+    /// <param name="depth">How many hops, from 1.</param>
     public IReadOnlyList<GraphReached> Related(string id, string relation, int depth)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(depth, 1);
-        ArgumentOutOfRangeException.ThrowIfGreaterThan(depth, 3);
 
         var edges = GraphRelations.Edges(relation);
         var into = GraphRelations.Into(relation);
@@ -509,18 +509,13 @@ public sealed class CodebaseGraphQueries
                     }
 
                     // A use is recall, never a doubt: its candidates leave the walk as sure as it was.
-                    var crowded = Crowd(to, edges, into);
                     reached.Add(new GraphReached(Card(to), hop)
                     {
-                        Crowded = crowded,
                         Candidates = steps.Any(step => !CodeEdgeKinds.Recall(step.Kind) && string.Equals(step.Confidence, CodeConfidences.Candidates, StringComparison.Ordinal)),
                         Recall = steps.All(step => CodeEdgeKinds.Recall(step.Kind)),
                     });
 
-                    if (crowded is null)
-                    {
-                        next.Add(to);
-                    }
+                    next.Add(to);
                 }
             }
 
@@ -533,8 +528,7 @@ public sealed class CodebaseGraphQueries
     /// <summary>
     /// How many nodes the view holds that <paramref name="edges"/> reach from <paramref name="id"/>, where that makes it a
     /// hub - at least <see cref="CrowdFloor"/>, and more than the view's 99th percentile of any of those kinds on its side -
-    /// which a walk gives and does not go through; null where it goes through. The one rule of a hub, for <c>related</c> and
-    /// the context pack.
+    /// which the context pack gives and does not go through; null where it goes through. The one rule of a hub.
     /// </summary>
     /// <param name="id">A node's id, the view's.</param>
     /// <param name="edges">The kinds walked, each with the side it is followed from.</param>
@@ -760,7 +754,9 @@ public sealed class CodebaseGraphQueries
     /// What an answer about the file at <paramref name="path"/> says the graph does not hold of it, a line each: the state
     /// it is held in where no implementation read it, with why; where its implementation stopped reading it or could not
     /// bind it, by line and why - the first, where there are several; the keys and elements, and the string literals, its
-    /// extract counts past those it keeps. None where the graph holds the whole of it, or where the view holds no such file.
+    /// extract counts past those it keeps - each one line, the file's path and each why printable
+    /// (<see cref="ReportText.Printable"/>). None where the graph holds the whole of it, or where the view holds no such
+    /// file.
     /// </summary>
     /// <param name="path">A file's path, relative to the tree with forward separators.</param>
     public IReadOnlyList<string> Unread(string path)
@@ -774,7 +770,7 @@ public sealed class CodebaseGraphQueries
 
         if (!CodeFileStates.Extracted.Contains(entry.State, StringComparer.Ordinal))
         {
-            return [entry.Why is { } why ? $"{path} is {entry.State}: {why}" : $"{path} is {entry.State}"];
+            return [entry.Why is { } why ? $"{ReportText.Printable(path)} is {entry.State}: {ReportText.Printable(why)}" : $"{ReportText.Printable(path)} is {entry.State}"];
         }
 
         var extract = _extracts.TryGetValue(path, out var held) ? held : _read.Extract(path);
@@ -782,15 +778,15 @@ public sealed class CodebaseGraphQueries
 
         if (string.Equals(entry.State, CodeFileStates.Listed, StringComparison.Ordinal))
         {
-            lines.Add($"{path} is {entry.State}: no implementation of the graph reads its language");
+            lines.Add($"{ReportText.Printable(path)} is {entry.State}: no implementation of the graph reads its language");
         }
 
         if (extract?.Dynamic is { Count: > 0 } dynamic)
         {
             var first = dynamic.OrderBy(mark => mark.Line).First();
             lines.Add(dynamic.Count == 1
-                ? $"line {first.Line.ToString(CultureInfo.InvariantCulture)}: {first.Why}"
-                : $"{ReportText.Counted(dynamic.Count, "place")} the graph cannot bind, the first at line {first.Line.ToString(CultureInfo.InvariantCulture)}: {first.Why}");
+                ? $"line {first.Line.ToString(CultureInfo.InvariantCulture)}: {ReportText.Printable(first.Why)}"
+                : $"{ReportText.Counted(dynamic.Count, "place")} the graph cannot bind, the first at line {first.Line.ToString(CultureInfo.InvariantCulture)}: {ReportText.Printable(first.Why)}");
         }
 
         if (extract is { KeysBeyond: > 0 } keyed)

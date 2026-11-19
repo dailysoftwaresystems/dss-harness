@@ -220,11 +220,12 @@ public sealed class ReasonStepRunner(
         // words, or what a granted bound tells the agent - in the attempt's own conversation; a compaction sends the
         // engine's record as the run's first message and the filled prompt stands for the files that read it; every
         // other start fills the step's prompt, the resume prompt - what a step that goes on with earlier work is asked
-        // with when it runs again - only where earlier work there is: its own attempt before this one, work another
-        // step began, or a handoff. A step that resumes its own work is asked with its prompt the first time it runs.
+        // with when it runs again - only where earlier work there is: its own attempt before this one, the work its
+        // conversation goes on with (FlowStepRun.GoesOnWith), or a handoff. A step that resumes its own work is asked with
+        // its prompt the first time it runs, whatever steps it depends on.
         IReadOnlyList<FlowTemplate.Piece>? resume = null;
 
-        if (goingOn is null && run.Step.ResumePrompt is not null && (run.Attempt > 1 || run.Handoff is not null || run.WorkedFrom is [_, ..])
+        if (goingOn is null && run.Step.ResumePrompt is not null && (run.Attempt > 1 || run.Handoff is not null || run.GoesOnWith is [_, ..])
             && run.Prompts.TryGetValue("resumePrompt", out var readResume))
         {
             resume = readResume;
@@ -406,8 +407,15 @@ public sealed class ReasonStepRunner(
             var ended = Ended(result, run.Instance, stored, FlowRunBudget.RunsShareBinds(definition?.MaxBudgetUsd, run.BudgetLeftUsd));
 
             // The step's graph, where it was given one, ends with the step: its working set written beside its output,
-            // the seeds of the packs of the steps after it, and its figures gathered for its record.
+            // the seeds of the packs of the steps after it, and its figures gathered for its record. A step done whose
+            // work no later step's conversation goes on with puts away the pages its graph answers kept: none is asked
+            // again.
             var graphUse = stepGraph?.Ended(graphService!, fileSystem, platform.PathComparison, layout, cancellationToken);
+
+            if (ended is { Passed: true, Asked: null } && !ResumeChain.GoneOnWith(place.Definition, run.DeclarationPath, run.Step))
+            {
+                FlowStepGraph.PutAwayPages(fileSystem, harnessOutput, StepDirectoryOf(layout, run.Instance, agent), run.Instance);
+            }
 
             return result.Status == AgentRunStatus.NotStarted ? ended : ended with { Skills = skills, Graph = graphUse };
         }
@@ -594,9 +602,9 @@ public sealed class ReasonStepRunner(
             return null;
         }
 
-        // The steps before it that left notes: each source of the work its directory holds a record of, named by step
-        // and never by path, for the next attempt has their notes in what it is given.
-        var before = (run.WorkedFrom ?? [])
+        // The steps before it that left notes: each step of the work its conversation goes on with whose directory holds
+        // them, named by step and never by path, for the next attempt has their notes in its continuation record.
+        var before = run.GoesOnWith
             .Where(source => fileSystem.KindOf(Path.Combine(DirectoryOf(layout, source), OrchestratorLayout.StepNotesFileName)) == PathKind.File)
             .Select(source => new AgentContinuedStep(source.Instance, "done", string.Empty))
             .ToList();
@@ -897,12 +905,13 @@ public sealed class ReasonStepRunner(
     }
 
     /// <summary>
-    /// The continuation record of the work the step goes on with, where it goes on with any: the instances the engine
-    /// named as its sources rendered whole - each as its own record says it ended - the paths this agent's folds wrote
-    /// and its worktree holds unfolded, and the red legs of its newest red build or test, their copies put in what the
-    /// step's agent is handed. Null where the step begins its own work.
+    /// The continuation record of the work the step's conversation goes on with (<see cref="FlowStepRun.GoesOnWith"/>),
+    /// where it goes on with any: that work's instances rendered whole, oldest first - each as its own record says it
+    /// ended, the newest's last iterations word for word - the paths this agent's folds wrote and its worktree holds
+    /// unfolded, and the red legs of its newest red build or test, their copies put in what the step's agent is handed.
+    /// Null where the step begins its own work, whatever steps it depends on.
     /// </summary>
-    /// <param name="run">The step, with the instances whose working sets its context pack is seeded from.</param>
+    /// <param name="run">The step, with the work its conversation goes on with.</param>
     /// <param name="layout">The run's own paths.</param>
     /// <param name="agent">The agent the step works as.</param>
     /// <param name="handed">Where the step's agent is handed what it reads, the copies put under it.</param>
@@ -910,7 +919,7 @@ public sealed class ReasonStepRunner(
     /// <param name="cancellationToken">Stops the reading of the worktree.</param>
     private async Task<string?> ContinuationOfAsync(FlowStepRun run, OrchestratorLayout layout, string agent, string handed, HarnessContext context, CancellationToken cancellationToken)
     {
-        if (!GoesOnWithEarlierWork(run) || run.WorkedFrom is not [_, ..] worked)
+        if (run.GoesOnWith is not [_, ..] worked)
         {
             return null;
         }
@@ -1070,11 +1079,6 @@ public sealed class ReasonStepRunner(
 
         return [];
     }
-
-    /// <summary>Whether the step goes on with earlier work: another step's, or its own attempt that a stop cut.</summary>
-    /// <param name="run">The step.</param>
-    private static bool GoesOnWithEarlierWork(FlowStepRun run)
-        => run.Step.Resume is not null || run.Attempt > 1 || run.Handoff is not null;
 
     /// <summary>
     /// The events the step's own stream holds, masked as it holds them, read by the store's one reader of it: the step's

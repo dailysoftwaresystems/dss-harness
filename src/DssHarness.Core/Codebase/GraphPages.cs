@@ -92,15 +92,17 @@ public sealed record GraphPageAnswer(string Text, int Page, int Pages, int Total
 /// The one owner of an answer's pages: no answer of the graph is cut, but each is pages of whole entries, with the page
 /// said, any page asked by number, and the totals exact. Every page's entries are held within the characters an answer
 /// holds: an entry wider than a whole page is given in pieces at character boundaries, never inside a surrogate pair,
-/// each piece marked with <see cref="TextCut.Ellipsis"/> where the entry goes on or went on before it, and the page that
-/// ends inside one says it goes on. Every operation of the graph tool answers through it, and the text fallback's hits
-/// and a body's served lines are entries as any other.
+/// each piece marked with <see cref="TextCut.Ellipsis"/> where the entry goes on or went on before it, and each section a
+/// page ends inside one of, or inside a node's block, says it goes on after what the page gave of it, whatever sections
+/// follow it on the page. The notes an answer ends with follow its last entry within the same room, every one of them
+/// given, on as many pages as they take. Every operation of the graph tool answers through it, and the text fallback's
+/// hits - each line whole - and a body's served lines are entries as any other.
 /// </summary>
 public static class GraphPages
 {
     /// <summary>
-    /// The characters held back from a page's entries for what surrounds them: the header, the notes an answer ends
-    /// with, and the line that says a block goes on.
+    /// The characters held back from a page's entries for what surrounds them: the header, and the lines that say a
+    /// section goes on. The notes an answer ends with are entries of their own, held within the room as any entry is.
     /// </summary>
     public const int ReservedCharacters = 4096;
 
@@ -126,26 +128,27 @@ public static class GraphPages
 
     /// <summary>
     /// What the page that computed a result of more than one page says where its file could not be written: the result is
-    /// held in memory while it is among the most recently asked, and a later page asked once it is not - or in a resumed
-    /// conversation - is counted again, and says so.
+    /// held in memory for the conversation's process, and a later page asked in a resumed conversation is counted again,
+    /// and says so.
     /// </summary>
     /// <param name="why">Why its file could not be written.</param>
     public static string Unkept(string why)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(why);
 
-        return $"its result could not be written ({why}): a later page may be counted again, and says so";
+        return $"its result could not be written ({why}): a resumed conversation counts its later pages again, and says so";
     }
 
     /// <summary>
     /// The answer's <paramref name="page"/>, from its sections: the page holds whole entries, each section up to its
     /// size and the whole within <paramref name="mostCharacters"/> less <see cref="ReservedCharacters"/> and the leading
-    /// lines - an entry wider than that given in pieces, a page each; a page of one holds the whole answer and no header;
-    /// a page past the last is refused with the answer's range.
+    /// lines - an entry wider than that given in pieces, a page each; the notes the answer ends with follow its last
+    /// entries, held within the same room, on as many pages as they take; a page of one holds the whole answer and no
+    /// header; a page past the last is refused with the answer's range.
     /// </summary>
     /// <param name="sections">The answer's sections, in their order; each page holds of every section what its size leaves.</param>
     /// <param name="leading">The lines the answer begins with, said on every page.</param>
-    /// <param name="trailing">The notes the answer ends with, said on its last page alone.</param>
+    /// <param name="trailing">The notes the answer ends with, each given whole - or in pieces where it is wider than a page - after every entry.</param>
     /// <param name="page">The page asked, from 1.</param>
     /// <param name="asked">How the answer names what was asked, for a page past the last to say.</param>
     /// <param name="mostCharacters">The most characters an answer may hold.</param>
@@ -158,12 +161,21 @@ public static class GraphPages
         string asked,
         int mostCharacters,
         string? note = null)
+        => Lay(sections, leading, trailing, mostCharacters).Page(page, asked, note);
+
+    /// <summary>
+    /// The answer's pages, filled once from its sections as <see cref="Assemble"/> fills them: every page of it is given
+    /// from what this fill found, so a later page is never filled again.
+    /// </summary>
+    /// <param name="sections">The answer's sections, in their order.</param>
+    /// <param name="leading">The lines the answer begins with, said on every page.</param>
+    /// <param name="trailing">The notes the answer ends with.</param>
+    /// <param name="mostCharacters">The most characters an answer may hold.</param>
+    public static Layout Lay(IReadOnlyList<GraphSection> sections, IReadOnlyList<string> leading, IReadOnlyList<string> trailing, int mostCharacters)
     {
         ArgumentNullException.ThrowIfNull(sections);
         ArgumentNullException.ThrowIfNull(leading);
         ArgumentNullException.ThrowIfNull(trailing);
-        ArgumentOutOfRangeException.ThrowIfLessThan(page, 1);
-        ArgumentException.ThrowIfNullOrWhiteSpace(asked);
 
         foreach (var section in sections)
         {
@@ -174,72 +186,105 @@ public static class GraphPages
         }
 
         var room = Math.Max(LeastRoom, mostCharacters - ReservedCharacters - leading.Sum(line => line.Length + 1));
-        var fills = Fills(sections, room);
-        var pages = Math.Max(1, fills.Count);
-        var total = sections.Sum(section => section.Entries.Count(entry => entry.Lines > 0));
-        var said = note is null ? string.Empty : $" · {note}";
 
-        if (page > pages)
+        // The notes are entries of a section of their own that counts nothing, filled once every section is given: what
+        // the answer ends with is held within a page's room as any entry is, every note of it given.
+        var notes = new GraphSection(
+            null,
+            [.. trailing.SelectMany(line => line.Split('\n')).Select(line => line.TrimEnd('\r')).Where(line => line.Length > 0).Select(line => new GraphEntry(line, Lines: 0))],
+            int.MaxValue);
+        return new Layout([.. leading], Fills(sections, notes, room), notes, sections.Sum(section => section.Entries.Count(entry => entry.Lines > 0)));
+    }
+
+    /// <summary>An answer's pages as one fill found them (<see cref="Lay"/>): any of them given from it, none filled again.</summary>
+    public sealed class Layout
+    {
+        private readonly IReadOnlyList<string> _leading;
+        private readonly List<List<SectionOfPage>> _fills;
+        private readonly GraphSection _notes;
+
+        internal Layout(IReadOnlyList<string> leading, List<List<SectionOfPage>> fills, GraphSection notes, int total)
         {
-            return new GraphPageAnswer(
-                $"page {Number(page)} of '{asked}': it has {Number(pages)} page{(pages == 1 ? string.Empty : "s")} (1 to {Number(pages)}){said}",
-                page,
-                pages,
-                total,
-                [],
-                note)
+            _leading = leading;
+            _fills = fills;
+            _notes = notes;
+            Total = total;
+        }
+
+        /// <summary>How many pages the answer holds; one where all of it is given at once.</summary>
+        public int Pages => Math.Max(1, _fills.Count);
+
+        /// <summary>How many results the whole answer holds, counted once.</summary>
+        public int Total { get; }
+
+        /// <summary>The answer's <paramref name="page"/>, as <see cref="Assemble"/> gives it.</summary>
+        /// <param name="page">The page asked, from 1.</param>
+        /// <param name="asked">How the answer names what was asked, for a page past the last to say.</param>
+        /// <param name="note">What the header says after its counts, and a refusal after its range (<see cref="GraphPageAnswer.Note"/>).</param>
+        public GraphPageAnswer Page(int page, string asked, string? note = null)
+        {
+            ArgumentOutOfRangeException.ThrowIfLessThan(page, 1);
+            ArgumentException.ThrowIfNullOrWhiteSpace(asked);
+
+            var pages = Pages;
+            var total = Total;
+            var said = note is null ? string.Empty : $" · {note}";
+
+            if (page > pages)
             {
-                Refusal = "past the last",
-            };
-        }
-
-        var held = fills.Count == 0 ? new List<SectionOfPage>() : fills[page - 1];
-        var builder = new StringBuilder();
-
-        if (pages > 1 || note is not null)
-        {
-            builder.Append(Header(page, pages, total)).Append(said).Append('\n');
-        }
-
-        foreach (var line in leading)
-        {
-            builder.Append(line).Append('\n');
-        }
-
-        foreach (var section in held)
-        {
-            if (section.Section.Caption is { } caption)
-            {
-                builder.Append(caption).Append('\n');
+                return new GraphPageAnswer(
+                    $"page {Number(page)} of '{asked}': it has {Number(pages)} page{(pages == 1 ? string.Empty : "s")} (1 to {Number(pages)}){said}",
+                    page,
+                    pages,
+                    total,
+                    [],
+                    note)
+                {
+                    Refusal = "past the last",
+                };
             }
 
-            foreach (var entry in section.Shown)
+            var held = _fills.Count == 0 ? new List<SectionOfPage>() : _fills[page - 1];
+            var builder = new StringBuilder();
+
+            if (pages > 1 || note is not null)
             {
-                builder.Append(entry.Text).Append('\n');
+                builder.Append(Header(page, pages, total)).Append(said).Append('\n');
             }
-        }
 
-        // A page that ends inside an entry, or inside a node's block, says it goes on: what the next page holds is its own.
-        if (held.Count > 0 && held[^1].GoesOn is { } goesOn)
-        {
-            builder.Append($"{TextCut.Ellipsis} {goesOn} goes on").Append('\n');
-        }
-
-        if (page == pages)
-        {
-            foreach (var line in trailing)
+            foreach (var line in _leading)
             {
                 builder.Append(line).Append('\n');
             }
-        }
 
-        return new GraphPageAnswer(
-            builder.ToString().TrimEnd('\n'),
-            page,
-            pages,
-            total,
-            [.. held.Select(section => new GraphPageSection(section.Section.Caption, section.Shown))],
-            note);
+            foreach (var section in held)
+            {
+                if (section.Section.Caption is { } caption)
+                {
+                    builder.Append(caption).Append('\n');
+                }
+
+                foreach (var entry in section.Shown)
+                {
+                    builder.Append(entry.Text).Append('\n');
+                }
+
+                // A section whose page ends inside an entry, or inside a node's block, says it goes on, right after what the
+                // page gave of it - whatever later sections the page holds too: what the next page holds of it is its own.
+                if (section.GoesOn is { } goesOn)
+                {
+                    builder.Append($"{TextCut.Ellipsis} {goesOn} goes on").Append('\n');
+                }
+            }
+
+            return new GraphPageAnswer(
+                builder.ToString().TrimEnd('\n'),
+                page,
+                pages,
+                total,
+                [.. held.Where(section => !ReferenceEquals(section.Section, _notes)).Select(section => new GraphPageSection(section.Section.Caption, section.Shown))],
+                note);
+        }
     }
 
     /// <summary>The header of a page of more than one: which page, the exact total, and how to ask for the next - or that this is the last.</summary>
@@ -254,7 +299,7 @@ public static class GraphPages
     /// <param name="Section">The section.</param>
     /// <param name="Shown">The entries - or the piece of one - the page gave of it.</param>
     /// <param name="GoesOn">What the page says goes on where it ends here, inside an entry or a node's block; null where it ends between them.</param>
-    private sealed record SectionOfPage(GraphSection Section, IReadOnlyList<GraphEntry> Shown, string? GoesOn);
+    internal sealed record SectionOfPage(GraphSection Section, IReadOnlyList<GraphEntry> Shown, string? GoesOn);
 
     /// <summary>One section's fill: where its cursor stands after the pages made so far.</summary>
     private sealed class SectionFill(GraphSection section)
@@ -275,14 +320,15 @@ public static class GraphPages
     /// <summary>
     /// The entries of every page, filled once from the sections: each page takes of every section, in its order, whole
     /// entries up to the section's size while the page has room - a section's caption charged with the first it gives -
-    /// and an entry no room is left for begins the page after. A block's head goes with its first counted line, so the
+    /// and an entry no room is left for begins the page after; <paramref name="notes"/> are taken once every section is
+    /// given, on the page its last entry is and the pages after. A block's head goes with its first counted line, so the
     /// page that serves a node's lines names it. Where a page would hold nothing, it takes as much of the first entry not
     /// yet given as its room holds, marked as going on: a page always moves the answer on, and none passes its room.
     /// </summary>
-    private static List<List<SectionOfPage>> Fills(IReadOnlyList<GraphSection> sections, int room)
+    private static List<List<SectionOfPage>> Fills(IReadOnlyList<GraphSection> sections, GraphSection notes, int room)
     {
         var fills = new List<List<SectionOfPage>>();
-        var state = sections.Select(section => new SectionFill(section)).ToList();
+        var state = sections.Select(section => new SectionFill(section)).Append(new SectionFill(notes)).ToList();
 
         while (state.Any(fill => !fill.Done))
         {
@@ -296,6 +342,12 @@ public static class GraphPages
 
             foreach (var fill in state)
             {
+                // The notes wait for every section's last entry.
+                if (ReferenceEquals(fill.Section, notes) && state.Any(other => !other.Done && !ReferenceEquals(other.Section, notes)))
+                {
+                    continue;
+                }
+
                 var shown = new List<GraphEntry>();
                 var budget = fill.Section.Size;
                 var caption = fill.Section.Caption is { } said ? said.Length + 1 : 0;

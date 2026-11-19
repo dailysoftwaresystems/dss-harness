@@ -304,17 +304,65 @@ public sealed class FlowStepGraph
     /// <summary>
     /// Where the step's graph tool keeps the results its answers' pages read from: its own directory's
     /// <c>graph-pages</c> (<see cref="OrchestratorLayout.StepPagesDirectoryName"/>), which every attempt of the step and a
-    /// resumed conversation read; and, where its own holds nothing for an ask, those of the instances its work goes on
-    /// from (<see cref="FlowStepRun.WorkedFrom"/>), the nearest first - a continuation record carries that work's last
-    /// iterations word for word, its pages among them - each read under the step's own read rules alone
-    /// (<see cref="ReadsOf"/>), so no page gives a line of a file this step may not read.
+    /// resumed conversation read; and, where its own holds nothing for an ask under the graph's digest, those of the work
+    /// its conversation goes on with (<see cref="FlowStepRun.GoesOnWith"/>) and no other - not a step it only depends on,
+    /// whose conversation it never held - the newest first, the order that work went read back: a continuation record
+    /// carries the newest's last iterations word for word, its pages among them. Each is read under the step's own read
+    /// rules alone (<see cref="ReadsOf"/>), so no page gives a line of a file this step may not read.
     /// </summary>
     private static GraphPageStore PagesOf(IFileSystem fileSystem, OrchestratorLayout layout, FlowStepRun run, string directory, AgentPolicyGround ground)
         => new(
             Path.Combine(directory, OrchestratorLayout.StepPagesDirectoryName),
             fileSystem,
             ReadsOf(ground),
-            [.. (run.WorkedFrom ?? []).Select(source => Path.Combine(layout.InstanceDirectory(source.Instance, source.Agent), OrchestratorLayout.StepPagesDirectoryName))]);
+            [.. run.GoesOnWith.Reverse().Select(source => Path.Combine(layout.InstanceDirectory(source.Instance, source.Agent), OrchestratorLayout.StepPagesDirectoryName))]);
+
+    /// <summary>
+    /// Puts away the pages the graph answers of the step whose records are in <paramref name="directory"/> kept
+    /// (<see cref="GraphPageStore.PutAway"/>): what a step leaves once it is done and no later step's conversation goes on
+    /// with its work (<see cref="ResumeChain.GoneOnWith"/>), so no page of them is asked again. One that cannot be removed is
+    /// said, and the step's ending stands.
+    /// </summary>
+    /// <param name="fileSystem">The file system the pages are removed through.</param>
+    /// <param name="output">Hears pages that could not be put away.</param>
+    /// <param name="directory">The step instance's own directory.</param>
+    /// <param name="instance">The step instance, as the warning names it.</param>
+    public static void PutAwayPages(IFileSystem fileSystem, IHarnessOutput output, string directory, string instance)
+    {
+        ArgumentNullException.ThrowIfNull(fileSystem);
+        ArgumentNullException.ThrowIfNull(output);
+        ArgumentException.ThrowIfNullOrWhiteSpace(directory);
+
+        if (GraphPageStore.PutAway(Path.Combine(directory, OrchestratorLayout.StepPagesDirectoryName), fileSystem) is { } why)
+        {
+            output.Warn("reason", $"the graph pages '{instance}' kept were not put away: {why}. The step's ending stands, and they stay in its records.");
+        }
+    }
+
+    /// <summary>
+    /// Puts away the pages every step of the run <paramref name="flow"/> records kept, where the run is done: no step's
+    /// conversation goes on any more, so the last of them - those a step that is done kept for a later step to go on from -
+    /// are asked again by none. A run that is not done - paused, failed, stopped - keeps them, for a step of it may go on.
+    /// </summary>
+    /// <param name="fileSystem">The file system the pages are removed through.</param>
+    /// <param name="output">Hears pages that could not be put away.</param>
+    /// <param name="layout">The run's own paths.</param>
+    /// <param name="flow">The run's record as its session left it.</param>
+    public static void PutAwayRunPages(IFileSystem fileSystem, IHarnessOutput output, OrchestratorLayout layout, FlowFile flow)
+    {
+        ArgumentNullException.ThrowIfNull(layout);
+        ArgumentNullException.ThrowIfNull(flow);
+
+        if (!string.Equals(flow.Status, nameof(FlowRunStatus.Done), StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        foreach (var step in flow.Steps)
+        {
+            PutAwayPages(fileSystem, output, layout.InstanceDirectory(step.Instance, step.Agent), step.Instance);
+        }
+    }
 
     /// <summary>The step's use of the graph, its default resolved: <c>off</c>, <c>map</c> or <c>tools</c>.</summary>
     public string Mode { get; }

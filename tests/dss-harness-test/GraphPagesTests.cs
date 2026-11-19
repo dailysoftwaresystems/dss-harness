@@ -154,6 +154,28 @@ public sealed class GraphPagesTests
     }
 
     /// <summary>
+    /// A section the page ends inside a block of - a body's, its lines' size spent - says the block goes on right after
+    /// what the page gave of it, though a later section - the body's text search - still has entries on the page: the
+    /// page that holds the hits never reads as the end of the block.
+    /// </summary>
+    [Fact]
+    public void ASectionThePageEndsInsideABlockOf_SaysItGoesOn_BeforeTheSectionsAfterIt()
+    {
+        var block = new List<GraphEntry> { new("A src/A.cs:1-5 #0123456a", Lines: 0, GoesOn: "A", Node: "csharp:A") };
+        block.AddRange(Enumerable.Range(1, 5).Select(at => new GraphEntry($"{at}\tline {at}", Lines: 1, GoesOn: "A", Node: "csharp:A", File: "src/A.cs")));
+        var hits = new GraphSection("text: lines that hold 'A'", [.. Enumerable.Range(1, 2).Select(at => new GraphEntry($"  src/B.cs:{at} A", Hit: true))], 20);
+        GraphSection[] sections = [new(null, block, 3), hits];
+
+        var first = GraphPages.Assemble(sections, [], [], 1, "body A", Most);
+        var second = GraphPages.Assemble(sections, [], [], 2, "body A", Most);
+
+        Assert.Equal(
+            "page 1 of 2 · 7 results · ask again with page: 2 for the next\nA src/A.cs:1-5 #0123456a\n1\tline 1\n2\tline 2\n3\tline 3\n… A goes on\ntext: lines that hold 'A'\n  src/B.cs:1 A\n  src/B.cs:2 A",
+            first.Text);
+        Assert.Equal("page 2 of 2 · the last\n4\tline 4\n5\tline 5", second.Text);
+    }
+
+    /// <summary>
     /// A block's head goes on the page that serves the block's first line: a page whose size is spent ends before the
     /// next node's head, saying nothing goes on, and the next page begins with the head, so the page that serves a node's
     /// lines names its node, its path and its hash.
@@ -248,6 +270,32 @@ public sealed class GraphPagesTests
         Assert.Equal("page 1 of 3 · 45 results · ask again with page: 2 for the next\nthe card\n" + string.Join('\n', Enumerable.Range(1, 20).Select(at => $"node {at}")), pages[0].Text);
         Assert.Equal("page 2 of 3 · 45 results · ask again with page: 3 for the next\nthe card\n" + string.Join('\n', Enumerable.Range(21, 20).Select(at => $"node {at}")), pages[1].Text);
         Assert.Equal("page 3 of 3 · the last\nthe card\n" + string.Join('\n', Enumerable.Range(41, 5).Select(at => $"node {at}")) + "\n" + Note, pages[2].Text);
+    }
+
+    /// <summary>
+    /// The notes an answer ends with are held within a page's room as any entry is: notes past what the last entries'
+    /// page holds go on to the pages after it, a note wider than a page in pieces, every character of every note given
+    /// and no page past its bound; the notes count toward no total and are none of the page's sections.
+    /// </summary>
+    [Fact]
+    public void TheTrailingNotes_ArePagedWithinTheRoom_EveryNoteGiven()
+    {
+        const int Small = GraphPages.ReservedCharacters + 1000;
+        var section = new GraphSection(null, [.. Enumerable.Range(1, 3).Select(at => new GraphEntry($"node {at}"))], 20);
+        List<string> notes = [.. Enumerable.Range(1, 40).Select(at => $"note {at:D2} " + new string('n', 80)), "wide " + new string('w', 2500)];
+
+        var first = GraphPages.Assemble([section], [], notes, 1, "find node", Small);
+        var pages = Enumerable.Range(1, first.Pages).Select(page => GraphPages.Assemble([section], [], notes, page, "find node", Small)).ToList();
+        var lines = pages.SelectMany(page => page.Text.Split('\n').Skip(1)).Where(line => line != "… the line goes on").ToList();
+        var wide = lines.Where(line => line.StartsWith("wide ", StringComparison.Ordinal) || line.StartsWith('…')).ToList();
+
+        Assert.True(first.Pages > 2, "the notes took no page of their own");
+        Assert.All(pages, page => Assert.True(page.Text.Length <= Small, "a page passed its bound"));
+        Assert.All(pages, page => Assert.Equal(3, page.Total));
+        Assert.Equal(["node 1", "node 2", "node 3"], pages.SelectMany(page => page.Sections).SelectMany(section => section.Entries).Select(entry => entry.Text));
+        Assert.Equal(notes.Take(40), lines.Where(line => line.StartsWith("note ", StringComparison.Ordinal)));
+        Assert.True(wide.Count > 1, "a note wider than a page was not given in pieces");
+        Assert.Equal(notes[^1], string.Concat(wide.Select((piece, at) => piece[(at == 0 ? 0 : 1)..(at == wide.Count - 1 ? piece.Length : piece.Length - 1)])));
     }
 
     /// <summary>

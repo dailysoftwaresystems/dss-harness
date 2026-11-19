@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -20,13 +21,16 @@ public sealed record GraphFileRead(string Path, string Digest);
 
 /// <summary>
 /// The whole result an answer's pages are read from, kept for the conversation that asked its first page: the answer as
-/// it was computed - its leading lines, its sections, its notes - under the digest of the graph it was computed on and
-/// the read rules it was computed under, so a later page of the same ask is a page of that one result, and a resumed
+/// it was computed - its leading lines, its sections, its notes - under the digest of the graph of the view it ended on
+/// and the read rules it was computed under, so a later page of the same ask is a page of that one result, and a resumed
 /// conversation reads what the stream holds page 1 of.
 /// </summary>
 /// <param name="Schema">The record's schema it was written under.</param>
 /// <param name="Key">The ask it is kept for, as <see cref="GraphPageStore.KeyOf"/> spells it.</param>
-/// <param name="Digest">The digest of the graph it was computed on (<see cref="CodebaseGraphQueries.Graph"/>).</param>
+/// <param name="Digest">
+/// The digest of the graph of the view the answer ended on (<see cref="CodebaseGraphQueries.Graph"/>): the one it was
+/// computed on, or the one a body's check of a moved node's file left - so a later page asked of that view reads it.
+/// </param>
 /// <param name="Reads">The digest of the read rules it was computed under, as its store names them; null where none narrow the reads.</param>
 /// <param name="Asked">How the answer names what was asked, for a page past the last to say.</param>
 /// <param name="Leading">The lines the answer begins with.</param>
@@ -64,13 +68,22 @@ public sealed record GraphPageKept(
             : Sections.Select(section => section.Problem()).FirstOrDefault(problem => problem is not null);
 }
 
-/// <summary>What a store found kept for an ask: the result, or why none reads - null for both where none was kept.</summary>
-/// <param name="Kept">The result kept; null where none reads.</param>
-/// <param name="Why">Why what was kept does not read, where something was kept; null where nothing was, or it read.</param>
+/// <summary>
+/// What a store found kept for an ask under the digest of the graph asked of: the result, or why none reads - null for
+/// both where none was kept - and whether one that reads was kept under another digest.
+/// </summary>
+/// <param name="Kept">The result kept under the digest asked of; null where none reads under it.</param>
+/// <param name="Why">Why what was kept does not read, where something was kept and none reads at all; null otherwise.</param>
 public sealed record GraphPageFind(GraphPageKept? Kept, string? Why)
 {
     /// <summary>Nothing kept.</summary>
     public static GraphPageFind None { get; } = new(null, null);
+
+    /// <summary>
+    /// Whether no result reads under the digest asked of while one of the same ask reads under another: the graph the view
+    /// answers from moved since page 1 was counted.
+    /// </summary>
+    public bool Moved { get; init; }
 }
 
 /// <summary>
@@ -79,27 +92,26 @@ public sealed record GraphPageFind(GraphPageKept? Kept, string? Why)
 /// side-task's. The page that computes a result of more than one page keeps it; a later page of the same ask - in the
 /// same process, or a conversation resumed over the same directory - reads what was kept, so it is a page of that one
 /// result. A conversation that goes on with earlier work - a continuation record carries that work's last iterations
-/// word for word - reads too what the directories of that work kept, where its own holds nothing, and keeps what it
-/// reads there as its own. The tool alone uses it; the verb, which reads and answers in one call, keeps nothing.
+/// word for word - reads too what the directories of that work kept, the work it went on from nearest first
+/// (<see cref="Orchestration.Flow.FlowStepRun.GoesOnWith"/>), where its own holds nothing under the graph's digest, and
+/// keeps what it reads there as its own. The tool alone uses it; the verb, which reads and answers in one call, keeps
+/// nothing.
 /// </summary>
 /// <remarks>
 /// A kept result is a cache of one computation, not a record of what is true: one that does not read - a shape this
 /// build does not know, a file no disk gives, a result kept under other read rules - is made again, and the page says
-/// why; one that cannot be written leaves the answer it was made for standing, held in memory alone, and that page says
-/// a later page may be counted again. It is bounded: an answer of one page is never kept, the most recent <see cref="MostHeld"/> results are
-/// held in memory and the most recently kept <see cref="MostKept"/> on disk, each written on one line, the oldest put
-/// away as a later one is kept.
+/// why. Every result is kept for the conversation's life, whatever it holds and however many there are: in memory as it
+/// was computed or read, and in its file packed - its one JSON line compressed - for a resume; one that cannot be written
+/// is held in memory alone, and the page that computed it says a resumed conversation counts its later pages again. An
+/// answer of one page is never kept. What a directory keeps for an ask is read and unpacked once: a later page is given
+/// the same result from memory, never read from the disk again.
+/// The store is put away whole when its conversation ends (<see cref="PutAway"/>): a step that is done and whose work no
+/// later step goes on with, and every step of a run that is done.
 /// </remarks>
 public sealed class GraphPageStore
 {
-    /// <summary>The most results held in memory, the most recently asked; the rest are read from disk.</summary>
-    public const int MostHeld = 8;
-
-    /// <summary>The most results kept on disk in the store's directory, the most recently kept; the oldest is removed as one more is kept.</summary>
-    public const int MostKept = 32;
-
-    /// <summary>What a kept file is named by: the ask's key, then this.</summary>
-    private const string Extension = ".json";
+    /// <summary>What a kept file is named by: the ask's key, then this - its one JSON line, compressed.</summary>
+    public const string Extension = ".json.gz";
 
     private readonly string _directory;
     private readonly IFileSystem _fileSystem;
@@ -107,11 +119,14 @@ public sealed class GraphPageStore
     private readonly IReadOnlyList<string> _earlier;
     private readonly object _lock = new();
 
-    /// <summary>The results held in memory, the most recently asked first.</summary>
-    private readonly List<GraphPageKept> _held = [];
+    /// <summary>
+    /// What this store holds for each ask, by its key: the result it kept, or took from the earlier work as its own, or
+    /// what its own directory was found to keep once it was read - a result, or why none reads.
+    /// </summary>
+    private readonly Dictionary<string, Visit> _own = new(StringComparer.Ordinal);
 
-    /// <summary>The asks this store wrote, by their keys, the oldest first: the order its own files are put away in.</summary>
-    private readonly List<string> _order = [];
+    /// <summary>What each of the earlier work's directories was found to keep for an ask, by the directory's place and the ask's key: each read once.</summary>
+    private readonly Dictionary<(int At, string Key), Visit> _visited = [];
 
     /// <summary>The store over <paramref name="directory"/>, read and written through <paramref name="fileSystem"/>.</summary>
     /// <param name="directory">The <c>graph-pages</c> directory, absolute.</param>
@@ -121,8 +136,9 @@ public sealed class GraphPageStore
     /// read back only under the rules it was computed under, so no page gives a line of a file the reader may not read.
     /// </param>
     /// <param name="earlier">
-    /// The <c>graph-pages</c> directories of the work this conversation goes on with, the nearest first: read, never
-    /// written, where this store's own holds nothing for an ask.
+    /// The <c>graph-pages</c> directories of the work this conversation goes on with, the nearest first - the order that
+    /// work went, newest first: read, never written, where this store's own holds nothing for an ask under the graph's
+    /// digest.
     /// </param>
     public GraphPageStore(string directory, IFileSystem fileSystem, string? reads = null, IReadOnlyList<string>? earlier = null)
     {
@@ -139,55 +155,59 @@ public sealed class GraphPageStore
     public string? Reads => _reads;
 
     /// <summary>
-    /// The result kept for <paramref name="key"/>, where one reads: held in memory, else in the store's directory, else in
-    /// the earlier work's directories, the nearest first - one found there kept as this store's own. Where none reads,
-    /// why the nearest one kept does not, or nothing where none was kept.
+    /// The result kept for <paramref name="key"/> under <paramref name="digest"/>, where one reads: this store's own - held,
+    /// or read once from its directory - else the earlier work's, the nearest first, one found there kept as this store's
+    /// own; the nearest one under the digest asked of answering, whatever a nearer one kept under another holds. Where none
+    /// reads under it: whether one that reads was kept under another digest, and else why the nearest one kept does not
+    /// read, or nothing where none was kept.
     /// </summary>
     /// <param name="key">The ask's key, as <see cref="KeyOf"/> spells it.</param>
-    public GraphPageFind Find(string key)
+    /// <param name="digest">The digest of the graph the view answers from now (<see cref="CodebaseGraphQueries.Graph"/>).</param>
+    public GraphPageFind Find(string key, string digest)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(key);
+        ArgumentException.ThrowIfNullOrWhiteSpace(digest);
 
         lock (_lock)
         {
-            if (_held.FindIndex(kept => kept.Key == key) is var index and >= 0)
-            {
-                var found = _held[index];
-                _held.RemoveAt(index);
-                _held.Insert(0, found);
-                return new GraphPageFind(found, null);
-            }
-
+            var moved = false;
             string? why = null;
 
-            foreach (var (directory, own) in new[] { (_directory, true) }.Concat(_earlier.Select(earlier => (earlier, false))))
+            for (var at = -1; at < _earlier.Count; at++)
             {
-                var read = ReadIn(directory, key);
+                var visit = at < 0 ? Own(key) : Earlier(at, key);
 
-                if (read.Kept is { } kept)
+                if (visit.Kept is not { } kept)
                 {
-                    Hold(kept);
-
-                    if (!own)
-                    {
-                        Write(kept);
-                    }
-
-                    return read;
+                    why ??= visit.Why;
+                    continue;
                 }
 
-                why ??= read.Why;
+                if (!string.Equals(kept.Digest, digest, StringComparison.Ordinal))
+                {
+                    moved = true;
+                    continue;
+                }
+
+                // What the earlier work kept is this store's own from now on, for a conversation that goes on from this one
+                // in turn; where it cannot be written, it is held here, as every result this store holds is.
+                if (at >= 0)
+                {
+                    _own[key] = visit;
+                    _ = Write(key, Packed(kept));
+                }
+
+                return new GraphPageFind(kept, null);
             }
 
-            return new GraphPageFind(null, why);
+            return moved ? new GraphPageFind(null, null) { Moved = true } : new GraphPageFind(null, why);
         }
     }
 
     /// <summary>
-    /// Keeps <paramref name="kept"/> for its ask, in memory and in the store's directory for a resume; the oldest kept
-    /// file is removed where the directory would hold more than <see cref="MostKept"/>. Where it cannot be written, why -
-    /// what the page that computed it says, for a later page asked once it is no longer held may be counted again; null
-    /// where it was written.
+    /// Keeps <paramref name="kept"/> for its ask, for the conversation's life: in memory, and packed in the store's
+    /// directory for a resume. Where it is not written, why - what the page that computed it says, for a resumed
+    /// conversation counts its later pages again: the disk refused it; null where it was written.
     /// </summary>
     /// <param name="kept">The result to keep.</param>
     public string? Keep(GraphPageKept kept)
@@ -204,10 +224,34 @@ public sealed class GraphPageStore
             throw new ArgumentException("a result is kept under the read rules of the store that keeps it", nameof(kept));
         }
 
+        var bytes = Packed(kept);
+
         lock (_lock)
         {
-            Hold(kept);
-            return Write(kept);
+            _own[kept.Key] = new Visit(kept, null);
+            return Write(kept.Key, bytes);
+        }
+    }
+
+    /// <summary>
+    /// Puts away the <c>graph-pages</c> directory <paramref name="directory"/> whole: what a conversation leaves as it ends,
+    /// so no page of it is asked again. Why it could not be, or null where it was - or was never made.
+    /// </summary>
+    /// <param name="directory">The directory, absolute.</param>
+    /// <param name="fileSystem">The file system it is removed through.</param>
+    public static string? PutAway(string directory, IFileSystem fileSystem)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(directory);
+        ArgumentNullException.ThrowIfNull(fileSystem);
+
+        try
+        {
+            fileSystem.DeleteDirectory(directory);
+            return null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return ex.Message.TrimEnd('.');
         }
     }
 
@@ -232,19 +276,75 @@ public sealed class GraphPageStore
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(said))).ToLowerInvariant();
     }
 
-    /// <summary>The result <paramref name="directory"/> keeps for <paramref name="key"/>, where it reads under this store's read rules; else why not.</summary>
-    private GraphPageFind ReadIn(string directory, string key)
+    /// <summary>The bytes <paramref name="kept"/> is held and written as: its one JSON line, compressed.</summary>
+    private static byte[] Packed(GraphPageKept kept)
+    {
+        using var packed = new MemoryStream();
+
+        using (var compressing = new GZipStream(packed, CompressionLevel.Optimal, leaveOpen: true))
+        {
+            JsonSerializer.Serialize(compressing, kept, JsonStateFile.LineOptions);
+        }
+
+        return packed.ToArray();
+    }
+
+    /// <summary>The result <paramref name="bytes"/> pack (<see cref="Packed(GraphPageKept)"/>); null where they hold null.</summary>
+    /// <exception cref="JsonException">They do not read as a result.</exception>
+    /// <exception cref="InvalidDataException">They are not compressed as a result is.</exception>
+    private static GraphPageKept? Unpacked(byte[] bytes)
+    {
+        using var decompressing = new GZipStream(new MemoryStream(bytes, writable: false), CompressionMode.Decompress);
+        return JsonSerializer.Deserialize<GraphPageKept>(decompressing, JsonStateFile.LineOptions);
+    }
+
+    /// <summary>What this store holds for <paramref name="key"/>: what it kept or took, else what its own directory keeps, read once.</summary>
+    private Visit Own(string key)
+    {
+        if (!_own.TryGetValue(key, out var own))
+        {
+            _own[key] = own = ReadIn(_directory, key);
+        }
+
+        return own;
+    }
+
+    /// <summary>What the earlier work's directory at <paramref name="at"/> keeps for <paramref name="key"/>, read once.</summary>
+    private Visit Earlier(int at, string key)
+    {
+        if (!_visited.TryGetValue((at, key), out var visit))
+        {
+            _visited[(at, key)] = visit = ReadIn(_earlier[at], key);
+        }
+
+        return visit;
+    }
+
+    /// <summary>
+    /// The result <paramref name="directory"/> keeps for <paramref name="key"/>, unpacked, where it reads under this store's
+    /// read rules; else why not; nothing where it keeps none.
+    /// </summary>
+    private Visit ReadIn(string directory, string key)
     {
         var file = Path.Combine(directory, key + Extension);
 
         try
         {
-            if (!_fileSystem.FileExists(file))
+            if (_fileSystem.StandingOf(file) is null)
             {
-                return GraphPageFind.None;
+                return Visit.None;
             }
 
-            var read = JsonStateFile.Read<GraphPageKept>(_fileSystem, file, JsonStateFile.LineOptions);
+            byte[] bytes;
+
+            using (var stream = _fileSystem.OpenRead(file))
+            using (var held = new MemoryStream())
+            {
+                stream.CopyTo(held);
+                bytes = held.ToArray();
+            }
+
+            var read = Unpacked(bytes);
 
             return read is null ? new(null, "its file holds nothing")
                 : read.Problem() is { } problem ? new(null, problem)
@@ -252,55 +352,31 @@ public sealed class GraphPageStore
                 : !string.Equals(read.Reads, _reads, StringComparison.Ordinal) ? new(null, "it was kept under other read rules")
                 : new(read, null);
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or NotSupportedException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or NotSupportedException or InvalidDataException)
         {
+            // A file not compressed as a result is - another build's, or written over - is one that does not read.
             return new(null, $"its file does not read: {ex.Message.TrimEnd('.')}");
         }
     }
 
-    /// <summary>Holds <paramref name="kept"/> in memory as the most recently asked, the least recently asked let go past <see cref="MostHeld"/>.</summary>
-    private void Hold(GraphPageKept kept)
-    {
-        _held.RemoveAll(held => held.Key == kept.Key);
-        _held.Insert(0, kept);
-
-        if (_held.Count > MostHeld)
-        {
-            _held.RemoveRange(MostHeld, _held.Count - MostHeld);
-        }
-    }
-
-    /// <summary>Writes <paramref name="kept"/> in the store's directory, on one line, and removes the oldest kept past <see cref="MostKept"/>; why it could not, or null.</summary>
-    private string? Write(GraphPageKept kept)
+    /// <summary>Writes the result packed as <paramref name="bytes"/> in the store's directory for <paramref name="key"/>; why it was not written, or null.</summary>
+    private string? Write(string key, byte[] bytes)
     {
         try
         {
             _fileSystem.CreateDirectory(_directory);
-            JsonStateFile.Write(_fileSystem, Path.Combine(_directory, kept.Key + Extension), kept, JsonStateFile.LineOptions);
-            _order.Remove(kept.Key);
-            _order.Add(kept.Key);
-
-            // The oldest first: what an earlier process kept, by when it was written, then what this one kept, in the order
-            // it kept it - its own order, for a clock may give two writes of one moment the same time.
-            var files = _fileSystem.EnumerateWrittenFiles(_directory)
-                .Where(file => file.Path.EndsWith(Extension, StringComparison.Ordinal))
-                .Select(file => (file.Path, file.LastWriteTimeUtc, Order: _order.IndexOf(Path.GetFileNameWithoutExtension(file.Path))))
-                .OrderBy(file => file.Order)
-                .ThenBy(file => file.LastWriteTimeUtc)
-                .ThenBy(file => file.Path, StringComparer.Ordinal)
-                .ToList();
-
-            foreach (var old in files.Take(Math.Max(0, files.Count - MostKept)))
-            {
-                _fileSystem.DeleteFile(old.Path);
-                _order.Remove(Path.GetFileNameWithoutExtension(old.Path));
-            }
-
+            _fileSystem.WriteAtomic(Path.Combine(_directory, key + Extension), stream => stream.Write(bytes));
             return null;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             return ex.Message.TrimEnd('.');
         }
+    }
+
+    /// <summary>What a directory was found to keep for an ask: a result that reads, or why none does; neither where none is kept.</summary>
+    private sealed record Visit(GraphPageKept? Kept, string? Why)
+    {
+        public static Visit None { get; } = new(null, null);
     }
 }

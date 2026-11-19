@@ -361,6 +361,7 @@ public sealed record ExtractNode(string Id, string Kind, string Name, string Qua
             : !Id.StartsWith(language + ":", StringComparison.Ordinal) ? $"its id does not begin '{language}:', its implementation's name"
             : !CodeNodeKinds.Extracted.Contains(Kind, StringComparer.Ordinal) ? $"its kind is '{Kind}', which is none of {string.Join(", ", CodeNodeKinds.Extracted)}"
             : string.IsNullOrWhiteSpace(Name) || string.IsNullOrWhiteSpace(Qualified) ? "it has no name"
+            : Name.AsSpan().IndexOfAny('\r', '\n') >= 0 || Qualified.AsSpan().IndexOfAny('\r', '\n') >= 0 ? "its name is not one line"
             : !FileExtract.Within(Start, lineCount) || End < Start || End > lineCount ? string.Create(CultureInfo.InvariantCulture, $"its lines {Start}-{End} are not lines of the file's {lineCount}")
             : BodyStart is { } body && (body < Start || body > End) ? string.Create(CultureInfo.InvariantCulture, $"its body begins on line {body}, outside its lines {Start}-{End}")
             : Signature is null || Signature.Length > FileExtract.MostSignature || Signature.AsSpan().IndexOfAny('\r', '\n') >= 0 ? $"its signature is not one line of at most {FileExtract.MostSignature} characters"

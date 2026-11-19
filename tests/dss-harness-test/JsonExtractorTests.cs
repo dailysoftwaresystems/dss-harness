@@ -202,6 +202,28 @@ public sealed class JsonExtractorTests : CodeGraphExtractorContractTests<JsonExt
     }
 
     /// <summary>
+    /// A key that holds a line break - a translation file keyed by its source strings - is a place a path holds in
+    /// brackets, quoted with each control character escaped, so its node's name is one line and its extract one the core
+    /// holds; a key that holds none is named as it is.
+    /// </summary>
+    [Fact]
+    public void AKeyThatHoldsALineBreak_IsNamedOnOneLine_InBrackets()
+    {
+        const string Text = "{\n  \"messages\": {\n    \"Are you sure?\\nThis cannot be undone.\": \"Sure?\",\n    \"Tab\\there\": \"t\",\n    \"plain\": \"p\"\n  }\n}\n";
+        var extract = Read("i18n/en.json", Text);
+
+        Assert.Equal(
+            [
+                ("json:i18n/en.json#messages", "messages", "i18n/en.json#messages"),
+                ("json:i18n/en.json#messages[\"Are you sure?\\nThis cannot be undone.\"]", "[\"Are you sure?\\nThis cannot be undone.\"]", "messages[\"Are you sure?\\nThis cannot be undone.\"]"),
+                ("json:i18n/en.json#messages[\"Tab\\there\"]", "[\"Tab\\there\"]", "messages[\"Tab\\there\"]"),
+                ("json:i18n/en.json#messages.plain", "plain", "messages.plain"),
+            ],
+            extract.Nodes.Select(node => (node.Id, node.Name, node.Qualified)));
+        Assert.Null(extract.WithDigests(CodeFileText.Lines(Text)).Problem("json", CodeFileText.Lines(Text).Count));
+    }
+
+    /// <summary>
     /// A <c>$ref</c> into another file by a relative path is an import of that file, its pointer and query left out; a
     /// pointer into this file, an address with a scheme, a rooted path and a protocol-relative one name none.
     /// </summary>

@@ -230,8 +230,9 @@ public sealed class ReasonStepRunnerTests
         int attempt = 1,
         IReadOnlyList<FlowAnswerGiven>? answers = null,
         bool ask = false,
-        int? askRounds = null)
-        => new(
+        int? askRounds = null,
+        IReadOnlyList<FlowWorkedFrom>? goesOnWith = null)
+        => new FlowStepRun(
             new WorkflowStep { Name = "think", Type = "reason", Prompt = "prompts/plan.md", Outputs = "schemas/plan.schema.json", Ask = ask, AskRounds = askRounds },
             "think",
             attempt,
@@ -249,7 +250,10 @@ public sealed class ReasonStepRunnerTests
             agent,
             Target: null,
             workedFrom,
-            Prompts: new Dictionary<string, IReadOnlyList<FlowTemplate.Piece>>(StringComparer.Ordinal) { ["prompt"] = Filled(prompt ?? string.Empty) });
+            Prompts: new Dictionary<string, IReadOnlyList<FlowTemplate.Piece>>(StringComparer.Ordinal) { ["prompt"] = Filled(prompt ?? string.Empty) })
+        {
+            GoesOnWith = goesOnWith ?? [],
+        };
 
     /// <summary>
     /// A prompt as the engine hands it to the runner, filled around its skills: each name <paramref name="values"/>
@@ -740,13 +744,75 @@ public sealed class ReasonStepRunnerTests
             Run(kit,
                 agent: "reader",
                 workedFrom: [new FlowWorkedFrom("plan", "reader")],
-                handoff: "what was left"),
+                handoff: "what was left",
+                goesOnWith: [new FlowWorkedFrom("plan", "reader")]),
             Token);
 
         Assert.True(gone.Passed, gone.Error);
         var asked = agents.Asked.Single();
         Assert.NotNull(asked.Continuation);
         Assert.Contains("You are going on with work begun by step 'plan'.", asked.Continuation, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A step whose conversation goes on with no earlier work - it resumes nothing - is given no continuation record, its
+    /// handoff and the steps it depends on whatever they are: a step it only depends on seeds its pack, and its
+    /// conversation never held that step's.
+    /// </summary>
+    [Fact]
+    public async Task AStepThatOnlyDependsOnEarlierWork_IsGivenNoContinuationRecord()
+    {
+        using var temp = new TempDirectory();
+        var (kit, agents) = await ReadyAsync(temp);
+        await kit.CreateReadingAgentAsync("reader");
+
+        var gone = await Runner(kit, agents).RunAsync(
+            Run(kit, agent: "reader", workedFrom: [new FlowWorkedFrom("plan", "reader")], handoff: "what was left", attempt: 2),
+            Token);
+
+        Assert.True(gone.Passed, gone.Error);
+        Assert.Null(agents.Asked.Single().Continuation);
+    }
+
+    /// <summary>
+    /// The continuation record is of the work the step's conversation goes on with, in the order it went: the steps so far
+    /// oldest first - the work its resume names, then its visits - and the last iterations word for word of the newest of
+    /// them, never of an older visit's.
+    /// </summary>
+    [Fact]
+    public async Task AContinuationRecord_GoesOnFromTheNewestOfTheWork_AndListsItOldestFirst()
+    {
+        using var temp = new TempDirectory();
+        var (kit, agents) = await ReadyAsync(temp);
+        await kit.CreateReadingAgentAsync("reader");
+
+        foreach (var (instance, said) in new[] { ("implement", "the implementer's last word"), ("fix#1.rework", "the first round's last word"), ("fix#2.rework", "the second round's last word") })
+        {
+            var stream = StoredStream.Open(kit.Harness.FileSystem, kit.Layout.AgentStepDirectory("reader", instance), new Masking());
+            await stream.EmitAsync(new RunStarted(1));
+            await stream.EmitAsync(new TurnStarted(1));
+            await stream.EmitAsync(new AssistantMessage(said, []));
+            await stream.EmitAsync(new RunFinished(AgentRunStatus.Completed));
+            stream.Dispose();
+        }
+
+        var gone = await Runner(kit, agents).RunAsync(
+            Run(
+                kit,
+                agent: "reader",
+                workedFrom: [new FlowWorkedFrom("implement", "reader"), new FlowWorkedFrom("fix#3.review", "reader"), new FlowWorkedFrom("fix#2.rework", "reader"), new FlowWorkedFrom("fix#1.rework", "reader")],
+                goesOnWith: [new FlowWorkedFrom("implement", "reader"), new FlowWorkedFrom("fix#1.rework", "reader"), new FlowWorkedFrom("fix#2.rework", "reader")]),
+            Token);
+
+        Assert.True(gone.Passed, gone.Error);
+
+        var continuation = agents.Asked.Single().Continuation!;
+
+        Assert.Contains("You are going on with work begun by step 'implement'.", continuation, StringComparison.Ordinal);
+        Assert.Contains($"- step 'implement' ended done.{Environment.NewLine}- step 'fix#1.rework' ended done.{Environment.NewLine}- step 'fix#2.rework' ended done.{Environment.NewLine}", continuation, StringComparison.Ordinal);
+        Assert.Contains("the second round's last word", continuation, StringComparison.Ordinal);
+        Assert.DoesNotContain("the first round's last word", continuation, StringComparison.Ordinal);
+        Assert.DoesNotContain("fix#3.review", continuation, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -933,7 +999,7 @@ public sealed class ReasonStepRunnerTests
         await stream.EmitAsync(new AssistantMessage("The tests failed.", []));
         stream.Dispose();
 
-        var account = runner.Account(Run(kit, agent: "reader", workedFrom: [new FlowWorkedFrom("plan", "reader")], handoff: "cut off", attempt: 2));
+        var account = runner.Account(Run(kit, agent: "reader", workedFrom: [new FlowWorkedFrom("plan", "reader")], handoff: "cut off", attempt: 2, goesOnWith: [new FlowWorkedFrom("plan", "reader")]));
 
         Assert.NotNull(account);
         Assert.DoesNotContain("src/one.cs", account, StringComparison.Ordinal);
@@ -992,7 +1058,7 @@ public sealed class ReasonStepRunnerTests
             DateTimeOffset.UtcNow));
 
         var gone = await Runner(kit, agents).RunAsync(
-            Run(kit, agent: "reader", workedFrom: [new FlowWorkedFrom("plan", "reader")], handoff: "what was left"),
+            Run(kit, agent: "reader", workedFrom: [new FlowWorkedFrom("plan", "reader")], handoff: "what was left", goesOnWith: [new FlowWorkedFrom("plan", "reader")]),
             Token);
 
         Assert.True(gone.Passed, gone.Error);
@@ -1018,7 +1084,7 @@ public sealed class ReasonStepRunnerTests
         OrchestrationKit.Write(worktree, "two.cs", "two");
 
         var gone = await Runner(kit, agents).RunAsync(
-            Run(kit, agent: "ag", workedFrom: [new FlowWorkedFrom("plan", "ag")], handoff: "what was left"),
+            Run(kit, agent: "ag", workedFrom: [new FlowWorkedFrom("plan", "ag")], handoff: "what was left", goesOnWith: [new FlowWorkedFrom("plan", "ag")]),
             Token);
 
         Assert.True(gone.Passed, gone.Error);
@@ -2076,7 +2142,7 @@ public sealed class ReasonStepRunnerTests
 
         var earlier = await runner.RunAsync(Graphing(kit, Graphed()), Token);
         var first = await agents.Asked[0].Graph!.Tool!.RunAsync(JsonNode.Parse("""{"op":"find","query":"M"}""")!.AsObject(), operations, Token);
-        var later = await runner.RunAsync(Graphing(kit, Graphed(), instance: "again") with { WorkedFrom = [new FlowWorkedFrom("think", "a9")], Handoff = "what was left" }, Token);
+        var later = await runner.RunAsync(Graphing(kit, Graphed(), instance: "again") with { WorkedFrom = [new FlowWorkedFrom("think", "a9")], GoesOnWith = [new FlowWorkedFrom("think", "a9")], Handoff = "what was left" }, Token);
         var second = await agents.Asked[1].Graph!.Tool!.RunAsync(JsonNode.Parse("""{"op":"find","query":"M","page":2}""")!.AsObject(), operations, Token);
 
         Assert.True(earlier.Passed, earlier.Error);
@@ -2084,6 +2150,86 @@ public sealed class ReasonStepRunnerTests
         Assert.Equal("page 1 of 3 · 58 results · ask again with page: 2 for the next", first.Text.Split('\n')[0]);
         Assert.Equal("page 2 of 3 · 58 results · ask again with page: 3 for the next", second.Text.Split('\n')[0]);
         Assert.Single(Directory.EnumerateFiles(Path.Combine(kit.Layout.InstanceDirectory("again", "a9"), OrchestratorLayout.StepPagesDirectoryName)));
+    }
+
+    /// <summary>
+    /// A step reads the pages of the work its conversation goes on with alone, the newest of it first: a step it only
+    /// depends on, whose conversation it never held, is never read - its later page is counted on the graph as it stands
+    /// and says so - and of two that kept the ask under the graph's digest, the newer answers.
+    /// </summary>
+    [Fact]
+    public async Task AStepReadsThePagesOfTheWorkItGoesOnWith_TheNewestFirst_AndNeverAStepItOnlyDependsOn()
+    {
+        using var temp = new TempDirectory();
+        var (kit, agents) = await ReadyAsync(temp);
+        await GraphedTreeAsync(kit, (Path.Combine("src", "Hub.cs"), CodebaseGraphToolTests.HubFile(30)));
+        var runner = Runner(kit, agents, graphService: kit.Harness.CodebaseGraph);
+        var operations = DssHarness.Core.Agents.Runtime.CodebaseGraphTool.Operations(write: false, narrow: false);
+        var findM = JsonNode.Parse("""{"op":"find","query":"M"}""")!.AsObject();
+        var pageTwo = JsonNode.Parse("""{"op":"find","query":"M","page":2}""")!.AsObject();
+
+        Assert.True((await runner.RunAsync(Graphing(kit, Graphed()), Token)).Passed);
+        await agents.Asked[0].Graph!.Tool!.RunAsync(findM, operations, Token);
+
+        // The step after it kept the same ask, under the same digest, said apart by a line of its own.
+        var kept = Directory.EnumerateFiles(Path.Combine(kit.Layout.InstanceDirectory("think", "a9"), OrchestratorLayout.StepPagesDirectoryName)).Single();
+        var newer = Path.Combine(kit.Layout.InstanceDirectory("think+2", "a9"), OrchestratorLayout.StepPagesDirectoryName);
+        Directory.CreateDirectory(newer);
+        string line;
+
+        using (var reader = new StreamReader(new System.IO.Compression.GZipStream(File.OpenRead(kept), System.IO.Compression.CompressionMode.Decompress)))
+        {
+            line = reader.ReadToEnd();
+        }
+
+        using (var packed = new System.IO.Compression.GZipStream(File.Create(Path.Combine(newer, Path.GetFileName(kept))), System.IO.Compression.CompressionLevel.Optimal))
+        {
+            packed.Write(System.Text.Encoding.UTF8.GetBytes(line.Replace("\"leading\":[]", "\"leading\":[\"the newer visit's\"]", StringComparison.Ordinal)));
+        }
+
+        var depends = await runner.RunAsync(Graphing(kit, Graphed(), instance: "review") with { WorkedFrom = [new FlowWorkedFrom("think", "a9")], Handoff = "what was left" }, Token);
+        var unread = await agents.Asked[1].Graph!.Tool!.RunAsync(pageTwo, operations, Token);
+        var goesOn = await runner.RunAsync(Graphing(kit, Graphed(), instance: "think+3") with { WorkedFrom = [new FlowWorkedFrom("think", "a9"), new FlowWorkedFrom("think+2", "a9")], GoesOnWith = [new FlowWorkedFrom("think", "a9"), new FlowWorkedFrom("think+2", "a9")] }, Token);
+        var read = await agents.Asked[2].Graph!.Tool!.RunAsync(pageTwo, operations, Token);
+
+        Assert.True(depends.Passed, depends.Error);
+        Assert.True(goesOn.Passed, goesOn.Error);
+        Assert.Equal("page 2 of 3 · 58 results · ask again with page: 3 for the next · page 1 of this ask is not kept: pages counted on the graph as it stands", unread.Text.Split('\n')[0]);
+        Assert.Equal(["page 2 of 3 · 58 results · ask again with page: 3 for the next", "the newer visit's"], read.Text.Split('\n')[..2]);
+    }
+
+    /// <summary>
+    /// A step that is done puts away the pages its graph answers kept where no later step's conversation can go on with
+    /// its work; where one can - a step names it in its resume - they stay for that step to read; and a run that is done
+    /// puts away every step's.
+    /// </summary>
+    [Fact]
+    public async Task AStepThatIsDone_PutsAwayItsPages_WhereNoLaterStepGoesOnWithIt_AndADoneRunPutsAwayEverySteps()
+    {
+        using var temp = new TempDirectory();
+        var (kit, agents) = await ReadyAsync(temp);
+        await GraphedTreeAsync(kit);
+        var runner = Runner(kit, agents, graphService: kit.Harness.CodebaseGraph);
+        var pages = Path.Combine(kit.Layout.InstanceDirectory("think", "a9"), OrchestratorLayout.StepPagesDirectoryName);
+        const string Again = "  - name: again\n    type: reason\n    resume: think\n    dependsOn: [think]\n    prompt: prompts/plan.md\n    outputs: schemas/plan.schema.json\n";
+
+        Directory.CreateDirectory(pages);
+        File.WriteAllText(Path.Combine(pages, "kept.json"), "{}\n");
+        Assert.True((await runner.RunAsync(Graphing(kit, Graphed(after: Again)), Token)).Passed);
+        Assert.True(File.Exists(Path.Combine(pages, "kept.json")), "the pages a later step goes on from were put away");
+
+        Assert.True((await runner.RunAsync(Graphing(kit, Graphed()), Token)).Passed);
+        Assert.False(Directory.Exists(pages), "the pages of a step no later step goes on with were kept");
+
+        Directory.CreateDirectory(pages);
+        File.WriteAllText(Path.Combine(pages, "kept.json"), "{}\n");
+        var steps = new List<FlowStepRecord> { new("think", "think", false, "Done", 1, 1, [], [], Type: "reason", Agent: "a9") };
+
+        FlowStepGraph.PutAwayRunPages(kit.Harness.FileSystem, kit.Harness.Output, kit.Layout, new FlowFile(1, "o1", "flow", "digest", new Dictionary<string, string>(), nameof(FlowRunStatus.Paused), new FlowBudgetRecord(0, 0, 0), 0, steps, [], DateTimeOffset.UtcNow));
+        Assert.True(Directory.Exists(pages), "a run that is not done put its pages away");
+
+        FlowStepGraph.PutAwayRunPages(kit.Harness.FileSystem, kit.Harness.Output, kit.Layout, new FlowFile(1, "o1", "flow", "digest", new Dictionary<string, string>(), nameof(FlowRunStatus.Done), new FlowBudgetRecord(0, 0, 0), 0, steps, [], DateTimeOffset.UtcNow));
+        Assert.False(Directory.Exists(pages), "a run that is done kept a step's pages");
     }
 
     /// <summary>

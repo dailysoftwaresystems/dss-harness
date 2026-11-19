@@ -407,7 +407,7 @@ public sealed partial class AgentToolRuntime
 
         try
         {
-            search = await _host.Files.SearchAsync(directory, pattern, glob, _host.Platform.PathComparison, (int)context, (int)most, MayRead, cancellationToken).ConfigureAwait(false);
+            search = await _host.Files.SearchAsync(directory, pattern, glob, _host.Platform.PathComparison, (int)context, (int)most, AgentFiles.MostSearchedBytes, MayRead, cancellationToken).ConfigureAwait(false);
         }
         catch (RegexMatchTimeoutException)
         {

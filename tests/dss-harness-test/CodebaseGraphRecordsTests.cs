@@ -69,6 +69,8 @@ public sealed class CodebaseGraphRecordsTests
             (sound with { Nodes = [Node with { Id = "other:A" }] }, "its id does not begin 'toy:'"),
             (sound with { Nodes = [Node with { Kind = CodeNodeKinds.File }] }, "its kind is 'file'"),
             (sound with { Nodes = [Node with { Name = " " }] }, "it has no name"),
+            (sound with { Nodes = [Node with { Name = "Sure?\nIt cannot be undone." }] }, "its name is not one line"),
+            (sound with { Nodes = [Node with { Qualified = "messages.Sure?\rIt cannot be undone." }] }, "its name is not one line"),
             (sound with { Nodes = [Node with { End = 4 }] }, "its lines 1-4 are not lines of the file's 3"),
             (sound with { Nodes = [Node with { Start = 0 }] }, "its lines 0-3 are not lines"),
             (sound with { Nodes = [Node with { Start = 3, End = 2 }] }, "its lines 3-2 are not lines"),

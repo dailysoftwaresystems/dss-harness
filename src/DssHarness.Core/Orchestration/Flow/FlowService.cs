@@ -1507,6 +1507,8 @@ public sealed class FlowService(
 
             var flow = _store.ReadFlow(layout)
                 ?? throw new HarnessException(HarnessExit.Refused, $"'{layout.FlowFile}' is not there after the session of run '{layout.Name}', which writes it at every change");
+
+            FlowStepGraph.PutAwayRunPages(_fileSystem, _output, layout, flow);
             var questions = _store.ReadFlowQuestions(layout);
             var exit = ExitOf(end, flow);
             var left = FlowReports.Write(_fileSystem, layout, flow, questions, end.Summary, exit, _clock.GetUtcNow(), _store.ReadFlowUpdates(layout));

@@ -1015,7 +1015,7 @@ public sealed class AgentToolRuntimeTests : IDisposable
         var files = new AgentFiles(_harness.GitClient, _harness.FileSystem, new StoppingClock(stop));
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => files.SearchAsync(
-            Path.Combine(_worktree, "lines"), new Regex("z"), null, StringComparison.Ordinal, 0, 10, _ => true, stop.Token));
+            Path.Combine(_worktree, "lines"), new Regex("z", RegexOptions.None, AgentFiles.PatternBound), null, StringComparison.Ordinal, 0, 10, AgentFiles.MostSearchedBytes, _ => true, stop.Token));
     }
 
     /// <summary>
