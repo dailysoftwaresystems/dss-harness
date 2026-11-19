@@ -100,8 +100,28 @@ public sealed partial class AgentPolicy
         }
 
         // A plainly spelled word - its choices spelling names, its text names and separators, any character quoted
-        // spelled as itself - is decided by the spellings that decide it.
-        return PlainSegments(pattern) is { } segments ? SpellingsThatDecide(segments, place, matters) : pattern.Spellings();
+        // spelled as itself - is decided by the spellings that decide it. A word of options that is not one names its
+        // paths in the pieces past its markers: each is decided where the whole word is not plain, never spelled out.
+        if (PlainSegments(pattern) is { } segments)
+        {
+            return SpellingsThatDecide(segments, place, matters);
+        }
+
+        var derived = DerivedPieces(pattern);
+
+        if (derived.Count > 0)
+        {
+            var spelled = new List<(string, string)>();
+
+            foreach (var piece in derived)
+            {
+                spelled.AddRange(Decisive(piece, place, matters, dotNames));
+            }
+
+            return spelled.Distinct();
+        }
+
+        return pattern.Spellings();
     }
 
     /// <summary>
@@ -365,6 +385,102 @@ public sealed partial class AgentPolicy
     private static bool MayBeginWithDot(WordPattern piece) => piece.Matcher().MayBeginWith(character => character == '.');
 
     /// <summary>
+    /// The pieces of <paramref name="pattern"/> a word of options names as its paths, where the whole word is not a plain
+    /// path: the value after its first <c>=</c> (<c>--file=x</c>), a dash word's after its <c>:</c> (<c>-Path:x</c>), a
+    /// short option's glued value (<c>-ix</c>) - each cut where its marker stands in the word's fixed text before the
+    /// pattern's first choice, every choice the pattern holds lying past it (where one stands before the marker, or may
+    /// spell one, the word is read whole). Empty where no marker stands there.
+    /// </summary>
+    private static IReadOnlyList<WordPattern> DerivedPieces(WordPattern pattern)
+    {
+        var text = string.Empty;
+
+        foreach (var part in pattern.Parts)
+        {
+            if (part is WordPart.Choice)
+            {
+                break;
+            }
+
+            text += ((WordPart.Text)part).Spelled;
+        }
+
+        if (text.Length == 0 || !pattern.Chooses)
+        {
+            return [];
+        }
+
+        List<(int At, WordPattern Piece)> pieces = [];
+        var cuts = new List<int>();
+
+        if (text.IndexOf('=', StringComparison.Ordinal) is var equals && equals >= 0)
+        {
+            cuts.Add(equals);
+        }
+
+        if (text.StartsWith('-'))
+        {
+            if (text.IndexOf(':', StringComparison.Ordinal) is var colon && colon > 1)
+            {
+                cuts.Add(colon);
+            }
+
+            if (text.Length > 2 && text[1] != '-')
+            {
+                cuts.Add(1);
+            }
+        }
+
+        foreach (var at in cuts.OrderBy(each => each))
+        {
+            if (Sliced(pattern, at + 1) is { } piece)
+            {
+                pieces.Add((at, piece));
+            }
+        }
+
+        return [.. pieces.OrderBy(each => each.At).Select(each => each.Piece)];
+    }
+
+    /// <summary>
+    /// <paramref name="pattern"/> from character <paramref name="from"/> on - its fixed text cut, every choice the
+    /// pattern holds kept; null where a choice stands before <paramref name="from"/>, whose word is read whole.
+    /// </summary>
+    private static WordPattern? Sliced(WordPattern pattern, int from)
+    {
+        var parts = new List<WordPart>();
+        var at = 0;
+
+        foreach (var part in pattern.Parts)
+        {
+            if (part is WordPart.Text text)
+            {
+                if (at >= from)
+                {
+                    parts.Add(part);
+                }
+                else if (at + text.Spelled.Length > from)
+                {
+                    var start = from - at;
+                    parts.Add(new WordPart.Text(text.Spelled[start..], text.Quoted.Length >= text.Spelled.Length ? text.Quoted[start..] : string.Empty));
+                }
+
+                at += text.Spelled.Length;
+                continue;
+            }
+
+            if (at < from)
+            {
+                return null;
+            }
+
+            parts.Add(part);
+        }
+
+        return new WordPattern(parts);
+    }
+
+    /// <summary>
     /// A spelling of <paramref name="piece"/> that names <paramref name="name"/> - the piece's spellings and the name
     /// read together as the shell reads a path's segment (<see cref="SegmentPattern"/> lifted to a pattern: an unquoted
     /// star any run of characters, a question mark one, a bracket its members, every other character itself) - or null
@@ -374,7 +490,11 @@ public sealed partial class AgentPolicy
     private static string? SegmentSpells(WordPattern piece, string name)
     {
         var spelled = new System.Text.StringBuilder();
-        var seen = new HashSet<(int Part, int At, int Name)>();
+
+        // The states of the walk - a parts list met again at the same part, character and name place answers as it did
+        // before, the class its characters take with it: keyed by the list's identity, for the same indices in two lists
+        // are two states.
+        var seen = new HashSet<(IReadOnlyList<WordPart> Parts, int Part, int At, int Name, char? Taken)>();
 
         bool Walk(IReadOnlyList<WordPart> parts, int part, int at, char? taken, int named)
         {
@@ -386,7 +506,7 @@ public sealed partial class AgentPolicy
                     return RestSpellsNothing(parts, part, at);
                 }
 
-                if (part >= parts.Count || !seen.Add((part, at, named)))
+                if (part >= parts.Count || !seen.Add((parts, part, at, named, taken)))
                 {
                     return false;
                 }

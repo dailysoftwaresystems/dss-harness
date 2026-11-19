@@ -167,7 +167,14 @@ public sealed record WordPattern(IReadOnlyList<WordPart> Parts)
     }
 
     /// <summary>The pattern as an automaton (<see cref="WordMatcher"/>), built once for the questions asked of it.</summary>
-    internal WordMatcher Matcher() => new(Automaton.Of(this));
+    internal WordMatcher Matcher() => Matchers.GetValue(this, static pattern => new WordMatcher(pattern.AutomatonOf()));
+
+    /// <summary>The pattern as an automaton, built once for the questions asked of it (<see cref="WordMatcher"/> and <see cref="MayNameProgram"/>).</summary>
+    internal Automaton AutomatonOf() => Automata.GetValue(this, static pattern => Automaton.Of(pattern));
+
+    /// <summary>The matchers and automata asked of patterns, each built once: a pattern asked again answers from what it built.</summary>
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<WordPattern, WordMatcher> Matchers = new();
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<WordPattern, Automaton> Automata = new();
 
     /// <summary>
     /// Whether every brace of <paramref name="word"/> pairs, each <c>}</c> closing a <c>{</c> before it and none left open:
@@ -295,7 +302,7 @@ public sealed record WordPattern(IReadOnlyList<WordPart> Parts)
         ArgumentException.ThrowIfNullOrEmpty(program);
         ArgumentNullException.ThrowIfNull(ends);
 
-        var automaton = Automaton.Of(this);
+        var automaton = AutomatonOf();
 
         // Where a last segment may begin: the start, past any '@'s, and wherever a separator was just read.
         var begins = automaton.Closure([automaton.Start]);

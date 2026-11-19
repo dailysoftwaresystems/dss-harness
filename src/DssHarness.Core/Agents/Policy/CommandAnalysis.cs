@@ -297,38 +297,46 @@ public static partial class CommandAnalysis
         }
 
         var program = Name(words[environment]);
-        var rest = words.Skip(environment + 1).ToList();
 
-        // A name an expansion gives is one this cannot see: it may be any, git's configuration or a program's among them.
         // Each program's naming words only: an export's and its kind's assignments, a set's one name (its '--' ends the
         // search, for what follows is a positional, not a name), and an item cmdlet's env: references (never a -Value or
         // a path that names no env: item). The expansion is read where the shell would make it: a name in quotes is a
         // name, not one a variable gave - each word's quoting taken by where it stands, before any word is passed over.
-        var placed = rest.Select((word, index) => (Word: word, Quoted: At(quoted, environment + 1 + index))).ToList();
-        var naming = Is(program, "export", "declare", "typeset", "local", "readonly")
-            ? placed.Where(each => DeclaredName(each.Word) is { } name && Expansion(name, Within(each.Word, each.Quoted, name)) is not null)
-            : Is(program, "set", "setenv", "setx")
-                ? placed.TakeWhile(each => each.Word != "--").Where(each => !each.Word.StartsWith('-') && !each.Word.StartsWith('/')).Take(1)
-                    .Where(each => Expansion(AssignedName(each.Word), Within(each.Word, each.Quoted, AssignedName(each.Word))) is not null)
-            : Is(program, ["Set-Item", "si", "New-Item", "ni", "Set-Content", "sc", "Add-Content", "ac", .. ItemMovers])
-                ? placed.Where(each => EnvironmentReference().Match(each.Word) is { Success: true } reference
-                    && Expansion(reference.Groups["name"].Value, Within(each.Word, each.Quoted, reference.Groups["name"].Value)) is not null)
-            : [];
+        // The words past the program are read only where a program's own naming could be among them: no other program's
+        // words are copied for a question none of them answers.
+        var naming = Is(program, "export", "declare", "typeset", "local", "readonly");
+        var setting = Is(program, "set", "setenv", "setx");
+        var items = Is(program, ["Set-Item", "si", "New-Item", "ni", "Set-Content", "sc", "Add-Content", "ac", .. ItemMovers]);
+        List<string> rest = items ? [.. words.Skip(environment + 1)] : [];
 
-        if (naming.Select(each => each.Word).FirstOrDefault() is { } unread)
+        if (naming || setting || items)
         {
-            var named = Is(program, "set", "setenv", "setx") ? AssignedName(unread)
-                : EnvironmentReference().Match(unread) is { Success: true } reference ? reference.Groups["name"].Value
-                : DeclaredName(unread)!;
+            var placed = rest.Select((word, index) => (Word: word, Quoted: At(quoted, environment + 1 + index))).ToList();
+            var named = naming
+                ? placed.Where(each => DeclaredName(each.Word) is { } name && Expansion(name, Within(each.Word, each.Quoted, name)) is not null)
+                : setting
+                    ? placed.TakeWhile(each => each.Word != "--").Where(each => !each.Word.StartsWith('-') && !each.Word.StartsWith('/')).Take(1)
+                        .Where(each => Expansion(AssignedName(each.Word), Within(each.Word, each.Quoted, AssignedName(each.Word))) is not null)
+                : items
+                    ? placed.Where(each => EnvironmentReference().Match(each.Word) is { Success: true } reference
+                        && Expansion(reference.Groups["name"].Value, Within(each.Word, each.Quoted, reference.Groups["name"].Value)) is not null)
+                : [];
 
-            throw new NotSupportedException($"'{unread}' declares a name {Expansion(named)} gives, which this does not read");
+            if (named.Select(each => each.Word).FirstOrDefault() is { } unread)
+            {
+                var name = setting ? AssignedName(unread)
+                    : EnvironmentReference().Match(unread) is { Success: true } reference ? reference.Groups["name"].Value
+                    : DeclaredName(unread)!;
+
+                throw new NotSupportedException($"'{unread}' declares a name {Expansion(name)} gives, which this does not read");
+            }
         }
 
-        if (Is(program, "export", "declare", "typeset", "local", "readonly"))
+        if (naming)
         {
-            declared.AddRange(rest.Where(IsAssignment));
+            declared.AddRange(words.Skip(environment + 1).Where(IsAssignment));
         }
-        else if (Is(program, "set", "setenv", "setx") && rest.TakeWhile(word => word != "--").ToList() is var named
+        else if (setting && words.Skip(environment + 1).TakeWhile(word => word != "--").ToList() is var named
             && named.FindIndex(word => !word.StartsWith('-') && !word.StartsWith('/')) is var at and >= 0)
         {
             declared.Add(named[at].Contains('=', StringComparison.Ordinal)

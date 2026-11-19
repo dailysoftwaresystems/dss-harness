@@ -1039,8 +1039,8 @@ public sealed partial class AgentPolicy
                         return denied with
                         {
                             Reason = denied.Rule == GitsOwnRule
-                                ? $"'{whole}' writes '{target}', git's own: written by git's verbs and this tool's, never by an agent's command"
-                                : $"'{whole}' writes '{target}', the tool's own state: written by its verbs alone, never by an agent's",
+                                ? $"'{whole}' writes '{spelled}', git's own: written by git's verbs and this tool's, never by an agent's command"
+                                : $"'{whole}' writes '{spelled}', the tool's own state: written by its verbs alone, never by an agent's",
                         };
                     }
                 }
@@ -2014,8 +2014,9 @@ public sealed partial class AgentPolicy
             // undecided by an earlier one's.
             var ran = WrittenScripts(readings, environment, state, Wholes);
 
-            if (ran.FirstOrDefault(each => each.Text is null) is { } unread)
+            if (ran.Any(each => each.Text is null))
             {
+                var unread = ran.First(each => each.Text is null);
                 return Undecided(string.Join(' ', analyzed.Whole), new NotSupportedException($"'{unread.File}' is a script file this command wrote before it runs it, whose text this does not read"));
             }
 
@@ -2034,15 +2035,15 @@ public sealed partial class AgentPolicy
             // not strip - meets the rules on its own program; but a program that runs none of its
             // words, whose words are its data. Assignments alone run no program, yet set git's
             // configuration for what runs after them (PowerShell's $env:NAME = value): they meet
-            // the rules too.
+            // the rules too. The words are a view, never a copy: a program that runs its words is
+            // read at each of them without a list as long as the command made for each.
+            var whole = string.Join(' ', analyzed.Whole);
             var starts = environment == command.Count || CommandAnalysis.RunsNoWords(command[environment]) ? environment + 1 : command.Count;
 
             for (var start = environment; start < starts; start++)
             {
                 foreach (var reading in readings)
                 {
-                    var whole = string.Join(' ', analyzed.Whole);
-
                     // What the program there writes - its output redirects, and the files a writer's words name - meets the
                     // refusals every ground keeps on a write, as a file tool's write does: a side-task has no fold after it.
                     // A brace word is kept whole and decided by its pattern.
@@ -2083,9 +2084,9 @@ public sealed partial class AgentPolicy
                     }
                 }
 
-                IReadOnlyList<string> words = [.. command.Take(environment), .. command.Skip(start)];
+                IReadOnlyList<string> words = new WordsOf(command, environment, start);
 
-                if (Decided(analyzed, start, words, comparison).Refusal() is { } denied)
+                if (Decided(analyzed, start, words, whole, comparison).Refusal() is { } denied)
                 {
                     return denied;
                 }
@@ -2301,8 +2302,17 @@ public sealed partial class AgentPolicy
 
                 // The value as the pattern of its spellings: each known variable it reads standing for every value it may
                 // hold. One whose spelling may hold what the shell expands - an unknown variable, a substitution - is one the
-                // string computes.
+                // string computes. A value whose braces the shell expands - none of what they spell expanded further - is the
+                // pattern of what they spell: the variable holds one of them, whichever it is.
                 var given = CommandAnalysis.Patterned(value, mask.Length == words[at].Length ? mask[(equals + 1)..] : null, known => ValuesOf(known, places));
+
+                if (!given.Chooses
+                    && CommandAnalysis.Expansion(value, mask.Length == words[at].Length ? mask[(equals + 1)..] : null) is null
+                    && value.Contains('{', StringComparison.Ordinal)
+                    && WordPattern.Braces(value, mask.Length == words[at].Length ? mask[(equals + 1)..] : null) is { } braces)
+                {
+                    given = braces;
+                }
 
                 if (CommandAnalysis.MayExpand(given))
                 {
@@ -2812,20 +2822,45 @@ public sealed partial class AgentPolicy
         => BatchFiles.Reread([word]) is not null || CommandAnalysis.Expansion(word, quoted) is not null;
 
     /// <summary>
+    /// A command's words as one program of it is handed them: the environment's words, then the words from
+    /// <paramref name="start"/> on - a view over the command's own, nothing copied, so a program that runs its words is
+    /// read at each of them without a list as long as the command made for each.
+    /// </summary>
+    private readonly struct WordsOf(IReadOnlyList<string> command, int environment, int start) : IReadOnlyList<string>
+    {
+        /// <inheritdoc/>
+        public int Count => environment + command.Count - start;
+
+        /// <inheritdoc/>
+        public string this[int at] => at < environment ? command[at] : command[start + at - environment];
+
+        /// <inheritdoc/>
+        public IEnumerator<string> GetEnumerator()
+        {
+            for (var at = 0; at < Count; at++)
+            {
+                yield return this[at];
+            }
+        }
+
+        /// <inheritdoc/>
+        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
+    }
+
+    /// <summary>
     /// The rules on one command's words from <paramref name="start"/>, as the program there would run them: the words it
     /// is handed, its redirects the shell's own - with no program where the command is assignments alone.
     /// </summary>
-    private AgentPolicyAnswer Decided(AnalyzedCommand analyzed, int start, IReadOnlyList<string> words, StringComparison comparison)
+    private AgentPolicyAnswer Decided(AnalyzedCommand analyzed, int start, IReadOnlyList<string> words, string whole, StringComparison comparison)
     {
         var roots = StringComparer.OrdinalIgnoreCase;
         var command = analyzed.Words;
         var program = start < command.Count ? CommandAnalysis.Name(command[start]) : string.Empty;
-        var whole = string.Join(' ', analyzed.Whole);
 
         // A program that runs a command line it composes - Start-Process's arguments, WMI's, the task scheduler's, code
         // Add-Type compiles, a terminal session's, cron's, launchd's and systemd's - runs what no word here spells: the
         // command's own program, or one a program that runs its words starts, past the root actions.
-        if (CommandAnalysis.RunsAt(command, start) && CommandAnalysis.ComposesCommandLine([.. command.Skip(start)]) is { } composed)
+        if (CommandAnalysis.RunsAt(command, start) && CommandAnalysis.ComposesCommandLine(new WordsOf(command, 0, start)) is { } composed)
         {
             return Undecided(whole, new NotSupportedException($"'{command[start]}' {composed}, which this does not read"));
         }
@@ -2961,8 +2996,9 @@ public sealed partial class AgentPolicy
 
         // A command that runs a program which fetches from the network is decided as a web request
         // too, by each address it names - and where the web is held to rules, one whose addresses
-        // are in a file this does not read is denied.
-        foreach (var address in CommandAnalysis.WebAddresses(words, spelled))
+        // are in a file this does not read is denied. Read once of the command whole, for every
+        // program of it is denied by an address it names as the command is.
+        foreach (var address in CommandAnalysis.WebAddresses(command, CommandAnalysis.QuotedOf(analyzed, environment)))
         {
             if (WebDecided(address, whole, domains: true, agentRules: true).Refusal() is { } denied)
             {
@@ -2970,7 +3006,7 @@ public sealed partial class AgentPolicy
             }
         }
 
-        if (CommandAnalysis.WebAddressesUnread(words) is { } unread && (!_ground.Web || _webDomains.Count > 0 || _rules.Any(pair => pair.Rule.Verb is AgentRuleVerb.Web)))
+        if (CommandAnalysis.WebAddressesUnread(command) is { } unread && (!_ground.Web || _webDomains.Count > 0 || _rules.Any(pair => pair.Rule.Verb is AgentRuleVerb.Web)))
         {
             return new AgentPolicyAnswer.Denied(
                 _ground.Web ? "the web rules" : "the web capability",

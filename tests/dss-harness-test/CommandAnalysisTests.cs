@@ -328,8 +328,8 @@ public sealed class CommandAnalysisTests
     [Fact]
     public void AScriptThatEvaluatesItself_EndsAtTheRevisit()
     {
-        Assert.Contains(["git", "-p", "log"], Commands("GIT_PAGER='git -p log' git -p log"));
-        Assert.Contains(["sudo", "id"], Commands("GIT_PAGER='sudo id; git -p log' git -p log"));
+        Assert.Contains(["GIT_PAGER=git -p log", "git", "-p", "log"], Commands("GIT_PAGER='git -p log' git -p log"));
+        Assert.Contains(["GIT_PAGER=sudo id; git -p log", "sudo", "id"], Commands("GIT_PAGER='sudo id; git -p log' git -p log"));
     }
 
     /// <summary>
@@ -844,7 +844,7 @@ public sealed class CommandAnalysisTests
         Assert.Equal([["cd", "--", "dir"], ["git", "push"]], Commands("env -C dir -S 'git push'"));
         Assert.Equal([["git", "push"]], Commands("env -iS 'git push'"));
         Assert.Equal([["git", "push"]], Commands("env -u X -S'git push'"));
-        Assert.Contains(["git", "push;"], Commands("find . -exec env -S 'git push;' ';'"));
+        Assert.Contains(["git", "push;", ";"], Commands("find . -exec env -S 'git push;' ';'"));
         Assert.DoesNotContain(["git", "push"], Commands("find . -exec env -S 'git push;' ';'"));
 
         // A backslash's escapes are env's own, and a comment a line end follows is one this does not read.
@@ -881,10 +881,10 @@ public sealed class CommandAnalysisTests
     }
 
     [Fact]
-    public void WrappersPastTheBound_AreRefused_NeverReadForever()
+    public void WrappersPastTheBound_AreReadWhole_NeverForever()
     {
         Assert.Equal([["git", "push"]], Commands("nohup nohup env nice git push"));
-        Assert.Throws<NotSupportedException>(() => Commands(string.Join(' ', Enumerable.Repeat("nohup", 100)) + " git push"));
+        Assert.Equal([["git", "push"]], Commands(string.Join(' ', Enumerable.Repeat("nohup", 100)) + " git push"));
     }
 
     [Fact]
