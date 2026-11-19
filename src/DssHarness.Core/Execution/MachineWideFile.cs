@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.Text.Json;
@@ -133,12 +132,11 @@ internal static class MachineWideFile
     }
 
     /// <summary>
-    /// Runs <paramref name="work"/> with no other process inside the same file's update.
+    /// Runs <paramref name="work"/> with no other process inside the same file's update, waiting for another process's
+    /// update of it as <see cref="Update{T}(string, TimeSpan, Action{WaitTold}, TimeProvider, Func{T}, CancellationToken)"/>
+    /// does, told to the running operation's teller (<see cref="Waits.Told"/>) on the system's clock, and ended by nothing
+    /// but the bound it is given.
     /// </summary>
-    /// <remarks>
-    /// The work is synchronous, and must stay so: a mutex is released by the thread that took it,
-    /// and an await inside the work could resume on a different one.
-    /// </remarks>
     /// <param name="path">The file being updated, which names the mutex.</param>
     /// <param name="window">
     /// How long to wait for another process's update: <see cref="Window"/>, for as long as that process holds it, or a
@@ -148,26 +146,7 @@ internal static class MachineWideFile
     /// <param name="work">The read, the decision and the write.</param>
     /// <exception cref="HarnessException">Another process held the file for longer than a bound the caller gave allows.</exception>
     public static T Update<T>(string path, TimeSpan window, Func<T> work)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(path);
-        ArgumentNullException.ThrowIfNull(work);
-
-        var name = NameFor(path);
-        using var mutex = MachineWideMutex.Open(name, $"'{path}'");
-        var taken = Wait(mutex, path, window);
-
-        try
-        {
-            return work();
-        }
-        finally
-        {
-            if (taken)
-            {
-                mutex.ReleaseMutex();
-            }
-        }
-    }
+        => Update(path, window, Waits.Told, TimeProvider.System, work, CancellationToken.None);
 
     /// <summary>
     /// Runs <paramref name="work"/> as <see cref="Update{T}(string, TimeSpan, Func{T})"/> does, and says what it gave to
@@ -177,7 +156,7 @@ internal static class MachineWideFile
     /// <remarks>
     /// Said while the file is held, a line would hold every other process's change of it for as long as the line took
     /// to write: a console whose window has text selected in it, or a pipe nobody reads, takes as long as it likes, and
-    /// every process waiting to change the file would be refused once the window had passed.
+    /// every process waiting to change the file would wait on it.
     /// </remarks>
     /// <param name="path">The file being updated, which names the mutex.</param>
     /// <param name="window">How long to wait for another process's update: <see cref="Window"/>, for as long as it holds it.</param>
@@ -199,26 +178,29 @@ internal static class MachineWideFile
     }
 
     /// <summary>
-    /// Runs <paramref name="work"/> with no other process inside the same file's update, as
-    /// <see cref="Update{T}(string, TimeSpan, Func{T})"/> does - the same mutex - but waiting for another process's update
-    /// of the file for as long as that process holds it: the system lets go a mutex whose holder ended holding it, so the
-    /// wait ends where the holder lets go or dies, never at a number of the code's own. It is the one wait every wait is
-    /// (<see cref="Waits.ForAsync{T}"/>): told every <see cref="Waits.SaidEvery"/> as waiting for another process's change
-    /// of the file, by its path, and ended by <paramref name="cancellationToken"/>.
+    /// Runs <paramref name="work"/> with no other process inside the same file's update: the one wait every update of a
+    /// file every run decides by waits through. Another process's update is waited for for as long as that process holds
+    /// the file, or for <paramref name="window"/> where the caller gives a bound of its own: the system lets go a mutex
+    /// whose holder ended holding it, so the wait ends where the holder lets go or dies, never at a number of the code's
+    /// own. It is told as every wait is (<see cref="Waits.ForAsync{T}"/>), every <see cref="Waits.SaidEvery"/>, as waiting
+    /// for another process's change of the file by its path, and ended by <paramref name="cancellationToken"/>.
     /// </summary>
     /// <remarks>
     /// The mutex is taken by a hold on a thread of its own (<see cref="MachineWideMutex.HoldAsync"/>), which keeps it until
     /// the hold is let go: the work, synchronous, runs on the calling thread meanwhile, and the hold lets the mutex go from
-    /// whichever thread ends it.
+    /// whichever thread ends it. A work under a file's update that updates the same file again goes on inside the hold it
+    /// runs under, as a mutex its own thread held was taken again at once.
     /// </remarks>
     /// <typeparam name="T">What the work answers.</typeparam>
     /// <param name="path">The file being updated, which names the mutex.</param>
+    /// <param name="window">How long to wait for another process's update: <see cref="Window"/>, for as long as it holds it, or a bound of the caller's own.</param>
     /// <param name="tell">Told where the wait stands, in the one form a wait is told in (<see cref="WaitTold.Line"/>).</param>
-    /// <param name="clock">The clock the wait is measured on.</param>
+    /// <param name="clock">The clock the wait is told on.</param>
     /// <param name="work">The read, the decision and the write.</param>
     /// <param name="cancellationToken">Ends the wait, before the work begins.</param>
+    /// <exception cref="HarnessException">Another process held the file for longer than a bound the caller gave allows.</exception>
     /// <exception cref="OperationCanceledException">The token ended the wait; nothing was changed.</exception>
-    public static T UpdateWhileHeld<T>(string path, Action<WaitTold> tell, TimeProvider clock, Func<T> work, CancellationToken cancellationToken)
+    public static T Update<T>(string path, TimeSpan window, Action<WaitTold> tell, TimeProvider clock, Func<T> work, CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
         ArgumentNullException.ThrowIfNull(tell);
@@ -235,15 +217,26 @@ internal static class MachineWideFile
             return work();
         }
 
+        // The caller's bound is the hold's own: the take ends there with nothing held, as it ends at the token.
         var end = Waits.ForAsync(
-                token => MachineWideMutex.HoldAsync(name, $"'{path}'", Timeout.InfiniteTimeSpan, token),
+                token => MachineWideMutex.HoldAsync(name, $"'{path}'", window, token),
                 new WaitWatch($"another process's change of '{path}'", tell, Bound: null, clock),
                 cancellationToken)
             .GetAwaiter()
             .GetResult();
 
-        // A hold is null only where the wait ended without taking the mutex, which no bound ends: the caller's token did.
-        using var hold = end.Value ?? throw new OperationCanceledException(cancellationToken);
+        if (end.Value is null)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            throw new HarnessException(
+                HarnessExit.Refused,
+                string.Create(
+                    CultureInfo.InvariantCulture,
+                    $"Another {ToolPackage.Id} process has been updating '{path}' for {window.TotalSeconds:0} seconds, so nothing was changed."));
+        }
+
+        using var hold = end.Value;
         held.Add(name);
 
         try
@@ -257,8 +250,9 @@ internal static class MachineWideFile
     }
 
     /// <summary>
-    /// The files whose work under <see cref="UpdateWhileHeld{T}"/> runs on this thread now, by their mutex's name: the
-    /// work is synchronous, so the thread it runs on is the one that asks again.
+    /// The files whose work under an update (<see cref="Update{T}(string, TimeSpan, Action{WaitTold}, TimeProvider, Func{T}, CancellationToken)"/>)
+    /// runs on this thread now, by their mutex's name: the work is synchronous, so the thread it runs on is the one that
+    /// asks again.
     /// </summary>
     private static readonly ThreadLocal<HashSet<string>> HeldHere = new(() => new HashSet<string>(StringComparer.Ordinal));
 
@@ -272,46 +266,4 @@ internal static class MachineWideFile
     /// </remarks>
     private static string NameFor(string path)
         => MachineWideMutex.NameFor("file", [path], ignoreCase: true);
-
-    /// <summary>
-    /// Takes <paramref name="mutex"/>, waiting while another process holds it: a look every
-    /// <see cref="Waits.LooksAgainEvery"/>, said every <see cref="Waits.SaidEvery"/>, and refused only at a bound the caller
-    /// gave. Waited on this thread, which takes the mutex and must let it go; what ends a wait for a holder that never lets
-    /// go is the process's own end - its holder's, which lets the mutex go, or this one's, at the second interrupt.
-    /// </summary>
-    /// <returns>True: the mutex is taken, and must be let go.</returns>
-    private static bool Wait(Mutex mutex, string path, TimeSpan window)
-    {
-        var bounded = window != Timeout.InfiniteTimeSpan;
-        var started = Stopwatch.GetTimestamp();
-        var saidAt = started;
-
-        while (true)
-        {
-            var waited = Stopwatch.GetElapsedTime(started);
-            var slice = bounded ? Waits.Shorter(Waits.LooksAgainEvery, window - waited) : Waits.LooksAgainEvery;
-
-            if (MachineWideMutex.Wait(mutex, slice))
-            {
-                return true;
-            }
-
-            waited = Stopwatch.GetElapsedTime(started);
-
-            if (bounded && waited >= window)
-            {
-                throw new HarnessException(
-                    HarnessExit.Refused,
-                    string.Create(
-                        CultureInfo.InvariantCulture,
-                        $"Another {ToolPackage.Id} process has been updating '{path}' for {window.TotalSeconds:0} seconds, so nothing was changed."));
-            }
-
-            if (Stopwatch.GetElapsedTime(saidAt) >= Waits.SaidEvery)
-            {
-                Waits.Told(new WaitTold($"'{path}' to be let go", waited, $"another {ToolPackage.Id} process", null));
-                saidAt = Stopwatch.GetTimestamp();
-            }
-        }
-    }
 }

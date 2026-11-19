@@ -298,13 +298,13 @@ public sealed class OrchestrationStore(IFileSystem fileSystem, IHarnessOutput ou
     /// Runs <paramref name="work"/> with no other process inside the same section of <paramref name="path"/>, waiting for
     /// another process's for as long as it holds it - a holder that ended holding it is let go by the system - told every
     /// five minutes naming the file, and ended by <paramref name="cancellationToken"/>; never refused for how long another
-    /// took (<see cref="MachineWideFile.UpdateWhileHeld{T}"/>).
+    /// took (<see cref="MachineWideFile.Update{T}(string, TimeSpan, Action{Waiting.WaitTold}, TimeProvider, Func{T}, CancellationToken)"/>).
     /// </summary>
     /// <param name="path">The file the section is of.</param>
     /// <param name="work">The reading, the decision and the writing, all synchronous.</param>
     /// <param name="cancellationToken">Ends the wait, before the work begins.</param>
     private T WhileHeld<T>(string path, Func<T> work, CancellationToken cancellationToken)
-        => MachineWideFile.UpdateWhileHeld(path, told => _output.Info(Hosts.ToolPackage.Id, told.Line()), TimeProvider.System, work, cancellationToken);
+        => MachineWideFile.Update(path, MachineWideFile.Window, told => _output.Info(Hosts.ToolPackage.Id, told.Line()), TimeProvider.System, work, cancellationToken);
 
     /// <summary>The file that names the repository's one section across its runs (<see cref="AcrossRuns{T}"/>).</summary>
     /// <param name="layout">The repository.</param>
