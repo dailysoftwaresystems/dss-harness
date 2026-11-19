@@ -244,15 +244,17 @@ public static partial class HelpTopics
             $"A leg whose host's {ToolPackage.Id} fails as a defect (exit {HarnessExit.InternalError}) with no line for it is poisoned - the "
             + "harness failing, never a host that could not be reached - its line naming the host, the code and what the host "
             + "said. Where it failed so before anything ran there - no run named, no note written, and no ledger, or one with no "
-            + "line, no run and no set-up left running - the leg is started there again, "
-            + $"{(RemoteLegRunner.MostRestarts == 1 ? "once" : $"{RemoteLegRunner.MostRestarts} times")} at most, which is safe since "
-            + "nothing ran: a runtime or a tool replaced there while it started fails that way once. "
-            + "A start that then answers is the leg's line, which says what the failed start said ('retried once: ...', and "
-            + "retried in --json); one that fails so again is poisoned, saying it was retried; and one that ends with no line "
-            + "for the leg says it in what ends it. Once anything ran there, the leg is never started again. A WSL distribution "
-            + "asked to check a heavy leg before this machine takes its slot is asked once more alike - a check runs nothing - "
-            + "and one that fails so again is the leg's poisoned line, with no slot waited for; what its failed start said is "
-            + "said on whatever line the leg then reaches, before what its run's own starts said.");
+            + "line, no run and no set-up left running - the leg is started there again, which is safe since nothing ran: a "
+            + "runtime or a tool replaced there while it started fails that way once. It is started again for each cause not "
+            + "met before - the code and what the failure line said - after a pause that begins at "
+            + $"{LedgerReport.FormatDuration(Waits.LooksAgainEvery)} and doubles, to {Waits.SaidEvery.TotalMinutes.ToString(CultureInfo.InvariantCulture)} "
+            + "minutes at most, each pause said as it begins; a start that fails of a cause met before ends the starts. "
+            + "A start that then answers is the leg's line, which says what each failed start said ('retried once: ...', and "
+            + "retried in --json); one that fails of a cause met before is poisoned, saying it was retried; and one that ends with "
+            + "no line for the leg says it in what ends it. Once anything ran there, the leg is never started again. A WSL "
+            + "distribution asked to check a heavy leg before this machine takes its slot is asked once more alike - a check "
+            + "runs nothing - and one that fails of a cause met before is the leg's poisoned line, with no slot waited for; what "
+            + "its failed starts said is said on whatever line the leg then reaches, before what its run's own starts said.");
         builder.AppendLine();
         AppendWrapped(
             builder,

@@ -1483,7 +1483,7 @@ public sealed class RemoteLegRunnerTests
         Assert.Equal(1 + RemoteLegRunner.MostRestarts, hosts.Calls.Count);
         Assert.Equal((LegVerdict.Passed, "412 tests"), (entry.Verdict, entry.Detail));
         Assert.Equal([Said], entry.Retried);
-        Assert.Contains($"build: WARN - wsl-debug: {Said}; starting the leg there once more", harness.StandardError.ToString(), StringComparison.Ordinal);
+        Assert.Contains($"build: WARN - wsl-debug: waits for its start there once more: {Said}; tries again in 1s", harness.StandardError.ToString(), StringComparison.Ordinal);
 
         // On the leg's line, beside what it reached, and in the ledger's data.
         var report = LedgerReport.From([entry], durationWarningFactor: 0);
@@ -1493,6 +1493,55 @@ public sealed class RemoteLegRunnerTests
         using var document = System.Text.Json.JsonDocument.Parse(report.ToJson(cancelled: false, unfinished: []));
 
         Assert.Equal([Said], document.RootElement.GetProperty("legs")[0].GetProperty("retried").EnumerateArray().Select(said => said.GetString()));
+    }
+
+    /// <summary>
+    /// A host whose DssHarness fails as it starts of one cause, then of another, is started once more for each - a runtime
+    /// replaced while it started, then a tool - and one that fails of a cause already met stops there, poisoned: the same
+    /// cause twice is the harness failing, which a further start only meets a third time. Each pause before a start once
+    /// more is said as it begins, and the leg's line says what each failed start said. Started once at most, a host whose
+    /// second start met a second cause was poisoned with it, though a third start would have run the leg.
+    /// </summary>
+    [Fact]
+    public async Task TwoDifferentCauses_RestartTwice_TheSameCauseTwiceStops()
+    {
+        const string NoTool = "Unexpected FileNotFoundException: Could not find file '/home/dev/.dotnet/tools/dssharness.dll'.";
+        string[] causes = [CouldNotLoad, NoTool, NoTool];
+
+        var harness = new HarnessFactory();
+        var clock = new TimerClock();
+        var starts = 0;
+        var hosts = new ScriptedHostCommands((_, command) =>
+        {
+            command.OnErrorLine?.Invoke(FailureLine.For("build", causes[Math.Min(starts++, causes.Length - 1)]));
+            return HostResults.Finished(command, HarnessExit.InternalError);
+        });
+
+        var running = new RemoteLegRunner(hosts, harness.Output, harness.FileSystem, clock)
+            .RunAsync("build", Leg(), [], cancellationToken: TestContext.Current.CancellationToken);
+
+        // The first pause, of a second, then the second, doubled: each before a start for a cause not met before.
+        foreach (var pause in new[] { TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(2) })
+        {
+            await clock.WaitingAsync().WaitAsync(ClockDrive.Within, TestContext.Current.CancellationToken);
+            clock.Advance(pause);
+        }
+
+        var entry = await running.WaitAsync(ClockDrive.Within, TestContext.Current.CancellationToken);
+        const string SaidOfNoTool = $"wsl Example-Linux's DssHarness exited 70 as it started, before anything ran there, saying: {NoTool}";
+
+        Assert.Equal(3, hosts.Calls.Count);
+        Assert.Equal(LegVerdict.Poisoned, entry.Verdict);
+        Assert.Equal(
+            "wsl Example-Linux ran 'build' for leg 'wsl-debug', and its DssHarness failed as it started, before anything ran there: "
+            + $"it exited 70, saying: {NoTool}",
+            entry.Detail);
+        Assert.Equal([SaidAsItStarted, SaidOfNoTool], entry.Retried);
+
+        var warned = harness.StandardError.ToString();
+
+        Assert.Contains($"build: WARN - wsl-debug: waits for its start there once more: {SaidAsItStarted}; tries again in 1s", warned, StringComparison.Ordinal);
+        Assert.Contains($"build: WARN - wsl-debug: has waited 1s for its start there once more: {SaidOfNoTool}; tries again in 2s", warned, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -1749,35 +1798,63 @@ public sealed class RemoteLegRunnerTests
 
     /// <summary>
     /// What a host's command prints is relayed as it comes, and only its end is kept, while its ledger arrives whole. A
-    /// failure line followed by more lines than any failure runs to was printed by the command's own work: what was held
-    /// with it is shown then, in order, everything after it as it comes, and none of it is taken for how the command ended
-    /// - holding it all would hold the rest of what the run prints.
+    /// failure line is held with every line after it, however many - a million, a run's whole output under --verbose -
+    /// on a file of the command's own rather than in memory, until the command ends: where it ended badly that is how it
+    /// ended, said whole in this machine's refusal and never shown as the host said it; where it ended well, every line is
+    /// shown then, in order. Held to two hundred lines, a refusal followed by more was shown and its words lost, the run
+    /// said to have refused saying nothing more.
     /// </summary>
-    [Fact]
-    public async Task AFailureLineFollowedByMoreThanAnyFailureRunsTo_IsShownAsItComes_AndIsNoConclusion()
+    [Theory]
+    [InlineData(HarnessExit.Refused)]
+    [InlineData(HarnessExit.Success)]
+    public async Task AMillionLinesAfterTheFailureLine_AreHeldByReference(int code)
     {
+        const int Lines = 1_000_000;
         var harness = new HarnessFactory();
-        var inner = FailureLine.For("run", "an inner run's own failure, printed by a step");
+        var failureLine = FailureLine.For("run", "'actions/corpus/corpus.yml' names a million programs that may not run:");
         var hosts = new ScriptedHostCommands((_, command) =>
         {
-            command.OnErrorLine?.Invoke(inner);
+            command.OnErrorLine?.Invoke("run: corpus: resolving the action");
+            command.OnErrorLine?.Invoke(failureLine);
 
-            for (var line = 0; line < RemoteLegRunner.MostHeldLines + 50; line++)
+            for (var line = 0; line < Lines; line++)
             {
-                command.OnErrorLine?.Invoke($"step output {line}");
+                command.OnErrorLine?.Invoke(line.ToString(System.Globalization.CultureInfo.InvariantCulture));
             }
 
-            return HostResults.Finished(command, HarnessExit.Refused);
+            if (code == HarnessExit.Success)
+            {
+                Answer(command, Ledger("passed", "412 tests", 2.5, 2.1, 412));
+            }
+
+            return HostResults.Finished(command, code);
         });
 
-        var refusal = await Assert.ThrowsAsync<HarnessException>(() => Runner(hosts, harness).RunAsync(
-            "run", Leg(), ["corpus"], cancellationToken: TestContext.Current.CancellationToken));
+        var following = new System.Text.StringBuilder();
 
-        Assert.EndsWith($"it exited {HarnessExit.Refused} and said nothing more", refusal.Message, StringComparison.Ordinal);
-        Assert.Contains(
-            string.Join(Environment.NewLine, [inner, .. Enumerable.Range(0, RemoteLegRunner.MostHeldLines + 50).Select(line => $"step output {line}")]),
-            harness.StandardError.ToString(),
-            StringComparison.Ordinal);
+        for (var line = 0; line < Lines; line++)
+        {
+            following.Append(Environment.NewLine).Append(line.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        }
+
+        var running = Runner(hosts, harness).RunAsync("run", Leg(), ["corpus"], cancellationToken: TestContext.Current.CancellationToken);
+        var shown = harness.StandardError;
+
+        if (code == HarnessExit.Success)
+        {
+            Assert.Equal(LegVerdict.Passed, (await running).Verdict);
+            Assert.Contains(failureLine + following, shown.ToString(), StringComparison.Ordinal);
+        }
+        else
+        {
+            var refusal = await Assert.ThrowsAsync<HarnessException>(() => running);
+
+            Assert.True(
+                refusal.Message == "wsl Example-Linux refused 'run' for leg 'wsl-debug': 'actions/corpus/corpus.yml' names a million programs that may not run:" + following,
+                "the refusal says the host's failure whole, every line after it among it");
+            Assert.Contains("run: corpus: resolving the action", shown.ToString(), StringComparison.Ordinal);
+            Assert.DoesNotContain("may not run", shown.ToString(), StringComparison.Ordinal);
+        }
 
         var (_, command) = Assert.Single(hosts.Calls);
         Assert.Equal((StreamKept.Whole, StreamKept.Tail), (command.OutputKept, command.ErrorKept));

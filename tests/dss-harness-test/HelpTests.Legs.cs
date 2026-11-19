@@ -274,9 +274,10 @@ public sealed partial class HelpTests
 
     /// <summary>
     /// The legs topic says that a host's DssHarness failing as a defect is a poisoned leg, that one failing so before
-    /// anything ran is started once more, how the line - or what ends the leg with none - says it, and that a WSL
-    /// distribution's check of a heavy leg before its slot is asked once more alike, failing again is the leg's poisoned
-    /// line with no slot waited for, and is said on whatever line the leg then reaches.
+    /// anything ran is started once more for each cause not met before - never a count of starts - how the line, or what
+    /// ends the leg with none, says it, and that a WSL distribution's check of a heavy leg before its slot is asked once
+    /// more alike, a cause met again being the leg's poisoned line with no slot waited for, said on whatever line the leg
+    /// then reaches.
     /// </summary>
     [Fact]
     public void LegsTopic_SaysAHostsDssHarnessFailingAsItStarts_IsStartedOnceMore_ItsCheckBeforeTheSlotAlike()
@@ -288,14 +289,17 @@ public sealed partial class HelpTests
             $"A leg whose host's DssHarness fails as a defect (exit {HarnessExit.InternalError}) with no line for it is poisoned - "
                 + "the harness failing, never a host that could not be reached - its line naming the host, the code and what the "
                 + "host said.",
-            "the leg is started there again, once at most, which is safe since nothing ran: a runtime or a tool replaced "
-                + "there while it started fails that way once.",
-            "A start that then answers is the leg's line, which says what the failed start said ('retried once: ...', and "
-                + "retried in --json); one that fails so again is poisoned, saying it was retried; and one that ends with no "
-                + "line for the leg says it in what ends it. Once anything ran there, the leg is never started again.",
+            "the leg is started there again, which is safe since nothing ran: a runtime or a tool replaced there while it "
+                + "started fails that way once. It is started again for each cause not met before - the code and what the "
+                + "failure line said - after a pause that begins at 1s and doubles, to 5 minutes at most, each pause said as it "
+                + "begins; a start that fails of a cause met before ends the starts.",
+            "A start that then answers is the leg's line, which says what each failed start said ('retried once: ...', and "
+                + "retried in --json); one that fails of a cause met before is poisoned, saying it was retried; and one that "
+                + "ends with no line for the leg says it in what ends it. Once anything ran there, the leg is never started again.",
             "A WSL distribution asked to check a heavy leg before this machine takes its slot is asked once more alike - a "
-                + "check runs nothing - and one that fails so again is the leg's poisoned line, with no slot waited for; what "
-                + "its failed start said is said on whatever line the leg then reaches, before what its run's own starts said.",
+                + "check runs nothing - and one that fails of a cause met before is the leg's poisoned line, with no slot waited "
+                + "for; what its failed starts said is said on whatever line the leg then reaches, before what its run's own "
+                + "starts said.",
         })
         {
             Assert.Contains(text, words, StringComparison.Ordinal);
