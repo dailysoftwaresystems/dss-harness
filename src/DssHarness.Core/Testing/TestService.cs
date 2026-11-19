@@ -11,6 +11,7 @@ using DssHarness.Core.Output;
 using DssHarness.Core.Processes;
 using DssHarness.Core.Results;
 using DssHarness.Core.Sync;
+using DssHarness.Core.Text;
 using DssHarness.Core.Worktrees;
 
 namespace DssHarness.Core.Testing;
@@ -279,13 +280,6 @@ public sealed class TestService(
     /// <summary>The phase's name when the caller names none, which also names its log file.</summary>
     public const string DefaultPhaseName = "test";
 
-    /// <summary>
-    /// How long the count pattern may spend on one match. A count never decides a verdict, so a
-    /// pattern that backtracks is stopped and the count is left unknown rather than hanging the leg
-    /// it was only ever counting.
-    /// </summary>
-    private static readonly TimeSpan CountBudget = TimeSpan.FromSeconds(5);
-
     private readonly PhaseRunner _phaseRunner = phaseRunner;
     private readonly InputFingerprint _inputFingerprint = inputFingerprint;
     private readonly ProcessSampler _processSampler = processSampler;
@@ -528,10 +522,11 @@ public sealed class TestService(
     /// </summary>
     /// <param name="countPattern">The invocation's <c>countPattern</c>.</param>
     /// <exception cref="HarnessException">
-    /// The pattern is not a regular expression. Refused when it is read rather than ignored when it
-    /// fails to match: a count nobody can extract is indistinguishable from a leg that ran no tests,
-    /// and it is precisely a leg running fewer tests than its siblings that this exists to catch.
+    /// The pattern is not a regular expression the linear matcher reads. Refused when it is read rather than ignored when
+    /// it fails to match: a count nobody can extract is indistinguishable from a leg that ran no tests, and it is precisely
+    /// a leg running fewer tests than its siblings that this exists to catch.
     /// </exception>
+    /// <remarks>Matched in time linear in each line, however the pattern nests: no clock cuts a count off.</remarks>
     public static Regex? CompileCountPattern(string? countPattern)
     {
         if (string.IsNullOrWhiteSpace(countPattern))
@@ -539,17 +534,9 @@ public sealed class TestService(
             return null;
         }
 
-        try
-        {
-            return new Regex(countPattern, RegexOptions.Multiline | RegexOptions.CultureInvariant, CountBudget);
-        }
-        catch (ArgumentException ex)
-        {
-            throw new HarnessException(
-                HarnessExit.ConfigInvalid,
-                $"'{countPattern}' is not a count pattern: {ex.Message}",
-                ex);
-        }
+        return LinearRegex.TryCompile(countPattern, RegexOptions.Multiline, out var pattern, out var refusal)
+            ? pattern
+            : throw new HarnessException(HarnessExit.ConfigInvalid, $"'{countPattern}' is not a count pattern: {refusal}");
     }
 
     /// <summary>
@@ -594,11 +581,10 @@ public sealed class TestService(
                 ? total
                 : null;
         }
-        catch (Exception ex) when (ex is RegexMatchTimeoutException or PhaseOutputUnreadException)
+        catch (PhaseOutputUnreadException)
         {
-            // A count never changes a verdict, so a pattern that could not be evaluated, or output that
-            // could not be read back, leaves the count unknown rather than failing the leg it was only
-            // ever measuring.
+            // A count never changes a verdict, so output that could not be read back leaves the count unknown rather
+            // than failing the leg it was only ever measuring.
             return null;
         }
     }

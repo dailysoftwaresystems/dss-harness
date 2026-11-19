@@ -4,6 +4,7 @@ using System.Globalization;
 using DssHarness.Core.Output;
 using DssHarness.Core.Execution;
 using System.Text.Json;
+using DssHarness.Core.Waiting;
 using NSubstitute;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Hosts;
@@ -833,14 +834,12 @@ public sealed class HostAgentServiceTests
     }
 
     /// <summary>
-    /// A request saying a beat no machine writes - less than none, or one a host would wait most of a day on the silence
-    /// of - is refused before anything runs: watched for, it is a wait no clock can hold, and the run would go unwatched
-    /// without a word.
+    /// A request saying a beat no machine writes - less than none - is refused before anything runs: watched for, it is a
+    /// silence that has passed before it began, and the run would be cancelled at once without a word.
     /// </summary>
     [Theory]
     [InlineData(-1)]
-    [InlineData(3601)]
-    [InlineData(int.MaxValue)]
+    [InlineData(int.MinValue)]
     public async Task ARequestSayingABeatNoMachineWrites_IsRefused_BeforeAnythingRuns(int beatSeconds)
     {
         using var copy = new TempDirectory();
@@ -861,9 +860,39 @@ public sealed class HostAgentServiceTests
         Assert.Equal(HarnessExit.UsageError, exitCode);
         Assert.False(ran);
         Assert.Contains(
-            $"host-agent: FAIL - the request says its asker writes a beat every {beatSeconds} s, and a host counts one of 0, for none, to 3600 s",
+            $"host-agent: FAIL - the request says its asker writes a beat every {beatSeconds} s, and a host counts one of 0, for none, or of a second or more",
             error.ToString(),
             StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A beat of any length a machine writes is one a host watches for: its silence is a span of time that holds any count
+    /// of seconds, waited in looks that each fit a timer. Held to an hour of the code's own, a beat of ten thousand seconds
+    /// - an asker on a link that sleeps for hours - was refused, and its run never started.
+    /// </summary>
+    [Theory]
+    [InlineData(10_000)]
+    [InlineData(int.MaxValue)]
+    public async Task ATenThousandSecondBeat_IsAccepted(int beatSeconds)
+    {
+        using var copy = new TempDirectory();
+        using var error = new StringWriter();
+        var ran = false;
+
+        var exitCode = await Service().ServeAsync(
+            new StringReader(RunRequest(copy.Path, beatSeconds, "verify-git")),
+            new StringWriter(),
+            error,
+            (_, _, _, _) =>
+            {
+                ran = true;
+                return Task.FromResult(HarnessExit.Success);
+            },
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(HarnessExit.Success, exitCode);
+        Assert.True(ran);
+        Assert.DoesNotContain("FAIL", error.ToString(), StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -881,7 +910,7 @@ public sealed class HostAgentServiceTests
         var release = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
         var cancellationToken = TestContext.Current.CancellationToken;
 
-        var serving = Service(lastResort: lastResort, patience: new HostAgentPatience { Unwind = TimeSpan.FromMilliseconds(100) }).ServeAsync(
+        var serving = Service(lastResort: lastResort).ServeAsync(
             input,
             new StringWriter(),
             error,
@@ -910,22 +939,26 @@ public sealed class HostAgentServiceTests
     }
 
     /// <summary>
-    /// What a run started that has not stopped within the host's patience of being cancelled is ended by the agent's last
-    /// resort, and the agent with it, saying so and how the request finished: a command stuck reading what a process its
-    /// child left behind still holds would otherwise keep the host for good, with nobody reading it.
+    /// What a run started is waited for, once cancelled, while anything it started still runs - however long that takes
+    /// to stop - and once nothing does and the run still has not ended, the agent's last resort ends it, and the agent with
+    /// it, saying so and how the request finished: a command stuck reading what a process its child left behind still holds
+    /// would otherwise keep the host for good, with nobody reading it. Cut off at a time of the code's own, a run whose
+    /// build tool took two minutes to stop was ended part way.
     /// </summary>
     [Fact]
-    public async Task Run_EndsWhatItStarted_AndItself_WhereTheCommandHasNotStoppedInTimeOnceCancelled()
+    public async Task Run_EndsWhatItStarted_AndItself_OnceNothingItStartedRunsAndItHasNotStopped()
     {
         using var copy = new TempDirectory();
-        using var input = new BeatingReader(RunRequest(copy.Path, "verify-git"));
-        using var error = new StringWriter();
-        var lastResort = new RecordingLastResort();
+        using var input = new BeatingReader(RunRequest(copy.Path, beatSeconds: 0, "verify-git"));
+        using var written = new StringWriter();
+        var error = TextWriter.Synchronized(written);
+        var stepped = new SteppedPatience();
+        var lastResort = new RecordingLastResort { RunningLooks = 3 };
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
         var cancellationToken = TestContext.Current.CancellationToken;
 
-        var serving = Service(lastResort: lastResort, patience: new HostAgentPatience { Unwind = TimeSpan.FromMilliseconds(100) }).ServeAsync(
+        var serving = Service(lastResort: lastResort, patience: stepped.Patience).ServeAsync(
             input,
             new StringWriter(),
             error,
@@ -940,24 +973,97 @@ public sealed class HostAgentServiceTests
         try
         {
             await started.Task.WaitAsync(TimeSpan.FromSeconds(30), cancellationToken);
-            Assert.False(lastResort.Ended.IsCompleted);
-
             input.End();
+
+            // Three looks find what it started still running, and the run is waited for through each of them.
+            for (var look = 0; look < 4; look++)
+            {
+                Assert.False(lastResort.Asked, $"what the run started was ended while it still ran, at look {look}");
+                await stepped.StepAsync(meanwhile: null, cancellationToken).WaitAsync(TimeSpan.FromSeconds(30), cancellationToken);
+            }
 
             Assert.Equal(HarnessExit.Cancelled, await lastResort.Ended.WaitAsync(TimeSpan.FromSeconds(30), cancellationToken));
             Assert.Equal(HarnessExit.Cancelled, await serving.WaitAsync(TimeSpan.FromSeconds(30), cancellationToken));
+            Assert.Equal(4, lastResort.Looks);
 
             // What was ended, as the last resort found it: said once it was tried, never before.
+            var said = await SaidAsync(error, written, HostAgentProtocol.CompletionLine(Nonce, HarnessExit.Cancelled), cancellationToken);
             Assert.Contains(
-                "host-agent: FAIL - what the request started here was cancelled - the input it holds open here ended - and had not stopped 1 s later: "
+                "host-agent: FAIL - what the request started here was cancelled - the input it holds open here ended - and waits, with nothing "
+                + "it started still running, on what will never end - the output of something its child left behind, or a line nobody reads: "
                 + "2 processes it started were ended, each with what it started (pid 41, pid 42), and this process ends",
-                error.ToString(),
+                said,
                 StringComparison.Ordinal);
-            Assert.EndsWith(HostAgentProtocol.CompletionLine(Nonce, HarnessExit.Cancelled) + Environment.NewLine, error.ToString(), StringComparison.Ordinal);
         }
         finally
         {
             release.TrySetResult(HarnessExit.Success);
+        }
+    }
+
+    /// <summary>
+    /// A run that stops while what it started is still stopping answers as it ends, however many looks that took, and
+    /// nothing it started is ended by the agent.
+    /// </summary>
+    [Fact]
+    public async Task Run_ThatStopsWhileWhatItStartedStillRuns_AnswersAsItEnds()
+    {
+        using var copy = new TempDirectory();
+        using var input = new BeatingReader(RunRequest(copy.Path, beatSeconds: 0, "verify-git"));
+        using var error = new StringWriter();
+        var stepped = new SteppedPatience();
+        var lastResort = new RecordingLastResort { RunningLooks = int.MaxValue };
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var cancellationToken = TestContext.Current.CancellationToken;
+
+        var serving = Service(lastResort: lastResort, patience: stepped.Patience).ServeAsync(
+            input,
+            new StringWriter(),
+            error,
+            (_, _, _, _) =>
+            {
+                started.SetResult();
+                return release.Task;
+            },
+            cancellationToken);
+
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(30), cancellationToken);
+        input.End();
+
+        for (var look = 0; look < 10; look++)
+        {
+            await stepped.StepAsync(meanwhile: null, cancellationToken).WaitAsync(TimeSpan.FromSeconds(30), cancellationToken);
+        }
+
+        release.SetResult(HarnessExit.Cancelled);
+
+        Assert.Equal(HarnessExit.Cancelled, await serving.WaitAsync(TimeSpan.FromSeconds(30), cancellationToken));
+        Assert.False(lastResort.Asked, "What the run started was ended while it still stopped.");
+        Assert.True(lastResort.Looks >= 10);
+    }
+
+    /// <summary>
+    /// What a synchronized writer holds once <paramref name="last"/> ends it: what the agent says as it ends is written from
+    /// another thread, so that a line nobody reads holds nothing up, and is read here once it is all there.
+    /// </summary>
+    private static async Task<string> SaidAsync(TextWriter synchronized, StringWriter written, string last, CancellationToken cancellationToken)
+    {
+        while (true)
+        {
+            string said;
+
+            lock (synchronized)
+            {
+                said = written.ToString();
+            }
+
+            if (said.EndsWith(last + Environment.NewLine, StringComparison.Ordinal))
+            {
+                return said;
+            }
+
+            await Task.Delay(TimeSpan.FromMilliseconds(10), cancellationToken);
         }
     }
 
@@ -995,8 +1101,9 @@ public sealed class HostAgentServiceTests
 
     /// <summary>
     /// A command past its point of no return goes on once cancelled, to finish what it began or to say what is left: a
-    /// host gives it as long as the command line gives one interrupted where it was typed, and ends nothing meanwhile.
-    /// Cut off at the time any other command is given, a deletion was ended part way with nothing said of what remained.
+    /// host waits for it to its end, as the command line does one interrupted where it was typed, and ends nothing
+    /// meanwhile. Cut off at the time any other command was given, a deletion was ended part way with nothing said of what
+    /// remained.
     /// </summary>
     [Theory]
     [MemberData(nameof(CommandsPastThePointOfNoReturn))]
@@ -1009,7 +1116,7 @@ public sealed class HostAgentServiceTests
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var cancellationToken = TestContext.Current.CancellationToken;
 
-        var serving = Service(lastResort: lastResort, patience: new HostAgentPatience { Unwind = TimeSpan.FromMilliseconds(100), Finishing = TimeSpan.FromMinutes(5) })
+        var serving = Service(lastResort: lastResort)
             .ServeAsync(
                 input,
                 new StringWriter(),
@@ -1038,8 +1145,8 @@ public sealed class HostAgentServiceTests
     }
 
     /// <summary>
-    /// A run asked to set up goes on once cancelled too, for its legs to bring down what they brought up: a host gives it
-    /// the time a command past its point of no return is given, and ends nothing meanwhile.
+    /// A run asked to set up goes on once cancelled too, for its legs to bring down what they brought up: a host waits for
+    /// it to its end, as for a command past its point of no return, and ends nothing meanwhile.
     /// </summary>
     [Theory]
     [InlineData("test", "--legs", "a", "--set-up")]
@@ -1053,7 +1160,7 @@ public sealed class HostAgentServiceTests
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var cancellationToken = TestContext.Current.CancellationToken;
 
-        var serving = Service(lastResort: lastResort, patience: new HostAgentPatience { Unwind = TimeSpan.FromMilliseconds(100), Finishing = TimeSpan.FromMinutes(5) })
+        var serving = Service(lastResort: lastResort)
             .ServeAsync(
                 input,
                 new StringWriter(),
@@ -1081,21 +1188,24 @@ public sealed class HostAgentServiceTests
     }
 
     /// <summary>
-    /// The time a command past its point of no return is given is a bound all the same, and its own: one that never
-    /// finishes is ended once it is up, whatever any other command would have been given, and the time said is that one.
+    /// A command past its point of no return is waited for to its end however long that takes, told every five minutes
+    /// where the machine that asked would read it, and nothing it started is ended meanwhile: it finishes what it began by
+    /// its own grace. Given a time of the code's own, one still finishing an hour on was ended part way.
     /// </summary>
     [Fact]
-    public async Task ACommandPastItsPointOfNoReturn_ThatNeverFinishes_IsEndedOnceItsOwnTimeIsUp()
+    public async Task ACommandPastItsPointOfNoReturn_IsWaitedForToItsEnd_AndTold()
     {
         using var copy = new TempDirectory();
-        using var input = new BeatingReader(RunRequest(copy.Path, PointOfNoReturn.Commands.First(command => !HostAgentProtocol.IsNotForwardable(command)), "anything"));
-        using var error = new StringWriter();
+        using var input = new BeatingReader(RunRequest(copy.Path, beatSeconds: 0, PointOfNoReturn.Commands.First(command => !HostAgentProtocol.IsNotForwardable(command)), "anything"));
+        using var written = new StringWriter();
+        var error = TextWriter.Synchronized(written);
+        var clock = new TimerClock();
         var lastResort = new RecordingLastResort();
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
         var cancellationToken = TestContext.Current.CancellationToken;
 
-        var serving = Service(lastResort: lastResort, patience: new HostAgentPatience { Unwind = TimeSpan.FromMinutes(5), Finishing = TimeSpan.FromMilliseconds(1500) })
+        var serving = Service(lastResort: lastResort, patience: new HostAgentPatience { Clock = clock })
             .ServeAsync(
                 input,
                 new StringWriter(),
@@ -1107,21 +1217,27 @@ public sealed class HostAgentServiceTests
                 },
                 cancellationToken);
 
-        try
-        {
-            await started.Task.WaitAsync(TimeSpan.FromSeconds(30), cancellationToken);
-            input.End();
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(30), cancellationToken);
+        input.End();
 
-            Assert.Equal(HarnessExit.Cancelled, await lastResort.Ended.WaitAsync(TimeSpan.FromSeconds(30), cancellationToken));
-            Assert.Equal(HarnessExit.Cancelled, await serving.WaitAsync(TimeSpan.FromSeconds(30), cancellationToken));
-            Assert.Contains("and had not stopped 2 s later: ", error.ToString(), StringComparison.Ordinal);
-        }
-        finally
+        for (var told = 0; told < 12; told++)
         {
-            release.TrySetResult(HarnessExit.Success);
+            await clock.WaitingAsync().WaitAsync(ClockDrive.Within, cancellationToken);
+            clock.Advance(Waits.SaidEvery);
         }
+
+        await clock.WaitingAsync().WaitAsync(ClockDrive.Within, cancellationToken);
+        Assert.False(lastResort.Asked, "What the command started was ended while it finished what it began.");
+
+        release.SetResult(9);
+
+        Assert.Equal(9, await serving.WaitAsync(TimeSpan.FromSeconds(30), cancellationToken));
+
+        var said = await SaidAsync(error, written, HostAgentProtocol.CompletionLine(Nonce, 9), cancellationToken);
+        Assert.Contains("has waited 5m00s for what the request started here to stop", said, StringComparison.Ordinal);
+        Assert.Equal(12, said.Split("for what the request started here to stop").Length - 1);
+        Assert.False(lastResort.Asked);
     }
-
     /// <summary>
     /// What the agent says to a machine that has stopped reading holds nothing up. The console's own writer writes where
     /// it is called, and one whose reader has gone never returns: the run is cancelled all the same, and where its last
@@ -1142,7 +1258,7 @@ public sealed class HostAgentServiceTests
 
         var serving = Service(
                 lastResort: lastResort,
-                patience: new HostAgentPatience { Saying = TimeSpan.FromMilliseconds(50), Unwind = TimeSpan.FromMilliseconds(100) })
+                patience: null)
             .ServeAsync(
                 input,
                 new StringWriter(),

@@ -3,8 +3,10 @@ using System.Net;
 using System.Net.Sockets;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using DssHarness.Core.Json;
 using DssHarness.Core.Platform;
 using DssHarness.Core.Processes;
+using DssHarness.Core.Text;
 
 namespace DssHarness.Core.Hosts;
 
@@ -30,16 +32,30 @@ public sealed record SdkListing(string Version, string Location)
 /// anything else as unreadable, because a guess at a host's state is exactly how a leg ends up
 /// running somewhere it cannot.
 /// </summary>
-public static partial class HostProbes
+public static class HostProbes
 {
     /// <summary>ssh's own exit code for a failure of ssh itself, such as a connection or authentication failure.</summary>
     public const int SshFailed = 255;
 
-    /// <summary>Longest excerpt of a program's output a message quotes.</summary>
-    private const int ExcerptLength = 300;
+    /// <summary>
+    /// The most characters an IP address is written in, its scope aside: an IPv6 address with an IPv4 one in its last
+    /// 32 bits, <c>ffff:ffff:ffff:ffff:ffff:ffff:255.255.255.255</c> - the text form's own longest (RFC 4291), and so no
+    /// bound of the code's: a run of characters longer than this is no address, whatever it holds.
+    /// </summary>
+    private const int LongestAddress = 45;
 
-    /// <summary>How many labels stuck to the front of an address with a colon are set aside, at most.</summary>
-    private const int MostLabels = 2;
+    /// <summary>One run of the characters a host name or an address is spelt from, which nothing else adjoins.</summary>
+    private static readonly Regex AddressLike = LinearRegex.Compile(@"[0-9A-Za-z.:%_-]+");
+
+    /// <summary>ssh's debug line naming the address it authenticates to, with the port straight after it.</summary>
+    private static readonly Regex SshAuthenticatingTo = LinearRegex.Compile(@"Authenticating to (?<address>[0-9A-Za-z.:%_-]+):(?<port>[0-9]+) as '");
+
+    /// <summary>A line in which ssh says it never connected: see <see cref="NeverConnected"/>.</summary>
+    private static readonly Regex SshNeverConnected = LinearRegex.Compile(
+        @"^(?:ssh(?:\.exe)?: (?:Could not resolve hostname |connect to host \S+ port \S+: )|banner exchange: Connection to UNKNOWN port -1: |Connection timed out during banner exchange$)");
+
+    /// <summary>One SDK as <c>dotnet --list-sdks</c> lists it: its version, then where it is in brackets.</summary>
+    private static readonly Regex SdkLine = LinearRegex.Compile(@"^(?<version>\d+\.\d+\.\d+\S*)\s+\[(?<location>.+)\]$");
 
     /// <summary>
     /// Whether the host ran a command at all. A program that ran and failed exits non-zero; any
@@ -76,7 +92,7 @@ public static partial class HostProbes
 
         return [.. output
             .Split('\n')
-            .Select(line => SdkLine().Match(line.Trim()))
+            .Select(line => SdkLine.Match(line.Trim()))
             .Where(match => match.Success)
             .Select(match => new SdkListing(match.Groups["version"].Value, match.Groups["location"].Value))];
     }
@@ -105,7 +121,7 @@ public static partial class HostProbes
 
         try
         {
-            using var document = JsonDocument.Parse(output.AsMemory(start));
+            using var document = JsonDocument.Parse(output.AsMemory(start), JsonDepth.Document);
 
             if (!document.RootElement.TryGetProperty("data", out var data) || data.ValueKind != JsonValueKind.Array)
             {
@@ -206,7 +222,7 @@ public static partial class HostProbes
         }
 
         var said = string.IsNullOrWhiteSpace(result.StandardError) ? result.StandardOutput : result.StandardError;
-        return $"{what} (exit {result.ExitCode}): {Excerpt(AsConfigured(said, through))}";
+        return $"{what} (exit {result.ExitCode}): {Quoted(AsConfigured(said, through))}";
     }
 
     /// <summary>
@@ -251,8 +267,8 @@ public static partial class HostProbes
     public static string CouldNotReach(string said) => $"the host could not be reached: ssh said {said}";
 
     /// <summary>
-    /// That <paramref name="through"/>'s host could not be reached, with the end of what ssh said on standard error over
-    /// <paramref name="result"/> quoted, as <see cref="Excerpt"/> quotes it - the host named as the configuration
+    /// That <paramref name="through"/>'s host could not be reached, with what ssh said on standard error over
+    /// <paramref name="result"/> quoted, as <see cref="Quoted"/> quotes it - the host named as the configuration
     /// declares it, never by an address its name resolved to here (see <see cref="AsConfigured"/>).
     /// </summary>
     /// <param name="result">What ssh did, having failed itself.</param>
@@ -262,7 +278,7 @@ public static partial class HostProbes
         ArgumentNullException.ThrowIfNull(result);
         ArgumentNullException.ThrowIfNull(through);
 
-        return CouldNotReach(Excerpt(AsConfigured(result.StandardError, through)));
+        return CouldNotReach(Quoted(AsConfigured(result.StandardError, through)));
     }
 
     /// <summary>
@@ -289,7 +305,7 @@ public static partial class HostProbes
         return standardError
             .Split('\n')
             .Select(line => line.Trim())
-            .FirstOrDefault(line => SshNeverConnected().IsMatch(line));
+            .FirstOrDefault(line => SshNeverConnected.IsMatch(line));
     }
 
     /// <summary>
@@ -363,13 +379,13 @@ public static partial class HostProbes
     }
 
     /// <summary>
-    /// What a program printed on standard error, quoted after a colon as <see cref="Excerpt"/> quotes it,
+    /// What a program printed on standard error, quoted after a colon as <see cref="Quoted"/> quotes it,
     /// or nothing where it printed nothing.
     /// </summary>
     /// <param name="standardError">What it printed.</param>
     public static string Detail(string standardError)
     {
-        var said = Excerpt(standardError);
+        var said = Quoted(standardError);
 
         return said.Length == 0 ? string.Empty : ": " + said;
     }
@@ -416,7 +432,7 @@ public static partial class HostProbes
         // ssh's debug line puts the port straight after the address it dialled, an IPv6 one unbracketed, which no
         // word of its own can tell from another address: "Authenticating to 2001:db8::7:22 as 'harness'". Its shape
         // says where the port starts.
-        said = SshAuthenticatingTo().Replace(
+        said = SshAuthenticatingTo.Replace(
             said,
             match => Address(match.Groups["address"].Value) is { } address && resolved.Contains(address)
                 ? $"Authenticating to {declared}:{match.Groups["port"].Value} as '"
@@ -427,7 +443,7 @@ public static partial class HostProbes
         // a command itself printed, handing the reader an address that never existed, and does the same to an IPv6
         // address inside a longer one. This runs over every line a host writes, not only over ssh's, so a line that
         // merely contains the address as part of something else is left alone.
-        return AddressLike().Replace(
+        return AddressLike.Replace(
             said,
             match => Spelt(match.Value) is ({ } address, var start, var length) && resolved.Contains(address)
                 ? match.Value[..start] + declared + match.Value[(start + length)..]
@@ -439,75 +455,124 @@ public static partial class HostProbes
     /// among them, since a pin is made from what the name resolved to.
     /// </summary>
     private static List<IPAddress> Resolved(HostConnection through)
-        => [.. (through.Resolved?.All ?? []).Select(Address).OfType<IPAddress>()];
+        => [.. (through.Resolved?.All ?? []).Select(resolved => Address(resolved.AsSpan())).OfType<IPAddress>()];
 
     /// <summary>
     /// The address <paramref name="token"/> spells, as the address it is, with where in the token it starts and how
     /// much of it it takes; <see langword="null"/> where it spells none. What follows an address is set aside: the
     /// colon ssh puts after a refused login's host, a full stop, and a port, as ssh writes one after an IPv4 or a
-    /// scoped address - "192.0.2.10:22", "fe80::1%12:22". So is a label stuck to its front with a colon, where the
-    /// word is no address from its start - "addr:192.0.2.10", as ifconfig prints one.
+    /// scoped address - "192.0.2.10:22", "fe80::1%12:22". So is every label stuck to its front with a colon, where the
+    /// word is no address from its start - "addr:192.0.2.10", as ifconfig prints one, or as many as a word holds.
     /// </summary>
+    /// <remarks>
+    /// One pass over the word, by its grammar: a label ends at its colon, and the next start is after it, so each
+    /// character is looked at a fixed number of times however many labels there are - what follows the address, the
+    /// scope after a '%', the colon that ends it, each found once and carried to the next start - and each start weighs
+    /// a few lengths of at most <see cref="LongestAddress"/> characters. A word of a million colons is read in a
+    /// million steps, never a million times a million.
+    /// </remarks>
     private static (IPAddress Address, int Start, int Length)? Spelt(string token)
     {
-        // A label or two at most, as a choice: ifconfig prints one, and a word of a thousand colons is passed over in a
-        // few looks rather than a thousand.
-        for (int start = 0, labels = 0; labels <= MostLabels; labels++)
-        {
-            var word = token[start..];
+        // Set aside once for the whole word: colons and full stops at its end belong to no address, whichever start the
+        // address is read from.
+        var coreEnd = token.AsSpan().TrimEnd(":.").Length;
 
-            foreach (var length in Lengths(word))
+        // The first '%' at or after the start - none yet looked for, or none there - and where the scope it begins ends.
+        var percent = NotLooked;
+        var scopeEnd = 0;
+        Span<int> lengths = stackalloc int[4];
+
+        for (var start = 0; ;)
+        {
+            if (percent == NotLooked || (percent >= 0 && percent < start))
             {
-                if (Address(word[..length]) is { } address)
+                percent = token.IndexOf('%', start);
+                scopeEnd = percent < 0 ? 0 : ScopeEnd(token, percent);
+            }
+
+            var colon = token.IndexOf(':', start);
+            var count = Lengths(token, start, coreEnd, percent, scopeEnd, colon, lengths);
+
+            for (var index = 0; index < count; index++)
+            {
+                if (Address(token.AsSpan(start, lengths[index])) is { } address)
                 {
-                    return (address, start, length);
+                    return (address, start, lengths[index]);
                 }
             }
 
-            if (word.IndexOf(':') is not (var colon and > 0))
+            // No further label where no colon follows, or where the next one starts a label that is empty.
+            if (colon <= start)
             {
                 return null;
             }
 
-            start += colon + 1;
+            start = colon + 1;
+        }
+    }
+
+    /// <summary>What a look for the next '%' has not been made of yet: no index, and not the -1 that says there is none.</summary>
+    private const int NotLooked = -2;
+
+    /// <summary>
+    /// Where the scope the '%' at <paramref name="percent"/> begins ends in <paramref name="token"/>: at the colon after
+    /// it, or the word's end, the full stops before that set aside. A scope is an interface's name or number: it holds
+    /// no colon, and it ends in no full stop.
+    /// </summary>
+    private static int ScopeEnd(string token, int percent)
+    {
+        var colon = token.IndexOf(':', percent);
+        var end = colon < 0 ? token.Length : colon;
+
+        while (end > percent && token[end - 1] == '.')
+        {
+            end--;
         }
 
-        return null;
+        return end;
     }
 
     /// <summary>
-    /// How long an address <paramref name="token"/> begins with may be, longest first: a few lengths, whatever the
-    /// token's own, so that a word of any length a host prints is read in one pass.
+    /// How long an address the word from <paramref name="start"/> on begins with may be, longest first, written into
+    /// <paramref name="lengths"/>: a few lengths, whatever the word's own, so that a word of any length a host prints is
+    /// read in one pass. Answers how many it wrote.
     /// </summary>
-    private static IEnumerable<int> Lengths(string token)
+    /// <param name="token">The word.</param>
+    /// <param name="start">Where in it this reading starts.</param>
+    /// <param name="coreEnd">Where the word ends once the colons and full stops at its end are set aside.</param>
+    /// <param name="percent">The first '%' at or after <paramref name="start"/>, or -1 where there is none.</param>
+    /// <param name="scopeEnd">Where the scope that '%' begins ends (<see cref="ScopeEnd"/>).</param>
+    /// <param name="colon">The first colon at or after <paramref name="start"/>, or -1 where there is none.</param>
+    /// <param name="lengths">Where the lengths go: room for four.</param>
+    private static int Lengths(string token, int start, int coreEnd, int percent, int scopeEnd, int colon, Span<int> lengths)
     {
-        var scope = token.IndexOf('%');
-
-        if (scope >= 0)
+        if (percent >= 0)
         {
-            // A scope is an interface's name or number: it holds no colon, it ends in no full stop, and one that is
-            // empty is none.
-            var end = token.IndexOf(':', scope);
-            var scoped = (end < 0 ? token : token[..end]).TrimEnd('.');
+            // A scope that is empty is none: the address then ends at its '%'.
+            var scoped = scopeEnd - start;
+            var at = percent - start;
 
-            yield return scoped.Length > scope + 1 ? scoped.Length : scope;
-            yield break;
+            lengths[0] = scoped > at + 1 ? scoped : at;
+            return 1;
         }
 
-        var core = token.TrimEnd(':', '.');
+        var core = Math.Max(0, coreEnd - start);
+        var count = 0;
 
         // An IPv6 address can itself end in '::', so as many as two of the colons after it may be its own.
-        for (var length = Math.Min(token.Length, core.Length + 2); length >= core.Length && length > 0; length--)
+        for (var length = Math.Min(token.Length - start, core + 2); length >= core && length > 0; length--)
         {
-            yield return length;
+            lengths[count++] = length;
         }
 
         // An IPv4 address with its port. An IPv6 one cannot be told from a port without the brackets ssh puts round
         // it, which leave the address a word of its own; before its first colon is never one.
-        if (core.IndexOf(':') is var colon and > 0)
+        if (colon > start && colon < start + core)
         {
-            yield return colon;
+            lengths[count++] = colon - start;
         }
+
+        return count;
     }
 
     /// <summary>
@@ -515,16 +580,18 @@ public static partial class HostProbes
     /// and an IPv4 one mapped into IPv6 as that IPv4 one - or <see langword="null"/> where it spells none as
     /// programs print one.
     /// </summary>
-    private static IPAddress? Address(string text)
+    private static IPAddress? Address(ReadOnlySpan<char> text)
     {
-        // Most of what a host prints holds neither, and is passed over without being parsed.
-        if (!text.Contains('.') && !text.Contains(':'))
+        // A scope's '%' stands within an address's own length from the start, or the text before it is no address.
+        var scope = text[..Math.Min(text.Length, LongestAddress + 1)].IndexOf('%');
+        var bare = scope < 0 ? text : text[..scope];
+
+        // Longer than an address is ever written, it is none; and most of what a host prints holds neither a full stop nor
+        // a colon, and is passed over without being parsed.
+        if (bare.Length > LongestAddress || bare.IndexOfAny('.', ':') < 0)
         {
             return null;
         }
-
-        var scope = text.IndexOf('%');
-        var bare = scope < 0 ? text : text[..scope];
 
         if (!IPAddress.TryParse(bare, out var address))
         {
@@ -538,36 +605,30 @@ public static partial class HostProbes
 
         // An IPv4 address has no scope, and is taken only as it is always spelt: '192.0.522' parses as 192.0.2.10,
         // and is a version.
-        return scope < 0 && string.Equals(bare, address.ToString(), StringComparison.Ordinal) ? address : null;
+        return scope < 0 && bare.SequenceEqual(address.ToString()) ? address : null;
     }
 
     /// <summary>
-    /// A short quotation of what a program printed, on one line, keeping the end, where a program
-    /// usually says what went wrong.
+    /// What a program printed, quoted on one line and whole: each line trimmed, the empty ones left out, and the rest
+    /// joined by <c> / </c>. Nothing of it is cut - the part a quotation leaves out is the part a reader needed - so a
+    /// reason that quotes a program says all it said, and so does every record and <c>--json</c> answer that carries the
+    /// reason: a vcvarsall that prints three megabytes before it fails is quoted as those three megabytes.
     /// </summary>
-    public static string Excerpt(string text)
+    /// <param name="text">What the program printed.</param>
+    public static string Quoted(string text)
     {
         ArgumentNullException.ThrowIfNull(text);
 
-        var joined = string.Join(" / ", text
+        return string.Join(" / ", text
             .Split('\n')
             .Select(line => line.Trim())
             .Where(line => line.Length > 0));
-
-        return joined.Length <= ExcerptLength ? joined : "..." + Output.TextCut.Tail(joined, ExcerptLength);
     }
 
-    /// <summary>One run of the characters a host name or an address is spelt from, which nothing else adjoins.</summary>
-    [GeneratedRegex(@"[0-9A-Za-z.:%_-]+", RegexOptions.CultureInvariant)]
-    private static partial Regex AddressLike();
-
-    /// <summary>ssh's debug line naming the address it authenticates to, with the port straight after it.</summary>
-    [GeneratedRegex(@"Authenticating to (?<address>[0-9A-Za-z.:%_-]+):(?<port>[0-9]+) as '", RegexOptions.CultureInvariant)]
-    private static partial Regex SshAuthenticatingTo();
-
-    [GeneratedRegex(@"^(?:ssh(?:\.exe)?: (?:Could not resolve hostname |connect to host \S+ port \S+: )|banner exchange: Connection to UNKNOWN port -1: |Connection timed out during banner exchange$)", RegexOptions.CultureInvariant)]
-    private static partial Regex SshNeverConnected();
-
-    [GeneratedRegex(@"^(?<version>\d+\.\d+\.\d+\S*)\s+\[(?<location>.+)\]$", RegexOptions.CultureInvariant)]
-    private static partial Regex SdkLine();
+    /// <summary>
+    /// What <see cref="Quoted"/> gives, by the name it had while it quoted only the end of what a program printed: kept for
+    /// the callers outside the hosts' code until each names <see cref="Quoted"/>.
+    /// </summary>
+    /// <param name="text">What the program printed.</param>
+    public static string Excerpt(string text) => Quoted(text);
 }

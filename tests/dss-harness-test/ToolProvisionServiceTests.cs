@@ -66,6 +66,22 @@ public sealed class ToolProvisionServiceTests
             call => call.Program == $"{Home}/.dotnet/dotnet" && call.Arguments.Contains("--list-sdks"));
     }
 
+    /// <summary>
+    /// No program provisioning runs on a host - its probes, the SDK's installer, a package manager's install - carries a
+    /// bound of the code's own: an install of two hours over a slow link is waited for to its end, told every five minutes
+    /// while it lasts. Held to thirty minutes, one still downloading was cut off part way.
+    /// </summary>
+    [Fact]
+    public async Task NoProgramProvisioningRuns_CarriesABoundOfTheCodesOwn()
+    {
+        using var fixture = new Fixture();
+
+        var report = await fixture.ProvisionAsync();
+
+        Assert.True(report.Passed);
+        Assert.Contains(fixture.Host.Calls, call => call.Program == "sh" && call.Arguments.Count == 0);
+        Assert.All(fixture.Host.Calls, call => Assert.Null(call.Timeout));
+    }
     [Fact]
     public async Task ASecondRun_ReportsAlreadyCurrent_AndChangesNothing()
     {
@@ -1510,7 +1526,7 @@ public sealed class ToolProvisionServiceTests
                 Substitute.For<IProcessRunner>(),
                 commands,
                 new HostSecretsStore(fileSystem, permissions, platform),
-                new HostAddressResolver(Substitute.For<INameLookup>(), TimeProvider.System, TimeSpan.Zero),
+                new HostAddressResolver(Substitute.For<INameLookup>(), TimeProvider.System, TimeSpan.FromTicks(1)),
                 programs,
                 new SshWakeWindow(Substitute.For<INameLookup>(), TimeProvider.System, TimeSpan.Zero),
                 new SyncedCopyRefusals(Substitute.For<IHarnessOutput>()));
@@ -1607,7 +1623,7 @@ public sealed class ToolProvisionServiceTests
     }
 
     /// <summary>One command a host was asked to run, and what it was given.</summary>
-    private sealed record HostCall(HostId Host, string Program, IReadOnlyList<string> Arguments, string StandardInput);
+    private sealed record HostCall(HostId Host, string Program, IReadOnlyList<string> Arguments, string StandardInput, TimeSpan? Timeout = null);
 
     /// <summary>
     /// Somebody at a terminal: what they would type for each host, and every host they were asked
@@ -1717,7 +1733,7 @@ public sealed class ToolProvisionServiceTests
         public ProcessResult Respond(HostConnection connection, HostCommand command)
         {
             var host = connection.Host;
-            Calls.Add(new HostCall(host, command.Program, command.Arguments, command.StandardInput.Read()));
+            Calls.Add(new HostCall(host, command.Program, command.Arguments, command.StandardInput.Read(), command.Timeout));
 
             if (transportStops?.Invoke(host, command) == true)
             {
@@ -2092,7 +2108,7 @@ public sealed class ToolProvisionServiceTests
 
             var fileSystem = new PhysicalFileSystem(FilePermissionsFactory.Create());
             var secrets = new HostSecretsStore(fileSystem, permissions, platform);
-            var addresses = new HostAddressResolver(new NameLookup(), TimeProvider.System, TimeSpan.Zero);
+            var addresses = new HostAddressResolver(new NameLookup(), TimeProvider.System, TimeSpan.FromTicks(1));
             var programs = new HostProgramResolver(new LocalProgramResolver(platform, permissions, () => "/usr/bin"), commands);
             var connector = new HostConnector(
                 platform,

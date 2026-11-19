@@ -1,6 +1,7 @@
 using System.Text.RegularExpressions;
 using DssHarness.Core.Configuration;
 using DssHarness.Core.Output;
+using DssHarness.Core.Text;
 
 namespace DssHarness.Core.Runners;
 
@@ -72,7 +73,7 @@ public sealed record RunnerScope(
 /// engine treats as syntax.
 /// </para>
 /// <para>
-/// Every doubtful case answers no. A pattern that times out, an entry naming no messages, a leg
+/// Every doubtful case answers no. A pattern the linear matcher refuses, an entry naming no messages, a leg
 /// outside the scope: none of them excuse anything. The measurement is biased toward ABSENT because
 /// a wrong ABSENT costs a failure somebody reads, and a wrong PRESENT costs a regression nobody
 /// ever sees.
@@ -80,13 +81,6 @@ public sealed record RunnerScope(
 /// </remarks>
 public sealed class ExpectedExceptionMatcher(IHarnessOutput output)
 {
-    /// <summary>
-    /// How long one declared message may take to match. An entry is tracked configuration, so a
-    /// pattern that backtracks forever is a mistake; the bound turns it into no match rather than
-    /// into a run that never reports.
-    /// </summary>
-    public static readonly TimeSpan PatternTimeout = TimeSpan.FromSeconds(1);
-
     private readonly IHarnessOutput _output = output;
 
     /// <summary>
@@ -174,7 +168,8 @@ public sealed class ExpectedExceptionMatcher(IHarnessOutput output)
 
     /// <summary>
     /// Whether one declared message recognises <paramref name="text"/>, as a regular expression
-    /// where it compiles as one and as ordinary text either way.
+    /// where it compiles as one and as ordinary text either way. Matched in time linear in the text, however the
+    /// pattern nests (<see cref="LinearRegex"/>), so every match is answered and none is cut off by a clock.
     /// </summary>
     /// <param name="message">One entry of <c>messages</c>.</param>
     /// <param name="text">The failure's message or its output.</param>
@@ -195,19 +190,8 @@ public sealed class ExpectedExceptionMatcher(IHarnessOutput output)
             return true;
         }
 
-        try
-        {
-            return Regex.IsMatch(text, message, RegexOptions.None, PatternTimeout);
-        }
-        catch (ArgumentException)
-        {
-            // Not a regular expression at all, so plain text was the only reading; already tried.
-            return false;
-        }
-        catch (RegexMatchTimeoutException)
-        {
-            // An answer this expensive is no answer. Biased toward ABSENT: the failure stays genuine.
-            return false;
-        }
+        // Not a regular expression the linear matcher reads - none at all, or one with a construct it lacks - so plain
+        // text was the only reading, already tried. Biased toward ABSENT: the failure stays genuine.
+        return LinearRegex.TryCompile(message, RegexOptions.None, out var pattern, out _) && pattern.IsMatch(text);
     }
 }

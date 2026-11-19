@@ -1,5 +1,7 @@
+using DssHarness.Core.Output;
 using DssHarness.Core.Platform;
 using DssHarness.Core.Processes;
+using DssHarness.Core.Waiting;
 
 namespace DssHarness.Core.Hosts;
 
@@ -141,28 +143,31 @@ public interface IHostProgramResolver
     /// A directory given that cannot be looked in leaves a program found nowhere else unknown,
     /// never missing.
     /// </param>
-    /// <param name="budget">Longest one lookup may take.</param>
     /// <param name="cancellationToken">Stops the lookups.</param>
     Task<HostConnection> ResolveAsync(
         HostConnection connection,
         IReadOnlyList<string> programs,
         IReadOnlyList<string> directories,
-        TimeSpan budget,
         CancellationToken cancellationToken = default);
 
 }
 
 /// <inheritdoc cref="IHostProgramResolver"/>
-public sealed class HostProgramResolver(LocalProgramResolver local, IHostCommandRunner hostCommands) : IHostProgramResolver
+/// <param name="local">Finds a program on this machine.</param>
+/// <param name="hostCommands">Asks a host where a program is.</param>
+/// <param name="output">Where a lookup that lasts is told; nowhere where none is given.</param>
+/// <param name="clock">The clock a lookup's wait is measured on; the machine's own where none is given.</param>
+public sealed class HostProgramResolver(LocalProgramResolver local, IHostCommandRunner hostCommands, IHarnessOutput? output = null, TimeProvider? clock = null) : IHostProgramResolver
 {
     private readonly LocalProgramResolver _local = local;
     private readonly IHostCommandRunner _hostCommands = hostCommands;
+    private readonly IHarnessOutput? _output = output;
+    private readonly TimeProvider? _clock = clock;
 
     public async Task<HostConnection> ResolveAsync(
         HostConnection connection,
         IReadOnlyList<string> programs,
         IReadOnlyList<string> directories,
-        TimeSpan budget,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(connection);
@@ -170,7 +175,7 @@ public sealed class HostProgramResolver(LocalProgramResolver local, IHostCommand
         ArgumentNullException.ThrowIfNull(directories);
 
         var found = new Dictionary<string, ProgramLocation>(connection.Programs, StringComparer.Ordinal);
-        var home = new Lazy<Task<Home>>(() => HomeAsync(connection, budget, cancellationToken));
+        var home = new Lazy<Task<Home>>(() => HomeAsync(connection, cancellationToken));
 
         foreach (var program in programs.Distinct(StringComparer.Ordinal).Where(program => !found.ContainsKey(program)))
         {
@@ -178,7 +183,7 @@ public sealed class HostProgramResolver(LocalProgramResolver local, IHostCommand
             // run use.
             found[program] = connection.Host.Kind == HostKind.Local
                 ? _local.Find(program, directories)
-                : await ThereAsync(connection, program, directories, home, budget, cancellationToken).ConfigureAwait(false);
+                : await ThereAsync(connection, program, directories, home, cancellationToken).ConfigureAwait(false);
         }
 
         // The home, where a search asked the host for it, kept with what it found: a program found under it is
@@ -226,9 +231,9 @@ public sealed class HostProgramResolver(LocalProgramResolver local, IHostCommand
     /// listing - PowerShell's is a table - and reading it as "none of them exist" would call every program there
     /// missing.
     /// </remarks>
-    private async Task<Listing> ListAsync(HostConnection connection, IReadOnlyList<string> candidates, TimeSpan budget, CancellationToken cancellationToken)
+    private async Task<Listing> ListAsync(HostConnection connection, IReadOnlyList<string> candidates, CancellationToken cancellationToken)
     {
-        var listing = await RunAsync(connection, "ls", candidates, budget, cancellationToken).ConfigureAwait(false);
+        var listing = await RunAsync(connection, "ls", candidates, cancellationToken).ConfigureAwait(false);
 
         if (!HostProbes.Answered(listing))
         {
@@ -265,7 +270,6 @@ public sealed class HostProgramResolver(LocalProgramResolver local, IHostCommand
         string program,
         IReadOnlyList<string> directories,
         Lazy<Task<Home>> home,
-        TimeSpan budget,
         CancellationToken cancellationToken)
     {
         // The name travels inside a command line an ssh server hands to a shell, so a name no shell
@@ -275,7 +279,7 @@ public sealed class HostProgramResolver(LocalProgramResolver local, IHostCommand
             return new ProgramLocation(program, ProgramFound.Unreadable, Reason: Unspeakable(program));
         }
 
-        var onPath = await OnPathAsync(connection, program, budget, cancellationToken).ConfigureAwait(false);
+        var onPath = await OnPathAsync(connection, program, cancellationToken).ConfigureAwait(false);
 
         if (onPath.Found != ProgramFound.Nowhere)
         {
@@ -310,7 +314,7 @@ public sealed class HostProgramResolver(LocalProgramResolver local, IHostCommand
 
         if (candidates.Count > 0)
         {
-            var listing = await ListAsync(connection, candidates, budget, cancellationToken).ConfigureAwait(false);
+            var listing = await ListAsync(connection, candidates, cancellationToken).ConfigureAwait(false);
 
             if (!listing.Answered)
             {
@@ -342,14 +346,13 @@ public sealed class HostProgramResolver(LocalProgramResolver local, IHostCommand
     private async Task<ProgramLocation> OnPathAsync(
         HostConnection connection,
         string program,
-        TimeSpan budget,
         CancellationToken cancellationToken)
     {
         var answered = false;
 
         foreach (var lookup in Lookups(connection, program))
         {
-            var result = await RunAsync(connection, lookup.Program, lookup.Arguments, budget, cancellationToken)
+            var result = await RunAsync(connection, lookup.Program, lookup.Arguments, cancellationToken)
                 .ConfigureAwait(false);
 
             answered |= HostProbes.Answered(result);
@@ -370,9 +373,9 @@ public sealed class HostProgramResolver(LocalProgramResolver local, IHostCommand
     /// Both transports start a command there: <c>wsl.exe</c> is given <c>--cd ~</c>, and an ssh server
     /// starts a command in the user's home directory.
     /// </remarks>
-    private async Task<Home> HomeAsync(HostConnection connection, TimeSpan budget, CancellationToken cancellationToken)
+    private async Task<Home> HomeAsync(HostConnection connection, CancellationToken cancellationToken)
     {
-        var result = await RunAsync(connection, "pwd", [], budget, cancellationToken).ConfigureAwait(false);
+        var result = await RunAsync(connection, "pwd", [], cancellationToken).ConfigureAwait(false);
 
         return new Home(
             result.Succeeded && result.TrimmedOutput.Length > 0 ? result.TrimmedOutput : null,
@@ -475,15 +478,20 @@ public sealed class HostProgramResolver(LocalProgramResolver local, IHostCommand
 
     private static string Quoted(IEnumerable<string> directories) => string.Join(", ", directories.Select(directory => $"'{directory}'"));
 
+    /// <summary>
+    /// Runs one lookup on the host, waited for to its end (<see cref="ProgramWait"/>): a host that is merely far away, or
+    /// slow to start a shell, is waited for, told every <see cref="Waits.SaidEvery"/>, and only the caller's token ends it.
+    /// </summary>
     private Task<ProcessResult> RunAsync(
         HostConnection connection,
         string program,
         IReadOnlyList<string> arguments,
-        TimeSpan budget,
         CancellationToken cancellationToken)
-        => _hostCommands.RunAsync(
-            connection,
-            new HostCommand { Program = program, Arguments = arguments, Timeout = budget },
+        => ProgramWait.ToItsEndAsync(
+            token => _hostCommands.RunAsync(connection, new HostCommand { Program = program, Arguments = arguments }, token),
+            $"'{program}' on {connection.Host} to answer",
+            ProgramWait.Told(_output, ToolPackage.Command),
+            _clock,
             cancellationToken);
 
     private static string? FirstPath(string output) => Paths(output).FirstOrDefault();

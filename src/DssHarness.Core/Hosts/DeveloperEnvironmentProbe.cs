@@ -2,6 +2,8 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using DssHarness.Core.Configuration;
 using DssHarness.Core.FileSystem;
+using DssHarness.Core.Json;
+using DssHarness.Core.Output;
 using DssHarness.Core.Platform;
 using DssHarness.Core.Processes;
 
@@ -83,14 +85,23 @@ public sealed record DeveloperEnvironmentCheck(DeveloperEnvironmentFound Found, 
 /// a host without it turns that leg away as missing a tool, naming what was looked for - never a
 /// build that fails halfway for want of <c>cl</c>, or one a compiler refuses for the toolset it found.
 /// </remarks>
-public sealed class DeveloperEnvironmentProbe(IHostPlatform platform, IProcessRunner processRunner, IFileSystem fileSystem)
+/// <param name="platform">Says which platform this machine runs.</param>
+/// <param name="processRunner">Runs vswhere.</param>
+/// <param name="fileSystem">Reads the toolsets an instance holds.</param>
+/// <param name="output">Where a vswhere that lasts is told; nowhere where none is given.</param>
+/// <param name="clock">The clock that wait is measured on; the machine's own where none is given.</param>
+public sealed class DeveloperEnvironmentProbe(
+    IHostPlatform platform,
+    IProcessRunner processRunner,
+    IFileSystem fileSystem,
+    IHarnessOutput? output = null,
+    TimeProvider? clock = null)
 {
-    /// <summary>Longest vswhere may take.</summary>
-    public static readonly TimeSpan ProbeBudget = TimeSpan.FromSeconds(60);
-
     private readonly IHostPlatform _platform = platform;
     private readonly IProcessRunner _processRunner = processRunner;
     private readonly IFileSystem _fileSystem = fileSystem;
+    private readonly IHarnessOutput? _output = output;
+    private readonly TimeProvider? _clock = clock;
 
     /// <summary>
     /// Where Visual Studio's installer keeps vswhere: the one place it is always installed, since
@@ -127,15 +138,20 @@ public sealed class DeveloperEnvironmentProbe(IHostPlatform platform, IProcessRu
             // JSON rather than one property, so the instance and its version come from one answer;
             // UTF-8, so a path the console's code page cannot spell arrives whole. The newest alone
             // where any instance with the component will do; every one of them, newest first - the
-            // order -latest takes its one from - where the toolset decides which.
-            result = await _processRunner
-                .RunAsync(
-                    new ProcessRequest
-                    {
-                        FileName = vswhere,
-                        Arguments = [environment.ToolsVersion is null ? "-latest" : "-sort", "-products", "*", "-requires", environment.RequiresComponent, "-format", "json", "-utf8"],
-                        Timeout = ProbeBudget,
-                    },
+            // order -latest takes its one from - where the toolset decides which. Waited for to its end, and told while it
+            // lasts: a cold disk after a Visual Studio update has kept it minutes.
+            result = await ProgramWait
+                .ToItsEndAsync(
+                    token => _processRunner.RunAsync(
+                        new ProcessRequest
+                        {
+                            FileName = vswhere,
+                            Arguments = [environment.ToolsVersion is null ? "-latest" : "-sort", "-products", "*", "-requires", environment.RequiresComponent, "-format", "json", "-utf8"],
+                        },
+                        token),
+                    $"'{vswhere}' to list the Visual Studio instances",
+                    ProgramWait.Told(_output, DeveloperEnvironmentProvider.CommandName),
+                    _clock,
                     cancellationToken)
                 .ConfigureAwait(false);
         }
@@ -148,7 +164,7 @@ public sealed class DeveloperEnvironmentProbe(IHostPlatform platform, IProcessRu
             return DeveloperEnvironmentCheck.Unreadable($"'{vswhere}' could not be started: {ex.Message}");
         }
 
-        if (result.TimedOut || result.ExitCode != 0)
+        if (result.ExitCode != 0)
         {
             return DeveloperEnvironmentCheck.Unreadable(HostProbes.Failure($"'{vswhere}' could not list the Visual Studio instances", result));
         }
@@ -230,7 +246,7 @@ public sealed class DeveloperEnvironmentProbe(IHostPlatform platform, IProcessRu
     /// <exception cref="JsonException">It is not JSON.</exception>
     private static List<(string Path, string? Version)> Instances(string json)
     {
-        using var document = JsonDocument.Parse(json);
+        using var document = JsonDocument.Parse(json, JsonDepth.Document);
         var instances = new List<(string Path, string? Version)>();
 
         if (document.RootElement.ValueKind != JsonValueKind.Array)

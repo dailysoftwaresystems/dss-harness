@@ -4,6 +4,7 @@ using DssHarness.Core.FileSystem;
 using DssHarness.Core.Hosts;
 using DssHarness.Core.Platform;
 using DssHarness.Core.Processes;
+using NSubstitute;
 
 namespace DssHarness.Tests;
 
@@ -56,8 +57,8 @@ public sealed class DeveloperEnvironmentProviderTests
     /// <summary>
     /// The batch file is started by a relative path from a directory of its own, under the host's
     /// environment, with vcvarsall.bat and its arguments - the architecture alone, where the survey
-    /// found no toolset to ask for - handed over in variables rather than in its text; the directory
-    /// is gone afterwards.
+    /// found no toolset to ask for - handed over in variables rather than in its text, with no bound of the code's own on
+    /// how long it takes; the directory is gone afterwards.
     /// </summary>
     [Fact]
     public async Task TheCapture_RunsUnderTheHostsEnvironment_AndLeavesNothingBehind()
@@ -69,7 +70,7 @@ public sealed class DeveloperEnvironmentProviderTests
 
         var capture = Assert.Single(visualStudio.Captures);
         Assert.Equal(["/d", "/u", "/c", @".\capture.bat"], capture.Arguments);
-        Assert.Equal(DeveloperEnvironmentProvider.CaptureBudget, capture.Timeout);
+        Assert.Null(capture.Timeout);
         Assert.Equal(@"D:\cache", capture.Environment["CCACHE_DIR"]);
         Assert.Equal(
             Path.Combine(visualStudio.InstallationPath, "VC", "Auxiliary", "Build", "vcvarsall.bat"),
@@ -467,15 +468,30 @@ public sealed class DeveloperEnvironmentProviderTests
         Assert.StartsWith("developer environment 'vs': vcvarsall.bat amd64 could not be run: ", setUp.Failure, StringComparison.Ordinal);
     }
 
-    /// <summary>A vcvarsall.bat that outlives its budget is refused, naming the budget.</summary>
+    /// <summary>
+    /// A vcvarsall.bat that takes four minutes - measured on a cold disk after an update - is waited for, told every five
+    /// minutes it lasts, and set up as any other. Held to two minutes of the code's own, it was refused as one that never
+    /// finished.
+    /// </summary>
     [Fact]
-    public async Task AVcvarsallThatNeverFinishes_IsRefused_NamingTheBudget()
+    public async Task AFourMinuteVcvarsall_IsWaitedAndTold()
     {
-        using var visualStudio = new ScriptedVisualStudio { TimesOut = true };
+        var held = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var visualStudio = new ScriptedVisualStudio { Holding = (_, token) => held.Task.WaitAsync(token) };
+        var clock = new TimerClock();
+        var output = NSubstitute.Substitute.For<DssHarness.Core.Output.IHarnessOutput>();
 
-        var setUp = await visualStudio.Provider().SetUpAsync("vs", visualStudio.Found, "x86_64", NoHostEnvironment, TestContext.Current.CancellationToken);
+        var setUp = await FourMinutes.WaitedAndToldAsync(
+            clock,
+            visualStudio.Provider(output: output, clock: clock).SetUpAsync("vs", visualStudio.Found, "x86_64", NoHostEnvironment, TestContext.Current.CancellationToken),
+            held.SetResult,
+            TestContext.Current.CancellationToken);
 
-        Assert.Equal("developer environment 'vs': vcvarsall.bat amd64 did not finish within 120 seconds", setUp.Failure);
+        Assert.Null(setUp.Failure);
+        Assert.Null(Assert.Single(visualStudio.Captures).Timeout);
+        output.Received().Info(
+            DeveloperEnvironmentProvider.CommandName,
+            NSubstitute.Arg.Is<string>(line => line.StartsWith("has waited 5m00s for vcvarsall.bat amd64 of developer environment 'vs' to end", StringComparison.Ordinal)));
     }
 
     /// <summary>A shell that will not start is refused, naming the shell.</summary>

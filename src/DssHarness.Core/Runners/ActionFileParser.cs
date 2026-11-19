@@ -60,13 +60,6 @@ public sealed class ActionFileParser(
     IHarnessOutput output,
     IHostPlatform platform) : IActionFileParser
 {
-    /// <summary>
-    /// How long a declared pattern may take to be compiled or matched. A pattern is author-supplied
-    /// and an action file is tracked, so a pathological one is a mistake rather than an attack; the
-    /// bound exists so the mistake surfaces as a refusal instead of a run that never starts.
-    /// </summary>
-    public static readonly TimeSpan PatternTimeout = TimeSpan.FromSeconds(1);
-
     /// <summary>Top-level keys an action file may hold.</summary>
     private static readonly IReadOnlyList<string> FileKeys = KeyDescription.Names(ActionFileKeys.File);
 

@@ -7,6 +7,7 @@ using DssHarness.Core.FileSystem;
 using DssHarness.Core.Hosts;
 using DssHarness.Core.Repository;
 using DssHarness.Core.Results;
+using DssHarness.Core.Text;
 using DssHarness.Core.Worktrees;
 
 namespace DssHarness.Core.Sync;
@@ -28,7 +29,7 @@ namespace DssHarness.Core.Sync;
 /// for part of it - by git there, and so by the harness there, which finds its tree through git.
 /// </para>
 /// </remarks>
-public static partial class HostCopies
+public static class HostCopies
 {
     /// <summary>What a worktree's copy adds to the host's repositoryPath, before the worktree's name.</summary>
     public const string WorktreeSuffix = ".worktree-";
@@ -43,7 +44,7 @@ public static partial class HostCopies
     {
         ArgumentNullException.ThrowIfNull(name);
 
-        return CopyName().IsMatch(name);
+        return CopyName.IsMatch(name);
     }
 
     /// <summary>
@@ -121,7 +122,7 @@ public static partial class HostCopies
         }
 
         var leaf = Path.GetFileName(Path.TrimEndingDirectorySeparator(treeRoot));
-        var name = NotANameCharacter().Replace(leaf.ToLowerInvariant(), "-").Trim('-');
+        var name = NotANameCharacter.Replace(leaf.ToLowerInvariant(), "-").Trim('-');
 
         return name.Length > 0 ? name : "worktree";
     }
@@ -282,11 +283,11 @@ public static partial class HostCopies
 
     private static string Whole(string path) => Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
 
-    [GeneratedRegex("[^a-z0-9]+", RegexOptions.CultureInvariant)]
-    private static partial Regex NotANameCharacter();
+    /// <summary>A run of what no copy's name holds.</summary>
+    private static readonly Regex NotANameCharacter = LinearRegex.Compile("[^a-z0-9]+");
 
-    [GeneratedRegex(@"^[a-z0-9]+(-+[a-z0-9]+)*\z", RegexOptions.CultureInvariant)]
-    private static partial Regex CopyName();
+    /// <summary>A copy's name: words of lower-case letters and digits, joined by hyphens.</summary>
+    private static readonly Regex CopyName = LinearRegex.Compile(@"^[a-z0-9]+(-+[a-z0-9]+)*\z");
 }
 
 /// <summary>Where a host keeps the main checkout's copy for this machine, and what says so.</summary>
@@ -447,9 +448,6 @@ public sealed class HostCopyRecord(IFileSystem fileSystem, StringComparison path
 {
     /// <summary>The record's file name, in <see cref="HarnessLayout.HostCopiesDirectory"/>.</summary>
     public const string FileName = "record.json";
-
-    /// <summary>How long a change waits for another process changing the record.</summary>
-    private static readonly TimeSpan Window = TimeSpan.FromSeconds(30);
 
     private static readonly JsonSerializerOptions Options = JsonStateFile.Options;
 
@@ -644,7 +642,7 @@ public sealed class HostCopyRecord(IFileSystem fileSystem, StringComparison path
 
         return MachineWideFile.Update(
             System.IO.Path.GetFullPath(path),
-            Window,
+            MachineWideFile.Window,
             () => Read(path).FirstOrDefault(kept => kept.SameCopy(entry)));
     }
 
@@ -666,14 +664,14 @@ public sealed class HostCopyRecord(IFileSystem fileSystem, StringComparison path
     {
         var path = PathOf(layout);
 
-        return MachineWideFile.Update(System.IO.Path.GetFullPath(path), Window, () => Read(path));
+        return MachineWideFile.Update(System.IO.Path.GetFullPath(path), MachineWideFile.Window, () => Read(path));
     }
 
     private void Change(HarnessLayout layout, Func<IReadOnlyList<HostCopyEntry>, IReadOnlyList<HostCopyEntry>> change)
     {
         var path = PathOf(layout);
 
-        MachineWideFile.Update(System.IO.Path.GetFullPath(path), Window, () =>
+        MachineWideFile.Update(System.IO.Path.GetFullPath(path), MachineWideFile.Window, () =>
         {
             var before = Read(path);
             var after = change(before);

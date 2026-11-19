@@ -1,6 +1,6 @@
-using System.Text.RegularExpressions;
 using DssHarness.Core.Hosts;
 using DssHarness.Core.Processes;
+using DssHarness.Core.Text;
 
 namespace DssHarness.Core.Tools;
 
@@ -11,9 +11,6 @@ namespace DssHarness.Core.Tools;
 /// </summary>
 public static class ToolVersion
 {
-    /// <summary>Longest a probe's regex may take over what the probe printed.</summary>
-    private static readonly TimeSpan PatternBudget = TimeSpan.FromSeconds(2);
-
     /// <summary>
     /// The version a tool's probe reported, read the way the tool's configuration says to read it, or why none could
     /// be: the probe failed, or what it printed holds none.
@@ -48,18 +45,17 @@ public static class ToolVersion
             return (text.Split('\n').FirstOrDefault()?.Trim().Split(' ').LastOrDefault(), null);
         }
 
-        try
+        // Matched in time linear in what the probe printed, however the pattern nests: no clock cuts a match off.
+        if (!LinearRegex.TryCompile(pattern, System.Text.RegularExpressions.RegexOptions.None, out var probe, out var refusal))
         {
-            var match = Regex.Match(text, pattern, RegexOptions.CultureInvariant, PatternBudget);
+            return (null, $"the probe regex of '{tool}' could not be used: {refusal}");
+        }
 
-            return match.Success
-                ? (match.Groups.Count > 1 ? match.Groups[1].Value : match.Value, null)
-                : (null, $"the probe regex of '{tool}' matched nothing in what it printed: {HostProbes.Excerpt(HostProbes.AsConfigured(text, through))}");
-        }
-        catch (Exception ex) when (ex is ArgumentException or RegexMatchTimeoutException)
-        {
-            return (null, $"the probe regex of '{tool}' could not be used: {ex.Message}");
-        }
+        var match = probe.Match(text);
+
+        return match.Success
+            ? (match.Groups.Count > 1 ? match.Groups[1].Value : match.Value, null)
+            : (null, $"the probe regex of '{tool}' matched nothing in what it printed: {HostProbes.Quoted(HostProbes.AsConfigured(text, through))}");
     }
 
     /// <summary>

@@ -386,24 +386,20 @@ public sealed class ToolUpdateServiceTests
     }
 
     /// <summary>
-    /// An update dotnet did not finish within its bound is a change begun and not finished, which running it again can
-    /// finish: it exits as every program's update begun and not finished does, by the one rule both updaters share.
+    /// dotnet is waited for to its end, however long an update over a slow link takes: neither the change nor a listing
+    /// carries a bound of the code's own. Held to ten minutes, an update still downloading was cut off part way, and the
+    /// machine left with half a tool.
     /// </summary>
     [Fact]
-    public async Task AnUpdateThatDidNotFinishInTime_IsIncomplete_AsEveryProgramsUpdateIs()
+    public async Task AnUpdate_AndEveryListing_AreWaitedForToTheirEnd()
     {
         var kit = new Kit(installed: "0.6.12", newest: "0.6.13");
-        kit.Dotnet.Change = new ProcessResult(-1, string.Empty, string.Empty, ToolPackage.ChangeBudget, TimedOut: true);
-        kit.Dotnet.Listed = ["0.6.12", "0.6.12"];
 
         var outcome = await kit.Service().RunAsync(new ToolUpdateRequest(), Token);
 
-        Assert.Equal(
-            (HarnessExit.Incomplete, $"updating DssHarness in {Global} from 0.6.12 to 0.6.13 failed: there was no answer within 600 seconds"),
-            (outcome.ExitCode, outcome.Message));
-        Assert.Equal(
-            ["DssHarness is listed there as 0.6.12 since.", "It was begun and not finished; running it again can finish it."],
-            outcome.Details);
+        Assert.Equal(HarnessExit.Success, outcome.ExitCode);
+        Assert.True(kit.Dotnet.Bounds.Count >= 3, "the update and the listings before and after it were run");
+        Assert.All(kit.Dotnet.Bounds, bound => Assert.Null(bound));
     }
 
     /// <summary>An update dotnet called done that is not listed as the release it was moved to is a failure, saying what is listed.</summary>
@@ -757,6 +753,9 @@ public sealed class ToolUpdateServiceTests
         /// <summary>Whether each command, in turn, was given a token that can stop it.</summary>
         public List<bool> Stoppable { get; } = [];
 
+        /// <summary>The bound each command, in turn, carried.</summary>
+        public List<TimeSpan?> Bounds { get; } = [];
+
         /// <summary>What each listing says is installed, in turn; the last from then on.</summary>
         public string?[] Listed { get; set; } = [installed, newest ?? "0.6.13"];
 
@@ -780,6 +779,7 @@ public sealed class ToolUpdateServiceTests
 
             Ran.Add(ran);
             Stoppable.Add(cancellationToken.CanBeCanceled);
+            Bounds.Add(request.Timeout);
             Running?.Invoke(ran);
 
             if (!ran.Contains(" list ", StringComparison.Ordinal))

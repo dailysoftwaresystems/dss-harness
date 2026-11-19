@@ -4,6 +4,7 @@ using System.Text.Json.Serialization;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Git;
 using DssHarness.Core.Hosts;
+using DssHarness.Core.Json;
 using DssHarness.Core.Platform;
 using DssHarness.Core.Processes;
 using DssHarness.Core.Repository;
@@ -1358,6 +1359,9 @@ public sealed class LocalSyncTransport(
         // it is wherever this tool reads JSON that decides something. This file decides whose
         // directory a sync is about to delete into, so it is the last one that should guess.
         UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
+
+        // At any depth (JsonDepth): a marker is refused for what its shape cannot hold, never for how deep it nests.
+        MaxDepth = JsonDepth.Unbounded,
     };
 
     /// <summary>What the marker file records, so a reader can tell where a copy came from.</summary>

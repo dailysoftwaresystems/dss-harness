@@ -1,4 +1,6 @@
+using DssHarness.Core.Execution;
 using DssHarness.Core.FileSystem;
+using DssHarness.Core.Output;
 using DssHarness.Core.Platform;
 using DssHarness.Core.Processes;
 using DssHarness.Core.Repository;
@@ -69,7 +71,14 @@ public interface IWslPageCache
 /// <param name="secrets">Reads which distribution each WSL host reaches.</param>
 /// <param name="hostCommands">Asks WSL which distributions run, and drops the cache in one.</param>
 /// <param name="platform">Says whether this machine is Windows, where alone WSL runs.</param>
-public sealed class WslPageCache(IHostSecretsStore secrets, IHostCommandRunner hostCommands, IHostPlatform platform) : IWslPageCache
+/// <param name="output">Where a listing or a drop that lasts is told; nowhere where none is given.</param>
+/// <param name="clock">The clock those waits are measured on; the machine's own where none is given.</param>
+public sealed class WslPageCache(
+    IHostSecretsStore secrets,
+    IHostCommandRunner hostCommands,
+    IHostPlatform platform,
+    IHarnessOutput? output = null,
+    TimeProvider? clock = null) : IWslPageCache
 {
     /// <summary>
     /// What drops the cache, as one shell command: what is written and not yet on disk is written first, so it is clean and
@@ -77,15 +86,11 @@ public sealed class WslPageCache(IHostSecretsStore secrets, IHostCommandRunner h
     /// </summary>
     public const string DropCommand = "grep '^Cached:' /proc/meminfo; sync; echo 1 > /proc/sys/vm/drop_caches && grep '^Cached:' /proc/meminfo";
 
-    /// <summary>How long WSL is given to say which distributions run.</summary>
-    private static readonly TimeSpan ListBudget = TimeSpan.FromSeconds(30);
-
-    /// <summary>How long the drop is given: what <c>sync</c> writes first may take a while under a build writing hard.</summary>
-    private static readonly TimeSpan DropBudget = TimeSpan.FromMinutes(2);
-
     private readonly IHostSecretsStore _secrets = secrets;
     private readonly IHostCommandRunner _hostCommands = hostCommands;
     private readonly IHostPlatform _platform = platform;
+    private readonly IHarnessOutput? _output = output;
+    private readonly TimeProvider? _clock = clock;
 
     public async Task<PageCacheDrop?> DropAsync(HarnessContext context, CancellationToken cancellationToken)
     {
@@ -118,14 +123,14 @@ public sealed class WslPageCache(IHostSecretsStore secrets, IHostCommandRunner h
 
         try
         {
-            listed = await _hostCommands.ListRunningWslDistributionsAsync(ListBudget, cancellationToken).ConfigureAwait(false);
+            listed = await WaitedAsync(_hostCommands.ListRunningWslDistributionsAsync, "WSL to say which distributions run", cancellationToken).ConfigureAwait(false);
         }
         catch (HarnessException ex)
         {
             return PageCacheDrop.NotDropped($"WSL's page cache was not dropped: {ex.Message}");
         }
 
-        if (listed.TimedOut || !listed.Succeeded)
+        if (!listed.Succeeded)
         {
             return PageCacheDrop.NotDropped($"WSL's page cache was not dropped: {HostProbes.Failure("WSL did not say which distributions run", listed)}");
         }
@@ -145,8 +150,11 @@ public sealed class WslPageCache(IHostSecretsStore secrets, IHostCommandRunner h
 
         try
         {
-            dropped = await _hostCommands
-                .RunAsync(connection, new HostCommand { Program = "sh", Arguments = ["-c", DropCommand], AsRoot = true, StandardInput = string.Empty, Timeout = DropBudget }, cancellationToken)
+            // Waited for to its end: what sync writes first may take a while under a build writing hard, and is told.
+            dropped = await WaitedAsync(
+                    token => _hostCommands.RunAsync(connection, new HostCommand { Program = "sh", Arguments = ["-c", DropCommand], AsRoot = true, StandardInput = string.Empty }, token),
+                    $"{through.Host} to drop WSL's page cache",
+                    cancellationToken)
                 .ConfigureAwait(false);
         }
         catch (HarnessException ex)
@@ -154,10 +162,17 @@ public sealed class WslPageCache(IHostSecretsStore secrets, IHostCommandRunner h
             return PageCacheDrop.NotDropped($"WSL's page cache was not dropped: {ex.Message}");
         }
 
-        return dropped.Succeeded && !dropped.TimedOut
+        return dropped.Succeeded
             ? PageCacheDrop.Dropped(through.Host, DroppedBytes(dropped.StandardOutput))
             : PageCacheDrop.NotDropped(HostProbes.Failure($"WSL's page cache could not be dropped as root in {through.Host}", dropped, connection));
     }
+
+    /// <summary>
+    /// <paramref name="run"/>'s answer, waited for to its end (<see cref="ProgramWait"/>) and told under the admission
+    /// the drop is made for, while it lasts.
+    /// </summary>
+    private Task<ProcessResult> WaitedAsync(Func<CancellationToken, Task<ProcessResult>> run, string subject, CancellationToken cancellationToken)
+        => ProgramWait.ToItsEndAsync(run, subject, ProgramWait.Told(_output, HeavyLegSlots.CommandName), _clock, cancellationToken);
 
     /// <summary>
     /// How much of the cache <paramref name="printed"/> - what <see cref="DropCommand"/> prints - says was dropped, or

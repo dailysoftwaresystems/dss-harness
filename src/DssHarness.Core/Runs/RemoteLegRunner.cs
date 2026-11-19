@@ -2,6 +2,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using DssHarness.Core.Execution;
 using DssHarness.Core.Hosts;
+using DssHarness.Core.Json;
 using DssHarness.Core.Output;
 using DssHarness.Core.Processes;
 using DssHarness.Core.Results;
@@ -57,6 +58,9 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
         PropertyNameCaseInsensitive = true,
+
+        // At any depth (JsonDepth): a host's ledger is refused for what its shape cannot hold, never for how deep it nests.
+        MaxDepth = JsonDepth.Unbounded,
     };
 
     private readonly IHostCommandRunner _hostCommands = hostCommands;

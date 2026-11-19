@@ -113,13 +113,11 @@ public sealed class DeveloperEnvironmentProvider(
     IHostPlatform platform,
     IProcessRunner processRunner,
     IFileSystem fileSystem,
-    IHarnessOutput output)
+    IHarnessOutput output,
+    TimeProvider? clock = null)
 {
     /// <summary>What this reports under.</summary>
     public const string CommandName = "developer-environment";
-
-    /// <summary>Longest vcvarsall.bat may take.</summary>
-    public static readonly TimeSpan CaptureBudget = TimeSpan.FromMinutes(2);
 
     /// <summary>What the batch file is given the instance's vcvarsall.bat in.</summary>
     internal const string ScriptVariable = "DSSHARNESS_VCVARSALL";
@@ -147,6 +145,7 @@ public sealed class DeveloperEnvironmentProvider(
     private readonly IProcessRunner _processRunner = processRunner;
     private readonly IFileSystem _fileSystem = fileSystem;
     private readonly IHarnessOutput _output = output;
+    private readonly TimeProvider? _clock = clock;
     private readonly ConcurrentDictionary<(string Name, string Instance, string Toolset, string Architecture, string Over), Lazy<Task<DeveloperEnvironmentSetup>>> _captured = new();
 
     /// <summary>
@@ -334,17 +333,22 @@ public sealed class DeveloperEnvironmentProvider(
         try
         {
             // Started by a relative path from its own directory, so the scratch directory's name -
-            // a user's profile can hold spaces and brackets - never reaches cmd.exe's command line.
-            result = await _processRunner
-                .RunAsync(
-                    new ProcessRequest
-                    {
-                        FileName = shell,
-                        Arguments = ["/d", "/u", "/c", @".\capture.bat"],
-                        WorkingDirectory = scratch,
-                        Environment = environment,
-                        Timeout = CaptureBudget,
-                    },
+            // a user's profile can hold spaces and brackets - never reaches cmd.exe's command line. Waited for to its end,
+            // and told while it lasts: measured, a vcvarsall.bat on a cold disk took four minutes, and is no failure.
+            result = await ProgramWait
+                .ToItsEndAsync(
+                    token => _processRunner.RunAsync(
+                        new ProcessRequest
+                        {
+                            FileName = shell,
+                            Arguments = ["/d", "/u", "/c", @".\capture.bat"],
+                            WorkingDirectory = scratch,
+                            Environment = environment,
+                        },
+                        token),
+                    $"vcvarsall.bat {vcvars.Arguments} of developer environment '{name}' to end",
+                    ProgramWait.Told(_output, CommandName),
+                    _clock,
                     cancellationToken)
                 .ConfigureAwait(false);
         }
@@ -367,12 +371,6 @@ public sealed class DeveloperEnvironmentProvider(
         ProcessResult result)
     {
         string Written(string file) => Path.Combine(scratch, file);
-
-        if (result.TimedOut)
-        {
-            return DeveloperEnvironmentSetup.Failed(
-                $"developer environment '{name}': vcvarsall.bat {vcvars.Arguments} did not finish within {CaptureBudget.TotalSeconds:0} seconds");
-        }
 
         if (!_fileSystem.FileExists(Written("before.env")) || !_fileSystem.FileExists(Written("after.env")) || !_fileSystem.FileExists(Written("exit.txt")))
         {

@@ -5,6 +5,7 @@ using System.Text.Json.Serialization;
 using DssHarness.Core.Execution;
 using DssHarness.Core.Git;
 using DssHarness.Core.Hosts;
+using DssHarness.Core.Json;
 using DssHarness.Core.Output;
 using DssHarness.Core.Results;
 
@@ -464,6 +465,9 @@ public static class SyncServe
         // A shape one end does not recognise is a hard failure rather than silent data loss, as it
         // is everywhere else this tool reads JSON.
         UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
+
+        // At any depth (JsonDepth): an answer is refused for what its shape cannot hold, never for how deep it nests.
+        MaxDepth = JsonDepth.Unbounded,
     };
 
     /// <summary>

@@ -6,6 +6,7 @@ using System.Text.Json.Serialization;
 using DssHarness.Core.Configuration;
 using DssHarness.Core.Execution;
 using DssHarness.Core.FileSystem;
+using DssHarness.Core.Json;
 using DssHarness.Core.Processes;
 using DssHarness.Core.Results;
 
@@ -58,9 +59,6 @@ public static class HostAgentProtocol
     /// </summary>
     public const int SilenceLooks = 4;
 
-    /// <summary>The longest beat a request may say its asker writes: an hour, past which a host would wait most of a day on silence.</summary>
-    public const int LongestBeatSeconds = 3600;
-
     /// <summary>What a beat writes: anything read on the input counts as one, and this says what it is to whoever reads a capture.</summary>
     public const string BeatLine = CommandName + ": beat";
 
@@ -88,6 +86,9 @@ public static class HostAgentProtocol
         Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
         RespectNullableAnnotations = true,
         UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
+
+        // At any depth (JsonDepth): a request is refused for what its own shape cannot hold, never for how deep it nests.
+        MaxDepth = JsonDepth.Unbounded,
         Converters =
         {
             new JsonStringEnumConverter(JsonNamingPolicy.CamelCase),

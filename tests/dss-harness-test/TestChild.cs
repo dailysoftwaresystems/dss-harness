@@ -1123,8 +1123,7 @@ internal static class TestChild
             platform,
             new DssHarness.Core.Processes.ProcessRunner(platform, DssHarness.Core.Platform.FilePermissionsFactory.Create()));
 
-        // Longer than an agent gives it: a busy machine's table is read slowly, and this is no test of that budget.
-        var resort = new DssHarness.Core.Hosts.HostAgentLastResort(table, platform, TimeSpan.FromMinutes(5));
+        var resort = new DssHarness.Core.Hosts.HostAgentLastResort(table, platform);
 
         output.Write(resort.EndStartedAsync().GetAwaiter().GetResult() + "\n");
         output.Flush();

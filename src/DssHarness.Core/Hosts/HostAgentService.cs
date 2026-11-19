@@ -5,10 +5,12 @@ using System.Text.Json;
 using DssHarness.Core.Configuration;
 using DssHarness.Core.Execution;
 using DssHarness.Core.FileSystem;
+using DssHarness.Core.Json;
 using DssHarness.Core.Output;
 using DssHarness.Core.Platform;
 using DssHarness.Core.Processes;
 using DssHarness.Core.Results;
+using DssHarness.Core.Waiting;
 
 namespace DssHarness.Core.Hosts;
 
@@ -20,11 +22,12 @@ namespace DssHarness.Core.Hosts;
 /// <remarks>
 /// What a run request starts never outlives the machine that asked for it. That machine has gone when the input it holds
 /// open ends, when that input cannot be read, or when it stops writing the beat its request said it would write - the
-/// one sign that needs nothing of whatever carries the input in between. What the request started is then cancelled, and
-/// where it has not stopped within <see cref="HostAgentPatience.Unwind"/> - <see cref="HostAgentPatience.Finishing"/>,
-/// for a command that finishes what it began - the agent ends its processes and itself. A hold is no run request: the
-/// process that holds a host awake between commands is started to outlast the request that asked for it, and ends on its
-/// own seconds.
+/// one sign that needs nothing of whatever carries the input in between. What the request started is then cancelled and
+/// waited for while anything it started still runs, however long that takes to stop; once nothing does and it still has
+/// not answered - it reads what something its child left behind holds open, or writes a line nobody reads - the agent
+/// ends its processes and itself, as it does where the agent is itself stopped meanwhile. A command past its point of no
+/// return is waited for to its end. A hold is no run request: the process that holds a host awake between commands is
+/// started to outlast the request that asked for it, and ends on its own seconds.
 /// </remarks>
 public sealed class HostAgentService(
     IHostPlatform platform,
@@ -128,15 +131,17 @@ public sealed class HostAgentService(
             return await RefuseAsync(error, HarnessExit.UsageError, "the request is empty").ConfigureAwait(false);
         }
 
-        // A beat no machine writes: refused, where watched for it would be a wait no clock can hold, and the run left
-        // unwatched without a word.
-        if (request.BeatSeconds is < 0 or > HostAgentProtocol.LongestBeatSeconds)
+        // A beat no machine writes, every so many seconds below none: refused, where watched for it would be a silence that
+        // has passed before it began, and the run cancelled at once. Any count of seconds from one up is a beat a host
+        // watches for, however long: the silence it lets pass is a span of time that holds any count of them, waited in
+        // looks that each fit a timer (WatchBeatAsync).
+        if (request.BeatSeconds < 0)
         {
             return await RefuseAsync(
                 error,
                 HarnessExit.UsageError,
                 $"the request says its asker writes a beat every {request.BeatSeconds.ToString(CultureInfo.InvariantCulture)} s, and a host counts "
-                + $"one of 0, for none, to {HostAgentProtocol.LongestBeatSeconds.ToString(CultureInfo.InvariantCulture)} s").ConfigureAwait(false);
+                + "one of 0, for none, or of a second or more").ConfigureAwait(false);
         }
 
         // The machine that asked holds its end open while the request is served, so the end of the input means
@@ -145,7 +150,7 @@ public sealed class HostAgentService(
         // nothing, so a run request is cancelled as well once the beat it said it would write has stopped.
         using var abandoned = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         using var served = new CancellationTokenSource();
-        var gone = new Gone(abandoned, request.Kind == HostAgentRequestKind.Run ? error : null, _patience.Saying);
+        var gone = new Gone(abandoned, request.Kind == HostAgentRequestKind.Run ? error : null);
         var heard = new StrongBox<long>(_patience.Clock.GetTimestamp());
 
         _ = WatchInputAsync(input, heard, gone, _patience.Clock);
@@ -208,16 +213,21 @@ public sealed class HostAgentService(
             return await HoldAsync(request, output, error).ConfigureAwait(false);
         }
 
-        return await WithinTheUnwindAsync(RunAsync(request, output, error, run, abandoned), request, error, gone, abandoned).ConfigureAwait(false);
+        return await WithinTheUnwindAsync(RunAsync(request, output, error, run, abandoned), request, error, gone, abandoned, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
-    /// What <paramref name="serving"/> answers, where it answers before it is cancelled or within
-    /// <see cref="HostAgentPatience.Unwind"/> of that - <see cref="HostAgentPatience.Finishing"/>, for a command past
-    /// its point of no return; and otherwise the end of everything it started, and of this process, by
-    /// <see cref="IHostAgentLastResort"/>.
+    /// What <paramref name="serving"/> answers, where it answers before it is cancelled, or once cancelled while anything
+    /// it started still runs - to its end, for a command past its point of no return; and otherwise the end of everything
+    /// it started, and of this process, by <see cref="IHostAgentLastResort"/>.
     /// </summary>
-    private async Task<int> WithinTheUnwindAsync(Task<int> serving, HostAgentRequest request, TextWriter error, Gone gone, CancellationToken abandoned)
+    /// <param name="serving">The run being served.</param>
+    /// <param name="request">The request it serves.</param>
+    /// <param name="error">Where the machine that asked reads.</param>
+    /// <param name="gone">Why the machine that asked was taken to have gone, where it was.</param>
+    /// <param name="abandoned">Cancels the run: the machine that asked has gone, or this agent was stopped.</param>
+    /// <param name="stopped">This agent's own stop, which ends the wait on a run that has not stopped.</param>
+    private async Task<int> WithinTheUnwindAsync(Task<int> serving, HostAgentRequest request, TextWriter error, Gone gone, CancellationToken abandoned, CancellationToken stopped)
     {
         var cancelled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -229,33 +239,43 @@ public sealed class HostAgentService(
             }
         }
 
-        // A deletion, a fold, a hand-over goes on once cancelled, to finish what it began or to say what is left: given
-        // here what it is given where it is typed and interrupted, never ended part way with nothing said.
-        var unwind = PointOfNoReturn.Holds([.. request.Arguments.Select(argument => argument.Text)]) ? _patience.Finishing : _patience.Unwind;
+        // A deletion, a fold, a hand-over goes on once cancelled, to finish what it began or to say what is left, by the
+        // grace it is given where it is typed and interrupted: waited for to its end, never ended part way with nothing said.
+        // Any other command is waited for while anything it started still runs - a build tool stopping, its output read to
+        // the end - however long that takes; each wait told every few minutes where the machine that asked would read it.
+        var finishing = PointOfNoReturn.Holds([.. request.Arguments.Select(argument => argument.Text)]);
+        var waited = await Waits
+            .ForAsync(
+                token => finishing ? AnsweredAsync(serving, token) : WhileStartedRunsAsync(serving, token),
+                new WaitWatch("what the request started here to stop", told => _ = Gone.SayAsync(error, [told.Line()]), Bound: null, _patience.Clock),
+                finishing ? CancellationToken.None : stopped)
+            .ConfigureAwait(false);
 
-        if (await Task.WhenAny(serving, Task.Delay(unwind, CancellationToken.None)).ConfigureAwait(false) == serving)
+        if (waited is { Kind: WaitEndKind.Done, Value: { } answered })
         {
-            return await serving.ConfigureAwait(false);
+            return answered;
         }
 
         try
         {
             // What was ended is said once it has been tried, never before: said as any other end is, and best read by
-            // nobody - the machine that asked has gone, or is not reading.
+            // nobody - the machine that asked has gone, or this agent was stopped.
             var ended = await _lastResort.EndStartedAsync().ConfigureAwait(false);
-            var seconds = Math.Ceiling(unwind.TotalSeconds).ToString(CultureInfo.InvariantCulture);
+            var still = waited.Kind == WaitEndKind.Done
+                ? "and waits, with nothing it started still running, on what will never end - the output of something its "
+                    + "child left behind, or a line nobody reads"
+                : "and this agent was stopped before it had stopped";
 
-            await Gone.SayWithinAsync(
+            await Gone.SayAsync(
                 error,
                 [
                     FailureLine.For(
                         HostAgentProtocol.CommandName,
                         _home.Shown(
-                            $"what the request started here was cancelled{(gone.Why is { } why ? $" - {why}" : string.Empty)} - and had not stopped {seconds} s "
-                            + $"later: {ended}, and this process ends")),
+                            $"what the request started here was cancelled{(gone.Why is { } why ? $" - {why}" : string.Empty)} - {still}: "
+                            + $"{ended}, and this process ends")),
                     .. request.Nonce is { Length: > 0 } nonce ? [HostAgentProtocol.CompletionLine(nonce, HarnessExit.Cancelled)] : Array.Empty<string>(),
-                ],
-                _patience.Saying).ConfigureAwait(false);
+                ]).ConfigureAwait(false);
         }
         finally
         {
@@ -264,6 +284,36 @@ public sealed class HostAgentService(
         }
 
         return HarnessExit.Cancelled;
+    }
+
+    /// <summary>What <paramref name="serving"/> answers, or the cancellation <paramref name="cancellationToken"/> makes.</summary>
+    private static async Task<int?> AnsweredAsync(Task<int> serving, CancellationToken cancellationToken)
+        => await serving.WaitAsync(cancellationToken).ConfigureAwait(false);
+
+    /// <summary>
+    /// What <paramref name="serving"/>, cancelled, answers, looked for every <see cref="Waits.LooksAgainEvery"/> while
+    /// anything this agent started still runs; <see langword="null"/> once nothing does and it has still not answered.
+    /// </summary>
+    private async Task<int?> WhileStartedRunsAsync(Task<int> serving, CancellationToken cancellationToken)
+    {
+        while (true)
+        {
+            using var paused = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            var looked = await Task.WhenAny(serving, _patience.Pause(Waits.LooksAgainEvery, paused.Token)).ConfigureAwait(false);
+            await paused.CancelAsync().ConfigureAwait(false);
+
+            if (looked == serving)
+            {
+                return await serving.ConfigureAwait(false);
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (!await _lastResort.AnyStartedRunsAsync(cancellationToken).ConfigureAwait(false))
+            {
+                return serving.IsCompleted ? await serving.ConfigureAwait(false) : null;
+            }
+        }
     }
 
     /// <summary>
@@ -710,7 +760,7 @@ public sealed class HostAgentService(
 
         try
         {
-            using var document = JsonDocument.Parse(line);
+            using var document = JsonDocument.Parse(line, JsonDepth.Document);
             var root = document.RootElement;
 
             if (root.ValueKind != JsonValueKind.Object)
@@ -773,15 +823,18 @@ public sealed class HostAgentService(
     /// <summary>
     /// Says the machine that asked has gone once nothing has been read on its input for <paramref name="silence"/>:
     /// looked at <see cref="HostAgentProtocol.SilenceLooks"/> times in that long, by <paramref name="patience"/>'s clock,
-    /// until <paramref name="served"/>.
+    /// until <paramref name="served"/> - and at least every <see cref="Waits.SaidEvery"/>, so the silence of a beat of any
+    /// length is waited in looks that each fit a timer.
     /// </summary>
     private static async Task WatchBeatAsync(TimeSpan silence, StrongBox<long> heard, Gone gone, HostAgentPatience patience, CancellationToken served)
     {
+        var look = Waits.Shorter(silence / HostAgentProtocol.SilenceLooks, Waits.SaidEvery);
+
         try
         {
             while (patience.Clock.GetElapsedTime(Volatile.Read(ref heard.Value)) < silence)
             {
-                await patience.Pause(silence / HostAgentProtocol.SilenceLooks, served).ConfigureAwait(false);
+                await patience.Pause(look, served).ConfigureAwait(false);
             }
         }
         catch (Exception ex) when (ex is OperationCanceledException or ObjectDisposedException)
@@ -803,8 +856,7 @@ public sealed class HostAgentService(
     /// </summary>
     /// <param name="abandoned">Cancels what the request started.</param>
     /// <param name="error">Where why is written; <see langword="null"/> to say nothing, as for a request that starts no command.</param>
-    /// <param name="saying">How long the writing of it is waited for.</param>
-    private sealed class Gone(CancellationTokenSource abandoned, TextWriter? error, TimeSpan saying)
+    private sealed class Gone(CancellationTokenSource abandoned, TextWriter? error)
     {
         private int _settled;
 
@@ -831,10 +883,9 @@ public sealed class HostAgentService(
             // completion line.
             if (say && error is not null)
             {
-                await SayWithinAsync(
+                await SayAsync(
                     error,
-                    [FailureLine.For(HostAgentProtocol.CommandName, $"the machine that asked has gone - {why} - so what it started here is stopped")],
-                    saying).ConfigureAwait(false);
+                    [FailureLine.For(HostAgentProtocol.CommandName, $"the machine that asked has gone - {why} - so what it started here is stopped")]).ConfigureAwait(false);
             }
 
             // A request served as this was told has let go of its token already.
@@ -842,17 +893,27 @@ public sealed class HostAgentService(
         }
 
         /// <summary>
-        /// Writes <paramref name="lines"/> where the machine that asked reads, and waits no longer than
-        /// <paramref name="budget"/> for that: a line nobody reads may never finish being written, and neither a
-        /// cancellation nor the agent's end waits on one. Written from another thread, because the console's own writer
-        /// writes where it is called and hands back nothing to stop waiting on: one whose reader had stopped reading held
-        /// the cancellation it came before, for as long as the connection stood.
+        /// Writes <paramref name="lines"/> where the machine that asked reads, from another thread, and waits only until
+        /// the writing has begun: it is said where the machine that asked has gone, or this agent was stopped, and a line
+        /// nobody reads may never finish being written - the console's own writer writes where it is called and hands back
+        /// nothing to stop waiting on, and one whose reader had stopped reading held the cancellation it came before, for as
+        /// long as the connection stood. Begun first, it is first through the writer, whose lock orders what follows it.
         /// </summary>
-        public static Task SayWithinAsync(TextWriter error, IReadOnlyList<string> lines, TimeSpan budget)
-            => Task.WhenAny(Task.Run(() => SayAsync(error, lines)), Task.Delay(budget, CancellationToken.None));
+        public static Task SayAsync(TextWriter error, IReadOnlyList<string> lines)
+        {
+            var begun = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            _ = Task.Run(() =>
+            {
+                begun.TrySetResult();
+                return WriteAsync(error, lines);
+            });
+
+            return begun.Task;
+        }
 
         /// <summary>Writes <paramref name="lines"/> where the machine that asked reads, which may no longer be there to.</summary>
-        private static async Task SayAsync(TextWriter error, IReadOnlyList<string> lines)
+        private static async Task WriteAsync(TextWriter error, IReadOnlyList<string> lines)
         {
             try
             {

@@ -22,6 +22,7 @@ using DssHarness.Core.Results;
 using DssHarness.Core.Runners;
 using DssHarness.Core.Runs;
 using DssHarness.Core.Sync;
+using DssHarness.Core.Waiting;
 
 namespace DssHarness.Tests;
 
@@ -481,16 +482,14 @@ public sealed partial class HelpTests
             StringComparison.Ordinal);
         Assert.Contains("On Linux and macOS a session hung up cancels it the same way.", prose, StringComparison.Ordinal);
 
-        // What a cancelled command is given to stop in, from the patience a host is built with: one that finishes what
-        // it began as long as the command line gives it where it is typed.
-        Assert.Equal(
-            (TimeSpan.FromSeconds(60), DssHarness.Core.Worktrees.WorktreeService.DefaultInterruptionGrace),
-            (new HostAgentPatience().Unwind, new HostAgentPatience().Finishing));
+        // What a cancelled command is waited for while: no time of the code's own, only what it started still running.
         Assert.Contains(
-            "What the host started that has not stopped 60 seconds after it was cancelled - a command reading the output of something its child "
-            + "left running - is ended with its processes, and the host's DssHarness with it, so the host is never held by a run nobody reads; a "
-            + "command that finishes what it began - a deletion, a fold, a hand-over - is given 120, as it is where it is typed and interrupted. "
-            + "Where this machine can no longer write to the connection while a host works, it says so here, with why: the host hears no more of "
+            "What the host started is then waited for while anything it started still runs, however long that takes to stop, and said every "
+            + $"{Waits.SaidEvery.TotalMinutes} minutes where this machine would read it; once nothing it started runs and it still has not ended - a "
+            + "command reading the output of something its child left running, or writing a line nobody reads - it is ended, and the host's "
+            + "DssHarness with it, so the host is never held by a run nobody reads, as it is where the host's DssHarness is itself stopped "
+            + "meanwhile. A command that finishes what it began - a deletion, a fold, a hand-over - is waited for to its end, as it is where it "
+            + "is typed and interrupted. Where this machine can no longer write to the connection while a host works, it says so here, with why: the host hears no more of "
             + "it, and stops what it was asked. To end a run on its hosts, stop the command that dispatched it.",
             prose,
             StringComparison.Ordinal);
@@ -518,12 +517,12 @@ public sealed partial class HelpTests
         Assert.Contains(
             "Once the update has begun this command does not stop it, interrupted or not, and reads back what it left: it says the update done only once "
             + $"the tool is listed as that release, and a failure with what dotnet said and what is listed since, or why that is not known "
-            + $"({HarnessExit.CommandFailed}; {HarnessExit.Incomplete} where dotnet did not finish within {ToolPackage.ChangeBudget.TotalMinutes} "
-            + "minutes, an update begun and not finished, which running it again can finish, as every program's update this tool makes answers it).",
+            + $"({HarnessExit.CommandFailed}). dotnet is waited for to its end, however long it takes, and said every {Waits.SaidEvery.TotalMinutes} "
+            + "minutes while it lasts.",
             prose,
             StringComparison.Ordinal);
         Assert.Contains(
-            "Where nuget.org does not say which release is the newest it says why - no route to it, no answer in time, an answer it cannot read - "
+            "Where nuget.org does not say which release is the newest it says why - no route to it, a refusal, an answer it cannot read - "
             + "and changes nothing, unless the copy asking is itself a release newer than the installed one, which it then moves to, saying so.",
             prose,
             StringComparison.Ordinal);

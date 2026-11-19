@@ -119,16 +119,38 @@ public sealed class HostProbesTests
         Assert.Equal(expected, HostProbes.ListsProcess(listing, "DssHarness"));
     }
 
+    /// <summary>
+    /// What a program printed is quoted whole, on one line - each of its lines trimmed, the empty ones dropped - so the
+    /// first line that went wrong is in it as surely as the last.
+    /// </summary>
     [Fact]
-    public void Excerpt_KeepsTheEndOfALongOutput_OnOneLine()
+    public void Quoted_KeepsAllOfALongOutput_OnOneLine()
     {
-        var output = string.Join("\n", Enumerable.Range(1, 200).Select(index => $"line {index}")) + "\nthe actual error";
+        var output = string.Join("\n", Enumerable.Range(1, 200).Select(index => $"line {index}  ")) + "\n\n\r\nthe actual error\n";
 
-        var excerpt = HostProbes.Excerpt(output);
+        var quoted = HostProbes.Quoted(output);
 
-        Assert.StartsWith("...", excerpt, StringComparison.Ordinal);
-        Assert.EndsWith("the actual error", excerpt, StringComparison.Ordinal);
-        Assert.DoesNotContain("\n", excerpt, StringComparison.Ordinal);
+        Assert.Equal(string.Join(" / ", Enumerable.Range(1, 200).Select(index => $"line {index}")) + " / the actual error", quoted);
+        Assert.Equal(quoted, HostProbes.Excerpt(output));
+    }
+
+    /// <summary>
+    /// A probe's output of three megabytes - a vcvarsall dump, a listing of every SDK - is kept whole, its first line and
+    /// its last: cut to three hundred characters of the code's own, the line that said what went wrong was the one lost.
+    /// </summary>
+    [Fact]
+    public void AThreeMegabyteProbeOutput_IsKeptWhole()
+    {
+        var lines = Enumerable.Range(1, 100_000).Select(index => $"set VARIABLE_{index:000000}=a value of its own").ToList();
+        var output = string.Join("\r\n", lines);
+
+        Assert.True(output.Length > 3_000_000);
+
+        var quoted = HostProbes.Quoted(output);
+
+        Assert.Equal(string.Join(" / ", lines), quoted);
+        Assert.StartsWith("set VARIABLE_000001=", quoted, StringComparison.Ordinal);
+        Assert.EndsWith("set VARIABLE_100000=a value of its own", quoted, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -264,6 +286,8 @@ public sealed class HostProbesTests
     [InlineData("dead:192.0.2.10 and x:y:192.0.2.10", "dead:mac.invalid and x:y:mac.invalid")]
     [InlineData("debug1: Authenticating to 2001:db8::7:22 as 'harness'", "debug1: Authenticating to mac.invalid:22 as 'harness'")]
     [InlineData("listening on 192.0.2.10:8080 and fe80::1c2b:3d4e:5f60:7182%12:8080", "listening on mac.invalid:8080 and mac.invalid:8080")]
+    [InlineData("three labels stacked: a:b:c:192.0.2.10", "three labels stacked: a:b:c:mac.invalid")]
+    [InlineData("five labels: one:two:three:four:five:192.0.2.10 and eth0:lo:br0:wg0:tun0:fe80::1c2b:3d4e:5f60:7182%12", "five labels: one:two:three:four:five:mac.invalid and eth0:lo:br0:wg0:tun0:mac.invalid")]
     public void EveryAddressTheNameResolvedTo_IsRelayedAsTheConfigurationDeclaresTheHost_HoweverSshSpellsIt(string said, string expected)
     {
         var resolved = new HostConnection
@@ -280,7 +304,7 @@ public sealed class HostProbesTests
     /// <summary>
     /// What only looks like one of the addresses is left as it is - another address, one beginning with it, and a
     /// version or a number that would parse as it: '192.0.522' and '3221225994' are both 192.0.2.10 to a parser - and so
-    /// is one of them standing where no word of its own sets it apart: behind three labels, or before a URL's escape.
+    /// is one of them standing where no word of its own sets it apart: before a URL's escape.
     /// </summary>
     [Theory]
     [InlineData("version 192.0.522 and 3221225994 bytes")]
@@ -290,7 +314,6 @@ public sealed class HostProbesTests
     [InlineData("std::fe80::1c2b and fe80::1c2b:3d4e:5f60:7182:9")]
     [InlineData("fetched http://192.0.2.10%2Fpath")]
     [InlineData("a neighbour at 2001:db8::7:22, and a card at 00:1a:2b:3c:4d:5e")]
-    [InlineData("three labels stacked: a:b:c:192.0.2.10")]
     [InlineData("debug1: Authenticating to 2001:db8::8:22 as 'harness'")]
     public void WhatOnlyLooksLikeAnAddressTheNameResolvedTo_IsLeftAlone(string said)
     {

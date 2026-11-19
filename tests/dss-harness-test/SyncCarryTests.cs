@@ -180,16 +180,16 @@ public sealed class SyncCarryTests
             return Task.FromResult(new ProcessResult(0, string.Empty, string.Empty, TimeSpan.Zero, TimedOut: false));
         }
 
-        public Task<ProcessResult> ProbeShellAsync(HostConnection connection, TimeSpan timeout, CancellationToken cancellationToken = default)
+        public Task<ProcessResult> ProbeShellAsync(HostConnection connection, CancellationToken cancellationToken = default)
             => throw new NotSupportedException();
 
-        public Task<ProcessResult> ReadSshSettingsAsync(HostConnection connection, TimeSpan timeout, CancellationToken cancellationToken = default)
+        public Task<ProcessResult> ReadSshSettingsAsync(HostConnection connection, CancellationToken cancellationToken = default)
             => throw new NotSupportedException();
 
-        public Task<ProcessResult> ProbeDefaultWslDistributionAsync(TimeSpan timeout, CancellationToken cancellationToken = default)
+        public Task<ProcessResult> ProbeDefaultWslDistributionAsync(CancellationToken cancellationToken = default)
             => throw new NotSupportedException();
 
-        public Task<ProcessResult> ListRunningWslDistributionsAsync(TimeSpan timeout, CancellationToken cancellationToken = default)
+        public Task<ProcessResult> ListRunningWslDistributionsAsync(CancellationToken cancellationToken = default)
             => throw new NotSupportedException();
     }
 

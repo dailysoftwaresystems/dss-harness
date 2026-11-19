@@ -8,6 +8,7 @@ using DssHarness.Core.Output;
 using DssHarness.Core.Processes;
 using DssHarness.Core.Repository;
 using DssHarness.Core.Results;
+using DssHarness.Core.Text;
 using DssHarness.Core.Worktrees;
 
 namespace DssHarness.Core.Runners;
@@ -266,11 +267,7 @@ public sealed class RunnerRunService(
     /// How an exception type is spelled where a child printed one: a dotted name ending in
     /// <c>Exception</c>, which is the form every runtime this tool drives writes it in.
     /// </summary>
-    private static readonly Regex ExceptionType = new(
-        @"\b([A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*Exception)\b",
-        RegexOptions.CultureInvariant,
-        TimeSpan.FromSeconds(1));
-
+    private static readonly Regex ExceptionType = LinearRegex.Compile(@"\b([A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*Exception)\b");
 
     private readonly PhaseRunner _phaseRunner = phaseRunner;
     private readonly IActionFileParser _actionFileParser = actionFileParser;
@@ -573,24 +570,15 @@ public sealed class RunnerRunService(
     /// A step is a child process, not a call, so the only type a failure can carry is one the child
     /// printed. Reading it out of the output is what lets an entry earned against a typed failure
     /// keep matching the day the same failure arrives from a wrapper that only prints it. The first
-    /// line naming one says it, read from the step's log a line at a time.
+    /// line naming one says it, read from the step's log a line at a time, each matched in time linear in its length.
     /// </remarks>
     /// <param name="output">The failing step's own output.</param>
     public static string FailureTypeIn(PhaseOutput output)
     {
         ArgumentNullException.ThrowIfNull(output);
 
-        try
-        {
-            var match = output.Lines().Select(line => ExceptionType.Match(line)).FirstOrDefault(found => found.Success);
-            return match is null ? StepFailureType : match.Groups[1].Value;
-        }
-        catch (RegexMatchTimeoutException)
-        {
-            // An answer this expensive is no answer, and the failure keeps the name that matches
-            // nothing an author did not deliberately declare.
-            return StepFailureType;
-        }
+        var match = output.Lines().Select(line => ExceptionType.Match(line)).FirstOrDefault(found => found.Success);
+        return match is null ? StepFailureType : match.Groups[1].Value;
     }
 
     /// <summary>

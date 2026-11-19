@@ -2,40 +2,46 @@ using DssHarness.Core.Hosts;
 using DssHarness.Core.Platform;
 using DssHarness.Core.Processes;
 using DssHarness.Core.Results;
+using NSubstitute;
 
 namespace DssHarness.Tests;
 
 /// <summary>
 /// The update sequence every program's updater shares: the change is run only under the machine-wide lock on the place
-/// it writes, the change and the reading of what it left are run never stopped, so each must carry a bound of its own,
-/// and what the reading says is told three ways apart.
+/// it writes, the change and the reading of what it left are run never stopped and waited for to their end, and what the
+/// reading says is told three ways apart.
 /// </summary>
 public sealed class ProgramUpdateTests
 {
     /// <summary>
-    /// A change or a listing that carries no bound is refused before anything runs: neither can be stopped once begun,
-    /// so one with none would hold the change for good on a machine that never answers.
+    /// A change and the listing after it carry no bound of the code's own: each is waited for to its end, however long an
+    /// install over a slow link takes, and told every five minutes while it lasts. Refused unless each carried a bound,
+    /// an install of two hours was cut off part way, leaving half a program.
     /// </summary>
-    [Theory]
-    [InlineData(false, true, "change", "A change is run never stopped, so it carries a bound of its own. (Parameter 'change')")]
-    [InlineData(true, false, "listSince", "A listing since a change is run never stopped, so it carries a bound of its own. (Parameter 'listSince')")]
-    public async Task ARequestWithoutABound_IsRefused_AndNothingRuns(bool changeBounded, bool listingBounded, string parameter, string message)
+    [Fact]
+    public async Task AChangeAndItsListing_AreWaitedForToTheirEnd_AndTold()
     {
-        var runner = new RecordingRunner(Listing: ProcessResultOf("listed"));
+        var clock = new TimerClock();
+        var told = new List<string>();
+        var runner = NSubstitute.Substitute.For<IProcessRunner>();
+        var changing = new TaskCompletionSource<ProcessResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        runner.RunAsync(NSubstitute.Arg.Any<ProcessRequest>(), NSubstitute.Arg.Any<CancellationToken>())
+            .Returns(call => call.Arg<ProcessRequest>().FileName == "change" ? changing.Task : Task.FromResult(ProcessResultOf("listed")));
+
         var update = Update(runner);
         using var held = update.TryHold(Place());
 
-        var refused = await Assert.ThrowsAsync<ArgumentException>(() => update.ChangeAsync(
-            held!,
-            Request("change", changeBounded),
-            Request("list", listingBounded),
-            _ => ListedRelease.Absent));
+        var change = await FourMinutes.WaitedAndToldAsync(
+            clock,
+            update.ChangeAsync(held!, Request("change", bounded: false), Request("list", bounded: false), _ => ListedRelease.Read("1.2.3"), line => told.Add(line.Line()), clock),
+            () => changing.SetResult(ProcessResultOf("changed")),
+            TestContext.Current.CancellationToken);
 
-        Assert.Equal(parameter, refused.ParamName);
-        Assert.Equal(message, refused.Message);
-        Assert.Empty(runner.Ran);
+        Assert.True(change.Ran.Succeeded);
+        Assert.Equal((true, "1.2.3"), (change.Now.Readable, change.Now.Release));
+        Assert.Equal(["has waited 5m00s for 'change' to change what is installed"], told);
     }
-
     /// <summary>
     /// What is installed since the change is told three ways apart: a listing that failed is unreadable, whatever the
     /// reader would have made of it; and one that ran is what the reader says - a release, absent, or unreadable.

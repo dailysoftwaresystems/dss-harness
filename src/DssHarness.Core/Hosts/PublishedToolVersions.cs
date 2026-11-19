@@ -1,13 +1,16 @@
 using System.Globalization;
 using System.Net;
 using System.Text.Json;
+using DssHarness.Core.Json;
+using DssHarness.Core.Output;
+using DssHarness.Core.Waiting;
 
 namespace DssHarness.Core.Hosts;
 
 /// <summary>What a feed said of the newest release: which it is, or why that could not be told.</summary>
 /// <param name="Newest">The newest release, or <see langword="null"/> where the feed did not say.</param>
 /// <param name="Untold">
-/// Why it did not, as a clause about the feed - <c>it did not answer within 3 s</c> - or <see langword="null"/> where it
+/// Why it did not, as a clause about the feed - <c>it could not be reached: ...</c> - or <see langword="null"/> where it
 /// did. Kept, because the causes are not one: a machine with no route out, a feed that is down, and an answer this build
 /// cannot read are put right in three different places.
 /// </param>
@@ -25,8 +28,8 @@ public interface IPublishedToolVersions
 {
     /// <summary>
     /// The newest release published and listed that is newer than <paramref name="running"/>;
-    /// <paramref name="running"/> itself where none is; or why that cannot be told: no network, a feed that did not
-    /// answer in time, or an answer that is not what it should be.
+    /// <paramref name="running"/> itself where none is; or why that cannot be told: no network, a feed that refused, or
+    /// an answer that is not what it should be. Waited for to its end, however long the feed takes, and told while it lasts.
     /// </summary>
     /// <param name="running">The build running here, which a release must be newer than to be named.</param>
     /// <param name="cancellationToken">Stops the asking; cancelling it is reported, not read as no answer.</param>
@@ -42,7 +45,9 @@ public interface IPublishedToolVersions
 /// so no dispatcher runs it, and named as newer it had every copy say it trailed a release nobody was on - until
 /// a newer one was listed. A host running the newest release asks one question. The addresses are the ones the
 /// feed's service index names for nuget.org, spelt out rather than looked up, which would be one more request
-/// for an answer that is only ever advisory.
+/// for an answer that is only ever advisory. No clock of the code's own cuts the asking off: a machine with no route
+/// out is told so by its own network - a name that does not resolve, a connection refused or timed out by the system -
+/// and a feed that is slow to answer is waited for, told every few minutes, until the person stops the command.
 /// </remarks>
 public sealed class NuGetPublishedToolVersions : IPublishedToolVersions, IDisposable
 {
@@ -55,17 +60,13 @@ public sealed class NuGetPublishedToolVersions : IPublishedToolVersions, IDispos
         new($"https://api.nuget.org/v3/registration5-gz-semver2/{ToolPackage.Id.ToLowerInvariant()}/");
 
     /// <summary>
-    /// Longest the answer is waited for, however many questions it takes. Short, because a command is
-    /// waiting on it and the answer is only ever advice: a host with no route out waits this long once, and
-    /// hears nothing.
-    /// </summary>
-    public static readonly TimeSpan Budget = TimeSpan.FromSeconds(3);
-
-    /// <summary>
     /// Made when the feed is first asked, and not before: every command that loads a repository resolves
     /// this, and only one typed in a synced copy ever asks.
     /// </summary>
     private readonly Lazy<HttpClient> _client;
+
+    private readonly IHarnessOutput? _output;
+    private readonly TimeProvider _clock;
 
     /// <summary>Asks nuget.org over this machine's own network.</summary>
     public NuGetPublishedToolVersions()
@@ -73,14 +74,26 @@ public sealed class NuGetPublishedToolVersions : IPublishedToolVersions, IDispos
     {
     }
 
+    /// <summary>Asks nuget.org over this machine's own network, telling <paramref name="output"/> of an answer that lasts.</summary>
+    /// <param name="output">Where an answer slow to come is told.</param>
+    public NuGetPublishedToolVersions(IHarnessOutput output)
+        : this(handler: null, output)
+    {
+    }
+
     /// <summary>Asks through <paramref name="handler"/>, or over this machine's own network where none is given.</summary>
     /// <param name="handler">What sends the requests.</param>
-    internal NuGetPublishedToolVersions(HttpMessageHandler? handler)
+    /// <param name="output">Where an answer slow to come is told; nowhere where none is given.</param>
+    /// <param name="clock">The clock that wait is measured on; the machine's own where none is given.</param>
+    internal NuGetPublishedToolVersions(HttpMessageHandler? handler, IHarnessOutput? output = null, TimeProvider? clock = null)
     {
-        // The registration leaves are served compressed.
+        _output = output;
+        _clock = clock ?? TimeProvider.System;
+
+        // The registration leaves are served compressed; no timeout of the client's own, which the wait replaces.
         _client = new(() => new HttpClient(handler ?? new SocketsHttpHandler { AutomaticDecompression = DecompressionMethods.All })
         {
-            Timeout = Budget,
+            Timeout = Timeout.InfiniteTimeSpan,
         });
     }
 
@@ -88,12 +101,22 @@ public sealed class NuGetPublishedToolVersions : IPublishedToolVersions, IDispos
     {
         ArgumentNullException.ThrowIfNull(running);
 
-        using var budget = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        budget.CancelAfter(Budget);
+        var asked = await Waits
+            .ForAsync(
+                token => AskAsync(running, token),
+                new WaitWatch($"nuget.org to say which {ToolPackage.Id} release is the newest", ProgramWait.Told(_output, ToolPackage.Command), Bound: null, _clock),
+                cancellationToken)
+            .ConfigureAwait(false);
 
+        return asked.Kind == WaitEndKind.Done ? asked.Value! : throw new OperationCanceledException(cancellationToken);
+    }
+
+    /// <summary>Asks nuget.org which release is the newest; see <see cref="NewestAsync"/>.</summary>
+    private async Task<PublishedAnswer> AskAsync(SemanticVersion running, CancellationToken cancellationToken)
+    {
         try
         {
-            var (versions, refused) = await ReadAsync(VersionsAddress, budget.Token).ConfigureAwait(false);
+            var (versions, refused) = await ReadAsync(VersionsAddress, cancellationToken).ConfigureAwait(false);
 
             if (versions is null)
             {
@@ -107,7 +130,7 @@ public sealed class NuGetPublishedToolVersions : IPublishedToolVersions, IDispos
 
             foreach (var release in releases.Where(release => SemanticVersion.Compare(release, running) > 0))
             {
-                var (leaf, withheld) = await ReadAsync(LeafAddress(release), budget.Token).ConfigureAwait(false);
+                var (leaf, withheld) = await ReadAsync(LeafAddress(release), cancellationToken).ConfigureAwait(false);
 
                 switch (IsListed(leaf))
                 {
@@ -126,11 +149,6 @@ public sealed class NuGetPublishedToolVersions : IPublishedToolVersions, IDispos
             }
 
             return PublishedAnswer.Of(running);
-        }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
-        {
-            // The budget ran out, which HttpClient reports as a cancellation of its own.
-            return PublishedAnswer.NotTold($"it did not answer within {Budget.TotalSeconds.ToString(CultureInfo.InvariantCulture)} s");
         }
         catch (HttpRequestException ex)
         {
@@ -166,7 +184,7 @@ public sealed class NuGetPublishedToolVersions : IPublishedToolVersions, IDispos
 
         try
         {
-            using var document = JsonDocument.Parse(json);
+            using var document = JsonDocument.Parse(json, JsonDepth.Document);
 
             if (document.RootElement.ValueKind != JsonValueKind.Object
                 || !document.RootElement.TryGetProperty("versions", out var versions)
@@ -223,7 +241,7 @@ public sealed class NuGetPublishedToolVersions : IPublishedToolVersions, IDispos
 
         try
         {
-            using var document = JsonDocument.Parse(json);
+            using var document = JsonDocument.Parse(json, JsonDepth.Document);
 
             if (document.RootElement.ValueKind != JsonValueKind.Object)
             {

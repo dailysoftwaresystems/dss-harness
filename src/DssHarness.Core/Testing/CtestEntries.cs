@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text.Json;
+using DssHarness.Core.Json;
 
 namespace DssHarness.Core.Testing;
 
@@ -51,7 +52,7 @@ public static class CtestEntries
 
         try
         {
-            using var document = JsonDocument.Parse(json);
+            using var document = JsonDocument.Parse(json, JsonDepth.Document);
 
             var root = document.RootElement;
 

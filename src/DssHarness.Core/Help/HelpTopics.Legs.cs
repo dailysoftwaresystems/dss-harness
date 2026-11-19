@@ -25,6 +25,7 @@ using DssHarness.Core.Secrets;
 using DssHarness.Core.SetUps;
 using DssHarness.Core.Sync;
 using DssHarness.Core.Tools;
+using DssHarness.Core.Waiting;
 using DssHarness.Core.Worktrees;
 
 namespace DssHarness.Core.Help;
@@ -270,10 +271,10 @@ public static partial class HelpTopics
             + $"{ToolUpdateService.WaitOption} or without, since it read the machine before the other changed it. "
             + "Once the update has begun this command does not stop it, interrupted or not, and reads back what it left: "
             + "it says the update done only once the tool is listed as that release, and a failure with what dotnet said and what "
-            + $"is listed since, or why that is not known ({HarnessExit.CommandFailed}; {HarnessExit.Incomplete} where dotnet did not finish within "
-            + $"{ToolPackage.ChangeBudget.TotalMinutes.ToString(CultureInfo.InvariantCulture)} minutes, an update begun and not finished, which running "
-            + "it again can finish, as every program's update this tool makes answers it). Where nuget.org does not say which release "
-            + "is the newest it says why - no route to it, no answer in time, an answer it cannot read - and changes nothing, "
+            + $"is listed since, or why that is not known ({HarnessExit.CommandFailed}). dotnet is waited for to its end, however long "
+            + $"it takes, and said every {Waits.SaidEvery.TotalMinutes.ToString(CultureInfo.InvariantCulture)} minutes while it lasts. Where "
+            + "nuget.org does not say which release is the newest it says why - no route to it, a refusal, an answer it cannot read - "
+            + "and changes nothing, "
             + "unless the copy asking is itself a release newer than the installed one, which it then moves to, saying so. A tool "
             + $"installed with dotnet's --tool-path is named with {ToolUpdateService.ToolPathOption}.");
         builder.AppendLine();
@@ -296,7 +297,6 @@ public static partial class HelpTopics
         builder.AppendLine("commit its git HEAD names ('help config').");
         builder.AppendLine();
         // From the numbers both ends count by, so no sentence here can come to say another time than the host keeps.
-        var patience = new HostAgentPatience();
         var beat = TimeSpan.FromSeconds(HostAgentProtocol.BeatSeconds);
         var silence = beat * HostAgentProtocol.BeatsMissed;
 
@@ -313,11 +313,13 @@ public static partial class HelpTopics
             + "its end of the connection leaves a leg that is cancelled within "
             + $"{Seconds(silence + (silence / HostAgentProtocol.SilenceLooks))} seconds of its last beat, on an ssh host as in a "
             + "WSL distribution, and the host says why where this machine would read it. On Linux and macOS a session hung up "
-            + $"cancels it the same way. What the host started that has not stopped {Seconds(patience.Unwind)} seconds after it "
-            + "was cancelled - a command reading the output of something its child left running - is ended with its "
-            + "processes, and the host's DssHarness with it, so the host is never held by a run nobody reads; a command that "
-            + $"finishes what it began - a deletion, a fold, a hand-over - is given {Seconds(patience.Finishing)}, as it is "
-            + "where it is typed and interrupted. Where this machine can no longer write to the connection while a host works, "
+            + "cancels it the same way. What the host started is then waited for while anything it started still runs, however "
+            + $"long that takes to stop, and said every {Waits.SaidEvery.TotalMinutes.ToString(CultureInfo.InvariantCulture)} minutes "
+            + "where this machine would read it; once nothing it started runs and it still has not ended - a command reading "
+            + "the output of something its child left running, or writing a line nobody reads - it is ended, and the host's "
+            + "DssHarness with it, so the host is never held by a run nobody reads, as it is where the host's DssHarness is "
+            + "itself stopped meanwhile. A command that finishes what it began - a deletion, a fold, a hand-over - is waited "
+            + "for to its end, as it is where it is typed and interrupted. Where this machine can no longer write to the connection while a host works, "
             + "it says so here, with why: the host hears no more of it, and stops what it was asked. To end a run on its hosts, "
             + "stop the command that dispatched it.");
         builder.AppendLine();
