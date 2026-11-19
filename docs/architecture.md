@@ -4847,7 +4847,10 @@ pack or a working set it was given, a file its `writes` covers, a file its agent
 holds) and then by id; `related` walks as many hops as asked, from 1, going through every node it reaches: it keeps the
 nodes it reached and never reaches one again, so it is linear in the edges it follows, cycles among them, and a hop that
 reaches nothing new ends it; `body` serves each node named once and reads each file once, again only where an extract of it
-found its lines moved, and reads a file whole whatever it holds. No answer of a read of the graph is cut: each is pages of whole entries (`Codebase\GraphPages.cs`), an operation's page holding up to
+found its lines moved, and reads a file whole whatever it holds. No answer of a read of the graph is cut: each is pages of whole entries (`Codebase\GraphPages.cs`, the graph's use of
+`Pages\Paging`, the one owner of an answer's pages and of the one rule a piece is cut by, over the graph's own entry,
+`GraphEntry`: `GraphSection`, `GraphPageSection` and `GraphPageAnswer` are its `PageSection`, `PageOfSection` and
+`PageAnswer`, by the graph's names), an operation's page holding up to
 its bound (`CodebaseGraphTool.FindLines` and the rest) and every page's entries within `CodebaseGraphTool.MostCharacters`
 less what the pages reserve and the answer's leading lines - an entry wider than that given in pieces at character
 boundaries, never inside a surrogate pair, a page each, each marked with `…` where it goes on or went on, and the page
@@ -4859,7 +4862,9 @@ and how to ask for the next with `page`, from 1, `offset` and `limit` refused na
 and an answer with no header holds all of it; a page past the last is refused with the answer's range. A write is no
 paged read: `edit` and `wholeFile` take no `page`, refused before anything is written, and answer one page once they are
 done, an edit whose new lines hold more declarations than a page saying how many and that `outline` pages them. The page
-that computes an answer of more than one page keeps its whole result (`GraphPageStore`), under the digest of the graph
+that computes an answer of more than one page keeps its whole result (`GraphPageStore`, the graph's use of
+`Pages\KeptAnswers`, the one store of a conversation's kept answers, read back under the graph's own
+`GraphPageFreshness`), under the digest of the graph
 the view answers from (`CodebaseGraphQueries.Graph`: the link result's manifest and every file as the view holds it -
 blob, state, implementation and extract - so an agent's own writes move it as a fold moves the base; the plan named the
 link result's digest alone, which an agent's view never moves) and the read rules it was computed under

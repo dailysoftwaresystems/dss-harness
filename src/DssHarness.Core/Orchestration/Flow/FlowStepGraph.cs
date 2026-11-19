@@ -8,6 +8,7 @@ using DssHarness.Core.FileSystem;
 using DssHarness.Core.Git;
 using DssHarness.Core.Orchestration;
 using DssHarness.Core.Output;
+using DssHarness.Core.Pages;
 using DssHarness.Core.Platform;
 using DssHarness.Core.Repository;
 using DssHarness.Core.Results;
@@ -318,9 +319,10 @@ public sealed class FlowStepGraph
             [.. run.GoesOnWith.Reverse().Select(source => Path.Combine(layout.InstanceDirectory(source.Instance, source.Agent), OrchestratorLayout.StepPagesDirectoryName))]);
 
     /// <summary>
-    /// Puts away the pages the graph answers of the step whose records are in <paramref name="directory"/> kept
-    /// (<see cref="GraphPageStore.PutAway"/>): what a step leaves once it is done and no later step's conversation goes on
-    /// with its work (<see cref="ResumeChain.GoneOnWith"/>), so no page of them is asked again. One that cannot be removed is
+    /// Puts away the answers the conversation of the step whose records are in <paramref name="directory"/> kept - the pages
+    /// its graph answers read from - its directory whole (<see cref="KeptAnswers.PutAway"/>): what a step leaves once it is
+    /// done and no later step's conversation goes on with
+    /// its work (<see cref="ResumeChain.GoneOnWith"/>), so no page of them is asked again. One that cannot be removed is
     /// said, and the step's ending stands.
     /// </summary>
     /// <param name="fileSystem">The file system the pages are removed through.</param>
@@ -333,7 +335,7 @@ public sealed class FlowStepGraph
         ArgumentNullException.ThrowIfNull(output);
         ArgumentException.ThrowIfNullOrWhiteSpace(directory);
 
-        if (GraphPageStore.PutAway(Path.Combine(directory, OrchestratorLayout.StepPagesDirectoryName), fileSystem) is { } why)
+        if (KeptAnswers.PutAway(Path.Combine(directory, OrchestratorLayout.StepPagesDirectoryName), fileSystem) is { } why)
         {
             output.Warn("reason", $"the graph pages '{instance}' kept were not put away: {why}. The step's ending stands, and they stay in its records.");
         }

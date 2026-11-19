@@ -6,6 +6,7 @@ using DssHarness.Core.Agents.Policy;
 using DssHarness.Core.Codebase;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Output;
+using DssHarness.Core.Pages;
 
 namespace DssHarness.Core.Agents.Runtime;
 
@@ -184,10 +185,11 @@ public sealed class CodebaseGraphTool(
     Execution.ILineMask? mask = null)
 {
     /// <summary>
-    /// The most characters an answer holds: its pages hold whole entries within it (<see cref="GraphPages"/>), and an entry
-    /// wider than a page's room is given in pieces, a page each, each marked where it goes on.
+    /// The most characters an answer holds (<see cref="PageRoom.GraphAnswer"/>): its pages hold whole entries within it
+    /// (<see cref="GraphPages"/>), and an entry wider than a page's room is given in pieces, a page each, each marked where
+    /// it goes on.
     /// </summary>
-    public const int MostCharacters = 24 * 1024;
+    public const int MostCharacters = PageRoom.GraphAnswer;
 
     /// <summary>The results a page of <c>find</c> holds.</summary>
     public const int FindLines = 20;
@@ -228,7 +230,7 @@ public sealed class CodebaseGraphTool(
     private readonly GraphPageStore? _pages = pages;
 
     /// <summary>The pages of each result the store holds, laid out once (<see cref="GraphPages.Lay"/>), by the result: a later page is given from its layout, never filled again.</summary>
-    private readonly System.Runtime.CompilerServices.ConditionalWeakTable<GraphPageKept, GraphPages.Layout> _layouts = new();
+    private readonly System.Runtime.CompilerServices.ConditionalWeakTable<GraphPageKept, PageLayout<GraphEntry>> _layouts = new();
     private readonly Execution.ILineMask? _mask = mask;
     private CodebaseGraphQueries _queries = queries ?? throw new ArgumentNullException(nameof(queries));
 
@@ -1344,7 +1346,7 @@ public sealed class CodebaseGraphTool(
         var page = Int(input, "page") ?? 1;
         var key = GraphPageStore.KeyOf(NameOf(op), ask);
         GraphAnswer? answer = null;
-        GraphPages.Layout? layout = null;
+        PageLayout<GraphEntry>? layout = null;
         string? note = null;
 
         if (page > 1 && _pages is not null)
@@ -1550,7 +1552,7 @@ public sealed class CodebaseGraphTool(
         }
 
         return Int(input, "depth") is { } depth and < 1 ? $"depth is {depth.ToString(CultureInfo.InvariantCulture)}: hops start at 1"
-            : Int(input, "page") is { } asked and < 1 ? $"page is {asked.ToString(CultureInfo.InvariantCulture)}: pages start at 1"
+            : Int(input, "page") is { } asked and < 1 ? Paging.BelowTheFirst(asked)
             : null;
     }
 
