@@ -12,7 +12,8 @@ namespace DssHarness.Core.Pages;
 /// (<see cref="Pieces"/>), and each section a page ends inside one of, or inside a block, says it goes on after what the
 /// page gave of it, whatever sections follow it on the page. The notes an answer ends with follow its last entry within the
 /// same room, every one of them given, on as many pages as they take. The graph's answers are laid by it
-/// (<see cref="Codebase.GraphPages"/>).
+/// (<see cref="Codebase.GraphPages"/>), and a text's pages, streamed from its file, keep its header, its range and its
+/// pieces (<see cref="TextPages"/>).
 /// </summary>
 public static class Paging
 {
@@ -119,7 +120,7 @@ public static class Paging
         => pages > 1 || note is not null ? Header(page, pages, total) + Said(note) : null;
 
     /// <summary>What a page past the last says: the page asked, of what, and the answer's range, with the note after it.</summary>
-    internal static string PastTheLastSaid(int page, int pages, string asked, string? note)
+    internal static string PastTheLastSaid(long page, int pages, string asked, string? note)
         => $"page {Number(page)} of '{asked}': it has {Number(pages)} page{(pages == 1 ? string.Empty : "s")} (1 to {Number(pages)}){Said(note)}";
 
     /// <summary>What a page that ends inside an entry, or a block, says goes on.</summary>

@@ -7,7 +7,8 @@ namespace DssHarness.Core.Pages;
 /// left of the entry as its room holds, cut by characters and never inside a surrogate pair (<see cref="TextCut.Head"/>),
 /// at least one character past the mark a continued piece begins with, and marks the piece with
 /// <see cref="TextCut.Ellipsis"/> where the entry goes on; the next piece begins with the same mark. The pages of an
-/// answer laid in memory (<see cref="Paging"/>) cut by it.
+/// answer laid in memory (<see cref="Paging"/>) and of a text streamed from its file (<see cref="TextPages"/>) cut by it
+/// alike.
 /// </summary>
 internal static class Pieces
 {
