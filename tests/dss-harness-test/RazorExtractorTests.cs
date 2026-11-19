@@ -383,7 +383,9 @@ public sealed class RazorExtractorTests : CodeGraphExtractorContractTests<RazorE
             }
             """);
 
-        Assert.Equal(("property", 1), (Assert.Single(extract.Nodes, node => node.Id == "razor:Shared.Checkout.Carts").SubKind, 1));
+        var carts = Assert.Single(extract.Nodes, node => node.Id == "razor:Shared.Checkout.Carts");
+
+        Assert.Equal(("property", 1, 1), (carts.SubKind, carts.Start, carts.End));
         Assert.Equal([(CodeEdgeKinds.References, "CartService")], extract.References.Where(reference => reference.From == "razor:Shared.Checkout.Carts").Select(reference => (reference.Kind, reference.Name)));
 
         var linked = CodeGraphLinker.Link([new CodeGraphFile("Shared/Checkout.razor", "razor", extract)]);

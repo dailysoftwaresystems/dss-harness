@@ -117,15 +117,15 @@ internal sealed class ScanExtract
             }
         }
 
-        return new FileExtract([.. _nodes.Select(node => node with { Id = given[node.Id], Parent = node.Parent is { } parent ? given[parent] : null, SuffixOf = node.SuffixOf?.Select(key => given[key]).ToList() })])
+        return new FileExtract(_nodes)
         {
             Scopes = [.. _scopes.Values],
             Imports = _imports,
-            References = [.. _references.Select(reference => reference with { From = given[reference.From] })],
+            References = _references,
             Generated = Generated,
             Dynamic = _dynamic,
-            Literals = _literals.Kept(from => from is not null ? given[from] : _top is { } top ? given[top] : null),
-        };
+            Literals = _literals.Kept(from => from ?? _top),
+        }.Renamed(key => given[key]);
     }
 
     private static int IndexOf(string key) => int.Parse(key.AsSpan(1), NumberStyles.None, CultureInfo.InvariantCulture);

@@ -13,7 +13,8 @@ namespace DssHarness.Core.Codebase.Languages;
 /// elements close as HTML closes them where their end tags are left out - a <c>p</c> at the next block, an <c>li</c> at
 /// the next item; a component's are matched as written, <c>/&gt;</c> closing any element, as Vue's and Razor's compilers
 /// read them, so no tag is dropped as a browser drops one it finds out of place, and a component named as an element
-/// whose text is raw - a <c>Title</c>, a <c>Textarea</c> - holds markup.
+/// whose text is raw - a <c>Title</c>, a <c>Textarea</c> - or as one no end tag closes - a <c>Link</c>, an
+/// <c>Input</c> - holds the markup it is written around.
 /// </summary>
 internal sealed class MarkupText
 {
@@ -221,8 +222,10 @@ internal sealed class MarkupText
                     _elements.Add(element);
                     opened = element;
 
-                    // A void element holds nothing; a component's tag closed by /> holds nothing, as a page's foreign one does.
-                    empty = Void.Contains(name) || (tag.IsSelfClosing && (!_closesAsHtml || _foreign > 0));
+                    // A void element holds nothing - a component's tag is matched as written, so a component named as one,
+                    // a Link, an Input, holds what it is written around - and a component's tag closed by /> holds nothing,
+                    // as a page's foreign one does.
+                    empty = (Void.Contains(name) && (_closesAsHtml || element.Tag == name)) || (tag.IsSelfClosing && (!_closesAsHtml || _foreign > 0));
 
                     if (empty)
                     {

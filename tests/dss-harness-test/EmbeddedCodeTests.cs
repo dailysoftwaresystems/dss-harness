@@ -8,8 +8,9 @@ public sealed class EmbeddedCodeTests
 {
     /// <summary>
     /// Every field of what an embedded reader answers is merged into the host's: an id another reader gave is told apart,
-    /// what the node holds and what it makes following it; a scope once by its name; the imports, address roots and
-    /// dynamic marks added; the literals, every one of each; and why the file is generated the first reader's that says.
+    /// what the node holds, what it makes and the literals it holds following it; a scope once by its name; the imports,
+    /// address roots and dynamic marks added; the literals, every one of each; and why the file is generated the first
+    /// reader's that says.
     /// </summary>
     [Fact]
     public void EveryFieldOfAnEmbeddedExtract_IsMergedIntoTheHosts()
@@ -17,7 +18,7 @@ public sealed class EmbeddedCodeTests
         var host = new FileExtract([new ExtractNode("html:x.html#body", CodeNodeKinds.Section, "body", "x.html#body", 1, 9, "body")])
         {
             References = [new ExtractReference("html:x.html#body", CodeEdgeKinds.Uses, ".a", 1)],
-            Literals = [.. Enumerable.Range(0, 2_500).Select(index => new ExtractLiteral($"v{index}", 1))],
+            Literals = [.. Enumerable.Range(0, 2_500).Select(index => new ExtractLiteral($"value {index}", 1))],
         };
 
         var merged = EmbeddedCode.Merged(host, [Script(2, "one"), Script(5, "two") with { Generated = "the second says" }]);
@@ -34,8 +35,28 @@ public sealed class EmbeddedCodeTests
         Assert.Equal([("./one.js", 2), ("./two.js", 5)], merged.Imports.Select(import => (import.Target, import.Line)));
         Assert.Equal([new ExtractAddressRoot("@", "src"), new ExtractAddressRoot("@", "src")], merged.AddressRoots);
         Assert.Equal([new ExtractDynamic(2, "one"), new ExtractDynamic(5, "two")], merged.Dynamic);
-        Assert.Equal([.. Enumerable.Range(0, 2_500).Select(index => $"v{index}"), "one", "one-2", "two", "two-2"], (merged.Literals ?? []).Select(literal => literal.Value));
+        Assert.Equal([.. Enumerable.Range(0, 2_500).Select(index => $"value {index}"), "one", "one-2", "two", "two-2"], (merged.Literals ?? []).Select(literal => literal.Value));
+
+        // The second script's literal is held by its own node, under the id the merge gave it.
+        Assert.Equal(
+            [("one", 2, "html:open"), ("one-2", 2, "html:open.inner"), ("two", 5, "html:open~2"), ("two-2", 5, "html:open.inner~2")],
+            merged.Literals!.Skip(2_500).Select(literal => (literal.Value, literal.Line, literal.Node)));
         Assert.Equal("the first says", merged.Generated);
+    }
+
+    /// <summary>
+    /// A node folded into one of the host's is gone, and every field that named it names the node it is folded into: what
+    /// it held, the references it made and the literals it held - so the extract holds no field naming a node it lacks.
+    /// </summary>
+    [Fact]
+    public void AFoldedNode_IsGone_AndEveryFieldThatNamedIt_NamesTheNodeItIsFoldedInto()
+    {
+        var read = Script(2, "one");
+        var folded = EmbeddedCode.Folded(read, node => node.Id == "html:open", "html:x.html#body");
+
+        Assert.Equal([("html:open.inner", "html:x.html#body")], folded.Nodes.Select(node => (node.Id, node.Parent)));
+        Assert.Equal([("html:x.html#body", "one")], folded.References.Select(reference => (reference.From, reference.Name)));
+        Assert.Equal([("one", "html:x.html#body"), ("one-2", "html:open.inner")], folded.Literals!.Select(literal => (literal.Value, literal.Node)));
     }
 
     /// <summary>
@@ -66,7 +87,7 @@ public sealed class EmbeddedCodeTests
         AddressRoots = [new ExtractAddressRoot("@", "src")],
         References = [new ExtractReference("html:open", CodeEdgeKinds.Calls, name, line)],
         Dynamic = [new ExtractDynamic(line, name)],
-        Literals = [new ExtractLiteral(name, line), new ExtractLiteral($"{name}-2", line)],
+        Literals = [new ExtractLiteral(name, line) { Node = "html:open" }, new ExtractLiteral($"{name}-2", line) { Node = "html:open.inner" }],
         Generated = name == "one" ? "the first says" : null,
     };
 }

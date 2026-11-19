@@ -176,18 +176,18 @@ public sealed partial class VueExtractor : ICodeGraphExtractor
         var shown = script.References.Where(reference => folded.Contains(reference.From) && reference.Kind == CodeEdgeKinds.Uses && reference.Qualifier is null)
             .Select(reference => reference.Name).ToHashSet(StringComparer.Ordinal);
 
-        return script with
+        var answered = script with
         {
-            Nodes = [.. script.Nodes.Where(node => !folded.Contains(node.Id)).Select(node => node with
+            Nodes = [.. script.Nodes.Select(node => node with
             {
-                Parent = node.Parent is { } parent && folded.Contains(parent) ? component : node.Parent,
                 SeenIn = node.Parent is null && node.Scope == path && shown.Contains(node.Name) ? null : node.SeenIn,
-                Exports = node.Exports?.Contains(Default, StringComparer.Ordinal) == true
+                Exports = node.Exports?.Contains(Default, StringComparer.Ordinal) == true && !folded.Contains(node.Id)
                     ? node.Exports.Where(exported => exported != Default).ToList() is { Count: > 0 } rest ? rest : null
                     : node.Exports,
             })],
-            References = [.. script.References.Select(reference => folded.Contains(reference.From) ? reference with { From = component } : reference)],
         };
+
+        return EmbeddedCode.Folded(answered, node => folded.Contains(node.Id), component);
     }
 
     /// <summary>The component's name: its file's, in PascalCase as Vue names a component - <c>child-item.vue</c> is <c>ChildItem</c>.</summary>

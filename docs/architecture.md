@@ -4471,7 +4471,8 @@ receiver's type is the call's qualifier where the file states it; a call through
 member, `eval`, a function a parameter, a local or a function-typed field holds, a receiver typed or cast `any`, an
 import of a module the code computes - is marked dynamic. A function a body declares is the body's own wherever it calls
 it. A declaration file's (`.d.ts`) members are prototypes, and code at a module's top is held by its file's `(module)`
-node, CommonJS exports its blocks hold read as the top's. `npm`, over `JsonOutline` (the reader of a project file's
+node - over the file's lines, or, in code a markup file embeds, over the lines that code is written on, from the first
+to the last, never the markup's - CommonJS exports its blocks hold read as the top's. `npm`, over `JsonOutline` (the reader of a project file's
 JSON, which keeps the line each value begins on as the core counts lines and says where and why a file is no object),
 names a package by its name, refers to each package it depends on, and declares its address roots: its name alone each
 file its entry may be - its `exports`' `.` conditions in the order written, then `source`, `module`, `main`, `types`
@@ -4568,7 +4569,8 @@ element (a script, a style) are read as a browser reads them and no tag a commen
 over its tokens - a stack, no recursion, however deep the markup nests - that matches each element to its end tag: a
 page's as HTML closes them where their end tags are left out (a `p` at the next block, an `li` at the next item), a
 component's as written, `/>` closing any element, so no tag is dropped as a browser drops one it finds out of place,
-and a component named as a raw-text element is - a `<Title>`, a `<Textarea>` - holds markup as any component does.
+and a component named as a raw-text element is - a `<Title>`, a `<Textarea>` - or as one no end tag closes - a
+`<Link>`, an `<Input>` - holds the markup it is written around as any component does.
 What one element says is one rule over a table each kind gives (`MarkupDialect`): each class a `uses` of the rule
 `.name`, split at ASCII white space as HTML splits a class list, and an id a `uses` of `#id`, looked for among rules
 alone by a qualifier of its own (`selector`); which tag is a component's, an `instantiates`; which attributes name a

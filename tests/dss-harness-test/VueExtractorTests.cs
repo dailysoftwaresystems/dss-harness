@@ -63,9 +63,44 @@ public sealed class VueExtractorTests : CodeGraphExtractorContractTests<VueExtra
         </style>
         """;
 
+    private const string Options = """
+        <template>
+          <div>{{ msg }}</div>
+        </template>
+        <script>
+        export default {
+          name: "CartView",
+          props: ["total"],
+          data() { return { msg: "hello" } }
+        }
+        </script>
+        """;
+
+    private const string Module = """
+        <template>
+          <div>
+            <p>{{ total }}</p>
+          </div>
+        </template>
+
+        <script setup>
+        import { track } from "./track.js";
+        track("cart-view");
+        const total = 4;
+        </script>
+        """;
+
     /// <inheritdoc/>
     public override IReadOnlyList<CodeGraphFixture> Fixtures { get; } =
     [
+        new("src/Options.vue", Options)
+        {
+            Nodes = [new("vue:src/Options.vue", CodeNodeKinds.Type, (1, 10))],
+        },
+        new("src/Module.vue", Module)
+        {
+            Nodes = [new("vue:src/Module.vue", CodeNodeKinds.Type, (1, 11)), new("vue:src/Module.vue.(module)", CodeNodeKinds.Member, (9, 9))],
+        },
         new("src/Cart.vue", Cart)
         {
             Nodes =
@@ -211,6 +246,58 @@ public sealed class VueExtractorTests : CodeGraphExtractorContractTests<VueExtra
         Assert.Equal(
             [new CodeEdge("vue:src/Shop.vue", "vue:src/Billing.vue", CodeEdgeKinds.Uses, 3, CodeConfidences.Exact)],
             linked.Edges.Where(edge => edge.From.StartsWith("vue:src/Shop.vue", StringComparison.Ordinal) && edge.Kind == CodeEdgeKinds.Uses));
+    }
+
+    /// <summary>
+    /// A literal the options object a component's script exports by default holds is held by the component, the node the
+    /// object is folded into: the extract names no node it lacks, so the file is no unreadable one.
+    /// </summary>
+    [Fact]
+    public void AnOptionsObjectsLiteral_IsHeldByTheComponent()
+    {
+        var input = new CodeFileInput("src/Options.vue", Options);
+        var extract = new VueExtractor().Extract(input);
+
+        var name = Assert.Single(extract.Literals ?? [], literal => literal.Value == "CartView");
+
+        Assert.Null(extract.WithDigests(input.Lines).Problem("vue", input.Lines.Count));
+        Assert.Equal(("vue:src/Options.vue", 6), (name.Node, name.Line));
+    }
+
+    /// <summary>
+    /// What a component's script does at its top outside its declarations is over the lines that code is written on, not
+    /// from the file's first line: its body is the script's, never the template before it.
+    /// </summary>
+    [Fact]
+    public void AScriptsTop_IsOverTheLinesItsCodeIsWrittenOn()
+    {
+        var top = Assert.Single(Read("src/Module.vue", Module).Nodes, node => node.Name == "(module)");
+
+        Assert.Equal(("vue:src/Module.vue.(module)", 9, 9), (top.Id, top.Start, top.End));
+    }
+
+    /// <summary>
+    /// A component's tag named as an element no end tag closes - a <c>Link</c>, a <c>Col</c> - is matched as written, so
+    /// it holds what it is written around and the names its loop and its slot declare are its content's own; an
+    /// <c>input</c> as written is that element, and holds nothing.
+    /// </summary>
+    [Fact]
+    public void AComponentNamedAsAVoidElement_HoldsItsContent()
+    {
+        var extract = Read("src/Nav.vue", """
+            <template>
+              <nav>
+                <Link v-for="link in links" :href="link.url">{{ link.label }}</Link>
+                <Col v-slot="{ row }">{{ row.name }}</Col>
+                <input v-model="query">
+                <p>{{ link }}</p>
+              </nav>
+            </template>
+            """);
+
+        Assert.Equal(
+            [("Link", CodeEdgeKinds.Instantiates, 3), ("links", CodeEdgeKinds.Uses, 3), ("Col", CodeEdgeKinds.Instantiates, 4), ("query", CodeEdgeKinds.Uses, 5), ("link", CodeEdgeKinds.Uses, 6)],
+            extract.References.Select(reference => (reference.Name, reference.Kind, reference.Line)));
     }
 
     /// <summary>A script's default export is the component itself: no second node is exported by default beside it.</summary>

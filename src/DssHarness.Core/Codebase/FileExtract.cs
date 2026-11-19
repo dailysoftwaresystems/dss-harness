@@ -199,6 +199,37 @@ public sealed record FileExtract(IReadOnlyList<ExtractNode> Nodes)
         };
     }
 
+    /// <summary>
+    /// This extract with every field that names one of its nodes given the id <paramref name="renamed"/> gives - each
+    /// node's id, the id of the node it is declared inside and of each node its name is written onto
+    /// (<see cref="ExtractNode.SuffixOf"/>), the node each reference is made from and the node of its own file it names
+    /// (<see cref="CodeQualifierKinds.Own"/>), and the node each literal is held by - so no field is left naming a node by
+    /// an id the extract no longer gives it: the one way an
+    /// extract's ids are moved, where a reader gives each node its id once the file is read, where a markup file's reader
+    /// tells apart the ids of the code it embeds, and where one node is folded into another.
+    /// </summary>
+    /// <param name="renamed">The id each id is given: itself, where it is kept.</param>
+    internal FileExtract Renamed(Func<string, string> renamed)
+    {
+        ArgumentNullException.ThrowIfNull(renamed);
+
+        return this with
+        {
+            Nodes = [.. Nodes.Select(node => node with
+            {
+                Id = renamed(node.Id),
+                Parent = node.Parent is { } parent ? renamed(parent) : null,
+                SuffixOf = node.SuffixOf is { } onto ? [.. onto.Select(renamed)] : null,
+            })],
+            References = [.. References.Select(reference => reference with
+            {
+                From = renamed(reference.From),
+                Qualifier = reference.Qualifier is { Kind: CodeQualifierKinds.Own, Name: { } own } named ? named with { Name = renamed(own) } : reference.Qualifier,
+            })],
+            Literals = Literals is null ? null : [.. Literals.Select(literal => literal.Node is { } node ? literal with { Node = renamed(node) } : literal)],
+        };
+    }
+
     /// <summary>Whether <paramref name="line"/> is one of a file's <paramref name="lineCount"/> lines.</summary>
     internal static bool Within(int line, int lineCount) => line >= 1 && line <= lineCount;
 

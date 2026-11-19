@@ -66,9 +66,40 @@ public sealed class HtmlExtractorTests : CodeGraphExtractorContractTests<HtmlExt
         </html>
         """;
 
+    private const string TwoScripts = """
+        <html>
+        <body>
+        <script>
+        window.config = { apiUrl: "https://a.example" };
+        </script>
+        <main id="app">
+        <p>x</p>
+        </main>
+        <script>
+        document.title = "Shop home";
+        function init() { return "first one"; }
+        </script>
+        <script>
+        function init() { return "second one"; }
+        </script>
+        </body>
+        </html>
+        """;
+
     /// <inheritdoc/>
     public override IReadOnlyList<CodeGraphFixture> Fixtures { get; } =
     [
+        new("site/two.html", TwoScripts)
+        {
+            Nodes =
+            [
+                new("html:site/two.html#body", CodeNodeKinds.Section, (2, 16)),
+                new("html:site/two.html.(module)", CodeNodeKinds.Member, (4, 4)),
+                new("html:site/two.html.(module)~2", CodeNodeKinds.Member, (10, 10)),
+                new("html:init", CodeNodeKinds.Member, (11, 11)),
+                new("html:init~2", CodeNodeKinds.Member, (14, 14)),
+            ],
+        },
         new("index.html", Page)
         {
             Nodes =
@@ -277,6 +308,27 @@ public sealed class HtmlExtractorTests : CodeGraphExtractorContractTests<HtmlExt
             [("bar", CodeEdgeKinds.Calls, 28)],
             extract.References.Where(reference => reference.Name is "bar" or "foobar" or "hidden").Select(reference => (reference.Name, reference.Kind, reference.Line)));
         Assert.Contains(extract.References, reference => reference is { Name: "foo", Kind: CodeEdgeKinds.Uses, Line: 28 });
+    }
+
+    /// <summary>
+    /// Each script's literals are held by that script's own nodes, under the ids the page's merge gives them - the second
+    /// script's function and top alike - and what each script's top does is over the lines its code is written on, never
+    /// the page's head, markup or other scripts before it.
+    /// </summary>
+    [Fact]
+    public void EachScriptsLiterals_AreHeldByItsOwnNodes_AndItsTopIsOverItsOwnLines()
+    {
+        var extract = Read("site/two.html", TwoScripts);
+
+        Assert.Equal(
+            [("html:site/two.html.(module)", 4, 4), ("html:site/two.html.(module)~2", 10, 10), ("html:init", 11, 11), ("html:init~2", 14, 14)],
+            extract.Nodes.Where(node => node.Kind == CodeNodeKinds.Member).OrderBy(node => node.Start).Select(node => (node.Id, node.Start, node.End)));
+        Assert.Equal(
+            [
+                ("https://a.example", 4, "html:site/two.html.(module)"), ("Shop home", 10, "html:site/two.html.(module)~2"), ("first one", 11, "html:init"),
+                ("second one", 14, "html:init~2"),
+            ],
+            (extract.Literals ?? []).OrderBy(literal => literal.Line).Select(literal => (literal.Value, literal.Line, literal.Node)));
     }
 
     /// <summary>What an inline script's reader marks dynamic is the page's to say as it is the script's own file's: nothing the embedded reader saw is lost.</summary>

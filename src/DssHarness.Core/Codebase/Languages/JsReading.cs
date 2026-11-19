@@ -205,6 +205,9 @@ internal sealed class JsReading
     /// <summary>The key of the node what the file's top does outside its declarations is the calls of, once made.</summary>
     private string? _moduleKey;
 
+    /// <summary>The first and the last line the code at the file's top outside its declarations is written on, once some is read.</summary>
+    private (int First, int Last)? _topLines;
+
     /// <summary>Reads <paramref name="text"/>, the file <paramref name="path"/>.</summary>
     /// <param name="language">The implementation's name, which prefixes every id.</param>
     /// <param name="path">The file's path.</param>
@@ -268,7 +271,29 @@ internal sealed class JsReading
 
         Exported();
         _extract.Generated = Generated();
+
+        if (_moduleSaid is not null && _moduleKey is not null && _topLines is var (first, last))
+        {
+            _extract.Change(_moduleKey, node => node with { Start = first, End = last });
+        }
+
         return _extract.Build();
+    }
+
+    /// <summary>
+    /// Notes that the tokens of <paramref name="scan"/> from <paramref name="from"/> to <paramref name="to"/> are code the
+    /// file's top does outside its declarations: the lines the node of it is over in code a markup file embeds.
+    /// </summary>
+    private void TopCode(ScannedText scan, int from, int to)
+    {
+        var last = Math.Min(to, scan.Count) - 1;
+
+        if (from <= last && from >= 0)
+        {
+            _topLines = _topLines is var (first, end)
+                ? (Math.Min(first, scan[from].Line), Math.Max(end, scan[last].EndLine))
+                : (scan[from].Line, scan[last].EndLine);
+        }
     }
 
     /// <summary>Whether <paramref name="path"/> is a test file's: under a directory of tests, or named as a test is.</summary>
@@ -2906,6 +2931,10 @@ internal sealed class JsReading
         {
             Hoisted(scan, from, to, locals);
         }
+        else if (depth == 0)
+        {
+            TopCode(scan, from, to);
+        }
 
         // Where the test calls read are no longer too deep to be: past the first that was.
         var shallowFrom = -1;
@@ -3851,7 +3880,11 @@ internal sealed class JsReading
         return test.Close;
     }
 
-    /// <summary>The key of the node what the file's top does outside its declarations is the calls of: made the first time it is needed.</summary>
+    /// <summary>
+    /// The key of the node what the file's top does outside its declarations is the calls of: made the first time it is
+    /// needed, over the file's lines - but for code a markup file embeds, whose other lines are the markup's: there it is
+    /// over the lines that code is written on, from the first to the last (<see cref="TopCode"/>), once the file is read.
+    /// </summary>
     private string ModuleKey()
     {
         if (_moduleKey is not null)

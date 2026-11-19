@@ -75,9 +75,11 @@ internal static class EmbeddedCode
     /// <summary>
     /// <paramref name="host"/> with every field of each of <paramref name="embedded"/> merged into it, in order: each
     /// node's id made unique among those already held - with its place among those alike, as <see cref="ExtractIds"/>
-    /// gives it, the nodes it holds and the references it makes following it - each scope once, by its name, the
-    /// imports, address roots, references, dynamic marks and literals after the host's, every one of each, and why the
-    /// file is generated the host's own, else the first embedded reader's that says.
+    /// gives it - and every field that names it following it (<see cref="FileExtract.Renamed"/>): the nodes it holds or is
+    /// written onto, the references it makes and the literals it holds; each scope once, by its name, the imports, address
+    /// roots, references, dynamic marks and literals after the host's, every one of each - the literals by the one rule
+    /// every reader keeps them by (<see cref="ExtractLiterals"/>) - and why the file is generated the host's own, else
+    /// the first embedded reader's that says.
     /// </summary>
     /// <param name="host">The host's own extract: what its reader of markup made.</param>
     /// <param name="embedded">What each reader of the code it embeds made of it.</param>
@@ -102,12 +104,17 @@ internal static class EmbeddedCode
         var roots = new List<ExtractAddressRoot>(host.AddressRoots);
         var references = new List<ExtractReference>(host.References);
         var dynamic = new List<ExtractDynamic>(host.Dynamic);
-        var literals = new List<ExtractLiteral>(host.Literals ?? []);
+        var literals = new ExtractLiterals();
         var generated = host.Generated;
+
+        foreach (var literal in host.Literals ?? [])
+        {
+            literals.Add(literal.Value, literal.Line, literal.Node);
+        }
 
         foreach (var extract in embedded)
         {
-            // An id the host or an earlier reader gave is told apart; what the node holds and what it makes follow it.
+            // An id the host or an earlier reader gave is told apart; whatever names the node follows it.
             var given = new Dictionary<string, string>(StringComparer.Ordinal);
 
             foreach (var node in extract.Nodes)
@@ -115,13 +122,10 @@ internal static class EmbeddedCode
                 given[node.Id] = ids.Next(node.Id);
             }
 
-            nodes.AddRange(extract.Nodes.Select(node => node with
-            {
-                Id = given[node.Id],
-                Parent = node.Parent is { } parent && given.TryGetValue(parent, out var held) ? held : node.Parent,
-                SuffixOf = node.SuffixOf?.Select(onto => given.TryGetValue(onto, out var written) ? written : onto).ToList(),
-            }));
-            references.AddRange(extract.References.Select(reference => given.TryGetValue(reference.From, out var from) ? reference with { From = from } : reference));
+            var renamed = extract.Renamed(id => given.GetValueOrDefault(id, id));
+
+            nodes.AddRange(renamed.Nodes);
+            references.AddRange(renamed.References);
 
             foreach (var scope in extract.Scopes)
             {
@@ -132,7 +136,11 @@ internal static class EmbeddedCode
             roots.AddRange(extract.AddressRoots);
             dynamic.AddRange(extract.Dynamic);
             generated ??= extract.Generated;
-            literals.AddRange(extract.Literals ?? []);
+
+            foreach (var literal in renamed.Literals ?? [])
+            {
+                literals.Add(literal.Value, literal.Line, literal.Node);
+            }
         }
 
         return new FileExtract(nodes)
@@ -143,7 +151,24 @@ internal static class EmbeddedCode
             References = references,
             Generated = generated,
             Dynamic = dynamic,
-            Literals = literals.Count == 0 ? null : literals,
+            Literals = literals.Kept(),
         };
+    }
+
+    /// <summary>
+    /// <paramref name="read"/> with each node <paramref name="folded"/> says is no node of its own folded into the node of
+    /// <paramref name="into"/> the host holds: the node gone, and every field that named it - what it holds, the references
+    /// it makes, the literals it holds - naming <paramref name="into"/> (<see cref="FileExtract.Renamed"/>). What a reader
+    /// declares to read the markup's code by - a component's options object, the function a template's expressions are
+    /// read in - is the markup's node it stands for.
+    /// </summary>
+    /// <param name="read">What the embedded code's reader made.</param>
+    /// <param name="folded">Whether a node is folded.</param>
+    /// <param name="into">The id of the node of the host each is folded into.</param>
+    public static FileExtract Folded(FileExtract read, Func<ExtractNode, bool> folded, string into)
+    {
+        var gone = read.Nodes.Where(folded).Select(node => node.Id).ToHashSet(StringComparer.Ordinal);
+
+        return gone.Count == 0 ? read : (read with { Nodes = [.. read.Nodes.Where(node => !gone.Contains(node.Id))] }).Renamed(id => gone.Contains(id) ? into : id);
     }
 }
