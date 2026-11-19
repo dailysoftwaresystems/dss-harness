@@ -4573,20 +4573,28 @@ and a component named as a raw-text element is - a `<Title>`, a `<Textarea>` - o
 `<Link>`, an `<Input>` - holds the markup it is written around as any component does.
 What one element says is one rule over a table each kind gives (`MarkupDialect`): each class a `uses` of the rule
 `.name`, split at ASCII white space as HTML splits a class list, and an id a `uses` of `#id`, looked for among rules
-alone by a qualifier of its own (`selector`); which tag is a component's, an `instantiates`; which attributes name a
-handler - a `calls` of the function its value names alone or calls first, an arrow function's head passed over, else
-a `uses` of the name it begins with - and which bind a value, a `uses` of the name its expression begins with; a
-parameter of the arrow function a value is, and a name the markup declares where the element stands, is no member's
-and no reference. Code a
-markup file holds is embedded one way (`EmbeddedCode`): its language's own reader is given the host's text with only
-the code kept, so what it declares carries the host's lines, and every field of what it answers - nodes, scopes,
-imports, references, dynamic marks, literals - is merged into the host's extract. `html` (`.html`, `.htm`) makes each
+alone by a qualifier of its own (`selector`); which tag is a component's, an `instantiates`; and what each attribute's
+value is (`MarkupRole`) - a handler's code, a bound expression, a loop, the names a slot declares, or nothing the graph
+reads. What that code calls, uses and declares is never the dialect's to say but its language's reader's: each
+markup's reader gives it the code as its framework compiles the value - an HTML `on*` the body of the function HTML
+makes of it, a Vue handler that names a member a call of it with what the event gives - each piece the body of a
+function of its own whose parameters are the names the markup declares where the piece stands that it names, found by
+one walk that holds each name once over the stretch it is declared for (`DeclaredNames`), so no name one piece declares
+is another's; the JavaScript reader or the C# reader reads them (`EmbeddedCode.Script`, `EmbeddedCode.CSharp`) and
+each function is folded into the markup's node it stands for. Code a markup file holds is embedded one way
+(`EmbeddedCode`): its language's own reader is given the host's text with only the code kept, so what it declares
+carries the host's lines - or, where one piece stands inside another's, a text of its own each line of which is given
+back as the host's line it stands for (`FileExtract.Relined`) - and every field of what it answers - nodes, scopes,
+imports, references, dynamic marks, literals - is merged into the host's extract, every field that names a node
+following it where its id is told apart or it is folded into one of the host's (`FileExtract.Renamed`). `html` (`.html`, `.htm`) makes each
 landmark (`main`, `nav`, `header`, `footer`, `aside`, `article`, `section`) and each element with an `id` a `section`
 from its start tag to its end tag, a `<template>`'s content among them, and the `body` one that holds what no other
 does - named by its id where it has one, the node every reference made outside a section is made from; a custom
 element (`<my-widget>`) an `instantiates` of a component of that name; a `script src`, `link href`, `img src` and
-`a href` naming a local file by a relative path - one that climbs among them - an import of it; an `on*=` attribute a
-handler; each inline `<script>` of JavaScript read by the JavaScript reader as a program of its own, from where its
+`a href` naming a local file by a relative path - one that climbs among them - an import of it (`HtmlExtractor.Local`,
+the one reading of what a markup's `src` or `href` names); an `on*=` attribute the body of the function HTML makes of
+it, given `event`, read by the JavaScript reader - `return validate(this)` a call of `validate`, `go` alone a use;
+each inline `<script>` of JavaScript read by the JavaScript reader as a program of its own, from where its
 start tag ends - a module where its type is `module`, and one of another type, a template a framework reads, no code -
 and each `<style>` by the style sheet's reader in the syntax its `lang` or its `type` names (`text/less`,
 `text/x-scss`; CSS where it names neither), one of a syntax no style sheet's reader reads read as none.
@@ -4644,23 +4652,35 @@ of a rule - of any other node, nothing), so "who uses this class" and "what styl
 
 Razor views (.cshtml) and Blazor components (.razor) are one implementation, `razor`: a component is a type named by
 its file in the namespace a `@namespace` gives it - else its directory's path, each part made a C# name as Razor makes
-it (`my-app` is `my_app`), none at the tree's root - and a view a section over its lines. The class either compiles
-to is C# the C# reader reads, the markup blanked so each declaration carries the line it stands on: on the first
-line, before what it holds, its namespace and its `partial class`; the code of each `@code` and `@functions` block,
-found as the compiler's own lexer reads it (`CSharpExtractor.Closing`), so a brace a string or a comment holds ends no
-block, and one on the line after the keyword opens it; an `@inject` a property of the type it is given, `@model` its
-`Model` property, and `@inherits` and `@implements` a part of the class with that base. Where that class is the
-component, it is the component's node, and says it is a part, which the linker joins to its `.razor.cs` code-behind.
-Each `@using` is read by the C# reader too, so a static one imports its type and an alias names its prefix. The
-markup - Razor's comments, the code, the directives and the C# of its expressions taken out - is read by the markup
-reader: a PascalCase or dotted element and a `<partial name=` are instantiates, as is an `Html.Partial("x")` and its
-kin (`PartialAsync`, `RenderPartial`); an `@on*` attribute, `@bind:after` and `@bind:set` a call of the component's
-member it names, and `@bind`, `@bind-Value` and another `@` attribute a use of one - but of a name the markup's own C#
-declares where the attribute stands, which is the markup's and no member: an `@foreach`'s, `@for`'s, `@using`'s or
-`catch`'s variable and a pattern's over its statement's block, a `@{ }` block's local from where it is declared to the
-close of the block of markup that holds it, as Razor compiles the markup into one method and a `@{ }` opens no scope
-of its own, and a template's `context` - or the name its `Context=` gives - inside a component's content, each read
-by the C# parser and each block matched by its braces past every start tag. A `_ViewImports.cshtml` and an
+it (`my-app` is `my_app`), none at the tree's root - generic by its `@typeparam`s, named as the C# reader names a
+generic type (``Grid`1``), and a view a section over its lines. The file is read as Razor's own parser reads it, in one
+walk over its text with a stack of what is open (`RazorExtractor.Syntax`), so no nesting is too deep to read: its
+comments; its `@code` and `@functions` blocks; the directives a line begins with; each statement it writes - a
+`@{ }` block, an `@if`, `@foreach`, `@try` and their kin, with their `else`, `else if`, `catch`, `finally` and a
+`do`'s `while`, written with no `@` as Razor writes them - its C# read token by token by the compiler's own lexer, so
+a brace a string or a comment holds ends no block, and the markup Razor switches to inside it - an element where a
+statement may begin, `<text>`, an `@:` line, an `@<tag>` template - held to the end tag that closes it; each
+expression - `@x.y(z)`, `@await x`, `@( )` - in a text or an attribute's value, but a directive attribute's, whose
+value is C# of its own, and an address's `@` and an `@@`, which are text. The class the file compiles to is read by
+the C# reader as one class (`EmbeddedCode.CSharp`): on the first line its namespace and its `partial class`; the code
+of each `@code` and `@functions` block; an `@inject` a property of the type it is given, `@model` its `Model`
+property, `@inherits` and `@implements` a part of the class with that base, `@attribute` one with that attribute; and
+each piece of C# the markup holds - each statement at the markup's top whole, the C# of the markup it switches to
+among it, a `@{ }`'s braces none, for Razor compiles its code where it stands; each expression; each directive
+attribute's value, a handler that names a method a call of it with whatever the event gives; `@layout`'s type and
+`@page`'s route - code of the file's head, a field's function of its own, so it sees the class's members, a name it
+reads by itself a member of the component (`this`) and no name one piece declares another's. Each piece is given the
+names the markup's code declares where it stands that it names, by one walk in the order the file writes them:
+each declared over the stretch C# declares it for as the C# parser reads each statement - an `@foreach`'s, a
+`catch`'s, a pattern's variable, a local a statement's body declares - and a `@{ }` block's locals, and a pattern's
+of a statement at the top, to the end of the stretch that holds them: the file's, else a component's content, which
+Razor compiles into a template of its own and which declares `context` - or the name its `Context=` gives - else a
+section's. Where that class is the component, it is the component's node, and says it is a part, which the linker
+joins to its code-behind: the partial of its qualified name, and the partial of its name its `.razor.cs` file
+declares beside it, whatever namespace the tree's path gives the component. Each `@using` is read by the C# reader
+too, so a static one imports its type and an alias names its prefix. The markup - what is no markup taken out - is
+read by the markup reader: a PascalCase or dotted element and a `<partial name=` are instantiates, as is an
+`Html.Partial("x")` and its kin (`PartialAsync`, `RenderPartial`) the code calls. A `_ViewImports.cshtml` and an
 `_Imports.razor` declare each `@using` they hold for the whole of their directory's subtree: an import of the
 `directory` form, which the linker applies to every file of the language under it, and to no file of another
 language or outside it.
@@ -4680,13 +4700,17 @@ it holds (`data`, `setup`, a lifecycle hook) and each property `data()` and `set
 on its own lines, with the code it holds, so the template binds to them and a method's `this.save()` to the method;
 each `watch` key is a use of the member it watches, and its handler's code the component's. The props a
 `<script setup>`'s `defineProps` declares - an array's strings, an object's keys, the keys of the type it is given,
-one written there or an interface or object type the script declares - are members of the component too. Its `<template>` is read by the markup reader, nested templates among
-it: a component's tag - `<FooBar>` or `<foo-bar>`, each naming `FooBar` - an instantiates; a `v-on` or `@` attribute,
-its modifiers among them, a call of the handler it names; a `v-bind`, `:` attribute, every other directive's
-expression (`v-model`, `v-if`, a directive of the component's own), a `v-for`'s list and `{{ }}` a use of the name its
-expression begins with - each looked for as the template compiles it, a member of the component (`this`), but a name
-a `v-for`'s aliases or a `v-slot`'s value declares where it stands, the template's own and no member - and each class
-and id a use of the rule that styles it. Its `<style>` blocks - scoped among them - are read by the style sheet's
+one written there or an interface or object type the script declares - are members of the component too. A
+`<template>`, `<script>` or `<style>` that names its file by `src` is an import of it, as a page's `src` is. Its
+`<template>` is read by the markup reader, nested templates among it: a component's tag - `<FooBar>` or `<foo-bar>`,
+each naming `FooBar` - an instantiates, and each class and id a use of the rule that styles it; and its code is read
+by the JavaScript reader as Vue's compiler compiles it - a `v-on` or `@` value that names a member path a call of it
+with whatever the event gives, a function expression the handler itself, anything else statements the event runs,
+`$event` its own; a `v-bind`, `:`, `v-model`, `v-if` and every other directive's expression, a dynamic argument, a
+`v-for`'s list and `{{ }}` what their expressions read - each name it reads by itself a member of the component
+(`this`), as the template compiles it, but a global Vue's compiler leaves to itself (`Math`) and a name a `v-for`'s
+aliases or a `v-slot`'s pattern declares where it stands, the template's own and no member; a slot's pattern's
+defaults code read once where it is written. Its `<style>` blocks - scoped among them - are read by the style sheet's
 reader in the syntax each block's `lang` names - CSS where it names none, `scss`, `sass` or `less`, one of another
 (`stylus`) read as none - which the css implementation answers for another language's file as the C# reader does.
 

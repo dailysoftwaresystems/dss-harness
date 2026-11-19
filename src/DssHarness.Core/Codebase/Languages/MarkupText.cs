@@ -39,6 +39,19 @@ internal sealed class MarkupText
         ["plaintext"] = HtmlParseMode.Plaintext,
     };
 
+    /// <summary>
+    /// Whether the tag <paramref name="written"/>, as written, is one no end tag closes where elements are matched as
+    /// written - an HTML element's, in its own case: <c>input</c>, and no <c>Input</c> component - the one rule this
+    /// reader closes them by, and a Razor file's reader finds where its markup ends by.
+    /// </summary>
+    public static bool IsVoid(string written) => Void.Contains(written);
+
+    /// <summary>
+    /// Whether the tag <paramref name="written"/>, as written, is one whose text is raw - an HTML element's, in its own
+    /// case: <c>script</c>, and no <c>Title</c> component - its text no markup.
+    /// </summary>
+    public static bool IsRaw(string written) => Raw.ContainsKey(written);
+
     /// <summary>The elements whose start tag closes a paragraph left open, as HTML closes it.</summary>
     private static readonly HashSet<string> ClosesParagraph = new(StringComparer.Ordinal)
     {
@@ -217,7 +230,7 @@ internal sealed class MarkupText
                     }
 
                     var element = new MarkupElement(Written(at, name), name, at, LineAt(at), _open.Count > 0 ? _open[^1] : -1,
-                        [.. tag.Attributes.Select(attribute => new MarkupAttribute(attribute.Name, attribute.Value, LineAt(attribute.Position.Index)))]);
+                        [.. tag.Attributes.Select(attribute => new MarkupAttribute(attribute.Name, attribute.Value, LineAt(attribute.Position.Index)) { NameAt = Math.Clamp(attribute.Position.Index, 0, Text.Length), ValueAt = ValueAt(attribute.Position.Index, attribute.Name.Length) })]);
 
                     _elements.Add(element);
                     opened = element;
@@ -225,7 +238,7 @@ internal sealed class MarkupText
                     // A void element holds nothing - a component's tag is matched as written, so a component named as one,
                     // a Link, an Input, holds what it is written around - and a component's tag closed by /> holds nothing,
                     // as a page's foreign one does.
-                    empty = (Void.Contains(name) && (_closesAsHtml || element.Tag == name)) || (tag.IsSelfClosing && (!_closesAsHtml || _foreign > 0));
+                    empty = (_closesAsHtml ? Void.Contains(name) : IsVoid(element.Tag)) || (tag.IsSelfClosing && (!_closesAsHtml || _foreign > 0));
 
                     if (empty)
                     {
@@ -441,6 +454,33 @@ internal sealed class MarkupText
         }
     }
 
+    /// <summary>
+    /// Where the value of the attribute whose name of <paramref name="length"/> characters begins at
+    /// <paramref name="name"/> begins: past its name, its <c>=</c> and its opening quote; where its name ends, for one
+    /// written with no value.
+    /// </summary>
+    private int ValueAt(int name, int length)
+    {
+        var at = Math.Clamp(name + length, 0, Text.Length);
+        var after = at;
+
+        while (after < Text.Length && char.IsWhiteSpace(Text[after]))
+        {
+            after++;
+        }
+
+        if (after >= Text.Length || Text[after] != '=')
+        {
+            return at;
+        }
+
+        for (after++; after < Text.Length && char.IsWhiteSpace(Text[after]); after++)
+        {
+        }
+
+        return after < Text.Length && Text[after] is '"' or '\'' ? after + 1 : after;
+    }
+
     /// <summary>The tag at <paramref name="at"/> as the text writes it - <c>MyButton</c>, where the tokenizer says <c>mybutton</c>.</summary>
     private string Written(int at, string name)
     {
@@ -495,4 +535,11 @@ internal sealed class MarkupElement(string tag, string name, int start, int line
 /// <param name="Name">Its name, in lower case as HTML names it.</param>
 /// <param name="Value">Its value, character references read.</param>
 /// <param name="Line">The line its name stands on.</param>
-internal sealed record MarkupAttribute(string Name, string Value, int Line);
+internal sealed record MarkupAttribute(string Name, string Value, int Line)
+{
+    /// <summary>Where its name begins in the text, which writes it as written - a dynamic argument's code in its case.</summary>
+    public int NameAt { get; init; }
+
+    /// <summary>Where its value begins in the text: past its <c>=</c> and its quote - where its code stands, for a reader of code given it there.</summary>
+    public int ValueAt { get; init; }
+}

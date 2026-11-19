@@ -89,7 +89,7 @@ public sealed class CSharpExtractor : ICodeGraphExtractor
     }
 
     /// <summary>
-    /// Where the bracket at <paramref name="open"/> of <paramref name="text"/> - a <c>{</c> or a <c>(</c> - is closed, as
+    /// Where the bracket at <paramref name="open"/> of <paramref name="text"/> - a <c>{</c>, a <c>(</c> or a <c>[</c> - is closed, as
     /// the compiler's own lexer reads what it holds: a string, an interpolated or raw one among them, a character and a
     /// comment each one token, so no bracket inside one counts; the text's length where nothing closes it. How another
     /// implementation finds the C# its markup holds - a Razor file's code blocks and expressions - by C#'s rules.
@@ -100,7 +100,12 @@ public sealed class CSharpExtractor : ICodeGraphExtractor
     {
         ArgumentNullException.ThrowIfNull(text);
 
-        var (opens, closes) = text[open] == '(' ? (SyntaxKind.OpenParenToken, SyntaxKind.CloseParenToken) : (SyntaxKind.OpenBraceToken, SyntaxKind.CloseBraceToken);
+        var (opens, closes) = text[open] switch
+        {
+            '(' => (SyntaxKind.OpenParenToken, SyntaxKind.CloseParenToken),
+            '[' => (SyntaxKind.OpenBracketToken, SyntaxKind.CloseBracketToken),
+            _ => (SyntaxKind.OpenBraceToken, SyntaxKind.CloseBraceToken),
+        };
         var depth = 0;
 
         foreach (var token in SyntaxFactory.ParseTokens(text, offset: open, initialTokenPosition: open, options: Options))
@@ -122,6 +127,17 @@ public sealed class CSharpExtractor : ICodeGraphExtractor
 
         return text.Length;
     }
+
+    /// <summary>
+    /// The type a <c>var</c> is given where its initializer says: a <c>new</c> of a named type, or a cast - the one rule a
+    /// local's type is read by, a Razor file's markup's locals among them.
+    /// </summary>
+    internal static TypeSyntax? Inferred(ExpressionSyntax? value) => value switch
+    {
+        ObjectCreationExpressionSyntax created => created.Type,
+        CastExpressionSyntax cast => cast.Type,
+        _ => null,
+    };
 
     /// <summary>The attributes a test framework marks a test with, by their names as written: xUnit's, NUnit's and MSTest's.</summary>
     private static readonly HashSet<string> TestAttributes = new(StringComparer.Ordinal) { "Fact", "Theory", "Test", "TestCase", "TestCaseSource", "TestMethod", "DataTestMethod" };
@@ -1398,14 +1414,6 @@ public sealed class CSharpExtractor : ICodeGraphExtractor
 
             return locals;
         }
-
-        /// <summary>The type a <c>var</c> is given where its initializer says: a <c>new</c> of a named type, or a cast.</summary>
-        private static TypeSyntax? Inferred(ExpressionSyntax? value) => value switch
-        {
-            ObjectCreationExpressionSyntax created => created.Type,
-            CastExpressionSyntax cast => cast.Type,
-            _ => null,
-        };
 
         /// <summary>The type a target-typed <c>new()</c> makes: the one written where it is given - a variable's, a field's, a property's, a parameter's default.</summary>
         private static TypeSyntax? TargetType(ImplicitObjectCreationExpressionSyntax created) => created.Parent switch

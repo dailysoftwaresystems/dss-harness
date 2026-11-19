@@ -9,11 +9,12 @@ namespace DssHarness.Core.Codebase.Languages;
 /// rule <c>.name</c> and each id a <c>uses</c> of <c>#id</c>, looked for among rules alone; a custom element
 /// (<c>&lt;my-widget&gt;</c>) an <c>instantiates</c> of a component of that name; a <c>script src</c>, <c>link href</c>,
 /// <c>img src</c> and <c>a href</c> naming a local file by a relative path - one that climbs among them - an import of
-/// it; an <c>on*=</c> handler a call of the function it names; each inline <c>&lt;script&gt;</c> of JavaScript read by
-/// the JavaScript reader as its own program - a module where its type says - and each <c>&lt;style&gt;</c> by the style
-/// sheet's, in the syntax its <c>lang</c> or <c>type</c> names (<c>text/less</c>, <c>text/x-scss</c>), each embedded as
-/// every markup embeds code (<see cref="EmbeddedCode"/>), so its declarations carry the lines
-/// they stand on and nothing its reader saw is lost.
+/// it; an <c>on*=</c> handler the body of the function HTML makes of it, given <c>event</c>, read by the JavaScript
+/// reader (<see cref="EmbeddedCode.Script"/>) - what it calls and uses its section's; each inline <c>&lt;script&gt;</c>
+/// of JavaScript read by the JavaScript reader as its own program - a module where its type says - and each
+/// <c>&lt;style&gt;</c> by the style sheet's, in the syntax its <c>lang</c> or <c>type</c> names (<c>text/less</c>,
+/// <c>text/x-scss</c>), each embedded as every markup embeds code (<see cref="EmbeddedCode"/>), so its declarations carry
+/// the lines they stand on and nothing its reader saw is lost.
 /// </summary>
 public sealed class HtmlExtractor : ICodeGraphExtractor
 {
@@ -45,14 +46,13 @@ public sealed class HtmlExtractor : ICodeGraphExtractor
 
     /// <inheritdoc/>
     public CodeGraphExtractorHelp Help { get; } = new(
-        "HTML documents (.html, .htm): each landmark and each element with an id as a section from its start tag to its end tag, a template's content among them, each class and id as a use of the rule that styles it, a custom element as an instantiates of a component of that name, a script src, link href, img src and a href naming a local file by a relative path as an import of it, an on*= handler as a call of the function it names, each inline script of JavaScript read by the JavaScript reader as a program of its own - a module where its type says - and each style element by the style sheet's reader, in the syntax its lang or type names (CSS where it names none, text/less, text/scss, text/x-scss, text/sass), on the lines they stand on",
+        "HTML documents (.html, .htm): each landmark and each element with an id as a section from its start tag to its end tag, a template's content among them, each class and id as a use of the rule that styles it, a custom element as an instantiates of a component of that name, a script src, link href, img src and a href naming a local file by a relative path as an import of it, an on*= handler as the body of the function HTML makes of it, given event, read by the JavaScript reader - return validate(this) a call of validate, go alone a use - each inline script of JavaScript read by the JavaScript reader as a program of its own - a module where its type says - and each style element by the style sheet's reader, in the syntax its lang or type names (CSS where it names none, text/less, text/scss, text/x-scss, text/sass), on the lines they stand on",
         [
             "a style attribute's declarations: no rule of their own",
             "a script of another type - a JSON block, an import map, a template a framework reads: its text read as no code",
             "a style element of another syntax (lang=\"stylus\", a template's type): its text read as no style sheet",
             "an element with no id and no landmark tag: no node of its own, its lines its enclosing section's",
             "an href or src that names no file of the tree - another site's, a rooted path, an anchor, data: - no import of it",
-            "a handler that names no one function - a longer expression - is a use of the name it begins with, and no call",
         ]);
 
     /// <inheritdoc/>
@@ -68,6 +68,7 @@ public sealed class HtmlExtractor : ICodeGraphExtractor
         var references = new List<ExtractReference>();
         var imports = new List<ExtractImport>();
         var embedded = new List<FileExtract>();
+        var handlers = new List<CodeRegion>();
 
         // The last line of each element, held to hold every element written inside it: what a section ends on.
         var ends = new int[elements.Count];
@@ -127,7 +128,13 @@ public sealed class HtmlExtractor : ICodeGraphExtractor
             sectionOf[at] = inside;
             var from = (inside ?? body).Id;
 
-            MarkupDialect.Html.Read(element, from, members: null, references);
+            MarkupDialect.Html.Read(element, from, references);
+
+            // Each handler is the body of a function HTML makes of it, given the event: its code the section's.
+            foreach (var handler in element.Attributes.Where(attribute => MarkupDialect.Html.Role(attribute) == MarkupRole.Handler && !string.IsNullOrWhiteSpace(attribute.Value)))
+            {
+                handlers.Add(new CodeRegion(from, "event", handler.ValueAt, handler.Value));
+            }
 
             if (Linked.FirstOrDefault(linked => linked.Element == element.Name) is ({ }, { } named)
                 && element.Attributes.FirstOrDefault(attribute => attribute.Name == named) is { Value: { Length: > 0 } written } attribute
@@ -140,6 +147,11 @@ public sealed class HtmlExtractor : ICodeGraphExtractor
             {
                 embedded.Add(code);
             }
+        }
+
+        if (handlers.Count > 0)
+        {
+            embedded.Add(EmbeddedCode.Script(Language, input.Path, markup.Lines, handlers, typescript: false));
         }
 
         return EmbeddedCode.Merged(new FileExtract([.. nodes]) { References = references, Imports = imports }, embedded);
@@ -161,7 +173,7 @@ public sealed class HtmlExtractor : ICodeGraphExtractor
             return null;
         }
 
-        var kept = EmbeddedCode.Kept(markup.Text, [(element.OpenEnd, element.Close)]);
+        var kept = EmbeddedCode.Kept(markup.Text, markup.Lines, [(element.OpenEnd, element.Close)]);
 
         if (element.Name == "script" && element.Attribute("src") is null && JavaScriptTypes.Contains(ScriptType(element)))
         {
@@ -179,9 +191,10 @@ public sealed class HtmlExtractor : ICodeGraphExtractor
 
     /// <summary>
     /// The local path <paramref name="written"/> names, its query and fragment taken off and its escapes read; null where it
-    /// names no file of the tree's own - another site's (a scheme, or <c>//</c>), a rooted path, or none at all.
+    /// names no file of the tree's own - another site's (a scheme, or <c>//</c>), a rooted path, or none at all: the one
+    /// reading of what a markup's <c>src</c> or <c>href</c> names, a page's and a component's block's alike.
     /// </summary>
-    private static string? Local(string written)
+    internal static string? Local(string written)
     {
         var raw = written.Trim().Split(['?', '#'], 2)[0];
 

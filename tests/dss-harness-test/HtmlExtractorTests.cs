@@ -130,8 +130,9 @@ public sealed class HtmlExtractorTests : CodeGraphExtractorContractTests<HtmlExt
     /// <summary>
     /// Each landmark and each element with an id is a section from its start tag to its end tag, the body one over all;
     /// each class a use of the rule <c>.name</c> and each id a use of <c>#id</c>; a custom element is an instantiates of a
-    /// component of its name; an <c>on*=</c> handler a call of the function it names; and an inline script is read by the
-    /// JavaScript reader, its declarations carrying the lines they stand on.
+    /// component of its name; an <c>on*=</c> handler the body of the function HTML makes of it - <c>open()</c> a call,
+    /// <c>go</c> alone a use, as HTML runs it; and an inline script is read by the JavaScript reader, its declarations
+    /// carrying the lines they stand on.
     /// </summary>
     [Fact]
     public void LandmarksAndIdElementsAreSections_ClassesAndIdsAreUsesOfRules_ScriptsCarryTheirLines()
@@ -143,11 +144,11 @@ public sealed class HtmlExtractorTests : CodeGraphExtractorContractTests<HtmlExt
 
         var uses = extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Uses).Select(reference => reference.Name).Order(StringComparer.Ordinal).ToList();
 
-        Assert.Equal(["#content", "#title", ".dark", ".lead", ".muted"], uses);
+        Assert.Equal(["#content", "#title", ".dark", ".lead", ".muted", "go"], uses);
         Assert.All(extract.References.Where(reference => reference.Name[0] is '.' or '#'), reference => Assert.Equal(CodeQualifierKinds.Selector, reference.Qualifier?.Kind));
 
         Assert.Equal("checkout-widget", Assert.Single(extract.References, reference => reference.Kind == CodeEdgeKinds.Instantiates).Name);
-        Assert.Equal(["go", "open"], extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Calls).Select(reference => reference.Name).Order(StringComparer.Ordinal));
+        Assert.Equal(["open"], extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Calls).Select(reference => reference.Name));
 
         var script = Assert.Single(extract.Nodes, node => node.Id == "html:open");
 
@@ -340,6 +341,26 @@ public sealed class HtmlExtractorTests : CodeGraphExtractorContractTests<HtmlExt
 
         Assert.Equal(2, alone.Dynamic.Count);
         Assert.Equal(alone.Dynamic, page.Dynamic);
+    }
+
+    /// <summary>
+    /// A handler is the body of the function HTML makes of it, given the event, read by the JavaScript reader: a
+    /// <c>return</c> and an <c>if</c> are statements and no names, a <c>javascript:</c> a label, <c>event</c> the
+    /// function's own and <c>this</c> no name; what each calls and uses is its section's, on the line it is written on.
+    /// </summary>
+    [Fact]
+    public void AHandler_IsTheBodyOfTheFunctionHtmlMakesOfIt_ReadByTheJavaScriptReader()
+    {
+        var extract = Read("h.html", "<form onsubmit=\"return validate(this)\">\n<a onclick=\"javascript:openMenu()\">m</a>\n<button onclick=\"event.preventDefault(); save()\">s</button>\n<button onclick=\"if (ok) send(1, 2)\">t</button>\n</form>\n");
+
+        Assert.Equal(
+            [
+                (CodeEdgeKinds.Calls, "validate", 1, (int?)1, (string?)null), (CodeEdgeKinds.Calls, "openMenu", 2, 0, null), (CodeEdgeKinds.Calls, "preventDefault", 3, 0, CodeQualifierKinds.Value),
+                (CodeEdgeKinds.Calls, "save", 3, 0, null), (CodeEdgeKinds.Uses, "ok", 4, null, null), (CodeEdgeKinds.Calls, "send", 4, 2, null),
+            ],
+            extract.References.Select(reference => (reference.Kind, reference.Name, reference.Line, reference.Arity, reference.Qualifier?.Kind)));
+        Assert.All(extract.References, reference => Assert.Equal("html:h.html#body", reference.From));
+        Assert.Equal(["html:h.html#body"], extract.Nodes.Select(node => node.Id));
     }
 
     /// <summary>A style element's text is read by the style sheet's reader, its rules carrying the lines they stand on.</summary>

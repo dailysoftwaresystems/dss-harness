@@ -3128,10 +3128,14 @@ internal sealed class JsReading
 
             if (nameAt < 0 && scan.Opens(at))
             {
-                foreach (var bound in PatternNames(scan, at))
+                var (bound, given) = Pattern(scan, at);
+
+                foreach (var name in bound)
                 {
-                    locals[bound] = null;
+                    locals[name] = null;
                 }
+
+                defaults.AddRange(given);
             }
 
             var optional = false;
@@ -3200,14 +3204,49 @@ internal sealed class JsReading
     }
 
     /// <summary>The names the pattern the bracket at <paramref name="open"/> opens binds: each name a comma, a closer or a default follows, and no key's.</summary>
-    private static List<string> PatternNames(ScannedText scan, int open)
+    private static List<string> PatternNames(ScannedText scan, int open) => Pattern(scan, open).Names;
+
+    /// <summary>
+    /// The names a list of patterns binds as JavaScript binds a function's parameters - <c>item, index</c>,
+    /// <c>{ row: line }</c> <c>line</c> alone, <c>[first, ...rest]</c> both, a default's value none: what a markup's loop
+    /// or slot declares for what it holds, as the code of its framework's compiled template binds it.
+    /// </summary>
+    /// <param name="patterns">The patterns, written as a parameter list's are, without its parentheses.</param>
+    internal static List<string> Binds(string patterns)
+    {
+        var scan = JsLexer.Scan($"[{patterns}]", markup: false).Scan;
+        return scan.Count > 0 ? PatternNames(scan, 0) : [];
+    }
+
+    /// <summary>
+    /// What the pattern the bracket at <paramref name="open"/> opens binds - each name a comma, a closer or a default
+    /// follows, and no key's - and the spans of the default values it gives them: code, which binds no name of its own -
+    /// <c>{ size = fallback }</c> binds <c>size</c> and reads <c>fallback</c>.
+    /// </summary>
+    private static (List<string> Names, List<(int Start, int End)> Defaults) Pattern(ScannedText scan, int open)
     {
         var names = new List<string>();
+        var defaults = new List<(int Start, int End)>();
         var close = scan.Match(open) is var matched and > 0 ? matched : open;
 
         for (var at = open + 1; at < close; at++)
         {
             var next = scan.Next(at);
+
+            if (scan.Is(at, "="))
+            {
+                // A default runs to the comma or the closer that ends it, a bracket it holds passed over.
+                var end = next;
+
+                while (end < close && !(scan.Is(end, ",") || scan.Is(end, "}") || scan.Is(end, "]") || scan.Is(end, ")")))
+                {
+                    end = scan.Opens(end) ? Math.Max(Math.Min(scan.Past(end), close), end + 1) : end + 1;
+                }
+
+                defaults.Add((next, end));
+                at = end - 1;
+                continue;
+            }
 
             if (scan.IsName(at) && !IsMember(scan, scan.Previous(at)) && (scan.Is(next, ",") || scan.Is(next, "}") || scan.Is(next, "]") || scan.Is(next, "=")))
             {
@@ -3215,7 +3254,7 @@ internal sealed class JsReading
             }
         }
 
-        return names;
+        return (names, defaults);
     }
 
     // ---- What a body calls ----

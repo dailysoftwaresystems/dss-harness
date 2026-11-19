@@ -192,9 +192,10 @@ public sealed class VueExtractorTests : CodeGraphExtractorContractTests<VueExtra
     /// <summary>
     /// The component is a type named by its file, qualified by its path and exported default; its script - TypeScript
     /// where <c>lang="ts"</c> - is read by the JavaScript reader, its declarations and literals on the lines they stand on;
-    /// its template's component tags are instantiates, its <c>@</c> attributes calls, its <c>:</c> attributes and
-    /// <c>{{ }}</c> uses of the name they begin with - each a member of the component - and its classes and ids uses of
-    /// the rules that style them; its style block is read by the style sheet's reader.
+    /// its template's component tags are instantiates and its classes and ids uses of the rules that style them, and its
+    /// code is read by the JavaScript reader as Vue compiles it - a handler that names one a call of it, a binding and a
+    /// <c>{{ }}</c> what their expressions use, each name read by itself a member of the component; its style block is
+    /// read by the style sheet's reader.
     /// </summary>
     [Fact]
     public void AComponentIsAType_ItsScriptReadItsTemplateScannedItsStyleRead()
@@ -221,6 +222,7 @@ public sealed class VueExtractorTests : CodeGraphExtractorContractTests<VueExtra
                 new ExtractReference("vue:src/Cart.vue", CodeEdgeKinds.Uses, "total", 3) { Qualifier = members },
                 new ExtractReference("vue:src/Cart.vue", CodeEdgeKinds.Calls, "pay", 3) { Qualifier = members },
                 new ExtractReference("vue:src/Cart.vue", CodeEdgeKinds.Uses, "item", 4) { Qualifier = members },
+                new ExtractReference("vue:src/Cart.vue", CodeEdgeKinds.Uses, "name", 4) { Qualifier = new ExtractQualifier(CodeQualifierKinds.Value, "item") },
             ],
             extract.References.Where(reference => reference.Line is >= 2 and <= 5));
 
@@ -248,8 +250,8 @@ public sealed class VueExtractorTests : CodeGraphExtractorContractTests<VueExtra
 
     /// <summary>
     /// A template nested in the template ends nothing, and each attribute is read by its own name: a long-form handler is
-    /// one call, a modifier and a dashed binding are read, a bound class and a data attribute are no selectors, and what a
-    /// comment holds is no element.
+    /// one call, a modifier and a dashed binding are read, a bound class's object is what its values use and no selector, a
+    /// data attribute none, and what a comment holds is no element.
     /// </summary>
     [Fact]
     public void ANestedTemplateEndsNothing_AndEachAttributeIsReadByItsName()
@@ -258,10 +260,10 @@ public sealed class VueExtractorTests : CodeGraphExtractorContractTests<VueExtra
 
         Assert.Equal(
             [
-                ("ok", CodeEdgeKinds.Uses, 13), ("ChildItem", CodeEdgeKinds.Instantiates, 13), ("Other", CodeEdgeKinds.Instantiates, 14), ("save", CodeEdgeKinds.Calls, 14),
-                ("Comp", CodeEdgeKinds.Instantiates, 15), ("count", CodeEdgeKinds.Uses, 15), ("submit", CodeEdgeKinds.Calls, 15),
+                ("isActive", CodeEdgeKinds.Uses, 12), ("ChildItem", CodeEdgeKinds.Instantiates, 13), ("ok", CodeEdgeKinds.Uses, 13), ("Other", CodeEdgeKinds.Instantiates, 14),
+                ("save", CodeEdgeKinds.Calls, 14), ("Comp", CodeEdgeKinds.Instantiates, 15), ("count", CodeEdgeKinds.Uses, 15), ("submit", CodeEdgeKinds.Calls, 15),
             ],
-            extract.References.Where(reference => reference.Line is >= 11 and <= 18).Select(reference => (reference.Name, reference.Kind, reference.Line)));
+            extract.References.Where(reference => reference.Line is >= 11 and <= 18).OrderBy(reference => reference.Line).Select(reference => (reference.Name, reference.Kind, reference.Line)));
     }
 
     /// <summary>
@@ -420,8 +422,12 @@ public sealed class VueExtractorTests : CodeGraphExtractorContractTests<VueExtra
             """);
 
         Assert.Equal(
-            [("Link", CodeEdgeKinds.Instantiates, 3), ("links", CodeEdgeKinds.Uses, 3), ("Col", CodeEdgeKinds.Instantiates, 4), ("query", CodeEdgeKinds.Uses, 5), ("link", CodeEdgeKinds.Uses, 6)],
-            extract.References.Select(reference => (reference.Name, reference.Kind, reference.Line)));
+            [
+                ("Link", CodeEdgeKinds.Instantiates, 3, (string?)null), ("links", CodeEdgeKinds.Uses, 3, CodeQualifierKinds.This), ("url", CodeEdgeKinds.Uses, 3, CodeQualifierKinds.Value),
+                ("label", CodeEdgeKinds.Uses, 3, CodeQualifierKinds.Value), ("Col", CodeEdgeKinds.Instantiates, 4, null), ("name", CodeEdgeKinds.Uses, 4, CodeQualifierKinds.Value),
+                ("query", CodeEdgeKinds.Uses, 5, CodeQualifierKinds.This), ("link", CodeEdgeKinds.Uses, 6, CodeQualifierKinds.This),
+            ],
+            extract.References.OrderBy(reference => reference.Line).Select(reference => (reference.Name, reference.Kind, reference.Line, reference.Qualifier?.Kind)));
     }
 
     /// <summary>A script's default export is the component itself: no second node is exported by default beside it.</summary>
@@ -455,10 +461,10 @@ public sealed class VueExtractorTests : CodeGraphExtractorContractTests<VueExtra
 
     /// <summary>
     /// Every directive whose value is an expression - <c>v-model</c> with its modifiers, <c>v-if</c>, one of the
-    /// component's own - is a use of the name it begins with, and a <c>v-for</c> one of the list it walks; a name a
+    /// component's own - is what its expression uses, and a <c>v-for</c> what the list it walks does; a name a
     /// <c>v-for</c>'s aliases or a slot's value declares is the template's own where it stands - in the element and what
-    /// it holds, its text among it, and nowhere after its end - and no member's, though a property a slot's pattern
-    /// renames, and a name its default value gives, is.
+    /// it holds, its text among it, and nowhere after its end - and no member's, a member of it a member of that value,
+    /// though a property a slot's pattern renames, and a name its default value gives, is a member of the component.
     /// </summary>
     [Fact]
     public void EveryDirectivesExpression_IsAUse_AndANameTheTemplateDeclaresIsNoMember()
@@ -478,11 +484,61 @@ public sealed class VueExtractorTests : CodeGraphExtractorContractTests<VueExtra
 
         Assert.Equal(
             [
-                ("items", CodeEdgeKinds.Uses, 3), ("pick", CodeEdgeKinds.Calls, 3), ("name", CodeEdgeKinds.Uses, 5), ("shown", CodeEdgeKinds.Uses, 5),
-                ("target", CodeEdgeKinds.Uses, 5), ("Table", CodeEdgeKinds.Instantiates, 6), ("Panel", CodeEdgeKinds.Instantiates, 7), ("Panel", CodeEdgeKinds.Instantiates, 9),
-                ("total", CodeEdgeKinds.Uses, 3), ("row", CodeEdgeKinds.Uses, 6), ("fallback", CodeEdgeKinds.Uses, 6), ("item", CodeEdgeKinds.Uses, 8), ("note", CodeEdgeKinds.Uses, 9),
+                ("items", CodeEdgeKinds.Uses, 3, CodeQualifierKinds.This), ("pick", CodeEdgeKinds.Calls, 3, CodeQualifierKinds.This), ("name", CodeEdgeKinds.Uses, 3, CodeQualifierKinds.Value),
+                ("total", CodeEdgeKinds.Uses, 3, CodeQualifierKinds.This), ("name", CodeEdgeKinds.Uses, 5, CodeQualifierKinds.This), ("shown", CodeEdgeKinds.Uses, 5, CodeQualifierKinds.This),
+                ("target", CodeEdgeKinds.Uses, 5, CodeQualifierKinds.This), ("Table", CodeEdgeKinds.Instantiates, 6, (string?)null), ("fallback", CodeEdgeKinds.Uses, 6, CodeQualifierKinds.This),
+                ("row", CodeEdgeKinds.Uses, 6, CodeQualifierKinds.This), ("fallback", CodeEdgeKinds.Uses, 6, CodeQualifierKinds.This), ("Panel", CodeEdgeKinds.Instantiates, 7, null),
+                ("title", CodeEdgeKinds.Uses, 7, CodeQualifierKinds.Value), ("item", CodeEdgeKinds.Uses, 8, CodeQualifierKinds.This), ("Panel", CodeEdgeKinds.Instantiates, 9, null),
+                ("note", CodeEdgeKinds.Uses, 9, CodeQualifierKinds.This),
             ],
-            extract.References.Select(reference => (reference.Name, reference.Kind, reference.Line)));
+            extract.References.OrderBy(reference => reference.Line).Select(reference => (reference.Name, reference.Kind, reference.Line, reference.Qualifier?.Kind)));
+    }
+
+    /// <summary>
+    /// A handler's value is compiled as Vue's compiler compiles it and read by the JavaScript reader: a member path - a
+    /// name, <c>cart.add</c> - a call of the handler it names with whatever the event gives, of no count of arguments; a
+    /// function expression the handler itself; anything else statements the event runs - an <c>if</c> no name -
+    /// <c>$event</c> its own. A directive's dynamic argument is an expression of its own, read in its own case, and a
+    /// global Vue's compiler leaves to itself - <c>Math</c> - is no member.
+    /// </summary>
+    [Fact]
+    public void AHandlersValue_IsCompiledAsVueCompilesIt_AndReadByTheJavaScriptReader()
+    {
+        var extract = Read("src/Act.vue", """
+            <template>
+              <button @click="pay" @focus="cart.add" @blur="(e) => track(e, 1)" @keyup="if (ok) send($event); else stop()">x</button>
+              <Comp :[slotKey]="Math.max(a, 1)" @[event]="handle" />
+              <p>{{ isNaN(count) }}</p>
+            </template>
+            """);
+
+        Assert.Equal(
+            [
+                ("Comp", CodeEdgeKinds.Instantiates, 3, (int?)null, (string?)null, (string?)null), ("pay", CodeEdgeKinds.Calls, 2, null, CodeQualifierKinds.This, null),
+                ("cart", CodeEdgeKinds.Uses, 2, null, CodeQualifierKinds.This, null), ("add", CodeEdgeKinds.Calls, 2, null, CodeQualifierKinds.Value, "cart"),
+                ("track", CodeEdgeKinds.Calls, 2, 2, CodeQualifierKinds.This, null), ("ok", CodeEdgeKinds.Uses, 2, null, CodeQualifierKinds.This, null),
+                ("send", CodeEdgeKinds.Calls, 2, 1, CodeQualifierKinds.This, null), ("stop", CodeEdgeKinds.Calls, 2, 0, CodeQualifierKinds.This, null),
+                ("slotKey", CodeEdgeKinds.Uses, 3, null, CodeQualifierKinds.This, null), ("max", CodeEdgeKinds.Calls, 3, 2, CodeQualifierKinds.Named, "Math"),
+                ("a", CodeEdgeKinds.Uses, 3, null, CodeQualifierKinds.This, null), ("event", CodeEdgeKinds.Uses, 3, null, CodeQualifierKinds.This, null),
+                ("handle", CodeEdgeKinds.Calls, 3, null, CodeQualifierKinds.This, null), ("isNaN", CodeEdgeKinds.Calls, 4, 1, null, null),
+                ("count", CodeEdgeKinds.Uses, 4, null, CodeQualifierKinds.This, null),
+            ],
+            extract.References.Select(reference => (reference.Name, reference.Kind, reference.Line, reference.Arity, reference.Qualifier?.Kind, reference.Qualifier?.Name)));
+        Assert.Equal(["vue:src/Act.vue"], extract.Nodes.Select(node => node.Id));
+    }
+
+    /// <summary>
+    /// A block that names its file by <c>src</c> - a template's, a script's, a style's - is an import of that file, as a
+    /// page's <c>src</c> is, by the one reading of what a <c>src</c> names: another site's names none.
+    /// </summary>
+    [Fact]
+    public void ABlockThatNamesItsFileBySrc_IsAnImportOfIt()
+    {
+        var extract = Read("src/Act.vue", "<template src=\"./act.html\"></template>\n<script src=\"./act.js?v=2\"></script>\n<style src=\"../css/act.css\"></style>\n<script src=\"https://cdn.example/x.js\"></script>\n");
+
+        Assert.Equal(
+            [(CodeImportForms.Relative, "act.html", 1), (CodeImportForms.Relative, "act.js", 2), (CodeImportForms.Relative, "../css/act.css", 3)],
+            extract.Imports.Select(import => (import.Form, import.Target, import.Line)));
     }
 
     /// <summary>A dashed tag names the component its PascalCase form does, and a component's file in either case names it so.</summary>

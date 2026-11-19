@@ -200,6 +200,26 @@ public sealed record FileExtract(IReadOnlyList<ExtractNode> Nodes)
     }
 
     /// <summary>
+    /// This extract with every field that names a line given the line <paramref name="line"/> gives - each node's first
+    /// and last lines and the line its body begins on, and the line of each import, reference, dynamic mark and literal -
+    /// the one way an extract's lines are moved: where a markup file's reader gives embedded code a text of its own whose
+    /// lines are not the host's, each written where its pieces need, and says on which of the host's lines each stands.
+    /// </summary>
+    /// <param name="line">The line each line is given.</param>
+    internal FileExtract Relined(Func<int, int> line)
+    {
+        ArgumentNullException.ThrowIfNull(line);
+        return this with
+        {
+            Nodes = [.. Nodes.Select(node => node with { Start = line(node.Start), End = line(node.End), BodyStart = node.BodyStart is { } body ? line(body) : null })],
+            Imports = [.. Imports.Select(import => import with { Line = line(import.Line) })],
+            References = [.. References.Select(reference => reference with { Line = line(reference.Line) })],
+            Dynamic = [.. Dynamic.Select(dynamic => dynamic with { Line = line(dynamic.Line) })],
+            Literals = Literals is null ? null : [.. Literals.Select(literal => literal with { Line = line(literal.Line) })],
+        };
+    }
+
+    /// <summary>
     /// This extract with every field that names one of its nodes given the id <paramref name="renamed"/> gives - each
     /// node's id, the id of the node it is declared inside and of each node its name is written onto
     /// (<see cref="ExtractNode.SuffixOf"/>), the node each reference is made from and the node of its own file it names

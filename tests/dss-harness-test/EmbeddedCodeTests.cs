@@ -52,7 +52,7 @@ public sealed class EmbeddedCodeTests
     public void AFoldedNode_IsGone_AndEveryFieldThatNamedIt_NamesTheNodeItIsFoldedInto()
     {
         var read = Script(2, "one");
-        var folded = EmbeddedCode.Folded(read, node => node.Id == "html:open", "html:x.html#body");
+        var folded = EmbeddedCode.Folded(read, node => node.Id == "html:open" ? "html:x.html#body" : null);
 
         Assert.Equal([("html:open.inner", "html:x.html#body")], folded.Nodes.Select(node => (node.Id, node.Parent)));
         Assert.Equal([("html:x.html#body", "one")], folded.References.Select(reference => (reference.From, reference.Name)));
@@ -71,7 +71,7 @@ public sealed class EmbeddedCodeTests
         var second = Text.IndexOf("bar", StringComparison.Ordinal);
         var third = Text.IndexOf("\nlast", StringComparison.Ordinal);
 
-        var kept = EmbeddedCode.Kept(Text, [(first, first + 11), (second, second + 5), (third, third + 7)]);
+        var kept = EmbeddedCode.Kept(Text, CodeFileText.LineIndex(Text), [(first, first + 11), (second, second + 5), (third, third + 7)]);
 
         Assert.Equal("\nvar x = foo bar()\n\nlast()", kept);
     }

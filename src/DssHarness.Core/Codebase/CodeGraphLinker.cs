@@ -1780,22 +1780,92 @@ public static class CodeGraphLinker
         }
 
         /// <summary>
-        /// Each <c>partOf</c> edge: one part of a declaration to the first of its parts, among the declarations of one
-        /// qualified name that say they are parts (<see cref="ExtractNode.Part"/>) - a XAML view and the C# type its
-        /// <c>x:Class</c> names, a Blazor component and its code-behind. Ids stay per language; the edge is derived, so
-        /// no stored extract changes meaning.
+        /// Each <c>partOf</c> edge: one part of a declaration to the first of its parts, among the declarations that say
+        /// they are parts (<see cref="ExtractNode.Part"/>) and are one declaration - those of one qualified name, exact: a
+        /// XAML view and the C# type its <c>x:Class</c> names; and a Blazor component and the partial of its name its
+        /// code-behind file declares - <c>Cart.razor.cs</c> beside <c>Cart.razor</c>, as Razor pairs them - whatever
+        /// namespace the tree's path gives the component, for the namespace Razor compiles it into is its project's, which
+        /// the file does not say: unique. Ids stay per language; the edge is derived, so no stored extract changes meaning.
+        /// The parts are joined as they are met, each join kept, so each is found once (<see cref="PartsJoined"/>).
         /// </summary>
         private void Parts()
         {
-            foreach (var alike in _declarations.Where(declaration => declaration.Node.Part).GroupBy(declaration => declaration.Node.Qualified, StringComparer.Ordinal))
+            var parts = _declarations.Where(declaration => declaration.Node.Part).ToList();
+            var joined = new PartsJoined(parts.Count);
+            var byQualified = new Dictionary<string, int>(StringComparer.Ordinal);
+            var byFile = new Dictionary<(string Path, string Name), int>();
+
+            for (var at = 0; at < parts.Count; at++)
             {
-                List<string> ids = [.. alike.Select(part => part.Id).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)];
+                if (!byQualified.TryAdd(parts[at].Node.Qualified, at))
+                {
+                    joined.Join(at, byQualified[parts[at].Node.Qualified]);
+                }
+
+                byFile.TryAdd((parts[at].File.Path, SimpleName(parts[at].Node.Qualified)), at);
+            }
+
+            for (var at = 0; at < parts.Count; at++)
+            {
+                if (parts[at].File.Path.EndsWith(".razor.cs", StringComparison.OrdinalIgnoreCase)
+                    && byFile.TryGetValue((parts[at].File.Path[..^3], SimpleName(parts[at].Node.Qualified)), out var component))
+                {
+                    joined.Join(at, component);
+                }
+            }
+
+            foreach (var alike in Enumerable.Range(0, parts.Count).GroupBy(joined.Root).Select(group => group.Select(at => parts[at]).ToList()).Where(group => group.Count > 1))
+            {
+                var byId = new Dictionary<string, Declaration>(StringComparer.Ordinal);
+
+                foreach (var part in alike)
+                {
+                    byId.TryAdd(part.Id, part);
+                }
+
+                List<string> ids = [.. byId.Keys.Order(StringComparer.Ordinal)];
+                var first = byId[ids[0]];
 
                 for (var at = 1; at < ids.Count; at++)
                 {
-                    _edges.Add(new CodeEdge(ids[at], ids[0], CodeEdgeKinds.PartOf, alike.First(part => part.Id == ids[at]).Node.Start, CodeConfidences.Exact));
+                    var part = byId[ids[at]];
+                    _edges.Add(new CodeEdge(ids[at], ids[0], CodeEdgeKinds.PartOf, part.Node.Start, part.Node.Qualified == first.Node.Qualified ? CodeConfidences.Exact : CodeConfidences.Unique));
                 }
             }
+
+            // A qualified name's last part: the type's own name, its count of type parameters among it.
+            static string SimpleName(string qualified) => qualified.LastIndexOf('.') is var dot and >= 0 ? qualified[(dot + 1)..] : qualified;
+        }
+
+        /// <summary>
+        /// Which parts are one declaration, as the joins found so far say: each part held to the one that stands for its
+        /// group, each walk from a part to it keeping what it passed - every part on the way held to it directly - so no
+        /// part is walked past again.
+        /// </summary>
+        private sealed class PartsJoined(int count)
+        {
+            private readonly int[] _held = [.. Enumerable.Range(0, count)];
+
+            /// <summary>The part that stands for <paramref name="at"/>'s group.</summary>
+            public int Root(int at)
+            {
+                var root = at;
+
+                while (_held[root] != root)
+                {
+                    root = _held[root];
+                }
+
+                while (_held[at] != root)
+                {
+                    (_held[at], at) = (root, _held[at]);
+                }
+
+                return root;
+            }
+
+            /// <summary>Joins the groups of <paramref name="one"/> and <paramref name="other"/>.</summary>
+            public void Join(int one, int other) => _held[Root(one)] = Root(other);
         }
 
         /// <summary>
