@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text;
 using DssHarness.Core.Execution;
+using DssHarness.Core.Output;
 using DssHarness.Core.Processes;
 
 namespace DssHarness.Tests;
@@ -67,8 +68,10 @@ public sealed class PhaseFloodTests
 
         Assert.Equal(0, result.ExitCode);
         Assert.True(result.Witnessed, "the last line the child printed was never read");
+        // The last lines that fit a page's room, each costing its characters and its ending.
+        var fit = PhaseResult.TailRoom / (LineLength + 1);
         Assert.Equal(
-            [.. Enumerable.Range((int)FloodLines - PhaseResult.TailLines, PhaseResult.TailLines).Select(index => TestChild.FloodLine(index, LineLength))],
+            [.. Enumerable.Range((int)FloodLines - fit, fit).Select(index => TestChild.FloodLine(index, LineLength))],
             result.LastLines);
 
         AssertLogHolds(log, FloodLines, LineLength);
@@ -143,7 +146,10 @@ public sealed class PhaseFloodTests
         }
 
         Assert.Equal(Giant, kept);
-        Assert.All(result.LastLines, line => Assert.Equal(TestChild.GiantLine(line.Length), line));
+
+        // A piece wider than a page's room is shown by its end, marked where it went on before it, within the room.
+        var last = Assert.Single(result.LastLines);
+        Assert.Equal(TextCut.Ellipsis + TestChild.GiantLine(PhaseResult.TailRoom - 2), last);
     }
 
     /// <summary>That what <paramref name="heap"/> watched grew the heap by no more than <see cref="HeapBound"/>.</summary>

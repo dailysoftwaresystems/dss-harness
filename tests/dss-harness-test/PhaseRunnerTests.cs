@@ -520,7 +520,16 @@ public sealed class PhaseRunnerTests
 
         Assert.Equal(values.Redact(line), string.Concat(read));
         Assert.Equal(2, read.Count);
-        Assert.Equal(read, result.LastLines);
+
+        // The last lines the phase kept as it ran are those the pieces read back keep, piece for piece.
+        var readBack = new LastLinesRing(PhaseResult.TailRoom);
+
+        foreach (var piece in read)
+        {
+            readBack.Add(piece);
+        }
+
+        Assert.Equal(readBack.ToList(), result.LastLines);
     }
 
     [Fact]

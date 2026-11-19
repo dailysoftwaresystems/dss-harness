@@ -599,7 +599,7 @@ public sealed class PhaseRunner(
     /// <param name="record">Where each timing mark is written as it is found; <see langword="null"/> where the phase declares no timing pattern.</param>
     private sealed class Reading(Regex? success, IReadOnlyList<(string Pattern, Regex Regex)> timings, JsonLineWriter? record)
     {
-        private readonly LastLinesRing _last = new(PhaseResult.TailLines);
+        private readonly LastLinesRing _last = new(PhaseResult.TailRoom);
         private bool _witnessed;
 
         /// <summary>How many timing marks were written to the record, every pattern's together.</summary>

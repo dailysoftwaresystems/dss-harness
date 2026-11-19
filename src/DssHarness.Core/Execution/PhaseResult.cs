@@ -95,13 +95,24 @@ public sealed record PhaseResult(
     /// </summary>
     public bool Passed => Stopped == PhaseStop.None && ExitCode == 0 && Witnessed != false && MissingOutputs.Count == 0;
 
-    /// <summary>How many of its last lines a phase that did not pass is shown by.</summary>
+    /// <summary>
+    /// Retired: a phase is shown by the last of its lines that fit a page (<see cref="TailRoom"/>), never by a number of
+    /// them. Kept only for the check step that still cuts its own tail by it, until that step reads its tail the same way.
+    /// </summary>
     public const int TailLines = 50;
 
     /// <summary>
-    /// The last <see cref="TailLines"/> lines the child printed, on either stream, in the order they came,
-    /// with the run's secrets masked as in <see cref="Output"/>: kept as the phase ran, in a ring of that many,
-    /// so that what a reader is shown first needs no read of the log.
+    /// The characters the last lines a phase is shown by may take, each with its ending: a page of a tool's answer
+    /// (<see cref="Pages.PageRoom"/>), the one owner of how much one look gives - what a reader is shown first, never what
+    /// there is: the whole output is in <see cref="LogFile"/>, read by page.
+    /// </summary>
+    public static int TailRoom { get; } = Pages.PageRoom.For(Pages.PageRoom.ModelAnswer, []);
+
+    /// <summary>
+    /// The last lines the child printed that fit <see cref="TailRoom"/>, on either stream, in the order they came, with
+    /// the run's secrets masked as in <see cref="Output"/>: kept as the phase ran, a page of them, so that what a reader is
+    /// shown first - where the output ended, which is where a failure says itself - needs no read of the log, and the rest
+    /// is in the log, whole.
     /// </summary>
     public IReadOnlyList<string> LastLines { get; init; } = [];
 

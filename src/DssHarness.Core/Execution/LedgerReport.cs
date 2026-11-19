@@ -607,9 +607,10 @@ public sealed class LedgerReport
     }
 
     /// <summary>
-    /// The last lines each leg's last phase that did not pass printed, as a block below the table: what a
-    /// reader who cannot open the leg's log - another host's, which stays on that host - needs first.
-    /// Below rather than in the table, as the timings are, so no row is pushed apart.
+    /// The last lines each leg's last phase that did not pass printed - a page of them - as a block below the table: what
+    /// a reader who cannot open the leg's log - another host's, which stays on that host - needs first, and where the
+    /// whole is, the phase's log, read by page, where the leg's records name it. Below rather than in the table, as the
+    /// timings are, so no row is pushed apart.
     /// </summary>
     private IReadOnlyList<string> RenderTails()
     {
@@ -617,8 +618,10 @@ public sealed class LedgerReport
 
         foreach (var line in Lines.Where(line => line.LogTail.Count > 0))
         {
+            var whole = line.Logs.FirstOrDefault(log => string.Equals(log.Phase, line.TailPhase, StringComparison.Ordinal))?.File;
+
             rows.Add(string.Empty);
-            rows.Add($"{line.Leg}: the last {ReportText.Counted(line.LogTail.Count, "line")} its phase printed");
+            rows.Add($"{line.Leg}: the last {ReportText.Counted(line.LogTail.Count, "line")} its phase printed{(whole is null ? string.Empty : $", the whole in '{whole}'")}");
             rows.AddRange(line.LogTail.Select(QuotedLine.Of));
         }
 

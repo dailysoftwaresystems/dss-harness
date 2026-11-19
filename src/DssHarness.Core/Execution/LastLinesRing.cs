@@ -3,27 +3,34 @@ using DssHarness.Core.Output;
 namespace DssHarness.Core.Execution;
 
 /// <summary>
-/// The last lines of a phase's output, kept as they arrive in a ring of a fixed number of them, so that keeping them costs
-/// the same whatever the child prints: the one rule for <see cref="PhaseResult.LastLines"/>, whether a phase is running or
-/// its output is read back.
+/// The last lines of a phase's output that fit a page's room, kept as they arrive, so that keeping them costs a page
+/// whatever the child prints: the one rule for <see cref="PhaseResult.LastLines"/>, whether a phase is running or its
+/// output is read back. A page's room bounds what one look gives, never what is kept: the whole output is in the phase's
+/// log, which a reader pages through for the rest.
 /// </summary>
 /// <remarks>
+/// <para>
+/// A line costs its characters and its ending, as a line of a page does (<see cref="Pages.PageRoom"/>): the oldest lines
+/// go first once the room is spent, and a last line wider than the whole room is kept as its end, marked where it went
+/// on before it.
+/// </para>
+/// <para>
 /// A line is shown divided however it divides itself - at a carriage return alone, a form feed, a Unicode line separator -
 /// as a reader looking at it sees it, and no empty line comes after the last that is not: empty lines are counted rather
 /// than kept, and take their places only once a line that is not empty follows them.
+/// </para>
 /// </remarks>
-/// <param name="capacity">How many lines are kept.</param>
-internal sealed class LastLinesRing(int capacity)
+/// <param name="room">How many characters the lines kept may take, each with its ending.</param>
+internal sealed class LastLinesRing(int room)
 {
-    private readonly string[] _ring = capacity > 0
-        ? new string[capacity]
-        : throw new ArgumentOutOfRangeException(nameof(capacity), capacity, "A ring keeps at least one line.");
+    private readonly Queue<string> _kept = new();
 
-    /// <summary>Where the next line goes.</summary>
-    private int _next;
+    private readonly int _room = room > 1
+        ? room
+        : throw new ArgumentOutOfRangeException(nameof(room), room, "A page's room holds at least one character and its ending.");
 
-    /// <summary>How many lines are kept, until the ring is full.</summary>
-    private int _count;
+    /// <summary>What the lines kept take of the room, each with its ending.</summary>
+    private long _taken;
 
     /// <summary>The empty lines since the last that was not, which take their places only once one that is not follows them.</summary>
     private long _empty;
@@ -51,17 +58,7 @@ internal sealed class LastLinesRing(int capacity)
     }
 
     /// <summary>The lines kept, oldest first.</summary>
-    public IReadOnlyList<string> ToList()
-    {
-        var lines = new string[_count];
-
-        for (var index = 0; index < _count; index++)
-        {
-            lines[index] = _ring[(_next - _count + index + _ring.Length) % _ring.Length];
-        }
-
-        return lines;
-    }
+    public IReadOnlyList<string> ToList() => [.. _kept];
 
     /// <summary>Takes one line as a reader sees it, which holds no ending of any kind.</summary>
     private void Part(string line)
@@ -72,7 +69,8 @@ internal sealed class LastLinesRing(int capacity)
             return;
         }
 
-        for (var empty = Math.Min(_empty, _ring.Length); empty > 0; empty--)
+        // Only as many as the room could hold: more would go again at once.
+        for (var empty = Math.Min(_empty, _room); empty > 0; empty--)
         {
             Keep(string.Empty);
         }
@@ -83,8 +81,16 @@ internal sealed class LastLinesRing(int capacity)
 
     private void Keep(string line)
     {
-        _ring[_next] = line;
-        _next = (_next + 1) % _ring.Length;
-        _count = Math.Min(_count + 1, _ring.Length);
+        // A line wider than the whole room is its end, marked where it went on: what a reader is shown first is where the
+        // line ended.
+        var kept = line.Length + 1 > _room ? TextCut.Ellipsis + TextCut.Tail(line, _room - 2) : line;
+
+        _kept.Enqueue(kept);
+        _taken += kept.Length + 1;
+
+        while (_taken > _room)
+        {
+            _taken -= _kept.Dequeue().Length + 1;
+        }
     }
 }
