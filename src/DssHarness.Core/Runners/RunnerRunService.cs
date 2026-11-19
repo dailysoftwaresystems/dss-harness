@@ -484,6 +484,7 @@ public sealed class RunnerRunService(
             Leg = request.Leg,
             Verdict = decided.Verdict.Verdict,
             Detail = decided.Verdict.Detail,
+            Named = decided.Verdict.Named,
             Duration = elapsed.Elapsed,
             CommandTime = state.CommandTime,
             Emulated = request.Emulated,
@@ -494,11 +495,12 @@ public sealed class RunnerRunService(
 
             // Redacted like every other line that leaves a run: a timing pattern matches the phase's
             // own output, and a phase that printed a secret would otherwise have it copied into the
-            // ledger and the JSON a script keeps.
-            Timings = [.. state.Phases.SelectMany(phase => phase.Timings.Select(timing => new TimingMark(
+            // ledger and the JSON a script keeps. Read from each phase's timing record each time they are asked for, never
+            // gathered here.
+            Timings = state.Phases.SelectMany(phase => phase.Timings.Select(timing => new TimingMark(
                 values.Redact(phase.Phase),
                 values.Redact(timing.Text),
-                values.Redact(timing.Value))))],
+                values.Redact(timing.Value)))),
 
             // On the leg's own line, so a step this operating system left out is never simply absent.
             SkippedSteps = steps.SkippedSteps,

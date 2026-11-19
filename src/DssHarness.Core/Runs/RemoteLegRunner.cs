@@ -598,6 +598,9 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
             Leg = leg.Name,
             Verdict = verdict,
 
+            // Every item the host's detail stands for, whole, as its ledger's line keeps them.
+            Named = [.. entry.Named ?? []],
+
             // A refusal of the run the host made once the leg had its line - a sweep that had judged arms by then - is
             // this run's refusal as one with no line is: the line is this leg's, and the refusal ends the run after it,
             // in the host's own words. The host's document says which it is - written where something other than its
@@ -810,7 +813,8 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
         IReadOnlyList<RemoteLedgerControl>? Controls = null,
         IReadOnlyList<SetUps.SetUpFact>? SetUps = null,
         string? TailPhase = null,
-        Build.FailedUnits? FailedUnits = null);
+        Build.FailedUnits? FailedUnits = null,
+        IReadOnlyList<string>? Named = null);
 
     /// <summary>One control of a host's sweep that did not pass, beneath its leg's line.</summary>
     private sealed record RemoteLedgerControl(

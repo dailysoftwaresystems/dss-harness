@@ -2008,6 +2008,8 @@ internal sealed class MutationLegRunner(
             // Beside the verdict and never in it, as a build's and a test's are; in one order, whichever worker met each.
             return _leg.Entry(verdict, string.Join("; ", detail)) with
             {
+                // Every item the leg's own verdicts' details stand for, whole, in their order (ReachedVerdict.Named).
+                Named = [.. own.SelectMany(reached => reached.Named)],
                 Arms = ordered,
                 TimingNotes = [.. _timing.Order(StringComparer.Ordinal)],
                 PendingSweep = pending,

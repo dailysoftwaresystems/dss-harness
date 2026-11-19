@@ -147,6 +147,7 @@ public sealed record BuildResult(
         Leg = leg,
         Verdict = Verdict.Verdict,
         Detail = Verdict.Detail,
+        Named = Verdict.Named,
         Duration = duration,
         Emulated = emulated,
         TimingNotes = Notes,

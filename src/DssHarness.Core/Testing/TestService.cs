@@ -385,6 +385,7 @@ public sealed class TestService(
             Leg = request.Leg,
             Verdict = reached.Verdict,
             Detail = reached.Detail,
+            Named = reached.Named,
             Duration = elapsed.Elapsed,
             CommandTime = phase.Duration,
             Emulated = request.Emulated,
@@ -397,7 +398,8 @@ public sealed class TestService(
             TestSet = invocation.TestSet,
             Phases = [new PhaseRecord(phase.Phase, phase.Duration, phase.ClockStepped)],
             TimingNotes = TimingNotes(phase),
-            Timings = [.. phase.Timings.Select(timing => new TimingMark(phase.Phase, timing.Text, timing.Value))],
+            // Read from the phase's timing record each time they are asked for, never gathered here.
+            Timings = phase.Timings.Select(timing => new TimingMark(phase.Phase, timing.Text, timing.Value)),
             LogTail = phase.Tail,
             TailPhase = phase.Passed ? null : phase.Phase,
         };

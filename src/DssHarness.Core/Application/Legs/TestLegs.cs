@@ -178,6 +178,7 @@ public sealed class TestLegs(IBuildService builds, ITestService tests, CMakeTool
                     Leg = leg.Name,
                     Verdict = held.Verdict,
                     Detail = held.Detail,
+                    Named = held.Named,
                     Duration = Stopwatch.GetElapsedTime(started),
                     Emulated = leg.Emulated,
                     Compilers = compilers,
