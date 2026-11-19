@@ -61,8 +61,8 @@ public enum PhaseStop
 /// modification time it stamped, which is what an incremental build would otherwise trust.
 /// </param>
 /// <param name="Timings">
-/// The matches of the phase's timing patterns, pattern by pattern, each in the order they appeared: up to
-/// <see cref="PhaseRunner.MostTimings"/> of each.
+/// The matches of the phase's timing patterns, pattern by pattern, each in the order they appeared: every one, kept in the
+/// phase's timing record beside its log and read back from there when asked for (<see cref="PhaseTimings"/>).
 /// </param>
 /// <param name="LogFile">Where the whole of the child's output was written, for a reader or a regex.</param>
 /// <param name="Output">
@@ -84,7 +84,7 @@ public sealed record PhaseResult(
     TimeSpan Duration,
     TimeSpan ClockDrift,
     bool ClockStepped,
-    IReadOnlyList<PhaseTiming> Timings,
+    PhaseTimings Timings,
     string LogFile,
     PhaseOutput Output)
 {

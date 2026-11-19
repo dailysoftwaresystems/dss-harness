@@ -88,9 +88,10 @@ public sealed record LegEntry
 
     /// <summary>
     /// What the leg's phases reported about their own timing under <c>--time</c>. Empty without it,
-    /// and empty with it where no timing pattern is configured or none matched.
+    /// and empty with it where no timing pattern is configured or none matched. Every mark: where the phases kept them in
+    /// their timing records, read from there each time the marks are asked for, never held (<see cref="PhaseTimings"/>).
     /// </summary>
-    public IReadOnlyList<TimingMark> Timings { get; init; } = [];
+    public IEnumerable<TimingMark> Timings { get; init; } = [];
 
     /// <summary>
     /// Anything already known to make this leg's timings meaningless, such as a phase that spanned a

@@ -25,7 +25,7 @@ namespace DssHarness.Core.Execution;
 /// <param name="CommandTime">The time the leg's own commands took.</param>
 /// <param name="Overhead">What the harness spent on syncing, fingerprinting and sampling.</param>
 /// <param name="TestCount">How many tests it reported running, where a count pattern extracted one.</param>
-/// <param name="Timings">What its phases reported about their own timing under <c>--time</c>.</param>
+/// <param name="Timings">What its phases reported about their own timing under <c>--time</c>: every mark, read as it is asked for.</param>
 public sealed record LedgerLine(
     string Leg,
     LegVerdict Verdict,
@@ -36,7 +36,7 @@ public sealed record LedgerLine(
     TimeSpan CommandTime,
     TimeSpan Overhead,
     int? TestCount,
-    IReadOnlyList<TimingMark> Timings)
+    IEnumerable<TimingMark> Timings)
 {
     /// <summary>
     /// Where the leg's records are when another host ran it, or <see langword="null"/> when they are
@@ -637,18 +637,20 @@ public sealed class LedgerReport
     /// </remarks>
     private IReadOnlyList<string> RenderTimings()
     {
+        // Read as they are asked for, never gathered first: once for the columns' widths, and once for the rows.
         var marks = Lines
-            .SelectMany(line => line.Timings.Select(timing => (line.Leg, timing.Phase, timing.Text, timing.Value)))
-            .ToList();
+            .SelectMany(line => line.Timings.Select(timing => (line.Leg, timing.Phase, timing.Text, timing.Value)));
+        var (leg, phase, text, any) = ("LEG".Length, "PHASE".Length, "REPORTED".Length, false);
 
-        if (marks.Count == 0)
+        foreach (var mark in marks)
+        {
+            (leg, phase, text, any) = (Math.Max(leg, mark.Leg.Length), Math.Max(phase, mark.Phase.Length), Math.Max(text, mark.Text.Length), true);
+        }
+
+        if (!any)
         {
             return [];
         }
-
-        var leg = Width("LEG", marks.Select(mark => mark.Leg));
-        var phase = Width("PHASE", marks.Select(mark => mark.Phase));
-        var text = Width("REPORTED", marks.Select(mark => mark.Text));
 
         return
         [

@@ -54,8 +54,8 @@ public sealed record PhaseRequest
     public int StallSeconds { get; init; }
 
     /// <summary>
-    /// Patterns whose every match is pulled out of each line of the command's output as it arrives, up to
-    /// <see cref="PhaseRunner.MostTimings"/> of each.
+    /// Patterns whose every match is pulled out of each line of the command's output as it arrives, each written to the
+    /// phase's timing record as it is found (<see cref="PhaseTimings"/>).
     /// </summary>
     public IReadOnlyList<string> TimingPatterns { get; init; } = [];
 
@@ -179,12 +179,6 @@ public sealed class PhaseRunner(
     TimeProvider? wallClock = null)
 {
     /// <summary>
-    /// The most matches of one timing pattern a phase keeps. A timing mark per test of a suite of thousands is ordinary;
-    /// a pattern that matches every line of a flood is not a measurement, and keeping every match would hold the flood.
-    /// </summary>
-    public const int MostTimings = 10_000;
-
-    /// <summary>
     /// How each line of a log ends: this machine's own line ending, as it always has. Spelled once, for the runner that
     /// writes a log and for <see cref="PhaseOutput"/>, which reads it back.
     /// </summary>
@@ -240,7 +234,14 @@ public sealed class PhaseRunner(
         // its time over any of it — is this tool's own, and counting it as the child being quiet is
         // how a slow launch reads as a hung command.
         var clock = new StallClock();
-        var reading = new Reading(success, timings);
+
+        // Every timing mark goes to the record beside the log as it is found, and nothing of them is held: a pattern that
+        // matches every line of a flood costs the record its lines and the phase nothing.
+        var timingRecord = timings.Count == 0 ? null : PhaseTimings.RecordOf(request.LogFile);
+        await using var marks = timingRecord is null
+            ? null
+            : new FileStream(timingRecord, FileMode.Create, FileAccess.Write, FileShare.ReadWrite);
+        var reading = new Reading(success, timings, marks is null ? null : new JsonLineWriter(marks));
         var callback = new LineCallback(request.OnLine);
 
         // Where the child's own lines begin: what is above is the header this run wrote, and a header
@@ -359,6 +360,9 @@ public sealed class PhaseRunner(
             // Where the child's own lines end: what follows is the exit line this run writes.
             end = log.BaseStream.Position;
             log.WriteLine(exit);
+
+            // Every mark found is in the record, for whatever reads them back.
+            marks?.Flush();
         }
 
         // Now that the log is whole, its exit line included: a reader's failure is its own, and the
@@ -375,7 +379,7 @@ public sealed class PhaseRunner(
             Duration: result.Duration,
             ClockDrift: drift,
             ClockStepped: stepped,
-            Timings: reading.Timings(_output, request.Phase),
+            Timings: timingRecord is null ? PhaseTimings.None : PhaseTimings.InRecord(_fileSystem, timingRecord, [.. timings.Select(timing => timing.Pattern)], reading.Marks),
             LogFile: request.LogFile,
 
             // The child's lines as the log keeps them, already masked: read back from there by whatever
@@ -574,8 +578,8 @@ public sealed class PhaseRunner(
 
     /// <summary>
     /// What a phase establishes from its child's output, read a line at a time as each line is kept: whether the success
-    /// pattern matched, the timing marks, and the last lines. Nothing else of the output is held, so what this holds is the
-    /// same whatever the child prints.
+    /// pattern matched, the timing marks - each written to the phase's timing record as it is found - and the last lines.
+    /// Nothing else of the output is held, so what this holds is the same whatever the child prints.
     /// </summary>
     /// <remarks>
     /// <para>
@@ -592,12 +596,14 @@ public sealed class PhaseRunner(
     /// </remarks>
     /// <param name="success">The success pattern, or <see langword="null"/> where the phase declares none.</param>
     /// <param name="timings">The timing patterns.</param>
-    private sealed class Reading(Regex? success, IReadOnlyList<(string Pattern, Regex Regex)> timings)
+    /// <param name="record">Where each timing mark is written as it is found; <see langword="null"/> where the phase declares no timing pattern.</param>
+    private sealed class Reading(Regex? success, IReadOnlyList<(string Pattern, Regex Regex)> timings, JsonLineWriter? record)
     {
         private readonly LastLinesRing _last = new(PhaseResult.TailLines);
-        private readonly List<PhaseTiming>[] _marks = [.. timings.Select(_ => new List<PhaseTiming>())];
-        private readonly long[] _matched = new long[timings.Count];
         private bool _witnessed;
+
+        /// <summary>How many timing marks were written to the record, every pattern's together.</summary>
+        public long Marks { get; private set; }
 
         /// <summary>The last lines read, in the order they came.</summary>
         public IReadOnlyList<string> LastLines => _last.ToList();
@@ -621,31 +627,6 @@ public sealed class PhaseRunner(
             return _witnessed;
         }
 
-        /// <summary>
-        /// Every timing mark kept, pattern by pattern, each in the order it appeared; and said to <paramref name="output"/>,
-        /// for <paramref name="phase"/>, of each pattern that matched more often than was kept.
-        /// </summary>
-        public IReadOnlyList<PhaseTiming> Timings(IHarnessOutput output, string phase)
-        {
-            for (var index = 0; index < timings.Count; index++)
-            {
-                var pattern = timings[index].Pattern;
-
-                if (_matched[index] > MostTimings)
-                {
-                    // Said, because a report holding the first marks and none after reads as a phase
-                    // that stopped reporting them.
-                    output.Warn(
-                        phase,
-                        string.Create(
-                            CultureInfo.InvariantCulture,
-                            $"the timing pattern '{pattern}' matched this phase's output {_matched[index]} times; only the first {MostTimings} were kept"));
-                }
-            }
-
-            return [.. _marks.SelectMany(marks => marks)];
-        }
-
         private void Witness(string line)
         {
             // Once matched, matched: a pattern is evidence the command ran the moment one line shows it.
@@ -663,13 +644,9 @@ public sealed class PhaseRunner(
             {
                 foreach (var match in timings[index].Regex.Matches(line).Cast<Match>())
                 {
-                    if (++_matched[index] > MostTimings)
-                    {
-                        continue;
-                    }
-
                     var value = match.Groups.Count > 1 && match.Groups[1].Success ? match.Groups[1].Value : match.Value;
-                    _marks[index].Add(new PhaseTiming(timings[index].Pattern, match.Value, value));
+                    record!.Write(new PhaseTimings.Mark(index, match.Value, value));
+                    Marks++;
                 }
             }
         }
