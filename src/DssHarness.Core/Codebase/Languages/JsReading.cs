@@ -208,6 +208,12 @@ internal sealed class JsReading
     /// <summary>The first and the last line the code at the file's top outside its declarations is written on, once some is read.</summary>
     private (int First, int Last)? _topLines;
 
+    /// <summary>Whether the text is a single-file component's script, whose default export's options declare the component's members.</summary>
+    private readonly bool _component;
+
+    /// <summary>The body of each interface and object type alias the file's top declares, by its name: the props a component's <c>defineProps</c> names.</summary>
+    private readonly Dictionary<string, (int Open, int Inner)> _typeBodies = new(StringComparer.Ordinal);
+
     /// <summary>Reads <paramref name="text"/>, the file <paramref name="path"/>.</summary>
     /// <param name="language">The implementation's name, which prefixes every id.</param>
     /// <param name="path">The file's path.</param>
@@ -218,12 +224,16 @@ internal sealed class JsReading
     /// <param name="module">Whether the text is a module - an embedded script's, as the markup that holds it says, a Vue
     /// component's always and a page's where its type is <c>module</c> - whatever it holds; null where what it holds
     /// says, as a file of its own does.</param>
-    public JsReading(string language, string path, string text, bool typescript, bool? markup = null, bool? module = null)
+    /// <param name="component">Whether the text is a Vue single-file component's script, whose default export - an object
+    /// of the component's options, or one a call such as <c>defineComponent</c> is given - declares the component's
+    /// members (<see cref="Options"/>).</param>
+    public JsReading(string language, string path, string text, bool typescript, bool? markup = null, bool? module = null, bool component = false)
     {
         var name = CodeGraphIds.FileName(path);
 
         _typescript = typescript;
         _moduleSaid = module;
+        _component = component;
 
         // JavaScript writes no type that a < could open, so every file of it may hold markup; TypeScript's .tsx alone does.
         _markup = markup ?? (!typescript || name.EndsWith(".tsx", StringComparison.OrdinalIgnoreCase));
@@ -1143,8 +1153,340 @@ internal sealed class JsReading
         });
 
         Registered(key, frame, "default");
+
+        if (_component && OptionsAt(at, boundary) is var open and >= 0)
+        {
+            Options(at, open, boundary, key, frame);
+            return stop;
+        }
+
         Defer(() => Calls(_text, at, boundary, key, new Locals(), null, depth: 0));
         return stop;
+    }
+
+    // ---- A component's options ----
+
+    /// <summary>
+    /// Where the options object a component's default export from <paramref name="at"/> writes begins: the object itself,
+    /// or the first argument of the call it is given to - <c>defineComponent({...})</c>, <c>Vue.extend({...})</c>; -1
+    /// where it writes neither.
+    /// </summary>
+    private int OptionsAt(int at, int end)
+    {
+        if (_scan.Is(at, "{"))
+        {
+            return at;
+        }
+
+        if (!_scan.IsName(at))
+        {
+            return -1;
+        }
+
+        var past = ChainAt(_scan, at, end).Past;
+
+        if (_typescript && _scan.Is(past, "<"))
+        {
+            past = Angle(_scan, past, end);
+        }
+
+        return _scan.Is(past, "(") && _scan.Next(past) is var first && first < end && _scan.Is(first, "{") ? first : -1;
+    }
+
+    /// <summary>
+    /// A component's options object at <paramref name="open"/>, its default export's node <paramref name="key"/>, read as
+    /// Vue reads one: each key of its <c>methods</c> and its <c>computed</c>, each prop and each injection its
+    /// <c>props</c> and its <c>inject</c> name - an array's strings or an object's keys - and each function it holds,
+    /// <c>data</c>, <c>setup</c> and a lifecycle hook among them, a member of the component, on its own lines, with the
+    /// code it holds; each property <c>data()</c> and <c>setup()</c> return a member too; each key of its <c>watch</c> a
+    /// use of the member it watches, a handler a string names a call of that method and every handler's code the
+    /// component's; and everything else it holds - its name, its components, the call it is given to - the component's
+    /// code.
+    /// </summary>
+    private void Options(int at, int open, int end, string key, ScanFrame frame)
+    {
+        var close = Math.Min(_scan.Bounds(open, end).Inner, end);
+        var members = frame.Inside(frame.Prefix, frame.Scope, key, frame.Owner);
+        var seenIn = _module ? _path : null;
+
+        Code(at, open, key);
+        Code(Math.Min(close + 1, end), end, key);
+
+        foreach (var (pieceStart, pieceEnd) in ScanCalls.Split(_scan, open + 1, close, null))
+        {
+            var option = _scan.IsName(pieceStart) ? _scan.Text(pieceStart) : null;
+            var valueAt = option is not null && _scan.Is(_scan.Next(pieceStart), ":") ? _scan.Next(_scan.Next(pieceStart)) : -1;
+            var opens = valueAt >= 0 && valueAt < pieceEnd ? _scan.Text(valueAt) : null;
+
+            switch (option, opens)
+            {
+                case ("methods" or "computed", "{"):
+                    OptionMembers(valueAt, pieceEnd, key, members, option == "methods" ? "method" : "computed", seenIn);
+                    continue;
+
+                case ("props" or "inject", "{"):
+                    OptionMembers(valueAt, pieceEnd, key, members, "property", seenIn);
+                    continue;
+
+                case ("props" or "inject", "["):
+                    foreach (var (itemStart, itemEnd) in ScanCalls.Split(_scan, valueAt + 1, Math.Min(_scan.Bounds(valueAt, pieceEnd).Inner, pieceEnd), null))
+                    {
+                        if (_scan.Next(itemStart) >= itemEnd && MemberName(itemStart) is { } listed)
+                        {
+                            OptionMember(itemStart, itemEnd, listed, members, "property", seenIn);
+                        }
+                    }
+
+                    Code(pieceStart, pieceEnd, key);
+                    continue;
+
+                case ("watch", "{"):
+                    Watched(valueAt, pieceEnd, key);
+                    continue;
+            }
+
+            if (OptionFunction(pieceStart, pieceEnd) is var (nameAt, function))
+            {
+                var name = _scan.Text(nameAt);
+                Callable(pieceStart, pieceStart, nameAt, name, function, members, [], [], [], "method", seenIn, exports: null);
+
+                if (name is "data" or "setup")
+                {
+                    Returned(function, members, seenIn);
+                }
+
+                continue;
+            }
+
+            Code(pieceStart, pieceEnd, key);
+        }
+    }
+
+    /// <summary>
+    /// The keys of an option's object at <paramref name="open"/> - a <c>methods</c>', a <c>computed</c>'s, a
+    /// <c>props</c>' - each a member of the component of <paramref name="subKind"/> over its piece: a function its
+    /// function, a value a member whose code is what the value holds; a key written alone names the script's own
+    /// declaration, already the component's, and is its code.
+    /// </summary>
+    private void OptionMembers(int open, int end, string key, ScanFrame members, string subKind, string? seenIn)
+    {
+        foreach (var (pieceStart, pieceEnd) in ScanCalls.Split(_scan, open + 1, Math.Min(_scan.Bounds(open, end).Inner, end), null))
+        {
+            var name = MemberName(pieceStart);
+            var next = _scan.Next(pieceStart);
+
+            if (MethodNameAt(pieceStart, pieceEnd) is var methodAt and >= 0 && FunctionAt(methodAt, pieceEnd, methodName: true) is { } method)
+            {
+                Callable(pieceStart, pieceStart, methodAt, _scan.Text(methodAt), method, members, [], [], [], subKind, seenIn, exports: null);
+            }
+            else if (name is not null && _scan.Is(next, ":") && FunctionAt(_scan.Next(next), pieceEnd) is { } function)
+            {
+                Callable(pieceStart, pieceStart, _scan.Next(next), name, function, members, [], [], [], subKind, seenIn, exports: null);
+            }
+            else if (name is not null && _scan.Is(next, ":"))
+            {
+                var member = OptionMember(pieceStart, pieceEnd, name, members, subKind, seenIn);
+                var valueAt = _scan.Next(next);
+                Defer(() => Calls(_text, valueAt, pieceEnd, member, new Locals(), null, depth: 0));
+            }
+            else
+            {
+                Code(pieceStart, pieceEnd, key);
+            }
+        }
+    }
+
+    /// <summary>A member of the component named <paramref name="name"/> over the piece from <paramref name="start"/> to <paramref name="end"/>; answers its key.</summary>
+    private string OptionMember(int start, int end, string name, ScanFrame members, string subKind, string? seenIn)
+        => _extract.Add(new ExtractNode(Id(members.Qualify(name)), CodeNodeKinds.Member, name, members.Qualify(name), _scan[start].Line, _scan[_scan.LastOf(end)].EndLine, ExtractText.Signature(name))
+        {
+            SubKind = subKind,
+            Scope = members.Scope,
+            Parent = members.Parent,
+            SeenIn = seenIn,
+        });
+
+    /// <summary>
+    /// The function an option's piece from <paramref name="start"/> writes - <c>data() { }</c>, <c>mounted: function () { }</c>,
+    /// <c>setup: () =&gt; ...</c> - with where its name stands; <see langword="null"/> where it writes none.
+    /// </summary>
+    private (int NameAt, FunctionShape Function)? OptionFunction(int start, int end)
+    {
+        if (MethodNameAt(start, end) is var methodAt and >= 0 && FunctionAt(methodAt, end, methodName: true) is { } method)
+        {
+            return (methodAt, method);
+        }
+
+        return _scan.IsName(start) && _scan.Is(_scan.Next(start), ":") && FunctionAt(_scan.Next(_scan.Next(start)), end) is { } function ? (start, function) : null;
+    }
+
+    /// <summary>
+    /// Each property the object <paramref name="function"/> - <c>data</c>, <c>setup</c> - returns at its body's own level
+    /// names, or its arrow's body is: a member of the component over its piece, its code the function's.
+    /// </summary>
+    private void Returned(FunctionShape function, ScanFrame members, string? seenIn)
+    {
+        var objects = new List<int>();
+
+        if (function.Arrow)
+        {
+            var body = _scan.Next(function.Body);
+
+            if (_scan.Is(body, "(") && _scan.Is(_scan.Next(body), "{"))
+            {
+                objects.Add(_scan.Next(body));
+            }
+        }
+        else if (function.Body >= 0)
+        {
+            for (var at = function.Body + 1; at < function.Last && at < _scan.Count; at = _scan.Opens(at) ? Math.Max(_scan.Past(at), at + 1) : at + 1)
+            {
+                if (_scan.Is(at, "return") && _scan.Is(_scan.Next(at), "{"))
+                {
+                    objects.Add(_scan.Next(at));
+                }
+            }
+        }
+
+        foreach (var open in objects)
+        {
+            var end = Math.Min(_scan.Past(open), function.Last + 1);
+
+            foreach (var (pieceStart, pieceEnd) in ScanCalls.Split(_scan, open + 1, Math.Min(_scan.Bounds(open, end).Inner, end), null))
+            {
+                if ((MethodNameAt(pieceStart, pieceEnd) is var methodAt and >= 0 ? _scan.Text(methodAt) : MemberName(pieceStart)) is { } name)
+                {
+                    OptionMember(pieceStart, pieceEnd, name, members, "field", seenIn);
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// A component's <c>watch</c> option at <paramref name="open"/>: each key a use of the member it watches - the first
+    /// name of a path - a handler a string names a call of that method, and every handler's code the component's.
+    /// </summary>
+    private void Watched(int open, int end, string key)
+    {
+        foreach (var (pieceStart, pieceEnd) in ScanCalls.Split(_scan, open + 1, Math.Min(_scan.Bounds(open, end).Inner, end), null))
+        {
+            if (MemberName(pieceStart, path: true) is { } watched)
+            {
+                _extract.Reference(key, CodeEdgeKinds.Uses, watched, _scan[pieceStart].Line, qualifier: new ExtractQualifier(CodeQualifierKinds.This));
+            }
+
+            var next = _scan.Next(pieceStart);
+
+            if (_scan.Is(next, ":") && _scan.Next(next) is var valueAt && valueAt < pieceEnd && _scan.Next(valueAt) >= pieceEnd && MemberName(valueAt) is { } method && IsText(valueAt))
+            {
+                _extract.Reference(key, CodeEdgeKinds.Calls, method, _scan[valueAt].Line, qualifier: new ExtractQualifier(CodeQualifierKinds.This));
+            }
+
+            Code(pieceStart, pieceEnd, key);
+        }
+    }
+
+    /// <summary>
+    /// The name the token at <paramref name="at"/> gives a member: a name, or a string's value that is one - the first
+    /// name of a path where <paramref name="path"/>, as a <c>watch</c> key writes one; <see langword="null"/> otherwise.
+    /// </summary>
+    private string? MemberName(int at, bool path = false)
+    {
+        var written = _scan.IsName(at) ? _scan.Text(at) : IsText(at) ? _scan.Value(at) : null;
+
+        if (written is null)
+        {
+            return null;
+        }
+
+        var name = path ? written.Split('.')[0] : written;
+        return name.Length > 0 && (char.IsLetter(name[0]) || name[0] is '_' or '$') && name.All(character => char.IsLetterOrDigit(character) || character is '_' or '$') ? name : null;
+    }
+
+    /// <summary>
+    /// The props a <c>&lt;script setup&gt;</c>'s <c>defineProps</c> at <paramref name="at"/> - past its name - declares,
+    /// each a member of the component at the script's top, as Vue gives its template them: an array's strings, an object's
+    /// keys, the keys of the type it is given - one written there, or an interface or a type alias of an object type the
+    /// script declares at its top.
+    /// </summary>
+    private void DefinedProps(int at, int end)
+    {
+        var top = new ScanFrame(_scope, _scope, null, null);
+        var seenIn = _module ? _path : null;
+        var keys = new List<int>();
+
+        if (_typescript && _scan.Is(at, "<"))
+        {
+            var type = _scan.Next(at);
+
+            if (_scan.Is(type, "{"))
+            {
+                keys.AddRange(TypeKeys(type, Math.Min(_scan.Bounds(type, end).Inner, end)));
+            }
+            else if (_scan.IsName(type) && _typeBodies.TryGetValue(_scan.Text(type), out var body))
+            {
+                keys.AddRange(TypeKeys(body.Open, body.Inner));
+            }
+
+            at = Angle(_scan, at, end);
+        }
+
+        if (_scan.Is(at, "(") && _scan.Next(at) is var argument && argument < end && (_scan.Is(argument, "[") || _scan.Is(argument, "{")))
+        {
+            foreach (var (pieceStart, pieceEnd) in ScanCalls.Split(_scan, argument + 1, Math.Min(_scan.Bounds(argument, end).Inner, end), null))
+            {
+                if (_scan.Is(argument, "[") ? _scan.Next(pieceStart) >= pieceEnd && IsText(pieceStart) : _scan.IsName(pieceStart) || IsText(pieceStart))
+                {
+                    keys.Add(pieceStart);
+                }
+            }
+        }
+
+        foreach (var key in keys)
+        {
+            if (MemberName(key) is { } name)
+            {
+                OptionMember(key, key + 1, name, top, "property", seenIn);
+            }
+        }
+    }
+
+    /// <summary>The tokens that name the members of the object type at <paramref name="open"/>: each first in its member, its type passed over.</summary>
+    private IEnumerable<int> TypeKeys(int open, int inner)
+    {
+        var first = true;
+
+        for (var at = open + 1; at < inner && at < _scan.Count; at = _scan.Opens(at) ? Math.Max(_scan.Past(at), at + 1) : at + 1)
+        {
+            if (_scan.Is(at, ";") || _scan.Is(at, ","))
+            {
+                first = true;
+                continue;
+            }
+
+            first |= _scan[at].Line > _scan[_scan.Previous(at)].EndLine && at > open + 1;
+
+            if (first && _scan.Is(at, "readonly") && _scan.IsName(_scan.Next(at)))
+            {
+                continue;
+            }
+
+            if (first && (_scan.IsName(at) || IsText(at)) && (_scan.Is(_scan.Next(at), ":") || _scan.Is(_scan.Next(at), "?") || _scan.Is(_scan.Next(at), "(")))
+            {
+                yield return at;
+            }
+
+            first = false;
+        }
+    }
+
+    /// <summary>Reads the tokens from <paramref name="from"/> to <paramref name="to"/> as code of the node of <paramref name="key"/>, once the file's declarations are read.</summary>
+    private void Code(int from, int to, string key)
+    {
+        if (from < to)
+        {
+            Defer(() => Calls(_text, from, to, key, new Locals(), null, depth: 0));
+        }
     }
 
     /// <summary>
@@ -1445,6 +1787,11 @@ internal sealed class JsReading
         var (inner, close) = _scan.Bounds(open, end);
         var key = _extract.Part(TypeNode(start, head, Math.Min(inner, _scan.Count - 1), frame, name, "interface", modifiers, marks, open, seenIn));
         Registered(key, frame, name);
+
+        if (frame.Parent is null)
+        {
+            _typeBodies.TryAdd(name, (open, inner));
+        }
         var added = typeParameters.Where(_typeParameters.Add).ToList();
 
         try
@@ -1523,6 +1870,11 @@ internal sealed class JsReading
         var aliasEnd = _scan.Is(last, ";") ? last : stop;
         var key = DeclareType(start, head, last, frame, name, "type", modifiers, marks, signatureEnd: _scan.Is(cursor, "=") ? cursor : aliasEnd, seenIn);
         var added = typeParameters.Where(_typeParameters.Add).ToList();
+
+        if (frame.Parent is null && _scan.Is(cursor, "=") && _scan.Next(cursor) is var literal && _scan.Is(literal, "{"))
+        {
+            _typeBodies.TryAdd(name, (literal, _scan.Bounds(literal, aliasEnd).Inner));
+        }
 
         try
         {
@@ -3010,6 +3362,12 @@ internal sealed class JsReading
             var next = scan.Next(at);
             var previous = scan.Previous(at);
             var member = IsMember(scan, previous);
+
+            // A component's defineProps declares the props its template reads as members; the call is read as any is.
+            if (!member && _component && word == "defineProps" && scan == _scan)
+            {
+                DefinedProps(next, to);
+            }
 
             if (!member)
             {

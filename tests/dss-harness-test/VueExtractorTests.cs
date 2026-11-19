@@ -76,6 +76,34 @@ public sealed class VueExtractorTests : CodeGraphExtractorContractTests<VueExtra
         </script>
         """;
 
+    private const string Pay = """
+        <template>
+          <button @click="pay">{{ total }} {{ msg }} {{ label }}</button>
+        </template>
+        <script>
+        import { defineComponent } from "vue";
+        export default defineComponent({
+          name: "PayButton",
+          props: { label: { type: String, default: "Pay" } },
+          inject: ["cart"],
+          data() {
+            return { msg: "hello", count: 0 };
+          },
+          computed: {
+            total() { return this.cart.sum(); },
+          },
+          watch: {
+            count(next) { this.save(next); },
+          },
+          methods: {
+            pay() { this.save(1); },
+            save: function (amount) { return amount; },
+          },
+          mounted() { this.pay(); },
+        });
+        </script>
+        """;
+
     private const string Module = """
         <template>
           <div>
@@ -95,7 +123,26 @@ public sealed class VueExtractorTests : CodeGraphExtractorContractTests<VueExtra
     [
         new("src/Options.vue", Options)
         {
-            Nodes = [new("vue:src/Options.vue", CodeNodeKinds.Type, (1, 10))],
+            Nodes = [new("vue:src/Options.vue", CodeNodeKinds.Type, (1, 10)), new("vue:src/Options.vue.msg", CodeNodeKinds.Member, (8, 8))],
+            Edges = [new("vue:src/Options.vue", "vue:src/Options.vue.msg", CodeEdgeKinds.Uses, 2, CodeConfidences.Exact)],
+        },
+        new("src/Pay.vue", Pay)
+        {
+            Nodes =
+            [
+                new("vue:src/Pay.vue", CodeNodeKinds.Type, (1, 25)),
+                new("vue:src/Pay.vue.data", CodeNodeKinds.Member, (10, 12)),
+                new("vue:src/Pay.vue.pay", CodeNodeKinds.Member, (20, 20)),
+            ],
+            Edges =
+            [
+                new("vue:src/Pay.vue", "vue:src/Pay.vue.pay", CodeEdgeKinds.Calls, 2, CodeConfidences.Exact),
+                new("vue:src/Pay.vue", "vue:src/Pay.vue.total", CodeEdgeKinds.Uses, 2, CodeConfidences.Exact),
+                new("vue:src/Pay.vue", "vue:src/Pay.vue.label", CodeEdgeKinds.Uses, 2, CodeConfidences.Exact),
+                new("vue:src/Pay.vue", "vue:src/Pay.vue.count", CodeEdgeKinds.Uses, 17, CodeConfidences.Exact),
+                new("vue:src/Pay.vue.pay", "vue:src/Pay.vue.save", CodeEdgeKinds.Calls, 20, CodeConfidences.Exact),
+                new("vue:src/Pay.vue.mounted", "vue:src/Pay.vue.pay", CodeEdgeKinds.Calls, 23, CodeConfidences.Exact),
+            ],
         },
         new("src/Module.vue", Module)
         {
@@ -262,6 +309,83 @@ public sealed class VueExtractorTests : CodeGraphExtractorContractTests<VueExtra
 
         Assert.Null(extract.WithDigests(input.Lines).Problem("vue", input.Lines.Count));
         Assert.Equal(("vue:src/Options.vue", 6), (name.Node, name.Line));
+    }
+
+    /// <summary>
+    /// A component written with the options API declares its members in its options: each prop and injection, each
+    /// method and computed property, each function it holds - <c>data</c> and a lifecycle hook among them - and each
+    /// property <c>data()</c> returns is a member of the component on its own lines, so its template binds to them and a
+    /// method's <c>this.save()</c> to the method; a <c>watch</c> key is a use of the member it watches, and its handler's
+    /// code the component's.
+    /// </summary>
+    [Fact]
+    public void AnOptionsObjectsGroups_AreTheComponentsMembers_AndTheTemplateBindsToThem()
+    {
+        var extract = Read("src/Pay.vue", Pay);
+
+        Assert.Equal(
+            [
+                ("label", "property", 8, 8), ("cart", "property", 9, 9), ("data", "method", 10, 12), ("msg", "field", 11, 11), ("count", "field", 11, 11),
+                ("total", "computed", 14, 14), ("pay", "method", 20, 20), ("save", "method", 21, 21), ("mounted", "method", 23, 23),
+            ],
+            extract.Nodes.Where(node => node.Kind == CodeNodeKinds.Member).Select(node => (node.Name, node.SubKind!, node.Start, node.End)));
+        Assert.All(extract.Nodes.Where(node => node.Kind == CodeNodeKinds.Member), node => Assert.Equal(("vue:src/Pay.vue", "src/Pay.vue"), (node.Parent, node.Scope)));
+
+        var linked = CodeGraphLinker.Link([new CodeGraphFile("src/Pay.vue", "vue", extract)]);
+
+        Assert.Equal(
+            [
+                new CodeEdge("vue:src/Pay.vue", "vue:src/Pay.vue.pay", CodeEdgeKinds.Calls, 2, CodeConfidences.Exact),
+                new CodeEdge("vue:src/Pay.vue", "vue:src/Pay.vue.total", CodeEdgeKinds.Uses, 2, CodeConfidences.Exact),
+                new CodeEdge("vue:src/Pay.vue", "vue:src/Pay.vue.msg", CodeEdgeKinds.Uses, 2, CodeConfidences.Exact),
+                new CodeEdge("vue:src/Pay.vue", "vue:src/Pay.vue.label", CodeEdgeKinds.Uses, 2, CodeConfidences.Exact),
+                new CodeEdge("vue:src/Pay.vue.total", "vue:src/Pay.vue.cart", CodeEdgeKinds.Uses, 14, CodeConfidences.Exact),
+                new CodeEdge("vue:src/Pay.vue", "vue:src/Pay.vue.count", CodeEdgeKinds.Uses, 17, CodeConfidences.Exact),
+                new CodeEdge("vue:src/Pay.vue", "vue:src/Pay.vue.save", CodeEdgeKinds.Calls, 17, CodeConfidences.Exact),
+                new CodeEdge("vue:src/Pay.vue.pay", "vue:src/Pay.vue.save", CodeEdgeKinds.Calls, 20, CodeConfidences.Exact),
+                new CodeEdge("vue:src/Pay.vue.mounted", "vue:src/Pay.vue.pay", CodeEdgeKinds.Calls, 23, CodeConfidences.Exact),
+            ],
+            linked.Edges.Where(edge => edge.Kind != CodeEdgeKinds.Contains && edge.To.StartsWith("vue:src/Pay.vue.", StringComparison.Ordinal)).OrderBy(edge => edge.Line));
+        Assert.Equal(
+            [("PayButton", "vue:src/Pay.vue"), ("Pay", "vue:src/Pay.vue.label"), ("cart", "vue:src/Pay.vue"), ("hello", "vue:src/Pay.vue.data")],
+            (extract.Literals ?? []).Select(literal => (literal.Value, literal.Node)));
+    }
+
+    /// <summary>
+    /// The props a setup script's <c>defineProps</c> declares are members of the component, so its template binds to them:
+    /// those of an interface the script declares and of a type written in the call alike, an array's strings and an
+    /// object's keys too.
+    /// </summary>
+    [Fact]
+    public void ThePropsDefinePropsDeclares_AreTheComponentsMembers()
+    {
+        var extract = Read("src/Props.vue", """
+            <script setup lang="ts">
+            interface Props {
+              title: string;
+              readonly count?: number
+            }
+            const props = defineProps<Props>();
+            const other = withDefaults(defineProps<{ label: string; size?: number }>(), { size: 1 });
+            </script>
+            <script>
+            const listed = defineProps(["first", "second"]);
+            const keyed = defineProps({ third: String });
+            </script>
+            <template>
+              <h1>{{ title }} {{ count }} {{ label }} {{ size }}</h1>
+            </template>
+            """);
+
+        Assert.Equal(
+            [("title", 3), ("count", 4), ("label", 7), ("size", 7), ("first", 10), ("second", 10), ("third", 11)],
+            extract.Nodes.Where(node => node.SubKind == "property" && node.Parent is null).Select(node => (node.Name, node.Start)));
+
+        var linked = CodeGraphLinker.Link([new CodeGraphFile("src/Props.vue", "vue", extract)]);
+
+        Assert.Equal(
+            ["vue:src/Props.vue.title", "vue:src/Props.vue.count", "vue:src/Props.vue.label", "vue:src/Props.vue.size"],
+            linked.Edges.Where(edge => edge.From == "vue:src/Props.vue" && edge.Line == 14).Select(edge => edge.To));
     }
 
     /// <summary>

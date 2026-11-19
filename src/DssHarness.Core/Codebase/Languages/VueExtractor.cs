@@ -9,7 +9,9 @@ namespace DssHarness.Core.Codebase.Languages;
 /// in, so the script's declarations are the component's members; exported <c>default</c>, so
 /// <c>import Foo from './Foo.vue'</c> binds to it and <c>Foo.x</c> to its member <c>x</c>. Its script blocks -
 /// <c>&lt;script&gt;</c> and <c>&lt;script setup&gt;</c>, TypeScript where <c>lang="ts"</c> or <c>"tsx"</c> - are read
-/// by the JavaScript reader as the one module Vue compiles them to, the script's default export the component itself.
+/// by the JavaScript reader as the one module Vue compiles them to, the script's default export the component itself, the
+/// members its options declare - its props, injections, methods, computed properties, functions and what <c>data()</c>
+/// returns - and the props a <c>&lt;script setup&gt;</c>'s <c>defineProps</c> declares the component's members.
 /// Its template's elements, nested templates among them: a component's tag - <c>&lt;FooBar&gt;</c> or
 /// <c>&lt;foo-bar&gt;</c>, each naming <c>FooBar</c> - an <c>instantiates</c>; a <c>v-on</c> or <c>@</c> attribute, its
 /// modifiers among them, a call of the handler it names; a <c>v-bind</c>, <c>:</c> attribute, another directive's
@@ -39,13 +41,14 @@ public sealed partial class VueExtractor : ICodeGraphExtractor
 
     /// <inheritdoc/>
     public CodeGraphExtractorHelp Help { get; } = new(
-        "Vue single-file components (.vue): the component a type named by its file and qualified by its path, exported default, so an import of it binds to it and a member through it to its script's declaration; its script blocks - TypeScript where lang=\"ts\" - read by the JavaScript reader as the one module Vue compiles them to, its default export the component itself; its template's component tags - <FooBar> and <foo-bar> alike - as instantiates, its v-on and @ attributes as calls and its v-bind, :, v-model, v-if and every other directive's expression, a v-for's list and {{ }} as uses of the component's members - a v-for's alias and a v-slot's name the template's own, no member - and its classes and ids as uses of the rules that style them; and each style block read by the style sheet's reader in the syntax its lang names - CSS where it names none, scss, sass, less",
+        "Vue single-file components (.vue): the component a type named by its file and qualified by its path, exported default, so an import of it binds to it and a member through it to its script's declaration; its script blocks - TypeScript where lang=\"ts\" - read by the JavaScript reader as the one module Vue compiles them to, its default export the component itself, its options object - or the one defineComponent is given - declaring its members: each prop and injection, method and computed property, each function it holds (data, setup, a lifecycle hook) and each property data() and setup() return a member of the component, as is each prop a <script setup>'s defineProps declares, and each watch key a use of the member it watches; its template's component tags - <FooBar> and <foo-bar> alike - as instantiates, its v-on and @ attributes as calls and its v-bind, :, v-model, v-if and every other directive's expression, a v-for's list and {{ }} as uses of the component's members - a v-for's alias and a v-slot's name the template's own, no member - and its classes and ids as uses of the rules that style them; and each style block read by the style sheet's reader in the syntax its lang names - CSS where it names none, scss, sass, less",
         [
             "a template expression past the name it begins with, and one that begins with none - an object, a literal: no reference of what it holds",
             "a template written in another language (lang=\"pug\"): not read",
             "a style block of another language (lang=\"stylus\"): not read",
             "a script block that names its file by src: not read, and no import of it",
             "a component with no script block: the type alone, and nothing of its own members",
+            "what a mixin or an extends option adds, a prop defineModel declares and one defineProps is given by a type another file declares: no member of the component",
         ]);
 
     /// <inheritdoc/>
@@ -83,7 +86,7 @@ public sealed partial class VueExtractor : ICodeGraphExtractor
             var typescript = languages.Any(written => written is "ts" or "tsx");
             var text = EmbeddedCode.Kept(markup.Text, [.. scripts.Select(script => (script.OpenEnd, script.Close))]);
 
-            embedded.Add(Folded(new JsReading(Language, input.Path, text, typescript, markup: !typescript || languages.Contains("tsx"), module: true).Read(), input.Path, component.Id));
+            embedded.Add(Folded(new JsReading(Language, input.Path, text, typescript, markup: !typescript || languages.Contains("tsx"), module: true, component: true).Read(), input.Path, component.Id));
         }
 
         embedded.AddRange(blocks.Where(block => block.Name == "style" && block.Close > block.OpenEnd)
@@ -164,11 +167,12 @@ public sealed partial class VueExtractor : ICodeGraphExtractor
 
     /// <summary>
     /// <paramref name="script"/> with its default export made the component it is: the declaration its
-    /// <c>export default</c> of an expression makes - the options object of a component written so - is the component,
-    /// what it holds and the references it makes now the component's, and each of the script's own declarations that object
-    /// names (<c>export default { charge }</c>) is a member the component shows whoever imports it, kept to the script no
-    /// more; a declaration the script exports by name besides is no longer exported by <c>default</c>, which the component
-    /// answers alone.
+    /// <c>export default</c> of an expression makes - the options object of a component written so - is folded into the
+    /// component (<see cref="EmbeddedCode.Folded"/>), the members its options declare, the references it makes and the
+    /// literals it holds now the component's, and each of the script's own declarations that object names
+    /// (<c>export default { charge }</c>) is a member the component shows whoever imports it, kept to the script no more; a
+    /// declaration the script exports by name besides is no longer exported by <c>default</c>, which the component answers
+    /// alone.
     /// </summary>
     private static FileExtract Folded(FileExtract script, string path, string component)
     {

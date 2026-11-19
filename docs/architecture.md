@@ -4673,7 +4673,14 @@ to its prefix alone, so a member through it is what the file declares and export
 to nothing) and `Foo.x` to its member `x`. Its `<script>` and `<script setup>` - TypeScript where
 their own start tag says `lang="ts"` - are read by the JavaScript reader as the one module Vue compiles them to, the
 script's default export the component itself, each of its own declarations that export's options object names a
-member the component shows whoever imports it. Its `<template>` is read by the markup reader, nested templates among
+member the component shows whoever imports it. The options object - written alone, or given to a call such as
+`defineComponent` - declares the component's members as Vue reads them: each prop and injection its `props` and
+`inject` name (an array's strings or an object's keys), each key of its `methods` and its `computed`, each function
+it holds (`data`, `setup`, a lifecycle hook) and each property `data()` and `setup()` return a member of the component
+on its own lines, with the code it holds, so the template binds to them and a method's `this.save()` to the method;
+each `watch` key is a use of the member it watches, and its handler's code the component's. The props a
+`<script setup>`'s `defineProps` declares - an array's strings, an object's keys, the keys of the type it is given,
+one written there or an interface or object type the script declares - are members of the component too. Its `<template>` is read by the markup reader, nested templates among
 it: a component's tag - `<FooBar>` or `<foo-bar>`, each naming `FooBar` - an instantiates; a `v-on` or `@` attribute,
 its modifiers among them, a call of the handler it names; a `v-bind`, `:` attribute, every other directive's
 expression (`v-model`, `v-if`, a directive of the component's own), a `v-for`'s list and `{{ }}` a use of the name its
