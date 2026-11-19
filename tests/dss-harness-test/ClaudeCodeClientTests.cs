@@ -1051,15 +1051,17 @@ public sealed class ClaudeCodeClientTests : IDisposable
     }
 
     /// <summary>
-    /// A result of a call of Claude Code's own - a side-task's own web fetch - larger than an event carries is kept whole in
-    /// a file beside the stream, and its event carries its head and its tail with what was left out between them, counted
-    /// exactly.
+    /// A result of a call of Claude Code's own - a side-task's own web fetch - longer than a page is kept whole in a file
+    /// beside the stream, and its event carries its first page as every call's long answer is given: a header that says how
+    /// many pages it holds, how read_result gives the next and where the whole is, then the answer's first lines as they
+    /// are, nothing of it cut between a head and a tail.
     /// </summary>
     [Fact]
-    public async Task AResultLargerThanAnEventCarries_IsKeptWholeBesideTheStream()
+    public async Task AResultLongerThanAPage_IsKeptWholeBesideTheStream_ItsEventCarryingPageOne()
     {
         using var kit = new Kit();
-        var whole = string.Concat(Enumerable.Range(0, AgentCallRecords.ResultCap / 8).Select(at => at.ToString("D8", System.Globalization.CultureInfo.InvariantCulture))) + "tail-end";
+        var lines = Enumerable.Range(1, 20_000).Select(at => $"line {at.ToString("D6", System.Globalization.CultureInfo.InvariantCulture)} of the page").ToList();
+        var whole = string.Join('\n', lines);
         kit.Script([new JsonObject { ["calls"] = new JsonArray(new JsonObject { ["tool"] = "WebFetch", ["input"] = new JsonObject { ["url"] = "https://example.com/page", ["prompt"] = "read it" }, ["result"] = whole }) }]);
         var sink = new Sink();
 
@@ -1072,10 +1074,15 @@ public sealed class ClaudeCodeClientTests : IDisposable
         Assert.Equal(file, finished.ResultFile);
         Assert.Equal(whole, File.ReadAllText(file));
 
-        const int Head = AgentCallRecords.ResultHead;
-        Assert.Equal(
-            $"{whole[..Head]}\n[{whole.Length - AgentCallRecords.ResultCap} characters left out: the whole result is '{file}']\n{whole[^(AgentCallRecords.ResultCap - Head)..]}",
-            finished.Result);
+        var shown = finished.Result.Split('\n');
+        Assert.StartsWith("page 1 of ", shown[0], StringComparison.Ordinal);
+        Assert.EndsWith($" · 20000 results · ask read_result with id: '{finished.Id}', page: 2 for the next · the whole is '{file}'", shown[0], StringComparison.Ordinal);
+        Assert.True(finished.Result.Length <= DssHarness.Core.Pages.PageRoom.ModelAnswer, $"page 1 is {finished.Result.Length} characters");
+
+        var given = shown.Skip(1).ToList();
+        Assert.NotEmpty(given);
+        Assert.Equal(lines.Take(given.Count), given);
+        Assert.DoesNotContain(lines[^1], given);
     }
 
 
