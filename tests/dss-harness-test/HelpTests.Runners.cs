@@ -410,20 +410,23 @@ public sealed partial class HelpTests
     }
 
     /// <summary>
-    /// The runner topic names the largest file that can cross to a host or back, the one the refusal names: a file crosses
-    /// whole, inside one request, and that request is one line of text a string must hold.
+    /// The runner topic says a file of any size crosses to a host or back, one larger than a piece a piece at a time, each
+    /// checked, and put in place once all of it has arrived as it was read: held whole inside one request, a file past about
+    /// 767 MiB was refused, and the topic named that bound.
     /// </summary>
     [Fact]
-    public async Task RunnerTopic_NamesTheLargestFileThatCanCross_AsTheRefusalDoes()
+    public void RunnerTopic_SaysAFileOfAnySizeCrosses_APieceAtATime()
     {
-        var result = HelpText.Of("runner");
-        var text = Prose.Words(result.StandardOutput);
+        var text = Prose.Words(HelpText.Of("runner").StandardOutput);
 
         Assert.Contains(
-            $"A file crosses whole, whichever way it goes - to a host inside one request, back in one answer: one larger than {SyncServe.LargestFile.ToString(CultureInfo.InvariantCulture)} bytes is refused by name before anything is sent.",
+            $"A file of any size crosses, whichever way it goes. One larger than {SyncServe.LargestBatch.ToString(CultureInfo.InvariantCulture)} "
+            + "bytes crosses a piece of that many at a time, a request each, and is never held whole on either side: each piece is "
+            + "checked against the hash the side that read it took, and the file is put in place only once every piece has arrived "
+            + "and what they hold together is what the whole file was read as.",
             text,
             StringComparison.Ordinal);
-        Assert.Contains(SyncServe.LargestFile.ToString(CultureInfo.InvariantCulture), SyncServe.TooLargeToCarry(SyncServe.LargestFile + 1, "a.bin", "ssh vps"), StringComparison.Ordinal);
+        Assert.DoesNotContain("is refused by name before anything is sent", text, StringComparison.Ordinal);
     }
 
     private static IEnumerable<(KeyDescription Key, int Depth)> Listed(IReadOnlyList<KeyDescription> keys, int depth)

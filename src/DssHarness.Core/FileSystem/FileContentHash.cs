@@ -81,17 +81,23 @@ public static class FileContentHash
     {
         ArgumentNullException.ThrowIfNull(write);
 
-        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        using var hash = Running();
         using (var sink = new Hashing(hash))
         {
             write(sink);
         }
 
-        return Convert.ToHexStringLower(hash.GetHashAndReset());
+        return hash.Content();
     }
 
+    /// <summary>
+    /// The same hash, taken of bytes as they come, a piece at a time - a file that crosses to another machine in pieces,
+    /// never held whole - until <see cref="RunningHash.Content"/> says what they hash to together.
+    /// </summary>
+    public static RunningHash Running() => new();
+
     /// <summary>A stream that only takes bytes, each into the hash.</summary>
-    private sealed class Hashing(IncrementalHash hash) : Stream
+    private sealed class Hashing(RunningHash hash) : Stream
     {
         public override bool CanRead => false;
 
@@ -103,9 +109,9 @@ public static class FileContentHash
 
         public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
 
-        public override void Write(byte[] buffer, int offset, int count) => hash.AppendData(buffer, offset, count);
+        public override void Write(byte[] buffer, int offset, int count) => hash.Append(buffer.AsSpan(offset, count));
 
-        public override void Write(ReadOnlySpan<byte> buffer) => hash.AppendData(buffer);
+        public override void Write(ReadOnlySpan<byte> buffer) => hash.Append(buffer);
 
         public override void Flush()
         {
@@ -137,4 +143,23 @@ public static class FileContentHash
             _ => null,
         };
     }
+}
+
+/// <summary>
+/// <see cref="FileContentHash"/>'s hash, taken of bytes appended a piece at a time: what they hash to together is what
+/// <see cref="FileContentHash.Of(ReadOnlySpan{byte})"/> gives of the same bytes held whole.
+/// </summary>
+public sealed class RunningHash : IDisposable
+{
+    private readonly IncrementalHash _hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+
+    /// <summary>Takes <paramref name="bytes"/> into the hash, after every piece taken before them.</summary>
+    /// <param name="bytes">The next bytes.</param>
+    public void Append(ReadOnlySpan<byte> bytes) => _hash.AppendData(bytes);
+
+    /// <summary>What every piece taken hashes to together, lowercase hex; the hash then starts again, holding none.</summary>
+    public string Content() => Convert.ToHexStringLower(_hash.GetHashAndReset());
+
+    /// <inheritdoc/>
+    public void Dispose() => _hash.Dispose();
 }

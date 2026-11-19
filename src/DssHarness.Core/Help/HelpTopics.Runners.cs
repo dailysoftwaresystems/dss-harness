@@ -394,9 +394,11 @@ public static partial class HelpTopics
         builder.AppendLine();
         AppendWrapped(
             builder,
-            "A file crosses whole, whichever way it goes - to a host inside one request, back in one answer: one larger than "
-            + $"{SyncServe.LargestFile.ToString(CultureInfo.InvariantCulture)} bytes is refused by name before anything is "
-            + "sent. Keep the smaller thing a later step reads - a packaged build rather than a build tree.");
+            "A file of any size crosses, whichever way it goes. One larger than "
+            + $"{SyncServe.LargestBatch.ToString(CultureInfo.InvariantCulture)} bytes crosses a piece of that many at a time, "
+            + "a request each, and is never held whole on either side: each piece is checked against the hash the side that read "
+            + "it took, and the file is put in place only once every piece has arrived and what they hold together is what the "
+            + "whole file was read as.");
 
         builder.AppendLine();
         builder.AppendLine("A step may ask for the guards the build and test verbs carry. Both are off unless");

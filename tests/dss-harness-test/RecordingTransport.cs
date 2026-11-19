@@ -1,3 +1,4 @@
+using DssHarness.Core.FileSystem;
 using DssHarness.Core.Git;
 using DssHarness.Core.Hosts;
 using DssHarness.Core.Processes;
@@ -70,6 +71,8 @@ internal sealed class RecordingTransport(
     public bool RefusesToDelete { get; init; }
 
     public HostId Host => reports ?? inner.Host;
+
+    public int PieceBytes => inner.PieceBytes;
 
     public Task<bool> RootExistsAsync(string root, CancellationToken cancellationToken = default)
     {
@@ -227,28 +230,72 @@ internal sealed class RecordingTransport(
         CancellationToken cancellationToken = default)
         => inner.RemoveEmptyDirectoriesAsync(root, directories, cancellationToken);
 
+    /// <summary>Every piece of a file sent to be kept aside until the whole of it arrives: the file, where the piece starts, and how many bytes it is.</summary>
+    public List<(string Path, long Offset, int Bytes)> PiecesSent { get; } = [];
+
+    /// <summary>Every file put in place from its pieces, in order.</summary>
+    public List<string> Placed { get; } = [];
+
+    /// <summary>Every file whose pieces were removed, its carrying having stopped, in order.</summary>
+    public List<string> Dropped { get; } = [];
+
+    /// <summary>
+    /// Told each piece once it is sent, with its file and where it starts: what a tree that moves while a file of it crosses
+    /// a piece at a time looks like from here.
+    /// </summary>
+    public Action<string, long>? AfterPiece { get; init; }
+
+    public async Task WritePieceAsync(string root, string relativePath, long offset, ReadOnlyMemory<byte> piece, CancellationToken cancellationToken = default)
+    {
+        PiecesSent.Add((relativePath, offset, piece.Length));
+        await inner.WritePieceAsync(root, relativePath, offset, piece, cancellationToken).ConfigureAwait(false);
+        AfterPiece?.Invoke(relativePath, offset);
+    }
+
+    /// <summary>
+    /// A file put in place from its pieces is written as a whole file is: counted among the writes, and failed where
+    /// <see cref="FailsWrite"/> names it.
+    /// </summary>
+    public async Task PlacePiecesAsync(string root, string relativePath, FileContent whole, CancellationToken cancellationToken = default)
+    {
+        if (++_writes == FailsWrite)
+        {
+            throw new HarnessException(HarnessExit.HostUnavailable, $"the link dropped putting '{relativePath}' in place");
+        }
+
+        await inner.PlacePiecesAsync(root, relativePath, whole, cancellationToken).ConfigureAwait(false);
+        Placed.Add(relativePath);
+        Written.Add(relativePath);
+    }
+
+    public Task DropPiecesAsync(string root, string relativePath, CancellationToken cancellationToken = default)
+    {
+        Dropped.Add(relativePath);
+        return inner.DropPiecesAsync(root, relativePath, cancellationToken);
+    }
+
     /// <summary>
     /// Which read to fail, counting from one, or zero to fail none: what a link that dropped part way through a pull
-    /// looks like from here.
+    /// looks like from here. Each piece read is a read of its own.
     /// </summary>
     public int FailsRead { get; init; }
 
     private int _reads;
 
-    public Task<byte[]> ReadFileAsync(string root, string relativePath, CancellationToken cancellationToken = default)
+    public Task<SyncFilePiece> ReadFileAsync(string root, string relativePath, long offset, int count, CancellationToken cancellationToken = default)
         => ++_reads == FailsRead
             ? throw new HarnessException(HarnessExit.HostUnavailable, $"the link dropped reading '{relativePath}'")
-            : inner.ReadFileAsync(root, relativePath, cancellationToken);
+            : inner.ReadFileAsync(root, relativePath, offset, count, cancellationToken);
 
-    /// <summary>The hidden places each pull's read was given, in order.</summary>
+    /// <summary>The hidden places each pull's read was given, in order: one for each piece read.</summary>
     public List<IReadOnlyList<IsolatedPath>> PulledHidden { get; } = [];
 
-    public Task<byte[]> PullFileAsync(string root, string relativePath, IReadOnlyList<IsolatedPath> hidden, CancellationToken cancellationToken = default)
+    public Task<SyncFilePiece> PullFileAsync(string root, string relativePath, long offset, int count, IReadOnlyList<IsolatedPath> hidden, CancellationToken cancellationToken = default)
     {
         PulledHidden.Add(hidden);
         return ++_reads == FailsRead
             ? throw new HarnessException(HarnessExit.HostUnavailable, $"the link dropped reading '{relativePath}'")
-            : inner.PullFileAsync(root, relativePath, hidden, cancellationToken);
+            : inner.PullFileAsync(root, relativePath, offset, count, hidden, cancellationToken);
     }
 
     /// <summary>Every directory the copy was asked to list, as it was asked.</summary>

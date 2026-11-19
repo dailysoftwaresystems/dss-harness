@@ -20,6 +20,17 @@ namespace DssHarness.Core.Sync;
 /// command line is bounded, and an ssh server hands it to a shell whose identity is not known in
 /// advance, so only a small set of characters may appear there at all.
 /// </remarks>
+/// <param name="host">The host, as reports name it.</param>
+/// <param name="session">How the host is reached, and where its DssHarness is.</param>
+/// <param name="hostCommands">Runs the host's agent.</param>
+/// <param name="output">Where what the host says on its standard error, and a beat it lost, are told.</param>
+/// <param name="keepAwake">What keeps the host awake while it serves each request, as the configuration declares it.</param>
+/// <param name="keepAwakeEnvironment">What the host declares under <c>env</c>.</param>
+/// <param name="keepAwakeDirectories">Where the survey found the host's programs.</param>
+/// <param name="pieceBytes">
+/// The most bytes of one file a request carries (<see cref="ISyncTransport.PieceBytes"/>); none for
+/// <see cref="SyncServe.LargestBatch"/>. A test gives one of its own, to carry a file in pieces of the size it needs.
+/// </param>
 public sealed class RemoteSyncTransport(
     HostId host,
     HostSession session,
@@ -27,11 +38,17 @@ public sealed class RemoteSyncTransport(
     IHarnessOutput output,
     IReadOnlyList<string>? keepAwake = null,
     IReadOnlyDictionary<string, string>? keepAwakeEnvironment = null,
-    IReadOnlyList<string>? keepAwakeDirectories = null) : ISyncTransport
+    IReadOnlyList<string>? keepAwakeDirectories = null,
+    int? pieceBytes = null) : ISyncTransport
 {
     private readonly HostSession _session = session;
     private readonly IHostCommandRunner _hostCommands = hostCommands;
     private readonly IHarnessOutput _output = output;
+
+    /// <inheritdoc/>
+    public int PieceBytes { get; } = pieceBytes is { } given
+        ? given > 0 ? given : throw new ArgumentOutOfRangeException(nameof(pieceBytes), given, "A piece of a file holds at least one byte.")
+        : (int)SyncServe.LargestBatch;
 
     /// <summary>
     /// What keeps the host awake while it serves each of this sync's requests, as the configuration
@@ -206,9 +223,9 @@ public sealed class RemoteSyncTransport(
 
     /// <inheritdoc/>
     /// <remarks>
-    /// Refused here if it is too large to carry, before anything is sent, so the reader is told which file rather than
-    /// left with a host that could not read the request. Its content is encoded into the request as the request is
-    /// written, and never held here as text.
+    /// Its content is encoded into the request as the request is written, and never held here as text. One larger than a
+    /// piece is sent a piece to a request (<see cref="SyncPieces.SendAsync"/>): a request is read on the host as one line,
+    /// which one string holds, and a file inside one could be no larger than about 767 MiB.
     /// </remarks>
     public Task WriteFileAsync(
         string root,
@@ -218,42 +235,104 @@ public sealed class RemoteSyncTransport(
     {
         ArgumentNullException.ThrowIfNull(contents);
 
-        SyncServe.RefuseAFileTooLargeToCarry(contents.LongLength, relativePath, Host.ToString());
-
-        return AskAsync<object>(SyncServe.Write, root, [relativePath, HostArgument.Carrying(contents)], cancellationToken);
+        return contents.LongLength > PieceBytes
+            ? WriteInPiecesAsync(root, relativePath, contents, cancellationToken)
+            : AskAsync<object>(SyncServe.Write, root, [relativePath, HostArgument.Carrying(contents)], cancellationToken);
     }
 
     /// <inheritdoc/>
     /// <remarks>
     /// One request, and so one session: the cost of reaching this host is paid once for the batch rather
-    /// than once per file. Each file is refused here if it alone is too large to carry, before anything is
-    /// sent. Each crosses as its path then its content, encoded into the request as the request is written:
+    /// than once per file. Each crosses as its path then its content, encoded into the request as the request is written:
     /// a batch built as text first - its files' base64, inside its JSON, inside the request's - left a
-    /// consumer's first sync of 85 MiB holding 3.2 GiB here.
+    /// consumer's first sync of 85 MiB holding 3.2 GiB here. A file larger than a piece is sent on its own, a piece to a
+    /// request, after the files before it and before those after it.
     /// </remarks>
-    public Task WriteFilesAsync(
+    public async Task WriteFilesAsync(
         string root,
         IReadOnlyList<SyncFileContent> files,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(files);
 
-        if (files.Count == 0)
-        {
-            return Task.CompletedTask;
-        }
+        var batch = new List<SyncFileContent>();
 
         foreach (var file in files)
         {
-            SyncServe.RefuseAFileTooLargeToCarry(file.Contents.LongLength, file.Path, Host.ToString());
+            if (file.Contents.LongLength <= PieceBytes)
+            {
+                batch.Add(file);
+                continue;
+            }
+
+            await SendBatchAsync().ConfigureAwait(false);
+            await WriteInPiecesAsync(root, file.Path, file.Contents, cancellationToken).ConfigureAwait(false);
         }
 
-        return AskAsync<object>(
-            SyncServe.WriteMany,
+        await SendBatchAsync().ConfigureAwait(false);
+
+        async Task SendBatchAsync()
+        {
+            if (batch.Count == 0)
+            {
+                return;
+            }
+
+            await AskAsync<object>(
+                    SyncServe.WriteMany,
+                    root,
+                    [.. batch.SelectMany(file => new[] { HostArgument.Of(file.Path), HostArgument.Carrying(file.Contents) })],
+                    cancellationToken)
+                .ConfigureAwait(false);
+
+            batch.Clear();
+        }
+    }
+
+    /// <summary>A file whose bytes are in hand and larger than a piece, sent a piece to a request and put in place once all have arrived.</summary>
+    private Task WriteInPiecesAsync(string root, string relativePath, byte[] contents, CancellationToken cancellationToken)
+    {
+        SyncFilePiece Piece(long offset) => new(
+            contents.LongLength,
+            offset == 0 ? FileContentHash.Of(contents) : null,
+            contents.AsSpan((int)offset, (int)Math.Min(PieceBytes, contents.LongLength - offset)).ToArray());
+
+        return SyncPieces.SendAsync(
+            Piece(0),
+            (offset, _) => Task.FromResult(Piece(offset)),
+            this,
             root,
-            [.. files.SelectMany(file => new[] { HostArgument.Of(file.Path), HostArgument.Carrying(file.Contents) })],
+            relativePath,
+            // Bytes in hand do not change while they are sent: a whole that differs from its pieces is a defect here.
+            changed: () => new InvalidOperationException($"The bytes of '{relativePath}' in hand changed while they were sent to {Host}."),
+            warn: message => _output.Warn(SyncService.CommandName, message),
             cancellationToken);
     }
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// The piece's content is encoded into the request as the request is written, with the hash taken here of its bytes,
+    /// which the host checks them against as they arrive (<see cref="SyncServe.PieceIn"/>), keeping nothing of a piece
+    /// that arrived otherwise.
+    /// </remarks>
+    public Task WritePieceAsync(string root, string relativePath, long offset, ReadOnlyMemory<byte> piece, CancellationToken cancellationToken = default)
+        => AskAsync<object>(
+            SyncServe.WritePiece,
+            root,
+            [relativePath, offset.ToString(CultureInfo.InvariantCulture), FileContentHash.Of(piece.Span), HostArgument.Carrying(piece)],
+            cancellationToken);
+
+    /// <inheritdoc/>
+    public Task PlacePiecesAsync(string root, string relativePath, FileContent whole, CancellationToken cancellationToken = default)
+        => AskAsync<object>(
+            SyncServe.PlacePieces,
+            root,
+            [relativePath, whole.Length.ToString(CultureInfo.InvariantCulture), whole.Content],
+            cancellationToken);
+
+    /// <inheritdoc/>
+    public Task DropPiecesAsync(string root, string relativePath, CancellationToken cancellationToken = default)
+        => AskAsync<object>(SyncServe.DropPieces, root, [relativePath], cancellationToken);
 
     /// <inheritdoc/>
     public Task DeleteFileAsync(string root, string relativePath, CancellationToken cancellationToken = default)
@@ -298,35 +377,40 @@ public sealed class RemoteSyncTransport(
     /// its own isolation hides - the places <paramref name="hidden"/> names are this machine's, not the host's - and the
     /// file comes as <see cref="ReadFileAsync"/>'s does.
     /// </remarks>
-    public Task<byte[]> PullFileAsync(string root, string relativePath, IReadOnlyList<IsolatedPath> hidden, CancellationToken cancellationToken = default)
-        => ReadAsync(SyncServe.Pull, root, relativePath, cancellationToken);
+    public Task<SyncFilePiece> PullFileAsync(string root, string relativePath, long offset, int count, IReadOnlyList<IsolatedPath> hidden, CancellationToken cancellationToken = default)
+        => ReadAsync(SyncServe.Pull, root, relativePath, offset, count, cancellationToken);
 
     /// <inheritdoc/>
     /// <remarks>
-    /// Decoded a line at a time as it arrives, into the bytes the answer said the file holds, so it is never held here as
-    /// text.
+    /// Decoded a line at a time as it arrives, into the bytes the answer said the piece holds, so it is never held here as
+    /// text, and checked against the hash the host took of it before it is answered.
     /// </remarks>
-    public Task<byte[]> ReadFileAsync(
+    public Task<SyncFilePiece> ReadFileAsync(
         string root,
         string relativePath,
+        long offset,
+        int count,
         CancellationToken cancellationToken = default)
-        => ReadAsync(SyncServe.Read, root, relativePath, cancellationToken);
+        => ReadAsync(SyncServe.Read, root, relativePath, offset, count, cancellationToken);
 
-    /// <summary>One file read out of the host's copy by <paramref name="operation"/>, checked against the hash the host took of it.</summary>
-    private async Task<byte[]> ReadAsync(string operation, string root, string relativePath, CancellationToken cancellationToken)
+    /// <summary>One piece of a file read out of the host's copy by <paramref name="operation"/>, checked against the hash the host took of it.</summary>
+    private async Task<SyncFilePiece> ReadAsync(string operation, string root, string relativePath, long offset, int count, CancellationToken cancellationToken)
     {
-        byte[]? contents = null;
+        ArgumentOutOfRangeException.ThrowIfNegative(offset);
+        ArgumentOutOfRangeException.ThrowIfNegative(count);
+
+        byte[]? bytes = null;
         var filled = 0;
 
         var answer = await AskAsync<SyncFileAnswer>(
                 operation,
                 root,
-                [relativePath],
+                [relativePath, offset.ToString(CultureInfo.InvariantCulture), count.ToString(CultureInfo.InvariantCulture)],
                 cancellationToken,
                 following: (told, line) =>
                 {
-                    contents ??= new byte[Told(told, relativePath)];
-                    filled += SyncServe.ReadContentLine(line, contents.AsSpan(filled), relativePath);
+                    bytes ??= new byte[Told(told, relativePath, offset, count)];
+                    filled += SyncServe.ReadContentLine(line, bytes.AsSpan(filled), relativePath);
                 })
             .ConfigureAwait(false);
 
@@ -337,28 +421,31 @@ public sealed class RemoteSyncTransport(
                 $"{Host} did not answer with the content of '{relativePath}'.");
         }
 
-        contents ??= new byte[Told(answer, relativePath)];
+        bytes ??= new byte[Told(answer, relativePath, offset, count)];
 
-        // Fewer bytes than it said is a file cut short on the way, and said so rather than as a file that changed.
-        if (filled != contents.Length)
+        // Fewer bytes than it said is a piece cut short on the way, and said so rather than as a file that changed.
+        if (filled != bytes.Length)
         {
             throw new HarnessException(
                 HarnessExit.CommandFailed,
-                $"'{relativePath}' did not arrive whole from {Host}: {filled.ToString(CultureInfo.InvariantCulture)} of its "
-                + $"{contents.Length.ToString(CultureInfo.InvariantCulture)} bytes did.");
+                $"'{relativePath}' did not arrive whole from {Host}: {filled.ToString(CultureInfo.InvariantCulture)} of the "
+                + $"{bytes.Length.ToString(CultureInfo.InvariantCulture)} bytes of its piece at byte {offset.ToString(CultureInfo.InvariantCulture)} did.");
         }
 
-        var arrived = FileContentHash.Of(contents);
+        // Checked against the hash the far side took of what it read, not against what arrived here. A piece that lost bytes
+        // on the way is the failure this catches, and it can only be caught by a number that was computed before the journey.
+        SyncServe.RefuseAPieceChanged(relativePath, offset, bytes, answer.PieceHash, $"{Host} and here");
 
-        // Checked against the hash the far side took of what it read, not against what arrived here.
-        // A file that lost bytes on the way is the failure this catches, and it can only be caught by
-        // a number that was computed before the journey.
-        return string.Equals(arrived, answer.ContentHash, StringComparison.Ordinal)
-            ? contents
-            : throw new HarnessException(
+        // A piece that starts the file says what all of it holds, which the rest of it is held to; one that does not, never.
+        if ((offset == 0) != (answer.ContentHash is not null))
+        {
+            throw new HarnessException(
                 HarnessExit.CommandFailed,
-                $"'{relativePath}' changed between {Host} and here: it was read as {answer.ContentHash} "
-                + $"and arrived as {arrived}.");
+                $"{Host} answered with a piece of '{relativePath}' at byte {offset.ToString(CultureInfo.InvariantCulture)} in a shape "
+                + "this build cannot read: the hash of the whole file comes with the piece that starts it, and only with that one.");
+        }
+
+        return new SyncFilePiece(answer.Length, answer.ContentHash, bytes);
     }
 
     /// <inheritdoc/>
@@ -372,14 +459,18 @@ public sealed class RemoteSyncTransport(
                 HarnessExit.CommandFailed,
                 $"{Host} did not answer with what '{relativeDirectory}' holds.");
 
-    /// <summary>How many bytes <paramref name="answer"/> says its file holds, refused where no file it can carry holds that many.</summary>
-    /// <exception cref="HarnessException">The length is below nothing or past <see cref="SyncServe.LargestFile"/>.</exception>
-    private int Told(SyncFileAnswer answer, string relativePath)
-        => answer.Length is >= 0 and <= SyncServe.LargestFile
-            ? (int)answer.Length
+    /// <summary>
+    /// How many bytes the piece <paramref name="answer"/> answers holds: as many as its file holds from
+    /// <paramref name="offset"/> on, up to the <paramref name="count"/> asked for; refused where the file is said to hold
+    /// fewer than none.
+    /// </summary>
+    /// <exception cref="HarnessException">The length is below nothing.</exception>
+    private int Told(SyncFileAnswer answer, string relativePath, long offset, int count)
+        => answer.Length >= 0
+            ? (int)Math.Clamp(answer.Length - offset, 0, count)
             : throw new HarnessException(
                 HarnessExit.CommandFailed,
-                $"{Host} said '{relativePath}' holds {answer.Length.ToString(CultureInfo.InvariantCulture)} bytes, which no file it can send does.");
+                $"{Host} said '{relativePath}' holds {answer.Length.ToString(CultureInfo.InvariantCulture)} bytes, which no file does.");
 
     /// <inheritdoc/>
     public async Task<SyncInspectAnswer> InspectAsync(string root, GitHistoryWanted? wanted = null, CancellationToken cancellationToken = default)
