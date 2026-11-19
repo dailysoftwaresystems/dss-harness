@@ -440,11 +440,6 @@ public sealed class ArchitectureTests
 
         // The caller's own selection, no ceiling of the tool's.
         [@"DssHarness.Cli\Commands\CheckCiLegsCommand.cs|LimitOption"] = "the caller's own --limit, a selection the person asks for",
-
-        // Retired: kept only until the owner of the file deletes them (the graph's own folder).
-        [@"DssHarness.Core\Codebase\CodebaseGraphShape.cs|DefaultMaxFileBytes"] = "retired: what maxFileBytes stood at; no file is kept unread by it - left for the codebase folder's owner",
-        [@"DssHarness.Core\Codebase\CodebaseGraphShape.cs|LeastMaxFileBytes"] = "retired: the least maxFileBytes could say; no file is kept unread by it - left for the codebase folder's owner",
-        [@"DssHarness.Core\Codebase\CodebaseGraphShape.cs|MostMaxFileBytes"] = "retired: the most maxFileBytes could say; no file is kept unread by it - left for the codebase folder's owner",
     };
 
     /// <summary>The namespaces a front end may reach of Core directly.</summary>

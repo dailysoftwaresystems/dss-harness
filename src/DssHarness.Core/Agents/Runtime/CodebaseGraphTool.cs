@@ -1251,10 +1251,12 @@ public sealed class CodebaseGraphTool(
         // of the tree, where no relative path reads. No bound on the hits, nor on a file's bytes, nor on a hit's line: the
         // answer's pages hold them all, at the text fallback's size a page, a line wider than a page given in pieces.
         var pattern = LinearRegex.Compile($@"(?:^|[^\p{{L}}\p{{N}}_]){Regex.Escape(word)}(?:$|[^\p{{L}}\p{{N}}_])");
-        var search = await _files.SearchAsync(_queries.Tree, pattern, null, StringComparison.Ordinal, 0, int.MaxValue, long.MaxValue, file => _paths.Read(file).Full is not null && _mayRead(Relative(file)), cancellationToken).ConfigureAwait(false);
+        var hits = new List<AgentSearchHit>();
+        var search = await _files.SearchAsync(_queries.Tree, pattern, null, StringComparison.Ordinal, 0, file => _paths.Read(file).Full is not null && _mayRead(Relative(file)),
+            (hit, _) => { hits.Add(hit); return ValueTask.CompletedTask; }, cancellationToken).ConfigureAwait(false);
 
         return new(
-            [.. search.Hits.Select(hit => new GraphEntry($"  {ReportText.Printable(hit.Path)}:{hit.Line.ToString(CultureInfo.InvariantCulture)} {hit.Text.Trim()}", Lines: 1, Hit: true))],
+            [.. hits.Select(hit => new GraphEntry($"  {ReportText.Printable(hit.Path)}:{hit.Line.ToString(CultureInfo.InvariantCulture)} {hit.Text.Trim()}", Lines: 1, Hit: true))],
             [.. search.LeftOut(ReportText.Printable)]);
     }
 

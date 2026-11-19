@@ -284,7 +284,7 @@ public sealed class FlowStepGraph
             var never = CodebaseGraphService.NeverListed(request.WorktreesRoot);
             var tool = new CodebaseGraphTool(
                 queries,
-                new AgentFiles(git, fileSystem, clock),
+                new AgentFiles(git, fileSystem),
                 fileSystem,
                 ConfinedPaths.Within(fileSystem, platform, tree),
                 path => Readable(path) && !PathPatterns.Matches(never, path, platform.PathComparison),

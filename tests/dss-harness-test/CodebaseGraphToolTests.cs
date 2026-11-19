@@ -1849,7 +1849,7 @@ public sealed partial class CodebaseGraphToolTests
 
         return new(
             queries,
-            new AgentFiles(tree.Harness.GitClient, files ?? tree.Harness.FileSystem, TimeProvider.System),
+            new AgentFiles(tree.Harness.GitClient, files ?? tree.Harness.FileSystem),
             files ?? tree.Harness.FileSystem,
             ConfinedPaths.Within(tree.Harness.FileSystem, tree.Harness.Platform, queries.Tree),
             path =>!PathPatterns.Matches(never, path, tree.Harness.Platform.PathComparison) && (mayRead?.Invoke(path) ?? true),

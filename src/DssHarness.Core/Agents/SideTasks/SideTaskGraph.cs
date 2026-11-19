@@ -196,7 +196,7 @@ public sealed class SideTaskGraph
 
         return new CodebaseGraphTool(
             view,
-            new AgentFiles(git, files, clock),
+            new AgentFiles(git, files),
             files,
             ConfinedPaths.Within(files, platform, view.Tree),
             path => policy.Read(Full(path)).Refusal() is null && !PathPatterns.Matches(never, path, platform.PathComparison),

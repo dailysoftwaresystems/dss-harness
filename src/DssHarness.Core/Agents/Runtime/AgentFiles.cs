@@ -23,15 +23,13 @@ namespace DssHarness.Core.Agents.Runtime;
 /// </summary>
 /// <param name="git">Lists a work tree's files.</param>
 /// <param name="fileSystem">Walks a directory git does not list, and reads and writes each file.</param>
-/// <param name="clock">The clock a search was once bounded on; it bounds nothing of it now.</param>
-public sealed class AgentFiles(IGitClient git, IFileSystem fileSystem, TimeProvider clock)
+public sealed class AgentFiles(IGitClient git, IFileSystem fileSystem)
 {
     /// <summary>The refusal a search's own decision stands for, where it only says whether a place may be read: counted, never said.</summary>
     private static readonly AgentPolicyAnswer.Denied NotToBeRead = new(ConfinedPaths.RootsRule, AgentPolicySource.Builtin, "a place the reader may not read");
 
     private readonly IGitClient _git = git ?? throw new ArgumentNullException(nameof(git));
     private readonly IFileSystem _fileSystem = fileSystem ?? throw new ArgumentNullException(nameof(fileSystem));
-    private readonly TimeProvider _clock = clock ?? throw new ArgumentNullException(nameof(clock));
 
     /// <summary>
     /// Every file under <paramref name="directory"/>, relative to it with forward separators, in ordinal order: what git
@@ -96,64 +94,6 @@ public sealed class AgentFiles(IGitClient git, IFileSystem fileSystem, TimeProvi
     }
 
     /// <summary>
-    /// The lines under <paramref name="directory"/> that <paramref name="pattern"/> matches, as the streamed search finds
-    /// them (<see cref="SearchAsync(string, Regex, GlobPattern?, StringComparison, int, Func{string, bool}, Func{AgentSearchHit, CancellationToken, ValueTask}, CancellationToken)"/>),
-    /// held: at most <paramref name="most"/> hits, each with <paramref name="context"/> lines on either side, and how many
-    /// more there were - a file past <paramref name="mostBytes"/> passed over and counted.
-    /// </summary>
-    /// <param name="directory">The directory, absolute.</param>
-    /// <param name="pattern">The pattern, matched against each line.</param>
-    /// <param name="glob">The files searched, by their paths relative to <paramref name="directory"/>; null for every one.</param>
-    /// <param name="comparison">How a path is compared with <paramref name="glob"/>.</param>
-    /// <param name="context">How many lines before and after each hit are given.</param>
-    /// <param name="most">The most hits held.</param>
-    /// <param name="mostBytes">The largest file searched, a larger one passed over and counted: <see cref="long.MaxValue"/> for every file, whatever it holds.</param>
-    /// <param name="mayRead">Whether the agent may read a file, by its absolute path.</param>
-    /// <param name="cancellationToken">Stops the search.</param>
-    public async Task<AgentSearch> SearchAsync(
-        string directory,
-        Regex pattern,
-        GlobPattern? glob,
-        StringComparison comparison,
-        int context,
-        int most,
-        long mostBytes,
-        Func<string, bool> mayRead,
-        CancellationToken cancellationToken)
-    {
-        ArgumentOutOfRangeException.ThrowIfLessThan(most, 1);
-        ArgumentOutOfRangeException.ThrowIfNegative(mostBytes);
-
-        var hits = new List<AgentSearchHit>();
-        long more = 0;
-
-        var search = await SearchAsync(
-            directory,
-            pattern,
-            glob,
-            comparison,
-            context,
-            mostBytes,
-            mayRead,
-            (hit, _) =>
-            {
-                if (hits.Count < most)
-                {
-                    hits.Add(hit);
-                }
-                else
-                {
-                    more++;
-                }
-
-                return ValueTask.CompletedTask;
-            },
-            cancellationToken).ConfigureAwait(false);
-
-        return search with { Hits = hits, More = more };
-    }
-
-    /// <summary>
     /// The lines under <paramref name="directory"/> that <paramref name="pattern"/> matches, file by file in the listing's
     /// order: each file <paramref name="glob"/> takes, where one is given, and <paramref name="mayRead"/> allows - one it
     /// does not counted as left out - read as text a line at a time, whatever it holds, each hit with
@@ -168,25 +108,12 @@ public sealed class AgentFiles(IGitClient git, IFileSystem fileSystem, TimeProvi
     /// <param name="mayRead">Whether the agent may read a file, by its absolute path.</param>
     /// <param name="found">Takes each hit, as it is found.</param>
     /// <param name="cancellationToken">Stops the search.</param>
-    public Task<AgentSearch> SearchAsync(
+    public async Task<AgentSearch> SearchAsync(
         string directory,
         Regex pattern,
         GlobPattern? glob,
         StringComparison comparison,
         int context,
-        Func<string, bool> mayRead,
-        Func<AgentSearchHit, CancellationToken, ValueTask> found,
-        CancellationToken cancellationToken)
-        => SearchAsync(directory, pattern, glob, comparison, context, long.MaxValue, mayRead, found, cancellationToken);
-
-    /// <summary>The streamed search, a file past <paramref name="mostBytes"/> passed over and counted.</summary>
-    private async Task<AgentSearch> SearchAsync(
-        string directory,
-        Regex pattern,
-        GlobPattern? glob,
-        StringComparison comparison,
-        int context,
-        long mostBytes,
         Func<string, bool> mayRead,
         Func<AgentSearchHit, CancellationToken, ValueTask> found,
         CancellationToken cancellationToken)
@@ -227,14 +154,8 @@ public sealed class AgentFiles(IGitClient git, IFileSystem fileSystem, TimeProvi
             try
             {
                 // A file the listing names that is no longer there - gone since, or a deletion git still lists - is none to search.
-                if (_fileSystem.StandingOf(file) is not { } standing)
+                if (_fileSystem.StandingOf(file) is not { })
                 {
-                    continue;
-                }
-
-                if (standing.Length > mostBytes)
-                {
-                    passed++;
                     continue;
                 }
 
@@ -287,7 +208,7 @@ public sealed class AgentFiles(IGitClient git, IFileSystem fileSystem, TimeProvi
             }
         }
 
-        return new AgentSearch([], 0, refused, passed, searched, listing, unread, firstUnread) { MostBytes = mostBytes, Found = given };
+        return new AgentSearch([], 0, refused, passed, searched, listing, unread, firstUnread) { Found = given };
     }
 
     /// <summary>
@@ -594,9 +515,6 @@ public sealed record AgentSearch(
     int Unread,
     AgentSearchUnread? FirstUnread)
 {
-    /// <summary>The largest file the search read, a larger one passed over; <see cref="long.MaxValue"/> where it read every file whatever it holds.</summary>
-    public long MostBytes { get; init; } = long.MaxValue;
-
     /// <summary>How many hits the search found, every one counted: those held and those past them, or those handed on.</summary>
     public long Found { get; init; }
 
@@ -616,9 +534,7 @@ public sealed record AgentSearch(
 
         if (Passed > 0)
         {
-            yield return MostBytes == long.MaxValue
-                ? $"[{ReportText.Counted(Passed, "file")} passed over: binary, or no text this tool reads]"
-                : $"[{ReportText.Counted(Passed, "file")} passed over: binary, over {DiskSpace.Size(MostBytes)}, or no text this tool reads]";
+            yield return $"[{ReportText.Counted(Passed, "file")} passed over: binary, or no text this tool reads]";
         }
 
         foreach (var note in Listing.LeftOut(said))

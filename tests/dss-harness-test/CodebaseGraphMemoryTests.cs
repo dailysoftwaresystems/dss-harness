@@ -26,7 +26,7 @@ public sealed class CodebaseGraphMemoryTests
     [Fact]
     public async Task AFortyMegabytePackageLock_IsExtracted()
     {
-        using var graph = await Graph.CreateAsync(shape: CodebaseGraphShape.Default with { MaxFileBytes = CodebaseGraphShape.DefaultMaxFileBytes });
+        using var graph = await Graph.CreateAsync(shape: CodebaseGraphShape.Default);
         var line = "  \"node_modules/" + new string('a', 1000) + "\": { \"version\": \"1.0.0\" },\n";
         var text = new StringBuilder("class Lock\n", LockBytes + line.Length + 16);
 

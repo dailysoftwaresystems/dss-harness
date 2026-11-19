@@ -1112,7 +1112,7 @@ public sealed class AgentToolRuntimeTests : IDisposable
     {
         Write("lines/a.txt", "a\nb\nc\nd\ne\n");
         using var stop = new CancellationTokenSource();
-        var files = new AgentFiles(_harness.GitClient, _harness.FileSystem, TimeProvider.System);
+        var files = new AgentFiles(_harness.GitClient, _harness.FileSystem);
         var seen = 0;
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => files.SearchAsync(
@@ -1216,7 +1216,7 @@ public sealed class AgentToolRuntimeTests : IDisposable
 
         using (var atFirst = CancellationTokenSource.CreateLinkedTokenSource(Token))
         {
-            var files = new AgentFiles(_harness.GitClient, new StoppingAtKinds(_harness.FileSystem, atFirst, 1), TimeProvider.System);
+            var files = new AgentFiles(_harness.GitClient, new StoppingAtKinds(_harness.FileSystem, atFirst, 1));
 
             await Assert.ThrowsAnyAsync<OperationCanceledException>(() => files.ListAsync(directory, atFirst.Token));
         }

@@ -137,7 +137,7 @@ public sealed record FlowCodebaseGraph(
     /// written with it - the run's frozen definition, and its digest, hold what the file says, not this build's defaults.
     /// </summary>
     [System.Text.Json.Serialization.JsonIgnore]
-    public Codebase.CodebaseGraphShape Shape => Codebase.CodebaseGraphShape.Of(Include, Exclude, Languages, maxFileBytes: null, Generated, MapTokens, KeyNaming, Claims);
+    public Codebase.CodebaseGraphShape Shape => Codebase.CodebaseGraphShape.Of(Include, Exclude, Languages, Generated, MapTokens, KeyNaming, Claims);
 }
 
 /// <summary>

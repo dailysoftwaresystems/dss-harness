@@ -801,7 +801,7 @@ public sealed class AgentToolHost(
     internal IHostPlatform Platform { get; } = platform ?? throw new ArgumentNullException(nameof(platform));
 
     /// <summary>Lists and searches a directory's files.</summary>
-    internal AgentFiles Files { get; } = new(git ?? throw new ArgumentNullException(nameof(git)), fileSystem, clock);
+    internal AgentFiles Files { get; } = new(git ?? throw new ArgumentNullException(nameof(git)), fileSystem);
 
     /// <summary>Runs a command as a phase.</summary>
     internal PhaseRunner Phases { get; } = phases ?? throw new ArgumentNullException(nameof(phases));

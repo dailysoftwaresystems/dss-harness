@@ -33,21 +33,6 @@ public sealed record CodebaseGraphShape(
     IReadOnlyList<string>? KeyNaming = null,
     IReadOnlyDictionary<string, IReadOnlyList<string>>? Claims = null)
 {
-    /// <summary>What the retired <c>maxFileBytes</c> stood at where a workflow said nothing; no file is kept unread by it.</summary>
-    public const int DefaultMaxFileBytes = 1_048_576;
-
-    /// <summary>The least the retired <c>maxFileBytes</c> could say; no file is kept unread by it.</summary>
-    public const int LeastMaxFileBytes = 4_096;
-
-    /// <summary>The most the retired <c>maxFileBytes</c> could say; no file is kept unread by it.</summary>
-    public const int MostMaxFileBytes = 16_777_216;
-
-    /// <summary>
-    /// What the workflow's retired <c>codebaseGraph.maxFileBytes</c> said, held as it was read and decided by nothing: the
-    /// graph reads every file it claims whole, whatever its size, and no two shapes differ by it.
-    /// </summary>
-    public long MaxFileBytes { get; init; } = DefaultMaxFileBytes;
-
     /// <summary>The cap of the run's repository map where the workflow says nothing.</summary>
     public const int DefaultMapTokens = 1_500;
 
@@ -196,7 +181,6 @@ public sealed record CodebaseGraphShape(
     /// <param name="include">The block's <c>include</c>, or <see langword="null"/>.</param>
     /// <param name="exclude">The block's <c>exclude</c>, or <see langword="null"/>.</param>
     /// <param name="languages">The block's <c>languages</c>, or <see langword="null"/>.</param>
-    /// <param name="maxFileBytes">The block's retired <c>maxFileBytes</c>, or <see langword="null"/>: held, and decided by nothing (<see cref="MaxFileBytes"/>).</param>
     /// <param name="generated">The block's <c>generated</c>, or <see langword="null"/>.</param>
     /// <param name="mapTokens">The block's <c>mapTokens</c>, or <see langword="null"/>.</param>
     /// <param name="keyNaming">The block's <c>keyNaming</c>, or <see langword="null"/>.</param>
@@ -205,7 +189,6 @@ public sealed record CodebaseGraphShape(
         IReadOnlyList<string>? include,
         IReadOnlyList<string>? exclude,
         IReadOnlyList<string>? languages,
-        int? maxFileBytes,
         string? generated,
         int? mapTokens,
         IReadOnlyList<string>? keyNaming = null,
@@ -217,10 +200,7 @@ public sealed record CodebaseGraphShape(
             generated == GeneratedExclude,
             mapTokens ?? DefaultMapTokens,
             Named(keyNaming ?? DefaultKeyNaming),
-            ClaimsOf(claims))
-        {
-            MaxFileBytes = maxFileBytes ?? DefaultMaxFileBytes,
-        };
+            ClaimsOf(claims));
 
     /// <summary>Whether <paramref name="path"/> is graphed: matched by an <c>include</c> where any is given, and by no <c>exclude</c>.</summary>
     /// <param name="path">A path relative to the tree, with forward separators.</param>

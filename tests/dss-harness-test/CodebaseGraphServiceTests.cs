@@ -211,7 +211,7 @@ public sealed class CodebaseGraphServiceTests
 
         Assert.DoesNotContain(graph.Symbols().Edges, edge => edge is { To: Key, Kind: CodeEdgeKinds.Uses });
 
-        var snake = await graph.Shaped(CodebaseGraphShape.Of(null, null, null, null, null, null, keyNaming: [CodebaseGraphShape.SnakeCase])).SyncAsync();
+        var snake = await graph.Shaped(CodebaseGraphShape.Of(null, null, null, null, null, keyNaming: [CodebaseGraphShape.SnakeCase])).SyncAsync();
 
         Assert.Equal(0, snake.Extracted);
         Assert.Contains(graph.Symbols().Edges, edge => edge is { From: "csharp:Other.CallingConvention", To: Key, Kind: CodeEdgeKinds.Uses });
@@ -402,13 +402,12 @@ public sealed class CodebaseGraphServiceTests
 
     /// <summary>
     /// Every state a file the core does not give an implementation is in: a Git LFS pointer, undecodable, claimed by two
-    /// that both say yes, a link git records as one, a submodule - each listed with why; and none for its size alone, under
-    /// the retired maxFileBytes too.
+    /// that both say yes, a link git records as one, a submodule - each listed with why; and none for its size alone.
     /// </summary>
     [Fact]
     public async Task EveryStateTheCoreGivesAFile_IsListedWithWhy()
     {
-        using var graph = await Graph.CreateAsync(shape: CodebaseGraphShape.Default with { MaxFileBytes = 200 });
+        using var graph = await Graph.CreateAsync();
         var head = await graph.HeadAsync();
         graph.Write("big.toy", "class Big\n" + new string('x', 300) + "\n");
         graph.Write("model.toy", "version https://git-lfs.github.com/spec/v1\noid sha256:" + new string('a', 64) + "\nsize 9\n");
@@ -877,24 +876,21 @@ public sealed class CodebaseGraphServiceTests
         Assert.Equal(graphed, graph.Manifest().Files.Keys);
     }
 
-    /// <summary>
-    /// A file kept unread for its state - binary, claimed by two - keeps the state its content gives it whatever the retired
-    /// maxFileBytes says, and a file past it is read: the key is held as it was written and decides nothing.
-    /// </summary>
+    /// <summary>A file kept unread for its state - binary, claimed by two - keeps the state its content gives it, and a file of any size is read.</summary>
     [Fact]
-    public async Task TheRetiredMaxFileBytes_DecidesNoFilesState()
+    public async Task AFilePastAnySize_IsRead_AndItsStateKept()
     {
-        using var graph = await Graph.CreateAsync(shape: CodebaseGraphShape.Default with { MaxFileBytes = 1000 });
+        using var graph = await Graph.CreateAsync();
         graph.WriteBytes("bin.toy", [.. Enumerable.Repeat((byte)'a', 300), 0]);
         graph.Write("both.amb", new string('e', 300) + "\n");
         graph.Write("big.toy", "class Big\n" + new string('x', 300) + "\n");
         await graph.CommitAsync();
         await graph.SyncAsync();
 
-        var lowered = await graph.Shaped(CodebaseGraphShape.Default with { MaxFileBytes = 200 }).SyncAsync();
+        var again = await graph.Shaped(CodebaseGraphShape.Default).SyncAsync();
         var files = graph.Manifest().Files;
 
-        Assert.Equal((0, 3), (lowered.Extracted, lowered.Reused));
+        Assert.Equal((0, 3), (again.Extracted, again.Reused));
         Assert.Equal((CodeFileStates.Binary, CodeFileStates.Ambiguous, CodeFileStates.Parsed), (files["bin.toy"].State, files["both.amb"].State, files["big.toy"].State));
     }
 
