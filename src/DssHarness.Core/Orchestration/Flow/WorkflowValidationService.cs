@@ -380,13 +380,15 @@ public sealed class WorkflowValidationService(
             }
 
             var resolution = remotes.FirstOrDefault(resolved => WorkflowRemote.Name(resolved.Source, resolved.Commit) == use.Name);
+            // The commit and the fingerprint whole: the line is what --json carries of the resolution, and a cut id names
+            // no commit a reader can check out or compare.
             var said = WorkflowRemote.PartsOf(use.Name) is { } parts
-                ? $"{parts.Host}/{parts.Owner}/{parts.Repo}/{parts.Directory} at commit {parts.Commit[..12]}"
+                ? $"{parts.Host}/{parts.Owner}/{parts.Repo}/{parts.Directory} at commit {parts.Commit}"
                 : use.Name;
             var applied = use.Own?.Declared.Where(key => !use.NotApplied.Contains(key, StringComparer.Ordinal)).ToList();
 
             lines.Add(
-                $"'{path}' uses {use.Source} -> {said} ({use.Inputs.Count} input{(use.Inputs.Count == 1 ? string.Empty : "s")}, fingerprint {use.Fingerprint[..12]})"
+                $"'{path}' uses {use.Source} -> {said} ({use.Inputs.Count} input{(use.Inputs.Count == 1 ? string.Empty : "s")}, fingerprint {use.Fingerprint})"
                 + (applied is null
                     ? string.Empty
                     : applied.Count == 0

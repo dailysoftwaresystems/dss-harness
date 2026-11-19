@@ -1673,7 +1673,7 @@ public sealed class RemoteWorkflowUseTests
 
         Assert.True(report.Passed, string.Join(Environment.NewLine, report.Workflows.Single().Lines));
         Assert.StartsWith(
-            $"'scan' uses {Source} -> github.com/dailysoftwaresystems/shared/workflows/security-review at commit {Commit[..12]} (",
+            $"'scan' uses {Source} -> github.com/dailysoftwaresystems/shared/workflows/security-review at commit {Commit} (",
             Assert.Single(report.Workflows.Single().Lines.Where(line => line.StartsWith("'scan' uses ", StringComparison.Ordinal)).ToList()),
             StringComparison.Ordinal);
 
