@@ -2148,15 +2148,16 @@ public sealed class SideTaskServiceTests
     }
 
     /// <summary>
-    /// Making Claude Code ready can end on a change npm did not finish - not within its bound, or the registry not
-    /// reached - which is the code every program's update begun and not finished ends on (21), passed through as the
-    /// finder answers it with its own words: never read as a model cut short, never as a program missing.
+    /// Making Claude Code ready can end on a change npm did not finish - the registry or the download not reached, for an
+    /// install is given no time of its own to end it - which is the code every program's update begun and not finished
+    /// ends on (21), passed through as the finder answers it with its own words: never read as a model cut short, never
+    /// as a program missing.
     /// </summary>
     [Fact]
     public async Task AnInstallOfClaudeCodeNotFinished_RefusesTheSideTask_Incomplete()
     {
         using var kit = new ClaudeCodeUpdateServiceTests.Kit(package: "2.1.201", program: "2.1.201");
-        kit.Runner.Install = new ProcessResult(-1, "running postinstall\n", string.Empty, ToolPackage.ChangeBudget, TimedOut: true);
+        kit.Runner.Install = new ProcessResult(1, "running postinstall\n", "npm ERR! code ETIMEDOUT\n", TimeSpan.FromMinutes(3), TimedOut: false);
         var finder = await kit.Service().ReadyAsync(kit.Layout, [], client: null, DssHarness.Core.Agents.ClaudeCode.ClaudeCodeAsker.SideTask("unfinished"), Token);
         var (_, temp, service, _, rendered) = await RepoAsync(updates: kit.Service());
         using var tree = temp;
