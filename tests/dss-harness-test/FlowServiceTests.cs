@@ -1060,6 +1060,40 @@ public sealed class FlowServiceTests
         Refused(await StartAsync(), "the main checkout has staged changes (1 path(s): staged.txt), and a run's commit stages what it folded alone: commit them, or unstage them");
     }
 
+    /// <summary>
+    /// A start refused over its staged changes names every path its line has room for, then how many more there are and
+    /// where: --json holds all four thousand in named.staged, in git's order, never cut to what the line could name.
+    /// </summary>
+    [Fact]
+    public async Task FourThousandStagedPaths_AreAllInJson()
+    {
+        var (repository, service, _) = await ServiceAsync();
+        using var disposed = repository;
+        var git = repository.Harness;
+        var paths = Enumerable.Range(0, 4000).Select(at => $"staged/{at.ToString("D4", CultureInfo.InvariantCulture)}.txt").ToList();
+
+        await git.RunGitAsync(repository.Path, ["checkout", "--quiet", "-b", "feature"], Token);
+
+        foreach (var path in paths)
+        {
+            repository.Tree.WriteFile(path, "staged\n");
+        }
+
+        await git.RunGitAsync(repository.Path, ["add", "staged"], Token);
+
+        var outcome = await service.RunAsync(repository.Path, Workflow, run: null, inputs: null, json: true, cancellationToken: Token).WaitAsync(Bound, Token);
+        var document = JsonNode.Parse(Assert.Single(outcome.Data))!.AsObject();
+
+        // Each path is 15 characters and 2 stand between two: 241 fill the line's 4,096, and 3,759 are counted.
+        Assert.Equal(HarnessExit.Refused, outcome.ExitCode);
+        Assert.Equal(
+            $"run 'r1' of 'flow' cannot start: the main checkout has staged changes (4000 path(s): {string.Join(", ", paths.Take(241))} and 3759 more (all in --json named.staged)), and a run's commit stages what it folded alone: commit them, or unstage them. Nothing was made.",
+            outcome.Message);
+        Assert.Equal(outcome.Message, document["summary"]!.GetValue<string>());
+        Assert.Equal(paths, document["named"]!["staged"]!.AsArray().Select(path => path!.GetValue<string>()));
+        Assert.False(Directory.Exists(RunOf(repository).Directory));
+    }
+
     /// <summary>A session's --json is the run's document: its code and line, the run, its status, what it spent and every record it wrote by its path - never the empty stopped document.</summary>
     [Fact]
     public async Task ASessionsJson_IsTheRunsDocument_NamingEveryRecord()
@@ -1074,7 +1108,7 @@ public sealed class FlowServiceTests
         var document = JsonNode.Parse(Assert.Single(outcome.Data))!.AsObject();
 
         Assert.True(outcome.Quiet);
-        Assert.Equal(["exitCode", "summary", "run", "status", "questions", "answered", "passedOver", "handoffs", "leftForAPerson", "spent", "records"], document.Select(member => member.Key));
+        Assert.Equal(["exitCode", "summary", "run", "status", "questions", "answered", "passedOver", "handoffs", "leftForAPerson", "spent", "records", "named"], document.Select(member => member.Key));
         Assert.Equal(0, document["exitCode"]!.GetValue<int>());
         Assert.Equal("done", document["summary"]!.GetValue<string>());
         Assert.Equal("r1", document["run"]!.GetValue<string>());

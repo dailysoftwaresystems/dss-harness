@@ -290,6 +290,7 @@ public sealed class FlowService(
         // two cannot take one name.
         OrchestratorLayout layout;
         FlowRunContext runContext;
+        IReadOnlyDictionary<string, IReadOnlyList<string>>? named = null;
 
         try
         {
@@ -300,13 +301,23 @@ public sealed class FlowService(
                 given,
                 checkout.Head,
                 checkout.Branch,
-                refusal: name => StartRefusal(checkout, workflow, resolved, name)
-                    ?? FlowRunPaths.RefusalAtStart(_pathBudget, context, name, workflow, _platform.PlatformKey, files),
+                refusal: name =>
+                {
+                    var (refused, lists) = Start(checkout, workflow, resolved, name);
+                    named = lists;
+                    return refused ?? FlowRunPaths.RefusalAtStart(_pathBudget, context, name, workflow, _platform.PlatformKey, files);
+                },
                 cancellationToken).ConfigureAwait(false);
         }
         catch (HarnessException ex)
         {
-            return new CommandOutcome(ex.ExitCode, ex.Message);
+            // A refusal whose line names part of a list - the staged paths - answers --json with the run's document, the
+            // whole list in its named: what the line could not name is never lost to its length.
+            var refused = new CommandOutcome(ex.ExitCode, ex.Message);
+
+            return json && named is { Count: > 0 } lists
+                ? refused with { Data = [FlowReports.Document(FlowRunResult.Empty(ex.ExitCode, ex.Message) with { Named = lists })], Quiet = true }
+                : refused;
         }
 
         // A base that cannot be told held the checkout's branch to nothing: the start says so, never silently. The remote
@@ -1205,13 +1216,24 @@ public sealed class FlowService(
     /// read against that base, else the remote's default branch); null where it can.
     /// </summary>
     internal static string? StartRefusal(FlowCheckout checkout, WorkflowDefinition workflow, IReadOnlyDictionary<string, string> inputs, string run)
+        => Start(checkout, workflow, inputs, run).Refusal;
+
+    /// <summary>
+    /// <see cref="StartRefusal"/>, with the lists its line names part of, each whole (<see cref="FlowCheckout.StartNamed"/>):
+    /// none where the base cannot be filled, or where the start is not refused.
+    /// </summary>
+    private static (string? Refusal, IReadOnlyDictionary<string, IReadOnlyList<string>>? Named) Start(FlowCheckout checkout, WorkflowDefinition workflow, IReadOnlyDictionary<string, string> inputs, string run)
     {
         var filled = FlowTemplate.PullRequestBase(workflow, inputs, run, out var problem);
-        var refusal = problem is not null
-            ? $"its pull request's base cannot be filled: {problem}"
-            : checkout.StartRefusal(filled);
 
-        return refusal is null ? null : $"run '{run}' of '{workflow.Name}' cannot start: {refusal}. Nothing was made.";
+        if (problem is not null)
+        {
+            return ($"run '{run}' of '{workflow.Name}' cannot start: its pull request's base cannot be filled: {problem}. Nothing was made.", null);
+        }
+
+        return checkout.StartRefusal(filled) is { } refusal
+            ? ($"run '{run}' of '{workflow.Name}' cannot start: {refusal}. Nothing was made.", checkout.StartNamed(filled))
+            : (null, null);
     }
 
     /// <summary>

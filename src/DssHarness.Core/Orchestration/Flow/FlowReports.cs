@@ -52,6 +52,11 @@ public sealed record FlowRecordPath(string What, string Path);
 /// <param name="Spent">What the run has spent of its budget: usd, tokens and minutes, and why the dollars are not known past usd where a part's cost could not be counted; null where the command did not reach a run's state.</param>
 /// <param name="ExitCode">The command's exit code.</param>
 /// <param name="Records">Every record the command wrote or took, by what it is and where it is.</param>
+/// <param name="Named">
+/// The whole of each list the command's line names part of (<see cref="Output.Names.Line"/>), by the list's name - the
+/// line says <c>all in --json named.&lt;list&gt;</c>: the staged paths a start is refused over among them; null where
+/// its line names none.
+/// </param>
 public sealed record FlowRunResult(
     string? Status,
     string? Run,
@@ -63,8 +68,13 @@ public sealed record FlowRunResult(
     IReadOnlyList<string> LeftForAPerson,
     FlowBudgetRecord? Spent,
     int ExitCode,
-    IReadOnlyList<FlowRecordPath> Records)
+    IReadOnlyList<FlowRecordPath> Records,
+    IReadOnlyDictionary<string, IReadOnlyList<string>>? Named = null)
 {
+    /// <summary>Where a line of a run's command says a list it names part of is whole: the member <paramref name="list"/> of the document's <c>named</c>.</summary>
+    /// <param name="list">The list's name, as <see cref="Named"/> keys it.</param>
+    public static string WholeIn(string list) => $"--json named.{list}";
+
     /// <summary>A command of a run that reached no run's state: its code and its line, and nothing else.</summary>
     /// <param name="exitCode">The code it exits with.</param>
     /// <param name="summary">The line it ends on.</param>
@@ -156,6 +166,14 @@ public static class FlowReports
             records[record.What] = record.Path;
         }
 
+        // Every list the line names part of, whole: never cut to what the line could name.
+        var named = new JsonObject();
+
+        foreach (var (list, items) in result.Named ?? new Dictionary<string, IReadOnlyList<string>>())
+        {
+            named[list] = new JsonArray([.. items.Select(item => JsonValue.Create(item))]);
+        }
+
         return ReportJson.Stopped(
             result.ExitCode,
             result.Summary,
@@ -177,6 +195,7 @@ public static class FlowReports
                 ["leftForAPerson"] = new JsonArray([.. result.LeftForAPerson.Select(line => JsonValue.Create(line))]),
                 ["spent"] = result.Spent is { } spent ? SpentOf(spent) : null,
                 ["records"] = records,
+                ["named"] = named,
             });
     }
 
