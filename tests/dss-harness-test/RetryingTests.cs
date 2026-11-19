@@ -187,6 +187,22 @@ public sealed class RetryingTests
     }
 
     /// <summary>
+    /// The doubling's one rule, for a run of tries and for a wait kept between runs: the first wait where there was none,
+    /// the last doubled up to five minutes and then kept, and a first wait already past five minutes kept as given.
+    /// </summary>
+    [Fact]
+    public void Doubled_StartsAtTheFirst_DoublesUpToFiveMinutes_ThenStays()
+    {
+        Assert.Equal(TimeSpan.FromSeconds(2), Retrying.Doubled(null, TimeSpan.FromSeconds(2)));
+        Assert.Equal(TimeSpan.FromSeconds(8), Retrying.Doubled(TimeSpan.FromSeconds(4), TimeSpan.FromSeconds(2)));
+        Assert.Equal(Waits.SaidEvery, Retrying.Doubled(TimeSpan.FromSeconds(256), TimeSpan.FromSeconds(2)));
+        Assert.Equal(Waits.SaidEvery, Retrying.Doubled(Waits.SaidEvery, TimeSpan.FromSeconds(2)));
+        Assert.Equal(TimeSpan.FromHours(1), Retrying.Doubled(TimeSpan.FromHours(1), TimeSpan.FromSeconds(2)));
+        Assert.Equal(TimeSpan.FromMinutes(30), Retrying.Doubled(null, TimeSpan.FromMinutes(30)));
+        Assert.Throws<ArgumentOutOfRangeException>(() => Retrying.Doubled(null, TimeSpan.Zero));
+    }
+
+    /// <summary>
     /// A wait longer than what is left of the user's bound ends at the bound, and the run with it, saying so - told as
     /// before until then, and with no further try: the person's bound ends an unattended run, a cause's long wait
     /// included.

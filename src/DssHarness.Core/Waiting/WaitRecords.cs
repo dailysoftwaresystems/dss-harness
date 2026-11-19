@@ -45,6 +45,11 @@ public sealed record WaitTold(string Subject, TimeSpan Waited, string? Holder, s
     }
 }
 
+/// <summary>Where a work a wait watches for silence stands (<see cref="Waits.WhileMovingAsync"/>): when it last moved, and what it has to add.</summary>
+/// <param name="At">When it last moved - a byte read, a line written - as a timestamp of the watch's clock.</param>
+/// <param name="Progress">Where it stands, as a line says it after a colon; <see langword="null"/> where it has nothing to add.</param>
+public readonly record struct WaitMoved(long At, string? Progress);
+
 /// <summary>Who holds what a wait waits for: its process, what tells that process from a later one, and its name.</summary>
 /// <param name="ProcessId">The holder's process id, as its record gives it.</param>
 /// <param name="Stamp">

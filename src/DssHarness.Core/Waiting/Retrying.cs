@@ -102,19 +102,40 @@ public static class Retrying
             return new RetryEnd<T>(RetryEndKind.Cancelled, default, tries, last);
         }
 
-        // The doubling wait due now, and the next one: doubled until it reaches the cadence a wait is told at, then kept
-        // there - and a first wait already past it kept as given.
+        // The doubling wait due now, and the next one, by the one rule of it (Doubled).
         TimeSpan Doubling()
         {
             var due = doubled;
-
-            if (doubled < Waits.SaidEvery)
-            {
-                doubled = doubled + doubled < Waits.SaidEvery ? doubled + doubled : Waits.SaidEvery;
-            }
-
+            doubled = Doubled(doubled, watch.FirstWait);
             return due;
         }
+    }
+
+    /// <summary>
+    /// The wait that follows <paramref name="last"/> where no cause names its length: <paramref name="first"/> where there
+    /// was none, else the last doubled until it reaches the cadence a wait is told at (<see cref="Waits.SaidEvery"/>), then
+    /// kept there - a cadence, never a bound, since the tries go on - and a first wait already past it kept as given. The
+    /// one rule of the doubling, for a run of tries here and for a wait kept between runs: a source that asks to be left
+    /// alone and says not for how long, left the next time for twice as long.
+    /// </summary>
+    /// <param name="last">The wait before; <see langword="null"/> where there was none.</param>
+    /// <param name="first">The first wait: the caller's own pace, or a planned value; more than nothing.</param>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="first"/> is no time, or less.</exception>
+    public static TimeSpan Doubled(TimeSpan? last, TimeSpan first)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(first, TimeSpan.Zero);
+
+        if (last is not { } before || before <= TimeSpan.Zero)
+        {
+            return first;
+        }
+
+        if (before >= Waits.SaidEvery)
+        {
+            return before;
+        }
+
+        return before + before < Waits.SaidEvery ? before + before : Waits.SaidEvery;
     }
 
     /// <summary>

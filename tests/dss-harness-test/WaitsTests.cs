@@ -303,6 +303,70 @@ public sealed class WaitsTests
     }
 
     /// <summary>A work that never ends of itself: cancelled when, and only when, its token is.</summary>
+    /// <summary>
+    /// A work that goes on moving is waited for to its end, however far past the user's bound it runs: the bound is a
+    /// silence, never the time a work takes. Told every five minutes with where the work says it stands.
+    /// </summary>
+    [Fact]
+    public async Task AMovingWork_IsWaitedForPastTheBound()
+    {
+        var clock = new TimerClock();
+        var told = new ConcurrentQueue<WaitTold>();
+        var answer = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var moves = 0;
+        var at = clock.GetTimestamp();
+
+        var run = Waits.WhileMovingAsync(
+            _ => answer.Task,
+            () => new WaitMoved(Volatile.Read(ref at), $"{Volatile.Read(ref moves)} moves"),
+            new WaitWatch(Checks, told.Enqueue, TimeSpan.FromMinutes(1), clock),
+            Token);
+
+        for (var step = 0; step < 24; step++)
+        {
+            await clock.WaitingAsync().WaitAsync(ClockDrive.Within, Token);
+            clock.Advance(TimeSpan.FromSeconds(30));
+            Interlocked.Increment(ref moves);
+            Volatile.Write(ref at, clock.GetTimestamp());
+        }
+
+        answer.SetResult(7);
+
+        Assert.Equal(new WaitEnd<int>(WaitEndKind.Done, 7, TimeSpan.FromMinutes(12)), await run.WaitAsync(ClockDrive.Within, Token));
+        Assert.Equal(2, told.Count);
+        Assert.All(told, one => Assert.EndsWith(" moves", one.Progress, StringComparison.Ordinal));
+        Assert.Equal([Waits.SaidEvery, Waits.SaidEvery * 2], told.Select(one => one.Waited));
+    }
+
+    /// <summary>
+    /// A work silent for the user's bound is cancelled there, and the wait ends saying it was the bound - told as before
+    /// until then: a silence is what the bound measures, from the wait's start where the work never moved.
+    /// </summary>
+    [Fact]
+    public async Task ASilentWork_EndsAtTheBound_SayingBound()
+    {
+        var clock = new TimerClock();
+        var told = new ConcurrentQueue<WaitTold>();
+        var given = CancellationToken.None;
+        var before = clock.GetTimestamp() - 1;
+
+        var run = Waits.WhileMovingAsync(
+            token =>
+            {
+                given = token;
+                return Unending<int>(token);
+            },
+            () => new WaitMoved(before, null),
+            new WaitWatch(Checks, told.Enqueue, TimeSpan.FromMinutes(7), clock),
+            Token);
+
+        var end = await ClockDrive.UntilEndedAsync(clock, run, TimeSpan.FromMinutes(1), 60, Token);
+
+        Assert.Equal(new WaitEnd<int>(WaitEndKind.Bound, 0, TimeSpan.FromMinutes(7)), end);
+        Assert.True(given.IsCancellationRequested, "the work is cancelled at the bound");
+        Assert.Equal(["has waited 5m00s for the forge's checks"], told.Select(one => one.Line()));
+    }
+
     private static Task<T> Unending<T>(CancellationToken token)
     {
         var never = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);

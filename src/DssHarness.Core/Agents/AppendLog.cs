@@ -118,6 +118,53 @@ internal sealed class AppendLog : IDisposable
         }
     }
 
+    /// <summary>
+    /// Every line the log holds, whole, in its order, each without its newline: read a piece at a time, so a log of any
+    /// length is read through and never held whole - what a writer that keeps its log compact reads it by.
+    /// </summary>
+    public IEnumerable<string> Lines()
+    {
+        var buffer = new byte[1 << 16];
+        using var line = new MemoryStream();
+        var at = 0L;
+
+        while (true)
+        {
+            int read;
+
+            lock (_gate)
+            {
+                var left = _file.Length - at;
+
+                if (left <= 0)
+                {
+                    yield break;
+                }
+
+                read = (int)Math.Min(buffer.Length, left);
+                _file.ReadExactlyAt(at, buffer.AsSpan(0, read));
+            }
+
+            at += read;
+            var begun = 0;
+
+            for (var end = 0; end < read; end++)
+            {
+                if (buffer[end] != (byte)'\n')
+                {
+                    continue;
+                }
+
+                line.Write(buffer, begun, end - begun);
+                yield return Encoding.UTF8.GetString(line.GetBuffer(), 0, (int)line.Length);
+                line.SetLength(0);
+                begun = end + 1;
+            }
+
+            line.Write(buffer, begun, read - begun);
+        }
+    }
+
     /// <summary>Empties the log, for a log kept to a most: what it held is gone, and the next line is its first.</summary>
     public void Clear()
     {

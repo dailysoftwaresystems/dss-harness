@@ -205,6 +205,26 @@ public sealed class AgentStreamTests
     }
 
     /// <summary>
+    /// A log's lines are read through a piece at a time, each whole and in its order however long: one longer than three
+    /// pieces, and one whose characters a piece's end parts.
+    /// </summary>
+    [Fact]
+    public void ALogsLines_AreReadThroughAPieceAtATime_EachWhole()
+    {
+        using var temp = new TempDirectory();
+        string[] lines = ["first", new string('x', 200_001), new string('\u00e9', 100_000), "last"];
+
+        using var log = AppendLog.Open(Disk(), temp.Combine("lines.jsonl"));
+
+        foreach (var line in lines)
+        {
+            log.Append(line);
+        }
+
+        Assert.Equal(lines, log.Lines());
+    }
+
+    /// <summary>
     /// A line that holds a line break of its own is refused before anything is written: cut after the inner break by a
     /// kill, it would be taken back as half a record that looks whole. No writer here makes one, so the log's refusal is a
     /// guard against its writer's defect, raised as a value out of its range, which no tool tells its model as its fault.

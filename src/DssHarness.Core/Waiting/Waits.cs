@@ -230,6 +230,103 @@ public static class Waits
     }
 
     /// <summary>
+    /// Awaits <paramref name="work"/> to its end for as long as it moves: the user's bound is a silence - the time since
+    /// the work last moved, as <paramref name="moved"/> says - never the time the work takes, so a work that goes on moving,
+    /// however slowly, is waited for to its end. Told as <see cref="ForAsync"/> tells, each time <see cref="SaidEvery"/> has
+    /// passed since the wait last said so, with where the work says it stands.
+    /// </summary>
+    /// <remarks>
+    /// <paramref name="moved"/> is asked at each look: when the work last moved, as a timestamp of the watch's clock - a
+    /// byte read, a line written - and what it has to add. A move before the wait began counts as the wait's start. The
+    /// work is cancelled once its silence reaches the bound, and its own end is still awaited, as <see cref="ForAsync"/>
+    /// awaits it: a work that ends with its answer all the same, past its cancellation, ends <see cref="WaitEndKind.Done"/>.
+    /// A failure of the work's own is raised through.
+    /// </remarks>
+    /// <typeparam name="T">What the work answers.</typeparam>
+    /// <param name="work">The work, given the token that cancels it.</param>
+    /// <param name="moved">When the work last moved, and where it stands.</param>
+    /// <param name="watch">What the wait is told as, the user's bound on a silence, and the clock it is measured on.</param>
+    /// <param name="cancellationToken">Ends the wait, cancelling the work.</param>
+    /// <returns>
+    /// <see cref="WaitEndKind.Done"/> with the work's answer; <see cref="WaitEndKind.Bound"/> where the work ended on the
+    /// cancellation its silence at the user's bound made; <see cref="WaitEndKind.Cancelled"/> where it ended on the
+    /// caller's. Each with how long the wait lasted.
+    /// </returns>
+    /// <exception cref="ArgumentNullException"><paramref name="work"/>, <paramref name="moved"/> or <paramref name="watch"/> is null.</exception>
+    public static async Task<WaitEnd<T>> WhileMovingAsync<T>(Func<CancellationToken, Task<T>> work, Func<WaitMoved> moved, WaitWatch watch, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(work);
+        ArgumentNullException.ThrowIfNull(moved);
+        ArgumentNullException.ThrowIfNull(watch);
+
+        var clock = watch.Clock;
+        var started = clock.GetTimestamp();
+        var saidAt = started;
+        var bounded = false;
+
+        using var stop = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var running = work(stop.Token);
+
+        try
+        {
+            while (!running.IsCompleted)
+            {
+                var now = clock.GetTimestamp();
+                var waited = clock.GetElapsedTime(started, now);
+                var stands = moved();
+                var silent = clock.GetElapsedTime(Math.Max(stands.At, started), now);
+
+                if (silent < TimeSpan.Zero)
+                {
+                    silent = TimeSpan.Zero;
+                }
+
+                // As in ForAsync: the bound weighs only until the work is cancelled, past which the wait is its draining.
+                if (!stop.IsCancellationRequested && watch.Bound is { } bound && silent >= bound)
+                {
+                    bounded = true;
+                    stop.Cancel();
+                    continue;
+                }
+
+                var sinceSaid = clock.GetElapsedTime(saidAt, now);
+
+                if (sinceSaid >= SaidEvery)
+                {
+                    watch.Tell(new WaitTold(watch.Subject, waited, null, stands.Progress));
+                    (saidAt, sinceSaid) = (now, TimeSpan.Zero);
+                }
+
+                var pause = SaidEvery - sinceSaid;
+
+                if (!stop.IsCancellationRequested && watch.Bound is { } left)
+                {
+                    pause = Shorter(pause, left - silent);
+                }
+
+                using var paused = new CancellationTokenSource();
+                _ = await Task.WhenAny(running, Task.Delay(pause, clock, paused.Token)).ConfigureAwait(false);
+                paused.Cancel();
+            }
+        }
+        catch
+        {
+            stop.Cancel();
+            throw;
+        }
+
+        try
+        {
+            var answer = await running.ConfigureAwait(false);
+            return new WaitEnd<T>(WaitEndKind.Done, answer, clock.GetElapsedTime(started));
+        }
+        catch (OperationCanceledException) when (stop.IsCancellationRequested)
+        {
+            return new WaitEnd<T>(bounded ? WaitEndKind.Bound : WaitEndKind.Cancelled, default, clock.GetElapsedTime(started));
+        }
+    }
+
+    /// <summary>
     /// Waits while something is held by a holder that lives: asks <paramref name="holder"/> who holds it, and looks again
     /// every <see cref="LooksAgainEvery"/> for as long as the holder it names lives by <paramref name="identity"/>.
     /// </summary>
