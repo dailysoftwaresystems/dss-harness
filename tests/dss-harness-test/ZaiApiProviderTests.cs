@@ -360,103 +360,82 @@ public sealed class ZaiApiProviderTests : IDisposable
     }
 
     /// <summary>
-    /// Once what the model read and wrote passes 70% of its context, the next request says it begins sending the
-    /// conversation shortened - before the last six turns that called tools - and sends every answer to a call before
-    /// them in its short form, the calls and every other message as stored; a later request given that point sends the
-    /// same; past 90% after that, the context is full and nothing is sent.
+    /// A conversation past 70% of its model's context - and past 90% - is sent whole, every answer to a call as it was
+    /// stored: nothing is stubbed while the context still holds the next request. Red where the answers older than the
+    /// last turns that called tools go out in a short form past 70% (ShortenAt).
     /// </summary>
     [Fact]
-    public async Task AConversation_IsSentShortened_PastMostOfItsContext()
+    public async Task AConversationPastSeventyPercent_KeepsItsAnswersWhole()
     {
         // answer.sse reads 206 and writes 8: 214 of a context of 300 is past 70%, and of 230 past 90%.
         var messages = Calling(8);
-        var provider = Provider(contextTokens: 300);
-        _endpoint.Then(ZaiApiFixtures.Reply("answer.sse")).Then(ZaiApiFixtures.Reply("answer.sse")).Then(ZaiApiFixtures.Reply("answer.sse"));
+        _endpoint.Then(ZaiApiFixtures.Reply("answer.sse")).Then(ZaiApiFixtures.Reply("answer.sse"));
+        _endpoint.Then(ZaiApiFixtures.Reply("answer.sse")).Then(ZaiApiFixtures.Reply("answer.sse"));
 
-        await Sent(Request() with { Messages = messages }, provider: provider);
-        var shortening = await Sent(Request() with { Messages = messages }, provider: provider);
-        var sent = Messages(_endpoint.Asked[1]);
+        foreach (var contextTokens in new long[] { 300, 230 })
+        {
+            var provider = Provider();
+            await Sent(Request() with { Messages = messages, ContextTokens = contextTokens }, provider: provider);
+            var past = await Sent(Request() with { Messages = messages, ContextTokens = contextTokens }, provider: provider);
 
-        // The eight turns begin at 1, 3, ... 15: the last six at 5.
-        Assert.Equal(new ChatPart.Shortened(5), shortening[0]);
-        Assert.Equal(ZaiApiRequest.ShortAnswer, sent[3]!["content"]!.GetValue<string>());
-        Assert.Equal(ZaiApiRequest.ShortAnswer, sent[5]!["content"]!.GetValue<string>());
-        Assert.Equal("answer 3", sent[7]!["content"]!.GetValue<string>());
-        Assert.Equal(messages[3], sent[4]!.ToJsonString(ApiBody.Json));
-        Assert.Equal(messages.Count + 1, sent.Count);
+            Assert.IsType<ChatPart.Answered>(past[^1]);
+            Assert.DoesNotContain(past, part => part is ChatPart.Shortened);
+        }
 
-        var again = await Sent(Request() with { Messages = messages, ShortenedBefore = 5 }, provider: provider);
-
-        Assert.DoesNotContain(again, part => part is ChatPart.Shortened);
-        Assert.Equal(sent.ToJsonString(), Messages(_endpoint.Asked[2]).ToJsonString());
-
-        var full = Provider(contextTokens: 230);
-        _endpoint.Then(ZaiApiFixtures.Reply("answer.sse"));
-        await Sent(Request() with { Messages = messages, ShortenedBefore = 5 }, provider: full);
-
-        Assert.Equal(
-            new ChatFailure(ChatFailureKind.ContextFull, "the conversation holds 214 tokens, past 90% of the 230 the context of 'glm-5.3' holds, and is sent shortened already"),
-            Assert.IsType<ChatPart.Failed>(Assert.Single(await Sent(Request() with { Messages = messages, ShortenedBefore = 5 }, provider: full))).Failure);
+        Assert.All(_endpoint.Asked, asked => Assert.Equal(messages, Messages(asked).Skip(1).Select(message => message!.ToJsonString(ApiBody.Json))));
         Assert.Equal(4, _endpoint.Asked.Count);
     }
 
     /// <summary>
-    /// A conversation is sent whole below 70% of its model's context, and past it where it holds no more than six turns
-    /// that called tools - nothing is older than them; and past 90% where it was never shortened, it is sent all the same,
-    /// shortened from then on: the API says when it is full.
+    /// Once what the model last read and wrote is the whole of its context, the next request - which holds that and more
+    /// - would pass it, and is not sent: the context is full, said with what the provider counted, for the step's own
+    /// answer to a full context - its compaction - to carry the work on; no request is ever sent with its answers stubbed.
+    /// The measure is the context of the model each request asks, as its entry says it.
     /// </summary>
     [Fact]
-    public async Task AConversation_IsSentWhole_WhereNothingIsShortened()
+    public async Task AConversationThatWouldPassTheContext_IsFullNotStubbed()
     {
-        var below = Provider(contextTokens: 400);
-        var few = Provider(contextTokens: 300);
-        var never = Provider(contextTokens: 230);
-        _endpoint.Then(ZaiApiFixtures.Reply("answer.sse")).Then(ZaiApiFixtures.Reply("answer.sse"));
-        _endpoint.Then(ZaiApiFixtures.Reply("answer.sse")).Then(ZaiApiFixtures.Reply("answer.sse"));
+        var messages = Calling(8);
+        var provider = Provider();
         _endpoint.Then(ZaiApiFixtures.Reply("answer.sse")).Then(ZaiApiFixtures.Reply("answer.sse"));
 
-        await Sent(Request() with { Messages = Calling(8) }, provider: below);
-        Assert.DoesNotContain(await Sent(Request() with { Messages = Calling(8) }, provider: below), part => part is ChatPart.Shortened);
-        await Sent(Request() with { Messages = Calling(6) }, provider: few);
-        Assert.DoesNotContain(await Sent(Request() with { Messages = Calling(6) }, provider: few), part => part is ChatPart.Shortened);
-        await Sent(Request() with { Messages = Calling(8) }, provider: never);
-        Assert.Equal(new ChatPart.Shortened(5), (await Sent(Request() with { Messages = Calling(8) }, provider: never))[0]);
+        await Sent(Request() with { Messages = messages, ContextTokens = 214 }, provider: provider);
+        var full = await Sent(Request() with { Messages = messages, ContextTokens = 214 }, provider: provider);
+        var roomier = await Sent(Request() with { Messages = messages, ContextTokens = 215 }, provider: provider);
 
-        Assert.All(new[] { _endpoint.Asked[1], _endpoint.Asked[3] }, asked => Assert.DoesNotContain(ZaiApiRequest.ShortAnswer, asked.Body, StringComparison.Ordinal));
-        Assert.Equal(6, _endpoint.Asked.Count);
+        Assert.Equal(new ChatFailure(ChatFailureKind.ContextFull, ZaiApiProvider.ContextFull(214, 214, Model)), Assert.IsType<ChatPart.Failed>(Assert.Single(full)).Failure);
+        Assert.Equal(
+            $"the conversation's last answer had '{Model}' read and write 214 tokens, which its next request holds and more, and the model's context holds 214: the next request would pass it",
+            ZaiApiProvider.ContextFull(214, 214, Model));
+        Assert.IsType<ChatPart.Answered>(roomier[^1]);
+        Assert.Equal(2, _endpoint.Asked.Count);
+        Assert.All(_endpoint.Asked, asked => Assert.Equal(messages, Messages(asked).Skip(1).Select(message => message!.ToJsonString(ApiBody.Json))));
     }
 
     /// <summary>
     /// Only what the next request holds is weighed against the context: an answer cut off at its length may be thrown
-    /// away, so what it wrote is not counted; and past 90% the context is full only as measured on a request sent
-    /// shortened - the request asked again after the one that began shortening the conversation failed is sent, never
-    /// refused by the measure of the conversation whole.
+    /// away, so what it wrote is not counted - the request after it is sent, never refused by the measure of what it
+    /// wrote - and a context the entry says nothing of weighs nothing.
     /// </summary>
     [Fact]
     public async Task OnlyWhatTheNextRequestHolds_IsWeighedAgainstTheContext()
     {
-        // cut-off.sse reads 205 and writes 24: 205 of a context of 300 is below 70%, 229 past it.
+        // cut-off.sse reads 205 and writes 24: 205 of a context of 229 leaves room, 229 would not.
         var messages = Calling(8);
-        var cut = Provider(contextTokens: 300);
+        var cut = Provider();
         _endpoint.Then(ZaiApiFixtures.Reply("cut-off.sse")).Then(ZaiApiFixtures.Reply("answer.sse"));
 
-        await Sent(Request() with { Messages = messages }, provider: cut);
+        await Sent(Request() with { Messages = messages, ContextTokens = 229 }, provider: cut);
 
-        Assert.DoesNotContain(await Sent(Request() with { Messages = messages }, provider: cut), part => part is ChatPart.Shortened);
+        Assert.IsType<ChatPart.Answered>((await Sent(Request() with { Messages = messages, ContextTokens = 229 }, provider: cut))[^1]);
 
-        // answer.sse reads 206 and writes 8: 214 of a context of 230 is past 90%, measured on the conversation whole.
-        var retried = Provider(contextTokens: 230);
-        _endpoint.Then(ZaiApiFixtures.Reply("answer.sse")).Then(ApiReply.Status(529, string.Empty)).Then(ZaiApiFixtures.Reply("answer.sse"));
+        var unsaid = Provider();
+        _endpoint.Then(ZaiApiFixtures.Reply("answer.sse")).Then(ZaiApiFixtures.Reply("answer.sse"));
 
-        await Sent(Request() with { Messages = messages }, provider: retried);
-        var failed = await Sent(Request() with { Messages = messages }, provider: retried);
-        var again = await Sent(Request() with { Messages = messages, ShortenedBefore = 5 }, provider: retried);
+        await Sent(Request() with { Messages = messages }, provider: unsaid);
 
-        Assert.Equal(new ChatPart.Shortened(5), failed[0]);
-        Assert.Equal(ChatFailureKind.Transient, Assert.IsType<ChatPart.Failed>(failed[^1]).Failure.Kind);
-        Assert.IsType<ChatPart.Answered>(again[^1]);
-        Assert.Contains(ZaiApiRequest.ShortAnswer, _endpoint.Asked[^1].Body, StringComparison.Ordinal);
-        Assert.Equal(5, _endpoint.Asked.Count);
+        Assert.IsType<ChatPart.Answered>((await Sent(Request() with { Messages = messages }, provider: unsaid))[^1]);
+        Assert.Equal(4, _endpoint.Asked.Count);
     }
 
     /// <summary>Every stored answer the tests replay, by its name.</summary>
@@ -531,8 +510,8 @@ public sealed class ZaiApiProviderTests : IDisposable
     /// <summary>A stream of <paramref name="chunks"/>, then its end.</summary>
     private static string Chunks(params string[] chunks) => string.Concat(chunks) + "data: [DONE]\n\n";
 
-    private ZaiApiProvider Provider(ZaiApiSettings? settings = null, long contextTokens = 1_000_000)
-        => new(_connection, Api, settings ?? ZaiApiSettings.Of(null), contextTokens);
+    private ZaiApiProvider Provider(ZaiApiSettings? settings = null)
+        => new(_connection, Api, settings ?? ZaiApiSettings.Of(null), records: null);
 
     /// <summary>The turn the next request was answered with.</summary>
     private async Task<ChatTurn> Turn() => Assert.IsType<ChatPart.Answered>((await Sent(Request()))[^1]).Turn;

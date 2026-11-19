@@ -31,6 +31,7 @@ public sealed class ClaudeApiClient(
     /// <summary>The client's key under <c>agentClients</c>.</summary>
     public const string ClientName = "claude-api";
 
+    private readonly IFileSystem _fileSystem = fileSystem ?? throw new ArgumentNullException(nameof(fileSystem));
     private readonly ToolLoop _loop = new(fileSystem, tools, clock, wait, jitter);
     private readonly ApiConnection _connection = connection ?? throw new ArgumentNullException(nameof(connection));
 
@@ -70,9 +71,10 @@ public sealed class ClaudeApiClient(
         }
 
         var entries = run.Entries!;
-        var provider = new ClaudeApiProvider(_connection, entries.Provider.Api, ClaudeApiSettings.Of(entries.Client));
+        var records = new ApiRecords(_fileSystem, run.StepDirectory);
+        var provider = new ClaudeApiProvider(_connection, entries.Provider.Api, ClaudeApiSettings.Of(entries.Client), records);
 
-        return _loop.RunAsync(WithNativeSearch(_connection, run, entries), events, provider, ToolLoopTerms.Of(ClientName, entries), cancellationToken);
+        return _loop.RunAsync(WithNativeSearch(_connection, run, entries, records), events, provider, ToolLoopTerms.Of(ClientName, entries), cancellationToken);
     }
 
     /// <summary>
@@ -84,8 +86,33 @@ public sealed class ClaudeApiClient(
     /// <param name="connection">How the native search's request is posted.</param>
     /// <param name="run">The run.</param>
     /// <param name="entries">The run's entries: its provider, model and client.</param>
-    internal static AgentRun WithNativeSearch(ApiConnection connection, AgentRun run, AgentEntries entries)
+    /// <param name="records">Where the body of a search the API refuses is kept whole: the step's records.</param>
+    internal static AgentRun WithNativeSearch(ApiConnection connection, AgentRun run, AgentEntries entries, ApiRecords? records)
         => run.Ground is { SideTask: true } && run.WebSearch is not null && run.Credential?.Keys is [_, ..]
-            ? run with { NativeSearch = new ClaudeApiNativeSearch(connection, entries.Provider.Api) }
+            ? run with { NativeSearch = new ClaudeApiNativeSearch(connection, entries.Provider.Api, records, MostOutput(run, entries)) }
             : run;
+
+    /// <summary>
+    /// Each model the loop may ask the native search of - the run's own, then each later entry's of the same provider and
+    /// client the loop walks to, up to the first of another - with the most a reply of it holds, as its entry says it.
+    /// </summary>
+    private static Dictionary<string, long> MostOutput(AgentRun run, AgentEntries entries)
+    {
+        var most = new Dictionary<string, long>(StringComparer.Ordinal) { [run.Model!] = entries.Model.MaxOutputTokens };
+
+        foreach (var entry in run.Fallback)
+        {
+            if (!string.Equals(entry.Provider, entries.Provider.Name, StringComparison.Ordinal) || !string.Equals(entry.Client, ClientName, StringComparison.Ordinal))
+            {
+                break;
+            }
+
+            if (entry.Entries is { } its)
+            {
+                most.TryAdd(entry.Model, its.Model.MaxOutputTokens);
+            }
+        }
+
+        return most;
+    }
 }

@@ -58,20 +58,26 @@ public static partial class HelpTopics
             + "the budget runs none of them. The conversation is kept in the provider's own form under the agent's "
             + $"{OrchestratorLayout.SessionsDirectoryName}/<id>/, each message as it was sent and received and sent back so with "
             + "every later request, one line for each point where the history is whole - a turn that called tools stored with "
-            + "their answers - and a step that goes on in it sends what it began with; where a provider begins sending it "
-            + $"shortened to keep it within its model's context, the point is kept beside it ({Agents.StoredConversation.ShortenedFileName}) "
-            + "and given with every later request, a notice saying so once. The first request asks for a quarter of "
+            + "their answers - and a step that goes on in it sends what it began with, every request the conversation whole. "
+            + "The first request asks for a quarter of "
             + "the model's maxOutputTokens. A turn cut off at its length that called no tool, its request holding it to no "
             + $"schema, is stored and nudged on, {Agents.Loop.ToolLoop.MostNudges} times at most; one cut off while it called a "
             + "tool - its calls never run - before it wrote anything, or while its request held it to a schema, which the answer "
             + "to a nudge would be held to whole, is thrown away and asked again with twice the room, up to the most; "
             + $"past either the step is {nameof(Agents.AgentRunStatus.Truncated)}. A turn the provider paused is sent again with "
-            + $"nothing added, {Agents.Loop.ToolLoop.MostPausesInARow} in a row failing the step. An answer gone on from, cut off "
-            + "or paused, is every piece of it. A failed request is asked again "
+            + "nothing added for as long as the provider pauses it, never counted - each pause told with how long the turn has "
+            + "waited - until the step's own bounds end it: its time, its budget, a handoff or an interrupt. An answer gone on "
+            + "from, cut off or paused, is every piece of it. A failed request is asked again "
             + $"up to {Agents.Loop.ToolLoopTerms.DefaultMaxRetries} times after a wait that doubles from "
             + $"{Agents.Loop.ToolLoop.FirstWait.TotalSeconds:0} s to {Agents.Loop.ToolLoop.LongestDoubledWait.TotalSeconds:0} s, "
             + "or the one the provider names; a service failing past them, or naming such a wait, fails the "
             + "step, and one silent past the stall bound - nothing of it heard, not even the provider's keep-alive - stalls it; "
+            + "a connection is given no time of its own to connect in - the operating system's own retries end one that never "
+            + "comes - and the body of a request the provider refused is read to its end, kept whole as it comes in the "
+            + $"step's {Agents.Http.ApiRecords.DirectoryName}/ beside its records, a notice every "
+            + $"{Waiting.Waits.SaidEvery.TotalMinutes:0} minutes saying how much has come while it still does, and said in "
+            + "the provider's own words where it is an error of the provider's, else whole where it was held or by its size "
+            + "and the file that keeps it; "
             + "a model the provider does not serve the key never starts the "
             + "step before the provider begins an answer with the model asked and fails it once one began. The engine's fallback works inside the one conversation: a key "
             + $"the provider refuses - said, and passed over for the rest of the run - an account at its limit (a rate limit past those tries, or naming a wait past {Agents.Loop.ToolLoopTerms.DefaultMaxRetryWait.TotalSeconds:0} s: "
@@ -149,9 +155,9 @@ public static partial class HelpTopics
     }
 
     /// <summary>
-    /// The glm client: what each request to Z.AI is and carries, the one rewrite that keeps a conversation within its
-    /// model's context, its keys, and what each of Z.AI's failures is to a step - its codes from the one table of them, each
-    /// name and number from its owner.
+    /// The glm client: what each request to Z.AI is and carries, the conversation sent whole until its model's context is
+    /// full, its keys, and what each of Z.AI's failures is to a step - its codes from the one table of them, each name and
+    /// number from its owner.
     /// </summary>
     private static string ZaiApiClientProse()
     {
@@ -180,13 +186,11 @@ public static partial class HelpTopics
             + "no write, so a budget needs the model's input, cached-input and output prices. Each answer's reasoning is "
             + "stored with it and sent back; Z.AI leaves it out of what the model reads in later turns unless "
             + $"agentClients.{Client}.preserveThinking is true (false where nothing is said), which keeps it "
-            + "(thinking.clear_thinking: false). Z.AI clears nothing of a conversation itself, so once what the model last "
-            + $"read and wrote passes {Percent(Agents.ZaiApi.ZaiApiProvider.ShortenAt)} of the model's contextTokens, the "
-            + $"answers to the calls of every turn but the last {Agents.ZaiApi.ZaiApiProvider.WholeTurns} that called tools "
-            + "go out in a short form that says so, from that request on - the calls and the reasoning as they were, and "
-            + "what is stored whole; past "
-            + $"{Percent(Agents.ZaiApi.ZaiApiProvider.FullAt)} after that, the context is exhausted "
-            + $"({nameof(Agents.AgentRunStatus.ContextExhausted)}). Three keys are both API clients' - requestExtras, "
+            + "(thinking.clear_thinking: false). Z.AI clears nothing of a conversation itself, and every request sends it "
+            + "whole, each answer to a call as it was; once what the model last read and wrote - Z.AI's own count of it - "
+            + "reaches the model's contextTokens, the next request would pass the context and is not sent: the context is "
+            + $"exhausted ({nameof(Agents.AgentRunStatus.ContextExhausted)}), as where Z.AI refuses a prompt too long, and "
+            + "the step's answer to a full context - its compaction among them - carries the work on. Three keys are both API clients' - requestExtras, "
             + $"refused where it sets what the tool sends itself, and maxRetries and maxRetryWaitSeconds, as the {Agents.ClaudeApi.ClaudeApiClient.ClientName} "
             + $"client's above - and one is {Client}'s alone: preserveThinking. A failure is read by Z.AI's code first: "
             + codes
@@ -244,7 +248,4 @@ public static partial class HelpTopics
         Agents.Loop.ChatFailureKind.Unserved => "is a model the provider does not serve the key",
         _ => "fails the step",
     };
-
-    /// <summary>A share as the help says it: 0.7 as 70%.</summary>
-    private static string Percent(double share) => $"{(int)Math.Round(share * 100)}%";
 }

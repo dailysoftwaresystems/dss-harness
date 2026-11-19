@@ -1,8 +1,9 @@
 using System.Globalization;
-using System.Text.Json;
+using System.Text;
 using System.Text.RegularExpressions;
 using DssHarness.Core.Agents.Http;
 using DssHarness.Core.Agents.Loop;
+using DssHarness.Core.Text;
 
 namespace DssHarness.Core.Agents.ClaudeApi;
 
@@ -23,8 +24,14 @@ namespace DssHarness.Core.Agents.ClaudeApi;
 /// and an overload, a server's error, a request timed out or a conflict, a network that failed and a stream cut, the
 /// service failing for now.
 /// </remarks>
-public static partial class ClaudeApiFailures
+public static class ClaudeApiFailures
 {
+    /// <summary>What an error of the API's says of itself, by each member's path: its type, its message, the request, and the code its details name.</summary>
+    private static readonly IReadOnlyList<IReadOnlyList<string>> ErrorMembers = [["error", "type"], ["error", "message"], ["request_id"], ["error", "details", "error_code"]];
+
+    /// <summary>When the API says access resumes, as its sentence of a spend limit says it.</summary>
+    private static readonly Regex RegainsAccess = LinearRegex.Compile(@"regain access on (?<date>\d{4}-\d{2}-\d{2}) at (?<time>\d{2}:\d{2}) UTC");
+
     /// <summary>What the error's details name a request refused at its organization's monthly spend cap: a 429 that no wait mends.</summary>
     public const string SpendCapCode = "enforced_spend_limit_reached";
 
@@ -123,38 +130,39 @@ public static partial class ClaudeApiFailures
     private static bool FormatTooLarge(int? status, string? type, string message)
         => (status == 400 || (status is null && type == "invalid_request_error")) && message.Contains(GrammarTooLarge, StringComparison.OrdinalIgnoreCase);
 
-    /// <summary>An error's type, message and request, and the code its details name, as the API writes them; nulls where the body is no error of its.</summary>
-    private static (string? Type, string? Message, string? Request, string? Code) Read(string body)
+    /// <summary>
+    /// A refused body's error - its type, message and request, and the code its details name - read as it streams from
+    /// where it is kept, never whole; nulls where the body is no error of the API's.
+    /// </summary>
+    private static (string? Type, string? Message, string? Request, string? Code) Read(ApiRefusedBody body)
     {
-        try
-        {
-            using var document = JsonDocument.Parse(body);
-            var root = document.RootElement;
+        using var stream = body.Open();
+        return Read(stream);
+    }
 
-            if (root.ValueKind != JsonValueKind.Object || !root.TryGetProperty("error", out var error) || error.ValueKind != JsonValueKind.Object)
-            {
-                return (null, null, null, null);
-            }
+    /// <summary>An error's type, message and request, and the code its details name, as the API writes them; nulls where the data is no error of its.</summary>
+    private static (string? Type, string? Message, string? Request, string? Code) Read(string data)
+    {
+        using var stream = new MemoryStream(Encoding.UTF8.GetBytes(data), writable: false);
+        return Read(stream);
+    }
 
-            return (
-                ApiAnswers.Text(error, "type"),
-                ApiAnswers.Text(error, "message"),
-                ApiAnswers.Text(root, "request_id"),
-                ApiAnswers.Member(error, "details") is { } details ? ApiAnswers.Text(details, "error_code") : null);
-        }
-        catch (JsonException)
-        {
-            return (null, null, null, null);
-        }
+    /// <summary>What an error of the API's says of itself (<see cref="ErrorMembers"/>), read from <paramref name="json"/> as it streams.</summary>
+    private static (string? Type, string? Message, string? Request, string? Code) Read(Stream json)
+    {
+        var members = ApiAnswers.Members(json, ErrorMembers);
+
+        return (
+            members.GetValueOrDefault("error.type"),
+            members.GetValueOrDefault("error.message"),
+            members.GetValueOrDefault("request_id"),
+            members.GetValueOrDefault("error.details.error_code"));
     }
 
     /// <summary>When the API says access resumes - "You will regain access on 2026-09-01 at 00:00 UTC" - where it says it; null where it does not.</summary>
     private static DateTimeOffset? Resumes(string message)
-        => RegainsAccess().Match(message) is { Success: true } said
+        => RegainsAccess.Match(message) is { Success: true } said
             && DateTimeOffset.TryParseExact($"{said.Groups["date"].Value} {said.Groups["time"].Value}", "yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var at)
                 ? at
                 : null;
-
-    [GeneratedRegex(@"regain access on (?<date>\d{4}-\d{2}-\d{2}) at (?<time>\d{2}:\d{2}) UTC", RegexOptions.CultureInvariant)]
-    private static partial Regex RegainsAccess();
 }

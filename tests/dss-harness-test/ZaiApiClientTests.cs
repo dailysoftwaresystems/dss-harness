@@ -109,37 +109,33 @@ public sealed class ZaiApiClientTests : IDisposable
     }
 
     /// <summary>
-    /// Once the conversation passes most of its model's context, the loop stores where the provider began sending it
-    /// shortened, and every later request - a later step's among them - sends what it did: older answers in their short
-    /// form, the calls and the rest whole.
+    /// A conversation whose next request would pass its model's context is never sent with its answers stubbed: the
+    /// request is not sent, the run ends with the context exhausted - what the engine answers with its compaction - its
+    /// conversation stored whole; and the run given the compaction begins a conversation of its own from it, sent whole.
+    /// Red where older answers go out in a short form.
     /// </summary>
     [Fact]
-    public async Task AConversationSentShortened_IsSentSoByEveryLaterRequest()
+    public async Task AConversationThatWouldPassTheContext_IsCompactedNotStubbed()
     {
-        // tool-use.sse reads 217 and writes 13 - 230 of a context of 320, past 70% - and asks for one call each turn: the
-        // eighth request holds seven turns that called tools, and the first turn's answer, message 2, is the one older.
-        for (var turn = 0; turn < 8; turn++)
-        {
-            _endpoint.Then(ZaiApiFixtures.Reply("tool-use.sse"));
-        }
+        // tool-use.sse reads 217 and writes 13: 230, the whole context of 230, so the request after it would pass it.
+        _endpoint.Then(ZaiApiFixtures.Reply("tool-use.sse")).Then(ZaiApiFixtures.Reply("answer.sse"));
+        var small = Entries() with { Model = Glm53(contextTokens: 230) };
 
-        _endpoint.Then(ZaiApiFixtures.Reply("answer.sse")).Then(ZaiApiFixtures.Reply("answer.sse"));
-        var small = Entries() with { Model = Glm53(contextTokens: 320) };
+        var full = await Ran(Run() with { Entries = small });
+        var stored = File.ReadAllLines(Path.Combine(_sessions, full.Session!, StoredConversation.ConversationFileName));
 
-        var shortened = await Ran(Run() with { Entries = small, Limits = new AgentLimits(20, null, null, null) });
-        var goingOn = await Ran(Run() with { Entries = small, UserPrompt = "go on", Conversation = new AgentSessionRef(ZaiApiClient.ClientName, "zai", shortened.Session!) });
+        Assert.Equal(AgentRunStatus.ContextExhausted, full.Status);
+        Assert.Contains(ZaiApiProvider.ContextFull(230, 230, Model), full.Error, StringComparison.Ordinal);
+        Assert.Single(_endpoint.Asked);
+        Assert.Contains("alpha", stored[^1], StringComparison.Ordinal);
 
-        var directory = Path.Combine(_sessions, shortened.Session!);
-        var before = JsonNode.Parse(File.ReadAllText(Path.Combine(directory, StoredConversation.ShortenedFileName)))!["before"]!.GetValue<int>();
-        var later = ClaudeApiClientTests.Messages(_endpoint.Asked[^1].Body);
+        const string Compacted = "The work so far, compacted by the engine: a.txt reads alpha.";
+        var compacted = await Ran(Run() with { Entries = small, Compaction = Compacted });
+        var sent = ClaudeApiClientTests.Messages(_endpoint.Asked[^1].Body);
 
-        Assert.Equal((AgentRunStatus.Completed, AgentRunStatus.Completed), (shortened.Status, goingOn.Status));
-        Assert.Equal(3, before);
-        Assert.Contains(_events.All.OfType<Notice>(), notice => notice.Text.Contains($"is sent shortened before message {before} from now on", StringComparison.Ordinal));
-        Assert.Equal(ZaiApiRequest.ShortAnswer, JsonNode.Parse(later[3])!["content"]!.GetValue<string>());
-        Assert.Contains("alpha", JsonNode.Parse(later[1 + before + 1])!["content"]!.GetValue<string>(), StringComparison.Ordinal);
-        Assert.DoesNotContain(ZaiApiRequest.ShortAnswer, _endpoint.Asked[1].Body, StringComparison.Ordinal);
-        Assert.All(File.ReadAllLines(Path.Combine(directory, StoredConversation.ConversationFileName)), line => Assert.DoesNotContain(ZaiApiRequest.ShortAnswer, line, StringComparison.Ordinal));
+        Assert.Equal(AgentRunStatus.Completed, compacted.Status);
+        Assert.NotEqual(full.Session, compacted.Session);
+        Assert.Equal(Compacted, JsonNode.Parse(sent[1])!["content"]!.GetValue<string>());
     }
 
     /// <summary>The fields the client's entry adds, and its keeping of the reasoning across turns, reach every request of the step.</summary>

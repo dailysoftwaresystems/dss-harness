@@ -5,6 +5,7 @@ using System.Text.Json.Nodes;
 using DssHarness.Core.Agents.Http;
 using DssHarness.Core.Agents.Loop;
 using DssHarness.Core.Agents.Runtime;
+using DssHarness.Core.Json;
 
 namespace DssHarness.Core.Agents.ClaudeApi;
 
@@ -23,7 +24,8 @@ namespace DssHarness.Core.Agents.ClaudeApi;
 /// <param name="connection">How the request is posted and its stream read.</param>
 /// <param name="api">The provider's <c>api</c>, an absolute address.</param>
 /// <param name="settings">The client's settings: its cache's lifetime, the fields and betas it adds.</param>
-public sealed class ClaudeApiProvider(ApiConnection connection, string api, ClaudeApiSettings settings) : IChatProvider
+/// <param name="records">Where the body of a request the API refuses is kept whole: the step's records; null where none are kept, and it is held.</param>
+public sealed class ClaudeApiProvider(ApiConnection connection, string api, ClaudeApiSettings settings, ApiRecords? records) : IChatProvider
 {
     private readonly ApiConnection _connection = connection ?? throw new ArgumentNullException(nameof(connection));
     private readonly Uri _endpoint = ClaudeApiRequest.Endpoint(api ?? throw new ArgumentNullException(nameof(api)));
@@ -56,7 +58,7 @@ public sealed class ClaudeApiProvider(ApiConnection connection, string api, Clau
         {
             ["name"] = tool.Name,
             ["description"] = tool.Description,
-            ["input_schema"] = JsonNode.Parse(tool.Schema),
+            ["input_schema"] = JsonDepth.ParseNode(tool.Schema),
             ["eager_input_streaming"] = true,
         })]);
 
@@ -156,7 +158,7 @@ public sealed class ClaudeApiProvider(ApiConnection connection, string api, Clau
     {
         ArgumentNullException.ThrowIfNull(request);
 
-        var post = new ApiPost(_endpoint, ClaudeApiRequest.Headers(request, _settings), ClaudeApiRequest.Body(request, _settings));
+        var post = new ApiPost(_endpoint, ClaudeApiRequest.Headers(request, _settings), ClaudeApiRequest.Body(request, _settings), records);
 
         return ApiAnswers.ReadAsync(_connection, post, new Answer(request, _settings).Read, cancellationToken);
     }
@@ -187,7 +189,7 @@ public sealed class ClaudeApiProvider(ApiConnection connection, string api, Clau
 
             try
             {
-                using var document = JsonDocument.Parse(item.Data);
+                using var document = JsonDepth.ParseDocument(item.Data);
                 data = document.RootElement.Clone();
             }
             catch (JsonException ex)
@@ -244,7 +246,7 @@ public sealed class ClaudeApiProvider(ApiConnection connection, string api, Clau
                 return [Failed(ChatFailureKind.Transient, $"the answer's stream began block {Index(data)} where block {_blocks.Count} stood next")];
             }
 
-            var block = new Block(type, JsonNode.Parse(start.GetRawText())!.AsObject());
+            var block = new Block(type, JsonDepth.ParseNode(start.GetRawText())!.AsObject());
 
             if (type == Block.ToolUse && (block.Id is not { Length: > 0 } || block.Name is not { Length: > 0 }))
             {

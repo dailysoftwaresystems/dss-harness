@@ -39,15 +39,19 @@ public sealed partial class HelpTests
         var interrupted = DssHarness.Core.Agents.Runtime.AgentToolRuntime.Interrupted(DssHarness.Core.Agents.Loop.ToolLoop.Pausing);
         var cut = DssHarness.Core.Agents.Runtime.AgentToolRuntime.Interrupted(DssHarness.Core.Agents.AgentTurnInterrupt.Cut);
         var nudges = DssHarness.Core.Agents.Loop.ToolLoop.MostNudges;
-        var pauses = DssHarness.Core.Agents.Loop.ToolLoop.MostPausesInARow;
         var tries = DssHarness.Core.Agents.Loop.ToolLoopTerms.DefaultMaxRetries;
         var (first, longest) = (DssHarness.Core.Agents.Loop.ToolLoop.FirstWait.TotalSeconds, DssHarness.Core.Agents.Loop.ToolLoop.LongestDoubledWait.TotalSeconds);
         var wait = DssHarness.Core.Agents.Loop.ToolLoopTerms.DefaultMaxRetryWait.TotalSeconds;
+        var (refusals, every) = (DssHarness.Core.Agents.Http.ApiRecords.DirectoryName, DssHarness.Core.Waiting.Waits.SaidEvery.TotalMinutes);
+        const string Paused = "A turn the provider paused is sent again with nothing added for as long as the provider pauses it, never counted - each pause told with how long the turn has waited - until the step's own bounds end it: its time, its budget, a handoff or an interrupt.";
+        var refused = "a connection is given no time of its own to connect in - the operating system's own retries end one that never comes - and the body of a request the provider refused is read to its end, kept whole as it comes in the "
+            + $"step's {{0}}{refusals}/{{0}} beside its records, a notice every {every} minutes saying how much has come while it still does, and said in the provider's own words where it is an error of the provider's, else whole where it was held or by its size and the file that keeps it; ";
 
         Assert.Contains(
             $"A turn cut off at its length that called no tool, its request holding it to no schema, is stored and nudged on, {nudges} times at most; one cut off while it called a tool - its calls never run - before it wrote anything, or while its request held it to a schema, which the answer to a nudge would be held to whole, is thrown away and asked again with twice the room, up to the most; past either the step is Truncated. "
-                + $"A turn the provider paused is sent again with nothing added, {pauses} in a row failing the step. An answer gone on from, cut off or paused, is every piece of it. A failed request is asked again up to {tries} times after a wait that doubles from {first} s to {longest} s, "
+                + $"{Paused} An answer gone on from, cut off or paused, is every piece of it. A failed request is asked again up to {tries} times after a wait that doubles from {first} s to {longest} s, "
                 + "or the one the provider names; a service failing past them, or naming such a wait, fails the step, and one silent past the stall bound - nothing of it heard, not even the provider's keep-alive - stalls it; "
+                + string.Format(CultureInfo.InvariantCulture, refused, string.Empty)
                 + "a model the provider does not serve the key never starts the step before the provider begins an answer with the model asked and fails it once one began. The engine's fallback works inside the one conversation: a key "
                 + $"the provider refuses - said, and passed over for the rest of the run - an account at its limit (a rate limit past those tries, or naming a wait past {wait} s: "
                 + "the model's on the key it was sent with, or the key's whole where its balance is spent, each named) and a "
@@ -72,20 +76,15 @@ public sealed partial class HelpTests
         Assert.Contains("and no request but the handoff turn's is sent once the step's `maxBudgetUsd` is spent.", readme, StringComparison.Ordinal);
         Assert.Contains(string.Format(System.Globalization.CultureInfo.InvariantCulture, Priceless, "`maxBudgetUsd`", "`budget.usd`", "`claude-api`", "`claude-code`", "`validate-workflow`", "`reporter`", "`agentClients`"), readme, StringComparison.Ordinal);
         Assert.Contains("The loop the claude-api and glm clients share (ToolLoop) runs a step of either over the provider each gives it - the Claude API's and Z.AI's below.", prose, StringComparison.Ordinal);
-        Assert.Contains(
-            $"a step that goes on in it sends what it began with; where a provider begins sending it shortened to keep it within its model's context, the point is kept beside it ({DssHarness.Core.Agents.StoredConversation.ShortenedFileName}) and given with every later request, a notice saying so once.",
-            prose,
-            StringComparison.Ordinal);
-        Assert.Contains(
-            $"a step that goes on in it sends what it began with; where a provider begins sending it shortened to keep it within its model's context, the point is kept beside it (`{DssHarness.Core.Agents.StoredConversation.ShortenedFileName}`) and given with every later request, a notice saying so once.",
-            readme,
-            StringComparison.Ordinal);
+        Assert.Contains("a step that goes on in it sends what it began with, every request the conversation whole. The first request asks for a quarter of the model's maxOutputTokens.", prose, StringComparison.Ordinal);
+        Assert.Contains("a step that goes on in it sends what it began with, every request the conversation whole. The first request asks for a quarter of the model's `maxOutputTokens`.", readme, StringComparison.Ordinal);
         Assert.Contains($"under the agent's {DssHarness.Core.Orchestration.OrchestratorLayout.SessionsDirectoryName}/<id>/, each message as it was sent and received", prose, StringComparison.Ordinal);
 
         Assert.Contains(
             $"A turn cut off at its length that called no tool, its request holding it to no schema, is stored and nudged on, {nudges} times at most; one cut off while it called a tool - its calls never run - before it wrote anything, or while its request held it to a schema, which the answer to a nudge would be held to whole, is thrown away and asked again with twice the room, up to the most; past either the step is `Truncated`. "
-                + $"A turn the provider paused is sent again with nothing added, {pauses} in a row failing the step. An answer gone on from, cut off or paused, is every piece of it. A failed request is asked again up to {tries} times after a wait that doubles from {first} s to {longest} s, "
+                + $"{Paused} An answer gone on from, cut off or paused, is every piece of it. A failed request is asked again up to {tries} times after a wait that doubles from {first} s to {longest} s, "
                 + $"or the one the provider names; a service failing past them, or naming such a wait, fails the step, and one silent past the stall bound - nothing of it heard, not even the provider's keep-alive - stalls it; "
+                + string.Format(CultureInfo.InvariantCulture, refused, "`")
                 + "a model the provider does not serve the key never starts the step before the provider begins an answer with the model asked and fails it once one began. The engine's fallback works inside the one conversation: a key "
                 + $"the provider refuses - said, and passed over for the rest of the run - an account at its limit (a rate limit past those tries, or naming a wait past {wait} s: "
                 + "the model's on the key it was sent with, or the key's whole where its balance is spent, each named) and a "
@@ -131,9 +130,8 @@ public sealed partial class HelpTests
             $"{nameof(DssHarness.Core.Agents.AgentMessages)}.{nameof(DssHarness.Core.Agents.AgentMessages.TryTake)}",
             $"{nameof(DssHarness.Core.Agents.AgentRun)}.{nameof(DssHarness.Core.Agents.AgentRun.SessionsDirectory)}",
             $"{nameof(DssHarness.Core.Orchestration.OrchestratorLayout)}.{nameof(DssHarness.Core.Orchestration.OrchestratorLayout.SessionDirectoryIn)}",
-            $"{nameof(DssHarness.Core.Agents.Loop.ChatPart)}.{nameof(DssHarness.Core.Agents.Loop.ChatPart.Shortened)}",
-            $"{nameof(DssHarness.Core.Agents.StoredConversation)}.{nameof(DssHarness.Core.Agents.StoredConversation.Shorten)}",
-            $"{nameof(DssHarness.Core.Agents.Loop.ChatRequest)}.{nameof(DssHarness.Core.Agents.Loop.ChatRequest.ShortenedBefore)}",
+            $"{nameof(DssHarness.Core.Agents.Loop.ChatRequest)}.{nameof(DssHarness.Core.Agents.Loop.ChatRequest.ContextTokens)}",
+            $"{nameof(DssHarness.Core.Agents.Loop.ToolLoop)}.{nameof(DssHarness.Core.Agents.Loop.ToolLoop.PausedTurn)}",
         })
         {
             Assert.Contains($"`{owner}`", architecture, StringComparison.Ordinal);
@@ -192,6 +190,9 @@ public sealed partial class HelpTests
             nameof(DssHarness.Core.Agents.ClaudeApi.ClaudeApiFailures),
             nameof(DssHarness.Core.Agents.AgentEntries),
             nameof(DssHarness.Core.Agents.Http.ApiEvent),
+            nameof(DssHarness.Core.Agents.Http.ApiRecords),
+            nameof(DssHarness.Core.Agents.Http.ApiRefusedBody),
+            $"{nameof(DssHarness.Core.Agents.Http.ApiEvent)}.{nameof(DssHarness.Core.Agents.Http.ApiEvent.Refusing)}",
             $"{nameof(DssHarness.Core.Agents.ClaudeApi.ClaudeApiRequest)}.{nameof(DssHarness.Core.Agents.ClaudeApi.ClaudeApiRequest.Owned)}",
             nameof(DssHarness.Core.Agents.ClaudeApi.ClaudeApiRequest.ExtrasProblems),
         })
@@ -268,8 +269,8 @@ public sealed partial class HelpTests
         var prose = Prose.Words(HelpText.Of("agent-clients").StandardOutput);
         var readme = Prose.Document("README.md");
         var architecture = Prose.Document("docs", "architecture.md");
-        var (shorten, full, whole) = (Percent(DssHarness.Core.Agents.ZaiApi.ZaiApiProvider.ShortenAt), Percent(DssHarness.Core.Agents.ZaiApi.ZaiApiProvider.FullAt), DssHarness.Core.Agents.ZaiApi.ZaiApiProvider.WholeTurns);
         const string Path = DssHarness.Core.Agents.ZaiApi.ZaiApiRequest.CompletionsPath;
+        const string Whole = "Z.AI clears nothing of a conversation itself, and every request sends it whole, each answer to a call as it was; once what the model last read and wrote - Z.AI's own count of it - reaches the model's {0}contextTokens{0}, the next request would pass the context and is not sent: the context is exhausted ({0}ContextExhausted{0}), as where Z.AI refuses a prompt too long, and the step's answer to a full context - its compaction among them - carries the work on.";
 
         Assert.Contains($"each request is posted to its provider's api with /{Path} after it, signed with a key of the provider's (Authorization: Bearer), and its answer streamed.", prose, StringComparison.Ordinal);
         Assert.Contains($"each request is posted to its provider's `api` with `/{Path}` after it, signed with a key of the provider's (`Authorization: Bearer`), and its answer streamed.", readme, StringComparison.Ordinal);
@@ -277,8 +278,8 @@ public sealed partial class HelpTests
         Assert.Contains("the model's thinking on, the step's effort as `reasoning_effort` (`low`, `medium`, `high`, `xhigh`, `max`); and `max_tokens` - no sampling parameter or tool choice of the tool's own, which `requestExtras` may add, and no tool of Z.AI's, for the web is the harness's own.", readme, StringComparison.Ordinal);
         Assert.Contains("unless agentClients.glm.preserveThinking is true (false where nothing is said), which keeps it (thinking.clear_thinking: false).", prose, StringComparison.Ordinal);
         Assert.Contains("unless `agentClients.glm.preserveThinking` is true (false where nothing is said), which keeps it (`thinking.clear_thinking: false`).", readme, StringComparison.Ordinal);
-        Assert.Contains($"passes {shorten} of the model's contextTokens, the answers to the calls of every turn but the last {whole} that called tools go out in a short form that says so, from that request on - the calls and the reasoning as they were, and what is stored whole; past {full} after that, the context is exhausted (ContextExhausted).", prose, StringComparison.Ordinal);
-        Assert.Contains($"passes {shorten} of the model's `contextTokens`, the answers to the calls of every turn but the last {whole} that called tools go out in a short form that says so, from that request on - the calls and the reasoning as they were, and what is stored whole; past {full} after that, the context is exhausted (`ContextExhausted`).", readme, StringComparison.Ordinal);
+        Assert.Contains(string.Format(CultureInfo.InvariantCulture, Whole, string.Empty), prose, StringComparison.Ordinal);
+        Assert.Contains(string.Format(CultureInfo.InvariantCulture, Whole, "`"), readme, StringComparison.Ordinal);
         Assert.Contains("and one is glm's alone: preserveThinking.", prose, StringComparison.Ordinal);
         Assert.Contains("and one is `glm`'s alone: `preserveThinking`.", readme, StringComparison.Ordinal);
 
@@ -319,16 +320,12 @@ public sealed partial class HelpTests
             $"{nameof(DssHarness.Core.Agents.Loop.ToolLoopTerms)}.{nameof(DssHarness.Core.Agents.Loop.ToolLoopTerms.Of)}",
             $"{nameof(DssHarness.Core.Agents.Loop.ToolLoopTerms)}.{nameof(DssHarness.Core.Agents.Loop.ToolLoopTerms.Unstartable)}",
             $"{nameof(DssHarness.Core.Agents.ZaiApi.ZaiApiRequest)}.{nameof(DssHarness.Core.Agents.ZaiApi.ZaiApiRequest.Owned)}",
-            $"{nameof(DssHarness.Core.Agents.ZaiApi.ZaiApiRequest)}.{nameof(DssHarness.Core.Agents.ZaiApi.ZaiApiRequest.ShortAnswer)}",
-            $"{nameof(DssHarness.Core.Agents.ZaiApi.ZaiApiProvider)}.{nameof(DssHarness.Core.Agents.ZaiApi.ZaiApiProvider.ShortenAt)}",
-            $"{nameof(DssHarness.Core.Agents.ZaiApi.ZaiApiProvider)}.{nameof(DssHarness.Core.Agents.ZaiApi.ZaiApiProvider.FullAt)}",
+            $"{nameof(DssHarness.Core.Agents.ZaiApi.ZaiApiProvider)}.{nameof(DssHarness.Core.Agents.ZaiApi.ZaiApiProvider.ContextFull)}",
             $"{nameof(DssHarness.Core.Agents.ZaiApi.ZaiApiFailures)}.{nameof(DssHarness.Core.Agents.ZaiApi.ZaiApiFailures.Codes)}",
             $"{nameof(DssHarness.Core.Agents.ZaiApi.ZaiApiFailures)}.{nameof(DssHarness.Core.Agents.ZaiApi.ZaiApiFailures.Statuses)}",
         })
         {
             Assert.Contains($"`{owner}`", architecture, StringComparison.Ordinal);
         }
-
-        static string Percent(double share) => $"{(int)Math.Round(share * 100)}%";
     }
 }
