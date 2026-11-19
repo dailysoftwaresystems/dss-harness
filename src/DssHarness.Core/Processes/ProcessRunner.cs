@@ -16,9 +16,6 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
     /// <summary>ENOENT on Linux and macOS, ERROR_FILE_NOT_FOUND on Windows.</summary>
     private const int ErrorFileNotFound = 2;
 
-    /// <summary>How long a step that has ended is given for a connection it made to its channel to be taken.</summary>
-    private static readonly TimeSpan ReachGrace = TimeSpan.FromSeconds(1);
-
     /// <summary>
     /// How often the end of what a child wrote is looked for once the child has ended and something it left running still
     /// holds its output: a look's pace, never a bound.
@@ -427,7 +424,7 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
         {
             try
             {
-                var heard = await HeardAsync(status, reached!, reaching, process, timeoutSource.Token).ConfigureAwait(false);
+                var heard = await HeardAsync(status, reached!, reaching, process.WaitForExitAsync(timeoutSource.Token), timeoutSource.Token).ConfigureAwait(false);
 
                 if (heard is not { Placed: true, Failure: null })
                 {
@@ -759,41 +756,50 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
 
     /// <summary>
     /// What the step said on its channel once it ended or closed it, or <see langword="null"/> where it
-    /// ended without reaching it.
+    /// ended having said nothing.
     /// </summary>
     /// <remarks>
     /// The channel closes as the step ends, or on Linux and macOS as the program is become; a step
-    /// that ended before it reached the channel never closes it, so its end is watched for as well.
+    /// that ended before it reached the channel never closes it, so its end is watched for as well. The step says nothing
+    /// until it is told its connection was taken (<see cref="ContainExec.Taken"/>), which it is only once the wait for it
+    /// has ended here: so a step seen to end with its connection not taken said nothing - however late the system would
+    /// have handed over a connection it made just before its end - and is given up at once, with no time allowed for a
+    /// connection to come, and nothing it said lost to one that came late.
     /// </remarks>
     /// <param name="status">The channel.</param>
     /// <param name="reached">The wait for the step to reach the channel, begun before it started.</param>
     /// <param name="reaching">Gives that wait up.</param>
-    /// <param name="process">The step.</param>
+    /// <param name="ended">The step's end, raising the stop where that came first.</param>
     /// <param name="cancellationToken">Stops the waiting: the run's bound, or its caller giving up.</param>
-    private static async Task<ContainExec.StartHeard?> HeardAsync(
+    internal static async Task<ContainExec.StartHeard?> HeardAsync(
         NamedPipeServerStream status,
         Task reached,
         CancellationTokenSource reaching,
-        Process process,
+        Task ended,
         CancellationToken cancellationToken)
     {
-        var ended = process.WaitForExitAsync(cancellationToken);
-
         if (await Task.WhenAny(reached, ended).ConfigureAwait(false) == ended && !reached.IsCompleted)
         {
             // Raises the stop, where that is what ended the wait.
             await ended.ConfigureAwait(false);
 
-            // A connection made just before the step ended is taken still; a step that made none
-            // said nothing.
-            if (await Task.WhenAny(reached, Task.Delay(ReachGrace, CancellationToken.None)).ConfigureAwait(false) != reached)
-            {
-                await GivenUpAsync(reaching, reached).ConfigureAwait(false);
-                return null;
-            }
+            // Never told its connection was taken, the step said nothing.
+            await GivenUpAsync(reaching, reached).ConfigureAwait(false);
+            return null;
         }
 
         await reached.ConfigureAwait(false);
+
+        try
+        {
+            await status.WriteAsync(new[] { ContainExec.Taken }, cancellationToken).ConfigureAwait(false);
+            await status.FlushAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (IOException)
+        {
+            // The step went with its connection made and before it heard it taken: it said nothing, and its end says why.
+            return null;
+        }
 
         using var reader = new StreamReader(status, Utf8NoBom, detectEncodingFromByteOrderMarks: false, OutputBuffer, leaveOpen: true);
 
@@ -885,7 +891,7 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
     {
         try
         {
-            return new NamedPipeServerStream(name, PipeDirection.In, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
+            return new NamedPipeServerStream(name, PipeDirection.InOut, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or PlatformNotSupportedException)
         {

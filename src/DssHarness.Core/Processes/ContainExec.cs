@@ -30,7 +30,10 @@ namespace DssHarness.Core.Processes;
 /// </para>
 /// <para>
 /// Whether the program started is said on a channel of the process runner's own, never on the
-/// program's streams or in an exit code a program could end with too: the step connects to it,
+/// program's streams or in an exit code a program could end with too: the step connects to it, waits for the process
+/// runner to say it has taken the connection (<see cref="Taken"/>) - so whatever the step says comes after its connection
+/// was taken, and a step that ended with its connection not taken said nothing, however late the system hands the
+/// process runner a connection made just before that end -
 /// says what failed where anything did, and says the program is placed just before it is become or
 /// once it is started - on Linux and macOS with its own start, which the program it becomes keeps, so the process
 /// runner records what tells the child from a later process however soon the program ends. The channel closes with the
@@ -71,6 +74,12 @@ public static class ContainExec
     /// on the error stream.
     /// </summary>
     public const int Failed = HarnessExit.InternalError;
+
+    /// <summary>
+    /// The byte the process runner writes on the channel once it has taken the step's connection, and the step waits for
+    /// before it says anything: what makes "ended with its connection not taken" mean "said nothing".
+    /// </summary>
+    internal const byte Taken = 0x06;
 
     /// <summary>The line that says the program is placed and about to be become, or started.</summary>
     private const string PlacedLine = "placed";
@@ -269,13 +278,16 @@ public static class ContainExec
         /// its starter lives: the process runner listens on it before it starts the step, so a step not yet through - a
         /// machine too busy to schedule it, a disk that stalls - waits, looking again every second
         /// (<see cref="Waits.LooksAgainEvery"/>) and told every five minutes, and gives up only once the starter has
-        /// ended and nobody can listen on it any more.
+        /// ended and nobody can listen on it any more. Reached, it waits for the process runner to say it has taken the
+        /// connection (<see cref="Taken"/>) - for as long as that takes, the channel closing ending the wait where the
+        /// process runner gave the start up or has gone - and only then is anything said on it.
         /// </summary>
         /// <param name="name">The channel.</param>
         /// <param name="starterLives">Whether the process that started the step, and listens on the channel, still lives.</param>
         /// <param name="tell">Told of the wait every five minutes.</param>
         /// <param name="clock">What the wait is told by: the system's, or a test's.</param>
-        /// <returns>The channel reached; <see langword="null"/> where the starter ended first.</returns>
+        /// <returns>The channel reached and its connection taken; <see langword="null"/> where the starter ended first.</returns>
+        /// <exception cref="IOException">The channel closed before its connection was said taken, or said something else.</exception>
         public static StartStatus? Reach(string name, Func<bool> starterLives, Action<WaitTold> tell, TimeProvider clock)
         {
             ArgumentNullException.ThrowIfNull(starterLives);
@@ -288,19 +300,18 @@ public static class ContainExec
             return reached.Value;
         }
 
-        /// <summary>Reaches the channel in slices of a second, while the starter lives.</summary>
+        /// <summary>Reaches the channel in slices of a second, while the starter lives, and waits for its connection to be said taken.</summary>
         private static async Task<StartStatus?> ReachingAsync(string name, Func<bool> starterLives, CancellationToken cancellationToken)
         {
             var slice = (int)Waits.LooksAgainEvery.TotalMilliseconds;
 
             while (true)
             {
-                var pipe = new NamedPipeClientStream(".", name, PipeDirection.Out, PipeOptions.CurrentUserOnly);
+                var pipe = new NamedPipeClientStream(".", name, PipeDirection.InOut, PipeOptions.CurrentUserOnly);
 
                 try
                 {
                     await pipe.ConnectAsync(slice, cancellationToken).ConfigureAwait(false);
-                    return new StartStatus(pipe);
                 }
                 catch (TimeoutException)
                 {
@@ -310,6 +321,27 @@ public static class ContainExec
                     {
                         return null;
                     }
+
+                    continue;
+                }
+                catch
+                {
+                    await pipe.DisposeAsync().ConfigureAwait(false);
+                    throw;
+                }
+
+                try
+                {
+                    var taken = new byte[1];
+
+                    // The channel's own end is what ends this wait where no word comes: the process runner gave the start
+                    // up, or has gone.
+                    return await pipe.ReadAsync(taken, cancellationToken).ConfigureAwait(false) switch
+                    {
+                        0 => throw new IOException("the process runner closed it before it took the connection"),
+                        _ when taken[0] != Taken => throw new IOException($"the process runner said {taken[0]} where it says it took the connection"),
+                        _ => new StartStatus(pipe),
+                    };
                 }
                 catch
                 {

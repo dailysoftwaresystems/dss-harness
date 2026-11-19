@@ -1415,20 +1415,82 @@ public sealed class ContainExecTests
         await Task.Delay(TimeSpan.FromSeconds(31), cancellationToken);
         Assert.False(reaching.IsCompleted, "the step stopped waiting for a channel its starter still lives to listen on");
 
-        using var listening = new System.IO.Pipes.NamedPipeServerStream(
-            channel,
-            System.IO.Pipes.PipeDirection.In,
-            1,
-            System.IO.Pipes.PipeTransmissionMode.Byte,
-            System.IO.Pipes.PipeOptions.Asynchronous | System.IO.Pipes.PipeOptions.CurrentUserOnly);
+        using var listening = Listening(channel);
 
         await listening.WaitForConnectionAsync(cancellationToken).WaitAsync(LongBound, cancellationToken);
+        await TakenAsync(listening, cancellationToken);
         using var reached = await reaching.WaitAsync(LongBound, cancellationToken);
 
         Assert.NotNull(reached);
         Assert.Equal(
             [$"has waited 5m00s for the channel '{channel}' it says the start on", $"has waited 10m00s for the channel '{channel}' it says the start on"],
             told);
+    }
+
+    /// <summary>
+    /// The step says nothing on its channel until it hears its connection taken: what makes a step seen to end with its
+    /// connection not taken one that said nothing, so the process runner allows no time for a connection to come. Gone
+    /// on as soon as it connected, a step that said its start and ended at once was heard only where the system handed
+    /// its connection over within the second once allowed.
+    /// </summary>
+    [Fact]
+    public async Task TheStep_SaysNothingOnItsChannel_UntilItHearsItsConnectionTaken()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var channel = ProcessRunner.StatusName(OperatingSystem.IsWindows());
+        using var listening = Listening(channel);
+        var connected = listening.WaitForConnectionAsync(cancellationToken);
+        var reaching = Task.Run(() => ContainExec.StartStatus.Reach(channel, () => true, _ => { }, TimeProvider.System), cancellationToken);
+
+        await connected.WaitAsync(LongBound, cancellationToken);
+        await Task.Delay(TimeSpan.FromMilliseconds(500), cancellationToken);
+        Assert.False(reaching.IsCompleted, "the step went on before it heard its connection taken");
+
+        await TakenAsync(listening, cancellationToken);
+        var reached = await reaching.WaitAsync(LongBound, cancellationToken);
+
+        Assert.NotNull(reached);
+        reached.Placed();
+        reached.Dispose();
+
+        using var reader = new StreamReader(listening);
+        Assert.Equal("placed\n", await reader.ReadToEndAsync(cancellationToken));
+    }
+
+    /// <summary>
+    /// A step seen to end with its connection to its channel not taken is given up at once - it said nothing, never having
+    /// heard its connection taken - with no second allowed for a connection to come, as once was.
+    /// </summary>
+    [Fact]
+    public async Task AStepSeenToEndWithItsConnectionNotTaken_IsGivenUpAtOnce()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        using var listening = Listening(ProcessRunner.StatusName(OperatingSystem.IsWindows()));
+        using var reaching = new CancellationTokenSource();
+        var reached = listening.WaitForConnectionAsync(reaching.Token);
+
+        // Under the second once allowed: a wait for a connection is given up in a moment.
+        var heard = await ProcessRunner.HeardAsync(listening, reached, reaching, Task.CompletedTask, cancellationToken)
+            .WaitAsync(TimeSpan.FromMilliseconds(900), cancellationToken);
+
+        Assert.Null(heard);
+        Assert.True(reached.IsCanceled, "the wait for a connection was not given up");
+    }
+
+    /// <summary>A channel listened on as the process runner listens on one.</summary>
+    private static System.IO.Pipes.NamedPipeServerStream Listening(string channel)
+        => new(
+            channel,
+            System.IO.Pipes.PipeDirection.InOut,
+            1,
+            System.IO.Pipes.PipeTransmissionMode.Byte,
+            System.IO.Pipes.PipeOptions.Asynchronous | System.IO.Pipes.PipeOptions.CurrentUserOnly);
+
+    /// <summary>Says the step's connection was taken, as the process runner says it.</summary>
+    private static async Task TakenAsync(System.IO.Pipes.NamedPipeServerStream listening, CancellationToken cancellationToken)
+    {
+        await listening.WriteAsync(new[] { ContainExec.Taken }, cancellationToken);
+        await listening.FlushAsync(cancellationToken);
     }
 
     /// <summary>
