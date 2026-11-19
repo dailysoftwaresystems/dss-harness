@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.Text.Json;
@@ -5,6 +6,7 @@ using DssHarness.Core.FileSystem;
 using DssHarness.Core.Hosts;
 using DssHarness.Core.Platform;
 using DssHarness.Core.Results;
+using DssHarness.Core.Waiting;
 
 namespace DssHarness.Core.Execution;
 
@@ -21,10 +23,12 @@ internal static class MachineWideFile
 {
     /// <summary>
     /// How long one change of a file every run decides by - the run lock, a log directory's owner, the heavy legs admitted
-    /// onto a machine - waits for another process's change of it. This bounds a rewrite that takes microseconds, never
-    /// what the file records.
+    /// onto a machine - waits for another process's change of it: for as long as that process holds it, and no bound of
+    /// the code's own. A process that ends holding it lets it go by the system's own hand, so a wait for a dead holder ends
+    /// as it ends; one for a live holder busy for minutes - a disk that stalls, a machine that sleeps - waits for it, said
+    /// every five minutes (<see cref="Waits.SaidEvery"/>) to whoever the operation tells its waits to.
     /// </summary>
-    public static readonly TimeSpan Window = TimeSpan.FromSeconds(10);
+    public static readonly TimeSpan Window = Timeout.InfiniteTimeSpan;
 
     /// <summary>
     /// What <paramref name="path"/> holds, read by every state file's rules (<see cref="JsonStateFile"/>), or
@@ -137,12 +141,12 @@ internal static class MachineWideFile
     /// </remarks>
     /// <param name="path">The file being updated, which names the mutex.</param>
     /// <param name="window">
-    /// How long to wait for another process's update. It bounds a rewrite that takes microseconds,
-    /// never what the file records: a held lock is refused at once, and a taken heavy-leg slot is
-    /// waited for between updates, never inside one.
+    /// How long to wait for another process's update: <see cref="Window"/>, for as long as that process holds it, or a
+    /// bound of the caller's own. A held lock is refused at once, and a taken heavy-leg slot is waited for between updates,
+    /// never inside one: what waits here is another process's rewrite of the file.
     /// </param>
     /// <param name="work">The read, the decision and the write.</param>
-    /// <exception cref="HarnessException">Another process held the file for longer than the window allows.</exception>
+    /// <exception cref="HarnessException">Another process held the file for longer than a bound the caller gave allows.</exception>
     public static T Update<T>(string path, TimeSpan window, Func<T> work)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
@@ -176,9 +180,9 @@ internal static class MachineWideFile
     /// every process waiting to change the file would be refused once the window had passed.
     /// </remarks>
     /// <param name="path">The file being updated, which names the mutex.</param>
-    /// <param name="window">How long to wait for another process's update.</param>
+    /// <param name="window">How long to wait for another process's update: <see cref="Window"/>, for as long as it holds it.</param>
     /// <param name="work">The read, the decision and the write, given where to leave what is to be said afterwards.</param>
-    /// <exception cref="HarnessException">Another process held the file for longer than the window allows.</exception>
+    /// <exception cref="HarnessException">Another process held the file for longer than a bound the caller gave allows.</exception>
     public static T Update<T>(string path, TimeSpan window, Func<Action<Action>, T> work)
     {
         ArgumentNullException.ThrowIfNull(work);
@@ -205,12 +209,45 @@ internal static class MachineWideFile
     private static string NameFor(string path)
         => MachineWideMutex.NameFor("file", [path], ignoreCase: true);
 
+    /// <summary>
+    /// Takes <paramref name="mutex"/>, waiting while another process holds it: a look every
+    /// <see cref="Waits.LooksAgainEvery"/>, said every <see cref="Waits.SaidEvery"/>, and refused only at a bound the caller
+    /// gave. Waited on this thread, which takes the mutex and must let it go; what ends a wait for a holder that never lets
+    /// go is the process's own end - its holder's, which lets the mutex go, or this one's, at the second interrupt.
+    /// </summary>
+    /// <returns>True: the mutex is taken, and must be let go.</returns>
     private static bool Wait(Mutex mutex, string path, TimeSpan window)
-        => MachineWideMutex.Wait(mutex, window)
-            ? true
-            : throw new HarnessException(
-                HarnessExit.Refused,
-                string.Create(
-                    CultureInfo.InvariantCulture,
-                    $"Another {ToolPackage.Id} process has been updating '{path}' for {window.TotalSeconds:0} seconds, so nothing was changed."));
+    {
+        var bounded = window != Timeout.InfiniteTimeSpan;
+        var started = Stopwatch.GetTimestamp();
+        var saidAt = started;
+
+        while (true)
+        {
+            var waited = Stopwatch.GetElapsedTime(started);
+            var slice = bounded ? Waits.Shorter(Waits.LooksAgainEvery, window - waited) : Waits.LooksAgainEvery;
+
+            if (MachineWideMutex.Wait(mutex, slice))
+            {
+                return true;
+            }
+
+            waited = Stopwatch.GetElapsedTime(started);
+
+            if (bounded && waited >= window)
+            {
+                throw new HarnessException(
+                    HarnessExit.Refused,
+                    string.Create(
+                        CultureInfo.InvariantCulture,
+                        $"Another {ToolPackage.Id} process has been updating '{path}' for {window.TotalSeconds:0} seconds, so nothing was changed."));
+            }
+
+            if (Stopwatch.GetElapsedTime(saidAt) >= Waits.SaidEvery)
+            {
+                Waits.Told(new WaitTold($"'{path}' to be let go", waited, $"another {ToolPackage.Id} process", null));
+                saidAt = Stopwatch.GetTimestamp();
+            }
+        }
+    }
 }

@@ -1903,33 +1903,33 @@ public sealed class RemoteWorkflowUseTests
     }
 
     /// <summary>
-    /// The cache's lock held past its window by another process is the cache's own failure, never a refusal of what was
-    /// asked: the use is not recorded, and the command run again once that process is done finishes.
+    /// The cache's lock held by another process is waited for for as long as that process holds it - here past the ten
+    /// seconds once given before the use failed - and the use then goes on as it would have: never a failure at a number of
+    /// the code's own.
     /// </summary>
     [Fact]
-    public void TheCachesLockHeldPastItsWindow_IsTheCachesOwnFailure()
+    public void TheCachesLockHeldByAnother_IsWaitedFor()
     {
         using var temp = new TempDirectory();
         var (_, cache, _, _) = Fixture(temp);
+        Exception? refused = null;
 
-        var thrown = DssHarness.Core.Execution.MachineWideFile.Update(
+        // A thread of its own, never this one: a machine-wide section is the thread's that took it, taken again freely -
+        // and a task waited on before it began may run on the waiting thread itself.
+        var other = new Thread(() => refused = Record.Exception(() => cache.Hold(Entry(), resolution: null, DateTimeOffset.UtcNow)));
+
+        DssHarness.Core.Execution.MachineWideFile.Update(
             Path.Combine(cache.Directory, "entries"),
             DssHarness.Core.Execution.MachineWideFile.Window,
             () =>
             {
-                // A thread of its own, never this one: a machine-wide section is the thread's that took it, taken again
-                // freely - and a task waited on before it began may run on the waiting thread itself.
-                Exception? refused = null;
-                var other = new Thread(() => refused = Record.Exception(() => cache.Hold(Entry(), resolution: null, DateTimeOffset.UtcNow)));
                 other.Start();
-
-                Assert.True(other.Join(DssHarness.Core.Execution.MachineWideFile.Window + TimeSpan.FromMinutes(1)), "the other thread's hold never ended");
-                return refused;
+                Assert.False(other.Join(TimeSpan.FromSeconds(12)), "the other thread's hold ended while the lock was held");
+                return 0;
             });
 
-        var held = Assert.IsType<HarnessException>(thrown);
-        Assert.Equal(WorkflowCache.FailedExit, held.ExitCode);
-        Assert.EndsWith(": the workflow cache's lock was held past its window, and the command run again once that process is done finishes", held.Message, StringComparison.Ordinal);
+        Assert.True(other.Join(TimeSpan.FromMinutes(1)), "the other thread's hold never ended once the lock was let go");
+        Assert.Null(refused);
     }
 
     /// <summary>

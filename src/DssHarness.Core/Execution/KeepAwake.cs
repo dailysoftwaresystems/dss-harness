@@ -2,6 +2,7 @@ using System.Globalization;
 using DssHarness.Core.Configuration;
 using DssHarness.Core.Output;
 using DssHarness.Core.Processes;
+using DssHarness.Core.Waiting;
 
 namespace DssHarness.Core.Execution;
 
@@ -22,21 +23,14 @@ public sealed class KeepAwake
     /// <summary>The one name a <c>keepAwake</c> command is filled in with: the process running the leg.</summary>
     public const string ProcessName = "pid";
 
-    /// <summary>
-    /// How long a stopped command is waited for. Bounded: a descendant the stop cannot reach - one
-    /// running as root under sudo - keeps its output open, and a leg whose work is done would
-    /// otherwise wait on it forever.
-    /// </summary>
-    public static readonly TimeSpan StopBudget = TimeSpan.FromSeconds(10);
-
     private readonly IProcessRunner _processRunner;
     private readonly IHarnessOutput _output;
-    private readonly TimeSpan _stopBudget;
+    private readonly TimeProvider _clock;
     private readonly HoldAwakeStore? _holds;
 
     /// <summary>Holds machines awake with <paramref name="processRunner"/>, saying what goes wrong through <paramref name="output"/>.</summary>
     public KeepAwake(IProcessRunner processRunner, IHarnessOutput output)
-        : this(processRunner, output, StopBudget)
+        : this(processRunner, output, TimeProvider.System)
     {
     }
 
@@ -45,17 +39,17 @@ public sealed class KeepAwake
     /// <param name="output">Says what goes wrong.</param>
     /// <param name="holds">Where this machine's hold between commands is kept.</param>
     public KeepAwake(IProcessRunner processRunner, IHarnessOutput output, HoldAwakeStore holds)
-        : this(processRunner, output, StopBudget)
+        : this(processRunner, output, TimeProvider.System)
     {
         _holds = holds;
     }
 
-    /// <summary>The same, waiting <paramref name="stopBudget"/> for a stopped command.</summary>
-    internal KeepAwake(IProcessRunner processRunner, IHarnessOutput output, TimeSpan stopBudget)
+    /// <summary>The same, a stopped command waited for on <paramref name="clock"/>: a test's, to say when the wait is told.</summary>
+    internal KeepAwake(IProcessRunner processRunner, IHarnessOutput output, TimeProvider clock)
     {
         _processRunner = processRunner;
         _output = output;
-        _stopBudget = stopBudget;
+        _clock = clock;
     }
 
     /// <summary>The names a <c>keepAwake</c> command is filled in with, for the process <paramref name="processId"/>.</summary>
@@ -155,24 +149,29 @@ public sealed class KeepAwake
         }
     }
 
-    /// <summary>A command holding the machine awake, stopped and waited for when the leg's work ends.</summary>
+    /// <summary>
+    /// A command holding the machine awake, stopped and waited for when the leg's work ends: for as long as it takes to
+    /// end, said every five minutes on the leg's own line, and never given up at a number of the code's own. A stopped
+    /// run's - the usual reason its leg's work ends early - is waited for as well, since its stop is what ends the command;
+    /// a descendant the stop cannot reach, one running as root under sudo holding its output open, is waited for as told,
+    /// and the second interrupt, the system's hard stop, is what ends that.
+    /// </summary>
     private sealed class Holding(KeepAwake owner, string commandName, string leg, Task watching, CancellationTokenSource stop) : IAsyncDisposable
     {
         public async ValueTask DisposeAsync()
         {
             await stop.CancelAsync().ConfigureAwait(false);
 
-            try
-            {
-                await watching.WaitAsync(owner._stopBudget).ConfigureAwait(false);
-                stop.Dispose();
-            }
-            catch (TimeoutException)
-            {
-                // Said, and left behind: the leg's work is done, and its verdict does not wait on a
-                // command the stop could not reach.
-                owner._output.Warn(commandName, $"{leg}: keepAwake did not stop within {owner._stopBudget.TotalSeconds:0} seconds, and may still be holding this machine awake.");
-            }
+            await Waits.ForAsync(
+                async cancelled =>
+                {
+                    await watching.WaitAsync(cancelled).ConfigureAwait(false);
+                    return true;
+                },
+                new WaitWatch("keepAwake to end", told => owner._output.Info(commandName, $"{leg}: {told.Line()}"), null, owner._clock),
+                CancellationToken.None).ConfigureAwait(false);
+
+            stop.Dispose();
         }
     }
 
