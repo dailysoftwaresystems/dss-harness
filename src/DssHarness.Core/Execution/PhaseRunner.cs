@@ -7,6 +7,7 @@ using DssHarness.Core.FileSystem;
 using DssHarness.Core.Output;
 using DssHarness.Core.Processes;
 using DssHarness.Core.Results;
+using DssHarness.Core.Text;
 
 namespace DssHarness.Core.Execution;
 
@@ -188,13 +189,6 @@ public sealed class PhaseRunner(
     /// writes a log and for <see cref="PhaseOutput"/>, which reads it back.
     /// </summary>
     internal static readonly string LogLineEnding = Environment.NewLine;
-
-    /// <summary>
-    /// How long a pattern may spend on one match. A pattern that backtracks past this is refused
-    /// rather than left to run: an unbounded match in a phase's own output would hang the leg it was
-    /// supposed to be evidence for.
-    /// </summary>
-    private static readonly TimeSpan MatchBudget = TimeSpan.FromSeconds(5);
 
     /// <summary>Written without a byte order mark, so a regex reading the log sees the first line.</summary>
     private static readonly UTF8Encoding Utf8NoBom = new(encoderShouldEmitUTF8Identifier: false);
@@ -447,23 +441,8 @@ public sealed class PhaseRunner(
     }
 
     /// <summary>
-    /// How much longer than the silence bound a child may take to start. Starting is this tool's own
-    /// work and is not counted as the child being quiet, but it is not unbounded either: resolving a
-    /// program walks every entry of PATH, and one naming an unreachable share blocks for that
-    /// platform's own timeout per entry, as does a working directory on a mount that has gone away.
-    /// <para>
-    /// A multiple of the silence bound rather than a number of its own, because the two measure
-    /// different things and only one of them repeats. A child may legitimately be silent for its
-    /// whole bound over and over; it starts once. Four times over is past any honest launch and
-    /// still finite, and it scales with how patient the run was asked to be, which is the knob
-    /// somebody actually sets.
-    /// </para>
-    /// </summary>
-    private const int StartBoundMultiple = 4;
-
-    /// <summary>
-    /// Watches the silence and cancels <paramref name="stall"/> when it passes <paramref name="bound"/>,
-    /// or when the child has not started within <see cref="StartBoundMultiple"/> times that. The poll
+    /// Watches the silence - from the launch, a start counting as silence - and cancels <paramref name="stall"/> when it
+    /// passes <paramref name="bound"/>, the user's own stall bound. The poll
     /// is a quarter of the bound so the phase is stopped near the moment it is due, and never more
     /// often than every 50 milliseconds, which would cost more than it measures.
     /// </summary>
@@ -477,7 +456,7 @@ public sealed class PhaseRunner(
             {
                 await Task.Delay(poll, finished).ConfigureAwait(false);
 
-                if (clock.Overdue(bound, bound * StartBoundMultiple))
+                if (clock.Overdue(bound))
                 {
                     await stall.CancelAsync().ConfigureAwait(false);
                     return;
@@ -538,16 +517,12 @@ public sealed class PhaseRunner(
 
     private static Regex Compile(string pattern, string what)
     {
-        try
-        {
-            // Multiline, so a pattern anchored with ^ or $ means the start or end of a line of
-            // output, which is how such a pattern is written and what it is matched against.
-            return new Regex(pattern, RegexOptions.Multiline | RegexOptions.CultureInvariant, MatchBudget);
-        }
-        catch (ArgumentException ex)
-        {
-            throw new HarnessException(HarnessExit.ConfigInvalid, $"'{pattern}' is not {what}: {ex.Message}", ex);
-        }
+        // Multiline, so a pattern anchored with ^ or $ means the start or end of a line of output, which is how such a
+        // pattern is written and what it is matched against; and linear, so no line of a phase's output, however long,
+        // holds a match up - a construct the linear engine lacks is refused by name.
+        return LinearRegex.TryCompile(pattern, RegexOptions.Multiline, out var regex, out var refusal)
+            ? regex
+            : throw new HarnessException(HarnessExit.ConfigInvalid, $"'{pattern}' is not {what}: {refusal}");
     }
 
     /// <summary>
@@ -603,9 +578,8 @@ public sealed class PhaseRunner(
     /// is read as its pieces.
     /// </para>
     /// <para>
-    /// A pattern that cannot be evaluated in time is never read as one that did not match. The success pattern's failure
-    /// is kept and raised once the child has ended, as one over the whole output was; a timing pattern's leaves the phase
-    /// unmeasured by it, and is said.
+    /// Every pattern is linear (<see cref="LinearRegex"/>), so each is decided against every line, however long: none is
+    /// ever left unknown for the time a match took.
     /// </para>
     /// </remarks>
     /// <param name="success">The success pattern, or <see langword="null"/> where the phase declares none.</param>
@@ -615,9 +589,7 @@ public sealed class PhaseRunner(
         private readonly LastLinesRing _last = new(PhaseResult.TailLines);
         private readonly List<PhaseTiming>[] _marks = [.. timings.Select(_ => new List<PhaseTiming>())];
         private readonly long[] _matched = new long[timings.Count];
-        private readonly bool[] _unreadable = new bool[timings.Count];
         private bool _witnessed;
-        private RegexMatchTimeoutException? _unknown;
 
         /// <summary>The last lines read, in the order they came.</summary>
         public IReadOnlyList<string> LastLines => _last.ToList();
@@ -634,27 +606,16 @@ public sealed class PhaseRunner(
         }
 
         /// <summary>Whether the success pattern matched a line.</summary>
-        /// <param name="pattern">The pattern as declared, named if it could not be evaluated.</param>
-        /// <exception cref="HarnessException">The pattern could not be evaluated in time against a line it was read against.</exception>
+        /// <param name="pattern">The pattern as declared.</param>
         public bool Witnessed(string pattern)
         {
-            if (_unknown is not null)
-            {
-                // Never reported as "did not match": a pattern that could not be evaluated is not
-                // evidence either way, and a leg whose witness cannot be read must say so.
-                throw new HarnessException(
-                    HarnessExit.ConfigInvalid,
-                    $"The pattern '{pattern}' took longer than {MatchBudget.TotalSeconds:0}s against a line of this phase's output, "
-                    + "so whether it matched is unknown; it is written in a form that backtracks.",
-                    _unknown);
-            }
-
+            ArgumentNullException.ThrowIfNull(pattern);
             return _witnessed;
         }
 
         /// <summary>
         /// Every timing mark kept, pattern by pattern, each in the order it appeared; and said to <paramref name="output"/>,
-        /// for <paramref name="phase"/>, of each pattern that could not be read, or matched more often than was kept.
+        /// for <paramref name="phase"/>, of each pattern that matched more often than was kept.
         /// </summary>
         public IReadOnlyList<PhaseTiming> Timings(IHarnessOutput output, string phase)
         {
@@ -662,14 +623,7 @@ public sealed class PhaseRunner(
             {
                 var pattern = timings[index].Pattern;
 
-                if (_unreadable[index])
-                {
-                    // A timing mark never changes a verdict, so a pattern that cannot be read leaves
-                    // this phase unmeasured rather than failing it. Said out loud, because a timing
-                    // silently missing from a report reads as a phase that reported no timing.
-                    output.Warn(phase, $"the timing pattern '{pattern}' could not be matched against this phase's output in time; no timing was taken from it");
-                }
-                else if (_matched[index] > MostTimings)
+                if (_matched[index] > MostTimings)
                 {
                     // Said, because a report holding the first marks and none after reads as a phase
                     // that stopped reporting them.
@@ -687,49 +641,27 @@ public sealed class PhaseRunner(
         private void Witness(string line)
         {
             // Once matched, matched: a pattern is evidence the command ran the moment one line shows it.
-            if (success is null || _witnessed || _unknown is not null)
+            if (success is null || _witnessed)
             {
                 return;
             }
 
-            try
-            {
-                _witnessed = success.IsMatch(line);
-            }
-            catch (RegexMatchTimeoutException ex)
-            {
-                _unknown = ex;
-            }
+            _witnessed = success.IsMatch(line);
         }
 
         private void Time(string line)
         {
             for (var index = 0; index < timings.Count; index++)
             {
-                if (_unreadable[index])
+                foreach (var match in timings[index].Regex.Matches(line).Cast<Match>())
                 {
-                    continue;
-                }
-
-                try
-                {
-                    foreach (var match in timings[index].Regex.Matches(line).Cast<Match>())
+                    if (++_matched[index] > MostTimings)
                     {
-                        if (++_matched[index] > MostTimings)
-                        {
-                            continue;
-                        }
-
-                        var value = match.Groups.Count > 1 && match.Groups[1].Success ? match.Groups[1].Value : match.Value;
-                        _marks[index].Add(new PhaseTiming(timings[index].Pattern, match.Value, value));
+                        continue;
                     }
-                }
-                catch (RegexMatchTimeoutException)
-                {
-                    // Unmeasured by this pattern, as the warning will say: marks it found before are no
-                    // account of the phase either.
-                    _unreadable[index] = true;
-                    _marks[index].Clear();
+
+                    var value = match.Groups.Count > 1 && match.Groups[1].Success ? match.Groups[1].Value : match.Value;
+                    _marks[index].Add(new PhaseTiming(timings[index].Pattern, match.Value, value));
                 }
             }
         }

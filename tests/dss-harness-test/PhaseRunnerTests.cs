@@ -292,29 +292,46 @@ public sealed class PhaseRunnerTests
     }
 
     /// <summary>
-    /// A success pattern that cannot be evaluated in time against a line is never read as one that did not match: what it
-    /// could not decide is raised once the child has ended, with every line of it kept in the log and the exit line after.
+    /// A success pattern written in a form that backtracks is decided against every line in linear time, never given up
+    /// as unknown after five seconds, as once; and one using what the linear engine lacks - a backreference - is refused
+    /// by name as the phase's configuration.
     /// </summary>
     [Fact]
-    public async Task ASuccessPatternThatCannotBeEvaluatedInTime_IsRaisedOnceTheChildHasEnded()
+    public async Task ABacktrackingSuccessPattern_IsDecidedInLinearTime_AndALinearlessOneRefused()
     {
         using var temp = new TempDirectory();
         var factory = new HarnessFactory();
-        var log = temp.Combine("slow.log");
-        var lines = new ScriptedLines((new string('a', 40) + "!", false), ("after it", false));
+        var lines = new ScriptedLines((new string('a', 40_000) + "!", false), (new string('a', 40), false), ("after it", false));
 
-        var refusal = await Assert.ThrowsAsync<HarnessException>(() => new PhaseRunner(lines, factory.FileSystem, factory.Output).RunAsync(
-            Child("exit", log) with { SuccessPattern = "^(a+)+$" },
+        var result = await new PhaseRunner(lines, factory.FileSystem, factory.Output).RunAsync(
+            Child("exit", temp.Combine("slow.log")) with { SuccessPattern = "^(a+)+$" },
+            TestContext.Current.CancellationToken);
+
+        Assert.True(result.Witnessed);
+
+        var refusal = await Assert.ThrowsAsync<HarnessException>(() => new PhaseRunner(new ScriptedLines(("x", false)), factory.FileSystem, factory.Output).RunAsync(
+            Child("exit", temp.Combine("refused.log")) with { SuccessPattern = "(a)\\1" },
             TestContext.Current.CancellationToken));
 
         Assert.Equal(HarnessExit.ConfigInvalid, refusal.ExitCode);
-        Assert.Contains("took longer than 5s against a line of this phase's output", refusal.Message, StringComparison.Ordinal);
-        Assert.True(lines.Finished, "the child was not left to end");
+        Assert.StartsWith("'(a)\\1' is not a success pattern: ", refusal.Message, StringComparison.Ordinal);
+    }
 
-        var kept = await File.ReadAllLinesAsync(log, TestContext.Current.CancellationToken);
+    /// <summary>
+    /// A child still starting is as quiet as one that says nothing, under the one stall bound its user set: a start that
+    /// takes the whole bound is past it, never given four times the bound of the code's own.
+    /// </summary>
+    [Fact]
+    public void ASlowStartingChild_IsBoundByTheStallAlone()
+    {
+        var clock = new StallClock();
 
-        Assert.Equal("after it", kept[^2]);
-        Assert.StartsWith("# exit 0 after ", kept[^1], StringComparison.Ordinal);
+        Thread.Sleep(TimeSpan.FromMilliseconds(300));
+
+        Assert.True(clock.Overdue(TimeSpan.FromMilliseconds(200)), $"a launch quiet for {clock.Quiet} was not past a stall bound of 200 ms");
+
+        clock.Saw();
+        Assert.False(clock.Overdue(TimeSpan.FromMilliseconds(200)), "a child seen just now was past its stall bound");
     }
 
     /// <summary>
@@ -345,25 +362,22 @@ public sealed class PhaseRunnerTests
     }
 
     /// <summary>
-    /// A timing pattern that cannot be read in time against a line leaves the phase unmeasured by it - none of its marks,
-    /// not even those read before - and says so, while every other pattern keeps its marks and the phase its verdict.
+    /// A timing pattern written in a form that backtracks is read in linear time against every line, its marks kept as
+    /// any pattern's are, never left unmeasured for the time a match took, as once.
     /// </summary>
     [Fact]
-    public async Task ATimingPatternThatCannotBeReadInTime_LeavesThePhaseUnmeasuredByIt_AndSaysSo()
+    public async Task ABacktrackingTimingPattern_IsReadInLinearTime()
     {
         using var temp = new TempDirectory();
         var factory = new HarnessFactory();
-        var lines = new ScriptedLines(("compile took 3s", false), (new string('a', 40) + "!", false), ("link took 9s", false));
+        var lines = new ScriptedLines(("compile took 3s", false), (new string('a', 40_000) + "!", false), ("link took 9s", false));
 
         var result = await new PhaseRunner(lines, factory.FileSystem, factory.Output).RunAsync(
             Child("exit", temp.Combine("time.log")) with { TimingPatterns = ["^(a+)+$|compile took ([0-9]+)s", "link took ([0-9]+)s"] },
             TestContext.Current.CancellationToken);
 
-        Assert.Equal(["9"], result.Timings.Select(timing => timing.Value));
-        Assert.Contains(
-            "the timing pattern '^(a+)+$|compile took ([0-9]+)s' could not be matched against this phase's output in time; no timing was taken from it",
-            factory.StandardError.ToString(),
-            StringComparison.Ordinal);
+        Assert.Equal(["compile took 3s", "9"], result.Timings.Select(timing => timing.Value));
+        Assert.DoesNotContain("timing pattern", factory.StandardError.ToString(), StringComparison.Ordinal);
         Assert.Equal(0, result.ExitCode);
     }
 
