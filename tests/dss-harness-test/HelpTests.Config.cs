@@ -143,11 +143,11 @@ public sealed partial class HelpTests
     }
 
     /// <summary>
-    /// The config topic says a leg's inputs are watched only as deep as they lie, and the directories above them for
-    /// the names in them alone, so a build in another tree below the worktrees root is never heard: on Linux however
-    /// many directories they lie in, through one inotify instance for the process; on Windows and macOS up to the number
-    /// of directories .NET's watcher takes, read from the code, past which some are watched all the way down - and where
-    /// inotify cannot be called directly, that .NET's watcher stands in, said once.
+    /// The config topic says a leg's inputs are watched, on Linux, only as deep as they lie, and the directories above them
+    /// for the names in them alone, so a build in another tree below the worktrees root is never heard, however many
+    /// directories they lie in, through one inotify instance for the process; on Windows and macOS - and where inotify
+    /// cannot be called directly, .NET's watcher standing in, said once - through one watch of the root, counting only what
+    /// names an input or a directory above one; and that an overflow has every input looked at again.
     /// </summary>
     [Fact]
     public async Task ConfigTopic_SaysInputsAreWatchedOnlyAsDeepAsTheyLie()
@@ -155,16 +155,15 @@ public sealed partial class HelpTests
         var result = HelpText.Of("config");
 
         Assert.Contains(
-            "Its inputs are watched only as deep as they lie - each directory holding one, for its own files, and each directory "
-                + "above one, the root among them, for the names of the directories in it alone - so a build in another tree below the "
-                + "worktrees root, which init keeps in git by a placeholder, is never heard. On Linux every such directory is watched, "
-                + "however many there are, through one inotify instance for the whole process. On Windows and "
-                + $"macOS a watch takes at most {FileSystemWatcherKind.MostDirectoriesWatched} directories besides the root's own, those "
-                + "holding inputs and those above them alike, so past them the top-level directories watching the most are watched all "
-                + "the way down, until the rest fit, and a tree whose inputs lie in more top-level directories than that is watched "
-                + "whole. Where inotify cannot be called directly on Linux, .NET's "
-                + "watcher stands in, as on Windows and macOS, each directory taking an inotify instance of its own, and the process "
-                + "says so once.",
+            "On Linux its inputs are watched only as deep as they lie - each directory holding one, for its own files, and each "
+                + "directory above one, the root among them, for the names of the directories in it alone - so a build in another tree "
+                + "below the worktrees root, which init keeps in git by a placeholder, is never heard; every such directory is watched, "
+                + "however many there are, through one inotify instance for the whole process, and this user's inotify watches running "
+                + "out is said as the limit it is (fs.inotify.max_user_watches). On Windows and macOS, and on Linux where inotify cannot "
+                + "be called directly - where .NET's watcher stands in, and the process says so once - a tree is one watch of its root, "
+                + "all the way down, and what it hears counts only where it names an input or a directory above one. Where events come "
+                + "faster than the system's buffer or queue holds them, every input is looked at again against how the work found it, "
+                + "and one that no longer stands so counts.",
             Prose.Words(result.StandardOutput),
             StringComparison.Ordinal);
     }

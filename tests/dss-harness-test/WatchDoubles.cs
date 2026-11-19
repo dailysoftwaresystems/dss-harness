@@ -10,8 +10,8 @@ namespace DssHarness.Tests;
 /// cannot watch does.
 /// </summary>
 /// <param name="refusal">What starting raises, or nothing for a kind that starts.</param>
-/// <param name="mostDirectories">Its bound on directories: .NET's watcher's unless a test says otherwise.</param>
-internal sealed class ScriptedWatchKind(InputsUnwatchedException? refusal = null, int? mostDirectories = FileSystemWatcherKind.MostDirectoriesWatched) : IWatchKind
+/// <param name="wholeRoot">Whether it watches a tree through one watch of its root, as .NET's watcher does, rather than a watch a directory, as inotify's hub does.</param>
+internal sealed class ScriptedWatchKind(InputsUnwatchedException? refusal = null, bool wholeRoot = false) : IWatchKind
 {
     /// <summary>What a machine that will not watch says, in a system's own words.</summary>
     public const string SystemsWords = "The configured user limit (128) on the number of inotify instances has been reached.";
@@ -23,7 +23,7 @@ internal sealed class ScriptedWatchKind(InputsUnwatchedException? refusal = null
     public static string Refused => InputsUnwatchedException.Opening + SystemsWords;
 
     /// <inheritdoc/>
-    public int? MostDirectories => mostDirectories;
+    public bool WatchesTheRootWhole => wholeRoot;
 
     /// <summary>The directories the last start was asked to watch, as it was asked.</summary>
     public IReadOnlyList<WatchTarget>? Targets { get; private set; }
@@ -70,6 +70,9 @@ internal sealed class RecordingWatchSink : IWatchSink
     /// <summary>How <see cref="Heard"/> says the watch was lost.</summary>
     public const string WasLost = "lost";
 
+    /// <summary>How <see cref="Heard"/> says events were lost to an overflow, the watch going on.</summary>
+    public const string WasOverflowed = "overflowed";
+
     private readonly ConcurrentQueue<(string What, string Path)> _heard = new();
 
     /// <summary>Everything told so far: what happened, and to which path - or why, for a watch lost.</summary>
@@ -80,6 +83,8 @@ internal sealed class RecordingWatchSink : IWatchSink
     public void Named(string fullPath) => _heard.Enqueue((WasNamed, fullPath));
 
     public void Lost(string why) => _heard.Enqueue((WasLost, why));
+
+    public void Overflowed(string why) => _heard.Enqueue((WasOverflowed, why));
 
     /// <summary>
     /// Waits until the sink has been told <paramref name="what"/> of <paramref name="path"/>. File system notifications

@@ -617,114 +617,76 @@ public sealed class InputFingerprintTests
     }
 
     /// <summary>
-    /// Only past the watches the tool allows itself is a top-level directory watched all the way down - the one whose
-    /// inputs spread over the most directories first - so a tree whose sources fill many directories is watched as it was,
-    /// and a directory beside them tracked for one placeholder still costs one shallow watch.
+    /// Through a kind that watches a tree through one watch of its root - .NET's watcher, on Windows and macOS - inputs in
+    /// forty thousand directories are watched by that one watch, all the way down, and nothing else: no directory is
+    /// left out for a number of watches the tool once allowed itself, past which top-level directories were taken whole.
     /// </summary>
     [Fact]
-    public void AWatchOverMoreDirectoriesThanItAllows_TakesTheWidestTopLevelDirectoryAllTheWayDown()
+    public void FortyThousandInputDirectories_AreWatched()
     {
         using var temp = new TempDirectory();
-        var sources = Enumerable.Range(0, 80).Select(index => $"src/d{index:00}/f.cpp").ToList();
-
-        foreach (var source in sources)
-        {
-            temp.WriteFile(source, "f");
-        }
-
-        temp.WriteFile(".worktrees/.gitkeep", string.Empty);
-
-        using var watch = new InputWatch(temp.Path, [.. sources, ".worktrees/.gitkeep"], StringComparer.Ordinal, new ScriptedWatchKind());
-
-        Assert.Null(watch.Failure);
-        Assert.Equal([WatchTarget.NamesOnly(temp.Path), WatchTarget.Entries(temp.Combine(".worktrees")), WatchTarget.AllTheWayDown(temp.Combine("src"))], watch.Watched);
-    }
-
-    /// <summary>
-    /// A watch takes as many watches as the tool allows itself besides the root's own, and no more: directories of inputs
-    /// that fit are each watched for their own files - inputs in exactly as many top-level directories as it allows each
-    /// keep a watch of their own - and where taking top-level directories whole still leaves more than fit, the tree is
-    /// watched whole, as one watch.
-    /// </summary>
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public void AWatch_TakesNoMoreWatchesThanItAllows(bool oneMore)
-    {
-        using var temp = new TempDirectory();
-        var inputs = Enumerable.Range(0, FileSystemWatcherKind.MostDirectoriesWatched).Select(index => $"d{index:00}/f.cpp").ToList();
-
-        // A top-level directory of two directories of inputs: taken whole, it saves one watch, and one more is needed.
-        if (oneMore)
-        {
-            inputs.AddRange(["a/x/f.cpp", "a/y/f.cpp"]);
-        }
-
-        foreach (var input in inputs)
-        {
-            temp.WriteFile(input, "f");
-        }
-
-        using var watch = new InputWatch(temp.Path, inputs, StringComparer.Ordinal, new ScriptedWatchKind());
-
-        Assert.Null(watch.Failure);
-        Assert.Equal(
-            oneMore
-                ? [WatchTarget.AllTheWayDown(temp.Path)]
-                : [WatchTarget.NamesOnly(temp.Path), .. inputs.Select(input => WatchTarget.Entries(temp.Combine(input[..input.IndexOf('/')])))],
-            watch.Watched);
-    }
-
-    /// <summary>
-    /// A directory watched only for the names in it counts against what the tool allows itself as one holding inputs
-    /// does - each is a watcher of its own - so modules whose inputs lie deep each take a module whole, the most first, until
-    /// the rest fit: twenty modules of a build file and one source six directories down are thirteen modules whole and
-    /// seven watched directory by directory, within the bound with the root's own watch besides.
-    /// </summary>
-    [Fact]
-    public void DirectoriesWatchedForNamesAlone_CountAgainstTheBound_AsDirectoriesOfInputsDo()
-    {
-        using var temp = new TempDirectory();
-        var inputs = Enumerable.Range(0, 20)
-            .SelectMany(module => new[] { $"m{module:00}/pom.xml", $"m{module:00}/src/main/java/com/acme/m/A.java" })
-            .ToList();
-
-        foreach (var input in inputs)
-        {
-            temp.WriteFile(input, "f");
-        }
-
-        var kind = new ScriptedWatchKind();
+        var inputs = Enumerable.Range(0, 40_000).Select(index => $"t{index % 4}/d{index:00000}/f.cpp").ToList();
+        var kind = new ScriptedWatchKind(wholeRoot: true);
 
         using var watch = new InputWatch(temp.Path, inputs, StringComparer.Ordinal, kind);
 
-        // Each module watched apart takes seven: the module and its source's directory for their files, the five between
-        // for names.
-        static IEnumerable<WatchTarget> Apart(TempDirectory temp, int module)
-        {
-            var top = $"m{module:00}";
+        Assert.Null(watch.Failure);
+        Assert.Equal([WatchTarget.AllTheWayDown(temp.Path)], watch.Watched);
 
-            return
-            [
-                WatchTarget.Entries(temp.Combine(top)),
-                WatchTarget.NamesOnly(temp.Combine(top, "src")),
-                WatchTarget.NamesOnly(temp.Combine(top, "src", "main")),
-                WatchTarget.NamesOnly(temp.Combine(top, "src", "main", "java")),
-                WatchTarget.NamesOnly(temp.Combine(top, "src", "main", "java", "com")),
-                WatchTarget.NamesOnly(temp.Combine(top, "src", "main", "java", "com", "acme")),
-                WatchTarget.Entries(temp.Combine(top, "src", "main", "java", "com", "acme", "m")),
-            ];
-        }
+        // What it hears counts where it names an input, however deep, and nowhere else.
+        kind.Sink!.Written(temp.Combine("t3", "d39999", "f.cpp"));
+        kind.Sink.Written(temp.Combine("build", "f.o"));
+        Assert.Equal(["t3/d39999/f.cpp"], watch.Changed);
+    }
+
+    /// <summary>
+    /// Events lost to an overflow while the watch goes on have every input looked at again against how the work found it:
+    /// one written since, one gone and one arrived count, one that stands as found does not, and the span stays answered
+    /// for - a build below the root writing faster than a watch of the root is read once made the work unmeasured.
+    /// </summary>
+    [Fact]
+    public async Task AnOverflow_HasEveryInputLookedAtAgain_CountingThoseThatNoLongerStandAsFound()
+    {
+        using var temp = new TempDirectory();
+        string[] inputs = ["kept.txt", "written.txt", "gone.txt", "arrived.txt"];
+        var kind = new ScriptedWatchKind(wholeRoot: true);
+        var factory = new HarnessFactory();
+        var fingerprint = new InputFingerprint(factory.FileSystem, factory.Platform, kind);
+
+        temp.WriteFile("kept.txt", "kept");
+        temp.WriteFile("written.txt", "first");
+        temp.WriteFile("gone.txt", "gone");
+
+        var before = await fingerprint.TakeAsync(temp.Path, inputs, TestContext.Current.CancellationToken);
+        using var watch = fingerprint.Watch(temp.Path, inputs, before);
+
+        temp.WriteFile("written.txt", "written again");
+        File.Delete(temp.Combine("gone.txt"));
+        temp.WriteFile("arrived.txt", "arrived");
+
+        kind.Sink!.Overflowed("Too many changes at once in directory.");
 
         Assert.Null(watch.Failure);
-        Assert.Equal(
-            [
-                WatchTarget.NamesOnly(temp.Path),
-                .. Enumerable.Range(0, 13).Select(module => WatchTarget.AllTheWayDown(temp.Combine($"m{module:00}"))),
-                .. Enumerable.Range(13, 7).SelectMany(module => Apart(temp, module)),
-            ],
-            watch.Watched);
-        Assert.True(kind.Targets!.Count - 1 <= FileSystemWatcherKind.MostDirectoriesWatched, $"{kind.Targets.Count} watches");
+        Assert.Equal(["arrived.txt", "gone.txt", "written.txt"], watch.Changed);
+    }
+
+    /// <summary>
+    /// An overflow that leaves an input with no record of how the work found it - one that could not be read then - leaves
+    /// the span unanswered for, saying what overflowed and which input could not be looked at again, never passed over as
+    /// standing still.
+    /// </summary>
+    [Fact]
+    public void AnOverflow_WithAnInputThatCannotBeLookedAtAgain_LeavesTheSpanUnansweredFor()
+    {
+        using var temp = new TempDirectory();
+        var kind = new ScriptedWatchKind(wholeRoot: true);
+
+        using var watch = new InputWatch(temp.Path, ["unread.txt"], StringComparer.Ordinal, kind);
+
+        kind.Sink!.Overflowed("Too many changes at once in directory.");
+
+        Assert.Equal("Too many changes at once in directory., and the input 'unread.txt' cannot be looked at again against how the work found it", watch.Failure);
+        Assert.Empty(watch.Changed);
     }
 
     /// <summary>
