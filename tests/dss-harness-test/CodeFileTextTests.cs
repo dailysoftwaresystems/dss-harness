@@ -116,18 +116,17 @@ public sealed class CodeFileTextTests
         Assert.Equal(1, CodeFileText.LineIndex(string.Empty).LineAt(0));
     }
 
-    /// <summary>A probe is a decoded text's first characters, never cut inside a surrogate pair.</summary>
+    /// <summary>
+    /// What a content test is given is the decoded text whole, however long - its surrogate pairs whole with it - so a
+    /// marker anywhere in a file decides its claim. Red with the probe cut at its first characters (ProbeCharacters).
+    /// </summary>
     [Fact]
-    public void AProbe_IsTheTextsFirstCharacters_NeverInsideASurrogatePair()
+    public void AProbe_IsTheWholeText_HoweverLong()
     {
+        var text = new string('a', 100_000) + "😀" + "tail";
+
         Assert.Equal("short", CodeFileText.Probe("short"));
-        Assert.Equal(CodeFileText.ProbeCharacters, CodeFileText.Probe(new string('a', CodeFileText.ProbeCharacters * 2)).Length);
-
-        var split = new string('a', CodeFileText.ProbeCharacters - 1) + "😀" + "tail";
-        var probe = CodeFileText.Probe(split);
-
-        Assert.Equal(CodeFileText.ProbeCharacters - 1, probe.Length);
-        Assert.False(char.IsHighSurrogate(probe[^1]));
+        Assert.Same(text, CodeFileText.Probe(text));
     }
 
     private static (string? Text, string? State) Read(byte[] bytes)

@@ -376,9 +376,10 @@ public static partial class GraphLines
         return null;
     }
 
-    /// <summary>A place as <see cref="Of"/> writes one: <c>path:start-end</c>, then <c>#hash</c> where the node has one.</summary>
-    [System.Text.RegularExpressions.GeneratedRegex(@"^(?<path>[^ ].*):(?<start>\d+)-(?<end>\d+)(?: #(?<hash>[0-9a-fA-F]+))?$", System.Text.RegularExpressions.RegexOptions.CultureInvariant)]
-    private static partial System.Text.RegularExpressions.Regex PlaceForm();
+    /// <summary>A place as <see cref="Of"/> writes one: <c>path:start-end</c>, then <c>#hash</c> where the node has one - matched by the one linear engine.</summary>
+    private static System.Text.RegularExpressions.Regex PlaceForm() => Place.Value;
+
+    private static readonly Lazy<System.Text.RegularExpressions.Regex> Place = new(() => Text.LinearRegex.Compile(@"^(?<path>[^ ].*):(?<start>\d+)-(?<end>\d+)(?: #(?<hash>[0-9a-fA-F]+))?$"));
 }
 
 /// <summary>Where a node line says its node stands (<see cref="GraphLines.Placed"/>).</summary>

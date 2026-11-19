@@ -102,22 +102,68 @@ public sealed class CodebaseConversationChangesTests
     }
 
     /// <summary>
-    /// A delta past the step's cap is cut at whole lines, its first line always kept, and says how many lines it left
-    /// out.
+    /// A delta told at a page size too small for its own first line is told whole all the same: the page is never less
+    /// than what holds its first and last lines and a line beside them, so no change is left out for the size. Red with
+    /// the delta cut at whole lines under the step's tokens.
     /// </summary>
     [Fact]
-    public async Task ADeltaPastTheCap_IsCutAtWholeLines_SayingHowManyItLeftOut()
+    public async Task ADeltaAtAPageTooSmallForItsHead_IsToldWhole()
     {
         using var tree = await TreeAsync(("src/A.cs", A));
         var view = await QueriesAsync(tree);
         var pack = CodebaseContextPack.Make(view, new ContextPackRequest("see `One` and `Two`", All));
-        var nodes = pack.Lines.Count(line => line.Id is not null);
-        var first = $"0 declarations the conversation held: 0 moved or changed, 0 removed; {nodes} nodes of this step's pack added";
+        var nodes = pack.Lines.Where(line => line.Id is not null).Select(line => line.Text).ToList();
+        var first = $"0 declarations the conversation held: 0 moved or changed, 0 removed; {nodes.Count} nodes of this step's pack added";
 
-        Assert.True(nodes > 1, $"the pack holds {nodes} nodes: the cut needs more than one line to leave out");
-        Assert.Equal(
-            [first, $"{nodes} lines left out"],
-            CodebaseConversationChanges.Make(view, pack, [], EstimatedTokens.Of(first) + 1).Split('\n'));
+        Assert.True(nodes.Count > 1, $"the pack holds {nodes.Count} nodes: a cut needs more than one line to leave out");
+        Assert.Equal([first, .. nodes], CodebaseConversationChanges.Make(view, pack, [], EstimatedTokens.Of(first) + 1).Split('\n'));
+    }
+
+    /// <summary>
+    /// A conversation that held five thousand declarations, every one of which moved, is told every one, page by page at
+    /// the step's size: page 1 in the message, its last line saying how to ask for the next, each page after it the delta
+    /// going on, the last saying it is - each declaration on one page, once. Red with the delta cut at the step's tokens.
+    /// </summary>
+    [Fact]
+    public async Task AFiveThousandNodeDelta_IsToldWholeByPage()
+    {
+        const int Methods = 5_000;
+        var many = new System.Text.StringBuilder("public class Many\n{\n");
+
+        for (var at = 0; at < Methods; at++)
+        {
+            many.Append(System.Globalization.CultureInfo.InvariantCulture, $"    public void M{at}()\n    {{\n    }}\n\n");
+        }
+
+        using var tree = await TreeAsync(("src/Many.cs", many.Append("}\n").ToString()));
+        var before = await QueriesAsync(tree);
+        var held = string.Join('\n', before.OutlineFile("src/Many.cs")!.Select(GraphLines.Of));
+
+        // A line put at the head of the file moves every declaration in it.
+        await File.WriteAllTextAsync(Path.Combine(tree.Tree, "src", "Many.cs"), "// moved\n" + many, _token);
+        var after = new CodebaseGraphQueries((await tree.CheckAsync(null, null, "src/Many.cs")).Read);
+        var declared = after.OutlineFile("src/Many.cs")!.Select(GraphLines.Of).ToList();
+
+        var pages = new List<GraphTextPage>();
+        var told = CodebaseConversationChanges.Pages(after, NoPack, [held], CodebaseContextPack.DefaultTokens);
+
+        for (var at = 1; told.Page(at) is { } page; at++)
+        {
+            pages.Add(page);
+        }
+
+        var lines = pages.SelectMany(page => page.Lines).Select(line => line.Text).ToList();
+
+        Assert.True(declared.Count > Methods, $"the view declares {declared.Count}");
+        Assert.True(pages.Count > 1);
+        Assert.StartsWith($"{declared.Count} declarations the conversation held: {declared.Count} moved or changed, 0 removed; 0 nodes of this step's pack added\n", pages[0].Text, StringComparison.Ordinal);
+        Assert.Equal(pages[0].Text, CodebaseConversationChanges.Make(after, NoPack, [held], CodebaseContextPack.DefaultTokens));
+        Assert.EndsWith("codebase changes page 1 · ask graph for changes with page: 2 for the next", pages[0].Text, StringComparison.Ordinal);
+        Assert.All(pages.Skip(1), page => Assert.StartsWith($"codebase changes page {page.Page}:\n", page.Text, StringComparison.Ordinal));
+        Assert.EndsWith($"codebase changes page {pages.Count} of {pages.Count} · the last", pages[^1].Text, StringComparison.Ordinal);
+        Assert.All(pages, page => Assert.True(page.Tokens <= CodebaseContextPack.DefaultTokens, page.Text));
+        Assert.Equal(declared.Order(StringComparer.Ordinal), lines.Order(StringComparer.Ordinal));
+        Assert.Equal((int?)pages.Count, told.Known);
     }
 
     /// <summary>
@@ -215,7 +261,7 @@ public sealed class CodebaseConversationChangesTests
     private static readonly Func<string, bool> All = _ => true;
 
     /// <summary>A pack of no nodes: a delta made with it tells only what the conversation held.</summary>
-    private static readonly ContextPack NoPack = new(string.Empty, [], [], [], 0, 0, 0, new GraphNearness([], _ => false, [], [], []));
+    private static readonly ContextPack NoPack = new(string.Empty, [], [], [], 0, 0, new GraphNearness([], _ => false, [], [], []));
 
     /// <summary>A class whose method <c>One</c> has a body of one line, <c>var x = <paramref name="value"/>;</c>.</summary>
     private static string Bodied(string value) => $"public class A\n{{\n    public void One()\n    {{\n        var x = {value};\n    }}\n}}\n";

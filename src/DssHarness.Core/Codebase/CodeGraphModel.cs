@@ -278,7 +278,11 @@ public static class CodeFileStates
     /// <summary>A NUL in its first bytes, or a Git LFS pointer.</summary>
     public const string Binary = "binary";
 
-    /// <summary>Larger than <c>codebaseGraph.maxFileBytes</c>.</summary>
+    /// <summary>
+    /// Retired: what an earlier build of this tool held a file larger than its <c>codebaseGraph.maxFileBytes</c> in, unread.
+    /// No file is held in it now - every file claimed is read whole, whatever its size - and a view that still holds one says
+    /// so once, at the sync that reads it.
+    /// </summary>
     public const string TooLarge = "tooLarge";
 
     /// <summary>
@@ -446,14 +450,37 @@ public static class CodeGraphIds
     /// The name, under a graph's <c>extracts</c> directory and with forward separators, of the extract of the file at
     /// <paramref name="path"/> whose content is <paramref name="blob"/>, made by <paramref name="language"/> at
     /// <paramref name="version"/>: <c>&lt;ab&gt;/&lt;blob&gt;-&lt;path&gt;.&lt;language&gt;-&lt;version&gt;.json</c>, <c>ab</c> the blob's first
-    /// two characters and the path's part the first eight hexadecimal characters of its SHA-256 - an implementation's
-    /// answer may read the path, so a file's extract is its path's.
+    /// two characters and the path's part its whole SHA-256 - an implementation's answer may read the path, so a file's
+    /// extract is its path's, and two paths of one blob never share an extract, however many files a tree holds. Every name
+    /// is of one length for a blob, a language and a version, whatever the path, so the graphify step checks the longest a
+    /// run makes against the platform's path budget before it syncs (<c>PathBudget</c>).
     /// </summary>
     /// <param name="blob">The blob id git gives the file's content.</param>
     /// <param name="path">The file's path, relative to the tree with forward separators.</param>
     /// <param name="language">The implementation that made it.</param>
     /// <param name="version">Its version.</param>
     public static string ExtractName(string blob, string path, string language, int version)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(blob);
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        ArgumentException.ThrowIfNullOrWhiteSpace(language);
+
+        return string.Create(
+            CultureInfo.InvariantCulture,
+            $"{blob[..2]}/{blob}-{Sha256(path)}.{language}-{version}{OrchestratorLayout.GraphExtractExtension}");
+    }
+
+    /// <summary>
+    /// The name an earlier build of this tool gave the same extract, the path's part the first eight characters of its
+    /// SHA-256 alone - which two paths of one blob could share: read so a manifest that build wrote still reads, its
+    /// extracts served as they are until its next sync, which finds each name not the one <see cref="ExtractName"/> makes
+    /// and reads the file again. Never written.
+    /// </summary>
+    /// <param name="blob">The blob id git gives the file's content.</param>
+    /// <param name="path">The file's path, relative to the tree with forward separators.</param>
+    /// <param name="language">The implementation that made it.</param>
+    /// <param name="version">Its version.</param>
+    public static string EarlierExtractName(string blob, string path, string language, int version)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(blob);
         ArgumentException.ThrowIfNullOrWhiteSpace(path);

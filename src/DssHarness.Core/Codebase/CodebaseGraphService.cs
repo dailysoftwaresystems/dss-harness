@@ -18,8 +18,7 @@ public interface ICodebaseGraphService
     /// <summary>
     /// Brings the run's graph of one tree up to date by a whole listing of it - the main checkout's, the base, or with an
     /// agent an agent's worktree's, its view, made against the base (the base first, where the run has none yet): reads
-    /// only the files whose blob, claimant, claimant's version, or what <c>maxFileBytes</c> or <c>languages</c> decide of
-    /// them changed since that tree was last synced - or since the newest earlier run's graph, where the run has none -
+    /// only the files whose blob, claimant, claimant's version, or what <c>languages</c> decides of them changed since that tree was last synced - or since the newest earlier run's graph, where the run has none -
     /// those whose extract is gone, and those it could not read; a view reads none whose extract the base or an earlier
     /// sync of it made. Links again only what a change could have changed, where this process linked the tree before, and
     /// writes its records. Syncs of one tree wait for each other; syncs of different trees run side by side, a view's on
@@ -1061,6 +1060,9 @@ public sealed class CodebaseGraphService(
         private int _reused;
         private int _hashed;
 
+        /// <summary>How many files an earlier build listed <c>tooLarge</c> this sync reads again whole, said once it is done.</summary>
+        private int _retired;
+
         /// <summary>
         /// Whether this sync listed the tree whole: only then may the listing after its reads list the tree whole, so a sync
         /// by paths, or a check, never has git hash a file it was not given.
@@ -1590,6 +1592,12 @@ public sealed class CodebaseGraphService(
             });
             _service._output.Publish(new GraphSynced(_run.GraphDirectory, _view, _request.Why, listed, _extracted, _reused, removed, seconds));
 
+            // The retired state is said by the sync that leaves it behind, once: the next finds none of it.
+            if (Interlocked.Exchange(ref _retired, 0) is var retired and > 0)
+            {
+                _service._output.Info("graph", $"the codebase graph of run '{_run.Name}' read {ReportText.Counted(retired, "file")} an earlier build of this tool listed {CodeFileStates.TooLarge}, when the graph left a file past a size unread: every file it claims is read whole now, whatever its size.");
+            }
+
             return new CodebaseGraphSynced(
                 _run.GraphDirectory,
                 _view,
@@ -2093,8 +2101,9 @@ public sealed class CodebaseGraphService(
 
         /// <summary>
         /// The entry of a file whose blob has not changed, kept as it was - its extract copied from the run it was seeded from
-        /// - where nothing else that decides it changed: the implementation that claims it and its version, the largest
-        /// file read; null where the file is to be read again.
+        /// - where nothing else that decides it changed: the implementation that claims it and its version; null where the
+        /// file is to be read again. A file an earlier build listed <c>tooLarge</c>, when the graph left a file past a size
+        /// unread, is read again: the graph reads every file whole now, and the sync says once how many it read so.
         /// </summary>
         private CodeGraphFileEntry? Settled(string path, Listed file, CodeGraphFileEntry? before, bool sameReading, OrchestratorLayout? from)
         {
@@ -2113,19 +2122,14 @@ public sealed class CodebaseGraphService(
                 return null;
             }
 
-            // A limit lowered under a file read, or found binary or ambiguous, lists it too large: a fresh graph would.
-            if (before.State != CodeFileStates.TooLarge && before.Bytes > _shape.MaxFileBytes)
-            {
-                return null;
-            }
-
             switch (before.State)
             {
                 case CodeFileStates.Binary:
                     return before;
 
                 case CodeFileStates.TooLarge:
-                    return before.Bytes > _shape.MaxFileBytes ? before : null;
+                    Interlocked.Increment(ref _retired);
+                    return null;
 
                 case CodeFileStates.Ambiguous:
                     return sameReading ? before : null;
@@ -2208,9 +2212,8 @@ public sealed class CodebaseGraphService(
         /// index's where git finds the file clean - which, for one git would clean otherwise than the index holds it, is no hash
         /// of what it holds - and the one git gives its working file where it changed. Asking the one question twice compares
         /// like with like, and runs no clean filter over a file git found clean. A file truncated and written again whole, or
-        /// grown past maxFileBytes and back, reads clean to git again though what was read of it was none of what git lists:
-        /// its size or time after the listing is what tells. A file too large is not read, so not listed again, and is held to
-        /// its size and time alone; an unreadable one keeps nothing.
+        /// grown and shrunk back, reads clean to git again though what was read of it was none of what git lists: its size or
+        /// time after the listing is what tells. An unreadable one keeps nothing.
         /// </remarks>
         private async Task<IReadOnlyList<(string Path, CodeGraphFileEntry Entry)>> ReadAsync(IReadOnlyList<(string Path, string Blob)> files)
         {
@@ -2223,7 +2226,7 @@ public sealed class CodebaseGraphService(
                 read.Add((file.Path, file.Blob, entry, stored, seen));
             }).ConfigureAwait(false);
 
-            var looked = read.Where(file => file.Entry.State is not (CodeFileStates.Unreadable or CodeFileStates.TooLarge)).ToList();
+            var looked = read.Where(file => file.Entry.State is not CodeFileStates.Unreadable).ToList();
             var moved = new HashSet<string>(StringComparer.Ordinal);
 
             if (looked.Count > 0)
@@ -2262,16 +2265,16 @@ public sealed class CodebaseGraphService(
         }
 
         /// <summary>
-        /// One file read, by the core's rules first - its size, then its bytes, binary or undecodable, gone since it was
-        /// listed - and then by the implementation that claims it, whose extract is completed with every node's digest: its
-        /// entry, the extract to store once its blob is confirmed, and how the file stood when it was read, where its size
-        /// or its bytes decided its entry.
+        /// One file read, whatever its size, by the core's rules first - its bytes streamed into its text, binary or
+        /// undecodable, gone since it was listed - and then by the implementation that claims it, whose extract is completed
+        /// with every node's digest: its entry, the extract to store once its blob is confirmed, and how the file stood when
+        /// it was read, where its bytes decided its entry.
         /// </summary>
         private async Task<(CodeGraphFileEntry Entry, CodeGraphStoredExtract? Stored, FileStanding? Seen)> ReadOneAsync(string path, string blob, CancellationToken token)
         {
             var absolute = Absolute(path);
             FileStanding? standing;
-            byte[] bytes;
+            CodeFileDecoding decoded;
 
             try
             {
@@ -2282,12 +2285,7 @@ public sealed class CodebaseGraphService(
                     return (new CodeGraphFileEntry(blob, CodeFileStates.Unreadable, 0) { Why = "it was gone when it was read" }, null, null);
                 }
 
-                if (TooLarge(blob, standing.Length, _shape, standing.Written) is { } tooLarge)
-                {
-                    return (tooLarge, null, standing);
-                }
-
-                bytes = await _service._fileSystem.ReadAllBytesAsync(absolute, token).ConfigureAwait(false);
+                decoded = await CodeFileText.DecodeAsync(_service._fileSystem, absolute, standing.Length, token).ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
             {
@@ -2299,13 +2297,13 @@ public sealed class CodebaseGraphService(
             }
 
             // A write while it was read leaves bytes of no one content, though it may leave the file's blob as it was: its
-            // size or time moved, or it read to another length than it stood at. Nothing is made of such bytes.
-            if (bytes.Length != standing.Length || !StandsAsSeen(path, standing))
+            // size or time moved, or its two readings differ. Nothing is made of such bytes.
+            if (decoded.Changed || !StandsAsSeen(path, standing))
             {
                 return (new CodeGraphFileEntry(blob, CodeFileStates.Unreadable, 0) { Why = ChangedWhileRead }, null, null);
             }
 
-            var read = _service.Read(path, blob, bytes, _shape, standing.Written);
+            var read = _service.Read(path, blob, decoded, standing.Length, _shape, standing.Written);
             return (read.Entry, read.Stored, read.Settled ? standing : null);
         }
 
@@ -2484,12 +2482,28 @@ public sealed class CodebaseGraphService(
         var held = await _gitClient.HeldAtAsync(tree, baseCommit, paths, cancellationToken).ConfigureAwait(false);
         List<string> blobs = [.. paths.Select(path => held.TryGetValue(path, out var at) ? at.Blob : null).OfType<string>().Distinct(StringComparer.Ordinal)];
 
-        // A blob over maxFileBytes is never read: its size is asked first, as a file's is.
+        // Every blob is read, whatever its size: its size is asked first, so the blobs are read together in parts of about
+        // BaseBlobsTogether bytes - a part that loses nothing, a blob larger than it read alone - each part's extracts made
+        // and its bytes let go before the next is read.
         IReadOnlyList<long?> sizes = blobs.Count == 0 ? [] : await _gitClient.ReadBlobSizesAsync(tree, blobs, cancellationToken).ConfigureAwait(false);
-        List<string> small = [.. blobs.Where((_, at) => sizes[at] is { } size && size <= request.Shape.MaxFileBytes)];
-        IReadOnlyList<byte[]?> contents = small.Count == 0 ? [] : await _gitClient.ReadBlobsAsync(tree, small, cancellationToken).ConfigureAwait(false);
-        var sizeOf = blobs.Zip(sizes).ToDictionary(blob => blob.First, blob => blob.Second, StringComparer.Ordinal);
-        var bytesOf = small.Zip(contents).ToDictionary(blob => blob.First, blob => blob.Second, StringComparer.Ordinal);
+        var pathsOf = paths.Where(path => held.TryGetValue(path, out var at) && at.Blob is not null).ToLookup(path => held[path].Blob!, StringComparer.Ordinal);
+
+        // Each path's side at the base, by its own path: an implementation's answer may read the path.
+        var bases = new Dictionary<string, (Side? Side, string? Why)>(StringComparer.Ordinal);
+
+        foreach (var part in Parts(blobs, sizes))
+        {
+            var contents = await _gitClient.ReadBlobsAsync(tree, part, cancellationToken).ConfigureAwait(false);
+
+            for (var at = 0; at < part.Count; at++)
+            {
+                foreach (var path in pathsOf[part[at]])
+                {
+                    bases[path] = contents[at] is { } bytes ? AtBase(path, part[at], bytes, request.Shape) : (null, "its blob could not be read");
+                }
+            }
+        }
+
         var nodes = new List<CodeChangedNode>();
         var uncompared = new List<CodeUncomparedFile>();
 
@@ -2516,11 +2530,9 @@ public sealed class CodebaseGraphService(
 
             var before = Side.None;
 
-            if (held.TryGetValue(path, out var at) && at.Blob is { } blob)
+            if (held.TryGetValue(path, out var at) && at.Blob is not null)
             {
-                var (then, why) = bytesOf.GetValueOrDefault(blob) is { } bytes
-                    ? AtBase(path, blob, bytes, request.Shape)
-                    : (null, sizeOf.GetValueOrDefault(blob) is { } size ? TooLarge(blob, size, request.Shape, written: null)?.Why : "its blob could not be read");
+                var (then, why) = bases.GetValueOrDefault(path, (null, "its blob could not be read"));
 
                 if (then is null)
                 {
@@ -2538,12 +2550,45 @@ public sealed class CodebaseGraphService(
     }
 
     /// <summary>
-    /// A file's blob at the base, read as a sync reads the file - its size, its bytes, the implementation that claims it - or,
-    /// where no implementation read it or it is kept out as generated code, none and why.
+    /// The bytes a change-first comparison reads its base's blobs together in, about: a part, never a bound - every blob is
+    /// read, and one larger than it alone - so the base's side of a change holds one part's bytes at a time.
+    /// </summary>
+    internal const long BaseBlobsTogether = 64L * 1024 * 1024;
+
+    /// <summary>
+    /// <paramref name="blobs"/> in their order, in parts whose sizes together come to about <see cref="BaseBlobsTogether"/>:
+    /// each part closed by the blob that brings it to that, a blob of no known size a part's like any other.
+    /// </summary>
+    private static IEnumerable<List<string>> Parts(IReadOnlyList<string> blobs, IReadOnlyList<long?> sizes)
+    {
+        var part = new List<string>();
+        long bytes = 0;
+
+        for (var at = 0; at < blobs.Count; at++)
+        {
+            part.Add(blobs[at]);
+            bytes += sizes[at] ?? 0;
+
+            if (bytes >= BaseBlobsTogether)
+            {
+                yield return part;
+                (part, bytes) = ([], 0);
+            }
+        }
+
+        if (part.Count > 0)
+        {
+            yield return part;
+        }
+    }
+
+    /// <summary>
+    /// A file's blob at the base, read as a sync reads the file - its bytes, the implementation that claims it - or, where no
+    /// implementation read it or it is kept out as generated code, none and why.
     /// </summary>
     private (Side? Side, string? Why) AtBase(string path, string blob, byte[] bytes, CodebaseGraphShape shape)
     {
-        var read = Read(path, blob, bytes, shape, written: null);
+        var read = Read(path, blob, CodeFileText.Decode(bytes), bytes.Length, shape, written: null);
 
         return read is { Stored: { } stored, Lines: { } lines } && !string.Equals(read.Entry.State, CodeFileStates.Generated, StringComparison.Ordinal)
             ? (new Side(stored.Extract, lines), null)
@@ -2560,13 +2605,18 @@ public sealed class CodebaseGraphService(
         public static Side None { get; } = new(null, []);
     }
 
-    /// <summary>The lines of the file at <paramref name="absolute"/> as an extract numbers them; null where it is gone, cannot be read now, or does not decode.</summary>
+    /// <summary>The lines of the file at <paramref name="absolute"/> as an extract numbers them, read streamed; null where it is gone, cannot be read now, or does not decode.</summary>
     private async Task<IReadOnlyList<string>?> LinesNowAsync(string absolute, string path, CancellationToken cancellationToken)
     {
         try
         {
-            var decoded = CodeFileText.Decode(await _fileSystem.ReadAllBytesAsync(absolute, cancellationToken).ConfigureAwait(false));
-            return decoded.IsRead ? new CodeFileInput(path, decoded.Text).Lines : null;
+            if (_fileSystem.StandingOf(absolute) is not { } standing)
+            {
+                return null;
+            }
+
+            var decoded = await CodeFileText.DecodeAsync(_fileSystem, absolute, standing.Length, cancellationToken).ConfigureAwait(false);
+            return decoded.IsRead && !decoded.Changed ? new CodeFileInput(path, decoded.Text).Lines : null;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
@@ -2574,37 +2624,25 @@ public sealed class CodebaseGraphService(
         }
     }
 
-    /// <summary>The entry of a file of <paramref name="length"/> bytes over <c>maxFileBytes</c>, which is never read; null where it is not over.</summary>
-    private static CodeGraphFileEntry? TooLarge(string blob, long length, CodebaseGraphShape shape, DateTime? written)
-        => length > shape.MaxFileBytes
-            ? new CodeGraphFileEntry(blob, CodeFileStates.TooLarge, length) { Why = string.Create(CultureInfo.InvariantCulture, $"{length:N0} bytes, over maxFileBytes ({shape.MaxFileBytes:N0})"), Mtime = written }
-            : null;
-
     /// <summary>
-    /// What the bytes of the file at <paramref name="path"/> are, by the core's rules - over <c>maxFileBytes</c>, binary or
-    /// undecodable - and then by the implementation that claims them, whose extract is completed with every node's digest:
-    /// its entry, the extract to store once its blob is confirmed, whether the bytes decided the entry - a state a later
-    /// sync may keep while the file stands as it did - rather than a failure to read them, which is tried again, and its
-    /// lines where it decoded. The one reading of a file's bytes into an extract: a sync's of the file, and the change-first
-    /// base's of its blob.
+    /// What the bytes of the file at <paramref name="path"/> are, whatever their size, by the core's rules - binary or
+    /// undecodable, as <paramref name="decoded"/> found them - and then by the implementation that claims them, whose extract
+    /// is completed with every node's digest: its entry, the extract to store once its blob is confirmed, whether the bytes
+    /// decided the entry - a state a later sync may keep while the file stands as it did - rather than a failure to read
+    /// them, which is tried again, and its lines where it decoded. The one reading of a file's text into an extract: a
+    /// sync's of the file, and the change-first base's of its blob.
     /// </summary>
     /// <param name="path">The file's path, relative to the tree with forward separators.</param>
     /// <param name="blob">The id git gives the bytes.</param>
-    /// <param name="bytes">The bytes.</param>
+    /// <param name="decoded">What the bytes are to the graph (<see cref="CodeFileText.Decode"/>, <see cref="CodeFileText.DecodeAsync"/>).</param>
+    /// <param name="length">How many bytes they are.</param>
     /// <param name="shape">What the workflow's <c>codebaseGraph</c> says: the languages it uses, and whether generated code is kept out.</param>
     /// <param name="written">When the file was written, which its entry records; null for a blob.</param>
-    private FileRead Read(string path, string blob, byte[] bytes, CodebaseGraphShape shape, DateTime? written)
+    private FileRead Read(string path, string blob, CodeFileDecoding decoded, long length, CodebaseGraphShape shape, DateTime? written)
     {
-        if (TooLarge(blob, bytes.Length, shape, written) is { } tooLarge)
-        {
-            return new FileRead(tooLarge, null, true, null);
-        }
-
-        var decoded = CodeFileText.Decode(bytes);
-
         if (!decoded.IsRead)
         {
-            return new FileRead(new CodeGraphFileEntry(blob, decoded.State, bytes.Length) { Why = decoded.Why, Mtime = written }, null, true, null);
+            return new FileRead(new CodeGraphFileEntry(blob, decoded.State, length) { Why = decoded.Why, Mtime = written }, null, true, null);
         }
 
         var text = decoded.Text;
@@ -2615,12 +2653,12 @@ public sealed class CodebaseGraphService(
 
         if (route.Failed is { } failed)
         {
-            return new FileRead(new CodeGraphFileEntry(blob, CodeFileStates.Unreadable, bytes.Length) { Why = failed, Mtime = written }, null, false, lines);
+            return new FileRead(new CodeGraphFileEntry(blob, CodeFileStates.Unreadable, length) { Why = failed, Mtime = written }, null, false, lines);
         }
 
         if (route.Extractor is not { } claimant)
         {
-            return new FileRead(new CodeGraphFileEntry(blob, CodeFileStates.Ambiguous, bytes.Length) { Why = route.Ambiguous, Mtime = written }, null, true, lines);
+            return new FileRead(new CodeGraphFileEntry(blob, CodeFileStates.Ambiguous, length) { Why = route.Ambiguous, Mtime = written }, null, true, lines);
         }
 
         var extractor = shape.Uses(claimant.Language) ? claimant : _extractors.Fallback;
@@ -2634,18 +2672,18 @@ public sealed class CodebaseGraphService(
         {
             // The contract's kit holds every implementation to answering for any text; one that throws is a defect of
             // it, said for the one file and never the end of the sync.
-            return new FileRead(new CodeGraphFileEntry(blob, CodeFileStates.Unreadable, bytes.Length) { Why = $"its implementation '{extractor.Language}' failed on it: {ex.Message.TrimEnd('.')}", Mtime = written }, null, false, lines);
+            return new FileRead(new CodeGraphFileEntry(blob, CodeFileStates.Unreadable, length) { Why = $"its implementation '{extractor.Language}' failed on it: {ex.Message.TrimEnd('.')}", Mtime = written }, null, false, lines);
         }
 
         var stored = new CodeGraphStoredExtract(CodeGraphManifest.CurrentSchema, extractor.Language, extractor.Version, blob, path, lines.Count, extract);
 
         if (stored.Problem() is { } wrong)
         {
-            return new FileRead(new CodeGraphFileEntry(blob, CodeFileStates.Unreadable, bytes.Length) { Why = $"its implementation '{extractor.Language}' answered what is no extract: {wrong}", Mtime = written }, null, false, lines);
+            return new FileRead(new CodeGraphFileEntry(blob, CodeFileStates.Unreadable, length) { Why = $"its implementation '{extractor.Language}' answered what is no extract: {wrong}", Mtime = written }, null, false, lines);
         }
 
         // A file read keeps why it is generated, where its implementation said, in its why: the mark a later sync keeps.
-        var entry = new CodeGraphFileEntry(blob, StateOf(extractor, extract.Generated is not null, shape), bytes.Length)
+        var entry = new CodeGraphFileEntry(blob, StateOf(extractor, extract.Generated is not null, shape), length)
         {
             Language = extractor.Language,
             Why = extract.Generated,

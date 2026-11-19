@@ -15,7 +15,8 @@ namespace DssHarness.Core.Agents.SideTasks;
 /// the newest graph of the repository's runs or side-tasks at its opening, then incremental, synced again after each of
 /// its agent's writes and commands on either client (<see cref="AfterWrites"/>). Its agent is given the <c>graph</c> tool
 /// with every operation its client serves and no narrowing, held to the side-task's own policy, the repository map with
-/// its first message, and a context pack made from each message the person types.
+/// its first message, and a context pack made from each message the person types - its page 1 with the message, and its
+/// later pages by the tool's <c>pack</c>.
 /// </summary>
 public sealed class SideTaskGraph
 {
@@ -107,16 +108,20 @@ public sealed class SideTaskGraph
 
         var tool = Tool(queries, new AgentPolicy(files, platform, ground), Orchestration.Flow.FlowStepGraph.ReadsOf(ground));
 
+        // Every operation its client serves, pack among them: each message's pack goes on in pages, the tool held for the
+        // whole chat paging the last message's.
         return new AgentGraphSupport(
             tool,
             line => store.AppendGraphStepLine(layout.Directory, line),
-            (written, cancellationToken) => AfterWriteAsync(tool, written, cancellationToken));
+            (written, cancellationToken) => AfterWriteAsync(tool, written, cancellationToken),
+            CodebaseGraphTool.Operations(write: true, narrow: false, pack: true));
     }
 
     /// <summary>
     /// The person's message as the side-task's agent is given it: the repository map at its head where it is the first,
-    /// the context pack made from the message at the head of each - each part written as every first message's parts are
-    /// (<see cref="AgentPromptParts.Part"/>) - and the pack's nearness kept for the tool's <c>find</c>, whose ties it breaks.
+    /// the context pack made from the message at the head of each, its page 1 - each part written as every first message's
+    /// parts are (<see cref="AgentPromptParts.Part"/>) - and the pack kept, its nearness for the tool's <c>find</c>, whose
+    /// ties it breaks, and its later pages for the tool's <c>pack</c>.
     /// </summary>
     /// <param name="message">The person's message, whole.</param>
     /// <param name="first">Whether it is the side-task's first.</param>
@@ -131,17 +136,21 @@ public sealed class SideTaskGraph
 
         if (queries is { } view)
         {
-            var pack = CodebaseContextPack.Make(view, new ContextPackRequest(message, _ => true));
-            near = pack.Near;
+            var made = CodebaseContextPack.Make(view, new ContextPackRequest(message, _ => true));
+            near = made.Near;
+            pack = made;
 
-            if (pack.Text.Length > 0)
+            if (made.Text.Length > 0)
             {
-                front += AgentPromptParts.Part(AgentPromptParts.CodebaseTag, pack.Text);
+                front += AgentPromptParts.Part(AgentPromptParts.CodebaseTag, made.Text);
             }
         }
 
         return front + message;
     }
+
+    /// <summary>The context pack of the person's last message, whose later pages the tool's <c>pack</c> gives; null before any.</summary>
+    private ContextPack? pack;
 
     /// <summary>
     /// How near each node is to the work of the person's last message, as its pack said it, read by the tool at each
@@ -195,6 +204,7 @@ public sealed class SideTaskGraph
             async (path, cancellationToken) => new CodebaseGraphQueries((await graph.CheckAsync(request, [path], cancellationToken).ConfigureAwait(false)).Read),
             () => near,
             pages: new GraphPageStore(Path.Combine(layout.Directory, OrchestratorLayout.StepPagesDirectoryName), files, reads),
-            mask: mask);
+            mask: mask,
+            pack: () => pack?.Paged);
     }
 }

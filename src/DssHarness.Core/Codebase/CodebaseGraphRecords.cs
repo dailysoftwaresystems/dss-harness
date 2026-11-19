@@ -110,7 +110,10 @@ public sealed record CodeGraphManifest(
             return $"its file '{path}' was read by '{language}', which it names no version of";
         }
 
-        return entry.Extract is { } name && name != CodeGraphIds.ExtractName(entry.Blob!, path, language, version.Version)
+        // An earlier build's name of the same extract still reads: the next sync reads its file again, under the name made now.
+        return entry.Extract is { } name
+            && name != CodeGraphIds.ExtractName(entry.Blob!, path, language, version.Version)
+            && name != CodeGraphIds.EarlierExtractName(entry.Blob!, path, language, version.Version)
             ? $"its file '{path}' names the extract '{name}', which is not the one '{language}' at version {version.Version.ToString(CultureInfo.InvariantCulture)} makes of its blob"
             : null;
     }

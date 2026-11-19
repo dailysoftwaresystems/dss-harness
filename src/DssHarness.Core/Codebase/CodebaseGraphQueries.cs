@@ -6,8 +6,8 @@ namespace DssHarness.Core.Codebase;
 
 /// <summary>
 /// The lookups a <see cref="CodebaseGraphRead"/> is asked by, indexed once from it: each node by its id, handle, qualified
-/// and simple name and the line it is on, each file's nodes, each node's edges in and out by kind, the words its names split
-/// into weighed by how rare they are, and the 99th percentile of each kind's out-degree. One owner of what the <c>graph</c>
+/// and simple name and the line it is on, each file's nodes, each node's edges in and out by kind, and the words its names
+/// split into weighed by how rare they are. One owner of what the <c>graph</c>
 /// tool and the <c>query-codebase-graph</c> verb answer from - the same view and query answer alike - over the neutral model,
 /// no language of its own.
 /// </summary>
@@ -29,7 +29,6 @@ public sealed class CodebaseGraphQueries
     private readonly ILookup<string, CodeEdge> _in;
     private readonly IReadOnlyDictionary<string, double> _idf;
     private readonly IReadOnlyDictionary<string, IReadOnlyList<string>> _words;
-    private readonly IReadOnlyDictionary<(string Kind, GraphSide Side), int> _percentile;
     private readonly IReadOnlyDictionary<string, FileExtract?> _extracts;
     private readonly IReadOnlySet<string> _testFiles;
     private readonly ConcurrentDictionary<string, GraphCard> _cards = new(StringComparer.Ordinal);
@@ -131,7 +130,6 @@ public sealed class CodebaseGraphQueries
 
         _out = symbols.Edges.ToLookup(edge => edge.From, StringComparer.Ordinal);
         _in = symbols.Edges.ToLookup(edge => edge.To, StringComparer.Ordinal);
-        _percentile = Percentiles(symbols.Edges, kept.Count);
         _parts = symbols.Edges.Where(edge => string.Equals(edge.Kind, CodeEdgeKinds.PartOf, StringComparison.Ordinal))
             .SelectMany(edge => new[] { (edge.From, edge.To), (edge.To, edge.From) })
             .GroupBy(pair => pair.Item1, StringComparer.Ordinal)
@@ -366,8 +364,26 @@ public sealed class CodebaseGraphQueries
         ArgumentOutOfRangeException.ThrowIfLessThan(limit, 1);
         ArgumentOutOfRangeException.ThrowIfNegative(offset);
 
+        var ranked = Scored(query, kind, path, near);
+
+        return new GraphMatches([.. ranked.Skip(offset).Take(limit).Select(scored => scored.Card)], ranked.Count);
+    }
+
+    /// <summary>
+    /// Every node that matches <paramref name="query"/>, with its score, in the order <see cref="Find"/> gives them: the one
+    /// ranking of a query's matches, which the context pack seeds from - every match, weighed by its score.
+    /// </summary>
+    /// <param name="query">The words to match, split and folded as a name is.</param>
+    /// <param name="kind">The one kind to keep, where it is given.</param>
+    /// <param name="path">The one file to keep the nodes of, where it is given.</param>
+    /// <param name="near">How near each node is to the step's own work, which breaks a tie; none where it is not given.</param>
+    public IReadOnlyList<(GraphCard Card, double Score)> Scored(string query, string? kind = null, string? path = null, GraphNearness? near = null)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(query);
+
         var terms = new Terms(Split(query), _idf);
-        var ranked = _symbols.Values
+
+        return [.. _symbols.Values
             .Where(symbol => kind is null || string.Equals(symbol.Kind, kind, StringComparison.Ordinal))
             .Select(symbol => Card(symbol.Id))
             .Where(card => path is null || string.Equals(card.Path, path, StringComparison.Ordinal))
@@ -376,11 +392,7 @@ public sealed class CodebaseGraphQueries
             .OrderByDescending(scored => scored.Card.Generated ? 0 : 1)
             .ThenByDescending(scored => scored.Score)
             .ThenBy(scored => near?.Of(scored.Card) ?? GraphNearness.Far)
-            .ThenBy(scored => scored.Card.Id, StringComparer.Ordinal)
-            .Select(scored => scored.Card)
-            .ToList();
-
-        return new GraphMatches([.. ranked.Skip(offset).Take(limit)], ranked.Count);
+            .ThenBy(scored => scored.Card.Id, StringComparer.Ordinal)];
     }
 
     /// <summary>The files the view holds, by path.</summary>
@@ -522,23 +534,6 @@ public sealed class CodebaseGraphQueries
         }
 
         return reached;
-    }
-
-    /// <summary>
-    /// How many nodes the view holds that <paramref name="edges"/> reach from <paramref name="id"/>, where that makes it a
-    /// hub - at least <see cref="CrowdFloor"/>, and more than the view's 99th percentile of any of those kinds on its side -
-    /// which the context pack gives and does not go through; null where it goes through. The one rule of a hub.
-    /// </summary>
-    /// <param name="id">A node's id, the view's.</param>
-    /// <param name="edges">The kinds walked, each with the side it is followed from.</param>
-    /// <param name="into">The kind within a kind each edge's target must be (<see cref="GraphRelations.Into"/>); null for any.</param>
-    public int? Crowd(string id, IReadOnlyList<(GraphSide Side, string Kind)> edges, string? into = null)
-    {
-        ArgumentNullException.ThrowIfNull(edges);
-
-        var bound = edges.Max(edge => _percentile.GetValueOrDefault((edge.Kind, edge.Side)));
-        var degree = Steps(id, edges, into).Select(step => step.To).Distinct(StringComparer.Ordinal).Count();
-        return degree >= CrowdFloor && degree > bound ? degree : null;
     }
 
     /// <summary>
@@ -745,9 +740,9 @@ public sealed class CodebaseGraphQueries
     /// <summary>
     /// What an answer about the file at <paramref name="path"/> says the graph does not hold of it, a line each: the state
     /// it is held in where no implementation read it, with why; where its implementation stopped reading it or could not
-    /// bind it, by line and why - the first, where there are several - each one line, the file's path and each why printable
-    /// (<see cref="ReportText.Printable"/>). None where the graph holds the whole of it, or where the view holds no such
-    /// file.
+    /// bind it, how many places, then each of them by line and why, in the file's order - every one, however many - each one
+    /// line, the file's path and each why printable (<see cref="ReportText.Printable"/>). None where the graph holds the
+    /// whole of it, or where the view holds no such file.
     /// </summary>
     /// <param name="path">A file's path, relative to the tree with forward separators.</param>
     public IReadOnlyList<string> Unread(string path)
@@ -774,10 +769,15 @@ public sealed class CodebaseGraphQueries
 
         if (extract?.Dynamic is { Count: > 0 } dynamic)
         {
-            var first = dynamic.OrderBy(mark => mark.Line).First();
-            lines.Add(dynamic.Count == 1
-                ? $"line {first.Line.ToString(CultureInfo.InvariantCulture)}: {ReportText.Printable(first.Why)}"
-                : $"{ReportText.Counted(dynamic.Count, "place")} the graph cannot bind, the first at line {first.Line.ToString(CultureInfo.InvariantCulture)}: {ReportText.Printable(first.Why)}");
+            if (dynamic.Count > 1)
+            {
+                lines.Add($"{ReportText.Counted(dynamic.Count, "place")} the graph cannot bind:");
+            }
+
+            lines.AddRange(dynamic
+                .OrderBy(mark => mark.Line)
+                .ThenBy(mark => mark.Why, StringComparer.Ordinal)
+                .Select(mark => $"line {mark.Line.ToString(CultureInfo.InvariantCulture)}: {ReportText.Printable(mark.Why)}"));
         }
 
         return lines;
@@ -820,9 +820,6 @@ public sealed class CodebaseGraphQueries
         return symbol.Contains('/', StringComparison.Ordinal) || (backslash >= 0 && symbol.IndexOf('.', backslash) > backslash)
             || (colon > 0 && int.TryParse(symbol.AsSpan(colon + 1), NumberStyles.None, CultureInfo.InvariantCulture, out _));
     }
-
-    /// <summary>At least this many edges of a kind, whatever the percentile, mark a node too crowded to go through.</summary>
-    public const int CrowdFloor = 50;
 
     private GraphCard? AtLine(string symbol)
     {
@@ -893,30 +890,6 @@ public sealed class CodebaseGraphQueries
         // The declaration with a body speaks for a symbol spread over partials and prototypes; else the first by path.
         var ordered = at.OrderBy(one => one.Path, StringComparer.Ordinal).ThenBy(one => one.Node.Start).ToList();
         return ordered.FirstOrDefault(one => one.Node.BodyStart is not null) ?? ordered[0];
-    }
-
-    private static IReadOnlyDictionary<(string Kind, GraphSide Side), int> Percentiles(IReadOnlyList<CodeEdge> edges, int nodes)
-    {
-        var percentile = new Dictionary<(string Kind, GraphSide Side), int>();
-
-        foreach (var kind in edges.GroupBy(edge => edge.Kind, StringComparer.Ordinal))
-        {
-            foreach (var side in new[] { GraphSide.Out, GraphSide.In })
-            {
-                var degrees = kind
-                    .GroupBy(edge => side == GraphSide.Out ? edge.From : edge.To, StringComparer.Ordinal)
-                    .Select(node => node.Select(edge => side == GraphSide.Out ? edge.To : edge.From).Distinct(StringComparer.Ordinal).Count())
-                    .Order()
-                    .ToList();
-
-                // The view's percentile: a node with no edge of the kind counts as none, else a view's busiest node is its own bound.
-                var none = Math.Max(0, nodes - degrees.Count);
-                var rank = (int)Math.Ceiling((none + degrees.Count) * 0.99) - 1;
-                percentile[(kind.Key, side)] = rank < none ? 0 : degrees[rank - none];
-            }
-        }
-
-        return percentile;
     }
 
     /// <summary>

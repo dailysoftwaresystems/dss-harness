@@ -542,13 +542,17 @@ public sealed class CodebaseGraphRecordsTests
         Assert.InRange(disk.LargestRead, 1, 64 << 10);
     }
 
-    /// <summary>An extract's name holds its blob, a digest of its path, its implementation and version: a renamed file is read again, a raised version too.</summary>
+    /// <summary>
+    /// An extract's name holds its blob, the whole digest of its path, its implementation and version: a renamed file is
+    /// read again, a raised version too; the name an earlier build gave it held eight characters of the digest alone.
+    /// </summary>
     [Fact]
     public void AnExtractsName_HoldsItsBlobPathImplementationAndVersion()
     {
         var name = CodeGraphIds.ExtractName(Blob, "src/a.toy", "toy", 2);
 
-        Assert.Equal($"aa/{Blob}-{CodeGraphIds.Sha256("src/a.toy")[..8]}.toy-2.json", name);
+        Assert.Equal($"aa/{Blob}-{CodeGraphIds.Sha256("src/a.toy")}.toy-2.json", name);
+        Assert.Equal($"aa/{Blob}-{CodeGraphIds.Sha256("src/a.toy")[..8]}.toy-2.json", CodeGraphIds.EarlierExtractName(Blob, "src/a.toy", "toy", 2));
         Assert.NotEqual(name, CodeGraphIds.ExtractName(Blob, "src/b.toy", "toy", 2));
         Assert.NotEqual(name, CodeGraphIds.ExtractName(Blob, "src/a.toy", "toy", 3));
     }

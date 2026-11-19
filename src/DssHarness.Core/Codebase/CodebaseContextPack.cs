@@ -1,7 +1,7 @@
 using System.Globalization;
-using System.Text;
 using System.Text.RegularExpressions;
 using DssHarness.Core.Output;
+using DssHarness.Core.Text;
 
 namespace DssHarness.Core.Codebase;
 
@@ -15,10 +15,21 @@ public enum ContextPackFrom
     Changes,
 }
 
-/// <summary>One node of a working set a step's pack is given: a seed of the weight of one named exactly, an edited one above the rest.</summary>
+/// <summary>
+/// One node of a working set a step's pack is given: a seed of the weight of one named exactly, an edited one above the
+/// rest, each weighed by how often the work touched it.
+/// </summary>
 /// <param name="Id">The node's id.</param>
 /// <param name="Edited">Whether the step that worked with it edited it.</param>
-public sealed record ContextPackWorked(string Id, bool Edited);
+public sealed record ContextPackWorked(string Id, bool Edited)
+{
+    /// <summary>
+    /// How many times the work touched it, every working set it is given in counted, at least once: each touch past the
+    /// first raises its weight by a part of what is left of one, so a node touched more weighs more, and an edited one
+    /// stays above every one that was not.
+    /// </summary>
+    public int Uses { get; init; } = 1;
+}
 
 /// <summary>
 /// One site or home of a class of the work item a step's prompt reads the classes of: the path it stands at, the
@@ -38,8 +49,17 @@ public sealed record ContextPackRequest(string Prompt, Func<string, bool> MayRea
     /// <summary>What the pack starts from.</summary>
     public ContextPackFrom From { get; init; } = ContextPackFrom.Task;
 
-    /// <summary>The pack's cap in estimated tokens (<see cref="EstimatedTokens"/>), from 0 to <see cref="CodebaseContextPack.MostTokens"/>; 0 gives no pack.</summary>
+    /// <summary>
+    /// The estimated tokens of a page of the pack (<see cref="EstimatedTokens"/>): page 1 is what the step's first message
+    /// holds, and every later page is the pack going on, at the same size; 0 gives no pack.
+    /// </summary>
     public int Tokens { get; init; } = CodebaseContextPack.DefaultTokens;
+
+    /// <summary>
+    /// Whether the step may ask the graph tool for the pack's later pages - its graph is <c>tools</c> - which the pack's
+    /// last line then says how to; where it may not, the line says that the rest is on pages a step with the tool reaches.
+    /// </summary>
+    public bool Asks { get; init; } = true;
 
     /// <summary>
     /// Whether the step's <c>writes</c> covers a file, by its path relative to the tree - the step's policy's own rule
@@ -69,16 +89,35 @@ public sealed record ContextPackRequest(string Prompt, Func<string, bool> MayRea
     public string? ChangesUnread { get; init; }
 }
 
-/// <summary>A step's context pack: the text given at the head of its first message, and what it was made of.</summary>
-/// <param name="Text">The pack, line by line: its first line, the nodes, its last line; empty where the cap is 0, or too small to hold its first and last lines.</param>
+/// <summary>
+/// A step's context pack: its page 1 - the text given at the head of its first message - what it was made of, and the
+/// pages after it, laid from the same walk as they are asked for (<see cref="Page"/>).
+/// </summary>
+/// <param name="Text">Page 1, line by line: its first line, the nodes, its last line; empty where the pack's page size is 0, or too small to hold its first and last lines.</param>
 /// <param name="Seeds">The nodes it was seeded from, each once, with why: what the step's records say it started from.</param>
-/// <param name="Nodes">The nodes it lists, by id, each once, in the order it lists them.</param>
-/// <param name="Lines">Each line it lists a node or a declaration taken out by, in order, as it writes it: what a delta gives of the pack a conversation was not given.</param>
-/// <param name="Tokens">Its estimated tokens (<see cref="EstimatedTokens"/>).</param>
-/// <param name="LeftOut">How many of its lines did not fit the cap - a node's, or a declaration's taken out - each left out whole.</param>
-/// <param name="Refused">How many nodes the step's read rule left out.</param>
+/// <param name="Nodes">The nodes page 1 lists, by id, each once, in the order it lists them.</param>
+/// <param name="Lines">Each line page 1 lists a node or a declaration taken out by, in order, as it writes it: what a delta gives of the pack a conversation was not given.</param>
+/// <param name="Tokens">Page 1's estimated tokens (<see cref="EstimatedTokens"/>).</param>
+/// <param name="Refused">How many nodes the step's read rule left out of the walk that page 1 was laid from.</param>
 /// <param name="Near">How near each node is to the step's work, which the <c>graph</c> tool's <c>find</c> breaks a tie by.</param>
-public sealed record ContextPack(string Text, IReadOnlyList<ContextPackSeed> Seeds, IReadOnlyList<string> Nodes, IReadOnlyList<ContextPackLine> Lines, int Tokens, int LeftOut, int Refused, GraphNearness Near);
+public sealed record ContextPack(string Text, IReadOnlyList<ContextPackSeed> Seeds, IReadOnlyList<string> Nodes, IReadOnlyList<ContextPackLine> Lines, int Tokens, int Refused, GraphNearness Near)
+{
+    /// <summary>The pack's pages, page 1 among them; null where it has none.</summary>
+    internal GraphTextPages? Paged { get; init; }
+
+    /// <summary>Whether a page follows page 1: the pack goes on past what the first message holds.</summary>
+    public bool More => Paged?.Page(1) is { Last: false };
+
+    /// <summary>
+    /// Page <paramref name="page"/> of the pack, from 1: laid by going on with the walk page 1 was laid from, as far as it
+    /// needs; null where the pack ends before it, or has no page at all.
+    /// </summary>
+    /// <param name="page">The page asked, from 1.</param>
+    public GraphTextPage? Page(int page) => Paged?.Page(page);
+
+    /// <summary>How many pages the pack holds, where every one is laid; null while it may go on past those laid.</summary>
+    public int? Pages => Paged?.Known;
+}
 
 /// <summary>One line of a pack that lists a node, or a declaration taken out.</summary>
 /// <param name="Id">The node it lists; null for a declaration taken out of a file, as the base held it there.</param>
@@ -90,7 +129,7 @@ public sealed record ContextPackLine(string? Id, string Text);
 /// <param name="Why">Why it is a seed: the heaviest of its seeds', as its line says it where no path reaches it with more - <c>named</c>, <c>edited before</c>, <c>matches the task</c>.</param>
 public sealed record ContextPackSeed(string Id, string Why);
 
-/// <summary>A text's estimated tokens: its UTF-8 bytes over <see cref="BytesPerToken"/>, rounded up - what bounds a pack, and what an answer's records say.</summary>
+/// <summary>A text's estimated tokens: its UTF-8 bytes over <see cref="BytesPerToken"/>, rounded up - what sizes a pack's page, and what an answer's records say.</summary>
 public static class EstimatedTokens
 {
     /// <summary>The bytes one estimated token stands for.</summary>
@@ -101,7 +140,7 @@ public static class EstimatedTokens
     public static int Of(string text)
     {
         ArgumentNullException.ThrowIfNull(text);
-        return OfBytes(Encoding.UTF8.GetByteCount(text));
+        return OfBytes(System.Text.Encoding.UTF8.GetByteCount(text));
     }
 
     /// <summary>The estimated tokens of a text of <paramref name="bytes"/> UTF-8 bytes.</summary>
@@ -112,38 +151,28 @@ public static class EstimatedTokens
 /// <summary>
 /// The context pack (value 370) and change-first (value 371): the part of the graph a step's work touches, made at its
 /// start from the view and what the step says alone - so the same step on the same tree is given the same pack - and
-/// written as lines within its cap. Its seeds are what the prompt names exactly (a symbol or a path in backquotes, a
-/// qualified name, a handle, a <c>path:line</c>), every site and home of the classes of the work item its prompt reads
-/// the classes of (<see cref="ContextPackRequest.Closure"/>, each site's declaration at the weight of a named symbol,
-/// its file's at a named file's where it names none the file carries), the working sets
-/// it is given, the declarations of the files its <c>writes</c> covers and the nodes its words match best; from each
-/// the walk goes <see cref="NamedHops"/> hops from a
-/// node named or worked with and <see cref="OtherHops"/> from the others over the edges <see cref="Walked"/> names, each
-/// node scored by its seed's weight halved at each hop and weighed by each edge's confidence, and not gone through along
-/// a kind it is a hub of. Under <see cref="ContextPackFrom.Changes"/> the declarations the work changed lead, then their
-/// tests, then the rest of their impact set, then what the task gives.
+/// given in pages of the step's tokens, best first, page 1 in its first message and every later page asked of the graph
+/// tool. Its seeds are what the prompt names exactly (a symbol or a path in backquotes, a qualified name, a handle, a
+/// <c>path:line</c>), every site and home of the classes of the work item its prompt reads the classes of
+/// (<see cref="ContextPackRequest.Closure"/>, each site's declaration at the weight of a named symbol, its file's at a
+/// named file's where it names none the file carries), the working sets it is given, the declarations of the files its
+/// <c>writes</c> covers and every node its words match, each weighed by how well it matches. From all of them at once a
+/// walk goes best first over the edges <see cref="Walked"/> names, as far as the pages asked for need and with no count
+/// of hops: each node is reached once, at its best score - its seed's weight halved at each edge, weighed by the edge's
+/// confidence and shared among the neighbours of its kind the node it was reached from has, so a hub is gone through and
+/// its many neighbours are ranked down by how many they are, never cut. Under <see cref="ContextPackFrom.Changes"/> the
+/// declarations the work changed lead, then their impact set walked the same way from them - their tests first - then
+/// what the task gives.
 /// </summary>
 public static partial class CodebaseContextPack
 {
-    /// <summary>The cap where a step says none: <c>graphPromptTokens</c>' default.</summary>
+    /// <summary>The size of a page where a step says none: <c>graphPromptTokens</c>' default.</summary>
     public const int DefaultTokens = 3000;
-
-    /// <summary>The highest cap a step may say.</summary>
-    public const int MostTokens = 20000;
-
-    /// <summary>How many of the nodes the prompt's words match best are seeds.</summary>
-    public const int WordSeeds = 10;
-
-    /// <summary>How many hops the walk goes from a node the prompt names, or a working set carries.</summary>
-    public const int NamedHops = 2;
-
-    /// <summary>How many hops the walk goes from every other seed: a file's declarations, a word match.</summary>
-    public const int OtherHops = 1;
 
     /// <summary>The weight of a node the prompt names exactly, or a working set carries.</summary>
     public const double NamedWeight = 4;
 
-    /// <summary>The weight of a node a working set says was edited: above every other seed.</summary>
+    /// <summary>The weight of a node a working set says was edited, and of a declaration the work changed: above every other seed.</summary>
     public const double EditedWeight = 5;
 
     /// <summary>The weight of each declaration of a file the prompt names.</summary>
@@ -152,11 +181,14 @@ public static partial class CodebaseContextPack
     /// <summary>The weight of each declaration of a file the step's <c>writes</c> covers, and of each node a name several carry.</summary>
     public const double WrittenWeight = 2;
 
-    /// <summary>The weight of a node the prompt's words match.</summary>
+    /// <summary>The weight of the node the prompt's words match best; every other match weighs its score's part of it.</summary>
     public const double WordWeight = 2;
 
-    /// <summary>The bytes the cap keeps for the last line, whatever it says.</summary>
-    public const int LastLineRoom = 200;
+    /// <summary>The bytes a page keeps for its last line, whatever it says (<see cref="GraphTextPages.LastLineRoom"/>).</summary>
+    public const int LastLineRoom = GraphTextPages.LastLineRoom;
+
+    /// <summary>What a section of a pack's change-first lines that lists the files that could not be compared is headed by.</summary>
+    public const string NotCompared = "could not be compared:";
 
     /// <summary>
     /// The edges a walk follows, each with the side it is followed from: <c>calls</c> both ways, the type relations
@@ -182,7 +214,23 @@ public static partial class CodebaseContextPack
         (GraphSide.Out, CodeEdgeKinds.References),
     ];
 
-    /// <summary>Makes the pack of <paramref name="request"/> from <paramref name="queries"/>' view.</summary>
+    /// <summary>
+    /// The edges a change's impact set is walked over from the declarations it changed: their tests, their callers, the
+    /// members they override and that override them, their implementations and what dispatches to them, and their
+    /// derived types - each from the node reached, as far as the pages asked for need.
+    /// </summary>
+    public static IReadOnlyList<(GraphSide Side, string Kind)> Impacted { get; } =
+    [
+        .. GraphRelations.Edges(GraphRelations.Tests),
+        .. GraphRelations.Edges(GraphRelations.Callers),
+        (GraphSide.Out, CodeEdgeKinds.Overrides),
+        (GraphSide.In, CodeEdgeKinds.Overrides),
+        .. GraphRelations.Edges(GraphRelations.Implementations),
+        (GraphSide.In, CodeEdgeKinds.Dispatches),
+        .. GraphRelations.Edges(GraphRelations.Derived),
+    ];
+
+    /// <summary>Makes the pack of <paramref name="request"/> from <paramref name="queries"/>' view: its page 1, and the rest as it is asked for.</summary>
     /// <param name="queries">The step's view, synced at its start.</param>
     /// <param name="request">The step's filled prompt and what it says of its work.</param>
     public static ContextPack Make(CodebaseGraphQueries queries, ContextPackRequest request)
@@ -193,7 +241,6 @@ public static partial class CodebaseContextPack
         ArgumentNullException.ThrowIfNull(request.MayRead);
         ArgumentNullException.ThrowIfNull(request.Writes);
         ArgumentOutOfRangeException.ThrowIfNegative(request.Tokens);
-        ArgumentOutOfRangeException.ThrowIfGreaterThan(request.Tokens, MostTokens);
 
         return new Packing(queries, request).Make();
     }
@@ -241,142 +288,249 @@ public static partial class CodebaseContextPack
         return $"{verb} {from}";
     }
 
-    /// <summary>What a node has too many of, along one walked kind, for a walk to go through it that way: <c>callers</c>, <c>types it names</c>.</summary>
-    private static string Many((GraphSide Side, string Kind) edge) => edge switch
-    {
-        (GraphSide.In, CodeEdgeKinds.Calls) => "callers",
-        (GraphSide.Out, CodeEdgeKinds.Calls) => "callees",
-        (GraphSide.Out, CodeEdgeKinds.Inherits) => "bases",
-        (GraphSide.In, CodeEdgeKinds.Inherits) => "derived types",
-        (GraphSide.Out, CodeEdgeKinds.MixesIn) => "mixins",
-        (GraphSide.In, CodeEdgeKinds.MixesIn) => "types mixing it in",
-        (GraphSide.Out, CodeEdgeKinds.Implements) => "interfaces",
-        (GraphSide.In, CodeEdgeKinds.Implements) => "implementations",
-        (GraphSide.Out, CodeEdgeKinds.Overrides) => "members it overrides",
-        (GraphSide.In, CodeEdgeKinds.Overrides) => "overriding members",
-        (GraphSide.Out, CodeEdgeKinds.Dispatches) => "members it dispatches to",
-        (GraphSide.In, CodeEdgeKinds.Dispatches) => "members dispatching to it",
-        (GraphSide.In, CodeEdgeKinds.Tests) => "tests",
-        (GraphSide.Out, CodeEdgeKinds.Tests) => "members it tests",
-        (GraphSide.Out, CodeEdgeKinds.References) => "types it names",
-        _ => $"{edge.Kind} edges",
-    };
+    /// <summary>
+    /// How much of a node's score an edge carries on to a node it reaches, before the share of the neighbours of its kind:
+    /// half, as one more step from the work; a change's tests carry it whole, so they lead its impact.
+    /// </summary>
+    private static double Carried(string kind, bool impact) => impact && string.Equals(kind, CodeEdgeKinds.Tests, StringComparison.Ordinal) ? 1 : 0.5;
 
-    /// <summary>The making of one pack: its seeds, its walk, its sections, and the lines that fit.</summary>
+    /// <summary>The making of one pack: its seeds, its walks, and its pages, laid as they are asked for.</summary>
     private sealed class Packing(CodebaseGraphQueries queries, ContextPackRequest request)
     {
         private readonly HashSet<string> _refused = new(StringComparer.Ordinal);
         private readonly HashSet<string> _namedPaths = new(StringComparer.Ordinal);
         private readonly List<Seed> _seeds = [];
         private readonly Dictionary<string, Seed> _seeded = new(StringComparer.Ordinal);
-        private readonly Dictionary<string, Reach> _best = new(StringComparer.Ordinal);
-        private readonly Dictionary<string, IReadOnlyList<((GraphSide Side, string Kind) Edge, int Degree)>> _crowds = new(StringComparer.Ordinal);
+
+        /// <summary>The nodes a line of the pack lists already: a later walk goes through each and never lists it again.</summary>
+        private readonly HashSet<string> _listed = new(StringComparer.Ordinal);
+
+        /// <summary>The caption the task's lines are under: none where the pack holds no change.</summary>
+        private string? _taskCaption;
 
         public ContextPack Make()
         {
             Seeded();
-            Walk();
 
-            var sections = new List<Section>();
-            var listed = new HashSet<string>(StringComparer.Ordinal);
-            List<Section> changes = request.From == ContextPackFrom.Changes && request.Changes is { } read ? ChangeSections(read, listed) : [];
+            var changed = request.From == ContextPackFrom.Changes && request.Changes is { } read ? Changed(read) : null;
+            var uncompared = Uncompared();
+            var first = FirstLine(changed?.Lines.Count ?? 0, uncompared.Count);
 
-            sections.AddRange(changes);
-            sections.Add(new Section(changes.Count > 0 ? "the task:" : null, TaskEntries(listed), ByFile: true));
+            _taskCaption = changed is { Lines.Count: > 0 } ? "the task:" : null;
 
-            var first = FirstLine(changes.Count > 0 ? changes[0].Entries.Count : 0);
-            var fitted = Fit(first, sections, out var leftOut);
-            List<string> nodes = [.. (fitted ?? []).SelectMany(section => section.Entries).Select(entry => entry.Id).OfType<string>().Distinct(StringComparer.Ordinal)];
+            List<ContextPackSeed> seeds = [.. _seeded.Values.OrderBy(seed => seed.Order).Select(seed => new ContextPackSeed(seed.Id, seed.Why))];
+            var page = request.Tokens == 0 ? null : new GraphTextPages(Lines(uncompared, changed), request.Tokens, number => number == 1 ? first : $"codebase graph: context pack page {Number(number)}", Last, ByFile);
+            var one = page?.Page(1);
+            List<string> nodes = [.. (one?.Lines ?? []).Select(line => line.Id).OfType<string>().Distinct(StringComparer.Ordinal)];
             var near = new GraphNearness(
-                [.. nodes, .. request.Worked.Select(one => one.Id)],
+                [.. nodes, .. request.Worked.Select(worked => worked.Id)],
                 request.Writes,
                 request.Changes?.Files ?? [],
                 _namedPaths,
                 Identifier().Matches(request.Prompt).Select(match => match.Value));
-            List<ContextPackSeed> seeds = [.. _seeded.Values.OrderBy(seed => seed.Order).Select(seed => new ContextPackSeed(seed.Id, seed.Why))];
 
-            if (fitted is null)
+            if (one is null)
             {
-                return new ContextPack(string.Empty, seeds, [], [], 0, leftOut, _refused.Count, near);
+                return new ContextPack(string.Empty, seeds, [], [], 0, _refused.Count, near);
             }
 
-            var body = new StringBuilder(first).Append('\n');
-
-            foreach (var (header, entries, _) in fitted.Where(section => section.Entries.Count > 0))
-            {
-                if (header is not null)
-                {
-                    body.Append(header).Append('\n');
-                }
-
-                foreach (var entry in entries)
-                {
-                    body.Append(entry.Line).Append('\n');
-                }
-            }
-
-            var said = body.ToString();
-            var text = said + LastLine(nodes.Count, leftOut, EstimatedTokens.Of(said + LastLine(nodes.Count, leftOut, EstimatedTokens.Of(said))));
-            List<ContextPackLine> lines = [.. fitted.SelectMany(section => section.Entries).Select(entry => new ContextPackLine(entry.Id, entry.Line))];
-            return new ContextPack(text, seeds, nodes, lines, EstimatedTokens.Of(text), leftOut, _refused.Count, near);
+            List<ContextPackLine> lines = [.. one.Lines.Where(line => !string.Equals(line.Caption, NotCompared, StringComparison.Ordinal)).Select(line => new ContextPackLine(line.Id, line.Text))];
+            return new ContextPack(one.Text, seeds, nodes, lines, one.Tokens, _refused.Count, near) { Paged = page };
         }
 
-        /// <summary>Every seed, in the order the walk takes them: what the prompt names, the classes' sites and homes, the working sets, the files the step writes, the words' best matches.</summary>
+        /// <summary>
+        /// Every line of the pack, in the order its pages give them, read as far as the pages asked for need: each differing
+        /// file that could not be compared, then the declarations the work changed, then their impact set best first, then
+        /// what the task gives best first - each node listed once, by the first that reaches it.
+        /// </summary>
+        private IEnumerable<GraphTextLine> Lines(IReadOnlyList<CodeUncomparedFile> uncompared, (List<Entry> Lines, List<GraphCard> Held)? changed)
+        {
+            foreach (var file in uncompared)
+            {
+                yield return new GraphTextLine(NotCompared, $"{ReportText.Printable(file.Path)} ({TextLines.OneLine(file.Why)})");
+            }
+
+            if (changed is { Lines.Count: > 0 } change)
+            {
+                foreach (var entry in change.Lines)
+                {
+                    yield return new GraphTextLine("changed:", entry.Line, entry.Id);
+                }
+
+                // Their impact set is walked twice, the same walk each time: the tests it reaches first, under a section of
+                // their own, then every other node it reaches.
+                IEnumerable<Reach> Impact() => BestFirst(change.Held.Select((card, order) => new Reach(card.Id, EditedWeight, order, 0, "changed", CodeConfidences.Exact)), Impacted, impact: true);
+
+                foreach (var line in Section("their tests:", Impact().Where(reach => reach.Kind == CodeEdgeKinds.Tests)))
+                {
+                    yield return line;
+                }
+
+                foreach (var line in Section("their impact:", Impact().Where(reach => reach.Kind is not null and not CodeEdgeKinds.Tests)))
+                {
+                    yield return line;
+                }
+            }
+
+            var seeds = _seeds.Select(seed => new Reach(seed.Id, seed.Weight, seed.Order, 0, seed.Why, CodeConfidences.Exact));
+
+            foreach (var line in Section(_taskCaption, BestFirst(seeds, Walked, impact: false)))
+            {
+                yield return line;
+            }
+        }
+
+        /// <summary>
+        /// One section's lines from a walk best first: each node it reaches that no line listed yet, in the order the walk
+        /// reaches it, generated code after every other - held back until the walk has given the rest.
+        /// </summary>
+        private IEnumerable<GraphTextLine> Section(string? caption, IEnumerable<Reach> walk)
+        {
+            var generated = new List<GraphTextLine>();
+
+            foreach (var reach in walk)
+            {
+                if (!_listed.Add(reach.Id))
+                {
+                    continue;
+                }
+
+                var card = queries.Card(reach.Id);
+                var line = new GraphTextLine(caption, $"{GraphLines.Of(card)} | {Related(reach.Relation, reach.Confidence)}", card.Id);
+
+                if (card.Generated)
+                {
+                    generated.Add(line);
+                    continue;
+                }
+
+                yield return line;
+            }
+
+            foreach (var line in generated)
+            {
+                yield return line;
+            }
+        }
+
+        /// <summary>
+        /// The walk from <paramref name="sources"/> over <paramref name="edges"/>, best first, as far as it is read: each node
+        /// once, at its best score - its source's weight, at each edge carried on by <see cref="Carried"/>, weighed by the
+        /// edge's confidence and shared among the nodes of that edge's kind the node it was reached from reaches, so a hub's
+        /// many neighbours are ranked down by how many they are and never cut. Ties go to the earlier source, then the fewer
+        /// edges, then the id. A node the step may not read is not gone through at all, and is counted. It keeps what it has
+        /// reached and never reaches it again: linear in the edges it follows, its cycles among them, with no count of hops.
+        /// </summary>
+        private IEnumerable<Reach> BestFirst(IEnumerable<Reach> sources, IReadOnlyList<(GraphSide Side, string Kind)> edges, bool impact)
+        {
+            var queue = new PriorityQueue<Reach, Reach>(ReachOrder.Instance);
+            var best = new Dictionary<string, Reach>(StringComparer.Ordinal);
+            var settled = new HashSet<string>(StringComparer.Ordinal);
+
+            void Offer(Reach reach)
+            {
+                if (settled.Contains(reach.Id) || (best.TryGetValue(reach.Id, out var had) && ReachOrder.Instance.Compare(reach, had) >= 0))
+                {
+                    return;
+                }
+
+                best[reach.Id] = reach;
+                queue.Enqueue(reach, reach);
+            }
+
+            foreach (var source in sources)
+            {
+                Offer(source);
+            }
+
+            while (queue.TryDequeue(out var reach, out _))
+            {
+                // A reach a better one came after is passed over: a node is settled once, at its best.
+                if (!settled.Add(reach.Id))
+                {
+                    continue;
+                }
+
+                yield return reach;
+
+                var name = queries.Card(reach.Id).Name;
+                var steps = queries.Steps(reach.Id, edges);
+                var degrees = steps.GroupBy(step => (step.Side, step.Kind)).ToDictionary(kind => kind.Key, kind => kind.Select(step => step.To).Distinct(StringComparer.Ordinal).Count());
+
+                foreach (var step in steps)
+                {
+                    if (settled.Contains(step.To) || !Reads(queries.Card(step.To)))
+                    {
+                        continue;
+                    }
+
+                    var score = reach.Score * Carried(step.Kind, impact) * Confidence(step.Confidence) / degrees[(step.Side, step.Kind)];
+                    Offer(new Reach(step.To, score, reach.Order, reach.Hop + 1, Phrase(step, name), step.Confidence) { Kind = step.Kind });
+                }
+            }
+        }
+
+        /// <summary>
+        /// Every seed, in the order the walk takes them: what the prompt names, the classes' sites and homes, the working sets,
+        /// the files the step writes, and every node the prompt's words match, each weighed by its score's part of the best's.
+        /// </summary>
         private void Seeded()
         {
-            foreach (var (card, weight, hops, why, kind) in Named())
+            foreach (var (card, weight, why, kind) in Named())
             {
-                Seed(card, weight, hops, why, kind);
+                Seed(card, weight, why, kind);
             }
 
             foreach (var closure in request.Closure)
             {
-                foreach (var (card, weight, hops, why) in AtSite(closure))
+                foreach (var (card, weight, why) in AtSite(closure))
                 {
-                    Seed(card, weight, hops, why, SeedKind.Closure);
+                    Seed(card, weight, why, SeedKind.Closure);
                 }
             }
 
             foreach (var worked in request.Worked.Where(one => queries.Holds(one.Id)))
             {
-                Seed(queries.Card(worked.Id), worked.Edited ? EditedWeight : NamedWeight, NamedHops, worked.Edited ? "edited before" : "used before", SeedKind.Worked);
+                // Weighed by use: each touch past the first adds a part of what is left of one, never a whole one, so an
+                // edited node stays above every node that was not.
+                var weight = (worked.Edited ? EditedWeight : NamedWeight) + 1 - (1.0 / Math.Max(1, worked.Uses));
+                Seed(queries.Card(worked.Id), weight, worked.Edited ? "edited before" : "used before", SeedKind.Worked);
             }
 
             foreach (var path in queries.Paths.Where(request.Writes).Order(StringComparer.Ordinal))
             {
                 foreach (var card in Declarations(path))
                 {
-                    Seed(card, WrittenWeight, OtherHops, "in a file the step writes", SeedKind.Written);
+                    Seed(card, WrittenWeight, "in a file the step writes", SeedKind.Written);
                 }
             }
 
             if (!string.IsNullOrWhiteSpace(request.Prompt))
             {
-                foreach (var card in queries.Find(request.Prompt, null, null, int.MaxValue, 0).Cards.Where(Declares).Where(Reads).Take(WordSeeds))
+                var matched = queries.Scored(request.Prompt).Where(scored => Declares(scored.Card) && Reads(scored.Card)).ToList();
+                var best = matched.Count == 0 ? 0 : matched.Max(scored => scored.Score);
+
+                foreach (var (card, score) in matched)
                 {
-                    Seed(card, WordWeight, OtherHops, "matches the task", SeedKind.Words);
+                    Seed(card, WordWeight * score / best, "matches the task", SeedKind.Words);
                 }
             }
         }
 
         /// <summary>
-        /// A seed, where the step may read its node and no seed of it before goes as far with as much weight; the node is
-        /// recorded by its heaviest seed, the first of equals - the one its own line is reached by.
+        /// A seed, where the step may read its node and no seed of it before weighs as much; the node is recorded by its
+        /// heaviest seed, the first of equals - the one its own line is reached by.
         /// </summary>
-        private void Seed(GraphCard card, double weight, int hops, string why, SeedKind kind)
+        private void Seed(GraphCard card, double weight, string why, SeedKind kind)
         {
-            if (!Reads(card) || (_seeded.TryGetValue(card.Id, out var had) && had.Weight >= weight && had.Hops >= hops))
+            if (!Reads(card) || (_seeded.TryGetValue(card.Id, out var had) && had.Weight >= weight))
             {
                 return;
             }
 
-            var seed = new Seed(card.Id, weight, hops, why, _seeds.Count, kind);
+            var seed = new Seed(card.Id, weight, why, _seeds.Count, kind);
             _seeds.Add(seed);
-
-            if (had is null || weight > had.Weight)
-            {
-                _seeded[card.Id] = seed;
-            }
+            _seeded[card.Id] = seed;
         }
 
         /// <summary>
@@ -385,7 +539,7 @@ public static partial class CodebaseContextPack
         /// A name several nodes the step may read carry seeds every one of them, however many, sharing the weight of a
         /// name written (<see cref="WrittenWeight"/>) among them, each its part of it; a file seeds its declarations.
         /// </summary>
-        private IEnumerable<(GraphCard Card, double Weight, int Hops, string Why, SeedKind Kind)> Named()
+        private IEnumerable<(GraphCard Card, double Weight, string Why, SeedKind Kind)> Named()
         {
             var said = new List<(int At, string Text, bool Quoted)>();
             var quoted = new List<(int Start, int End)>();
@@ -396,23 +550,23 @@ public static partial class CodebaseContextPack
                 quoted.Add((match.Index, match.Index + match.Length));
             }
 
-            bool InQuotes(Match match) => quoted.Any(span => match.Index >= span.Start && match.Index < span.End);
+            bool InQuotes(int at) => quoted.Any(span => at >= span.Start && at < span.End);
 
-            foreach (Match match in AtLine().Matches(request.Prompt).Where(match => !InQuotes(match)))
+            foreach (Match match in AtLine().Matches(request.Prompt).Where(match => !InQuotes(match.Index)))
             {
                 said.Add((match.Index, match.Value, false));
             }
 
-            foreach (Match match in QualifiedName().Matches(request.Prompt).Where(match => !InQuotes(match)))
+            foreach (var (at, name) in QualifiedNames(request.Prompt).Where(name => !InQuotes(name.At)))
             {
-                said.Add((match.Index, match.Value, false));
+                said.Add((at, name, false));
             }
 
-            foreach (Match match in Handle().Matches(request.Prompt).Where(match => !InQuotes(match)))
+            foreach (var (at, handle) in Handles(request.Prompt).Where(handle => !InQuotes(handle.At)))
             {
-                if (queries.Resolve(match.Value) is GraphResolve.Found found && found.Card.Handle == match.Value)
+                if (queries.Resolve(handle) is GraphResolve.Found found && found.Card.Handle == handle)
                 {
-                    said.Add((match.Index, match.Value, false));
+                    said.Add((at, handle, false));
                 }
             }
 
@@ -425,7 +579,7 @@ public static partial class CodebaseContextPack
             }
         }
 
-        private IEnumerable<(GraphCard Card, double Weight, int Hops, string Why, SeedKind Kind)> Resolved(string text, bool quoted)
+        private IEnumerable<(GraphCard Card, double Weight, string Why, SeedKind Kind)> Resolved(string text, bool quoted)
         {
             if (text.Length == 0)
             {
@@ -440,12 +594,12 @@ public static partial class CodebaseContextPack
                 }
 
                 _namedPaths.Add(path);
-                return queries.AtLine(path, line) is { } card ? [(card, NamedWeight, NamedHops, "named", SeedKind.Named)] : [];
+                return queries.AtLine(path, line) is { } card ? [(card, NamedWeight, "named", SeedKind.Named)] : [];
             }
 
             if (!quoted)
             {
-                return queries.Resolve(text) is GraphResolve.Found found ? [(found.Card, NamedWeight, NamedHops, "named", SeedKind.Named)] : [];
+                return queries.Resolve(text) is GraphResolve.Found found ? [(found.Card, NamedWeight, "named", SeedKind.Named)] : [];
             }
 
             var name = SymbolNamed(text);
@@ -453,14 +607,14 @@ public static partial class CodebaseContextPack
             if (Relative(name) is { } file)
             {
                 _namedPaths.Add(file);
-                return [.. Declarations(file).Select(card => (card, FileWeight, OtherHops, "in a file named", SeedKind.File))];
+                return [.. Declarations(file).Select(card => (card, FileWeight, "in a file named", SeedKind.File))];
             }
 
             return queries.Resolve(name) switch
             {
-                GraphResolve.Found found => [(found.Card, NamedWeight, NamedHops, "named", SeedKind.Named)],
+                GraphResolve.Found found => [(found.Card, NamedWeight, "named", SeedKind.Named)],
                 GraphResolve.Candidates candidates when candidates.Cards.Where(Reads).ToList() is { Count: > 0 } read
-                    => [.. read.Select(card => (card, WrittenWeight / read.Count, NamedHops, $"one of {Number(read.Count)} named '{name}'", SeedKind.Named))],
+                    => [.. read.Select(card => (card, WrittenWeight / read.Count, $"one of {Number(read.Count)} named '{name}'", SeedKind.Named))],
                 _ => [],
             };
         }
@@ -475,7 +629,7 @@ public static partial class CodebaseContextPack
         /// (<see cref="SymbolNamed"/>) - so a site the plan check accepts seeds what the prompt's own name of it would.
         /// Nothing where the view holds no such file.
         /// </summary>
-        private IEnumerable<(GraphCard Card, double Weight, int Hops, string Why)> AtSite(ContextPackClosure closure)
+        private IEnumerable<(GraphCard Card, double Weight, string Why)> AtSite(ContextPackClosure closure)
         {
             if (Relative(closure.Path) is not { } path)
             {
@@ -492,8 +646,8 @@ public static partial class CodebaseContextPack
                 : [];
 
             return named.Count > 0
-                ? named.Select(card => (card, NamedWeight, NamedHops, why))
-                : declared.Select(card => (card, FileWeight, OtherHops, "in a file a class of the item names"));
+                ? named.Select(card => (card, NamedWeight, why))
+                : declared.Select(card => (card, FileWeight, "in a file a class of the item names"));
         }
 
         /// <summary>
@@ -535,86 +689,12 @@ public static partial class CodebaseContextPack
         private static bool Declares(GraphCard card) => CodeNodeKinds.Declarations.Contains(card.Kind, StringComparer.Ordinal);
 
         /// <summary>
-        /// The walk from each seed, in order: each node reached keeps its best score - its seed's weight halved at each hop
-        /// and weighed by each edge's confidence - and the relation to the node it was reached from on that path. A seed is
-        /// walked from along every kind, as <c>related</c> walks from the node asked about; a node reached is not gone
-        /// through along a kind it is a hub of, and a node the step may not read is not gone through at all.
+        /// The declarations changed the step may read - each with where its lines differ, one moved between files said so,
+        /// and those taken out as the base held them, what went with its container said by the container - generated code
+        /// after every other, and the cards of those the view holds, which the impact set is walked from; null where no
+        /// change the step may read was found.
         /// </summary>
-        private void Walk()
-        {
-            foreach (var seed in _seeds)
-            {
-                Offer(new Reach(seed.Id, seed.Weight, seed.Order, 0, seed.Why, CodeConfidences.Exact));
-
-                var reached = new Dictionary<string, double>(StringComparer.Ordinal) { [seed.Id] = seed.Weight };
-                var layer = new SortedDictionary<string, double>(StringComparer.Ordinal) { [seed.Id] = seed.Weight };
-
-                for (var hop = 1; hop <= seed.Hops && layer.Count > 0; hop++)
-                {
-                    var next = new SortedDictionary<string, double>(StringComparer.Ordinal);
-
-                    foreach (var (from, score) in layer)
-                    {
-                        var name = queries.Card(from).Name;
-                        HashSet<(GraphSide Side, string Kind)> crowded = hop == 1 ? [] : [.. Crowds(from).Select(crowd => crowd.Edge)];
-
-                        foreach (var step in queries.Steps(from, Walked).Where(step => !crowded.Contains((step.Side, step.Kind))))
-                        {
-                            if (!Reads(queries.Card(step.To)))
-                            {
-                                continue;
-                            }
-
-                            var weighed = score * 0.5 * Confidence(step.Confidence);
-
-                            if (reached.TryGetValue(step.To, out var had) && had >= weighed)
-                            {
-                                continue;
-                            }
-
-                            reached[step.To] = weighed;
-                            next[step.To] = weighed;
-                            Offer(new Reach(step.To, weighed, seed.Order, hop, Phrase(step, name), step.Confidence));
-                        }
-                    }
-
-                    layer = next;
-                }
-            }
-        }
-
-        private void Offer(Reach reach)
-        {
-            if (!_best.TryGetValue(reach.Id, out var had) || Better(reach, had))
-            {
-                _best[reach.Id] = reach;
-            }
-        }
-
-        private static bool Better(Reach one, Reach other)
-            => one.Score != other.Score ? one.Score > other.Score
-                : one.Order != other.Order ? one.Order < other.Order
-                : one.Hop < other.Hop;
-
-        /// <summary>Each walked kind <paramref name="id"/> is a hub of (<see cref="CodebaseGraphQueries.Crowd"/>), with how many edges of it it has.</summary>
-        private IReadOnlyList<((GraphSide Side, string Kind) Edge, int Degree)> Crowds(string id)
-        {
-            if (!_crowds.TryGetValue(id, out var crowds))
-            {
-                crowds = _crowds[id] = [.. Walked.Select(edge => (Edge: edge, Degree: queries.Crowd(id, [edge]))).Where(one => one.Degree is not null).Select(one => (one.Edge, one.Degree!.Value))];
-            }
-
-            return crowds;
-        }
-
-        /// <summary>
-        /// The sections change-first leads with: the declarations changed the step may read - each with where its lines
-        /// differ, one moved between files said so, and those taken out as the base held them, what went with its container
-        /// said by the container - then the tests of each and of each one's direct callers, then the rest of the impact
-        /// set: callers to two hops, overrides both ways, implementations and dispatches, derived types; generated code
-        /// after every other in each. None where no change the step may read was found.
-        /// </summary>
-        private List<Section> ChangeSections(CodebaseGraphChanges changes, HashSet<string> listed)
+        private (List<Entry> Lines, List<GraphCard> Held)? Changed(CodebaseGraphChanges changes)
         {
             var changed = new List<Entry>();
             var held = new List<GraphCard>();
@@ -631,7 +711,7 @@ public static partial class CodebaseContextPack
                     continue;
                 }
 
-                if (listed.Add(card.Id))
+                if (_listed.Add(card.Id))
                 {
                     held.Add(card);
                 }
@@ -665,163 +745,48 @@ public static partial class CodebaseContextPack
                 changed.Add(new Entry(null, $"removed {node.Kind} {node.Qualified} | was {node.Path}:{Number(node.Start)}-{Number(node.End)} at {ReportText.Commit(changes.Base)}", false));
             }
 
-            if (changed.Count == 0)
-            {
-                return [];
-            }
-
-            // A caller the step may not read is listed nowhere and gone through to nothing: its tests and its own callers
-            // would be said as its, by its name.
-            var callers = held.Select(card => (Card: card, Steps: Steps(card.Id, GraphRelations.Edges(GraphRelations.Callers)))).ToList();
-            var readable = callers.SelectMany(one => one.Steps).Where(step => Readable(queries.Card(step.To))).ToList();
-            var tests = held.SelectMany(card => Steps(card.Id, GraphRelations.Edges(GraphRelations.Tests)).Select(step => (step, card.Name)))
-                .Concat(readable.SelectMany(caller => Steps(caller.To, GraphRelations.Edges(GraphRelations.Tests)).Select(step => (step, queries.Card(caller.To).Name))));
-            var near = callers.SelectMany(one => one.Steps.Select(step => (step, one.Card.Name)));
-            var far = readable.Where(step => queries.Crowd(step.To, GraphRelations.Edges(GraphRelations.Callers)) is null)
-                .SelectMany(caller => Steps(caller.To, GraphRelations.Edges(GraphRelations.Callers)).Select(step => (step, queries.Card(caller.To).Name)));
-            var overrides = held.SelectMany(card => Steps(card.Id, [(GraphSide.Out, CodeEdgeKinds.Overrides), (GraphSide.In, CodeEdgeKinds.Overrides)]).Select(step => (step, card.Name)));
-            var implementations = held.SelectMany(card => Steps(card.Id, [.. GraphRelations.Edges(GraphRelations.Implementations), (GraphSide.In, CodeEdgeKinds.Dispatches)]).Select(step => (step, card.Name)));
-            var derived = held.SelectMany(card => Steps(card.Id, GraphRelations.Edges(GraphRelations.Derived)).Select(step => (step, card.Name)));
-
-            return
-            [
-                new Section("changed:", Generated(changed), ByFile: false),
-                new Section("their tests:", Impact(tests, listed), ByFile: false),
-                new Section("their impact:", [.. Impact(near, listed, mark: true), .. Impact(far, listed), .. Impact(overrides, listed), .. Impact(implementations, listed), .. Impact(derived, listed)], ByFile: false),
-            ];
+            return changed.Count == 0 ? null : ([.. changed.OrderBy(entry => entry.Generated ? 1 : 0)], held);
         }
 
-        private IReadOnlyList<GraphStep> Steps(string id, IReadOnlyList<(GraphSide Side, string Kind)> edges) => queries.Steps(id, edges);
-
-        /// <summary>
-        /// One part of the impact set: each node not listed yet, the step may read, by file and line, generated code after
-        /// every other, with its relation to the node it was reached from - and, for a direct caller, that it is a hub of
-        /// callers not gone through, where it is.
-        /// </summary>
-        private List<Entry> Impact(IEnumerable<(GraphStep Step, string From)> reached, HashSet<string> listed, bool mark = false)
-        {
-            var entries = new List<(GraphCard Card, string Line)>();
-
-            foreach (var (step, from) in reached)
-            {
-                var card = queries.Card(step.To);
-
-                if (!Reads(card) || !listed.Add(card.Id))
-                {
-                    continue;
-                }
-
-                var hub = mark && queries.Crowd(card.Id, GraphRelations.Edges(GraphRelations.Callers)) is { } callers
-                    ? $" | hub, not gone through its {Number(callers)} {Many((GraphSide.In, CodeEdgeKinds.Calls))}"
-                    : string.Empty;
-                entries.Add((card, $"{GraphLines.Of(card)} | {Related(Phrase(step, from), step.Confidence)}{hub}"));
-            }
-
-            return Generated([.. entries
-                .OrderBy(entry => entry.Card.Path, StringComparer.Ordinal)
-                .ThenBy(entry => entry.Card.Start)
-                .ThenBy(entry => entry.Card.Id, StringComparer.Ordinal)
-                .Select(entry => new Entry(entry.Card.Id, entry.Line, entry.Card.Generated))]);
-        }
-
-        /// <summary><paramref name="entries"/> in their order, generated code after every other.</summary>
-        private static List<Entry> Generated(List<Entry> entries) => [.. entries.OrderBy(entry => entry.Generated ? 1 : 0)];
-
-        /// <summary>
-        /// What the task gives, best first: every node the walk reached and no section listed, generated code after every
-        /// other, then by score, by the order of its seed, by hop and by id; a node reached that is a hub of a kind says
-        /// which, a seed being walked from along every kind.
-        /// </summary>
-        private List<Entry> TaskEntries(HashSet<string> listed)
-            => [.. _best.Values
-                .Where(reach => !listed.Contains(reach.Id))
-                .Select(reach => (Reach: reach, Card: queries.Card(reach.Id)))
-                .OrderBy(one => one.Card.Generated ? 1 : 0)
-                .ThenByDescending(one => one.Reach.Score)
-                .ThenBy(one => one.Reach.Order)
-                .ThenBy(one => one.Reach.Hop)
-                .ThenBy(one => one.Reach.Id, StringComparer.Ordinal)
-                .Select(one => new Entry(one.Card.Id, $"{GraphLines.Of(one.Card)} | {Related(one.Reach.Relation, one.Reach.Confidence)}{(one.Reach.Hop > 0 ? Hubbed(one.Card.Id) : string.Empty)}", one.Card.Generated))];
+        /// <summary>The differing files the step may read that could not be compared, with why: each a line of its own, ahead of what the pack lists.</summary>
+        private List<CodeUncomparedFile> Uncompared() => [.. request.Changes?.Uncompared.Where(file => request.MayRead(file.Path)) ?? []];
 
         /// <summary>A node's relation as its line says it: the edge's confidence where it is not exact.</summary>
         private static string Related(string relation, string confidence)
             => string.Equals(confidence, CodeConfidences.Exact, StringComparison.Ordinal) ? relation : $"{relation} | {confidence}";
 
-        /// <summary>The kinds a node reached is a hub of, which the walk did not go through it along; nothing where it is none.</summary>
-        private string Hubbed(string id)
-            => Crowds(id) is { Count: > 0 } crowds
-                ? $" | hub, not gone through its {string.Join(", ", crowds.Select(crowd => $"{Number(crowd.Degree)} {Many(crowd.Edge)}"))}"
-                : string.Empty;
-
         /// <summary>
-        /// The lines that fit the cap, section by section and best first, each left out whole where it does not - and the
-        /// task's grouped by file then, each file where its best node stands, its nodes by line; null where the cap cannot
-        /// hold the first and last lines, every line left out.
+        /// A page's lines as the page writes them: those of the task by file - each file where its best node on the page
+        /// stands, its nodes by line - and every other in the order it was reached.
         /// </summary>
-        private List<Section>? Fit(string first, List<Section> sections, out int leftOut)
+        private IReadOnlyList<GraphTextLine> ByFile(IReadOnlyList<GraphTextLine> page)
         {
-            var used = (long)Bytes(first) + LastLineRoom;
-            leftOut = 0;
+            var task = page.Where(line => line.Id is not null && string.Equals(line.Caption, _taskCaption, StringComparison.Ordinal)).ToList();
 
-            if (request.Tokens == 0)
+            if (task.Count == 0)
             {
-                return null;
+                return page;
             }
 
-            if (EstimatedTokens.OfBytes(used) > request.Tokens)
-            {
-                leftOut = sections.Sum(section => section.Entries.Count);
-                return null;
-            }
+            var files = task.Select(line => queries.Card(line.Id!).Path).Distinct(StringComparer.Ordinal).ToList();
+            var arranged = task
+                .OrderBy(line => files.IndexOf(queries.Card(line.Id!).Path))
+                .ThenBy(line => queries.Card(line.Id!).Start)
+                .ThenBy(line => line.Id, StringComparer.Ordinal)
+                .ToList();
 
-            var fitted = new List<Section>();
-
-            foreach (var (header, entries, byFile) in sections)
-            {
-                var kept = new List<Entry>();
-
-                foreach (var entry in entries)
-                {
-                    var cost = Bytes(entry.Line) + (kept.Count == 0 && header is not null ? Bytes(header) : 0);
-
-                    if (EstimatedTokens.OfBytes(used + cost) > request.Tokens)
-                    {
-                        leftOut++;
-                        continue;
-                    }
-
-                    used += cost;
-                    kept.Add(entry);
-                }
-
-                fitted.Add(new Section(header, byFile ? ByFile(kept) : kept, byFile));
-            }
-
-            return fitted;
-        }
-
-        /// <summary>The task's nodes by file: each file where its best node stands, its nodes by line.</summary>
-        private List<Entry> ByFile(List<Entry> kept)
-        {
-            var cards = kept.ToDictionary(entry => entry.Id!, entry => queries.Card(entry.Id!), StringComparer.Ordinal);
-            var files = kept.Select(entry => cards[entry.Id!].Path).Distinct(StringComparer.Ordinal).ToList();
-
-            return [.. kept
-                .OrderBy(entry => files.IndexOf(cards[entry.Id!].Path))
-                .ThenBy(entry => cards[entry.Id!].Start)
-                .ThenBy(entry => entry.Id, StringComparer.Ordinal)];
+            return [.. page.Where(line => !task.Contains(line)), .. arranged];
         }
 
         /// <summary>
         /// The pack's first line: the view, its commit, how many files the step may read the tree holds otherwise than its
-        /// base and each of them that could not be compared, with why, and what the pack was seeded from - or, under
-        /// change-first, how many lines the changes lead with, or why the task's seeds stand in for them: never that no
-        /// declaration changed while a file was not compared, for what it changed is not known.
+        /// base and how many of them could not be compared - each listed after it, with why - and what the pack was seeded
+        /// from - or, under change-first, how many lines the changes lead with, or why the task's seeds stand in for them:
+        /// never that no declaration changed while a file was not compared, for what it changed is not known.
         /// </summary>
-        private string FirstLine(int changesLead)
+        private string FirstLine(int changesLead, int uncompared)
         {
-            var line = new StringBuilder($"codebase graph: view '{queries.View}' at {(queries.Head is { } head ? ReportText.Commit(head) : "no commit")}");
-            List<CodeUncomparedFile> uncompared = [.. request.Changes?.Uncompared.Where(file => request.MayRead(file.Path)) ?? []];
+            var line = new System.Text.StringBuilder($"codebase graph: view '{queries.View}' at {(queries.Head is { } head ? ReportText.Commit(head) : "no commit")}");
 
             if (request.Changes is { } read)
             {
@@ -831,11 +796,11 @@ public static partial class CodebaseContextPack
             line.Append("; ");
 
             // Every differing file not compared leaves nothing that was: the task's seeds stand in, said as following from it.
-            var noneCompared = uncompared.Count > 0 && uncompared.Count == request.Changes!.Files.Count(request.MayRead);
+            var noneCompared = uncompared > 0 && uncompared == request.Changes!.Files.Count(request.MayRead);
 
-            if (uncompared.Count > 0)
+            if (uncompared > 0)
             {
-                line.Append(CultureInfo.InvariantCulture, $"{ReportText.Counted(uncompared.Count, "differing file")} could not be compared: {ReportText.Listed([.. uncompared.Select(file => $"{file.Path} ({file.Why})")])}");
+                line.Append(CultureInfo.InvariantCulture, $"{ReportText.Counted(uncompared, "differing file")} could not be compared, each listed under '{NotCompared}'");
                 line.Append(request.From == ContextPackFrom.Changes && changesLead == 0 && noneCompared ? ", " : "; ");
             }
 
@@ -845,7 +810,7 @@ public static partial class CodebaseContextPack
                     : request.ChangesUnread is { } why ? $"its changes could not be read ({TextLines.OneLine(why).TrimEnd('.')}), so packed from the task: "
                     : request.Changes is null ? "no base to compare with, so packed from the task: "
                     : noneCompared ? "so packed from the task: "
-                    : uncompared.Count > 0 ? "no declaration among the rest changed, so packed from the task: "
+                    : uncompared > 0 ? "no declaration among the rest changed, so packed from the task: "
                     : request.Changes.Files.Any(request.MayRead) ? "no declaration among them changed, so packed from the task: "
                     : "no change against its base, so packed from the task: ");
             }
@@ -869,22 +834,32 @@ public static partial class CodebaseContextPack
             SeedKind.File => ReportText.Counted(count, "declaration") + " of the files it names",
             SeedKind.Worked => ReportText.Counted(count, "working set node"),
             SeedKind.Written => ReportText.Counted(count, "declaration") + " of the files the step writes",
-            _ => "the " + ReportText.Counted(count, "best word match"),
+            _ => ReportText.Counted(count, "node") + " its words match",
         };
 
-        /// <summary>The pack's last line: how many nodes it lists and its tokens, and how many lines were left out whole, and by the read rule.</summary>
-        private string LastLine(int nodes, int leftOut, int tokens)
+        /// <summary>
+        /// A page's last line: how many nodes it lists and its tokens of the page's size, and where the pack goes on - nothing
+        /// left out where it is one page; else which page, and how to ask for the next, or that it is the last - and how many
+        /// nodes the read rule left out of the walk so far, or in all on the last.
+        /// </summary>
+        private string Last(GraphTextPageEnd end)
         {
-            var line = $"{ReportText.Counted(nodes, "node")}, ~{Number(tokens)} of {Number(request.Tokens)} tokens; "
-                + (leftOut == 0 ? "nothing left out" : $"{Number(leftOut)} more left out whole, past the cap");
+            var nodes = end.Lines.Select(line => line.Id).OfType<string>().Distinct(StringComparer.Ordinal).Count();
+            var where = end is { Last: true, Page: 1 } ? "nothing left out"
+                : end.Last ? $"context pack page {Number(end.Page)} of {Number(end.Pages!.Value)} · the last"
+                : request.Asks ? $"context pack page {Number(end.Page)} · ask graph for pack with page: {Number(end.Page + 1)} for the next"
+                : $"context pack page {Number(end.Page)} · the rest is on the pages after it, which a step whose graph is tools asks the graph for";
+            var line = $"{ReportText.Counted(nodes, "node")}, ~{Number(end.Tokens)} of {Number(request.Tokens)} tokens; {where}";
 
-            return _refused.Count == 0 ? line : $"{line}; {Number(_refused.Count)} in files the step may not read left out";
+            return _refused.Count == 0 ? line
+                : end.Last ? $"{line}; {Number(_refused.Count)} in files the step may not read left out"
+                : $"{line}; {Number(_refused.Count)} so far in files the step may not read left out";
         }
 
         /// <summary>Whether the step may read <paramref name="card"/>'s file, a node it may not counted as left out.</summary>
         private bool Reads(GraphCard card)
         {
-            if (Readable(card))
+            if (request.MayRead(card.Path))
             {
                 return true;
             }
@@ -892,8 +867,6 @@ public static partial class CodebaseContextPack
             _refused.Add(card.Id);
             return false;
         }
-
-        private bool Readable(GraphCard card) => request.MayRead(card.Path);
 
         private static string Where(IReadOnlyList<CodeLineHunk> hunks)
         {
@@ -915,12 +888,65 @@ public static partial class CodebaseContextPack
         }
 
         private static string Number(int value) => value.ToString(CultureInfo.InvariantCulture);
-
-        private static int Bytes(string line) => Encoding.UTF8.GetByteCount(line) + 1;
     }
 
-    /// <summary>A seed: a node, its weight, how many hops the walk goes from it, why it is one, where it stands among the seeds, and what kind of seed it is.</summary>
-    private sealed record Seed(string Id, double Weight, int Hops, string Why, int Order, SeedKind Kind);
+    /// <summary>
+    /// Each qualified name <paramref name="prompt"/> holds, with where it begins: dotted or <c>::</c>-joined parts, each a
+    /// letter or underscore then word characters, at a place no word character, dot, colon or separator stands before, and
+    /// ending where no word character or separator follows - its last parts given up, at a dot, where one does, as a
+    /// name that runs into a path is read only up to the path.
+    /// </summary>
+    private static IEnumerable<(int At, string Name)> QualifiedNames(string prompt)
+    {
+        foreach (Match match in QualifiedName().Matches(prompt))
+        {
+            if (match.Index > 0 && (char.IsLetterOrDigit(prompt[match.Index - 1]) || prompt[match.Index - 1] is '_' or '.' or ':' or '\\' or '/'))
+            {
+                continue;
+            }
+
+            var end = match.Index + match.Length;
+
+            if (end < prompt.Length && (char.IsLetterOrDigit(prompt[end]) || prompt[end] is '_' or '/' or '\\'))
+            {
+                // The name runs into a path: given up to the end of its part before the last, where it has two parts left.
+                var name = match.Value;
+                var separator = Math.Max(name.LastIndexOf('.'), name.LastIndexOf("::", StringComparison.Ordinal));
+                var kept = separator > 0 ? name[..separator] : string.Empty;
+
+                if (kept.Contains('.', StringComparison.Ordinal) || kept.Contains("::", StringComparison.Ordinal))
+                {
+                    yield return (match.Index, kept);
+                }
+
+                continue;
+            }
+
+            yield return (match.Index, match.Value);
+        }
+    }
+
+    /// <summary>
+    /// Each handle <paramref name="prompt"/> holds, with where it begins: a run of six to sixty-four lowercase hexadecimal
+    /// digits, whole - no word character or dash beside it.
+    /// </summary>
+    private static IEnumerable<(int At, string Handle)> Handles(string prompt)
+    {
+        foreach (Match match in HexRun().Matches(prompt))
+        {
+            var end = match.Index + match.Length;
+
+            if (match.Length is >= CodeGraphIds.HandleLength and <= 64
+                && (match.Index == 0 || !(char.IsLetterOrDigit(prompt[match.Index - 1]) || prompt[match.Index - 1] is '_' or '-'))
+                && (end == prompt.Length || !(char.IsLetterOrDigit(prompt[end]) || prompt[end] is '_' or '-')))
+            {
+                yield return (match.Index, match.Value);
+            }
+        }
+    }
+
+    /// <summary>A seed: a node, its weight, why it is one, where it stands among the seeds, and what kind of seed it is.</summary>
+    private sealed record Seed(string Id, double Weight, string Why, int Order, SeedKind Kind);
 
     /// <summary>What made a node a seed, in the order the first line says them.</summary>
     private enum SeedKind
@@ -933,27 +959,50 @@ public static partial class CodebaseContextPack
         Words,
     }
 
-    /// <summary>A node the walk reached, as its best path reached it.</summary>
-    private sealed record Reach(string Id, double Score, int Order, int Hop, string Relation, string Confidence);
+    /// <summary>A node a walk reached, as its best path reached it.</summary>
+    private sealed record Reach(string Id, double Score, int Order, int Hop, string Relation, string Confidence)
+    {
+        /// <summary>The kind of the edge its best path reached it by; null for a node a walk starts from.</summary>
+        public string? Kind { get; init; }
+    }
 
-    /// <summary>One line of the pack: the node it names, where it names one, and whether it is generated code.</summary>
+    /// <summary>The order a walk settles what it reached in: the better score first, then the earlier source, the fewer edges, the id.</summary>
+    private sealed class ReachOrder : IComparer<Reach>
+    {
+        public static ReachOrder Instance { get; } = new();
+
+        public int Compare(Reach? x, Reach? y)
+        {
+            ArgumentNullException.ThrowIfNull(x);
+            ArgumentNullException.ThrowIfNull(y);
+
+            return x.Score != y.Score ? y.Score.CompareTo(x.Score)
+                : x.Order != y.Order ? x.Order.CompareTo(y.Order)
+                : x.Hop != y.Hop ? x.Hop.CompareTo(y.Hop)
+                : string.CompareOrdinal(x.Id, y.Id);
+        }
+    }
+
+    /// <summary>One changed line of the pack: the node it names, where it names one, and whether it is generated code.</summary>
     private sealed record Entry(string? Id, string Line, bool Generated);
 
-    /// <summary>One section of the pack: the line it is headed by, where it has one, its lines best first, and whether they are written by file.</summary>
-    private sealed record Section(string? Header, List<Entry> Entries, bool ByFile);
+    private static Regex Quoted() => QuotedPattern.Value;
 
-    [GeneratedRegex(@"`(?<text>[^`\r\n]+)`", RegexOptions.CultureInvariant)]
-    private static partial Regex Quoted();
+    private static Regex AtLine() => AtLinePattern.Value;
 
-    [GeneratedRegex(@"(?<path>(?:[A-Za-z]:[\\/])?[\w.\-/\\]*\w\.\w+)(?::line (?<line>\d+)|:(?<line>\d+)(?:-\d+)?|\((?<line>\d+)(?:,\d+)?\))", RegexOptions.CultureInvariant)]
-    private static partial Regex AtLine();
+    private static Regex QualifiedName() => QualifiedPattern.Value;
 
-    [GeneratedRegex(@"(?<![\w.:\\/])[A-Za-z_]\w*(?:(?:\.|::)[A-Za-z_]\w*)+(?![\w/\\])", RegexOptions.CultureInvariant)]
-    private static partial Regex QualifiedName();
+    private static Regex HexRun() => HexPattern.Value;
 
-    [GeneratedRegex(@"(?<![\w-])[0-9a-f]{6,64}(?![\w-])", RegexOptions.CultureInvariant)]
-    private static partial Regex Handle();
+    private static Regex Identifier() => IdentifierPattern.Value;
 
-    [GeneratedRegex(@"[A-Za-z_]\w*", RegexOptions.CultureInvariant)]
-    private static partial Regex Identifier();
+    private static readonly Lazy<Regex> QuotedPattern = new(() => LinearRegex.Compile(@"`(?<text>[^`\r\n]+)`"));
+
+    private static readonly Lazy<Regex> AtLinePattern = new(() => LinearRegex.Compile(@"(?<path>(?:[A-Za-z]:[\\/])?[\w.\-/\\]*\w\.\w+)(?::line (?<line>\d+)|:(?<line>\d+)(?:-\d+)?|\((?<line>\d+)(?:,\d+)?\))"));
+
+    private static readonly Lazy<Regex> QualifiedPattern = new(() => LinearRegex.Compile(@"[A-Za-z_]\w*(?:(?:\.|::)[A-Za-z_]\w*)+"));
+
+    private static readonly Lazy<Regex> HexPattern = new(() => LinearRegex.Compile("[0-9a-f]+"));
+
+    private static readonly Lazy<Regex> IdentifierPattern = new(() => LinearRegex.Compile(@"[A-Za-z_]\w*"));
 }

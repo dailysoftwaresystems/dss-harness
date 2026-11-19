@@ -7,6 +7,7 @@ using DssHarness.Core.Codebase;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Output;
 using DssHarness.Core.Pages;
+using DssHarness.Core.Text;
 
 namespace DssHarness.Core.Agents.Runtime;
 
@@ -33,6 +34,12 @@ public enum GraphOp
 
     /// <summary>The narrowing of reads lifted for a file for the rest of the step.</summary>
     WholeFile,
+
+    /// <summary>A page of the context pack the step's first message began, by its number.</summary>
+    Pack,
+
+    /// <summary>A page of the codebase changes the step's message began, by its number.</summary>
+    Changes,
 }
 
 /// <summary>What answering a <c>graph</c> call left: the text given to the model, how it ended, and the file a write touched.</summary>
@@ -132,10 +139,11 @@ public sealed record GraphWholeRead(bool Narrowed, string Text, string? Escape, 
 }
 
 /// <summary>
-/// The one tool <c>graph</c>, over the lookups of <see cref="CodebaseGraphQueries"/>: its seven operations - <c>find</c>,
+/// The one tool <c>graph</c>, over the lookups of <see cref="CodebaseGraphQueries"/>: its operations - <c>find</c>,
 /// <c>node</c>, <c>related</c>, <c>outline</c>, <c>body</c>, <c>edit</c> and <c>wholeFile</c> - the same on every client, each
 /// answering in pages of whole entries with a line range and a hash on every node, and a text search where the graph is not
-/// sure. The schema a step is given holds only the operations it may use. No step opens it: the tool
+/// sure; and <c>pack</c> and <c>changes</c>, the later pages of the context pack and of the codebase changes a step's message
+/// began, where they go on past it. The schema a step is given holds only the operations it may use. No step opens it: the tool
 /// runtime's table does not hold it. The <c>query-codebase-graph</c> verb runs its read operations by hand.
 /// </summary>
 /// <remarks>
@@ -172,6 +180,11 @@ public sealed record GraphWholeRead(bool Narrowed, string Text, string? Escape, 
 /// is paged and kept, so its pages and what the conversation's records keep of it hold none, as every answer the run is
 /// given holds none (<see cref="AgentToolRuntime"/>); null where the tool serves a person's own view (the verb).
 /// </param>
+/// <param name="pack">
+/// The pages of the context pack the step's first message began, read at each <c>pack</c> - a side-task's follows its last
+/// message's pack; null, or answering null, where it has none.
+/// </param>
+/// <param name="changes">The pages of the codebase changes the step's message began, read at each <c>changes</c>; null, or answering null, where it was told none.</param>
 public sealed class CodebaseGraphTool(
     CodebaseGraphQueries queries,
     AgentFiles files,
@@ -182,7 +195,9 @@ public sealed class CodebaseGraphTool(
     Func<string, CancellationToken, Task<CodebaseGraphQueries>>? reExtract = null,
     Func<GraphNearness?>? near = null,
     GraphPageStore? pages = null,
-    Execution.ILineMask? mask = null)
+    Execution.ILineMask? mask = null,
+    Func<GraphTextPages?>? pack = null,
+    Func<GraphTextPages?>? changes = null)
 {
     /// <summary>
     /// The most characters an answer holds (<see cref="PageRoom.GraphAnswer"/>): its pages hold whole entries within it
@@ -219,6 +234,8 @@ public sealed class CodebaseGraphTool(
         [GraphOp.Body] = "body",
         [GraphOp.Edit] = "edit",
         [GraphOp.WholeFile] = "wholeFile",
+        [GraphOp.Pack] = "pack",
+        [GraphOp.Changes] = "changes",
     };
 
     private readonly AgentFiles _files = files ?? throw new ArgumentNullException(nameof(files));
@@ -262,10 +279,16 @@ public sealed class CodebaseGraphTool(
         return null;
     }
 
-    /// <summary>The operations a step is given: the read ones always, <c>edit</c> where it may write, <c>wholeFile</c> where its reads are narrowed.</summary>
+    /// <summary>
+    /// The operations a step is given: the read ones always, <c>edit</c> where it may write, <c>wholeFile</c> where its
+    /// reads are narrowed, <c>pack</c> where its context pack goes on past its first message's page, and <c>changes</c>
+    /// where the codebase changes it is told go on past its message's.
+    /// </summary>
     /// <param name="write">Whether the step has the <c>write</c> capability.</param>
     /// <param name="narrow">Whether the step's reads are narrowed (<c>graphReads: narrow</c>).</param>
-    public static IReadOnlySet<GraphOp> Operations(bool write, bool narrow)
+    /// <param name="pack">Whether the step's context pack has a page after its first message's.</param>
+    /// <param name="changes">Whether the codebase changes the step is told have a page after its message's.</param>
+    public static IReadOnlySet<GraphOp> Operations(bool write, bool narrow, bool pack = false, bool changes = false)
     {
         var ops = new HashSet<GraphOp>(Read);
 
@@ -277,6 +300,16 @@ public sealed class CodebaseGraphTool(
         if (narrow)
         {
             ops.Add(GraphOp.WholeFile);
+        }
+
+        if (pack)
+        {
+            ops.Add(GraphOp.Pack);
+        }
+
+        if (changes)
+        {
+            ops.Add(GraphOp.Changes);
         }
 
         return ops;
@@ -365,6 +398,7 @@ public sealed class CodebaseGraphTool(
         GraphOp.Body => (["symbols", "full", "page"], ["symbols"]),
         GraphOp.Edit => (["symbol", "hash", "text"], ["symbol", "hash", "text"]),
         GraphOp.WholeFile => (["path", "reason"], ["path", "reason"]),
+        GraphOp.Pack or GraphOp.Changes => (["page"], ["page"]),
         _ => throw new ArgumentOutOfRangeException(nameof(op), op, "Not an operation of the graph tool."),
     };
 
@@ -434,6 +468,8 @@ public sealed class CodebaseGraphTool(
             [GraphOp.Body] = $"body - the lines of the nodes you name, read fresh and numbered, {BodyLines} lines a page",
             [GraphOp.Edit] = "edit - a node's lines replaced where the hash you give is its hash now",
             [GraphOp.WholeFile] = "wholeFile - lifts the narrowing of reads for one file for the rest of the step, with why",
+            [GraphOp.Pack] = "pack - a page of the context pack your first message began, best first, its last line saying how to ask for the next",
+            [GraphOp.Changes] = "changes - a page of the codebase changes your message began, its last line saying how to ask for the next",
         };
 
         return "Asks the codebase graph of the tree you work in: "
@@ -477,8 +513,30 @@ public sealed class CodebaseGraphTool(
             GraphOp.Outline => await OutlineAsync(input, cancellationToken).ConfigureAwait(false),
             GraphOp.Body => await BodyAsync(input, cancellationToken).ConfigureAwait(false),
             GraphOp.Edit => await OneEditAtATimeAsync(input, cancellationToken).ConfigureAwait(false),
+            GraphOp.Pack => TextPage(pack?.Invoke(), "pack", "context pack", Int(input, "page")!.Value),
+            GraphOp.Changes => TextPage(changes?.Invoke(), "changes", "codebase changes", Int(input, "page")!.Value),
             _ => WholeFile(input),
         };
+    }
+
+    /// <summary>
+    /// <c>pack</c> and <c>changes</c>: page <paramref name="page"/> of a text the step's message began, as it was laid -
+    /// each later page laid as it is first asked, by going on with what laid the one before - its first and last lines with
+    /// it; a page past the last refused with how many there are, as any answer's is, and a text the step was not given said.
+    /// </summary>
+    private static GraphToolAnswer TextPage(GraphTextPages? text, string asked, string what, int page)
+    {
+        if (text is null)
+        {
+            return Usage($"this step was given no {what} to page");
+        }
+
+        if (text.Page(page) is { } given)
+        {
+            return new GraphToolAnswer(given.Text, GraphToolOutcome.Answered);
+        }
+
+        return Usage(Paging.PastTheLastSaid(page, text.Known!.Value, asked, note: null));
     }
 
     private async Task<GraphToolAnswer> FindAsync(JsonObject input, CancellationToken cancellationToken)
@@ -651,22 +709,25 @@ public sealed class CodebaseGraphTool(
         }, cancellationToken).ConfigureAwait(false);
     }
 
-    /// <summary>A file outline's answer: its leading lines and its declarations as one section.</summary>
+    /// <summary>
+    /// A file outline's answer: its leading line, then what the graph does not hold of the file - every place its reader
+    /// stopped or could not bind, however many, paged as any entry is - then its declarations as one section.
+    /// </summary>
     private static GraphAnswer OutlineOf(CodebaseGraphQueries view, string path, IReadOnlyList<GraphCard> cards)
     {
         var leading = new List<string> { $"outline of {ReportText.Printable(path)} ({ReportText.Counted(cards.Count, "declaration")}):" };
 
         // What the graph does not hold of the file is said before what it does: an outline that stops where its reader did is never read as the whole file.
-        leading.AddRange(view.Unread(path));
+        List<GraphEntry> unread = [.. view.Unread(path).Select(line => new GraphEntry(line, Lines: 0))];
 
         if (cards.Count == 0)
         {
-            leading.Add("no declaration");
+            unread.Add(new GraphEntry("no declaration", Lines: 0));
         }
 
         return new(
             leading,
-            cards.Count == 0 ? [] : [Section(null, [.. cards.Select(card => new GraphEntry(GraphLines.Of(card)))], OutlineLines)],
+            [.. unread.Count == 0 ? [] : new[] { Section(null, unread, OutlineLines) }, .. cards.Count == 0 ? [] : new[] { Section(null, [.. cards.Select(card => new GraphEntry(GraphLines.Of(card)))], OutlineLines) }],
             [],
             [],
             []);
@@ -1183,12 +1244,13 @@ public sealed class CodebaseGraphTool(
             return Searched.None;
         }
 
-        // A whole word, escaped, between two characters that are no part of a word: matched in time linear in a line, so
-        // never timed. Each file held to the tree as well as to what the graph may read: the search decides again where
-        // each file it opened stands, and a link put on its way since may lead out of the tree, where no relative path
-        // reads. No bound on the hits, nor on a file's bytes, nor on a hit's line: the answer's pages hold them all, at the
-        // text fallback's size a page, a line wider than a page given in pieces.
-        var pattern = new Regex($@"(?<![\p{{L}}\p{{N}}_]){Regex.Escape(word)}(?![\p{{L}}\p{{N}}_])", RegexOptions.CultureInvariant, Regex.InfiniteMatchTimeout);
+        // A whole word, escaped, at a line's start or after a character that is no part of a word, and at its end or before
+        // one - each line asked whether it holds a match, so the characters beside the word need no lookaround - matched
+        // by the one linear engine (LinearRegex), so never timed. Each file held to the tree as well as to what the graph
+        // may read: the search decides again where each file it opened stands, and a link put on its way since may lead out
+        // of the tree, where no relative path reads. No bound on the hits, nor on a file's bytes, nor on a hit's line: the
+        // answer's pages hold them all, at the text fallback's size a page, a line wider than a page given in pieces.
+        var pattern = LinearRegex.Compile($@"(?:^|[^\p{{L}}\p{{N}}_]){Regex.Escape(word)}(?:$|[^\p{{L}}\p{{N}}_])");
         var search = await _files.SearchAsync(_queries.Tree, pattern, null, StringComparison.Ordinal, 0, int.MaxValue, long.MaxValue, file => _paths.Read(file).Full is not null && _mayRead(Relative(file)), cancellationToken).ConfigureAwait(false);
 
         return new(

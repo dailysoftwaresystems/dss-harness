@@ -27,23 +27,26 @@ namespace DssHarness.Tests;
 
 public sealed partial class HelpTests
 {
-    /// <summary>The codebase-graph topic says the context pack's seeds, walk, weights and cap, and find's ties, as the code holds them.</summary>
+    /// <summary>The codebase-graph topic says the context pack's seeds, walk, weights and pages, and find's ties, as the code holds them.</summary>
     [Fact]
-    public void TheCodebaseGraphTopic_SaysTheContextPacksSeedsWalkAndCap_FromTheCode()
+    public void TheCodebaseGraphTopic_SaysTheContextPacksSeedsWalkAndPages_FromTheCode()
     {
         var prose = Prose.Words(HelpText.Of("codebase-graph").StandardOutput);
 
-        Assert.Contains(Prose.Words($"the {DssHarness.Core.Codebase.CodebaseContextPack.WordSeeds} nodes its words match best"), prose, StringComparison.Ordinal);
+        Assert.Contains(Prose.Words("and every node its words match, each at its score's share of the best match's weight."), prose, StringComparison.Ordinal);
         Assert.Contains(Prose.Words("every site and home of the classes of the work item it is an instance of, where its prompt reads them ({input.item.classes}), each site's declaration at the weight of a node named and its file's declarations at a named file's where it names no symbol its file carries, so a fresh agent holds every site's declaration"), prose, StringComparison.Ordinal);
-        Assert.Contains(Prose.Words($"The walk goes {DssHarness.Core.Codebase.CodebaseContextPack.NamedHops} hops from a node named or worked with and {DssHarness.Core.Codebase.CodebaseContextPack.OtherHops} from the others"), prose, StringComparison.Ordinal);
+        Assert.Contains(Prose.Words("From all of them at once the walk goes best first over calls both ways, the type relations, tests and the types a node names, with no count of hops"), prose, StringComparison.Ordinal);
         Assert.Contains(Prose.Words($"({string.Join(", ", DssHarness.Core.Codebase.CodeConfidences.All.Select(confidence => $"{confidence} {DssHarness.Core.Codebase.CodebaseContextPack.Confidence(confidence).ToString(System.Globalization.CultureInfo.InvariantCulture)}"))})"), prose, StringComparison.Ordinal);
-        Assert.Contains(Prose.Words($"more edges of than the view's 99th percentile, and at least {DssHarness.Core.Codebase.CodebaseGraphQueries.CrowdFloor}, which its line says"), prose, StringComparison.Ordinal);
-        Assert.Contains(Prose.Words("none at all where the cap cannot hold its first and last lines"), prose, StringComparison.Ordinal);
+        Assert.Contains(Prose.Words("so a hub is gone through and its many neighbours are ranked down by how many they are, never cut."), prose, StringComparison.Ordinal);
+        Assert.Contains(Prose.Words($"or how to ask for the next page - graph's {DssHarness.Core.Agents.Runtime.CodebaseGraphTool.NameOf(DssHarness.Core.Agents.Runtime.GraphOp.Pack)} with page - each later page laid by going on with the same walk"), prose, StringComparison.Ordinal);
+        Assert.Contains(Prose.Words("graphPromptTokens 0 gives no pack, and so does a size that cannot hold a page's first and last lines."), prose, StringComparison.Ordinal);
         Assert.Contains(Prose.Words("A step that starts from its changes is packed first from the declarations its tree changed against its base - an agent's where its worktree was made or last moved to, the main checkout's the run's start - each with where its lines differ"), prose, StringComparison.Ordinal);
-        Assert.Contains(Prose.Words("then their tests and those of their direct callers, then their callers to two hops, overrides, implementations and dispatches, and derived types; where nothing changed, its first line says so and the task's seeds stand in."), prose, StringComparison.Ordinal);
-        Assert.Contains(Prose.Words($"within its cap ({DssHarness.Core.Codebase.CodebaseContextPack.DefaultTokens} estimated tokens - bytes over {DssHarness.Core.Codebase.EstimatedTokens.BytesPerToken} - by default)"), prose, StringComparison.Ordinal);
+        Assert.Contains(Prose.Words("then their impact walked the same way from them - their tests, carried whole, first, then their callers, overrides, implementations and dispatches, and derived types, as far as it goes - then from the task; where nothing changed, its first line says so and the task's seeds stand in."), prose, StringComparison.Ordinal);
+        Assert.Contains(Prose.Words($"It is given in pages of the step's graphPromptTokens ({DssHarness.Core.Codebase.CodebaseContextPack.DefaultTokens} estimated tokens - bytes over {DssHarness.Core.Codebase.EstimatedTokens.BytesPerToken} - by default), best first"), prose, StringComparison.Ordinal);
+        Assert.Contains(Prose.Words($"is listed under '{DssHarness.Core.Codebase.CodebaseContextPack.NotCompared}' with why, and nothing in it is said unchanged."), prose, StringComparison.Ordinal);
+        Assert.Contains(Prose.Words($"told in pages of the step's graphPromptTokens, page 1 in the message and each later page by graph's {DssHarness.Core.Agents.Runtime.CodebaseGraphTool.NameOf(DssHarness.Core.Agents.Runtime.GraphOp.Changes)} with page"), prose, StringComparison.Ordinal);
         Assert.Contains(Prose.Words("a tie broken by how near the step's own work each is - its context pack or a working set it was given, a file it writes, a file its agent changed, a path or a name its prompt holds - then by id"), prose, StringComparison.Ordinal);
-        Assert.Contains(Prose.Words($"each node it {string.Join(", ", DssHarness.Core.Codebase.WorkingSetUses.All.SkipLast(1))} or {DssHarness.Core.Codebase.WorkingSetUses.All[^1]}, with its handle, file, lines and hash at the step's end, at most {DssHarness.Core.Codebase.CodebaseWorkingSet.MostNodes},"), prose, StringComparison.Ordinal);
+        Assert.Contains(Prose.Words($"each node it {string.Join(", ", DssHarness.Core.Codebase.WorkingSetUses.All.SkipLast(1))} or {DssHarness.Core.Codebase.WorkingSetUses.All[^1]}, with its handle, file, lines and hash at the step's end, every one however many,"), prose, StringComparison.Ordinal);
         Assert.Contains(Prose.Words("A reason step's pack is to be given the working sets of the step it goes on with (resume), of each step it depends on directly, a group by each reason step in it, and of its own earlier visits of the same work item, newest first"), prose, StringComparison.Ordinal);
         Assert.Contains(Prose.Words("edited first, then by how often each was touched; a node the view no longer holds kept by its id, marked gone"), prose, StringComparison.Ordinal);
         Assert.Contains(Prose.Words("by where its new text stands once there - every place, with replace_all - else by the lines it names"), prose, StringComparison.Ordinal);

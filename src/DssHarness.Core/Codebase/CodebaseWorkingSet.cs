@@ -80,8 +80,11 @@ public sealed record WorkingSetNode(
 /// every occurrence - else by the lines its call names; a whole file's write by every line. Text is found there line by
 /// line, each line's trailing blanks aside, as a client may strip them as it writes.
 /// </remarks>
-/// <param name="Nodes">The nodes, at most <see cref="MostNodes"/>: edited first, then by how often each was touched, then by when first - the graph's calls before the stream's.</param>
-/// <param name="LeftOut">How many more were touched past <see cref="MostNodes"/>.</param>
+/// <param name="Nodes">Every node the step touched, however many: edited first, then by how often each was touched, then by when first - the graph's calls before the stream's.</param>
+/// <param name="LeftOut">
+/// How many more an earlier build of this tool left out of a working set it kept, when it kept at most 200 - read as it
+/// was written, so an old record says what it lacks; a working set made now leaves none out, and says 0.
+/// </param>
 /// <param name="Unplaced">
 /// How many writes were matched to no node: a deletion, which writes no lines, new text found nowhere it may stand -
 /// once, or at least once where it replaced every occurrence - by a call that names no lines, and a whole file's write
@@ -89,17 +92,9 @@ public sealed record WorkingSetNode(
 /// </param>
 public sealed partial record CodebaseWorkingSet(IReadOnlyList<WorkingSetNode> Nodes, int LeftOut = 0, int Unplaced = 0)
 {
-    /// <summary>The most nodes a working set keeps.</summary>
-    public const int MostNodes = 200;
-
     /// <summary>Why the record does not read as one, or null where it does.</summary>
     public string? Problem()
     {
-        if (Nodes.Count > MostNodes)
-        {
-            return $"a working set keeps at most {MostNodes.ToString(CultureInfo.InvariantCulture)} nodes";
-        }
-
         if (LeftOut < 0 || Unplaced < 0)
         {
             return "a count is never below 0";
@@ -166,8 +161,9 @@ public sealed partial record CodebaseWorkingSet(IReadOnlyList<WorkingSetNode> No
     }
 
     /// <summary>
-    /// The seeds <paramref name="sets"/> give a step's pack, in the order they are given: each node the view held once,
-    /// edited where any set says so - a node gone is no seed.
+    /// The seeds <paramref name="sets"/> give a step's pack, in the order they are given: each node the view held once -
+    /// every one of every set, however many - edited where any set says so, used as often as every set together says it
+    /// was touched; a node gone is no seed.
     /// </summary>
     /// <param name="sets">The working sets the step is given: of the step it goes on with, of each it depends on directly, of its own earlier visits.</param>
     public static IReadOnlyList<ContextPackWorked> Seeds(IEnumerable<CodebaseWorkingSet> sets)
@@ -182,12 +178,11 @@ public sealed partial record CodebaseWorkingSet(IReadOnlyList<WorkingSetNode> No
             if (!at.TryGetValue(node.Id, out var index))
             {
                 at[node.Id] = seeds.Count;
-                seeds.Add(new ContextPackWorked(node.Id, node.Edited));
+                seeds.Add(new ContextPackWorked(node.Id, node.Edited) { Uses = Math.Max(1, node.Times) });
+                continue;
             }
-            else if (node.Edited && !seeds[index].Edited)
-            {
-                seeds[index] = seeds[index] with { Edited = true };
-            }
+
+            seeds[index] = seeds[index] with { Edited = seeds[index].Edited || node.Edited, Uses = seeds[index].Uses + Math.Max(1, node.Times) };
         }
 
         return seeds;
@@ -226,7 +221,7 @@ public sealed partial record CodebaseWorkingSet(IReadOnlyList<WorkingSetNode> No
                 .ThenBy(touch => touch.Order)
                 .Select(Node)];
 
-            return new CodebaseWorkingSet([.. nodes.Take(MostNodes)], Math.Max(0, nodes.Count - MostNodes), _unplaced);
+            return new CodebaseWorkingSet(nodes, LeftOut: 0, _unplaced);
         }
 
         /// <summary>
@@ -493,6 +488,8 @@ public sealed partial record CodebaseWorkingSet(IReadOnlyList<WorkingSetNode> No
         public int Times { get; set; }
     }
 
-    [GeneratedRegex(@"^[ \t]*(?<line>\d+)(?:\t|→)(?<text>[^\n]*)", RegexOptions.Multiline | RegexOptions.CultureInvariant)]
-    private static partial Regex NumberedLine();
+    /// <summary>A numbered line of a read's answer, as a client numbers it: matched by the one linear engine.</summary>
+    private static Regex NumberedLine() => Numbered.Value;
+
+    private static readonly Lazy<Regex> Numbered = new(() => Text.LinearRegex.Compile(@"^[ \t]*(?<line>\d+)(?:\t|→)(?<text>[^\n]*)", RegexOptions.Multiline));
 }

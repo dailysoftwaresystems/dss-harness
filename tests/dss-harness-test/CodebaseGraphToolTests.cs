@@ -900,6 +900,42 @@ public sealed partial class CodebaseGraphToolTests
         Assert.Equal((GraphToolOutcome.Answered, "the narrowing of reads is lifted for 'src/Geometry.cs' for the rest of this step: to follow the whole flow"), (answer.Outcome, answer.Text));
     }
 
+    /// <summary>
+    /// <c>pack</c> gives a page of the step's context pack as the pack laid it - page 1, the first message's, and each
+    /// later one laid as it is asked - a page past the last refused with how many there are; <c>changes</c> gives a page of
+    /// the codebase changes the step was told, and says where it was told none; each needs its page, and neither is given
+    /// a step whose operations do not hold it.
+    /// </summary>
+    [Fact]
+    public async Task ThePackAndChangesOps_GiveTheirTextsPages_AndRefuseAPagePastTheLast()
+    {
+        using var tree = await TreeAsync();
+        var queries = await QueriesAsync(tree);
+        var made = CodebaseContextPack.Make(queries, new ContextPackRequest("`Demo.Geometry.Total` and `Demo.Geometry.Twice`", _ => true) { Tokens = 150 });
+        var tool = Tool(tree, queries, pack: () => made.Paged);
+        var ops = CodebaseGraphTool.Operations(write: false, narrow: false, pack: true, changes: true);
+
+        var second = await AskAsync(tool, """{"op":"pack","page":2}""", ops);
+        var first = await AskAsync(tool, """{"op":"pack","page":1}""", ops);
+        var pages = CodebaseContextPackTests.Pages(made);
+        var past = await AskAsync(tool, $$"""{"op":"pack","page":{{pages.Count + 1}}}""", ops);
+        var unpaged = await AskAsync(tool, """{"op":"pack"}""", ops);
+        var untold = await AskAsync(tool, """{"op":"changes","page":1}""", ops);
+        var ungiven = await AskAsync(tool, """{"op":"pack","page":2}""", CodebaseGraphTool.Operations(write: false, narrow: false));
+
+        Assert.True(made.More, made.Text);
+        Assert.Equal((GraphToolOutcome.Answered, made.Page(2)!.Text), (second.Outcome, second.Text));
+        Assert.StartsWith("codebase graph: context pack page 2\n", second.Text, StringComparison.Ordinal);
+        Assert.Equal(made.Text, first.Text);
+        Assert.Equal((GraphToolOutcome.Usage, $"page {pages.Count + 1} of 'pack': it has {pages.Count} page{(pages.Count == 1 ? string.Empty : "s")} (1 to {pages.Count})"), (past.Outcome, past.Text));
+        Assert.Equal((GraphToolOutcome.Usage, "op 'pack' needs page: which page of the answer to give, from 1; the first where it is left out."), (unpaged.Outcome, unpaged.Text));
+        Assert.Equal((GraphToolOutcome.Usage, "this step was given no codebase changes to page"), (untold.Outcome, untold.Text));
+        Assert.Equal(GraphToolOutcome.Usage, ungiven.Outcome);
+        Assert.StartsWith("op 'pack' is not one this step may use: find, node, related, outline, body", ungiven.Text, StringComparison.Ordinal);
+        Assert.Contains("pack - a page of the context pack your first message began", CodebaseGraphTool.Description(ops), StringComparison.Ordinal);
+        Assert.Contains("\"pack\"", CodebaseGraphTool.Schema(ops), StringComparison.Ordinal);
+    }
+
     /// <summary>The description a step is given names only its operations, each with its page's bound, and the pages every answer holds.</summary>
     [Fact]
     public void TheDescriptionAStepIsGiven_NamesOnlyItsOperations()
@@ -1805,7 +1841,7 @@ public sealed partial class CodebaseGraphToolTests
         => $"namespace Demo;\n\npublic static class {name}\n{{\n" + string.Concat(Enumerable.Range(0, lines).Select(at => $"    // line {at}\n")) + "}\n";
 
     /// <summary>The tool over <paramref name="queries"/>, reading what the graph lists where no rule is given, and syncing a file again where <paramref name="sync"/>.</summary>
-    internal static CodebaseGraphTool Tool(CodebaseGraphTree tree, CodebaseGraphQueries queries, Func<string, bool>? mayRead = null, Func<string, AgentPolicyAnswer>? mayWrite = null, bool sync = true, GraphNearness? near = null, GraphPageStore? pages = null, IFileSystem? files = null, Core.Execution.ILineMask? mask = null)
+    internal static CodebaseGraphTool Tool(CodebaseGraphTree tree, CodebaseGraphQueries queries, Func<string, bool>? mayRead = null, Func<string, AgentPolicyAnswer>? mayWrite = null, bool sync = true, GraphNearness? near = null, GraphPageStore? pages = null, IFileSystem? files = null, Core.Execution.ILineMask? mask = null, Func<GraphTextPages?>? pack = null, Func<GraphTextPages?>? changes = null)
     {
         var never = CodebaseGraphService.NeverListed(tree.WorktreesRoot);
 
@@ -1819,7 +1855,9 @@ public sealed partial class CodebaseGraphToolTests
             sync ? async (path, _) => new CodebaseGraphQueries((await tree.CheckAsync(null, null, path)).Read) : null,
             near is null ? null : () => near,
             pages,
-            mask);
+            mask,
+            pack,
+            changes);
     }
 
     /// <summary>

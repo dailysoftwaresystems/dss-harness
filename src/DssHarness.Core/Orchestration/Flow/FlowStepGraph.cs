@@ -64,6 +64,7 @@ public sealed class FlowStepGraph
     private CodebaseGraphQueries? view;
     private string section = string.Empty;
     private string? changes;
+    private GraphTextPages? told;
     private AgentCodebaseGiven? given;
 
     private FlowStepGraph(string mode, string from, string viewName, int tokens, string? map, ContextPack? made, string? missing, string? noPack, OrchestrationStore store, IHarnessOutput output, string lines, string instance)
@@ -261,6 +262,7 @@ public sealed class FlowStepGraph
                 {
                     From = from == WorkflowStep.GraphFromChanges ? ContextPackFrom.Changes : ContextPackFrom.Task,
                     Tokens = tokens,
+                    Asks = mode == "tools" && git is not null,
                     Writes = policy.StepWrites,
                     Worked = worked,
                     Closure = ClosureOf(run),
@@ -277,7 +279,8 @@ public sealed class FlowStepGraph
 
         if (mode == "tools" && git is not null)
         {
-            var operations = CodebaseGraphTool.Operations(ground.Capabilities.Contains(AgentCapability.Write), narrowed);
+            // pack where the step's pack goes on past its first message's page; changes once the step is told changes that go on past its message's (ChangesSince).
+            var operations = CodebaseGraphTool.Operations(ground.Capabilities.Contains(AgentCapability.Write), narrowed, pack: served.Pack is { More: true });
             var never = CodebaseGraphService.NeverListed(request.WorktreesRoot);
             var tool = new CodebaseGraphTool(
                 queries,
@@ -289,7 +292,9 @@ public sealed class FlowStepGraph
                 async (path, token) => new CodebaseGraphQueries((await graph.CheckAsync(request, [path], token).ConfigureAwait(false)).Read),
                 near: () => served.made?.Near,
                 pages: PagesOf(fileSystem, layout, run, directory, ground),
-                mask: mask);
+                mask: mask,
+                pack: () => served.Pack?.Paged,
+                changes: () => served.told);
 
             served.support = new AgentGraphSupport(
                 tool,
@@ -412,7 +417,8 @@ public sealed class FlowStepGraph
     /// <summary>
     /// The changes the conversation the step goes on with is told of the codebase: the declarations its view changed
     /// since what that conversation was told of them - its pack and every delta after it - and the nodes of its own pack
-    /// the conversation was not given - in the one new user message, never a map or a pack again whole. Made against the pack
+    /// the conversation was not given - in the one new user message, never a map or a pack again whole: their page 1, every
+    /// one told, page by page, the graph tool's <c>changes</c> given where they go on past it. Made against the pack
     /// as it was made, so a pack that held nothing still tells the conversation what moved of what it was told; null only
     /// where the step asked for no pack or its view was not read. Kept, so the line of the launch told them says what
     /// they cost.
@@ -420,7 +426,17 @@ public sealed class FlowStepGraph
     /// <param name="told">The codebase parts the conversation holds, in the order it was given them: its pack, then each delta after it.</param>
     public string? ChangesSince(IReadOnlyList<string> told)
     {
-        changes = view is null || made is null ? null : CodebaseConversationChanges.Make(view, made, told, Tokens);
+        var asks = support?.Tool is not null;
+        var pages = view is null || made is null ? null : CodebaseConversationChanges.Pages(view, made, told, Tokens, asks);
+
+        changes = pages?.Page(1)!.Text;
+        this.told = pages?.Page(1) is { Last: false } ? pages : null;
+
+        if (this.told is not null && support is { Tool: not null, Operations: { } operations })
+        {
+            support = support with { Operations = new HashSet<GraphOp>(operations) { GraphOp.Changes } };
+        }
+
         return changes;
     }
 
@@ -465,7 +481,8 @@ public sealed class FlowStepGraph
 
         if (given.Codebase && Pack is { } pack)
         {
-            return new GraphPromptLine(mapTokens, pack.Seeds.Count, pack.Nodes.Count, pack.Tokens, pack.LeftOut);
+            // Nothing of the pack is left out: what page 1 does not hold is on the pages after it.
+            return new GraphPromptLine(mapTokens, pack.Seeds.Count, pack.Nodes.Count, pack.Tokens, 0);
         }
 
         return new GraphPromptLine(mapTokens, 0, 0, 0, 0, Missing ?? noPack ?? NoPackCompacted);
@@ -711,7 +728,8 @@ public sealed class FlowStepGraph
     /// What a step's reads are decided by beyond what every step of the run shares - the read rules of its ground, from the
     /// configuration, its definition and its step - named by a digest of them, sorted and once each: steps whose read rules
     /// are the same share one map, and read the pages one another's graph tool kept; null where no read rule narrows the
-    /// step's reads. A side-task's ground is named by it too.
+    /// step's reads. A side-task's ground is named by it too. The whole digest, never a part of it: two sets of rules
+    /// whose digests begin alike are two keys, so no step reads a map or a page made under another's reads.
     /// </summary>
     /// <param name="ground">The step's ground, or a side-task's.</param>
     internal static string? ReadsOf(AgentPolicyGround ground)
@@ -723,7 +741,7 @@ public sealed class FlowStepGraph
             .Order(StringComparer.Ordinal)
             .ToList();
 
-        return rules.Count == 0 ? null : FileContentHash.Of(Encoding.UTF8.GetBytes(string.Join('\n', rules)))[..16];
+        return rules.Count == 0 ? null : FileContentHash.Of(Encoding.UTF8.GetBytes(string.Join('\n', rules)));
     }
 
     /// <summary>

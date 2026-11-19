@@ -4,14 +4,12 @@ namespace DssHarness.Core.Codebase;
 
 /// <summary>
 /// The shape of a run's one graph, as the workflow's <c>codebaseGraph</c> says it once for the run - every default held
-/// where it says nothing: which paths are graphed, which implementations read them, the largest file read, what becomes
-/// of generated code, the cap of the repository map, the naming policies a configuration key is joined by, and the file
+/// where it says nothing: which paths are graphed, which implementations read them, what becomes of generated code, the cap of the repository map, the naming policies a configuration key is joined by, and the file
 /// name endings the repository maps to an implementation of its own.
 /// </summary>
 /// <param name="Include">Only paths one of these matches are graphed; every path where none is given.</param>
 /// <param name="Exclude">Paths one of these matches are not graphed.</param>
 /// <param name="Languages">The implementations used, by name, in ordinal order; every one the registry holds where <see langword="null"/>. A file whose claimant is left out is read by the fallback.</param>
-/// <param name="MaxFileBytes">The largest file read; one larger is listed <c>tooLarge</c>.</param>
 /// <param name="ExcludeGenerated">Whether a generated file's declarations are left out (<c>exclude</c>) rather than kept, its file's entry naming why it is generated (<c>low</c>).</param>
 /// <param name="MapTokens">The cap, in tokens, of the run's repository map; 0 asks for none.</param>
 /// <param name="KeyNaming">
@@ -30,20 +28,25 @@ public sealed record CodebaseGraphShape(
     IReadOnlyList<GlobPattern> Include,
     IReadOnlyList<GlobPattern> Exclude,
     IReadOnlyList<string>? Languages,
-    long MaxFileBytes,
     bool ExcludeGenerated,
     int MapTokens,
     IReadOnlyList<string>? KeyNaming = null,
     IReadOnlyDictionary<string, IReadOnlyList<string>>? Claims = null)
 {
-    /// <summary>The largest file read where the workflow says nothing: a mebibyte.</summary>
+    /// <summary>What the retired <c>maxFileBytes</c> stood at where a workflow said nothing; no file is kept unread by it.</summary>
     public const int DefaultMaxFileBytes = 1_048_576;
 
-    /// <summary>The least <c>maxFileBytes</c> may say.</summary>
+    /// <summary>The least the retired <c>maxFileBytes</c> could say; no file is kept unread by it.</summary>
     public const int LeastMaxFileBytes = 4_096;
 
-    /// <summary>The most <c>maxFileBytes</c> may say.</summary>
+    /// <summary>The most the retired <c>maxFileBytes</c> could say; no file is kept unread by it.</summary>
     public const int MostMaxFileBytes = 16_777_216;
+
+    /// <summary>
+    /// What the workflow's retired <c>codebaseGraph.maxFileBytes</c> said, held as it was read and decided by nothing: the
+    /// graph reads every file it claims whole, whatever its size, and no two shapes differ by it.
+    /// </summary>
+    public long MaxFileBytes { get; init; } = DefaultMaxFileBytes;
 
     /// <summary>The cap of the run's repository map where the workflow says nothing.</summary>
     public const int DefaultMapTokens = 1_500;
@@ -161,8 +164,8 @@ public sealed record CodebaseGraphShape(
     }
 
     /// <summary>
-    /// Whether this shape and <paramref name="other"/> make one graph: the same patterns, implementations, largest file,
-    /// generated code, map, naming policies and claims, each as a shape holds it - a default said and one left out alike,
+    /// Whether this shape and <paramref name="other"/> make one graph: the same patterns, implementations, generated code,
+    /// map, naming policies and claims, each as a shape holds it - a default said and one left out alike,
     /// two lists of one set alike. The one owner of whether two shapes are one.
     /// </summary>
     /// <param name="other">Another shape.</param>
@@ -176,7 +179,6 @@ public sealed record CodebaseGraphShape(
         return Include.Select(pattern => pattern.ToString()).SequenceEqual(other.Include.Select(pattern => pattern.ToString()), StringComparer.Ordinal)
             && Exclude.Select(pattern => pattern.ToString()).SequenceEqual(other.Exclude.Select(pattern => pattern.ToString()), StringComparer.Ordinal)
             && Same(Languages, other.Languages)
-            && MaxFileBytes == other.MaxFileBytes
             && ExcludeGenerated == other.ExcludeGenerated
             && MapTokens == other.MapTokens
             && Named(KeyNaming ?? DefaultKeyNaming).SequenceEqual(Named(other.KeyNaming ?? DefaultKeyNaming), StringComparer.Ordinal)
@@ -184,7 +186,7 @@ public sealed record CodebaseGraphShape(
     }
 
     /// <summary>The shape where the workflow says nothing of the graph.</summary>
-    public static CodebaseGraphShape Default { get; } = new([], [], null, DefaultMaxFileBytes, ExcludeGenerated: false, DefaultMapTokens);
+    public static CodebaseGraphShape Default { get; } = new([], [], null, ExcludeGenerated: false, DefaultMapTokens);
 
     /// <summary>
     /// The shape the workflow's block says, each key it leaves out at its default: the patterns read as
@@ -194,7 +196,7 @@ public sealed record CodebaseGraphShape(
     /// <param name="include">The block's <c>include</c>, or <see langword="null"/>.</param>
     /// <param name="exclude">The block's <c>exclude</c>, or <see langword="null"/>.</param>
     /// <param name="languages">The block's <c>languages</c>, or <see langword="null"/>.</param>
-    /// <param name="maxFileBytes">The block's <c>maxFileBytes</c>, or <see langword="null"/>.</param>
+    /// <param name="maxFileBytes">The block's retired <c>maxFileBytes</c>, or <see langword="null"/>: held, and decided by nothing (<see cref="MaxFileBytes"/>).</param>
     /// <param name="generated">The block's <c>generated</c>, or <see langword="null"/>.</param>
     /// <param name="mapTokens">The block's <c>mapTokens</c>, or <see langword="null"/>.</param>
     /// <param name="keyNaming">The block's <c>keyNaming</c>, or <see langword="null"/>.</param>
@@ -212,11 +214,13 @@ public sealed record CodebaseGraphShape(
             [.. (include ?? []).Select(GlobPattern.Parse)],
             [.. (exclude ?? []).Select(GlobPattern.Parse)],
             languages is null ? null : [.. languages.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)],
-            maxFileBytes ?? DefaultMaxFileBytes,
             generated == GeneratedExclude,
             mapTokens ?? DefaultMapTokens,
             Named(keyNaming ?? DefaultKeyNaming),
-            ClaimsOf(claims));
+            ClaimsOf(claims))
+        {
+            MaxFileBytes = maxFileBytes ?? DefaultMaxFileBytes,
+        };
 
     /// <summary>Whether <paramref name="path"/> is graphed: matched by an <c>include</c> where any is given, and by no <c>exclude</c>.</summary>
     /// <param name="path">A path relative to the tree, with forward separators.</param>

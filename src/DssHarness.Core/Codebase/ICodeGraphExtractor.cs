@@ -58,8 +58,34 @@ public interface ICodeGraphExtractor
 /// <param name="Text">The file's text, decoded by the core.</param>
 public sealed record CodeFileInput(string Path, string Text)
 {
-    /// <summary>The file's lines, as every span of its extract counts them (<see cref="CodeFileText.Lines"/>).</summary>
-    public IReadOnlyList<string> Lines => CodeFileText.Lines(Text);
+    /// <summary>The lines cut once, with the text they were cut from: a copy made with another text cuts its own.</summary>
+    private (string Of, IReadOnlyList<string> Lines)? _lines;
+
+    /// <summary>
+    /// The file's lines, as every span of its extract counts them (<see cref="CodeFileText.Lines"/>): cut once, however
+    /// often the implementation and the core ask, so a file's lines are held once beside its text.
+    /// </summary>
+    public IReadOnlyList<string> Lines
+    {
+        get
+        {
+            if (_lines is not { } held || !ReferenceEquals(held.Of, Text))
+            {
+                held = (Text, CodeFileText.Lines(Text));
+                _lines = held;
+            }
+
+            return held.Lines;
+        }
+    }
+
+    /// <summary>Whether <paramref name="other"/> is the same file: its path and its text, whatever either has cut of its lines.</summary>
+    /// <param name="other">Another input.</param>
+    public bool Equals(CodeFileInput? other)
+        => other is not null && string.Equals(Path, other.Path, StringComparison.Ordinal) && string.Equals(Text, other.Text, StringComparison.Ordinal);
+
+    /// <inheritdoc/>
+    public override int GetHashCode() => HashCode.Combine(StringComparer.Ordinal.GetHashCode(Path), StringComparer.Ordinal.GetHashCode(Text));
 }
 
 /// <summary>What files an implementation reads.</summary>
@@ -80,8 +106,8 @@ public sealed record CodeGraphClaims(IReadOnlyList<CodeGraphClaim> Names, IReadO
 /// <summary>One file name or extension an implementation claims.</summary>
 /// <param name="Value">The exact file name, or the extension with its dot; compared without regard to case.</param>
 /// <param name="ContentTest">
-/// A pure test of the file's first <see cref="CodeFileText.ProbeCharacters"/> characters, decoded, which says whether it is this
-/// implementation's; <see langword="null"/> where the claim needs none. Where two implementations claim one name or one
+/// A pure test of the file's decoded text, given whole (<see cref="CodeFileText.Probe"/>) and read only as far as the test
+/// reads, which says whether it is this implementation's; <see langword="null"/> where the claim needs none. Where two implementations claim one name or one
 /// extension, each must give one, and the registry refuses them otherwise.
 /// </param>
 public sealed record CodeGraphClaim(string Value, Func<string, bool>? ContentTest = null);

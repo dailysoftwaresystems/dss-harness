@@ -12,18 +12,14 @@ namespace DssHarness.Core.Codebase;
 /// </summary>
 public static class CodeFileText
 {
-    /// <summary>
-    /// How many of a file's first characters, once decoded, are given to a claim's content test: as many as the bytes of
-    /// the window a file is binary by a NUL in (<see cref="BinaryContent.Window"/>), so a test is given about what was
-    /// looked at.
-    /// </summary>
-    public const int ProbeCharacters = BinaryContent.Window;
-
     /// <summary>How a Git LFS pointer begins: a file of a few lines that stands for one git keeps elsewhere.</summary>
     private static readonly byte[] LfsPointer = "version https://git-lfs.github.com/spec/"u8.ToArray();
 
-    /// <summary>The longest a Git LFS pointer is, in bytes: a file that begins like one and is longer is a file of its own.</summary>
-    private const int MostLfsPointer = 1024;
+    /// <summary>
+    /// What a Git LFS pointer is under, in bytes, by the Git LFS specification's own rule: a file that begins like one and
+    /// holds this many bytes or more is a file of its own.
+    /// </summary>
+    private const int LfsPointerUnder = 1024;
 
     /// <summary>
     /// What <paramref name="bytes"/>, a file's whole content, are to the graph: a Git LFS pointer and a file with a NUL in
@@ -32,19 +28,42 @@ public static class CodeFileText
     /// </summary>
     /// <param name="bytes">The file's bytes.</param>
     public static CodeFileDecoding Decode(ReadOnlySpan<byte> bytes)
+        => bytes.StartsWith(LfsPointer) && bytes.Length < LfsPointerUnder ? LfsPointerDecoding : Of(EncodedText.Read(bytes));
+
+    /// <summary>
+    /// What the file at <paramref name="path"/>, of <paramref name="length"/> bytes as it stood, is to the graph, by the rules
+    /// <see cref="Decode"/> holds a file's bytes to - whatever its size: a file as short as a Git LFS pointer is read whole,
+    /// for what it begins with tells; any other is streamed into its text (<see cref="Pages.TextPages.ReadWholeAsync"/>), so
+    /// no array of its bytes is ever held beside its text. A file whose two streamed readings differ is
+    /// <see cref="CodeFileDecoding.Changed"/>.
+    /// </summary>
+    /// <param name="fileSystem">The file system the file is read through.</param>
+    /// <param name="path">The file, absolute.</param>
+    /// <param name="length">Its size, as it stood before it was read.</param>
+    /// <param name="cancellationToken">Stops the read.</param>
+    public static async Task<CodeFileDecoding> DecodeAsync(IFileSystem fileSystem, string path, long length, CancellationToken cancellationToken)
     {
-        if (bytes.StartsWith(LfsPointer) && bytes.Length <= MostLfsPointer)
+        ArgumentNullException.ThrowIfNull(fileSystem);
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+
+        if (length < LfsPointerUnder)
         {
-            return CodeFileDecoding.Refused(CodeFileStates.Binary, "a Git LFS pointer, whose file git keeps elsewhere");
+            return Decode(await fileSystem.ReadAllBytesAsync(path, cancellationToken).ConfigureAwait(false));
         }
 
-        // Which encodings are read is the file system's one rule (EncodedText), the graph's states named here.
-        var reading = EncodedText.Read(bytes);
+        return await Pages.TextPages.ReadWholeAsync(() => fileSystem.OpenRead(path), cancellationToken).ConfigureAwait(false) is { } reading
+            ? Of(reading)
+            : CodeFileDecoding.ChangedWhileRead;
+    }
 
-        return reading.IsRead
+    /// <summary>What a Git LFS pointer is to the graph: binary, its file kept by git elsewhere.</summary>
+    private static CodeFileDecoding LfsPointerDecoding { get; } = CodeFileDecoding.Refused(CodeFileStates.Binary, "a Git LFS pointer, whose file git keeps elsewhere");
+
+    /// <summary>What a file's reading by the one rule of which encodings are read (<see cref="EncodedText"/>) is to the graph, its states named here.</summary>
+    private static CodeFileDecoding Of(EncodedTextReading reading)
+        => reading.IsRead
             ? CodeFileDecoding.Read(reading.Text.Text)
             : CodeFileDecoding.Refused(reading.Binary ? CodeFileStates.Binary : CodeFileStates.Unreadable, reading.Why);
-    }
 
     /// <summary>
     /// <paramref name="text"/>'s lines, without their endings: cut at each CR LF, LF and CR, a final ending closing the
@@ -77,12 +96,16 @@ public static class CodeFileText
     public static IReadOnlyList<CodeLineSpan> Spans(string text)
         => Text.LineEnds.Spans(text, (start, end, next) => new CodeLineSpan(start, end, next));
 
-    /// <summary>The first <see cref="ProbeCharacters"/> characters of a file's decoded text, as a claim's content test is given them.</summary>
+    /// <summary>
+    /// What a claim's content test is given of a file's decoded text: all of it, read as far as the test reads - a test
+    /// defined by a format's start (a shebang, an XML prolog) stops there by its own grammar, and one that looks for a mark
+    /// finds it wherever the file holds it - so no file is claimed or passed over by what lies past a count of characters.
+    /// </summary>
     /// <param name="text">The file's decoded text.</param>
     public static string Probe(string text)
     {
         ArgumentNullException.ThrowIfNull(text);
-        return Output.TextCut.Head(text, ProbeCharacters);
+        return text;
     }
 }
 
@@ -175,4 +198,13 @@ public sealed record CodeFileDecoding
         ArgumentException.ThrowIfNullOrWhiteSpace(why);
         return new(null, state, why);
     }
+
+    /// <summary>
+    /// Whether the file read otherwise in the second of its streamed readings than in the first
+    /// (<see cref="CodeFileText.DecodeAsync"/>): it changed while it was read, and nothing is made of what was read.
+    /// </summary>
+    public bool Changed { get; private init; }
+
+    /// <summary>A file whose two streamed readings differ: unreadable, as one that changed while it was read is.</summary>
+    internal static CodeFileDecoding ChangedWhileRead { get; } = new(null, CodeFileStates.Unreadable, "it changed while it was read") { Changed = true };
 }

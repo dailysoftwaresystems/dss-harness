@@ -424,6 +424,146 @@ public static class TextPages
     internal static (Encoding Encoding, int Preamble) EncodingOf(ReadOnlySpan<byte> start) => TextSource.EncodingOf(start);
 
     /// <summary>
+    /// The whole text of the file <paramref name="open"/> opens, read by the one rule of which encodings a text file is read
+    /// in (<see cref="EncodedText"/>) in two streamed passes: the first decodes it strictly and counts its characters, the
+    /// second decodes them into the one string that holds them - so no array of the file's bytes is held beside its text,
+    /// and its text is held once, whatever the file's size. A file that is binary, or no text this rule reads, is answered as
+    /// <see cref="EncodedText.Read"/> answers it, in its words; one whose characters pass what one string of the runtime holds
+    /// is not read, with why; one that read otherwise in the second pass than in the first changed while it was read, and is
+    /// answered <see langword="null"/>, for nothing can be said of what it holds.
+    /// </summary>
+    /// <param name="open">Opens the file, once for each pass.</param>
+    /// <param name="cancellationToken">Stops the read.</param>
+    internal static async Task<EncodedTextReading?> ReadWholeAsync(Func<Stream> open, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(open);
+
+        long count;
+        TextEncoding encoding;
+        Encoding decoding;
+        int preamble;
+
+        var first = open();
+
+        await using (first.ConfigureAwait(false))
+        {
+            try
+            {
+                var source = await TextSource.OpenAsync(first, string.Empty, hash: null, cancellationToken).ConfigureAwait(false);
+                count = await source.CountAsync(cancellationToken).ConfigureAwait(false);
+                (encoding, decoding, preamble) = (source.Found, source.Decoding, source.Preamble);
+            }
+            catch (InvalidDataException ex) when (ex.Data[WhyKey] is string why)
+            {
+                return EncodedTextReading.Unread(ex.Data[BinaryKey] is true, why);
+            }
+        }
+
+        if (count > int.MaxValue)
+        {
+            return EncodedTextReading.Unread(binary: false, TextTooLong(count));
+        }
+
+        var second = open();
+
+        await using (second.ConfigureAwait(false))
+        {
+            var changed = false;
+            string text;
+
+            try
+            {
+                text = string.Create((int)count, (second, decoding.GetDecoder(), preamble), (chars, state) =>
+                {
+                    var (stream, decoder, skip) = state;
+                    var block = new byte[TextSource.Block];
+                    var written = 0;
+
+                    // The mark the first pass read the encoding by is no character of the text.
+                    while (skip > 0 && stream.Read(block, 0, skip) is var read and > 0)
+                    {
+                        skip -= read;
+                    }
+
+                    while (!changed)
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+
+                        var read = stream.Read(block, 0, block.Length);
+                        var flush = read == 0;
+                        var used = 0;
+
+                        try
+                        {
+                            while (used < read || flush)
+                            {
+                                if (written == chars.Length && used < read)
+                                {
+                                    // More characters than the first pass counted: the file grew between them.
+                                    changed = true;
+                                    break;
+                                }
+
+                                decoder.Convert(block.AsSpan(used, read - used), chars[written..], flush, out var bytesUsed, out var charsUsed, out var completed);
+                                used += bytesUsed;
+                                written += charsUsed;
+
+                                if (completed && used >= read)
+                                {
+                                    break;
+                                }
+                            }
+                        }
+                        catch (Exception ex) when (ex is DecoderFallbackException or ArgumentException)
+                        {
+                            // Bytes no character is made of, or more characters than the text holds room for: not the file the
+                            // first pass read.
+                            changed = true;
+                        }
+
+                        if (flush)
+                        {
+                            break;
+                        }
+                    }
+
+                    changed |= written != chars.Length;
+                });
+            }
+            catch (OutOfMemoryException)
+            {
+                // The runtime holds no string of so many characters: its own limit, which a text read whole meets.
+                return EncodedTextReading.Unread(binary: false, TextTooLong(count));
+            }
+
+            return changed ? null : EncodedTextReading.Of(new EncodedText(text, encoding));
+        }
+    }
+
+    /// <summary>Why a text of <paramref name="count"/> characters is not read whole: one string of the runtime holds fewer.</summary>
+    private static string TextTooLong(long count)
+        => $"its {count.ToString("N0", CultureInfo.InvariantCulture)} characters pass what one string of the .NET runtime holds, which a text read whole is";
+
+    /// <summary>The key of a refusal's data that holds whether its file is binary, rather than no text the rule reads.</summary>
+    private const string BinaryKey = "binary";
+
+    /// <summary>The key of a refusal's data that holds why its file reads as no text, as <see cref="EncodedTextReading.Why"/> says it.</summary>
+    private const string WhyKey = "why";
+
+    /// <summary>
+    /// The refusal of a file's bytes that read as no text: binary, or no text <see cref="EncodedText"/>'s rule reads - the
+    /// file named in its message as a page's reader says it, and whether it is binary and why, in the rule's words, in its
+    /// data, for a whole text's reading to answer as <see cref="EncodedText.Read"/> does.
+    /// </summary>
+    private static InvalidDataException NotText(string message, bool binary, string why)
+    {
+        var refusal = new InvalidDataException(message);
+        refusal.Data[BinaryKey] = binary;
+        refusal.Data[WhyKey] = why;
+        return refusal;
+    }
+
+    /// <summary>
     /// A page's characters cut into its lines, or the pieces of lines its ends hold, without their endings, by the one rule
     /// of where a line ends (<see cref="LineEnds"/>): an ending the page's characters end with closes its line rather than
     /// opening another, and a page of no characters is an empty text's one empty line.
@@ -438,14 +578,14 @@ public static class TextPages
     private sealed class TextSource
     {
         /// <summary>How many bytes are read at a time.</summary>
-        private const int Block = 64 * 1024;
+        public const int Block = 64 * 1024;
 
         private static readonly UTF8Encoding Utf8Strict = new(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
         private static readonly UnicodeEncoding Utf16LittleStrict = new(bigEndian: false, byteOrderMark: false, throwOnInvalidBytes: true);
         private static readonly UnicodeEncoding Utf16BigStrict = new(bigEndian: true, byteOrderMark: false, throwOnInvalidBytes: true);
 
         private readonly Stream _stream;
-        private readonly IncrementalHash _hash;
+        private readonly IncrementalHash? _hash;
         private readonly string _path;
         private readonly Decoder _decoder;
         private readonly bool _utf16;
@@ -461,7 +601,7 @@ public static class TextPages
         /// <summary>How many of the bytes after the mark were handed to the decoder before the block being decoded: where a byte that does not decode stands.</summary>
         private long _decoded;
 
-        private TextSource(Stream stream, IncrementalHash hash, string path, Encoding encoding, int preamble)
+        private TextSource(Stream stream, IncrementalHash? hash, string path, Encoding encoding, int preamble)
         {
             _stream = stream;
             _hash = hash;
@@ -470,28 +610,42 @@ public static class TextPages
             _utf16 = encoding is UnicodeEncoding;
             _preamble = preamble;
             Offset = preamble;
+            Decoding = encoding;
+            Found = ReferenceEquals(encoding, Utf16BigStrict) ? TextEncoding.Utf16Big
+                : ReferenceEquals(encoding, Utf16LittleStrict) ? TextEncoding.Utf16Little
+                : preamble > 0 ? TextEncoding.Utf8WithMark
+                : TextEncoding.Utf8;
         }
 
         /// <summary>The byte of the file the next character not consumed begins at.</summary>
         public long Offset { get; private set; }
 
+        /// <summary>The encoding the text was found in, its mark kept or left out as found.</summary>
+        public TextEncoding Found { get; }
+
+        /// <summary>The strict encoding its bytes after the mark are decoded by.</summary>
+        public Encoding Decoding { get; }
+
+        /// <summary>How many bytes its mark is: none where it has none.</summary>
+        public int Preamble => _preamble;
+
         /// <summary>
         /// The text of <paramref name="stream"/>, from its first byte: UTF-16 by its mark - a UTF-32 mark, which begins as
         /// UTF-16's does, being none - then binary by a NUL among its first <see cref="BinaryContent.Window"/> bytes, then
-        /// UTF-8 with or without its mark.
+        /// UTF-8 with or without its mark. Each byte read is hashed by <paramref name="hash"/>, where one is given.
         /// </summary>
         /// <exception cref="InvalidDataException">It is binary.</exception>
-        public static async Task<TextSource> OpenAsync(Stream stream, string path, IncrementalHash hash, CancellationToken cancellationToken)
+        public static async Task<TextSource> OpenAsync(Stream stream, string path, IncrementalHash? hash, CancellationToken cancellationToken)
         {
             var head = new byte[BinaryContent.Window];
             var read = await FillAsync(stream, head, cancellationToken).ConfigureAwait(false);
             var (encoding, preamble) = EncodingOf(head.AsSpan(0, read));
 
-            hash.AppendData(head, 0, read);
+            hash?.AppendData(head, 0, read);
 
             if (encoding is not UnicodeEncoding && BinaryContent.Holds(head.AsSpan(0, read)))
             {
-                throw new InvalidDataException($"'{path}' is binary: {EncodedText.BinaryWhy}");
+                throw NotText($"'{path}' is binary: {EncodedText.BinaryWhy}", binary: true, EncodedText.BinaryWhy);
             }
 
             var text = new TextSource(stream, hash, path, encoding, preamble);
@@ -644,11 +798,28 @@ public static class TextPages
             {
                 var read = await _stream.ReadAsync(_block, cancellationToken).ConfigureAwait(false);
 
-                _hash.AppendData(_block, 0, read);
+                _hash?.AppendData(_block, 0, read);
                 Decode(_block.AsSpan(0, read), flush: read == 0);
             }
 
             return Math.Min(count, _end - _start);
+        }
+
+        /// <summary>
+        /// How many characters are left, read and decoded to the file's end and consumed - each decoded strictly, so a byte no
+        /// character is made of is the file's refusal as a page's is - without keeping one of them or counting their bytes.
+        /// </summary>
+        public async Task<long> CountAsync(CancellationToken cancellationToken)
+        {
+            long count = 0;
+
+            while (await AvailableAsync(Block, cancellationToken).ConfigureAwait(false) is var held and > 0)
+            {
+                count += held;
+                _start += held;
+            }
+
+            return count;
         }
 
         /// <summary>Decodes <paramref name="bytes"/> after the characters held, strictly: a byte no character is made of is the file's refusal, with where it stands.</summary>
@@ -684,9 +855,9 @@ public static class TextPages
             {
                 // Where the byte stands is counted from the first after the mark, as the whole text's reading counts it; a
                 // sequence the block before began stands before this block's first byte.
-                throw new InvalidDataException(_utf16
-                    ? $"'{_path}' is no text this tool reads: {EncodedText.NotUtf16Why}"
-                    : $"'{_path}' is no text this tool reads: {EncodedText.NotUtf8Why(Utf8Text.NotUtf8(_decoded + used + ex.Index, ex.BytesUnknown?.FirstOrDefault() ?? 0))}");
+                var why = _utf16 ? EncodedText.NotUtf16Why : EncodedText.NotUtf8Why(Utf8Text.NotUtf8(_decoded + used + ex.Index, ex.BytesUnknown?.FirstOrDefault() ?? 0));
+
+                throw NotText($"'{_path}' is no text this tool reads: {why}", binary: false, why);
             }
 
             _decoded += bytes.Length;
