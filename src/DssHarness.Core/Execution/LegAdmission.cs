@@ -5,6 +5,7 @@ using DssHarness.Core.Hosts;
 using DssHarness.Core.Legs;
 using DssHarness.Core.Output;
 using DssHarness.Core.Platform;
+using DssHarness.Core.Waiting;
 
 namespace DssHarness.Core.Execution;
 
@@ -217,7 +218,7 @@ public sealed class LegAdmission(
     /// so a poll is cut at when the next line is due, and a settle is waited whole in pieces no longer than this, the
     /// leg saying between them that it still waits to look.
     /// </summary>
-    public static readonly TimeSpan SaidAgainEvery = TimeSpan.FromMinutes(5);
+    public static readonly TimeSpan SaidAgainEvery = Waits.SaidEvery;
 
     /// <summary>
     /// The least time between two drops of WSL's page cache for legs about to wait on the memory, whichever leg of this
