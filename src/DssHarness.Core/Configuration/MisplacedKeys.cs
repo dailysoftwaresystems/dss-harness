@@ -51,6 +51,7 @@ internal static class MisplacedKeys
             List<string> keys = [.. RetiredAgentSections(document.RootElement)];
 
             keys.AddRange(Retired(document.RootElement));
+            keys.AddRange(Web.Search.WebSearchSources.Retired(document.RootElement));
             keys.AddRange(RetiredProviderKeys(document.RootElement));
             keys.AddRange(RetiredClientKeys(document.RootElement));
             keys.AddRange(StepKeysOnPhases(document.RootElement));

@@ -53,12 +53,22 @@ public interface IWebSearchKind
     /// <param name="source">A source of this kind, its keys held to <see cref="Problems"/>.</param>
     string? KeyOrigin(WebSearchSource source);
 
-    /// <summary>The request <paramref name="query"/> makes of <paramref name="source"/>, asking at most <paramref name="limit"/> results.</summary>
+    /// <summary>
+    /// The request <paramref name="query"/> makes of <paramref name="source"/> for its page <paramref name="page"/>, as an
+    /// agent counts them from 1, each page as many results as the source's <see cref="WebSearchSource.PageSize"/> - or
+    /// <see cref="WebSearchRequest.OnePage"/>, no request, where the source answers one page alone and a later one is asked.
+    /// </summary>
     /// <param name="source">The source.</param>
     /// <param name="found">What its lookups found.</param>
     /// <param name="query">The query, as the agent wrote it.</param>
-    /// <param name="limit">The most results asked.</param>
-    WebSearchRequest Request(WebSearchSource source, WebSearchFound found, string query, int limit);
+    /// <param name="page">The page asked, from 1.</param>
+    WebSearchRequest Request(WebSearchSource source, WebSearchFound found, string query, int page);
+
+    /// <summary>
+    /// The keys a source of this kind once took and takes no longer, each with what took its place: a source that still
+    /// writes one is refused naming it, never as a key it never knew. None for most kinds.
+    /// </summary>
+    IReadOnlyDictionary<string, string> Retired => new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>What <paramref name="response"/> answers: results, none, or why none - never an empty list for a failure.</summary>
     /// <param name="source">The source.</param>

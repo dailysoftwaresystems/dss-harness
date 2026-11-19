@@ -147,7 +147,7 @@ public static partial class HelpTopics
             $"the harness's own web search: sources, each by its name - its {string.Join(", ", Web.Search.WebSearchSource.OwnKeys.Select(key => key.Name))} "
             + "and its kind's own keys, laid over the built-in sources key by key, which init writes; defaults, the sources or "
             + "tags a step that names none searches, those turned on; "
-            + $"maxPerStep ({Web.Search.WebSearchSources.DefaultMaxPerStep}) and resultsPerSource ({Web.Search.WebSearchSources.DefaultResultsPerSource}) ('help web-search')",
+            + $"and maxPerStep ({Web.Search.WebSearchSources.DefaultMaxPerStep}), the requests a step makes, a later page of a source's results among them ('help web-search')",
             "  agentWebSearch ");
         AppendWrapped(
             builder,

@@ -9,7 +9,8 @@ namespace DssHarness.Tests;
 
 /// <summary>
 /// The harness's own fetch, over an endpoint a test answers: each address decided before anything is sent, a host that
-/// resolves to an address no public host holds refused, its redirects bounded, its size bounded, text alone read.
+/// resolves to an address no public host holds refused, its redirects followed as a chain to its end or its first revisit,
+/// an answer read whole for as long as it moves, text alone read.
 /// </summary>
 public sealed class HarnessFetchTests
 {
@@ -67,155 +68,6 @@ public sealed class HarnessFetchTests
         Assert.Equal("its body could not be read: the stream's encoding does not decode", fetched.Failure);
         Assert.Equal((fetched.Failure, (int?)200), (Assert.Single(hops).Failure, hops[0].Status));
     }
-
-    /// <summary>A character set the runtime will not read - UTF-7 - is read as UTF-8, as one it does not know is.</summary>
-    [Fact]
-    public async Task ACharacterSetTheRuntimeWillNotRead_IsReadAsUtf8()
-    {
-        using var fetch = Fetch(new WebEndpoint(_ => new HttpResponseMessage(HttpStatusCode.OK)
-        {
-            Content = new ByteArrayContent("caf\u00e9 ok"u8.ToArray()) { Headers = { ContentType = new MediaTypeHeaderValue("text/plain") { CharSet = "utf-7" } } },
-        }));
-
-        Assert.Equal("caf\u00e9 ok", (await FetchAsync(fetch, "https://example.com/seven.txt")).Fetched.Text);
-    }
-
-    /// <summary>What no answer foresaw still leaves the address its line in the record, and is raised.</summary>
-    [Fact]
-    public async Task AFailureNoAnswerForesaw_IsRecorded_AndRaised()
-    {
-        using var fetch = Fetch(new WebEndpoint(_ => throw new InvalidCastException("a defect")));
-        var hops = new List<WebHop>();
-
-        await Assert.ThrowsAsync<InvalidCastException>(() => fetch.FetchAsync(
-            "https://example.com/defect",
-            new WebFetchGate(
-                _ => Task.FromResult<AgentPolicyAnswer>(new AgentPolicyAnswer.Allowed()),
-                hop =>
-                {
-                    hops.Add(hop);
-                    return Task.CompletedTask;
-                }),
-            TestContext.Current.CancellationToken));
-
-        Assert.Equal(("https://example.com/defect", "a defect"), (Assert.Single(hops).Address, hops[0].Failure));
-
-        // What failed recording it never hides the defect: both are raised, the defect first.
-        var both = await Assert.ThrowsAsync<AggregateException>(() => fetch.FetchAsync(
-            "https://example.com/defect",
-            new WebFetchGate(_ => Task.FromResult<AgentPolicyAnswer>(new AgentPolicyAnswer.Allowed()), _ => throw new IOException("the disk is full")),
-            TestContext.Current.CancellationToken));
-
-        Assert.Equal([typeof(InvalidCastException), typeof(IOException)], both.InnerExceptions.Select(inner => inner.GetType()));
-    }
-
-    /// <summary>The fetch's bound holds the reading of a page's markup too, which markup nested deep makes long - its parts' as its text's.</summary>
-    [Theory]
-    [InlineData(WebFetchHtml.Text)]
-    [InlineData(WebFetchHtml.Parts)]
-    public async Task APageThatReadsPastTheBound_IsNoAnswer(WebFetchHtml html)
-    {
-        var deep = string.Concat(Enumerable.Repeat("<div>", 50_000)) + "deep";
-        using var fetch = new HarnessFetch(new RunningToolDouble("1.2.3"), WebNamesDouble.AllPublic, new WebEndpoint(_ => WebEndpoint.Page(deep, "text/html")), TimeSpan.FromSeconds(1));
-        var hops = new List<WebHop>();
-
-        var fetched = await fetch.FetchAsync(
-            "https://example.com/deep",
-            new WebFetchAsk { Html = html },
-            new WebFetchGate(_ => Task.FromResult(AgentPolicyAnswer.Allow), hop =>
-            {
-                hops.Add(hop);
-                return Task.CompletedTask;
-            }) { Pace = _ => Task.FromResult<DateTimeOffset?>(null) },
-            TestContext.Current.CancellationToken);
-
-        Assert.Equal("no answer read within 1 s", fetched.Failure);
-        Assert.Equal(fetched.Failure, Assert.Single(hops).Failure);
-    }
-
-    /// <summary>
-    /// An answer whose body outlives the bound keeps the status, type and headers already read: the pause a 429 asks for is
-    /// told, though its body never ended.
-    /// </summary>
-    [Fact]
-    public async Task AnAnswerWhoseBodyOutlivesTheBound_KeepsItsStatusAndHeaders()
-    {
-        using var fetch = new HarnessFetch(new RunningToolDouble("1.2.3"), WebNamesDouble.AllPublic, new WebEndpoint(_ => new HttpResponseMessage(HttpStatusCode.TooManyRequests)
-        {
-            Headers = { RetryAfter = new RetryConditionHeaderValue(TimeSpan.FromSeconds(30)) },
-            Content = new StreamContent(new Stalled()) { Headers = { ContentType = new MediaTypeHeaderValue("application/json") } },
-        }), TimeSpan.FromSeconds(1));
-
-        var hops = new List<WebHop>();
-
-        var fetched = await fetch.FetchAsync(
-            "https://example.com/limited",
-            new WebFetchAsk { AnyType = true },
-            new WebFetchGate(_ => Task.FromResult(AgentPolicyAnswer.Allow), hop =>
-            {
-                hops.Add(hop);
-                return Task.CompletedTask;
-            }),
-            TestContext.Current.CancellationToken);
-
-        Assert.Equal(("no answer read within 1 s", 429, "30"), (fetched.Failure, fetched.Status, fetched.Headers["Retry-After"]));
-        Assert.Equal(("no answer read within 1 s", 429, "application/json", "30"), (Assert.Single(hops).Failure, hops[0].Status, hops[0].Type, hops[0].Headers["Retry-After"]));
-    }
-
-    /// <summary>
-    /// A header no request carries - one a body says of itself - is refused where it is configured: one asked here, the
-    /// asker's or its key's, is a defect, never dropped unsaid, and its value is never told.
-    /// </summary>
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task AHeaderNoRequestCarries_IsADefect(bool key)
-    {
-        var endpoint = new WebEndpoint(_ => WebEndpoint.Page("x", "text/plain"));
-        using var fetch = Fetch(endpoint);
-        var ask = key
-            ? new WebFetchAsk { Key = new WebFetchKey("Expires", "k-secret") { Origins = ["https://example.com"] } }
-            : new WebFetchAsk { Headers = new Dictionary<string, string> { ["Content-Language"] = "k-secret" } };
-
-        var defect = await Assert.ThrowsAsync<InvalidOperationException>(() => fetch.FetchAsync("https://example.com/", ask, WebFetchGate.Open, TestContext.Current.CancellationToken));
-
-        Assert.Equal($"'{(key ? "Expires" : "Content-Language")}' was asked to be sent, and is no header a request carries", defect.Message);
-        Assert.Empty(endpoint.Asked);
-    }
-
-    /// <summary>The bound is the whole asking's: each hop's time is taken from what is left of it, a redirect's among it.</summary>
-    [Fact]
-    public async Task TheBound_IsSharedByEveryHop()
-    {
-        using var fetch = new HarnessFetch(new RunningToolDouble("1.2.3"), WebNamesDouble.AllPublic, new WebEndpoint(request =>
-        {
-            Thread.Sleep(TimeSpan.FromMilliseconds(700));
-            return request.RequestUri!.AbsolutePath == "/a" ? WebEndpoint.Redirect("/b") : WebEndpoint.Page("late", "text/plain");
-        }), TimeSpan.FromSeconds(1));
-
-        var fetched = await fetch.FetchAsync("https://example.com/a", WebFetchGate.Open, TestContext.Current.CancellationToken);
-
-        Assert.Equal(("https://example.com/b", "no answer read within 1 s"), (fetched.Address, fetched.Failure));
-    }
-
-    /// <summary>
-    /// An answer the clock says came past the bound is none read within it, though the bound's timer has not fired - a busy
-    /// machine runs a timer's callback late - and what it said of itself is kept.
-    /// </summary>
-    [Fact]
-    public async Task AnAnswerPastTheBoundByTheClock_ItsTimerLate_IsNoneReadWithinIt()
-    {
-        using var fetch = new HarnessFetch(new RunningToolDouble("1.2.3"), WebNamesDouble.AllPublic, new WebEndpoint(_ =>
-        {
-            Thread.Sleep(TimeSpan.FromMilliseconds(700));
-            return WebEndpoint.Page("late", "text/plain");
-        }), TimeSpan.FromMilliseconds(300), new LateTimers());
-
-        var fetched = await fetch.FetchAsync("https://example.com/a", WebFetchGate.Open, TestContext.Current.CancellationToken);
-
-        Assert.Equal(("https://example.com/a", "no answer read within 0.3 s", 200, (string?)null), (fetched.Address, fetched.Failure, fetched.Status, fetched.Text));
-    }
-
     /// <summary>Asked for its parts, a page is read into them - its text the parts' text - and anything else is read as asked without them.</summary>
     [Fact]
     public async Task AskedForParts_APageIsReadIntoThem()
@@ -232,17 +84,16 @@ public sealed class HarnessFetchTests
     }
 
     /// <summary>
-    /// The bound is the asking's alone: a decision and a turn waited for, each hop's, are not charged to it, so a slow pace
-    /// never takes a request's time.
+    /// The stall bound is an answer's silence alone: a decision and a turn waited for, each hop's, are not charged to it, so
+    /// a slow pace never takes a request's time.
     /// </summary>
     [Fact]
-    public async Task ADecisionAndATurn_AreWaitedForOutsideTheBound()
+    public async Task ADecisionAndATurn_AreWaitedForOutsideTheStallBound()
     {
         using var fetch = new HarnessFetch(
             new RunningToolDouble("1.2.3"),
             WebNamesDouble.AllPublic,
-            new WebEndpoint(request => request.RequestUri!.AbsolutePath == "/a" ? WebEndpoint.Redirect("/b") : WebEndpoint.Page("paced", "text/plain")),
-            TimeSpan.FromSeconds(1));
+            new WebEndpoint(request => request.RequestUri!.AbsolutePath == "/a" ? WebEndpoint.Redirect("/b") : WebEndpoint.Page("paced", "text/plain")));
         var gate = new WebFetchGate(
             async _ =>
             {
@@ -256,6 +107,7 @@ public sealed class HarnessFetchTests
                 await Task.Delay(TimeSpan.FromMilliseconds(600), cancellationToken);
                 return null;
             },
+            Stall = TimeSpan.FromSeconds(1),
         };
 
         var fetched = await fetch.FetchAsync("https://example.com/a", gate, TestContext.Current.CancellationToken);
@@ -417,22 +269,6 @@ public sealed class HarnessFetchTests
         Assert.Equal([302, null], hops.Select(hop => hop.Status));
         Assert.Single(endpoint.Asked);
     }
-
-    /// <summary>A relative redirect is read against the address that gave it; a sixth redirect is not followed.</summary>
-    [Fact]
-    public async Task ASixthRedirect_IsNotFollowed()
-    {
-        var endpoint = new WebEndpoint(request => WebEndpoint.Redirect($"/hop{int.Parse(request.RequestUri!.AbsolutePath.AsSpan(4), System.Globalization.CultureInfo.InvariantCulture) + 1}"));
-        using var fetch = Fetch(endpoint);
-
-        var (fetched, decided, _) = await FetchAsync(fetch, "https://example.com/hop0");
-
-        Assert.Equal(HarnessFetch.MostRedirects + 1, endpoint.Asked.Count);
-        Assert.Equal(HarnessFetch.MostRedirects + 1, decided.Count);
-        Assert.Equal("https://example.com/hop5", decided[^1]);
-        Assert.Equal("'https://example.com/hop0' redirects more than 5 times, and no more are followed", fetched.Failure);
-    }
-
     /// <summary>A redirect that names no address fails, and so does one to what reads as no address against the one it came from.</summary>
     [Fact]
     public async Task ARedirectThatNamesNoAddress_Fails()
@@ -449,34 +285,6 @@ public sealed class HarnessFetchTests
 
         Assert.Equal("a redirect (302) to '//exa mple.com/', which reads as no address", unreadFetched.Failure);
     }
-
-    /// <summary>A page whose size is said past the bound is refused unread; one that runs past it unsaid is read no further.</summary>
-    [Fact]
-    public async Task APagePastTheBound_IsRefused()
-    {
-        using var said = Fetch(new WebEndpoint(_ =>
-        {
-            var answer = WebEndpoint.Page("small", "text/plain");
-            answer.Content.Headers.ContentLength = HarnessFetch.MostBytes + 1;
-            return answer;
-        }));
-
-        var (saidFetched, _, saidHops) = await FetchAsync(said, "https://example.com/big");
-
-        Assert.Equal($"{HarnessFetch.MostBytes + 1:N0} bytes, past the 5 MiB this tool's fetch reads", saidFetched.Failure);
-        Assert.Null(Assert.Single(saidHops).Bytes);
-
-        using var unsaid = Fetch(new WebEndpoint(_ => new HttpResponseMessage(HttpStatusCode.OK)
-        {
-            Content = new StreamContent(new Endless()) { Headers = { ContentType = new MediaTypeHeaderValue("text/plain") } },
-        }));
-
-        var (unsaidFetched, _, unsaidHops) = await FetchAsync(unsaid, "https://example.com/endless");
-
-        Assert.Equal("more than the 5 MiB this tool's fetch reads", unsaidFetched.Failure);
-        Assert.InRange(Assert.Single(unsaidHops).Bytes!.Value, HarnessFetch.MostBytes + 1, HarnessFetch.MostBytes + (128 * 1024));
-    }
-
     /// <summary>What is no text - an image, an archive, a type unsaid - is refused, unless any type is asked for: then it is read as text.</summary>
     [Theory]
     [InlineData("image/png", "its type is 'image/png', and this tool's fetch reads text alone: ")]
@@ -552,6 +360,244 @@ public sealed class HarnessFetchTests
         Assert.StartsWith("'nowhere.test' could not be looked up: ", fetched.Failure, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// A redirect back to an address the chain asked before, by the same method, is a loop: it ends at its first revisit,
+    /// the address it leads back to never asked again - however few hops the loop is, with no count of hops.
+    /// </summary>
+    [Fact]
+    public async Task ARedirectLoop_EndsAtItsFirstRevisit()
+    {
+        var endpoint = new WebEndpoint(request => WebEndpoint.Redirect(request.RequestUri!.AbsolutePath == "/a" ? "/b" : "/a"));
+        using var fetch = Fetch(endpoint);
+
+        var (fetched, decided, hops) = await FetchAsync(fetch, "https://example.com/a");
+
+        Assert.Equal(["https://example.com/a", "https://example.com/b"], decided);
+        Assert.Equal(2, endpoint.Asked.Count);
+        Assert.Equal([302, 302], hops.Select(hop => hop.Status));
+        Assert.Equal(
+            ("https://example.com/b", "'https://example.com/a' redirects in a loop: 'https://example.com/b' leads back to 'https://example.com/a', asked before, and it is not asked again"),
+            (fetched.Address, fetched.Failure));
+    }
+
+    /// <summary>
+    /// A chain of new addresses is followed to its end, each decided and answered, however long: twelve redirects, a
+    /// relative one read against the address that gave it, then the page.
+    /// </summary>
+    [Fact]
+    public async Task ATwelveHopChain_IsFollowed()
+    {
+        var endpoint = new WebEndpoint(request => int.Parse(request.RequestUri!.AbsolutePath.AsSpan(4), System.Globalization.CultureInfo.InvariantCulture) is var hop and < 12
+            ? WebEndpoint.Redirect($"/hop{hop + 1}")
+            : WebEndpoint.Page("the end", "text/plain"));
+        using var fetch = Fetch(endpoint);
+
+        var (fetched, decided, hops) = await FetchAsync(fetch, "https://example.com/hop0");
+
+        Assert.Equal(13, endpoint.Asked.Count);
+        Assert.Equal([.. Enumerable.Range(0, 13).Select(hop => $"https://example.com/hop{hop}")], decided);
+        Assert.Equal(13, hops.Count);
+        Assert.Equal(("https://example.com/hop12", "the end", (string?)null), (fetched.Address, fetched.Text, fetched.Failure));
+    }
+
+    /// <summary>
+    /// An answer that goes on coming, however slowly, is read to its end - its wait told every five minutes with how much
+    /// has come, never cut at a time of the fetch's own: a server that sends a byte every seven seconds for an hour is
+    /// read whole.
+    /// </summary>
+    [Fact]
+    public async Task ATricklingServer_IsToldNotCut()
+    {
+        const int Bytes = 520;
+        var clock = new TimerClock();
+        var trickle = new Trickle(clock, Bytes, TimeSpan.FromSeconds(7));
+        using var fetch = new HarnessFetch(
+            new RunningToolDouble("1.2.3"),
+            WebNamesDouble.AllPublic,
+            new WebEndpoint(_ => new HttpResponseMessage(HttpStatusCode.OK) { Content = new StreamContent(trickle) { Headers = { ContentType = new MediaTypeHeaderValue("text/plain") } } }),
+            clock);
+        var told = new List<Core.Waiting.WaitTold>();
+        var gate = WebFetchGate.Open with { Stall = TimeSpan.FromSeconds(30), Tell = told.Add };
+
+        var fetching = fetch.FetchAsync("https://example.com/slow", WebFetchAsk.Page, gate, TestContext.Current.CancellationToken);
+
+        // Moved a second at a time once the wait and the trickle's next byte both wait on the clock.
+        while (!fetching.IsCompleted)
+        {
+            await Task.WhenAny(clock.WaitingAsync(2), fetching).WaitAsync(ClockDrive.Within, TestContext.Current.CancellationToken);
+
+            if (!fetching.IsCompleted)
+            {
+                clock.Advance(TimeSpan.FromSeconds(1));
+            }
+        }
+
+        var fetched = await fetching;
+
+        Assert.Equal((new string('a', Bytes), (string?)null), (fetched.Text, fetched.Failure));
+        Assert.True(told.Count >= 12, $"told {told.Count} times over {Bytes * 7} s");
+        Assert.All(told, said => Assert.Equal("'https://example.com/slow' to answer", said.Subject));
+        Assert.Equal("42 bytes so far", told[0].Progress);
+        Assert.Equal(TimeSpan.FromMinutes(5), told[0].Waited);
+    }
+
+    /// <summary>
+    /// An answer that falls silent - nothing of its head or its body coming - for as long as the step's stall bound is given
+    /// up, said so; one whose head came keeps its status and headers, so the pause a 429 asks for holds.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ASilentServer_EndsAtTheStepsStallBound(bool headCame)
+    {
+        var clock = new TimerClock();
+        using var fetch = new HarnessFetch(
+            new RunningToolDouble("1.2.3"),
+            WebNamesDouble.AllPublic,
+            new Answering(headCame
+                ? (_, _) => Task.FromResult(new HttpResponseMessage(HttpStatusCode.TooManyRequests)
+                {
+                    Headers = { RetryAfter = new RetryConditionHeaderValue(TimeSpan.FromSeconds(30)) },
+                    Content = new StreamContent(new Stalled()) { Headers = { ContentType = new MediaTypeHeaderValue("application/json") } },
+                })
+                : async (_, cancellationToken) =>
+                {
+                    await Task.Delay(Timeout.Infinite, cancellationToken);
+                    throw new InvalidOperationException("never answered");
+                }),
+            clock);
+        var hops = new List<WebHop>();
+        var gate = new WebFetchGate(_ => Task.FromResult(AgentPolicyAnswer.Allow), hop =>
+        {
+            hops.Add(hop);
+            return Task.CompletedTask;
+        }) { Stall = TimeSpan.FromSeconds(30) };
+
+        var fetched = await ClockDrive.UntilEndedAsync(clock, fetch.FetchAsync("https://example.com/silent", new WebFetchAsk { AnyType = true }, gate, TestContext.Current.CancellationToken), TimeSpan.FromSeconds(1), 31, TestContext.Current.CancellationToken);
+
+        Assert.Equal("nothing came from it for 30 s, the step's stall bound", fetched.Failure);
+        Assert.Equal(fetched.Failure, Assert.Single(hops).Failure);
+        Assert.Equal(headCame ? 429 : null, fetched.Status);
+        Assert.Equal(headCame ? "30" : null, fetched.Headers.GetValueOrDefault("Retry-After"));
+    }
+
+    /// <summary>
+    /// A body is read whole, as large as it is, streamed into the writer its asker gives - never held as one text - and
+    /// laid in pages a reader asks for one at a time: three hundred megabytes from a server on this machine.
+    /// </summary>
+    [Fact]
+    public async Task AThreeHundredMegabyteBody_IsStreamedAndPaged()
+    {
+        const long Size = 300L * 1024 * 1024;
+        const string Line = "a line of the body, sixty-four bytes long with its own newline\n";
+
+        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+        var serving = Task.Run(async () =>
+        {
+            using var client = await listener.AcceptTcpClientAsync(TestContext.Current.CancellationToken);
+            await using var stream = client.GetStream();
+            using var reader = new StreamReader(stream, Encoding.ASCII, false, 1024, leaveOpen: true);
+
+            while (await reader.ReadLineAsync(TestContext.Current.CancellationToken) is { Length: > 0 })
+            {
+            }
+
+            await stream.WriteAsync(Encoding.ASCII.GetBytes($"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {Size}\r\nConnection: close\r\n\r\n"), TestContext.Current.CancellationToken);
+
+            var chunk = Encoding.ASCII.GetBytes(string.Concat(Enumerable.Repeat(Line, 1024)));
+
+            for (var sent = 0L; sent < Size; sent += chunk.Length)
+            {
+                await stream.WriteAsync(chunk, TestContext.Current.CancellationToken);
+            }
+        }, TestContext.Current.CancellationToken);
+
+        using var handler = new SocketsHttpHandler
+        {
+            UseProxy = false,
+            ConnectCallback = async (_, cancellationToken) =>
+            {
+                var socket = new Socket(SocketType.Stream, ProtocolType.Tcp);
+                await socket.ConnectAsync(IPAddress.Loopback, port, cancellationToken);
+                return new NetworkStream(socket, ownsSocket: true);
+            },
+        };
+        using var fetch = new HarnessFetch(new RunningToolDouble("1.2.3"), WebNamesDouble.AllPublic, handler);
+        using var directory = new TempDirectory();
+        var path = directory.Combine("body.txt");
+        WebFetched fetched;
+
+        await using (var into = new StreamWriter(path, append: false, new UTF8Encoding(false)))
+        {
+            fetched = await fetch.FetchAsync("http://big.test/body", new WebFetchAsk { Into = into }, WebFetchGate.Open, TestContext.Current.CancellationToken);
+        }
+
+        await serving;
+
+        Assert.Equal((Size, (string?)null, (string?)null), (fetched.Written, fetched.Text, fetched.Failure));
+        Assert.Equal(Size, new FileInfo(path).Length);
+
+        var files = new Core.FileSystem.PhysicalFileSystem(Core.Platform.FilePermissionsFactory.Create());
+        var kept = await Core.Pages.TextPages.LayAsync(files, path, "body", "the body", Core.Pages.PageRoom.Least, numbered: false, TestContext.Current.CancellationToken);
+        var last = await Core.Pages.TextPages.PageAsync(files, kept, kept.Marks.Count, numbered: false, null, TestContext.Current.CancellationToken);
+
+        Assert.True(kept.Marks.Count > 1000, $"{kept.Marks.Count} pages");
+        Assert.Contains(Line.TrimEnd('\n'), Assert.IsType<string>(last.Text), StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// What an asker's own protocol bounds - a sitemap's 50 MiB - is its fact, said in its words: an answer said past it is
+    /// refused unread, one that runs past it unsaid is read no further, a gzip once decompressed past it alike; and an
+    /// asker with no such fact reads the same answers whole.
+    /// </summary>
+    [Fact]
+    public async Task AnAskersMost_IsItsProtocolsFact()
+    {
+        const long Most = 1024 * 1024;
+        var ask = new WebFetchAsk { Most = Most, MostSaid = "the sitemaps protocol lets a sitemap be", Gzip = true };
+        using var said = Fetch(new WebEndpoint(_ =>
+        {
+            var answer = WebEndpoint.Page("small", "text/plain");
+            answer.Content.Headers.ContentLength = Most + 1;
+            return answer;
+        }));
+        using var endless = Fetch(new WebEndpoint(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StreamContent(new Endless()) { Headers = { ContentType = new MediaTypeHeaderValue("text/plain") } },
+        }));
+        using var big = Fetch(new WebEndpoint(_ => Gzipped(Encoding.ASCII.GetBytes(new string('a', (int)Most + 10)), "application/gzip")));
+        using var broken = Fetch(new WebEndpoint(_ => new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent([0x1F, 0x8B, 1, 2, 3]) { Headers = { ContentType = new MediaTypeHeaderValue("application/gzip") } } }));
+        using var plain = Fetch(new WebEndpoint(_ => new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent("<urlset/>"u8.ToArray()) { Headers = { ContentType = new MediaTypeHeaderValue("application/x-gzip") } } }));
+
+        var refused = await said.FetchAsync("https://example.com/s.xml", ask, WebFetchGate.Open, TestContext.Current.CancellationToken);
+        var cut = await endless.FetchAsync("https://example.com/s.xml", ask, WebFetchGate.Open, TestContext.Current.CancellationToken);
+        var past = await big.FetchAsync("https://example.com/s.gz", ask, WebFetchGate.Open, TestContext.Current.CancellationToken);
+        var whole = await big.FetchAsync("https://example.com/s.gz", new WebFetchAsk { Gzip = true }, WebFetchGate.Open, TestContext.Current.CancellationToken);
+        var none = await broken.FetchAsync("https://example.com/s.gz", ask, WebFetchGate.Open, TestContext.Current.CancellationToken);
+        var text = await plain.FetchAsync("https://example.com/s.gz", ask, WebFetchGate.Open, TestContext.Current.CancellationToken);
+
+        Assert.Equal($"{Most + 1:N0} bytes, past the 1 MiB the sitemaps protocol lets a sitemap be", refused.Failure);
+        Assert.Equal("more than the 1 MiB the sitemaps protocol lets a sitemap be", cut.Failure);
+        Assert.Equal("more than the 1 MiB the sitemaps protocol lets a sitemap be once decompressed", past.Failure);
+        Assert.Equal(((int)Most + 10, (string?)null), (whole.Text?.Length, whole.Failure));
+        Assert.StartsWith("its body could not be read: ", none.Failure, StringComparison.Ordinal);
+        Assert.Equal(("<urlset/>", (string?)null), (text.Text, text.Failure));
+    }
+
+    /// <summary>A body past what the fetch once read - five mebibytes - is read whole, as any is.</summary>
+    [Fact]
+    public async Task ABodyPastFiveMebibytes_IsReadWhole()
+    {
+        var body = new string('a', (int)HarnessFetch.MostBytes + 10);
+        using var fetch = Fetch(new WebEndpoint(_ => WebEndpoint.Page(body, "text/plain")));
+
+        var read = await fetch.FetchAsync("https://example.com/big", new WebFetchAsk(), WebFetchGate.Open, TestContext.Current.CancellationToken);
+
+        Assert.Equal((body.Length, (string?)null), (read.Text?.Length, read.Failure));
+    }
+
     private static HarnessFetch Fetch(WebEndpoint endpoint)
         => new(new RunningToolDouble("1.2.3"), new WebNamesDouble(host => host switch
         {
@@ -594,27 +640,6 @@ public sealed class HarnessFetchTests
         Assert.Null(unasked.Text);
         Assert.StartsWith("its type is", unasked.Failure, StringComparison.Ordinal);
     }
-
-    /// <summary>
-    /// A gzip that holds more than the fetch reads is refused once decompressed past it, read no further; one whose gzip is
-    /// broken, said so; and one said to be a gzip whose bytes are none - the transport's own decompressed - is its text.
-    /// </summary>
-    [Fact]
-    public async Task AGzipPastTheBound_IsRefused()
-    {
-        using var big = Fetch(new WebEndpoint(_ => Gzipped(new byte[HarnessFetch.MostBytes + 10], "application/gzip")));
-        using var broken = Fetch(new WebEndpoint(_ => new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent([0x1F, 0x8B, 1, 2, 3]) { Headers = { ContentType = new MediaTypeHeaderValue("application/gzip") } } }));
-        using var plain = Fetch(new WebEndpoint(_ => new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent("<urlset/>"u8.ToArray()) { Headers = { ContentType = new MediaTypeHeaderValue("application/x-gzip") } } }));
-
-        var past = await big.FetchAsync("https://example.com/s.gz", new WebFetchAsk { Gzip = true }, WebFetchGate.Open, TestContext.Current.CancellationToken);
-        var none = await broken.FetchAsync("https://example.com/s.gz", new WebFetchAsk { Gzip = true }, WebFetchGate.Open, TestContext.Current.CancellationToken);
-        var text = await plain.FetchAsync("https://example.com/s.gz", new WebFetchAsk { Gzip = true }, WebFetchGate.Open, TestContext.Current.CancellationToken);
-
-        Assert.Equal("more than the 5 MiB this tool's fetch reads once decompressed", past.Failure);
-        Assert.StartsWith("its body could not be read: ", none.Failure, StringComparison.Ordinal);
-        Assert.Equal(("<urlset/>", (string?)null), (text.Text, text.Failure));
-    }
-
     /// <summary>A gzip is known by its bytes: one said to be bytes of any name, or XML, is read as the text it holds where any type is asked.</summary>
     [Theory]
     [InlineData("binary/octet-stream", "https://example.com/sitemap.xml.gz")]
@@ -629,23 +654,6 @@ public sealed class HarnessFetchTests
         Assert.Equal(("<urlset/>", (string?)null), (read.Text, read.Failure));
         Assert.NotEqual("<urlset/>", unasked.Text);
     }
-
-    /// <summary>An asker's own most is read to, past the fetch's; and where its head is asked, an answer past the most is kept to it, not refused.</summary>
-    [Fact]
-    public async Task AnAskersMost_AndAHead_AreReadTo()
-    {
-        var body = new string('a', (int)HarnessFetch.MostBytes + 10);
-        using var fetch = Fetch(new WebEndpoint(_ => WebEndpoint.Page(body, "text/plain")));
-
-        var refused = await fetch.FetchAsync("https://example.com/big", new WebFetchAsk(), WebFetchGate.Open, TestContext.Current.CancellationToken);
-        var most = await fetch.FetchAsync("https://example.com/big", new WebFetchAsk { Most = HarnessFetch.MostBytes * 2 }, WebFetchGate.Open, TestContext.Current.CancellationToken);
-        var head = await fetch.FetchAsync("https://example.com/big", new WebFetchAsk { Head = true }, WebFetchGate.Open, TestContext.Current.CancellationToken);
-
-        Assert.NotNull(refused.Failure);
-        Assert.Equal((body.Length, (string?)null), (most.Text?.Length, most.Failure));
-        Assert.Equal(((int?)HarnessFetch.MostBytes, (string?)null), (head.Text?.Length, head.Failure));
-    }
-
     /// <summary>What an address was answered keeps its headers, the content's among them, by name in any case - a failure's too.</summary>
     [Fact]
     public async Task AnAnswer_KeepsItsHeaders()
@@ -1028,5 +1036,55 @@ public sealed class HarnessFetchTests
         public override void SetLength(long value) => throw new NotSupportedException();
 
         public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    }
+
+    /// <summary>A body sent a byte at a time, each after a wait on the test's clock, until all are sent.</summary>
+    private sealed class Trickle(TimeProvider clock, int bytes, TimeSpan every) : Stream
+    {
+        private int _sent;
+
+        public override bool CanRead => true;
+
+        public override bool CanSeek => false;
+
+        public override bool CanWrite => false;
+
+        public override long Length => throw new NotSupportedException();
+
+        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            if (_sent == bytes || buffer.IsEmpty)
+            {
+                return 0;
+            }
+
+            await Task.Delay(every, clock, cancellationToken);
+            buffer.Span[0] = (byte)'a';
+            _sent++;
+            return 1;
+        }
+
+        public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
+            => ReadAsync(buffer.AsMemory(offset, count), cancellationToken).AsTask();
+
+        public override void Flush()
+        {
+        }
+
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+
+        public override void SetLength(long value) => throw new NotSupportedException();
+
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    }
+
+    /// <summary>A handler that answers as a test's function does, in its own time: one that never answers among them.</summary>
+    private sealed class Answering(Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> answer) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) => answer(request, cancellationToken);
     }
 }

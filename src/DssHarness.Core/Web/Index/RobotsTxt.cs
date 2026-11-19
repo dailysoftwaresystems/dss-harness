@@ -6,14 +6,12 @@ namespace DssHarness.Core.Web.Index;
 /// <summary>
 /// A site's <c>robots.txt</c> as RFC 9309 reads it, for one crawler: the groups that name it - else those for every crawler
 /// (<c>*</c>) - their <c>Allow</c> and <c>Disallow</c> rules decided by the longest that matches, an <c>Allow</c> winning a
-/// tie; its <c>Crawl-delay</c>; and every <c>Sitemap</c> it names. What the harness's index of a site reads of it: no page
-/// a site refuses this tool is read.
+/// tie; its <c>Crawl-delay</c>, as given; and every <c>Sitemap</c> it names. What the harness's index of a site reads of it:
+/// no page a site refuses this tool is read. It is read whole: RFC 9309 (2.5) asks a crawler to parse at least 500 KiB of
+/// it, and every line of a longer one is a rule its site wrote.
 /// </summary>
 public sealed class RobotsTxt
 {
-    /// <summary>How much of a robots.txt is read: 500 KiB, as RFC 9309 (2.5) asks a crawler to read at least; past it, no line is.</summary>
-    public const int MostRead = 500 * 1024;
-
     private readonly IReadOnlyList<Rule> _rules;
 
     private RobotsTxt(IReadOnlyList<Rule> rules, TimeSpan? crawlDelay, IReadOnlyList<string> sitemaps)
@@ -39,12 +37,6 @@ public sealed class RobotsTxt
     {
         ArgumentNullException.ThrowIfNull(text);
         ArgumentException.ThrowIfNullOrWhiteSpace(agent);
-
-        // Read to the last whole line within the most read: a rule cut short would refuse what the whole one does not.
-        if (text.Length > MostRead)
-        {
-            text = text[..Math.Max(text.LastIndexOfAny(['\r', '\n'], MostRead - 1), 0)];
-        }
 
         var groups = new List<(List<string> Agents, List<(bool, string)> Rules, List<string> Delays)>();
         var sitemaps = new List<string>();
@@ -122,7 +114,7 @@ public sealed class RobotsTxt
 
         return new RobotsTxt(
             [.. mine.SelectMany(group => group.Rules).Select(rule => Rule.Of(rule.Item1, rule.Item2))],
-            delay is { } wait ? TimeSpan.FromSeconds(Math.Min(wait, WebRateLimit.MostPause.TotalSeconds)) : null,
+            delay is { } wait ? WebRateLimit.Seconds(wait) : null,
             sitemaps);
     }
 

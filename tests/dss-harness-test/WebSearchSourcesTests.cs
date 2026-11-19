@@ -23,7 +23,7 @@ public sealed class WebSearchSourcesTests
             ["stackoverflow", "github-repos", "github-issues", "nuget", "npm", "pub-dev", "learn", "mdn", "wikipedia", "hackernews", "readthedocs"],
             sources.All.Select(source => source.Name));
         Assert.Equal(["qa", "code", "packages", "docs", "reference", "blogs"], sources.Defaults);
-        Assert.Equal((WebSearchSources.DefaultMaxPerStep, WebSearchSources.DefaultResultsPerSource), (sources.MaxPerStep, sources.ResultsPerSource));
+        Assert.Equal(WebSearchSources.DefaultMaxPerStep, sources.MaxPerStep);
         Assert.Equal(
             ["stackoverflow", "github-repos", "github-issues", "nuget", "npm", "pub-dev", "learn", "wikipedia", "hackernews"],
             sources.Chosen(null).Select(source => source.Name));
@@ -52,7 +52,7 @@ public sealed class WebSearchSourcesTests
             : WebSearchFound.None;
 
         Assert.Null(found.Failure);
-        var request = Assert.IsType<WebSearchRequest.Http>(kind.Request(source, found, "group by", 2));
+        var request = Assert.IsType<WebSearchRequest.Http>(kind.Request(source, found, "group by", 1));
         Assert.Contains("group%20by", request.Address, StringComparison.Ordinal);
 
         var answer = kind.Read(source, found, Answer(Stored(stored), address: request.Address));
@@ -66,13 +66,13 @@ public sealed class WebSearchSourcesTests
     [Fact]
     public void AStepsSearch_IsGivenItsSourcesAndBounds()
     {
-        var sources = Of("""{ "maxPerStep": 5, "resultsPerSource": 2 }""");
+        var sources = Of("""{ "maxPerStep": 5 }""");
         var keys = new Dictionary<string, WebSearchKey> { ["learn"] = new(null, "none") };
 
         var search = DssHarness.Core.Agents.AgentWebSearch.Of(sources, ["docs", "reference"], keys);
 
         Assert.Equal(["learn", "wikipedia"], search.Sources.Select(source => source.Name));
-        Assert.Equal((2, 5), (search.ResultsPerSource, search.MaxPerStep));
+        Assert.Equal(5, search.MaxPerStep);
         Assert.Same(keys, search.Keys);
         Assert.Equal(sources.Chosen(null), DssHarness.Core.Agents.AgentWebSearch.Of(sources, null, keys).Sources);
     }
@@ -84,8 +84,8 @@ public sealed class WebSearchSourcesTests
         var mdn = Of(null).Find("mdn")!;
         var request = Assert.IsType<WebSearchRequest.Indexed>(WebSearchKinds.OfThisBuild.Find(mdn.Kind)!.Request(mdn, WebSearchFound.None, "flexbox", 8));
 
-        Assert.Equal(("flexbox", 8), (request.Query, request.Limit));
-        Assert.Equal(("https://developer.mozilla.org", "https://developer.mozilla.org/sitemaps/en-us/sitemap.xml.gz", 6000), (request.Settings.Site, request.Settings.Sitemap, request.Settings.MaxPages));
+        Assert.Equal(("flexbox", new WebSearchPage(8, WebSearchSource.DefaultPageSize)), (request.Query, request.Page));
+        Assert.Equal(("https://developer.mozilla.org", "https://developer.mozilla.org/sitemaps/en-us/sitemap.xml.gz"), (request.Settings.Site, request.Settings.Sitemap));
         Assert.Equal(["en-US/docs/Web/**"], request.Settings.Include.Select(pattern => pattern.ToString()));
     }
 
@@ -137,23 +137,38 @@ public sealed class WebSearchSourcesTests
     /// <summary>Each source is held to its kind and every source's own keys, each problem naming where it is (V56), and nothing else is said.</summary>
     [Theory]
     [InlineData("""{ "sources": { "gov": { "kind": "json-api", "url": "https://gov.test/?q={query}", "title": "{@.t}", "link": "{@.u}" } } }""", "agentWebSearch.sources.gov (json-api): 'items' is missing: a source of kind 'json-api' gives it - a JSONPath query of the answer that finds the array of results, as $.results")]
-    [InlineData("""{ "sources": { "gov": { "kind": "sitemap", "site": "https://gov.test", "url": "https://gov.test" } } }""", "agentWebSearch.sources.gov (sitemap): 'url' is no key a source of kind 'sitemap' takes; it takes kind, tags, description, terms, enabled, perMinute, perDay, credential, site, sitemap, include, exclude, maxPages, refreshDays")]
+    [InlineData("""{ "sources": { "gov": { "kind": "sitemap", "site": "https://gov.test", "url": "https://gov.test" } } }""", "agentWebSearch.sources.gov (sitemap): 'url' is no key a source of kind 'sitemap' takes; it takes kind, tags, description, terms, enabled, perMinute, perDay, pageSize, credential, site, sitemap, include, exclude, refreshDays")]
+    [InlineData("""{ "sources": { "mdn": { "maxPages": 6000 } } }""", "agentWebSearch.sources.mdn (sitemap): 'maxPages' is no longer read: an index holds every page its robots.txt allows and include names, read a page at a time and searched as it grows; delete the key")]
     [InlineData("""{ "sources": { "gov": { "kind": "duckduckgo" } } }""", "agentWebSearch.sources.gov (duckduckgo): 'kind' is 'duckduckgo', which is no kind; the kinds are feed, json-api, opensearch, sitemap")]
     [InlineData("""{ "sources": { "gov": { "url": "https://gov.test/?q={query}" } } }""", "agentWebSearch.sources.gov: 'kind' is missing: a source names its kind, one of feed, json-api, opensearch, sitemap")]
     [InlineData("""{ "sources": { "gov": 3 } }""", "agentWebSearch.sources.gov is an object of the source's keys, and is 3")]
     [InlineData("""{ "sources": { "Gov_Docs": { "kind": "feed", "url": "https://gov.test/?q={query}" } } }""", "agentWebSearch.sources.Gov_Docs is no source's name: a source's name names its index's directory, and is lower-case letters and digits joined by single hyphens")]
     [InlineData("""{ "sources": { "stackoverflow": { "perMinute": 5, "PerMinute": 6 } } }""", "agentWebSearch.sources.stackoverflow: 'perMinute' is given twice, as 'perMinute' and 'PerMinute': a key is one whatever its case, and nothing could say which value was meant")]
-    [InlineData("""{ "sources": { "stackoverflow": { "perMinute": 0 } } }""", "agentWebSearch.sources.stackoverflow (json-api): 'perMinute' is a whole number from 1 to 600, and is 0")]
+    [InlineData("""{ "sources": { "stackoverflow": { "perMinute": 0 } } }""", "agentWebSearch.sources.stackoverflow (json-api): 'perMinute' is a whole number from 1 to 2,147,483,647, and is 0")]
     [InlineData("""{ "sources": { "stackoverflow": { "terms": " " } } }""", "agentWebSearch.sources.stackoverflow (json-api): 'terms' says nothing; it is what its owner's terms say of programs asking it, which help says beside it")]
     [InlineData("""{ "sources": { "stackoverflow": { "tags": ["npm"] } } }""", "agentWebSearch: 'npm' names both a source and a tag, and a step's search could not say which it means")]
     [InlineData("""{ "maxPerStep": 0 }""", "agentWebSearch.maxPerStep is 0; it is the most requests of sources one step makes, from 1 to 1,000")]
     [InlineData("""{ "maxPerStep": 1001 }""", "agentWebSearch.maxPerStep is 1001; it is the most requests of sources one step makes, from 1 to 1,000")]
-    [InlineData("""{ "resultsPerSource": 21 }""", "agentWebSearch.resultsPerSource is 21; it is the most results a source gives one search, from 1 to 20")]
+    [InlineData("""{ "maxPerStep": 1000 }""", null)]
     [InlineData("""{ "defaults": [] }""", "agentWebSearch.defaults is given empty, which is never read as the built-in defaults: name sources or tags, or leave the key out for the built-in defaults")]
     [InlineData("""{ "defaults": ["qa", "qa"] }""", "agentWebSearch.defaults names 'qa' more than once")]
     [InlineData("""{ "defaults": ["gov"] }""", "agentWebSearch.defaults names 'gov', which is no source or tag of agentWebSearch; sources: stackoverflow, github-repos, github-issues, nuget, npm, pub-dev, learn, mdn, wikipedia, hackernews, readthedocs; tags: qa, code, packages, dotnet, js, dart, docs, docs-web, reference, blogs, docs-rtd")]
-    public void AWebSearchThatCannotBeUsed_IsRefused_NamingWhere(string section, string problem)
-        => Assert.Equal([problem], Of(section).Problems);
+    public void AWebSearchThatCannotBeUsed_IsRefused_NamingWhere(string section, string? problem)
+        => Assert.Equal(problem is null ? [] : [problem], Of(section).Problems);
+
+    /// <summary>
+    /// The count of results a step's source once gave is retired - every result of a page is given, and the next page is
+    /// asked for by web_search's page - and a configuration that still writes it is refused naming what took its place,
+    /// before anything else of it is read.
+    /// </summary>
+    [Fact]
+    public void ResultsPerSource_IsRefusedNamingPage()
+    {
+        const string Said = "agentWebSearch.resultsPerSource is no longer read: a source gives every result of the page it answers, and an agent asks for the next page by web_search's page, each request counted against maxPerStep; delete the key";
+
+        Assert.Contains(Said, MisplacedKeys.In("""{ "agentWebSearch": { "maxPerStep": 5, "resultsPerSource": 3 } }"""));
+        Assert.DoesNotContain(MisplacedKeys.In("""{ "agentWebSearch": { "maxPerStep": 5 } }"""), said => said.Contains(WebSearchSources.ResultsPerSourceKey, StringComparison.Ordinal));
+    }
 
     /// <summary>
     /// A source turned off is left out of the defaults, never refused there - turning one off is one key of its own - and a

@@ -233,7 +233,6 @@ public sealed partial class AgentToolRuntime : IDisposable
         _webSearch = _tools.ContainsKey(AgentTools.WebSearch) && run.WebSearch is { } search
             ? new Web.Search.WebSearchStep(
                 search.Sources,
-                search.ResultsPerSource,
                 search.MaxPerStep,
                 run.Workspace.RunDirectory,
                 new Repository.HarnessLayout(run.Workspace.MainCheckout, run.Workspace.MainCheckout),
@@ -241,6 +240,9 @@ public sealed partial class AgentToolRuntime : IDisposable
                 search.Keys,
                 new Web.Search.WebSearchRules(_policy.WebSource, _policy.WebFill, _policy.Web),
                 new SearchRecords(this))
+            {
+                Stall = run.Limits.StallSeconds is { } stall and > 0 ? TimeSpan.FromSeconds(stall) : null,
+            }
             : null;
 
         if (host.Unserved(Tools) is { } unserved)

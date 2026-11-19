@@ -45,7 +45,7 @@ public sealed class AgentRunnerTests
 
         var seen = new List<AgentEvent>();
 
-        var search = new AgentWebSearch([], 3, 4, new Dictionary<string, DssHarness.Core.Web.Search.WebSearchKey>());
+        var search = new AgentWebSearch([], 4, new Dictionary<string, DssHarness.Core.Web.Search.WebSearchKey>());
         var entries = new AgentEntries(new AgentProviderConfig { Name = "anthropic" }, new AgentModelConfig { Code = "model-x" }, new AgentClientConfig { MaxRetries = 2 });
         var step = Step(temp, prompt: "do the login form") with { WebSearch = search, Withheld = ["DEPLOY_TOKEN"], Entries = entries };
 

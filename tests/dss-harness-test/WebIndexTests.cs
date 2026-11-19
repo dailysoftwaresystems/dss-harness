@@ -3,6 +3,7 @@ using DssHarness.Core.Platform;
 using DssHarness.Core.Repository;
 using DssHarness.Core.Web;
 using DssHarness.Core.Web.Index;
+using DssHarness.Core.Web.Search;
 
 namespace DssHarness.Tests;
 
@@ -30,7 +31,7 @@ public sealed class WebIndexTests
         var index = Index(directory);
         index.Refresh();
 
-        var hits = index.Search("Tokenizer", 10);
+        var hits = Hits(index, "Tokenizer", 10);
 
         Assert.Equal([$"{Site}/a", $"{Site}/b"], hits.Select(hit => hit.Address));
         Assert.True(hits[0].Score > hits[1].Score);
@@ -48,7 +49,7 @@ public sealed class WebIndexTests
         var index = Index(directory);
         index.Refresh();
 
-        Assert.Equal([$"{Site}/title", $"{Site}/text"], index.Search("tokenizer", 2).Select(hit => hit.Address));
+        Assert.Equal([$"{Site}/title", $"{Site}/text"], Hits(index, "tokenizer", 2).Select(hit => hit.Address));
     }
 
     /// <summary>A page dropped counts for nothing: the index scores as though it was never held.</summary>
@@ -70,7 +71,7 @@ public sealed class WebIndexTests
         var other = Index(never);
         other.Refresh();
 
-        Assert.Equal(other.Search("parser", 5).Single().Score, one.Search("parser", 5).Single().Score, 9);
+        Assert.Equal(Hits(other, "parser", 5).Single().Score, Hits(one, "parser", 5).Single().Score, 9);
     }
 
     /// <summary>A line of another site - one whose address only begins as this site's does - is none of the index's.</summary>
@@ -85,21 +86,20 @@ public sealed class WebIndexTests
         index.Refresh();
 
         Assert.Equal(1, index.Held);
-        Assert.Equal([$"{Site}/a"], index.Search("parser", 5).Select(hit => hit.Address));
+        Assert.Equal([$"{Site}/a"], Hits(index, "parser", 5).Select(hit => hit.Address));
     }
 
     /// <summary>A source's settings are one fingerprint: any of what it reads changes it; how often it is read again does not.</summary>
     [Fact]
     public void ASourcesSettings_AreOneFingerprint()
     {
-        var settings = new SitemapSettings(Site, null, [], [], 100, TimeSpan.FromDays(7));
+        var settings = new SitemapSettings(Site, null, [], [], TimeSpan.FromDays(7));
         SitemapSettings[] changed =
         [
             settings with { Site = "https://other.example.test" },
             settings with { Sitemap = $"{Site}/s.xml" },
             settings with { Include = [GlobPattern.Parse("/a/**")] },
             settings with { Exclude = [GlobPattern.Parse("/a/**")] },
-            settings with { MaxPages = 99 },
         ];
 
         Assert.Equal(changed.Length + 1, changed.Select(other => other.Fingerprint).Append(settings.Fingerprint).Distinct(StringComparer.Ordinal).Count());
@@ -118,8 +118,8 @@ public sealed class WebIndexTests
         var index = Index(directory);
         index.Refresh();
 
-        Assert.Equal($"{Site}/heading", index.Search("lexer", 1).Single().Address);
-        Assert.Equal($"{Site}/text", index.Search("lexer parser", 1).Single().Address);
+        Assert.Equal($"{Site}/heading", Hits(index, "lexer", 1).Single().Address);
+        Assert.Equal($"{Site}/text", Hits(index, "lexer parser", 1).Single().Address);
     }
 
     /// <summary>A searcher reads only what was added since it last looked, and a torn last line waits for the next look.</summary>
@@ -141,7 +141,7 @@ public sealed class WebIndexTests
         File.AppendAllText(Path.Combine(directory.Path, WebIndex.PagesFileName), torn[20..] + "\n");
         index.Refresh();
         Assert.Equal(2, index.Held);
-        Assert.Equal($"{Site}/b", index.Search("second", 5).Single().Address);
+        Assert.Equal($"{Site}/b", Hits(index, "second", 5).Single().Address);
     }
 
     /// <summary>A later line of an address replaces the earlier; a line that says it is gone drops it; a page of another site is none of this one's.</summary>
@@ -160,8 +160,8 @@ public sealed class WebIndexTests
 
         Assert.Equal(1, index.Held);
         Assert.Equal(5, index.Lines);
-        Assert.Empty(index.Search("obsolete", 5));
-        Assert.Equal("New", index.Search("fresh", 5).Single().Title);
+        Assert.Empty(Hits(index, "obsolete", 5));
+        Assert.Equal("New", Hits(index, "fresh", 5).Single().Title);
         Assert.Equal([$"{Site}/a"], index.Pages().Keys);
     }
 
@@ -180,11 +180,11 @@ public sealed class WebIndexTests
         Append(directory, Page("/long", string.Empty, [], "needle " + string.Join(' ', Enumerable.Repeat("word", 500))));
         index.Refresh();
 
-        var hits = index.Search("needle", 5);
+        var hits = Hits(index, "needle", 5);
         var first = hits.Single(hit => hit.Address == $"{Site}/a");
         var cut = hits.Single(hit => hit.Address == $"{Site}/long").Snippet;
 
-        Assert.True(cut.Length <= WebIndex.MostField);
+        Assert.True(cut.Length <= WebIndex.SnippetLength);
         Assert.EndsWith("word…", cut, StringComparison.Ordinal);
 
         Assert.Equal("The heading", first.Title);
@@ -194,25 +194,93 @@ public sealed class WebIndexTests
         Assert.Equal($"{Site}/b", hits.Single(hit => hit.Address == $"{Site}/b").Title);
     }
 
-    /// <summary>A page's text, its title and each of its first headings are kept to their most, never half a pair of surrogates.</summary>
+    /// <summary>A page's line keeps it whole: its title, every heading, all its text and why a page could not be read, however long each is.</summary>
     [Fact]
-    public void APagesText_IsKeptToItsMost()
+    public void APagesLine_KeepsItWhole()
     {
-        var title = new string('t', WebIndex.MostField - 1) + "\U0001F600" + "rest";
-        var headings = Enumerable.Range(0, WebIndex.MostHeadings + 20).Select(at => new string('h', WebIndex.MostField + at)).ToList();
-        var line = WebIndex.PageLine($"{Site}/a", "2026-01-01", At, new WebPageParts(title, headings, new string('x', WebIndex.MostCharacters + 500)));
+        var title = new string('t', 1000) + char.ConvertFromUtf32(0x1F600) + "rest";
+        var headings = Enumerable.Range(0, 150).Select(at => new string('h', 400 + at)).ToList();
+        var text = new string('x', 40_000);
+        var line = WebIndex.PageLine($"{Site}/a", "2026-01-01", At, new WebPageParts(title, headings, text));
 
         using var document = System.Text.Json.JsonDocument.Parse(line);
         var root = document.RootElement;
 
-        Assert.Equal(WebIndex.MostCharacters, root.GetProperty("text").GetString()!.Length);
-        Assert.Equal(new string('t', WebIndex.MostField - 1), root.GetProperty("title").GetString());
-        Assert.Equal(WebIndex.MostHeadings, root.GetProperty("headings").GetArrayLength());
-        Assert.All(root.GetProperty("headings").EnumerateArray(), heading => Assert.Equal(WebIndex.MostField, heading.GetString()!.Length));
+        Assert.Equal(text, root.GetProperty("text").GetString());
+        Assert.Equal(title, root.GetProperty("title").GetString());
+        Assert.Equal(headings, root.GetProperty("headings").EnumerateArray().Select(heading => heading.GetString()));
         Assert.Equal("2026-01-01", root.GetProperty("lastmod").GetString());
 
-        using var failed = System.Text.Json.JsonDocument.Parse(WebIndex.FailedLine($"{Site}/a", At, new string('w', 1000)));
-        Assert.Equal(WebIndex.MostField, failed.RootElement.GetProperty("why").GetString()!.Length);
+        var why = string.Join(' ', Enumerable.Repeat("it answered 503", 100));
+        using var failed = System.Text.Json.JsonDocument.Parse(WebIndex.FailedLine($"{Site}/a", At, why));
+        Assert.Equal(why, failed.RootElement.GetProperty("why").GetString());
+    }
+
+    /// <summary>
+    /// A page of five hundred kilobytes is indexed whole: a term at the end of its text, in its hundred and fiftieth heading,
+    /// and at the end of a title a thousand characters long each finds it, its title shown whole.
+    /// </summary>
+    [Fact]
+    public void AFiveHundredKilobytePage_IsIndexedWhole()
+    {
+        using var directory = new TempDirectory();
+        var title = string.Join(' ', Enumerable.Repeat("long", 200)) + " titled";
+        var headings = Enumerable.Range(0, 150).Select(at => at == 149 ? "lastheading" : $"heading {at}").ToList();
+        var text = string.Join(' ', Enumerable.Repeat("filler", 500 * 1024 / 7)) + " farthest";
+        Append(directory, WebIndex.PageLine($"{Site}/a", null, At, new WebPageParts(title, headings, text)));
+        Append(directory, Page("/b", "Other", [], "nothing of it"));
+
+        var index = Index(directory);
+        index.Refresh();
+
+        Assert.True(text.Length > 500 * 1000);
+        Assert.Equal($"{Site}/a", Assert.Single(Hits(index, "farthest", 5)).Address);
+        Assert.Equal($"{Site}/a", Assert.Single(Hits(index, "lastheading", 5)).Address);
+
+        var titled = Assert.Single(Hits(index, "titled", 5));
+        Assert.Equal(title, titled.Title);
+        Assert.Contains("farthest", Assert.Single(Hits(index, "farthest", 5)).Snippet, StringComparison.Ordinal);
+    }
+
+    /// <summary>A term two thousand characters long - a hash, a key, a run of digits - is a term, and finds its page.</summary>
+    [Fact]
+    public void ATwoThousandCharacterTerm_IsFindable()
+    {
+        using var directory = new TempDirectory();
+        var term = string.Concat(Enumerable.Range(0, 2000).Select(at => (char)('a' + (at % 26))));
+        Append(directory, Page("/hash", "Checksums", [], $"the checksum is {term} as written"));
+        Append(directory, Page("/other", "Other", [], $"the checksum is {term[..1999]} short of it"));
+
+        var index = Index(directory);
+        index.Refresh();
+
+        var hit = Assert.Single(Hits(index, term.ToUpperInvariant(), 5));
+        Assert.Equal($"{Site}/hash", hit.Address);
+        Assert.True(hit.Snippet.Length <= WebIndex.SnippetLength);
+    }
+
+    /// <summary>A search gives the page of its hits asked - from 1, of the size asked - and how many pages answer it in all, on every page of them.</summary>
+    [Fact]
+    public void ASearch_GivesThePageAsked_AndHowManyAnswerInAll()
+    {
+        using var directory = new TempDirectory();
+
+        for (var at = 0; at < 25; at++)
+        {
+            Append(directory, Page($"/p{at}", $"Page {at}", [], string.Join(' ', Enumerable.Repeat("parser", at + 1))));
+        }
+
+        var index = Index(directory);
+        index.Refresh();
+
+        var pages = Enumerable.Range(1, 4).Select(number => index.Search("parser", new WebSearchPage(number, 10))).ToList();
+
+        Assert.Equal([10, 10, 5, 0], pages.Select(page => page.Hits.Count));
+        Assert.All(pages, page => Assert.Equal(25, page.Total));
+        Assert.Equal(25, pages.SelectMany(page => page.Hits).Select(hit => hit.Address).Distinct(StringComparer.Ordinal).Count());
+        var none = index.Search("zebra", new WebSearchPage(1, 10));
+        Assert.Equal((0, 0), (none.Hits.Count, none.Total));
+        Assert.Throws<ArgumentOutOfRangeException>(() => index.Search("parser", new WebSearchPage(0, 10)));
     }
 
     /// <summary>A search keeps to the pages it is told to: one the source's patterns no longer read is no hit, though it is held.</summary>
@@ -226,13 +294,13 @@ public sealed class WebIndexTests
         var index = Index(directory);
         index.Refresh();
 
-        Assert.Equal(2, index.Search("parser", 5).Count);
-        Assert.Equal([$"{Site}/blog/b"], index.Search("parser", 5, address => address.Contains("/blog/", StringComparison.Ordinal)).Select(hit => hit.Address));
+        Assert.Equal(2, Hits(index, "parser", 5).Count);
+        Assert.Equal([$"{Site}/blog/b"], Hits(index, "parser", 5, address => address.Contains("/blog/", StringComparison.Ordinal)).Select(hit => hit.Address));
         Assert.Equal(2, index.Held);
 
         // Each page is asked of once a search, however many of its terms were asked.
         var asked = new List<string>();
-        index.Search("parser guide blog", 5, address =>
+        Hits(index, "parser guide blog", 5, address =>
         {
             asked.Add(address);
             return true;
@@ -247,13 +315,13 @@ public sealed class WebIndexTests
     [Fact]
     public void AFill_IsDue_AsItsStateSays()
     {
-        var settings = new SitemapSettings(Site, null, [], [], 10, TimeSpan.FromDays(7));
+        var settings = new SitemapSettings(Site, null, [], [], TimeSpan.FromDays(7));
         var filled = new WebIndexState(Site, 0, 2, At, At, null, null) { Settings = settings.Fingerprint };
 
         Assert.False(filled.Due(At + TimeSpan.FromDays(1), settings));
         Assert.True((filled with { FilledAt = null }).Due(At, settings));
         Assert.True((filled with { FillStartedAt = At + TimeSpan.FromHours(1) }).Due(At + TimeSpan.FromHours(2), settings));
-        Assert.True(filled.Due(At + TimeSpan.FromDays(1), settings with { MaxPages = 11 }));
+        Assert.True(filled.Due(At + TimeSpan.FromDays(1), settings with { Exclude = [GlobPattern.Parse("/old/**")] }));
         Assert.True(filled.Due(At + TimeSpan.FromDays(1), settings with { Include = [DssHarness.Core.Repository.GlobPattern.Parse("/guides/**")] }));
         Assert.False(filled.Due(At + TimeSpan.FromDays(1), settings with { Refresh = TimeSpan.FromDays(2) }));
         Assert.True(filled.Due(At + TimeSpan.FromDays(7), settings));
@@ -263,9 +331,9 @@ public sealed class WebIndexTests
 
         // A pause after a problem holds the settings it stopped under alone - how long a page waits among them - and one the
         // site asked for holds whatever the settings.
-        Assert.True(stopped.Due(At, settings with { MaxPages = 11 }));
+        Assert.True(stopped.Due(At, settings with { Exclude = [GlobPattern.Parse("/old/**")] }));
         Assert.True(stopped.Due(At, settings with { Refresh = TimeSpan.FromDays(1) }));
-        Assert.False((stopped with { PausedFor = SitemapFill.SiteLimited }).Due(At, settings with { MaxPages = 11 }));
+        Assert.False((stopped with { PausedFor = SitemapFill.SiteLimited }).Due(At, settings with { Exclude = [GlobPattern.Parse("/old/**")] }));
 
         // A fill stopped short is held off for no word of the site's, whatever held it off before.
         Assert.Null((filled with { PausedFor = SitemapFill.SiteLimited }).Stopped("p", At, settings.All).PausedFor);
@@ -295,8 +363,8 @@ public sealed class WebIndexTests
         other.Refresh();
         Assert.Equal(2, other.Lines);
         Assert.Equal(2, other.Held);
-        Assert.Equal("One again", other.Search("first", 5).Single().Title);
-        Assert.Equal("Three", other.Search("third", 5).Single().Title);
+        Assert.Equal("One again", Hits(other, "first", 5).Single().Title);
+        Assert.Equal("Three", Hits(other, "third", 5).Single().Title);
     }
 
     /// <summary>
@@ -322,7 +390,7 @@ public sealed class WebIndexTests
 
         Assert.Equal((2, 2), (index.Held, index.Failed));
         Assert.Equal(new Dictionary<string, (DateTimeOffset, string)> { [$"{Site}/a"] = (At, "it answered 503"), [$"{Site}/b"] = (At, "it answered 403") }, index.Failures());
-        Assert.Equal("One", index.Search("first", 5).Single().Title);
+        Assert.Equal("One", Hits(index, "first", 5).Single().Title);
 
         index.Compact();
 
@@ -340,20 +408,20 @@ public sealed class WebIndexTests
         using var directory = new TempDirectory();
         var empty = Index(directory);
         empty.Refresh();
-        Assert.Empty(empty.Search("anything", 5));
+        Assert.Empty(Hits(empty, "anything", 5));
 
         Append(directory, Page("/a", "One", [], "first"));
         var index = Index(directory);
         index.Refresh();
 
-        Assert.Empty(index.Search("zebra", 5));
-        Assert.Empty(index.Search("!!", 5));
+        Assert.Empty(Hits(index, "zebra", 5));
+        Assert.Empty(Hits(index, "!!", 5));
     }
 
-    /// <summary>Terms are runs of letters and digits in lower case, any script's, a run too long to be a word left out.</summary>
+    /// <summary>Terms are runs of letters and digits in lower case, any script's, every one however long.</summary>
     [Fact]
     public void Terms_AreRunsOfLettersAndDigits()
-        => Assert.Equal(["über", "café", "x2", "日本語"], WebIndexTerms.Of($"Über-CAFÉ x2 {new string('a', 65)} 日本語").ToList());
+        => Assert.Equal(["über", "café", "x2", new string('a', 65), "日本語"], WebIndexTerms.Of($"Über-CAFÉ x2 {new string('a', 65)} 日本語").ToList());
 
     /// <summary>How much an index held is told as an agent reads it.</summary>
     [Theory]
@@ -366,6 +434,9 @@ public sealed class WebIndexTests
         => Assert.Equal(said, new WebIndexAnswer("https://digital.gov", [], held, known, filling, null, null).Said);
 
     private static WebIndex Index(TempDirectory directory) => new(Files, directory.Path, Site);
+
+    private static IReadOnlyList<WebIndexHit> Hits(WebIndex index, string query, int size, Func<string, bool>? keep = null)
+        => index.Search(query, new WebSearchPage(1, size), keep).Hits;
 
     private static string Page(string path, string title, string[] headings, string text)
         => WebIndex.PageLine(Site + path, null, At, new WebPageParts(title, headings, text));

@@ -1,3 +1,4 @@
+using DssHarness.Core.Web;
 using DssHarness.Core.Web.Index;
 
 namespace DssHarness.Tests;
@@ -29,33 +30,66 @@ public sealed class SitemapDocumentTests
     }
 
     /// <summary>
-    /// A sitemap is read to the sitemaps protocol's most: 50,000 entries, an address of 2,048 characters - a longer one
-    /// names none - and a lastmod no longer than a date and time is.
+    /// A loc of 2,048 characters is past the sitemaps protocol's - which are under 2,048 - and is refused by name, beside why;
+    /// one of 2,047 is a page; and an address of any length that no sitemap holds is an address.
     /// </summary>
     [Fact]
-    public void ASitemap_IsReadToItsMost()
+    public void ALocOf2048_IsRefusedByName()
     {
-        var longest = "https://docs.example.test/" + new string('x', 2048 - 26);
+        var under = "https://docs.example.test/" + new string('x', 2047 - 26);
+        var at = under + "y";
         var read = SitemapDocument.Read($"""
             <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
-              <url><loc>{longest}</loc><lastmod>{new string('1', SitemapDocument.MostLastModified + 1)}</lastmod></url>
-              <url><loc>{longest}y</loc></url>
+              <url><loc>{under}</loc></url>
+              <url><loc>{at}</loc></url>
               <url><loc>https://docs.example.test/{new string('é', 400)}</loc></url>
-              <url><loc>/{new string('é', 400)}</loc></url>
             </urlset>
             """, Address);
 
-        Assert.Equal([(longest, (string?)null)], read.Pages);
+        Assert.Equal([under, "https://docs.example.test/" + Uri.EscapeDataString(new string('é', 400))], read.Pages.Select(page => page.Address));
+        Assert.Equal([(at, "its <loc> is 2,048 characters, and the sitemaps protocol's are under 2,048")], read.Refused);
+        Assert.Equal("https://docs.example.test/" + new string('x', 10_000), WebAddresses.Absolute("/" + new string('x', 10_000), Address));
+    }
 
-        var many = SitemapDocument.Read($"""<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">{string.Concat(Enumerable.Range(0, SitemapDocument.MostEntries + 1).Select(at => $"<url><loc>/p{at}</loc></url>"))}</urlset>""", Address);
+    /// <summary>
+    /// A sitemap holds at most the protocol's 50,000 entries: those past them are counted, unread, and said - a listing the
+    /// fill then knows is not whole.
+    /// </summary>
+    [Fact]
+    public void ASitemap_PastTheProtocolsEntries_CountsTheRest()
+    {
+        var many = SitemapDocument.Read($"""<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">{string.Concat(Enumerable.Range(0, SitemapDocument.MostEntries + 3).Select(at => $"<url><loc>/p{at}</loc></url>"))}</urlset>""", Address);
 
-        Assert.Equal((SitemapDocument.MostEntries, "https://docs.example.test/p49999"), (many.Pages.Count, many.Pages[^1].Address));
+        Assert.Equal((SitemapDocument.MostEntries, "https://docs.example.test/p49999", 3), (many.Pages.Count, many.Pages[^1].Address, many.Unread));
 
         var index = SitemapDocument.Read($"""<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">{string.Concat(Enumerable.Range(0, SitemapDocument.MostEntries + 1).Select(at => $"<sitemap><loc>/s{at}.xml</loc></sitemap>"))}</sitemapindex>""", Address);
-        Assert.Equal(SitemapDocument.MostEntries, index.Sitemaps.Count);
+        Assert.Equal((SitemapDocument.MostEntries, 1), (index.Sitemaps.Count, index.Unread));
 
         var lines = SitemapDocument.Read(string.Concat(Enumerable.Range(0, SitemapDocument.MostEntries + 1).Select(at => $"https://docs.example.test/l{at}\n")), Address);
-        Assert.Equal(SitemapDocument.MostEntries, lines.Pages.Count);
+        Assert.Equal((SitemapDocument.MostEntries, 1), (lines.Pages.Count, lines.Unread));
+    }
+
+    /// <summary>
+    /// A lastmod is read by W3C Datetime's grammar - a year, a day, a minute, a fraction of a second of any length, a
+    /// nanosecond's among them - and one no grammar reads is no lastmod, its page listed all the same.
+    /// </summary>
+    [Fact]
+    public void ANanosecondLastmod_IsRead()
+    {
+        var read = SitemapDocument.Read("""
+            <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+              <url><loc>/a</loc><lastmod>2026-10-25T12:00:00.123456789+00:00</lastmod></url>
+              <url><loc>/b</loc><lastmod>2026</lastmod></url>
+              <url><loc>/c</loc><lastmod>2026-10-25T12:00Z</lastmod></url>
+              <url><loc>/d</loc><lastmod>yesterday</lastmod></url>
+              <url><loc>/e</loc><lastmod>1111111111111111111111111111111</lastmod></url>
+            </urlset>
+            """, Address);
+
+        Assert.Equal(
+            [("2026-10-25T12:00:00.123456789+00:00"), "2026", "2026-10-25T12:00Z", null, null],
+            read.Pages.Select(page => page.LastModified));
+        Assert.Equal(5, read.Pages.Count);
     }
 
     /// <summary>

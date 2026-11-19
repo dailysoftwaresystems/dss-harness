@@ -183,7 +183,11 @@ public sealed partial class AgentToolRuntime
 
                 return answer;
             },
-            hop => _records.WebAnsweredAsync(AgentTools.WebFetch, "fetch", hop.Address, hop.Status, hop.Type, hop.Bytes, hop.Failure));
+            hop => _records.WebAnsweredAsync(AgentTools.WebFetch, "fetch", hop.Address, hop.Status, hop.Type, hop.Bytes, hop.Failure))
+        {
+            // An answer's silence ends at the step's stall bound, as a command's does; one that goes on coming is read whole.
+            Stall = _run.Limits.StallSeconds is { } stall and > 0 ? TimeSpan.FromSeconds(stall) : null,
+        };
 
         var fetched = await _host.Fetch.FetchAsync(url, gate, cancellationToken).ConfigureAwait(false);
 
@@ -216,8 +220,14 @@ public sealed partial class AgentToolRuntime
         var search = _host.Search!;
         var query = Text(input, "query")!;
         IReadOnlyList<string>? names = input["sources"] is JsonArray given ? [.. given.Select(name => name!.GetValue<string>())] : null;
+        var page = Number(input, "page") ?? 1;
 
-        var searched = await search.SearchAsync(step, query, names, cancellationToken).ConfigureAwait(false);
+        if (page is < 1 or > int.MaxValue)
+        {
+            return Answer.Failed($"page is {page.ToString(CultureInfo.InvariantCulture)}, and is 1 to {int.MaxValue.ToString("N0", CultureInfo.InvariantCulture)}");
+        }
+
+        var searched = await search.SearchAsync(step, query, names, (int)page, cancellationToken).ConfigureAwait(false);
 
         if (searched.Refusal is { } refusal)
         {

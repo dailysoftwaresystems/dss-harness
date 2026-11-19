@@ -196,10 +196,9 @@ public static class AgentTools
             return said;
         }
 
-        var limit = search.ResultsPerSource.ToString(CultureInfo.InvariantCulture);
         var sources = string.Join("\n", search.Sources.Select(source => $"- {source.Name}{(source.Tags.Count > 0 ? $" ({string.Join(", ", source.Tags)})" : string.Empty)}: {source.Description ?? source.Kind}"));
 
-        return $"{said} Each source gives at most {limit} results; name some in sources to ask them alone, else every one is asked. This step's sources:\n{sources}";
+        return $"{said} Each source gives every result of one page of its answer; ask its next page with page, each page one more request of each source asked; name some in sources to ask them alone, else every one is asked. This step's sources:\n{sources}";
     }
 
     /// <summary><c>web_search</c>'s input: the query, and the step's sources it may name.</summary>
@@ -219,6 +218,7 @@ public static class AgentTools
             {
                 ["query"] = new JsonObject { ["type"] = "string", ["description"] = "What to search for, in words." },
                 ["sources"] = new JsonObject { ["type"] = "array", ["items"] = items, ["minItems"] = 1, ["description"] = "The sources asked, by name; every one of this step's where it is left out." },
+                ["page"] = new JsonObject { ["type"] = "integer", ["minimum"] = 1, ["description"] = "The page of each source's results asked, from 1; the first where it is left out." },
             },
             ["required"] = new JsonArray("query"),
             ["additionalProperties"] = false,

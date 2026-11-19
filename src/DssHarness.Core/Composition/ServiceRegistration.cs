@@ -307,7 +307,7 @@ public static class ServiceRegistration
         {
             var clock = provider.GetRequiredService<TimeProvider>();
             var platform = provider.GetRequiredService<IHostPlatform>();
-            return new Web.Search.WebSearchPace(provider.GetRequiredService<IFileSystem>(), () => Web.Search.WebSearchPace.PathFor(platform, provider.GetRequiredService<IHarnessOutput>()), clock, (wait, cancellationToken) => Task.Delay(wait, clock, cancellationToken));
+            return new Web.Search.WebSearchPace(provider.GetRequiredService<IFileSystem>(), () => Web.Search.WebSearchPace.PathFor(platform, provider.GetRequiredService<IHarnessOutput>()), clock, (wait, cancellationToken) => Task.Delay(wait, clock, cancellationToken), provider.GetRequiredService<IProcessIdentity>());
         });
         services.AddSingleton<Web.Search.HarnessWebSearch>();
         services.AddSingleton<Web.Search.WebSearchKeys>();

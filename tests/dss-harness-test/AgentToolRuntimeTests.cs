@@ -1619,8 +1619,9 @@ public sealed class AgentToolRuntimeTests : IDisposable
 
         Assert.Equal(["alpha", "beta"], schema["properties"]!["sources"]!["items"]!["enum"]!.AsArray().Select(name => name!.GetValue<string>()));
         Assert.Equal(["query"], schema["required"]!.AsArray().Select(name => name!.GetValue<string>()));
+        Assert.Equal(("integer", 1), (schema["properties"]!["page"]!["type"]!.GetValue<string>(), schema["properties"]!["page"]!["minimum"]!.GetValue<int>()));
         Assert.EndsWith(
-            $" Each source gives at most {DssHarness.Core.Web.Search.WebSearchSources.DefaultResultsPerSource} results; name some in sources to ask them alone, else every one is asked. This step's sources:\n- alpha: Alpha's answers\n- beta: Beta's packages",
+            " Each source gives every result of one page of its answer; ask its next page with page, each page one more request of each source asked; name some in sources to ask them alone, else every one is asked. This step's sources:\n- alpha: Alpha's answers\n- beta: Beta's packages",
             tool.Description,
             StringComparison.Ordinal);
 
@@ -2550,7 +2551,7 @@ public sealed class AgentToolRuntimeTests : IDisposable
     {
         var files = new PhysicalFileSystem(DssHarness.Core.Platform.FilePermissionsFactory.Create());
         var indexes = new DssHarness.Core.Web.Index.WebIndexes(files, new DssHarness.Core.Web.Index.SitemapFill(files, fetch, clock, (_, _) => Task.CompletedTask), clock);
-        var pace = new DssHarness.Core.Web.Search.WebSearchPace(files, () => Path.Combine(_step, "..", "pace.json"), clock, (_, _) => Task.CompletedTask);
+        var pace = new DssHarness.Core.Web.Search.WebSearchPace(files, () => Path.Combine(_step, "..", "pace.json"), clock, (_, _) => Task.CompletedTask, new DssHarness.Core.Execution.ProcessIdentity(new DssHarness.Core.Platform.HostPlatform()));
         var search = new DssHarness.Core.Web.Search.HarnessWebSearch(DssHarness.Core.Web.Search.WebSearchKinds.OfThisBuild, fetch, indexes, pace, files, clock);
 
         _opened.Add(search);
@@ -2567,7 +2568,6 @@ public sealed class AgentToolRuntimeTests : IDisposable
                 WebSearchFixtures.Source("alpha", """{ "kind": "json-api", "description": "Alpha's answers", "url": "https://alpha.example.test/?q={query}", "items": "$.items", "title": "{@.title}", "link": "{@.link}" }"""),
                 WebSearchFixtures.Source("beta", """{ "kind": "json-api", "description": "Beta's packages", "url": "https://beta.example.test/?q={query}", "items": "$.items", "title": "{@.title}", "link": "{@.link}" }"""),
             ],
-            DssHarness.Core.Web.Search.WebSearchSources.DefaultResultsPerSource,
             maxPerStep,
             new Dictionary<string, DssHarness.Core.Web.Search.WebSearchKey>());
 

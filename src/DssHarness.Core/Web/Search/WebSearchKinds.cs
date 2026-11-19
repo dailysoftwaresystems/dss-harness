@@ -102,9 +102,12 @@ public sealed class WebSearchKinds
 
         var taken = WebSearchSource.OwnKeys.Concat(kind.Keys).Select(key => key.Name).ToList();
 
+        // A key the kind took once is refused naming what took its place, never as one it never knew.
         problems.AddRange(source.Keys
             .Where(key => !taken.Contains(key, StringComparer.OrdinalIgnoreCase))
-            .Select(key => $"'{key}' is no key a source of kind '{kind.Kind}' takes; it takes {string.Join(", ", taken)}"));
+            .Select(key => kind.Retired.TryGetValue(key, out var now)
+                ? $"'{key}' is no longer read: {now}"
+                : $"'{key}' is no key a source of kind '{kind.Kind}' takes; it takes {string.Join(", ", taken)}"));
 
         problems.AddRange(kind.Problems(source));
 

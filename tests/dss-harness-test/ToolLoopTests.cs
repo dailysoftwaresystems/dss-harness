@@ -1067,7 +1067,7 @@ public sealed class ToolLoopTests : IDisposable
             "noSessions" => Run() with { SessionsDirectory = null },
             "otherEntry" => Run() with { Model = "claude-sonnet-5-5" },
             "noMaxOutput" => Run(),
-            "search" => Run() with { WebSearch = new AgentWebSearch([WebSearchFixtures.Source("alpha", """{ "kind": "json-api", "url": "https://alpha.example.test/?q={query}", "items": "$.items", "title": "{@.title}", "link": "{@.link}" }""")], 8, 60, new Dictionary<string, DssHarness.Core.Web.Search.WebSearchKey>()) },
+            "search" => Run() with { WebSearch = new AgentWebSearch([WebSearchFixtures.Source("alpha", """{ "kind": "json-api", "url": "https://alpha.example.test/?q={query}", "items": "$.items", "title": "{@.title}", "link": "{@.link}" }""")], 60, new Dictionary<string, DssHarness.Core.Web.Search.WebSearchKey>()) },
             _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, "no such run"),
         };
 
@@ -1089,7 +1089,7 @@ public sealed class ToolLoopTests : IDisposable
     {
         var run = Run(capabilities: [AgentCapability.Read, AgentCapability.Web]) with
         {
-            WebSearch = new AgentWebSearch([WebSearchFixtures.Source("alpha", """{ "kind": "json-api", "url": "https://alpha.example.test/?q={query}", "items": "$.items", "title": "{@.title}", "link": "{@.link}" }""")], 8, 60, new Dictionary<string, DssHarness.Core.Web.Search.WebSearchKey>()),
+            WebSearch = new AgentWebSearch([WebSearchFixtures.Source("alpha", """{ "kind": "json-api", "url": "https://alpha.example.test/?q={query}", "items": "$.items", "title": "{@.title}", "link": "{@.link}" }""")], 60, new Dictionary<string, DssHarness.Core.Web.Search.WebSearchKey>()),
             NativeSearch = new UsingNativeSearch(new AgentUsage(1000, 50, 0, 0, 0, 1)),
         };
         _chat.Answer(FakeChat.Calling(FakeChat.Call("c1", AgentTools.WebSearch, ("query", "group by")))).Answer(FakeChat.Said("done"));
@@ -1187,7 +1187,7 @@ public sealed class ToolLoopTests : IDisposable
     private AgentRun Searching(IAgentNativeSearch native)
         => Run(capabilities: [AgentCapability.Read, AgentCapability.Web]) with
         {
-            WebSearch = new AgentWebSearch([WebSearchFixtures.Source("alpha", """{ "kind": "json-api", "url": "https://alpha.example.test/?q={query}", "items": "$.items", "title": "{@.title}", "link": "{@.link}" }""")], 8, 60, new Dictionary<string, DssHarness.Core.Web.Search.WebSearchKey>()),
+            WebSearch = new AgentWebSearch([WebSearchFixtures.Source("alpha", """{ "kind": "json-api", "url": "https://alpha.example.test/?q={query}", "items": "$.items", "title": "{@.title}", "link": "{@.link}" }""")], 60, new Dictionary<string, DssHarness.Core.Web.Search.WebSearchKey>()),
             NativeSearch = native,
         };
 
@@ -1302,7 +1302,7 @@ public sealed class ToolLoopTests : IDisposable
     {
         var files = new PhysicalFileSystem(DssHarness.Core.Platform.FilePermissionsFactory.Create());
         var indexes = new DssHarness.Core.Web.Index.WebIndexes(files, new DssHarness.Core.Web.Index.SitemapFill(files, fetch, TimeProvider.System, (_, _) => Task.CompletedTask), TimeProvider.System);
-        var pace = new DssHarness.Core.Web.Search.WebSearchPace(files, () => Path.Combine(_step, "..", "pace.json"), TimeProvider.System, (_, _) => Task.CompletedTask);
+        var pace = new DssHarness.Core.Web.Search.WebSearchPace(files, () => Path.Combine(_step, "..", "pace.json"), TimeProvider.System, (_, _) => Task.CompletedTask, new DssHarness.Core.Execution.ProcessIdentity(new DssHarness.Core.Platform.HostPlatform()));
         var search = new DssHarness.Core.Web.Search.HarnessWebSearch(DssHarness.Core.Web.Search.WebSearchKinds.OfThisBuild, fetch, indexes, pace, files, TimeProvider.System);
 
         _opened.Add(search);

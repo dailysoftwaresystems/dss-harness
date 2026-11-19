@@ -29,6 +29,9 @@ public sealed class WebIndexesTests
     /// <summary>A gate that allows every address, records none, and gives every request its turn at once.</summary>
     private static readonly WebFetchGate Open = WebFetchGate.Open with { Pace = _ => Task.FromResult<DateTimeOffset?>(null) };
 
+    /// <summary>The first page of a search's hits, five to a page.</summary>
+    private static readonly WebSearchPage FirstFive = new(1, 5);
+
     /// <summary>
     /// A first search begins the fill and says the sitemaps are being read; once filled, the pages robots.txt allows and the
     /// source includes are found - none other asked - each request after the first at the crawl delay, every request a line of the fill's record.
@@ -41,14 +44,14 @@ public sealed class WebIndexesTests
         using var harness = new Harness(site);
         var settings = Settings(include: ["/guides/**"]);
 
-        var first = harness.Indexes.Search(directory.Path, settings, "tokenizer", 5, Open);
+        var first = harness.Indexes.Search(directory.Path, settings, "tokenizer", FirstFive, Open);
 
         Assert.True(first.Filling);
         Assert.Empty(first.Hits);
 
         await harness.Indexes.FilledAsync(directory.Path);
 
-        var answer = harness.Indexes.Search(directory.Path, settings, "tokenizer", 5, Open);
+        var answer = harness.Indexes.Search(directory.Path, settings, "tokenizer", FirstFive, Open);
 
         Assert.False(answer.Filling);
         Assert.Equal(2, answer.Held);
@@ -87,28 +90,28 @@ public sealed class WebIndexesTests
             },
         };
 
-        harness.Indexes.Search(directory.Path, Settings(include: ["/guides/**"]), "x", 5, gate);
+        harness.Indexes.Search(directory.Path, Settings(include: ["/guides/**"]), "x", FirstFive, gate);
         await harness.Indexes.FilledAsync(directory.Path);
 
         Assert.Equal(site.Asked.Count, turns);
         Assert.Equal(7, turns);
-        Assert.Throws<ArgumentException>(() => harness.Indexes.Search(directory.Path, Settings(), "x", 5, WebFetchGate.Open));
+        Assert.Throws<ArgumentException>(() => harness.Indexes.Search(directory.Path, Settings(), "x", FirstFive, WebFetchGate.Open));
     }
 
-    /// <summary>An index holds at most maxPages, the first its sitemaps list; with no pattern, every page the site allows.</summary>
+    /// <summary>An index holds every page its sitemaps list that the site allows and the source includes; with no pattern, every page the site allows.</summary>
     [Fact]
-    public async Task AnIndex_HoldsAtMostMaxPages()
+    public async Task AnIndex_HoldsEveryPageTheSiteAllows()
     {
         using var directory = new TempDirectory();
         using var harness = new Harness(new SiteDouble());
 
-        harness.Indexes.Search(directory.Path, Settings(maxPages: 1), "x", 5, Open);
+        harness.Indexes.Search(directory.Path, Settings(), "x", FirstFive, Open);
         await harness.Indexes.FilledAsync(directory.Path);
 
-        var answer = harness.Indexes.Search(directory.Path, Settings(maxPages: 1), "guide", 5, Open);
+        var answer = harness.Indexes.Search(directory.Path, Settings(), "guide", FirstFive, Open);
 
-        Assert.Equal((1, (int?)1), (answer.Held, answer.Known));
-        Assert.Equal([$"{Site}/guides/alpha"], answer.Hits.Select(hit => hit.Address));
+        Assert.Equal((3, (int?)3, 3), (answer.Held, answer.Known, answer.Total));
+        Assert.Equal([$"{Site}/blog/zeta", $"{Site}/guides/alpha", $"{Site}/guides/beta"], answer.Hits.Select(hit => hit.Address).Order(StringComparer.Ordinal));
     }
 
     /// <summary>A page the gate refuses is never asked, and never held.</summary>
@@ -123,11 +126,11 @@ public sealed class WebIndexesTests
             Decide = address => Task.FromResult(address.EndsWith("/beta", StringComparison.Ordinal) ? new AgentPolicyAnswer.Denied("Web(x)", AgentPolicySource.Config, "refused") : AgentPolicyAnswer.Allow),
         };
 
-        harness.Indexes.Search(directory.Path, Settings(include: ["/guides/**"]), "x", 5, gate);
+        harness.Indexes.Search(directory.Path, Settings(include: ["/guides/**"]), "x", FirstFive, gate);
         await harness.Indexes.FilledAsync(directory.Path);
 
         Assert.DoesNotContain(site.Asked, asked => asked.Address.AbsolutePath == "/guides/beta");
-        Assert.Equal(1, harness.Indexes.Search(directory.Path, Settings(include: ["/guides/**"]), "x", 5, gate).Held);
+        Assert.Equal(1, harness.Indexes.Search(directory.Path, Settings(include: ["/guides/**"]), "x", FirstFive, gate).Held);
     }
 
     /// <summary>A refill past refreshDays reads the page whose lastmod moved first, then a new one; one unmoved is not read, one no longer listed is dropped.</summary>
@@ -139,10 +142,10 @@ public sealed class WebIndexesTests
         using var harness = new Harness(site);
         var settings = Settings(include: ["/guides/**"]);
 
-        harness.Indexes.Search(directory.Path, settings, "x", 5, Open);
+        harness.Indexes.Search(directory.Path, settings, "x", FirstFive, Open);
         await harness.Indexes.FilledAsync(directory.Path);
 
-        Assert.False(harness.Indexes.Search(directory.Path, settings, "x", 5, Open).Filling);
+        Assert.False(harness.Indexes.Search(directory.Path, settings, "x", FirstFive, Open).Filling);
 
         site.Guides = """
             <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
@@ -153,12 +156,12 @@ public sealed class WebIndexesTests
         site.Asked.Clear();
         harness.Clock.Advance(TimeSpan.FromDays(8));
 
-        Assert.True(harness.Indexes.Search(directory.Path, settings, "x", 5, Open).Filling);
+        Assert.True(harness.Indexes.Search(directory.Path, settings, "x", FirstFive, Open).Filling);
         await harness.Indexes.FilledAsync(directory.Path);
 
         Assert.Equal(["/guides/beta", "/guides/gamma"], site.Asked.Select(asked => asked.Address.AbsolutePath).Where(path => path.StartsWith("/guides/", StringComparison.Ordinal)));
 
-        var answer = harness.Indexes.Search(directory.Path, settings, "guide", 5, Open);
+        var answer = harness.Indexes.Search(directory.Path, settings, "guide", FirstFive, Open);
         Assert.Equal([$"{Site}/guides/beta", $"{Site}/guides/gamma"], answer.Hits.Select(hit => hit.Address).Order(StringComparer.Ordinal));
     }
 
@@ -171,10 +174,10 @@ public sealed class WebIndexesTests
         using var harness = new Harness(site);
         var settings = Settings(include: ["/guides/**"]);
 
-        harness.Indexes.Search(directory.Path, settings, "x", 5, Open);
+        harness.Indexes.Search(directory.Path, settings, "x", FirstFive, Open);
         await harness.Indexes.FilledAsync(directory.Path);
 
-        var answer = harness.Indexes.Search(directory.Path, settings, "alpha", 5, Open);
+        var answer = harness.Indexes.Search(directory.Path, settings, "alpha", FirstFive, Open);
 
         Assert.False(answer.Filling);
         Assert.Equal(1, answer.Held);
@@ -185,9 +188,9 @@ public sealed class WebIndexesTests
         harness.Clock.Advance(TimeSpan.FromSeconds(601));
         site.LimitedAt = null;
 
-        Assert.True(harness.Indexes.Search(directory.Path, settings, "x", 5, Open).Filling);
+        Assert.True(harness.Indexes.Search(directory.Path, settings, "x", FirstFive, Open).Filling);
         await harness.Indexes.FilledAsync(directory.Path);
-        Assert.Equal(2, harness.Indexes.Search(directory.Path, settings, "x", 5, Open).Held);
+        Assert.Equal(2, harness.Indexes.Search(directory.Path, settings, "x", FirstFive, Open).Held);
     }
 
     /// <summary>A robots.txt that cannot be read reads nothing of the site, and says why; one that is not there refuses nothing.</summary>
@@ -201,14 +204,17 @@ public sealed class WebIndexesTests
         using var directory = new TempDirectory();
         using var harness = new Harness(new SiteDouble { RobotsStatus = status });
 
-        harness.Indexes.Search(directory.Path, Settings(), "x", 5, Open);
+        harness.Indexes.Search(directory.Path, Settings(), "x", FirstFive, Open);
         await harness.Indexes.FilledAsync(directory.Path);
 
-        var answer = harness.Indexes.Search(directory.Path, Settings(), "x", 5, Open);
+        var state = WebIndexState.Read(Files, directory.Path, Site);
+        var answer = harness.Indexes.Search(directory.Path, Settings(), "x", FirstFive, Open);
 
+        // A fill that stopped short is begun again by the next search, saying why the last stopped until one ends whole.
         Assert.Equal(held, answer.Held);
-        Assert.Equal(problem, answer.Problem);
-        Assert.False(answer.Filling);
+        Assert.Equal((problem, problem), (state.Problem, answer.Problem));
+        Assert.Equal(problem is not null, answer.Filling);
+        await harness.Indexes.FilledAsync(directory.Path);
 
         if (problem is not null)
         {
@@ -225,10 +231,10 @@ public sealed class WebIndexesTests
         using var directory = new TempDirectory();
         using var harness = new Harness(new SiteDouble { IndexStatus = 404 });
 
-        harness.Indexes.Search(directory.Path, Settings(), "x", 5, Open);
+        harness.Indexes.Search(directory.Path, Settings(), "x", FirstFive, Open);
         await harness.Indexes.FilledAsync(directory.Path);
 
-        Assert.Equal("no sitemap of it could be read, the first 'https://docs.example.test/sitemap-index.xml': it answered 404", harness.Indexes.Search(directory.Path, Settings(), "x", 5, Open).Problem);
+        Assert.Equal("no sitemap of it could be read, the first 'https://docs.example.test/sitemap-index.xml': it answered 404", harness.Indexes.Search(directory.Path, Settings(), "x", FirstFive, Open).Problem);
     }
 
     /// <summary>
@@ -242,10 +248,10 @@ public sealed class WebIndexesTests
         var site = new SiteDouble { RobotsType = "text/html", OtherType = "text/html", IndexType = "text/html" };
         using var harness = new Harness(site);
 
-        harness.Indexes.Search(directory.Path, Settings(), "x", 5, Open);
+        harness.Indexes.Search(directory.Path, Settings(), "x", FirstFive, Open);
         await harness.Indexes.FilledAsync(directory.Path);
 
-        var answer = harness.Indexes.Search(directory.Path, Settings(), "guide", 5, Open);
+        var answer = harness.Indexes.Search(directory.Path, Settings(), "guide", FirstFive, Open);
 
         Assert.Null(answer.Problem);
         Assert.Equal(3, answer.Held);
@@ -264,18 +270,18 @@ public sealed class WebIndexesTests
         var site = new SiteDouble();
         using var harness = new Harness(site);
 
-        harness.Indexes.Search(directory.Path, Settings(), "x", 5, Open);
+        harness.Indexes.Search(directory.Path, Settings(), "x", FirstFive, Open);
         await harness.Indexes.FilledAsync(directory.Path);
 
         site.Guides = site.Guides.Replace("</urlset>", "  <url><loc>https://docs.example.test/guides/gamma</loc><lastmod>2026-03-01</lastmod></url>\n</urlset>", StringComparison.Ordinal);
         site.Asked.Clear();
         harness.Clock.Advance(TimeSpan.FromDays(8));
 
-        harness.Indexes.Search(directory.Path, Settings(), "x", 5, Open);
+        harness.Indexes.Search(directory.Path, Settings(), "x", FirstFive, Open);
         await harness.Indexes.FilledAsync(directory.Path);
 
         Assert.Equal(["/guides/gamma", "/blog/zeta"], PagesAsked(site));
-        Assert.Equal(4, harness.Indexes.Search(directory.Path, Settings(), "x", 5, Open).Held);
+        Assert.Equal(4, harness.Indexes.Search(directory.Path, Settings(), "x", FirstFive, Open).Held);
     }
 
     /// <summary>A page that answers it is gone is dropped, though its sitemap still lists it.</summary>
@@ -289,24 +295,24 @@ public sealed class WebIndexesTests
         using var harness = new Harness(site);
         var settings = Settings(include: ["/guides/**"]);
 
-        harness.Indexes.Search(directory.Path, settings, "x", 5, Open);
+        harness.Indexes.Search(directory.Path, settings, "x", FirstFive, Open);
         await harness.Indexes.FilledAsync(directory.Path);
 
         site.Guides = site.Guides.Replace("alpha</loc><lastmod>2026-01-01", "alpha</loc><lastmod>2026-05-01", StringComparison.Ordinal);
         site.Statuses["/guides/alpha"] = status;
         harness.Clock.Advance(TimeSpan.FromDays(8));
 
-        harness.Indexes.Search(directory.Path, settings, "x", 5, Open);
+        harness.Indexes.Search(directory.Path, settings, "x", FirstFive, Open);
         await harness.Indexes.FilledAsync(directory.Path);
 
-        var answer = harness.Indexes.Search(directory.Path, settings, "tokenizer", 5, Open);
+        var answer = harness.Indexes.Search(directory.Path, settings, "tokenizer", FirstFive, Open);
 
         Assert.Equal(1, answer.Held);
         Assert.Equal([$"{Site}/guides/beta"], answer.Hits.Select(hit => hit.Address));
 
         // Remembered as one that could not be read, it is not asked again before its time, though the index is filled again.
         site.Asked.Clear();
-        harness.Indexes.Search(directory.Path, Settings(include: ["/guides/**"], maxPages: 99), "x", 5, Open);
+        harness.Indexes.Search(directory.Path, Changed(Settings(include: ["/guides/**"])), "x", FirstFive, Open);
         await harness.Indexes.FilledAsync(directory.Path);
 
         Assert.Empty(PagesAsked(site));
@@ -322,13 +328,13 @@ public sealed class WebIndexesTests
         using var harness = new Harness(site);
         var settings = Settings(include: ["/guides/**"]);
 
-        harness.Indexes.Search(directory.Path, settings, "x", 5, Open);
+        harness.Indexes.Search(directory.Path, settings, "x", FirstFive, Open);
         await harness.Indexes.FilledAsync(directory.Path);
 
         site.Guides = site.Guides.Replace("<url><loc>https://docs.example.test/guides/beta</loc><lastmod>2026-02-01</lastmod></url>", string.Empty, StringComparison.Ordinal);
         harness.Clock.Advance(TimeSpan.FromDays(8));
 
-        harness.Indexes.Search(directory.Path, settings, "x", 5, Open);
+        harness.Indexes.Search(directory.Path, settings, "x", FirstFive, Open);
         await harness.Indexes.FilledAsync(directory.Path);
 
         var index = new WebIndex(Files, directory.Path, Site);
@@ -346,89 +352,56 @@ public sealed class WebIndexesTests
         using var harness = new Harness(site);
         var settings = Settings(include: ["/guides/**"]);
 
-        harness.Indexes.Search(directory.Path, settings, "x", 5, Open);
+        harness.Indexes.Search(directory.Path, settings, "x", FirstFive, Open);
         await harness.Indexes.FilledAsync(directory.Path);
-        Assert.Equal(2, harness.Indexes.Search(directory.Path, settings, "x", 5, Open).Held);
+        Assert.Equal(2, harness.Indexes.Search(directory.Path, settings, "x", FirstFive, Open).Held);
 
         site.Guides = """<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"></urlset>""";
         harness.Clock.Advance(TimeSpan.FromDays(8));
 
-        harness.Indexes.Search(directory.Path, settings, "x", 5, Open);
+        harness.Indexes.Search(directory.Path, settings, "x", FirstFive, Open);
         await harness.Indexes.FilledAsync(directory.Path);
 
-        var answer = harness.Indexes.Search(directory.Path, settings, "x", 5, Open);
+        var answer = harness.Indexes.Search(directory.Path, settings, "x", FirstFive, Open);
         Assert.Equal((0, (int?)0), (answer.Held, answer.Known));
         Assert.Equal("its sitemaps list 1 page(s), none the source may read: 1 left unread by its robots.txt or the source's include and exclude", answer.Problem);
     }
 
     /// <summary>
-    /// A listing read short still holds the index to maxPages: beside the pages held it lists, of those it does not list the
-    /// ones read last are kept.
+    /// A listing read short keeps every page held that it does not list - fill after fill, for as long as a sitemap fails -
+    /// and reads again each page it lists that is due.
     /// </summary>
     [Fact]
-    public async Task AListingReadShort_HoldsTheIndexToItsMost()
+    public async Task AListingReadShort_KeepsEveryPageHeld_FillAfterFill()
     {
         using var directory = new TempDirectory();
         var site = new SiteDouble();
         using var harness = new Harness(site);
-        site.Answering = path =>
+
+        harness.Indexes.Search(directory.Path, Settings(), "x", FirstFive, Open);
+        await harness.Indexes.FilledAsync(directory.Path);
+
+        site.Statuses["/sitemap-guides.xml.gz"] = 503;
+
+        for (var fill = 0; fill < 2; fill++)
         {
-            if (path == "/guides/beta")
-            {
-                harness.Clock.Advance(TimeSpan.FromMinutes(1));
-            }
-        };
+            site.Asked.Clear();
+            harness.Clock.Advance(TimeSpan.FromDays(8));
+            harness.Indexes.Search(directory.Path, Settings(), "x", FirstFive, Open);
+            await harness.Indexes.FilledAsync(directory.Path);
 
-        harness.Indexes.Search(directory.Path, Settings(maxPages: 3), "x", 5, Open);
-        await harness.Indexes.FilledAsync(directory.Path);
-        Assert.Equal(3, harness.Indexes.Search(directory.Path, Settings(maxPages: 3), "x", 5, Open).Held);
-
-        site.Statuses["/sitemap-guides.xml.gz"] = 503;
-
-        harness.Indexes.Search(directory.Path, Settings(maxPages: 2), "x", 5, Open);
-        await harness.Indexes.FilledAsync(directory.Path);
+            Assert.Equal(["/blog/zeta"], PagesAsked(site));
+        }
 
         var index = new WebIndex(Files, directory.Path, Site);
         index.Refresh();
 
-        Assert.Equal([$"{Site}/blog/zeta", $"{Site}/guides/beta"], index.Pages().Keys.Order(StringComparer.Ordinal));
+        Assert.Equal([$"{Site}/blog/zeta", $"{Site}/guides/alpha", $"{Site}/guides/beta"], index.Pages().Keys.Order(StringComparer.Ordinal));
     }
 
     /// <summary>
-    /// A sitemap that fails for longer than the index may be old costs the pages held their place: the pages the listing
-    /// names are read, the index following it still.
-    /// </summary>
-    [Fact]
-    public async Task ASitemapFailingPastTheIndexsAge_GivesThePagesHeldUpToTheListing()
-    {
-        using var directory = new TempDirectory();
-        var site = new SiteDouble();
-        using var harness = new Harness(site);
-        var settings = Settings(maxPages: 2);
-
-        harness.Indexes.Search(directory.Path, settings, "x", 5, Open);
-        await harness.Indexes.FilledAsync(directory.Path);
-
-        site.Statuses["/sitemap-guides.xml.gz"] = 503;
-        harness.Clock.Advance(TimeSpan.FromDays(8));
-        harness.Indexes.Search(directory.Path, settings, "x", 5, Open);
-        await harness.Indexes.FilledAsync(directory.Path);
-        Assert.DoesNotContain("/blog/zeta", PagesAsked(site));
-
-        harness.Clock.Advance(TimeSpan.FromDays(8));
-        harness.Indexes.Search(directory.Path, settings, "x", 5, Open);
-        await harness.Indexes.FilledAsync(directory.Path);
-
-        var index = new WebIndex(Files, directory.Path, Site);
-        index.Refresh();
-
-        Assert.Equal(2, index.Held);
-        Assert.Contains($"{Site}/blog/zeta", index.Pages().Keys);
-    }
-
-    /// <summary>
-    /// A listing short by a rule whose pages could not be read is said as the pages', as a whole listing's are, and asked
-    /// again soon - not held off for the rule.
+    /// A listing short by a rule whose pages could not be read is said as the pages', as a whole listing's are, and begun
+    /// again by the next search - not held off for the rule.
     /// </summary>
     [Fact]
     public async Task AListingShortByARule_WhosePagesFailed_SaysThePages()
@@ -440,12 +413,13 @@ public sealed class WebIndexesTests
         using var harness = new Harness(site);
         var settings = Settings(include: ["/guides/**"]);
 
-        harness.Indexes.Search(directory.Path, settings, "x", 5, Open);
+        harness.Indexes.Search(directory.Path, settings, "x", FirstFive, Open);
         await harness.Indexes.FilledAsync(directory.Path);
 
-        var answer = harness.Indexes.Search(directory.Path, settings, "x", 5, Open);
-        Assert.StartsWith($"none of the 2 page(s) its sitemaps list that it may read could be read, the first '{Site}/guides/alpha': it answered 503", answer.Problem, StringComparison.Ordinal);
-        Assert.Equal(harness.Clock.GetUtcNow() + WebIndexState.AfterProblem, answer.PausedUntil);
+        var state = WebIndexState.Read(Files, directory.Path, Site);
+        Assert.StartsWith($"none of the 2 page(s) its sitemaps list that it may read could be read, the first '{Site}/guides/alpha': it answered 503", state.Problem, StringComparison.Ordinal);
+        Assert.Null(state.PausedUntil);
+        Assert.True(state.Due(harness.Clock.GetUtcNow(), settings));
     }
 
     /// <summary>A sitemap unread for once costs none of what the index holds: no page held is dropped, and none is read in its place.</summary>
@@ -455,73 +429,107 @@ public sealed class WebIndexesTests
         using var directory = new TempDirectory();
         var site = new SiteDouble();
         using var harness = new Harness(site);
-        var settings = Settings(maxPages: 2);
+        var settings = Settings(include: ["/guides/**"]);
 
-        harness.Indexes.Search(directory.Path, settings, "x", 5, Open);
+        harness.Indexes.Search(directory.Path, settings, "x", FirstFive, Open);
         await harness.Indexes.FilledAsync(directory.Path);
 
         site.Statuses["/sitemap-guides.xml.gz"] = 503;
+        site.Asked.Clear();
         harness.Clock.Advance(TimeSpan.FromDays(8));
-        harness.Indexes.Search(directory.Path, settings, "x", 5, Open);
+        harness.Indexes.Search(directory.Path, settings, "x", FirstFive, Open);
         await harness.Indexes.FilledAsync(directory.Path);
 
         var index = new WebIndex(Files, directory.Path, Site);
         index.Refresh();
 
         Assert.Equal([$"{Site}/guides/alpha", $"{Site}/guides/beta"], index.Pages().Keys.Order(StringComparer.Ordinal));
-        Assert.DoesNotContain("/blog/zeta", PagesAsked(site));
+        Assert.Empty(PagesAsked(site));
     }
 
     /// <summary>
-    /// A listing cut at maxPages is whole, however many sitemaps wait behind it; one short by a rule - a sitemap its
-    /// robots.txt leaves unread - ends, saying so, and is read again when the index is old.
+    /// Every sitemap is read, however many an index or robots.txt names - two hundred and one here, the pages the last of
+    /// them lists held as any other's - each once however many times it is named, and the listing is whole.
     /// </summary>
-    [Fact]
-    public async Task AListingCutAtMaxPages_IsWhole_AndOneShortByARule_Ends()
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task TwoHundredSitemaps_AreRead(bool byIndex)
     {
         using var directory = new TempDirectory();
-        var site = new SiteDouble
-        {
-            Index = $"""<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"><sitemap><loc>https://docs.example.test/sitemap-guides.xml.gz</loc></sitemap>{string.Concat(Enumerable.Range(0, SitemapFill.MostSitemaps + 50).Select(at => $"<sitemap><loc>https://docs.example.test/empty-{at}.xml</loc></sitemap>"))}</sitemapindex>""",
-        };
-        using var harness = new Harness(site);
-        var settings = Settings(maxPages: 2);
+        var empties = Enumerable.Range(0, 200).Select(at => $"https://docs.example.test/empty-{at}.xml").ToList();
+        var site = new SiteDouble();
 
-        harness.Indexes.Search(directory.Path, settings, "x", 5, Open);
+        if (byIndex)
+        {
+            site.Index = $"""<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">{string.Concat(empties.Select(empty => $"<sitemap><loc>{empty}</loc></sitemap>"))}<sitemap><loc>https://docs.example.test/sitemap-guides.xml.gz</loc></sitemap><sitemap><loc>{empties[0]}</loc></sitemap></sitemapindex>""";
+        }
+        else
+        {
+            site.Robots = $"User-agent: *\n{string.Concat(empties.Select(empty => $"Sitemap: {empty}\n"))}Sitemap: https://docs.example.test/sitemap-guides.xml.gz\nSitemap: {empties[0]}\n";
+        }
+
+        using var harness = new Harness(site);
+        var settings = Settings(include: ["/guides/**"]);
+
+        harness.Indexes.Search(directory.Path, settings, "x", FirstFive, Open);
         await harness.Indexes.FilledAsync(directory.Path);
 
-        Assert.Null(harness.Indexes.Search(directory.Path, settings, "x", 5, Open).Problem);
+        var answer = harness.Indexes.Search(directory.Path, settings, "tokenizer", FirstFive, Open);
 
-        using var other = new TempDirectory();
+        Assert.Equal((2, (string?)null), (answer.Held, answer.Problem));
+        Assert.Equal([$"{Site}/guides/alpha", $"{Site}/guides/beta"], answer.Hits.Select(hit => hit.Address).Order(StringComparer.Ordinal));
+        Assert.Equal(empties.Count, site.Asked.Count(asked => asked.Address.AbsolutePath.StartsWith("/empty-", StringComparison.Ordinal)));
+        Assert.Single(site.Asked, asked => asked.Address.AbsolutePath == "/sitemap-guides.xml.gz");
+    }
+
+    /// <summary>
+    /// A listing short by a rule - a sitemap its robots.txt leaves unread - ends, saying so, and is read again when the
+    /// index is old.
+    /// </summary>
+    [Fact]
+    public async Task AListingShortByARule_Ends_SayingSo()
+    {
+        using var directory = new TempDirectory();
         var ruled = new SiteDouble { Robots = "User-agent: *\nDisallow: /private/\nDisallow: /sitemap-other\nSitemap: https://docs.example.test/sitemap-index.xml\n" };
         using var rules = new Harness(ruled);
 
-        rules.Indexes.Search(other.Path, Settings(), "x", 5, Open);
-        await rules.Indexes.FilledAsync(other.Path);
+        rules.Indexes.Search(directory.Path, Settings(), "x", FirstFive, Open);
+        await rules.Indexes.FilledAsync(directory.Path);
 
         rules.Clock.Advance(TimeSpan.FromHours(2));
-        var answer = rules.Indexes.Search(other.Path, Settings(), "x", 5, Open);
+        var answer = rules.Indexes.Search(directory.Path, Settings(), "x", FirstFive, Open);
 
         Assert.False(answer.Filling);
         Assert.Equal(2, answer.Held);
         Assert.StartsWith("1 of its sitemaps the source may not read, the first 'https://docs.example.test/sitemap-other.xml': ", answer.Problem, StringComparison.Ordinal);
     }
 
-    /// <summary>A fill that finds its record past its most begins it anew: the record holds the latest fills, never every one.</summary>
+    /// <summary>
+    /// A fill's record keeps what each address last came to: written anew - each address's latest line in its order, and a
+    /// line that names none kept as its own - once the lines a later line of their address replaced outnumber those kept,
+    /// and never emptied, however large it grew.
+    /// </summary>
     [Fact]
-    public async Task AFillsRecord_IsBegunAnewPastItsMost()
+    public async Task TheFillRecord_IsCompacted()
     {
         using var directory = new TempDirectory();
         var record = Path.Combine(directory.Path, SitemapFill.RecordFileName);
-        File.WriteAllText(record, string.Concat(Enumerable.Repeat(new string('x', 1023) + "\n", (int)(SitemapFill.MostRecordBytes / 1024) + 1)));
+        var once = Enumerable.Range(0, 20).Select(at => $$"""{"at":"2026-10-01T00:00:00+00:00","address":"https://docs.example.test/old/o{{at}}","status":500,"read":false,"why":"{{new string('w', 256 * 1024)}}"}""").ToList();
+        var latest = """{"at":"2026-10-01T00:00:00+00:00","address":"https://docs.example.test/robots.txt","status":200,"read":true}""";
+        var replaced = Enumerable.Repeat("""{"at":"2026-10-01T00:00:00+00:00","address":"https://docs.example.test/robots.txt","status":503,"read":false}""", 499).Append(latest);
+        File.WriteAllText(record, string.Concat(once.Concat(replaced).Append("not a line of the fill's").Select(line => line + "\n")));
         using var harness = new Harness(new SiteDouble());
 
-        harness.Indexes.Search(directory.Path, Settings(), "x", 5, Open);
+        harness.Indexes.Search(directory.Path, Settings(), "x", FirstFive, Open);
         await harness.Indexes.FilledAsync(directory.Path);
 
         var lines = File.ReadAllLines(record);
-        Assert.DoesNotContain(lines, line => line.StartsWith('x'));
-        Assert.Contains(lines, line => line.Contains("/robots.txt", StringComparison.Ordinal));
+
+        Assert.Equal(once, lines.Take(20));
+        Assert.Equal([latest, "not a line of the fill's"], lines.Skip(20).Take(2));
+        Assert.Equal(22 + 7, lines.Length);
+        Assert.Contains("\"address\":\"https://docs.example.test/robots.txt\"", lines[22], StringComparison.Ordinal);
     }
 
     /// <summary>A sitemap longer than the fetch's own most is read to the sitemaps protocol's.</summary>
@@ -534,10 +542,10 @@ public sealed class WebIndexesTests
         using var harness = new Harness(site);
         var settings = Settings(include: ["/guides/**"]);
 
-        harness.Indexes.Search(directory.Path, settings, "x", 5, Open);
+        harness.Indexes.Search(directory.Path, settings, "x", FirstFive, Open);
         await harness.Indexes.FilledAsync(directory.Path);
 
-        var answer = harness.Indexes.Search(directory.Path, settings, "x", 5, Open);
+        var answer = harness.Indexes.Search(directory.Path, settings, "x", FirstFive, Open);
         Assert.Equal((2, (string?)null), (answer.Held, answer.Problem));
     }
 
@@ -565,21 +573,21 @@ public sealed class WebIndexesTests
             }
         };
 
-        harness.Indexes.Search(directory.Path, settings, "x", 5, Open);
+        harness.Indexes.Search(directory.Path, settings, "x", FirstFive, Open);
         await harness.Indexes.FilledAsync(directory.Path);
 
         // A fill between that stops short for another reason.
         site.RobotsStatus = 503;
         harness.Clock.Advance(TimeSpan.FromHours(2));
-        harness.Indexes.Search(directory.Path, settings, "x", 5, Open);
+        harness.Indexes.Search(directory.Path, settings, "x", FirstFive, Open);
         await harness.Indexes.FilledAsync(directory.Path);
 
         site.RobotsStatus = 200;
         harness.Clock.Advance(TimeSpan.FromHours(2));
-        harness.Indexes.Search(directory.Path, settings, "x", 5, Open);
+        harness.Indexes.Search(directory.Path, settings, "x", FirstFive, Open);
         await harness.Indexes.FilledAsync(directory.Path);
 
-        var answer = harness.Indexes.Search(directory.Path, settings, "x", 5, Open);
+        var answer = harness.Indexes.Search(directory.Path, settings, "x", FirstFive, Open);
 
         Assert.Equal(2, PagesAsked(site).Count(path => path.StartsWith("/guides/", StringComparison.Ordinal)));
         Assert.StartsWith($"none of the 2 page(s) its sitemaps list that it may read could be read, the first '{Site}/guides/alpha': refused: ", answer.Problem, StringComparison.Ordinal);
@@ -588,8 +596,8 @@ public sealed class WebIndexesTests
     }
 
     /// <summary>
-    /// A listing read short keeps the pages held it does not list within maxPages, never giving their room to a failure it
-    /// does not list, which holds no page and is forgotten.
+    /// A listing read short keeps the pages held it does not list, and forgets a failure it does not list, which holds no
+    /// page.
     /// </summary>
     [Fact]
     public async Task AListingReadShort_KeepsPagesHeld_BeforeFailuresItDoesNotList()
@@ -602,7 +610,7 @@ public sealed class WebIndexesTests
         };
         site.Statuses["/blog/broken"] = 500;
         using var harness = new Harness(site);
-        var settings = Settings(maxPages: 3);
+        var settings = Settings();
 
         // The page that could not be read fails after the pages held were read.
         site.Answering = path =>
@@ -613,13 +621,13 @@ public sealed class WebIndexesTests
             }
         };
 
-        harness.Indexes.Search(directory.Path, settings, "x", 5, Open);
+        harness.Indexes.Search(directory.Path, settings, "x", FirstFive, Open);
         await harness.Indexes.FilledAsync(directory.Path);
 
         site.Guides = """<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"><url><loc>https://docs.example.test/guides/alpha</loc></url><url><loc>https://docs.example.test/guides/beta</loc></url></urlset>""";
         site.Statuses["/sitemap-other.xml"] = 503;
         harness.Clock.Advance(TimeSpan.FromDays(8));
-        harness.Indexes.Search(directory.Path, settings, "x", 5, Open);
+        harness.Indexes.Search(directory.Path, settings, "x", FirstFive, Open);
         await harness.Indexes.FilledAsync(directory.Path);
 
         var index = new WebIndex(Files, directory.Path, Site);
@@ -629,57 +637,46 @@ public sealed class WebIndexesTests
         Assert.Empty(index.Failures());
     }
 
-    /// <summary>
-    /// A listing whose sitemaps are more than a fill reads - named by an index or by robots.txt - is not read whole: the
-    /// pages held it does not list are kept.
-    /// </summary>
-    [Theory]
-    [InlineData(true)]
-    [InlineData(false)]
-    public async Task SitemapsPastTheMostAFillReads_AreAListingNotReadWhole(bool byIndex)
+    /// <summary>A robots.txt longer than any fetch once read - past five mebibytes - is read whole: a rule past them holds.</summary>
+    [Fact]
+    public async Task ARobotsTxtLongerThanAFetchOnceRead_IsReadWhole()
     {
         using var directory = new TempDirectory();
-        var site = new SiteDouble();
+        var site = new SiteDouble { Robots = $"User-agent: *\nDisallow: /private/\nDisallow: /guides/alpha\n# {new string('x', (int)HarnessFetch.MostBytes)}\nDisallow: /guides/beta\nSitemap: https://docs.example.test/sitemap-index.xml\n" };
         using var harness = new Harness(site);
-        var settings = Settings(include: ["/guides/**"]);
 
-        harness.Indexes.Search(directory.Path, settings, "x", 5, Open);
+        harness.Indexes.Search(directory.Path, Settings(), "x", FirstFive, Open);
         await harness.Indexes.FilledAsync(directory.Path);
 
-        var empties = Enumerable.Range(0, SitemapFill.MostSitemaps).Select(at => $"https://docs.example.test/empty-{at}.xml").ToList();
-
-        if (byIndex)
-        {
-            site.Index = $"""<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">{string.Concat(empties.Select(empty => $"<sitemap><loc>{empty}</loc></sitemap>"))}<sitemap><loc>https://docs.example.test/sitemap-guides.xml.gz</loc></sitemap></sitemapindex>""";
-        }
-        else
-        {
-            site.Robots = $"User-agent: *\n{string.Concat(empties.Select(empty => $"Sitemap: {empty}\n"))}Sitemap: https://docs.example.test/sitemap-guides.xml.gz\n";
-        }
-
-        harness.Clock.Advance(TimeSpan.FromDays(8));
-        harness.Indexes.Search(directory.Path, settings, "x", 5, Open);
-        await harness.Indexes.FilledAsync(directory.Path);
-
-        var answer = harness.Indexes.Search(directory.Path, settings, "x", 5, Open);
-        Assert.Equal(2, answer.Held);
-        Assert.EndsWith($"; it names more sitemaps than the {SitemapFill.MostSitemaps} a fill reads, and those past them were not read", answer.Problem, StringComparison.Ordinal);
+        Assert.Null(harness.Indexes.Search(directory.Path, Settings(), "x", FirstFive, Open).Problem);
+        Assert.Equal(["/blog/zeta"], PagesAsked(site));
     }
 
-    /// <summary>A robots.txt longer than the fetch reads is read to its head: its first rules held, the line its cut ends in none.</summary>
+    /// <summary>
+    /// A sitemap of fifty thousand pages - the most the sitemaps protocol lets one hold - is indexed every one, a page at a
+    /// time: a search while it is read says how many of the fifty thousand are held, and finds what they hold.
+    /// </summary>
     [Fact]
-    public async Task ARobotsTxtLongerThanTheFetchReads_IsReadToItsHead()
+    public async Task AFiftyThousandPageSitemap_IsIndexedNOfM()
     {
         using var directory = new TempDirectory();
-        var site = new SiteDouble { Robots = $"User-agent: *\nDisallow: /guides/alpha\n# {new string('x', (int)HarnessFetch.MostBytes)}\nDisallow: /\n" };
-        using var harness = new Harness(site);
+        var site = new SiteDouble
+        {
+            Guides = $"""<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">{string.Concat(Enumerable.Range(0, SitemapDocument.MostEntries).Select(at => $"<url><loc>https://docs.example.test/guides/n{at}</loc></url>"))}</urlset>""",
+        };
         var settings = Settings(include: ["/guides/**"]);
 
-        harness.Indexes.Search(directory.Path, settings, "x", 5, Open);
-        await harness.Indexes.FilledAsync(directory.Path);
+        // Held at its fourteenth wait: robots.txt, its three sitemaps and ten pages asked, the eleventh not yet.
+        using var harness = new Harness(site) { HoldAt = 14 };
 
-        Assert.Null(harness.Indexes.Search(directory.Path, settings, "x", 5, Open).Problem);
-        Assert.Equal(["/guides/beta"], PagesAsked(site));
+        harness.Indexes.Search(directory.Path, settings, "x", FirstFive, Open);
+        await harness.Holding.Task.WaitAsync(TimeSpan.FromSeconds(60), TestContext.Current.CancellationToken);
+
+        var during = harness.Indexes.Search(directory.Path, settings, "guide", FirstFive, Open);
+
+        Assert.True(during.Filling);
+        Assert.Equal((10, (int?)SitemapDocument.MostEntries, 10, 5), (during.Held, during.Known, during.Total, during.Hits.Count));
+        Assert.Equal("indexed 10 of 50,000 pages of docs.example.test; the rest are being read", during.Said);
     }
 
     /// <summary>
@@ -694,20 +691,20 @@ public sealed class WebIndexesTests
         using var harness = new Harness(site);
         var blog = Settings(include: ["/blog/**"]);
 
-        harness.Indexes.Search(directory.Path, blog, "x", 5, Open);
+        harness.Indexes.Search(directory.Path, blog, "x", FirstFive, Open);
         await harness.Indexes.FilledAsync(directory.Path);
 
         site.Statuses["/sitemap-other.xml"] = 503;
         harness.Clock.Advance(TimeSpan.FromMinutes(1));
 
-        harness.Indexes.Search(directory.Path, Settings(), "x", 5, Open);
+        harness.Indexes.Search(directory.Path, Settings(), "x", FirstFive, Open);
         await harness.Indexes.FilledAsync(directory.Path);
-        Assert.Equal(2, harness.Indexes.Search(directory.Path, Settings(), "x", 5, Open).Known);
+        Assert.Equal(2, WebIndexState.Read(Files, directory.Path, Site).Known);
 
-        Assert.Null(harness.Indexes.Search(directory.Path, blog, "x", 5, Open).Known);
+        Assert.Null(harness.Indexes.Search(directory.Path, blog, "x", FirstFive, Open).Known);
         await harness.Indexes.FilledAsync(directory.Path);
 
-        Assert.Equal(0, harness.Indexes.Search(directory.Path, blog, "x", 5, Open).Known);
+        Assert.Equal(0, harness.Indexes.Search(directory.Path, blog, "x", FirstFive, Open).Known);
     }
 
     /// <summary>A fill held off before it gets as far as one that stopped short leaves why that one did, and says it is held off.</summary>
@@ -719,16 +716,16 @@ public sealed class WebIndexesTests
         site.Statuses["/sitemap-other.xml"] = 503;
         using var harness = new Harness(site);
 
-        harness.Indexes.Search(directory.Path, Settings(), "x", 5, Open);
+        harness.Indexes.Search(directory.Path, Settings(), "x", FirstFive, Open);
         await harness.Indexes.FilledAsync(directory.Path);
 
         site.LimitedAt = "/robots.txt";
         harness.Clock.Advance(TimeSpan.FromHours(2));
 
-        harness.Indexes.Search(directory.Path, Settings(), "x", 5, Open);
+        harness.Indexes.Search(directory.Path, Settings(), "x", FirstFive, Open);
         await harness.Indexes.FilledAsync(directory.Path);
 
-        var answer = harness.Indexes.Search(directory.Path, Settings(), "x", 5, Open);
+        var answer = harness.Indexes.Search(directory.Path, Settings(), "x", FirstFive, Open);
 
         Assert.False(answer.Filling);
         Assert.StartsWith("1 of its sitemaps could not be read", answer.Problem, StringComparison.Ordinal);
@@ -747,25 +744,28 @@ public sealed class WebIndexesTests
         using var harness = new Harness(site);
         var settings = Settings(include: ["/guides/**"]);
 
-        harness.Indexes.Search(directory.Path, settings, "x", 5, Open);
+        harness.Indexes.Search(directory.Path, settings, "x", FirstFive, Open);
         await harness.Indexes.FilledAsync(directory.Path);
 
-        var answer = harness.Indexes.Search(directory.Path, settings, "x", 5, Open);
+        var answer = harness.Indexes.Search(directory.Path, settings, "x", FirstFive, Open);
 
         Assert.Equal(0, answer.Held);
         Assert.Equal($"its sitemaps list 3 page(s), none the source may read: 1 of another site than '{Site}', 2 left unread by its robots.txt or the source's include and exclude", answer.Problem);
         Assert.Empty(PagesAsked(site));
 
+        // The search began the fill again, as a fill that stopped short is: it ends before the site changes.
+        await harness.Indexes.FilledAsync(directory.Path);
+
         // Beside a sitemap that could not be read, each is said.
         site.Statuses["/sitemap-other.xml"] = 503;
         harness.Clock.Advance(TimeSpan.FromHours(2));
 
-        harness.Indexes.Search(directory.Path, settings, "x", 5, Open);
+        harness.Indexes.Search(directory.Path, settings, "x", FirstFive, Open);
         await harness.Indexes.FilledAsync(directory.Path);
 
         Assert.Equal(
             $"1 of its sitemaps could not be read, the first '{Site}/sitemap-other.xml': it answered 503; and its sitemaps list 2 page(s), none the source may read: 1 of another site than '{Site}', 1 left unread by its robots.txt or the source's include and exclude",
-            harness.Indexes.Search(directory.Path, settings, "x", 5, Open).Problem);
+            harness.Indexes.Search(directory.Path, settings, "x", FirstFive, Open).Problem);
     }
 
     /// <summary>
@@ -794,12 +794,12 @@ public sealed class WebIndexesTests
         using var harness = new Harness(site);
         var settings = Settings(include: ["/guides/**"]);
 
-        harness.Indexes.Search(directory.Path, settings, "x", 5, Open);
+        harness.Indexes.Search(directory.Path, settings, "x", FirstFive, Open);
         await harness.Indexes.FilledAsync(directory.Path);
 
         Assert.StartsWith(
             $"none of the 2 page(s) its sitemaps list that it may read could be read, the first '{Site}/guides/alpha': {why}",
-            harness.Indexes.Search(directory.Path, settings, "x", 5, Open).Problem,
+            WebIndexState.Read(Files, directory.Path, Site).Problem,
             StringComparison.Ordinal);
     }
 
@@ -811,10 +811,10 @@ public sealed class WebIndexesTests
         var site = new SiteDouble { RobotsType = "application/octet-stream", OtherType = "binary/octet-stream", IndexType = "application/octet-stream" };
         using var harness = new Harness(site);
 
-        harness.Indexes.Search(directory.Path, Settings(), "x", 5, Open);
+        harness.Indexes.Search(directory.Path, Settings(), "x", FirstFive, Open);
         await harness.Indexes.FilledAsync(directory.Path);
 
-        var answer = harness.Indexes.Search(directory.Path, Settings(), "guide", 5, Open);
+        var answer = harness.Indexes.Search(directory.Path, Settings(), "guide", FirstFive, Open);
 
         Assert.Null(answer.Problem);
         Assert.Equal(3, answer.Held);
@@ -832,17 +832,17 @@ public sealed class WebIndexesTests
         var site = new SiteDouble();
         using var harness = new Harness(site);
 
-        harness.Indexes.Search(directory.Path, Settings(), "x", 5, Open);
+        harness.Indexes.Search(directory.Path, Settings(), "x", FirstFive, Open);
         await harness.Indexes.FilledAsync(directory.Path);
-        Assert.Equal((3, (int?)3), (harness.Indexes.Search(directory.Path, Settings(), "x", 5, Open) is var whole ? (whole.Held, whole.Known) : default));
+        Assert.Equal((3, (int?)3), (harness.Indexes.Search(directory.Path, Settings(), "x", FirstFive, Open) is var whole ? (whole.Held, whole.Known) : default));
 
         site.Statuses["/sitemap-other.xml"] = 503;
         var narrowed = Settings(include: ["/guides/**"]);
 
-        Assert.Equal(2, harness.Indexes.Search(directory.Path, narrowed, "x", 5, Open).Held);
+        Assert.Equal(2, harness.Indexes.Search(directory.Path, narrowed, "x", FirstFive, Open).Held);
         await harness.Indexes.FilledAsync(directory.Path);
 
-        var answer = harness.Indexes.Search(directory.Path, narrowed, "x", 5, Open);
+        var answer = harness.Indexes.Search(directory.Path, narrowed, "x", FirstFive, Open);
         Assert.Equal((2, (int?)2), (answer.Held, answer.Known));
 
         // A page the settings no longer read is gone, a listing read short or not.
@@ -860,67 +860,37 @@ public sealed class WebIndexesTests
         using var harness = new Harness(site);
         var settings = Settings(include: ["/guides/**"]);
 
-        harness.Indexes.Search(directory.Path, settings, "x", 5, Open);
+        harness.Indexes.Search(directory.Path, settings, "x", FirstFive, Open);
         await harness.Indexes.FilledAsync(directory.Path);
-        var before = harness.Indexes.Search(directory.Path, settings, "x", 5, Open).Known;
+        var before = harness.Indexes.Search(directory.Path, settings, "x", FirstFive, Open).Known;
 
         site.Guides = site.Guides.Replace("<url><loc>https://docs.example.test/guides/beta</loc><lastmod>2026-02-01</lastmod></url>", string.Empty, StringComparison.Ordinal);
         harness.Clock.Advance(TimeSpan.FromDays(8));
 
-        harness.Indexes.Search(directory.Path, settings, "x", 5, Open);
+        harness.Indexes.Search(directory.Path, settings, "x", FirstFive, Open);
         await harness.Indexes.FilledAsync(directory.Path);
 
-        Assert.Equal((2, 1), (before, harness.Indexes.Search(directory.Path, settings, "x", 5, Open).Known));
+        Assert.Equal((2, 1), (before, harness.Indexes.Search(directory.Path, settings, "x", FirstFive, Open).Known));
     }
 
-    /// <summary>A page read, or one that answers otherwise than with no answer or a refusal, ends a run of them: ten in a row alone stop a fill.</summary>
+    /// <summary>
+    /// Pages that in a row give no answer or refuse this tool - twenty of them - never stop the fill: each is recorded, to be
+    /// asked last when it is asked again, and the fill goes on to the next, the page after them read and the fill whole.
+    /// </summary>
     [Theory]
-    [InlineData(null)]
-    [InlineData(400)]
-    public async Task APageBetweenFailures_EndsTheirRow(int? between)
+    [InlineData(503)]
+    [InlineData(403)]
+    [InlineData(401)]
+    public async Task TwentyFailuresInARow_DoNotStopTheFill(int status)
     {
         using var directory = new TempDirectory();
-        var middle = between is null ? "alpha" : "mid";
-        var pages = Enumerable.Range(0, 9).Select(at => $"p{at}").Append(middle).Concat(Enumerable.Range(9, 9).Select(at => $"p{at}")).Append("beta").ToList();
+        var pages = Enumerable.Range(0, 20).Select(at => $"p{at}").Append("alpha").ToList();
         var site = new SiteDouble
         {
             Guides = $"""<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">{string.Concat(pages.Select(page => $"<url><loc>https://docs.example.test/guides/{page}</loc></url>"))}</urlset>""",
         };
 
-        foreach (var page in pages.Where(page => page.StartsWith('p')))
-        {
-            site.Statuses[$"/guides/{page}"] = 503;
-        }
-
-        if (between is { } status)
-        {
-            site.Statuses["/guides/mid"] = status;
-        }
-
-        using var harness = new Harness(site);
-        var settings = Settings(include: ["/guides/**"]);
-
-        harness.Indexes.Search(directory.Path, settings, "x", 5, Open);
-        await harness.Indexes.FilledAsync(directory.Path);
-
-        Assert.Null(harness.Indexes.Search(directory.Path, settings, "x", 5, Open).Problem);
-        Assert.Equal(pages.Select(page => $"/guides/{page}"), PagesAsked(site));
-    }
-
-    /// <summary>Pages that in a row give no answer, or refuse this tool, stop the fill, which says the last and is held off.</summary>
-    [Theory]
-    [InlineData(503)]
-    [InlineData(403)]
-    [InlineData(401)]
-    public async Task PagesThatGiveNoAnswerInARow_StopTheFill(int status)
-    {
-        using var directory = new TempDirectory();
-        var site = new SiteDouble
-        {
-            Guides = $"""<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">{string.Concat(Enumerable.Range(0, 12).Select(at => $"<url><loc>https://docs.example.test/guides/p{at}</loc></url>"))}</urlset>""",
-        };
-
-        foreach (var at in Enumerable.Range(0, 12))
+        foreach (var at in Enumerable.Range(0, 20))
         {
             site.Statuses[$"/guides/p{at}"] = status;
         }
@@ -928,14 +898,17 @@ public sealed class WebIndexesTests
         using var harness = new Harness(site);
         var settings = Settings(include: ["/guides/**"]);
 
-        harness.Indexes.Search(directory.Path, settings, "x", 5, Open);
+        harness.Indexes.Search(directory.Path, settings, "x", FirstFive, Open);
         await harness.Indexes.FilledAsync(directory.Path);
 
-        var answer = harness.Indexes.Search(directory.Path, settings, "x", 5, Open);
+        var state = WebIndexState.Read(Files, directory.Path, Site);
+        var index = new WebIndex(Files, directory.Path, Site);
+        index.Refresh();
 
-        Assert.Equal($"{SitemapFill.MostFailuresInARow} of its pages in a row gave no answer or refused this tool, the last 'https://docs.example.test/guides/p9': it answered {status}", answer.Problem);
-        Assert.Equal(Enumerable.Range(0, SitemapFill.MostFailuresInARow).Select(at => $"/guides/p{at}"), PagesAsked(site));
-        Assert.Equal(harness.Clock.GetUtcNow() + WebIndexState.AfterProblem, answer.PausedUntil);
+        Assert.Equal(pages.Select(page => $"/guides/{page}"), PagesAsked(site));
+        Assert.Equal(((string?)null, (DateTimeOffset?)null), (state.Problem, state.PausedUntil));
+        Assert.NotNull(state.FilledAt);
+        Assert.Equal((1, 20), (index.Held, index.Failed));
     }
 
     /// <summary>A fill writes its index's file anew once the lines replaced and gone outnumber its pages, raising its generation.</summary>
@@ -950,7 +923,7 @@ public sealed class WebIndexesTests
 
         File.WriteAllText(pages, string.Concat(Enumerable.Repeat(stale + "\n", SitemapFill.MostStaleLines + 10)));
 
-        harness.Indexes.Search(directory.Path, Settings(include: ["/guides/**"]), "x", 5, Open);
+        harness.Indexes.Search(directory.Path, Settings(include: ["/guides/**"]), "x", FirstFive, Open);
         await harness.Indexes.FilledAsync(directory.Path);
 
         var state = WebIndexState.Read(Files, directory.Path, Site);
@@ -959,7 +932,7 @@ public sealed class WebIndexesTests
         Assert.NotNull(state.FilledAt);
         Assert.Equal(2, File.ReadAllLines(pages).Length);
         Assert.Equal(["/guides/beta"], PagesAsked(site));
-        Assert.Equal(2, harness.Indexes.Search(directory.Path, Settings(include: ["/guides/**"]), "tokenizer", 5, Open).Hits.Count);
+        Assert.Equal(2, harness.Indexes.Search(directory.Path, Settings(include: ["/guides/**"]), "tokenizer", FirstFive, Open).Hits.Count);
     }
 
     /// <summary>
@@ -982,7 +955,7 @@ public sealed class WebIndexesTests
 
         File.WriteAllText(Path.Combine(directory.Path, WebIndex.PagesFileName), string.Concat(lines.Select(line => line + "\n")));
 
-        harness.Indexes.Search(directory.Path, Settings(maxPages: 200), "x", 5, Open);
+        harness.Indexes.Search(directory.Path, Settings(), "x", FirstFive, Open);
         await harness.Indexes.FilledAsync(directory.Path);
 
         var state = WebIndexState.Read(Files, directory.Path, Site);
@@ -1000,13 +973,13 @@ public sealed class WebIndexesTests
         var site = new SiteDouble();
         using var harness = new Harness(site);
 
-        harness.Indexes.Search(directory.Path, Settings(), "x", 5, Open);
+        harness.Indexes.Search(directory.Path, Settings(), "x", FirstFive, Open);
         await harness.Indexes.FilledAsync(directory.Path);
 
         site.Guides = site.Guides.Replace("<lastmod>2026-01-01</lastmod>", string.Empty, StringComparison.Ordinal);
         site.Asked.Clear();
 
-        harness.Indexes.Search(directory.Path, Settings(maxPages: 99), "x", 5, Open);
+        harness.Indexes.Search(directory.Path, Changed(Settings()), "x", FirstFive, Open);
         await harness.Indexes.FilledAsync(directory.Path);
 
         Assert.Empty(PagesAsked(site));
@@ -1020,7 +993,7 @@ public sealed class WebIndexesTests
         var site = new SiteDouble();
         using var harness = new Harness(site);
 
-        harness.Indexes.Search(directory.Path, Settings(), "x", 5, Open);
+        harness.Indexes.Search(directory.Path, Settings(), "x", FirstFive, Open);
         await harness.Indexes.FilledAsync(directory.Path);
 
         site.Guides = site.Guides.Replace("alpha</loc><lastmod>2026-01-01", "alpha</loc><lastmod>2026-05-01", StringComparison.Ordinal);
@@ -1029,18 +1002,18 @@ public sealed class WebIndexesTests
         site.Asked.Clear();
         harness.Clock.Advance(TimeSpan.FromDays(8));
 
-        harness.Indexes.Search(directory.Path, Settings(), "x", 5, Open);
+        harness.Indexes.Search(directory.Path, Settings(), "x", FirstFive, Open);
         await harness.Indexes.FilledAsync(directory.Path);
 
         Assert.Equal(["/guides/alpha", "/blog/zeta"], PagesAsked(site));
 
         site.Asked.Clear();
 
-        harness.Indexes.Search(directory.Path, Settings(maxPages: 99), "x", 5, Open);
+        harness.Indexes.Search(directory.Path, Changed(Settings()), "x", FirstFive, Open);
         await harness.Indexes.FilledAsync(directory.Path);
 
         Assert.Empty(PagesAsked(site));
-        Assert.Equal(3, harness.Indexes.Search(directory.Path, Settings(maxPages: 99), "x", 5, Open).Held);
+        Assert.Equal(3, harness.Indexes.Search(directory.Path, Changed(Settings()), "x", FirstFive, Open).Held);
     }
 
     /// <summary>
@@ -1057,11 +1030,11 @@ public sealed class WebIndexesTests
         site.Answering = _ => harness.Clock.Advance(TimeSpan.FromSeconds(3));
         var settings = Settings(include: ["/guides/**"]);
 
-        harness.Indexes.Search(directory.Path, settings, "x", 5, Open);
+        harness.Indexes.Search(directory.Path, settings, "x", FirstFive, Open);
         await harness.Indexes.FilledAsync(directory.Path);
 
         Assert.Equal([1.0, 1.0, 1.0, 1.0, 2.0], harness.Waits.Select(wait => wait.TotalSeconds));
-        Assert.Equal(2, harness.Indexes.Search(directory.Path, settings, "x", 5, Open).Held);
+        Assert.Equal(2, harness.Indexes.Search(directory.Path, settings, "x", FirstFive, Open).Held);
     }
 
     /// <summary>A sitemap the source names is the one read: robots.txt's and the default are passed by.</summary>
@@ -1072,27 +1045,10 @@ public sealed class WebIndexesTests
         var site = new SiteDouble();
         using var harness = new Harness(site);
 
-        harness.Indexes.Search(directory.Path, Settings() with { Sitemap = $"{Site}/sitemap-other.xml" }, "x", 5, Open);
+        harness.Indexes.Search(directory.Path, Settings() with { Sitemap = $"{Site}/sitemap-other.xml" }, "x", FirstFive, Open);
         await harness.Indexes.FilledAsync(directory.Path);
 
         Assert.Equal(["/robots.txt", "/sitemap-other.xml", "/blog/zeta"], site.Asked.Select(asked => asked.Address.AbsolutePath));
-    }
-
-    /// <summary>A fill reads at most so many sitemaps, however many an index names.</summary>
-    [Fact]
-    public async Task AFill_ReadsAtMostItsSitemaps()
-    {
-        using var directory = new TempDirectory();
-        var site = new SiteDouble
-        {
-            Index = $"""<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">{string.Concat(Enumerable.Range(0, 150).Select(at => $"<sitemap><loc>https://docs.example.test/sitemap-n{at}.xml</loc></sitemap>"))}</sitemapindex>""",
-        };
-        using var harness = new Harness(site);
-
-        harness.Indexes.Search(directory.Path, Settings(), "x", 5, Open);
-        await harness.Indexes.FilledAsync(directory.Path);
-
-        Assert.Equal(SitemapFill.MostSitemaps, site.Asked.Count(asked => asked.Address.AbsolutePath.StartsWith("/sitemap", StringComparison.Ordinal)));
     }
 
     /// <summary>A source whose site changed is answered by the index of its new site alone, never by the old one's pages.</summary>
@@ -1103,7 +1059,7 @@ public sealed class WebIndexesTests
         var site = new SiteDouble();
         using var harness = new Harness(site);
 
-        harness.Indexes.Search(directory.Path, Settings(), "x", 5, Open);
+        harness.Indexes.Search(directory.Path, Settings(), "x", FirstFive, Open);
         await harness.Indexes.FilledAsync(directory.Path);
 
         site.Robots = "User-agent: *\nSitemap: https://new.example.test/sitemap-guides.xml.gz\n";
@@ -1114,30 +1070,36 @@ public sealed class WebIndexesTests
             """;
         var settings = Settings() with { Site = "https://new.example.test" };
 
-        var answer = harness.Indexes.Search(directory.Path, settings, "guide", 5, Open);
+        var answer = harness.Indexes.Search(directory.Path, settings, "guide", FirstFive, Open);
         await harness.Indexes.FilledAsync(directory.Path);
 
         Assert.Equal((0, true), (answer.Held, answer.Filling));
         Assert.Empty(answer.Hits);
 
         // What the new site's fill read is the index its searches read.
-        var after = harness.Indexes.Search(directory.Path, settings, "tokenizer", 5, Open);
+        var after = harness.Indexes.Search(directory.Path, settings, "tokenizer", FirstFive, Open);
         Assert.Equal(["https://new.example.test/guides/alpha"], after.Hits.Select(hit => hit.Address));
     }
 
-    /// <summary>A fill that fails is said where every search of the index reads it, and the index is held off a while.</summary>
+    /// <summary>A fill that fails is said where every search of the index reads it, and is begun again by the next search.</summary>
     [Fact]
-    public async Task AFillThatFails_IsSaid_AndHeldOff()
+    public async Task AFillThatFails_IsSaid_AndBegunAgainByTheNextSearch()
     {
         using var directory = new TempDirectory();
         using var harness = new Harness(new SiteDouble()) { WaitFails = new IOException("the disk is full") };
 
-        harness.Indexes.Search(directory.Path, Settings(), "x", 5, Open);
+        harness.Indexes.Search(directory.Path, Settings(), "x", FirstFive, Open);
         await harness.Indexes.FilledAsync(directory.Path);
 
-        var answer = harness.Indexes.Search(directory.Path, Settings(), "x", 5, Open);
+        var state = WebIndexState.Read(Files, directory.Path, Site);
 
-        Assert.Equal(("its fill failed: the disk is full", (DateTimeOffset?)(harness.Clock.GetUtcNow() + WebIndexState.AfterProblem)), (answer.Problem, answer.PausedUntil));
+        Assert.Equal(("its fill failed: the disk is full", (DateTimeOffset?)null), (state.Problem, state.PausedUntil));
+        Assert.True(state.Due(harness.Clock.GetUtcNow(), Settings()));
+
+        var answer = harness.Indexes.Search(directory.Path, Settings(), "x", FirstFive, Open);
+
+        Assert.Equal(("its fill failed: the disk is full", true), (answer.Problem, answer.Filling));
+        await harness.Indexes.FilledAsync(directory.Path);
     }
 
     /// <summary>
@@ -1153,10 +1115,10 @@ public sealed class WebIndexesTests
 
         using (var harness = new Harness(site) { HoldAt = 5 })
         {
-            harness.Indexes.Search(directory.Path, settings, "x", 5, Open);
+            harness.Indexes.Search(directory.Path, settings, "x", FirstFive, Open);
             await harness.Holding.Task.WaitAsync(TimeSpan.FromSeconds(60), TestContext.Current.CancellationToken);
 
-            var during = harness.Indexes.Search(directory.Path, settings, "tokenizer", 5, Open);
+            var during = harness.Indexes.Search(directory.Path, settings, "tokenizer", FirstFive, Open);
 
             Assert.True(during.Filling);
             Assert.Equal("indexed 1 of 2 pages of docs.example.test; the rest are being read", during.Said);
@@ -1165,23 +1127,23 @@ public sealed class WebIndexesTests
             harness.Indexes.Dispose();
 
             Assert.True(harness.Indexes.FilledAsync(directory.Path).IsCompleted);
-            Assert.Throws<ObjectDisposedException>(() => harness.Indexes.Search(directory.Path, settings, "x", 5, Open));
+            Assert.Throws<ObjectDisposedException>(() => harness.Indexes.Search(directory.Path, settings, "x", FirstFive, Open));
         }
 
         site.Asked.Clear();
 
         using var next = new Harness(site);
 
-        Assert.True(next.Indexes.Search(directory.Path, settings, "x", 5, Open).Filling);
+        Assert.True(next.Indexes.Search(directory.Path, settings, "x", FirstFive, Open).Filling);
         await next.Indexes.FilledAsync(directory.Path);
 
         Assert.Equal(["/guides/beta"], PagesAsked(site));
-        Assert.Equal(2, next.Indexes.Search(directory.Path, settings, "x", 5, Open).Held);
+        Assert.Equal(2, next.Indexes.Search(directory.Path, settings, "x", FirstFive, Open).Held);
     }
 
     /// <summary>
     /// A sitemap that cannot be read leaves every page held as it was - none dropped for a listing not read whole - and the
-    /// fill says so and is read again after a while.
+    /// fill says so and is begun again by the next search.
     /// </summary>
     [Fact]
     public async Task AListingNotReadWhole_DropsNothing_AndIsReadAgainLater()
@@ -1190,26 +1152,26 @@ public sealed class WebIndexesTests
         var site = new SiteDouble();
         using var harness = new Harness(site);
 
-        harness.Indexes.Search(directory.Path, Settings(), "x", 5, Open);
+        harness.Indexes.Search(directory.Path, Settings(), "x", FirstFive, Open);
         await harness.Indexes.FilledAsync(directory.Path);
 
         site.Statuses["/sitemap-other.xml"] = 503;
         harness.Clock.Advance(TimeSpan.FromDays(8));
 
-        harness.Indexes.Search(directory.Path, Settings(), "x", 5, Open);
+        harness.Indexes.Search(directory.Path, Settings(), "x", FirstFive, Open);
         await harness.Indexes.FilledAsync(directory.Path);
 
-        var answer = harness.Indexes.Search(directory.Path, Settings(), "zeta", 5, Open);
+        var state = WebIndexState.Read(Files, directory.Path, Site);
 
-        Assert.Equal(3, answer.Held);
+        Assert.Equal("1 of its sitemaps could not be read, the first 'https://docs.example.test/sitemap-other.xml': it answered 503; the pages it holds that the rest list are kept", state.Problem);
+        Assert.Null(state.PausedUntil);
+
+        var answer = harness.Indexes.Search(directory.Path, Settings(), "zeta", FirstFive, Open);
+
+        Assert.Equal((3, true), (answer.Held, answer.Filling));
         Assert.Equal([$"{Site}/blog/zeta"], answer.Hits.Select(hit => hit.Address));
-        Assert.StartsWith("indexed 3 of 3 pages of docs.example.test; no fill has ended whole since one stopped short: 1 of its sitemaps could not be read", answer.Said, StringComparison.Ordinal);
-        Assert.Equal("1 of its sitemaps could not be read, the first 'https://docs.example.test/sitemap-other.xml': it answered 503; the pages it holds that the rest list are kept, while it holds no more than maxPages", answer.Problem);
-        Assert.Equal(harness.Clock.GetUtcNow() + WebIndexState.AfterProblem, answer.PausedUntil);
-        Assert.False(answer.Filling);
-
-        harness.Clock.Advance(WebIndexState.AfterProblem);
-        Assert.True(harness.Indexes.Search(directory.Path, Settings(), "x", 5, Open).Filling);
+        Assert.StartsWith("indexed 3 of 3 pages of docs.example.test; they are being read again; no fill has ended whole since one stopped short: 1 of its sitemaps could not be read", answer.Said, StringComparison.Ordinal);
+        await harness.Indexes.FilledAsync(directory.Path);
     }
 
     /// <summary>
@@ -1226,13 +1188,13 @@ public sealed class WebIndexesTests
         using var harness = new Harness(site);
         var settings = Settings(include: ["/guides/**"]);
 
-        harness.Indexes.Search(directory.Path, settings, "x", 5, Open);
+        harness.Indexes.Search(directory.Path, settings, "x", FirstFive, Open);
         await harness.Indexes.FilledAsync(directory.Path);
 
         Assert.Equal(["/guides/alpha", "/guides/beta", "/guides/beta-moved"], PagesAsked(site));
         Assert.Equal(Enumerable.Repeat(TimeSpan.FromSeconds(4), 6), harness.Waits);
 
-        var answer = harness.Indexes.Search(directory.Path, settings, "tokenizer", 5, Open);
+        var answer = harness.Indexes.Search(directory.Path, settings, "tokenizer", FirstFive, Open);
 
         Assert.Equal(1, answer.Held);
         Assert.Equal([$"{Site}/guides/beta"], answer.Hits.Select(hit => hit.Address));
@@ -1248,10 +1210,10 @@ public sealed class WebIndexesTests
         using var harness = new Harness(site);
         var settings = Settings(include: ["/guides/**"]);
 
-        harness.Indexes.Search(directory.Path, settings, "x", 5, Open);
+        harness.Indexes.Search(directory.Path, settings, "x", FirstFive, Open);
         await harness.Indexes.FilledAsync(directory.Path);
 
-        var answer = harness.Indexes.Search(directory.Path, settings, "tokenizer", 5, Open);
+        var answer = harness.Indexes.Search(directory.Path, settings, "tokenizer", FirstFive, Open);
 
         Assert.Equal(["/guides/alpha"], PagesAsked(site));
         Assert.Equal(1, answer.Held);
@@ -1263,10 +1225,10 @@ public sealed class WebIndexesTests
         harness.Clock.Advance(TimeSpan.FromSeconds(601));
         site.Spent.Clear();
 
-        harness.Indexes.Search(directory.Path, settings, "x", 5, Open);
+        harness.Indexes.Search(directory.Path, settings, "x", FirstFive, Open);
         await harness.Indexes.FilledAsync(directory.Path);
 
-        var after = harness.Indexes.Search(directory.Path, settings, "x", 5, Open);
+        var after = harness.Indexes.Search(directory.Path, settings, "x", FirstFive, Open);
         Assert.Equal((2, (DateTimeOffset?)null, (string?)null), (after.Held, after.PausedUntil, after.PausedFor));
     }
 
@@ -1281,10 +1243,10 @@ public sealed class WebIndexesTests
         var turns = 0;
         var gate = Open with { Pace = _ => Task.FromResult(Interlocked.Increment(ref turns) >= 4 ? until : (DateTimeOffset?)null) };
 
-        harness.Indexes.Search(directory.Path, Settings(), "x", 5, gate);
+        harness.Indexes.Search(directory.Path, Settings(), "x", FirstFive, gate);
         await harness.Indexes.FilledAsync(directory.Path);
 
-        var answer = harness.Indexes.Search(directory.Path, Settings(), "x", 5, gate);
+        var answer = harness.Indexes.Search(directory.Path, Settings(), "x", FirstFive, gate);
 
         Assert.Equal(["/robots.txt", "/sitemap-index.xml", "/sitemap-guides.xml.gz"], site.Asked.Select(asked => asked.Address.AbsolutePath));
         Assert.Equal((until, (string?)null, false, SitemapFill.TurnSpent), (answer.PausedUntil, answer.Problem, answer.Filling, answer.PausedFor));
@@ -1296,25 +1258,53 @@ public sealed class WebIndexesTests
 
     /// <summary>
     /// A site that asks to be left alone where robots.txt or a sitemap is asked holds the fill off there, nothing more
-    /// asked, until the time it gave - a date included - never longer than a day.
+    /// asked, until the time it gave - a date included - as given, however far off.
     /// </summary>
     [Theory]
-    [InlineData("/robots.txt", "600", 600)]
-    [InlineData("/sitemap-index.xml", "Sun, 25 Oct 2026 12:30:00 GMT", 1800)]
-    [InlineData("/sitemap-guides.xml.gz", "Thu, 25 Oct 2096 12:00:00 GMT", 86400)]
-    public async Task ASitesLimitAnywhere_HoldsTheFillOff(string at, string retryAfter, int seconds)
+    [InlineData("/robots.txt", "600", 600L)]
+    [InlineData("/sitemap-index.xml", "Sun, 25 Oct 2026 12:30:00 GMT", 1800L)]
+    [InlineData("/sitemap-guides.xml.gz", "Thu, 25 Oct 2096 12:00:00 GMT", 2209075200L)]
+    public async Task ASitesLimitAnywhere_HoldsTheFillOff(string at, string retryAfter, long seconds)
     {
         using var directory = new TempDirectory();
         var site = new SiteDouble { LimitedAt = at, RetryAfter = retryAfter };
         using var harness = new Harness(site);
 
-        harness.Indexes.Search(directory.Path, Settings(), "x", 5, Open);
+        harness.Indexes.Search(directory.Path, Settings(), "x", FirstFive, Open);
         await harness.Indexes.FilledAsync(directory.Path);
 
-        var answer = harness.Indexes.Search(directory.Path, Settings(), "x", 5, Open);
+        var answer = harness.Indexes.Search(directory.Path, Settings(), "x", FirstFive, Open);
 
         Assert.Equal(at, site.Asked[^1].Address.AbsolutePath);
         Assert.Equal((harness.Clock.GetUtcNow() + TimeSpan.FromSeconds(seconds), SitemapFill.SiteLimited, 0), (answer.PausedUntil, answer.PausedFor, answer.Held));
+    }
+
+    /// <summary>
+    /// A site that asks to be left alone for two days is left alone for two days: a search a day on begins no fill, and the
+    /// first once they passed does, and reads it.
+    /// </summary>
+    [Fact]
+    public async Task ATwoDayRetryAfter_IsHonoured()
+    {
+        using var directory = new TempDirectory();
+        var site = new SiteDouble { LimitedAt = "/sitemap-index.xml", RetryAfter = "172800" };
+        using var harness = new Harness(site);
+
+        harness.Indexes.Search(directory.Path, Settings(), "x", FirstFive, Open);
+        await harness.Indexes.FilledAsync(directory.Path);
+
+        var held = WebIndexState.Read(Files, directory.Path, Site);
+        Assert.Equal((harness.Clock.GetUtcNow() + TimeSpan.FromDays(2), SitemapFill.SiteLimited), (held.PausedUntil, held.PausedFor));
+
+        harness.Clock.Advance(TimeSpan.FromDays(1));
+        Assert.False(harness.Indexes.Search(directory.Path, Settings(), "x", FirstFive, Open).Filling);
+
+        site.LimitedAt = null;
+        harness.Clock.Advance(TimeSpan.FromDays(1));
+        Assert.True(harness.Indexes.Search(directory.Path, Settings(), "x", FirstFive, Open).Filling);
+        await harness.Indexes.FilledAsync(directory.Path);
+
+        Assert.Equal(3, harness.Indexes.Search(directory.Path, Settings(), "x", FirstFive, Open).Held);
     }
 
     /// <summary>
@@ -1328,7 +1318,7 @@ public sealed class WebIndexesTests
         var named = new SiteDouble { Robots = "User-agent: *\nDisallow: /sitemap-other\nSitemap: https://docs.example.test/sitemap-index.xml\n" };
         using (var harness = new Harness(named))
         {
-            harness.Indexes.Search(directory.Path, Settings(), "x", 5, Open);
+            harness.Indexes.Search(directory.Path, Settings(), "x", FirstFive, Open);
             await harness.Indexes.FilledAsync(directory.Path);
 
             Assert.DoesNotContain(named.Asked, asked => asked.Address.AbsolutePath == "/sitemap-other.xml");
@@ -1339,11 +1329,11 @@ public sealed class WebIndexesTests
         var unnamed = new SiteDouble { Robots = "User-agent: *\nDisallow: /sitemap\n" };
         using var refused = new Harness(unnamed);
 
-        refused.Indexes.Search(other.Path, Settings(), "x", 5, Open);
+        refused.Indexes.Search(other.Path, Settings(), "x", FirstFive, Open);
         await refused.Indexes.FilledAsync(other.Path);
 
         Assert.Equal(["/robots.txt"], unnamed.Asked.Select(asked => asked.Address.AbsolutePath));
-        var nothing = refused.Indexes.Search(other.Path, Settings(), "x", 5, Open);
+        var nothing = refused.Indexes.Search(other.Path, Settings(), "x", FirstFive, Open);
         Assert.StartsWith("1 of its sitemaps the source may not read, the first 'https://docs.example.test/sitemap.xml': 'https://docs.example.test/sitemap.xml' is an address the site's robots.txt", nothing.Problem, StringComparison.Ordinal);
         Assert.Equal(refused.Clock.GetUtcNow() + TimeSpan.FromDays(7), nothing.PausedUntil);
 
@@ -1352,7 +1342,7 @@ public sealed class WebIndexesTests
         var disallowed = new SiteDouble { Robots = "User-agent: *\nDisallow: /sitemap\nSitemap: https://docs.example.test/sitemap-index.xml\n" };
         using (var harness = new Harness(disallowed))
         {
-            harness.Indexes.Search(third.Path, Settings(), "x", 5, Open);
+            harness.Indexes.Search(third.Path, Settings(), "x", FirstFive, Open);
             await harness.Indexes.FilledAsync(third.Path);
 
             Assert.Equal(["/robots.txt", "/sitemap-index.xml"], disallowed.Asked.Select(asked => asked.Address.AbsolutePath));
@@ -1363,7 +1353,7 @@ public sealed class WebIndexesTests
         var offSite = new SiteDouble { Robots = "User-agent: *\nDisallow: /sitemap\n" };
         using var cdn = new Harness(offSite);
 
-        cdn.Indexes.Search(fourth.Path, Settings() with { Sitemap = "https://cdn.example.test/sitemap.xml" }, "x", 5, Open);
+        cdn.Indexes.Search(fourth.Path, Settings() with { Sitemap = "https://cdn.example.test/sitemap.xml" }, "x", FirstFive, Open);
         await cdn.Indexes.FilledAsync(fourth.Path);
 
         Assert.Contains(offSite.Asked, asked => asked.Address.Host == "cdn.example.test" && asked.Address.AbsolutePath == "/sitemap.xml");
@@ -1371,7 +1361,7 @@ public sealed class WebIndexesTests
 
     /// <summary>
     /// A page that could not be read is remembered, and waits as long as a page read does before it is asked again, and is
-    /// asked last: pages that refuse this tool in a row stop one fill, never every fill after it.
+    /// asked last: pages that refuse this tool, however many in a row, stop no fill.
     /// </summary>
     [Fact]
     public async Task PagesThatCouldNotBeRead_WaitAndGoLast()
@@ -1390,29 +1380,29 @@ public sealed class WebIndexesTests
         using var harness = new Harness(site);
         var settings = Settings(include: ["/guides/**"]);
 
-        harness.Indexes.Search(directory.Path, settings, "x", 5, Open);
-        await harness.Indexes.FilledAsync(directory.Path);
-        Assert.Equal(0, harness.Indexes.Search(directory.Path, settings, "x", 5, Open).Held);
-
-        site.Asked.Clear();
-        harness.Clock.Advance(WebIndexState.AfterProblem);
-
-        harness.Indexes.Search(directory.Path, settings, "x", 5, Open);
+        harness.Indexes.Search(directory.Path, settings, "x", FirstFive, Open);
         await harness.Indexes.FilledAsync(directory.Path);
 
-        var answer = harness.Indexes.Search(directory.Path, settings, "tokenizer", 5, Open);
+        var answer = harness.Indexes.Search(directory.Path, settings, "tokenizer", FirstFive, Open);
 
-        Assert.Equal(["/guides/p10", "/guides/p11", "/guides/alpha"], PagesAsked(site));
+        Assert.Equal([.. Enumerable.Range(0, 12).Select(at => $"/guides/p{at}"), "/guides/alpha"], PagesAsked(site));
         Assert.Equal((1, (string?)null), (answer.Held, answer.Problem));
+
+        // Not asked again before their time, though the index is filled again.
+        site.Asked.Clear();
+        harness.Indexes.Search(directory.Path, Changed(settings), "x", FirstFive, Open);
+        await harness.Indexes.FilledAsync(directory.Path);
+
+        Assert.Empty(PagesAsked(site));
 
         site.Asked.Clear();
         harness.Clock.Advance(TimeSpan.FromDays(7));
 
-        harness.Indexes.Search(directory.Path, settings, "x", 5, Open);
+        harness.Indexes.Search(directory.Path, settings, "x", FirstFive, Open);
         await harness.Indexes.FilledAsync(directory.Path);
 
         // Read again in their order once they waited: the page held first, then those that could not be read.
-        Assert.Equal(["/guides/alpha", .. Enumerable.Range(0, 10).Select(at => $"/guides/p{at}")], PagesAsked(site));
+        Assert.Equal(["/guides/alpha", .. Enumerable.Range(0, 12).Select(at => $"/guides/p{at}")], PagesAsked(site));
     }
 
     /// <summary>A source whose settings changed is filled again at once, and answered by them meanwhile: a page they no longer read is no hit.</summary>
@@ -1422,18 +1412,18 @@ public sealed class WebIndexesTests
         using var directory = new TempDirectory();
         using var harness = new Harness(new SiteDouble());
 
-        harness.Indexes.Search(directory.Path, Settings(include: ["/guides/**"]), "x", 5, Open);
+        harness.Indexes.Search(directory.Path, Settings(include: ["/guides/**"]), "x", FirstFive, Open);
         await harness.Indexes.FilledAsync(directory.Path);
 
         var blog = Settings(include: ["/blog/**"]);
-        var meanwhile = harness.Indexes.Search(directory.Path, blog, "guide", 5, Open);
+        var meanwhile = harness.Indexes.Search(directory.Path, blog, "guide", FirstFive, Open);
 
         Assert.True(meanwhile.Filling);
         Assert.DoesNotContain(meanwhile.Hits, hit => hit.Address.Contains("/guides/", StringComparison.Ordinal));
 
         await harness.Indexes.FilledAsync(directory.Path);
 
-        var answer = harness.Indexes.Search(directory.Path, blog, "guide", 5, Open);
+        var answer = harness.Indexes.Search(directory.Path, blog, "guide", FirstFive, Open);
 
         Assert.Equal((1, false), (answer.Held, answer.Filling));
         Assert.Equal([$"{Site}/blog/zeta"], answer.Hits.Select(hit => hit.Address));
@@ -1450,7 +1440,7 @@ public sealed class WebIndexesTests
         {
             Assert.NotNull(first);
             Assert.Null(harness.Fill.Claim(directory.Path));
-            Assert.True(harness.Indexes.Search(directory.Path, Settings(), "x", 5, Open).Filling);
+            Assert.True(harness.Indexes.Search(directory.Path, Settings(), "x", FirstFive, Open).Filling);
         }
 
         using var again = harness.Fill.Claim(directory.Path);
@@ -1477,7 +1467,7 @@ public sealed class WebIndexesTests
         var said = $"'{record}' is not opened for writing: its claim '{claim}' could not be taken ({why}). Nothing was read or written.";
 
         Assert.Equal(said, Assert.Throws<IOException>(() => harness.Fill.Claim(directory.Path)).Message);
-        Assert.Equal(said, Assert.Throws<IOException>(() => harness.Indexes.Search(directory.Path, Settings(), "x", 5, Open)).Message);
+        Assert.Equal(said, Assert.Throws<IOException>(() => harness.Indexes.Search(directory.Path, Settings(), "x", FirstFive, Open)).Message);
         Assert.Empty(site.Asked);
         Assert.False(File.Exists(record));
     }
@@ -1524,8 +1514,11 @@ public sealed class WebIndexesTests
         Assert.NotNull(OrchestrationRules.NameProblem(OrchestratorLayout.WebIndexesDirectoryName));
     }
 
-    private static SitemapSettings Settings(string[]? include = null, int maxPages = 100)
-        => new(Site, null, [.. (include ?? []).Select(GlobPattern.Parse)], [GlobPattern.Parse("/guides/hidden/**")], maxPages, TimeSpan.FromDays(7));
+    private static SitemapSettings Settings(string[]? include = null)
+        => new(Site, null, [.. (include ?? []).Select(GlobPattern.Parse)], [GlobPattern.Parse("/guides/hidden/**")], TimeSpan.FromDays(7));
+
+    /// <summary><paramref name="settings"/> under another fingerprint that reads the very same pages: settings changed, which fill again at once.</summary>
+    private static SitemapSettings Changed(SitemapSettings settings) => settings with { Exclude = [.. settings.Exclude, GlobPattern.Parse("/nowhere/**")] };
 
     /// <summary>The pages the site was asked for, in their order: every address but its robots.txt and its sitemaps.</summary>
     private static List<string> PagesAsked(SiteDouble site)
@@ -1714,6 +1707,8 @@ public sealed class WebIndexesTests
                 "/guides/beta" or "/guides/beta-moved" => Text("<html><head><title>Beta guide</title></head><body><p>The tokenizer, once more, in a guide.</p></body></html>", "text/html"),
                 "/guides/gamma" => Text("<html><head><title>Gamma guide</title></head><body><p>A new guide.</p></body></html>", "text/html"),
                 "/blog/zeta" => Text("<html><head><title>Zeta</title></head><body><p>A guide of the blog.</p></body></html>", "text/html"),
+                _ when path.StartsWith("/guides/n", StringComparison.Ordinal) => Text($"<html><head><title>Guide {path}</title></head><body><p>A numbered guide.</p></body></html>", "text/html"),
+                _ when path.StartsWith("/empty-", StringComparison.Ordinal) => Text("""<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"></urlset>""", "application/xml"),
                 _ => new HttpResponseMessage(HttpStatusCode.NotFound) { Content = new StringContent("none", Encoding.UTF8, "text/plain") },
             };
 

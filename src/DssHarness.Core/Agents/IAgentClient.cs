@@ -362,12 +362,10 @@ public sealed record AgentCredential(string Auth, IReadOnlyList<AgentKey> Keys, 
 /// run's mask holds (<see cref="Web.Search.WebSearchCredential.Forms"/>).
 /// </summary>
 /// <param name="Sources">The step's sources, as its <c>search</c> picks them (<see cref="Web.Search.WebSearchSources.Chosen"/>).</param>
-/// <param name="ResultsPerSource">The most results a source gives one search.</param>
-/// <param name="MaxPerStep">The most requests of sources the step makes.</param>
+/// <param name="MaxPerStep">The most requests of sources the step makes, a later page of a source's results among them.</param>
 /// <param name="Keys">Each source's key, by its name, as <see cref="Web.Search.WebSearchKeys"/> read it.</param>
 public sealed record AgentWebSearch(
     IReadOnlyList<Web.Search.WebSearchSource> Sources,
-    int ResultsPerSource,
     int MaxPerStep,
     IReadOnlyDictionary<string, Web.Search.WebSearchKey> Keys)
 {
@@ -380,7 +378,7 @@ public sealed record AgentWebSearch(
         ArgumentNullException.ThrowIfNull(sources);
         ArgumentNullException.ThrowIfNull(keys);
 
-        return new(sources.Chosen(search), sources.ResultsPerSource, sources.MaxPerStep, keys);
+        return new(sources.Chosen(search), sources.MaxPerStep, keys);
     }
 }
 

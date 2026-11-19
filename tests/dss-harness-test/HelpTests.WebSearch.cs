@@ -64,14 +64,18 @@ public sealed partial class HelpTests
 
         foreach (var source in builtIn.All)
         {
-            Assert.Contains(Prose.Words($"{source.Name} ({source.Kind}; tags {string.Join(", ", source.Tags)}; perMinute {source.PerMinute.ToString(CultureInfo.InvariantCulture)}"), prose, StringComparison.Ordinal);
+            Assert.Contains(Prose.Words($"{source.Name} ({source.Kind}; tags {string.Join(", ", source.Tags)}; {(source.PerMinute is { } perMinute ? $"perMinute {perMinute.ToString(CultureInfo.InvariantCulture)}" : "one request at a time")}"), prose, StringComparison.Ordinal);
             Assert.Contains(Prose.Words($"{source.Description}. Its owner's terms: {source.Terms}."), prose, StringComparison.Ordinal);
         }
 
         Assert.Contains(Prose.Words($"A step that says no search asks the defaults: {string.Join(", ", builtIn.Defaults)}."), prose, StringComparison.Ordinal);
         Assert.Contains($"{OrchestratorLayout.WebDirectoryName}/{OrchestratorLayout.WebSearchesFileName}", prose, StringComparison.Ordinal);
         Assert.Contains($"{DssHarness.Core.Web.Search.WebSearchPace.FilePrefix}-<machine>.json", prose, StringComparison.Ordinal);
-        Assert.Contains(Prose.Words($"the snippet at most {DssHarness.Core.Web.Search.WebSearchResult.MostSnippet.ToString(CultureInfo.InvariantCulture)} characters"), prose, StringComparison.Ordinal);
+        Assert.Contains(Prose.Words("every result of the page it answered - each one's title, address and snippet, whole"), prose, StringComparison.Ordinal);
+        Assert.Contains(Prose.Words("A later page of each source's results is asked by web_search's page, from 1, each a request counted against maxPerStep"), prose, StringComparison.Ordinal);
+        Assert.Contains(Prose.Words("a source that names no perMinute is asked one request at a time, the next once the last is answered"), prose, StringComparison.Ordinal);
+        Assert.Contains(Prose.Words("one that says not for how long holds it for the source's own pace between two requests, doubled each time it asks so again"), prose, StringComparison.Ordinal);
+        Assert.Contains(Prose.Words("a page that could not be read is recorded and the fill goes on, and a fill that stopped short is begun again by the next search"), prose, StringComparison.Ordinal);
 
         // A source's key goes where its configuration writes alone, never to a host a document it read names.
         Assert.Contains(Prose.Words("a variable of the .env slot, sent to the scheme, host and port the source's own address writes alone, or the machine's gh login"), prose, StringComparison.Ordinal);
@@ -97,6 +101,6 @@ public sealed partial class HelpTests
         var config = Prose.Words(HelpText.Of("config").StandardOutput);
 
         Assert.Contains("agentWebSearch the harness's own web search", config, StringComparison.Ordinal);
-        Assert.Contains(Prose.Words($"maxPerStep ({DssHarness.Core.Web.Search.WebSearchSources.DefaultMaxPerStep}) and resultsPerSource ({DssHarness.Core.Web.Search.WebSearchSources.DefaultResultsPerSource}) ('help web-search')"), config, StringComparison.Ordinal);
+        Assert.Contains(Prose.Words($"and maxPerStep ({DssHarness.Core.Web.Search.WebSearchSources.DefaultMaxPerStep}), the requests a step makes, a later page of a source's results among them ('help web-search')"), config, StringComparison.Ordinal);
     }
 }

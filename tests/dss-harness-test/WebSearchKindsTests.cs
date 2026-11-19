@@ -66,7 +66,7 @@ public sealed class WebSearchKindsTests
     [InlineData("""{ "kind": 3 }""", "'kind' is the name of a kind, one of feed, json-api, opensearch, sitemap")]
     [InlineData("""{ "kind": "duckduckgo" }""", "'kind' is 'duckduckgo', which is no kind; the kinds are feed, json-api, opensearch, sitemap")]
     [InlineData("""{ "kind": "json-api", "url": "https://a.test/?q={query}", "items": "$.i", "title": "{@.t}" }""", "'link' is missing: a source of kind 'json-api' gives it")]
-    [InlineData("""{ "kind": "sitemap", "site": "https://a.test", "sitemaps": [] }""", "'sitemaps' is no key a source of kind 'sitemap' takes; it takes kind, tags, description, terms, enabled, perMinute, perDay, credential, site, sitemap, include, exclude, maxPages, refreshDays")]
+    [InlineData("""{ "kind": "sitemap", "site": "https://a.test", "sitemaps": [] }""", "'sitemaps' is no key a source of kind 'sitemap' takes; it takes kind, tags, description, terms, enabled, perMinute, perDay, pageSize, credential, site, sitemap, include, exclude, refreshDays")]
     public void ASource_IsHeldToItsKind(string keys, string problem)
         => Assert.Contains(WebSearchKinds.OfThisBuild.Problems(Source("s", keys)), said => said.StartsWith(problem, StringComparison.Ordinal));
 
@@ -113,9 +113,10 @@ public sealed class WebSearchKindsTests
     [InlineData("""{ "description": 5 }""", "'description' is a text, and is 5")]
     [InlineData("""{ "description": " " }""", "'description' says nothing; it is what the agent is told the source is for")]
     [InlineData("""{ "enabled": "no" }""", "'enabled' is true or false, and is \"no\"")]
-    [InlineData("""{ "perMinute": 0 }""", "'perMinute' is a whole number from 1 to 600, and is 0")]
-    [InlineData("""{ "perMinute": 601 }""", "'perMinute' is a whole number from 1 to 600, and is 601")]
-    [InlineData("""{ "perMinute": "10" }""", "'perMinute' is a whole number from 1 to 600, and is \"10\"")]
+    [InlineData("""{ "perMinute": 0 }""", "'perMinute' is a whole number from 1 to 2,147,483,647, and is 0")]
+    [InlineData("""{ "perMinute": 2147483648 }""", "'perMinute' is a whole number from 1 to 2,147,483,647, and is 2147483648")]
+    [InlineData("""{ "perMinute": "10" }""", "'perMinute' is a whole number from 1 to 2,147,483,647, and is \"10\"")]
+    [InlineData("""{ "pageSize": 0 }""", "'pageSize' is a whole number from 1 to 2,147,483,647, and is 0")]
     [InlineData("""{ "perDay": 0 }""", "'perDay' is a whole number from 1 to 1,000,000, and is 0")]
     [InlineData("""{ "credential": "KEY" }""", "'credential' is an object: a key to send it")]
     [InlineData("""{ "credential": { "from": "vault" } }""", "'credential.from' is env, a variable of the .env slot, or gh, the machine's gh login")]
@@ -164,7 +165,21 @@ public sealed class WebSearchKindsTests
     /// <summary>A source's pace on this machine is what it says, and 30 requests a minute where it says none.</summary>
     [Fact]
     public void ASourcesPace_IsWhatItSays()
-        => Assert.Equal((30, 6), (Source("s", """{ "kind": "feed" }""").PerMinute, Source("s", """{ "kind": "feed", "perMinute": 6 }""").PerMinute));
+        => Assert.Equal(((int?)null, (int?)6), (Source("s", """{ "kind": "feed" }""").PerMinute, Source("s", """{ "kind": "feed", "perMinute": 6 }""").PerMinute));
+
+    /// <summary>
+    /// A rate or an age is held to the range it is kept in, never to a ceiling of the tool's: a source's index may be a
+    /// thousand days old, and a source asked two thousand times a minute.
+    /// </summary>
+    [Fact]
+    public void RefreshDaysOfAThousand_AndPerMinuteOfTwoThousand_AreAccepted()
+    {
+        var source = Source("gov", """{ "kind": "sitemap", "site": "https://digital.gov", "refreshDays": 1000, "perMinute": 2000 }""");
+
+        Assert.Empty(WebSearchKinds.OfThisBuild.Problems(source));
+        Assert.Equal((2000, TimeSpan.FromDays(1000)), (source.PerMinute, SitemapKind.Settings(source).Refresh));
+        Assert.Empty(WebSearchKinds.OfThisBuild.Problems(Source("gov", $$"""{ "kind": "sitemap", "site": "https://digital.gov", "refreshDays": {{SitemapKind.MostRefreshDays}} }""")));
+    }
 
     /// <summary>A credential's place: a slot's variable where it says, the gh login as GitHub's bearer token unless it says otherwise; its keys in any case.</summary>
     [Fact]
@@ -195,9 +210,7 @@ public sealed class WebSearchKindsTests
     [InlineData("""{ "sitemap": "/sitemap.xml" }""", "'sitemap' is an http or https address, written whole")]
     [InlineData("""{ "include": "/guides/**" }""", "'include' is a list of patterns of paths, as [\"/guides/**\"]")]
     [InlineData("""{ "exclude": ["/a/../b"] }""", "'exclude' holds '/a/../b', which holds a '..' segment")]
-    [InlineData("""{ "maxPages": 20001 }""", "'maxPages' is a whole number from 1 to 20,000, and is 20001")]
-    [InlineData("""{ "maxPages": 0 }""", "'maxPages' is a whole number from 1 to 20,000, and is 0")]
-    [InlineData("""{ "refreshDays": 1.5 }""", "'refreshDays' is a whole number from 1 to 365, and is 1.5")]
+    [InlineData("""{ "refreshDays": 1.5 }""", "'refreshDays' is a whole number from 1 to 10,675,199, and is 1.5")]
     public void ASitemapSourcesKeys_AreHeld(string overrides, string problem)
     {
         var keys = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, System.Text.Json.JsonElement>>("""{ "kind": "sitemap", "site": "https://a.test" }""")!;
@@ -214,9 +227,9 @@ public sealed class WebSearchKindsTests
     [Fact]
     public void ASitemapSourcesSettings_TakeTheirDefaults()
     {
-        var full = SitemapKind.Settings(Source("gov", """{ "kind": "sitemap", "site": "https://Digital.gov/", "sitemap": "https://digital.gov/sitemap.xml", "include": ["/guides/**"], "exclude": ["/guides/old/**"], "maxPages": 1500, "refreshDays": 14, "perMinute": 6 }"""));
+        var full = SitemapKind.Settings(Source("gov", """{ "kind": "sitemap", "site": "https://Digital.gov/", "sitemap": "https://digital.gov/sitemap.xml", "include": ["/guides/**"], "exclude": ["/guides/old/**"], "refreshDays": 14, "perMinute": 6 }"""));
 
-        Assert.Equal(("https://digital.gov", "https://digital.gov/sitemap.xml", 1500, TimeSpan.FromDays(14)), (full.Site, full.Sitemap, full.MaxPages, full.Refresh));
+        Assert.Equal(("https://digital.gov", "https://digital.gov/sitemap.xml", TimeSpan.FromDays(14)), (full.Site, full.Sitemap, full.Refresh));
         Assert.True(full.Reads("/guides/web/"));
         Assert.False(full.Reads("/guides/old/x"));
         Assert.False(full.Reads("/blog/x"));
@@ -224,7 +237,7 @@ public sealed class WebSearchKindsTests
 
         var bare = SitemapKind.Settings(Source("mdn", """{ "kind": "sitemap", "site": "https://developer.example.test" }"""));
 
-        Assert.Equal(((string?)null, SitemapKind.DefaultMaxPages, TimeSpan.FromDays(SitemapKind.DefaultRefreshDays)), (bare.Sitemap, bare.MaxPages, bare.Refresh));
+        Assert.Equal(((string?)null, TimeSpan.FromDays(SitemapKind.DefaultRefreshDays)), (bare.Sitemap, bare.Refresh));
         Assert.True(bare.Reads("/"));
         Assert.True(bare.Reads("/a//b"));
     }
@@ -238,7 +251,7 @@ public sealed class WebSearchKindsTests
 
         var request = Assert.IsType<WebSearchRequest.Indexed>(kind.Request(source, WebSearchFound.None, "forms", 4));
 
-        Assert.Equal(("forms", 4, SitemapKind.Settings(source).Fingerprint), (request.Query, request.Limit, request.Settings.Fingerprint));
+        Assert.Equal(("forms", new WebSearchPage(4, WebSearchSource.DefaultPageSize), SitemapKind.Settings(source).Fingerprint), (request.Query, request.Page, request.Settings.Fingerprint));
         Assert.Empty(kind.Lookups(source));
 
         var hits = kind.Read(source, WebSearchFound.None, Indexed(new("https://digital.gov", [new("https://digital.gov/guides/forms", "Forms", "How to build forms.", 3.2)], 240, 1904, true, null, null)));

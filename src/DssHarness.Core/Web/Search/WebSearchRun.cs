@@ -12,8 +12,9 @@ namespace DssHarness.Core.Web.Search;
 
 /// <summary>
 /// What a run's web search keeps, in <c>web/searches.jsonl</c>: what each source's lookups found, read once for the run,
-/// and each query a source answered - so the same query again, of the same source as the run asked it, is answered from
-/// here with no request. One for each run in the process, shared by its steps; a resumed run reads back what it kept.
+/// and each page of a query a source answered - so the same page of the same query again, of the same source as the run
+/// asked it, is answered from here with no request. One for each run in the process, shared by its steps; a resumed run
+/// reads back what it kept.
 /// </summary>
 /// <remarks>
 /// A source is told apart by its name, its keys as written and its kind's version: a source the configuration changed
@@ -23,6 +24,8 @@ namespace DssHarness.Core.Web.Search;
 /// filled; and what lookups found, never why they found nothing. Each line is written with every text in it masked, by
 /// the record's one writer in the process, which holds it open until it is disposed - and kept for the run only once it
 /// is written, so the run answers nothing from what its record does not hold, which a resumed run would read otherwise.
+/// A searched line of the form before pages, which says the most results it was asked for, is read and answers nothing:
+/// its kind's version is older than any this build asks.
 /// </remarks>
 internal sealed class WebSearchRun : IDisposable
 {
@@ -47,9 +50,9 @@ internal sealed class WebSearchRun : IDisposable
             (line, _) => line.Line switch
             {
                 "found" => line is { Values: not null, Addresses: not null } ? null : "it is a found line that holds no values or addresses",
-                "searched" => line is { Query: not null, Limit: not null, Keyed: not null, Addresses: [_, ..], Outcome: WebSearchOutcome.Ok or WebSearchOutcome.NoResults }
+                "searched" => line is { Query: not null, Keyed: not null, Addresses: [_, ..], Outcome: WebSearchOutcome.Ok or WebSearchOutcome.NoResults } && (line.Page is not null || line.Limit is not null)
                     ? null
-                    : "it is a searched line that names no query, limit, key's sending, address or answer",
+                    : "it is a searched line that names no query, page, key's sending, address or answer",
                 _ => $"it is a '{line.Line}' line, which is none of found and searched",
             },
             (number, why) => new HarnessException(HarnessExit.InternalError, $"The run's web search record '{FilePath}' does not read at line {number}: {why}. Remove it: the run asks its sources again."));
@@ -62,7 +65,7 @@ internal sealed class WebSearchRun : IDisposable
             }
             else
             {
-                _searched[Key(line.Source, line.Settings, line.Version, line.Query ?? string.Empty, line.Limit ?? 0, line.Keyed ?? false)] = line;
+                _searched[Key(line.Source, line.Settings, line.Version, line.Query ?? string.Empty, Asked(line), line.Keyed ?? false)] = line;
             }
         }
     }
@@ -105,14 +108,14 @@ internal sealed class WebSearchRun : IDisposable
     }
 
     /// <summary>
-    /// What <paramref name="source"/> answered <paramref name="query"/>, asked for <paramref name="limit"/> results with its
+    /// What <paramref name="source"/> answered <paramref name="query"/>, its page <paramref name="page"/>, asked with its
     /// key or without it as <paramref name="keyed"/> says, earlier in the run; <see langword="null"/> where it was not asked it.
     /// </summary>
-    public WebSearchRunLine? Searched(WebSearchSource source, int version, string query, int limit, bool keyed)
+    public WebSearchRunLine? Searched(WebSearchSource source, int version, string query, int page, bool keyed)
     {
         lock (_gate)
         {
-            return _searched.GetValueOrDefault(Key(source.Name, SettingsOf(source), version, query, limit, keyed));
+            return _searched.GetValueOrDefault(Key(source.Name, SettingsOf(source), version, query, Paged(page), keyed));
         }
     }
 
@@ -121,7 +124,7 @@ internal sealed class WebSearchRun : IDisposable
     /// asked, then each redirect, its key sent as <paramref name="keyed"/> says: <paramref name="answer"/> as any step
     /// may be told it - results, or none - before any step's rules.
     /// </summary>
-    public void Keep(WebSearchSource source, int version, string query, int limit, bool keyed, IReadOnlyList<string> addresses, WebSearchAnswer answer, ILineMask mask)
+    public void Keep(WebSearchSource source, int version, string query, int page, bool keyed, IReadOnlyList<string> addresses, WebSearchAnswer answer, ILineMask mask)
     {
         if (answer.Outcome is not (WebSearchOutcome.Ok or WebSearchOutcome.NoResults))
         {
@@ -141,7 +144,7 @@ internal sealed class WebSearchRun : IDisposable
             Settings = SettingsOf(source),
             Version = version,
             Query = query,
-            Limit = limit,
+            Page = page,
             Keyed = keyed,
             Addresses = [.. addresses],
             Outcome = answer.Outcome,
@@ -154,7 +157,7 @@ internal sealed class WebSearchRun : IDisposable
         lock (_gate)
         {
             Append(line, mask);
-            _searched[Key(line.Source, line.Settings, version, query, limit, keyed)] = line;
+            _searched[Key(line.Source, line.Settings, version, query, Paged(page), keyed)] = line;
         }
     }
 
@@ -181,6 +184,12 @@ internal sealed class WebSearchRun : IDisposable
     }
 
     private static string Key(params object[] parts) => string.Join('\u001F', parts);
+
+    /// <summary>What a searched line was asked for, as its key holds it: its page, or - a line of the form before pages - the most results it asked.</summary>
+    private static string Asked(WebSearchRunLine line)
+        => line.Page is { } page ? Paged(page) : $"limit {(line.Limit ?? 0).ToString(System.Globalization.CultureInfo.InvariantCulture)}";
+
+    private static string Paged(int page) => $"page {page.ToString(System.Globalization.CultureInfo.InvariantCulture)}";
 }
 
 /// <summary>One line of a run's web search record.</summary>
@@ -213,7 +222,10 @@ internal sealed record WebSearchRunLine
     /// </summary>
     public List<string>? Addresses { get; init; }
 
-    /// <summary>The most results it was asked for: a searched line's.</summary>
+    /// <summary>The page of results it answers, from 1: a searched line's.</summary>
+    public int? Page { get; init; }
+
+    /// <summary>The most results it was asked for: a searched line of the form before pages, read and never written.</summary>
     public int? Limit { get; init; }
 
     /// <summary>Whether its key was sent with it, which an answer to a step that sends it, or one that does not, is apart from: a searched line's.</summary>

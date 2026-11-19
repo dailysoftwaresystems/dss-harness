@@ -12,13 +12,13 @@ namespace DssHarness.Core.Web.Index;
 /// </summary>
 /// <param name="Site">The site indexed.</param>
 /// <param name="Generation">The generation of <c>pages.jsonl</c>.</param>
-/// <param name="Known">How many pages its sitemaps list that it may read, at most <c>maxPages</c>; <see langword="null"/> until they were read.</param>
+/// <param name="Known">How many pages its sitemaps list that it may read; <see langword="null"/> until they were read.</param>
 /// <param name="FillStartedAt">When the last fill began; <see langword="null"/> where none has.</param>
 /// <param name="FilledAt">When the last fill read all it was to; <see langword="null"/> where none has.</param>
 /// <param name="PausedUntil">
 /// When a fill may begin again: the time the site asked to be left alone until, or said its requests are spent until, or
-/// the source's turn on this machine is spent until (<see cref="PausedFor"/> says which), or <see cref="AfterProblem"/>
-/// after a fill stopped short, so a site that fails is not asked at every search; <see langword="null"/> where none holds.
+/// the source's turn on this machine is spent until (<see cref="PausedFor"/> says which), or the time a fill that stopped
+/// short gave, where it gave one; <see langword="null"/> where none holds, and the next search begins a fill.
 /// </param>
 /// <param name="Problem">Why a fill stopped short, kept until one ends whole; <see langword="null"/> where none stopped short since one did.</param>
 public sealed record WebIndexState(
@@ -32,9 +32,6 @@ public sealed record WebIndexState(
 {
     /// <summary>The file it is kept in, in the index's directory.</summary>
     public const string FileName = "state.json";
-
-    /// <summary>How long after a fill stopped short the next may begin.</summary>
-    public static readonly TimeSpan AfterProblem = TimeSpan.FromHours(1);
 
     /// <summary>
     /// The settings it was last filled whole under (<see cref="SitemapSettings.Fingerprint"/>); <see langword="null"/>
@@ -55,31 +52,31 @@ public sealed record WebIndexState(
     public string? PausedUnder { get; init; }
 
     /// <summary>
-    /// When a fill first found a sitemap of the site it could not read, since its listing was last read as far as its rules
-    /// let; <see langword="null"/> where none has. A failure younger than the index may be old costs none of the pages held;
-    /// one older gives them up to the pages the listing names.
+    /// The last wait the site asked for without saying how long, which the next such wait doubles from (<see cref="WebRateLimit.Unsaid"/>);
+    /// <see langword="null"/> where its last answer said its time, or was good.
     /// </summary>
-    public DateTimeOffset? FailingSince { get; init; }
+    public TimeSpan? UnsaidFor { get; init; }
 
     /// <summary>The settings <see cref="Known"/> was counted under; a count of others is never kept.</summary>
     public string? KnownUnder { get; init; }
 
     /// <summary>
     /// This state, a fill stopped short for <paramref name="problem"/>: held off until <paramref name="until"/> under
-    /// <paramref name="settings"/> alone, for no word of the site's or the machine's.
+    /// <paramref name="settings"/> alone, where a time is given - for no word of the site's or the machine's - and else
+    /// begun again by the next search.
     /// </summary>
     /// <param name="problem">Why it stopped short.</param>
-    /// <param name="until">When the next fill under the same settings may begin.</param>
+    /// <param name="until">When the next fill under the same settings may begin; <see langword="null"/> where the next search begins it.</param>
     /// <param name="settings">The settings it stopped under (<see cref="SitemapSettings.All"/>).</param>
-    public WebIndexState Stopped(string problem, DateTimeOffset until, string settings)
+    public WebIndexState Stopped(string problem, DateTimeOffset? until, string settings)
         => this with { Problem = problem, PausedUntil = until, PausedFor = null, PausedUnder = settings };
 
-    private static readonly JsonSerializerOptions Options = new()
+    private static readonly JsonSerializerOptions Options = Json.JsonDepth.Serializer(new JsonSerializerOptions
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
         WriteIndented = true,
-    };
+    });
 
     /// <summary>The state of the index in <paramref name="directory"/>; a new index's of <paramref name="site"/> where it has none, or one of another site.</summary>
     /// <param name="fileSystem">Where it is kept.</param>

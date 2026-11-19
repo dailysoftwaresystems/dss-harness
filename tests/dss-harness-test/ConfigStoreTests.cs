@@ -3609,12 +3609,12 @@ public sealed class ConfigStoreTests
         var config = LoadValid("""
             { "agentWebSearch": {
                 "sources": { "npm": { "enabled": false }, "gov": { "kind": "feed", "url": "https://gov.example.test/feed?q={query}" } },
-                "defaults": ["gov", "qa"], "maxPerStep": 12, "resultsPerSource": 3 } }
+                "defaults": ["gov", "qa"], "maxPerStep": 12 } }
             """);
         var search = DssHarness.Core.Web.Search.WebSearchSources.Of(config, DssHarness.Core.Web.Search.WebSearchKinds.OfThisBuild);
 
         Assert.Empty(search.Problems);
-        Assert.Equal((12, 3), (search.MaxPerStep, search.ResultsPerSource));
+        Assert.Equal(12, search.MaxPerStep);
         Assert.Equal(["gov", "stackoverflow"], search.Chosen(null).Select(source => source.Name));
         Assert.False(search.Find("npm")!.Enabled);
     }

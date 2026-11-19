@@ -568,7 +568,7 @@ public sealed class ClaudeApiClientTests : IDisposable
         _endpoint.Then(ApiReply.Error(429, "rate_limit_error", "slow down", TimeSpan.FromSeconds(30)));
         var connection = new ApiConnection(TimeProvider.System, _endpoint);
         _opened.Add(connection);
-        var step = Run() with { WebSearch = new AgentWebSearch([], 3, 4, new Dictionary<string, WebSearchKey>()) };
+        var step = Run() with { WebSearch = new AgentWebSearch([], 4, new Dictionary<string, WebSearchKey>()) };
         var sideTask = step with { Ground = step.Ground! with { SideTask = true } };
 
         Assert.Null(ClaudeApiClient.WithNativeSearch(connection, step, step.Entries!).NativeSearch);

@@ -230,7 +230,7 @@ public sealed class ClaudeToolDeciderTests : IDisposable
         Assert.Null(ClaudeCodeTools.ServedAs("WebFetch"));
 
         var ground = PolicyGrounds.Of(_worktree, [_worktree], [_worktree], [], [], []);
-        var search = new AgentWebSearch([WebSearchFixtures.Source("alpha", """{ "kind": "json-api", "url": "https://alpha.example.test/?q={query}", "items": "$.items", "title": "{@.title}", "link": "{@.link}" }""")], 8, 60, new Dictionary<string, DssHarness.Core.Web.Search.WebSearchKey>());
+        var search = new AgentWebSearch([WebSearchFixtures.Source("alpha", """{ "kind": "json-api", "url": "https://alpha.example.test/?q={query}", "items": "$.items", "title": "{@.title}", "link": "{@.link}" }""")], 60, new Dictionary<string, DssHarness.Core.Web.Search.WebSearchKey>());
         Assert.Equal([AgentTools.WebFetch], ClaudeCodeTools.Served(AgentTools.Offered(ground, AgentCommandSettings.Default)));
         Assert.Equal([AgentTools.WebFetch, AgentTools.WebSearch], ClaudeCodeTools.Served(AgentTools.Offered(ground, AgentCommandSettings.Default, search)));
         Assert.Empty(ClaudeCodeTools.Served(AgentTools.Offered(ground with { Capabilities = [AgentCapability.Read] }, AgentCommandSettings.Default, search)));

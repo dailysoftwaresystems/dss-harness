@@ -27,18 +27,12 @@ public enum WebSearchOutcome
 /// <summary>One result a source gave: its title, its address and a snippet, each text.</summary>
 /// <param name="Title">Its title, reduced to text.</param>
 /// <param name="Link">Its address, absolute.</param>
-/// <param name="Snippet">What it says, reduced to text and cut to <see cref="MostSnippet"/> characters (<see cref="TextCut.AtWord"/>); empty where the source gave none.</param>
+/// <param name="Snippet">What it says, reduced to text, whole, as the source gave it; empty where the source gave none.</param>
 public sealed record WebSearchResult(string Title, string Link, string Snippet)
 {
-    /// <summary>The most characters a snippet keeps.</summary>
-    public const int MostSnippet = 300;
-
-    /// <summary>The most characters a title keeps.</summary>
-    public const int MostTitle = 300;
-
     /// <summary>
     /// The result a source gave as <paramref name="title"/>, <paramref name="link"/> and <paramref name="snippet"/>: the
-    /// title and the snippet text (<see cref="WebPageText.OfText"/>), each cut, the link made absolute against
+    /// title and the snippet text (<see cref="WebPageText.OfText"/>), each whole, the link made absolute against
     /// <paramref name="relativeTo"/>; <see langword="null"/> where it has no title or names no address. A field that is
     /// markup is reduced to its text first (<see cref="WebPageText.OfMarkup"/>), by the reader that knows it is: nothing
     /// here reads one as markup, for whether a field is markup is its source's or its format's word, never guessed.
@@ -49,11 +43,11 @@ public sealed record WebSearchResult(string Title, string Link, string Snippet)
     /// <param name="relativeTo">The address a relative link is read against: the answer's own.</param>
     public static WebSearchResult? Of(string? title, string? link, string? snippet, string? relativeTo)
     {
-        var text = TextCut.AtWord(WebPageText.OfText(title ?? string.Empty), MostTitle);
+        var text = WebPageText.OfText(title ?? string.Empty);
 
         return text.Length == 0 || WebAddresses.Absolute(link, relativeTo) is not { } address
             ? null
-            : new WebSearchResult(text, address, TextCut.AtWord(WebPageText.OfText(snippet ?? string.Empty), MostSnippet));
+            : new WebSearchResult(text, address, WebPageText.OfText(snippet ?? string.Empty));
     }
 }
 
@@ -63,9 +57,6 @@ public sealed record WebSearchResult(string Title, string Link, string Snippet)
 /// </summary>
 public sealed record WebSearchAnswer
 {
-    /// <summary>The most of an answer's items read: a query asks for a few, and an answer that holds more is read no further.</summary>
-    public const int MostResults = 100;
-
     private WebSearchAnswer(WebSearchOutcome outcome, IReadOnlyList<WebSearchResult> results, string? why)
     {
         Outcome = outcome;
@@ -79,7 +70,7 @@ public sealed record WebSearchAnswer
     /// <summary>The results, in the source's order; empty but for <see cref="WebSearchOutcome.Ok"/>.</summary>
     public IReadOnlyList<WebSearchResult> Results { get; }
 
-    /// <summary>Why it came to no results: a limit, a change, a failure, a refusal; <see langword="null"/> for results and for none.</summary>
+    /// <summary>Why it came to no results: a limit, a change, a failure, a refusal, a page past the one it answers; <see langword="null"/> for results and for none.</summary>
     public string? Why { get; private init; }
 
     /// <summary>How many results the source says it holds for the query; <see langword="null"/> where it said not.</summary>
@@ -101,6 +92,9 @@ public sealed record WebSearchAnswer
         ArgumentNullException.ThrowIfNull(results);
         return new(results.Count > 0 ? WebSearchOutcome.Ok : WebSearchOutcome.NoResults, results, null);
     }
+
+    /// <summary>No results, and no request: the page asked is past the one the source answers, as <paramref name="why"/> says.</summary>
+    public static WebSearchAnswer NoPage(string why) => new(WebSearchOutcome.NoResults, [], Said(why));
 
     /// <summary>The source asks to be left alone until <paramref name="until"/>, as <paramref name="why"/> says.</summary>
     public static WebSearchAnswer Limited(DateTimeOffset until, string why) => new(WebSearchOutcome.RateLimited, [], Said(why)) { Until = until };

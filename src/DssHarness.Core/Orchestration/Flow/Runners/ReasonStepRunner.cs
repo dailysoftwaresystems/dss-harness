@@ -890,7 +890,7 @@ public sealed class ReasonStepRunner(
             ["agentWebSearch"] = webSearch is null ? null : new JsonObject
             {
                 ["sources"] = new JsonArray([.. webSearch.Sources.Select(source => (JsonNode?)source.Name)]),
-                ["resultsPerSource"] = webSearch.ResultsPerSource,
+                ["maxPerStep"] = webSearch.MaxPerStep,
             },
             ["runsOn"] = new JsonArray([.. order.Select(entry => (JsonNode?)new JsonObject
             {

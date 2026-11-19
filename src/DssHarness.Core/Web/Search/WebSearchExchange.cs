@@ -40,9 +40,34 @@ public abstract record WebSearchRequest
 
     /// <summary>A search of the harness's own index of the source: its pages, read through its sitemaps, as its settings say.</summary>
     /// <param name="Query">The query.</param>
-    /// <param name="Limit">The most results it gives.</param>
+    /// <param name="Page">The page of its results asked.</param>
     /// <param name="Settings">What the index reads, as the source's keys say it.</param>
-    public sealed record Indexed(string Query, int Limit, SitemapSettings Settings) : WebSearchRequest;
+    public sealed record Indexed(string Query, WebSearchPage Page, SitemapSettings Settings) : WebSearchRequest;
+
+    /// <summary>
+    /// No request: the source answers its results in one page, the first, and a later page asks it nothing - its address
+    /// names no <c>{page}</c> and no <c>{start}</c>, or its description no index or page to begin at.
+    /// </summary>
+    /// <param name="Why">Why it has one page, as the agent is told.</param>
+    public sealed record OnePage(string Why) : WebSearchRequest;
+}
+
+/// <summary>
+/// Which page of a source's results a request asks, as an agent counts them, from 1: its number, how many results a page
+/// holds (<see cref="WebSearchSource.PageSize"/>), and the number the source counts its first page as - from which the
+/// number the source counts it by and the place of its first result follow. Paging, never a bound: each page is read
+/// whole, and the next is asked by its number.
+/// </summary>
+/// <param name="Number">The page, from 1.</param>
+/// <param name="Size">How many results a page holds.</param>
+/// <param name="First">The number the source counts its first page as: 1, or 0 for one that counts from 0.</param>
+public readonly record struct WebSearchPage(int Number, int Size, int First = 1)
+{
+    /// <summary>The number the source counts it by: <see cref="First"/> for the first page.</summary>
+    public long Counted => First + (long)Number - 1;
+
+    /// <summary>How many results come before it, which a source that is asked its first result's place is asked: 0 for the first page.</summary>
+    public long Start => ((long)Number - 1) * Size;
 }
 
 /// <summary>What a request was answered: the endpoint's response, or the index's.</summary>
@@ -61,6 +86,13 @@ public abstract record WebSearchResponse
     /// <param name="At">When it was read.</param>
     public sealed record Http(string Address, int Status, string? Type, IReadOnlyDictionary<string, string> Headers, string Body, DateTimeOffset At) : WebSearchResponse
     {
+        /// <summary>
+        /// How long the source is left where it asks to be left alone and says not for how long: its own pace's interval the
+        /// first time, doubled each time it asks so again (<see cref="WebRateLimit.Unsaid"/>); the search's word, never the
+        /// source's.
+        /// </summary>
+        public TimeSpan Unsaid { get; init; } = WebRateLimit.Unsaid(null, null);
+
         /// <summary>The header <paramref name="name"/>, in any case; <see langword="null"/> where it is not there.</summary>
         /// <param name="name">The header's name.</param>
         public string? Header(string name) => WebRateLimit.Header(Headers, name);

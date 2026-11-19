@@ -77,7 +77,7 @@ public static partial class HelpTopics
         foreach (var source in builtIn.All)
         {
             builder.AppendLine();
-            AppendWrapped(builder, $"{source.Name} ({source.Kind}{(source.Tags.Count > 0 ? $"; tags {string.Join(", ", source.Tags)}" : string.Empty)}; perMinute {source.PerMinute.ToString(CultureInfo.InvariantCulture)}{(source.PerDay is { } perDay ? $", perDay {perDay.ToString(CultureInfo.InvariantCulture)}" : string.Empty)}): {source.Description}. Its owner's terms: {source.Terms}.");
+            AppendWrapped(builder, $"{source.Name} ({source.Kind}{(source.Tags.Count > 0 ? $"; tags {string.Join(", ", source.Tags)}" : string.Empty)}; {(source.PerMinute is { } perMinute ? $"perMinute {perMinute.ToString(CultureInfo.InvariantCulture)}" : "one request at a time")}{(source.PerDay is { } perDay ? $", perDay {perDay.ToString(CultureInfo.InvariantCulture)}" : string.Empty)}): {source.Description}. Its owner's terms: {source.Terms}.");
         }
 
         builder.AppendLine();
@@ -105,7 +105,8 @@ public static partial class HelpTopics
             + "that began it: the fill writes each page it asks to its own record, and counts against no step. No source is "
             + "asked more than its perMinute in a minute, nor its perDay in a day, on this machine, whatever runs ask it - one "
             + $"record of the machine's, {Web.Search.WebSearchPace.FilePrefix}-<machine>.json in this user's directory for the "
-            + "tool, beside admission's - a request past its minute waiting for it. A source's key, where it names one - a "
+            + "tool, beside admission's - a request past its minute waiting for it; a source that names no perMinute is asked one "
+            + "request at a time, the next once the last is answered, whichever process asks it. A source's key, where it names one - a "
             + "variable of the .env slot, sent to the scheme, host and port the source's own address writes alone, or the "
             + "machine's gh login for the source's host, sent to that host or its api. host alone - is used where it is there, "
             + "and the fetch adds it to what it sends to the scheme, host and port each of that source's searches first asks "
@@ -120,26 +121,32 @@ public static partial class HelpTopics
             builder,
             "A limit is obeyed and told, never looped on: a 429, or a 403 or 503 with Retry-After or spent requests, a RateLimit "
             + "or X-RateLimit-Remaining header at zero, or a body's backoff, holds that source on the machine until the time it "
-            + "gave, and nothing is sent to it before then. Each source answers in its own part, in the step's order: its results "
-            + "- each one's title, address and snippet, the snippet at most "
-            + $"{Web.Search.WebSearchResult.MostSnippet.ToString(CultureInfo.InvariantCulture)} characters; or no results; or a "
-            + "limit it asked for; or an answer that could not be read (it changed), which is a notice too; or a failure; or a "
-            + "refusal, each with its cause - inside a <web-search> block that says it is from the web. One source's failure never "
+            + "gave, as given, and nothing is sent to it before then; one that says not for how long holds it for the source's "
+            + "own pace between two requests, doubled each time it asks so again. Each source answers in its own part, in the "
+            + "step's order: every result of the page it answered - each one's title, address and snippet, whole; or no "
+            + "results; or a limit it asked for; or an answer that could not be read (it changed), which is a notice too; or a "
+            + "failure, the source's own words whole; or a refusal, each with its cause - inside a <web-search> block that says "
+            + "it is from the web. A later page of each source's results is asked by web_search's page, from 1, each a request "
+            + "counted against maxPerStep; a source whose address names no {page} or {start} answers one page, and says so for a "
+            + "later one. One source's failure never "
             + "hides another's results, and a search none of whose sources answered fails. Each request carries the tool's own "
             + "User-Agent, naming it, its version and its project's address: no address rotated, no browser imitated, no script "
             + "run and no challenge answered.");
         builder.AppendLine();
         AppendWrapped(
             builder,
-            $"What a run's sources found once, and each query a source answered, is kept in {OrchestratorLayout.WebDirectoryName}/{OrchestratorLayout.WebSearchesFileName} "
-            + "in the run's directory: the same query again, of the same source, its key sent or not alike, is answered from "
+            $"What a run's sources found once, and each page of a query a source answered, is kept in {OrchestratorLayout.WebDirectoryName}/{OrchestratorLayout.WebSearchesFileName} "
+            + "in the run's directory: the same page of the same query again, of the same source, its key sent or not alike, is answered from "
             + "there with no request, under "
             + "the asking step's own rules - each address the source was asked at decided again, and each result held to its "
             + "web. A "
             + "sitemap source's index is the repository's, under "
             + $"{HarnessLayout.OrchestratorsDirectoryName}/{OrchestratorLayout.WebIndexesDirectoryName}/<source>/, filled in the background on its first "
             + "search and whenever it is older than refreshDays or its settings change, at the slower of its site's Crawl-delay "
-            + "and the source's pace; a search answers from what it holds, saying how much.");
+            + "and the source's pace, every page its robots.txt allows and its include names read whole and indexed as it is "
+            + "read; a page that could not be read is recorded and the fill goes on, and a fill that stopped short is begun "
+            + "again by the next search. A search answers from what it holds, a page of hits at a time, saying how many pages "
+            + "it holds of how many its sitemaps list.");
 
         return builder.ToString();
     }

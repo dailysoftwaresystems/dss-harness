@@ -15,14 +15,12 @@ namespace DssHarness.Core.Web.Search;
 /// </summary>
 public sealed class WebSearchSource
 {
-    /// <summary>A source's pace where it names none: the most requests it is sent in a minute.</summary>
-    public const int DefaultPerMinute = 30;
-
-    /// <summary>The most requests a source may be sent in a minute: ten a second.</summary>
-    public const int MostPerMinute = 600;
-
-    /// <summary>The most requests a source may be sent in a day, where it names a bound.</summary>
-    public const int MostPerDay = 1_000_000;
+    /// <summary>
+    /// How many results a page of a source's answer holds where it says none: what its address's <c>{limit}</c> asks for,
+    /// and how far its <c>{start}</c> moves from one page to the next. A page's size, never a bound: every result of a page
+    /// is given, and the next page is asked for by its number.
+    /// </summary>
+    public const int DefaultPageSize = 10;
 
     /// <summary>A source of <paramref name="name"/>, its keys <paramref name="settings"/>.</summary>
     /// <param name="name">Its name, as the configuration declares it.</param>
@@ -52,8 +50,9 @@ public sealed class WebSearchSource
         new("description", "what the agent is told the source is for"),
         new("terms", "what its owner's terms say of programs asking it, which help says beside it"),
         new("enabled", "false turns the source off"),
-        new("perMinute", $"the most requests it is sent in a minute on this machine, from 1 to {MostPerMinute}; {DefaultPerMinute} where none is said"),
-        new("perDay", $"the most requests it is sent in a day on this machine, from 1 to {MostPerDay:N0}; no bound where none is said"),
+        new("perMinute", "the most requests it is sent in a minute on this machine, its owner's documented rate, a whole number from 1; where none is said, it is sent one request at a time, the next once the last is answered, and paced by what it answers"),
+        new("perDay", "the most requests it is sent in a day on this machine, a whole number from 1; no bound where none is said"),
+        new("pageSize", $"how many results a page of its answer holds - what its {{limit}} asks for, and how far its {{start}} moves a page - a whole number from 1; {DefaultPageSize} where none is said"),
         new("credential", WebSearchCredential.Meaning),
     ];
 
@@ -66,8 +65,14 @@ public sealed class WebSearchSource
     /// <summary>The kind it names; <see langword="null"/> where it names none, or names it by no text.</summary>
     public string? Kind => Text("kind");
 
-    /// <summary>The most requests it is sent in a minute: its <c>perMinute</c>, held to <see cref="OwnProblems"/>, else <see cref="DefaultPerMinute"/>.</summary>
-    public int PerMinute => Integer("perMinute") ?? DefaultPerMinute;
+    /// <summary>
+    /// The most requests it is sent in a minute: its <c>perMinute</c>, held to <see cref="OwnProblems"/>; <see langword="null"/>
+    /// where it names none, and it is sent one request at a time, paced by what it answers.
+    /// </summary>
+    public int? PerMinute => Integer("perMinute");
+
+    /// <summary>How many results a page of its answer holds: its <c>pageSize</c>, held to <see cref="OwnProblems"/>, else <see cref="DefaultPageSize"/>.</summary>
+    public int PageSize => Integer("pageSize") ?? DefaultPageSize;
 
     /// <summary>The most requests it is sent in a day: its <c>perDay</c>, held to <see cref="OwnProblems"/>; <see langword="null"/> where it names no bound.</summary>
     public int? PerDay => Integer("perDay");
@@ -91,7 +96,7 @@ public sealed class WebSearchSource
     /// <summary>
     /// Why the values of the keys every source takes cannot be used, each problem one line naming its key: a key given
     /// twice, in two spellings or one; <c>tags</c> a list of names; <c>description</c> and <c>terms</c> texts that say
-    /// something; <c>enabled</c> true or false; <c>perMinute</c> and <c>perDay</c> whole numbers within their bounds;
+    /// something; <c>enabled</c> true or false; <c>perMinute</c>, <c>perDay</c> and <c>pageSize</c> whole numbers from 1;
     /// <c>credential</c> one of its two shapes. Empty where they can be; a key not given is no problem here.
     /// </summary>
     public IReadOnlyList<string> OwnProblems()
@@ -125,7 +130,7 @@ public sealed class WebSearchSource
             problems.Add(enabled);
         }
 
-        problems.AddRange(new[] { IntegerProblem("perMinute", 1, MostPerMinute), IntegerProblem("perDay", 1, MostPerDay) }.OfType<string>());
+        problems.AddRange(new[] { "perMinute", "perDay", "pageSize" }.Select(key => IntegerProblem(key, 1, int.MaxValue)).OfType<string>());
 
         if (Value("credential") is { } credential)
         {

@@ -1,40 +1,53 @@
-using System.Diagnostics;
 using System.Globalization;
 using System.IO.Compression;
 using System.Net;
-using System.Net.Http.Headers;
 using System.Net.Sockets;
 using System.Text;
 using DssHarness.Core.Agents.Policy;
 using DssHarness.Core.Hosts;
+using DssHarness.Core.Waiting;
+using DssHarness.Core.Walks;
 
 namespace DssHarness.Core.Web;
 
 /// <summary>
 /// The harness's own fetch, which makes every request a reader of the web sends - every page an agent reads, every
 /// request a site's index is filled by: <c>http</c> and <c>https</c> alone; each address - the first and each redirect,
-/// at most <see cref="MostRedirects"/> - decided before anything is sent, then given its turn by the reader's pace, where
-/// it has one (<see cref="WebFetchGate"/>); a host that resolves to any address no public host holds refused, and a
-/// connection made only to an address that was checked, and checked again once made; <see cref="Bound"/> for the asking
-/// of them all, a decision and a turn waited for apart; <see cref="MostBytes"/> at most; text alone - <c>text/*</c>, JSON
-/// and XML, and a gzip of text where the reader asks - read as the reader asks (<see cref="WebFetchAsk"/>): a page's HTML
-/// reduced to its text, read into its parts or kept as its markup, within the bound; no cookie, no proxy, nothing of the
-/// tool's environment and no credential of the machine's sent, under a fixed <c>User-Agent</c> that names the tool - a
-/// search source's own key alone where its asker gives one (<see cref="WebFetchAsk.Key"/>), to the scheme, host and port
-/// first asked, one its source's configuration names.
+/// followed as a chain to its end, a loop ended at its first revisit - decided before anything is sent, then given its
+/// turn by the reader's pace, where it has one (<see cref="WebFetchGate"/>); a host that resolves to any address no public
+/// host holds refused, and a connection made only to an address that was checked, and checked again once made; an answer
+/// waited for for as long as it moves, its silence told and ended at the reader's stall bound
+/// (<see cref="WebFetchGate.Stall"/>) or its stop, a decision and a turn waited for apart; read whole, streamed into the
+/// reader's writer where it names one (<see cref="WebFetchAsk.Into"/>); text alone - <c>text/*</c>, JSON and XML, and a
+/// gzip of text where the reader asks - read as the reader asks (<see cref="WebFetchAsk"/>): a page's HTML reduced to its
+/// text, read into its parts or kept as its markup; no cookie, no proxy, nothing of the tool's environment and no
+/// credential of the machine's sent, under a fixed <c>User-Agent</c> that names the tool - a search source's own key alone
+/// where its asker gives one (<see cref="WebFetchAsk.Key"/>), to the scheme, host and port first asked, one its source's
+/// configuration names.
 /// </summary>
 public sealed class HarnessFetch : IDisposable
 {
-    /// <summary>The most redirects one fetch follows: one more is refused.</summary>
+    /// <summary>
+    /// What <c>web_fetch</c>'s description and the tool runtime's help say of redirects: the fetch itself follows them as a
+    /// chain to its end and ends a loop at its first revisit, so this bounds no fetch.
+    /// </summary>
     public const int MostRedirects = 5;
 
     /// <summary>The rule an address a search source's key may not be sent to is refused by (<see cref="WebFetchAsk.Key"/>): https alone, its origins alone, and no parameter of its own name.</summary>
     public const string KeyRule = "the source's key";
 
-    /// <summary>The most bytes a page may hold: more is refused, read no further.</summary>
+    /// <summary>
+    /// What <c>web_fetch</c>'s description and the tool runtime's help say of a page's size: the fetch itself reads an
+    /// answer whole, so this bounds no fetch; an asker's own protocol bounds its answers where it has one
+    /// (<see cref="WebFetchAsk.Most"/>).
+    /// </summary>
     public const long MostBytes = 5 * 1024 * 1024;
 
-    /// <summary>How long the asking of one fetch may take, its redirects and its reading among it: a decision or a turn waited for is not.</summary>
+    /// <summary>
+    /// What <c>web_fetch</c>'s description and the tool runtime's help say of a fetch's time: the fetch itself waits for an
+    /// answer for as long as it moves, its silence ended at the reader's stall bound (<see cref="WebFetchGate.Stall"/>), so
+    /// this bounds no fetch.
+    /// </summary>
     public static readonly TimeSpan Bound = TimeSpan.FromSeconds(30);
 
     /// <summary>The types of what a fetch reads, beside every <c>text/</c> one and every <c>+json</c> and <c>+xml</c> one.</summary>
@@ -43,8 +56,10 @@ public sealed class HarnessFetch : IDisposable
     /// <summary>Every type a fetch reads, as help, a tool's description and a refusal say them.</summary>
     public static string TextTypesSaid => $"text/*, {string.Join(", ", TextTypes)} and every +json and +xml type";
 
+    /// <summary>How many bytes or characters an answer is read in at a time.</summary>
+    private const int Chunk = 81920;
+
     private readonly IWebNames _names;
-    private readonly TimeSpan _bound;
     private readonly TimeProvider _clock;
     private readonly string _userAgent;
     private readonly Lazy<HttpMessageInvoker> _client;
@@ -61,15 +76,13 @@ public sealed class HarnessFetch : IDisposable
     /// <param name="identity">The tool, whose name and version the <c>User-Agent</c> says.</param>
     /// <param name="names">Finds a host's addresses.</param>
     /// <param name="handler">What sends the requests: a test's endpoint, or null for <see cref="Connecting"/>'s own.</param>
-    /// <param name="bound">How long one fetch may take: <see cref="Bound"/> where none is given, a test's shorter.</param>
-    /// <param name="clock">The clock the bound is held to: the machine's where none is given, a test's whose timers are late.</param>
-    internal HarnessFetch(IToolIdentityProvider identity, IWebNames names, HttpMessageHandler? handler, TimeSpan? bound = null, TimeProvider? clock = null)
+    /// <param name="clock">The clock an answer's silence is measured on: the machine's where none is given, a test's that it moves.</param>
+    internal HarnessFetch(IToolIdentityProvider identity, IWebNames names, HttpMessageHandler? handler, TimeProvider? clock = null)
     {
         ArgumentNullException.ThrowIfNull(identity);
         ArgumentNullException.ThrowIfNull(names);
 
         _names = names;
-        _bound = bound ?? Bound;
         _clock = clock ?? TimeProvider.System;
         _userAgent = $"{ToolPackage.Command}/{identity.Current.Version} (+{ToolPackage.ProjectUrl})";
         _client = new(() => new HttpMessageInvoker(handler ?? Connecting(names), disposeHandler: true), LazyThreadSafetyMode.ExecutionAndPublication);
@@ -77,9 +90,10 @@ public sealed class HarnessFetch : IDisposable
 
     /// <summary>
     /// The handler the fetch sends through on this machine's own network: no redirect followed by itself, no cookie, no
-    /// credential, no proxy, and each connection made only to an address <paramref name="names"/> gives that is public -
-    /// every one the host resolves to checked, so none is reached by a lookup's second answer - and checked again as the
-    /// address the connection was in fact made to.
+    /// credential, no proxy, no time of its own for a connection - the fetch's wait on the answer's silence holds it - and
+    /// each connection made only to an address <paramref name="names"/> gives that is public - every one the host resolves
+    /// to checked, so none is reached by a lookup's second answer - and checked again as the address the connection was in
+    /// fact made to.
     /// </summary>
     /// <param name="names">Finds a host's addresses.</param>
     internal static SocketsHttpHandler Connecting(IWebNames names)
@@ -94,7 +108,7 @@ public sealed class HarnessFetch : IDisposable
             Credentials = null,
             PreAuthenticate = false,
             AutomaticDecompression = DecompressionMethods.All,
-            ConnectTimeout = Bound,
+            ConnectTimeout = Timeout.InfiniteTimeSpan,
             ConnectCallback = (context, cancellationToken) => ConnectAsync(names, context.DnsEndPoint, cancellationToken),
         };
     }
@@ -149,154 +163,55 @@ public sealed class HarnessFetch : IDisposable
         => FetchAsync(address, WebFetchAsk.Page, gate, cancellationToken);
 
     /// <summary>
-    /// Fetches <paramref name="address"/> as <paramref name="ask"/> says - a page's parts read or its markup kept, a gzip of text read - each
-    /// address decided by <paramref name="gate"/> first and each answer told to it, as
-    /// <see cref="FetchAsync(string, WebFetchGate, CancellationToken)"/> does.
+    /// Fetches <paramref name="address"/> as <paramref name="ask"/> says - a page's parts read or its markup kept, a gzip of
+    /// text read, the text streamed into a writer - each address decided by <paramref name="gate"/> first and each answer
+    /// told to it, as <see cref="FetchAsync(string, WebFetchGate, CancellationToken)"/> does.
     /// </summary>
     /// <param name="address">The address.</param>
     /// <param name="ask">What is read, and how.</param>
     /// <param name="gate">
-    /// Decides each address before it is asked - a denial ends the fetch, nothing sent - gives it its turn, and is told what
-    /// each was answered.
+    /// Decides each address before it is asked - a denial ends the fetch, nothing sent - gives it its turn, is told what
+    /// each was answered, and bounds and tells an answer's silence.
     /// </param>
     /// <param name="cancellationToken">Stops the fetch.</param>
+    /// <exception cref="OperationCanceledException"><paramref name="cancellationToken"/> stopped it.</exception>
     public async Task<WebFetched> FetchAsync(string address, WebFetchAsk ask, WebFetchGate gate, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(address);
         ArgumentNullException.ThrowIfNull(ask);
         ArgumentNullException.ThrowIfNull(gate);
 
-        // The bound is the asking's alone: a decision and a turn are waited for apart, so a slow pace never takes a
-        // request's time.
-        var left = _bound;
-        var current = address;
-        var method = ask.Method;
-        var body = ask.Body;
-        string? keyedTo = null;
+        var run = new FetchRun(this, ask, gate);
+        Exception? failed = null;
 
-        for (var hop = 0; ; hop++)
+        try
         {
-            if (!WebAddresses.IsWeb(current, out var uri))
+            // Followed as a chain to its end: every address asked, by its method, is kept, and a redirect back to one is a
+            // loop, ended at its first revisit (RFC 9110, 15.4) before it is asked again. No count ends it: a chain of new
+            // addresses is followed, each decided and recorded, until it ends or the reader's bounds or stop end the fetch.
+            var chain = await Chain.FollowAsync(
+                new WebAsking(address, ask.Method, ask.Body, First: true),
+                run.HopAsync,
+                asking => (asking.Method, run.KeyOf(asking.Address)),
+                followed: null,
+                cancellationToken).ConfigureAwait(false);
+
+            if (chain.Cycled)
             {
-                return WebFetched.Refused(current, $"'{current}' is no http or https address, and this tool's fetch asks no other");
+                var last = run.KeyOf(chain.Members[^1].Address);
+                return WebFetched.Refused(last, $"'{address}' redirects in a loop: '{last}' leads back to '{run.KeyOf(chain.RepeatedAt!.Address)}', asked before, and it is not asked again");
             }
 
-            // A key sent as a query parameter is the fetch's alone: a parameter of its name - a redirect that echoes it back -
-            // is dropped from every address before it is decided, so none is recorded, answered, sent elsewhere or sent twice.
-            // The address first asked naming one of its own would have what it says replaced by the key: it is refused.
-            if (ask.Key is { Query: true } parameter)
-            {
-                var without = WithoutParameter(uri, parameter.Name);
-
-                if (hop == 0 && without.AbsoluteUri != uri.AbsoluteUri)
-                {
-                    return WebFetched.Denied(uri.AbsoluteUri, KeyDenial($"'{uri.AbsoluteUri}' names '{parameter.Name}', the parameter its key is sent as"));
-                }
-
-                uri = without;
-            }
-
-            // The address decided, recorded and answered is the one asked, as it was read: a text a reader reads its own
-            // way ('http:/\host') is decided as the host it reaches, never as the text's own spelling.
-            current = uri.AbsoluteUri;
-
-            // A source's key goes where its source's configuration says alone - the scheme, host and port its address writes,
-            // or a gh login's host and its API - never to one a document the source fetched names, first asked or not; of
-            // those, to the one first asked alone, never on a redirect to another; and never in the clear: a fetch that
-            // carries one begins at an https address of its own, else nothing is sent.
-            if (keyedTo is null && ask.Key is not null && uri.Scheme != Uri.UriSchemeHttps)
-            {
-                return WebFetched.Denied(current, KeyDenial("a key is sent over https alone, and this address is no https one"));
-            }
-
-            if (keyedTo is null && ask.Key is { Origins: var origins } && uri.GetLeftPart(UriPartial.Authority) is var origin && !origins.Contains(origin, StringComparer.OrdinalIgnoreCase))
-            {
-                return WebFetched.Denied(current, KeyDenial(origins.Count == 0
-                    ? $"its key is sent to no scheme, host and port, for its source's configuration writes none of its own, and a host a document it read names is never sent one: this address is {origin}'s"
-                    : $"its key is sent to {string.Join(" or ", origins)} alone, and this address is {origin}'s"));
-            }
-
-            keyedTo ??= uri.GetLeftPart(UriPartial.Authority);
-
-            if (hop > MostRedirects)
-            {
-                return WebFetched.Refused(current, $"'{address}' redirects more than {MostRedirects} times, and no more are followed");
-            }
-
-            if ((await gate.Decide(current).ConfigureAwait(false)).Refusal() is { } denied)
-            {
-                return WebFetched.Denied(current, denied);
-            }
-
-            // Its turn, once it is allowed: a turn refused is no request, so nothing is answered for it.
-            if (gate.Pace is { } pace && await pace(cancellationToken).ConfigureAwait(false) is { } until)
-            {
-                return WebFetched.Held(current, until);
-            }
-
-            WebHop told;
-            var given = left > TimeSpan.Zero ? left : TimeSpan.Zero;
-            var asked = _clock.GetTimestamp();
-
-            using (var timer = new CancellationTokenSource(given, _clock))
-            using (var bound = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timer.Token))
-            {
-                try
-                {
-                    told = await AskAsync(uri, ask, method, body, ask.Key is not null && uri.GetLeftPart(UriPartial.Authority) == keyedTo, bound.Token, cancellationToken).ConfigureAwait(false);
-                }
-                catch (OperationCanceledException) when (bound.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
-                {
-                    told = WebHop.Failed(current, Unanswered);
-                }
-                catch (Exception ex) when (ex is not OperationCanceledException)
-                {
-                    // What no answer here foresaw still leaves the address its line, for the request may have left the machine;
-                    // the defect is raised all the same - beside what failed recording it, which never hides it.
-                    try
-                    {
-                        await gate.Answered(WebHop.Failed(current, ex.Message)).ConfigureAwait(false);
-                    }
-                    catch (Exception recording)
-                    {
-                        throw new AggregateException(ex, recording);
-                    }
-
-                    throw;
-                }
-            }
-
-            var took = _clock.GetElapsedTime(asked);
-            left -= took;
-
-            // An answer read past the bound is no answer read within it, though the bound's timer had not yet stopped the
-            // reading: a busy machine runs a timer's callback late, and the clock says the time was spent.
-            if (told.Failure is null && took > given)
-            {
-                told = WebHop.Failed(told.Address, Unanswered, told.Status, told.Type) with { Headers = told.Headers };
-            }
-
-            await gate.Answered(told).ConfigureAwait(false);
-
-            if (told.Failure is { } failure)
-            {
-                return WebFetched.Refused(current, failure) with { Status = told.Status, Headers = told.Headers };
-            }
-
-            if (told.Location is { } next)
-            {
-                // As browsers follow one: a 303, and a 301 or 302 of what is no GET, asks the next address with a GET and no
-                // body; a 307 and a 308 ask it as the first was asked.
-                if (told.Status is 303 || (told.Status is 301 or 302 && method != "GET"))
-                {
-                    (method, body) = ("GET", null);
-                }
-
-                current = next;
-                continue;
-            }
-
-            return new WebFetched(current, told.Status, told.Type, told.Text, Failure: null, Denial: null) { Headers = told.Headers, Parts = told.Parts };
+            return run.Ended!;
+        }
+        catch (Exception ex)
+        {
+            failed = ex;
+            throw;
+        }
+        finally
+        {
+            await run.EndTurnAsync(failed).ConfigureAwait(false);
         }
     }
 
@@ -343,14 +258,18 @@ public sealed class HarnessFetch : IDisposable
         return request.Headers.TryAddWithoutValidation(name, string.Empty);
     }
 
-    /// <summary>Why an asking its bound ran out on read no answer.</summary>
-    private string Unanswered => $"no answer read within {_bound.TotalSeconds.ToString(CultureInfo.InvariantCulture)} s";
+    /// <summary>Why an answer whose silence reached <paramref name="stall"/> was not read: the reader's stall bound.</summary>
+    internal static string Silent(TimeSpan stall)
+        => $"nothing came from it for {stall.TotalSeconds.ToString("0.###", CultureInfo.InvariantCulture)} s, the step's stall bound";
 
     /// <summary>
-    /// Asks one address as <paramref name="method"/> with <paramref name="body"/> - the key the ask carries where <paramref name="keyed"/> - and answers its answer, a redirect's next address, or why it failed;
-    /// <paramref name="cancellationToken"/> is the asking's bound, the caller's stop among it, and <paramref name="caller"/> the caller's stop alone.
+    /// Asks one address as <paramref name="method"/> with <paramref name="body"/> - the key the ask carries where
+    /// <paramref name="keyed"/> - and answers its answer, a redirect's next address, or why it failed: its markup as it came,
+    /// read into its text by the caller, or streamed into the ask's writer where it is no page to reduce. Each byte read is
+    /// told to <paramref name="moved"/>, which the wait on the answer's silence reads. <paramref name="cancellationToken"/>
+    /// is that wait's - its stall bound's and the caller's stop - and <paramref name="caller"/> the caller's stop alone.
     /// </summary>
-    private async Task<WebHop> AskAsync(Uri uri, WebFetchAsk ask, string method, string? body, bool keyed, CancellationToken cancellationToken, CancellationToken caller)
+    private async Task<WebHop> AskAsync(Uri uri, WebFetchAsk ask, string method, string? body, bool keyed, Action<int> moved, TimeSpan? stall, CancellationToken cancellationToken, CancellationToken caller)
     {
         var said = uri.AbsoluteUri;
 
@@ -412,16 +331,20 @@ public sealed class HarnessFetch : IDisposable
 
         using (response)
         {
+            // The answer's head came: a move, as each byte of its body is.
+            moved(0);
+
             var headers = HeadersOf(response);
 
             try
             {
-                return await AnsweredAsync(said, uri, ask, response, cancellationToken).ConfigureAwait(false) with { Headers = headers };
+                return await AnsweredAsync(said, uri, ask, response, moved, cancellationToken).ConfigureAwait(false) with { Headers = headers };
             }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested && !caller.IsCancellationRequested)
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested && !caller.IsCancellationRequested && stall is { } bound)
             {
-                // The bound ran out on the body: the status and headers already read are kept, so a pause they ask for holds.
-                return WebHop.Failed(said, Unanswered, (int)response.StatusCode, response.Content.Headers.ContentType?.MediaType) with { Headers = headers };
+                // The answer fell silent past the stall bound in its body: the status and headers already read are kept, so a
+                // pause they ask for holds.
+                return WebHop.Failed(said, Silent(bound), (int)response.StatusCode, response.Content.Headers.ContentType?.MediaType) with { Headers = headers };
             }
         }
     }
@@ -439,8 +362,11 @@ public sealed class HarnessFetch : IDisposable
         }
     }
 
-    /// <summary>Reads one answer: a redirect's next address, its text, or why it is none.</summary>
-    private static async Task<WebHop> AnsweredAsync(string said, Uri uri, WebFetchAsk ask, HttpResponseMessage response, CancellationToken cancellationToken)
+    /// <summary>
+    /// Reads one answer: a redirect's next address, its text - whole, streamed into the ask's writer where it names one and
+    /// the answer is no page to reduce - or why it is none.
+    /// </summary>
+    private static async Task<WebHop> AnsweredAsync(string said, Uri uri, WebFetchAsk ask, HttpResponseMessage response, Action<int> moved, CancellationToken cancellationToken)
     {
         var status = (int)response.StatusCode;
         var type = response.Content.Headers.ContentType?.MediaType;
@@ -454,12 +380,11 @@ public sealed class HarnessFetch : IDisposable
                     : WebHop.Failed(said, $"a redirect ({status.ToString(CultureInfo.InvariantCulture)}) to '{location.OriginalString}', which reads as no address", status);
         }
 
-        var most = ask.Most ?? MostBytes;
-
-        // Refused unread: the size is the answer's word for it, said in why, and no byte came back - unless its head is asked.
-        if (!ask.Head && response.Content.Headers.ContentLength is { } length && length > most)
+        // Refused unread where the asker's own protocol bounds what it reads, and the answer's size is past it: said in why,
+        // and no byte came back.
+        if (ask.Most is { } most && response.Content.Headers.ContentLength is { } length && length > most)
         {
-            return WebHop.Failed(said, $"{length.ToString("N0", CultureInfo.InvariantCulture)} bytes, past the {FileSystem.DiskSpace.Size(most)} this tool's fetch reads", status, type);
+            return WebHop.Failed(said, $"{length.ToString("N0", CultureInfo.InvariantCulture)} bytes, past the {FileSystem.DiskSpace.Size(most)} {ask.MostSaid}", status, type);
         }
 
         if (!(ask.Gzip && IsGzip(type, uri)) && !ask.AnyType && !IsText(type))
@@ -467,83 +392,92 @@ public sealed class HarnessFetch : IDisposable
             return WebHop.Failed(said, $"its type is {(type is null ? "not said" : $"'{type}'")}, and this tool's fetch reads text alone: {TextTypesSaid}", status, type);
         }
 
-        byte[] bytes;
-        bool over;
+        // A page reduced to its text, or read into its parts, is read whole as markup first: its reader needs it whole.
+        var page = IsHtml(type) && ask.Html != WebFetchHtml.Markup;
+        var into = page ? null : ask.Into;
+        var read = 0L;
         var gzip = false;
+        var writing = false;
+
+        WebHop Past(long most)
+            => WebHop.Failed(said, $"more than the {FileSystem.DiskSpace.Size(most)} {ask.MostSaid}{(gzip ? " once decompressed" : string.Empty)}", status, type, read);
 
         try
         {
-            (bytes, over) = await ReadAsync(response.Content, most, cancellationToken).ConfigureAwait(false);
+            await using var raw = new FetchStream(await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false), ReadOnlyMemory<byte>.Empty, moved);
+            Stream stream = raw;
 
             // A gzip is known by its bytes, never by what it is said to be: one said to be bytes or XML is a gzip all the
             // same, and one the transport already decompressed, still said to be a gzip, is the text it holds.
-            gzip = ask.Gzip && !over && bytes is [0x1F, 0x8B, ..];
-
-            if (gzip)
+            if (ask.Gzip)
             {
-                (bytes, over) = await GunzipAsync(bytes, most, cancellationToken).ConfigureAwait(false);
+                var head = new byte[2];
+                var headRead = await raw.ReadAtLeastAsync(head, 2, throwOnEndOfStream: false, cancellationToken).ConfigureAwait(false);
+                stream = new FetchStream(raw, head.AsMemory(0, headRead), null);
+                gzip = headRead == 2 && head[0] == 0x1F && head[1] == 0x8B;
+
+                if (gzip)
+                {
+                    stream = new GZipStream(stream, CompressionMode.Decompress);
+                }
             }
 
-            if (over && ask.Head)
+            // Read a chunk at a time, never held as bytes: decoded as it comes, and held as one text, or written as it is
+            // read into the ask's writer.
+            await using var counted = new FetchStream(stream, ReadOnlyMemory<byte>.Empty, bytes => read += bytes);
+            using var reader = new StreamReader(counted, EncodingOf(gzip ? null : response.Content.Headers.ContentType?.CharSet), detectEncodingFromByteOrderMarks: true, Chunk, leaveOpen: true);
+            var chunk = new char[Chunk];
+            var text = into is null ? new StringBuilder() : null;
+            var written = 0L;
+
+            while (await reader.ReadAsync(chunk, cancellationToken).ConfigureAwait(false) is var characters and > 0)
             {
-                (bytes, over) = (bytes[..(int)most], false);
+                if (ask.Most is { } bound && read > bound)
+                {
+                    return Past(bound);
+                }
+
+                if (into is not null)
+                {
+                    writing = true;
+                    await into.WriteAsync(chunk.AsMemory(0, characters), cancellationToken).ConfigureAwait(false);
+                    writing = false;
+                }
+                else
+                {
+                    text!.Append(chunk, 0, characters);
+                }
+
+                written += characters;
             }
+
+            if (ask.Most is { } last && read > last)
+            {
+                return Past(last);
+            }
+
+            return text is not null
+                ? WebHop.Read(said, status, type ?? (gzip ? "application/gzip" : null), read, text.ToString())
+                : WebHop.Read(said, status, type ?? (gzip ? "application/gzip" : null), read, null) with { Written = written };
         }
-        catch (Exception ex) when (ex is IOException or InvalidDataException or InvalidOperationException or HttpRequestException)
+        catch (Exception ex) when (!writing && (ex is IOException or HttpRequestException) && cancellationToken.IsCancellationRequested)
+        {
+            // A read the wait's stop ended, said by the transport as a failure of its own: the stop it is.
+            throw new OperationCanceledException(ex.Message, ex, cancellationToken);
+        }
+        catch (Exception ex) when (!writing && (ex is IOException or InvalidDataException or InvalidOperationException or HttpRequestException))
         {
             // A body that ends early, or that its encoding does not decode: gzip said of a plain page raises
-            // InvalidDataException, a broken brotli InvalidOperationException, as the runtime's decoders do.
+            // InvalidDataException, a broken brotli InvalidOperationException, as the runtime's decoders do. What the ask's
+            // writer fails at is its own failure, raised through.
             return WebHop.Failed(said, $"its body could not be read: {ex.Message.TrimEnd('.')}", status, type);
         }
-
-        if (over)
-        {
-            return WebHop.Failed(said, $"more than the {FileSystem.DiskSpace.Size(most)} this tool's fetch reads{(gzip ? " once decompressed" : string.Empty)}", status, type, bytes.Length);
-        }
-
-        var text = Decoded(bytes, gzip ? null : response.Content.Headers.ContentType?.CharSet);
-        var read = WebHop.Read(said, status, type ?? (gzip ? "application/gzip" : null), bytes.Length, text);
-
-        // A page's markup is read within the bound, as its bytes are: markup nested deep makes the reading long.
-        if (!IsHtml(type) || ask.Html == WebFetchHtml.Markup)
-        {
-            return read;
-        }
-
-        if (ask.Html == WebFetchHtml.Parts)
-        {
-            var parts = await WebPageText.PartsAsync(text, cancellationToken).ConfigureAwait(false);
-            return read with { Text = parts.Text, Parts = parts };
-        }
-
-        return read with { Text = await WebPageText.OfAsync(text, cancellationToken).ConfigureAwait(false) };
     }
 
     /// <summary>Whether an answer of <paramref name="type"/> from <paramref name="uri"/> is a gzip: said so, or bytes of no type said under a name ending in <c>.gz</c>.</summary>
     private static bool IsGzip(string? type, Uri uri)
         => type is not null && (type.Equals("application/gzip", StringComparison.OrdinalIgnoreCase) || type.Equals("application/x-gzip", StringComparison.OrdinalIgnoreCase))
             || ((type is null || type.Equals("application/octet-stream", StringComparison.OrdinalIgnoreCase)) && uri.AbsolutePath.EndsWith(".gz", StringComparison.OrdinalIgnoreCase));
-
-    /// <summary>What the gzip <paramref name="bytes"/> holds, read no further than one byte past <paramref name="most"/>, and whether it held more.</summary>
-    /// <exception cref="InvalidDataException">The bytes are no gzip.</exception>
-    private static async Task<(byte[] Bytes, bool Over)> GunzipAsync(byte[] bytes, long most, CancellationToken cancellationToken)
-    {
-        await using var gzip = new GZipStream(new MemoryStream(bytes), CompressionMode.Decompress);
-        using var held = new MemoryStream();
-        var buffer = new byte[81920];
-
-        while (await gzip.ReadAsync(buffer, cancellationToken).ConfigureAwait(false) is var read and > 0)
-        {
-            held.Write(buffer, 0, read);
-
-            if (held.Length > most)
-            {
-                return (held.ToArray(), true);
-            }
-        }
-
-        return (held.ToArray(), false);
-    }
 
     /// <summary>An answer's headers by name in any case, the content's among them, each one's values joined by commas.</summary>
     private static IReadOnlyDictionary<string, string> HeadersOf(HttpResponseMessage response)
@@ -571,26 +505,6 @@ public sealed class HarnessFetch : IDisposable
     internal static bool IsHtml(string? type)
         => string.Equals(type, "text/html", StringComparison.OrdinalIgnoreCase) || string.Equals(type, "application/xhtml+xml", StringComparison.OrdinalIgnoreCase);
 
-    /// <summary>What <paramref name="content"/> holds, read no further than one byte past <paramref name="most"/>, and whether it held more.</summary>
-    private static async Task<(byte[] Bytes, bool Over)> ReadAsync(HttpContent content, long most, CancellationToken cancellationToken)
-    {
-        await using var stream = await content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
-        using var held = new MemoryStream();
-        var buffer = new byte[81920];
-
-        while (await stream.ReadAsync(buffer, cancellationToken).ConfigureAwait(false) is var read and > 0)
-        {
-            held.Write(buffer, 0, read);
-
-            if (held.Length > most)
-            {
-                return (held.ToArray(), true);
-            }
-        }
-
-        return (held.ToArray(), false);
-    }
-
     /// <summary>
     /// The encoding <paramref name="name"/> names: one the runtime holds, or a code page's - windows-1252, shift_jis - which
     /// the runtime holds only through <see cref="CodePagesEncodingProvider"/>, asked here alone rather than for the process.
@@ -598,24 +512,21 @@ public sealed class HarnessFetch : IDisposable
     /// <exception cref="ArgumentException">Neither knows it.</exception>
     private static Encoding Named(string name) => CodePagesEncodingProvider.Instance.GetEncoding(name) ?? Encoding.GetEncoding(name);
 
-    /// <summary>The text of <paramref name="bytes"/> by the character set the answer names, by its mark, else as UTF-8 - a byte that forms no character read as U+FFFD, for a page is read, never written back.</summary>
-    private static string Decoded(byte[] bytes, string? charset)
+    /// <summary>
+    /// The encoding of a body by the character set the answer names - else UTF-8, its mark read first where it has one - a
+    /// byte that forms no character read as U+FFFD, for a page is read, never written back.
+    /// </summary>
+    private static Encoding EncodingOf(string? charset)
     {
-        Encoding encoding;
-
         try
         {
-            encoding = charset is { Length: > 0 } named ? Named(named.Trim('"', '\'')) : Encoding.UTF8;
+            return charset is { Length: > 0 } named ? Named(named.Trim('"', '\'')) : Encoding.UTF8;
         }
         catch (Exception ex) when (ex is ArgumentException or NotSupportedException)
         {
             // A set neither knows, or one the runtime holds and will not read - UTF-7, which it turned off.
-            encoding = Encoding.UTF8;
+            return Encoding.UTF8;
         }
-
-        using var reader = new StreamReader(new MemoryStream(bytes), encoding, detectEncodingFromByteOrderMarks: true);
-
-        return reader.ReadToEnd();
     }
 
     /// <summary>Every address <paramref name="host"/> resolves to, each public; refused where any is not, or none is given.</summary>
@@ -656,6 +567,322 @@ public sealed class HarnessFetch : IDisposable
 
         return addresses;
     }
+
+    /// <summary>One address of a fetch's chain: what is asked, how, and whether it is the first.</summary>
+    /// <param name="Address">The address, as asked or as a redirect named it.</param>
+    /// <param name="Method">The method it is asked by.</param>
+    /// <param name="Body">The body it is sent; none for a GET.</param>
+    /// <param name="First">Whether it is the address first asked.</param>
+    private sealed record WebAsking(string Address, string Method, string? Body, bool First);
+
+    /// <summary>One fetch, its chain's hops one by one: where its key may go, whether its pace gave it a turn, and how it ended.</summary>
+    private sealed class FetchRun(HarnessFetch fetch, WebFetchAsk ask, WebFetchGate gate)
+    {
+        private string? _keyedTo;
+        private bool _turned;
+
+        /// <summary>What the fetch ended with, at the chain's end; null while it goes on.</summary>
+        public WebFetched? Ended { get; private set; }
+
+        /// <summary>
+        /// The address a chain member is known by: as it is asked - read, and with the key's parameter dropped where the key
+        /// is sent as one, so a redirect that echoes it back is the address it came from - else as written.
+        /// </summary>
+        public string KeyOf(string asked)
+            => !WebAddresses.IsWeb(asked, out var uri) ? asked
+                : ask.Key is { Query: true } parameter ? WithoutParameter(uri, parameter.Name).AbsoluteUri
+                : uri.AbsoluteUri;
+
+        /// <summary>Tells the gate the fetch has ended, where its pace was asked for a turn: what lets a turn held for the whole fetch go.</summary>
+        public async Task EndTurnAsync(Exception? failed)
+        {
+            if (!_turned || gate.Ended is not { } ended)
+            {
+                return;
+            }
+
+            try
+            {
+                await ended().ConfigureAwait(false);
+            }
+            catch (Exception releasing) when (failed is not null)
+            {
+                // What ended the fetch is never hidden by what failed letting its turn go: both are raised.
+                throw new AggregateException(failed, releasing);
+            }
+        }
+
+        /// <summary>One hop: decided, given its turn, asked under the wait on its silence, and read; the chain's next address, or its end.</summary>
+        public async Task<ChainNext<WebAsking>> HopAsync(WebAsking asking, CancellationToken cancellationToken)
+        {
+            var current = asking.Address;
+
+            if (!WebAddresses.IsWeb(current, out var uri))
+            {
+                return End(WebFetched.Refused(current, $"'{current}' is no http or https address, and this tool's fetch asks no other"));
+            }
+
+            // A key sent as a query parameter is the fetch's alone: a parameter of its name - a redirect that echoes it back -
+            // is dropped from every address before it is decided, so none is recorded, answered, sent elsewhere or sent twice.
+            // The address first asked naming one of its own would have what it says replaced by the key: it is refused.
+            if (ask.Key is { Query: true } parameter)
+            {
+                var without = WithoutParameter(uri, parameter.Name);
+
+                if (asking.First && without.AbsoluteUri != uri.AbsoluteUri)
+                {
+                    return End(WebFetched.Denied(uri.AbsoluteUri, KeyDenial($"'{uri.AbsoluteUri}' names '{parameter.Name}', the parameter its key is sent as")));
+                }
+
+                uri = without;
+            }
+
+            // The address decided, recorded and answered is the one asked, as it was read: a text a reader reads its own
+            // way ('http:/\host') is decided as the host it reaches, never as the text's own spelling.
+            current = uri.AbsoluteUri;
+
+            // A source's key goes where its source's configuration says alone - the scheme, host and port its address writes,
+            // or a gh login's host and its API - never to one a document the source fetched names, first asked or not; of
+            // those, to the one first asked alone, never on a redirect to another; and never in the clear: a fetch that
+            // carries one begins at an https address of its own, else nothing is sent.
+            if (_keyedTo is null && ask.Key is not null && uri.Scheme != Uri.UriSchemeHttps)
+            {
+                return End(WebFetched.Denied(current, KeyDenial("a key is sent over https alone, and this address is no https one")));
+            }
+
+            if (_keyedTo is null && ask.Key is { Origins: var origins } && uri.GetLeftPart(UriPartial.Authority) is var origin && !origins.Contains(origin, StringComparer.OrdinalIgnoreCase))
+            {
+                return End(WebFetched.Denied(current, KeyDenial(origins.Count == 0
+                    ? $"its key is sent to no scheme, host and port, for its source's configuration writes none of its own, and a host a document it read names is never sent one: this address is {origin}'s"
+                    : $"its key is sent to {string.Join(" or ", origins)} alone, and this address is {origin}'s")));
+            }
+
+            _keyedTo ??= uri.GetLeftPart(UriPartial.Authority);
+
+            if ((await gate.Decide(current).ConfigureAwait(false)).Refusal() is { } denied)
+            {
+                return End(WebFetched.Denied(current, denied));
+            }
+
+            // Its turn, once it is allowed: a turn refused is no request, so nothing is answered for it. Whatever the pace
+            // took - all of it, or part before it failed - is the gate's to let go once the fetch ends.
+            if (gate.Pace is { } pace)
+            {
+                _turned = true;
+
+                if (await pace(cancellationToken).ConfigureAwait(false) is { } until)
+                {
+                    return End(WebFetched.Held(current, until));
+                }
+            }
+
+            var told = await AskWatchedAsync(uri, current, asking, cancellationToken).ConfigureAwait(false);
+
+            await gate.Answered(told).ConfigureAwait(false);
+
+            if (told.Failure is { } failure)
+            {
+                return End(WebFetched.Refused(current, failure) with { Status = told.Status, Headers = told.Headers });
+            }
+
+            if (told.Location is { } next)
+            {
+                // As browsers follow one: a 303, and a 301 or 302 of what is no GET, asks the next address with a GET and no
+                // body; a 307 and a 308 ask it as the first was asked.
+                return ChainNext<WebAsking>.To(told.Status is 303 || (told.Status is 301 or 302 && asking.Method != "GET")
+                    ? new WebAsking(next, "GET", null, First: false)
+                    : asking with { Address = next, First = false });
+            }
+
+            return End(await ReadAsync(told, current, cancellationToken).ConfigureAwait(false));
+        }
+
+        /// <summary>The chain's end, with what the fetch ended with.</summary>
+        private ChainNext<WebAsking> End(WebFetched ended)
+        {
+            Ended = ended;
+            return ChainNext<WebAsking>.End;
+        }
+
+        /// <summary>
+        /// Asks one address under the wait on its silence (<see cref="Waits.WhileMovingAsync"/>): for as long as its answer
+        /// moves, told every five minutes, ended where it falls silent for the reader's stall bound, or at the caller's stop.
+        /// What it came to, its silence's end said as a failure.
+        /// </summary>
+        /// <exception cref="OperationCanceledException">The caller's stop ended it.</exception>
+        private async Task<WebHop> AskWatchedAsync(Uri uri, string current, WebAsking asking, CancellationToken cancellationToken)
+        {
+            var clock = fetch._clock;
+            var movedAt = clock.GetTimestamp();
+            var bytes = 0L;
+            var keyed = ask.Key is not null && uri.GetLeftPart(UriPartial.Authority) == _keyedTo;
+            var stall = gate.Stall is { } given && given > TimeSpan.Zero ? given : (TimeSpan?)null;
+
+            void Moved(int read)
+            {
+                Interlocked.Add(ref bytes, read);
+                Interlocked.Exchange(ref movedAt, clock.GetTimestamp());
+            }
+
+            WaitMoved Stands()
+            {
+                var read = Interlocked.Read(ref bytes);
+                return new WaitMoved(Interlocked.Read(ref movedAt), read == 0 ? "nothing has come yet" : $"{read.ToString("N0", CultureInfo.InvariantCulture)} bytes so far");
+            }
+
+            WaitEnd<WebHop> waited;
+
+            try
+            {
+                waited = await Waits.WhileMovingAsync(
+                    token => fetch.AskAsync(uri, ask, asking.Method, asking.Body, keyed, Moved, stall, token, cancellationToken),
+                    Stands,
+                    new WaitWatch($"'{current}' to answer", gate.Tell ?? (_ => { }), stall, clock),
+                    cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // What no answer here foresaw still leaves the address its line, for the request may have left the machine;
+                // the defect is raised all the same - beside what failed recording it, which never hides it.
+                try
+                {
+                    await gate.Answered(WebHop.Failed(current, ex.Message)).ConfigureAwait(false);
+                }
+                catch (Exception recording)
+                {
+                    throw new AggregateException(ex, recording);
+                }
+
+                throw;
+            }
+
+            return waited.Kind switch
+            {
+                WaitEndKind.Done => waited.Value!,
+                WaitEndKind.Bound => WebHop.Failed(current, Silent(stall!.Value)),
+                _ => throw new OperationCanceledException(cancellationToken),
+            };
+        }
+
+        /// <summary>
+        /// The fetch's end, of an address read: its text as asked - a page's markup reduced to its text or read into its parts,
+        /// waited for as long as the reading takes, told every five minutes - or as it came.
+        /// </summary>
+        private async Task<WebFetched> ReadAsync(WebHop told, string current, CancellationToken cancellationToken)
+        {
+            var ended = new WebFetched(current, told.Status, told.Type, told.Text, Failure: null, Denial: null) { Headers = told.Headers, Written = told.Written };
+
+            if (!IsHtml(told.Type) || ask.Html == WebFetchHtml.Markup || told.Text is not { } markup)
+            {
+                return ended;
+            }
+
+            var watch = new WaitWatch($"'{current}''s page to be read", gate.Tell ?? (_ => { }), null, fetch._clock);
+
+            if (ask.Html == WebFetchHtml.Parts)
+            {
+                var parts = await Waits.ForAsync(token => WebPageText.PartsAsync(markup, token), watch, cancellationToken).ConfigureAwait(false);
+                return parts.Kind == WaitEndKind.Done ? ended with { Text = parts.Value!.Text, Parts = parts.Value } : throw new OperationCanceledException(cancellationToken);
+            }
+
+            if (ask.Into is { } into)
+            {
+                var written = await Waits.ForAsync(token => WebPageText.WriteAsync(markup, into, token), watch, cancellationToken).ConfigureAwait(false);
+                return written.Kind == WaitEndKind.Done ? ended with { Text = null, Written = written.Value } : throw new OperationCanceledException(cancellationToken);
+            }
+
+            var text = await Waits.ForAsync(token => WebPageText.OfAsync(markup, token), watch, cancellationToken).ConfigureAwait(false);
+            return text.Kind == WaitEndKind.Done ? ended with { Text = text.Value } : throw new OperationCanceledException(cancellationToken);
+        }
+    }
+
+    /// <summary>
+    /// A body as the fetch reads it: what was read ahead of it first - a gzip's first two bytes - then the body itself, each
+    /// read told to whoever watches it.
+    /// </summary>
+    private sealed class FetchStream(Stream inner, ReadOnlyMemory<byte> ahead, Action<int>? read) : Stream
+    {
+        private ReadOnlyMemory<byte> _ahead = ahead;
+
+        public override bool CanRead => true;
+
+        public override bool CanSeek => false;
+
+        public override bool CanWrite => false;
+
+        public override long Length => throw new NotSupportedException();
+
+        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+
+        public override int Read(byte[] buffer, int offset, int count) => Read(buffer.AsSpan(offset, count));
+
+        public override int Read(Span<byte> buffer)
+        {
+            if (Ahead(buffer) is var given and > 0)
+            {
+                return given;
+            }
+
+            var count = inner.Read(buffer);
+            read?.Invoke(count);
+            return count;
+        }
+
+        public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
+            => ReadAsync(buffer.AsMemory(offset, count), cancellationToken).AsTask();
+
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            if (Ahead(buffer.Span) is var given and > 0)
+            {
+                return given;
+            }
+
+            var count = await inner.ReadAsync(buffer, cancellationToken).ConfigureAwait(false);
+            read?.Invoke(count);
+            return count;
+        }
+
+        public override void Flush()
+        {
+        }
+
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+
+        public override void SetLength(long value) => throw new NotSupportedException();
+
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                inner.Dispose();
+            }
+
+            base.Dispose(disposing);
+        }
+
+        public override async ValueTask DisposeAsync()
+        {
+            await inner.DisposeAsync().ConfigureAwait(false);
+            await base.DisposeAsync().ConfigureAwait(false);
+        }
+
+        /// <summary>Gives what was read ahead first, as much as <paramref name="buffer"/> holds; how much.</summary>
+        private int Ahead(Span<byte> buffer)
+        {
+            if (_ahead.IsEmpty || buffer.IsEmpty)
+            {
+                return 0;
+            }
+
+            var given = Math.Min(_ahead.Length, buffer.Length);
+            _ahead.Span[..given].CopyTo(buffer);
+            _ahead = _ahead[given..];
+            return given;
+        }
+    }
 }
 
 /// <summary>What one address of a fetch was answered: its status, its type, its size, and its text, a redirect's next address, or why it failed.</summary>
@@ -663,7 +890,7 @@ public sealed class HarnessFetch : IDisposable
 /// <param name="Status">The status the server answered; null where none was read.</param>
 /// <param name="Type">The type of what came back; null where none was said or read.</param>
 /// <param name="Bytes">How many bytes came back; null where none were read.</param>
-/// <param name="Text">The text read, as the fetch was asked to read it (<see cref="WebFetchAsk"/>); null but where it was read.</param>
+/// <param name="Text">The text read, as the fetch was asked to read it (<see cref="WebFetchAsk"/>); null but where it was read and held.</param>
 /// <param name="Location">The address a redirect named; null for any other answer.</param>
 /// <param name="Failure">Why it failed; null where it did not.</param>
 public sealed record WebHop(string Address, int? Status, string? Type, long? Bytes, string? Text, string? Location, string? Failure)
@@ -674,8 +901,11 @@ public sealed record WebHop(string Address, int? Status, string? Type, long? Byt
     /// <summary>The parts of the page it read, where its parts were asked (<see cref="WebFetchHtml.Parts"/>) and it was HTML; null otherwise.</summary>
     public WebPageParts? Parts { get; init; }
 
-    /// <summary>An address read: its text.</summary>
-    internal static WebHop Read(string address, int status, string? type, long bytes, string text) => new(address, status, type, bytes, text, null, null);
+    /// <summary>How many characters of its text were written into the ask's writer (<see cref="WebFetchAsk.Into"/>), where it was; null otherwise.</summary>
+    public long? Written { get; init; }
+
+    /// <summary>An address read: its text, or none held where it was written into the ask's writer.</summary>
+    internal static WebHop Read(string address, int status, string? type, long bytes, string? text) => new(address, status, type, bytes, text, null, null);
 
     /// <summary>An address that redirected to <paramref name="location"/>.</summary>
     internal static WebHop Redirected(string address, int status, string location) => new(address, status, null, null, null, location, null);
@@ -688,7 +918,7 @@ public sealed record WebHop(string Address, int? Status, string? Type, long? Byt
 /// <param name="Address">The address it ended at, its redirects followed.</param>
 /// <param name="Status">The status the last address answered; null where none answered.</param>
 /// <param name="Type">The type of what it read; null where it read nothing.</param>
-/// <param name="Text">The text read, as the fetch was asked to read it; null where none was read.</param>
+/// <param name="Text">The text read, as the fetch was asked to read it; null where none was read, or it was written into the ask's writer.</param>
 /// <param name="Failure">Why none was read; null where one was, or the policy denied it.</param>
 /// <param name="Denial">The denial that stopped it before an address was asked; null where none did.</param>
 public sealed record WebFetched(string Address, int? Status, string? Type, string? Text, string? Failure, AgentPolicyAnswer.Denied? Denial)
@@ -701,6 +931,9 @@ public sealed record WebFetched(string Address, int? Status, string? Type, strin
 
     /// <summary>The parts of the page it read, where its parts were asked (<see cref="WebFetchHtml.Parts"/>) and it was HTML; null otherwise.</summary>
     public WebPageParts? Parts { get; init; }
+
+    /// <summary>How many characters of its text were written into the ask's writer (<see cref="WebFetchAsk.Into"/>), where it read one so; null otherwise.</summary>
+    public long? Written { get; init; }
 
     /// <summary>A fetch whose address the reader's pace refused its turn until <paramref name="until"/>: nothing was sent.</summary>
     internal static WebFetched Held(string address, DateTimeOffset until)
@@ -717,7 +950,8 @@ public sealed record WebFetched(string Address, int? Status, string? Type, strin
 /// What decides, records and paces each address a reader of the web asks through the harness's fetch: the policy's
 /// <c>Web(...)</c> rules and the mask before an address is asked, the record of what it was answered, and - for a reader
 /// that asks a source many times, as a site's index is filled and a search's sources are asked - the source's turn on
-/// this machine, which the fetch waits for after the decision and before each request, a redirect's too.
+/// this machine, which the fetch waits for after the decision and before each request, a redirect's too; and how long an
+/// answer may fall silent, and where that silence is told.
 /// </summary>
 /// <param name="Decide">Decides an address before it is asked: a denial and nothing is sent.</param>
 /// <param name="Answered">Told what each address was answered, or why it failed.</param>
@@ -732,6 +966,22 @@ public sealed record WebFetchGate(Func<string, Task<AgentPolicyAnswer>> Decide, 
     /// once, as an agent's page is read.
     /// </summary>
     public Func<CancellationToken, Task<DateTimeOffset?>>? Pace { get; init; }
+
+    /// <summary>
+    /// Told once the fetch has ended, however it ended, where its pace gave it a turn: what lets go a turn the source's pace
+    /// holds for a whole fetch - a source asked one request at a time; none where the pace holds nothing past a request.
+    /// </summary>
+    public Func<Task>? Ended { get; init; }
+
+    /// <summary>
+    /// How long an answer may fall silent - nothing of its head or its body coming - before it is given up: the reader's
+    /// stall bound, its step's <c>stallSeconds</c>; <see langword="null"/> where it has none, and an answer is waited for
+    /// for as long as the reader's stop lets it. An answer that goes on coming, however slowly, is read to its end.
+    /// </summary>
+    public TimeSpan? Stall { get; init; }
+
+    /// <summary>Told where a wait on an answer stands, every five minutes it lasts (<see cref="Waits.SaidEvery"/>); none where nothing is told.</summary>
+    public Action<WaitTold>? Tell { get; init; }
 }
 
 /// <summary>What a fetch reads and how: a page as an agent reads it, or what a reader of its own takes - markup, a page's parts, a gzip.</summary>
@@ -748,7 +998,7 @@ public sealed record WebFetchAsk
 
     /// <summary>
     /// Whether a gzip of text - its type <c>application/gzip</c>, or none said under a name ending in <c>.gz</c>, as a
-    /// sitemap's - is read as the UTF-8 text it holds, no more of it than the fetch reads of any answer.
+    /// sitemap's - is read as the UTF-8 text it holds.
     /// </summary>
     public bool Gzip { get; init; }
 
@@ -762,16 +1012,21 @@ public sealed record WebFetchAsk
     public bool AnyType { get; init; }
 
     /// <summary>
-    /// The most bytes read of the answer - once decompressed, where it is a gzip - where it is not the fetch's own
-    /// <see cref="HarnessFetch.MostBytes"/>: a sitemap's, which its protocol lets be 50 MiB.
+    /// The most bytes the asker's own protocol lets its answer be - once decompressed, where it is a gzip - as a sitemap's
+    /// 50 MiB is the sitemaps protocol's: an answer past it is refused, said with <see cref="MostSaid"/>. <see langword="null"/>
+    /// where the asker's protocol bounds none, and the answer is read whole.
     /// </summary>
     public long? Most { get; init; }
 
+    /// <summary>What a refusal says of <see cref="Most"/> after its size: whose word it is, as <c>the sitemaps protocol lets a sitemap be</c>.</summary>
+    public string MostSaid { get; init; } = "its reader takes";
+
     /// <summary>
-    /// Whether an answer longer than the most read is kept to its head, the rest unread, rather than refused: a robots.txt,
-    /// of which only the first 500 KiB are parsed (RFC 9309, 2.5), its reader leaving the line its cut ends in unread.
+    /// Where the answer's text is written as it is read, rather than held as one text: what keeps a page an agent fetches
+    /// whole - as large as it is - as it comes. A page whose HTML is reduced to its text is read whole as markup, its reader
+    /// needing it whole, and its text written here line by line. <see langword="null"/> where the text is held and given.
     /// </summary>
-    public bool Head { get; init; }
+    public TextWriter? Into { get; init; }
 
     /// <summary>The request's method: <c>GET</c> where none is said, or <c>POST</c> with <see cref="Body"/> - a search source's request.</summary>
     public string Method { get; init; } = "GET";
@@ -814,7 +1069,7 @@ public sealed record WebFetchKey(string Name, string Value, bool Query = false)
     public override string ToString() => Query ? $"?{Name}" : Name;
 }
 
-/// <summary>How a fetch reads an answer that is HTML - within its bound, as it reads the answer's bytes.</summary>
+/// <summary>How a fetch reads an answer that is HTML.</summary>
 public enum WebFetchHtml
 {
     /// <summary>Reduced to its text, as an agent reads a page (<see cref="WebPageText.OfAsync"/>).</summary>

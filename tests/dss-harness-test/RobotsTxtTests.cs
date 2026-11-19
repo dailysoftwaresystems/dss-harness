@@ -204,20 +204,19 @@ public sealed class RobotsTxtTests
         Assert.False(robots.Allows(path + "0b"));
     }
 
-    /// <summary>A robots.txt is read to its most, the last whole line within it, whichever end its lines have: a rule past it is none.</summary>
+    /// <summary>
+    /// A robots.txt is read whole, whichever end its lines have: a rule past the 500 KiB a crawler parses at least is a rule
+    /// its site wrote, and holds; and a crawl delay is kept as given, however long.
+    /// </summary>
     [Theory]
     [InlineData("\n")]
     [InlineData("\r")]
-    public void ARobotsTxt_IsReadToItsMost(string end)
+    public void ARobotsTxt_IsReadWhole(string end)
     {
-        var robots = RobotsTxt.Read($"User-agent: *{end}Disallow: /early{end}# {new string('x', RobotsTxt.MostRead)}{end}Disallow: /late{end}", Agent);
+        var robots = RobotsTxt.Read($"User-agent: *{end}Disallow: /early{end}# {new string('x', 2 * 1024 * 1024)}{end}Disallow: /late{end}Crawl-delay: 86400000{end}", Agent);
 
         Assert.False(robots.Allows("/early"));
-        Assert.True(robots.Allows("/late"));
-
-        // A line the most cuts is no rule: what it would refuse cut short, it does not.
-        var head = $"User-agent: *{end}# ";
-        var cut = RobotsTxt.Read(head + new string('x', RobotsTxt.MostRead - head.Length - 13) + $"{end}Disallow: /cutting{end}", Agent);
-        Assert.True(cut.Allows("/cat"));
+        Assert.False(robots.Allows("/late"));
+        Assert.Equal(TimeSpan.FromSeconds(86_400_000), robots.CrawlDelay);
     }
 }

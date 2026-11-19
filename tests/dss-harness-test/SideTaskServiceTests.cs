@@ -826,7 +826,7 @@ public sealed class SideTaskServiceTests
             var connection = new ApiConnection(TimeProvider.System, endpoint);
             var paced = new TempDirectory();
             var indexes = new DssHarness.Core.Web.Index.WebIndexes(harness.FileSystem, new DssHarness.Core.Web.Index.SitemapFill(harness.FileSystem, fetch, TimeProvider.System, (_, _) => Task.CompletedTask), TimeProvider.System);
-            var pace = new WebSearchPace(harness.FileSystem, () => Path.Combine(paced.Path, "pace.json"), TimeProvider.System, (_, _) => Task.CompletedTask);
+            var pace = new WebSearchPace(harness.FileSystem, () => Path.Combine(paced.Path, "pace.json"), TimeProvider.System, (_, _) => Task.CompletedTask, harness.Identity);
             var search = new HarnessWebSearch(WebSearchKinds.OfThisBuild, fetch, indexes, pace, harness.FileSystem, TimeProvider.System);
             var host = new AgentToolHost(harness.FileSystem, harness.Platform, harness.GitClient, new PhaseRunner(harness.ProcessRunner, harness.FileSystem, harness.Output), harness.ChildSessions, fetch, new RunningToolDouble("1.2.3"), TimeProvider.System, search: search);
             opened.AddRange([search, indexes, fetch, connection, paced]);

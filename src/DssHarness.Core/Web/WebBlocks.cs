@@ -29,6 +29,32 @@ public static class WebBlocks
         return $"<web-page url=\"{Attribute(address)}\" status=\"{status?.ToString(System.Globalization.CultureInfo.InvariantCulture)}\">\n{PageLead}\n{Inside(text)}\n</web-page>";
     }
 
+    /// <summary>
+    /// Writes a page into <paramref name="into"/> as <see cref="Page"/> gives it - its block's head, its text, its block's
+    /// end - the text written by <paramref name="text"/> through a writer that writes every tag a block is made of as text
+    /// as it passes, however the writes part it: a page kept as it is read, never held as one text.
+    /// </summary>
+    /// <param name="into">Where the block is written.</param>
+    /// <param name="address">The address it was read from, its redirects followed.</param>
+    /// <param name="status">The status it answered; none where none was read.</param>
+    /// <param name="text">Writes its text into the writer it is given.</param>
+    public static async Task PageAsync(TextWriter into, string address, int? status, Func<TextWriter, Task> text)
+    {
+        ArgumentNullException.ThrowIfNull(into);
+        ArgumentNullException.ThrowIfNull(address);
+        ArgumentNullException.ThrowIfNull(text);
+
+        await into.WriteAsync($"<web-page url=\"{Attribute(address)}\" status=\"{status?.ToString(System.Globalization.CultureInfo.InvariantCulture)}\">\n{PageLead}\n").ConfigureAwait(false);
+
+        using (var inside = new InsideWriter(into))
+        {
+            await text(inside).ConfigureAwait(false);
+            inside.End();
+        }
+
+        await into.WriteAsync("\n</web-page>").ConfigureAwait(false);
+    }
+
     /// <summary>What <paramref name="source"/> answered <paramref name="query"/>: <paramref name="text"/>, its results or what it came to.</summary>
     /// <param name="query">The query, as the agent wrote it.</param>
     /// <param name="source">The source's name.</param>
@@ -54,4 +80,102 @@ public static class WebBlocks
     /// <summary><paramref name="text"/> with every tag a block is made of written as text, in any case.</summary>
     private static string Inside(string text)
         => Tags.Aggregate(text, (written, tag) => written.Replace(tag, "&lt;" + tag[1..], StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>
+    /// A writer that writes what it is given into another as <see cref="Inside"/> writes a text whole: every tag a block is
+    /// made of, in any case, written as text - holding back only the characters that may yet be the start of one, until
+    /// the next write or <see cref="End"/> says what they are.
+    /// </summary>
+    private sealed class InsideWriter(TextWriter into) : TextWriter
+    {
+        private readonly System.Text.StringBuilder _held = new();
+
+        public override System.Text.Encoding Encoding => into.Encoding;
+
+        public override void Write(char value)
+        {
+            _held.Append(value);
+            Pass(end: false);
+        }
+
+        public override void Write(char[] buffer, int index, int count)
+        {
+            _held.Append(buffer, index, count);
+            Pass(end: false);
+        }
+
+        public override void Write(string? value)
+        {
+            _held.Append(value);
+            Pass(end: false);
+        }
+
+        /// <summary>Writes what is held: nothing more follows, so what might have begun a tag is text as it stands.</summary>
+        public void End() => Pass(end: true);
+
+        /// <summary>
+        /// Writes what is held up to the first '&lt;' that may yet begin a tag - one followed by fewer characters than a tag
+        /// holds, each matching it - every tag found before it written as text.
+        /// </summary>
+        private void Pass(bool end)
+        {
+            var at = 0;
+            var written = new System.Text.StringBuilder();
+
+            while (at < _held.Length)
+            {
+                if (_held[at] != '<')
+                {
+                    written.Append(_held[at]);
+                    at++;
+                    continue;
+                }
+
+                var (tag, partial) = TagAt(at);
+
+                if (tag is not null)
+                {
+                    written.Append("&lt;").Append(tag, 1, tag.Length - 1);
+                    at += tag.Length;
+                }
+                else if (partial && !end)
+                {
+                    break;
+                }
+                else
+                {
+                    written.Append('<');
+                    at++;
+                }
+            }
+
+            _held.Remove(0, at);
+            into.Write(written);
+        }
+
+        /// <summary>The tag the held text begins at <paramref name="at"/>, in any case; and whether it might yet begin one, being shorter than it.</summary>
+        private (string? Tag, bool Partial) TagAt(int at)
+        {
+            var partial = false;
+
+            foreach (var tag in Tags)
+            {
+                var matched = 0;
+
+                while (matched < tag.Length && at + matched < _held.Length && char.ToUpperInvariant(_held[at + matched]) == char.ToUpperInvariant(tag[matched]))
+                {
+                    matched++;
+                }
+
+                if (matched == tag.Length)
+                {
+                    return (tag, false);
+                }
+
+                partial |= at + matched == _held.Length;
+            }
+
+            return (null, partial);
+        }
+    }
 }

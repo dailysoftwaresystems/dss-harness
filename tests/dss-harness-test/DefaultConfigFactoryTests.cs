@@ -86,7 +86,6 @@ public sealed class DefaultConfigFactoryTests
         Assert.Equal(builtIn.Sources!.Keys, config.AgentWebSearch.Sources!.Keys);
         Assert.All(builtIn.Sources, source => Assert.Equal(source.Value.GetRawText(), config.AgentWebSearch.Sources[source.Key].GetRawText()));
         Assert.Null(config.AgentWebSearch.MaxPerStep);
-        Assert.Null(config.AgentWebSearch.ResultsPerSource);
 
         using var written = new TempDirectory();
         var file = written.Combine("config.json");
