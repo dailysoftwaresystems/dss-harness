@@ -61,13 +61,13 @@ public sealed class ReportTextTests
             ReportText.FailedInOneLine([("a.txt", "full")], "path", (item, why) => $"'{item}' failed: {why}", (_, _, _) => "many"));
 
     /// <summary>
-    /// Many items that failed for one reason are said in one line: how many, as many as a line names and how many more,
-    /// and that reason alone.
+    /// Many items that failed for one reason, where the line is the one place the list is kept, are said in one line: how
+    /// many, every one of them - never three and a count of the rest, which nothing else would name - and that reason alone.
     /// </summary>
     [Fact]
-    public void ManyItemsThatFailedForOneReason_AreSaidInOneLine_WithThatReason()
+    public void ManyItemsThatFailedForOneReason_AreSaidInOneLine_EveryOneNamed_WithThatReason()
         => Assert.Equal(
-            ["5 path(s) failed - a, b, c and 2 more: full"],
+            ["5 path(s) failed - a, b, c, d, e: full"],
             ReportText.FailedInOneLine(
                 [("a", "full"), ("b", "full"), ("c", "full"), ("d", "full"), ("e", "full")],
                 "path",

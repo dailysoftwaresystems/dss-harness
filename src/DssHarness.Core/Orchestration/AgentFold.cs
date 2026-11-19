@@ -788,7 +788,7 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
             }
 
             refused.Add((file.Key, $"'{file.Key}': the main tree holds a directory there with files the fold does not remove - "
-                + $"{ReportText.Listed(listed)} - which writing it would remove"));
+                + $"{Names.All(listed)} - which writing it would remove"));
         }
 
         // What is settled by hand is sorted as any hand-over sorts what the main tree holds, and is handed over nothing of
@@ -808,7 +808,7 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
         foreach (var file in inTheWayOfHanding.Where(way => way.Below).GroupBy(way => way.Written, StringComparer.Ordinal))
         {
             refused.Add((file.Key, $"{FoldAllowances.SettledOption} '{file.Key}': the agent holds a directory there with files of its own - "
-                + $"{ReportText.Listed([.. file.Select(way => way.Own)])} - which handing it the main tree's copy would remove"));
+                + $"{Names.All([.. file.Select(way => way.Own)])} - which handing it the main tree's copy would remove"));
         }
 
         foreach (var (path, held) in await HoldingAsync(worktree, [.. handed.Deletions, .. handed.Files], cancellationToken).ConfigureAwait(false))
@@ -1357,7 +1357,7 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
                 + "it, first. Nothing was handed over."),
             _ => throw new HarnessException(
                 HarnessExit.Refused,
-                $"{ReportText.Listed(links)} are symbolic links, which are never handed to an agent as the files they lead to: commit them, or remove "
+                $"{Names.All(links)} are symbolic links, which are never handed to an agent as the files they lead to: commit them, or remove "
                 + "them, first. Nothing was handed over."),
         };
     }
@@ -2268,19 +2268,19 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
 
             if (ownBelow.Count > 0)
             {
-                refused.Add((written.Key, $"{there}, where the agent's worktree holds a directory with files of its own - {ReportText.Listed(ownBelow)} - that writing "
+                refused.Add((written.Key, $"{there}, where the agent's worktree holds a directory with files of its own - {Names.All(ownBelow)} - that writing "
                     + $"it would {lost}: move them aside, and run again"));
             }
 
             if (sharedBelow.Count > 0)
             {
-                refused.Add((written.Key, $"{there}, where the agent shares {ReportText.Listed(sharedBelow)} with the main tree, which writing it would {lost}: "
+                refused.Add((written.Key, $"{there}, where the agent shares {Names.All(sharedBelow)} with the main tree, which writing it would {lost}: "
                     + "refresh-agent hands it what the main tree holds there first"));
             }
 
             if (settledBelow.Count > 0)
             {
-                refused.Add((written.Key, $"{there}, and writing it would {lost} {ReportText.Listed(settledBelow)}, declared settled: reconcile them by hand, and "
+                refused.Add((written.Key, $"{there}, and writing it would {lost} {Names.All(settledBelow)}, declared settled: reconcile them by hand, and "
                     + "run again without --settled for them"));
             }
         }

@@ -6,9 +6,6 @@ namespace DssHarness.Core.Output;
 /// <summary>How a message names things in a line of text: one spelling for each, whichever command writes it.</summary>
 public static class ReportText
 {
-    /// <summary>How many of a list a one-line message names before it counts the rest.</summary>
-    public const int NamedLimit = 3;
-
     /// <summary>The letters that, before a final <c>y</c>, leave a noun whole in its plural: <c>key(s)</c>.</summary>
     private const string Vowels = "aeiou";
 
@@ -22,23 +19,12 @@ public static class ReportText
             ? $"{limit.TotalMinutes.ToString(CultureInfo.InvariantCulture)} minute{(limit.TotalMinutes == 1 ? string.Empty : "s")}"
             : $"{limit.TotalSeconds.ToString("0.#", CultureInfo.InvariantCulture)} s";
 
-    /// <summary>At most <see cref="NamedLimit"/> of <paramref name="items"/>, each printable, and how many more there are.</summary>
-    /// <param name="items">What to name.</param>
-    public static string Listed(IReadOnlyList<string> items)
-    {
-        ArgumentNullException.ThrowIfNull(items);
-
-        var named = string.Join(", ", items.Take(NamedLimit).Select(Printable));
-
-        return items.Count > NamedLimit ? $"{named} and {items.Count - NamedLimit} more" : named;
-    }
-
     /// <summary>
     /// What failed for each of <paramref name="failed"/>, said in one line however many there are - a full disk would
     /// otherwise say it once for every item a command meets: one as <paramref name="one"/> says it, given the item and why;
-    /// more as <paramref name="many"/> does, given how many (<see cref="Counted"/> of <paramref name="noun"/>), as many of
-    /// them as a line names (<see cref="Listed"/>), and why - the first reason, and how many other reasons there were where
-    /// they differ.
+    /// more as <paramref name="many"/> does, given how many (<see cref="Counted"/> of <paramref name="noun"/>), every one of
+    /// them (<see cref="Names.All"/>) - the line is the one place the list is kept - and why: the first reason, and how
+    /// many other reasons there were where they differ.
     /// </summary>
     /// <param name="failed">Each item that failed, with why, in the order they are named.</param>
     /// <param name="noun">What an item is, as one of them is called, to count them by.</param>
@@ -50,7 +36,7 @@ public static class ReportText
         string noun,
         Func<string, string, string> one,
         Func<string, string, string, string> many)
-        => FailedInOneLine(failed, noun, one, many, Listed);
+        => FailedInOneLine(failed, noun, one, many, Names.All);
 
     /// <summary>
     /// What failed for each of <paramref name="failed"/>, said in one line as the other overload says it, naming as many of

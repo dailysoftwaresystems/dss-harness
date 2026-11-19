@@ -493,8 +493,9 @@ public sealed class SharedCopiesTests
     }
 
     /// <summary>
-    /// Copies that cannot be kept are said in one line whatever their number - which paths, as many as a line names, how
-    /// many more, and why - never a line for each: a full disk would otherwise print one for every file handed.
+    /// Copies that cannot be kept are said in one line whatever their number - which paths, every one, since the line is
+    /// the one place they are named, and why - never a line for each: a full disk would otherwise print one for every
+    /// file handed.
     /// </summary>
     [Fact]
     public async Task ManyCopiesThatCannotBeKept_AreSaidInOneLine()
@@ -514,7 +515,7 @@ public sealed class SharedCopiesTests
 
         Assert.True(created.Succeeded, OrchestrationKit.Describe(created));
         Assert.Equal(
-            $"5 path(s) are recorded as shared, and their bytes were not kept in '{shared}' - a.txt, b.txt, c.txt and 2 more: There is not enough space on the disk",
+            $"5 path(s) are recorded as shared, and their bytes were not kept in '{shared}' - a.txt, b.txt, c.txt, d.txt, e.txt: There is not enough space on the disk",
             Assert.Single(created.Details!, line => line.Contains("were not kept", StringComparison.Ordinal)));
         Assert.Equal(5, kit.Harness.OrchestrationStore.ReadSeed(kit.Layout, "ag")!.Paths.Count);
     }

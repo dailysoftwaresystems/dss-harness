@@ -12,7 +12,7 @@ namespace DssHarness.Core.Output;
 /// </summary>
 public static class Names
 {
-    /// <summary>What stands between two names, as <see cref="ReportText.Listed"/> writes it.</summary>
+    /// <summary>What stands between two names, however many a line names.</summary>
     private const string Separator = ", ";
 
     /// <summary>
