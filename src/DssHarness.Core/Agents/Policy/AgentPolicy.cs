@@ -1979,18 +1979,21 @@ public sealed partial class AgentPolicy
                 return marker;
             }
 
-            // A script file the string wrote and now runs holds what it wrote: read where its text is known, refused where not.
-            if (WrittenScripts(readings, environment, state, Wholes) is { } run)
-            {
-                if (run.Text is null)
-                {
-                    return Undecided(string.Join(' ', analyzed.Whole), new NotSupportedException($"'{run.File}' is a script file this command wrote before it runs it, whose text this does not read"));
-                }
+            // A script file the string wrote and now runs holds what it wrote: read where its text is known, refused
+            // where not. Every one the command's readings run is decided - a later reading's script is never left
+            // undecided by an earlier one's.
+            var ran = WrittenScripts(readings, environment, state, Wholes);
 
+            if (ran.FirstOrDefault(each => each.Text is null) is { } unread)
+            {
+                return Undecided(string.Join(' ', analyzed.Whole), new NotSupportedException($"'{unread.File}' is a script file this command wrote before it runs it, whose text this does not read"));
+            }
+
+            foreach (var text in ran.Select(each => each.Text!).Where(text => !running.Contains(text)).Distinct(StringComparer.Ordinal))
+            {
                 // However deep scripts that write and run scripts nest, each is decided whole, a level deeper through
                 // DeepCalls; a script that runs one of the texts in progress runs itself, whose every command is being decided.
-                if (!running.Contains(run.Text)
-                    && DeepCalls.Run(() => RunDecided(CommandAnalysis.Commands(run.Text), [.. forms], new HashSet<string>(running, StringComparer.Ordinal) { run.Text })).Refusal() is { } inScript)
+                if (DeepCalls.Run(() => RunDecided(CommandAnalysis.Commands(text), [.. forms], new HashSet<string>(running, StringComparer.Ordinal) { text })).Refusal() is { } inScript)
                 {
                     return inScript;
                 }
@@ -2278,7 +2281,11 @@ public sealed partial class AgentPolicy
             var contentWriters = new[] { "tee", "dd", "curl", "wget", "sed", "gsed", "Out-File", "Set-Content", "Add-Content", "sc", "ac", "Invoke-WebRequest", "iwr", "Invoke-RestMethod", "irm" };
 
             // A reading that gives a known variable its values names the file as the shell would; the spelling alone
-            // stands where no variable of it is known.
+            // stands where no variable of it is known. What the readings of this one command write is collected before
+            // it is kept: the readings are the ways one command may be spelled, and where they write one form with
+            // texts that differ, or one of them appends, what the file holds is not known - never the last reading's.
+            var wrote = new Dictionary<string, (PlaceForm Whole, List<string?> Texts)>(StringComparer.Ordinal);
+
             foreach (var reading in readings.Given)
             {
                 var targets = reading.Redirects.Where(redirect => redirect.Operator is ">" or ">>" or "<>").Select(redirect => redirect.Target)
@@ -2300,13 +2307,26 @@ public sealed partial class AgentPolicy
 
                     var appended = reading.Redirects.Any(redirect => redirect.Operator == ">>" && redirect.Target == target) || reading.Words.Skip(environment + 1).Any(word => word is "-a" or "--append");
 
-                    // A later write to the same form is what it holds now.
+                    // A later command's write to the same form is what it holds now; the readings of this one are
+                    // collected and kept as one.
                     foreach (var whole in spelled)
                     {
-                        Written.RemoveAll(written => written.Whole.Key == whole.Key);
-                        Written.Add((whole, appended ? null : text));
+                        if (!wrote.TryGetValue(whole.Key, out var held))
+                        {
+                            wrote[whole.Key] = (whole, [appended ? null : text]);
+                        }
+                        else
+                        {
+                            held.Texts.Add(appended ? null : text);
+                        }
                     }
                 }
+            }
+
+            foreach (var (whole, texts) in wrote.Values)
+            {
+                Written.RemoveAll(written => written.Whole.Key == whole.Key);
+                Written.Add((whole, texts.Distinct().Count() == 1 ? texts[0] : null));
             }
         }
 
@@ -2504,20 +2524,24 @@ public sealed partial class AgentPolicy
     }
 
     /// <summary>
-    /// The script file a reading of <paramref name="readings"/> runs that a command of its string wrote before it, with
-    /// the text a here-document or here-string gave it where one did: the program itself, or the script file a shell,
-    /// <c>source</c>, PowerShell or sed reads (<see cref="CommandAnalysis.ScriptFilesOf"/>) - named by a word or given as
-    /// its input - each where a program runs (<see cref="CommandAnalysis.RunsAt"/>), by every place it may be
-    /// (<paramref name="wholes"/>); or one that may be a file the string wrote this cannot tell by its path
-    /// (<see cref="StringState.MayBeUnread"/>) - named by what the shell expands, or run as the program or a script file
-    /// by a word the shell expands - whose text this does not know. Null where it runs none.
+    /// Every script file a reading of <paramref name="readings"/> runs that a command of its string wrote before it -
+    /// each decided, never the first alone - with the text a here-document or here-string gave it where one did: the
+    /// program itself, or the script file a shell, <c>source</c>, PowerShell or sed reads
+    /// (<see cref="CommandAnalysis.ScriptFilesOf"/>) - named by a word or given as its input - each where a program runs
+    /// (<see cref="CommandAnalysis.RunsAt"/>), by every place it may be (<paramref name="wholes"/>), a word whose braces
+    /// spell several files read at each of them (<see cref="WordPattern.Spellings()"/>); or one that may be a file the
+    /// string wrote this cannot tell by its path (<see cref="StringState.MayBeUnread"/>) - named by what the shell
+    /// expands, or run as the program or a script file by a word the shell expands - whose text this does not know. Each
+    /// file run once, in the order the readings and their words name them; empty where none runs one.
     /// </summary>
-    private static (string File, string? Text)? WrittenScripts(CommandReadings readings, int environment, StringState state, Func<string, IReadOnlyList<PlaceForm>?> wholes)
+    private static IReadOnlyList<(string File, string? Text)> WrittenScripts(CommandReadings readings, int environment, StringState state, Func<string, IReadOnlyList<PlaceForm>?> wholes)
     {
         if (state.Written.Count == 0 && state.UnreadEnds.Count == 0)
         {
-            return null;
+            return [];
         }
+
+        var run = new List<(string File, string? Text)>();
 
         foreach (var reading in readings.Given)
         {
@@ -2544,25 +2568,47 @@ public sealed partial class AgentPolicy
 
                 foreach (var (word, quoted, read, runsIt) in runs)
                 {
-                    var places = wholes(word);
-
-                    string? text = null;
-
-                    if (places?.FirstOrDefault(whole => state.WroteInto(whole, out text)) is not null)
+                    // A word whose braces spell several files runs one of them per reading of the command: each is read,
+                    // each its own text.
+                    foreach (var (spelled, spelledQuoted) in RunWords(word, quoted))
                     {
-                        return (word, read ? text : null);
-                    }
+                        if (run.Any(each => each.File == spelled))
+                        {
+                            continue;
+                        }
 
-                    if (state.MayBeUnread(word, quoted, places, runsIt))
-                    {
-                        return (word, null);
+                        var places = wholes(spelled);
+
+                        string? text = null;
+
+                        if (places?.FirstOrDefault(whole => state.WroteInto(whole, out text)) is not null)
+                        {
+                            run.Add((spelled, read ? text : null));
+                        }
+                        else if (state.MayBeUnread(spelled, spelledQuoted, places, runsIt))
+                        {
+                            run.Add((spelled, null));
+                        }
                     }
                 }
             }
         }
 
-        return null;
+        return run;
     }
+
+    /// <summary>
+    /// The files <paramref name="word"/> names as a program or a script file it runs (<see cref="WrittenScripts"/>): the
+    /// word itself, or each word its braces spell with its characters' classes where they pair, given one at a time.
+    /// </summary>
+    /// <param name="word">The word.</param>
+    /// <param name="quoted">How each of its characters stands to the shell, or null where its spelling was not kept.</param>
+    private static IEnumerable<(string Spelled, string? Quoted)> RunWords(string word, string? quoted)
+        => word.Contains('{', StringComparison.Ordinal) && CommandAnalysis.BraceGroup(word) is not null
+            ? WordPattern.Braces(word, quoted) is { } pattern
+                ? pattern.Spellings().Select(each => (each.Word, (string?)each.Quoted))
+                : CommandAnalysis.BraceExpansions(word).Select(each => (each, (string?)null))
+            : [(word, quoted)];
 
     /// <summary>
     /// Why <c>run-side-task</c> is refused, where the program at <paramref name="start"/> starts it - by its own name, or

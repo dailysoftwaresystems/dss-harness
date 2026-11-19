@@ -211,6 +211,42 @@ public sealed class AgentPolicyPatternTests
         }
     }
 
+    /// <summary>
+    /// A command whose braces spell two scripts, each written before it by the string, has both decided: the second,
+    /// which reads the slot, is refused though the first is allowed - never only the first written script a reading runs.
+    /// Red with the written-script look returning the first alone, which allowed the command.
+    /// </summary>
+    [Fact]
+    public void ACommandRunningTwoWrittenScripts_HasBothDecided()
+    {
+        using var temp = new TempDirectory();
+        var worktree = Directory.CreateDirectory(temp.Combine("tree")).FullName;
+        var policy = Policy(new PassThroughFileSystem(new PhysicalFileSystem(FilePermissionsFactory.Create())), worktree);
+
+        var answer = policy.Run(
+            "cat <<< 'cat x.txt' > a.sh; cat <<< 'cat .harness-config/workflows/.env/keys.env' > b.sh; sh {a,b}.sh");
+
+        Assert.Equal("the credential slots", Assert.IsType<AgentPolicyAnswer.Denied>(answer).Rule);
+    }
+
+    /// <summary>
+    /// A command whose readings write one file - one appending, so leaving its text unknown, one overwriting it with a
+    /// text it knows - leaves what the file holds unknown: the script it runs is undecided, never decided as the last
+    /// reading's text alone. Red with <c>StringState.Record</c> keeping the last reading's write, which allowed a script
+    /// of the text only one reading gives the file.
+    /// </summary>
+    [Fact]
+    public void TwoReadingsWritingOneFileWithDifferentTexts_LeaveItsTextUnknown()
+    {
+        using var temp = new TempDirectory();
+        var worktree = Directory.CreateDirectory(temp.Combine("tree")).FullName;
+        var policy = Policy(new PassThroughFileSystem(new PhysicalFileSystem(FilePermissionsFactory.Create())), worktree);
+
+        var answer = policy.Run("p={-a,zz}; tee <<< 'cat x.txt' $p s.sh; sh s.sh");
+
+        Assert.Equal(AgentPolicy.UndecidedRule, Assert.IsType<AgentPolicyAnswer.Denied>(answer).Rule);
+    }
+
     /// <summary>A policy over <paramref name="worktree"/>, which it reads and writes, a slot in it and git's own directory kept.</summary>
     private static AgentPolicy Policy(IFileSystem fileSystem, string worktree)
         => new(
