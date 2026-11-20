@@ -367,6 +367,40 @@ public sealed class WaitsTests
         Assert.Equal(["has waited 5m00s for the forge's checks"], told.Select(one => one.Line()));
     }
 
+    /// <summary>
+    /// A moment less than a millisecond ahead is waited out by a whole delay, the least a delay can be asked for: asked
+    /// for less, a delay is asked for none and ends at once, so a clock only its delays move - as one a test drives is -
+    /// could never pass the moment, and a wait measured on it would never end. The wait runs beside the test so a
+    /// <see cref="ClockDrive"/> that never sees it arm a delay fails the test, rather than the wait taking the test's own
+    /// thread with it.
+    /// </summary>
+    [Fact]
+    public async Task AMomentLessThanAMillisecondAhead_IsWaitedOutByAWholeDelay()
+    {
+        var clock = new TimerClock();
+        var moment = clock.GetUtcNow() + TimeSpan.FromTicks(2);
+        var run = Task.Run(() => Waits.UntilAsync(moment, new WaitWatch("the clock to pass a site's date", _ => { }, null, clock), CancellationToken.None), CancellationToken.None);
+
+        var end = await ClockDrive.UntilEndedAsync(clock, run, TimeSpan.FromMilliseconds(2), 10, Token);
+
+        Assert.Equal(new WaitEnd<bool>(WaitEndKind.Done, true, TimeSpan.FromMilliseconds(2)), end);
+        Assert.Equal(0, clock.Waiting);
+    }
+
+    /// <summary>
+    /// The pause a wait asks of a delay is never shorter than a millisecond, the least a delay can be asked for; where
+    /// nothing is left of what is allowed, or nothing is asked, it is no pause at all.
+    /// </summary>
+    [Fact]
+    public void APauseIsNeverShorterThanADelayCanBeAskedFor()
+    {
+        Assert.Equal(TimeSpan.FromMilliseconds(1), Waits.Shorter(TimeSpan.FromTicks(2), Waits.SaidEvery));
+        Assert.Equal(TimeSpan.FromMilliseconds(1), Waits.Shorter(Waits.SaidEvery, TimeSpan.FromMilliseconds(1)));
+        Assert.Equal(TimeSpan.FromSeconds(2), Waits.Shorter(TimeSpan.FromSeconds(3), TimeSpan.FromSeconds(2)));
+        Assert.Equal(TimeSpan.Zero, Waits.Shorter(TimeSpan.FromSeconds(3), TimeSpan.Zero));
+        Assert.Equal(TimeSpan.Zero, Waits.Shorter(TimeSpan.Zero, Waits.SaidEvery));
+    }
+
     private static Task<T> Unending<T>(CancellationToken token)
     {
         var never = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);

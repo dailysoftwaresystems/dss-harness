@@ -11,8 +11,9 @@ namespace DssHarness.Core.Waiting;
 /// <remarks>
 /// Time is read, and every pause is waited, on the watch's own clock, so a test's clock decides when a wait ends. No pause
 /// is longer than the time to the next telling, so a bound of any length - a budget of months - is waited in pieces that
-/// no timer refuses. Telling goes through the watch's callback alone: nothing here writes to the console or to the
-/// harness's output, and nothing branches on the operating system.
+/// no timer refuses, and one it asks for is never shorter than a millisecond, the least a delay can be asked for: a
+/// delay asked for less is asked for none, which no clock moves past. Telling goes through the watch's callback alone:
+/// nothing here writes to the console or to the harness's output, and nothing branches on the operating system.
 /// </remarks>
 public static class Waits
 {
@@ -66,12 +67,27 @@ public static class Waits
 
     /// <summary>
     /// <paramref name="wanted"/>, or what is <paramref name="left"/> of the time allowed where that is less - never below
-    /// nothing, since time passes between the look that found some left and the wait.
+    /// nothing, since time passes between the look that found some left and the wait, and a pause it does ask for, never
+    /// below the least a delay can be asked for, a millisecond: a delay asked for less is asked for none and ends at
+    /// once, before the clock the wait is measured on - which only its delays move, as one a test drives does - could
+    /// pass what the wait waits to pass.
     /// </summary>
     /// <param name="wanted">How long it would wait: its poll, or a settle.</param>
     /// <param name="left">What is left of the time it is allowed.</param>
     internal static TimeSpan Shorter(TimeSpan wanted, TimeSpan left)
-        => left <= TimeSpan.Zero ? TimeSpan.Zero : wanted < left ? wanted : left;
+    {
+        if (left <= TimeSpan.Zero)
+        {
+            return TimeSpan.Zero;
+        }
+
+        var pause = wanted < left ? wanted : left;
+
+        return pause > TimeSpan.Zero && pause < LeastPause ? LeastPause : pause;
+    }
+
+    /// <summary>The least a wait asks a delay for: a delay asked for less than a millisecond is asked for none.</summary>
+    private static readonly TimeSpan LeastPause = TimeSpan.FromMilliseconds(1);
 
     /// <summary>
     /// Awaits <paramref name="work"/> to its end, telling how long it has run each time <see cref="SaidEvery"/> has passed
