@@ -204,18 +204,20 @@ public sealed class JsonPathTests
 
     /// <summary>
     /// A pattern of any length is read and matched like any other, and kept once read: a class of a hundred thousand
-    /// characters, and four thousand classes in a row, each matching what it says - where once a pattern past 4 KiB
-    /// silently matched nothing.
+    /// characters matches what it says - where once a pattern past 4 KiB silently matched nothing. Four thousand classes
+    /// in a row are past the automaton .NET's linear matcher builds for this machine, and are refused in the matcher's
+    /// words (<see cref="AnIRegexpPastTheLinearMatcher_IsRefusedInItsWords_NeverMatchedAsNothing"/>): the limit is
+    /// .NET's own fact, never raised by this tool, and the pairs that fit under it match what they say.
     /// </summary>
     [Fact]
     public void ALongIRegexp_Matches()
     {
-        var pairs = string.Concat(Enumerable.Repeat("[ab]", 4000));
+        var pairs = string.Concat(Enumerable.Repeat("[ab]", 500));
 
         Assert.True(IRegexp.Matches("[" + new string('a', 100_000) + "]", "a", whole: true));
-        Assert.True(IRegexp.Matches(pairs, string.Concat(Enumerable.Repeat("ab", 2000)), whole: true));
-        Assert.False(IRegexp.Matches(pairs, string.Concat(Enumerable.Repeat("ab", 1999)), whole: true));
-        Assert.True(IRegexp.Matches(pairs, "x" + string.Concat(Enumerable.Repeat("ba", 2000)) + "x", whole: false));
+        Assert.True(IRegexp.Matches(pairs, string.Concat(Enumerable.Repeat("ab", 250)), whole: true));
+        Assert.False(IRegexp.Matches(pairs, string.Concat(Enumerable.Repeat("ab", 249)), whole: true));
+        Assert.True(IRegexp.Matches(pairs, "x" + string.Concat(Enumerable.Repeat("ba", 250)) + "x", whole: false));
     }
 
     /// <summary>
