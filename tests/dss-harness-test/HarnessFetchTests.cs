@@ -473,7 +473,24 @@ public sealed class HarnessFetchTests
             return Task.CompletedTask;
         }) { Stall = TimeSpan.FromSeconds(30) };
 
-        var fetched = await ClockDrive.UntilEndedAsync(clock, fetch.FetchAsync("https://example.com/silent", new WebFetchAsk { AnyType = true }, gate, TestContext.Current.CancellationToken), TimeSpan.FromSeconds(1), 31, TestContext.Current.CancellationToken);
+        // The clock is moved a second at a time, past the thirty of the step's stall bound, each time
+        // the fetch waits on it. Past the bound the wait's own end comes in real time - the work's own
+        // end is awaited past its cancellation, its pauses armed on the clock again - so the fetch is
+        // then waited for in real time alone: driving the clock on would only spin through those pauses
+        // while the end came, whatever count of steps was allowed.
+        var fetching = fetch.FetchAsync("https://example.com/silent", new WebFetchAsk { AnyType = true }, gate, TestContext.Current.CancellationToken);
+
+        for (var steps = 0; steps < 35 && !fetching.IsCompleted; steps++)
+        {
+            await Task.WhenAny(clock.WaitingAsync(), fetching).WaitAsync(ClockDrive.Within, TestContext.Current.CancellationToken);
+
+            if (!fetching.IsCompleted)
+            {
+                clock.Advance(TimeSpan.FromSeconds(1));
+            }
+        }
+
+        var fetched = await fetching.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
 
         Assert.Equal("nothing came from it for 30 s, the step's stall bound", fetched.Failure);
         Assert.Equal(fetched.Failure, Assert.Single(hops).Failure);

@@ -259,7 +259,10 @@ child's tree, read before anything is signalled, asked to end with SIGTERM and w
 any of it stands - told every five minutes, and killed at what is left of the child's time limit,
 or at once where a sweep ends what a killed run left, that run's bound having passed with it - and
 the output is read until every character the child wrote has been, to its end or until the pipe
-holds nothing more and its read waits on it (`PipeBytes`); what a leftover writes after that is its
+holds nothing more and its read waits on it (`PipeBytes` taking the pipe; the waiting read itself
+the answer - anything more would have ended it - and the system asked nothing, for on Windows the
+handle a synchronous read pends on answers no peek, which waits for that read); what a leftover
+writes after that is its
 own, said in `ProcessResult.OutputHeld` and not read: a process
 that made a session of its own away from the child's tree is not reached, and nothing waits for
 what it holds. On macOS, where the isolation keeps no process namespace, such a process of an

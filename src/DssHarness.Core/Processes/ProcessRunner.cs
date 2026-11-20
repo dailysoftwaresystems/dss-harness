@@ -1392,9 +1392,12 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
         }
 
         /// <summary>
-        /// Whether every character the child wrote to the stream has been read: the stream has ended; or the pipe holds
-        /// nothing more and its read has waited on it across two looks with nothing in between - what a process the child
-        /// left running holds open, once the child has ended. A pipe that cannot be asked is read to its end.
+        /// Whether every character the child wrote to the stream has been read: the stream has ended; or a read of the
+        /// pipe has waited across two looks with none returning in between - the pipe holding nothing more, for
+        /// anything more would have ended the waiting read - what a process the child left running holds open, once
+        /// the child has ended. The system is asked nothing: the pending read is itself the answer, and on Windows
+        /// the handle a synchronous read pends on answers no other question - a peek on it waits for that read, which
+        /// is what the child left running holds. A stream that is no pipe of a child's is read to its end.
         /// </summary>
         public bool ReadAll()
         {
@@ -1404,7 +1407,7 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
             }
 
             var reads = Interlocked.Read(ref _reads);
-            var quiet = _waiting && _pipe is not null && PipeBytes.Quiet(_pipe) == true;
+            var quiet = _waiting && _pipe is not null;
             var settled = quiet && reads == _lookedAt;
 
             _lookedAt = quiet ? reads : -1;

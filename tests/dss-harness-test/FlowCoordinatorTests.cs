@@ -1604,9 +1604,10 @@ public sealed class FlowCoordinatorTests
     }
 
     /// <summary>
-    /// A plan of thirty work items runs whole, in waves of the run's open agents: each item makes an agent and deletes it,
-    /// and with maxOpenAgents 4 four agents are made and nothing more while their deletions are held - the fifth waits
-    /// for a slot - and once the deletions go on, every item is made and deleted and the run ends done.
+    /// A plan of thirty work items runs whole, in waves of the run's open agents: with maxOpenAgents 4 four agents are
+    /// open at once - each making and each deletion writes the main tree, so one runs at a time, and the fifth making
+    /// waits for a slot - and while a deletion is held no second one runs and nothing more is made. Once it goes on,
+    /// every item is made and deleted, one deletion at a time, and the run ends done.
     /// </summary>
     [Fact]
     public async Task AThirtyItemPlan_RunsInWaves()
@@ -1631,25 +1632,19 @@ public sealed class FlowCoordinatorTests
             """);
         var cancel = TestContext.Current.CancellationToken;
         var list = new JsonArray([.. Enumerable.Range(1, 30).Select(item => (JsonNode?)$"item-{item}")]);
-        var fourDropping = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var dropping = 0;
+        var dropping = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var runner = new FakeRunner().On("plan", FlowStepResult.Ended(passed: true, HarnessExit.Success, output: new JsonObject { ["list"] = list }));
-        var drops = runner.Hold("drop", _ =>
-        {
-            if (Interlocked.Increment(ref dropping) == 4)
-            {
-                fourDropping.TrySetResult();
-            }
-        });
+        var drops = runner.Hold("drop", _ => dropping.TrySetResult());
         var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
 
         var session = coordinator.RunAsync(cancel);
 
-        await fourDropping.Task.WaitAsync(TimeSpan.FromSeconds(30), cancel);
+        await dropping.Task.WaitAsync(TimeSpan.FromSeconds(30), cancel);
         await coordinator.SettledAsync(cancel);
 
-        // Four agents are open while their deletions are held: the first wave, and no fifth making.
-        Assert.Equal((4, 4), (Count(".maker"), Count(".drop")));
+        // Four agents are open while the first deletion is held - the fifth making waits for a slot - and no second
+        // deletion runs beside it: each writes the main tree, and one writer at a time.
+        Assert.Equal((4, 1), (Count(".maker"), Count(".drop")));
 
         drops.Done();
         var end = await session.WaitAsync(TimeSpan.FromSeconds(60), cancel);

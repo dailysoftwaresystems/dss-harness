@@ -1447,14 +1447,20 @@ public sealed class ContainExecTests
         Assert.False(reaching.IsCompleted, "the step went on before it heard its connection taken");
 
         await TakenAsync(listening, cancellationToken);
+
+        // The read is posted from the moment the connection was said taken, as the process runner posts
+        // it: a pipe holds nothing for a writer whose reader has not posted, so a step asked to speak
+        // before that would wait for its write, and the read that follows for the step's end.
+        using var reader = new StreamReader(listening);
+        var heard = reader.ReadToEndAsync(cancellationToken);
+
         var reached = await reaching.WaitAsync(LongBound, cancellationToken);
 
         Assert.NotNull(reached);
         reached.Placed();
         reached.Dispose();
 
-        using var reader = new StreamReader(listening);
-        Assert.Equal("placed\n", await reader.ReadToEndAsync(cancellationToken));
+        Assert.Equal("placed\n", await heard.WaitAsync(LongBound, cancellationToken));
     }
 
     /// <summary>
