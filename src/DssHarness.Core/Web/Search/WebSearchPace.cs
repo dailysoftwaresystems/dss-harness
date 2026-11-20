@@ -181,7 +181,6 @@ public sealed class WebSearchPace
     /// </summary>
     /// <param name="source">The source's name.</param>
     /// <param name="lease">The hold its turn took (<see cref="WebSearchTurn.Lease"/>).</param>
-    /// <exception cref="Results.HarnessException">The record could not be read or written.</exception>
     public void Done(string source, string lease)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(source);
@@ -189,13 +188,22 @@ public sealed class WebSearchPace
 
         _open.TryRemove(lease, out _);
 
-        var now = _clock.GetUtcNow();
-
-        _record.Value.Change((entries, _) =>
+        try
         {
-            var list = Live(entries, now);
-            return [.. list.Select(entry => entry.Source == source && entry.Asking?.Lease == lease ? entry with { Asking = null } : entry)];
-        });
+            var now = _clock.GetUtcNow();
+
+            _record.Value.Change((entries, _) =>
+            {
+                var list = Live(entries, now);
+                return [.. list.Select(entry => entry.Source == source && entry.Asking?.Lease == lease ? entry with { Asking = null } : entry)];
+            });
+        }
+        catch (Results.HarnessException)
+        {
+            // The hold is let go of in this process whatever the record says: a fetch of this process takes the turn back
+            // at its next asking (Holds), and another process's waits end with this one, whose stamp the record still
+            // names. A fetch that got its answer is never failed by the giving back of its turn.
+        }
     }
 
     /// <summary>

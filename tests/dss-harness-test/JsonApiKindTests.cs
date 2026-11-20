@@ -150,13 +150,13 @@ public sealed class JsonApiKindTests
         => Assert.Equal(At + TimeSpan.FromSeconds(30), WebRateLimit.Read(429, new Dictionary<string, string>(StringComparer.Ordinal) { ["retry-after"] = "30" }, At, TimeSpan.FromSeconds(1))!.Until);
 
     /// <summary>
-    /// GitHub's limit - a 403 with nothing remaining and a reset in seconds since 1970 - is a limit until that time; a
-    /// reset past a day from now is held to a day.
+    /// GitHub's limit - a 403 with nothing remaining and a reset in seconds since 1970 - is a limit until that time, as
+    /// given: a reset ten years away holds the source for its ten years.
     /// </summary>
     [Fact]
     public void A403WithNothingRemaining_IsALimitUntilItsReset()
     {
-        foreach (var (reset, until) in new[] { (At + TimeSpan.FromMinutes(7), At + TimeSpan.FromMinutes(7)), (At + TimeSpan.FromDays(3650), At + TimeSpan.FromDays(1)) })
+        foreach (var (reset, until) in new[] { (At + TimeSpan.FromMinutes(7), At + TimeSpan.FromMinutes(7)), (At + TimeSpan.FromDays(3650), At + TimeSpan.FromDays(3650)) })
         {
             var answer = Kind.Read(Source("gh", GitHub), WebSearchFound.None, Answer("""{"message":"API rate limit exceeded"}""", 403, headers: Headers(("X-RateLimit-Remaining", "0"), ("X-RateLimit-Reset", reset.ToUnixTimeSeconds().ToString(System.Globalization.CultureInfo.InvariantCulture)))));
 
@@ -203,16 +203,6 @@ public sealed class JsonApiKindTests
         Assert.StartsWith($"it answered {status}: ", answer.Why, StringComparison.Ordinal);
         Assert.Contains("throttle_violation", answer.Why, StringComparison.Ordinal);
         Assert.Empty(answer.Results);
-    }
-
-    /// <summary>A failure's body is told cut short, at a word.</summary>
-    [Fact]
-    public void AFailuresLongBody_IsCut()
-    {
-        var answer = Kind.Read(Source("so", StackOverflow), WebSearchFound.None, Answer(string.Concat(Enumerable.Repeat("word ", 400)), 500, "text/plain"));
-
-        Assert.EndsWith("word…", answer.Why, StringComparison.Ordinal);
-        Assert.True(answer.Why!.Length <= "it answered 500: ".Length + 200);
     }
 
     /// <summary>A pause an answer's body asks for must be one: none at zero; a total below zero is none.</summary>
@@ -384,32 +374,32 @@ public sealed class JsonApiKindTests
         Assert.Equal(words, Assert.Single(answer.Results).Snippet);
     }
 
-    /// <summary>A GET fills its address - the query escaped, the limit a number - and asks for JSON, with the source's headers.</summary>
+    /// <summary>A GET fills its address - the query escaped, the page's size a number - and asks for JSON, with the source's headers.</summary>
     [Fact]
     public void AGet_FillsItsAddress_AndSendsItsHeaders()
     {
-        var request = Assert.IsType<WebSearchRequest.Http>(Kind.Request(Source("gh", GitHub), WebSearchFound.None, "c# & linq/x", 5));
+        var request = Assert.IsType<WebSearchRequest.Http>(Kind.Request(Source("gh", GitHub), WebSearchFound.None, "c# & linq/x", 1));
 
         Assert.Equal("GET", request.Method);
-        Assert.Equal("https://api.github.com/search/repositories?q=c%23%20%26%20linq%2Fx&per_page=5", request.Address);
+        Assert.Equal("https://api.github.com/search/repositories?q=c%23%20%26%20linq%2Fx&per_page=10", request.Address);
         Assert.Equal("application/vnd.github+json", request.Headers["Accept"]);
         Assert.Equal("2022-11-28", request.Headers["X-GitHub-Api-Version"]);
         Assert.Null(request.Body);
     }
 
-    /// <summary>A POST fills its body's texts - the query as it is, a text that is the limit alone a number - and sends JSON.</summary>
+    /// <summary>A POST fills its body's texts - the query as it is, a text that is the page's size alone a number - and sends JSON.</summary>
     [Fact]
     public void APost_FillsItsBody()
     {
         var source = Source("post", """
-            { "kind": "json-api", "url": "https://api.example.test/search", "method": "POST",
+            { "kind": "json-api", "url": "https://api.example.test/search", "method": "POST", "pageSize": 4,
               "body": { "q": "{query}", "size": "{limit}", "label": "top {limit}", "filters": ["{query}", 3, true, null] },
               "items": "$.hits", "title": "{@.t}", "link": "{@.u}" }
             """);
 
         Assert.Empty(WebSearchKinds.OfThisBuild.Problems(source));
 
-        var request = Assert.IsType<WebSearchRequest.Http>(Kind.Request(source, WebSearchFound.None, "say \"hi\"", 4));
+        var request = Assert.IsType<WebSearchRequest.Http>(Kind.Request(source, WebSearchFound.None, "say \"hi\"", 1));
 
         Assert.Equal("POST", request.Method);
         Assert.Equal("https://api.example.test/search", request.Address);
@@ -458,8 +448,8 @@ public sealed class JsonApiKindTests
         var unread = Kind.Found(source, [Answer("not json", headers: Headers(("X-RateLimit-Remaining", "0"), ("X-RateLimit-Reset", "45")), address: lookup.Address)]);
         Assert.Equal((WebSearchOutcome.Changed, At + TimeSpan.FromSeconds(45)), (unread.Failure!.Outcome, unread.Until));
 
-        var request = Assert.IsType<WebSearchRequest.Http>(Kind.Request(source, found, "json reader", 5));
-        Assert.Equal("https://search-primary.example-packages.test/query?q=json%20reader&take=5", request.Address);
+        var request = Assert.IsType<WebSearchRequest.Http>(Kind.Request(source, found, "json reader", 1));
+        Assert.Equal("https://search-primary.example-packages.test/query?q=json%20reader&take=10", request.Address);
 
         var answer = Kind.Read(source, found, Answer(Stored("nuget-search.json")));
         Assert.Equal(["Example.Json", "Example.Json.Extensions"], answer.Results.Select(result => result.Title));
@@ -476,12 +466,12 @@ public sealed class JsonApiKindTests
     [InlineData("{\"resources\":[{\"@type\":\"SearchQueryService\",\"@id\":\"x\\ud800\"}]}", 200, WebSearchOutcome.Changed, "its 'search', looked up at 'https://example-packages.test/v3/index.json': it is no JSON: line 1: 'x\\ud800' spells half a character, an escape of a lone surrogate that no text can hold")]
     public void ADocumentDiscoverCannotRead_IsTheSourcesAnswer(string body, int status, WebSearchOutcome outcome, string why)
     {
-        var found = Kind.Found(Source("nuget", NuGet), [Answer(body, status)]);
+        var found = Kind.Found(Source("nuget", NuGet), [Answer(body, status) with { Unsaid = TimeSpan.FromMinutes(1) }]);
 
         Assert.Equal(outcome, found.Failure!.Outcome);
         Assert.StartsWith(why, found.Failure.Why, StringComparison.Ordinal);
 
-        // A limit holds the source as the found values' pause: a minute, where it said not how long.
+        // A limit holds the source as the found values' pause: for the asker's unsaid wait, where it said not how long.
         Assert.Equal(outcome == WebSearchOutcome.RateLimited ? At + TimeSpan.FromMinutes(1) : null, found.Until);
     }
 

@@ -136,7 +136,7 @@ public sealed class SitemapKind : IWebSearchKind
             throw new ArgumentException($"A source of kind '{Kind}' is answered by the harness's index of it, never by an endpoint.", nameof(response));
         }
 
-        if (index.Held == 0 && !index.Filling)
+        if (index.Held == 0)
         {
             // Held off for the site's or the machine's word, not for a problem: asked again once the time it gave has passed.
             if (index.PausedUntil is { } until && index.PausedFor is { } why)
@@ -144,6 +144,8 @@ public sealed class SitemapKind : IWebSearchKind
                 return WebSearchAnswer.Limited(until, $"{why} until {WebRateLimit.Said(until)}, and its index holds no page yet") with { Held = index.Said };
             }
 
+            // A problem is said whether a fill runs again or not: one begun again follows a fill that stopped short, and
+            // what stopped the last one is the best known word of why the index holds nothing.
             if (index.Problem is { } problem)
             {
                 return WebSearchAnswer.Failed($"its index holds no page: {problem}") with { Held = index.Said };

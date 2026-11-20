@@ -197,7 +197,7 @@ public static class AgentTools
             {
                 ["query"] = new JsonObject { ["type"] = "string", ["description"] = "What to search for, in words." },
                 ["sources"] = new JsonObject { ["type"] = "array", ["items"] = items, ["minItems"] = 1, ["description"] = "The sources asked, by name; every one of this step's where it is left out." },
-                ["page"] = new JsonObject { ["type"] = "integer", ["minimum"] = 1, ["description"] = "The page of each source's results asked, from 1; the first where it is left out." },
+                ["page"] = new JsonObject { ["type"] = "integer", ["description"] = "The page of each source's results asked, from 1; the first where it is left out." },
             },
             ["required"] = new JsonArray("query"),
             ["additionalProperties"] = false,

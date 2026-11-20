@@ -1776,7 +1776,10 @@ public sealed class AgentToolRuntimeTests : IDisposable
 
         Assert.Equal(["alpha", "beta"], schema["properties"]!["sources"]!["items"]!["enum"]!.AsArray().Select(name => name!.GetValue<string>()));
         Assert.Equal(["query"], schema["required"]!.AsArray().Select(name => name!.GetValue<string>()));
-        Assert.Equal(("integer", 1), (schema["properties"]!["page"]!["type"]!.GetValue<string>(), schema["properties"]!["page"]!["minimum"]!.GetValue<int>()));
+
+        // The page is an integer; that it is 1 and more is the runtime's own rule, said in its refusal, never the schema's.
+        Assert.Equal("integer", schema["properties"]!["page"]!["type"]!.GetValue<string>());
+        Assert.Null(schema["properties"]!["page"]!["minimum"]);
         Assert.EndsWith(
             " Each source gives every result of one page of its answer; ask its next page with page, each page one more request of each source asked; name some in sources to ask them alone, else every one is asked. This step's sources:\n- alpha: Alpha's answers\n- beta: Beta's packages",
             tool.Description,

@@ -200,13 +200,13 @@ public sealed class FeedAndOpenSearchKindTests
         Assert.Equal(WebSearchOutcome.Failed, FeedReader.Read(Source("f", Feed), WebSearchFound.None, Answer("gone", 410, "text/plain")).Outcome);
     }
 
-    /// <summary>A feed's request fills its address and asks for a feed.</summary>
+    /// <summary>A feed's request fills its address - the query escaped, the page's size a number - and asks for a feed.</summary>
     [Fact]
     public void AFeedsRequest_FillsItsAddress()
     {
-        var request = Assert.IsType<WebSearchRequest.Http>(FeedReader.Request(Source("f", Feed), WebSearchFound.None, "a b", 3));
+        var request = Assert.IsType<WebSearchRequest.Http>(FeedReader.Request(Source("f", Feed), WebSearchFound.None, "a b", 1));
 
-        Assert.Equal("https://feeds.example.test/search?q=a%20b&n=3", request.Address);
+        Assert.Equal("https://feeds.example.test/search?q=a%20b&n=10", request.Address);
         Assert.StartsWith("application/atom+xml", request.Headers["Accept"], StringComparison.Ordinal);
     }
 
@@ -242,9 +242,9 @@ public sealed class FeedAndOpenSearchKindTests
         var spent = Described.Found(source, [Answer(Stored("opensearch-feeds.xml"), type: "application/opensearchdescription+xml", headers: Headers(("RateLimit", "\"default\";r=0;t=30")))]);
         Assert.Equal(At + TimeSpan.FromSeconds(30), spent.Until);
 
-        var request = Assert.IsType<WebSearchRequest.Http>(Described.Request(source, found, "lexer & parser", 7));
+        var request = Assert.IsType<WebSearchRequest.Http>(Described.Request(source, found, "lexer & parser", 1));
 
-        Assert.Equal("https://search.example.test/atom?q=lexer%20%26%20parser&n=7&from=0&lang=*&x=", request.Address);
+        Assert.Equal("https://search.example.test/atom?q=lexer%20%26%20parser&n=10&from=0&lang=*&x=", request.Address);
         Assert.Equal("application/atom+xml", request.Headers["Accept"]);
 
         Assert.Equal(2, Described.Read(source, found, Answer(Stored("atom.xml"), type: "application/atom+xml")).Results.Count);
@@ -277,7 +277,7 @@ public sealed class FeedAndOpenSearchKindTests
         var found = Described.Found(source, [Answer(Stored("opensearch-json.xml"))]);
 
         Assert.Equal("application/json", found["type"]);
-        Assert.Equal("https://json.example.test/api?q=x&limit=2", Assert.IsType<WebSearchRequest.Http>(Described.Request(source, found, "x", 2)).Address);
+        Assert.Equal("https://json.example.test/api?q=x&limit=10", Assert.IsType<WebSearchRequest.Http>(Described.Request(source, found, "x", 1)).Address);
 
         var answer = Described.Read(source, found, Answer("""{ "hits": [ { "name": "One", "href": "https://json.example.test/1" } ] }"""));
         Assert.Equal("One", Assert.Single(answer.Results).Title);
@@ -316,7 +316,7 @@ public sealed class FeedAndOpenSearchKindTests
 
         Assert.Null(found.Failure);
         Assert.Equal(("application/rss+xml", "1"), (found["type"], found["indexOffset"]));
-        Assert.Equal("https://a.test/rss?q=x&from=1", Assert.IsType<WebSearchRequest.Http>(Described.Request(Source("os", OpenSearch), found, "x", 3)).Address);
+        Assert.Equal("https://a.test/rss?q=x&from=1", Assert.IsType<WebSearchRequest.Http>(Described.Request(Source("os", OpenSearch), found, "x", 1)).Address);
     }
 
     /// <summary>

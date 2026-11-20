@@ -117,7 +117,7 @@ public sealed class WebSearchKindsTests
     [InlineData("""{ "perMinute": 2147483648 }""", "'perMinute' is a whole number from 1 to 2,147,483,647, and is 2147483648")]
     [InlineData("""{ "perMinute": "10" }""", "'perMinute' is a whole number from 1 to 2,147,483,647, and is \"10\"")]
     [InlineData("""{ "pageSize": 0 }""", "'pageSize' is a whole number from 1 to 2,147,483,647, and is 0")]
-    [InlineData("""{ "perDay": 0 }""", "'perDay' is a whole number from 1 to 1,000,000, and is 0")]
+    [InlineData("""{ "perDay": 0 }""", "'perDay' is a whole number from 1 to 2,147,483,647, and is 0")]
     [InlineData("""{ "credential": "KEY" }""", "'credential' is an object: a key to send it")]
     [InlineData("""{ "credential": { "from": "vault" } }""", "'credential.from' is env, a variable of the .env slot, or gh, the machine's gh login")]
     [InlineData("""{ "credential": { "from": "env", "query": "key" } }""", "'credential.name' is missing: the variable of the .env slot that holds the key")]
