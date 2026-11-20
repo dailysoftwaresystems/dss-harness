@@ -426,12 +426,27 @@ public sealed class InputWatch : IDisposable, IWatchSink
             }
         }
 
-        // The directories that hold an input of their own, as Targets() names them: what a watch of only where the
-        // inputs are hears, and so the only writes told of elsewhere - a write anywhere deeper is a build's or a copy's,
-        // below a directory no input lies in, and hearing it is what watching only the inputs' directories spares.
-        _holding = new HashSet<string>(_tracked.Keys.Select(Above), comparer);
+        // The directories an input lies in or above, as the watch watches them: each directory that holds an input
+        // of its own for its entries, and each directory above one for the names in it alone. What a write below a
+        // directory no input lies in or above is - a build's, a copy's - that watch never hears, and never told of.
+        _holding = new HashSet<string>(_tracked.Keys.SelectMany(Above), comparer);
 
-        static string Above(string path) => path.LastIndexOf('/') is var at and > 0 ? path[..at] : string.Empty;
+        static IEnumerable<string> Above(string path)
+        {
+            // Each directory the input lies beneath, and each directory above those - watched for the names in them
+            // alone - short of the tree's root, which a watch of only reaches where an input lies in it: a file of the
+            // root's own, whose parent the root is.
+            for (var at = path.LastIndexOf('/'); at > 0; at = path.LastIndexOf('/', at - 1))
+            {
+                yield return path[..at];
+            }
+
+            if (path.LastIndexOf('/') < 0)
+            {
+                // An input of the root's own: the root holds it, watched for its entries.
+                yield return string.Empty;
+            }
+        }
 
         if (!Directory.Exists(_root))
         {

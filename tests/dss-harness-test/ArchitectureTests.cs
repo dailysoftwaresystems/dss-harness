@@ -376,6 +376,7 @@ public sealed class ArchitectureTests
     private static readonly Dictionary<string, string> NamedFactsAndPlannedRules = new(StringComparer.Ordinal)
     {
         // External facts, E1-E11, each kept and named as the fact it is.
+        [@"DssHarness.Core\Waiting\Waits.cs|LeastPause"] = "the fact that .NET's timers ask a delay of a millisecond at least",
         [@"DssHarness.Core\Agents\AgentChildEnvironment.cs|MostTimeoutSeconds"] = "E8: what a timer of milliseconds holds, the runner's and Claude Code's own range",
         [@"DssHarness.Core\Agents\ClaudeApi\ClaudeApiRequest.cs|MostLeastItems"] = "E10: Claude's structured outputs take minItems 0 or 1 and no maxItems",
         [@"DssHarness.Core\Codebase\Languages\CFamilyLexer.cs|MostRawDelimiter"] = "E1: the C++ raw-string delimiter is at most 16 characters",
