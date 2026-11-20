@@ -90,9 +90,12 @@ public static partial class CommandAnalysis
             return targets;
         }
 
+        // The words from the program on are a view over the command's own, never a copy: a program that runs its words is
+        // asked at each of them, and a list as long as the command made for each would be the command's length twice over
+        // for every word of it.
         var program = Name(words[start]);
-        var command = words.Skip(start).ToList();
-        var arguments = command.Skip(1).ToList();
+        var command = new WordsFrom(words, start);
+        var arguments = new WordsFrom(words, start + 1);
 
         if (Is(program, "dd"))
         {
@@ -134,6 +137,32 @@ public static partial class CommandAnalysis
         }
 
         return targets;
+    }
+
+    /// <summary>
+    /// The words of <paramref name="words"/> from <paramref name="start"/> on, as one list: a view over the words it is
+    /// given, nothing copied, so a reader asked at each word of a long command never makes a list as long as the command
+    /// for each of them.
+    /// </summary>
+    private readonly struct WordsFrom(IReadOnlyList<string> words, int start) : IReadOnlyList<string>
+    {
+        /// <inheritdoc/>
+        public int Count => Math.Max(0, words.Count - start);
+
+        /// <inheritdoc/>
+        public string this[int at] => words[start + at];
+
+        /// <inheritdoc/>
+        public IEnumerator<string> GetEnumerator()
+        {
+            for (var at = start; at < words.Count; at++)
+            {
+                yield return words[at];
+            }
+        }
+
+        /// <inheritdoc/>
+        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
     }
 
     /// <summary>
@@ -532,8 +561,12 @@ public static partial class CommandAnalysis
         }
 
         var program = Name(words[start]);
-        var command = words.Skip(start).ToList();
-        var arguments = command.Skip(1).ToList();
+
+        // The words from the program on are a view over the command's own, never a copy: a program that runs its words is
+        // asked at each of them, and a list as long as the command made for each would be the command's length twice over
+        // for every word of it.
+        var command = new WordsFrom(words, start);
+        var arguments = new WordsFrom(words, start + 1);
 
         IEnumerable<string> Plain(IEnumerable<string> each) => each.Where(word => word.Length > 0 && word[0] is not '-' and not '/');
 

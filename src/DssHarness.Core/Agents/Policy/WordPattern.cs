@@ -305,10 +305,7 @@ public sealed record WordPattern(IReadOnlyList<WordPart> Parts)
         var automaton = AutomatonOf();
 
         // Where a last segment may begin: the start, past any '@'s, and wherever a separator was just read.
-        var begins = automaton.Closure([automaton.Start]);
-        begins = automaton.Closure([.. begins, .. automaton.Repeated(begins, character => character == '@')]);
-        var reached = automaton.Reachable();
-        begins.UnionWith(automaton.Closure(automaton.Step(reached, character => character is '/' or '\\')));
+        var begins = automaton.NameBegins();
 
         foreach (var end in (IEnumerable<string>)["", .. ends])
         {
@@ -321,6 +318,92 @@ public sealed record WordPattern(IReadOnlyList<WordPart> Parts)
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// Whether some spelling of the pattern names one of <paramref name="names"/> (<see cref="MayNameProgram"/>'s question over
+    /// a whole list, each name already holding the ends it is folded of): the names as a tree of their upper-case characters
+    /// and the pattern's automaton read together, each pair of a tree node and a state set once - one walk, however many
+    /// names the list holds, that reaches a tree node a name ends at only where reading that name reaches its states.
+    /// </summary>
+    /// <param name="names">The names, as <see cref="NameTree.Of"/> builds one of.</param>
+    internal bool MayNameAProgram(NameTree names)
+    {
+        ArgumentNullException.ThrowIfNull(names);
+
+        var automaton = AutomatonOf();
+        var seen = new HashSet<(NameTree Node, string States)>();
+        var waiting = new Stack<(NameTree Node, HashSet<int> States)>();
+        waiting.Push((names, automaton.NameBegins()));
+
+        while (waiting.TryPop(out var at))
+        {
+            if (!seen.Add((at.Node, string.Concat(at.States.Order()))))
+            {
+                continue;
+            }
+
+            // A name ends at this node: some spelling reads it where nothing but separators may follow.
+            if (at.Node.Names
+                && (automaton.Repeated(automaton.Closure(at.States), character => character is '/' or '\\').Concat(at.States).Any(state => state == automaton.Accept)))
+            {
+                return true;
+            }
+
+            foreach (var (character, child) in at.Node.Children)
+            {
+                var read = automaton.Closure(automaton.Step(at.States, each => char.ToUpperInvariant(each) == character));
+
+                if (read.Count > 0)
+                {
+                    waiting.Push((child, read));
+                }
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// The names a pattern may be asked against as one tree of their characters, upper case (<see cref="MayNameAProgram"/>):
+    /// each node the names sharing what stands before it, and whether one ends there. Built once for a list, asked of every
+    /// pattern.
+    /// </summary>
+    internal sealed class NameTree
+    {
+        /// <summary>The characters that may follow, each the tree it leads to.</summary>
+        public Dictionary<char, NameTree> Children { get; } = [];
+
+        /// <summary>Whether a name of the list ends at this node.</summary>
+        public bool Names { get; private set; }
+
+        /// <summary><paramref name="names"/>, each spelt into a tree of its upper-case characters.</summary>
+        public static NameTree Of(IEnumerable<string> names)
+        {
+            ArgumentNullException.ThrowIfNull(names);
+
+            var root = new NameTree();
+
+            foreach (var name in names)
+            {
+                var at = root;
+
+                foreach (var character in name.ToUpperInvariant())
+                {
+                    if (!at.Children.TryGetValue(character, out var child))
+                    {
+                        child = new NameTree();
+                        at.Children.Add(character, child);
+                    }
+
+                    at = child;
+                }
+
+                at.Names = true;
+            }
+
+            return root;
+        }
     }
 
     /// <summary>
@@ -449,6 +532,28 @@ public sealed record WordPattern(IReadOnlyList<WordPart> Parts)
         public int Start { get; private set; }
 
         public int Accept { get; private set; }
+
+        /// <summary>Where the states a word's last segment may begin from are held, once built (<see cref="NameBegins"/>).</summary>
+        private HashSet<int>? _nameBegins;
+
+        /// <summary>
+        /// Where a word's last segment may begin: the start, past any <c>@</c>s, and wherever a separator was just read -
+        /// the states a program's name is read from (<see cref="WordPattern.MayNameProgram"/>). A fact of the automaton,
+        /// built once for every name it is asked of.
+        /// </summary>
+        public HashSet<int> NameBegins()
+        {
+            if (_nameBegins is { } built)
+            {
+                return built;
+            }
+
+            var begins = Closure([Start]);
+            begins = Closure([.. begins, .. Repeated(begins, character => character == '@')]);
+            begins.UnionWith(Closure(Step(Reachable(), character => character is '/' or '\\')));
+
+            return _nameBegins = begins;
+        }
 
         public static Automaton Of(WordPattern pattern)
         {

@@ -580,7 +580,7 @@ public sealed partial class AgentPolicy
     {
         ArgumentNullException.ThrowIfNull(path);
 
-        return Decide(path, ReadDecision);
+        return Decide(path, ReadMatchers, ReadDecision);
     }
 
     /// <summary>
@@ -594,7 +594,7 @@ public sealed partial class AgentPolicy
     {
         ArgumentNullException.ThrowIfNull(path);
 
-        return Decide(path, (asked, resolved) => ReadDecision(asked, resolved).Refusal() is { } denied ? denied : SearchedPast(asked, resolved));
+        return Decide(path, ReadMatchers, (asked, resolved) => ReadDecision(asked, resolved).Refusal() is { } denied ? denied : SearchedPast(asked, resolved));
     }
 
     /// <summary>
@@ -607,7 +607,7 @@ public sealed partial class AgentPolicy
     {
         ArgumentNullException.ThrowIfNull(path);
 
-        return Decide(path, WriteDecision);
+        return Decide(path, WriteMatchers, WriteDecision);
     }
 
     /// <summary>
@@ -804,6 +804,124 @@ public sealed partial class AgentPolicy
         return candidate[whole.Length..].TrimStart('/', '\\').Replace('\\', '/');
     }
 
+    /// <summary>
+    /// <see cref="Beneath"/> as the policy reads it within a decision: each path's whole - made as the runtime makes one, on
+    /// Windows each short name along it given as its long name, a read of the disk - kept for the decision, so a path asked
+    /// of each rule and root is made whole once, however many ask.
+    /// </summary>
+    private string? BeneathOf(string root, string path, StringComparison comparison)
+    {
+        var whole = WholeOf(root);
+        var candidate = WholeOf(path);
+
+        if (!StrictlyInside(whole, candidate, comparison))
+        {
+            return null;
+        }
+
+        return candidate[whole.Length..].TrimStart('/', '\\').Replace('\\', '/');
+    }
+
+    /// <summary>
+    /// Whether <paramref name="candidate"/> lies strictly beneath <paramref name="whole"/>, as
+    /// <see cref="PathContainment.IsStrictlyInside"/> decides it, asked here of paths the decision already made whole
+    /// (<see cref="WholeOf"/>) so neither is read on the disk again: the containment of a path the policy asks at each
+    /// place, rule and root of a decision is decided once, on the wholes it holds.
+    /// </summary>
+    private static bool StrictlyInside(string whole, string candidate, StringComparison comparison)
+        => candidate.Length > whole.Length
+            && candidate.StartsWith(whole, comparison)
+            && (IsSeparator(whole[^1]) || IsSeparator(candidate[whole.Length]));
+
+    /// <summary>
+    /// Whether <paramref name="candidate"/> is <paramref name="root"/> itself or lies beneath it, as
+    /// <see cref="PathContainment.IsInsideOrSame"/> decides it (<see cref="StrictlyInside"/>'s question with the same
+    /// path), asked of the wholes this decision made.
+    /// </summary>
+    private bool InsideOrSameOf(string root, string candidate, StringComparison comparison)
+        => string.Equals(WholeOf(root), WholeOf(candidate), comparison) || StrictlyInside(WholeOf(root), WholeOf(candidate), comparison);
+
+    /// <summary><paramref name="path"/> made whole (<see cref="Whole"/>), kept for the decision being made: one disk, read once a path.</summary>
+    private string WholeOf(string path)
+    {
+        var wholes = _wholes;
+
+        if (wholes is not null && wholes.TryGetValue(path, out var whole))
+        {
+            return whole;
+        }
+
+        // A path already spelled as the runtime spells one, beneath a directory this decision found nothing at, is its own
+        // whole: no short name below a directory that is not on the disk expands, so the runtime's reading of it changes
+        // nothing. Each directory along it is asked of the disk once a decision (KindAt), shared by every path through it.
+        var made = wholes is not null && SpelledWhole(path) ? path : Whole(path);
+
+        wholes?.Add(path, made);
+
+        return made;
+    }
+
+    /// <summary>
+    /// Whether <paramref name="path"/> is its own whole (<see cref="Whole"/>): already spelled as the runtime spells one -
+    /// rooted, each separator single, no segment <c>.</c> or <c>..</c> or empty, none at its end - no short name along the
+    /// part of it that is on the disk (no <c>~</c> before the first directory this decision found nothing at), and nothing
+    /// at some directory along it (<see cref="KindAt"/>), so no segment the runtime would expand or fold stands in it.
+    /// </summary>
+    private bool SpelledWhole(string path)
+    {
+        if (!Path.IsPathRooted(path) || path.EndsWith(Path.DirectorySeparatorChar) || path.EndsWith(Path.AltDirectorySeparatorChar))
+        {
+            return false;
+        }
+
+        var root = Path.GetPathRoot(path)!.Length;
+
+        for (var at = root; at < path.Length;)
+        {
+            var end = path.IndexOfAny(['/', '\\'], at);
+
+            if (end < 0)
+            {
+                end = path.Length;
+            }
+
+            var segment = path[at..end];
+
+            if (segment.Length == 0 || segment is "." or "..")
+            {
+                return false;
+            }
+
+            var kind = KindAt(path[..end]);
+
+            // Nothing at the segment: no name it may shorten to, and none beneath it either.
+            if (kind is PathKind.None)
+            {
+                return true;
+            }
+
+            // A short name the disk holds: only the runtime's own reading of the path says the name it expands to.
+            if (segment.Contains('~'))
+            {
+                return false;
+            }
+
+            // Nothing below a file: no name beneath it is found to expand.
+            if (kind is PathKind.File)
+            {
+                return true;
+            }
+
+            at = end + 1;
+        }
+
+        // Every directory along it on the disk: the runtime may still expand a short name at any of them.
+        return false;
+    }
+
+    /// <summary>Each path made whole this decision, by its spelling: the short names a whole expands are the disk's, read once a path a decision.</summary>
+    private Dictionary<string, string>? _wholes;
+
     /// <summary>A read, decided: a place no action reaches never (<see cref="Unreached"/>), then the reporter's one root, then the <c>Read</c> rules on the path as asked and as resolved.</summary>
     private AgentPolicyAnswer ReadDecision(string asked, string resolved)
     {
@@ -866,7 +984,7 @@ public sealed partial class AgentPolicy
             return outside;
         }
 
-        if (!_writableRoots.Any(root => PathContainment.IsInsideOrSame(root, resolved, _platform.PathComparison)))
+        if (!_writableRoots.Any(root => InsideOrSameOf(root, resolved, _platform.PathComparison)))
         {
             return new AgentPolicyAnswer.Denied(
                 "the writable roots",
@@ -892,7 +1010,7 @@ public sealed partial class AgentPolicy
         {
             foreach (var form in new[] { asked, resolved })
             {
-                if (Beneath(root, form, Refusals) is not { } relative)
+                if (BeneathOf(root, form, Refusals) is not { } relative)
                 {
                     continue;
                 }
@@ -944,7 +1062,7 @@ public sealed partial class AgentPolicy
                     // submodule's .git runs its hooks as surely as the root's. Whatever protectedPaths says, and for a
                     // step's ground under the worktree rules - which a side-task's ground holds off, keeping this one
                     // alone of them, for git's own files are written by git's verbs and this tool's.
-                    if (Beneath(root, form, Refusals) is { } relative && relative.Split('/').Any(segment => segment.Equals(".git", Refusals)))
+                    if (BeneathOf(root, form, Refusals) is { } relative && relative.Split('/').Any(segment => segment.Equals(".git", Refusals)))
                     {
                         return new AgentPolicyAnswer.Denied(
                             GitsOwnRule,
@@ -1438,7 +1556,24 @@ public sealed partial class AgentPolicy
     }
 
     /// <summary>What is at <paramref name="path"/>, as the walk would find it; nothing where that cannot be asked.</summary>
+    /// <remarks>What the decision being made found at each path, it keeps (<see cref="_kinds"/>): one decision reads one disk, so a path asked again is given the kind it was found to have.</remarks>
     private PathKind KindAt(string path)
+    {
+        var kinds = _kinds;
+
+        if (kinds is not null && kinds.TryGetValue(path, out var kind))
+        {
+            return kind;
+        }
+
+        var found = KindOnDisk(path);
+        kinds?.Add(path, found);
+
+        return found;
+    }
+
+    /// <summary><see cref="KindAt"/> asked of the disk itself.</summary>
+    private PathKind KindOnDisk(string path)
     {
         try
         {
@@ -1449,6 +1584,12 @@ public sealed partial class AgentPolicy
             return PathKind.None;
         }
     }
+
+    /// <summary>
+    /// What the decision being made found at each path it asked, by its spelling: one decision reads one disk, so its
+    /// paths' kinds are its own to keep. Null outside a decision, where every ask reads the disk.
+    /// </summary>
+    private Dictionary<string, PathKind>? _kinds;
 
     /// <summary>Three answers a walk's test may give an entry: it does not hold, it may, it does.</summary>
     private enum Truth
@@ -1686,7 +1827,7 @@ public sealed partial class AgentPolicy
         {
             if (!named.Regular)
             {
-                pattern = WalkMatchers.GetValue(named, test => SegmentPattern(test.Pattern, test.IgnoreCase));
+                pattern = WalkMatchers.GetValue(named, test => Segmented(test.Pattern, test.IgnoreCase));
             }
             else if (!LinearRegex.TryCompile(named.Pattern, named.IgnoreCase ? System.Text.RegularExpressions.RegexOptions.IgnoreCase : System.Text.RegularExpressions.RegexOptions.None, out pattern, out _))
             {
@@ -1766,7 +1907,7 @@ public sealed partial class AgentPolicy
         {
             // Beneath the worktree by any spelling its file system folds to it: the narrowing holds
             // for each, and a pattern allows only the spelling it names as the platform compares.
-            if (Beneath(_workingRoot, form, Refusals) is { } relative && !Covers(relative))
+            if (BeneathOf(_workingRoot, form, Refusals) is { } relative && !Covers(relative))
             {
                 return new AgentPolicyAnswer.Denied(
                     "the step's writes",
@@ -1854,6 +1995,18 @@ public sealed partial class AgentPolicy
         // its own, and what lies outside this decision's readings is left as it was.
         var outer = _probes;
         _probes = probes ?? new Probes();
+
+        // What each path this decision asks resolves to, kept for the decision: one disk, read once a path.
+        var outerResolutions = _resolutions;
+        _resolutions = [];
+
+        // What each path this decision asks is, kept for the decision as well.
+        var outerKinds = _kinds;
+        _kinds = [];
+
+        // Each path this decision makes whole, kept for the decision as well.
+        var outerWholes = _wholes;
+        _wholes = [];
 
         try
         {
@@ -2109,6 +2262,9 @@ public sealed partial class AgentPolicy
         finally
         {
             _probes = outer;
+            _resolutions = outerResolutions;
+            _kinds = outerKinds;
+            _wholes = outerWholes;
         }
     }
 
@@ -2512,20 +2668,53 @@ public sealed partial class AgentPolicy
 
     /// <summary>
     /// The readings of one command (<see cref="Readings"/>): as it is spelled first, then each the variables the string
-    /// set give it (<see cref="Substituted"/>), given lazily, as often as they are asked for.
+    /// set give it (<see cref="Substituted"/>), given lazily - and kept as they are read, so a decision that asks for them
+    /// again (a decision of a string asks of every start of a program) reads what it read, never spelling the ways the
+    /// variables' choices may be made a second time.
     /// </summary>
     /// <param name="Spelled">The command as it is spelled.</param>
     /// <param name="Substituted">The command with the variables the string set given their values, one reading each way; none where it reads none.</param>
     private sealed record CommandReadings(AnalyzedCommand Spelled, IEnumerable<AnalyzedCommand> Substituted) : IEnumerable<AnalyzedCommand>
     {
+        /// <summary>The readings read so far, in the order they were spelled: what an enumeration that asks again is given first.</summary>
+        private readonly List<AnalyzedCommand> _read = [];
+
+        /// <summary>The reading of <see cref="Substituted"/> still being spelled, kept until it ends; null before the first is asked for.</summary>
+        private IEnumerator<AnalyzedCommand>? _reading;
+
         /// <summary>The readings the variables give where there are any, else the command as it is spelled: what a file it names is read by.</summary>
-        public IEnumerable<AnalyzedCommand> Given => Substituted.Any() ? Substituted : [Spelled];
+        public IEnumerable<AnalyzedCommand> Given => Read().Any() ? Read() : [Spelled];
 
         /// <inheritdoc/>
-        public IEnumerator<AnalyzedCommand> GetEnumerator() => Substituted.Prepend(Spelled).GetEnumerator();
+        public IEnumerator<AnalyzedCommand> GetEnumerator() => Read().Prepend(Spelled).GetEnumerator();
 
         /// <inheritdoc/>
         System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
+
+        /// <summary>
+        /// The substituted readings as they are spelled, kept as they are read: an enumeration replays what it holds and spells on
+        /// from where the reading stands, so the ways the variables' choices may be made are spelled once, however often they are asked for.
+        /// </summary>
+        private IEnumerable<AnalyzedCommand> Read()
+        {
+            for (var at = 0; ; at++)
+            {
+                while (at >= _read.Count)
+                {
+                    _reading ??= Substituted.GetEnumerator();
+
+                    if (!_reading.MoveNext())
+                    {
+                        _reading.Dispose();
+                        yield break;
+                    }
+
+                    _read.Add(_reading.Current);
+                }
+
+                yield return _read[at];
+            }
+        }
     }
 
     /// <summary>
@@ -3029,7 +3218,7 @@ public sealed partial class AgentPolicy
     /// as the shells match one (<see cref="DotNamed"/>) - but where <paramref name="dotNames"/> says the command's
     /// patterns match dot-names too.
     /// </summary>
-    private static bool GlobReaches(string pattern, string place, bool dotNames, bool exactly = false)
+    private bool GlobReaches(string pattern, string place, bool dotNames, bool exactly = false)
     {
         var (reaches, prefixes) = GlobAgainst(GlobSegments(pattern), place, dotNames);
 
@@ -3037,7 +3226,7 @@ public sealed partial class AgentPolicy
     }
 
     /// <summary>A shell pattern's segments, each with the expression it matches a name by - null for a <c>**</c> - read once for every place it is held against.</summary>
-    private static (string[] Segments, System.Text.RegularExpressions.Regex?[] Matchers) GlobSegments(string pattern)
+    private (string[] Segments, System.Text.RegularExpressions.Regex?[] Matchers) GlobSegments(string pattern)
     {
         var segments = pattern.Split(['/', '\\'], StringSplitOptions.RemoveEmptyEntries);
 
@@ -3051,8 +3240,7 @@ public sealed partial class AgentPolicy
     /// segment once: whether the pattern's first p segments may be the place's first q, a <c>**</c> taking none of them or
     /// any run of them, crossing a dot-named directory where a star matches one.
     /// </summary>
-    private static (bool Reaches, bool[] Prefixes) GlobAgainst((string[] Segments, System.Text.RegularExpressions.Regex?[] Matchers) pattern, string place, bool dotNames)
-    {
+    private static (bool Reaches, bool[] Prefixes) GlobAgainst((string[] Segments, System.Text.RegularExpressions.Regex?[] Matchers) pattern, string place, bool dotNames)    {
         var (patterned, segments) = pattern;
         var placed = place.Split(['/', '\\'], StringSplitOptions.RemoveEmptyEntries);
         var met = new bool[patterned.Length + 1, placed.Length + 1];
@@ -3184,7 +3372,18 @@ public sealed partial class AgentPolicy
     /// would not read as a bracket - a <c>]</c> right after its <c>[</c> or <c>[!</c> is a member, and one that does not
     /// close or holds a reversed range is the characters it is - read as those characters.
     /// </summary>
-    private static System.Text.RegularExpressions.Regex SegmentPattern(string segment, bool ignoreCase = true)
+    /// <remarks>
+    /// The expression a segment spells is a fact of its text: kept by the policy, so a segment - a name asked of each
+    /// reading it stands in, a pattern asked of each place it is held against - is compiled once, however often it is read.
+    /// </remarks>
+    private System.Text.RegularExpressions.Regex SegmentPattern(string segment, bool ignoreCase = true)
+        => _segments.TryGetValue((segment, ignoreCase), out var spelled) ? spelled : _segments[(segment, ignoreCase)] = Segmented(segment, ignoreCase);
+
+    /// <summary>The expression each segment spells, by its text and case (<see cref="SegmentPattern"/>): each compiled once.</summary>
+    private readonly Dictionary<(string Segment, bool IgnoreCase), System.Text.RegularExpressions.Regex> _segments = [];
+
+    /// <summary><see cref="SegmentPattern"/> asked of the segment's text itself.</summary>
+    private static System.Text.RegularExpressions.Regex Segmented(string segment, bool ignoreCase)
     {
         var expression = new System.Text.StringBuilder("^");
 
@@ -3974,7 +4173,7 @@ public sealed partial class AgentPolicy
         {
             foreach (var kind in _unreachable)
             {
-                if (kind.Places.Any(place => PathContainment.IsInsideOrSame(place, form, Refusals)))
+                if (kind.Places.Any(place => InsideOrSameOf(place, form, Refusals)))
                 {
                     return new AgentPolicyAnswer.Denied(kind.Rule, AgentPolicySource.Builtin, $"'{form}' {kind.Is}: no file tool of an agent reads or writes one");
                 }
@@ -4516,7 +4715,7 @@ public sealed partial class AgentPolicy
             {
                 matters = true;
 
-                if (Beneath(form, unreached, Refusals) is { } relative && relative.Split('/')[0] is { Length: > 0 } below && matcher.Spells(below))
+                if (BeneathOf(form, unreached, Refusals) is { } relative && relative.Split('/')[0] is { Length: > 0 } below && matcher.Spells(below))
                 {
                     names.Add(below);
                 }
@@ -4623,28 +4822,52 @@ public sealed partial class AgentPolicy
     /// for where it lands - and on each place a spelling of it may reach, allowed only where every
     /// one of them is. A path this cannot read, or one blank, is undecided.
     /// </summary>
-    private AgentPolicyAnswer Decide(string path, Func<string, string, AgentPolicyAnswer> decide)
+    /// <param name="path">The path as the tool asks it.</param>
+    /// <param name="matchers">The patterns the decision matches a path by, which tell its readings apart (<see cref="ReadMatchers"/>, <see cref="WriteMatchers"/>).</param>
+    /// <param name="decide">The decision of one spelling of the path, asked and resolved.</param>
+    private AgentPolicyAnswer Decide(string path, IReadOnlyList<(DssHarness.Core.Repository.GlobPattern Pattern, string Root, StringComparison Comparison)>? matchers, Func<string, string, AgentPolicyAnswer> decide)
     {
+        // What each path this decision asks resolves to, kept for the decision: one disk, read once a path.
+        var outerResolutions = _resolutions;
+        _resolutions = [];
+
+        // What each path this decision asks is, kept for the decision as well.
+        var outerKinds = _kinds;
+        _kinds = [];
+
+        // Each path this decision makes whole, kept for the decision as well.
+        var outerWholes = _wholes;
+        _wholes = [];
+
         try
         {
-            if (string.IsNullOrWhiteSpace(path))
+            try
             {
-                throw new ArgumentException("it names no path");
-            }
-
-            foreach (var asked in Spelled(path, _ground.WorkingDirectory, rules: true))
-            {
-                if (decide(asked, Resolved(asked)).Refusal() is { } denied)
+                if (string.IsNullOrWhiteSpace(path))
                 {
-                    return denied;
+                    throw new ArgumentException("it names no path");
                 }
-            }
 
-            return AgentPolicyAnswer.Allow;
+                foreach (var asked in Spelled(path, _ground.WorkingDirectory, matchers: matchers))
+                {
+                    if (decide(asked, Resolved(asked)).Refusal() is { } denied)
+                    {
+                        return denied;
+                    }
+                }
+
+                return AgentPolicyAnswer.Allow;
+            }
+            catch (Exception exception) when (Undecidable(exception))
+            {
+                return Undecided(path, exception);
+            }
         }
-        catch (Exception exception) when (Undecidable(exception))
+        finally
         {
-            return Undecided(path, exception);
+            _resolutions = outerResolutions;
+            _kinds = outerKinds;
+            _wholes = outerWholes;
         }
     }
 
@@ -4672,8 +4895,8 @@ public sealed partial class AgentPolicy
     /// the two as forms (<see cref="Meet"/>) - every path read from such a place, or asked of such a file, is lengthened
     /// where it is decided.
     /// </param>
-    /// <param name="rules">Whether a file tool decides the readings, so each of its path patterns tells two readings apart (<see cref="Lengthenings"/>).</param>
-    private IReadOnlyList<string> Spelled(string path, string directory, bool tildeExpands = true, bool lengthen = true, bool rules = false)
+    /// <param name="matchers">The patterns the decision asking matches a path by, each of which tells two readings apart (<see cref="Lengthenings"/>); null where none does.</param>
+    private IReadOnlyList<string> Spelled(string path, string directory, bool tildeExpands = true, bool lengthen = true, IReadOnlyList<(DssHarness.Core.Repository.GlobPattern Pattern, string Root, StringComparison Comparison)>? matchers = null)
     {
         var text = HomeExpanded(path.Trim(), _platform.HomeDirectory, tildeExpands);
         IReadOnlyList<string> readings = OnWindows && DriveSpelled(text) is { } drive ? [drive, text] : [text];
@@ -4681,7 +4904,7 @@ public sealed partial class AgentPolicy
         // A short name the system gave no long one - its path is not there yet - may be any guarded name it could shorten:
         // read one of each way its readings stand to the decisions (Lengthenings), never every one of them.
         return [.. readings.Select(reading => Plain(reading, directory))
-            .SelectMany(whole => OnWindows && lengthen ? Lengthenings(whole, rules) : [whole])
+            .SelectMany(whole => OnWindows && lengthen ? Lengthenings(whole, matchers) : [whole])
             .Distinct(StringComparer.OrdinalIgnoreCase)];
     }
 
@@ -4739,7 +4962,115 @@ public sealed partial class AgentPolicy
     /// place with a device prefix. A device-named file this Windows resolves to the device is the file in its directory's
     /// place, that directory's links followed, as <see cref="Plain"/> reads it.
     /// </summary>
+    /// <remarks>
+    /// The one decision of a string or a path that asks holds what each path it asked resolved to
+    /// (<see cref="_resolutions"/>): a decision reads one disk, so a path asked again - a word read at each place the shell
+    /// may stand, a path read again at another - is given what it resolved to, never walked on the disk twice.
+    /// </remarks>
     private string Resolved(string path)
+    {
+        var known = _resolutions;
+
+        if (known is not null && known.TryGetValue(path, out var resolved))
+        {
+            return resolved;
+        }
+
+        // A path no link stands along resolves to itself: read of the kinds this decision already found at each of its
+        // directories, so a path beneath a directory the decision found empty on the disk is not walked again.
+        var answer = known is not null && ResolvesToItself(path) ? path : ResolvedOnDisk(path);
+
+        // Set by place, never added: the path may have been resolved at the boundary another resolution confirmed.
+        if (known is not null)
+        {
+            known[path] = answer;
+        }
+
+        return answer;
+    }
+
+    /// <summary>
+    /// Whether <paramref name="path"/> resolves to itself: every directory along it one the decision found on the disk
+    /// and none a link, and no separator at its end - so the walk that follows links reads the path it is given. Each
+    /// directory's kind is asked once a decision (<see cref="KindAt"/>), shared by every path that passes through it; and
+    /// where the walk stops, at a name that is no directory, the disk's own resolver is asked once at the boundary it
+    /// stops on (<see cref="ResolvedOnce"/>), for a file system may refuse to resolve a name whose kind it reads fine -
+    /// a refusal is the caller's to see, as the walk's own would be.
+    /// </summary>
+    private bool ResolvesToItself(string path)    {
+        if (!Path.IsPathRooted(path) || path.EndsWith(Path.DirectorySeparatorChar) || path.EndsWith(Path.AltDirectorySeparatorChar))
+        {
+            return false;
+        }
+
+        var root = Path.GetPathRoot(path)!.Length;
+
+        for (var at = root; at < path.Length;)
+        {
+            var end = path.IndexOfAny(['/', '\\'], at);
+
+            if (end < 0)
+            {
+                end = path.Length;
+            }
+
+            if (end == at)
+            {
+                return false;
+            }
+
+            switch (KindAt(path[..end]))
+            {
+                case PathKind.Link:
+                    return false;
+                case PathKind.None or PathKind.File:
+                    // The walk that follows links stops at this name, probing nothing beneath it: what it does probe - the
+                    // directories above, and this name - the resolver is asked of at the first name past it, or the path
+                    // itself where the name is the path's last.
+                    return ResolvedOnce(Boundary(path, end + 1)) == Boundary(path, end + 1);
+            }
+
+            at = end + 1;
+        }
+
+        // Every directory along it is on the disk and none a link: the walk that follows them reads the path it is given.
+        return true;
+    }
+
+    /// <summary><paramref name="path"/> to its first separator past <paramref name="from"/> - the whole of it where the separator does not stand: the first name past a missing directory, as the walk that follows links stops at it.</summary>
+    private static string Boundary(string path, int from)
+    {
+        var end = from >= path.Length ? path.Length : path.IndexOfAny(['/', '\\'], from);
+
+        return path[..(end < 0 ? path.Length : end)];
+    }
+
+    /// <summary>
+    /// <see cref="ResolvedOnDisk"/> kept for the decision (<see cref="_resolutions"/>): a path the decision asks to resolve
+    /// again is given what it resolved to, and a disk that refuses to resolve it refuses to the caller as it did before.
+    /// </summary>
+    private string ResolvedOnce(string path)
+    {
+        var known = _resolutions;
+
+        if (known is not null && known.TryGetValue(path, out var resolved))
+        {
+            return resolved;
+        }
+
+        var answer = ResolvedOnDisk(path);
+
+        // Set by place, never added: the path may be the very boundary another resolution is confirming.
+        if (known is not null)
+        {
+            known[path] = answer;
+        }
+
+        return answer;
+    }
+
+    /// <summary><see cref="Resolved"/> asked of the disk itself.</summary>
+    private string ResolvedOnDisk(string path)
     {
         var resolved = _fileSystem.ResolveLinks(path);
 
@@ -4752,6 +5083,12 @@ public sealed partial class AgentPolicy
             return Path.Join(Resolved(parent), Path.GetFileName(path));
         }
     }
+
+    /// <summary>
+    /// Where each path the decision being made resolved to, by its spelling: one decision reads one disk, so its paths'
+    /// resolutions are its own to keep. Null outside a decision, where every ask walks the disk.
+    /// </summary>
+    private Dictionary<string, string>? _resolutions;
 
     /// <summary>
     /// <paramref name="path"/> without the device prefix at its start, on Windows - <c>\\?\</c>,
@@ -4924,7 +5261,7 @@ public sealed partial class AgentPolicy
             {
                 foreach (var form in new[] { asked, resolved })
                 {
-                    if (Beneath(root, form, Refusals) is { } relative && rule.Matches(relative, Refusals))
+                    if (BeneathOf(root, form, Refusals) is { } relative && rule.Matches(relative, Refusals))
                     {
                         return DeniedBy(declared, form);
                     }

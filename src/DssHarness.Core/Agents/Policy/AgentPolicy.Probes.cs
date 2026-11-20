@@ -44,6 +44,13 @@ public sealed partial class AgentPolicy
         },
     ];
 
+    /// <summary>ReadsWordsOf as one tree of names, each with the ends a program's name is folded of, built once: one walk of a word's pattern answers whether it may name one of them.</summary>
+    private static WordPattern.NameTree? _readWords;
+
+    /// <summary><see cref="ReadsWordsOf"/> as one tree of names (<see cref="WordPattern.NameTree.Of"/>), each name holding every end it is folded of: asked of a word's pattern whole, never one name at a time.</summary>
+    private static WordPattern.NameTree ReadWords => _readWords ??= WordPattern.NameTree.Of(
+        ReadsWordsOf.SelectMany(program => (IEnumerable<string>)[program, .. CommandAnalysis.ProgramEnds.Select(end => program + end)]));
+
     /// <summary>
     /// The cores of one decision of a string: each choice the readings hold as one text standing for its alternatives,
     /// and each core's choice and word where it holds one. Lives for one decision of a string: a core is decided
@@ -207,7 +214,7 @@ public sealed partial class AgentPolicy
         {
             // A word whose spelling names a program or mark whose words are read spells its choices: its words are
             // read, not only named.
-            foreach (var program in ReadsWordsOf.Where(program => words[at].MayNameProgram(program, CommandAnalysis.ProgramEnds)))
+            if (words[at].MayNameAProgram(ReadWords))
             {
                 foreach (var choice in ChoicesOf(words[at]).Where(choice => coreable.ContainsKey(choice)))
                 {

@@ -115,10 +115,11 @@ public static partial class CommandAnalysis
         }
 
         var program = Name(words[start]);
-        IReadOnlyList<string> command = [.. words.Skip(start)];
 
-        return Is(program, "find") ? FindWalk(command)
-            : Is(program, "fd", "fdfind") ? FdWalk(command)
+        // The walk is asked of the program's own words alone: a program that runs its words is asked at each of them, and
+        // the tail is never copied where the program there makes no walk.
+        return Is(program, "find") ? FindWalk([.. words.Skip(start)])
+            : Is(program, "fd", "fdfind") ? FdWalk([.. words.Skip(start)])
             : null;
     }
 

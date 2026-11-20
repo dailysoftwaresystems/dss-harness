@@ -32,9 +32,6 @@ public sealed partial class AgentPolicy
     /// <summary>Every place a decision of a path compares it with, as its roots and refusals spell them (<see cref="Placed"/>).</summary>
     private IReadOnlyList<string>? _tracked;
 
-    /// <summary>Every pattern a file tool's decision matches a path by, with the root it is matched beneath and how names compare.</summary>
-    private IReadOnlyList<(GlobPattern Pattern, string Root, StringComparison Comparison)>? _pathMatchers;
-
     /// <summary>
     /// Every place a decision of a path compares it with: the places no action reaches, the tool's state, every tree and its
     /// <c>.git</c>, every root, the working directory and the reporter's root - one of them, a directory that holds one, or
@@ -50,15 +47,33 @@ public sealed partial class AgentPolicy
         }.SelectMany(places => places).Distinct(StringComparer.OrdinalIgnoreCase),
     ];
 
+    /// <summary>Every pattern a <c>Read</c> decision of a path matches a path by, with the root it is matched beneath and how names compare.</summary>
+    private IReadOnlyList<(GlobPattern Pattern, string Root, StringComparison Comparison)>? _readMatchers;
+
+    /// <summary>Every pattern a write of a path matches a path by, with the root it is matched beneath and how names compare.</summary>
+    private IReadOnlyList<(GlobPattern Pattern, string Root, StringComparison Comparison)>? _writeMatchers;
+
     /// <summary>
-    /// Every pattern a file tool's decision matches a path by beneath a root (<see cref="Matched(AgentRuleVerb, string, string)"/>,
-    /// <see cref="BuiltinWriteRefusal"/>, <see cref="OutsideStepWrites"/>): each path rule beneath the roots its verb reads,
-    /// the worktree rules and protected paths beneath every root, and the step's writes beneath every root and its worktree.
+    /// The patterns a read of a path (<see cref="Read"/>, <see cref="Search"/>) is decided by: each <c>Read</c> rule's path
+    /// pattern beneath the roots its verb reads. The readings such a decision keeps one of each way of
+    /// (<see cref="Lengthenings"/>) are keyed by where these stand and no other pattern, for no other pattern is asked of
+    /// the readings a read decides - so the ways a write's patterns alone would tell apart, a read never spells apart.
     /// </summary>
-    private IReadOnlyList<(GlobPattern Pattern, string Root, StringComparison Comparison)> PathMatchers => _pathMatchers ??=
+    private IReadOnlyList<(GlobPattern Pattern, string Root, StringComparison Comparison)> ReadMatchers => _readMatchers ??=
     [
-        .. _rules.Where(pair => pair.Rule.PathPattern is not null)
-            .SelectMany(pair => (pair.Rule.Verb is AgentRuleVerb.Write ? _allRoots : _refusalReadRoots).Select(root => (pair.Rule.PathPattern!, root, Refusals))),
+        .. _rules.Where(pair => pair.Rule.PathPattern is not null && pair.Rule.Verb is AgentRuleVerb.Read)
+            .SelectMany(pair => _refusalReadRoots.Select(root => (pair.Rule.PathPattern!, root, Refusals))),
+    ];
+
+    /// <summary>
+    /// The patterns a write of a path (<see cref="Write"/>) is decided by: each <c>Write</c> rule's path pattern beneath
+    /// every root, the worktree rules and protected paths beneath every root, and the step's writes beneath every root and
+    /// its worktree - never a <c>Read</c> rule's, which no write's decision asks of the readings it decides.
+    /// </summary>
+    private IReadOnlyList<(GlobPattern Pattern, string Root, StringComparison Comparison)> WriteMatchers => _writeMatchers ??=
+    [
+        .. _rules.Where(pair => pair.Rule.PathPattern is not null && pair.Rule.Verb is AgentRuleVerb.Write)
+            .SelectMany(pair => _allRoots.Select(root => (pair.Rule.PathPattern!, root, Refusals))),
         .. _worktreePolicyWrites.Concat(_protectedPaths).SelectMany(pair => _allRoots.Select(root => (pair.Pattern, root, Refusals))),
         .. _writes.SelectMany(pair => _allRoots.Append(_workingRoot).Select(root => (pair.Pattern, root, _platform.PathComparison))),
     ];
@@ -95,10 +110,19 @@ public sealed partial class AgentPolicy
     /// <summary>One reading being read: its text so far, where it stands and where it resolves, and - for a file tool - where each of its patterns stands to both.</summary>
     private sealed record Reading(string Text, Placed Asked, Placed Resolved, IReadOnlyList<GlobPattern.Progress?>? AskedRules, IReadOnlyList<GlobPattern.Progress?>? ResolvedRules)
     {
-        /// <summary>What two readings standing alike to every decision share (<see cref="Placed"/>).</summary>
-        public string Key => Asked.Anchor is null
+        /// <summary>What two readings standing alike to every decision share (<see cref="Placed"/>), spelled once.</summary>
+        public string Key => _key ??= Asked.Anchor is null
             ? Asked.Key
             : string.Join('\n', [Asked.Key, Resolved.Key, Rules(AskedRules), Rules(ResolvedRules)]);
+
+        /// <summary><see cref="Key"/>, built once: a reading asked of the decisions again answers with what it spelled first.</summary>
+        private string? _key;
+
+        /// <summary>Whether the reading stands and resolves alike (<see cref="AgentPolicy.Stepped"/>): its two sides step as one, asked once.</summary>
+        public bool Alike => _alike ??= Resolved.Equals(Asked) && Rules(ResolvedRules) == Rules(AskedRules);
+
+        /// <summary><see cref="Alike"/>, read once.</summary>
+        private bool? _alike;
 
         private static string Rules(IReadOnlyList<GlobPattern.Progress?>? rules)
             => rules is null ? string.Empty : string.Join(';', rules.Select(rule => rule is { } stands ? $"{stands.Places}/{(stands.MatchedAbove ? 1 : 0)}{(stands.MatchedHere ? 1 : 0)}" : "-"));
@@ -111,8 +135,8 @@ public sealed partial class AgentPolicy
     /// itself comes first and a refusal of any reading is said of the first one refused.
     /// </summary>
     /// <param name="whole">A whole path, made plain (<see cref="Plain"/>).</param>
-    /// <param name="rules">Whether a file tool decides the readings, so where each pattern it matches a path by stands to each tells them apart.</param>
-    private IReadOnlyList<string> Lengthenings(string whole, bool rules)
+    /// <param name="matchers">The patterns the decision asking matches a path by, so where each stands to a reading tells two apart; null where none does.</param>
+    private IReadOnlyList<string> Lengthenings(string whole, IReadOnlyList<(GlobPattern Pattern, string Root, StringComparison Comparison)>? matchers)
     {
         var parts = WindowsNames.Lengthenings(whole, _guardedNames);
         var first = 0;
@@ -128,7 +152,7 @@ public sealed partial class AgentPolicy
         }
 
         var start = string.Concat(parts.Take(first).Select(part => part[0]));
-        List<Reading> readings = [Began(start, rules)];
+        List<Reading> readings = [Began(start, matchers)];
 
         foreach (var part in parts.Skip(first))
         {
@@ -146,7 +170,7 @@ public sealed partial class AgentPolicy
             {
                 foreach (var name in part)
                 {
-                    if (Stepped(reading, name, rules) is var stepped && ways.Add(stepped.Key))
+                    if (Stepped(reading, name, matchers) is var stepped && ways.Add(stepped.Key))
                     {
                         next.Add(stepped);
                     }
@@ -160,53 +184,54 @@ public sealed partial class AgentPolicy
     }
 
     /// <summary>A reading of <paramref name="start"/>, the path's text before its first name that may be read as another, where it stands read from its root.</summary>
-    private Reading Began(string start, bool rules)
+    private Reading Began(string start, IReadOnlyList<(GlobPattern Pattern, string Root, StringComparison Comparison)>? matchers)
     {
         var path = Path.TrimEndingDirectorySeparator(start);
 
-        return Stood(start, Classified(path), rules);
+        return Stood(start, Classified(path), matchers);
     }
 
     /// <summary>A reading of a path that stands where <paramref name="asked"/> says: where it resolves read anew, and its patterns' standing read whole.</summary>
-    private Reading Stood(string text, Placed asked, bool rules)
+    private Reading Stood(string text, Placed asked, IReadOnlyList<(GlobPattern Pattern, string Root, StringComparison Comparison)>? matchers)
     {
         var resolved = ResolvedPlace(asked.Path);
 
-        return new Reading(text, asked, resolved, rules ? RulesAt(asked.Path) : null, rules ? RulesAt(resolved.Path) : null);
+        return new Reading(text, asked, resolved, RulesAt(matchers, asked.Path), RulesAt(matchers, resolved.Path));
     }
 
     /// <summary>
     /// <paramref name="reading"/> with <paramref name="name"/> its next segment: where it stands read anew while it is a place
-    /// compared, and past one stepped a name further - where it resolves, and each pattern's standing, alike.
+    /// compared, and past one stepped a name further - where it resolves, and each pattern's standing, alike. A reading that
+    /// stands and resolves alike steps its two sides as one: both are asked of the disk's answer once.
     /// </summary>
-    private Reading Stepped(Reading reading, string name, bool rules)
+    private Reading Stepped(Reading reading, string name, IReadOnlyList<(GlobPattern Pattern, string Root, StringComparison Comparison)>? matchers)
     {
         var text = reading.Text + name;
         var asked = Advanced(reading.Asked, name, Path.TrimEndingDirectorySeparator(text));
 
         // A place compared is read whole; past one, where it resolves and each pattern's standing step a name on.
         return asked.Anchor is null
-            ? Stood(text, asked, rules)
+            ? Stood(text, asked, matchers)
             : new Reading(
                 text,
                 asked,
-                Advanced(reading.Resolved, name, Path.Join(reading.Resolved.Path, name)),
-                rules ? Next(reading.AskedRules!, name) : null,
-                rules ? Next(reading.ResolvedRules!, name) : null);
+                reading.Alike ? asked : Advanced(reading.Resolved, name, Path.Join(reading.Resolved.Path, name)),
+                Next(matchers, reading.AskedRules!, name),
+                reading.Alike ? Next(matchers, reading.AskedRules!, name) : Next(matchers, reading.ResolvedRules!, name));
     }
 
     /// <summary>Each pattern's standing a segment further on (<see cref="GlobPattern.Next"/>): one the path is not beneath the root of stays so.</summary>
-    private IReadOnlyList<GlobPattern.Progress?> Next(IReadOnlyList<GlobPattern.Progress?> standing, string name)
-        => [.. PathMatchers.Select((matcher, at) => standing[at] is { } stands ? matcher.Pattern.Next(stands, name, matcher.Comparison) : (GlobPattern.Progress?)null)];
+    private IReadOnlyList<GlobPattern.Progress?> Next(IReadOnlyList<(GlobPattern Pattern, string Root, StringComparison Comparison)>? matchers, IReadOnlyList<GlobPattern.Progress?> standing, string name)
+        => matchers is null ? [] : [.. matchers.Select((matcher, at) => standing[at] is { } stands ? matcher.Pattern.Next(stands, name, matcher.Comparison) : (GlobPattern.Progress?)null)];
 
     /// <summary>
     /// Where each pattern stands to <paramref name="path"/>, read whole: begun at its root, stepped through each segment of
     /// the path beneath it; null where the path is neither its root nor beneath it.
     /// </summary>
-    private IReadOnlyList<GlobPattern.Progress?> RulesAt(string path)
-        => [.. PathMatchers.Select(matcher =>
+    private IReadOnlyList<GlobPattern.Progress?> RulesAt(IReadOnlyList<(GlobPattern Pattern, string Root, StringComparison Comparison)>? matchers, string path)
+        => matchers is null ? [] : [.. matchers.Select(matcher =>
         {
-            if (Beneath(matcher.Root, path, Refusals) is { } relative)
+            if (BeneathOf(matcher.Root, path, Refusals) is { } relative)
             {
                 var stands = matcher.Pattern.Begin();
 
@@ -218,7 +243,7 @@ public sealed partial class AgentPolicy
                 return stands;
             }
 
-            return PathContainment.IsInsideOrSame(matcher.Root, path, Refusals) ? matcher.Pattern.Begin() : (GlobPattern.Progress?)null;
+            return InsideOrSameOf(matcher.Root, path, Refusals) ? matcher.Pattern.Begin() : (GlobPattern.Progress?)null;
         })];
 
     /// <summary>
@@ -326,7 +351,7 @@ public sealed partial class AgentPolicy
     /// Whether <paramref name="name"/> may match <c>.git</c> as a segment of a pattern (<see cref="MayMatchGitsOwn"/>): a name
     /// holding none matches it where it is it in any case, as the segment's expression reads it.
     /// </summary>
-    private static bool MayMatchGit(string name, bool dotNames)
+    private bool MayMatchGit(string name, bool dotNames)
         => HoldsPattern(name) ? DotNamed(name, ".git", dotNames) && SegmentPattern(name).IsMatch(".git") : name.Equals(".git", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>Whether <paramref name="name"/> is a Windows device's, on Windows.</summary>

@@ -3351,14 +3351,48 @@ public static partial class CommandAnalysis
     {
         var quoted = command.Quoted ?? [];
 
-        while (quoted.Count < command.Words.Count)
+        // Padded to the command's words in one copy: a word at a time would copy the whole of it for each word.
+        if (quoted.Count < command.Words.Count)
         {
-            quoted = [.. quoted, string.Empty];
+            quoted = [.. quoted, .. Enumerable.Repeat(string.Empty, command.Words.Count - quoted.Count)];
         }
 
         var environment = EnvironmentOf(command.Words);
 
-        return [.. quoted.Take(environment), .. quoted.Skip(start)];
+        // The environment's masks, then the masks from the start on, as one list: a view over the masks the command kept,
+        // nothing copied, for a program that runs its words is asked at each of them.
+        return new MasksFrom(quoted, environment, start);
+    }
+
+    /// <summary>
+    /// The masks of the words the rules read - the environment's, then the words from <paramref name="start"/> on - as one
+    /// list: a view over <paramref name="quoted"/>, nothing copied, so a program that runs its words is read at each of
+    /// them without a list as long as the command made for each.
+    /// </summary>
+    private readonly struct MasksFrom(IReadOnlyList<string> quoted, int environment, int start) : IReadOnlyList<string>
+    {
+        /// <inheritdoc/>
+        public int Count => environment + quoted.Count - start;
+
+        /// <inheritdoc/>
+        public string this[int at] => at < environment ? quoted[at] : quoted[start + at - environment];
+
+        /// <inheritdoc/>
+        public IEnumerator<string> GetEnumerator()
+        {
+            for (var at = 0; at < environment; at++)
+            {
+                yield return quoted[at];
+            }
+
+            for (var at = start; at < quoted.Count; at++)
+            {
+                yield return quoted[at];
+            }
+        }
+
+        /// <inheritdoc/>
+        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
     }
 
     /// <summary>
