@@ -723,7 +723,7 @@ public sealed class WorktreeRemovalTests
     }
 
     [Fact]
-    public async Task AnInterruptionDuringRemoval_SaysAtOnceThatTheDeletionIsUnderWay()
+    public async Task AnInterruptionDuringRemoval_SaysAtOnceThatTheDeletionGoesOnToItsEnd()
     {
         using var temp = new TempDirectory();
         using var interruption = new CancellationTokenSource();
@@ -746,7 +746,11 @@ public sealed class WorktreeRemovalTests
 
         Assert.True(outcome.Succeeded, outcome.Outcome.Message);
         Assert.False(Directory.Exists(path));
-        Assert.Contains("delete-worktree: WARN - Deleting worktree 'noticed' is under way and may be left half done", warnedBeforeGitRan, StringComparison.Ordinal);
+        Assert.Contains(
+            "delete-worktree: WARN - Deleting worktree 'noticed' is past its point of no return and goes on to its end; a second interruption ends it "
+                + "at once and may leave it half done",
+            warnedBeforeGitRan,
+            StringComparison.Ordinal);
         Assert.Contains("delete-worktree noticed --force", warnedBeforeGitRan, StringComparison.Ordinal);
     }
 

@@ -1795,7 +1795,7 @@ public sealed class AgentServiceTests
         OrchestrationKit.Write(kit.Main, "b.txt", "two\ncommitted\n");
         OrchestrationKit.Write(kit.Main, "docs/x.md", "x\ncommitted\n");
         await kit.Harness.CommitAllAsync(kit.Main, "between waves", Token);
-        const string Unproved = "--stale 'a.txt': its copy is no file the main tree held at that path in the last 512 commit(s) that changed it, so "
+        const string Unproved = "--stale 'a.txt': its copy is no file the main tree's history held at that path, so "
             + "nothing proves it stale. --except leaves it as the agent's change, for its fold to weigh.";
         const string Deleted = "--stale 'b.txt': the agent holds no file there, and a deletion is its change. --except leaves it.";
 

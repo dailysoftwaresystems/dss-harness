@@ -2825,6 +2825,10 @@ public sealed partial class CliEndToEndTests
             BuildConfigs = { ["debug"] = new BuildConfiguration() },
             Projects = { new ProjectConfig { Name = "app", Type = "dotnet", Path = ".", Test = new TestConfig { All = test } } },
             Legs = { ["native"] = new LegConfig { Os = platform.PlatformKey, Processor = platform.Processor, Config = "debug", Toolchain = "sdk" } },
+
+            // The action file's step names 'dotnet', a program the policy lets run only where the repository declares it
+            // under tools - never started here, the leg's build failing before its step, but refused before anything runs.
+            Tools = { new ToolConfig { Name = "dotnet" } },
             PredefinedRunners = { ["probe"] = new RunnerConfig { Action = "probe/probe.yml", RequireBuild = true } },
         });
 

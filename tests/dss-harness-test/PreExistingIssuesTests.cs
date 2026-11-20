@@ -96,7 +96,9 @@ public sealed class PreExistingIssuesTests
         var (harness, layout, issues, records) = Writer(temp.Path);
         var at = DateTimeOffset.UtcNow;
         var quote = new string('q', 2 * 1024 * 1024);
-        var output = string.Join("\n", Enumerable.Range(1, 2 * 1024 * 1024 / 16).Select(line => $"line {line,10}"));
+        // Sixteen characters a line with its separator, and one line more than 2 MiB holds: the join names a
+        // separator only between lines, so 2 MiB / 16 lines alone is one character short of 2 MiB.
+        var output = string.Join("\n", Enumerable.Range(1, 2 * 1024 * 1024 / 16 + 1).Select(line => $"line {line,10}"));
 
         using (records)
         {

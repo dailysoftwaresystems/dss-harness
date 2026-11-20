@@ -1103,7 +1103,7 @@ public sealed class MutationServiceTests
             []);
 
         Assert.Null(inWorktree.Sink.Unrecorded);
-        Assert.True(File.Exists(Path.Combine(temp.Path, HarnessLayout.DirectoryName, HarnessLayout.MutationRecordDirectoryName, "native.json")));
+        Assert.True(File.Exists(record.FileOf("native")));
         Assert.Equal("worktree xa", Assert.Single(record.Read("native").Arms["charge"]).SweptIn);
         Assert.False(Directory.Exists(Path.Combine(worktree, HarnessLayout.DirectoryName)));
     }
@@ -1943,7 +1943,12 @@ public sealed class MutationServiceTests
     {
         using var temp = new TempDirectory();
         var harness = new HarnessFactory();
-        var config = Sweepable(new MutationSettings());
+
+        // The workers are made in the tree's .m however deep the temporary tree is: the default reserve, measured
+        // against what CMake and Ninja really generate, refuses them where the temporary root is long enough - and
+        // nothing is built here, so the reserve stands for no build that runs. One of the fixture's own depths lets
+        // the sweep reach its workers' builds, which is what this test sweeps as far as.
+        var config = Sweepable(new MutationSettings(), new WorktreeSettings { PathBudgetReserve = 20 });
 
         InitRepository(temp.Path);
 
@@ -2025,13 +2030,14 @@ public sealed class MutationServiceTests
     /// A configuration a sweep can read: one CMake project, a gcc toolchain with the Ninja generator, one leg on Linux,
     /// and the registry and its texts where <paramref name="settings"/> says, by default with report arguments.
     /// </summary>
-    private static HarnessConfig Sweepable(MutationSettings? settings = null) => new()
+    private static HarnessConfig Sweepable(MutationSettings? settings = null, WorktreeSettings? worktrees = null) => new()
     {
         BuildConfigs = { ["debug"] = new BuildConfiguration() },
         Toolchains = { ["gcc"] = new ToolchainConfig { Generator = "Ninja" } },
         Projects = [new ProjectConfig { Name = "app", Type = "cmake" }],
         Legs = { ["native"] = new LegConfig { Os = "linux", Processor = "x86_64", Config = "debug", Toolchain = "gcc", Project = "app" } },
         Mutations = settings ?? new MutationSettings { Registry = Registry, TextDirectory = "mutations/texts", ReportArgs = ["--gtest_output=xml:{report}"] },
+        Worktrees = worktrees ?? new WorktreeSettings(),
     };
 
     /// <summary>

@@ -1241,7 +1241,7 @@ public sealed class RemoteLegRunnerTests
         Assert.Equal([SaidAsItStarted], check.Restarts.Said);
         Assert.Equal(2, hosts.Calls.Count);
         Assert.Contains(
-            $"run: WARN - wsl-debug: {SaidAsItStarted}; asking it to check the leg once more",
+            $"run: WARN - wsl-debug: waits for its check there once more: {SaidAsItStarted}; tries again in 1s",
             harness.StandardError.ToString(),
             StringComparison.Ordinal);
     }

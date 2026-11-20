@@ -24,7 +24,11 @@ internal sealed class ExtractIds
         while (!_given.Add(given))
         {
             place = Math.Max(place, 1) + 1;
-            given = given.Under(place.ToString(CultureInfo.InvariantCulture), "~");
+
+            // The place is joined to the id itself, never to a place already joined: 'b' third among its
+            // alike is 'b~3' even where a declaration took 'b~2' as its own id, which is the place the
+            // loop is stepping past.
+            given = id.Under(place.ToString(CultureInfo.InvariantCulture), "~");
         }
 
         _places[id] = Math.Max(place, 1);

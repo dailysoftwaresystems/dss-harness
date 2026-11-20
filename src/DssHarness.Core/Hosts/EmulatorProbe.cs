@@ -158,10 +158,11 @@ public sealed class EmulatorProbe(
         var output = LineText.Of(result.TrimmedOutput);
 
         // Matched in time linear in what the witness printed, however the pattern nests: no match is cut off by a clock.
-        if (!LinearRegex.TryCompile(emulator.Witness.Pattern, RegexOptions.Multiline, out var witness, out var refusal))
-        {
-            return EmulatorCheck.Unavailable($"its witness pattern cannot be matched: {refusal.TrimEnd('.')}");
-        }
+        // The pattern is compiled, never refused as this check's answer: the configuration refuses one that is no
+        // regular expression before any request is sent, so nothing on a host anticipates one, and a request that
+        // carries one anyway is a defect of the machine that asked it - named in the engine's own words, which quote
+        // the pattern, so the failure that reaches that machine says what it sent.
+        var witness = LinearRegex.Compile(emulator.Witness.Pattern, RegexOptions.Multiline);
 
         return witness.IsMatch(output)
             ? new EmulatorCheck(true, null, HostProbes.Quoted(output))

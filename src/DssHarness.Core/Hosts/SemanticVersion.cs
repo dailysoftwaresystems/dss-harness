@@ -101,6 +101,20 @@ public sealed class SemanticVersion
     /// <summary>The version as it was written, without build metadata.</summary>
     public override string ToString() => _text;
 
+    /// <summary>
+    /// Whether <paramref name="other"/> is this version: the same numbers and the same prerelease label, spelled as this
+    /// spells it, build metadata apart (ignored, as NuGet ignores it). One value, so a record holding a version answers by
+    /// what it says; <see cref="Compare"/> stays the ordering, which reads the label without its case.
+    /// </summary>
+    /// <param name="other">Another version, or <see langword="null"/>.</param>
+    public bool Equals(SemanticVersion? other) => other is not null && string.Equals(_text, other._text, StringComparison.Ordinal);
+
+    /// <inheritdoc/>
+    public override bool Equals(object? obj) => Equals(obj as SemanticVersion);
+
+    /// <inheritdoc/>
+    public override int GetHashCode() => StringComparer.Ordinal.GetHashCode(_text);
+
     /// <summary>Numeric identifiers compare as numbers and sort before text; text compares ignoring case, as NuGet does.</summary>
     private static int CompareIdentifiers(string first, string second)
     {

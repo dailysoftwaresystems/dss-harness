@@ -398,6 +398,15 @@ public sealed class SyncServiceTests
         var copy = SyncKit.CopyPath(temp);
         var big = Path.Combine(temp.Path, "src", "big.bin");
 
+        // The one file larger than a piece is the one under test: init leaves 'README.md', '.gitignore' and the seeded
+        // anchor registries under '.plans' more bytes than a piece of 4 each, which would carry each in a request of its
+        // own before the file under test was reached. Made no larger than a piece - the sync carries bytes only, parsing
+        // none of them - everything else crosses in one batch and only 'big.bin' is carried a piece at a time.
+        await File.WriteAllTextAsync(Path.Combine(temp.Path, "README.md"), "r\n", cancellationToken);
+        await File.WriteAllTextAsync(Path.Combine(temp.Path, ".gitignore"), "b\n", cancellationToken);
+        await File.WriteAllTextAsync(Path.Combine(temp.Path, AnchorSettings.DefaultPendingAnchorsPath), "p\n", cancellationToken);
+        await File.WriteAllTextAsync(Path.Combine(temp.Path, AnchorSettings.DefaultDoneAnchorsPath), "d\n", cancellationToken);
+
         await File.WriteAllTextAsync(big, "abcdefghij", cancellationToken);
 
         var transport = new RecordingTransport(SyncKit.AgentHere(harness, pieceBytes: 4))

@@ -530,7 +530,7 @@ public sealed class LegRunServiceTests
         {
             Assert.Equal("passed", legs["arm"].Verdict);
             Assert.Contains(
-                "test: arm: passed (tree staged at 0123456789ab with 2 uncommitted change(s) by run 20260101-000000-0a1b2c3d)",
+                "test: arm: passed (tree staged at 0123456789abcdef0123 with 2 uncommitted change(s) by run 20260101-000000-0a1b2c3d)",
                 harness.StandardError.ToString() + harness.StandardOutput.ToString(),
                 StringComparison.Ordinal);
             Assert.Equal(1, asked);
@@ -599,7 +599,7 @@ public sealed class LegRunServiceTests
         {
             Assert.Equal("passed", arm.GetProperty("verdict").GetString());
             Assert.Equal(string.Empty, arm.GetProperty("detail").GetString());
-            Assert.Contains("test: arm: passed (tree read at 0123456789ab)", harness.StandardError.ToString() + harness.StandardOutput.ToString(), StringComparison.Ordinal);
+            Assert.Contains("test: arm: passed (tree read at 0123456789abcdef)", harness.StandardError.ToString() + harness.StandardOutput.ToString(), StringComparison.Ordinal);
             Assert.Equal(run.Value, tree.GetProperty("readBy").GetString());
             Assert.Equal("0123456789abcdef", tree.GetProperty("commit").GetString());
             Assert.Equal(0, tree.GetProperty("uncommittedChanges").GetInt32());
