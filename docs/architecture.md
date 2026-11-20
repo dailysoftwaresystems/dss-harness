@@ -1111,8 +1111,10 @@ can leave it partly done on any platform, and running `delete-worktree <name> --
 ## Orchestrators and agents
 
 An orchestrator is a session that runs agents side by side, each in a worktree of its own. Everything it and its
-agents keep is in the main checkout under `.orchestrators/<orchestrator>/` - records, logs, plans, scratch, the rows
-an agent files, its kept evidence and transcripts - never in a worktree, and init keeps the directory in git by its
+agents keep is in the main checkout under `.orchestrators/<orchestrator>/` - records, logs, plans, scratch, its
+runs' temp and artifacts (one directory of each with every run, `OrchestratorLayout.TempDirectory` and
+`ArtifactsDirectory`, made with the run and taken away with its directory), the rows an agent files, its kept
+evidence and transcripts - never in a worktree, and init keeps the directory in git by its
 placeholder and everything made in it out; sync withholds it from every host by name. A session taking the work
 over, on another account or after the last one ended, reads it there. `OrchestratorLayout` spells every path once;
 `OrchestrationStore` reads and writes the records strictly - a record that does not read as exactly what it must be
@@ -3304,8 +3306,12 @@ checkout and in an agent's repository, while `git worktree add`, `move`, `remove
 `prune` and a `git gc` that expires another worktree's reflog fail in a main checkout. The refs so written are those
 of a repository whose git directory the work writes whole, every branch, tag, stash and remote-tracking ref and their
 reflogs; the push step sends the commit the run's
-commit steps recorded, never what the branch names later - the launch's own temporary directory under the isolation's own (`IsolationCaches.Root`, then `tmp/`;
-none where the mechanism gives one, `OwnTemp`) and the declared tool caches (`IsolationCaches.Declared`, each variable
+commit steps recorded, never what the branch names later - the launch's own temporary directory, kept in the
+run's temp (`OrchestratorLayout.TempDirectory`, `temp/` under the run's directory: one directory a launch,
+named by the hash of the launch's directory, held for the run's life and taken away with the run's directory)
+where the launch belongs to a run, and under the isolation's own (`IsolationCaches.Root`, then `tmp/`, taken
+away when the launch ends) for a side-task's; none where the mechanism gives one, `OwnTemp`) and the declared
+tool caches (`IsolationCaches.Declared`, each variable
 pointed into the directory of the child's write scope under `caches/`, `IsolationCaches.Prepared`: one for each set of
 outermost places written and sockets reached, named by their hash, `IsolationCaches.ScopeName`, beside a `.scope`
 record naming them, so a package one child plants is run only by a child that writes everything it writes - never by
@@ -3447,9 +3453,10 @@ own process runs in an outer layer of bubblewrap, which holds its process alone
 commands' profile, its slots still hidden and git's code-running files, the tool's state and the
 launch's directory still sealed, but Claude Code's own directories and `~/.claude.json` written -
 Claude Code ends at once, saying nothing, with no `.claude.json` it can write - and its own
-temporary directory in the launch's own records (`AgentIsolation.ClaudeCodeTempDirectory`,
-`claude-tmp`, named to it by `TMPDIR` and `CLAUDE_CODE_TMPDIR` both, so its temp is put away with
-the launch and shared with no command's layer), its rules laid parent first
+temporary directory beside the launch's commands' in the run's temp
+(`AgentIsolation.ClaudeCodeTempDirectory`, `claude-tmp`, named to it by `TMPDIR` and
+`CLAUDE_CODE_TMPDIR` both, so its temp is put away with the run and shared with no command's
+layer), its rules laid parent first
 (`IsolationProfiles.Ordered`); the outer layer's own process namespace ends whatever the launch
 left running once bubblewrap's first process inside is ended. Where Claude Code never ran, the
 client makes its directory and the file it keeps its state in (`ClaudeTranscripts.StateFile`,

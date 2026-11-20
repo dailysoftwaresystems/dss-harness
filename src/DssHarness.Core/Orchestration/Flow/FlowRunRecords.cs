@@ -415,7 +415,8 @@ public sealed class FlowRunRecords : IFlowRecords, IDisposable
     public PreExistingIssuesWriter Issues => _issues;
 
     /// <summary>
-    /// Opens the run's records: the run's directory and its event log, once for every change this session appends to.
+    /// Opens the run's records: the run's directory, its temp and its artifacts, and its event log, once for every
+    /// change this session appends to.
     /// At the run's start - where its state in one file is not on disk yet - the definition is frozen and the run's
     /// issues and questions are created empty; a resume creates none of them, for a resume that found one missing has
     /// been refused already by name (<see cref="FlowResume"/>), never handed an empty one in its place.
@@ -435,7 +436,11 @@ public sealed class FlowRunRecords : IFlowRecords, IDisposable
         _status = new WorkflowStatusWriter(store, layout, context);
         _issues = new PreExistingIssuesWriter(store, layout, context.Run);
 
+        // The run's directory, its temp and its artifacts - made here again for a run an older version of this tool
+        // began, whose directory holds neither - and its event log, once for every change this session appends to.
         _fileSystem.CreateDirectory(_layout.Directory);
+        _fileSystem.CreateDirectory(_layout.TempDirectory);
+        _fileSystem.CreateDirectory(_layout.ArtifactsDirectory);
         var starts = _fileSystem.KindOf(_layout.FlowFile) == PathKind.None;
         _events = FlowEventLog.Open(_fileSystem, _layout.EventsFile);
 

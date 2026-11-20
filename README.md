@@ -323,6 +323,8 @@ is enforced by tests that read the built command line itself. The
 .orchestrators/<o>/agents/<agent>/steps/<instance>/ ignored; one step the agent runs, or that runs in or for its worktree: everything of the step, its handoff.md where one stopped it, and for a reason step the policy.json it started under - the agents' configuration read when each step starts, as its prompts are, so an edit of config.json reaches the steps that start after it and never one under way - and, where the step has a codebase graph, its graph.jsonl (a line for each launch's first message, each call of the graph tool, each escape of its narrowed reads), its graph-pages/ (the whole result of each ask of more than one page its graph tool answered, and where each page of a call's whole result read_result reads begins, one file an ask, each kept packed for the conversation's life and put away when it ends, so a later page, a resumed conversation and a step that goes on with its work read pages of that one result) and its working-set.json, the seeds of the packs of the steps after it
 .orchestrators/<o>/agents/<agent>/sessions/<id>/ ignored; API clients only: one conversation with the provider, in the provider's own form
 .orchestrators/<o>/steps/<instance>/         ignored; one step of a run that no agent owns, the create-agent that makes an agent included
+.orchestrators/<o>/temp/<launch>/            ignored; every temporary directory a run's launch and its children keep, one directory a launch (its children's and Claude Code's own process's beside it), made with the launch, held for the run's life and never in the user's own places; taken away whole with the run's directory
+.orchestrators/<o>/artifacts/                ignored; the run's artifacts, made with the run and kept for its life: read and copied wherever they are asked for while it runs, and taken away with the run's directory
 .orchestrators/<o>/.../<instance>/children/<session>.json ignored; in either kind of step, on Linux and macOS: a session a contained child of the step leads while it runs, or the process group a phase of its legs - a set-up's up line apart - its keepAwake command or what carries a leg to a host leads while anything is in it, ended by the next command over the orchestrator - and by stop-orchestrator --now - once its starter has gone
 .orchestrators/<o>/asks/                     ignored; one directory for each call of ask-orchestrator and ask-orchestrator-status: the facts it was given, the files of its reporter's attempt, the conversations its client stores (sessions/) and ask.json; the engine never reads it
 .orchestrators/<o>/web/searches.jsonl        ignored; a run's web search: what each source found once for the run, and each query it answered, which the same query again is answered from; written by every client whose step searches
@@ -1142,7 +1144,10 @@ the work writes whole - the main checkout's over a side-task, a leg in place and
 push hooks, an agent's own in its repository - every branch, tag,
 stash and remote-tracking ref, and their reflogs - which a command spelt past the words policy can
 move; a run's push sends the commit its commit step recorded, never what the branch names later.
-Written too are a temporary directory of the launch's own, named by `TMPDIR` - on Linux the system's `/tmp` inside, so nothing another
+Written too are a temporary directory of the launch's own - in the run's temp under
+`.orchestrators/<run>/temp/`, one directory a launch, held for the run's life and taken away
+with the run's directory, where the launch belongs to a run; under the isolation's own, taken
+away when the launch ends, for a side-task's - named by `TMPDIR` - on Linux the system's `/tmp` inside, so nothing another
 process keeps there is reached, on Windows MXC's own; and the declared tool caches, each pointed by
 its variable into the cache directory of the child's write scope - the places it writes and the Unix
 sockets outside it reaches (`IsolationCaches.ScopeName`) - under the isolation's own
@@ -1295,8 +1300,10 @@ command started by `run_command` inside a layer of its own, as on the API client
 reaches Claude Code's directories, its login or its environment. On Linux Claude Code's own
 process runs inside an outer layer of bubblewrap, which holds its process alone: the machine
 read-only, every credential slot hidden, git's code-running files and the tool's state sealed as
-for its commands, and written but its writable roots, its own temporary directory in the launch's
-own records - named to it by `CLAUDE_CODE_TMPDIR`, so its temp is put away with the launch - the
+for its commands, and written but its writable roots, its own temporary directory beside its
+commands' - in the run's temp where the launch belongs to a run, in the launch's own records
+for a side-task's - named to it by `CLAUDE_CODE_TMPDIR`, so its temp is put away with the run
+and shared with no command's layer - the
 declared caches, Claude Code's own directories and `~/.claude.json`. Where Claude Code never ran,
 its directory and `.claude.json` (holding `{}`) are made first, for inside it can make neither. On
 macOS, whose sandbox starts none inside another, Claude Code's own process runs outside every

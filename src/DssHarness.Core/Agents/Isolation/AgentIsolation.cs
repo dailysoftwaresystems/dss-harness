@@ -205,9 +205,9 @@ public sealed record LaunchIsolation(
     /// <summary>
     /// The isolation a Claude Code launch's whole process is started with: the outer layer that holds its process alone
     /// where the mechanism starts one inside a layer of its own (<see cref="IsolationProfile.Outer"/>), with a temporary
-    /// directory of its own in the launch's records; else the commands' profile with the Claude Code directories read
-    /// alone, where the mechanism takes no command of the launch's one by one. Null where there is no mechanism, or
-    /// Claude Code's own process runs outside every layer.
+    /// directory of its own beside the launch's commands' in the run's temp; else the commands' profile with the Claude
+    /// Code directories read alone, where the mechanism takes no command of the launch's one by one. Null where there is
+    /// no mechanism, or Claude Code's own process runs outside every layer.
     /// </summary>
     public IsolationProfile? ClaudeCode { get; init; }
 
@@ -467,6 +467,7 @@ public sealed record ExecutionIsolation(
 /// <param name="CredentialPlaces">The places the user keeps credentials in, neither read nor written - but the files each leaves read.</param>
 /// <param name="StateDirectories">The tool's own state under each tree, written by nobody but where a writable root stands in it.</param>
 /// <param name="LaunchDirectory">The launch's own directory, which holds its settings and records; null for an execution with none.</param>
+/// <param name="RunDirectory">The run's directory the launch works for, whose temp keeps every temporary directory of the run's launches, held for the run's life; null for a launch outside every run and for an execution.</param>
 /// <param name="AgentSocket">The user's SSH agent's socket, which the child reaches outside alone and is named at its real spelling; null for an agent's own commands, and for an execution that signs and pushes through none.</param>
 internal sealed record IsolationGround(
     IReadOnlyList<string> Trees,
@@ -477,6 +478,7 @@ internal sealed record IsolationGround(
     IReadOnlyList<HiddenPlace> CredentialPlaces,
     IReadOnlyList<string> StateDirectories,
     string? LaunchDirectory,
+    string? RunDirectory,
     string? AgentSocket)
 {
     /// <summary>The ground of an agent's launch, from its policy's ground.</summary>
@@ -496,6 +498,7 @@ internal sealed record IsolationGround(
             ground.CredentialPlaces,
             ground.StateDirectories,
             launchDirectory,
+            ground.RunDirectory,
             null);
     }
 
@@ -522,6 +525,7 @@ internal sealed record IsolationGround(
             claudeCode,
             credentials,
             ground.StateDirectories,
+            null,
             null,
             ground.ReachesSshAgent ? agentSocket : null);
     }
@@ -567,8 +571,9 @@ public interface IAgentIsolation
 /// The owner of the operating system's isolation of what an agent runs, and of what the tool runs of an agent's work: the
 /// configuration's mode, this machine's mechanism as its platform proved it once, and each profile built from its ground -
 /// the machine read-only; written only the ground's writable roots, what git writes of a tree that is itself written -
-/// its own git directory (<see cref="GitWritten"/>) - the launch's own temporary directory and the declared tool caches of its write
-/// scope's own (<see cref="IsolationCaches"/>), which no child of another reach shares; neither read nor written the
+/// its own git directory (<see cref="GitWritten"/>) - the launch's own temporary directory, kept in the run's temp for
+/// the run's life where the launch belongs to a run and under the isolation's own, taken away at the launch's end, else,
+/// and the declared tool caches of its write scope's own (<see cref="IsolationCaches"/>), which no child of another reach shares; neither read nor written the
 /// credential slots, every Claude Code directory (<see cref="ClaudeCodeDirectories"/>) and every place the user keeps
 /// credentials in (<see cref="UserCredentials"/>), but the files each leaves read; reached outside no Unix socket but the
 /// one the ground names - the user's SSH
@@ -622,9 +627,10 @@ public sealed class AgentIsolation(
     public const string ShellSnapshots = "shell-snapshots";
 
     /// <summary>
-    /// The directory, in the launch's own, that is Claude Code's own temporary directory inside its outer layer: written
-    /// there alone, handed it as its <c>/tmp</c> and named to it by <c>CLAUDE_CODE_TMPDIR</c> - so its temp is put away
-    /// with the launch's own records, never shared with a command's layer.
+    /// The directory that is Claude Code's own temporary directory inside its outer layer: beside the launch's commands'
+    /// in the run's temp where the launch belongs to a run, in the launch's own records else - written there alone, handed
+    /// it as its <c>/tmp</c> and named to it by <c>CLAUDE_CODE_TMPDIR</c>, so its temp is put away with the run and never
+    /// shared with a command's layer.
     /// </summary>
     public const string ClaudeCodeTempDirectory = "claude-tmp";
 
@@ -794,8 +800,16 @@ public sealed class AgentIsolation(
         IsolationCaches.Sweep(fileSystem, cachesRoot);
         var caches = IsolationCaches.Prepared(fileSystem, cachesRoot, written, ground.AgentSocket is { } reached ? [Real(reached)] : []);
 
-        // A mechanism that gives the child a temporary directory of its own is named none.
-        var temp = mechanism.OwnTemp ? null : Path.Combine(root, IsolationCaches.TempDirectory, TempName(ground.LaunchDirectory));
+        // A mechanism that gives the child a temporary directory of its own is named none. A launch of a run's keeps
+        // its temporary directory in the run's own - one directory for each launch, beside every other launch's of the
+        // same run, held for the run's life and taken away with the run's directory - so everything the run's children
+        // leave as temp is put away with the run and none of it in the user's own places; a launch outside every run
+        // (a side-task's) keeps it under the isolation's own, taken away when the launch ends.
+        var temp = mechanism.OwnTemp
+            ? null
+            : Path.Combine(
+                ground.RunDirectory is { } run ? Path.Combine(run, HarnessLayout.OrchestratorTempDirectoryName) : Path.Combine(root, IsolationCaches.TempDirectory),
+                TempName(ground.LaunchDirectory));
         var shared = temp is not null && fileSystem.DirectoryExists(temp);
 
         if (temp is not null)
@@ -823,7 +837,7 @@ public sealed class AgentIsolation(
             pins?.Pin(tree, gitDirectory, commonDirectory);
         }
 
-        return new Held(mode, mechanism, built.Profile, built.ClaudeCode, null, null, legacy, temp is null ? null : () => Removed(temp), async (told, token) => LeftSince(before, await LeftAsync(writtenTrees, told, token).ConfigureAwait(false)));
+        return new Held(mode, mechanism, built.Profile, built.ClaudeCode, null, null, legacy, temp is null || ground.RunDirectory is not null ? null : () => Removed(temp), async (told, token) => LeftSince(before, await LeftAsync(writtenTrees, told, token).ConfigureAwait(false)));
     }
 
     /// <summary>A decision as the builder makes it, before it is a launch's or an execution's.</summary>
@@ -1435,8 +1449,9 @@ public sealed class AgentIsolation(
     /// directory of the user's credentials still read (<paramref name="readable"/>); where it takes handed commands and
     /// holds a program inside a layer of its own (bubblewrap), an outer layer: the commands' profile with Claude Code's
     /// own places written - those directories and that file, without which Claude Code does not
-    /// start - and a temporary directory of its own in the launch's own records, handed it as its <c>/tmp</c> and named to
-    /// it by <c>CLAUDE_CODE_TMPDIR</c>, so its temp is put away with the launch and shared with no command's layer; every
+    /// start - and a temporary directory of its own beside the launch's commands' in the run's temp, handed it as its
+    /// <c>/tmp</c> and named to it by <c>CLAUDE_CODE_TMPDIR</c>, so its temp is put away with the run and shared with no
+    /// command's layer; every
     /// other place as the commands' profile holds it: the slots hidden, the machine read-only, git's code-running files and
     /// the tool's state sealed; null where it takes handed commands and holds no layer around a program of its own
     /// (macOS's sandbox), and Claude Code's own process runs outside, or for an execution, which has no launch.
@@ -1457,10 +1472,13 @@ public sealed class AgentIsolation(
             return null;
         }
 
-        // The outer layer's temporary directory is Claude Code's own, in the launch's own records: nothing else runs inside
-        // it, and what it leaves there is put away with the launch. Made by the launch's client, as its settings are - the
-        // launch's directory is the run's to make.
-        var temp = Real(Path.Combine(ground.LaunchDirectory, ClaudeCodeTempDirectory));
+        // The outer layer's temporary directory is Claude Code's own, beside the launch's commands' in the run's temp
+        // where the launch belongs to a run - in the launch's own records else: nothing else runs inside it, and what it
+        // leaves there is put away with the run. Made by the launch's client, as its settings are - the directory is the
+        // run's to make.
+        var temp = Real(ground.RunDirectory is { } run
+            ? Path.Combine(run, HarnessLayout.OrchestratorTempDirectoryName, TempName(ground.LaunchDirectory) + "-" + ClaudeCodeTempDirectory)
+            : Path.Combine(ground.LaunchDirectory, ClaudeCodeTempDirectory));
 
         IReadOnlyList<IsolatedWrite> written =
         [
@@ -1473,7 +1491,7 @@ public sealed class AgentIsolation(
         {
             Writes = IsolationProfiles.Ordered(written, comparer),
             Temp = temp,
-            Environment = [.. apart.Environment.Where(variable => variable.Key != IsolationCaches.TempVariable), new(IsolationCaches.TempVariable, temp), new(ClaudeCodeTempVariable, temp)],
+            Environment = [new(IsolationCaches.TempVariable, temp), new(ClaudeCodeTempVariable, temp), .. apart.Environment.Where(variable => variable.Key != IsolationCaches.TempVariable)],
             Outer = true,
         };
     }
@@ -1602,7 +1620,8 @@ public sealed class AgentIsolation(
     /// <summary>
     /// The name of a launch's temporary directory: the one its own directory names, so every launch of one step or one
     /// side-task shares it however often it is set up again, and short, for a Unix socket's path is; a fresh one for an
-    /// execution with no directory of its own.
+    /// execution with no directory of its own. The name stands in the run's temp, beside every other launch's of the same
+    /// run, where the ground names the run, and under the isolation's own where it does not.
     /// </summary>
     private static string TempName(string? launchDirectory)
         => launchDirectory is null

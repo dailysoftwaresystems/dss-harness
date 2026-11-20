@@ -214,8 +214,9 @@ public sealed partial class HelpTests
         Assert.Contains(
             "On Linux Claude Code's own process runs inside an outer layer of bubblewrap, which holds its process alone: the machine "
                 + "read-only, every credential slot hidden, git's code-running files and the tool's state sealed as for its commands, and written "
-                + "but its writable roots, its own temporary directory in the launch's own records - named to it by `CLAUDE_CODE_TMPDIR`, so its "
-                + "temp is put away with the launch - the declared caches, Claude Code's own directories and `~/.claude.json`.",
+                + "but its writable roots, its own temporary directory beside its commands' - in the run's temp where the launch "
+                + "belongs to a run, in the launch's own records for a side-task's - named to it by `CLAUDE_CODE_TMPDIR`, so its "
+                + "temp is put away with the run and shared with no command's layer - the declared caches, Claude Code's own directories and `~/.claude.json`.",
             readme,
             StringComparison.Ordinal);
         Assert.Contains(

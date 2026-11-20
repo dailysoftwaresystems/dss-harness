@@ -79,8 +79,8 @@ public sealed class BubblewrapTests
     /// <summary>
     /// A Claude Code launch's outer layer holds its process alone: a command run inside it reads no file of a credential
     /// slot and writes neither git's hooks nor anything of the launch's own records, which stay sealed, but Claude Code's
-    /// own directory and its own temporary directory in the launch's records; no layer is started inside it, for every
-    /// layer allows no further namespace.
+    /// own directory and its own temporary directory beside its commands' in the run's temp; no layer is started inside
+    /// it, for every layer allows no further namespace.
     /// </summary>
     [Fact]
     public async Task AClaudeCodeLaunchsOuterLayer_HoldsItsProcessAlone_WithItsOwnTemporaryDirectory()
@@ -91,7 +91,7 @@ public sealed class BubblewrapTests
         await ProvedAsync(platform, temp.Path);
         var launch = await RealIsolation.StepLaunchAsync(temp, home, platform);
         var outer = Assert.IsType<ProcessIsolation>(launch.ClaudeCode);
-        var claudeTemp = Path.Combine(launch.Directory, DssHarness.Core.Agents.Isolation.AgentIsolation.ClaudeCodeTempDirectory);
+        var claudeTemp = outer.Profile.Temp!;
         var hook = Path.Combine(launch.Kit.Main, ".git", "hooks", "pre-commit");
         var settings = Path.Combine(launch.Directory, ClaudeLaunch.SettingsFileName);
         var written = Path.Combine(launch.Claude, "written");

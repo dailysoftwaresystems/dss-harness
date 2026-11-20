@@ -12,8 +12,9 @@ public sealed class OrchestratorServiceTests
     private static CancellationToken Token => TestContext.Current.CancellationToken;
 
     /// <summary>
-    /// An orchestrator is its directory under .orchestrators: its record, logs, work and plans directories, and where its
-    /// agents are kept; run again, it changes only its limit and its session, and refuses another model.
+    /// An orchestrator is its directory under .orchestrators: its record, logs, work and plans directories, where its
+    /// agents are kept, and its temp and artifacts directories, which every run in it keeps its temporary directories and
+    /// its artifacts in; run again, it changes only its limit and its session, and refuses another model.
     /// </summary>
     [Fact]
     public async Task AnOrchestrator_IsMadeUnderOrchestrators_AndRunAgainChangesOnlyItsLimitAndSession()
@@ -27,6 +28,8 @@ public sealed class OrchestratorServiceTests
         Assert.True(Directory.Exists(kit.Layout.LogsDirectory));
         Assert.True(Directory.Exists(kit.Layout.PlansDirectory("o1")));
         Assert.True(Directory.Exists(kit.Layout.AgentsDirectory));
+        Assert.True(Directory.Exists(kit.Layout.TempDirectory), $"{kit.Layout.TempDirectory} is the run's temporary directories' own");
+        Assert.True(Directory.Exists(kit.Layout.ArtifactsDirectory), $"{kit.Layout.ArtifactsDirectory} is the run's artifacts' own");
 
         var changed = await kit.Harness.OrchestratorService.CreateAsync(kit.Main, "o1", "model-a", 6, "sess-9", Token);
         var model = await kit.Harness.OrchestratorService.CreateAsync(kit.Main, "o1", "model-z", null, null, Token);
@@ -103,7 +106,8 @@ public sealed class OrchestratorServiceTests
 
     /// <summary>
     /// An orchestrator is deleted only once every agent of it is deleted, and the evidence and transcripts its agents kept
-    /// go with it only when asked.
+    /// go with it only when asked. Its run's temp and artifacts go with its directory: both are held for the run's life -
+    /// an artifact is there to be read and copied for as long as the run is - and the deletion is what takes them.
     /// </summary>
     [Fact]
     public async Task AnOrchestrator_IsDeletedOnlyOnceItsAgentsAre_AndItsKeptEvidenceOnlyWhenAsked()
@@ -112,11 +116,18 @@ public sealed class OrchestratorServiceTests
         var kit = await OrchestrationKit.PrepareAsync(temp);
         var worktree = await kit.CreateAgentAsync("ag");
         OrchestrationKit.Write(worktree, "evidence/run.log", "measured\n");
+        Directory.CreateDirectory(Path.Combine(kit.Layout.TempDirectory, "a-launch"));
+        await File.WriteAllTextAsync(Path.Combine(kit.Layout.TempDirectory, "a-launch", "scratch.txt"), "left by a child\n", Token);
+        await File.WriteAllTextAsync(Path.Combine(kit.Layout.ArtifactsDirectory, "report.html"), "<html>the run's artifact</html>\n", Token);
 
         var live = await kit.Harness.OrchestratorService.DeleteAsync(kit.Main, "o1", deleteEvidence: false, Token);
 
         Assert.Equal(HarnessExit.Refused, live.ExitCode);
         Assert.Contains("its agent(s) 'ag' are not deleted yet", live.Message);
+
+        // The artifact is readable for as long as the run is: the directories are the mechanism, and copying them
+        // elsewhere is copying a directory that is there.
+        Assert.Equal("<html>the run's artifact</html>\n", await File.ReadAllTextAsync(Path.Combine(kit.Layout.ArtifactsDirectory, "report.html"), Token));
 
         Assert.True((await kit.DeleteAsync("ag", apply: true, discard: true)).Succeeded);
 
@@ -129,6 +140,9 @@ public sealed class OrchestratorServiceTests
 
         Assert.True(deleted.Succeeded, OrchestrationKit.Describe(deleted));
         Assert.False(Directory.Exists(kit.Layout.Directory));
+        Assert.False(Directory.Exists(kit.Layout.TempDirectory), "the run's teardown takes its temp whole");
+        Assert.False(Directory.Exists(kit.Layout.ArtifactsDirectory), "the run's teardown takes its artifacts");
+        Assert.False(File.Exists(Path.Combine(kit.Layout.ArtifactsDirectory, "report.html")));
         Assert.False(Directory.Exists(kit.Worktrees));
     }
 

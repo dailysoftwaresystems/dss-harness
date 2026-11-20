@@ -39,7 +39,8 @@ public sealed class FlowSessionsTests
 
     /// <summary>
     /// A run starts with one more than the highest r&lt;N&gt;, its record written, its first status - every step of the
-    /// definition NotStarted, the run Running - and its owner: this process, claimed before the section is left.
+    /// definition NotStarted, the run Running - its owner: this process, claimed before the section is left - and its
+    /// temp and artifacts directories, which hold its launches' temporary directories and its artifacts for its life.
     /// </summary>
     [Fact]
     public async Task ARunStartsWithTheNextName_ItsRecordItsFirstStatusAndItsOwner()
@@ -54,6 +55,8 @@ public sealed class FlowSessionsTests
         Assert.Equal("r1", run.Name);
         Assert.Equal("r1", context.Run);
         Assert.Equal(Environment.ProcessId, harness.OrchestrationStore.ReadOwner(run)!.ProcessId);
+        Assert.True(harness.FileSystem.DirectoryExists(run.TempDirectory), $"{run.TempDirectory} is where the run's launches keep their temporary directories");
+        Assert.True(harness.FileSystem.DirectoryExists(run.ArtifactsDirectory), $"{run.ArtifactsDirectory} is where the run keeps its artifacts");
 
         var record = harness.OrchestrationStore.ReadOrchestrator(run);
 

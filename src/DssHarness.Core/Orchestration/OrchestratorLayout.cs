@@ -24,6 +24,8 @@ namespace DssHarness.Core.Orchestration;
 /// agents/&lt;agent&gt;/sessions/&lt;id&gt;/   API clients only: one conversation with the provider, in the provider's own form
 /// agents/&lt;agent&gt;/steps/&lt;instance&gt;/   one step the agent runs, or that runs in or for its worktree, everything of the step in it
 /// steps/&lt;instance&gt;/          one step of the run that no agent owns, the create-agent that makes an agent included
+/// temp/&lt;launch&gt;/             every temporary directory a run's launch and its children keep: one directory a launch, held for the run's life
+/// artifacts/                  the run's artifacts, kept for the run's life and copied wherever asked; both go with the run's directory
 /// &lt;step&gt;/step.json            in either kind of step's directory: the step's own record
 /// &lt;step&gt;/output.json          the step's output, validated
 /// &lt;step&gt;/handoff.md           the handoff a stop cut the step off with, until its next attempt is given it
@@ -482,6 +484,21 @@ public sealed record OrchestratorLayout(string Name, string Directory)
     /// <summary>A keeping of evidence named <paramref name="name"/>, relative to its agent's directory, as records and listings name it.</summary>
     /// <param name="name">The keeping's own name: the moment it was made.</param>
     public static string KeptEvidence(string name) => $"{EvidenceDirectoryName}/{name}";
+
+    /// <summary>
+    /// Where every temporary directory of the run's launches is kept (<see cref="HarnessLayout.OrchestratorTempDirectoryName"/>):
+    /// one directory for each launch - its children's temporary directory, and Claude Code's own process's beside it -
+    /// made with the launch and held for the run's life, so everything the run's children leave as temp is put away with
+    /// the run and taken away only with its directory.
+    /// </summary>
+    public string TempDirectory => Path.Combine(Directory, Repository.HarnessLayout.OrchestratorTempDirectoryName);
+
+    /// <summary>
+    /// Where the run's artifacts are kept (<see cref="HarnessLayout.OrchestratorArtifactsDirectoryName"/>), for the run's
+    /// life: made with the run, read and copied wherever they are asked for while it runs, and taken away with the run's
+    /// directory - which is the whole of the mechanism, for what a run keeps as artifacts is in its directory until it goes.
+    /// </summary>
+    public string ArtifactsDirectory => Path.Combine(Directory, Repository.HarnessLayout.OrchestratorArtifactsDirectoryName);
 
     /// <summary>
     /// The run's state in one file: every step instance and what runs next. Shaped for a resume; written after the

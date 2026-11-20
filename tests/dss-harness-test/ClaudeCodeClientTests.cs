@@ -2843,8 +2843,8 @@ public sealed class ClaudeCodeClientTests : IDisposable
     /// Under a mechanism that holds a layer around a program of its own - bubblewrap - a launch runs Claude Code's own
     /// process in its outer layer, its own sandbox off, saying nothing of running outside and handing it no command; where
     /// Claude Code never ran, its own directory and the file it keeps its state in are made first - the file holding no
-    /// state, and its own temporary directory in the launch's records with them - for inside the outer layer it could
-    /// make none of them.
+    /// state, and its own temporary directory, which the profile names in the run's temp, with them - for inside the outer
+    /// layer it could make none of them.
     /// </summary>
     [Fact]
     public async Task UnderAMechanismThatHoldsALayerOfItsOwn_ALaunchRunsClaudeCodeInItsOuterLayer_MakingWhatItCannotMakeInside()
@@ -2853,7 +2853,8 @@ public sealed class ClaudeCodeClientTests : IDisposable
         kit.Script([new JsonObject()]);
         var mechanism = new PassThroughMechanism();
         var commands = new DssHarness.Core.Processes.IsolationProfile([new DssHarness.Core.Processes.IsolatedPath(kit.ClaudeDirectory, Directory: true)], []);
-        var outer = new DssHarness.Core.Processes.IsolationProfile([], [new DssHarness.Core.Processes.IsolatedWrite(kit.ClaudeDirectory, Directory: true, Writable: true)]) { Outer = true };
+        var claudeTemp = Path.Combine(kit.Temp.Path, "the-run", DssHarness.Core.Repository.HarnessLayout.OrchestratorTempDirectoryName, "a1b2c3d4e5f6-" + DssHarness.Core.Agents.Isolation.AgentIsolation.ClaudeCodeTempDirectory);
+        var outer = new DssHarness.Core.Processes.IsolationProfile([], [new DssHarness.Core.Processes.IsolatedWrite(kit.ClaudeDirectory, Directory: true, Writable: true)]) { Outer = true, Temp = claudeTemp };
         Directory.Delete(kit.ClaudeDirectory);
         var sink = new Sink();
 
@@ -2869,7 +2870,8 @@ public sealed class ClaudeCodeClientTests : IDisposable
         Assert.False(request.Environment.ContainsKey("CLAUDE_CODE_SHELL_PREFIX"));
         Assert.False(File.Exists(Path.Combine(kit.StepDirectory, "claude-isolation.json")));
         Assert.Equal("{}\n", File.ReadAllText(Path.Combine(kit.ClaudeDirectory, ".claude.json")));
-        Assert.True(Directory.Exists(Path.Combine(kit.StepDirectory, DssHarness.Core.Agents.Isolation.AgentIsolation.ClaudeCodeTempDirectory)), "Claude Code's own temporary directory is made in the launch's records");
+        Assert.True(Directory.Exists(claudeTemp), "Claude Code's own temporary directory is made where its profile names it, in the run's temp");
+        Assert.False(Directory.Exists(Path.Combine(kit.StepDirectory, DssHarness.Core.Agents.Isolation.AgentIsolation.ClaudeCodeTempDirectory)), "nothing of a temporary directory is made in the launch's own records");
         Assert.Empty(sink.Of<Notice>());
     }
 

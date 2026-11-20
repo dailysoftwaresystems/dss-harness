@@ -186,7 +186,7 @@ public sealed class OrchestratorService(
                 Session = session,
             };
 
-            foreach (var directory in new[] { orchestrator.LogsDirectory, orchestrator.WorkRoot, orchestrator.PlansDirectory(name), orchestrator.AgentsDirectory })
+            foreach (var directory in new[] { orchestrator.LogsDirectory, orchestrator.WorkRoot, orchestrator.PlansDirectory(name), orchestrator.AgentsDirectory, orchestrator.TempDirectory, orchestrator.ArtifactsDirectory })
             {
                 _fileSystem.CreateDirectory(directory);
             }

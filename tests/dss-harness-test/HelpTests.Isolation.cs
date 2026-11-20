@@ -339,7 +339,10 @@ public sealed partial class HelpTests
                 + "and push hooks, an agent's own in its repository - every branch, "
                 + "tag, stash and remote-tracking ref, and their reflogs - which a command spelt past the words policy can move; "
                 + "a run's push sends the commit its commit step recorded, never what the branch names later. Written too are a "
-                + "temporary directory of the launch's own, named by TMPDIR - on Linux the system's /tmp inside, so nothing another process "
+                + "temporary directory of the launch's own - in the run's temp under .orchestrators/<run>/temp/, one directory a "
+                + "launch, held for the run's life and taken away with the run's directory, where the launch belongs to a run; "
+                + "under the isolation's own, taken away when the launch ends, for a side-task's - named by TMPDIR - on Linux the "
+                + "system's /tmp inside, so nothing another process "
                 + "keeps there is reached, on Windows MXC's own; and the declared tool caches,",
             prose,
             StringComparison.Ordinal);
@@ -507,8 +510,10 @@ public sealed partial class HelpTests
                 + "reaches nothing. Claude Code's own process runs apart from the agent's commands, reading its login and the key it "
                 + "is handed there. On Linux it runs inside an outer layer of bubblewrap, which holds its process alone: the machine "
                 + "read-only, every credential slot hidden, git's code-running files and the tool's state sealed as for the commands, "
-                + "and written but its writable roots, its own temporary directory in the launch's own records - named to it by "
-                + "CLAUDE_CODE_TMPDIR, so its temp is put away with the launch - the declared caches, Claude Code's own directories "
+                + "and written but its writable roots, its own temporary directory beside its commands' - in the run's temp where "
+                + "the launch belongs to a run, in the launch's own records for a side-task's - named to it by "
+                + "CLAUDE_CODE_TMPDIR, so its temp is put away with the run and shared with no command's layer - the declared "
+                + "caches, Claude Code's own directories "
                 + "and ~/.claude.json, without which it does not start. Where Claude Code never ran, its directory and .claude.json "
                 + "(holding {}) are made first, for inside it can make neither. On macOS, whose sandbox starts none inside another, "
                 + "Claude Code's own process runs outside every layer, and each launch says so as it starts: there it runs with the "

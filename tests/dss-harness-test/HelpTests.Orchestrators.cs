@@ -121,6 +121,17 @@ public sealed partial class HelpTests
         Assert.Contains("agents/<agent>/shared/<sha256>", result.StandardOutput, StringComparison.Ordinal);
         Assert.Contains("the bytes of each file it shares, kept to merge from", text, StringComparison.Ordinal);
         Assert.Contains(
+            "temp/<launch>/ every temporary directory a run's launch and its children keep, one directory a launch - its children's and Claude "
+                + "Code's own process's beside it - made with the launch, held for the run's life and never in the user's own places; taken away "
+                + "whole with the run's directory",
+            Prose.Words(result.StandardOutput),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "artifacts/ the run's artifacts, made with the run and kept for its life: read and copied wherever they are asked for while it "
+                + "runs, and taken away with the run's directory",
+            Prose.Words(result.StandardOutput),
+            StringComparison.Ordinal);
+        Assert.Contains(
             "Every command that writes an agent's records names where they are on each way out once it has: its record, its seed, the directory "
             + "of the bytes it shares where it keeps any, and the rows its folds applied - each that is there.",
             text,

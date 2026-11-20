@@ -183,6 +183,22 @@ public sealed record HarnessLayout(string RepositoryRoot, string MainCheckoutRoo
     public const string OrchestratorsDirectoryName = ".orchestrators";
 
     /// <summary>
+    /// The directory, in each orchestrator's under the orchestrators', where every temporary directory a run's launches
+    /// and their children keep is put away with the run: one directory for each launch, made with it and held for the
+    /// run's life, and taken away whole with the run's directory - so a run's temp never lands in the user's own places,
+    /// and all of it is there to be looked at for as long as the run is.
+    /// </summary>
+    public const string OrchestratorTempDirectoryName = "temp";
+
+    /// <summary>
+    /// The directory, in each orchestrator's under the orchestrators', where a run's artifacts are kept: made with the
+    /// run, held for its life - read and copied wherever they are asked for while it runs - and taken away with the
+    /// run's directory, which is the whole of the mechanism: what a run keeps as artifacts is in its directory until it
+    /// goes, so copying them elsewhere is copying a directory that is there.
+    /// </summary>
+    public const string OrchestratorArtifactsDirectoryName = "artifacts";
+
+    /// <summary>
     /// The directory at the root of a tree where its mutation workers are kept: each a copy of the tree a sweep of one of
     /// its legs made, <c>&lt;tree&gt;/.m/&lt;key&gt;&lt;mark&gt;-&lt;n&gt;</c>, which goes with the tree.
     /// </summary>

@@ -150,17 +150,18 @@ public sealed class AgentIsolationTests
     /// <summary>
     /// A step working in its worktree is given, by its launch's profile: the machine read-only; written its worktree, its
     /// work directory, what git writes of a tree it writes - a worktree a repository of its own writes its .git whole - and
-    /// the isolation's tool caches, with its own temporary directory; hidden every credential slot there is and the Claude
+    /// the isolation's tool caches, with its own temporary directory in the run's temp, one directory this launch's own,
+    /// held for the run's life and taken away with the run's directory; hidden every credential slot there is and the Claude
     /// Code directory and its .claude.json, the shell snapshots read again; written by nobody, inside what it writes, the
     /// worktree's configuration directory, the tool's state in the worktree, and the git directory's own code-running files,
     /// pointers and submodules: its hooks, its configuration, its replacements, its alternates and its commondir, made
     /// naming the directory itself, and its worktrees/. A place not there inside what it writes is made first; the launch's
     /// own directory, which no command writes, is not. Under a mechanism that holds a layer around a program of its own, a
     /// Claude Code launch's whole process is given the outer layer: the same profile, the slots still hidden, but Claude
-    /// Code's own directory and file written, and a temporary directory of its own in the launch's records - named to it
-    /// by CLAUDE_CODE_TMPDIR - every rule parent first. Its records say the mechanism, its pins hold the git directories
-    /// of the worktree and of the main checkout alike, nothing is said of a linked worktree, and its disposal takes the
-    /// temporary directory away.
+    /// Code's own directory and file written, and a temporary directory of its own beside the launch's commands' in the
+    /// run's temp - named to it by CLAUDE_CODE_TMPDIR - every rule parent first. Its records say the mechanism, its pins
+    /// hold the git directories of the worktree and of the main checkout alike, nothing is said of a linked worktree, and
+    /// its disposal leaves the temporary directory where it is, for the run's life: the run's teardown takes it.
     /// </summary>
     [Fact]
     public async Task AStepInItsWorktree_IsGivenTheMachineReadOnly_ItsRootsAndGitWritten_ItsGuardedPlacesSealed()
@@ -230,7 +231,7 @@ public sealed class AgentIsolationTests
         Assert.Equal(writes.OrderBy(write => write.Path, StringComparer.Ordinal), commands.Writes.OrderBy(write => write.Path, StringComparer.Ordinal));
         Assert.Equal([worktree, kit.Main, work], commands.Reads);
         Assert.Equal([Path.Combine(claude, AgentIsolation.ShellSnapshots)], commands.Reopened);
-        Assert.Equal(Path.Combine(root, IsolationCaches.TempDirectory), Path.GetDirectoryName(commands.Temp));
+        Assert.Equal(kit.Layout.TempDirectory, Path.GetDirectoryName(commands.Temp));
         Assert.Equal([new("TMPDIR", commands.Temp!), .. IsolationCaches.Environment(caches)], commands.Environment);
         Assert.True(Directory.Exists(Path.Combine(own, "modules")) && Directory.Exists(Path.Combine(own, "refs", "replace")) && Directory.Exists(Path.Combine(own, "worktrees")) && Directory.Exists(commands.Temp) && Directory.Exists(caches));
         Assert.Equal(AgentIsolation.ItsOwnDirectory, await File.ReadAllTextAsync(Path.Combine(own, AgentIsolation.CommonDirectoryFile), Token));
@@ -241,11 +242,12 @@ public sealed class AgentIsolationTests
         Assert.Equal(new AgentIsolationRecord(AgentIsolationMode.Required) { Mechanism = "test", Version = "1.0" }, isolated.Record);
 
         // Claude Code's whole process, in an outer layer of its own: the slots still hidden, and Claude Code's own
-        // directory and file written beside what the commands write, with a temporary directory of its own in the launch's
-        // records - its /tmp and its CLAUDE_CODE_TMPDIR both, put away with the launch - and nothing else of the launch's
-        // directory, where nothing of Claude Code's is kept now that it runs no command of its own.
+        // directory and file written beside what the commands write, with a temporary directory of its own beside the
+        // launch's commands' in the run's temp - its /tmp and its CLAUDE_CODE_TMPDIR both, put away with the run and
+        // shared with no command's layer - and nothing else of the launch's directory, where nothing of Claude Code's is
+        // kept now that it runs no command of its own.
         var outer = isolated.ForClaudeCode!.Profile;
-        var claudeTemp = Path.Combine(launch, AgentIsolation.ClaudeCodeTempDirectory);
+        var claudeTemp = Path.Combine(kit.Layout.TempDirectory, Path.GetFileName(commands.Temp) + "-" + AgentIsolation.ClaudeCodeTempDirectory);
         IReadOnlyList<IsolatedWrite> outerWrites =
         [
             .. writes,
@@ -270,7 +272,10 @@ public sealed class AgentIsolationTests
 
         isolated.Dispose();
 
-        Assert.False(Directory.Exists(commands.Temp), commands.Temp);
+        // The launch's end leaves its temporary directory where it is: the run's life holds it, and the run's teardown -
+        // the deletion of its directory - is what takes it, with every other launch's of the same run.
+        Assert.True(Directory.Exists(commands.Temp), commands.Temp);
+        Assert.False(Directory.Exists(Path.Combine(root, IsolationCaches.TempDirectory)), "a launch of a run keeps no temporary directory under the isolation's own");
     }
 
     /// <summary>

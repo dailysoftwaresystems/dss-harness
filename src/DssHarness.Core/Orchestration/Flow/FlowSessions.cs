@@ -116,7 +116,11 @@ public sealed class FlowSessions(OrchestrationStore store, IFileSystem fileSyste
 
             var run = OrchestratorLayout.Of(layout, name);
 
+            // The run's places come with it: its temp, where every launch's temporary directory is kept for the run's
+            // life, and its artifacts, kept for the run's life and copied wherever asked - both taken away with the run.
             _fileSystem.CreateDirectory(run.Directory);
+            _fileSystem.CreateDirectory(run.TempDirectory);
+            _fileSystem.CreateDirectory(run.ArtifactsDirectory);
             _store.WriteOrchestrator(
                 run,
                 new OrchestratorRecord
