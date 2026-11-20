@@ -389,12 +389,14 @@ public sealed class CiLegsServiceTests
             LegBudgetMinutes = 2,
         });
 
-        var refusal = await Assert.ThrowsAsync<HarnessException>(() => Service(backreference, run).CheckAsync(other.Path, Request(), cancellationToken));
+        // The refusal comes from the one check a pattern a file declares is held to, at the configuration's own
+        // door: the pattern never reaches a job, so no job is read as no match.
+        var refused = await Assert.ThrowsAsync<ConfigException>(() => Service(backreference, run).CheckAsync(other.Path, Request(), cancellationToken));
 
-        Assert.Equal(HarnessExit.ConfigInvalid, refusal.ExitCode);
-        Assert.Equal(
-            @"ci.legJobPattern: The pattern '^(?<leg>(a)\2)$' holds a backreference, which .NET's linear-time matcher lacks; write it without that construct. CI was NOT read. This is not a pass.",
-            refusal.Message);
+        Assert.Contains(
+            "ci.legJobPattern is not a valid regular expression: The pattern '^(?<leg>(a)\\2)$' holds a backreference, which .NET's linear-time matcher lacks",
+            refused.Message,
+            StringComparison.Ordinal);
     }
 
     [Fact]

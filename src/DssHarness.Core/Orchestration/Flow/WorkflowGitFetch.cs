@@ -117,7 +117,7 @@ internal sealed class WorkflowGitFetch(IGitClient git, IFileSystem fileSystem, I
     /// </exception>
     public async Task<IReadOnlyDictionary<string, WorkflowRemoteRef>> RefsAsync(WorkflowRemoteSource source, GitCredential? credential, CancellationToken cancellationToken)
     {
-        using var scratch = new ScratchDirectory(fileSystem, "remote-workflow", Warn);
+        using var scratch = Made(source);
         var listed = await RemoteAsync(source, scratch.Path, credential, ["ls-remote", "--tags", "--heads", "--", AddressOf(source)], $"list the refs of '{source.Owner}/{source.Repo}'", cancellationToken)
             .ConfigureAwait(false);
 
@@ -160,7 +160,7 @@ internal sealed class WorkflowGitFetch(IGitClient git, IFileSystem fileSystem, I
     /// <exception cref="HarnessException">As <see cref="RefsAsync"/>.</exception>
     public async Task<WorkflowClone> CloneAsync(WorkflowRemoteSource source, GitCredential? credential, string? reference, CancellationToken cancellationToken)
     {
-        var scratch = new ScratchDirectory(fileSystem, "remote-workflow", Warn);
+        var scratch = Made(source);
 
         try
         {
@@ -236,6 +236,30 @@ internal sealed class WorkflowGitFetch(IGitClient git, IFileSystem fileSystem, I
         => new(HarnessExit.CommandFailed, $"'{source.Spelled}' could not be resolved: git answered {what} with what does not read as one ({why}); nothing was cached");
 
     private void Warn(string said) => output?.Warn(WorkflowRemoteFetcher.Said, said);
+
+    /// <summary>
+    /// The scratch directory a fetch is made in, made before anything is: git runs in it as its working directory, and a
+    /// program is never started in a directory that is not there - neither the listing of refs nor the clone itself.
+    /// </summary>
+    /// <param name="source">The source whose repository is asked.</param>
+    private ScratchDirectory Made(WorkflowRemoteSource source)
+    {
+        var scratch = new ScratchDirectory(fileSystem, "remote-workflow", Warn);
+
+        try
+        {
+            fileSystem.CreateDirectory(scratch.Path);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            scratch.Dispose();
+            throw new HarnessException(
+                HarnessExit.CommandFailed,
+                $"the clone '{source.Owner}/{source.Repo}' is fetched into could not be made at '{scratch.Path}': {exception.Message}");
+        }
+
+        return scratch;
+    }
 }
 
 /// <summary>
@@ -379,13 +403,22 @@ internal sealed class WorkflowClone : IDisposable
             // "<mode> SP <type> SP <object> TAB <path>".
             var tab = record.IndexOf('\t', StringComparison.Ordinal);
             var fields = tab < 0 ? [] : record[..tab].Split(' ');
+            var path = tab < 0 ? "" : record[(tab + 1)..];
 
-            if (fields.Length != 3 || !record[(tab + 1)..].StartsWith($"{directory}/", StringComparison.Ordinal))
+            // The trees the listing names on its way into the directory - each tree above it, and the directory
+            // itself - are no entries of it: the directory's own stand under it, and only they are read as entries.
+            if (fields.Length == 3 && fields[1] == "tree"
+                && (path == directory || directory.StartsWith($"{path}/", StringComparison.Ordinal)))
+            {
+                continue;
+            }
+
+            if (fields.Length != 3 || !path.StartsWith($"{directory}/", StringComparison.Ordinal))
             {
                 throw WorkflowGitFetch.Malformed(_source, $"the directory '{directory}'", $"'{record}' is no entry of it");
             }
 
-            entries.Add(new WorkflowTreeEntry(record[(tab + 1 + directory.Length + 1)..], fields[1], fields[0], fields[2]));
+            entries.Add(new WorkflowTreeEntry(path[(directory.Length + 1)..], fields[1], fields[0], fields[2]));
         }
 
         return entries;

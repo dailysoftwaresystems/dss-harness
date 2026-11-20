@@ -1365,8 +1365,10 @@ public sealed class RemoteWorkflowUseTests
         var destination = temp.Combine("vendor", "security-review");
 
         Assert.Equal(destination, export.Destination);
+
+        // The files as the commit's tree holds them, the note of where they came from last.
         Assert.Equal(
-            ["security-review.yml", "prompts/review.md", "assets/mark.png", WorkflowExportService.VendoredNote],
+            ["assets/mark.png", "prompts/review.md", "security-review.yml", WorkflowExportService.VendoredNote],
             export.Files);
         Assert.Equal(Definition, await File.ReadAllTextAsync(Path.Combine(destination, "security-review.yml"), Token));
         Assert.Equal(marked, await File.ReadAllBytesAsync(Path.Combine(destination, "prompts", "review.md"), Token));
@@ -2346,8 +2348,8 @@ public sealed class RemoteWorkflowUseTests
         {
             $"(`WorkflowRemote.{nameof(WorkflowRemote.RefProblem)}`, before anything is asked)",
             $"(`WorkflowCache.{nameof(WorkflowCache.TreePathProblems)}`)",
-            $"with every other token variable taken away (`GhProcess.{nameof(GhProcess.HostEnvironment)}`)",
-            $"(`GhProcess.{nameof(GhProcess.Unreached)}`) - is the network not being there",
+            $"every helper git's configuration names cleared, and one that answers with it alone put in their place (`{nameof(DssHarness.Core.Git.GitCredentialValues)}`), so no command line carries it",
+            $"(`{nameof(WorkflowGitFetch)}.{nameof(WorkflowGitFetch.Unreached)}`) - is the network not being there",
             $"(`WorkflowCache.{nameof(WorkflowCache.BlobOf)}`, the inverse of the blob's path)",
             "at `blobs/<first 2 hex>/<remaining 38 hex>`",
             $"(`WorkflowCache.{nameof(WorkflowCache.BlobsPerHold)}`)",
@@ -2611,12 +2613,21 @@ public sealed class RemoteWorkflowUseTests
 
         /// <summary>
         /// A commit of <paramref name="repo"/> holding a README at its root and <paramref name="files"/> under the
-        /// workflow's directory, its parent <paramref name="parent"/> where one is given: made by git's own importer, which
-        /// writes any path a tree may hold, and held by no ref.
+        /// workflow's directory, its parent <paramref name="parent"/> where one is given: made by git's own importer,
+        /// which writes any path a tree may hold, and held by no ref.
         /// </summary>
         public async Task<string> CommitAsync(Repo repo, IEnumerable<Tracked> files, string? parent = null)
         {
             var path = await RepositoryAsync(repo);
+            var held = files.ToList();
+
+            // The importer writes no path with '..' in it, and a tree may hold one - the way out of a directory a
+            // file system reads - so a commit holding such a path has its trees written by hand instead.
+            if (held.Any(file => file.Path.Split('/', '\\').Contains("..")))
+            {
+                return await CommittedByHandAsync(path, held, parent);
+            }
+
             var made = ++_commits;
             var scratch = $"refs/fixture/{made.ToString(CultureInfo.InvariantCulture)}";
             using var stream = new MemoryStream();
@@ -2642,7 +2653,7 @@ public sealed class RemoteWorkflowUseTests
             Line("M 100644 inline README.md");
             Data(Encoding.UTF8.GetBytes("readme\n"));
 
-            foreach (var file in files)
+            foreach (var file in held)
             {
                 if (file.Object is { } named)
                 {
@@ -2662,6 +2673,82 @@ public sealed class RemoteWorkflowUseTests
             _ = await GitAsync(path, ["update-ref", "-d", scratch]);
 
             return commit;
+        }
+
+        /// <summary>
+        /// A commit of the repository at <paramref name="path"/> holding a README at its root and <paramref name="files"/>
+        /// under the workflow's directory, its every tree written by hand as git stores one - each blob hashed, each tree
+        /// written by its entries, the commit made of the root tree - and held by no ref.
+        /// </summary>
+        private async Task<string> CommittedByHandAsync(string path, IReadOnlyList<Tracked> files, string? parent)
+        {
+            var entries = new List<(string Tail, string Mode, string Sha)>();
+
+            foreach (var file in files)
+            {
+                entries.Add(($"{Directory}/{file.Path}", file.Mode, file.Object ?? await GitAsync(path, ["hash-object", "-w", "--stdin"], file.Content!)));
+            }
+
+            var readme = await GitAsync(path, ["hash-object", "-w", "--stdin"], Encoding.UTF8.GetBytes("readme\n"));
+            var root = await TreeWrittenAsync(path, [new("README.md", "100644", readme), .. entries.Select(entry => (entry.Tail, entry.Mode, entry.Sha))]);
+
+            var commitTree = new List<string> { "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit-tree", root };
+
+            if (parent is not null)
+            {
+                commitTree.AddRange(["-p", parent]);
+            }
+
+            commitTree.AddRange(["-m", "c"]);
+
+            return await GitAsync(path, commitTree);
+        }
+
+        /// <summary>
+        /// The tree of <paramref name="entries"/>, each by its whole path from the root, written as git stores a tree:
+        /// the files a first part names, and a directory of the paths under it, its entries sorted as git sorts one.
+        /// </summary>
+        private async Task<string> TreeWrittenAsync(string path, IReadOnlyList<(string Tail, string Mode, string Sha)> entries)
+        {
+            var files = new List<(string Name, string Mode, string Sha, bool IsTree)>();
+            var below = new Dictionary<string, List<(string Tail, string Mode, string Sha)>>(StringComparer.Ordinal);
+
+            foreach (var (tail, mode, sha) in entries)
+            {
+                var slash = tail.IndexOf('/', StringComparison.Ordinal);
+
+                if (slash < 0)
+                {
+                    files.Add((tail, mode, sha, IsTree: false));
+                    continue;
+                }
+
+                var name = tail[..slash];
+
+                if (!below.TryGetValue(name, out var heldUnder))
+                {
+                    below[name] = heldUnder = [];
+                }
+
+                heldUnder.Add((tail[(slash + 1)..], mode, sha));
+            }
+
+            foreach (var directory in below)
+            {
+                files.Add((directory.Key, "40000", await TreeWrittenAsync(path, directory.Value), IsTree: true));
+            }
+
+            using var tree = new MemoryStream();
+
+            foreach (var entry in files.OrderBy(entry => entry.Name + (entry.IsTree ? "/" : string.Empty), StringComparer.Ordinal))
+            {
+                // "<mode> SP <name> NUL <20 raw bytes of the id>": a tree stores no type word, and the id raw.
+                tree.Write(Encoding.UTF8.GetBytes($"{entry.Mode} {entry.Name}"));
+                tree.WriteByte(0);
+                tree.Write(Convert.FromHexString(entry.Sha));
+            }
+
+            return await GitAsync(path, ["hash-object", "-t", "tree", "-w", "--stdin"], tree.ToArray());
         }
 
         /// <summary>Puts the lightweight tag <paramref name="name"/> on <paramref name="target"/>, over any it had.</summary>

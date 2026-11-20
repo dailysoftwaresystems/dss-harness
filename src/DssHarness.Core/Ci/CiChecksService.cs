@@ -43,8 +43,9 @@ public sealed record CiChecksRequest(string Commit, string Command)
 
     /// <summary>
     /// Whether it reads the checks once, waiting for none to appear or end - what was reached taken as it stands, as a
-    /// person's <c>accept</c> asks - and answers what they are then, each settled on that read alone. A read that fails is
-    /// said and read again as in any wait, for as long as its failure can change and the time of the wait lasts.
+    /// person's <c>accept</c> asks - and answers what they are then, each settled on that read alone. A read that fails
+    /// is said and read again at the next poll for as long as its failure can change, however short the wait its step
+    /// says: its reads are the whole of it, so no time of the wait's own ends them.
     /// </summary>
     public bool Once { get; init; }
 
@@ -226,7 +227,9 @@ public sealed class CiChecksService(
     /// (401) or answering that the thing asked is not there (404) - ends it at once. Each read again is said as it is
     /// waited for, the first a poll after the failure and each later one twice as long up to five minutes. The time of the
     /// wait, the planned waitMinutes, still ends it: where it is spent before the next read, the wait ends with the last
-    /// failure's own code. A refusal of the command's own - another repository named, gh not there - is raised at once.
+    /// failure's own code - but never a wait that reads once, whose reads go on at the poll for as long as they fail,
+    /// however short the wait its step says. A refusal of the command's own - another repository named, gh not there -
+    /// is raised at once.
     /// </summary>
     /// <param name="root">The repository the forge is asked about.</param>
     /// <param name="request">The commit, and how long to wait.</param>
@@ -248,16 +251,23 @@ public sealed class CiChecksService(
                     catch (HarnessException ex) when (ex.ExitCode is HarnessExit.CommandFailed or HarnessExit.Incomplete)
                     {
                         last = ex;
-                        return GhProcess.Try<IReadOnlyList<CiCheck>>(ex);
+                        var again = GhProcess.Try<IReadOnlyList<CiCheck>>(ex);
+
+                        // A wait that reads once has no time of the wait's own to cut a read's again to: each read
+                        // that failed is read again at the next poll, however short the wait its step says.
+                        return request.Once && again is RetryTry<IReadOnlyList<CiCheck>>.Passing { After: null } passing
+                            ? new RetryTry<IReadOnlyList<CiCheck>>.Passing(passing.Cause, poll)
+                            : again;
                     }
                 },
                 new RetryWatch(
                     $"a read of the checks of {request.Commit}",
                     told => output.Warn(request.Command, told.Line()),
 
-                    // A poll, cut to the end of a wait that ends sooner, as every read of the wait's is.
-                    left > TimeSpan.Zero && left < poll ? left : poll,
-                    left > TimeSpan.Zero ? left : TimeSpan.Zero,
+                    // A poll, cut to the end of a wait that ends sooner, as every read of the wait's is - but never
+                    // cut where the wait reads once, whose reads are the whole of it.
+                    !request.Once && left > TimeSpan.Zero && left < poll ? left : poll,
+                    request.Once ? null : left > TimeSpan.Zero ? left : TimeSpan.Zero,
                     clock),
                 cancellationToken)
             .ConfigureAwait(false);
