@@ -269,12 +269,24 @@ public sealed class ClaudeCodeUpdateServiceTests
             return new ProcessResult(0, "added 1 package in 22m\n", string.Empty, lasts, TimedOut: false);
         };
 
-        var answer = await ClockDrive.UntilEndedAsync(
-            clock,
-            kit.Service(clock, output: harness.Output).ReadyAsync(kit.Layout, [], client: null, ClaudeCodeAsker.SideTask("slow"), Token),
-            TimeSpan.FromMinutes(1),
-            40,
-            Token);
+        var making = kit.Service(clock, output: harness.Output).ReadyAsync(kit.Layout, [], client: null, ClaudeCodeAsker.SideTask("slow"), Token);
+
+        // The install's own twenty-two minutes wait on the clock beside each pause of the wait that tells them, so the
+        // clock is moved only once both stand: five minutes at a time, each move waited for the pause to be armed
+        // again - the wait having told its line - before the next. A drive by steps alone would race the telling, for
+        // the install's own timer keeps the clock moving while the wait has not yet said where it stands.
+        await clock.WaitingAsync(2).WaitAsync(ClockDrive.Within, Token);
+
+        for (var minutes = 5; minutes <= 20; minutes += 5)
+        {
+            clock.Advance(TimeSpan.FromMinutes(5));
+            await clock.WaitingAsync(2).WaitAsync(ClockDrive.Within, Token);
+        }
+
+        // Two minutes more, telling nothing, so the install ends off a telling's mark.
+        clock.Advance(TimeSpan.FromMinutes(2));
+
+        var answer = await making.WaitAsync(ClockDrive.Within, Token);
         var told = harness.StandardOutput.ToString().Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
         var install = kit.Runner.Requests.Single(request => request.Arguments.Contains("install", StringComparer.Ordinal));

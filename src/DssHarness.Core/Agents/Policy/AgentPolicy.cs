@@ -4385,7 +4385,7 @@ public sealed partial class AgentPolicy
     /// <param name="pattern">Whether the shell that reads the word expands its pattern: a quoted star is a star.</param>
     private AgentPolicyAnswer.Denied? Named(string word, string? quoted, IReadOnlyList<string> places, bool braces, bool dotNames, bool holds, bool pattern)
     {
-        foreach (var (named, place) in NamedAgainst(word, quoted, places.Distinct().ToList(), braces, dotNames))
+        foreach (var (named, place, spelled) in NamedAgainst(word, quoted, places.Distinct().ToList(), braces, dotNames))
         {
             IReadOnlyList<string> readings;
 
@@ -4410,7 +4410,7 @@ public sealed partial class AgentPolicy
                 {
                     if (unreachable.FirstOrDefault(unreached => GlobReaches(asked, unreached, dotNames)) is not null)
                     {
-                        return new AgentPolicyAnswer.Denied(rule, AgentPolicySource.Builtin, $"'{word}' may name {what} by its pattern: no command of an agent touches one");
+                        return new AgentPolicyAnswer.Denied(rule, AgentPolicySource.Builtin, $"'{spelled}' may name {what} by its pattern: no command of an agent touches one");
                     }
 
                     if (holds && named.Whole && unreachable.FirstOrDefault(unreached => GlobHolds(asked, unreached, dotNames)) is { } held)
@@ -4418,7 +4418,7 @@ public sealed partial class AgentPolicy
                         return new AgentPolicyAnswer.Denied(
                             rule,
                             AgentPolicySource.Builtin,
-                            $"'{word}' may name a directory that holds {what}, '{held}', by its pattern: a command over it may read one, and no command of an agent touches one");
+                            $"'{spelled}' may name a directory that holds {what}, '{held}', by its pattern: a command over it may read one, and no command of an agent touches one");
                     }
                 }
             }
@@ -4430,7 +4430,7 @@ public sealed partial class AgentPolicy
                     return new AgentPolicyAnswer.Denied(
                         inside.Rule,
                         AgentPolicySource.Builtin,
-                        $"'{word}' {inside.Named}: no command of an agent touches one");
+                        $"'{spelled}' {inside.Named}: no command of an agent touches one");
                 }
 
                 if (!holds || !named.Whole)
@@ -4445,7 +4445,7 @@ public sealed partial class AgentPolicy
                         return new AgentPolicyAnswer.Denied(
                             rule,
                             AgentPolicySource.Builtin,
-                            $"'{word}' names '{form}', which holds {what}, '{held}': a command over it may read one, and no command of an agent touches one");
+                            $"'{spelled}' names '{form}', which holds {what}, '{held}': a command over it may read one, and no command of an agent touches one");
                     }
                 }
             }
@@ -4456,13 +4456,14 @@ public sealed partial class AgentPolicy
 
     /// <summary>
     /// Each path <paramref name="word"/> names (<see cref="CommandAnalysis.PathsNamed"/>) with each place it is read
-    /// against, for <see cref="Named"/>. A word whose braces pair is decided by its pattern
+    /// against, and the word a refusal names the path by: the word itself, or - for a word held as a core - the decisive
+    /// spelling that decided it, a real place never the core's text. A word whose braces pair is decided by its pattern
     /// (<see cref="Decisive"/>), never spelled out: its own readings, then against each place the spellings that decide
     /// it - <c>{a,b}</c> written forty times is decided by one spelling, not 2^40, and a word that may spell a shell
     /// pattern by a witness per guarded place. Every word whose braces do not pair has its spellings read each, one at a
     /// time.
     /// </summary>
-    private IEnumerable<(NamedPath Named, string Place)> NamedAgainst(string word, string? quoted, IReadOnlyList<string> places, bool braces, bool dotNames)
+    private IEnumerable<(NamedPath Named, string Place, string Spelled)> NamedAgainst(string word, string? quoted, IReadOnlyList<string> places, bool braces, bool dotNames)
     {
         // A word held as a core - one text standing for every alternative of a choice - is decided by its pattern, the
         // core mapped back to the choice (<see cref="Templated"/>): its spellings that decide it, never the core's text.
@@ -4476,7 +4477,7 @@ public sealed partial class AgentPolicy
                 {
                     foreach (var named in CommandAnalysis.PathsNamed(spelling, braces: false, quoted: mask))
                     {
-                        yield return (named, place);
+                        yield return (named, place, spelling);
                     }
                 }
             }
@@ -4492,7 +4493,7 @@ public sealed partial class AgentPolicy
             {
                 foreach (var place in places)
                 {
-                    yield return (named, place);
+                    yield return (named, place, word);
                 }
             }
 
@@ -4502,7 +4503,7 @@ public sealed partial class AgentPolicy
                 {
                     foreach (var named in CommandAnalysis.PathsNamed(spelling, braces: false, quoted: mask))
                     {
-                        yield return (named, place);
+                        yield return (named, place, spelling);
                     }
                 }
             }
@@ -4514,7 +4515,7 @@ public sealed partial class AgentPolicy
         {
             foreach (var place in places)
             {
-                yield return (named, place);
+                yield return (named, place, word);
             }
         }
     }

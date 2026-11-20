@@ -180,8 +180,10 @@ public sealed class ClaudeCodeInstall(IFileSystem fileSystem, IProcessRunner pro
 
         try
         {
+            // The program runs by the caller's token, which is the one that ends it: the wait adds no stopper of its
+            // own, so a reading back nothing can stop - the change's, given none - runs the program unstopped.
             asked = await ProgramWait.ToItsEndAsync(
-                    token => _processRunner.RunAsync(new ProcessRequest { FileName = program, Arguments = ["--version"], Environment = EveryStart }, token),
+                    _ => _processRunner.RunAsync(new ProcessRequest { FileName = program, Arguments = ["--version"], Environment = EveryStart }, cancellationToken),
                     $"'{program}' to answer its --version",
                     tell ?? (_ => { }),
                     _time,

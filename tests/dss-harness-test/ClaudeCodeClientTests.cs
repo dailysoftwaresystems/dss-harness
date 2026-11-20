@@ -1758,10 +1758,9 @@ public sealed class ClaudeCodeClientTests : IDisposable
     /// <summary>The refusal a call of the server's was answered with - kept with the control messages, the launch ended at once whether it read the answer or not.</summary>
     private static string Refused(Kit kit)
     {
-        var refused = Assert.Single(Control(kit), line => line["response"]?["response"]?["mcp_response"]?["result"]?["isError"] is not null)["response"]!["response"]!["mcp_response"]!["result"]!;
-        Assert.True(refused["isError"]!.GetValue<bool>());
-
-        return refused["content"]![0]!["text"]!.GetValue<string>();
+        // Every answer of the server's carries its isError member, a call that ran among them: the refusal is the one
+        // that says it is an error.
+        return Assert.Single(Control(kit), line => line["response"]?["response"]?["mcp_response"]?["result"]?["isError"]?.GetValue<bool>() is true)["response"]!["response"]!["mcp_response"]!["result"]!["content"]![0]!["text"]!.GetValue<string>();
     }
 
     /// <summary>A call of the server's its client cancels is cancelled where it runs, answered as cancelled, and the step goes on.</summary>

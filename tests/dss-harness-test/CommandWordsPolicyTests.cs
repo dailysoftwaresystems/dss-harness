@@ -1417,10 +1417,12 @@ public sealed class CommandWordsPolicyTests
         Assert.Equal([new NamedPath("-i./key", true, true), new NamedPath("./key", false, false)], CommandAnalysis.PathsNamed("-i./key"));
         Assert.Equal([new NamedPath("-Path:a/b", true, true), new NamedPath("a/b", true, false), new NamedPath("ath:a/b", false, false)], CommandAnalysis.PathsNamed("-Path:a/b"));
         Assert.Equal([new NamedPath("--file=x", true, true), new NamedPath("x", true, false)], CommandAnalysis.PathsNamed("--file=x"));
+        // Each word the braces spell is read by the same rules as the word itself, its own readings under it: the word's
+        // first alternative spelled first.
         Assert.Equal(
-            [new NamedPath("a {b,c}", true, true), new NamedPath("a", false, false), new NamedPath("{b,c}", false, false), new NamedPath("a c", true, true), new NamedPath("a b", true, true)],
+            [new NamedPath("a {b,c}", true, true), new NamedPath("a", false, false), new NamedPath("{b,c}", false, false), new NamedPath("a b", true, true), new NamedPath("a", false, false), new NamedPath("b", false, false), new NamedPath("a c", true, true), new NamedPath("a", false, false), new NamedPath("c", false, false)],
             CommandAnalysis.PathsNamed("a {b,c}"));
-        Assert.Equal([new NamedPath("{x,y}/k", true, true), new NamedPath("y/k", true, true), new NamedPath("x/k", true, true)], CommandAnalysis.PathsNamed("{x,y}/k"));
+        Assert.Equal([new NamedPath("{x,y}/k", true, true), new NamedPath("x/k", true, true), new NamedPath("y/k", true, true)], CommandAnalysis.PathsNamed("{x,y}/k"));
         Assert.Equal([new NamedPath("{x,y}/k", true, true)], CommandAnalysis.PathsNamed("{x,y}/k", braces: false));
         Assert.Equal([new NamedPath("file:///tmp/k", true, true), new NamedPath(new Uri("file:///tmp/k").LocalPath, true, false)], CommandAnalysis.PathsNamed("file:///tmp/k"));
 
