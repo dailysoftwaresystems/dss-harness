@@ -725,7 +725,7 @@ public sealed class CodebaseGraphServiceTests
         Assert.Equal(1, read.Extracted);
         Assert.Equal(CodeFileStates.Parsed, graph.Manifest().Files["big.toy"].State);
         Assert.Contains(graph.Symbols().Nodes, node => node.Id == "toy:Big");
-        graph.Output.Received(1).Info("graph", $"the codebase graph of run 'run' read 1 file an earlier build of this tool listed {CodeFileStates.TooLarge}, when the graph left a file past a size unread: every file it claims is read whole now, whatever its size.");
+        graph.Output.Received(1).Info("graph", $"the codebase graph of run 'run' read {ReportText.Counted(1, "file")} an earlier build of this tool listed {CodeFileStates.TooLarge}, when the graph left a file past a size unread: every file it claims is read whole now, whatever its size.");
 
         var again = await graph.SyncAsync();
 
@@ -890,7 +890,7 @@ public sealed class CodebaseGraphServiceTests
         var again = await graph.Shaped(CodebaseGraphShape.Default).SyncAsync();
         var files = graph.Manifest().Files;
 
-        Assert.Equal((0, 3), (again.Extracted, again.Reused));
+        Assert.Equal((0, 4), (again.Extracted, again.Reused));
         Assert.Equal((CodeFileStates.Binary, CodeFileStates.Ambiguous, CodeFileStates.Parsed), (files["bin.toy"].State, files["both.amb"].State, files["big.toy"].State));
     }
 
@@ -941,7 +941,7 @@ public sealed class CodebaseGraphServiceTests
 
         Assert.NotEqual(files[first].Extract, files[second].Extract);
         Assert.Equal(CodeGraphIds.ExtractName(files[first].Blob!, first, "toy", graph.Toy.Version), files[first].Extract);
-        Assert.Equal(2, graph.Extracts().Count);
+        Assert.Equal(3, graph.Extracts().Count);
         Assert.Equal(CodeGraphIds.Sha256(first)[..8], CodeGraphIds.Sha256(second)[..8]);
     }
 

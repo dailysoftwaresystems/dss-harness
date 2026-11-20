@@ -135,7 +135,7 @@ public sealed class JsonExtractorTests : CodeGraphExtractorContractTests<JsonExt
 
         Assert.Empty(extract.Imports);
         Assert.Equal([("$ref", "#/definitions/x"), ("$ref", "https://example.com/other.json")],
-            extract.Nodes.Where(node => node.Kind == CodeNodeKinds.Member).OrderBy(node => node.Id).Select(node => (node.Name, node.Summary)));
+            extract.Nodes.Where(node => node.Kind == CodeNodeKinds.Member).OrderBy(node => node.Id.Whole()).Select(node => (node.Name, node.Summary)));
     }
 
     /// <summary>

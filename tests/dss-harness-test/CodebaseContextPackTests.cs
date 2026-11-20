@@ -520,7 +520,12 @@ public sealed class CodebaseContextPackTests
 
         var pack = CodebaseContextPack.Make(queries, new ContextPackRequest("nothing here matches", All) { Writes = Covered("src/Storage/Memory*.cs"), Worked = [new(used, Edited: false), new(edited, Edited: true), new("gone:node", Edited: true)] });
 
-        Assert.Equal([edited, used], pack.Nodes.Take(2));
+        // The edited node of the working set stands above every other; a used one above the files' declarations - a node
+        // the walk reaches can weigh past a used one, its edges summed, but never past an edited one.
+        var nodes = pack.Nodes.ToList();
+
+        Assert.Equal(edited, nodes[0]);
+        Assert.True(nodes.IndexOf(used) < nodes.IndexOf(Id(queries, "Shop.Storage.MemoryOrderStore.Save")), $"the working set's used node is below a file's declaration:\n{pack.Text}");
         Assert.EndsWith(" | edited before", Line(pack, queries, "Shop.Reports.SalesReport.Sales"), StringComparison.Ordinal);
         Assert.EndsWith(" | used before", Line(pack, queries, "Shop.Orders.OrderLine.Amount"), StringComparison.Ordinal);
         Assert.EndsWith(" | in a file the step writes", Line(pack, queries, "Shop.Storage.MemoryOrderStore.Save"), StringComparison.Ordinal);

@@ -88,11 +88,11 @@ public sealed class CtestPresetsTests
         var fileSystem = Substitute.For<IFileSystem>();
 
         fileSystem.FileExists(Arg.Any<string>()).Returns(call => files.ContainsKey(call.Arg<string>()));
-        fileSystem.ReadAllText(Arg.Any<string>()).Returns(call =>
+        fileSystem.OpenRead(Arg.Any<string>()).Returns(call =>
         {
             var path = call.Arg<string>();
             reads[path] = reads.GetValueOrDefault(path) + 1;
-            return files[path];
+            return new MemoryStream(System.Text.Encoding.UTF8.GetBytes(files[path]));
         });
 
         var (filters, unread) = CtestPresets.FiltersOf(fileSystem, root, "ci");

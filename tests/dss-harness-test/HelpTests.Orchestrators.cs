@@ -62,7 +62,11 @@ public sealed partial class HelpTests
             prose,
             StringComparison.Ordinal);
         Assert.Contains("which it reads every 2 s", prose, StringComparison.Ordinal);
-        Assert.Contains("waits 30 s, and --now ends its process: only on this machine, and only the process its owner names by its start.", prose, StringComparison.Ordinal);
+        Assert.Contains(
+            $"waits while the engine runs, for as long as that is, saying so every {DssHarness.Core.Waiting.Waits.SaidEvery.TotalMinutes.ToString(CultureInfo.InvariantCulture)} minutes - its own Ctrl+C ends the wait, the stop staying asked - "
+                + "and --now ends its process: only on this machine, and only the process its owner names by its start.",
+            prose,
+            StringComparison.Ordinal);
     }
 
     /// <summary>

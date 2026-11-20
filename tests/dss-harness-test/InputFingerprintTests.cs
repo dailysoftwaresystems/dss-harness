@@ -84,7 +84,8 @@ public sealed class InputFingerprintTests
         // Decided among a leg's verdicts, the list goes with the detail that stands for it.
         var decided = new LegGuardReport(InputFingerprint.Compare(before, after), null).Decide("leg", [ReachedVerdict.Of(LegVerdict.Passed)]);
 
-        Assert.Equal((LegVerdict.InputsMoved, inputs), (decided.Verdict, (IReadOnlyList<string>)decided.Named));
+        Assert.Equal(LegVerdict.InputsMoved, decided.Verdict);
+        Assert.Equal(inputs, decided.Named);
     }
 
     /// <summary>

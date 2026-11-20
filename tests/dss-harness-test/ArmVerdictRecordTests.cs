@@ -198,10 +198,10 @@ public sealed class ArmVerdictRecordTests : IDisposable
 
     /// <summary>
     /// A table is written with the first entry that names it - never one no entry names - indexed beside the entries by the
-    /// digests of its parts, and removed with the last entry naming it, from the index and from the disk.
+    /// digests of its parts, and kept: written once under its digest, it stays though no live entry names it any more.
     /// </summary>
     [Fact]
-    public void ATable_IsWrittenWithTheFirstEntryThatNamesIt_AndRemovedWithTheLast()
+    public void ATable_IsWrittenWithTheFirstEntryThatNamesIt_AndKept()
     {
         var shared = Table("fixture", "src/fixture.cpp");
         var other = Table("fixture_tests", "src/tests.cpp");
@@ -221,9 +221,11 @@ public sealed class ArmVerdictRecordTests : IDisposable
 
         Assert.Null(Record.Merge(Leg, "floor", Verdict("passed", "k1", Noon, other), [other]));
 
-        Assert.False(File.Exists(Record.TableFile(Leg, shared.Digest())));
+        // A table is written once and kept: the entries that once named it are gone, and the table stays for the record's
+        // life - its history's to read, not the newest entry's alone.
+        Assert.True(File.Exists(Record.TableFile(Leg, shared.Digest())));
         Assert.True(File.Exists(Record.TableFile(Leg, other.Digest())));
-        Assert.Equal([other.Digest()], Record.Read(Leg).Tables.Keys);
+        Assert.Equal([shared.Digest(), other.Digest()], Record.Read(Leg).Tables.Keys);
         var index = other.Index();
 
         Assert.Equal(index, Record.Read(Leg).Tables[other.Digest()] with { Fetched = index.Fetched });

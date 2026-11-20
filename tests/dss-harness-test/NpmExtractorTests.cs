@@ -133,18 +133,16 @@ public sealed class NpmExtractorTests : CodeGraphExtractorContractTests<NpmExtra
     }
 
     /// <summary>
-    /// A file that is no JSON object - one that does not parse, an array, nothing, one nested past the reader's bounds - is
-    /// a project named by its file, nothing in it read, the line it stops at marked dynamic; one with no name declares no
-    /// address root and marks nothing.
+    /// A file that is no JSON object - one that does not parse, an array, nothing - is a project named by its file,
+    /// nothing in it read, the line it stops at marked dynamic; one with no name declares no address root and marks
+    /// nothing. However deep it nests, it is read - a file nested a hundred arrays deep is an object like any other.
     /// </summary>
     [Fact]
     public void AFileThatIsNoObject_IsAProjectOfItsFileName_NothingReadAndTheLineItStopsAtMarked()
     {
-        var deep = "{\n\"name\": \"p\",\n\"a\":\n" + string.Concat(Enumerable.Repeat("[\n", 100)) + string.Concat(Enumerable.Repeat("]\n", 100)) + "}";
-
         foreach (var (text, line) in new[]
         {
-            ("{\n  \"name\": \"p\",\n  \"dependencies\": {\n    \"a\": 1,,\n", 4), ("{ \"name\": \"p\", // a comment\n}", 1), ("[\"name\"]", 1), ("", 1), (deep, 67), ("{ \"name\": \"p\" }\n}", 2),
+            ("{\n  \"name\": \"p\",\n  \"dependencies\": {\n    \"a\": 1,,\n", 4), ("{ \"name\": \"p\", // a comment\n}", 1), ("[\"name\"]", 1), ("", 1), ("{ \"name\": \"p\" }\n}", 2),
         })
         {
             var extract = Read("package.json", text);

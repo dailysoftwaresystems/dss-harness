@@ -540,13 +540,13 @@ public sealed class StructuralScannerTests
         Assert.Equal(3, ScanCalls.At(scan, At(scan, "f", 1), plain)!.Value.Arity);
     }
 
-    /// <summary>A list that runs past the most tokens one is read over is taken for none.</summary>
+    /// <summary>A list however long is read to its end - never cut off at a count of tokens of the code's own.</summary>
     [Fact]
-    public void ATypeArgumentListTooLong_IsNone()
+    public void ATypeArgumentListHoweverLong_IsReadToItsEnd()
     {
         var scan = CFamilyLexer.Scan($"a<{string.Join(", ", Enumerable.Repeat("int", 200))}> b;", cpp: true);
 
-        Assert.Equal(-1, ScanCalls.TypeArgumentsEnd(scan, 1, CppLike));
+        Assert.Equal(scan.Count - 2, ScanCalls.TypeArgumentsEnd(scan, 1, CppLike));
     }
 
     /// <summary>Ids are given once the file is read, declarations with a body first: a prototype before its definition takes the twin's id; parents and references keep their nodes.</summary>

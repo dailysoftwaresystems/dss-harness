@@ -305,7 +305,7 @@ public sealed class CodebaseWorkingSetTests
         Assert.Equal("'a' is held, and named by its handle, its file and its lines", new CodebaseWorkingSet([held with { End = 0 }]).Problem());
         Assert.Equal("'a' is in the working set twice", new CodebaseWorkingSet([held, held]).Problem());
         Assert.Equal("a count is never below 0", new CodebaseWorkingSet([held], Unplaced: -1).Problem());
-        Assert.Equal("a working set keeps at most 200 nodes", new CodebaseWorkingSet([.. Enumerable.Range(0, 201).Select(at => held with { Id = $"n{at}" })]).Problem());
+        Assert.Null(new CodebaseWorkingSet([.. Enumerable.Range(0, 201).Select(at => held with { Id = $"n{at}" })]).Problem());
     }
 
     [Fact]

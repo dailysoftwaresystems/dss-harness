@@ -3594,10 +3594,10 @@ public sealed class ConfigStoreTests
     /// key no part of agentWebSearch takes is refused by name.
     /// </summary>
     [Theory]
-    [InlineData("""{ "agentWebSearch": { "sources": { "gov": { "kind": "feed" } } } }""", "agentWebSearch.sources.gov (feed): 'url' is missing: a source of kind 'feed' gives it - the address asked: a template whose {query} is the query, and {limit} the most results asked where the search takes one")]
-    [InlineData("""{ "agentWebSearch": { "sources": { "stackoverflow": { "perDay": -1 } } } }""", "agentWebSearch.sources.stackoverflow (json-api): 'perDay' is a whole number from 1 to 1,000,000, and is -1")]
+    [InlineData("""{ "agentWebSearch": { "sources": { "gov": { "kind": "feed" } } } }""", "agentWebSearch.sources.gov (feed): 'url' is missing: a source of kind 'feed' gives it - the address asked: a template whose {query} is the query, {limit} how many results a page holds (pageSize) where the search takes one, {page} the page asked and {start} how many results come before it; one that names neither {page} nor {start} asks one page")]
+    [InlineData("""{ "agentWebSearch": { "sources": { "stackoverflow": { "perDay": -1 } } } }""", "agentWebSearch.sources.stackoverflow (json-api): 'perDay' is a whole number from 1 to 2,147,483,647, and is -1")]
     [InlineData("""{ "agentWebSearch": { "defaults": ["nowhere"] } }""", "agentWebSearch.defaults names 'nowhere', which is no source or tag of agentWebSearch; sources: stackoverflow, github-repos, github-issues, nuget, npm, pub-dev, learn, mdn, wikipedia, hackernews, readthedocs; tags: qa, code, packages, dotnet, js, dart, docs, docs-web, reference, blogs, docs-rtd")]
-    [InlineData("""{ "agentWebSearch": { "maxPerStep": 0 } }""", "agentWebSearch.maxPerStep is 0; it is the most requests of sources one step makes, from 1 to 1,000")]
+    [InlineData("""{ "agentWebSearch": { "maxPerStep": 0 } }""", "agentWebSearch.maxPerStep is 0; it is the most requests of sources one step makes, a later page of a source's results among them, from 1 to 1,000")]
     [InlineData("""{ "agentWebSearch": { "engines": {} } }""", "The JSON property 'engines' could not be mapped to any .NET member contained in type 'DssHarness.Core.Configuration.AgentWebSearchConfig'. (line 1)")]
     public void AWebSearchThatCannotBeUsed_IsRefusedAsTheFile(string json, string expected)
         => Assert.EndsWith($"config.json' could not be read: {expected}", LoadInvalid(json).Message, StringComparison.Ordinal);

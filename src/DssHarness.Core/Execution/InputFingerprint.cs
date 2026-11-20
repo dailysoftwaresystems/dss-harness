@@ -369,6 +369,7 @@ public sealed class InputWatch : IDisposable, IWatchSink
     private readonly IReadOnlyList<WatchTarget> _targets;
     private readonly IDisposable _watching;
     private readonly Action<string>? _heardElsewhere;
+    private readonly HashSet<string> _holding;
     private string? _failure;
 
     /// <summary>Watches <paramref name="inputs"/> under <paramref name="root"/>.</summary>
@@ -424,6 +425,13 @@ public sealed class InputWatch : IDisposable, IWatchSink
                 inputsBelow.Add(input);
             }
         }
+
+        // The directories that hold an input of their own, as Targets() names them: what a watch of only where the
+        // inputs are hears, and so the only writes told of elsewhere - a write anywhere deeper is a build's or a copy's,
+        // below a directory no input lies in, and hearing it is what watching only the inputs' directories spares.
+        _holding = new HashSet<string>(_tracked.Keys.Select(Above), comparer);
+
+        static string Above(string path) => path.LastIndexOf('/') is var at and > 0 ? path[..at] : string.Empty;
 
         if (!Directory.Exists(_root))
         {
@@ -645,7 +653,17 @@ public sealed class InputWatch : IDisposable, IWatchSink
         {
             if (!_tracked.TryGetValue(relative, out declared))
             {
-                _heardElsewhere?.Invoke(relative);
+                // Told of it only where a watch of the inputs' own directories would hear it: in a directory that holds
+                // an input of its own. A write anywhere deeper - a build below a slot, an agent's below the worktrees
+                // root - is what that watch never hears, and never told of here.
+                var at = relative.LastIndexOf('/');
+                var held = at > 0 ? relative[..at] : string.Empty;
+
+                if (_holding.Contains(held))
+                {
+                    _heardElsewhere?.Invoke(relative);
+                }
+
                 return;
             }
         }

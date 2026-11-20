@@ -410,7 +410,7 @@ public sealed class AgentCompactionTests : IDisposable
             new AssistantMessage("last", []),
         };
 
-        var compacted = AgentCompaction.Reduce(stream, new AgentCompactionBounds());
+        var compacted = AgentCompaction.Reduce(stream, new AgentCompactionBounds(), last: 1);
         var id = StoredStream.MessageId(analysis);
 
         Assert.DoesNotContain(analysis[..2_000], compacted.Record, StringComparison.Ordinal);

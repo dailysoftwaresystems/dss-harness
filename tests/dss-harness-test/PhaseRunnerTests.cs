@@ -142,25 +142,27 @@ public sealed class PhaseRunnerTests
     }
 
     /// <summary>
-    /// Starting a process is this tool's own time, not the child being quiet. A machine under load
-    /// can take longer over it than a short bound allows, and counting that as silence made a slow
-    /// launch read as a hung command — which is exactly what made this suite's own stall test flake.
+    /// Starting a process is bounded by the stall bound itself, never by a multiple of it of the code's own: a start
+    /// that takes three times the bound is a child that said nothing for as long as its user allows, and is stopped as
+    /// one. A grace of the code's own invention - four times the bound, say - is a number nobody set, and this bound
+    /// carries none.
     /// </summary>
     [Fact]
-    public async Task AStallBound_DoesNotCountTheTimeSpentStartingAChild()
+    public async Task AStallBound_BoundsAStartByTheBoundItself_NeverAMultipleOfItsOwn()
     {
         using var temp = new TempDirectory();
         var factory = new HarnessFactory();
 
-        // Three times the bound before the child is running, and then it finishes at once.
+        // Three times the bound before the child is running: past the bound, though a former grace of
+        // four times it would have let it run. Red with such a grace restored.
         var slow = new SlowToStartRunner(TimeSpan.FromSeconds(3));
 
         var result = await new PhaseRunner(slow, factory.FileSystem, factory.Output).RunAsync(
             Child("echo-args", temp.Combine("slow.log")) with { StallSeconds = 1 },
             TestContext.Current.CancellationToken);
 
-        Assert.Equal(PhaseStop.None, result.Stopped);
-        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(PhaseStop.Silence, result.Stopped);
+        Assert.True(result.Duration < TimeSpan.FromSeconds(3), "the bound waited on the whole launch");
     }
 
     /// <summary>

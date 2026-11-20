@@ -206,6 +206,12 @@ internal sealed class FileExtractJson : JsonConverter<FileExtract>
                         }
 
                         var @base = Base(parent, name.Field ?? field);
+
+                        if (name.Kept > @base.Length)
+                        {
+                            throw new JsonException(string.Create(CultureInfo.InvariantCulture, $"a name keeps {name.Kept} characters of a name of {@base.Length}"));
+                        }
+
                         return name.Kept == @base.Length
                             ? name.Rest.StartsWith(".", StringComparison.Ordinal) ? @base.Under(name.Rest[1..]) : @base.Under(name.Rest, "")
                             : QualifiedName.Of(@base.Whole()[..name.Kept] + name.Rest);
@@ -270,6 +276,11 @@ internal sealed class FileExtractJson : JsonConverter<FileExtract>
                     if (stored.Name.At is not null || stored.Name.Field is not null || (stored.Name.Kept > 0 && parent is null))
                     {
                         throw new JsonException(string.Create(CultureInfo.InvariantCulture, $"scope {at}'s name keeps characters of what is not its parent's name"));
+                    }
+
+                    if (stored.Name.Kept > 0 && parent is not null && stored.Name.Kept > parent.Name.Length)
+                    {
+                        throw new JsonException(string.Create(CultureInfo.InvariantCulture, $"a name keeps {stored.Name.Kept} characters of a name of {parent.Name.Length}"));
                     }
 
                     // A scope's name, too, is held as the one it is written against and the part it adds to it.

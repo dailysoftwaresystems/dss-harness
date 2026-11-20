@@ -1281,7 +1281,7 @@ public sealed class ContainExecTests
             (named.ExitCode, named.StandardError));
 
         var unstarted = await CliRunner.RunAsync(
-            [ContainExec.CommandName, ContainExec.GroupOption, ContainExec.StatusOption, "a-channel", ContainExec.Separator, TestHost.DotnetExecutable, "--version"],
+            [ContainExec.CommandName, ContainExec.GroupOption, ContainExec.StatusOption, "a-channel", ContainExec.Separator, Environment.ProcessPath!, "--version"],
             TestContext.Current.CancellationToken);
 
         Assert.Equal(

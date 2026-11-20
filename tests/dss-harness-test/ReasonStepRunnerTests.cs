@@ -774,12 +774,12 @@ public sealed class ReasonStepRunnerTests
     }
 
     /// <summary>
-    /// The continuation record is of the work the step's conversation goes on with, in the order it went: the steps so far
-    /// oldest first - the work its resume names, then its visits - and the last iterations word for word of the newest of
-    /// them, never of an older visit's.
+    /// The continuation record is of the work the step's conversation goes on with: the steps so far newest first - the
+    /// visits it went through, then the work its resume names last - and the last iterations word for word of the newest
+    /// of them, never of an older visit's.
     /// </summary>
     [Fact]
-    public async Task AContinuationRecord_GoesOnFromTheNewestOfTheWork_AndListsItOldestFirst()
+    public async Task AContinuationRecord_GoesOnFromTheNewestOfTheWork_AndListsItNewestFirst()
     {
         using var temp = new TempDirectory();
         var (kit, agents) = await ReadyAsync(temp);
@@ -808,7 +808,7 @@ public sealed class ReasonStepRunnerTests
         var continuation = agents.Asked.Single().Continuation!;
 
         Assert.Contains("You are going on with work begun by step 'implement'.", continuation, StringComparison.Ordinal);
-        Assert.Contains($"- step 'implement' ended done.{Environment.NewLine}- step 'fix#1.rework' ended done.{Environment.NewLine}- step 'fix#2.rework' ended done.{Environment.NewLine}", continuation, StringComparison.Ordinal);
+        Assert.Contains($"- step 'fix#2.rework' ended done.{Environment.NewLine}{Environment.NewLine}- step 'fix#1.rework' ended done.{Environment.NewLine}{Environment.NewLine}- step 'implement' ended done.{Environment.NewLine}", continuation, StringComparison.Ordinal);
         Assert.Contains("the second round's last word", continuation, StringComparison.Ordinal);
         Assert.DoesNotContain("the first round's last word", continuation, StringComparison.Ordinal);
         Assert.DoesNotContain("fix#3.review", continuation, StringComparison.Ordinal);
@@ -1664,7 +1664,7 @@ public sealed class ReasonStepRunnerTests
         Assert.NotNull(support);
         Assert.NotNull(support.Tool);
         Assert.True(support.Narrow);
-        Assert.Equal([GraphOp.Find, GraphOp.Node, GraphOp.Related, GraphOp.Outline, GraphOp.Body, GraphOp.Edit, GraphOp.WholeFile], support.Operations!.Order());
+        Assert.Equal([GraphOp.Find, GraphOp.Node, GraphOp.Related, GraphOp.Outline, GraphOp.Body, GraphOp.Edit, GraphOp.WholeFile, GraphOp.Pack], support.Operations!.Order());
 
         var promptLine = Assert.IsType<GraphPromptLine>(Assert.Single(LinesOf(kit, "think")));
         Assert.Null(promptLine.Why);
@@ -2146,8 +2146,8 @@ public sealed class ReasonStepRunnerTests
 
         Assert.True(earlier.Passed, earlier.Error);
         Assert.True(later.Passed, later.Error);
-        Assert.Equal("page 1 of 3 · 58 results · ask again with page: 2 for the next", first.Text.Split('\n')[0]);
-        Assert.Equal("page 2 of 3 · 58 results · ask again with page: 3 for the next", second.Text.Split('\n')[0]);
+        Assert.Equal("page 1 of 4 · 64 results · ask again with page: 2 for the next", first.Text.Split('\n')[0]);
+        Assert.Equal("page 2 of 4 · 64 results · ask again with page: 3 for the next", second.Text.Split('\n')[0]);
         Assert.Single(Directory.EnumerateFiles(Path.Combine(kit.Layout.InstanceDirectory("again", "a9"), OrchestratorLayout.StepPagesDirectoryName)));
     }
 
@@ -2193,8 +2193,8 @@ public sealed class ReasonStepRunnerTests
 
         Assert.True(depends.Passed, depends.Error);
         Assert.True(goesOn.Passed, goesOn.Error);
-        Assert.Equal("page 2 of 3 · 58 results · ask again with page: 3 for the next · page 1 of this ask is not kept: pages counted on the graph as it stands", unread.Text.Split('\n')[0]);
-        Assert.Equal(["page 2 of 3 · 58 results · ask again with page: 3 for the next", "the newer visit's"], read.Text.Split('\n')[..2]);
+        Assert.Equal("page 2 of 4 · 64 results · ask again with page: 3 for the next · page 1 of this ask is not kept: pages counted on the graph as it stands", unread.Text.Split('\n')[0]);
+        Assert.Equal(["page 2 of 4 · 64 results · ask again with page: 3 for the next", "the newer visit's"], read.Text.Split('\n')[..2]);
     }
 
     /// <summary>

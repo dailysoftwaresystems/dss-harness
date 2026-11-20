@@ -536,6 +536,7 @@ public sealed class ArchitectureTests
 
         // The console's own pieces, which only a front end can be or show.
         ["DssHarness.Core.Orchestration.Flow.FlowTerminal"] = "the console's own counting of a run session's interrupts, which only a front end can take",
+        ["DssHarness.Core.Execution.CommandInterrupts"] = "the console's own first Ctrl+C and second, which only a front end can take; every command runs between them",
 
         // The anchor commands' option names, kept where Core's own refusal sentences say them.
         ["DssHarness.Core.Anchors.AnchorCellNames"] = "the cells' names and the option that selects them all, which Core's own sentences name",
@@ -568,9 +569,6 @@ public sealed class ArchitectureTests
         ["DssHarness.Core.Agents.SideTasks.SideTaskReports"] = "renders the report the side-task commands' use case answers",
         ["DssHarness.Core.Runs.RunStopReports"] = "renders the report the stop-run command's use case answers",
         ["DssHarness.Core.Worktrees.WorktreeReports"] = "renders the report the worktree commands' use case answers",
-
-        // What the command line itself owns: the point past which a stop is no longer safe.
-        ["DssHarness.Core.Execution.PointOfNoReturn"] = "how long the parser waits for a command past its point of no return, which the parser asks",
 
         // The hidden process commands the program starts for its own machinery.
         ["DssHarness.Core.Processes.ContainExec"] = "the hidden command that places a contained child, which the program runs for itself",

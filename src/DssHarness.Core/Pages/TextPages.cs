@@ -360,7 +360,7 @@ public static class TextPages
 
         var said = new List<string>();
 
-        if (Paging.HeaderLine(given, pages, kept.Lines, note) is { } header)
+        if (Paging.HeaderLine(given, pages, kept.Lines, note, ask) is { } header)
         {
             said.Add(header);
         }

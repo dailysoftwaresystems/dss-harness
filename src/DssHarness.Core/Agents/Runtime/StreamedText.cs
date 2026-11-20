@@ -140,7 +140,7 @@ internal sealed class StreamedText : IDisposable
     /// (<see cref="LineEnds"/>): at CR LF, LF and CR, an ending the text ends with closing its last line rather than
     /// opening another, and an empty text one empty line. One line is held at a time.
     /// </summary>
-    /// <param name="cancellationToken">Stops the read, between one block and the next.</param>
+    /// <param name="cancellationToken">Stops the read, between one line and the next.</param>
     /// <exception cref="StreamedTextUnreadException">A byte forms no character of the text's encoding, named where it stands.</exception>
     public async IAsyncEnumerable<string> LinesAsync([EnumeratorCancellation] CancellationToken cancellationToken)
     {
@@ -155,6 +155,10 @@ internal sealed class StreamedText : IDisposable
 
             while (!rest.IsEmpty)
             {
+                // A stop is heard between any two lines, never only between blocks: a reader that reads a line at a time
+                // is stopped before the next line, whatever block the lines fell in.
+                cancellationToken.ThrowIfCancellationRequested();
+
                 // A line feed straight after a carriage return is the second half of one ending, whatever block it is in.
                 if (afterCarriageReturn)
                 {

@@ -274,7 +274,8 @@ public sealed class CppExtractorTests : CodeGraphExtractorContractTests<CppExtra
     [Fact]
     public void AThousandTokenTypeArgumentList_IsRead()
     {
-        var types = Enumerable.Range(0, 500).Select(at => $"W{at}").ToList();
+        // The types are lowercase: a name in capitals the reader reads as a macro's, and a macro names no type.
+        var types = Enumerable.Range(0, 500).Select(at => $"w{at}").ToList();
         var extract = Read("m.cc", $"void f(int x) {{\n    make<{string.Join(", ", types)}>(x);\n}}\n");
 
         Assert.Empty(extract.Dynamic);
@@ -469,8 +470,8 @@ public sealed class CppExtractorTests : CodeGraphExtractorContractTests<CppExtra
             """);
 
         Assert.Equal(
-            [("cpp:Foo foo", "variable"), ("cpp:f(int)", "function"), ("cpp:v.cc:logger", "variable")],
-            extract.Nodes.Select(node => (node.Id == "cpp:foo" ? "cpp:Foo foo" : node.Id, node.SubKind)).Order());
+            [("cpp:f(int)", "function"), ("cpp:foo", "variable"), ("cpp:v.cc:logger", "variable")],
+            extract.Nodes.Select(node => (node.Id.Whole(), node.SubKind)).Order());
         Assert.Equal("Logger", Node(extract, "cpp:v.cc:logger").ValueType);
     }
 
@@ -1011,9 +1012,9 @@ public sealed class CppExtractorTests : CodeGraphExtractorContractTests<CppExtra
 
         Assert.Equal(
             [
-                (CodeEdgeKinds.Uses, "n0", null, null, null), (CodeEdgeKinds.Uses, "n1", CodeQualifierKinds.Value, "n0", null),
-                .. names.Skip(2).Select((name, at) => (CodeEdgeKinds.Uses, name, (string?)CodeQualifierKinds.Value, (string?)null, (int?)(at + 1))),
-                (CodeEdgeKinds.Calls, "go", CodeQualifierKinds.Value, null, 59),
+                (CodeEdgeKinds.Uses, "n0", null, (QualifiedName?)null, null), (CodeEdgeKinds.Uses, "n1", CodeQualifierKinds.Value, (QualifiedName?)"n0", null),
+                .. names.Skip(2).Select((name, at) => (CodeEdgeKinds.Uses, name, (string?)CodeQualifierKinds.Value, (QualifiedName?)null, (int?)(at + 1))),
+                (CodeEdgeKinds.Calls, "go", CodeQualifierKinds.Value, (QualifiedName?)null, 59),
             ],
             extract.References.Select(reference => (reference.Kind, reference.Name, reference.Qualifier?.Kind, reference.Qualifier?.Name, reference.Qualifier?.Link)));
         Assert.Equal(string.Join('.', names), extract.Written(extract.References[^1].Qualifier));

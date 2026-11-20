@@ -125,7 +125,7 @@ public sealed class AgentToolRuntimeTests : IDisposable
         Assert.True(runtime.Locks(new AgentToolCallRequest("call_3", AgentMeasureSupport.ToolName, """{"leg":"windows","variant":"debug","filter":"","cell":"x"}""")));
 
         var passed = await Call(runtime, AgentMeasureSupport.ToolName, "toolu_01:A", ("leg", "windows"), ("variant", "debug"), ("filter", "Shape"), ("cell", "the good cell"));
-        var records = Path.Combine(_step, AgentMeasureSupport.RecordsDirectoryName, "toolu_01_A");
+        var records = Path.Combine(_step, AgentMeasureSupport.RecordsDirectoryName, AgentCallRecords.NameOf("toolu_01:A"));
 
         Assert.True(passed.Ok, passed.Text);
         Assert.Equal(new AgentMeasureCall("toolu_01:A", "windows", "debug", "Shape", "the good cell", records), asked);
@@ -205,7 +205,7 @@ public sealed class AgentToolRuntimeTests : IDisposable
     public async Task AnInputThatDoesNotHold_Fails_AndSaysHowTheToolIsCalled()
     {
         var runtime = Open();
-        const string Usage = "view_file takes path (string), start_line? (integer), end_line? (integer)";
+        const string Usage = "view_file takes path (string), page? (integer), start_line? (integer), end_line? (integer)";
 
         var missing = await runtime.RunAsync(new AgentToolCallRequest("a", AgentTools.ViewFile, "{}"), Token);
         Assert.False(missing.Ok);
@@ -1081,7 +1081,7 @@ public sealed class AgentToolRuntimeTests : IDisposable
         var found = await Call(Open(), AgentTools.SearchFiles, ("pattern", "needle"), ("path", "big"));
 
         Assert.True(found.Ok, found.Text);
-        Assert.Matches(@"^dump\.sql:\d+: -- the needle$", found.Text);
+        Assert.Matches(@"^big/dump\.sql:\d+: -- the needle$", found.Text);
     }
 
     /// <summary>
@@ -1592,8 +1592,8 @@ public sealed class AgentToolRuntimeTests : IDisposable
     {
         var runtime = Open(mask: new Masking("s3cr3t"), restrictions: [Restriction("Run(npm publish *)")]);
 
-        Assert.Equal("timeout_seconds is 0, and is 1 to 3600", (await Call(runtime, AgentTools.RunCommand, ("program", "git"), ("timeout_seconds", 0))).Text);
-        Assert.Equal("timeout_seconds is 3601, and is 1 to 3600", (await Call(runtime, AgentTools.RunCommand, ("program", "git"), ("timeout_seconds", 3601))).Text);
+        Assert.Equal("timeout_seconds is 0, and is 1 to 2147483, what a command's timer holds; leave it out to run the command until it ends", (await Call(runtime, AgentTools.RunCommand, ("program", "git"), ("timeout_seconds", 0))).Text);
+        Assert.Equal("timeout_seconds is 2147484, and is 1 to 2147483, what a command's timer holds; leave it out to run the command until it ends", (await Call(runtime, AgentTools.RunCommand, ("program", "git"), ("timeout_seconds", 2147484L))).Text);
         Assert.Equal("program is empty: name the program to run", (await Call(runtime, AgentTools.RunCommand, ("program", string.Empty))).Text);
 
         var secret = await Call(runtime, AgentTools.RunCommand, ("program", "curl"), ("args", new[] { "-H", "token: s3cr3t" }));
@@ -1816,7 +1816,7 @@ public sealed class AgentToolRuntimeTests : IDisposable
             result.Text);
         Assert.Equal(2, runtime.Tally.WebRequests);
         Assert.Equal(
-            [$"web-search source 'beta' answered what its kind 'json-api' (version 1) could not read: {changed}"],
+            [$"web-search source 'beta' answered what its kind 'json-api' (version 2) could not read: {changed}"],
             _events.All.OfType<Notice>().Select(notice => notice.Text));
 
         var only = await Call(runtime, AgentTools.WebSearch, ("query", "other"), ("sources", new[] { "alpha" }));
@@ -1898,7 +1898,9 @@ public sealed class AgentToolRuntimeTests : IDisposable
             native: (query, _) => Task.FromResult(new AgentNativeAnswer(NoWire.FailedPart(query, "it ran its searches and failed"), ++asked is 1 ? 2 : 0)));
 
         var first = await Call(runtime, AgentTools.WebSearch, ("query", "group by"), ("sources", new[] { "alpha" }));
-        var second = await Call(runtime, AgentTools.WebSearch, ("query", "group by"), ("sources", new[] { "alpha" }));
+
+        // A query the run asked before is answered from what it holds, no request made: the bound is asked of a new one.
+        var second = await Call(runtime, AgentTools.WebSearch, ("query", "group by, again"), ("sources", new[] { "alpha" }));
 
         Assert.True(first.Ok);
         Assert.Equal(1, asked);

@@ -179,7 +179,7 @@ public sealed partial class HelpTests
         var said = Prose.Words((HelpText.Of("config")).StandardOutput);
 
         Assert.Contains(
-            "and the process says so once. A directory that holds inputs, or lies above some, going, arriving or changing its name "
+            "A directory that holds inputs, or lies above some, going, arriving or changing its name "
                 + "counts every input in or below it, under both names of a rename, though it be back when the work ends; one merely "
                 + "written to counts none. "
                 + "A leg whose inputs cannot be watched at all runs none of its work, and ends unmeasured at once, saying why ('help "

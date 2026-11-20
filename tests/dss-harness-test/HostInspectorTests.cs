@@ -734,7 +734,7 @@ public sealed class HostInspectorTests
         Assert.True(report.Available, report.Reason);
         Assert.Equal(2, wakeLookup.Calls);
         Assert.Contains(report.Actions, action => action.StartsWith("answered after ", StringComparison.Ordinal)
-            && action.EndsWith("(5 lookup(s) of its name, 2 connection attempt(s))", StringComparison.Ordinal));
+            && action.EndsWith("(4 lookup(s) of its name, 2 connection attempt(s))", StringComparison.Ordinal));
     }
 
     /// <summary>
@@ -1159,7 +1159,8 @@ public sealed class HostInspectorTests
 
         var report = await fixture.InspectAsync(HostId.Ssh(SshName));
 
-        Assert.Contains("resolved to no address", report.Reason, StringComparison.Ordinal);
+        Assert.Contains("'host.invalid' got no answer in 2 lookups", report.Reason, StringComparison.Ordinal);
+        Assert.Contains("check that the machine is on", report.Reason, StringComparison.Ordinal);
         Assert.Empty(fixture.Commands.ShellProbes);
     }
 
@@ -1387,7 +1388,8 @@ public sealed class HostInspectorTests
         var report = await fixture.InspectAsync(HostId.Ssh(SshName));
 
         Assert.False(report.Available);
-        Assert.Contains("'real.example.test', the HostName ssh's own configuration gives 'host.invalid', resolved to no address", report.Reason, StringComparison.Ordinal);
+        Assert.Contains("'real.example.test', the HostName ssh's own configuration gives 'host.invalid', got no answer in 2 lookups", report.Reason, StringComparison.Ordinal);
+        Assert.Contains("the HostName is a name this machine's network answers for", report.Reason, StringComparison.Ordinal);
         Assert.Empty(fixture.Commands.ShellProbes);
     }
 

@@ -75,7 +75,7 @@ public static partial class HelpTopics
             + $"time its call names (1 to {Agents.AgentCommandSettings.MostTimeoutSeconds} s, what a command's timer holds), "
             + "else for agentPolicy.commandTimeoutSeconds where it is given, stopped sooner where it "
             + "prints nothing for as long as the step's stall bound and by the step's own bounds - its timeoutMinutes and its "
-            + "budget; agentPolicy.maxCommandTimeoutSeconds is retired and refused, naming what bounds a command; a command line holding a secret, a word holding a NUL, or on Windows a batch file's argument holding what cmd.exe reads again ({Processes.BatchFiles.Said}) or what the shell expands, is refused. Its environment, and the claude child's before its own names are set, loses every name the "
+            + $"budget; agentPolicy.maxCommandTimeoutSeconds is retired and refused, naming what bounds a command; a command line holding a secret, a word holding a NUL, or on Windows a batch file's argument holding what cmd.exe reads again ({Processes.BatchFiles.Said}) or what the shell expands, is refused. Its environment, and the claude child's before its own names are set, loses every name the "
             + "configuration appoints and every secret-shaped name - ending "
             + $"{string.Join(", ", Agents.AgentChildEnvironment.SecretSuffixes)}, in any case - but those "
             + "agentPolicy.keepEnvironment gives back; an appointed name is never given back. web_fetch is the harness's own "

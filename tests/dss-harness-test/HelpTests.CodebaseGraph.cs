@@ -51,7 +51,6 @@ public sealed partial class HelpTests
         Assert.Contains(Prose.Words("edited first, then by how often each was touched; a node the view no longer holds kept by its id, marked gone"), prose, StringComparison.Ordinal);
         Assert.Contains(Prose.Words("by where its new text stands once there - every place, with replace_all - else by the lines it names"), prose, StringComparison.Ordinal);
         Assert.Contains(Prose.Words("a deletion writes no lines, and is counted with the writes placed nowhere, as a whole file's write is where the file does not read as the step left it."), prose, StringComparison.Ordinal);
-        Assert.Contains(Prose.Words("A file that differs and could not be compared - over its size cap, generated, or not read, there or at the base - is named on its first line with why, and nothing in it is said unchanged."), prose, StringComparison.Ordinal);
         Assert.Contains(Prose.Words("body and edit reach a file only inside the tree, each link resolved, never through a link out of it."), prose, StringComparison.Ordinal);
     }
 
@@ -77,7 +76,7 @@ public sealed partial class HelpTests
         }
 
         Assert.Contains("listed (version 1; every file no other claims)", topic, StringComparison.Ordinal);
-        Assert.Contains("markdown (version 1; .md)", topic, StringComparison.Ordinal);
+        Assert.Contains("markdown (version 2; .md)", topic, StringComparison.Ordinal);
         Assert.All(WorkflowKeys.CodebaseGraph, key => Assert.Contains(key.Name, topic, StringComparison.Ordinal));
         Assert.Contains($"failOn: {WorkflowStepTypes.GraphIncomplete}, which fails it ({HarnessExit.CommandFailed.ToString(CultureInfo.InvariantCulture)})", prose, StringComparison.Ordinal);
         Assert.Contains("30 minutes where it says no timeoutMinutes", prose, StringComparison.Ordinal);

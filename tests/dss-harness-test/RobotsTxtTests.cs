@@ -30,9 +30,9 @@ public sealed class RobotsTxtTests
         Assert.Equal(TimeSpan.FromSeconds(3), robots.CrawlDelay);
     }
 
-    /// <summary>A crawl delay is the first that reads as a number of seconds, none below zero, no longer than a day.</summary>
+    /// <summary>A crawl delay is the first that reads as a number of seconds, none below zero - kept as the site gives it, however long.</summary>
     [Theory]
-    [InlineData("Crawl-delay: 1000000", 86400.0)]
+    [InlineData("Crawl-delay: 1000000", 1000000.0)]
     [InlineData("Crawl-delay: soon\nCrawl-delay: 5", 5.0)]
     [InlineData("Crawl-delay: -5", null)]
     public void ACrawlDelay_IsReadAsItCanBe(string lines, double? seconds)

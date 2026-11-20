@@ -236,13 +236,13 @@ public static class WorkflowTemplates
             .. WorkflowFiles.Steps(resolved)
                 .SelectMany(entry => WorkflowFiles.OfStep(entry.Step, $"step '{entry.Path}'")
                     .Select(named => (entry.Step.WorkflowOf, Named: named)))
-                .Where(schema => schema.Named.IsSchema && EmbeddedText(schema.WorkflowOf, schema.Named.File) is not null)
+                .Where(schema => schema.Named.IsSchema && TextOf(schema.WorkflowOf, schema.Named.File) is not null)
                 .SelectMany(schema => WorkflowFiles.SchemaProblems(
                     schema.Named,
-                    EmbeddedText(schema.WorkflowOf, schema.Named.File)!,
-                    beside => WorkflowFiles.RootOf(EmbeddedText(schema.WorkflowOf, WorkflowFiles.Beside(schema.Named.File, beside))))),
+                    TextOf(schema.WorkflowOf, schema.Named.File)!,
+                    beside => WorkflowFiles.RootOf(TextOf(schema.WorkflowOf, WorkflowFiles.Beside(schema.Named.File, beside))))),
             .. UseFilesOf(resolved),
-            .. WorkflowValidator.Validate(resolved, hasCommitTemplate: false, (named, owner) => EmbeddedText(owner, named)),
+            .. WorkflowValidator.Validate(resolved, hasCommitTemplate: false, (named, owner) => TextOf(owner, named)),
         ];
 
         if (problems.Count > 0)
@@ -267,7 +267,7 @@ public static class WorkflowTemplates
         [
             .. WorkflowFiles.Steps(resolved)
                 .SelectMany(entry => WorkflowFiles.OfUse(entry.Step, entry.Path).Select(named => (entry.Path, entry.Step.Use!.Name, Named: named)))
-                .Where(file => EmbeddedText(file.Name, file.Named.File) is null)
+                .Where(file => TextOf(file.Name, file.Named.File) is null)
                 .Select(file => $"'{file.Named.File}', {file.Named.What}, is not in this build's embedded set at that path under '{file.Name}'"),
         ];
 
@@ -279,7 +279,7 @@ public static class WorkflowTemplates
     /// </summary>
     /// <param name="owner">The workflow the file belongs to: its path under the workflows root, or null for this workflow's own.</param>
     /// <param name="named">The file, as the definition names it, relative to its owner's directory.</param>
-    private static string? EmbeddedText(string? owner, string named)
+    private static string? TextOf(string? owner, string named)
         => WorkflowFiles.PlaceOf(ShippedWorkflowName, owner) switch
         {
             null => null,

@@ -106,7 +106,7 @@ public sealed class EmbeddedCodeTests
 
         var kept = EmbeddedCode.Kept(Text, CodeFileText.LineIndex(Text), [(first, first + 11), (second, second + 5), (third, third + 7)]);
 
-        Assert.Equal("\nvar x = foo bar()\n\nlast()", kept);
+        Assert.Equal("\nvar x = foo bar()\n\nlast()", kept.Slice(0, kept.Length));
     }
 
     private static FileExtract Script(int line, string name) => new(

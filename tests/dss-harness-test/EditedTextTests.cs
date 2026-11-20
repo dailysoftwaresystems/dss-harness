@@ -58,7 +58,8 @@ public sealed class EditedTextTests
     {
         Assert.Equal(CodeFileStates.Binary, CodeFileText.Decode([0x61, 0x00]).State);
         Assert.Equal(CodeFileStates.Unreadable, CodeFileText.Decode([0xE9]).State);
-        Assert.Equal("x", CodeFileText.Decode([0xFF, 0xFE, 0x78, 0x00]).Text);
+        var text = CodeFileText.Decode([0xFF, 0xFE, 0x78, 0x00]).Text!;
+        Assert.Equal("x", text.Slice(0, text.Length));
     }
 
     /// <summary>Text a model gives with LF is written in a CR LF file's endings, the file's final newline kept.</summary>

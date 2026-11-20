@@ -144,7 +144,7 @@ public sealed class SitemapDocumentTests
     /// <summary>What is no sitemap says why.</summary>
     [Theory]
     [InlineData("<html><body/></html>", "its root is <html>, where a sitemap's is <urlset> or <sitemapindex>")]
-    [InlineData("<html><body>Not found", "it is no XML (")]
+    [InlineData("<html><body>Not found", "its root is <html>, where a sitemap's is <urlset> or <sitemapindex>")]
     [InlineData("", "it is no XML (")]
     public void WhatIsNoSitemap_SaysWhy(string text, string why)
         => Assert.StartsWith(why, SitemapDocument.Read(text, Address).Problem, StringComparison.Ordinal);

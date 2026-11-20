@@ -213,10 +213,12 @@ public sealed partial class HelpTests
 
         // A side-task's own search on the Claude API, asked as the side-task stands when the agent asks it.
         Assert.Contains(
-            "on the Claude API a request of the harness's own whose only tool is the provider's search, asked with the model "
-                + "and key serving the side-task when the agent asks and through that key's gate as every request is, what it "
-                + "costs counted then to that model and key, a failure of it - a gate held past the longest wait among them - "
-                + "one failed part of the search saying why;",
+            "on the Claude API a request of the harness's own whose only tool is the provider's search, asked "
+                + "with the model and key serving the side-task when the agent asks and through that key's gate as every request "
+                + "is, asking for a quarter of the most a reply of that model holds - twice as much, up to the most, where its "
+                + "answer was cut off before the search returned anything - and naming no number of searches, the model "
+                + "searching as often as the query needs, what it costs - each search among it - counted then to that model and key, a failure of it - a gate held past the longest wait "
+                + "among them - one failed part of the search saying why;",
             Prose.Words(HelpText.Of("side-tasks").StandardOutput),
             StringComparison.Ordinal);
     }

@@ -63,9 +63,10 @@ public sealed class SyncPlanTests
         Assert.True(named.Sum(line => line.Length + 1) <= DssHarness.Core.Pages.PageRoom.Line, "the names took more than the line's room");
         Assert.Equal($"and {rest} more (all in {SyncPlan.DryRunList})", loss[^1]);
 
+        var describedSet = plan.Describe(SyncVerb.Planned).ToHashSet(StringComparer.Ordinal);
         Assert.Subset(
-            paths.Select(path => $"would overwrite  {path}").ToHashSet(StringComparer.Ordinal),
-            plan.Describe(SyncVerb.Planned).ToHashSet(StringComparer.Ordinal));
+            paths.Select(path => $"would overwrite  {path}").Append("unchanged 0 file(s)").ToHashSet(StringComparer.Ordinal),
+            describedSet);
     }
 
     [Fact]
@@ -333,7 +334,7 @@ public sealed class SyncPlanTests
         var plan = SyncPlan.Between(Manifest(("a.c", "1")), destination, Default);
 
         Assert.Equal(
-            $"This sync would delete 3 of the 4 files in '/tree': b.c, c.c, d.c. That is {0.75:P0} of it, over the "
+            $"This sync would delete 3 of the 4 file(s) in '/tree': b.c, c.c, d.c. That is {0.75:P0} of it, over the "
             + $"{SyncConfig.DefaultMaxDeleteFraction:P0} sync.maxDeleteFraction allows, which would have to be 0.75 or more for it to go on. "
             + "Nothing was changed. Confirm the source tree is the one you meant, then raise sync.maxDeleteFraction or run with --dry-run to see the list.",
             plan.OverTheBound(destination, SyncConfig.DefaultMaxDeleteFraction));
@@ -344,7 +345,7 @@ public sealed class SyncPlanTests
         var refused = emptied.OverTheBound(many, SyncConfig.DefaultMaxDeleteFraction)!;
         var swept = emptied.OverTheBound(many, SyncConfig.DefaultMaxDeleteFraction, reader: SyncBoundReader.Sweep)!;
 
-        Assert.StartsWith("This sync would delete 3000 of the 3000 files in '/tree': src/file0000.c, src/file0001.c, ", refused, StringComparison.Ordinal);
+        Assert.StartsWith("This sync would delete 3000 of the 3000 file(s) in '/tree': src/file0000.c, src/file0001.c, ", refused, StringComparison.Ordinal);
         Assert.Matches(@"src/file\d{4}\.c and \d+ more \(all in the list --dry-run prints\)\. That is ", refused);
         Assert.All(files, file => Assert.Contains(file.Item1, swept, StringComparison.Ordinal));
         Assert.Contains("which would have to be 1 or more for it to go on", swept, StringComparison.Ordinal);

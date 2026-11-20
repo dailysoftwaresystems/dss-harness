@@ -552,7 +552,7 @@ public static partial class CodebaseContextPack
 
             bool InQuotes(int at) => quoted.Any(span => at >= span.Start && at < span.End);
 
-            foreach (Match match in AtLine().Matches(request.Prompt).Where(match => !InQuotes(match.Index)))
+            foreach (Match match in AtLines().SelectMany(pattern => pattern.Matches(request.Prompt)).Where(match => !InQuotes(match.Index)))
             {
                 said.Add((match.Index, match.Value, false));
             }
@@ -586,7 +586,7 @@ public static partial class CodebaseContextPack
                 return [];
             }
 
-            if (AtLine().Match(text) is { Success: true } atLine && atLine.Length == text.Length)
+            if (AtLines().Select(pattern => pattern.Match(text)).FirstOrDefault(match => match.Success && match.Length == text.Length) is { } atLine)
             {
                 if (Relative(atLine.Groups["path"].Value) is not { } path || !int.TryParse(atLine.Groups["line"].Value, NumberStyles.None, CultureInfo.InvariantCulture, out var line))
                 {
@@ -988,17 +988,30 @@ public static partial class CodebaseContextPack
 
     private static Regex Quoted() => QuotedPattern.Value;
 
-    private static Regex AtLine() => AtLinePattern.Value;
+    /// <summary>
+    /// The three spellings of a file and a line in it - a stack frame's <c>:line n</c>, a range's <c>:n</c> and a
+    /// compiler's <c>(n,c)</c> - each a pattern of its own over <see cref="AtLinePath"/>: the linear engine reads the
+    /// three as one alternation only in part, losing a match before the last where a path-shaped word precedes them,
+    /// while each alone it reads as the backtracking engine does.
+    /// </summary>
+    private static IEnumerable<Regex> AtLines() => [AtLineWordPattern.Value, AtLineNumberedPattern.Value, AtLineParenPattern.Value];
+
+    /// <summary>A file's path: a drive's root and any name and separator, ending in a name with a dot and an extension.</summary>
+    private const string AtLinePath = @"(?<path>(?:[A-Za-z]:[\\/])?[\w.\-/\\]*\w\.\w+)";
+
+    private static readonly Lazy<Regex> QuotedPattern = new(() => LinearRegex.Compile(@"`(?<text>[^`\r\n]+)`"));
+
+    private static readonly Lazy<Regex> AtLineWordPattern = new(() => LinearRegex.Compile(AtLinePath + @":line (?<line>\d+)"));
+
+    private static readonly Lazy<Regex> AtLineNumberedPattern = new(() => LinearRegex.Compile(AtLinePath + @":(?<line>\d+)(?:-\d+)?"));
+
+    private static readonly Lazy<Regex> AtLineParenPattern = new(() => LinearRegex.Compile(AtLinePath + @"\((?<line>\d+)(?:,\d+)?\)"));
 
     private static Regex QualifiedName() => QualifiedPattern.Value;
 
     private static Regex HexRun() => HexPattern.Value;
 
     private static Regex Identifier() => IdentifierPattern.Value;
-
-    private static readonly Lazy<Regex> QuotedPattern = new(() => LinearRegex.Compile(@"`(?<text>[^`\r\n]+)`"));
-
-    private static readonly Lazy<Regex> AtLinePattern = new(() => LinearRegex.Compile(@"(?<path>(?:[A-Za-z]:[\\/])?[\w.\-/\\]*\w\.\w+)(?::line (?<line>\d+)|:(?<line>\d+)(?:-\d+)?|\((?<line>\d+)(?:,\d+)?\))"));
 
     private static readonly Lazy<Regex> QualifiedPattern = new(() => LinearRegex.Compile(@"[A-Za-z_]\w*(?:(?:\.|::)[A-Za-z_]\w*)+"));
 
