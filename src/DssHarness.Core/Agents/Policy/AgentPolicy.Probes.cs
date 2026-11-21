@@ -68,17 +68,18 @@ public sealed partial class AgentPolicy
 
         /// <summary>
         /// The core for <paramref name="choice"/>: one made where it was made before - the same choice is the same core
-        /// wherever it stands - its text naming no file (a character no path holds ends it) and beginning as its
-        /// alternatives do.
+        /// wherever it stands - its text naming no file (a character no path holds ends it). The core's text is its
+        /// sentinel alone, never a root before it: it is read back by the sentinel it holds (<see cref="Templated"/>),
+        /// and the alternatives it stands for carry their own root.
         /// </summary>
-        public string Core(WordChoice choice, bool rooted)
+        public string Core(WordChoice choice)
         {
             if (CoreOf.TryGetValue(choice, out var core))
             {
                 return core;
             }
 
-            core = $"{(rooted ? "/" : string.Empty)}\u0001zzh{++_given}\u0001";
+            core = $"\u0001zzh{++_given}\u0001";
             CoreOf[choice] = core;
             ChoiceOf[core] = choice;
 
@@ -328,7 +329,7 @@ public sealed partial class AgentPolicy
                     continue;
                 }
 
-                var core = probes.Core(choice.Of, rooted: PartsOf(choice.Of.Alternatives[0]).FirstOrDefault().Character is '/' or '\\');
+                var core = probes.Core(choice.Of);
                 text += core;
                 mask += new string(WordQuoting.Open, core.Length);
             }
