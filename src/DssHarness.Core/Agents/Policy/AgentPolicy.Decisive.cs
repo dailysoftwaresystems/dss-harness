@@ -216,18 +216,34 @@ public sealed partial class AgentPolicy
 
     /// <summary>
     /// <paramref name="pattern"/> with every <paramref name="choice"/> in it replaced by <paramref name="alternative"/>:
-    /// the one way the word spells that the choice's alternatives leave where they are.
+    /// the one way the word spells that the choice's alternatives leave where they are - the alternative's parts
+    /// <paramref name="alternative"/> holds in the choice's place, a part of the pattern itself, never a choice around
+    /// them, so a choice that spells a separator is not replaced by one again.
     /// </summary>
     private static WordPattern Substituted(WordPattern pattern, WordChoice choice, WordPattern alternative)
-        => new([.. pattern.Parts.Select(part => part is WordPart.Choice each && ReferenceEquals(each.Of, choice) ? Join(alternative.Parts) : part)]);
-
-    /// <summary>The parts as one part of a pattern: a choice of no alternatives spells nothing.</summary>
-    private static WordPart Join(IReadOnlyList<WordPart> parts) => parts switch
     {
-        [] => new WordPart.Text(string.Empty, string.Empty),
-        [var one] => one,
-        _ => new WordPart.Choice(new WordChoice([new WordPattern(parts)])),
-    };
+        List<WordPart> parts = [];
+
+        foreach (var part in pattern.Parts)
+        {
+            if (part is not WordPart.Choice each || !ReferenceEquals(each.Of, choice))
+            {
+                parts.Add(part);
+                continue;
+            }
+
+            // The alternative's parts where the choice stands, each character of them standing to the shell as the
+            // choice's did - a nested choice's own class first, as one spelling of it takes.
+            parts.AddRange(alternative.Parts.Select(part => part switch
+            {
+                WordPart.Text text => new WordPart.Text(text.Spelled, each.Class is { } taken ? new string(taken, text.Spelled.Length) : text.Quoted),
+                WordPart.Choice nested => nested with { Class = nested.Class ?? each.Class },
+                _ => part,
+            }));
+        }
+
+        return new WordPattern([.. parts]);
+    }
 
     /// <summary>Whether some spelling of <paramref name="pattern"/> holds an unquoted star, question mark or bracket: a pattern the shell expands.</summary>
     private static bool MaySpellAGlob(WordPattern pattern)
