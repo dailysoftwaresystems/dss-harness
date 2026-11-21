@@ -782,7 +782,11 @@ public sealed class PhysicalFileSystemTests
         var real = LinkPaths.Resolve(temp.Path);
         Directory.CreateDirectory(temp.Combine("target"));
 
-        for (var index = LongChain - 1; index >= 0; index--)
+        // Made from the chain's head down, each to one not made yet: a junction made to one already made answers with
+        // the chain it leads to resolved whole, and the system resolves a chain of links no further than its own budget -
+        // made to one not there yet, the chain closes only when its last link is made, and the walk of it is the
+        // harness's own.
+        for (var index = 0; index < LongChain; index++)
         {
             TestLinks.DirectoryLink(temp.Combine($"link{index}"), index == LongChain - 1 ? temp.Combine("target") : temp.Combine($"link{index + 1}"));
         }

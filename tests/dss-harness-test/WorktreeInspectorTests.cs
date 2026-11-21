@@ -33,6 +33,10 @@ public sealed class WorktreeInspectorTests
         var elsewhere = temp.Combine("elsewhere");
 
         Directory.Move(created.Path, elsewhere);
+
+        // Git hides a worktree's .git file, and Windows refuses a write over a hidden file: said plainly again, as a
+        // hand that moved the worktree and wrote its gitdir line anew would have to.
+        File.SetAttributes(Path.Combine(elsewhere, ".git"), FileAttributes.Archive);
         File.WriteAllText(Path.Combine(elsewhere, ".git"), $"gitdir: {spelled}\n");
 
         Assert.True(spelled.Length > 5000, $"the gitdir line is only {spelled.Length} characters");
