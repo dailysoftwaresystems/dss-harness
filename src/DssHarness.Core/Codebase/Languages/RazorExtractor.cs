@@ -188,7 +188,9 @@ public sealed class RazorExtractor : ICodeGraphExtractor
         var members = Members(text, razor, className, typeParameters);
         var embedded = new List<FileExtract>();
 
-        if (members.Count > 0 || regions.Count > 0)
+        // A component is compiled into the namespace its directory's path gives it even where its markup declares no
+        // code of its own, so that namespace is declared - what a use of its whole name from another file walks.
+        if (members.Count > 0 || regions.Count > 0 || (component && scope is not null))
         {
             // A view whose code declares no member of its class is the section alone: the class its markup's code is read
             // in is folded into it.
