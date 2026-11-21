@@ -807,9 +807,9 @@ public sealed class AgentIsolation(
         // (a side-task's) keeps it under the isolation's own, taken away when the launch ends.
         var temp = mechanism.OwnTemp
             ? null
-            : Path.Combine(
-                ground.RunDirectory is { } run ? Path.Combine(run, HarnessLayout.OrchestratorTempDirectoryName) : Path.Combine(root, IsolationCaches.TempDirectory),
-                TempName(ground.LaunchDirectory));
+            : ground.RunDirectory is { } run
+                ? Orchestration.OrchestratorLayout.LaunchTemp(run, TempName(ground.LaunchDirectory))
+                : Path.Combine(root, IsolationCaches.TempDirectory, TempName(ground.LaunchDirectory));
         var shared = temp is not null && fileSystem.DirectoryExists(temp);
 
         if (temp is not null)
@@ -1477,7 +1477,7 @@ public sealed class AgentIsolation(
         // leaves there is put away with the run. Made by the launch's client, as its settings are - the directory is the
         // run's to make.
         var temp = Real(ground.RunDirectory is { } run
-            ? Path.Combine(run, HarnessLayout.OrchestratorTempDirectoryName, TempName(ground.LaunchDirectory) + "-" + ClaudeCodeTempDirectory)
+            ? Orchestration.OrchestratorLayout.LaunchTemp(run, TempName(ground.LaunchDirectory) + "-" + ClaudeCodeTempDirectory)
             : Path.Combine(ground.LaunchDirectory, ClaudeCodeTempDirectory));
 
         IReadOnlyList<IsolatedWrite> written =

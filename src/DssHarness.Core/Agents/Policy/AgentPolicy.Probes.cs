@@ -104,9 +104,6 @@ public sealed partial class AgentPolicy
     /// <summary>The cores of the decision of the string being read; null outside a decision of a string.</summary>
     private Probes? _probes;
 
-    /// <summary>Whether <paramref name="word"/> holds a whole core of the readings - its sentinel, naming a choice.</summary>
-    private bool HoldsACore(string word) => word.Contains('\u0001', StringComparison.Ordinal) && _probes?.ChoiceOf.ContainsKey(word) == true;
-
     /// <summary>
     /// <paramref name="word"/> with every whole core in it standing for the choice it was made for: the pattern of the
     /// paths it may name. Null where the word holds no core, or only part of one - a derivation of it cut through a

@@ -13,8 +13,8 @@ public sealed class OrchestratorServiceTests
 
     /// <summary>
     /// An orchestrator is its directory under .orchestrators: its record, logs, work and plans directories, where its
-    /// agents are kept, and its temp and artifacts directories, which every run in it keeps its temporary directories and
-    /// its artifacts in; run again, it changes only its limit and its session, and refuses another model.
+    /// agents are kept. Each run of it is a directory of its own beside its agents, holding its own temp and artifacts
+    /// directories; run again, it changes only its limit and its session, and refuses another model.
     /// </summary>
     [Fact]
     public async Task AnOrchestrator_IsMadeUnderOrchestrators_AndRunAgainChangesOnlyItsLimitAndSession()
@@ -106,8 +106,9 @@ public sealed class OrchestratorServiceTests
 
     /// <summary>
     /// An orchestrator is deleted only once every agent of it is deleted, and the evidence and transcripts its agents kept
-    /// go with it only when asked. Its run's temp and artifacts go with its directory: both are held for the run's life -
-    /// an artifact is there to be read and copied for as long as the run is - and the deletion is what takes them.
+    /// go with it only when asked. The temp and artifacts of every run of it go with the run's own directory, which the
+    /// deletion takes with the orchestrator's: both are held for the run's life - an artifact is there to be read and
+    /// copied for as long as the run is.
     /// </summary>
     [Fact]
     public async Task AnOrchestrator_IsDeletedOnlyOnceItsAgentsAre_AndItsKeptEvidenceOnlyWhenAsked()

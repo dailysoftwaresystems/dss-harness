@@ -668,9 +668,10 @@ public sealed class InputWatch : IDisposable, IWatchSink
         {
             if (!_tracked.TryGetValue(relative, out declared))
             {
-                // Told of it only where a watch of the inputs' own directories would hear it: in a directory that holds
-                // an input of its own. A write anywhere deeper - a build below a slot, an agent's below the worktrees
-                // root - is what that watch never hears, and never told of here.
+                // Told of it only where a watch of the inputs' own directories would hear it: in a directory the watch
+                // watches - one that holds an input of its own, one above another for its names alone, or the tree's
+                // root where an input lies in it. A write anywhere deeper - a build below a slot, an agent's below the
+                // worktrees root - is what that watch never hears, and never told of here.
                 var at = relative.LastIndexOf('/');
                 var held = at > 0 ? relative[..at] : string.Empty;
 

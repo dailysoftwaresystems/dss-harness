@@ -649,10 +649,13 @@ public sealed class HostAgentService(
 
         var exitCode = await ServeRunAsync(request, error, run, cancellationToken).ConfigureAwait(false);
 
-        // Everything the run said where the machine that asked reads - why it was stopped, if it was - stands before
-        // the line that says it finished, whatever thread each was said on: the machine reads its exit code from that
-        // line, so it is the last thing written here. A say that never finishes being written, for a reader that is
-        // gone, keeps this line unwritten too - a line that never arrives tells it the connection failed first.
+        // The run has answered: nothing is said or cancelled for it after this, and each sign that settled before it is
+        // held with what it said. Everything the run said where the machine that asked reads - why it was stopped, if it
+        // was - then stands before the line that says it finished, whatever thread each was said on: the machine reads
+        // its exit code from that line, so it is the last thing written here. A say that never finishes being written,
+        // for a reader that is gone, keeps this line unwritten too - a line that never arrives tells it the connection
+        // failed first.
+        gone.Served();
         await gone.SaidAsync().ConfigureAwait(false);
 
         await error.WriteLineAsync(HostAgentProtocol.CompletionLine(request.Nonce, exitCode)).ConfigureAwait(false);
@@ -865,26 +868,40 @@ public sealed class HostAgentService(
     /// <param name="error">Where why is written; <see langword="null"/> to say nothing, as for a request that starts no command.</param>
     private sealed class Gone(CancellationTokenSource abandoned, TextWriter? error)
     {
-        private int _settled;
+        /// <summary>Settles one answer, under <see cref="_said"/>: whichever of a sign and the run's own ending reaches it first is the one that is said.</summary>
+        private bool _settled;
 
         /// <summary>Why the machine that asked was taken to have gone; <see langword="null"/> where it was not.</summary>
         public string? Why { get; private set; }
 
+        /// <summary>Holds settling a sign against what every settled sign said, so the two are one.</summary>
+        private readonly object _said = new();
+
         private readonly List<Task> _saidWrites = [];
 
-        /// <summary>The request was answered: no sign that comes after it says or cancels anything.</summary>
-        public void Served() => Interlocked.Exchange(ref _settled, 1);
+        /// <summary>
+        /// The request was answered - its run about to say how it finished, or its serving left: no sign that comes
+        /// after it says or cancels anything, and each sign that came before it is held for what it said.
+        /// </summary>
+        public void Served()
+        {
+            lock (_said)
+            {
+                _settled = true;
+            }
+        }
 
         /// <summary>
         /// The writing of everything this one has said, together: what anything said after it - the line that says a run
-        /// finished - waits on, so each stands behind what was said before it whatever thread each was said on. A say
-        /// that never finishes being written keeps what waits on it unwritten.
+        /// finished - waits on, so each stands behind what was said before it whatever thread each was said on. Taken
+        /// once the request is answered (<see cref="Served"/>), so a sign that settled is in it and one that did not
+        /// never will be. A say that never finishes being written keeps what waits on it unwritten.
         /// </summary>
         public Task SaidAsync()
         {
             Task[] said;
 
-            lock (_saidWrites)
+            lock (_said)
             {
                 said = [.. _saidWrites];
             }
@@ -898,26 +915,34 @@ public sealed class HostAgentService(
         /// </summary>
         public async Task BecauseAsync(string why, bool say)
         {
-            if (Interlocked.Exchange(ref _settled, 1) != 0)
+            Task? begun = null;
+
+            // Settling and the say it makes are one: a run that answers as this is told either holds this say's writing
+            // in what it waits on, or is answered already and this says nothing at all.
+            lock (_said)
             {
-                return;
-            }
-
-            Why = why;
-
-            // Said before anything is cancelled, so that it stands before whatever the command says as it stops, and its
-            // completion line.
-            if (say && error is not null)
-            {
-                var (begun, written) = SayingAsync(
-                    error,
-                    [FailureLine.For(HostAgentProtocol.CommandName, $"the machine that asked has gone - {why} - so what it started here is stopped")]);
-
-                lock (_saidWrites)
+                if (_settled)
                 {
-                    _saidWrites.Add(written);
+                    return;
                 }
 
+                _settled = true;
+                Why = why;
+
+                // Said before anything is cancelled, so that it stands before whatever the command says as it stops,
+                // and its completion line.
+                if (say && error is not null)
+                {
+                    var (b, written) = SayingAsync(
+                        error,
+                        [FailureLine.For(HostAgentProtocol.CommandName, $"the machine that asked has gone - {why} - so what it started here is stopped")]);
+                    _saidWrites.Add(written);
+                    begun = b;
+                }
+            }
+
+            if (begun is not null)
+            {
                 await begun.ConfigureAwait(false);
             }
 

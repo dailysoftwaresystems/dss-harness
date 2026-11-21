@@ -453,7 +453,8 @@ public sealed class ClaudeCodeClient(
 
                 // Its own temporary directory, put away with the run: the layer binds it as its /tmp, which fails where
                 // it is not there, and the launch's directory is the run's to make. The profile names it - beside the
-                // launch's commands' in the run's temp - for the one owner of the path is the isolation.
+                // launch's commands' in the run's temp - for the one owner of the path is the isolation. An outer
+                // profile always names one: ClaudeCodeOf makes it with the outer layer it gives.
                 files.CreateDirectory(whole.Profile.Temp!);
             }
 

@@ -25,15 +25,6 @@ public sealed record AgentCommandSettings(IReadOnlyList<string> KeepEnvironment,
     /// <summary>What holds where the configuration says nothing: no name given back, and no time of a command's.</summary>
     public static AgentCommandSettings Default { get; } = new([], null);
 
-    /// <summary>
-    /// How long a command runs where its call names no time, for a client that must be given a number - Claude Code's
-    /// shell: the configured time, else the most a timer holds, which ends no command sooner than the bounds above.
-    /// </summary>
-    public int TimeoutSeconds { get; init; } = CommandTimeoutSeconds ?? MostTimeoutSeconds;
-
-    /// <summary>The most a call may name, for a client that must be given a number: the most a timer holds.</summary>
-    public int MaxTimeoutSeconds { get; init; } = MostTimeoutSeconds;
-
     /// <summary>What <paramref name="policy"/> says: no name given back where it gives none, and no time where it names none.</summary>
     /// <param name="policy">The configuration's <c>agentPolicy</c>; null where it has none.</param>
     public static AgentCommandSettings Of(AgentPolicyConfig? policy) => new(policy?.KeepEnvironment ?? [], policy?.CommandTimeoutSeconds);

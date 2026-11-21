@@ -489,9 +489,17 @@ public sealed record OrchestratorLayout(string Name, string Directory)
     /// Where every temporary directory of the run's launches is kept (<see cref="HarnessLayout.OrchestratorTempDirectoryName"/>):
     /// one directory for each launch - its children's temporary directory, and Claude Code's own process's beside it -
     /// made with the launch and held for the run's life, so everything the run's children leave as temp is put away with
-    /// the run and taken away only with its directory.
+    /// the run and taken away only with its directory. The one owner of the shape: a launch names its own directory
+    /// under it, and never spells the run's temp for itself.
     /// </summary>
     public string TempDirectory => Path.Combine(Directory, Repository.HarnessLayout.OrchestratorTempDirectoryName);
+
+    /// <summary>Where a launch of the run at <paramref name="runDirectory"/> keeps its temporary directory: the name the
+    /// launch is known by, in the run's temp.</summary>
+    /// <param name="runDirectory">The run's own directory.</param>
+    /// <param name="name">The name the launch's directory is known by in the run's temp.</param>
+    public static string LaunchTemp(string runDirectory, string name)
+        => Path.Combine(Path.Combine(runDirectory, Repository.HarnessLayout.OrchestratorTempDirectoryName), name);
 
     /// <summary>
     /// Where the run's artifacts are kept (<see cref="HarnessLayout.OrchestratorArtifactsDirectoryName"/>), for the run's

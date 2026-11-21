@@ -1299,7 +1299,7 @@ public sealed partial class AgentPolicy
                         return new AgentPolicyAnswer.Denied(
                             rule,
                             AgentPolicySource.Builtin,
-                            $"'{whole}' removes or moves '{target}', which holds {what}, '{guarded}': no command of an agent removes or moves one");
+                            $"'{whole}' removes or moves '{spelled}', which holds {what}, '{guarded}': no command of an agent removes or moves one");
                     }
                 }
             }
@@ -2172,7 +2172,10 @@ public sealed partial class AgentPolicy
             if (ran.Any(each => each.Text is null))
             {
                 var unread = ran.First(each => each.Text is null);
-                return Undecided(string.Join(' ', analyzed.Whole), new NotSupportedException($"'{unread.File}' is a script file this command wrote before it runs it, whose text this does not read"));
+
+                // The file is named by a spelling that decides it, never a core's own sentinel text.
+                return Undecided(string.Join(' ', analyzed.Whole), new NotSupportedException(
+                    $"'{SpelledThatDecide(unread.File, places)}' is a script file this command wrote before it runs it, whose text this does not read"));
             }
 
             foreach (var text in ran.Select(each => each.Text!).Where(text => !running.Contains(text)).Distinct(StringComparer.Ordinal))
@@ -2844,6 +2847,15 @@ public sealed partial class AgentPolicy
 
         return run;
     }
+
+    /// <summary>
+    /// A spelling that decides <paramref name="word"/> at <paramref name="places"/>, for a refusal that names it: a word
+    /// held as a core names the path by a spelling that decides it, never the core's own sentinel text.
+    /// </summary>
+    private string SpelledThatDecide(string word, IReadOnlyList<string> places)
+        => Templated(word) is null
+            ? word
+            : SpelledAgainst(word, places.FirstOrDefault() ?? _ground.WorkingDirectory, _state, dotNames: true).FirstOrDefault() ?? word;
 
     /// <summary>
     /// The files <paramref name="word"/> names as a program or a script file it runs (<see cref="WrittenScripts"/>): the
