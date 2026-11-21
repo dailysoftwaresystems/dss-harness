@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using DssHarness.Core.FileSystem;
+using DssHarness.Core.Json;
 using DssHarness.Core.Results;
 
 namespace DssHarness.Core.Orchestration.Flow;
@@ -120,8 +121,14 @@ public sealed record FlowRunContext(
     public static string DigestOf(WorkflowDefinition definition)
     {
         ArgumentNullException.ThrowIfNull(definition);
-        return DigestOf(JsonSerializer.Serialize(definition with { Path = string.Empty }, JsonStateFile.Options));
+        return DigestOf(JsonSerializer.Serialize(definition with { Path = string.Empty }, Frozen));
     }
+
+    /// <summary>
+    /// How a definition is frozen for its digest: as <c>definition.json</c> holds it, at any depth - a schema a step holds
+    /// inline may nest past what the serializer writes by default, and a digest is never refused for depth alone.
+    /// </summary>
+    private static readonly JsonSerializerOptions Frozen = JsonDepth.Serializer(JsonStateFile.Options);
 
     /// <summary>The SHA-256 of the definition as this build freezes it, spelt in lower-case hex.</summary>
     /// <param name="frozen">The definition, serialized as <c>definition.json</c> holds it.</param>
@@ -374,22 +381,6 @@ public sealed class PreExistingIssuesWriter
         Write([.. issues.Issues, entry], at);
         return entry;
     }
-
-    /// <summary>What a cut quote or output ends with: the cut, said.</summary>
-    public static readonly string CutMark = $"… (cut to {PreExistingProof.Most.ToString(System.Globalization.CultureInfo.InvariantCulture)} characters)";
-
-    /// <summary>
-    /// Cuts a quote or an output to the most it may hold, the cut said: the text and the words that say it was cut
-    /// together hold no more than <see cref="PreExistingProof.Most"/> characters, so what is cut is what the reader of the
-    /// issue takes.
-    /// </summary>
-    /// <param name="text">What was read or run.</param>
-    public static string Cut(string text)
-    {
-        ArgumentNullException.ThrowIfNull(text);
-
-        return text.Length <= PreExistingProof.Most ? text : text[..(PreExistingProof.Most - CutMark.Length)] + CutMark;
-    }
 }
 
 /// <summary>
@@ -424,7 +415,8 @@ public sealed class FlowRunRecords : IFlowRecords, IDisposable
     public PreExistingIssuesWriter Issues => _issues;
 
     /// <summary>
-    /// Opens the run's records: the run's directory and its event log, once for every change this session appends to.
+    /// Opens the run's records: the run's directory, its temp and its artifacts, and its event log, once for every
+    /// change this session appends to.
     /// At the run's start - where its state in one file is not on disk yet - the definition is frozen and the run's
     /// issues and questions are created empty; a resume creates none of them, for a resume that found one missing has
     /// been refused already by name (<see cref="FlowResume"/>), never handed an empty one in its place.
@@ -444,7 +436,11 @@ public sealed class FlowRunRecords : IFlowRecords, IDisposable
         _status = new WorkflowStatusWriter(store, layout, context);
         _issues = new PreExistingIssuesWriter(store, layout, context.Run);
 
+        // The run's directory, its temp and its artifacts - made here again for a run an older version of this tool
+        // began, whose directory holds neither - and its event log, once for every change this session appends to.
         _fileSystem.CreateDirectory(_layout.Directory);
+        _fileSystem.CreateDirectory(_layout.TempDirectory);
+        _fileSystem.CreateDirectory(_layout.ArtifactsDirectory);
         var starts = _fileSystem.KindOf(_layout.FlowFile) == PathKind.None;
         _events = FlowEventLog.Open(_fileSystem, _layout.EventsFile);
 

@@ -10,14 +10,14 @@ namespace DssHarness.Core.Agents.Runtime;
 /// deleted, a path moved. Each is a write to every path it touches - each entry it deletes or moves, at both ends of a
 /// move - held to the writable roots and asked of the policy; the directories made on a path's way are part of the write
 /// to that path, decided with it and never asked apart. Each then acts relative to the directories it touches, held from
-/// the writable root it was decided in with no link on the way (<see cref="UnfollowedFiles"/>, <see cref="AgentFiles.Write"/>):
+/// the writable root it was decided in with no link on the way (<see cref="UnfollowedFiles"/>, <see cref="AgentFiles.Write(string, string, Action{Stream}, Func{string, AgentPolicyAnswer.Denied?})"/>):
 /// a link a command still running puts on the way after the decision reaches nothing, and the call is refused naming it.
 /// </summary>
 public sealed partial class AgentToolRuntime
 {
     /// <summary>
     /// <c>create_file</c>: a new file holding the content as given, in UTF-8 with no mark, the directories on its way made,
-    /// where it lands decided again before a byte is written (<see cref="AgentFiles.Write"/>).
+    /// where it lands decided again before a byte is written (<see cref="AgentFiles.Write(string, string, Action{Stream}, Func{string, AgentPolicyAnswer.Denied?})"/>).
     /// </summary>
     private async Task<Answer> Create(JsonObject input)
     {
@@ -55,7 +55,7 @@ public sealed partial class AgentToolRuntime
         return Answer.Done($"wrote '{Said(full)}' ({DiskSpace.Size(bytes.Length)})");
     }
 
-    /// <summary><c>replace_in_file</c>: a string replaced in a file viewed since it last changed, its encoding and its endings kept.</summary>
+    /// <summary><c>replace_in_file</c>: a string replaced in a file viewed since it last changed, its encoding and its endings kept, the file copied through.</summary>
     private async Task<Answer> ReplaceAsync(JsonObject input, CancellationToken cancellationToken)
     {
         var old = Text(input, "old_string")!;
@@ -71,50 +71,54 @@ public sealed partial class AgentToolRuntime
             return Answer.Failed("old_string and new_string are the same: nothing would change");
         }
 
-        return await EditAsync(AgentTools.ReplaceInFile, input, edited =>
-        {
-            var count = edited.Count(old);
-
-            if (count == 0)
-            {
-                return "old_string is not in the file: view it again, and give the text exactly as it stands";
-            }
-
-            if (count > 1 && !Flag(input, "replace_all"))
-            {
-                return $"old_string stands {Count(count)} times in the file: give more of the text around it so it stands once, or replace_all: true";
-            }
-
-            edited.Replace(old, replacement);
-            return null;
-        }, cancellationToken).ConfigureAwait(false);
+        return await EditAsync(
+            AgentTools.ReplaceInFile,
+            input,
+            line: null,
+            _ => null,
+            (source, path, written, scan) => AgentEdits.Replace(source, path, written, scan, old, replacement),
+            copy => copy.Found == 0 ? "old_string is not in the file: view it again, and give the text exactly as it stands"
+                : copy.Found > 1 && !Flag(input, "replace_all") ? $"old_string stands {Count(copy.Found)} times in the file: give more of the text around it so it stands once, or replace_all: true"
+                : null,
+            cancellationToken).ConfigureAwait(false);
     }
 
-    /// <summary><c>insert_in_file</c>: lines inserted before a line of a file viewed since it last changed, its encoding and its endings kept.</summary>
+    /// <summary><c>insert_in_file</c>: lines inserted before a line of a file viewed since it last changed, its encoding and its endings kept, the file copied through.</summary>
     private async Task<Answer> InsertAsync(JsonObject input, CancellationToken cancellationToken)
     {
         var line = Number(input, "line")!.Value;
         var text = Text(input, "text")!;
 
-        return await EditAsync(AgentTools.InsertInFile, input, edited =>
-        {
-            if (line < 1 || line > edited.LineCount + 1)
-            {
-                return $"line is {line}, and the file has {ReportText.Counted(edited.LineCount, "line")}: give 1 to {Count(edited.LineCount + 1)}, one past the last to append";
-            }
-
-            edited.Insert((int)line, text);
-            return null;
-        }, cancellationToken).ConfigureAwait(false);
+        return await EditAsync(
+            AgentTools.InsertInFile,
+            input,
+            line,
+            scan => line < 1 || line > scan.Lines + 1
+                ? $"line is {Count(line)}, and the file has {ReportText.Counted(scan.Lines, "line")}: give 1 to {Count(scan.Lines + 1)}, one past the last to append"
+                : null,
+            (source, path, written, scan) => AgentEdits.Insert(source, path, written, scan, line, text),
+            _ => null,
+            cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
-    /// An edit of the file <c>path</c> names: decided as a write, refused where the file was not viewed or changed since,
-    /// read in its encoding, changed by <paramref name="edit"/> - which says why it would not, where it would not - and
-    /// written back whole, in one write; read and written through the file as each was opened, where it stands decided
-    /// again as a write before a byte passes (<see cref="AgentFiles.ReadAsync"/>, <see cref="AgentFiles.Write"/>).
+    /// An edit of the file <c>path</c> names, copied through (<see cref="AgentEdits"/>): decided as a write; read once whole
+    /// a block at a time - through the file as it was opened, where it stands decided again as a write before a byte passes
+    /// - for its digest, its lines and the endings that decide the edit; refused where the file was not viewed or changed
+    /// since, or where <paramref name="refused"/> says why it would not be made; then copied a block at a time into the
+    /// file that replaces it, the edit made on the way (<paramref name="copy"/>), read again through its decided open and
+    /// held to the digest the first pass read, and put in place in one write (<see cref="AgentFiles.Write(string, string, Action{Stream}, Func{string, AgentPolicyAnswer.Denied?})"/>) -
+    /// or dropped, the file as it was, where <paramref name="dropped"/> says why the copy is not kept. A file of any size
+    /// is edited in a block of memory.
     /// </summary>
-    private async Task<Answer> EditAsync(string tool, JsonObject input, Func<EditedText, string?> edit, CancellationToken cancellationToken)
+    private async Task<Answer> EditAsync(
+        string tool,
+        JsonObject input,
+        long? line,
+        Func<EditScan, string?> refused,
+        Func<Stream, string, Stream, EditScan, EditCopy> copy,
+        Func<EditCopy, string?> dropped,
+        CancellationToken cancellationToken)
     {
         var path = Text(input, "path")!;
         var place = WritePlace(path);
@@ -125,63 +129,91 @@ public sealed partial class AgentToolRuntime
         }
 
         var full = place.Full!;
-        var files = _host.FileSystem;
 
-        if (!files.FileExists(full))
+        if (!_host.FileSystem.FileExists(full))
         {
             return Answer.Failed($"there is no file at '{Said(full)}'");
         }
 
-        if (TooLarge(full) is { } large)
+        EditScan scan;
+
+        try
         {
-            return Answer.Failed(large);
+            var stream = OpenToEdit(full);
+
+            await using (stream.ConfigureAwait(false))
+            {
+                scan = await AgentEdits.ScanAsync(stream, full, line, cancellationToken).ConfigureAwait(false);
+            }
         }
-
-        var read = await _host.Files.ReadAsync(full, AgentTools.MostViewedBytes, opened => OpenedPlace(opened, write: true).Denied, cancellationToken).ConfigureAwait(false);
-
-        if (read.Denied is { } moved)
+        catch (AgentReadRefusedException moved)
         {
-            return Answer.Refused(path, moved);
+            return Answer.Refused(path, moved.Denied);
         }
-
-        var bytes = read.Bytes!;
+        catch (StreamedTextUnreadException)
+        {
+            // No view gives a file that is no text: one viewed was text then, and changed since.
+            return Answer.Failed(_viewed.ContainsKey(full) ? ChangedSinceViewed : NeverViewed);
+        }
 
         if (!_viewed.TryGetValue(full, out var seen))
         {
             return Answer.Failed(NeverViewed);
         }
 
-        if (seen != Hash(bytes))
+        if (seen != scan.Digest)
         {
             return Answer.Failed(ChangedSinceViewed);
         }
 
-        var reading = EncodedText.Read(bytes);
-
-        if (!reading.IsRead)
-        {
-            return Answer.Failed($"'{Said(full)}' is {(reading.Binary ? "binary" : "no text this tool reads")}: {reading.Why}");
-        }
-
-        var edited = EditedText.Of(reading.Text);
-
-        if (edit(edited) is { } why)
+        if (refused(scan) is { } why)
         {
             return Answer.Failed(why);
         }
 
-        var written = edited.Bytes();
+        EditCopy? made = null;
+        AgentPolicyAnswer.Denied? landed;
 
-        if (_host.Files.Write(_paths.WritableRootOf(full), full, written, landing => OpenedPlace(landing, write: true).Denied) is { } landed)
+        try
+        {
+            landed = _host.Files.Write(_paths.WritableRootOf(full), full, written =>
+            {
+                using var source = OpenToEdit(full);
+                var copied = copy(source, full, written, scan);
+
+                // What the copy says is not kept leaves the file as it was: the write is given up before it is put in place.
+                made = dropped(copied) is { } reason ? throw new EditDroppedException(reason) : copied;
+            }, landing => OpenedPlace(landing, write: true).Denied);
+        }
+        catch (EditDroppedException ex)
+        {
+            return Answer.Failed(ex.Message);
+        }
+        catch (AgentReadRefusedException moved)
+        {
+            return Answer.Refused(path, moved.Denied);
+        }
+        catch (Exception ex) when (ex is EditMovedException or StreamedTextUnreadException)
+        {
+            return Answer.Failed(ChangedSinceViewed);
+        }
+
+        if (landed is not null)
         {
             return Answer.Refused(path, landed);
         }
 
-        _viewed[full] = Hash(written);
+        _viewed[full] = made!.Digest;
         await WroteAsync(tool, full).ConfigureAwait(false);
 
-        return Answer.Done($"edited '{Said(full)}': {ReportText.Counted(edited.LineCount, "line")} now");
+        return Answer.Done($"edited '{Said(full)}': {ReportText.Counted(made.Lines, "line")} now");
     }
+
+    /// <summary>A file an edit reads opened as itself, where it stands decided again as a write before a byte is read (<see cref="AgentFiles.OpenedOrRefused"/>).</summary>
+    private Stream OpenToEdit(string file) => _host.Files.OpenedOrRefused(file, opened => OpenedPlace(opened, write: true).Denied);
+
+    /// <summary>Why the file an edit copied through is not kept: the copy is given up before it is put in place, the file as it was.</summary>
+    private sealed class EditDroppedException(string why) : Exception(why);
 
     /// <summary>Counts a write of <paramref name="count"/> files at <paramref name="file"/> by <paramref name="tool"/>, and follows it as every write is.</summary>
     /// <param name="tool">The tool that wrote.</param>

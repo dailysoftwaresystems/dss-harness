@@ -38,6 +38,9 @@ public sealed record CodebaseGraphQuery(string Run, string? Agent)
 
     /// <summary>A <c>body</c>: the symbols to read, in the order given.</summary>
     public IReadOnlyList<string>? Body { get; init; }
+
+    /// <summary>The page of the answer to give, from 1; the first where it is left out.</summary>
+    public int? Page { get; init; }
 }
 
 /// <summary>
@@ -102,6 +105,11 @@ public sealed class CodebaseGraphQueryService(
         }
 
         var (op, input) = chosen;
+
+        if (query.Page is { } page)
+        {
+            input["page"] = page;
+        }
 
         if (op != GraphOp.Related && (query.Relation is not null || query.Depth is not null))
         {
@@ -184,7 +192,7 @@ public sealed class CodebaseGraphQueryService(
 
         // A person reads what the graph lists: never the credential slots or the tool's own state, which a text search would otherwise reach.
         var never = CodebaseGraphService.NeverListed(context.Config.Worktrees.Root);
-        var files = new AgentFiles(_gitClient, _fileSystem, _time);
+        var files = new AgentFiles(_gitClient, _fileSystem);
         var tool = new CodebaseGraphTool(queries, files, _fileSystem, ConfinedPaths.Within(_fileSystem, _platform, queries.Tree), path => !PathPatterns.Matches(never, path, _platform.PathComparison));
         var answer = await tool.RunAsync(input, new HashSet<GraphOp>(CodebaseGraphTool.Read), cancellationToken).ConfigureAwait(false);
         var text = said + answer.Text;
@@ -193,7 +201,7 @@ public sealed class CodebaseGraphQueryService(
             ? CommandOutcome.Usage(text)
             : CommandOutcome.Ok($"graph {Name(op)} of run '{query.Run}' ({view ?? CodebaseGraphService.BaseView})") with { Data = [text], Quiet = true };
 
-        return CodebaseGraphQueryReports.Render(outcome, query.Run, view ?? read.View, read.Head, Name(op), json, text);
+        return CodebaseGraphQueryReports.Render(outcome, query.Run, view ?? read.View, read.Head, Name(op), json, text, answer.Paging, queries.Graph);
     }
 
     private static (GraphOp Op, JsonObject Input)? Input(CodebaseGraphQuery query)

@@ -412,4 +412,33 @@ public sealed class AgentDefinitionTests
         Assert.Equal(("claude-api", "glm-5.3"), (throughDefinition?.Serving.Client, throughDefinition?.Serving.Model));
         Assert.Equal(("claude-api", "ANTHROPIC_API_KEY"), (named?.Serving.Client, named?.Serving.Key));
     }
+
+    /// <summary>
+    /// A frontmatter whose value nests a hundred thousand levels deep is read, and its value judged by its key's rule; one
+    /// that stops reading as YAML that deep is refused in the parser's words, at the place it stops. Neither crashes the
+    /// process, on a stack of a megabyte, where a recursion through the representation model once overflowed it.
+    /// </summary>
+    [Fact]
+    public async Task AFrontmatterAHundredThousandDeep_IsReadOrRefused_NeverCrashes()
+    {
+        Assert.Equal(
+            new ChildRunAnswer(
+                0,
+                "line 4, column 3: 'description' is not a single value.\n'description' is named nowhere; it is required.\n"
+                + "line 5, column 1: the file is not valid YAML (While parsing a flow sequence, did not find expected ',' or ']'.).",
+                ""),
+            await ChildRun.MethodAsync(typeof(AgentDefinitionTests), nameof(FrontmattersAHundredThousandDeep), TestContext.Current.CancellationToken));
+    }
+
+    /// <summary>The child of <see cref="AFrontmatterAHundredThousandDeep_IsReadOrRefused_NeverCrashes"/>: each definition's problems, the read one's first.</summary>
+    internal static string FrontmattersAHundredThousandDeep() => SmallStack.Run(() =>
+    {
+        var levels = string.Concat(Enumerable.Repeat("- ", 100_000));
+        var (read, readProblems) = AgentDefinitionParser.Parse($"---\nname: deep\ndescription:\n  {levels}x\n---\nThe prompt.\n", "deep");
+        var (refused, refusedProblems) = AgentDefinitionParser.Parse($"---\nname: deep\ndescription:\n  {levels}[x\n---\nThe prompt.\n", "deep");
+
+        Assert.Null(read);
+        Assert.Null(refused);
+        return string.Join('\n', readProblems.Concat(refusedProblems));
+    });
 }

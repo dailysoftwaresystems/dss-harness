@@ -4147,25 +4147,44 @@ public sealed class WorkflowValidatorTests
     }
 
     /// <summary>
-    /// Every expression ends: one nested past what the grammar's guard allows - a long chain of '!', empty(...) inside
-    /// empty(...), any(...) inside any(...), a path of a hundred thousand names - is refused with the depth it went
-    /// past, through the grammar and through the validator alike, and never spends the stack of the process that reads it.
+    /// An expression nests as deep as it is written, and the validator checks it whole: a condition of ten thousand terms
+    /// nested ten thousand deep, a hundred thousand '!', a group and an empty(...) inside each other that deep are each a
+    /// when the definition holds with no problem. They are checked in a child on a small stack, so a check that recursed
+    /// once a level would end that child, never this run - and a bound on the nesting would refuse them.
     /// </summary>
-    [Theory]
-    [InlineData("a hundred thousand '!'")]
-    [InlineData("a hundred empty(...) inside each other")]
-    [InlineData("a hundred any(...) inside each other")]
-    [InlineData("a path of a hundred thousand names")]
-    public void AnExpressionNestedTooDeep_IsRefused_AndNeverSpendsTheStack(string nested)
+    [Fact]
+    public async Task AnExpressionNestedAHundredThousandDeep_IsCheckedWhole()
     {
-        var expression = TooDeep(nested);
-
-        Assert.Equal($"the expression nests more than {FlowExpression.MostNesting} deep", FlowExpression.GrammarProblem(expression));
-        Assert.Throws<ArgumentException>(() => FlowExpression.Parse(expression));
+        var answer = await ChildRun.MethodAsync(typeof(WorkflowValidatorTests), nameof(CheckDeep), TestContext.Current.CancellationToken);
 
         Assert.Equal(
-            [$"'gate.when' is not written whole: the expression nests more than {FlowExpression.MostNesting} deep, and nothing past there would be checked"],
-            Problems($"""
+            new ChildRunAnswer(0, "condition: no problem\nnot: no problem\ngroup: no problem\nempty: no problem\n", string.Empty),
+            answer);
+    }
+
+    /// <summary>The child's side of <see cref="AnExpressionNestedAHundredThousandDeep_IsCheckedWhole"/>: each deep when checked on a small stack, its problems said a line each.</summary>
+    private static string CheckDeep() => SmallStack.Run(() =>
+    {
+        var condition = "true && true";
+
+        for (var term = 0; term < 9_998; term++)
+        {
+            condition = $"true && ({condition})";
+        }
+
+        var deep = new (string Name, string Expression)[]
+        {
+            ("condition", condition),
+            ("not", new string('!', 100_000) + "true"),
+            ("group", new string('(', 100_000) + "true" + new string(')', 100_000)),
+            ("empty", string.Concat(Enumerable.Repeat("empty(", 100_000)) + "true" + new string(')', 100_000)),
+        };
+
+        var said = new StringBuilder();
+
+        foreach (var (name, expression) in deep)
+        {
+            var problems = Problems($"""
                 name: flow
                 steps:
                   - name: plan
@@ -4174,28 +4193,13 @@ public sealed class WorkflowValidatorTests
                     type: orient
                     dependsOn: [plan]
                     when: '{expression}'
-                """));
-    }
+                """);
 
-    /// <summary>An expression nested past the guard by the construct <paramref name="nested"/> names, built here so no test's name carries it.</summary>
-    internal static string TooDeep(string nested)
-    {
-        var any = "plan.ok";
-
-        for (var level = 0; level < 100; level++)
-        {
-            any = $"any(plan.items, {any})";
+            said.Append(System.Globalization.CultureInfo.InvariantCulture, $"{name}: {(problems.Count == 0 ? "no problem" : string.Join("; ", problems))}\n");
         }
 
-        return nested switch
-        {
-            "a hundred thousand '!'" => new string('!', 100_000) + "plan.ok",
-            "a hundred empty(...) inside each other" => string.Concat(Enumerable.Repeat("empty(", 100)) + "plan.ok" + new string(')', 100),
-            "a hundred any(...) inside each other" => any,
-            "a path of a hundred thousand names" => "plan" + string.Concat(Enumerable.Repeat(".ok", 99_999)),
-            _ => throw new ArgumentOutOfRangeException(nameof(nested), nested, "no such nesting"),
-        };
-    }
+        return said.ToString();
+    });
 
     /// <summary>
     /// The grammar itself beside wholeness: what the engine will one day read must parse today, with the column it
@@ -4437,32 +4441,30 @@ public sealed class WorkflowValidatorTests
     }
 
     /// <summary>
-    /// V26: a workflow declares at most 200 steps - groups and their members each one, the recovery's among them, for
-    /// they run. Exactly 200 is a flow; 201, however they are split between the flow, its groups and the recovery, is
-    /// refused.
+    /// A workflow declares what it declares: no count of its steps is refused. Five thousand steps, each waiting for the
+    /// one before it, five thousand more in a group and a recovery of a thousand, validate with no problem - what bounds a
+    /// run is its maxInstances, the work it may draw, never the size of the file that says it.
     /// </summary>
     [Fact]
-    public void AWorkflowDeclaresAtMostTwoHundredSteps()
+    public void AFiveThousandStepWorkflow_Validates()
     {
-        Assert.Empty(Problems(Flow(top: WorkflowValidator.MostSteps, recovered: 0)));
+        Assert.Empty(Problems(Flow(top: 5_000, recovered: 0)));
+        Assert.Empty(Problems(Flow(top: 5_000, recovered: 1_000)));
 
-        Assert.Equal(
-            ["the workflow declares 201 steps; at most 200"],
-            Problems(Flow(top: 201, recovered: 0)));
-
-        Assert.Equal(
-            ["the workflow declares 201 steps; at most 200"],
-            Problems(Flow(top: 150, recovered: 51)));
-
-        // A group and its 199 members are 200 steps, and one more step beside them is the 201st.
+        // A group of five thousand members beside one step.
         var nested = new StringBuilder("name: flow\nsteps:\n  - name: alone\n    type: orient\n  - name: group\n    steps:");
 
-        for (var index = 0; index < 199; index++)
+        for (var index = 0; index < 5_000; index++)
         {
-            nested.Append($"\n      - name: s{index}\n        type: orient");
+            nested.Append(System.Globalization.CultureInfo.InvariantCulture, $"\n      - name: s{index}\n        type: orient");
+
+            if (index > 0)
+            {
+                nested.Append(System.Globalization.CultureInfo.InvariantCulture, $"\n        dependsOn: [s{index - 1}]");
+            }
         }
 
-        Assert.Equal(["the workflow declares 201 steps; at most 200"], Problems(nested.ToString()));
+        Assert.Empty(Problems(nested.ToString()));
 
         // A flow of top-level steps, the first of which gives its failure to a recovery of so many steps.
         static string Flow(int top, int recovered)
@@ -4471,7 +4473,12 @@ public sealed class WorkflowValidatorTests
 
             for (var index = 0; index < top; index++)
             {
-                text.Append($"\n  - name: s{index}\n    type: orient");
+                text.Append(System.Globalization.CultureInfo.InvariantCulture, $"\n  - name: s{index}\n    type: orient");
+
+                if (index > 0)
+                {
+                    text.Append(System.Globalization.CultureInfo.InvariantCulture, $"\n    dependsOn: [s{index - 1}]");
+                }
 
                 if (index == 0 && recovered > 0)
                 {
@@ -4485,7 +4492,7 @@ public sealed class WorkflowValidatorTests
 
                 for (var index = 0; index < recovered; index++)
                 {
-                    text.Append($"\n    - name: r{index}\n      type: orient");
+                    text.Append(System.Globalization.CultureInfo.InvariantCulture, $"\n    - name: r{index}\n      type: orient");
                 }
             }
 
@@ -5013,8 +5020,8 @@ public sealed class WorkflowValidatorTests
 
     /// <summary>
     /// V52: a workflow's codebaseGraph is held to its bounds - each list named or left out, never given empty; patterns as
-    /// a path pattern reads them; languages named once each and each one this tool extracts; maxFileBytes and mapTokens
-    /// within their ranges; generated one of its values - and to a step that makes the graph.
+    /// a path pattern reads them; languages named once each and each one this tool extracts; mapTokens within its range;
+    /// generated one of its values - and to a step that makes the graph.
     /// </summary>
     [Fact]
     public void V52_ACodebaseGraph_IsHeldToItsBounds_AndToAStepThatMakesIt()
@@ -5025,7 +5032,6 @@ public sealed class WorkflowValidatorTests
               include: ["src/**", "docs/**"]
               exclude: ["src/gen/**"]
               languages: [markdown]
-              maxFileBytes: 4096
               generated: exclude
               mapTokens: 0
             steps:
@@ -5049,7 +5055,6 @@ public sealed class WorkflowValidatorTests
                 "codebaseGraph.include is given empty, which is never read as every path graphed: name its patterns, or leave the key out for every path graphed",
                 "codebaseGraph.exclude names the pattern '../out/**', and it holds a '..' segment, which no path inside the tree holds, so it would name nothing; name the path from the tree's root",
                 "codebaseGraph.languages names 'markdown' more than once",
-                "codebaseGraph.maxFileBytes must be from 4,096 to 16,777,216, found 4095",
                 "codebaseGraph.mapTokens must be from 0 to 2,000, found 2001",
                 "codebaseGraph.generated is 'drop', which is none of 'low', 'exclude': generated code's declarations are kept, its file's entry naming why it is generated, or left out with the file listed",
             ],
@@ -5059,7 +5064,6 @@ public sealed class WorkflowValidatorTests
                   include: []
                   exclude: ["../out/**"]
                   languages: [markdown, markdown]
-                  maxFileBytes: 4095
                   mapTokens: 2001
                   generated: drop
                 steps:
@@ -5071,18 +5075,143 @@ public sealed class WorkflowValidatorTests
             [
                 "codebaseGraph.exclude is given empty, which is never read as no path left out: name its patterns, or leave the key out for no path left out",
                 "codebaseGraph.languages is given empty, which is never read as every one used: name the implementations, or leave the key out for every one",
-                "codebaseGraph.maxFileBytes must be from 4,096 to 16,777,216, found 16777217",
             ],
             Problems("""
                 name: flow
                 codebaseGraph:
                   exclude: []
                   languages: []
-                  maxFileBytes: 16777217
                 steps:
                   - name: map
                     type: graphify-codebase
                 """));
+    }
+
+    /// <summary>
+    /// V52: a codebaseGraph's keyNaming names each policy once and each one of the four; its claims map endings, each
+    /// well formed, to an implementation this build extracts, one ending to one implementation.
+    /// </summary>
+    [Fact]
+    public void V52_KeyNamingAndClaims_AreHeldToTheirBounds()
+    {
+        Assert.Empty(Problems("""
+            name: flow
+            codebaseGraph:
+              keyNaming: [snake_case]
+              claims:
+                json: [.lang.json, .target.json]
+                xml: [.props]
+            steps:
+              - name: map
+                type: graphify-codebase
+            """));
+
+        Assert.Equal(
+            [
+                "codebaseGraph.keyNaming names 'camelCase' more than once",
+                "codebaseGraph.keyNaming names 'PascalCase', which is none of 'camelCase', 'snake_case', 'kebab-case', 'exact': how a configuration key's last segment is written in the code that reads it",
+                "codebaseGraph.claims is given empty, which is never read as no ending claimed: name the endings, or leave the key out",
+            ],
+            Problems("""
+                name: flow
+                codebaseGraph:
+                  keyNaming: [camelCase, camelCase, PascalCase]
+                  claims: {}
+                steps:
+                  - name: map
+                    type: graphify-codebase
+                """));
+
+        Assert.Equal(
+            [
+                "codebaseGraph.claims.cobol is given empty, which is never read as none claimed: name its endings, or leave the implementation out",
+                "codebaseGraph.claims.json names the ending 'lang.json', which is not a file name's ending: a dot, what follows it, and no separator",
+                "codebaseGraph.claims maps the ending '.lang.json' to 'json' and 'xml', and a file is never given to one by order",
+            ],
+            Problems("""
+                name: flow
+                codebaseGraph:
+                  claims:
+                    cobol: []
+                    json: [.target.json, .lang.json, lang.json]
+                    xml: [.lang.json]
+                steps:
+                  - name: map
+                    type: graphify-codebase
+                """));
+    }
+
+    /// <summary>
+    /// V52: a keyNaming given empty is refused, as every list of the block is given empty; a claim maps endings to an
+    /// implementation this build extracts, and to one the block's languages name where it names them - one they leave out
+    /// would have the files it claims read by the fallback.
+    /// </summary>
+    [Fact]
+    public void V52_AnEmptyKeyNaming_AndAClaimOfAnImplementationUnknownOrLeftOut_AreRefused()
+    {
+        var definition = Parse("""
+            name: flow
+            codebaseGraph:
+              languages: [json, markdown]
+              keyNaming: []
+              claims:
+                json: [.lang.json]
+                xml: [.lang.xml]
+                cobol: [.cbl]
+            steps:
+              - name: map
+                type: graphify-codebase
+            """);
+
+        Assert.Equal(
+            [
+                "codebaseGraph.keyNaming is given empty, which is never read as no key joined: name its policies, or leave the key out for camelCase and exact",
+                "codebaseGraph.claims maps endings to 'xml', which codebaseGraph.languages leaves out, so the fallback would read every file it claims: name 'xml' in languages, or leave its claims out",
+                $"codebaseGraph.claims maps endings to 'cobol', which this tool has no extractor for; it extracts: {string.Join(", ", DssHarness.Core.Codebase.CodeGraphExtractors.OfThisBuild.Languages)}",
+            ],
+            WorkflowValidator.Validate(definition, hasCommitTemplate: false, files: null, languages: DssHarness.Core.Codebase.CodeGraphExtractors.OfThisBuild.Languages));
+    }
+
+    /// <summary>
+    /// V66: two uses that govern themselves shape the run's one graph alike as the shape reads their blocks - a keyNaming
+    /// that spells the default out is the default, in any order, and claims alike in any order are alike - and differently
+    /// where the policies or the claims differ.
+    /// </summary>
+    [Fact]
+    public void TwoGoverningUses_ShapeTheRunsGraphAlike_AsTheShapeReadsTheirKeysAndClaims()
+    {
+        static string Used(string name, string graph) => $"name: {name}\ncodebaseGraph:\n{graph}steps:\n  - name: chore\n    type: orient\n";
+
+        var files = new[]
+        {
+            ("flow/plain/plain.yml", Used("plain", "  mapTokens: 100\n")),
+            ("flow/spelled/spelled.yml", Used("spelled", "  mapTokens: 100\n  keyNaming: [exact, camelCase]\n")),
+            ("flow/snake/snake.yml", Used("snake", "  mapTokens: 100\n  keyNaming: [snake_case]\n")),
+            ("flow/claims/claims.yml", Used("claims", "  mapTokens: 100\n  claims:\n    json: [.a.json, .b.json]\n")),
+            ("flow/reordered/reordered.yml", Used("reordered", "  mapTokens: 100\n  claims:\n    json: [.b.json, .a.json]\n")),
+        };
+
+        static string Caller(string first, string second)
+            => $"""
+                name: flow
+                steps:
+                  - name: graph
+                    type: graphify-codebase
+                  - name: one
+                    use: ./{first}/{first}.yml
+                    useParentLimits: false
+                  - name: two
+                    use: ./{second}/{second}.yml
+                    useParentLimits: false
+                """;
+
+        static string Differ(string first, string second)
+            => $"steps 'one' and 'two' govern themselves (useParentLimits: false) by the workflows 'flow/{first}' and 'flow/{second}', which shape the run's graph differently, and the run's own workflow declares no codebaseGraph: a run has one graph, of one shape - declare it in the run's own workflow, or give the two one shape";
+
+        Assert.Empty(UsedProblems(Caller("plain", "spelled"), files));
+        Assert.Empty(UsedProblems(Caller("claims", "reordered"), files));
+        Assert.Equal([Differ("plain", "snake")], UsedProblems(Caller("plain", "snake"), files));
+        Assert.Equal([Differ("plain", "claims")], UsedProblems(Caller("plain", "claims"), files));
     }
 
     /// <summary>V52: a language the workflow names is one this build extracts, said with every one it does.</summary>

@@ -8,6 +8,7 @@ using DssHarness.Core.Output;
 using DssHarness.Core.Processes;
 using DssHarness.Core.Repository;
 using DssHarness.Core.Results;
+using DssHarness.Core.Walks;
 
 namespace DssHarness.Core.Sync;
 
@@ -642,7 +643,7 @@ public sealed class SyncService(
                 // What a pull reads follows the links along each path named, and never reaches a place the isolation hides.
                 var hidden = _isolation.Hidden(context.Config, context.Layout.MainCheckoutRoot);
                 var brought = options.DryRun
-                    ? await ListedForPullAsync(transport, destination, pull, hidden, cancellationToken).ConfigureAwait(false)
+                    ? (await ListedForPullAsync(transport, destination, pull, hidden, cancellationToken).ConfigureAwait(false)).Listed
                     : await PullAsync(transport, destination, context.Layout.RepositoryRoot, pull, hidden, cancellationToken).ConfigureAwait(false);
 
                 pulled += brought.Files.Count;
@@ -1023,7 +1024,7 @@ public sealed class SyncService(
         {
             _output.Warn(CommandName, $"{transport.Host}: adopting '{destinationRoot}', which this harness did not create.");
 
-            foreach (var line in plan.DescribeLoss(int.MaxValue, destination.Links))
+            foreach (var line in plan.DescribeLoss("these warnings", int.MaxValue, destination.Links))
             {
                 _output.Warn(CommandName, $"{transport.Host}:   {line}");
             }
@@ -1296,8 +1297,8 @@ public sealed class SyncService(
         // The tree's own configuration, or the main checkout's fallback: both '<root>/.harness-config/config.json'. Its
         // bytes, read as soon as it is parsed, so the copy is given the configuration the sync decides by, whatever
         // the file holds by the time the copy is made.
-        var configuration = await _localTransport
-            .ReadFileAsync(Path.GetDirectoryName(Path.GetDirectoryName(context.ConfigFile))!, HarnessLayout.ConfigFileRelative, cancellationToken)
+        var configuration = await SyncPieces
+            .ReadWholeAsync(_localTransport, Path.GetDirectoryName(Path.GetDirectoryName(context.ConfigFile))!, HarnessLayout.ConfigFileRelative, cancellationToken)
             .ConfigureAwait(false);
 
         var exclusions = await ExclusionsAsync(context, cancellationToken).ConfigureAwait(false);
@@ -1305,12 +1306,18 @@ public sealed class SyncService(
         // Before the tree is read, because it is about this tree and costs nothing.
         await exclusions.RefuseWhenNoLongerIgnoredAsync(_gitClient, root, cancellationToken).ConfigureAwait(false);
 
-        // A rule somebody believes is protecting something, doubted before a deletion rests on it.
-        // A rooted entry that matches nothing here while the name exists deeper reads, to any
-        // reader, as evidence that name is protected.
-        var rooted = exclusions.RootedEntriesMatchingNothing(_fileSystem, root, _platform.PathComparison, cancellationToken);
+        // With the files, so each copy's HEAD is the commit these files were read at, whatever is committed while the
+        // copies are made; and, beside it, how many of the paths the copies are given git calls changed since.
+        var history = await _gitClient.DescribeHistoryAsync(root, context.Config.Sync.WholeHistory, cancellationToken).ConfigureAwait(false);
+        var changed = await _gitClient.ReadStatusAsync(root, cancellationToken).ConfigureAwait(false);
 
-        foreach (var name in rooted.MatchingNothing)
+        // A rule somebody believes is protecting something, doubted before a deletion rests on it: looked for as the tree
+        // is read, so the tree is read once for both. A rooted entry that matches nothing here while the name exists
+        // deeper reads, to any reader, as evidence that name is protected.
+        var rooted = exclusions.SearchRootedEntries(_fileSystem, root);
+        var files = await ReadFilesAsync(root, exclusions.IsWithheldFromTransfer, rooted, cancellationToken).ConfigureAwait(false);
+
+        foreach (var name in rooted.Report().MatchingNothing)
         {
             _output.Warn(
                 CommandName,
@@ -1318,23 +1325,6 @@ public sealed class SyncService(
                 + $"does exist deeper in it, so this entry protects nothing. Write "
                 + $"'{PathPatterns.AnyDepth}{name}' to cover that name wherever it appears.");
         }
-
-        if (rooted.Incomplete is { } unread)
-        {
-            // Said rather than swallowed. The entries this would have named are exactly the ones a
-            // reader believes are protecting something, so "it found none" and "it stopped looking"
-            // must not read the same.
-            _output.Warn(
-                CommandName,
-                $"sync.neverTransfer entries could not all be checked against this tree: {unread}");
-        }
-
-        // With the files, so each copy's HEAD is the commit these files were read at, whatever is committed while the
-        // copies are made; and, beside it, how many of the paths the copies are given git calls changed since.
-        var history = await _gitClient.DescribeHistoryAsync(root, context.Config.Sync.WholeHistory, cancellationToken).ConfigureAwait(false);
-        var changed = await _gitClient.ReadStatusAsync(root, cancellationToken).ConfigureAwait(false);
-
-        var files = await ReadFilesAsync(root, exclusions.IsWithheldFromTransfer, cancellationToken).ConfigureAwait(false);
 
         // Nothing is packed for a tree with no commit; and for one with, only once a copy lacks something of it.
         var packs = history.Commit is null
@@ -1359,11 +1349,11 @@ public sealed class SyncService(
     /// Something listed was gone when it was opened, or a file was written, appeared or went before the second look
     /// reached it (<see cref="LegExit.InputsMoved"/>).
     /// </exception>
-    private async Task<SyncManifest> ReadFilesAsync(string root, Func<string, bool> isWithheld, CancellationToken cancellationToken)
+    private async Task<SyncManifest> ReadFilesAsync(string root, Func<string, bool> isWithheld, IManifestLook? look, CancellationToken cancellationToken)
     {
         try
         {
-            return await _manifestBuilder.BuildSettledAsync(root, isWithheld, cancellationToken).ConfigureAwait(false);
+            return await _manifestBuilder.BuildSettledAsync(root, isWithheld, look, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
         {
@@ -1394,7 +1384,7 @@ public sealed class SyncService(
             throw new HarnessException(LegExit.InputsMoved, $"'{root}' is no longer there to be read. Let it settle, then run again.");
         }
 
-        return await ReadFilesAsync(root, PlainDirectory.IsWithheldFromTransfer, cancellationToken).ConfigureAwait(false);
+        return await ReadFilesAsync(root, PlainDirectory.IsWithheldFromTransfer, look: null, cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc/>
@@ -1500,8 +1490,16 @@ public sealed class SyncService(
         ArgumentNullException.ThrowIfNull(hidden);
 
         // Every directory is listed, and refused where it is not one a pull brings back, before any file crosses.
-        var listed = await ListedForPullAsync(transport, sourceRoot, paths, hidden, cancellationToken).ConfigureAwait(false);
+        var (listed, bytes) = await ListedForPullAsync(transport, sourceRoot, paths, hidden, cancellationToken).ConfigureAwait(false);
         var brought = new List<string>();
+
+        // However many files and however much they hold: weighed against the room where they land, before any crosses, so
+        // a pull this machine has no room for stops before it fills the disk rather than part way through.
+        if (bytes > 0)
+        {
+            RefuseWithoutRoomFor(bytes, destinationRoot);
+            _output.Info(CommandName, $"{transport.Host}: bringing back {ReportText.Counted(listed.Files.Count, "file")}, {DiskSpace.Size(bytes)} listed, into '{destinationRoot}'");
+        }
 
         foreach (var path in listed.Files)
         {
@@ -1509,9 +1507,9 @@ public sealed class SyncService(
             {
                 cancellationToken.ThrowIfCancellationRequested();
 
-                // Checked against the hash the far side took before sending, inside ReadFileAsync, and again once it
+                // Checked against the hash the far side took before sending, inside PullFileAsync, and again once it
                 // is written here.
-                await CopyVerifiedAsync(transport, () => transport.PullFileAsync(sourceRoot, path, hidden, cancellationToken), _localTransport, destinationRoot, path, written: null, cancellationToken).ConfigureAwait(false);
+                await CopyVerifiedAsync(transport, sourceRoot, hidden, _localTransport, destinationRoot, path, transport.PieceBytes, written: null, cancellationToken).ConfigureAwait(false);
             }
             catch (Exception ex) when (StopOf(ex, path, destinationRoot, brought.Count, cancellationToken) is { } stop)
             {
@@ -1522,6 +1520,35 @@ public sealed class SyncService(
         }
 
         return new SyncPull(brought, listed.Links);
+    }
+
+    /// <summary>
+    /// Refuses a pull of <paramref name="bytes"/> where the file system <paramref name="destinationRoot"/> is on has less
+    /// room free, before any file crosses; one whose room cannot be read is let go on, as a write that finds no room
+    /// fails by name, and said.
+    /// </summary>
+    /// <exception cref="HarnessException">The files listed hold more than the room free there.</exception>
+    private void RefuseWithoutRoomFor(long bytes, string destinationRoot)
+    {
+        DiskSpace room;
+
+        try
+        {
+            room = _fileSystem.SpaceAt(destinationRoot);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            _output.Warn(CommandName, $"the room free under '{destinationRoot}' could not be read, so the pull goes on without it weighed: {ex.Message.TrimEnd('.')}");
+            return;
+        }
+
+        if (bytes > room.FreeBytes)
+        {
+            throw new HarnessException(
+                HarnessExit.CommandFailed,
+                $"the files a pull names hold {DiskSpace.Size(bytes)}, and '{destinationRoot}' has {room.Describe()}: make room there, or name "
+                + "less. Nothing was brought back.");
+        }
     }
 
     /// <summary>
@@ -1549,8 +1576,9 @@ public sealed class SyncService(
     /// <param name="paths">The paths a pull names, relative to the copy's root.</param>
     /// <param name="hidden">The places the isolation hides, which no directory named stands in.</param>
     /// <param name="cancellationToken">Stops the listing.</param>
-    /// <exception cref="HarnessException">A directory named is the whole copy, is not a directory, stands in a hidden place, or holds no file or too much.</exception>
-    private static async Task<SyncPull> ListedForPullAsync(
+    /// <returns>What it brings back, and how many bytes the files of the directories named hold together, each file once.</returns>
+    /// <exception cref="HarnessException">A directory named is the whole copy, is not a directory, stands in a hidden place, or holds no file.</exception>
+    private static async Task<(SyncPull Listed, long Bytes)> ListedForPullAsync(
         ISyncTransport transport,
         string sourceRoot,
         IReadOnlyList<string> paths,
@@ -1559,6 +1587,7 @@ public sealed class SyncService(
     {
         var files = new List<string>();
         var links = new List<string>();
+        var sizes = new Dictionary<string, long>(StringComparer.Ordinal);
 
         foreach (var path in paths)
         {
@@ -1596,9 +1625,14 @@ public sealed class SyncService(
 
             files.AddRange(listing.Files.Select(file => file.Path));
             links.AddRange(listing.Links);
+
+            foreach (var file in listing.Files)
+            {
+                sizes[file.Path] = file.Length;
+            }
         }
 
-        return new SyncPull([.. files.Distinct(StringComparer.Ordinal)], [.. links.Distinct(StringComparer.Ordinal)]);
+        return (new SyncPull([.. files.Distinct(StringComparer.Ordinal)], [.. links.Distinct(StringComparer.Ordinal)]), sizes.Values.Sum());
     }
 
     /// <summary>
@@ -1607,10 +1641,10 @@ public sealed class SyncService(
     /// <param name="layout">Resolved paths for this repository.</param>
     /// <param name="runId">The run whose artifacts to find.</param>
     /// <remarks>
-    /// Found by walking the actions directory for an <c>artifacts/&lt;run id&gt;</c>, at whatever
-    /// depth the author grouped the action to. Links are not followed: a link inside a tree makes
-    /// the walk unbounded, and one leaving it would carry files the tree does not contain to another
-    /// machine.
+    /// Found by walking the actions directory for an <c>artifacts/&lt;run id&gt;</c>, at whatever depth the author
+    /// grouped the action to, each directory once (<see cref="Walk.Visit"/>), on a stack of the walk's own: no depth of
+    /// grouping is too deep. Links are not followed: one leaving the tree would carry files the tree does not contain to
+    /// another machine, and with none followed no walk of a tree goes round.
     /// </remarks>
     private IReadOnlyList<string> ArtifactsOf(HarnessLayout layout, string runId)
     {
@@ -1622,43 +1656,25 @@ public sealed class SyncService(
         }
 
         var found = new List<string>();
-        Collect(actions, 0);
+
+        foreach (var action in Walk.Visit(Groups(actions), directory => directory, Groups, comparer: StringComparer.Ordinal))
+        {
+            found.AddRange(Runners.KeptOutputs.Under(
+                _fileSystem,
+                layout.RepositoryRoot,
+                Path.Combine(action, HarnessLayout.ActionArtifactsDirectoryName, runId)));
+        }
+
         return [.. found.Order(StringComparer.Ordinal)];
 
-        void Collect(string directory, int depth)
-        {
-            // Deep enough for any grouping somebody writes by hand, and bounded so a tree that is
-            // not one cannot spend the command.
-            if (depth > 32)
-            {
-                return;
-            }
-
-            foreach (var child in _fileSystem.EnumerateDirectories(directory))
-            {
-                if (LinkPaths.IsLink(_fileSystem, child, _platform.PathComparison))
-                {
-                    continue;
-                }
-
-                // Neither of the two directories an action owns holds actions, and no action may
-                // be called either name. The artifacts one holds runs, and walking it would treat
-                // each run directory as an action; the build one holds the working space of runs in
-                // flight and of any that was killed before it could clear its own, which is a whole
-                // build tree to enumerate for something that cannot be in it.
-                if (Runners.ActionPath.Reserved(Path.GetFileName(child)))
-                {
-                    continue;
-                }
-
-                found.AddRange(Runners.KeptOutputs.Under(
-                    _fileSystem,
-                    layout.RepositoryRoot,
-                    Path.Combine(child, HarnessLayout.ActionArtifactsDirectoryName, runId)));
-
-                Collect(child, depth + 1);
-            }
-        }
+        // The directories below one that may be actions or hold them. Neither of the two directories an action owns holds
+        // actions, and no action may be called either name. The artifacts one holds runs, and walking it would treat each
+        // run directory as an action; the build one holds the working space of runs in flight and of any that was killed
+        // before it could clear its own, which is a whole build tree to enumerate for something that cannot be in it.
+        List<string> Groups(string directory)
+            => [.. _fileSystem
+                .EnumerateDirectories(directory)
+                .Where(child => !LinkPaths.IsLink(_fileSystem, child, _platform.PathComparison) && !Runners.ActionPath.Reserved(Path.GetFileName(child)))];
     }
 
     /// <summary>
@@ -1694,7 +1710,7 @@ public sealed class SyncService(
 
                 // Counted as written before it is verified, because what has to be taken back is
                 // what reached the far side, and a file that arrived wrong is one of those.
-                await CopyVerifiedAsync(_localTransport, () => _localTransport.ReadFileAsync(sourceRoot, path, cancellationToken), transport, destinationRoot, path, () => landed.Add(path), cancellationToken)
+                await CopyVerifiedAsync(_localTransport, sourceRoot, hidden: null, transport, destinationRoot, path, transport.PieceBytes, () => landed.Add(path), cancellationToken)
                     .ConfigureAwait(false);
             }
         }
@@ -1715,36 +1731,68 @@ public sealed class SyncService(
     /// host to host is evidence that something built there runs here, and evidence nobody checked is not evidence.
     /// </summary>
     /// <param name="from">How the tree it is read from is reached.</param>
-    /// <param name="read">Reads the file out of that tree: a pull's read, or any other.</param>
+    /// <param name="fromRoot">That tree's root.</param>
+    /// <param name="hidden">The places a pull's read never reaches, or null for a read that follows no link.</param>
     /// <param name="to">How the tree it is written to is reached.</param>
     /// <param name="toRoot">That tree's root.</param>
     /// <param name="path">The file, relative to both roots.</param>
+    /// <param name="pieceBytes">The most bytes of it held at once: the far side's piece (<see cref="ISyncTransport.PieceBytes"/>).</param>
     /// <param name="written">Told once it is written, before it is read back; null where nothing needs telling.</param>
     /// <param name="cancellationToken">Stops the copy.</param>
-    /// <exception cref="HarnessException">It did not read back as it was read (<see cref="HarnessExit.CommandFailed"/>).</exception>
-    private static async Task CopyVerifiedAsync(
+    /// <exception cref="HarnessException">
+    /// It did not read back as it was read, or changed while it was read (<see cref="HarnessExit.CommandFailed"/>).
+    /// </exception>
+    /// <remarks>
+    /// A file of any size: one a piece holds crosses whole in one request, and is read back where it landed by its length and
+    /// hash alone, no byte of it carried back; one larger crosses a piece at a time (<see cref="SyncPieces.SendAsync"/>) and
+    /// is put in place only once what landed reads back, there, as what was read - so no side ever holds it whole.
+    /// </remarks>
+    private async Task CopyVerifiedAsync(
         ISyncTransport from,
-        Func<Task<byte[]>> read,
+        string fromRoot,
+        IReadOnlyList<IsolatedPath>? hidden,
         ISyncTransport to,
         string toRoot,
         string path,
+        int pieceBytes,
         Action? written,
         CancellationToken cancellationToken)
     {
-        var contents = await read().ConfigureAwait(false);
-        var expected = FileContent.Of(contents);
+        var first = await SyncPieces.ReadAsync(from, fromRoot, path, 0, pieceBytes, hidden, cancellationToken).ConfigureAwait(false);
+        var expected = first.Whole ?? throw new HarnessException(HarnessExit.CommandFailed, $"{from.Host} did not say what '{path}' holds as its first piece was read.");
 
-        await to.WriteFileAsync(toRoot, path, contents, cancellationToken).ConfigureAwait(false);
+        if (!first.IsWholeFile)
+        {
+            await SyncPieces.SendAsync(
+                    first,
+                    (offset, token) => SyncPieces.ReadAsync(from, fromRoot, path, offset, pieceBytes, hidden, token),
+                    to,
+                    toRoot,
+                    path,
+                    changed: () => new HarnessException(
+                        HarnessExit.CommandFailed,
+                        $"'{path}' changed on {from.Host} while it was read a piece at a time to be copied to {to.Host}: it was "
+                        + $"{expected.Content}, {ReportText.Counted(expected.Length, "byte")}, as its first piece was read. Nothing "
+                        + "was put in its place."),
+                    warn: message => _output.Warn(CommandName, message),
+                    cancellationToken)
+                .ConfigureAwait(false);
+
+            written?.Invoke();
+            return;
+        }
+
+        await to.WriteFileAsync(toRoot, path, first.Bytes, cancellationToken).ConfigureAwait(false);
         written?.Invoke();
 
-        var actual = FileContent.Of(await to.ReadFileAsync(toRoot, path, cancellationToken).ConfigureAwait(false));
+        var actual = (await to.ReadFileAsync(toRoot, path, 0, 0, cancellationToken).ConfigureAwait(false)).Whole;
 
         if (expected != actual)
         {
             throw new HarnessException(
                 HarnessExit.CommandFailed,
                 $"'{path}' did not land intact, copied from {from.Host} to {to.Host}: it was read as {expected.Content} and "
-                + $"reads back as {actual.Content}.");
+                + $"reads back as {actual?.Content}.");
         }
     }
 
@@ -1987,7 +2035,7 @@ public sealed class SyncService(
             return plan.Overwrites.Count == 0 && plan.Deletes.Count == 0 && links.Count == 0
                 ? $"{opening} {remedy}"
                 : $"{opening} {remedy} It holds:\n  "
-                    + string.Join("\n  ", plan.DescribeLoss(links: links));
+                    + string.Join("\n  ", plan.DescribeLoss($"'{destinationRoot}' on {transport.Host}", links: links));
         }
 
         if (plan.Overwrites.Count == 0 && plan.Deletes.Count == 0 && links.Count == 0)
@@ -2000,7 +2048,7 @@ public sealed class SyncService(
             + $"overwritten and {plan.Deletes.Count.ToString(CultureInfo.InvariantCulture)} deleted there";
 
         return $"{opening} {verb} is {take}, and {counted}:\n  "
-            + string.Join("\n  ", plan.DescribeLoss(links: links))
+            + string.Join("\n  ", plan.DescribeLoss(SyncPlan.DryRunList, links: links))
             + $"\n{configuration} {survives} Run with '--dry-run' to see all of it. Nothing has been "
             + "changed by this run.";
     }
@@ -2052,25 +2100,45 @@ public sealed class SyncService(
         // sync of a worktree's copy opened a session per file and outlasted the host's wake.
         var batch = new List<SyncFileContent>();
         var held = 0L;
+        var pieceBytes = transport.PieceBytes;
 
         foreach (var entry in plan.Writes)
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            var contents = await CarriedAsync(transport, sourceRoot, destinationRoot, entry, carrying, cancellationToken)
+            var first = await CarriedAsync(transport, sourceRoot, destinationRoot, entry, 0, pieceBytes, carrying, cancellationToken)
                 .ConfigureAwait(false);
 
-            // Sent before this file joins it, so a batch never holds more than the budget: a file larger
-            // than the budget on its own then crosses in a batch of its own, which is what carrying it at
-            // all requires.
+            // Larger than a piece: carried on its own, a piece at a time, once the files gathered before it have crossed, so
+            // the copy is written in the order the plan holds - and never held whole, on either side, however large it is.
+            if (!first.IsWholeFile)
+            {
+                await CarryBatchAsync().ConfigureAwait(false);
+                await SyncPieces.SendAsync(
+                        first,
+                        (offset, token) => CarriedAsync(transport, sourceRoot, destinationRoot, entry, offset, pieceBytes, carrying, token),
+                        transport,
+                        destinationRoot,
+                        entry.Path,
+                        changed: () => Moved(transport, destinationRoot, entry, carrying, "changed", cause: null),
+                        warn: message => _output.Warn(CommandName, message),
+                        cancellationToken)
+                    .ConfigureAwait(false);
+
+                Wrote(entry.Path);
+                continue;
+            }
+
+            // Sent before this file joins it, so a batch never holds more than the budget: a file no larger than a piece
+            // and larger than what the budget has left then crosses in the batch that follows.
             if (batch.Count > 0
-                && (held + contents.LongLength > SyncServe.LargestBatch || batch.Count >= SyncServe.MostFilesInABatch))
+                && (held + first.Bytes.LongLength > SyncServe.LargestBatch || batch.Count >= SyncServe.MostFilesInABatch))
             {
                 await CarryBatchAsync().ConfigureAwait(false);
             }
 
-            batch.Add(new SyncFileContent(entry.Path, contents));
-            held += contents.LongLength;
+            batch.Add(new SyncFileContent(entry.Path, first.Bytes));
+            held += first.Bytes.LongLength;
         }
 
         await CarryBatchAsync().ConfigureAwait(false);
@@ -2088,18 +2156,23 @@ public sealed class SyncService(
 
             foreach (var file in batch)
             {
-                if (overwritten.Contains(file.Path))
-                {
-                    _output.Info(CommandName, $"{transport.Host}: overwrote {file.Path}");
-                }
-                else
-                {
-                    _output.Detail(CommandName, $"{transport.Host}: wrote {file.Path}");
-                }
+                Wrote(file.Path);
             }
 
             batch.Clear();
             held = 0;
+        }
+
+        void Wrote(string path)
+        {
+            if (overwritten.Contains(path))
+            {
+                _output.Info(CommandName, $"{transport.Host}: overwrote {path}");
+            }
+            else
+            {
+                _output.Detail(CommandName, $"{transport.Host}: wrote {path}");
+            }
         }
 
         foreach (var path in plan.Deletes)
@@ -2133,12 +2206,15 @@ public sealed class SyncService(
             _output.Warn(
                 CommandName,
                 $"{transport.Host}: {directory.Path}/ held only files this sync does not manage, so it "
-                + $"stayed although the deletion emptied it of everything else: {string.Join(", ", directory.Held)}. "
+                + $"stayed although the deletion emptied it of everything else: {Names.Line(directory.Held, $"'{directory.Path}/' there")}. "
                 + "The copy there differs from this tree until somebody removes it.");
         }
     }
 
-    /// <summary>The bytes of the file <paramref name="entry"/> names, read for carrying.</summary>
+    /// <summary>
+    /// The piece of the file <paramref name="entry"/> names that starts after <paramref name="offset"/> bytes, read for
+    /// carrying: the whole file where a piece holds it, and its first piece, saying what all of it holds, where it starts it.
+    /// </summary>
     /// <exception cref="HarnessException">
     /// It no longer holds what <paramref name="entry"/> records - changed, or removed, since the tree was read - so the
     /// copy cannot be made that tree (<see cref="LegExit.InputsMoved"/>).
@@ -2147,38 +2223,44 @@ public sealed class SyncService(
     /// Checked as it is read: carried unchecked, a file edited since would reach the copy as content no reading of the
     /// tree recorded, and a leg there would test it under the tree's name. Raised at the first, without reading on to
     /// name the rest: every further read would hold the copy for nothing, and one that failed would take the answer
-    /// with it.
+    /// with it. A later piece is held to the first by the carrying of the pieces (<see cref="SyncPieces.SendAsync"/>).
     /// </remarks>
-    private async Task<byte[]> CarriedAsync(
+    private async Task<SyncFilePiece> CarriedAsync(
         ISyncTransport transport,
         string sourceRoot,
         string destinationRoot,
         SyncEntry entry,
+        long offset,
+        int pieceBytes,
         Carrying carrying,
         CancellationToken cancellationToken)
     {
-        byte[] contents;
+        SyncFilePiece piece;
 
         try
         {
-            contents = await _localTransport.ReadFileAsync(sourceRoot, entry.Path, cancellationToken).ConfigureAwait(false);
+            piece = await _localTransport.ReadFileAsync(sourceRoot, entry.Path, offset, pieceBytes, cancellationToken).ConfigureAwait(false);
         }
         catch (HarnessException ex) when (ex.ExitCode == HarnessExit.CommandFailed)
         {
             // What reading this tree raises only where no file is there now: removed since, or a directory. A file
             // there that cannot be opened raises as it did, never as a tree that moved.
-            throw Moved("was removed", ex);
+            throw Moved(transport, destinationRoot, entry, carrying, "was removed", ex);
         }
 
-        return FileContent.Of(contents) == entry.Identity ? contents : throw Moved("changed", null);
-
-        HarnessException Moved(string what, Exception? cause) => new(
-            LegExit.InputsMoved,
-            $"{transport.Host}: '{ReportText.Printable(entry.Path)}' {what} after {carrying.Read} was read for this command, before it "
-            + $"was carried to '{destinationRoot}', so that copy cannot be made {carrying.Made}. {carrying.PartMade} "
-            + $"Let {carrying.Settle} settle, then run again.",
-            cause);
+        return offset > 0 || piece.Whole == entry.Identity ? piece : throw Moved(transport, destinationRoot, entry, carrying, "changed", cause: null);
     }
+
+    /// <summary>
+    /// What a sync raises where the file <paramref name="entry"/> names <paramref name="what"/> after the tree was read, before
+    /// it was carried to <paramref name="destinationRoot"/>.
+    /// </summary>
+    private static HarnessException Moved(ISyncTransport transport, string destinationRoot, SyncEntry entry, Carrying carrying, string what, Exception? cause) => new(
+        LegExit.InputsMoved,
+        $"{transport.Host}: '{ReportText.Printable(entry.Path)}' {what} after {carrying.Read} was read for this command, before it "
+        + $"was carried to '{destinationRoot}', so that copy cannot be made {carrying.Made}. {carrying.PartMade} "
+        + $"Let {carrying.Settle} settle, then run again.",
+        cause);
 
     /// <summary>
     /// Confirms the copy now holds exactly what the tree's reading does.
@@ -2217,7 +2299,7 @@ public sealed class SyncService(
         throw new HarnessException(
             HarnessExit.CommandFailed,
             $"The copy at '{destinationRoot}' on {transport.Host} does not match {carrying.Matched} after the "
-            + $"sync: {ReportText.Counted(differing.Count, "file")} still differ: {ReportText.Listed(differing)}. Nothing should be "
+            + $"sync: {ReportText.Counted(differing.Count, "file")} still differ: {Names.Line(differing, SyncPlan.DryRunList)}. Nothing should be "
             + "run against it.");
     }
 

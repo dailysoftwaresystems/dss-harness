@@ -1,9 +1,12 @@
+using System.Collections.Concurrent;
 using DssHarness.Core.Execution;
 using DssHarness.Core.Orchestration;
 using DssHarness.Core.Orchestration.Flow;
 using DssHarness.Core.Output;
 using DssHarness.Core.Repository;
 using DssHarness.Core.Results;
+using DssHarness.Core.Waiting;
+using NSubstitute;
 
 namespace DssHarness.Tests;
 
@@ -13,6 +16,8 @@ namespace DssHarness.Tests;
 /// </summary>
 public sealed class OrchestrationStoreTests
 {
+    private static CancellationToken Token => TestContext.Current.CancellationToken;
+
     /// <summary>
     /// A record removed between the look and the read - a run's owner released by its engine as a stop watches for it - is
     /// a record that is not there, as one never written: never one that could not be read.
@@ -54,7 +59,7 @@ public sealed class OrchestrationStoreTests
             store.WriteAgent(kit.Layout, kit.Record("ag"));
             store.WriteSeed(kit.Layout, "ag", kit.Harness.OrchestrationStore.ReadSeed(kit.Layout, "ag")!);
             store.WriteAppliedRows(kit.Layout, "ag", new AppliedRowsRecord { Rows = [] });
-            log.Append(kit.Layout, "ag", "test", CommandOutcome.Ok("done"));
+            log.Append(kit.Layout, "ag", "test", CommandOutcome.Ok("done"), Token);
         }
 
         Assert.Equal(
@@ -66,6 +71,63 @@ public sealed class OrchestrationStoreTests
                 new RecordWritten("an orchestrator's log", kit.Layout.LogFile("ag")),
             ],
             sink.Seen.Select(@event => @event with { Operation = null, Sequence = 0, At = default }));
+    }
+
+    /// <summary>
+    /// An append to an orchestrator's log another update of the file holds - as another process's would - waits for as long
+    /// as the holder holds it, never giving up at a window of its own: a quarter of an hour on its clock, told at five, ten
+    /// and fifteen minutes as the command's own line naming the file, and the line is written once the holder lets go.
+    /// </summary>
+    [Fact]
+    public async Task AWrite_WaitsWhileTheHolderLives()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var clock = new TimerClock();
+        var told = new ConcurrentQueue<string>();
+        var output = Substitute.For<IHarnessOutput>();
+        output.When(said => said.Info("test", Arg.Any<string>())).Do(call => told.Enqueue(call.ArgAt<string>(1)));
+        var log = new OrchestrationLog(kit.Harness.FileSystem, clock, output);
+        var file = kit.Layout.LogFile("ag");
+        using var holding = new ManualResetEventSlim();
+        using var letGo = new ManualResetEventSlim();
+
+        // Another update of the log holds it, on a thread of its own, until it is let go.
+        var holder = Task.Factory.StartNew(
+            () => MachineWideFile.Update(file, TimeSpan.FromSeconds(5), () =>
+            {
+                holding.Set();
+                letGo.Wait(Token);
+                return true;
+            }),
+            Token,
+            TaskCreationOptions.LongRunning,
+            TaskScheduler.Default);
+        holding.Wait(Token);
+
+        var append = Task.Run(() => log.Append(kit.Layout, "ag", "test", CommandOutcome.Ok("done")), Token);
+
+        for (var tellings = 0; tellings < 3; tellings++)
+        {
+            await clock.WaitingAsync().WaitAsync(ClockDrive.Within, Token);
+            clock.Advance(Waits.SaidEvery);
+        }
+
+        await clock.WaitingAsync().WaitAsync(ClockDrive.Within, Token);
+        Assert.False(append.IsCompleted, "the append waits while the holder holds the log");
+
+        letGo.Set();
+        Assert.True(await holder.WaitAsync(ClockDrive.Within, Token));
+
+        Assert.Equal(file, await append.WaitAsync(ClockDrive.Within, Token));
+        Assert.Equal(["test"], log.Read(file).Select(entry => entry.Command));
+        Assert.Equal(
+            [
+                $"has waited 5m00s for another process's change of '{file}'",
+                $"has waited 10m00s for another process's change of '{file}'",
+                $"has waited 15m00s for another process's change of '{file}'",
+            ],
+            told);
     }
 
     /// <summary>
@@ -82,7 +144,7 @@ public sealed class OrchestrationStoreTests
 
         foreach (var at in Enumerable.Range(1, 3))
         {
-            log.Append(kit.Layout, "ag", $"command {at}", CommandOutcome.Ok($"done {at}"));
+            log.Append(kit.Layout, "ag", $"command {at}", CommandOutcome.Ok($"done {at}"), Token);
         }
 
         Assert.Equal(["command 1", "command 2", "command 3"], log.Read(file).Select(entry => entry.Command));
@@ -323,14 +385,14 @@ public sealed class OrchestrationStoreTests
             other.Start();
             other.Join();
             return ("the first map", new System.Text.Json.Nodes.JsonObject { ["by"] = "first" });
-        });
+        }, Token);
 
         // The second, under the section after it, reads the map the first kept and makes none.
         var second = harness.OrchestrationStore.MapOnce(layout, reads: null, () =>
         {
             secondMade++;
             return ("the second map", new System.Text.Json.Nodes.JsonObject { ["by"] = "second" });
-        });
+        }, Token);
 
         Assert.Equal(HarnessExit.Refused, Assert.IsType<HarnessException>(whileMaking).ExitCode);
         Assert.Equal(("the first map", "the first map", 0), (first, second, secondMade));
@@ -338,9 +400,9 @@ public sealed class OrchestrationStoreTests
         Assert.Equal("""{"by":"first"}""", System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(layout.GraphMapMetaFile))!.ToJsonString());
 
         // Steps whose read rules differ keep a map each, beside the run's.
-        Assert.Equal("a narrowed map", harness.OrchestrationStore.MapOnce(layout, "0123456789abcdef", () => ("a narrowed map", new System.Text.Json.Nodes.JsonObject())));
+        Assert.Equal("a narrowed map", harness.OrchestrationStore.MapOnce(layout, "0123456789abcdef", () => ("a narrowed map", new System.Text.Json.Nodes.JsonObject()), Token));
         Assert.Equal("a narrowed map", File.ReadAllText(Path.Combine(layout.GraphDirectory, "map-0123456789abcdef.md")));
-        Assert.Null(harness.OrchestrationStore.MapOnce(layout, "fedcba9876543210", () => null));
+        Assert.Null(harness.OrchestrationStore.MapOnce(layout, "fedcba9876543210", () => null, Token));
     }
 
     /// <summary>A front end's sink of events, keeping each as it is given.</summary>

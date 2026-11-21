@@ -114,7 +114,7 @@ public sealed class WorktreeDeletionTests
         var path = await CreateAsync(harness, temp, "detached");
         File.WriteAllText(Path.Combine(path, "work.txt"), "committed here only");
         await harness.CommitAllAsync(path, "work", cancellationToken);
-        var head = (await harness.GitClient.ResolveCommitAsync(path, "HEAD", cancellationToken))![..12];
+        var head = (await harness.GitClient.ResolveCommitAsync(path, "HEAD", cancellationToken))!;
 
         var outcome = await harness.WorktreeService.DeleteAsync(temp.Path, "detached", force: false, deleteEvidence: false, cancellationToken: cancellationToken);
 
@@ -765,7 +765,7 @@ public sealed class WorktreeDeletionTests
         var original = await CreateAsync(harness, temp, "before");
         File.WriteAllText(Path.Combine(original, "work.txt"), "committed here only");
         await harness.CommitAllAsync(original, "work", cancellationToken);
-        var head = (await harness.GitClient.ResolveCommitAsync(original, "HEAD", cancellationToken))![..12];
+        var head = (await harness.GitClient.ResolveCommitAsync(original, "HEAD", cancellationToken))!;
         var moved = HarnessFactory.WorktreePath(temp.Path, "after");
         Directory.Move(original, moved);
 
@@ -802,7 +802,7 @@ public sealed class WorktreeDeletionTests
         var path = await CreateAsync(harness, temp, "detached");
         File.WriteAllText(Path.Combine(path, "work.txt"), "committed here only");
         await harness.CommitAllAsync(path, "work", cancellationToken);
-        var head = (await harness.GitClient.ResolveCommitAsync(path, "HEAD", cancellationToken))![..12];
+        var head = (await harness.GitClient.ResolveCommitAsync(path, "HEAD", cancellationToken))!;
         var change = Uncommitted(path);
 
         var outcome = await DiscardingAsync(harness, temp, "detached");
@@ -821,7 +821,7 @@ public sealed class WorktreeDeletionTests
         var path = await CreateAsync(harness, temp, "stashed");
         File.WriteAllText(Path.Combine(path, "work.txt"), "committed on a detached HEAD");
         await harness.CommitAllAsync(path, "work", cancellationToken);
-        var head = (await harness.GitClient.ResolveCommitAsync(path, "HEAD", cancellationToken))![..12];
+        var head = (await harness.GitClient.ResolveCommitAsync(path, "HEAD", cancellationToken))!;
         File.WriteAllText(Path.Combine(path, "work.txt"), "then changed and stashed");
         await harness.RunGitAsync(path, ["stash", "--quiet"], cancellationToken);
         File.WriteAllText(Path.Combine(temp.Path, "README.md"), "changed and stashed in the main checkout");

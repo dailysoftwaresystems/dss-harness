@@ -1,8 +1,10 @@
-using System.Globalization;
+using System.Diagnostics;
 using System.Text.RegularExpressions;
 using DssHarness.Core.Output;
 using DssHarness.Core.Repository;
 using DssHarness.Core.Results;
+using DssHarness.Core.Text;
+using DssHarness.Core.Waiting;
 
 namespace DssHarness.Core.Ci;
 
@@ -41,8 +43,9 @@ public sealed record CiChecksRequest(string Commit, string Command)
 
     /// <summary>
     /// Whether it reads the checks once, waiting for none to appear or end - what was reached taken as it stands, as a
-    /// person's <c>accept</c> asks - and answers what they are then, each settled on that read alone. A read that fails is
-    /// said and read again at the next poll as in any wait, up to <see cref="CiChecksService.FailedReadsInARow"/> running.
+    /// person's <c>accept</c> asks - and answers what they are then, each settled on that read alone. A read that fails
+    /// is said and read again at the next poll for as long as its failure can change, however short the wait its step
+    /// says: its reads are the whole of it, so no time of the wait's own ends them.
     /// </summary>
     public bool Once { get; init; }
 
@@ -59,11 +62,7 @@ public sealed record CiChecksRequest(string Commit, string Command)
         ArgumentNullException.ThrowIfNull(name);
 
         return Ignore.Any(pattern => pattern.Contains('*', StringComparison.Ordinal)
-            ? Regex.IsMatch(
-                name,
-                "^" + Regex.Escape(pattern).Replace(@"\*", ".*", StringComparison.Ordinal) + "$",
-                RegexOptions.CultureInvariant | RegexOptions.Singleline,
-                TimeSpan.FromSeconds(1))
+            ? LinearRegex.Compile("^" + Regex.Escape(pattern).Replace(@"\*", ".*", StringComparison.Ordinal) + "$", RegexOptions.Singleline).IsMatch(name)
             : string.Equals(pattern, name, StringComparison.Ordinal));
     }
 }
@@ -146,9 +145,9 @@ public interface ICiChecksService
     /// <param name="request">The commit, and how long to wait.</param>
     /// <param name="cancellationToken">Stops the wait.</param>
     /// <exception cref="HarnessException">
-    /// The forge could not be read: <see cref="CiChecksService.FailedReadsInARow"/> reads running failed (20) or passed
-    /// their time limit (21), or one did as the time to wait was spent; <c>gh</c> is not there (14), or another
-    /// repository is named for it (13).
+    /// The forge could not be read: a read failed in a way no read again changes - the credential refused, the thing asked
+    /// not there - or as an earlier one had (20), or a read failed (20) or passed its time limit (21) as the time to wait
+    /// was spent; <c>gh</c> is not there (14), or another repository is named for it (13).
     /// </exception>
     Task<CiChecksReading> WaitAsync(string startDirectory, CiChecksRequest request, CancellationToken cancellationToken = default);
 }
@@ -166,9 +165,6 @@ public sealed class CiChecksService(
     IHarnessOutput output,
     TimeProvider clock) : ICiChecksService
 {
-    /// <summary>How many reads running may fail before the wait ends with the last one's failure: three.</summary>
-    public const int FailedReadsInARow = 3;
-
     public async Task<CiChecksReading> WaitAsync(string startDirectory, CiChecksRequest request, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -179,42 +175,10 @@ public sealed class CiChecksService(
         // a wait's end by what it moved.
         var started = clock.GetTimestamp();
         IReadOnlyList<CiCheck>? before = null;
-        var failed = 0;
 
         while (true)
         {
-            IReadOnlyList<CiCheck> checks;
-
-            try
-            {
-                checks = await ReadAsync(root, request, cancellationToken).ConfigureAwait(false);
-                failed = 0;
-            }
-            catch (HarnessException ex) when (ex.ExitCode is HarnessExit.CommandFailed or HarnessExit.Incomplete)
-            {
-                // A read the forge failed - a server error, a rate limit, a network that dropped - says nothing of the
-                // checks, and the next may answer: an hour's wait is never ended by one, nor a person's accept. It ends
-                // with the failure only where reads failed so many times running, or the time of a wait is spent; each
-                // one read again is said, as it is met.
-                var elapsed = clock.GetElapsedTime(started);
-
-                if (++failed >= FailedReadsInARow || !request.Once && elapsed >= request.Wait)
-                {
-                    throw;
-                }
-
-                var next = Next(request, elapsed);
-
-                output.Warn(
-                    request.Command,
-                    string.Create(
-                        CultureInfo.InvariantCulture,
-                        $"a read of the checks of {request.Commit} failed, {failed} running of the {FailedReadsInARow} that end the wait: {ex.Message.TrimEnd('.')}. They are read again in {next.TotalSeconds} s."));
-
-                await Task.Delay(next, clock, cancellationToken).ConfigureAwait(false);
-                continue;
-            }
-
+            var checks = await ReadUntilAnsweredAsync(root, request, clock.GetElapsedTime(started), cancellationToken).ConfigureAwait(false);
             var waited = clock.GetElapsedTime(started);
             var spent = request.Once || waited >= request.Wait;
 
@@ -253,6 +217,78 @@ public sealed class CiChecksService(
             before = checks;
             await Task.Delay(Next(request, waited), clock, cancellationToken).ConfigureAwait(false);
         }
+    }
+
+    /// <summary>
+    /// The checks as one read of them answers, read again for as long as a read that failed can change
+    /// (<see cref="Retrying"/>): a network that dropped, a read that did not answer in time, a server error and a rate
+    /// limit pass by nature and are read again however often they come; a failure of another kind is read again while it
+    /// is new, and ends the wait where the same one comes again; one no read changes - the forge refusing the credential
+    /// (401) or answering that the thing asked is not there (404) - ends it at once. Each read again is said as it is
+    /// waited for, the first a poll after the failure and each later one twice as long up to five minutes. The time of the
+    /// wait, the planned waitMinutes, still ends it: where it is spent before the next read, the wait ends with the last
+    /// failure's own code - but never a wait that reads once, whose reads go on at the poll for as long as they fail,
+    /// however short the wait its step says. A refusal of the command's own - another repository named, gh not there -
+    /// is raised at once.
+    /// </summary>
+    /// <param name="root">The repository the forge is asked about.</param>
+    /// <param name="request">The commit, and how long to wait.</param>
+    /// <param name="waited">How long the wait has lasted so far, which the time left to it is measured from.</param>
+    /// <param name="cancellationToken">Stops the wait.</param>
+    /// <exception cref="HarnessException">The reads ended on a failure, raised as the read raised it.</exception>
+    private async Task<IReadOnlyList<CiCheck>> ReadUntilAnsweredAsync(string root, CiChecksRequest request, TimeSpan waited, CancellationToken cancellationToken)
+    {
+        HarnessException? last = null;
+        var left = request.Wait - waited;
+        var poll = request.Poll > TimeSpan.Zero ? request.Poll : Waits.LooksAgainEvery;
+        var ended = await Retrying.RunAsync(
+                async (_, token) =>
+                {
+                    try
+                    {
+                        return new RetryTry<IReadOnlyList<CiCheck>>.Done(await ReadAsync(root, request, token).ConfigureAwait(false));
+                    }
+                    catch (HarnessException ex) when (ex.ExitCode is HarnessExit.CommandFailed or HarnessExit.Incomplete)
+                    {
+                        last = ex;
+                        var again = GhProcess.Try<IReadOnlyList<CiCheck>>(ex);
+
+                        // A wait that reads once has no time of the wait's own to cut a read's again to: each read
+                        // that failed is read again at the next poll, however short the wait its step says.
+                        return request.Once && again is RetryTry<IReadOnlyList<CiCheck>>.Passing { After: null } passing
+                            ? new RetryTry<IReadOnlyList<CiCheck>>.Passing(passing.Cause, poll)
+                            : again;
+                    }
+                },
+                new RetryWatch(
+                    $"a read of the checks of {request.Commit}",
+                    told => output.Warn(request.Command, told.Line()),
+
+                    // A poll, cut to the end of a wait that ends sooner, as every read of the wait's is - but never
+                    // cut where the wait reads once, whose reads are the whole of it.
+                    !request.Once && left > TimeSpan.Zero && left < poll ? left : poll,
+                    request.Once ? null : left > TimeSpan.Zero ? left : TimeSpan.Zero,
+                    clock),
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        if (ended.Kind == RetryEndKind.Done)
+        {
+            return ended.Value!;
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+
+        // The wait's time spent between two reads: its last read is made at its end, after a read that failed as after one
+        // that answered, and what that read raises is the failure the wait ends on.
+        if (ended.Kind == RetryEndKind.Bound && left > TimeSpan.Zero)
+        {
+            return await ReadAsync(root, request, cancellationToken).ConfigureAwait(false);
+        }
+
+        // The failure the reads ended on, as the read raised it: its code says what it was, and nothing here rewords it.
+        System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(last!).Throw();
+        throw new UnreachableException("a captured failure was thrown");
     }
 
     /// <summary>

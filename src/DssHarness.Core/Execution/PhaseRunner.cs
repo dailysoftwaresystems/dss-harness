@@ -7,6 +7,7 @@ using DssHarness.Core.FileSystem;
 using DssHarness.Core.Output;
 using DssHarness.Core.Processes;
 using DssHarness.Core.Results;
+using DssHarness.Core.Text;
 
 namespace DssHarness.Core.Execution;
 
@@ -53,8 +54,8 @@ public sealed record PhaseRequest
     public int StallSeconds { get; init; }
 
     /// <summary>
-    /// Patterns whose every match is pulled out of each line of the command's output as it arrives, up to
-    /// <see cref="PhaseRunner.MostTimings"/> of each.
+    /// Patterns whose every match is pulled out of each line of the command's output as it arrives, each written to the
+    /// phase's timing record as it is found (<see cref="PhaseTimings"/>).
     /// </summary>
     public IReadOnlyList<string> TimingPatterns { get; init; } = [];
 
@@ -178,23 +179,10 @@ public sealed class PhaseRunner(
     TimeProvider? wallClock = null)
 {
     /// <summary>
-    /// The most matches of one timing pattern a phase keeps. A timing mark per test of a suite of thousands is ordinary;
-    /// a pattern that matches every line of a flood is not a measurement, and keeping every match would hold the flood.
-    /// </summary>
-    public const int MostTimings = 10_000;
-
-    /// <summary>
     /// How each line of a log ends: this machine's own line ending, as it always has. Spelled once, for the runner that
     /// writes a log and for <see cref="PhaseOutput"/>, which reads it back.
     /// </summary>
     internal static readonly string LogLineEnding = Environment.NewLine;
-
-    /// <summary>
-    /// How long a pattern may spend on one match. A pattern that backtracks past this is refused
-    /// rather than left to run: an unbounded match in a phase's own output would hang the leg it was
-    /// supposed to be evidence for.
-    /// </summary>
-    private static readonly TimeSpan MatchBudget = TimeSpan.FromSeconds(5);
 
     /// <summary>Written without a byte order mark, so a regex reading the log sees the first line.</summary>
     private static readonly UTF8Encoding Utf8NoBom = new(encoderShouldEmitUTF8Identifier: false);
@@ -246,7 +234,14 @@ public sealed class PhaseRunner(
         // its time over any of it — is this tool's own, and counting it as the child being quiet is
         // how a slow launch reads as a hung command.
         var clock = new StallClock();
-        var reading = new Reading(success, timings);
+
+        // Every timing mark goes to the record beside the log as it is found, and nothing of them is held: a pattern that
+        // matches every line of a flood costs the record its lines and the phase nothing.
+        var timingRecord = timings.Count == 0 ? null : PhaseTimings.RecordOf(request.LogFile);
+        await using var marks = timingRecord is null
+            ? null
+            : new FileStream(timingRecord, FileMode.Create, FileAccess.Write, FileShare.ReadWrite);
+        var reading = new Reading(success, timings, marks is null ? null : new JsonLineWriter(marks));
         var callback = new LineCallback(request.OnLine);
 
         // Where the child's own lines begin: what is above is the header this run wrote, and a header
@@ -313,6 +308,13 @@ public sealed class PhaseRunner(
             ErrorKept = request.WholeLines ? StreamKept.TailOfWholeLines : StreamKept.Tail,
             CutLine = request.Mask is { } cutting ? cutting.Cut : null,
 
+            // A line past the longest string .NET makes is read in pieces, and said: never matched in pieces unseen.
+            OnLineInPieces = () => _output.Warn(
+                request.Phase,
+                string.Create(
+                    CultureInfo.InvariantCulture,
+                    $"{request.Leg}: a line of its output ran past the longest text .NET holds ({ProcessRunner.LongestLine:N0} characters), and was kept and matched in pieces")),
+
             // A wall-clock bound only where the phase declares one of its own; the stall bound below
             // is the one in force otherwise, for the reason the class remarks give.
             Timeout = request.Timeout,
@@ -334,6 +336,14 @@ public sealed class PhaseRunner(
         var (result, stopped) = await RunBoundedAsync(processRequest, request.StallSeconds, clock, cancellationToken).ConfigureAwait(false);
         var wall = _wallClock.GetUtcNow() - startedUtc;
 
+        // Every character the child wrote is in the log; what a process it left running - a server its build started,
+        // kept for the next phase - writes from now on is that process's own, and is not read. Said, so a log that ends
+        // where the child's output did is never taken for all that process went on to write.
+        if (result.OutputHeld is { } held)
+        {
+            _output.Warn(request.Phase, $"{request.Leg}: {held}");
+        }
+
         // Both readings cover the same window, so what they disagree by is the clock's own movement:
         // a step forward, a step back, or a host that slept in the middle of the phase.
         var drift = ClockStep.Drift(wall, clock.Elapsed);
@@ -350,6 +360,9 @@ public sealed class PhaseRunner(
             // Where the child's own lines end: what follows is the exit line this run writes.
             end = log.BaseStream.Position;
             log.WriteLine(exit);
+
+            // Every mark found is in the record, for whatever reads them back.
+            marks?.Flush();
         }
 
         // Now that the log is whole, its exit line included: a reader's failure is its own, and the
@@ -366,7 +379,7 @@ public sealed class PhaseRunner(
             Duration: result.Duration,
             ClockDrift: drift,
             ClockStepped: stepped,
-            Timings: reading.Timings(_output, request.Phase),
+            Timings: timingRecord is null ? PhaseTimings.None : PhaseTimings.InRecord(_fileSystem, timingRecord, [.. timings.Select(timing => timing.Pattern)], reading.Marks),
             LogFile: request.LogFile,
 
             // The child's lines as the log keeps them, already masked: read back from there by whatever
@@ -440,23 +453,8 @@ public sealed class PhaseRunner(
     }
 
     /// <summary>
-    /// How much longer than the silence bound a child may take to start. Starting is this tool's own
-    /// work and is not counted as the child being quiet, but it is not unbounded either: resolving a
-    /// program walks every entry of PATH, and one naming an unreachable share blocks for that
-    /// platform's own timeout per entry, as does a working directory on a mount that has gone away.
-    /// <para>
-    /// A multiple of the silence bound rather than a number of its own, because the two measure
-    /// different things and only one of them repeats. A child may legitimately be silent for its
-    /// whole bound over and over; it starts once. Four times over is past any honest launch and
-    /// still finite, and it scales with how patient the run was asked to be, which is the knob
-    /// somebody actually sets.
-    /// </para>
-    /// </summary>
-    private const int StartBoundMultiple = 4;
-
-    /// <summary>
-    /// Watches the silence and cancels <paramref name="stall"/> when it passes <paramref name="bound"/>,
-    /// or when the child has not started within <see cref="StartBoundMultiple"/> times that. The poll
+    /// Watches the silence - from the launch, a start counting as silence - and cancels <paramref name="stall"/> when it
+    /// passes <paramref name="bound"/>, the user's own stall bound. The poll
     /// is a quarter of the bound so the phase is stopped near the moment it is due, and never more
     /// often than every 50 milliseconds, which would cost more than it measures.
     /// </summary>
@@ -470,7 +468,7 @@ public sealed class PhaseRunner(
             {
                 await Task.Delay(poll, finished).ConfigureAwait(false);
 
-                if (clock.Overdue(bound, bound * StartBoundMultiple))
+                if (clock.Overdue(bound))
                 {
                     await stall.CancelAsync().ConfigureAwait(false);
                     return;
@@ -531,16 +529,12 @@ public sealed class PhaseRunner(
 
     private static Regex Compile(string pattern, string what)
     {
-        try
-        {
-            // Multiline, so a pattern anchored with ^ or $ means the start or end of a line of
-            // output, which is how such a pattern is written and what it is matched against.
-            return new Regex(pattern, RegexOptions.Multiline | RegexOptions.CultureInvariant, MatchBudget);
-        }
-        catch (ArgumentException ex)
-        {
-            throw new HarnessException(HarnessExit.ConfigInvalid, $"'{pattern}' is not {what}: {ex.Message}", ex);
-        }
+        // Multiline, so a pattern anchored with ^ or $ means the start or end of a line of output, which is how such a
+        // pattern is written and what it is matched against; and linear, so no line of a phase's output, however long,
+        // holds a match up - a construct the linear engine lacks is refused by name.
+        return LinearRegex.TryCompile(pattern, RegexOptions.Multiline, out var regex, out var refusal)
+            ? regex
+            : throw new HarnessException(HarnessExit.ConfigInvalid, $"'{pattern}' is not {what}: {refusal}");
     }
 
     /// <summary>
@@ -584,8 +578,8 @@ public sealed class PhaseRunner(
 
     /// <summary>
     /// What a phase establishes from its child's output, read a line at a time as each line is kept: whether the success
-    /// pattern matched, the timing marks, and the last lines. Nothing else of the output is held, so what this holds is the
-    /// same whatever the child prints.
+    /// pattern matched, the timing marks - each written to the phase's timing record as it is found - and the last lines.
+    /// Nothing else of the output is held, so what this holds is the same whatever the child prints.
     /// </summary>
     /// <remarks>
     /// <para>
@@ -596,21 +590,20 @@ public sealed class PhaseRunner(
     /// is read as its pieces.
     /// </para>
     /// <para>
-    /// A pattern that cannot be evaluated in time is never read as one that did not match. The success pattern's failure
-    /// is kept and raised once the child has ended, as one over the whole output was; a timing pattern's leaves the phase
-    /// unmeasured by it, and is said.
+    /// Every pattern is linear (<see cref="LinearRegex"/>), so each is decided against every line, however long: none is
+    /// ever left unknown for the time a match took.
     /// </para>
     /// </remarks>
     /// <param name="success">The success pattern, or <see langword="null"/> where the phase declares none.</param>
     /// <param name="timings">The timing patterns.</param>
-    private sealed class Reading(Regex? success, IReadOnlyList<(string Pattern, Regex Regex)> timings)
+    /// <param name="record">Where each timing mark is written as it is found; <see langword="null"/> where the phase declares no timing pattern.</param>
+    private sealed class Reading(Regex? success, IReadOnlyList<(string Pattern, Regex Regex)> timings, JsonLineWriter? record)
     {
-        private readonly LastLinesRing _last = new(PhaseResult.TailLines);
-        private readonly List<PhaseTiming>[] _marks = [.. timings.Select(_ => new List<PhaseTiming>())];
-        private readonly long[] _matched = new long[timings.Count];
-        private readonly bool[] _unreadable = new bool[timings.Count];
+        private readonly LastLinesRing _last = new(PhaseResult.TailRoom);
         private bool _witnessed;
-        private RegexMatchTimeoutException? _unknown;
+
+        /// <summary>How many timing marks were written to the record, every pattern's together.</summary>
+        public long Marks { get; private set; }
 
         /// <summary>The last lines read, in the order they came.</summary>
         public IReadOnlyList<string> LastLines => _last.ToList();
@@ -618,7 +611,7 @@ public sealed class PhaseRunner(
         /// <summary>Reads the next line the child printed, as the log keeps it.</summary>
         public void Read(string line)
         {
-            foreach (var piece in LineSplitter.PiecesOf(line, ProcessRunner.LongestLine))
+            foreach (var piece in LineSplitter.PiecesOf(line, ProcessRunner.LongestLineHandedOn))
             {
                 Witness(piece);
                 Time(piece);
@@ -627,102 +620,33 @@ public sealed class PhaseRunner(
         }
 
         /// <summary>Whether the success pattern matched a line.</summary>
-        /// <param name="pattern">The pattern as declared, named if it could not be evaluated.</param>
-        /// <exception cref="HarnessException">The pattern could not be evaluated in time against a line it was read against.</exception>
+        /// <param name="pattern">The pattern as declared.</param>
         public bool Witnessed(string pattern)
         {
-            if (_unknown is not null)
-            {
-                // Never reported as "did not match": a pattern that could not be evaluated is not
-                // evidence either way, and a leg whose witness cannot be read must say so.
-                throw new HarnessException(
-                    HarnessExit.ConfigInvalid,
-                    $"The pattern '{pattern}' took longer than {MatchBudget.TotalSeconds:0}s against a line of this phase's output, "
-                    + "so whether it matched is unknown; it is written in a form that backtracks.",
-                    _unknown);
-            }
-
+            ArgumentNullException.ThrowIfNull(pattern);
             return _witnessed;
-        }
-
-        /// <summary>
-        /// Every timing mark kept, pattern by pattern, each in the order it appeared; and said to <paramref name="output"/>,
-        /// for <paramref name="phase"/>, of each pattern that could not be read, or matched more often than was kept.
-        /// </summary>
-        public IReadOnlyList<PhaseTiming> Timings(IHarnessOutput output, string phase)
-        {
-            for (var index = 0; index < timings.Count; index++)
-            {
-                var pattern = timings[index].Pattern;
-
-                if (_unreadable[index])
-                {
-                    // A timing mark never changes a verdict, so a pattern that cannot be read leaves
-                    // this phase unmeasured rather than failing it. Said out loud, because a timing
-                    // silently missing from a report reads as a phase that reported no timing.
-                    output.Warn(phase, $"the timing pattern '{pattern}' could not be matched against this phase's output in time; no timing was taken from it");
-                }
-                else if (_matched[index] > MostTimings)
-                {
-                    // Said, because a report holding the first marks and none after reads as a phase
-                    // that stopped reporting them.
-                    output.Warn(
-                        phase,
-                        string.Create(
-                            CultureInfo.InvariantCulture,
-                            $"the timing pattern '{pattern}' matched this phase's output {_matched[index]} times; only the first {MostTimings} were kept"));
-                }
-            }
-
-            return [.. _marks.SelectMany(marks => marks)];
         }
 
         private void Witness(string line)
         {
             // Once matched, matched: a pattern is evidence the command ran the moment one line shows it.
-            if (success is null || _witnessed || _unknown is not null)
+            if (success is null || _witnessed)
             {
                 return;
             }
 
-            try
-            {
-                _witnessed = success.IsMatch(line);
-            }
-            catch (RegexMatchTimeoutException ex)
-            {
-                _unknown = ex;
-            }
+            _witnessed = success.IsMatch(line);
         }
 
         private void Time(string line)
         {
             for (var index = 0; index < timings.Count; index++)
             {
-                if (_unreadable[index])
+                foreach (var match in timings[index].Regex.Matches(line).Cast<Match>())
                 {
-                    continue;
-                }
-
-                try
-                {
-                    foreach (var match in timings[index].Regex.Matches(line).Cast<Match>())
-                    {
-                        if (++_matched[index] > MostTimings)
-                        {
-                            continue;
-                        }
-
-                        var value = match.Groups.Count > 1 && match.Groups[1].Success ? match.Groups[1].Value : match.Value;
-                        _marks[index].Add(new PhaseTiming(timings[index].Pattern, match.Value, value));
-                    }
-                }
-                catch (RegexMatchTimeoutException)
-                {
-                    // Unmeasured by this pattern, as the warning will say: marks it found before are no
-                    // account of the phase either.
-                    _unreadable[index] = true;
-                    _marks[index].Clear();
+                    var value = match.Groups.Count > 1 && match.Groups[1].Success ? match.Groups[1].Value : match.Value;
+                    record!.Write(new PhaseTimings.Mark(index, match.Value, value));
+                    Marks++;
                 }
             }
         }

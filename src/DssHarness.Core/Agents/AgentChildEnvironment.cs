@@ -6,35 +6,28 @@ namespace DssHarness.Core.Agents;
 
 /// <summary>
 /// What the configuration says of an agent's commands, under <c>agentPolicy</c>: the names a child is given back, and how
-/// long a command may run - where a call names no time of its own, and the most it may name.
+/// long a command runs where its call names no time of its own - none of the tool's: where neither says, a command runs
+/// until it ends, the step's stall bound ends it, or the step's own bounds do (its <c>timeoutMinutes</c>, its budget).
 /// </summary>
 /// <param name="KeepEnvironment">The secret-shaped names a child keeps (<c>agentPolicy.keepEnvironment</c>); empty where none is given back.</param>
-/// <param name="TimeoutSeconds">How long a command runs where its call names no time (<c>agentPolicy.commandTimeoutSeconds</c>).</param>
-/// <param name="MaxTimeoutSeconds">The most a call may name (<c>agentPolicy.maxCommandTimeoutSeconds</c>).</param>
-public sealed record AgentCommandSettings(IReadOnlyList<string> KeepEnvironment, int TimeoutSeconds, int MaxTimeoutSeconds)
+/// <param name="CommandTimeoutSeconds">
+/// How long a command runs where its call names no time (<c>agentPolicy.commandTimeoutSeconds</c>); null where the
+/// configuration names none, and such a command runs with no time of its own.
+/// </param>
+public sealed record AgentCommandSettings(IReadOnlyList<string> KeepEnvironment, int? CommandTimeoutSeconds)
 {
-    /// <summary>How long a command runs where neither its call nor the configuration names a time: two minutes.</summary>
-    public const int DefaultTimeoutSeconds = 120;
-
-    /// <summary>The most a call may name where the configuration names no bound: an hour.</summary>
-    public const int DefaultMaxTimeoutSeconds = 3600;
-
     /// <summary>
-    /// The most either time may say: what a timer of milliseconds holds - the runner's, and Claude Code's - about 24 days.
-    /// A time past it would end no command, but fail the one it was set on once it had started.
+    /// The most a time may say: what a timer of milliseconds holds - the runner's, and Claude Code's - about 24 days. A
+    /// time past it would end no command, but fail the one it was set on once it had started.
     /// </summary>
     public const int MostTimeoutSeconds = int.MaxValue / 1000;
 
-    /// <summary>What holds where the configuration says nothing: no name given back, and the two defaults.</summary>
-    public static AgentCommandSettings Default { get; } = new([], DefaultTimeoutSeconds, DefaultMaxTimeoutSeconds);
+    /// <summary>What holds where the configuration says nothing: no name given back, and no time of a command's.</summary>
+    public static AgentCommandSettings Default { get; } = new([], null);
 
-    /// <summary>What <paramref name="policy"/> says, each key left out taking its default.</summary>
+    /// <summary>What <paramref name="policy"/> says: no name given back where it gives none, and no time where it names none.</summary>
     /// <param name="policy">The configuration's <c>agentPolicy</c>; null where it has none.</param>
-    public static AgentCommandSettings Of(AgentPolicyConfig? policy)
-        => new(
-            policy?.KeepEnvironment ?? [],
-            policy?.CommandTimeoutSeconds ?? DefaultTimeoutSeconds,
-            policy?.MaxCommandTimeoutSeconds ?? DefaultMaxTimeoutSeconds);
+    public static AgentCommandSettings Of(AgentPolicyConfig? policy) => new(policy?.KeepEnvironment ?? [], policy?.CommandTimeoutSeconds);
 }
 
 /// <summary>
@@ -130,7 +123,7 @@ public static partial class AgentChildEnvironment
     /// <summary>
     /// Every problem <paramref name="policy"/>'s command keys hold, each by its key: <c>keepEnvironment</c> given empty, or
     /// naming what is no variable's name, no secret-shaped name - which nothing takes away - or a name the configuration
-    /// appoints, which is never given; a time below one second; a command's time past the most a call may name.
+    /// appoints, which is never given; a command's time below one second, or past what a command's timer holds.
     /// </summary>
     /// <param name="policy">The configuration's <c>agentPolicy</c>; null where it has none.</param>
     /// <param name="appointed">Every name the configuration appoints.</param>
@@ -166,31 +159,13 @@ public static partial class AgentChildEnvironment
             }
         }
 
-        var commands = AgentCommandSettings.Of(policy);
-        var timeout = commands.TimeoutSeconds;
-        var most = commands.MaxTimeoutSeconds;
-
-        if (timeout < 1)
+        if (policy.CommandTimeoutSeconds is { } seconds && seconds < 1)
         {
-            problems.Add($"agentPolicy.commandTimeoutSeconds is {timeout.ToString(CultureInfo.InvariantCulture)}, and a command runs for one second at least");
+            problems.Add($"agentPolicy.commandTimeoutSeconds is {seconds.ToString(CultureInfo.InvariantCulture)}, and a command runs for one second at least");
         }
-
-        if (most < 1)
+        else if (policy.CommandTimeoutSeconds is { } past && past > AgentCommandSettings.MostTimeoutSeconds)
         {
-            problems.Add($"agentPolicy.maxCommandTimeoutSeconds is {most.ToString(CultureInfo.InvariantCulture)}, and a command runs for one second at least");
-        }
-
-        foreach (var (key, seconds) in new[] { ("commandTimeoutSeconds", timeout), ("maxCommandTimeoutSeconds", most) })
-        {
-            if (seconds > AgentCommandSettings.MostTimeoutSeconds)
-            {
-                problems.Add($"agentPolicy.{key} is {seconds.ToString(CultureInfo.InvariantCulture)}, past the {AgentCommandSettings.MostTimeoutSeconds.ToString(CultureInfo.InvariantCulture)} a command's timer holds");
-            }
-        }
-
-        if (timeout >= 1 && most >= 1 && timeout > most)
-        {
-            problems.Add($"agentPolicy.commandTimeoutSeconds ({timeout.ToString(CultureInfo.InvariantCulture)}) is past agentPolicy.maxCommandTimeoutSeconds ({most.ToString(CultureInfo.InvariantCulture)}), the most a call may name");
+            problems.Add($"agentPolicy.commandTimeoutSeconds is {past.ToString(CultureInfo.InvariantCulture)}, past the {AgentCommandSettings.MostTimeoutSeconds.ToString(CultureInfo.InvariantCulture)} a command's timer holds");
         }
 
         return problems;

@@ -133,18 +133,16 @@ public sealed class NpmExtractorTests : CodeGraphExtractorContractTests<NpmExtra
     }
 
     /// <summary>
-    /// A file that is no JSON object - one that does not parse, an array, nothing, one nested past the reader's bounds - is
-    /// a project named by its file, nothing in it read, the line it stops at marked dynamic; one with no name declares no
-    /// address root and marks nothing.
+    /// A file that is no JSON object - one that does not parse, an array, nothing - is a project named by its file,
+    /// nothing in it read, the line it stops at marked dynamic; one with no name declares no address root and marks
+    /// nothing. However deep it nests, it is read - a file nested a hundred arrays deep is an object like any other.
     /// </summary>
     [Fact]
     public void AFileThatIsNoObject_IsAProjectOfItsFileName_NothingReadAndTheLineItStopsAtMarked()
     {
-        var deep = "{\n\"name\": \"p\",\n\"a\":\n" + string.Concat(Enumerable.Repeat("[\n", 100)) + string.Concat(Enumerable.Repeat("]\n", 100)) + "}";
-
         foreach (var (text, line) in new[]
         {
-            ("{\n  \"name\": \"p\",\n  \"dependencies\": {\n    \"a\": 1,,\n", 4), ("{ \"name\": \"p\", // a comment\n}", 1), ("[\"name\"]", 1), ("", 1), (deep, 67), ("{ \"name\": \"p\" }\n}", 2),
+            ("{\n  \"name\": \"p\",\n  \"dependencies\": {\n    \"a\": 1,,\n", 4), ("{ \"name\": \"p\", // a comment\n}", 1), ("[\"name\"]", 1), ("", 1), ("{ \"name\": \"p\" }\n}", 2),
         })
         {
             var extract = Read("package.json", text);
@@ -235,6 +233,23 @@ public sealed class NpmExtractorTests : CodeGraphExtractorContractTests<NpmExtra
     /// <summary>The usual index files a package's entry is tried as last, each as TypeScript and then Node try it: what a package that names no entry has as its entry.</summary>
     private static IReadOnlyList<string> Indexes { get; } =
         [.. new NpmExtractor().Extract(new CodeFileInput("package.json", """{ "name": "p" }""")).AddressRoots.Where(root => root.Whole).Select(root => root.Directory)];
+
+    /// <summary>
+    /// An export's conditions nested a hundred thousand deep are read on a stack of the reader's own, in a child given a
+    /// small stack: the file the innermost one names is the package's entry. A walk of the conditions that recursed once a
+    /// level would overflow it, and end the child.
+    /// </summary>
+    [Fact]
+    public async Task ConditionsAHundredThousandDeep_AreReadWhole()
+        => Assert.Equal(new ChildRunAnswer(0, "x.ts x.tsx x.d.ts x.js", ""), await ChildRun.MethodAsync(typeof(NpmExtractorTests), nameof(HundredThousandConditions), TestContext.Current.CancellationToken));
+
+    /// <summary>The child of <see cref="ConditionsAHundredThousandDeep_AreReadWhole"/>: the files the package's entry names, past its directory's indexes.</summary>
+    internal static string HundredThousandConditions() => SmallStack.Run(() =>
+    {
+        var text = $"{{ \"name\": \"p\", \"exports\": {string.Concat(Enumerable.Repeat("{ \"import\": ", 100_000))}\"./x.js\"{new string('}', 100_000)} }}";
+
+        return string.Join(' ', Read("package.json", text).AddressRoots.Where(root => root.Whole && root.Prefix == "p").Select(root => root.Directory).Except(Indexes));
+    });
 
     private static FileExtract Read(string path, string text) => new NpmExtractor().Extract(new CodeFileInput(path, text));
 

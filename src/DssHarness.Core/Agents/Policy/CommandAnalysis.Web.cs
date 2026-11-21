@@ -95,8 +95,12 @@ public static partial class CommandAnalysis
         }
 
         var program = Name(words[environment]);
-        var arguments = words.Skip(environment + 1).ToList();
-        var argumentQuoted = quoted.Skip(environment + 1).ToList();
+
+        // The words past the program are a view over the command's own, never a copy: a program that runs its words is
+        // asked at each of them, and a list as long as the command made for each would be the command's length twice over
+        // for every word of it.
+        var arguments = new WordsFrom(words, environment + 1);
+        var argumentQuoted = new WordsFrom(quoted, environment + 1);
 
         // Each assignment's name and value, the value's mask cut from its word's where the word kept its spelling.
         var assigned = words.Take(environment)

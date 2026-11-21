@@ -95,17 +95,23 @@ public sealed class FeedAndOpenSearchKindTests
         Assert.DoesNotContain("expanded", answer.Why, StringComparison.Ordinal);
     }
 
-    /// <summary>XML nested deeper than any feed is is no feed, read no further.</summary>
+    /// <summary>
+    /// A feed nested a thousand deep - an item's title wrapped a thousand times, and a hundred thousand - is read whole,
+    /// its title the text at its bottom. It is read in a child on a small stack, so a reading that recursed once a level
+    /// would end that child, never this run.
+    /// </summary>
     [Fact]
-    public void XmlNestedPastItsDepth_IsNoFeed()
-    {
-        var deep = string.Concat(Enumerable.Repeat("<a>", 200)) + string.Concat(Enumerable.Repeat("</a>", 200));
-        var answer = ReadFeed($"""<rss version="2.0"><channel><item><title>{deep}</title><link>https://a.test/</link></item></channel></rss>""");
+    public async Task AThousandDeepFeed_IsRead()
+        => Assert.Equal(
+            new ChildRunAnswer(0, "1000: Ok, Deep title\n100000: Ok, Deep title\n", string.Empty),
+            await ChildRun.MethodAsync(typeof(FeedAndOpenSearchKindTests), nameof(ReadDeepFeeds), TestContext.Current.CancellationToken));
 
-        Assert.Equal(WebSearchOutcome.Changed, answer.Outcome);
-        Assert.Contains("nest deeper than 64", answer.Why, StringComparison.Ordinal);
-        Assert.Equal(WebSearchOutcome.Ok, ReadFeed($"""<rss version="2.0"><channel><item><title>{string.Concat(Enumerable.Repeat("<a>", 50))}T{string.Concat(Enumerable.Repeat("</a>", 50))}</title><link>https://a.test/</link></item></channel></rss>""").Outcome);
-    }
+    /// <summary>The child of <see cref="AThousandDeepFeed_IsRead"/>: reads a feed of each depth on a small stack, and says what each gave.</summary>
+    private static string ReadDeepFeeds() => SmallStack.Run(() => string.Concat(new[] { 1000, 100_000 }.Select(depth =>
+    {
+        var answer = ReadFeed($"""<rss version="2.0"><channel><item><title>{string.Concat(Enumerable.Repeat("<a>", depth))}Deep title{string.Concat(Enumerable.Repeat("</a>", depth))}</title><link>https://a.test/</link></item></channel></rss>""");
+        return $"{depth}: {answer.Outcome}, {string.Join(", ", answer.Results.Select(result => result.Title))}\n";
+    })));
 
     /// <summary>A good feed whose headers say nothing remains keeps its items, and holds the source until the reset.</summary>
     [Fact]
@@ -171,10 +177,10 @@ public sealed class FeedAndOpenSearchKindTests
         Assert.Equal([new WebSearchResult("A & B", "https://a.test/2", "c")], one.Results);
     }
 
-    /// <summary>A feed is read to its most items.</summary>
+    /// <summary>A feed is read whole: every item of the page it answered, however many.</summary>
     [Fact]
-    public void AFeed_IsReadToItsMostItems()
-        => Assert.Equal(WebSearchAnswer.MostResults, ReadFeed($"""<rss version="2.0"><channel>{string.Concat(Enumerable.Range(0, 150).Select(at => $"<item><title>T{at}</title><link>https://a.test/{at}</link></item>"))}</channel></rss>""").Results.Count);
+    public void AFeed_IsReadToItsEveryItem()
+        => Assert.Equal(150, ReadFeed($"""<rss version="2.0"><channel>{string.Concat(Enumerable.Range(0, 150).Select(at => $"<item><title>T{at}</title><link>https://a.test/{at}</link></item>"))}</channel></rss>""").Results.Count);
 
     /// <summary>An item's guid is its address unless it says it is not one.</summary>
     [Fact]
@@ -194,13 +200,13 @@ public sealed class FeedAndOpenSearchKindTests
         Assert.Equal(WebSearchOutcome.Failed, FeedReader.Read(Source("f", Feed), WebSearchFound.None, Answer("gone", 410, "text/plain")).Outcome);
     }
 
-    /// <summary>A feed's request fills its address and asks for a feed.</summary>
+    /// <summary>A feed's request fills its address - the query escaped, the page's size a number - and asks for a feed.</summary>
     [Fact]
     public void AFeedsRequest_FillsItsAddress()
     {
-        var request = Assert.IsType<WebSearchRequest.Http>(FeedReader.Request(Source("f", Feed), WebSearchFound.None, "a b", 3));
+        var request = Assert.IsType<WebSearchRequest.Http>(FeedReader.Request(Source("f", Feed), WebSearchFound.None, "a b", 1));
 
-        Assert.Equal("https://feeds.example.test/search?q=a%20b&n=3", request.Address);
+        Assert.Equal("https://feeds.example.test/search?q=a%20b&n=10", request.Address);
         Assert.StartsWith("application/atom+xml", request.Headers["Accept"], StringComparison.Ordinal);
     }
 
@@ -236,9 +242,9 @@ public sealed class FeedAndOpenSearchKindTests
         var spent = Described.Found(source, [Answer(Stored("opensearch-feeds.xml"), type: "application/opensearchdescription+xml", headers: Headers(("RateLimit", "\"default\";r=0;t=30")))]);
         Assert.Equal(At + TimeSpan.FromSeconds(30), spent.Until);
 
-        var request = Assert.IsType<WebSearchRequest.Http>(Described.Request(source, found, "lexer & parser", 7));
+        var request = Assert.IsType<WebSearchRequest.Http>(Described.Request(source, found, "lexer & parser", 1));
 
-        Assert.Equal("https://search.example.test/atom?q=lexer%20%26%20parser&n=7&from=0&lang=*&x=", request.Address);
+        Assert.Equal("https://search.example.test/atom?q=lexer%20%26%20parser&n=10&from=0&lang=*&x=", request.Address);
         Assert.Equal("application/atom+xml", request.Headers["Accept"]);
 
         Assert.Equal(2, Described.Read(source, found, Answer(Stored("atom.xml"), type: "application/atom+xml")).Results.Count);
@@ -271,7 +277,7 @@ public sealed class FeedAndOpenSearchKindTests
         var found = Described.Found(source, [Answer(Stored("opensearch-json.xml"))]);
 
         Assert.Equal("application/json", found["type"]);
-        Assert.Equal("https://json.example.test/api?q=x&limit=2", Assert.IsType<WebSearchRequest.Http>(Described.Request(source, found, "x", 2)).Address);
+        Assert.Equal("https://json.example.test/api?q=x&limit=10", Assert.IsType<WebSearchRequest.Http>(Described.Request(source, found, "x", 1)).Address);
 
         var answer = Described.Read(source, found, Answer("""{ "hits": [ { "name": "One", "href": "https://json.example.test/1" } ] }"""));
         Assert.Equal("One", Assert.Single(answer.Results).Title);
@@ -310,7 +316,7 @@ public sealed class FeedAndOpenSearchKindTests
 
         Assert.Null(found.Failure);
         Assert.Equal(("application/rss+xml", "1"), (found["type"], found["indexOffset"]));
-        Assert.Equal("https://a.test/rss?q=x&from=1", Assert.IsType<WebSearchRequest.Http>(Described.Request(Source("os", OpenSearch), found, "x", 3)).Address);
+        Assert.Equal("https://a.test/rss?q=x&from=1", Assert.IsType<WebSearchRequest.Http>(Described.Request(Source("os", OpenSearch), found, "x", 1)).Address);
     }
 
     /// <summary>

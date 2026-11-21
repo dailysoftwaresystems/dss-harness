@@ -360,11 +360,11 @@ public sealed class CExtractorTests : CodeGraphExtractorContractTests<CExtractor
                 "c:Color", "c:Foo", "c:F", "c:F.hi", "c:F.lo", "c:GREEN", "c:P", "c:P.x", "c:P.y", "c:RED", "c:S", "c:S.z", "c:_Foo", "c:_Foo.w",
                 "c:a", "c:b", "c:byte_t", "c:point_t", "c:point_t.v", "c:ps", "c:s", "c:u8", "c:U", "c:U.f", "c:U.i", "c:u",
             ]).Order(StringComparer.Ordinal),
-            extract.Nodes.Select(node => node.Id).Order(StringComparer.Ordinal));
+            extract.Nodes.Select(node => node.Id.Whole()).Order(StringComparer.Ordinal));
         Assert.Equal("struct", Node(extract, "c:point_t").SubKind);
         Assert.Equal("union", Node(extract, "c:U").SubKind);
         Assert.Equal("typedef", Node(extract, "c:Foo").SubKind);
-        Assert.Contains(extract.References, reference => reference is { From: "c:Foo", Kind: CodeEdgeKinds.References, Name: "_Foo" });
+        Assert.Contains(extract.References, reference => reference is { Kind: CodeEdgeKinds.References, Name: "_Foo" } && reference.From.Is("c:Foo"));
     }
 
     /// <summary>A bracket one branch of a conditional leaves open and no other does is read as holding nothing, marked dynamic: what follows the conditional is read as it stands.</summary>
@@ -378,7 +378,7 @@ public sealed class CExtractorTests : CodeGraphExtractorContractTests<CExtractor
             int ok(void) { return done(); }
             """);
 
-        Assert.Equal(["c:ok"], extract.Nodes.Select(node => node.Id));
+        Assert.Equal(["c:ok"], extract.Nodes.Select(node => node.Id.Whole()));
         Assert.Equal((4, 4), Lines(extract, "c:ok"));
         Assert.Equal(["done"], Calls(extract, "c:ok"));
         Assert.Contains(extract.Dynamic, dynamic => dynamic is { Line: 2, Why: "a bracket one branch of a conditional leaves open and no other does: read as holding nothing" });
@@ -394,7 +394,7 @@ public sealed class CExtractorTests : CodeGraphExtractorContractTests<CExtractor
     {
         var extract = Read("util.h", text);
 
-        Assert.Equal(["c:util"], extract.Nodes.Select(node => node.Id));
+        Assert.Equal(["c:util"], extract.Nodes.Select(node => node.Id.Whole()));
         Assert.Empty(Node(extract, "c:util").Modifiers);
     }
 
@@ -429,7 +429,7 @@ public sealed class CExtractorTests : CodeGraphExtractorContractTests<CExtractor
 
         Assert.Equal(
             ["c:ext", "c:ext.e", "c:op", "c:op.f", "c:op.n", "c:shared", "c:x.c:ops", "c:x.c:state"],
-            extract.Nodes.Select(node => node.Id).Order(StringComparer.Ordinal));
+            extract.Nodes.Select(node => node.Id.Whole()).Order(StringComparer.Ordinal));
         Assert.True(Node(extract, "c:shared").Prototype);
         Assert.False(Node(extract, "c:x.c:ops").Prototype);
         Assert.Equal("op", Node(extract, "c:x.c:ops").ValueType);
@@ -441,7 +441,7 @@ public sealed class CExtractorTests : CodeGraphExtractorContractTests<CExtractor
     {
         var extract = Read("m.c", "static DEFINE_MUTEX(lock);\nstatic LIST_HEAD(queue);\nstatic inline int ok(void) { return 1; }\n");
 
-        Assert.Equal(["c:m.c:ok"], extract.Nodes.Select(node => node.Id));
+        Assert.Equal(["c:m.c:ok"], extract.Nodes.Select(node => node.Id.Whole()));
         Assert.Equal([1, 2], extract.Dynamic.Select(dynamic => dynamic.Line));
     }
 
@@ -454,7 +454,7 @@ public sealed class CExtractorTests : CodeGraphExtractorContractTests<CExtractor
     {
         var extract = Read("m.c", "static EXPORT(1) int count;\nstatic EXPORT(2) ALIGNED(8) int twice(void) { return 2; }\nstatic EXPORT(int) third(void) { bar(); }\n");
 
-        Assert.Equal(["c:m.c:count", "c:m.c:third", "c:m.c:twice"], extract.Nodes.Select(node => node.Id).Order(StringComparer.Ordinal));
+        Assert.Equal(["c:m.c:count", "c:m.c:third", "c:m.c:twice"], extract.Nodes.Select(node => node.Id.Whole()).Order(StringComparer.Ordinal));
         Assert.Equal(
             [(1, "the macro EXPORT stands in a declaration, which is not expanded"), (2, "the macro EXPORT stands in a declaration, which is not expanded"), (2, "the macro ALIGNED stands in a declaration, which is not expanded"), (3, "the macro EXPORT stands in a declaration, which is not expanded")],
             extract.Dynamic.Select(dynamic => (dynamic.Line, dynamic.Why)));
@@ -470,7 +470,7 @@ public sealed class CExtractorTests : CodeGraphExtractorContractTests<CExtractor
     {
         var extract = Read("u.c", "struct msg { int type; union { int i; float f; } data; struct { int x; }; };\n");
 
-        Assert.Equal(["c:msg", "c:msg.data", "c:msg.type", "c:msg.x"], extract.Nodes.Select(node => node.Id).Order(StringComparer.Ordinal));
+        Assert.Equal(["c:msg", "c:msg.data", "c:msg.type", "c:msg.x"], extract.Nodes.Select(node => node.Id.Whole()).Order(StringComparer.Ordinal));
     }
 
     /// <summary>C has no operators to name: <c>operator</c> is a name like any other, its <c>=</c> an initializer's.</summary>
@@ -479,7 +479,7 @@ public sealed class CExtractorTests : CodeGraphExtractorContractTests<CExtractor
     {
         var extract = Read("o.c", "int operator = compute();\n");
 
-        Assert.Equal([("c:operator", "variable")], extract.Nodes.Select(node => (node.Id, node.SubKind)));
+        Assert.Equal([("c:operator", "variable")], extract.Nodes.Select(node => (node.Id.Whole(), node.SubKind)));
         Assert.Equal(["compute"], Calls(extract, "c:operator"));
     }
 
@@ -493,17 +493,28 @@ public sealed class CExtractorTests : CodeGraphExtractorContractTests<CExtractor
         Assert.Null(Read("a.c", "int x;\n").Generated);
     }
 
-    /// <summary>Declarations nested deeper than a reader reads are marked and passed over, never the end of the reading.</summary>
+    /// <summary>
+    /// Declarations nested five thousand blocks deep are read whole from a stack of a megabyte - each block's walked on the
+    /// reader's stack of walks (<see cref="ScanStack"/>), never by a call a block - marking nothing dynamic: the type named
+    /// at the bottom, its field and the member declared of it are its holder's, and the declarations after it are read.
+    /// </summary>
     [Fact]
-    public void DeclarationsNestedTooDeep_AreMarked_AndPassedOver()
+    public async Task ABlockFiveThousandDeep_IsReadWhole()
     {
-        var depth = ScanFrame.MostDepth + 10;
-        var text = string.Concat(Enumerable.Range(0, depth).Select(at => $"struct s{at} {{ ")) + "int x; " + new string('}', depth) + ";\nint after(void);\n";
+        Assert.Equal(
+            new ChildRunAnswer(0, "c:after c:outer c:outer.in c:outer.inner c:outer.inner.x", ""),
+            await ChildRun.MethodAsync(typeof(CExtractorTests), nameof(BlockFiveThousandDeep), TestContext.Current.CancellationToken));
+    }
+
+    /// <summary>The child of <see cref="ABlockFiveThousandDeep_IsReadWhole"/>: the ids of the nodes read, in order.</summary>
+    internal static string BlockFiveThousandDeep() => SmallStack.Run(() =>
+    {
+        var text = "struct outer { " + string.Concat(Enumerable.Repeat("struct { ", 5_000)) + "struct inner { int x; } in; " + string.Concat(Enumerable.Repeat("}; ", 5_000)) + "};\nint after(void);\n";
         var extract = Read("n.h", text);
 
-        Assert.Contains(extract.Dynamic, dynamic => dynamic.Why == $"declarations nested more than {ScanFrame.MostDepth} blocks deep, which are not read");
-        Assert.Single(extract.Nodes, node => node.Id == "c:after");
-    }
+        Assert.Empty(extract.Dynamic);
+        return string.Join(' ', extract.Nodes.Select(node => node.Id.Whole()).Order(StringComparer.Ordinal));
+    });
 
     /// <summary>
     /// A typedef's struct or a function whose head is written under each branch of a conditional over one body is one
@@ -535,7 +546,7 @@ public sealed class CExtractorTests : CodeGraphExtractorContractTests<CExtractor
 
         Assert.Equal(
             [("c:foo", "struct", null), ("c:foo.pad", "field", "c:foo"), ("c:foo.x", "field", "c:foo"), ("c:foo_t", "typedef", null), ("c:net_init", "function", null)],
-            extract.Nodes.OrderBy(node => node.Id, StringComparer.Ordinal).Select(node => (node.Id, node.SubKind, node.Parent)));
+            extract.Nodes.OrderBy(node => node.Id.Whole(), StringComparer.Ordinal).Select(node => (node.Id.Whole(), node.SubKind, node.Parent?.Whole())));
         Assert.Equal(["WSAStartup", "MAKEWORD", "signal_off", "setup"], Calls(extract, "c:net_init"));
     }
 
@@ -568,7 +579,7 @@ public sealed class CExtractorTests : CodeGraphExtractorContractTests<CExtractor
             }
             """);
 
-        Assert.Equal([("c:serve", (6, 6)), ("c:sort", (3, 3))], extract.Nodes.OrderBy(node => node.Id, StringComparer.Ordinal).Select(node => (node.Id, Arity(extract, node.Id))));
+        Assert.Equal([("c:serve", (6, 6)), ("c:sort", (3, 3))], extract.Nodes.OrderBy(node => node.Id.Whole(), StringComparer.Ordinal).Select(node => (node.Id.Whole(), Arity(extract, node.Id.Whole()))));
         Assert.Equal([((1, 8), 5), ((10, 18), 16)], new[] { "c:sort", "c:serve" }.Select(id => (Lines(extract, id), Node(extract, id).BodyStart)));
         Assert.Equal(["run"], Calls(extract, "c:sort"));
         Assert.Empty(Calls(extract, "c:serve"));
@@ -584,7 +595,7 @@ public sealed class CExtractorTests : CodeGraphExtractorContractTests<CExtractor
     {
         var extract = Read("p.h", "struct pipe { enum pipe_format format:16; unsigned bound:1; };\n");
 
-        Assert.Equal([("c:pipe", "struct"), ("c:pipe.bound", "field"), ("c:pipe.format", "field")], extract.Nodes.OrderBy(node => node.Id, StringComparer.Ordinal).Select(node => (node.Id, node.SubKind!)));
+        Assert.Equal([("c:pipe", "struct"), ("c:pipe.bound", "field"), ("c:pipe.format", "field")], extract.Nodes.OrderBy(node => node.Id.Whole(), StringComparer.Ordinal).Select(node => (node.Id.Whole(), node.SubKind!)));
         Assert.Equal("pipe_format", Node(extract, "c:pipe.format").ValueType);
     }
 
@@ -597,7 +608,7 @@ public sealed class CExtractorTests : CodeGraphExtractorContractTests<CExtractor
     {
         var extract = Read("h.c", "struct __packed hdr { int a; };\n");
 
-        Assert.Equal([("c:hdr", "struct"), ("c:hdr.a", "field")], extract.Nodes.Select(node => (node.Id, node.SubKind!)));
+        Assert.Equal([("c:hdr", "struct"), ("c:hdr.a", "field")], extract.Nodes.Select(node => (node.Id.Whole(), node.SubKind!)));
     }
 
     /// <summary>
@@ -653,14 +664,199 @@ public sealed class CExtractorTests : CodeGraphExtractorContractTests<CExtractor
 
         Assert.Equal(
             [("c:after", "function"), ("c:deflateInit_", "function"), ("c:main", "function")],
-            extract.Nodes.OrderBy(node => node.Id, StringComparer.Ordinal).Select(node => (node.Id, node.SubKind!)));
+            extract.Nodes.OrderBy(node => node.Id.Whole(), StringComparer.Ordinal).Select(node => (node.Id.Whole(), node.SubKind!)));
         Assert.Equal("int ZEXPORT deflateInit_(strm, level) z_streamp strm; int level;", Node(extract, "c:deflateInit_").Signature);
         Assert.Equal(((1, 6), 4), (Lines(extract, "c:deflateInit_"), Node(extract, "c:deflateInit_").BodyStart));
         Assert.Equal(((2, 2), (2, 2)), (Arity(extract, "c:deflateInit_"), Arity(extract, "c:main")));
         Assert.Equal(
             [("c:deflateInit_", CodeEdgeKinds.References, "z_streamp"), ("c:deflateInit_", CodeEdgeKinds.Calls, "helper"), ("c:main", CodeEdgeKinds.Calls, "run"), ("c:after", CodeEdgeKinds.Calls, "done")],
-            extract.References.Select(reference => (reference.From, reference.Kind, reference.Name)));
+            extract.References.Select(reference => (reference.From.Whole(), reference.Kind, reference.Name)));
         Assert.Empty(extract.Dynamic);
+    }
+
+    /// <summary>
+    /// A string's value is what C reads of it, each kept with its line and the node whose code holds it: a prefixed one's
+    /// without its prefix, its escapes decoded - a run of byte escapes read as UTF-8, a wide string's hex escape a
+    /// character's code, a backslash before a line break joining the lines - and a character constant, <c>'RIFF'</c> among
+    /// them, no string at all.
+    /// </summary>
+    [Fact]
+    public void AStringsValue_IsWhatCReadsOfIt_APrefixedOnesAndOneWithEscapesAmongThem()
+    {
+        var extract = Read("src/t.c", """
+            const wchar_t *title = L"Main Window";
+            const char *bytes = u8"abc def";
+            const wchar_t *smile = L"smile \x263A";
+
+            int main(void)
+            {
+                printf("could not open %s\n", "tab\there");
+                puts("caf\xc3\xa9 \101\102C");
+                puts("one \
+            two");
+                int tag = 'RIFF';
+                return 0;
+            }
+            """);
+
+        Assert.Equal(
+            [
+                new LiteralRow("Main Window", 1, "c:title"),
+                new LiteralRow("abc def", 2, "c:bytes"),
+                new LiteralRow("smile \u263a", 3, "c:smile"),
+                new LiteralRow("could not open %s\n", 7, "c:main"),
+                new LiteralRow("tab\there", 7, "c:main"),
+                new LiteralRow("caf\u00e9 ABC", 8, "c:main"),
+                new LiteralRow("one two", 9, "c:main"),
+            ],
+            LiteralRow.Of(extract));
+    }
+
+    /// <summary>
+    /// What a declaration names is no use - a macro's parameter in its text, a function pointer's own parameters, a local
+    /// function pointer wherever it is read, a type a <c>struct</c> or an <c>enum</c> names and one a declaration is
+    /// written with - while a receiver's first name the code reads is, and so is each branch of a conditional, its colon
+    /// no label's.
+    /// </summary>
+    [Fact]
+    public void ADeclarationIsNoUse_ButAReceiversFirstNameAndAConditionalsBranchesAre()
+    {
+        var extract = Read("src/t.c", """
+            #define TWICE(x) ((x) * 2)
+
+            struct lexer
+            {
+                int (*peek)(struct lexer *self, int code);
+            };
+
+            struct settings { int verbose; } config;
+
+            enum Kind { One, Two }; typedef struct lexer Lexer;
+
+            static int (*handler)(int code) = on_code;
+
+            int take(struct lexer *lx, int c)
+            {
+                int (*fallback)(struct lexer *self, int code) = lx->peek;
+                enum Kind which = One;
+                config.verbose = TWICE(c);
+                if (fallback == 0) return c;
+                int size = sizeof(struct lexer);
+                Lexer copy = *lx;
+                (*fallback)(lx);
+                return c ? COUNT : LIMIT;
+            }
+            """);
+
+        Assert.Equal(
+            [
+                ("c:src/t.c:handler", "on_code", 12, ""), ("c:take", "peek", 16, "type lexer"), ("c:take", "One", 17, ""), ("c:take", "config", 18, ""),
+                ("c:take", "verbose", 18, "value config"), ("c:take", "COUNT", 23, ""), ("c:take", "LIMIT", 23, ""),
+            ],
+            extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Uses).Select(reference => (reference.From.Whole(), reference.Name, reference.Line, $"{reference.Qualifier?.Kind} {reference.Qualifier?.Name}".Trim())));
+    }
+
+    /// <summary>
+    /// Every declarator of a declaration declares a variable - <c>int a = 1, *b, c[2]</c>, a <c>for</c>'s among them - and
+    /// none is a use, while what their values read is.
+    /// </summary>
+    [Fact]
+    public void EachDeclaratorOfADeclaration_IsAVariable_AndNoUse()
+    {
+        var extract = Read("src/t.c", """
+            int sum(void)
+            {
+                int a = 1, *b = &total, c[2] = { first, second };
+                for (int i = 0, j = LIMIT; i < j; i++) { }
+                return a + *b + c[0];
+            }
+            """);
+
+        Assert.Equal(
+            [("total", 3), ("first", 3), ("second", 3), ("LIMIT", 4)],
+            extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Uses).Select(reference => (reference.Name, reference.Line)));
+    }
+
+    /// <summary>
+    /// A type a body writes - a declaration's, a cast's, a <c>sizeof</c>'s - is a reference and no use, while a name in
+    /// those parentheses the file declares as a value is one: a <c>sizeof</c> of a table, of a macro, and a parenthesis
+    /// that subtracts. A type's users are what reads it, never each declaration that mentions it.
+    /// </summary>
+    [Fact]
+    public void ATypeABodyWrites_IsAReference_AndAValueInParenthesesAUse()
+    {
+        var extract = Read("src/t.c", """
+            typedef struct node Node;
+            static int table[4];
+            #define LIMIT 4
+
+            int take(void *p)
+            {
+                char buf[16];
+                Node *n = (Node *)p;
+                int s = sizeof(Node) + sizeof(buf) + sizeof(table) + sizeof(LIMIT);
+                struct node *m = (struct node *)p;
+                int d = (s) - 1;
+                return (int)d + (Shape)s;
+            }
+            """);
+
+        Assert.Equal(
+            [
+                (CodeEdgeKinds.References, "Node", 8), (CodeEdgeKinds.References, "Node", 8), (CodeEdgeKinds.References, "Node", 9), (CodeEdgeKinds.Uses, "table", 9),
+                (CodeEdgeKinds.Uses, "LIMIT", 9), (CodeEdgeKinds.References, "node", 10), (CodeEdgeKinds.References, "node", 10), (CodeEdgeKinds.References, "Shape", 12),
+            ],
+            extract.References.Where(reference => reference.From == "c:take").Select(reference => (reference.Kind, reference.Name, reference.Line)));
+    }
+
+    /// <summary>
+    /// An enumerator's value is its enumerator's code, what it reads a use of each name: one of the enumerators before it
+    /// and a macro among them. The values an enumeration is made of are read as C# reads them.
+    /// </summary>
+    [Fact]
+    public void AnEnumeratorsValue_IsTheEnumeratorsCode()
+    {
+        var extract = Read("src/t.c", """
+            enum Kind { One = BASE + 1, Two = One | MASK, Three };
+            """);
+
+        Assert.Equal(
+            [("c:One", "BASE", 1), ("c:Two", "One", 1), ("c:Two", "MASK", 1)],
+            extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Uses).Select(reference => (reference.From.Whole(), reference.Name, reference.Line)));
+    }
+
+    /// <summary>A label a <c>goto</c> names is a jump's target and no use, while what the code reads around it is one.</summary>
+    [Fact]
+    public void ALabelAGotoNames_IsNoUse()
+    {
+        var extract = Read("src/t.c", """
+            int run(int x)
+            {
+                if (x) goto out;
+                x = LIMIT;
+            out:
+                return x;
+            }
+            """);
+
+        Assert.Equal(
+            [("LIMIT", 4)],
+            extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Uses).Select(reference => (reference.Name, reference.Line)));
+    }
+
+    /// <summary>
+    /// A raw string is read in C as GCC's GNU dialects - its default - read one: its value what its parentheses hold as
+    /// written, its prefix no name the code reads.
+    /// </summary>
+    [Fact]
+    public void ARawString_IsReadAsGccReadsOneInC()
+    {
+        var extract = Read("src/t.c", """
+            const char *pattern = R"(\d+ raw in c)";
+            """);
+
+        Assert.Equal([new LiteralRow("\\d+ raw in c", 1, "c:pattern")], LiteralRow.Of(extract));
+        Assert.Empty(extract.References);
     }
 
     private static FileExtract Read(string path, string text) => new CExtractor().Extract(new CodeFileInput(path, text));
@@ -676,9 +872,46 @@ public sealed class CExtractorTests : CodeGraphExtractorContractTests<CExtractor
     private static IEnumerable<string> Calls(FileExtract extract, string from)
         => extract.References.Where(reference => reference.From == from && reference.Kind == CodeEdgeKinds.Calls).Select(reference => reference.Name);
 
+    private const string Reads = """
+        /* One table of the reads. */
+        const char *greeting = "hello world";
+
+        static int count = 0;
+
+        enum Kind { One, Two = One + 1 };
+
+        int take(int local)
+        {
+            int own = 4;
+            count += local + own;
+            enum Kind which = One;
+            switch (which)
+            {
+            case One:
+                count += 1;
+            }
+            return greeting == " padding " ? count : 0;
+        }
+        """;
+
     /// <inheritdoc/>
     public override IReadOnlyList<CodeGraphFixture> Fixtures { get; } =
     [
+        new("src/reads.c", Reads)
+        {
+            Edges =
+            [
+                // An enumerator's value read by its enumerator, a file-scope variable read bare, a local's type a
+                // reference, an enum's member in a case, a pointer's value compared, and a conditional's branch read.
+                new("c:Two", "c:One", CodeEdgeKinds.Uses, 6, CodeConfidences.Unique),
+                new("c:take", "c:src/reads.c:count", CodeEdgeKinds.Uses, 11, CodeConfidences.Exact),
+                new("c:take", "c:Kind", CodeEdgeKinds.References, 12, CodeConfidences.Unique),
+                new("c:take", "c:One", CodeEdgeKinds.Uses, 12, CodeConfidences.Unique),
+                new("c:take", "c:One", CodeEdgeKinds.Uses, 15, CodeConfidences.Unique),
+                new("c:take", "c:greeting", CodeEdgeKinds.Uses, 18, CodeConfidences.Unique),
+                new("c:take", "c:src/reads.c:count", CodeEdgeKinds.Uses, 18, CodeConfidences.Exact),
+            ],
+        },
         new("src/lex.h", LexHeader)
         {
             Nodes =

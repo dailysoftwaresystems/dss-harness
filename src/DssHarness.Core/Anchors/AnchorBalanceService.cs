@@ -36,8 +36,6 @@ public sealed class AnchorBalanceService(
     /// <summary>The base used when none is given.</summary>
     public const string DefaultBase = "HEAD";
 
-    private const int ExcerptLength = 80;
-
     private readonly IHarnessContextLoader _contextLoader = contextLoader;
     private readonly IAnchorRegistryLocator _locator = locator;
     private readonly IAnchorRegistryLock _registryLock = registryLock;
@@ -133,7 +131,7 @@ public sealed class AnchorBalanceService(
         var now = new List<(AnchorRegistryDocument Document, AnchorRegistry Registry)>();
 
         // Both read as one moment: a row a change was moving between them would otherwise count as closed, or lost.
-        foreach (var (registry, text) in _registryLock.ReadTogether(registries, _fileSystem))
+        foreach (var (registry, text) in await _registryLock.ReadTogetherAsync(registries, _fileSystem, cancellationToken).ConfigureAwait(false))
         {
             if (text is null)
             {
@@ -245,7 +243,7 @@ public sealed class AnchorBalanceService(
             .OrderBy(pair => pair.Key, StringComparer.Ordinal)
             .Select(pair => new AnchorOpening(
                 pair.Key,
-                AnchorCells.Excerpt(pair.Value.Row.Trigger, ExcerptLength),
+                AnchorCells.Collapse(pair.Value.Row.Trigger),
                 AnchorStatus.IsDisclosed(pair.Value.Row.Status)))
             .ToList();
 

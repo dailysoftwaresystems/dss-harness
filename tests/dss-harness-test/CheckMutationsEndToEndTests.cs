@@ -23,6 +23,12 @@ namespace DssHarness.Tests;
 public sealed class CheckMutationsEndToEndTests
 {
     /// <summary>The C and C++ compilers a leg here builds with: MinGW's on Windows, the system's own elsewhere.</summary>
+    /// <summary>
+    /// The reserve these runs declare for their builds, the fixture being their project: its deepest file, a file of
+    /// CMake's own check of a compiler, lies within it, with a little to spare.
+    /// </summary>
+    private const int FixtureReserve = 100;
+
     private static readonly (string C, string Cxx) Compilers = OperatingSystem.IsWindows() ? ("gcc", "g++") : ("cc", "c++");
 
     /// <summary>Each arm's verdict, an abandoned claim and a held lock. A class of its own, so it runs beside the others: each sweeps real builds for minutes.</summary>
@@ -570,7 +576,7 @@ public sealed class CheckMutationsEndToEndTests
         BuildConfigs = { ["debug"] = new BuildConfiguration { CmakeBuildType = "Debug" } },
         Projects = { MutationFixture.Project },
         Legs = { ["native"] = Leg(platform) },
-        Worktrees = new WorktreeSettings { PathBudgetReserve = MutationFixture.LongestBuildPath },
+        Worktrees = new WorktreeSettings { PathBudgetReserve = FixtureReserve },
         Mutations = mutations,
     };
 

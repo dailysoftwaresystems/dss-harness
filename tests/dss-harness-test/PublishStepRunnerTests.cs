@@ -283,9 +283,9 @@ public sealed class PublishStepRunnerTests
         Assert.Empty(JsonSchemaSubset.Problems(JsonNode.Parse(WorkflowStepTypes.Find("pull-request")!.Output!)!, opened.Output));
         Assert.Equal(
             [
-                ["pr", "list", "--state", "open", "--json", "number,url,isCrossRepository", "--repo", "github.com/acme/widgets", "--base", "main", "--head", "work"],
+                ["pr", "list", "--state", "open", "--json", "number,url,isCrossRepository", "--repo", "github.com/acme/widgets", "--base", "main", "--head", "work", "--limit", "100"],
                 ["pr", "create", "--repo", "github.com/acme/widgets", "--base", "main", "--head", "work", "--title", "the run's work", "--body-file", bodyFile],
-                ["pr", "list", "--state", "open", "--json", "number,url,isCrossRepository", "--repo", "github.com/acme/widgets", "--base", "main", "--head", "work"],
+                ["pr", "list", "--state", "open", "--json", "number,url,isCrossRepository", "--repo", "github.com/acme/widgets", "--base", "main", "--head", "work", "--limit", "100"],
                 ["pr", "create", "--repo", "github.com/acme/widgets", "--base", "main", "--head", "work", "--title", "the run's work", "--body-file", bodyFile, "--draft"],
             ],
             requests.Select(request => request.Arguments.ToArray()));
@@ -313,7 +313,7 @@ public sealed class PublishStepRunnerTests
 
         Assert.True(found.Passed, found.Error);
         Assert.Equal("""{"number":7,"url":"https://github.com/acme/widgets/pull/7","created":false}""", found.Output!.ToJsonString());
-        Assert.Equal(["--base", "release", "--head", "work"], Assert.Single(requests).Arguments.TakeLast(4));
+        Assert.Equal(["--base", "release", "--head", "work", "--limit", "100"], Assert.Single(requests).Arguments.TakeLast(6));
         Assert.False(File.Exists(kit.Layout.InstancePullRequestBodyFile("pr")));
     }
 
@@ -378,9 +378,9 @@ public sealed class PublishStepRunnerTests
         Assert.Equal(
             [
                 ["-G", "work-gh"],
-                ["pr", "list", "--state", "open", "--json", "number,url,isCrossRepository", "--repo", "github.com/acme/widgets", "--base", "main", "--head", "work"],
+                ["pr", "list", "--state", "open", "--json", "number,url,isCrossRepository", "--repo", "github.com/acme/widgets", "--base", "main", "--head", "work", "--limit", "100"],
                 ["-G", "work-gh"],
-                ["pr", "list", "--state", "open", "--json", "number,url,isCrossRepository", "--base", "main", "--head", "work"],
+                ["pr", "list", "--state", "open", "--json", "number,url,isCrossRepository", "--base", "main", "--head", "work", "--limit", "100"],
             ],
             requests.Select(request => request.Arguments.ToArray()));
     }
@@ -434,7 +434,7 @@ public sealed class PublishStepRunnerTests
 
         Assert.Equal("""{"number":7,"url":"https://github.com/acme/widgets/pull/7","created":false}""", found.Output!.ToJsonString());
         Assert.Equal("""{"number":42,"url":"https://github.com/acme/widgets/pull/42","created":true}""", opened.Output!.ToJsonString());
-        Assert.Equal(["pr", "list", "--state", "open", "--json", "number,url,isCrossRepository", "--repo", "github.com/acme/widgets", "--base", "main", "--head", "work"], requests[0].Arguments);
+        Assert.Equal(["pr", "list", "--state", "open", "--json", "number,url,isCrossRepository", "--repo", "github.com/acme/widgets", "--base", "main", "--head", "work", "--limit", "100"], requests[0].Arguments);
     }
 
     /// <summary>

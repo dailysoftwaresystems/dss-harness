@@ -171,7 +171,7 @@ internal sealed class PhysicalAppendFile : IAppendFile
     /// </summary>
     /// <param name="refusal">What opening the claim raised.</param>
     private static bool HeldElsewhere(IOException refusal)
-        => OperatingSystem.IsWindows() ? WindowsHolds.HeldBy(refusal) : UnixFiles.WouldBlock(refusal.HResult);
+        => FileHolds.HeldElsewhere(refusal);
 
     /// <summary>
     /// Cuts the file back to <paramref name="end"/>, where an append failed: a line the disk did not take whole is not

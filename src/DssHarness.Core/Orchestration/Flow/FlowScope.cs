@@ -295,29 +295,39 @@ public static class FlowScope
         }
     }
 
-    /// <summary>Each step of <paramref name="steps"/> and of every group among them, with its path, a group before its members.</summary>
+    /// <summary>
+    /// Each step of <paramref name="steps"/> and of every group among them, with its path, a group before its members: on
+    /// a stack of the lists still to walk, each with how far along it the walk is, so every step is given once, in time
+    /// linear in the steps, however deep the groups nest.
+    /// </summary>
     private static IEnumerable<(string Path, WorkflowStep Step)> Walk(IReadOnlyList<WorkflowStep> steps, string? scope)
     {
-        foreach (var step in steps)
+        var lists = new Stack<(IReadOnlyList<WorkflowStep> Steps, string? Scope, int Next)>();
+
+        lists.Push((steps, scope, 0));
+
+        while (lists.TryPop(out var at))
         {
-            var path = scope is null ? step.Name : $"{scope}.{step.Name}";
+            if (at.Next >= at.Steps.Count)
+            {
+                continue;
+            }
+
+            var step = at.Steps[at.Next];
+            var path = at.Scope is null ? step.Name : $"{at.Scope}.{step.Name}";
 
             yield return (path, step);
 
-            foreach (var inner in Walk(step.Steps, path))
-            {
-                yield return inner;
-            }
+            // What is walked next is pushed last: the group's members, then the recovery of a workflow it uses - which
+            // hangs from the step under the same reserved name the flow's own does at the root - then its next sibling.
+            lists.Push((at.Steps, at.Scope, at.Next + 1));
 
-            // A workflow used as a step brings its own recovery, which hangs from the step under the same reserved name
-            // the flow's own does at the root.
             if (step.Use?.Recover is { } called)
             {
-                foreach (var inner in Walk(called.Steps, $"{path}.{Recovery}"))
-                {
-                    yield return inner;
-                }
+                lists.Push((called.Steps, $"{path}.{Recovery}", 0));
             }
+
+            lists.Push((step.Steps, path, 0));
         }
     }
 

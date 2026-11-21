@@ -352,8 +352,8 @@ public sealed class AgentArmRegistryTests
         Assert.Equal(HarnessExit.Refused, refused.ExitCode);
         Assert.Contains(refused.Details!, line => line.StartsWith($"  '{Registry}': the main tree changed it after the agent was last handed it or folded", StringComparison.Ordinal)
             && line.EndsWith(
-                $"; no three-way merge is offered: the bytes both trees shared (SHA-256 {recorded[..8]}...) were recorded by a build that kept no copy of them, and none of the "
-                + "1 version(s) of the path in the last 512 commit(s) of the main tree that changed it is those bytes",
+                $"; no three-way merge is offered: the bytes both trees shared (SHA-256 {recorded}) were recorded by a build that kept no copy of them, and none of the "
+                + "1 version(s) of the path in the main tree's history is those bytes",
                 StringComparison.Ordinal));
         Assert.Equal(Text(Arm("alpha")), OrchestrationKit.Read(kit.Main, Registry));
     }
@@ -763,25 +763,24 @@ public sealed class AgentArmRegistryTests
     }
 
     /// <summary>
-    /// The bound a merge of text is offered within holds for the registry too, asked again of a version once it is read:
-    /// a new base's registry above it is offered no merge, its size said.
+    /// No size stops a merge of the registry by arm: a new base's registry of 17 MiB is merged as a small one is, and
+    /// nothing is said of its size. Red where a merge is offered only up to 16 MiB.
     /// </summary>
     [Fact]
-    public async Task ARebase_OffersNoMergeOfARegistryAboveTheBound_ItsSizeAskedOnceItIsRead()
+    public async Task ARebase_MergesARegistryOfAnySizeByArm()
     {
         using var temp = new TempDirectory();
         var (kit, worktree) = await RegistryAsync(temp, "alpha");
-        OrchestrationKit.Write(kit.Main, Registry, Text(Arm("alpha"), Arm("beta")) + "#" + new string('x', (int)TwoChanges.MostBytes + (1024 * 1024)) + "\n");
+        OrchestrationKit.Write(kit.Main, Registry, Text(Arm("alpha"), Arm("beta")) + "#" + new string('x', 17 * 1024 * 1024) + "\n");
         WriteTexts(kit.Main, "beta");
-        await kit.Harness.CommitAllAsync(kit.Main, "a registry above the bound", Token);
+        await kit.Harness.CommitAllAsync(kit.Main, "a registry of 17 MiB", Token);
         OrchestrationKit.Write(worktree, Registry, Text(Arm("alpha"), Arm("gamma")));
         WriteTexts(worktree, "gamma");
 
-        var refused = await RebaseAsync(kit, apply: false);
+        var moved = await RebaseAsync(kit, apply: false);
 
-        Assert.Equal(HarnessExit.Refused, refused.ExitCode);
-        Assert.Contains(refused.Details!, line => line.StartsWith($"  '{Registry}': ", StringComparison.Ordinal)
-            && line.EndsWith("; no three-way merge is offered: it is 17 MiB, and a merge is offered for a file up to 16 MiB", StringComparison.Ordinal));
+        Assert.DoesNotContain(moved.Details ?? [], line => line.Contains("a merge is offered for a file up to", StringComparison.Ordinal));
+        Assert.DoesNotContain(moved.Details ?? [], line => line.StartsWith($"  '{Registry}': ", StringComparison.Ordinal) && line.Contains("no three-way merge is offered", StringComparison.Ordinal));
     }
 
     /// <summary>The real file system, noting each time a file under <paramref name="root"/> is opened to be read, by its path relative to it.</summary>

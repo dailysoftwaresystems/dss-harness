@@ -216,8 +216,8 @@ public sealed class JudgedOnTests
     [Fact]
     public void TheJudgesRevision_IsRaisedWithItsRules()
     {
-        const int PinnedRevision = 2;
-        const string PinnedDigest = "e4f7762baa5ce64023d246a43751248db964d99508ba8daf6ef737b93c467f5b";
+        const int PinnedRevision = 3;
+        const string PinnedDigest = "ac71211076469734040508f8c99f58c0277758c2665f28e4a7ebb28e4fde460b";
 
         var digest = FileContentHash.Of(Encoding.UTF8.GetBytes(string.Join("\n", Verdicts())));
 

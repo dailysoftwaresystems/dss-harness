@@ -9,9 +9,6 @@ namespace DssHarness.Core.Codebase.Languages.Scanning;
 /// </summary>
 internal static class ScanComments
 {
-    /// <summary>How many of a file's first lines a generator's mark is looked for in.</summary>
-    private const int GeneratedLines = 30;
-
     /// <summary>The marks a line of C's comments begins with.</summary>
     private static readonly char[] SlashMarks = ['/', '*', '!', '<'];
 
@@ -32,7 +29,7 @@ internal static class ScanComments
         foreach (var comment in scan.CommentsAbove(at))
         {
             // A shebang says how the file is run, never what a declaration is.
-            if (comment.Start == 0 && scan.Source.StartsWith("#!", StringComparison.Ordinal))
+            if (comment.Start == 0 && scan.Source.StartsWith("#!"))
             {
                 continue;
             }
@@ -66,28 +63,31 @@ internal static class ScanComments
     }
 
     /// <summary>
-    /// Why the text is generated code: what a comment among its first <see cref="GeneratedLines"/> lines says, as a
-    /// generator writes - <c>DO NOT EDIT</c>, <c>DO NOT MODIFY BY HAND</c> (Dart's builders) or <c>@generated</c>;
-    /// <see langword="null"/> where none does.
+    /// Why the text is generated code: what a comment of its leading run - every comment before its first token of code,
+    /// however many lines they run over, as the generators' own conventions place the mark - says, as a generator writes:
+    /// <c>DO NOT EDIT</c>, <c>DO NOT MODIFY BY HAND</c> (Dart's builders) or <c>@generated</c>; <see langword="null"/>
+    /// where none does.
     /// </summary>
     /// <param name="scan">The text.</param>
     public static string? Generated(ScannedText scan)
     {
-        foreach (var comment in scan.Comments.TakeWhile(comment => comment.Line <= GeneratedLines))
-        {
-            var text = scan.Source.AsSpan(comment.Start, comment.Length);
+        var code = scan.Count > 0 ? scan[0].Start : long.MaxValue;
 
-            if (text.Contains("DO NOT EDIT", StringComparison.Ordinal))
+        foreach (var comment in scan.Comments.TakeWhile(comment => comment.Start < code))
+        {
+            var (start, end) = (comment.Start, comment.Start + comment.Length);
+
+            if (scan.Source.Find("DO NOT EDIT", start, end) >= 0)
             {
                 return "its first lines say DO NOT EDIT, as a generator writes";
             }
 
-            if (text.Contains("DO NOT MODIFY BY HAND", StringComparison.Ordinal))
+            if (scan.Source.Find("DO NOT MODIFY BY HAND", start, end) >= 0)
             {
                 return "its first lines say DO NOT MODIFY BY HAND, as a generator writes";
             }
 
-            if (text.Contains("@generated", StringComparison.Ordinal))
+            if (scan.Source.Find("@generated", start, end) >= 0)
             {
                 return "its first lines say @generated, as a generator writes";
             }

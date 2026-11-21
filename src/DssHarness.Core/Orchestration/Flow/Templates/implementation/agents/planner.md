@@ -38,9 +38,9 @@ You plan a piece of work so that several agents can build it side by side and it
    near its work it must not touch. An item must not need another item's result; where it would, they are one item.
    Where two items would each need the same new helper, one item owns it and the plan says which.
 9. Size each item to one builder's cycle: as much work as one agent builds whole in a single sitting, with its tests -
-   never more than that, and never a sliver of it that belongs with the work beside it. Work too large for the 8 items
-   a plan may hold is not squeezed in: name in the summary what is left for the next run, and why, so the handoff
-   carries it.
+   never more than that, and never a sliver of it that belongs with the work beside it. A plan holds as many items as
+   the work needs: work is never squeezed into fewer items, nor left to a later run for how many there are - a round
+   builds its items in waves of the agents the run may have open.
 10. For each item, name what it reuses or extends, by path, with what each is used for; each thing it creates, with
    the reason and the search behind it; and each thing it replaces because the request asked, by path, with what
    becomes of the old one. The builder is given the three lists and holds to them.

@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using DssHarness.Core.Text;
 using DssHarness.Core.Hosts;
 using DssHarness.Core.Results;
 
@@ -33,7 +34,7 @@ public sealed record AnchorDocumentFinding(int LineNumber, AnchorFindingSeverity
 /// line that looks like an anchor row but belongs to no anchor table is therefore reported rather
 /// than silently skipped. The file's own line endings are kept on every line it writes.
 /// </remarks>
-public sealed partial class AnchorRegistryDocument
+public sealed class AnchorRegistryDocument
 {
     /// <summary>The header row every anchor table starts with.</summary>
     public const string TableHeader =
@@ -42,8 +43,6 @@ public sealed partial class AnchorRegistryDocument
 
     /// <summary>The separator row written under a new table's header.</summary>
     public const string SeparatorRow = "|---|---|---|---|---|---|";
-
-    private const int ExcerptLength = 100;
 
     private readonly List<string> _lines;
     private readonly List<(int HeaderIndex, int EndIndex)> _tables;
@@ -122,7 +121,7 @@ public sealed partial class AnchorRegistryDocument
                     index + 1,
                     AnchorFindingSeverity.Fatal,
                     "a table that is not the anchor table holds anchor rows, and they are counted by nothing: "
-                    + AnchorCells.Excerpt(lines[index], ExcerptLength)));
+                    + AnchorCells.Collapse(lines[index])));
             }
 
             index = end;
@@ -136,7 +135,7 @@ public sealed partial class AnchorRegistryDocument
                     line + 1,
                     AnchorFindingSeverity.Fatal,
                     "an anchor row sits outside any table, so nothing reads it: "
-                    + AnchorCells.Excerpt(lines[line], ExcerptLength)));
+                    + AnchorCells.Collapse(lines[line])));
             }
         }
 
@@ -287,12 +286,18 @@ public sealed partial class AnchorRegistryDocument
 
     private static string LineEndingOf(string line) => line.EndsWith('\r') ? "\r" : string.Empty;
 
-    [GeneratedRegex(@"^\s*\|[\s:|-]+\|\s*$", RegexOptions.CultureInvariant)]
-    private static partial Regex Separator();
+    /// <summary>A table's separator row: pipes, dashes, colons and spaces alone.</summary>
+    private static readonly Regex SeparatorRowPattern = LinearRegex.Compile(@"^\s*\|[\s:|-]+\|\s*$");
 
-    [GeneratedRegex(@"^\s*<!--", RegexOptions.CultureInvariant)]
-    private static partial Regex CommentOpen();
+    /// <summary>A line that opens an HTML comment.</summary>
+    private static readonly Regex CommentOpenPattern = LinearRegex.Compile(@"^\s*<!--");
 
-    [GeneratedRegex(@"-->\s*$", RegexOptions.CultureInvariant)]
-    private static partial Regex CommentClose();
+    /// <summary>A line that closes an HTML comment.</summary>
+    private static readonly Regex CommentClosePattern = LinearRegex.Compile(@"-->\s*$");
+
+    private static Regex Separator() => SeparatorRowPattern;
+
+    private static Regex CommentOpen() => CommentOpenPattern;
+
+    private static Regex CommentClose() => CommentClosePattern;
 }

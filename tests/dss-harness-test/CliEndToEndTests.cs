@@ -265,6 +265,35 @@ public sealed partial class CliEndToEndTests
         Assert.Contains("no worktrees", empty.StandardOutput, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// A commit a line names is shown as git itself abbreviates it in the repository the command works in - asked of git,
+    /// which grows the abbreviation with the repository so it stays unique there - never cut to a length of the tool's
+    /// own, which twelve once was; and the command's --json carries the whole id.
+    /// </summary>
+    [Fact]
+    public async Task ACommitIsShownAtTheRepositorysAbbreviation_FullInJson()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await PrepareRepositoryAsync(temp);
+
+        var git = new HarnessFactory().GitClient;
+        var head = (await git.ResolveCommitAsync(temp.Path, "HEAD", cancellationToken))!;
+        var shortened = (await git.RunAsync(temp.Path, ["rev-parse", "--short", "HEAD"], cancellationToken: cancellationToken)).StandardOutput.Trim();
+
+        Assert.Equal(HarnessExit.Success, (await CliRunner.RunAsync(["create-worktree", "wt", "-C", temp.Path], cancellationToken)).ExitCode);
+
+        var listed = await CliRunner.RunAsync(["list-worktree", "-C", temp.Path], cancellationToken);
+        var json = await CliRunner.RunAsync(["list-worktree", "--json", "-C", temp.Path], cancellationToken);
+        using var document = JsonDocument.Parse(json.StandardOutput);
+
+        // A repository of one commit: git's abbreviation is its shortest, well under the twelve the tool once cut to.
+        Assert.InRange(shortened.Length, 4, 11);
+        Assert.StartsWith(shortened, head, StringComparison.Ordinal);
+        Assert.Contains($"list-worktree: wt  base {shortened}", listed.StandardOutput.Split('\n').Select(line => line.TrimEnd('\r')));
+        Assert.Equal(head, document.RootElement.GetProperty("worktrees")[0].GetProperty("baseCommit").GetString());
+    }
+
     [Fact]
     public async Task CreateWorktree_WithRandom_ReportsTheNameItChose()
     {
@@ -2796,6 +2825,10 @@ public sealed partial class CliEndToEndTests
             BuildConfigs = { ["debug"] = new BuildConfiguration() },
             Projects = { new ProjectConfig { Name = "app", Type = "dotnet", Path = ".", Test = new TestConfig { All = test } } },
             Legs = { ["native"] = new LegConfig { Os = platform.PlatformKey, Processor = platform.Processor, Config = "debug", Toolchain = "sdk" } },
+
+            // The action file's step names 'dotnet', a program the policy lets run only where the repository declares it
+            // under tools - never started here, the leg's build failing before its step, but refused before anything runs.
+            Tools = { new ToolConfig { Name = "dotnet" } },
             PredefinedRunners = { ["probe"] = new RunnerConfig { Action = "probe/probe.yml", RequireBuild = true } },
         });
 

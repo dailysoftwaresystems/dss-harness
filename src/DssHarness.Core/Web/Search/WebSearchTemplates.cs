@@ -9,8 +9,9 @@ namespace DssHarness.Core.Web.Search;
 
 /// <summary>
 /// A template of a request - an address, or a text of a <c>POST</c>'s body - whose names in braces are filled for each
-/// query: <c>{query}</c>, the query; <c>{limit}</c>, the most results asked; and each name a lookup found, as
-/// <c>discover</c>'s. Read by the configuration's one brace grammar (<see cref="FlowTemplate.Pieces(string)"/>): <c>{{</c>
+/// query: <c>{query}</c>, the query; <c>{limit}</c>, how many results a page holds (the source's <c>pageSize</c>);
+/// <c>{page}</c>, the page asked, as the source counts its pages; <c>{start}</c>, how many results come before it; and each
+/// name a lookup found, as <c>discover</c>'s. A template that names neither <c>{page}</c> nor <c>{start}</c> asks one page. Read by the configuration's one brace grammar (<see cref="FlowTemplate.Pieces(string)"/>): <c>{{</c>
 /// and <c>}}</c> stand for a brace, another expander's <c>${...}</c> is left as written, and a name is one the
 /// configuration's placeholders take (<see cref="LegPathNames.IsName"/>).
 /// </summary>
@@ -19,8 +20,17 @@ public sealed class WebRequestTemplate
     /// <summary>The name filled with the query.</summary>
     public const string Query = "query";
 
-    /// <summary>The name filled with the most results asked.</summary>
+    /// <summary>The name filled with how many results a page holds.</summary>
     public const string Limit = "limit";
+
+    /// <summary>The name filled with the page asked, as the source counts its pages.</summary>
+    public const string Page = "page";
+
+    /// <summary>The name filled with how many results come before the page asked: 0 for the first.</summary>
+    public const string Start = "start";
+
+    /// <summary>The names every template may fill, beside what lookups find.</summary>
+    public static IReadOnlyList<string> Filled { get; } = [Query, Limit, Page, Start];
 
     private readonly IReadOnlyList<(string Text, bool Name)> _pieces;
 
@@ -35,6 +45,9 @@ public sealed class WebRequestTemplate
 
     /// <summary>The names it fills, in its order, each once.</summary>
     public IReadOnlyList<string> Names => [.. _pieces.Where(piece => piece.Name).Select(piece => piece.Text).Distinct(StringComparer.Ordinal)];
+
+    /// <summary>Whether it asks a page by its place - it names <c>{page}</c> or <c>{start}</c> - so a later page is a request of its own; one that names neither asks one page.</summary>
+    public bool Pages => Names.Any(name => name is Page or Start);
 
     /// <summary>Reads <paramref name="text"/>.</summary>
     /// <exception cref="FormatException">It is not written whole by the grammar, or a name in braces is none.</exception>
@@ -71,7 +84,7 @@ public sealed class WebRequestTemplate
 
     /// <summary>
     /// Why <paramref name="text"/> is no template of a request filled from <paramref name="names"/> - beside
-    /// <see cref="Query"/> and <see cref="Limit"/> - or <see langword="null"/> where it is one.
+    /// <see cref="Filled"/> - or <see langword="null"/> where it is one.
     /// </summary>
     /// <param name="text">The template.</param>
     /// <param name="names">The names lookups find for it.</param>
@@ -92,9 +105,9 @@ public sealed class WebRequestTemplate
             return $"is no template: {ex.Message}";
         }
 
-        if (template.Names.FirstOrDefault(name => name is not Query and not Limit && !names.Contains(name)) is { } unknown)
+        if (template.Names.FirstOrDefault(name => !Filled.Contains(name) && !names.Contains(name)) is { } unknown)
         {
-            return $"names '{{{unknown}}}', which nothing fills: {{{Query}}}, {{{Limit}}}{string.Concat(names.Select(name => $", {{{name}}}"))}";
+            return $"names '{{{unknown}}}', which nothing fills: {string.Join(", ", Filled.Concat(names).Select(name => $"{{{name}}}"))}";
         }
 
         return needsQuery && !template.Names.Contains(Query) ? $"never names {{{Query}}}, so no query would reach the source" : null;
@@ -102,7 +115,7 @@ public sealed class WebRequestTemplate
 
     /// <summary>
     /// Why <paramref name="text"/> is no template of an address filled from <paramref name="names"/> - beside
-    /// <see cref="Query"/> and <see cref="Limit"/> - that reads, once filled, as an <c>http</c> or <c>https</c> address
+    /// <see cref="Filled"/> - that reads, once filled, as an <c>http</c> or <c>https</c> address
     /// (each name filled as a found address is); <see langword="null"/> where it is one. Said of a source's key, as
     /// <c>'url' ...</c>.
     /// </summary>
@@ -119,7 +132,7 @@ public sealed class WebRequestTemplate
             return $"'{key}' {problem}";
         }
 
-        var filled = Parse(text).Address("q", 1, names.ToDictionary(name => name, _ => "https://found.invalid/x", StringComparer.Ordinal));
+        var filled = Parse(text).Address("q", new WebSearchPage(1, 1), names.ToDictionary(name => name, _ => "https://found.invalid/x", StringComparer.Ordinal));
 
         return WebAddresses.IsWeb(filled) ? null : $"'{key}' is an http or https address once filled, and '{text}' is not";
     }
@@ -146,22 +159,22 @@ public sealed class WebRequestTemplate
 
     /// <summary>The template as an address: each name filled - the query escaped for an address, a found value as found.</summary>
     /// <param name="query">The query.</param>
-    /// <param name="limit">The most results asked.</param>
+    /// <param name="page">The page asked.</param>
     /// <param name="found">The values lookups found.</param>
-    public string Address(string query, int limit, IReadOnlyDictionary<string, string> found)
-        => Fill(query, limit, found, Uri.EscapeDataString);
+    public string Address(string query, WebSearchPage page, IReadOnlyDictionary<string, string> found)
+        => Fill(query, page, found, Uri.EscapeDataString);
 
     /// <summary>The template as a text: each name filled as it is.</summary>
     /// <param name="query">The query.</param>
-    /// <param name="limit">The most results asked.</param>
+    /// <param name="page">The page asked.</param>
     /// <param name="found">The values lookups found.</param>
-    public string Plain(string query, int limit, IReadOnlyDictionary<string, string> found)
-        => Fill(query, limit, found, value => value);
+    public string Plain(string query, WebSearchPage page, IReadOnlyDictionary<string, string> found)
+        => Fill(query, page, found, value => value);
 
-    /// <summary>Whether the template is <c>{limit}</c> alone, which a body fills as a number.</summary>
-    public bool IsLimitAlone => _pieces is [(Limit, true)];
+    /// <summary>Whether the template is one number's name alone - <c>{limit}</c>, <c>{page}</c> or <c>{start}</c> - which a body fills as a number.</summary>
+    public bool IsNumberAlone => _pieces is [(Limit or Page or Start, true)];
 
-    private string Fill(string query, int limit, IReadOnlyDictionary<string, string> found, Func<string, string> escape)
+    private string Fill(string query, WebSearchPage page, IReadOnlyDictionary<string, string> found, Func<string, string> escape)
     {
         var filled = new StringBuilder();
 
@@ -169,7 +182,9 @@ public sealed class WebRequestTemplate
         {
             filled.Append(!name ? text
                 : text == Query ? escape(query)
-                : text == Limit ? limit.ToString(CultureInfo.InvariantCulture)
+                : text == Limit ? page.Size.ToString(CultureInfo.InvariantCulture)
+                : text == Page ? page.Counted.ToString(CultureInfo.InvariantCulture)
+                : text == Start ? page.Start.ToString(CultureInfo.InvariantCulture)
                 : found.TryGetValue(text, out var value) ? value
                 : throw new InvalidOperationException($"'{{{text}}}' is filled by no lookup of this source."));
         }
@@ -255,7 +270,7 @@ public sealed class WebItemTemplate
         }
     }
 
-    /// <summary>The field's text for <paramref name="item"/> of <paramref name="root"/>, or <see langword="null"/> where a path of it gives no text.</summary>
+    /// <summary>The field's text for <paramref name="item"/> of <paramref name="root"/>, whole, or <see langword="null"/> where a path of it gives no text.</summary>
     /// <param name="item">The item, which <c>@</c> names.</param>
     /// <param name="root">The whole answer, which <c>$</c> names.</param>
     public string? Fill(JsonElement item, JsonElement root)
@@ -278,13 +293,6 @@ public sealed class WebItemTemplate
             }
 
             filled.Append(string.Join(", ", values));
-
-            // No more is filled than a field is read for, and two past it - one, where a pair would be parted - so its reader
-            // cuts it and marks the cut: a value of the answer's root, as long as it likes, is not written whole for every item.
-            if (filled.Length > WebPageText.MostFieldRead)
-            {
-                return Output.TextCut.Head(filled.ToString(), WebPageText.MostFieldRead + 2);
-            }
         }
 
         return filled.ToString();

@@ -375,7 +375,7 @@ public sealed class StructuralScannerTests
         Assert.Equal(2, scan.Scan.Code(0, scan.Scan.Count).Count(at => scan.Scan.Is(at, "/")));
         Assert.Equal(
             ["i({ j: '}' })", "`k ${l}`"],
-            scan.Interpolations[scan.Scan[template].Start].Select(span => scan.Scan.Source[span.Start..span.End]));
+            scan.Interpolations[scan.Scan[template].Start].Select(span => scan.Scan.Source.Slice(span.Start, span.End)));
     }
 
     /// <summary>
@@ -392,8 +392,8 @@ public sealed class StructuralScannerTests
         var start = scan.Scan[element].Start;
 
         Assert.Equal("<Card title={`t${n}`} on={() => go('>')}>Don't {list.map(i => <Item key={i} />)}<br/></Card>", scan.Scan.Text(element));
-        Assert.Equal(["`t${n}`", "() => go('>')", "list.map(i => <Item key={i} />)"], scan.Interpolations[start].Select(span => Text[span.Start..span.End]));
-        Assert.Equal(["Card", "br"], scan.Elements![start].Select(span => Text[span.Start..span.End]));
+        Assert.Equal(["`t${n}`", "() => go('>')", "list.map(i => <Item key={i} />)"], scan.Interpolations[start].Select(span => Text[(int)span.Start..(int)span.End]));
+        Assert.Equal(["Card", "br"], scan.Elements![start].Select(span => Text[(int)span.Start..(int)span.End]));
         Assert.Contains(Enumerable.Range(0, scan.Scan.Count), at => scan.Scan.Text(at) == "<>" + "</>");
         Assert.Equal(2, Enumerable.Range(0, scan.Scan.Count).Count(at => scan.Scan.Is(at, "<")));
         Assert.Empty(JsLexer.Scan(Text, markup: false).Elements!);
@@ -427,18 +427,18 @@ public sealed class StructuralScannerTests
     }
 
     /// <summary>
-    /// A string, a template, a regular expression and an element the text ends in are read to its end, and elements
-    /// nested past the scanner's depth stop being read: never an exception, and every token where the text has it.
+    /// A string, a template, a regular expression and an element the text ends in are read to its end as one token,
+    /// however deep the elements it holds nest in each other's code - each one read in its turn, none left unread at a
+    /// depth: never an exception, and every token where the text has it.
     /// </summary>
     [Fact]
-    public void JavaScriptsLexer_ReadsUnendedTexts_AndElementsTooDeep_ToTheEnd()
+    public void JavaScriptsLexer_ReadsUnendedTexts_AndElementsNestedDeep_ToTheEnd()
     {
         foreach (var text in (string[])["a = 'abc", "a = `x ${b", "a = /re", "a = <div {b", "a = <div>", "a = <a>{" + string.Concat(Enumerable.Repeat("<a>{", 500))])
         {
             var scan = JsLexer.Scan(text, markup: true).Scan;
 
-            Assert.Equal(["a", "="], Enumerable.Range(0, 2).Select(at => scan.Text(at)));
-            Assert.Equal(text.Length, scan[scan.Count - 1].End);
+            Assert.Equal(["a", "=", text[4..]], Enumerable.Range(0, scan.Count).Select(at => scan.Text(at)));
         }
     }
 
@@ -464,8 +464,8 @@ public sealed class StructuralScannerTests
     /// <summary>
     /// A string in single quotes, double quotes or backticks, a heredoc and a nowdoc are each one token; a double-quoted
     /// string's and a heredoc's interpolations - <c>{$...}</c> from its <c>$</c>, <c>${...}</c> after its brace, holding
-    /// strings and braces of their own - are said as code, a single-quoted string's and a nowdoc's never; a string or a
-    /// heredoc the text ends in is read to its end.
+    /// strings and braces of their own - are said as code, a single-quoted string's and a nowdoc's never, nor a
+    /// <c>${name}</c>'s, a variable read by its name; a string or a heredoc the text ends in is read to its end.
     /// </summary>
     [Fact]
     public void PhpsLexer_ReadsStringsHeredocsAndNowdocs_AndSaysTheirInterpolations()
@@ -477,8 +477,8 @@ public sealed class StructuralScannerTests
         Assert.Equal(
             ["'x {$no}'", "\"y {$b->c(\"}\")} ${d} {$o->{'p'}->q()} {$a['{$']} \\\" e\"", "`f`", "<<<EOT\n  g {$h->i()}\n  EOT", "<<<'N'\n  {$j}\n  N"],
             texts.Select(at => scan.Scan.Text(at)));
-        Assert.Equal(["$b->c(\"}\")", "d", "$o->{'p'}->q()", "$a['{$']"], scan.Interpolations[scan.Scan[texts[1]].Start].Select(span => Text[span.Start..span.End]));
-        Assert.Equal(["$h->i()"], scan.Interpolations[scan.Scan[texts[3]].Start].Select(span => Text[span.Start..span.End]));
+        Assert.Equal(["$b->c(\"}\")", "$o->{'p'}->q()", "$a['{$']"], scan.Interpolations[scan.Scan[texts[1]].Start].Select(span => Text[(int)span.Start..(int)span.End]));
+        Assert.Equal(["$h->i()"], scan.Interpolations[scan.Scan[texts[3]].Start].Select(span => Text[(int)span.Start..(int)span.End]));
         Assert.False(scan.Interpolations.ContainsKey(scan.Scan[texts[0]].Start));
         Assert.False(scan.Interpolations.ContainsKey(scan.Scan[texts[4]].Start));
         Assert.Equal(";", scan.Scan.Text(scan.Scan.Count - 1));
@@ -492,7 +492,7 @@ public sealed class StructuralScannerTests
         }
 
         var open = PhpLexer.Scan("<?php a = \"x {$b->c()");
-        Assert.Equal(["$b->c()"], open.Interpolations.Values.Single().Select(span => "<?php a = \"x {$b->c()"[span.Start..span.End]));
+        Assert.Equal(["$b->c()"], open.Interpolations.Values.Single().Select(span => "<?php a = \"x {$b->c()"[(int)span.Start..(int)span.End]));
     }
 
     /// <summary>
@@ -519,7 +519,7 @@ public sealed class StructuralScannerTests
             var source = scan.Scan.Source;
 
             Assert.Equal(["a", "=", literal, ";", "f", "(", ")", ";"], Enumerable.Range(0, scan.Scan.Count).Select(at => scan.Scan.Text(at)));
-            Assert.Equal([code], scan.Interpolations[scan.Scan[2].Start].Select(span => source[span.Start..span.End]));
+            Assert.Equal([code], scan.Interpolations[scan.Scan[2].Start].Select(span => source.Slice(span.Start, span.End)));
         }
     }
 
@@ -540,13 +540,13 @@ public sealed class StructuralScannerTests
         Assert.Equal(3, ScanCalls.At(scan, At(scan, "f", 1), plain)!.Value.Arity);
     }
 
-    /// <summary>A list that runs past the most tokens one is read over is taken for none.</summary>
+    /// <summary>A list however long is read to its end - never cut off at a count of tokens of the code's own.</summary>
     [Fact]
-    public void ATypeArgumentListTooLong_IsNone()
+    public void ATypeArgumentListHoweverLong_IsReadToItsEnd()
     {
         var scan = CFamilyLexer.Scan($"a<{string.Join(", ", Enumerable.Repeat("int", 200))}> b;", cpp: true);
 
-        Assert.Equal(-1, ScanCalls.TypeArgumentsEnd(scan, 1, CppLike));
+        Assert.Equal(scan.Count - 2, ScanCalls.TypeArgumentsEnd(scan, 1, CppLike));
     }
 
     /// <summary>Ids are given once the file is read, declarations with a body first: a prototype before its definition takes the twin's id; parents and references keep their nodes.</summary>
@@ -565,8 +565,8 @@ public sealed class StructuralScannerTests
 
         Assert.Equal(
             [("c:T", null), ("c:T.f()~2", "c:T"), ("c:T.f()", "c:T")],
-            built.Nodes.Select(node => (node.Id, node.Parent)));
-        Assert.Equal([("c:T.f()", "g"), ("c:T.f()~2", "U")], built.References.Select(reference => (reference.From, reference.Name)));
+            built.Nodes.Select(node => (node.Id.Whole(), node.Parent?.Whole())));
+        Assert.Equal([("c:T.f()", "g"), ("c:T.f()~2", "U")], built.References.Select(reference => (reference.From.Whole(), reference.Name)));
     }
 
     /// <summary>A part of a node of the same id, kind and holder is that node, running to the part's last line; another holder's is its own.</summary>
@@ -581,7 +581,7 @@ public sealed class StructuralScannerTests
         Assert.Equal(first, again);
         Assert.NotEqual(first, inner);
         Assert.Equal((1, 12), (extract.Node(first).Start, extract.Node(first).End));
-        Assert.Equal(["cpp:app", "cpp:app~2"], extract.Build().Nodes.Select(node => node.Id));
+        Assert.Equal(["cpp:app", "cpp:app~2"], extract.Build().Nodes.Select(node => node.Id.Whole()));
     }
 
     /// <summary>A scope is declared once, its first declaration's openness and holder kept.</summary>
@@ -601,7 +601,7 @@ public sealed class StructuralScannerTests
     {
         var read = new List<int>();
 
-        ScanFrame.Walk(0, 6, at =>
+        new ScanStack().Walk(0, 6, at =>
         {
             read.Add(at);
             return at switch { 0 => 3, 3 => 3, 4 => 1, _ => at + 1 };
@@ -610,6 +610,22 @@ public sealed class StructuralScannerTests
         Assert.Equal([0, 3, 4, 5], read);
         Assert.Equal("a.b", (ScanFrame.Top with { Prefix = "a" }).Qualify("b"));
         Assert.Equal("b", ScanFrame.Top.Qualify("b"));
+    }
+
+    /// <summary>
+    /// A generator's mark is looked for in the whole leading run of a file's comments - as the generators' conventions
+    /// place it, after a licence of a hundred and twenty lines among them - and in no comment after the file's first code.
+    /// </summary>
+    [Fact]
+    public void AGeneratedMarkAfterAHundredAndTwentyLicenceLines_IsFound()
+    {
+        var licence = string.Concat(Enumerable.Range(1, 120).Select(line => $"// Licence line {line}.\n"));
+        var marked = licence + "// Generated by the protocol buffer compiler.  DO NOT EDIT!\n#pragma once\nint x;\n";
+        var late = licence + "int x;\n// DO NOT EDIT\n";
+
+        Assert.Equal(
+            ((string?)"its first lines say DO NOT EDIT, as a generator writes", (string?)null),
+            (new CExtractor().Extract(new CodeFileInput("a.pb.c", marked)).Generated, new CExtractor().Extract(new CodeFileInput("b.c", late)).Generated));
     }
 
     /// <summary>Type arguments as C++ writes them.</summary>

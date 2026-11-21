@@ -75,6 +75,7 @@ internal static class TestChild
             "claude-code" => ClaudeCode(standardOutput, arguments),
             "flow-interrupted" => FlowServiceTests.InterruptedChild(standardOutput, arguments),
             StructuralScannerTests.AssertionsChild => StructuralScannerTests.AssertionsOnASmallStack(standardOutput, arguments),
+            ChildRun.Mode => ChildRun.Run(standardOutput, standardError, arguments),
             "exit" => int.Parse(arguments[0], CultureInfo.InvariantCulture),
             _ => 99,
         };
@@ -551,6 +552,15 @@ internal static class TestChild
         if (string.Equals(arguments[0], "sleep", StringComparison.Ordinal))
         {
             Thread.Sleep(int.Parse(arguments[1], CultureInfo.InvariantCulture));
+        }
+
+        // 'flood' writes as many lines of a hundred characters as arguments[1] says, and ends at once.
+        if (string.Equals(arguments[0], "flood", StringComparison.Ordinal))
+        {
+            for (var index = 0; index < int.Parse(arguments[1], CultureInfo.InvariantCulture); index++)
+            {
+                output.Write(FloodLine(index, 100) + "\n");
+            }
         }
 
         return 0;
@@ -1113,8 +1123,7 @@ internal static class TestChild
             platform,
             new DssHarness.Core.Processes.ProcessRunner(platform, DssHarness.Core.Platform.FilePermissionsFactory.Create()));
 
-        // Longer than an agent gives it: a busy machine's table is read slowly, and this is no test of that budget.
-        var resort = new DssHarness.Core.Hosts.HostAgentLastResort(table, platform, TimeSpan.FromMinutes(5));
+        var resort = new DssHarness.Core.Hosts.HostAgentLastResort(table, platform);
 
         output.Write(resort.EndStartedAsync().GetAwaiter().GetResult() + "\n");
         output.Flush();

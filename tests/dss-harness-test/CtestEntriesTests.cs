@@ -359,7 +359,7 @@ public sealed class CtestEntriesTests
 /// <summary>
 /// The reader that asks ctest what it registers for a red control's cases: it asks only where the leg's tests run
 /// through ctest, with the command the test command of the same settings makes and the description option appended,
-/// started where that command starts and bounded by two minutes - and it owns no rule of the match, which
+/// started where that command starts and waited for to its end, said while it lasts - and it owns no rule of the match, which
 /// <see cref="CtestEntries"/> reads from the answer.
 /// </summary>
 public sealed class CtestDescriptionTests
@@ -371,7 +371,8 @@ public sealed class CtestDescriptionTests
     /// <summary>
     /// Nothing is asked - and nothing started - where the subject has no test settings, or their runner is no ctest; a
     /// leg whose tests run through ctest is asked with the command the test command makes, no filter and no label, the
-    /// description option appended, started where that command starts, bounded by two minutes.
+    /// description option appended, started where that command starts, and waited for to its end - no bound of the code's
+    /// own: a listing of forty thousand tests takes as long as it takes.
     /// </summary>
     [Fact]
     public async Task CtestIsAsked_AsTheLegsTestsStartIt_OnlyWhereTheyRunThroughIt()
@@ -400,7 +401,7 @@ public sealed class CtestDescriptionTests
 
         Assert.Equal(Path.Combine(Worker, "build", "x64-debug"), request.WorkingDirectory);
         Assert.Equal(["--test-dir", Path.Combine(Worker, "build", "x64-debug"), "--show-only=json-v1"], request.Arguments);
-        Assert.Equal(CtestDescription.Bound, request.Timeout);
+        Assert.Null(request.Timeout);
 
         foreach (var settings in new TestConfig?[]
         {
@@ -416,13 +417,12 @@ public sealed class CtestDescriptionTests
     }
 
     /// <summary>
-    /// What ctest could not say is said as that: ctest that would not start or failed, that ran past the bound, or whose
-    /// answer was no description - never a match, and never a rule of the reader's own.
+    /// What ctest could not say is said as that: ctest that would not start or failed, or whose answer was no description
+    /// - never a match, and never a rule of the reader's own.
     /// </summary>
     [Theory]
     [InlineData(1, null, false, "ctest exited 1")]
     [InlineData(0, "not json", false, "it is no JSON")]
-    [InlineData(0, null, true, "did not answer within 120s")]
     public async Task WhatCtestCouldNotSay_IsSaidAsThat(int exit, string? output, bool timedOut, string why)
     {
         var processes = Substitute.For<IProcessRunner>();
@@ -435,6 +435,32 @@ public sealed class CtestDescriptionTests
         Assert.Contains(why, answer.Unread, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// A ctest that takes four minutes to describe forty thousand tests is waited for and told, and read as any other: held
+    /// to two minutes of the code's own, it was said not to have answered.
+    /// </summary>
+    [Fact]
+    public async Task AFourMinuteListing_IsWaitedAndTold()
+    {
+        var clock = new TimerClock();
+        var output = Substitute.For<DssHarness.Core.Output.IHarnessOutput>();
+        var processes = Substitute.For<IProcessRunner>();
+        var ends = new TaskCompletionSource<ProcessResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        processes.RunAsync(Arg.Any<ProcessRequest>(), Arg.Any<CancellationToken>()).Returns(_ => ends.Task);
+
+        var answer = await FourMinutes.WaitedAndToldAsync(
+            clock,
+            new CtestDescription(processes, new HarnessFactory().FileSystem, new HostPlatform(), output, clock)
+                .AskAsync(Question(new TestConfig { All = new TestInvocation { Runner = "ctest" } }), TestContext.Current.CancellationToken),
+            () => ends.SetResult(new ProcessResult(0, """{"kind": "ctestInfo", "version": {"major": 1}, "tests": []}""", string.Empty, TimeSpan.FromMinutes(4), TimedOut: false)),
+            TestContext.Current.CancellationToken);
+
+        Assert.Null(answer!.Unread);
+        output.Received().Info(
+            DssHarness.Core.Mutations.MutationService.CommandName,
+            Arg.Is<string>(line => line.StartsWith("has waited 5m00s for ctest to describe the tests of ", StringComparison.Ordinal)));
+    }
     /// <summary>The asking over the given pieces, as the sweep builds it.</summary>
     private static CtestDescription Description(IProcessRunner processes)
         => new(processes, new HarnessFactory().FileSystem, new HostPlatform());

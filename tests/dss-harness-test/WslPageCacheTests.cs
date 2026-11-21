@@ -189,6 +189,42 @@ public sealed class WslPageCacheTests
         => Assert.Equal(bytes, WslPageCache.DroppedBytes(printed));
 
     /// <summary>
+    /// A listing of the distributions running, and the drop, are each waited for to their end and told under the admission
+    /// the drop is made for: held to thirty seconds and two minutes of the code's own, a sync writing hard under a build
+    /// was said to have given no answer.
+    /// </summary>
+    [Fact]
+    public async Task AFourMinuteListing_IsWaitedAndTold()
+    {
+        var clock = new TimerClock();
+        var output = Substitute.For<DssHarness.Core.Output.IHarnessOutput>();
+        var hosts = Substitute.For<IHostCommandRunner>();
+        var listed = new TaskCompletionSource<ProcessResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var commands = new List<HostCommand>();
+
+        hosts.ListRunningWslDistributionsAsync(Arg.Any<CancellationToken>()).Returns(_ => listed.Task);
+        hosts.RunAsync(Arg.Any<HostConnection>(), Arg.Do<HostCommand>(commands.Add), Arg.Any<CancellationToken>()).Returns(Task.FromResult(HostResults.Ok(Printed)));
+
+        var config = new HarnessConfig();
+        var secrets = Substitute.For<IHostSecretsStore>();
+        config.Hosts.Wsl["ubuntu"] = new WslHostConfig { RepositoryPath = "~/repo" };
+        secrets.ReadWslItem(Arg.Any<HarnessLayout>(), "ubuntu").Returns(new SecretsRead<WslItem>(new WslItem { Name = "ubuntu", Distribution = "Ubuntu-24.04" }, string.Empty));
+
+        var drop = await FourMinutes.WaitedAndToldAsync(
+            clock,
+            new WslPageCache(secrets, hosts, HostDoubles.Platform(PlatformId.Windows), output, clock)
+                .DropAsync(new HarnessContext(new HarnessLayout(TestHost.TemporaryRoot, TestHost.TemporaryRoot), config), TestContext.Current.CancellationToken),
+            () => listed.SetResult(HostResults.Ok("Ubuntu-24.04\n")),
+            TestContext.Current.CancellationToken);
+
+        Assert.NotNull(drop);
+        Assert.True(drop.Done, drop.Said);
+        Assert.Null(Assert.Single(commands).Timeout);
+        output.Received().Info(
+            DssHarness.Core.Execution.HeavyLegSlots.CommandName,
+            Arg.Is<string>(line => line == "has waited 5m00s for WSL to say which distributions run"));
+    }
+    /// <summary>
     /// Drops the cache over <paramref name="hosts"/>, on a machine running <paramref name="platform"/>, for a repository
     /// declaring a WSL host for each of <paramref name="declared"/>, in order, whose item names its distribution - or cannot
     /// be read, where it names none.

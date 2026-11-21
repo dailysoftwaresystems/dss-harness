@@ -1,6 +1,8 @@
+using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using DssHarness.Core.Json;
 
 namespace DssHarness.Core.Agents.Http;
 
@@ -26,8 +28,11 @@ public static class ApiBody
     /// <summary>The member of a body written as the conversation's messages.</summary>
     public const string Messages = "messages";
 
-    /// <summary>How the clients write JSON: compact, and escaping only what JSON must, for none of it is put in a page.</summary>
-    public static JsonSerializerOptions Json { get; } = new() { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
+    /// <summary>
+    /// How the clients write JSON: compact, escaping only what JSON must, for none of it is put in a page, and at any depth
+    /// (<see cref="JsonDepth"/>) - a tool's schema or a call's input nested past a writer's own depth is written whole.
+    /// </summary>
+    public static JsonSerializerOptions Json { get; } = JsonDepth.Serializer(new JsonSerializerOptions { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping });
 
     /// <summary>
     /// What is wrong with a client's <c>requestExtras</c>, each said in full: an object, whose members set nothing the
@@ -73,7 +78,7 @@ public static class ApiBody
 
         using var stream = new MemoryStream();
 
-        using (var writer = new Utf8JsonWriter(stream, new JsonWriterOptions { Encoder = Json.Encoder }))
+        using (var writer = new Utf8JsonWriter(stream, JsonDepth.Writer with { Encoder = Json.Encoder }))
         {
             writer.WriteStartObject();
 
@@ -84,14 +89,14 @@ public static class ApiBody
                 switch (name)
                 {
                     case Tools:
-                        writer.WriteRawValue(tools ?? throw new InvalidOperationException("A body that sends the conversation's tools was given none."));
+                        Raw(writer, tools ?? throw new InvalidOperationException("A body that sends the conversation's tools was given none."));
                         break;
                     case Messages:
                         writer.WriteStartArray();
 
                         foreach (var message in messages)
                         {
-                            writer.WriteRawValue(message);
+                            Raw(writer, message);
                         }
 
                         writer.WriteEndArray();
@@ -117,13 +122,32 @@ public static class ApiBody
         return stream.ToArray();
     }
 
+    /// <summary>
+    /// Writes <paramref name="json"/> as one value, byte for byte, once it reads as one value at any depth: a writer's own
+    /// check of a raw value reads it no deeper than 64 levels, so the check is made here, by a reader of
+    /// <see cref="JsonDepth"/>, and the writer's skipped.
+    /// </summary>
+    /// <exception cref="JsonException"><paramref name="json"/> is no one JSON value.</exception>
+    private static void Raw(Utf8JsonWriter writer, string json)
+    {
+        var bytes = Encoding.UTF8.GetBytes(json);
+        var reader = new Utf8JsonReader(bytes, JsonDepth.Reader);
+
+        if (!reader.Read() || !reader.TrySkip() || reader.Read())
+        {
+            throw new JsonException("A stored value of the conversation is no one JSON value.");
+        }
+
+        writer.WriteRawValue(bytes, skipInputValidation: true);
+    }
+
     /// <summary>Whether <paramref name="json"/> is the empty list: a conversation that has no tools.</summary>
     /// <param name="json">The tools, as stored.</param>
     public static bool IsEmptyList(string json)
     {
         ArgumentNullException.ThrowIfNull(json);
 
-        using var document = JsonDocument.Parse(json);
+        using var document = JsonDocument.Parse(json, JsonDepth.Document);
 
         return document.RootElement is { ValueKind: JsonValueKind.Array } list && list.GetArrayLength() == 0;
     }
@@ -148,7 +172,7 @@ public static class ApiBody
             else
             {
                 // From the value as it was read, never its text: config.json may hold comments and trailing commas within it.
-                body[member.Name] = JsonSerializer.SerializeToNode(member.Value);
+                body[member.Name] = JsonSerializer.SerializeToNode(member.Value, Json);
             }
         }
     }

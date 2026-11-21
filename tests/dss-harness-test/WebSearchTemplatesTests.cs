@@ -14,10 +14,28 @@ public sealed class WebSearchTemplatesTests
         var found = new Dictionary<string, string> { ["base"] = "https://a.test/api" };
 
         Assert.Equal(["base", "query", "limit"], template.Names);
-        Assert.Equal("https://a.test/api/s?q=a%2Bb%20c&n=7&f={x}&again=a%2Bb%20c", template.Address("a+b c", 7, found));
-        Assert.Equal("https://a.test/api/s?q=a+b c&n=7&f={x}&again=a+b c", template.Plain("a+b c", 7, found));
-        Assert.True(WebRequestTemplate.Parse("{limit}").IsLimitAlone);
-        Assert.False(WebRequestTemplate.Parse(" {limit}").IsLimitAlone);
+        Assert.Equal("https://a.test/api/s?q=a%2Bb%20c&n=7&f={x}&again=a%2Bb%20c", template.Address("a+b c", new WebSearchPage(1, 7), found));
+        Assert.Equal("https://a.test/api/s?q=a+b c&n=7&f={x}&again=a+b c", template.Plain("a+b c", new WebSearchPage(1, 7), found));
+        Assert.True(WebRequestTemplate.Parse("{limit}").IsNumberAlone);
+        Assert.True(WebRequestTemplate.Parse("{page}").IsNumberAlone);
+        Assert.False(WebRequestTemplate.Parse(" {limit}").IsNumberAlone);
+        Assert.False(template.Pages);
+    }
+
+    /// <summary>
+    /// A page is asked by its place: {page} the page as the source counts its pages - from 1, or from 0 for one that
+    /// counts so - and {start} how many results come before it, {limit} a page's size.
+    /// </summary>
+    [Fact]
+    public void ARequestsTemplate_AsksAPageByItsPlace()
+    {
+        var template = WebRequestTemplate.Parse("https://a.test/?q={query}&page={page}&from={start}&size={limit}");
+
+        Assert.True(template.Pages);
+        Assert.Equal("https://a.test/?q=x&page=1&from=0&size=10", template.Address("x", new WebSearchPage(1, 10), new Dictionary<string, string>()));
+        Assert.Equal("https://a.test/?q=x&page=3&from=20&size=10", template.Address("x", new WebSearchPage(3, 10), new Dictionary<string, string>()));
+        Assert.Equal("https://a.test/?q=x&page=2&from=20&size=10", template.Address("x", new WebSearchPage(3, 10, First: 0), new Dictionary<string, string>()));
+        Assert.Equal("https://a.test/?q=x&page=2147483647&from=21474836460&size=10", template.Address("x", new WebSearchPage(int.MaxValue, 10), new Dictionary<string, string>()));
     }
 
     /// <summary>A request's template that cannot be read says why.</summary>
@@ -27,7 +45,7 @@ public sealed class WebSearchTemplatesTests
     [InlineData("https://a.test/?q={}", "is no template: the placeholder at column 19 of line 1 names nothing (a brace meant literally is written twice)")]
     [InlineData("https://a.test/?q={9query}", "is no template: '{9query}' names no value: a name starts with a letter or '_' and holds only letters, digits, '_', '-' and '.'")]
     [InlineData("https://a.test/?q={query|x}", "is no template: '{query|x}' names no value")]
-    [InlineData("https://a.test/?q={query}&x={found}", "names '{found}', which nothing fills: {query}, {limit}, {other}")]
+    [InlineData("https://a.test/?q={query}&x={found}", "names '{found}', which nothing fills: {query}, {limit}, {page}, {start}, {other}")]
     public void ARequestsTemplateThatCannotBeRead_SaysWhy(string text, string problem)
         => Assert.StartsWith(problem, WebRequestTemplate.Problem(text, ["other"], needsQuery: true), StringComparison.Ordinal);
 
@@ -41,7 +59,7 @@ public sealed class WebSearchTemplatesTests
         var template = WebRequestTemplate.Parse("https://a.test/?q={query}&t=${TOKEN}&b=}&c={{x}}&d={_found.id}");
 
         Assert.Equal(["query", "_found.id"], template.Names);
-        Assert.Equal("https://a.test/?q=a%20b&t=${TOKEN}&b=}&c={x}&d=7", template.Address("a b", 5, new Dictionary<string, string> { ["_found.id"] = "7" }));
+        Assert.Equal("https://a.test/?q=a%20b&t=${TOKEN}&b=}&c={x}&d=7", template.Address("a b", new WebSearchPage(1, 5), new Dictionary<string, string> { ["_found.id"] = "7" }));
     }
 
     /// <summary>
@@ -85,23 +103,25 @@ public sealed class WebSearchTemplatesTests
         Assert.Equal("is no template: the placeholder at column 1 of line 1 is never closed", WebItemTemplate.Problem("{@.path{@.x}"));
     }
 
-    /// <summary>A snippet is cut at a blank near its end, never inside a pair of surrogates, and marked; a short one is kept whole.</summary>
+    /// <summary>An index hit's snippet - a window of a page kept whole - is cut at a blank near its end, never inside a pair of surrogates, and marked; a short one is kept whole.</summary>
     [Fact]
     public void ASnippet_IsCutAtABlank()
     {
-        Assert.Equal("short", DssHarness.Core.Output.TextCut.AtWord("short", WebSearchResult.MostSnippet));
+        const int Window = DssHarness.Core.Web.Index.WebIndex.SnippetLength;
+
+        Assert.Equal("short", DssHarness.Core.Output.TextCut.AtWord("short", Window));
 
         var unbroken = new string('x', 298) + "\U0001F600" + "tail";
-        Assert.Equal(new string('x', 298) + "…", DssHarness.Core.Output.TextCut.AtWord(unbroken, WebSearchResult.MostSnippet));
+        Assert.Equal(new string('x', 298) + "…", DssHarness.Core.Output.TextCut.AtWord(unbroken, Window));
 
         var words = string.Concat(Enumerable.Repeat("abcd ", 100));
-        var cut = DssHarness.Core.Output.TextCut.AtWord(words, WebSearchResult.MostSnippet);
+        var cut = DssHarness.Core.Output.TextCut.AtWord(words, Window);
         Assert.EndsWith("abcd…", cut, StringComparison.Ordinal);
-        Assert.True(cut.Length <= WebSearchResult.MostSnippet);
+        Assert.True(cut.Length <= Window);
 
         // A blank early in the text is no place to cut: the word is cut instead, most of the text kept.
-        var early = DssHarness.Core.Output.TextCut.AtWord("a " + new string('x', 400), WebSearchResult.MostSnippet);
-        Assert.Equal(("a xxx", WebSearchResult.MostSnippet), (early[..5], early.Length));
+        var early = DssHarness.Core.Output.TextCut.AtWord("a " + new string('x', 400), Window);
+        Assert.Equal(("a xxx", Window), (early[..5], early.Length));
     }
 
     /// <summary>A result's title and snippet are text with their blanks made single.</summary>

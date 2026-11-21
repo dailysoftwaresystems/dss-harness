@@ -43,7 +43,8 @@ internal sealed record InotifyUse(long? MaxInstances, long? MaxWatches, IReadOnl
                 + (holder.Name is { } name ? $" ({name})" : string.Empty))
             .ToList();
 
-        return $"{total.ToString(CultureInfo.InvariantCulture)} held: {ReportText.Listed(named)}";
+        // Every holder that fits the line is named, and the rest counted, where /proc - which this read - shows each.
+        return $"{total.ToString(CultureInfo.InvariantCulture)} held: {Names.Line(named, "/proc/<pid>/fdinfo")}";
     }
 }
 

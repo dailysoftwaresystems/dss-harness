@@ -156,6 +156,32 @@ public sealed class EmulatorProbeTests
         Assert.Equal(found.Directories, started?.ProgramDirectories);
     }
 
+    /// <summary>
+    /// A witness that takes four minutes - an emulator's first start, a sysroot read cold - is waited for and told, and
+    /// read as any other: held to a minute of the code's own, it was said not to have finished.
+    /// </summary>
+    [Fact]
+    public async Task AFourMinuteWitness_IsWaitedAndTold()
+    {
+        var clock = new TimerClock();
+        var output = Substitute.For<DssHarness.Core.Output.IHarnessOutput>();
+        var runner = Substitute.For<IProcessRunner>();
+        var ends = new TaskCompletionSource<ProcessResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var requests = new List<ProcessRequest>();
+
+        runner.RunAsync(Arg.Do<ProcessRequest>(requests.Add), Arg.Any<CancellationToken>()).Returns(_ => ends.Task);
+
+        var emulator = Emulator(prints: "aarch64", pattern: @"^\[aarch64\]$");
+        var check = await FourMinutes.WaitedAndToldAsync(
+            clock,
+            new EmulatorProbe(Platform("linux", "x86_64"), runner, FileSystem(), output, clock).CheckAsync(emulator, Found(emulator), TestContext.Current.CancellationToken),
+            () => ends.SetResult(new ProcessResult(0, "[aarch64]", string.Empty, TimeSpan.FromMinutes(4), TimedOut: false)),
+            TestContext.Current.CancellationToken);
+
+        Assert.True(check.Available, check.Reason);
+        Assert.Null(Assert.Single(requests).Timeout);
+        output.Received().Info(ToolPackage.Command, Arg.Is<string>(line => line.StartsWith("has waited 5m00s for the witness ", StringComparison.Ordinal)));
+    }
     [Fact]
     public async Task ARequirementNobodyCouldLookFor_IsSaidToBeUnknown_NotMissing()
     {

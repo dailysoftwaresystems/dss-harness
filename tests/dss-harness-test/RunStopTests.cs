@@ -222,38 +222,54 @@ public sealed class RunStopTests
     }
 
     /// <summary>
-    /// A dispatcher that has not taken the stop within the wait leaves it asked, refused naming --now and the request; one
-    /// that took it and is still stopping - a set-up's down line among what it waits for - is said to be stopping, naming
-    /// the run's record of the stop and that --now would end it part way through.
+    /// A dispatcher that takes the stop and is still stopping - a set-up's down line, a build's last step, among what it
+    /// waits for - is waited for while it lives, however long that takes, said every five minutes it lasts, and said
+    /// stopped once it has given up its records. Held to sixty seconds, a dispatcher still stopping was refused as one that
+    /// had not stopped in time, and the person told to end it part way through.
     /// </summary>
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task ADispatcherThatDoesNotStopInTime_IsSaidAsItStands(bool tookTheStop)
+    [Fact]
+    public async Task StopRun_WaitsWhileTheDispatcherLives()
     {
         using var temp = new TempDirectory();
-        var (service, _, layout) = Service(temp, new JumpingClock());
-        var directory = layout.RunDirectory(Run);
+        var harness = new HarnessFactory();
+        var clock = new TimerClock();
+        var claims = new LogOwnership(harness.FileSystem, harness.Output, harness.Identity);
+        var stops = new RunStops(harness.FileSystem, harness.Identity, harness.Output, claims);
+        var service = new RunStopService(HostDoubles.Loader(new HarnessConfig(), temp.Path), claims, stops, harness.Identity, harness.FileSystem, clock, harness.Output);
+        var directory = new Core.Repository.HarnessLayout(temp.Path, temp.Path).RunDirectory(Run);
 
         Directory.CreateDirectory(directory);
         Owned(directory, Environment.MachineName, Environment.ProcessId, new ProcessIdentity(new Core.Platform.HostPlatform()).Current);
+        TookTheStop(directory);
 
-        if (tookTheStop)
+        var stopping = service.StopAsync(temp.Path, Run, now: false, json: true, TestContext.Current.CancellationToken);
+
+        // Six minutes of a dispatcher that lives, a minute at a time: each look finds it still there, and the fifth minute
+        // is said.
+        for (var minute = 0; minute < 6; minute++)
         {
-            TookTheStop(directory);
+            await clock.WaitingAsync(2).WaitAsync(ClockDrive.Within, TestContext.Current.CancellationToken);
+            clock.Advance(TimeSpan.FromMinutes(1));
         }
 
-        var outcome = await service.StopAsync(temp.Path, Run, now: false, json: true, TestContext.Current.CancellationToken);
+        await clock.WaitingAsync(2).WaitAsync(ClockDrive.Within, TestContext.Current.CancellationToken);
+        Assert.False(stopping.IsCompleted, "the stop was not waited for while its dispatcher lived");
+
+        // It gives up its records, and the next look finds it gone.
+        File.Delete(LogOwnership.OwnerFile(directory));
+        clock.Advance(StopCadence.WatchEvery);
+
+        var outcome = await stopping.WaitAsync(ClockDrive.Within, TestContext.Current.CancellationToken);
 
         using var document = JsonDocument.Parse(Assert.Single(outcome.Data));
-        var record = tookTheStop ? RunStops.TakenFileOf(directory) : RunStops.FileOf(directory);
 
-        Assert.Equal(HarnessExit.Refused, outcome.ExitCode);
-        Assert.EndsWith(tookTheStop ? ") took the stop and is still stopping after 60 s" : ") did not take the stop within 60 s; the stop stays asked", outcome.Message, StringComparison.Ordinal);
-        Assert.Equal(
-            [tookTheStop ? $"stop-run {Run} --now ends its process where it stands, part way through its stop" : $"stop-run {Run} --now ends its process where it stands", $"stop: {record}"],
-            outcome.Details);
-        Assert.Equal(record, document.RootElement.GetProperty("records").GetProperty("stop").GetString());
+        Assert.Equal(HarnessExit.Success, outcome.ExitCode);
+        Assert.EndsWith(") took the stop and gave up its records", outcome.Message, StringComparison.Ordinal);
+        Assert.True(document.RootElement.GetProperty("stopped").GetBoolean());
+        Assert.Contains(
+            $"stop-run: has waited 5m00s for run {Run}'s dispatcher (pid {Environment.ProcessId}, run {Run}, since ",
+            $"{harness.StandardOutput}{harness.StandardError}",
+            StringComparison.Ordinal);
     }
 
     /// <summary>

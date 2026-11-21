@@ -168,6 +168,14 @@ public sealed record ReachedVerdict(LegVerdict Verdict, string Detail)
     public static ReachedVerdict Of(LegVerdict verdict, string detail = "") => new(verdict, detail);
 
     /// <summary>
+    /// Every item <see cref="Detail"/> stands for, whole and in order, where it stands for a list - the inputs that moved,
+    /// or that could not be measured: the sentence names as many as fit its line and says the rest are here, which the
+    /// leg's line keeps whole in the ledger and its <c>--json</c> (<see cref="LegEntry.Named"/>). Empty where it names no
+    /// list.
+    /// </summary>
+    public IReadOnlyList<string> Named { get; init; } = [];
+
+    /// <summary>
     /// <paramref name="verdict"/> when the leg reached one, and <see cref="LegVerdict.Poisoned"/>
     /// naming the leg when it did not. A leg that finishes with no verdict is a defect in the
     /// harness itself, and it fails the run rather than silently vanishing from the report.

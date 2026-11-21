@@ -26,14 +26,17 @@ public sealed class SshWakeWindowTests
         var resolution = await window.KeepResolvingAsync(Missed("mac.local"), window.Now, TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
 
         Assert.True(resolution.Resolved);
-        Assert.Equal(6, resolution.Attempts);
+        Assert.Equal(5, resolution.Attempts);
         Assert.Equal("192.0.2.7", resolution.ResolvedTo);
         Assert.Equal(["fe80::7", "192.0.2.7"], resolution.Addresses);
     }
 
-    /// <summary>A name that never answers is looked up until the window ends, and no longer.</summary>
+    /// <summary>
+    /// No answer is looked up again for as long as the window lasts, however many lookups that takes, and no longer: a
+    /// waking host passes by nature. Counted to a number of the code's own, it stopped where the window had time left.
+    /// </summary>
     [Fact]
-    public async Task AName_ThatNeverAnswers_IsLookedUpUntilTheWindowEnds()
+    public async Task NoAnswer_IsRetriedInTheWakeWindow()
     {
         var clock = new ManualClock(Start);
         var lookup = new ScriptedLookup(clock, answersOnCall: int.MaxValue, step: TimeSpan.FromSeconds(10));
@@ -43,7 +46,28 @@ public sealed class SshWakeWindowTests
 
         Assert.False(resolution.Resolved);
         Assert.Equal(3, lookup.Calls);
-        Assert.Equal(6, resolution.Attempts);
+        Assert.Equal(5, resolution.Attempts);
+        Assert.Null(resolution.NoSuchName);
+    }
+
+    /// <summary>
+    /// A name its DNS server says does not exist ends the window's lookups at once - no waking changes that answer - and one
+    /// the resolver already heard that of is not looked up again at all.
+    /// </summary>
+    [Fact]
+    public async Task ANameThatDoesNotExist_EndsTheWindowsLookupsAtOnce()
+    {
+        var clock = new ManualClock(Start);
+        var lookup = new ScriptedLookup(clock, int.MaxValue, TimeSpan.FromSeconds(1)) { Refuses = true };
+        var window = new SshWakeWindow(lookup, clock, TimeSpan.Zero);
+
+        var resolution = await window.KeepResolvingAsync(Missed("mac.example.com"), window.Now, TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+        var again = await window.KeepResolvingAsync(resolution, window.Now, TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+        Assert.Equal("does not exist", resolution.NoSuchName);
+        Assert.Equal(1, lookup.Calls);
+        Assert.Equal(3, resolution.Attempts);
+        Assert.Same(resolution, again);
     }
 
     /// <summary>
@@ -124,11 +148,13 @@ public sealed class SshWakeWindowTests
     }
 
     /// <summary>
-    /// Why a host's window ran out is kept for the half minute a name's answer is, so the other legs a command
-    /// places there are refused at once rather than each waiting the window again; and then forgotten.
+    /// Why a host's window ran out is kept for as long as that window, so the other legs a command places there in that
+    /// time are refused at once rather than each waiting the window again; and then forgotten, so a leg placed later waits
+    /// a window of its own. Kept for the half minute a name's answer once was, a ninety-second window was waited again
+    /// by a leg placed a minute later.
     /// </summary>
     [Fact]
-    public void WhyAWindowRanOut_IsKeptForAMoment_AndThenForgotten()
+    public void WhyAWindowRanOut_IsKeptForTheWindowsOwnLength_AndThenForgotten()
     {
         var clock = new ManualClock(Start);
         var window = new SshWakeWindow(new ScriptedLookup(clock, int.MaxValue, TimeSpan.Zero), clock, TimeSpan.Zero);
@@ -136,8 +162,8 @@ public sealed class SshWakeWindowTests
 
         Assert.Null(window.RanOut(mac));
 
-        window.Remember(mac, "it did not wake");
-        clock.Advance(HostAddressResolver.CacheLifetime - TimeSpan.FromSeconds(1));
+        window.Remember(mac, "it did not wake", TimeSpan.FromSeconds(90));
+        clock.Advance(TimeSpan.FromSeconds(89));
 
         Assert.Equal("it did not wake", window.RanOut(mac));
         Assert.Null(window.RanOut(HostId.Ssh("vps")));
@@ -147,7 +173,8 @@ public sealed class SshWakeWindowTests
         Assert.Null(window.RanOut(mac));
     }
 
-    private static AddressResolution Missed(string name) => AddressResolution.Missed(name, HostAddressResolver.Attempts);
+    /// <summary>A name the resolver got no answer for, in the two lookups it makes before a window is given.</summary>
+    private static AddressResolution Missed(string name) => AddressResolution.Missed(name, 2);
 
     private static ProcessResult Refused() => HostResults.Failed(HostProbes.SshFailed, "ssh: connect to host mac.local port 22: Connection refused\n");
 
@@ -177,10 +204,18 @@ public sealed class SshWakeWindowTests
     {
         public int Calls { get; private set; }
 
+        /// <summary>Whether its DNS server answers that the name does not exist.</summary>
+        public bool Refuses { get; init; }
+
         public Task<IReadOnlyList<string>> LookupAsync(string name, CancellationToken cancellationToken = default)
         {
             Calls++;
             clock.Advance(step);
+
+            if (Refuses)
+            {
+                throw new NoSuchNameException(name, "does not exist");
+            }
 
             return Task.FromResult<IReadOnlyList<string>>(Calls >= answersOnCall ? ["fe80::7", "192.0.2.7"] : []);
         }

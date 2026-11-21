@@ -113,23 +113,31 @@ public sealed record WorkflowDefinition(
 /// <param name="Include">Patterns only the paths one of which matches are graphed.</param>
 /// <param name="Exclude">Patterns the paths one of which matches are not graphed.</param>
 /// <param name="Languages">The implementations used, by name.</param>
-/// <param name="MaxFileBytes">The largest file read.</param>
+/// <param name="MaxFileBytes">
+/// The retired <c>maxFileBytes</c>, as a frozen definition of an earlier release holds it: read so that run's definition
+/// still reads back, and never applied - every file the graph claims is read whole - nor written, for no file gives it
+/// (<see cref="WorkflowFileParser.RetiredGraphKey"/>).
+/// </param>
 /// <param name="Generated">What becomes of generated code: <c>low</c> or <c>exclude</c>.</param>
 /// <param name="MapTokens">The cap, in tokens, of the run's repository map, made once and read as it is by every step after; 0 asks for none.</param>
+/// <param name="KeyNaming">The naming policies a configuration key's last segment is joined to a member's name by.</param>
+/// <param name="Claims">The file name endings, each with its dot, mapped to the implementation that reads them, by its name.</param>
 public sealed record FlowCodebaseGraph(
     IReadOnlyList<string>? Include = null,
     IReadOnlyList<string>? Exclude = null,
     IReadOnlyList<string>? Languages = null,
     int? MaxFileBytes = null,
     string? Generated = null,
-    int? MapTokens = null)
+    int? MapTokens = null,
+    IReadOnlyList<string>? KeyNaming = null,
+    IReadOnlyDictionary<string, IReadOnlyList<string>>? Claims = null)
 {
     /// <summary>
     /// The shape the block gives the run's graph, every key it leaves out at its default: read from the block, never
     /// written with it - the run's frozen definition, and its digest, hold what the file says, not this build's defaults.
     /// </summary>
     [System.Text.Json.Serialization.JsonIgnore]
-    public Codebase.CodebaseGraphShape Shape => Codebase.CodebaseGraphShape.Of(Include, Exclude, Languages, MaxFileBytes, Generated, MapTokens);
+    public Codebase.CodebaseGraphShape Shape => Codebase.CodebaseGraphShape.Of(Include, Exclude, Languages, Generated, MapTokens, KeyNaming, Claims);
 }
 
 /// <summary>
@@ -949,15 +957,17 @@ public sealed record WorkflowStep
     public static readonly IReadOnlyList<string> GraphFromWords = [GraphFromTask, GraphFromChanges];
 
     /// <summary>
-    /// The cap of the step's context pack, in estimated tokens, from 0 to <see cref="MostGraphPromptTokens"/> - 0 asks for
-    /// no pack; absent, <see cref="DefaultGraphPromptTokens"/>. A step that goes on with another's work may say its own.
+    /// The size of the first page of the step's context pack - the page its prompt is given - in estimated tokens, from 0
+    /// to <see cref="MostGraphPromptTokens"/>: 0 asks for no pack; absent, <see cref="DefaultGraphPromptTokens"/>. What
+    /// the pack reaches past the first page is on the pages after it, never left out. A step that goes on with another's
+    /// work may say its own.
     /// </summary>
     public int? GraphPromptTokens { get; init; } = null;
 
-    /// <summary>The cap of a step's context pack where neither the step nor anything else says one.</summary>
+    /// <summary>The size of a context pack's first page where neither the step nor anything else says one.</summary>
     public const int DefaultGraphPromptTokens = 3_000;
 
-    /// <summary>The most tokens a step may cap its context pack at.</summary>
+    /// <summary>The largest first page of its context pack a step may ask its prompt to be given.</summary>
     public const int MostGraphPromptTokens = 20_000;
 
     /// <summary>Whether the step's reads are narrowed to the graph: <c>narrow</c> (the default) or <c>guide</c>.</summary>

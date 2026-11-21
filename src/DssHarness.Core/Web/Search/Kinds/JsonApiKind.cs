@@ -8,9 +8,11 @@ namespace DssHarness.Core.Web.Search.Kinds;
 
 /// <summary>
 /// <c>json-api</c>: a search API that answers JSON, asked at an address its template fills - <c>{query}</c>, <c>{limit}</c>,
-/// and any name <c>discover</c> reads from another JSON document, kept for the run once found - and read by RFC 9535 JSONPath queries: the
-/// array of results, each one's title, address and snippet by templates of queries of the item, how many it holds, and a
-/// pause it asks for in its body.
+/// <c>{page}</c>, <c>{start}</c>, and any name <c>discover</c> reads from another JSON document, kept for the run once found -
+/// and read by RFC 9535 JSONPath queries: the array of results, every one of the page, each one's title, address and
+/// snippet by templates of queries of the item, how many it holds, and a pause it asks for in its body. A page past the
+/// first is asked by its number where its templates name <c>{page}</c> or <c>{start}</c>; one that names neither answers
+/// one page.
 /// </summary>
 public sealed class JsonApiKind : IWebSearchKind
 {
@@ -18,14 +20,15 @@ public sealed class JsonApiKind : IWebSearchKind
     public string Kind => "json-api";
 
     /// <inheritdoc/>
-    public int Version => 1;
+    public int Version => 2;
 
     /// <inheritdoc/>
     public IReadOnlyList<KeyDescription> Keys { get; } =
     [
-        new("url", "the address asked: a template whose {query} is the query, {limit} the most results asked, and any other name in braces a name discover reads") { Required = true },
+        new("url", "the address asked: a template whose {query} is the query, {limit} how many results a page holds (pageSize), {page} the page asked, as the source counts its pages, {start} how many results come before it, and any other name in braces a name discover reads; one that names neither {page} nor {start} asks one page") { Required = true },
+        new("firstPage", "the number the source counts its first page as, which {page} is filled from: 1 where none is said, or 0"),
         new("method", "GET, where none is said, or POST with body"),
-        new("body", "a POST's body, JSON: each text in it a template as url's, and a text that is {limit} alone the number"),
+        new("body", "a POST's body, JSON: each text in it a template as url's, and a text that is {limit}, {page} or {start} alone the number"),
         new("headers", "headers to send, by name: never User-Agent, a key, what the request itself says or what a body says of itself"),
         .. JsonSearchItems.Keys(required: true),
         new("backoff", "a JSONPath query of the answer that finds a number of seconds the source asks to be left alone"),
@@ -115,6 +118,15 @@ public sealed class JsonApiKind : IWebSearchKind
         if (read)
         {
             problems.AddRange(discovered.Where(name => !named.Contains(name)).Select(name => $"'discover' reads '{name}', which neither 'url' nor 'body' names"));
+        }
+
+        if (source.Value("firstPage") is { } first && (first.ValueKind != JsonValueKind.Number || !first.TryGetInt32(out var counted) || counted is not (0 or 1)))
+        {
+            problems.Add($"'firstPage' is 1 or 0, the number the source counts its first page as, and is {first.GetRawText()}");
+        }
+        else if (read && source.Has("firstPage") && !named.Contains(WebRequestTemplate.Page))
+        {
+            problems.Add($"'firstPage' says what {{{WebRequestTemplate.Page}}} counts from, and neither 'url' nor 'body' names {{{WebRequestTemplate.Page}}}");
         }
 
         if (source.Value("headers") is { } headers)
@@ -235,11 +247,20 @@ public sealed class JsonApiKind : IWebSearchKind
     }
 
     /// <inheritdoc/>
-    public WebSearchRequest Request(WebSearchSource source, WebSearchFound found, string query, int limit)
+    public WebSearchRequest Request(WebSearchSource source, WebSearchFound found, string query, int page)
     {
         ArgumentNullException.ThrowIfNull(source);
         ArgumentNullException.ThrowIfNull(found);
 
+        var url = WebRequestTemplate.Parse(source.Text("url")!);
+        var body = source.Value("body");
+
+        if (page > 1 && !url.Pages && (body is not { } texts || !Texts(texts).Any(text => WebRequestTemplate.Parse(text).Pages)))
+        {
+            return new WebSearchRequest.OnePage($"its address names no {{{WebRequestTemplate.Page}}} and no {{{WebRequestTemplate.Start}}}, so it answers one page, the first");
+        }
+
+        var asked = new WebSearchPage(page, source.PageSize, source.Integer("firstPage") ?? 1);
         var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { ["Accept"] = "application/json" };
 
         if (source.Value("headers") is { ValueKind: JsonValueKind.Object } given)
@@ -250,16 +271,16 @@ public sealed class JsonApiKind : IWebSearchKind
             }
         }
 
-        var address = WebRequestTemplate.Parse(source.Text("url")!).Address(query, limit, found.Values);
+        var address = url.Address(query, asked, found.Values);
 
-        if (source.Value("body") is not { } body)
+        if (body is not { } sent)
         {
             return new WebSearchRequest.Http("GET", address, headers, null);
         }
 
         headers["Content-Type"] = "application/json";
 
-        return new WebSearchRequest.Http("POST", address, headers, Filled(body, query, limit, found.Values));
+        return new WebSearchRequest.Http("POST", address, headers, Filled(sent, query, asked, found.Values));
     }
 
     /// <inheritdoc/>
@@ -303,9 +324,9 @@ public sealed class JsonApiKind : IWebSearchKind
         {
             var said = $"discover.{entry.Name}";
 
-            if (!LegPathNames.IsName(entry.Name) || entry.Name is WebRequestTemplate.Query or WebRequestTemplate.Limit)
+            if (!LegPathNames.IsName(entry.Name) || WebRequestTemplate.Filled.Contains(entry.Name))
             {
-                problems.Add($"'{said}' is no name a template fills: a name {LegPathNames.NameRule}, and neither query nor limit");
+                problems.Add($"'{said}' is no name a template fills: a name {LegPathNames.NameRule}, and none of {string.Join(", ", WebRequestTemplate.Filled)}");
                 continue;
             }
 
@@ -355,71 +376,84 @@ public sealed class JsonApiKind : IWebSearchKind
             ? [.. discover.EnumerateObject().Select(entry => (entry.Name, JsonObjectKeys.Text(entry.Value, "url")!, JsonObjectKeys.Text(entry.Value, "path")!))]
             : [];
 
-    /// <summary>Every text in <paramref name="value"/>, member names apart.</summary>
-    private static IEnumerable<string> Texts(JsonElement value) => value.ValueKind switch
-    {
-        JsonValueKind.String => [value.GetString()!],
-        JsonValueKind.Array => value.EnumerateArray().SelectMany(Texts),
-        JsonValueKind.Object => value.EnumerateObject().SelectMany(member => Texts(member.Value)),
-        _ => [],
-    };
+    /// <summary>Every text in <paramref name="value"/>, member names apart, in document order, by the one walk of a document (<see cref="JsonWalk"/>), which goes down a nesting of any depth.</summary>
+    private static IEnumerable<string> Texts(JsonElement value)
+        => JsonWalk.Descendants(value).Where(place => place.Element.ValueKind == JsonValueKind.String).Select(place => place.Element.GetString()!);
 
-    /// <summary><paramref name="body"/> with each text filled as a template - a text that is <c>{limit}</c> alone the number - written as JSON.</summary>
-    private static string Filled(JsonElement body, string query, int limit, IReadOnlyDictionary<string, string> found)
+    /// <summary>
+    /// <paramref name="body"/> with each text filled as a template - a text that is <c>{limit}</c>, <c>{page}</c> or
+    /// <c>{start}</c> alone the number - written as JSON: each place in document order, by the one walk of a document
+    /// (<see cref="JsonWalk"/>), an object or array closed once the walk has left it - no depth is too deep for it.
+    /// </summary>
+    private static string Filled(JsonElement body, string query, WebSearchPage page, IReadOnlyDictionary<string, string> found)
     {
         using var buffer = new MemoryStream();
 
-        using (var writer = new Utf8JsonWriter(buffer))
+        using (var writer = new Utf8JsonWriter(buffer, JsonDepth.Writer))
         {
-            Write(writer, body);
+            var open = new Stack<JsonValueKind>();
+
+            foreach (var (place, value) in JsonWalk.Descendants(body))
+            {
+                while (open.Count > place.Depth)
+                {
+                    End(writer, open.Pop());
+                }
+
+                if (place.Name is { } name)
+                {
+                    writer.WritePropertyName(name);
+                }
+
+                switch (value.ValueKind)
+                {
+                    case JsonValueKind.String:
+                        var template = WebRequestTemplate.Parse(value.GetString()!);
+
+                        if (template.IsNumberAlone)
+                        {
+                            writer.WriteRawValue(template.Plain(query, page, found));
+                        }
+                        else
+                        {
+                            writer.WriteStringValue(template.Plain(query, page, found));
+                        }
+
+                        break;
+
+                    case JsonValueKind.Array:
+                        writer.WriteStartArray();
+                        open.Push(JsonValueKind.Array);
+                        break;
+
+                    case JsonValueKind.Object:
+                        writer.WriteStartObject();
+                        open.Push(JsonValueKind.Object);
+                        break;
+
+                    default:
+                        value.WriteTo(writer);
+                        break;
+                }
+            }
+
+            while (open.Count > 0)
+            {
+                End(writer, open.Pop());
+            }
         }
 
         return Encoding.UTF8.GetString(buffer.ToArray());
 
-        void Write(Utf8JsonWriter writer, JsonElement value)
+        static void End(Utf8JsonWriter writer, JsonValueKind kind)
         {
-            switch (value.ValueKind)
+            if (kind == JsonValueKind.Array)
             {
-                case JsonValueKind.String:
-                    var template = WebRequestTemplate.Parse(value.GetString()!);
-
-                    if (template.IsLimitAlone)
-                    {
-                        writer.WriteNumberValue(limit);
-                    }
-                    else
-                    {
-                        writer.WriteStringValue(template.Plain(query, limit, found));
-                    }
-
-                    break;
-
-                case JsonValueKind.Array:
-                    writer.WriteStartArray();
-
-                    foreach (var item in value.EnumerateArray())
-                    {
-                        Write(writer, item);
-                    }
-
-                    writer.WriteEndArray();
-                    break;
-
-                case JsonValueKind.Object:
-                    writer.WriteStartObject();
-
-                    foreach (var member in value.EnumerateObject())
-                    {
-                        writer.WritePropertyName(member.Name);
-                        Write(writer, member.Value);
-                    }
-
-                    writer.WriteEndObject();
-                    break;
-
-                default:
-                    value.WriteTo(writer);
-                    break;
+                writer.WriteEndArray();
+            }
+            else
+            {
+                writer.WriteEndObject();
             }
         }
     }

@@ -161,6 +161,62 @@ public sealed class ProcessRunnerTests
     }
 
     /// <summary>
+    /// A stream kept as a tail whose request names its log is written there whole, every character as the child wrote
+    /// it, and the result names the log beside the tail it quotes: the tail is quoted by reference to the whole, never
+    /// all there is of a stream two megabytes long.
+    /// </summary>
+    [Fact]
+    public async Task AStreamsWholeOutput_IsQuotedByReference()
+    {
+        const int Count = 20_000;
+        const int Length = 100;
+        using var temp = new TempDirectory();
+        var log = temp.Combine("output.log");
+        var printed = string.Concat(Enumerable.Range(0, Count).Select(index => TestChild.FloodLine(index, Length) + "\n"));
+
+        var result = await CreateRunner().RunAsync(
+            TestHost.ChildRequest("flood", $"{Count}", $"{Length}") with
+            {
+                OnOutputLine = _ => { },
+                OutputKept = StreamKept.Tail,
+                OutputLog = log,
+            },
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(log, result.OutputLog);
+        Assert.Equal(printed, await File.ReadAllTextAsync(log, TestContext.Current.CancellationToken));
+        Assert.Equal(printed[^ProcessRunner.TailLength..], result.StandardOutput);
+    }
+
+    /// <summary>
+    /// A line thirty megabytes long - a test printing a whole JSON document on one line - is handed on whole, as one line,
+    /// on a stream kept as a tail, and the request is told of no line in pieces: lines are cut only past the longest string
+    /// .NET makes, never at 32K characters of the code's own, as once.
+    /// </summary>
+    [Fact]
+    public async Task AThirtyMegabyteLine_IsKeptWholeAndMatched()
+    {
+        const int Giant = 30_000_000;
+        var lines = new List<string>();
+        var pieced = 0;
+
+        await CreateRunner().RunAsync(
+            TestHost.ChildRequest("flood", "0", "200", $"{Giant}") with
+            {
+                OnOutputLine = lines.Add,
+                OutputKept = StreamKept.Tail,
+                OnLineInPieces = () => Interlocked.Increment(ref pieced),
+            },
+            TestContext.Current.CancellationToken);
+
+        var line = Assert.Single(lines);
+
+        Assert.Equal(Giant, line.Length);
+        Assert.Matches("^g+$", line);
+        Assert.Equal(0, pieced);
+    }
+
+    /// <summary>
     /// A line handler that fails - of the output or of the error output - is handed no more lines, and its stream is still
     /// read to the end: a child writing more than a pipe holds would otherwise block on a pipe nobody reads, and one whose
     /// input is held open, as a host's agent's is, would never end. What the handler raised is raised once the child has
@@ -241,14 +297,24 @@ public sealed class ProcessRunnerTests
     public async Task RunAsync_HandsOnALineThatNeverEnds_InPieces_OnAStreamKeptAsATail()
     {
         const int Giant = 100_000;
+        const int Piece = 32 * 1024;
+        using var cut = ProcessRunner.LinesHandedOnIn(Piece);
         var pieces = new List<string>();
+        var pieced = 0;
 
         var result = await CreateRunner().RunAsync(
-            TestHost.ChildRequest("flood", "0", "200", $"{Giant}") with { OnOutputLine = pieces.Add, OutputKept = StreamKept.Tail },
+            TestHost.ChildRequest("flood", "0", "200", $"{Giant}") with
+            {
+                OnOutputLine = pieces.Add,
+                OutputKept = StreamKept.Tail,
+                OnLineInPieces = () => Interlocked.Increment(ref pieced),
+            },
             TestContext.Current.CancellationToken);
 
+        Assert.Equal(1, pieced);
+
         Assert.Equal(
-            [ProcessRunner.LongestLine, ProcessRunner.LongestLine, ProcessRunner.LongestLine, Giant - (3 * ProcessRunner.LongestLine)],
+            [Piece, Piece, Piece, Giant - (3 * Piece)],
             pieces.Select(piece => piece.Length));
         Assert.Equal(TestChild.GiantLine(Giant), string.Concat(pieces));
         Assert.Equal(TestChild.GiantLine(ProcessRunner.TailLength), result.StandardOutput);
@@ -264,7 +330,7 @@ public sealed class ProcessRunnerTests
             },
             TestContext.Current.CancellationToken);
 
-        Assert.All(cutShort.SkipLast(1), piece => Assert.Equal(ProcessRunner.LongestLine - 100, piece.Length));
+        Assert.All(cutShort.SkipLast(1), piece => Assert.Equal(Piece - 100, piece.Length));
         Assert.Equal(TestChild.GiantLine(Giant), string.Concat(cutShort));
 
         var whole = new List<string>();
@@ -676,12 +742,15 @@ public sealed class ProcessRunnerTests
     /// child - a carrier to another machine - has stopped hearing this process and goes on, and whatever counts on the
     /// beat at its far end will give this process up. Passed over, as the child ceasing to read its input always was,
     /// that left whoever started it with a run stopped for a machine that had gone, and nothing here to say why.
-    /// A child that takes its input with it as it exits has lost no beat.
+    /// However soon the child ends after: the system is asked, as the beat fails, whether the child is in its exit - a
+    /// child going on for less than the two seconds once given to be "found exiting" stopped hearing this process all the
+    /// same. A child that takes its input with it as it exits has lost no beat
+    /// (<see cref="RunAsync_WritesABeatOnAnInputHeldOpen_UntilTheChildExits_AndNoneOnOneThatIsNot"/>).
     /// </summary>
     [Theory]
-    [InlineData("4000", true)]
-    [InlineData("300", false)]
-    public async Task RunAsync_SaysABeatWasLost_WhereAChildStillRunningStoppedTakingIt(string runsFor, bool lost)
+    [InlineData("4000")]
+    [InlineData("600")]
+    public async Task RunAsync_SaysABeatWasLost_WhereAChildStillRunningStoppedTakingIt(string runsFor)
     {
         // A child that takes its request, closes its own end of its input and goes on: this build's own on Windows, and
         // a shell elsewhere, where the runtime keeps a second descriptor of its input that closing the first does not
@@ -703,8 +772,44 @@ public sealed class ProcessRunnerTests
 
         Assert.False(result.TimedOut);
         Assert.Equal(0, result.ExitCode);
-        Assert.Equal(lost, result.BeatLost is { Length: > 0 });
+        Assert.False(string.IsNullOrWhiteSpace(result.BeatLost), "a child that closed its input and ran on was said to have lost no beat");
     }
+
+    /// <summary>
+    /// A child is going once the system marks it as in its exit or it has ended, and not while it runs: what tells a
+    /// child whose input closed with its exit from one that closed it and runs on, asked the moment the beat fails
+    /// rather than waited on for a guess at how long an exit takes.
+    /// </summary>
+    [Fact]
+    public async Task AChild_IsGoingOnceItHasEnded_AndNotWhileItRuns()
+    {
+        using var process = Process.Start(TestHost.StartOf(TestHost.ChildRequest("sleep", "300000")))!;
+
+        try
+        {
+            Assert.False(ProcessGoing.IsGoing(process), "a child sleeping was said to be going");
+        }
+        finally
+        {
+            process.Kill(entireProcessTree: true);
+            await process.WaitForExitAsync(TestContext.Current.CancellationToken);
+        }
+
+        Assert.True(ProcessGoing.IsGoing(process), "a child that has ended was not said to be going");
+    }
+
+    /// <summary>
+    /// A thread's <c>stat</c> line says it is exiting where it is a zombie or dead, or its flags hold <c>PF_EXITING</c>,
+    /// read after the last parenthesis of its name - which may hold spaces and parentheses of its own - and not otherwise.
+    /// </summary>
+    [Theory]
+    [InlineData("41 (sleep) S 40 41 41 0 -1 4194304 120 0 0 0", false)]
+    [InlineData("41 (sleep) S 40 41 41 0 -1 4194308 120 0 0 0", true)]
+    [InlineData("41 (a (b) c) R 40 41 41 0 -1 4194304 120 0 0 0", false)]
+    [InlineData("41 (a (b) c) Z 40 41 41 0 -1 4194304 120 0 0 0", true)]
+    [InlineData("41 (x) X 40 41 41 0 -1 0 1 0 0 0", true)]
+    public void AThreadsStatLine_SaysWhetherItIsExiting(string stat, bool exiting)
+        => Assert.Equal(exiting, ProcessGoing.ThreadExiting(stat));
 
     /// <summary>
     /// A start that fails as a program being written does is made again until it succeeds, where the system refuses to
@@ -725,19 +830,44 @@ public sealed class ProcessRunnerTests
                 }
             },
             busyPasses: true,
-            TimeSpan.FromSeconds(30),
             TestContext.Current.CancellationToken);
 
         Assert.Equal(3, tries);
     }
 
     /// <summary>
-    /// A program still held once the grace is spent fails as what it is; any other failure is the start's own at once,
-    /// as is that one where the system gives the number another meaning; and the waiting between two tries stops when
-    /// the run is cancelled.
+    /// A start the system refuses as a program being written is made again for as long as the system says so - here past
+    /// the two seconds it was once given before the start failed - and then starts.
     /// </summary>
     [Fact]
-    public async Task AStartStillFailingOnceTheGraceIsSpent_OrFailingAnotherWay_IsItsOwnFailure()
+    public async Task ETxtBusy_IsRetriedWhileTheOsSaysIt()
+    {
+        var busyFor = Stopwatch.StartNew();
+        var tries = 0;
+
+        await ProcessRunner.StartAsync(
+            () =>
+            {
+                tries++;
+
+                if (busyFor.Elapsed < TimeSpan.FromSeconds(3))
+                {
+                    throw new System.ComponentModel.Win32Exception(ProcessRunner.TextFileBusy);
+                }
+            },
+            busyPasses: true,
+            TestContext.Current.CancellationToken);
+
+        Assert.True(busyFor.Elapsed >= TimeSpan.FromSeconds(3), $"the start succeeded after {busyFor.Elapsed}, before the system stopped saying busy");
+        Assert.InRange(tries, 2, int.MaxValue);
+    }
+
+    /// <summary>
+    /// Any other failure is the start's own at once, as is a busy one where the system gives the number another meaning;
+    /// and the waiting between two tries stops when the run is cancelled.
+    /// </summary>
+    [Fact]
+    public async Task AStartFailingAnotherWay_IsItsOwnFailure_AndTheWaitsEndWithTheRun()
     {
         var token = TestContext.Current.CancellationToken;
         var tries = 0;
@@ -748,15 +878,8 @@ public sealed class ProcessRunnerTests
             throw new System.ComponentModel.Win32Exception(ProcessRunner.TextFileBusy);
         }
 
-        var spent = await Assert.ThrowsAsync<System.ComponentModel.Win32Exception>(
-            () => ProcessRunner.StartAsync(Busy, busyPasses: true, TimeSpan.FromMilliseconds(100), token));
-
-        Assert.Equal(ProcessRunner.TextFileBusy, spent.NativeErrorCode);
-        Assert.InRange(tries, 2, 50);
-
-        tries = 0;
         await Assert.ThrowsAsync<System.ComponentModel.Win32Exception>(
-            () => ProcessRunner.StartAsync(Busy, busyPasses: false, TimeSpan.FromSeconds(30), token));
+            () => ProcessRunner.StartAsync(Busy, busyPasses: false, token));
         Assert.Equal(1, tries);
 
         tries = 0;
@@ -768,7 +891,6 @@ public sealed class ProcessRunnerTests
                     throw new System.ComponentModel.Win32Exception(2);
                 },
                 busyPasses: true,
-                TimeSpan.FromSeconds(30),
                 token));
         Assert.Equal(1, tries);
 
@@ -783,7 +905,6 @@ public sealed class ProcessRunnerTests
                     Busy();
                 },
                 busyPasses: true,
-                TimeSpan.FromSeconds(30),
                 cancelled.Token));
         Assert.Equal(1, tries);
     }

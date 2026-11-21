@@ -477,7 +477,6 @@ public sealed class HostProgramResolverTests
             new HostConnection { Host = HostId.Local },
             ["dotnet", "ninja"],
             [],
-            TimeSpan.FromSeconds(5),
             TestContext.Current.CancellationToken);
 
         Assert.Equal(ProgramFound.OnPath, connection.Located("dotnet")?.Found);
@@ -516,6 +515,5 @@ public sealed class HostProgramResolverTests
                 connection,
                 wanted,
                 directories ?? ToolSearchDirectories.Posix,
-                TimeSpan.FromSeconds(5),
                 TestContext.Current.CancellationToken);
 }

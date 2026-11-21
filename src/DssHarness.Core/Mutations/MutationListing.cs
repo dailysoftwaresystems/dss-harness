@@ -217,7 +217,7 @@ internal static class MutationListing
 
         if (causesMoved.Count > 0)
         {
-            though.Add($"{ReportText.Counted(causesMoved.Count, "file")} its build is generated from moved ({ReportText.Listed(causesMoved)})");
+            though.Add($"{ReportText.Counted(causesMoved.Count, "file")} its build is generated from moved ({Names.Line(causesMoved, "--json's causesMoved")})");
         }
 
         if (causes is not null && input.Generation is not null && causes.Generation != input.Generation)

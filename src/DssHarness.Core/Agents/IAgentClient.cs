@@ -362,12 +362,10 @@ public sealed record AgentCredential(string Auth, IReadOnlyList<AgentKey> Keys, 
 /// run's mask holds (<see cref="Web.Search.WebSearchCredential.Forms"/>).
 /// </summary>
 /// <param name="Sources">The step's sources, as its <c>search</c> picks them (<see cref="Web.Search.WebSearchSources.Chosen"/>).</param>
-/// <param name="ResultsPerSource">The most results a source gives one search.</param>
-/// <param name="MaxPerStep">The most requests of sources the step makes.</param>
+/// <param name="MaxPerStep">The most requests of sources the step makes, a later page of a source's results among them.</param>
 /// <param name="Keys">Each source's key, by its name, as <see cref="Web.Search.WebSearchKeys"/> read it.</param>
 public sealed record AgentWebSearch(
     IReadOnlyList<Web.Search.WebSearchSource> Sources,
-    int ResultsPerSource,
     int MaxPerStep,
     IReadOnlyDictionary<string, Web.Search.WebSearchKey> Keys)
 {
@@ -380,7 +378,7 @@ public sealed record AgentWebSearch(
         ArgumentNullException.ThrowIfNull(sources);
         ArgumentNullException.ThrowIfNull(keys);
 
-        return new(sources.Chosen(search), sources.ResultsPerSource, sources.MaxPerStep, keys);
+        return new(sources.Chosen(search), sources.MaxPerStep, keys);
     }
 }
 
@@ -922,14 +920,19 @@ public interface IAgentNativeSearch
 /// <param name="Failure">The failure the request met, read as every failure of the provider's is; null where it answered.</param>
 public sealed record AgentNativeSearched(Web.Search.WebSearchPart Part, AgentUsage Used, Loop.ChatFailure? Failure = null);
 
+/// <summary>What one ask of a run's native search came to: its part, and how many searches the ask ran.</summary>
+/// <param name="Part">The part the ask came to.</param>
+/// <param name="Searches">How many searches the provider ran of the one ask, as its usage counted them: each one a request of the step's search.</param>
+public sealed record AgentNativeAnswer(Web.Search.WebSearchPart Part, int Searches);
+
 /// <summary>
 /// Asks a run's native search for its tool runtime, as the run stands when the agent asks it: the client's loop, which
 /// knows the entry serving the run then, goes through its gate and counts what the search used.
 /// </summary>
 /// <param name="query">The query, as the agent wrote it.</param>
 /// <param name="cancellationToken">Stops the search: the run's stop and the turn's cut.</param>
-/// <returns>The part the search came to.</returns>
-public delegate Task<Web.Search.WebSearchPart> AgentNativeAsk(string query, CancellationToken cancellationToken);
+/// <returns>What the ask came to - its part, and how many searches it ran, each of them a request of the step's search.</returns>
+public delegate Task<AgentNativeAnswer> AgentNativeAsk(string query, CancellationToken cancellationToken);
 
 /// <summary>
 /// The configuration's entries a run's model is reached by: its provider - the API's address and the currency of its
@@ -1120,7 +1123,7 @@ public sealed record AgentMeasureSupport(Func<AgentMeasureCall, CancellationToke
 
         try
         {
-            return System.Text.Json.Nodes.JsonNode.Parse(FileSystem.WholeFiles.ReadAllText(fileSystem, file)) is System.Text.Json.Nodes.JsonObject said
+            return DssHarness.Core.Json.JsonDepth.ParseNode(FileSystem.WholeFiles.ReadAllText(fileSystem, file)) is System.Text.Json.Nodes.JsonObject said
                 && said["cell"] is System.Text.Json.Nodes.JsonValue cell && cell.TryGetValue<string>(out _)
                 && said["result"] is System.Text.Json.Nodes.JsonValue result && result.TryGetValue<string>(out var word)
                 && AgentMeasureAnswer.Results.Contains(word, StringComparer.Ordinal)

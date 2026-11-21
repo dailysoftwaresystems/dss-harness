@@ -1,5 +1,7 @@
 using System.Globalization;
+using System.Text;
 using System.Text.RegularExpressions;
+using DssHarness.Core.Text;
 
 namespace DssHarness.Core.Codebase.Languages;
 
@@ -9,13 +11,13 @@ namespace DssHarness.Core.Codebase.Languages;
 /// heading above it of a higher level, so one section can be served alone. A heading inside a fenced block is code, and
 /// no heading.
 /// </summary>
-public sealed partial class MarkdownExtractor : ICodeGraphExtractor
+public sealed class MarkdownExtractor : ICodeGraphExtractor
 {
     /// <inheritdoc/>
     public string Language => "markdown";
 
     /// <inheritdoc/>
-    public int Version => 1;
+    public int Version => 2;
 
     /// <inheritdoc/>
     public CodeGraphClaims Claims { get; } = CodeGraphClaims.OfExtensions(".md");
@@ -112,9 +114,9 @@ public sealed partial class MarkdownExtractor : ICodeGraphExtractor
                 continue;
             }
 
-            if (Atx().Match(line) is { Success: true } atx)
+            if (Atx.Match(line) is { Success: true } atx)
             {
-                var title = Closing().Replace(atx.Groups["title"].Value, string.Empty).Trim();
+                var title = Closing.Replace(atx.Groups["title"].Value, string.Empty).Trim();
                 headings.Add((at + 1, atx.Groups["marks"].Value.Length, title.Length > 0 ? title : "(untitled)", line.Trim()));
                 continue;
             }
@@ -152,65 +154,66 @@ public sealed partial class MarkdownExtractor : ICodeGraphExtractor
         return 0;
     }
 
-    /// <summary>The first sentence of a section's first line of text, within <see cref="FileExtract.MostSummary"/> characters.</summary>
+    /// <summary>
+    /// The first sentence of a section's first paragraph of text: its lines up to a blank line, a heading, a fence or a
+    /// rule, on one line - whole, however many lines the sentence runs over; none where the section opens with no text.
+    /// </summary>
     private static string? SummaryOf(IReadOnlyList<string> lines, int start, int end)
     {
+        var paragraph = new StringBuilder();
+
         for (var line = start + 1; line <= end; line++)
         {
             var text = lines[line - 1].Trim();
 
-            if (text.Length == 0 || IsUnderline(text))
+            // Blank lines and rules before the text are no text of it.
+            if (paragraph.Length == 0 && (text.Length == 0 || IsUnderline(text) || Rule.IsMatch(text)))
             {
                 continue;
             }
 
-            // What follows is a heading of its own, or code: the section's text, if any, is under it.
-            if (Atx().IsMatch(text) || FenceOf(text) is not null || (line < end && IsUnderline(lines[line]) && IsSetextTitle(lines[line - 1])))
+            // What follows is a heading of its own, or code, or a rule, or the paragraph's end: the section's text, if any,
+            // is before it.
+            if (text.Length == 0 || Rule.IsMatch(text) || Atx.IsMatch(text) || FenceOf(text) is not null || (line < end && IsUnderline(lines[line]) && IsSetextTitle(lines[line - 1])))
             {
-                return null;
+                break;
             }
 
-            return ExtractText.Summary(text);
+            paragraph.Append(text).Append(' ');
         }
 
-        return null;
+        return paragraph.Length > 0 ? ExtractText.Summary(ExtractText.Flat(paragraph.ToString())) : null;
     }
 
-    private static bool IsUnderline(string line) => Underline().IsMatch(line);
+    private static bool IsUnderline(string line) => Underline.IsMatch(line);
 
     /// <summary>
     /// Whether an underline below <paramref name="line"/> makes a heading of it: it is a paragraph's text and no heading
     /// itself - a list item, a quote, a table's row, a rule, a fence or indented code under a rule is no heading.
     /// </summary>
     private static bool IsSetextTitle(string line)
-        => line.Trim().Length > 0 && !Atx().IsMatch(line) && FenceOf(line) is null && !line.StartsWith("    ", StringComparison.Ordinal) && !NoParagraph().IsMatch(line) && !Rule().IsMatch(line);
+        => line.Trim().Length > 0 && !Atx.IsMatch(line) && FenceOf(line) is null && !line.StartsWith("    ", StringComparison.Ordinal) && !NoParagraph.IsMatch(line) && !Rule.IsMatch(line);
 
     /// <summary>
     /// <paramref name="line"/> read as a fence's line - its marks and its info string - or <see langword="null"/> where it
     /// is none: a backtick fence's info string holds no backtick, and such a line is text with code spans in it.
     /// </summary>
     private static Match? FenceOf(string line)
-        => Fence().Match(line) is { Success: true } fence && !(fence.Groups["marks"].Value[0] == '`' && fence.Groups["info"].Value.Contains('`', StringComparison.Ordinal))
+        => Fence.Match(line) is { Success: true } fence && !(fence.Groups["marks"].Value[0] == '`' && fence.Groups["info"].Value.Contains('`', StringComparison.Ordinal))
             ? fence
             : null;
 
-    [GeneratedRegex(@"^ {0,3}(?<marks>#{1,6})(?:[ \t]+(?<title>.*))?$", RegexOptions.CultureInvariant)]
-    private static partial Regex Atx();
+    private static readonly Regex Atx = LinearRegex.Compile(@"^ {0,3}(?<marks>#{1,6})(?:[ \t]+(?<title>.*))?$");
 
-    [GeneratedRegex(@"[ \t]+#+[ \t]*$|^#+[ \t]*$", RegexOptions.CultureInvariant)]
-    private static partial Regex Closing();
+    private static readonly Regex Closing = LinearRegex.Compile(@"[ \t]+#+[ \t]*$|^#+[ \t]*$");
 
-    [GeneratedRegex(@"^ {0,3}(?:=+|-+)[ \t]*$", RegexOptions.CultureInvariant)]
-    private static partial Regex Underline();
+    private static readonly Regex Underline = LinearRegex.Compile(@"^ {0,3}(?:=+|-+)[ \t]*$");
 
-    [GeneratedRegex(@"^ {0,3}(?<marks>`{3,}|~{3,})(?<info>.*)$", RegexOptions.CultureInvariant)]
-    private static partial Regex Fence();
+    private static readonly Regex Fence = LinearRegex.Compile(@"^ {0,3}(?<marks>`{3,}|~{3,})(?<info>.*)$");
 
     /// <summary>A rule: three or more of one of <c>-</c>, <c>*</c> or <c>_</c>, spaces between them allowed.</summary>
-    [GeneratedRegex(@"^ {0,3}([-*_])(?:[ \t]*\1){2,}[ \t]*$", RegexOptions.CultureInvariant)]
-    private static partial Regex Rule();
+    private static readonly Regex Rule = LinearRegex.Compile(@"^ {0,3}(?:-(?:[ \t]*-){2,}|\*(?:[ \t]*\*){2,}|_(?:[ \t]*_){2,})[ \t]*$");
 
     /// <summary>A line that opens no paragraph: a list item, a quote, a table's row.</summary>
-    [GeneratedRegex(@"^ {0,3}(?:[-*+](?:[ \t]|$)|\d{1,9}[.)](?:[ \t]|$)|>|\|)", RegexOptions.CultureInvariant)]
-    private static partial Regex NoParagraph();
+    private static readonly Regex NoParagraph = LinearRegex.Compile(@"^ {0,3}(?:[-*+](?:[ \t]|$)|\d{1,9}[.)](?:[ \t]|$)|>|\|)");
 }

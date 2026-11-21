@@ -180,7 +180,7 @@ public static class WorkflowStepTypes
                 new("search", "the sources of agentWebSearch the step's web_search asks, by name or tag, in the order its answer gives them; absent, agentWebSearch.defaults"),
                 new("graph", $"the step's use of the run's codebase graph: off, map (its context pack alone) or tools (the pack and the graph tool); absent, tools where a graph is made upstream and its agent reads - for a step of the recovery, where one of the run has ended done - map where one is and its agent does not, off where none is; a step that goes on with another's work uses that step's"),
                 new("graphFrom", $"where the step's context pack starts from: {WorkflowStep.GraphFromTask} (the default: what its task names, and the working sets of the work the run holds for it), {WorkflowStep.GraphFromChanges} (what its tree holds differently from its base), or the reason step - of its own scope or one around it - whose working set seeds it, its instance in the step's own work item and iteration; a step named {string.Join(" or ", WorkflowStep.GraphFromWords)} cannot be named as a seed; a step that goes on with another's work may say it, for its pack is its own"),
-                new("graphPromptTokens", $"the cap of the step's context pack, in estimated tokens, from 0 (no pack) to {WorkflowStep.MostGraphPromptTokens}; absent, {WorkflowStep.DefaultGraphPromptTokens}; a step that goes on with another's work may say its own"),
+                new("graphPromptTokens", $"the size of the first page of the step's context pack - the page its prompt is given - in estimated tokens, from 0 (no pack) to {WorkflowStep.MostGraphPromptTokens}; absent, {WorkflowStep.DefaultGraphPromptTokens}; nothing the pack reaches is left out: what passes the first page is on the pages after it, which the graph tool's pack operation reads by page; a step that goes on with another's work may say its own"),
                 new("graphReads", "whether the step's reads are narrowed to the graph: narrow (the default) or guide; the narrowing holds only a step given the tool (graph: tools)"),
                 new("writes", "the paths a writing step may write"),
                 new("ask", "the step may put its questions to a person; one that may not writes its assumptions down"),
@@ -632,7 +632,7 @@ public static class WorkflowStepTypes
         ("passed", Flag),
         ("commit", Text),
         ("checks", ListOf(ObjectOf(("name", Text), ("state", Text), ("conclusion", TextOrNull), ("url", Text)))),
-        ("red", ListOf(ObjectOf(("name", Text), ("job", TextOrNull), ("workflow", TextOrNull), ("step", TextOrNull), ("leg", TextOrNull), ("overran", Flag), ("url", Text), ("tail", ListOf(Text)), ("log", TextOrNull), ("conclusion", TextOrNull), ("description", TextOrNull), ("unread", TextOrNull)))),
+        ("red", ListOf(ObjectOf(("name", Text), ("job", TextOrNull), ("workflow", TextOrNull), ("step", TextOrNull), ("leg", TextOrNull), ("overran", Flag), ("url", Text), ("failing", ListOf(Text)), ("log", TextOrNull), ("lines", WholeNumberOrNull), ("conclusion", TextOrNull), ("description", TextOrNull), ("unread", TextOrNull)))),
         ("pending", UntypedList),
         ("unsettled", UntypedList));
 
@@ -647,6 +647,9 @@ public static class WorkflowStepTypes
 
     /// <summary>A schema of a whole number.</summary>
     private static string WholeNumber => """{"type":"integer"}""";
+
+    /// <summary>A schema of a whole number, or null.</summary>
+    private static string WholeNumberOrNull => """{"type":["integer","null"]}""";
 
     /// <summary>A schema of a number, whole or not.</summary>
     private static string Number => """{"type":"number"}""";

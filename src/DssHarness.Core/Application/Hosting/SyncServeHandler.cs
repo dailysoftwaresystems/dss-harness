@@ -192,23 +192,44 @@ public sealed class SyncServeHandler(ISyncTransport transport, IAgentIsolation i
 
             case SyncServe.Read:
             case SyncServe.Pull:
-                var contents = await (operation == SyncServe.Pull
-                        ? _transport.PullFileAsync(root, Required(arguments, 1, operation), HiddenHere(root), cancellationToken)
-                        : _transport.ReadFileAsync(root, Required(arguments, 1, operation), cancellationToken))
+                var path = Required(arguments, 1, operation);
+                var offset = SyncServe.BytesIn(Required(arguments, 2, operation), SyncServe.PieceStartsAt);
+                var count = SyncServe.PieceBytesIn(Required(arguments, 3, operation));
+                var piece = await (operation == SyncServe.Pull
+                        ? _transport.PullFileAsync(root, path, offset, count, HiddenHere(root), cancellationToken)
+                        : _transport.ReadFileAsync(root, path, offset, count, cancellationToken))
                     .ConfigureAwait(false);
-
-                // Refused here rather than where it is decoded, because this is the side
-                // that knows the size and is about to spend the memory.
-                SyncServe.RefuseAFileTooLargeToCarry(
-                    contents.LongLength,
-                    Required(arguments, 1, operation),
-                    "this host");
 
                 // Hashed here, where the bytes were read. A hash the asking machine took of what
                 // arrived would agree with those bytes whatever happened on the way.
                 return Answer(
-                    new SyncFileAnswer(contents.LongLength, FileContentHash.Of(contents)),
-                    SyncServe.ContentLines(contents));
+                    new SyncFileAnswer(piece.Length, piece.Content, FileContentHash.Of(piece.Bytes)),
+                    SyncServe.ContentLines(piece.Bytes));
+
+            case SyncServe.WritePiece:
+                var carried = SyncServe.PieceIn(arguments);
+
+                await _transport
+                    .WritePieceAsync(root, carried.Path, carried.Offset, carried.Bytes, cancellationToken)
+                    .ConfigureAwait(false);
+
+                return SyncServeAnswer.None;
+
+            case SyncServe.PlacePieces:
+                var placed = SyncServe.PlacedIn(arguments);
+
+                await _transport
+                    .PlacePiecesAsync(root, placed.Path, placed.Whole, cancellationToken)
+                    .ConfigureAwait(false);
+
+                return SyncServeAnswer.None;
+
+            case SyncServe.DropPieces:
+                await _transport
+                    .DropPiecesAsync(root, Required(arguments, 1, operation), cancellationToken)
+                    .ConfigureAwait(false);
+
+                return SyncServeAnswer.None;
 
             default:
                 // Named rather than passed over: an operation this build does not know means the

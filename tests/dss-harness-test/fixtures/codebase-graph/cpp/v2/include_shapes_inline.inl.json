@@ -1,0 +1,1 @@
+{"nodes":[{"id":"cpp:clamp_to(int,int)","kind":"member","name":"clamp_to","qualified":"clamp_to","start":1,"end":1,"signature":"inline int clamp_to(int value, int most)","subKind":"function","bodyStart":1,"modifiers":["inline"],"minArity":2,"maxArity":2}],"scopes":[],"imports":[],"addressRoots":[],"references":[],"dynamic":[]}

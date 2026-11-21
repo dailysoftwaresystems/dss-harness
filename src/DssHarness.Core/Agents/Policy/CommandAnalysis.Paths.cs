@@ -27,10 +27,13 @@ public static partial class CommandAnalysis
     /// after its first <c>=</c> (<c>--file=x</c>, <c>of=x</c>, an assignment's) and a PowerShell parameter's after its
     /// <c>:</c> (<c>-Path:x</c>); a value glued to a short option (<c>-i./key</c>, <c>-t.git/hooks</c>); each of these with
     /// the <c>@</c> or <c>&lt;</c> that makes curl, httpie and gh read a file's contents taken off (<c>@x</c>,
-    /// <c>f=@x</c>, <c>f=@x;type=text/plain</c>, <c>f=&lt;x</c>); each word of a script's text inside it; each word its
-    /// braces spell where <paramref name="braces"/> says the shell expands them; and the path a file URL names - each said
-    /// whole or not, and whether the shell expands a tilde at its start (<see cref="NamedPath.TildeExpands"/>). The one
-    /// reading of which paths a word names, for the places no command reaches and for the places a command writes alike.
+    /// <c>f=@x</c>, <c>f=@x;type=text/plain</c>, <c>f=&lt;x</c>); each word of a script's text inside it; and the path a
+    /// file URL names - each said whole or not, and whether the shell expands a tilde at its start
+    /// (<see cref="NamedPath.TildeExpands"/>). Where <paramref name="braces"/> says the shell expands the word's braces,
+    /// every word they spell is read so too, each by these same rules with its characters standing as they do in the word
+    /// (<c>--git-dir={.git,x}</c> names <c>.git</c>), however many: given one word at a time after the word's own
+    /// readings, never held all at once, so a caller that stops at the first it refuses reads no more. The one reading of
+    /// which paths a word names, for the places no command reaches and for the places a command writes alike.
     /// </summary>
     /// <param name="word">The word, as the command's reading spells it.</param>
     /// <param name="braces">Whether the shell expands the word's braces: false for a here-document's or a here-string's text.</param>
@@ -43,11 +46,41 @@ public static partial class CommandAnalysis
     /// How each of the word's characters stands to the shell (<see cref="WordQuoting"/>), or null where its spelling was
     /// not kept, which reads as unquoted: a tilde quoted away is one the shell does not expand.
     /// </param>
-    /// <exception cref="NotSupportedException">The word's braces spell more words than <see cref="BraceBound"/>.</exception>
-    public static IReadOnlyList<NamedPath> PathsNamed(string word, bool braces = true, bool lists = false, string? quoted = null)
+    public static IEnumerable<NamedPath> PathsNamed(string word, bool braces = true, bool lists = false, string? quoted = null)
     {
         ArgumentNullException.ThrowIfNull(word);
 
+        var own = Readings(word, lists, quoted);
+
+        return braces && word.Contains('{', StringComparison.Ordinal) ? own.Concat(BraceReadings(word, lists, quoted)) : own;
+    }
+
+    /// <summary>
+    /// The paths each word <paramref name="word"/>'s braces spell names (<see cref="Readings"/>), one word at a time: each
+    /// with its characters' classes in the word where its braces pair (<see cref="WordPattern.Braces"/>), and read as
+    /// unquoted where they do not - which only reads a tilde the shell might not expand as one it does.
+    /// </summary>
+    private static IEnumerable<NamedPath> BraceReadings(string word, bool lists, string? quoted)
+    {
+        var spellings = WordPattern.Braces(word, quoted) is { } pattern
+            ? pattern.Spellings().Select(spelled => (spelled.Word, (string?)spelled.Quoted))
+            : BraceExpansions(word).Select(spelled => (spelled, (string?)null));
+
+        foreach (var (spelled, mask) in spellings)
+        {
+            if (spelled != word)
+            {
+                foreach (var path in Readings(spelled, lists, mask))
+                {
+                    yield return path;
+                }
+            }
+        }
+    }
+
+    /// <summary>The paths <paramref name="word"/> itself names, its braces as it spells them (<see cref="PathsNamed"/>).</summary>
+    private static IReadOnlyList<NamedPath> Readings(string word, bool lists, string? quoted)
+    {
         var named = new List<NamedPath>();
         var classes = ClassesOf(word, quoted);
         var assignment = IsAssignment(word);
@@ -103,15 +136,6 @@ public static partial class CommandAnalysis
             foreach (var piece in word.Split([' ', '\t', '\n', '\r', ';', '|', '&', '(', ')', '`', '\'', '"'], StringSplitOptions.RemoveEmptyEntries))
             {
                 Add(piece, whole: false, tilde: false);
-            }
-        }
-
-        // The shell expands a tilde at the start of each word the braces spell as at the word's own (~{a,b} is two homes).
-        if (braces && word.Contains('{', StringComparison.Ordinal))
-        {
-            foreach (var spelled in BraceExpansions(word))
-            {
-                Add(spelled, whole: true, tilde: TildeExpands(word, quoted));
             }
         }
 

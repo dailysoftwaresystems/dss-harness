@@ -2,6 +2,7 @@ using System.Text.RegularExpressions;
 using DssHarness.Core.Configuration;
 using DssHarness.Core.Output;
 using DssHarness.Core.Results;
+using DssHarness.Core.Text;
 
 namespace DssHarness.Core.Runners;
 
@@ -136,8 +137,9 @@ public sealed record ActionInput(string Name, string? Default, bool Required, st
     /// </summary>
     /// <param name="value">The value, as it was given, read or declared.</param>
     /// <remarks>
-    /// A value its pattern could not be matched against within <see cref="ActionFileParser.PatternTimeout"/> is refused:
-    /// not known to be one the input takes is not taken.
+    /// Matched in time linear in the value, however the pattern nests (<see cref="LinearRegex"/>): no clock cuts a match
+    /// off, so every value is known to be one the input takes or not. A pattern the linear matcher refuses - which reading
+    /// the file refuses first - is said as that.
     /// </remarks>
     public string? Refusal(string value)
     {
@@ -145,17 +147,14 @@ public sealed record ActionInput(string Name, string? Default, bool Required, st
 
         if (Pattern is { } pattern)
         {
-            try
+            if (!LinearRegex.TryCompile(Whole(pattern), RegexOptions.None, out var whole, out var refusal))
             {
-                if (!Regex.IsMatch(value, Whole(pattern), RegexOptions.CultureInvariant, ActionFileParser.PatternTimeout))
-                {
-                    return $"is '{value}', which its pattern '{pattern}' does not match";
-                }
+                return $"is '{value}', and its pattern cannot be matched: {refusal.TrimEnd('.')}";
             }
-            catch (RegexMatchTimeoutException)
+
+            if (!whole.IsMatch(value))
             {
-                return $"is '{value}', which its pattern '{pattern}' could not be matched against within "
-                    + $"{ReportText.Limit(ActionFileParser.PatternTimeout)}, so it is not known to be one it takes";
+                return $"is '{value}', which its pattern '{pattern}' does not match";
             }
         }
 

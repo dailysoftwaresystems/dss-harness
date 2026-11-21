@@ -96,9 +96,9 @@ public sealed class ArmJudgeTests
             LegVerdict.Unattributed,
             "ran past 10x the unmutated run, 1m40s, and was stopped"),
         ["11 past a bound the factor did not set"] = (
-            ArmRun.StoppedAt(PristineJudge.Bound(TimeSpan.FromSeconds(1), 10)),
+            ArmRun.StoppedAt(PristineJudge.Bound(TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(6), 1.5)),
             LegVerdict.Unattributed,
-            "ran past the unmutated run and 1m00s more, 1m01s, and was stopped"),
+            "ran past the unmutated run and its start and exit, 6s, again, 16s, and was stopped"),
         ["11 silent until it was stopped as hung"] = (
             ArmRun.Hung(45),
             LegVerdict.Unattributed,

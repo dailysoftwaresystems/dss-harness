@@ -103,7 +103,7 @@ that repairs it names the tests.
 ## What to return
 
 Whether the round is clean, which is true exactly when you give no work item; the findings; what you could not
-verify; and the work items of a further round, shaped as the plan's items are and at most 8: each sized to one
+verify; and the work items of a further round, shaped as the plan's items are, as many as the findings need: each sized to one
 builder's cycle, never more and never a sliver of one, each with its own definition of done - statements a check can
 answer one by one, the first of them the finding it settles - and each that changes a decision with its classes, or
 saying why in noClass where it decides none. Each takes a name no work item of this run has had, in this round or an

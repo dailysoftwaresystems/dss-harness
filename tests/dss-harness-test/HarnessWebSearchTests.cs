@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Headers;
 using DssHarness.Core.Agents.Policy;
+using DssHarness.Core.Execution;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Orchestration;
 using DssHarness.Core.Platform;
@@ -52,11 +53,11 @@ public sealed class HarnessWebSearchTests
             searched.Text);
         Assert.Equal(["alpha", "beta"], rig.Records.Parts.Select(part => part.Source));
         Assert.Equal(
-            ["alpha https://alpha.example.test/search?q=group%20by&n=8", "beta https://beta.example.test/search?q=group%20by"],
+            ["alpha https://alpha.example.test/search?q=group%20by&n=10", "beta https://beta.example.test/search?q=group%20by"],
             rig.Records.Decided.Select(decided => $"{decided.Source} {decided.Address}").Order(StringComparer.Ordinal));
         Assert.All(rig.Records.Decided, decided => Assert.Equal(AgentPolicyAnswer.Allow, decided.Answer));
         Assert.Equal(
-            ["alpha https://alpha.example.test/search?q=group%20by&n=8 200", "beta https://beta.example.test/search?q=group%20by 500"],
+            ["alpha https://alpha.example.test/search?q=group%20by&n=10 200", "beta https://beta.example.test/search?q=group%20by 500"],
             rig.Records.Answered.Select(answered => $"{answered.Source} {answered.Hop.Address} {answered.Hop.Status}").Order(StringComparer.Ordinal));
         Assert.Equal(2, step.Spent);
     }
@@ -120,7 +121,7 @@ public sealed class HarnessWebSearchTests
         // Another process of the run reads what was kept.
         using (var resumed = new HarnessWebSearch(WebSearchKinds.OfThisBuild, rig.Fetch, rig.Indexes, rig.Pace, rig.Files, rig.Clock))
         {
-            var read = await resumed.SearchAsync(rig.Step([Source("alpha", Alpha), Source("beta", Beta)]), "group by", null, TestContext.Current.CancellationToken);
+            var read = await resumed.SearchAsync(rig.Step([Source("alpha", Alpha), Source("beta", Beta)]), "group by", null, 1, TestContext.Current.CancellationToken);
 
             Assert.Equal([true, true], read.Parts.Select(part => part.Cached));
             Assert.Equal(again.Text, read.Text);
@@ -130,7 +131,7 @@ public sealed class HarnessWebSearchTests
         Assert.True(File.Exists(OrchestratorLayout.WebSearchesFile(rig.RunDirectory)));
 
         await rig.SearchAsync(step, "group by twice", ["alpha"]);
-        await rig.SearchAsync(rig.Step([Source("alpha", Alpha)], resultsPerSource: 3), "group by");
+        await rig.SearchAsync(rig.Step([Source("alpha", Alpha.Replace("\"items\"", "\"pageSize\": 3, \"items\"", StringComparison.Ordinal))]), "group by");
         await rig.SearchAsync(rig.Step([Source("alpha", Alpha.Replace("\"items\"", "\"perMinute\": 5, \"items\"", StringComparison.Ordinal))]), "group by");
 
         Assert.Equal(6, rig.Endpoint.Asked.Count);
@@ -159,7 +160,7 @@ public sealed class HarnessWebSearchTests
         var refused = await rig.SearchAsync(rig.Step([Source("alpha", Alpha)], rules: Rules(source: address => address.StartsWith("https://alpha.", StringComparison.Ordinal))), "x");
 
         Assert.Equal(WebSearchOutcome.Refused, refused.Parts[0].Answer.Outcome);
-        Assert.Equal(WebBlocks.Search("x", "alpha", "alpha was refused: 'https://alpha.example.test/search?q=x&n=8' was refused by Web(beta.example.test): denied by the step"), refused.Text);
+        Assert.Equal(WebBlocks.Search("x", "alpha", "alpha was refused: 'https://alpha.example.test/search?q=x&n=10' was refused by Web(beta.example.test): denied by the step"), refused.Text);
 
         // A step that may read everything is given every result again: the record holds the source's answer, never a step's.
         var whole = await rig.SearchAsync(rig.Step([Source("alpha", Alpha)]), "x");
@@ -221,9 +222,9 @@ public sealed class HarnessWebSearchTests
         using var search = new HarnessWebSearch(WebSearchKinds.OfThisBuild, rig.Fetch, rig.Indexes, rig.Pace, disk, rig.Clock);
         var step = rig.Step([Source("packages", Discovered)]);
 
-        var failed = await search.SearchAsync(step, "one", null, TestContext.Current.CancellationToken);
+        var failed = await search.SearchAsync(step, "one", null, 1, TestContext.Current.CancellationToken);
         disk.Full = false;
-        var answered = await search.SearchAsync(step, "two", null, TestContext.Current.CancellationToken);
+        var answered = await search.SearchAsync(step, "two", null, 1, TestContext.Current.CancellationToken);
 
         Assert.StartsWith("its search failed on this machine", failed.Parts[0].Answer.Why, StringComparison.Ordinal);
         Assert.Equal(WebSearchOutcome.Ok, answered.Parts[0].Answer.Outcome);
@@ -247,9 +248,9 @@ public sealed class HarnessWebSearchTests
         using var search = new HarnessWebSearch(WebSearchKinds.OfThisBuild, rig.Fetch, rig.Indexes, rig.Pace, disk, rig.Clock);
         var step = rig.Step([Source("alpha", Alpha)]);
 
-        var failed = await search.SearchAsync(step, "x", null, TestContext.Current.CancellationToken);
+        var failed = await search.SearchAsync(step, "x", null, 1, TestContext.Current.CancellationToken);
         disk.Full = false;
-        var again = await search.SearchAsync(step, "x", null, TestContext.Current.CancellationToken);
+        var again = await search.SearchAsync(step, "x", null, 1, TestContext.Current.CancellationToken);
 
         Assert.StartsWith("its search failed on this machine", failed.Parts[0].Answer.Why, StringComparison.Ordinal);
         Assert.Equal((WebSearchOutcome.Ok, false), (again.Parts[0].Answer.Outcome, again.Parts[0].Cached));
@@ -361,7 +362,7 @@ public sealed class HarnessWebSearchTests
         Assert.Single(rig.Endpoint.Asked);
         Assert.Equal(1, step.Spent);
         Assert.Equal(
-            [("https://alpha.example.test/search?q=x&n=8", false), ("https://mirror.example.test/search?q=x", true)],
+            [("https://alpha.example.test/search?q=x&n=10", false), ("https://mirror.example.test/search?q=x", true)],
             rig.Records.Decided.Select(decided => (decided.Address, decided.Answer is AgentPolicyAnswer.Denied)));
     }
 
@@ -422,7 +423,7 @@ public sealed class HarnessWebSearchTests
         Assert.Equal(1, step.Spent);
 
         // A turn refused is no request: nothing is recorded as decided for it.
-        Assert.Equal(["https://alpha.example.test/search?q=one&n=8"], rig.Records.Decided.Select(decided => decided.Address));
+        Assert.Equal(["https://alpha.example.test/search?q=one&n=10"], rig.Records.Decided.Select(decided => decided.Address));
 
         // A lookup whose turn the spent day holds is told so, and leaves no pause either.
         var discovered = rig.Step([Source("alpha", Discovered.Replace("\"items\"", "\"perDay\": 1, \"items\"", StringComparison.Ordinal))]);
@@ -478,7 +479,7 @@ public sealed class HarnessWebSearchTests
     [Theory]
     [InlineData("""{ "at": "2026-10-25T00:00:00+00:00", "line": "other", "source": "alpha", "settings": "x", "version": 1 }""", "it is a 'other' line, which is none of found and searched")]
     [InlineData("""{ "at": "2026-10-25T00:00:00+00:00", "line": "found", "source": "alpha", "settings": "x", "version": 1, "values": {} }""", "it is a found line that holds no values or addresses")]
-    [InlineData("""{ "at": "2026-10-25T00:00:00+00:00", "line": "searched", "source": "alpha", "settings": "x", "version": 1, "query": "x", "limit": 5, "addresses": ["https://alpha.example.test/"], "outcome": "Ok" }""", "it is a searched line that names no query, limit, key's sending, address or answer")]
+    [InlineData("""{ "at": "2026-10-25T00:00:00+00:00", "line": "searched", "source": "alpha", "settings": "x", "version": 1, "query": "x", "limit": 5, "addresses": ["https://alpha.example.test/"], "outcome": "Ok" }""", "it is a searched line that names no query, page, key's sending, address or answer")]
     public async Task ARecordThatDoesNotRead_IsSaid_AndOnceRemovedIsAskedAgain(string line, string why)
     {
         using var rig = new Rig(_ => Json(Found));
@@ -536,24 +537,27 @@ public sealed class HarnessWebSearchTests
         Assert.Equal(["alpha", "beta"], rig.Records.Parts.Select(part => part.Source).Order(StringComparer.Ordinal));
     }
 
-    /// <summary>A limit a source's status says holds it even where its body is not read: told as a limit, and the next query not sent.</summary>
+    /// <summary>
+    /// A limit a source's status says holds it even where its body is not read - here, because the body holds a secret of
+    /// this run's behind its escapes, which no cut of it may part: told as a limit, and the next query not sent.
+    /// </summary>
     [Fact]
     public async Task APauseOfAnUnreadBody_HoldsTheSource()
     {
+        const string Key = "abcdef+ghijkl";
         HttpResponseMessage Unread()
         {
             var limited = new HttpResponseMessage(HttpStatusCode.TooManyRequests)
             {
                 Headers = { RetryAfter = new RetryConditionHeaderValue(TimeSpan.FromSeconds(30)) },
-                Content = new StringContent("{}", System.Text.Encoding.UTF8, "application/json"),
+                Content = new StringContent("""{ "items": [ { "title": "key abcdef&#x2B;ghijkl", "link": "https://one.example.test/" } ] }""", System.Text.Encoding.UTF8, "application/json"),
             };
 
-            limited.Content.Headers.ContentLength = 6_000_000;
             return limited;
         }
 
         using var rig = new Rig(_ => Unread());
-        var step = rig.Step([Source("alpha", Alpha)]);
+        var step = rig.Step([Source("alpha", Alpha)], mask: new Secrets(Key));
         var until = rig.Clock.GetUtcNow().AddSeconds(30);
 
         var first = await rig.SearchAsync(step, "one");
@@ -563,13 +567,14 @@ public sealed class HarnessWebSearchTests
         Assert.Equal((WebSearchOutcome.RateLimited, until), (first.Parts[0].Answer.Outcome, first.Parts[0].Answer.Until));
         Assert.StartsWith(limit, first.Parts[0].Answer.Why, StringComparison.Ordinal);
         Assert.Contains("' was not read: ", first.Parts[0].Answer.Why, StringComparison.Ordinal);
+        Assert.DoesNotContain("ghijkl", first.Parts[0].Answer.Why, StringComparison.Ordinal);
         Assert.Equal(WebBlocks.Search("two", "alpha", $"alpha: it answered 429 and asks to be left alone until {WebRateLimit.Said(until)}; it was not asked"), held.Text);
         Assert.Single(rig.Endpoint.Asked);
     }
 
-    /// <summary>A secret an answer echoes is masked before any reader cuts it: no half of it is told, wherever the cut falls.</summary>
+    /// <summary>A secret an answer echoes is masked as the body is written, before any reader reads it: no spelling of it is told, whole as the failure now is.</summary>
     [Fact]
-    public async Task ASecretAnAnswerEchoes_IsMaskedBeforeItIsCut()
+    public async Task ASecretAnAnswerEchoes_IsMaskedBeforeItIsRead()
     {
         const string Key = "k-0123456789abcdef0123456789abcdef";
         using var rig = new Rig(_ => Json(new string('x', 190) + Key + " and more", HttpStatusCode.BadRequest));
@@ -577,7 +582,7 @@ public sealed class HarnessWebSearchTests
 
         var searched = await rig.SearchAsync(rig.Step([source], keys: new Dictionary<string, WebSearchKey> { ["beta"] = new(Key, null) }, mask: new Secrets(Key)), "x");
 
-        Assert.Equal(WebBlocks.Search("x", "beta", $"beta: it answered 400: {new string('x', 190)}*** and…"), searched.Text);
+        Assert.Equal(WebBlocks.Search("x", "beta", $"beta: it answered 400: {new string('x', 190)}*** and more"), searched.Text);
     }
 
     /// <summary>A key an answer echoes in a JSON text - escaped as .NET's encoder writes a '+', or as PHP's a '/' - is masked as the key is.</summary>
@@ -611,7 +616,7 @@ public sealed class HarnessWebSearchTests
         using var search = rig.Searching(new Scripted());
         var source = Source("alpha", Alpha.Replace("\"json-api\"", "\"scripted\"", StringComparison.Ordinal));
 
-        var both = await Assert.ThrowsAsync<AggregateException>(() => search.SearchAsync(rig.Step([source]), "x", null, TestContext.Current.CancellationToken));
+        var both = await Assert.ThrowsAsync<AggregateException>(() => search.SearchAsync(rig.Step([source]), "x", null, 1, TestContext.Current.CancellationToken));
 
         Assert.Equal([typeof(InvalidCastException), typeof(IOException)], both.InnerExceptions.Select(inner => inner.GetType()));
         Assert.Equal(until, rig.Pace.Held("alpha")?.Until);
@@ -635,11 +640,11 @@ public sealed class HarnessWebSearchTests
             };
         });
         disk = new FullDiskFileSystem(rig.Files);
-        var pace = new WebSearchPace(disk, () => Path.Combine(rig.Root, "full.json"), rig.Clock, (_, _) => Task.CompletedTask);
+        var pace = new WebSearchPace(disk, () => Path.Combine(rig.Root, "full.json"), rig.Clock, (_, _) => Task.CompletedTask, Rig.Identity);
         using var search = rig.Searching(new Scripted(), pace);
         var source = Source("alpha", Alpha.Replace("\"json-api\"", "\"scripted\"", StringComparison.Ordinal));
 
-        var both = await Assert.ThrowsAsync<AggregateException>(() => search.SearchAsync(rig.Step([source]), "x", null, TestContext.Current.CancellationToken));
+        var both = await Assert.ThrowsAsync<AggregateException>(() => search.SearchAsync(rig.Step([source]), "x", null, 1, TestContext.Current.CancellationToken));
 
         Assert.IsType<InvalidCastException>(both.InnerExceptions[0]);
         Assert.Contains(FullDiskFileSystem.Why, Assert.Single(both.InnerExceptions.Skip(1)).Message, StringComparison.Ordinal);
@@ -658,7 +663,7 @@ public sealed class HarnessWebSearchTests
         using var search = rig.Searching(new Scripted(found: () => throw new InvalidCastException("a defect of the kind")));
         var source = Source("alpha", Discovered.Replace("\"json-api\"", "\"scripted\"", StringComparison.Ordinal));
 
-        await Assert.ThrowsAsync<InvalidCastException>(() => search.SearchAsync(rig.Step([source]), "x", null, TestContext.Current.CancellationToken));
+        await Assert.ThrowsAsync<InvalidCastException>(() => search.SearchAsync(rig.Step([source]), "x", null, 1, TestContext.Current.CancellationToken));
 
         Assert.Equal(until, rig.Pace.Held("alpha")?.Until);
     }
@@ -676,7 +681,7 @@ public sealed class HarnessWebSearchTests
         using var search = rig.Searching(new Scripted(read: _ => WebSearchAnswer.Limited(until, "it said: wait, " + Uri.EscapeDataString(Uri.EscapeDataString(Key)))));
         var source = Source("alpha", Alpha.Replace("\"json-api\"", "\"scripted\"", StringComparison.Ordinal));
 
-        await search.SearchAsync(rig.Step([source], mask: new Secrets(Key)), "x", null, TestContext.Current.CancellationToken);
+        await search.SearchAsync(rig.Step([source], mask: new Secrets(Key)), "x", null, 1, TestContext.Current.CancellationToken);
 
         Assert.Equal("it said: wait, ***", rig.Pace.Held("alpha")?.Why);
     }
@@ -705,7 +710,7 @@ public sealed class HarnessWebSearchTests
 
         public string? KeyOrigin(WebSearchSource source) => _json.KeyOrigin(source);
 
-        public WebSearchRequest Request(WebSearchSource source, WebSearchFound found, string query, int limit) => _json.Request(source, found, query, limit);
+        public WebSearchRequest Request(WebSearchSource source, WebSearchFound found, string query, int page) => _json.Request(source, found, query, page);
 
         public WebSearchAnswer Read(WebSearchSource source, WebSearchFound found, WebSearchResponse response) => read is null ? throw new InvalidCastException("a defect of the kind") : read(response);
     }
@@ -1023,7 +1028,7 @@ public sealed class HarnessWebSearchTests
     {
         const string Key = "abcdef+ghijkl";
         const string Said = "said abcdef&amp;#x";
-        var html = "<p>" + new string(' ', WebPageText.MostFieldRead - 1 - "<p>".Length - Said.Length) + Said + "2B;ghijkl</p>";
+        var html = "<p>" + new string(' ', 300) + Said + "2B;ghijkl</p>";
         using var rig = new Rig(_ => new HttpResponseMessage(page ? HttpStatusCode.ServiceUnavailable : HttpStatusCode.OK)
         {
             Headers = { { "X-RateLimit-Remaining", "0" }, { "X-RateLimit-Reset", "45" } },
@@ -1043,8 +1048,9 @@ public sealed class HarnessWebSearchTests
     }
 
     /// <summary>
-    /// An answer the run kept is told to a later step under its own mask: a text its reader cut short inside a secret of
-    /// that step's - which the step that asked it held none of - behind its escapes is cut before the secret's start.
+    /// An answer the run kept is told to a later step under its own mask: a text whole since its reader read it whole,
+    /// holding a secret of that step's behind its escapes - which the step that asked it held none of - is masked in the
+    /// reading every escape of it is undone in.
     /// </summary>
     [Fact]
     public async Task AnAnswerTheRunKept_IsToldUnderTheLaterStepsMask()
@@ -1056,9 +1062,9 @@ public sealed class HarnessWebSearchTests
         var first = await rig.SearchAsync(rig.Step([Source("alpha", Alpha)]), "x");
         var later = await rig.SearchAsync(rig.Step([Source("alpha", Alpha)], mask: new Secrets(Secret)), "x");
 
-        Assert.Equal(new string('x', 290) + "abcdef&#x" + Core.Output.TextCut.Ellipsis, first.Parts[0].Answer.Results[0].Title);
+        Assert.Equal(title, first.Parts[0].Answer.Results[0].Title);
         Assert.True(later.Parts[0].Cached);
-        Assert.Equal(new string('x', 290) + Core.Output.TextCut.Ellipsis, later.Parts[0].Answer.Results[0].Title);
+        Assert.Equal(new string('x', 290) + "***" + new string('y', 20), later.Parts[0].Answer.Results[0].Title);
     }
 
     /// <summary>An answer every result of which is left out for the secret its link holds is none, and the run keeps it as none.</summary>
@@ -1079,13 +1085,14 @@ public sealed class HarnessWebSearchTests
     }
 
     /// <summary>
-    /// A text its reader cut short, whose end is a secret's start that begins inside a pair of surrogates, is cut before the
-    /// whole pair: half of one is no character.
+    /// A text that ends in an ellipsis - an index's snippet cut at query time, a title its source ended so - whose end
+    /// could be a secret's start that begins inside a pair of surrogates, is cut before the whole pair: half of one is no
+    /// character.
     /// </summary>
     [Fact]
     public async Task ATextCutBeforeASecretInsideAPair_KeepsNoHalfOfIt()
     {
-        var title = new string('a', 296) + "\uD83D\uDE00" + "xyyyy";
+        var title = new string('a', 296) + "\uD83D\uDE00" + "x" + Core.Output.TextCut.Ellipsis;
         using var rig = new Rig(_ => Json($$"""{ "items": [ { "title": "{{title}}", "link": "https://one.example.test/" } ] }"""));
 
         var searched = await rig.SearchAsync(rig.Step([Source("alpha", Alpha)], mask: new Secrets("\uDE00xz")), "x");
@@ -1116,17 +1123,17 @@ public sealed class HarnessWebSearchTests
     public async Task ATurnThatCouldNotBeTaken_CountsNothing()
     {
         using var rig = new Rig(_ => Json(Found));
-        var pace = new WebSearchPace(rig.Files, () => Path.Combine(rig.Root, "stuck-pace.json"), rig.Clock, (_, _) => throw new IOException("the pace cannot wait"));
+        var pace = new WebSearchPace(rig.Files, () => Path.Combine(rig.Root, "stuck-pace.json"), rig.Clock, (_, _) => throw new IOException("the pace cannot wait"), Rig.Identity);
         using var search = new HarnessWebSearch(WebSearchKinds.OfThisBuild, rig.Fetch, rig.Indexes, pace, rig.Files, rig.Clock);
         var step = rig.Step([Source("alpha", Alpha.Replace("\"items\"", "\"perMinute\": 1, \"items\"", StringComparison.Ordinal))]);
 
-        await search.SearchAsync(step, "one", null, TestContext.Current.CancellationToken);
-        var stuck = await search.SearchAsync(step, "two", null, TestContext.Current.CancellationToken);
+        await search.SearchAsync(step, "one", null, 1, TestContext.Current.CancellationToken);
+        var stuck = await search.SearchAsync(step, "two", null, 1, TestContext.Current.CancellationToken);
 
         Assert.Equal(WebBlocks.Search("two", "alpha", "alpha: its search failed on this machine, not at the source: the pace cannot wait"), stuck.Text);
         Assert.Equal(1, step.Spent);
         Assert.Single(rig.Endpoint.Asked);
-        Assert.Equal(["https://alpha.example.test/search?q=one&n=8"], rig.Records.Decided.Select(decided => decided.Address));
+        Assert.Equal(["https://alpha.example.test/search?q=one&n=10"], rig.Records.Decided.Select(decided => decided.Address));
     }
 
     /// <summary>A lookup's answer that asks its source to be left alone holds the lookups after it: the next is told, never sent.</summary>
@@ -1250,15 +1257,53 @@ public sealed class HarnessWebSearchTests
         Assert.Equal("a key", new WebSearchKey("k-alpha", null).ToString());
     }
 
-    /// <summary>A source that gives more than the step's resultsPerSource - one that takes no limit - is cut to it, its total kept.</summary>
+    /// <summary>
+    /// Every result of the page a source answered is given, however many - no count of the step's cuts them - and its next
+    /// page is asked of it when the agent asks for it, by its number, one more request counted against maxPerStep; the
+    /// same page again is answered from what the run asked before. A source that answers one page says so for a later one,
+    /// and is asked nothing.
+    /// </summary>
     [Fact]
-    public async Task ASourcesResults_AreCutToTheStepsMost()
+    public async Task PageTwoOfASource_IsFetchedOnDemand_Counted()
+    {
+        const string Paged = """{ "kind": "json-api", "url": "https://alpha.example.test/search?q={query}&n={limit}&p={page}", "items": "$.items", "title": "{@.title}", "link": "{@.link}", "total": "$.total" }""";
+        using var rig = new Rig(request =>
+        {
+            var page = System.Web.HttpUtility.ParseQueryString(request.RequestUri!.Query)["p"]!;
+            return Json(System.Text.Json.JsonSerializer.Serialize(new { total = 60, items = Enumerable.Range(0, 30).Select(at => new { title = $"P{page} R{at}", link = $"https://one.example.test/{page}/{at}" }) }));
+        });
+        var step = rig.Step([Source("alpha", Paged), Source("beta", Beta)]);
+
+        var first = await rig.SearchAsync(step, "x", ["alpha"]);
+        var second = await rig.SearchAsync(step, "x", ["alpha"], page: 2);
+        var again = await rig.SearchAsync(step, "x", ["alpha"], page: 2);
+        var onePage = await rig.SearchAsync(step, "x", ["beta"], page: 2);
+
+        Assert.Equal(30, first.Parts[0].Answer.Results.Count);
+        Assert.Equal(("P2 R0", "P2 R29"), (second.Parts[0].Answer.Results[0].Title, second.Parts[0].Answer.Results[^1].Title));
+        Assert.Equal(
+            ["https://alpha.example.test/search?q=x&n=10&p=1", "https://alpha.example.test/search?q=x&n=10&p=2"],
+            rig.Endpoint.Asked.Select(asked => asked.Address.AbsoluteUri));
+        Assert.Equal(2, step.Spent);
+        Assert.True(again.Parts[0].Cached);
+        Assert.Contains("(page 2; 60 in all)", second.Text, StringComparison.Ordinal);
+
+        Assert.Equal(WebSearchOutcome.NoResults, onePage.Parts[0].Answer.Outcome);
+        Assert.Equal(WebBlocks.Search("x", "beta", "no page 2 of results for 'x' from beta: its address names no {page} and no {start}, so it answers one page, the first"), onePage.Text);
+        Assert.True(onePage.Answered);
+        Assert.Equal(2, step.Spent);
+    }
+
+    /// <summary>A page is counted from 1: a search asked for none is refused, nothing asked.</summary>
+    [Fact]
+    public async Task APageBelowOne_IsRefused()
     {
         using var rig = new Rig(_ => Json(Found));
 
-        var searched = await rig.SearchAsync(rig.Step([Source("alpha", Alpha)], resultsPerSource: 1), "x");
+        var refused = await rig.SearchAsync(rig.Step([Source("alpha", Alpha)]), "x", page: 0);
 
-        Assert.Equal(WebBlocks.Search("x", "alpha", "1. One\n   https://one.example.test/\n   first\n(7 in all)"), searched.Text);
+        Assert.Equal("page is 0; a source's pages are counted from 1", refused.Refusal);
+        Assert.Empty(rig.Endpoint.Asked);
     }
 
     /// <summary>A result cannot end its source's block, nor open one that seems another's: its own tags are given as text.</summary>
@@ -1369,6 +1414,9 @@ public sealed class HarnessWebSearchTests
 
         var filling = await rig.SearchAsync(step, "flexbox");
 
+        // The fill runs in the background of the search that began it: waited for here, so what it asked is seen.
+        await rig.Indexes.FilledAsync(OrchestratorLayout.WebIndexDirectory(new HarnessLayout(rig.Root, rig.Root), "docs"));
+
         rig.Indexes.Dispose();
 
         Assert.Equal(WebSearchOutcome.NoResults, filling.Parts[0].Answer.Outcome);
@@ -1448,12 +1496,15 @@ public sealed class HarnessWebSearchTests
             {
                 Clock.Advance(wait);
                 return Task.CompletedTask;
-            });
+            }, Identity);
             Search = new HarnessWebSearch(WebSearchKinds.OfThisBuild, Fetch, Indexes, Pace, Files, Clock);
             RunDirectory = _directory.Combine("run");
         }
 
         public ManualClock Clock { get; } = new(At);
+
+        /// <summary>This process, as the pace tells a holder of a source's turn by.</summary>
+        public static IProcessIdentity Identity { get; } = new ProcessIdentity(new HostPlatform());
 
         public PhysicalFileSystem Files { get; } = new(FilePermissionsFactory.Create());
 
@@ -1480,13 +1531,11 @@ public sealed class HarnessWebSearchTests
         public WebSearchStep Step(
             IReadOnlyList<WebSearchSource> sources,
             int maxPerStep = 60,
-            int resultsPerSource = WebSearchSources.DefaultResultsPerSource,
             IReadOnlyDictionary<string, WebSearchKey>? keys = null,
             Core.Execution.ILineMask? mask = null,
             WebSearchRules? rules = null)
             => new(
                 sources,
-                resultsPerSource,
                 maxPerStep,
                 RunDirectory,
                 new HarnessLayout(_directory.Path, _directory.Path),
@@ -1495,8 +1544,8 @@ public sealed class HarnessWebSearchTests
                 rules ?? Rules(),
                 Records);
 
-        public Task<WebSearched> SearchAsync(WebSearchStep step, string query, IReadOnlyList<string>? names = null)
-            => Search.SearchAsync(step, query, names, TestContext.Current.CancellationToken);
+        public Task<WebSearched> SearchAsync(WebSearchStep step, string query, IReadOnlyList<string>? names = null, int page = 1)
+            => Search.SearchAsync(step, query, names, page, TestContext.Current.CancellationToken);
 
         public void Dispose()
         {

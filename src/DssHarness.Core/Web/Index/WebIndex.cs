@@ -17,10 +17,9 @@ namespace DssHarness.Core.Web.Index;
 /// <remarks>
 /// <para>
 /// A page's title counts three times, each heading twice and its text once: what a page is about is said first in its
-/// title and headings. Terms are runs of letters and digits, compared in lower case, unstemmed. Of a page's text the first
-/// <see cref="MostCharacters"/> characters are kept, of its title and each of its first <see cref="MostHeadings"/>
-/// headings the first <see cref="MostField"/>: enough to say what it holds, and a bound on what a site of thousands of
-/// pages costs the disk.
+/// title and headings. Terms are runs of letters and digits, compared in lower case, unstemmed, every one of them however
+/// long. A page is kept whole - its title, every heading and all its text - so a term anywhere in it finds it; a hit's
+/// snippet is cut from its text when it is asked for (<see cref="SnippetLength"/>), never when it is kept.
 /// </para>
 /// <para>
 /// Held in memory are each page's address, its title, its weighted length, where its line begins and the terms it holds
@@ -34,14 +33,11 @@ public sealed class WebIndex
     /// <summary>The file of the index's pages, in its directory.</summary>
     public const string PagesFileName = "pages.jsonl";
 
-    /// <summary>The most characters of a page's text kept.</summary>
-    public const int MostCharacters = 32_000;
-
-    /// <summary>The most characters of a page's title, and of each heading, kept.</summary>
-    public const int MostField = 300;
-
-    /// <summary>The most headings of a page kept, its first.</summary>
-    public const int MostHeadings = 100;
+    /// <summary>
+    /// How many characters of a page's text a hit shows around what was asked: a snippet, made from the text kept whole
+    /// when a search asks, which says where the page answers - the page itself is read whole by fetching it.
+    /// </summary>
+    public const int SnippetLength = 300;
 
     /// <summary>BM25's saturation of a term's frequency.</summary>
     private const double K1 = 1.2;
@@ -156,16 +152,16 @@ public sealed class WebIndex
             }
 
             writer.WriteString("readAt", readAt);
-            writer.WriteString("title", TextCut.Head(parts.Title, MostField));
+            writer.WriteString("title", parts.Title);
             writer.WriteStartArray("headings");
 
-            foreach (var heading in parts.Headings.Take(MostHeadings))
+            foreach (var heading in parts.Headings)
             {
-                writer.WriteStringValue(TextCut.Head(heading, MostField));
+                writer.WriteStringValue(heading);
             }
 
             writer.WriteEndArray();
-            writer.WriteString("text", TextCut.Head(parts.Text, MostCharacters));
+            writer.WriteString("text", parts.Text);
         });
     }
 
@@ -188,7 +184,7 @@ public sealed class WebIndex
     {
         writer.WriteString("address", address);
         writer.WriteString("failedAt", at);
-        writer.WriteString("why", TextCut.Head(why, MostField));
+        writer.WriteString("why", why);
     });
 
     /// <summary>
@@ -280,25 +276,28 @@ public sealed class WebIndex
     }
 
     /// <summary>
-    /// The pages that best answer <paramref name="query"/>, best first, at most <paramref name="limit"/>: BM25 over its
-    /// terms, each hit with its title and a snippet of its text around the first term it holds - of the pages
-    /// <paramref name="keep"/> keeps, where it is given.
+    /// The pages that answer <paramref name="query"/>, best first, their page <paramref name="paged"/> of them, and how many
+    /// answer it in all: BM25 over its terms, each hit with its title and a snippet of its text around the first term it
+    /// holds - of the pages <paramref name="keep"/> keeps, where it is given.
     /// </summary>
     /// <param name="query">The query.</param>
-    /// <param name="limit">The most hits.</param>
+    /// <param name="paged">Which of their pages: its number from 1, and how many hits a page holds.</param>
     /// <param name="keep">Whether a page, by its address, may be a hit; every page held where none is given.</param>
-    public IReadOnlyList<WebIndexHit> Search(string query, int limit, Func<string, bool>? keep = null)
+    public WebIndexFound Search(string query, Search.WebSearchPage paged, Func<string, bool>? keep = null)
     {
         ArgumentNullException.ThrowIfNull(query);
+        ArgumentOutOfRangeException.ThrowIfLessThan(paged.Number, 1);
+        ArgumentOutOfRangeException.ThrowIfLessThan(paged.Size, 1);
 
         var asked = WebIndexTerms.Of(query).Distinct(StringComparer.Ordinal).ToList();
         List<(Page Page, double Score)> best;
+        int total;
 
         lock (_gate)
         {
             if (_held == 0 || asked.Count == 0)
             {
-                return [];
+                return new WebIndexFound([], 0);
             }
 
             var average = _length / _held;
@@ -327,7 +326,8 @@ public sealed class WebIndex
                 }
             }
 
-            best = [.. scores.OrderByDescending(score => score.Value).ThenBy(score => score.Key).Take(limit).Select(score => (_pages[score.Key], score.Value))];
+            total = scores.Count;
+            best = [.. scores.OrderByDescending(score => score.Value).ThenBy(score => score.Key).Skip(paged.Start > int.MaxValue ? int.MaxValue : (int)paged.Start).Take(paged.Size).Select(score => (_pages[score.Key], score.Value))];
 
             bool Keeps(int id, Page page)
             {
@@ -341,7 +341,7 @@ public sealed class WebIndex
             }
         }
 
-        return [.. best.Select(hit => Hit(hit.Page, hit.Score, asked))];
+        return new WebIndexFound([.. best.Select(hit => Hit(hit.Page, hit.Score, asked))], total);
     }
 
     private static string Line(Action<Utf8JsonWriter> write)
@@ -423,7 +423,7 @@ public sealed class WebIndex
 
         try
         {
-            using var line = JsonDocument.Parse(bytes);
+            using var line = JsonDocument.Parse(bytes, Json.JsonDepth.Document);
             var root = line.RootElement;
 
             address = root.GetProperty("address").GetString()!;
@@ -542,7 +542,7 @@ public sealed class WebIndex
 
         try
         {
-            using var document = JsonDocument.Parse(line);
+            using var document = JsonDocument.Parse(line, Json.JsonDepth.Document);
             return document.RootElement.GetProperty("text").GetString();
         }
         catch (Exception ex) when (ex is JsonException or KeyNotFoundException or InvalidOperationException)
@@ -567,7 +567,7 @@ public sealed class WebIndex
             }
 
             var bytes = line.ToArray();
-            using var document = JsonDocument.Parse(bytes);
+            using var document = JsonDocument.Parse(bytes, Json.JsonDepth.Document);
 
             return document.RootElement.TryGetProperty("address", out var address) && address.GetString() == page.Address ? bytes : null;
         }
@@ -589,7 +589,7 @@ public sealed class WebIndex
             start = blank + 1;
         }
 
-        var snippet = TextCut.AtWord(string.Join(" ", text[start..].Split('\n', StringSplitOptions.RemoveEmptyEntries)), MostField);
+        var snippet = TextCut.AtWord(string.Join(" ", text[start..].Split('\n', StringSplitOptions.RemoveEmptyEntries)), SnippetLength);
 
         return start > 0 ? $"…{snippet}" : snippet;
     }
@@ -610,12 +610,9 @@ public sealed class WebIndex
     }
 }
 
-/// <summary>The terms of a text as the index reads them: runs of letters and digits, in lower case.</summary>
+/// <summary>The terms of a text as the index reads them: runs of letters and digits, in lower case, every one however long.</summary>
 internal static class WebIndexTerms
 {
-    /// <summary>The longest term kept: a longer run is no word anyone searches for.</summary>
-    private const int Longest = 64;
-
     /// <summary>The terms of <paramref name="text"/>, in its order.</summary>
     public static IEnumerable<string> Of(string text) => Positions(text).Select(found => found.Term);
 
@@ -639,23 +636,24 @@ internal static class WebIndexTerms
             }
             else if (builder.Length > 0)
             {
-                if (builder.Length <= Longest)
-                {
-                    yield return (builder.ToString(), start);
-                }
-
+                yield return (builder.ToString(), start);
                 builder.Clear();
             }
 
             at += rune.Utf16SequenceLength;
         }
 
-        if (builder.Length is > 0 and <= Longest)
+        if (builder.Length > 0)
         {
             yield return (builder.ToString(), start);
         }
     }
 }
+
+/// <summary>One page of what an index search found, and how many pages answer it in all.</summary>
+/// <param name="Hits">The page's hits, best first.</param>
+/// <param name="Total">How many pages answer the query, every page of them.</param>
+public sealed record WebIndexFound(IReadOnlyList<WebIndexHit> Hits, int Total);
 
 /// <summary>One page an index search found.</summary>
 /// <param name="Address">Its address.</param>
@@ -669,7 +667,7 @@ public sealed record WebIndexHit(string Address, string Title, string Snippet, d
 /// sitemaps list - whether it is being filled, and why it holds less than it might.
 /// </summary>
 /// <param name="Site">The site.</param>
-/// <param name="Hits">The pages found, best first.</param>
+/// <param name="Hits">The pages found, best first: the page of them asked.</param>
 /// <param name="Held">How many pages it holds that its source's settings read: those a search may find.</param>
 /// <param name="Known">How many pages its sitemaps list that it may read; <see langword="null"/> until they were read.</param>
 /// <param name="Filling">Whether it is being filled now, here or by another run.</param>
@@ -679,6 +677,9 @@ public sealed record WebIndexAnswer(string Site, IReadOnlyList<WebIndexHit> Hits
 {
     /// <summary>Why a fill is held off until <see cref="PausedUntil"/>, where it was not for a problem (<see cref="WebIndexState.PausedFor"/>).</summary>
     public string? PausedFor { get; init; }
+
+    /// <summary>How many of its pages answer the query, on every page of its hits.</summary>
+    public int Total { get; init; }
 
     /// <summary>How much of the site it held, as an agent is told: <c>indexed 240 of 1,904 pages of digital.gov; the rest are being read</c>.</summary>
     public string Said

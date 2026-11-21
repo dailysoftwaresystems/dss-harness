@@ -110,7 +110,7 @@ and says why in noClass.
 4. Where something is open that changes the design, your run context says whether you may ask the person. Ask now,
    everything at once, each question with its choices and the one you recommend by the bar above; or decide, and
    record each assumption.
-5. Design the work, then split it into at most 8 items by sets of files, as your instructions say. Size each item to
+5. Design the work, then split it into items by sets of files, as many as it needs, as your instructions say. Size each item to
    one builder's cycle: as much work as one agent builds whole in a single sitting, with its tests - never more than
    that, and never a sliver of one; an item too small to fill a builder is merged with the work beside it. Items are
    built at the same time: none may need another's result. Leave nothing inside an item that you already know only a

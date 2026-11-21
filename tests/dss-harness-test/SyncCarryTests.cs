@@ -1,7 +1,9 @@
 using System.Text;
+using DssHarness.Core.FileSystem;
 using DssHarness.Core.Hosts;
 using DssHarness.Core.Output;
 using DssHarness.Core.Processes;
+using DssHarness.Core.Repository;
 using DssHarness.Core.Sync;
 
 namespace DssHarness.Tests;
@@ -82,11 +84,11 @@ public sealed class SyncCarryTests
     }
 
     /// <summary>
-    /// A file read back from a host - what a pull brings, and what carrying an artifact reads back to prove it landed -
-    /// leaves the heap holding nothing more once it is read, and allocates a few times its size at most: its content
-    /// arrives a line at a time and is decoded as it comes. Read as one line of text, its answer was held in five copies,
-    /// and the serializer rented three times its length to read it, which the shared pool then kept: one 64 MiB file left
-    /// a dispatcher holding 2 GiB, and 640 MiB of it after every collection.
+    /// A file read back from a host - what a pull brings - holds no more than a few of its pieces while it is read and
+    /// nothing more once it is, and allocates a few times its size at most: it is read a piece at a time, each arriving a
+    /// line at a time and decoded as it comes. Read as one line of text, its answer was held in five copies, and the
+    /// serializer rented three times its length to read it, which the shared pool then kept: one 64 MiB file left a
+    /// dispatcher holding 2 GiB, and 640 MiB of it after every collection.
     /// </summary>
     [Fact]
     public async Task AFileReadBackFromAHost_HoldsNothingAfter_AndAllocatesAFewTimesItsSize()
@@ -94,8 +96,10 @@ public sealed class SyncCarryTests
         using var temp = new TempDirectory();
         var cancellationToken = TestContext.Current.CancellationToken;
         var harness = new HarnessFactory();
-        var transport = SyncKit.AgentHere(harness);
         var size = 32 * 1024 * 1024;
+
+        // Pieces of an eighth of the file, so that what a few of them hold is told apart from what the file does.
+        var transport = SyncKit.AgentHere(harness, pieceBytes: size / 8);
 
         Directory.CreateDirectory(temp.Combine("copy"));
 
@@ -106,7 +110,7 @@ public sealed class SyncCarryTests
 
         // Once, so that what is made the first time anything runs is not counted as the reading's.
         await File.WriteAllBytesAsync(temp.Combine("copy", "small.bin"), [1, 2, 3], cancellationToken);
-        await transport.ReadFileAsync(temp.Combine("copy"), "small.bin", cancellationToken);
+        await transport.ReadFileAsync(temp.Combine("copy"), "small.bin", 0, transport.PieceBytes, cancellationToken);
 
         var (before, _) = HeapWatch.Collected();
         var allocatedBefore = GC.GetTotalAllocatedBytes(precise: true);
@@ -126,7 +130,7 @@ public sealed class SyncCarryTests
 
         // Read with the transport's next request gone too: until another runs, the threads that served this one can still
         // hold its last continuation, and with it the file this test has finished with.
-        await transport.ReadFileAsync(temp.Combine("copy"), "small.bin", cancellationToken);
+        await transport.ReadFileAsync(temp.Combine("copy"), "small.bin", 0, transport.PieceBytes, cancellationToken);
 
         var (heldAfter, partsAfter) = HeapWatch.Collected();
         var held = heldAfter - before;
@@ -138,19 +142,131 @@ public sealed class SyncCarryTests
             $"reading {size:N0} bytes back grew the heap by at most {growth:N0}, allocated {allocated:N0}, and left {held:N0} more held");
 
         Assert.Equal(size, length);
+        // The piece read last is held while the next is read into.
         Assert.True(
-            growth <= size + HeapBound,
-            $"the heap grew by {growth:N0} bytes while a file of {size:N0} was read, past the file and {HeapBound:N0}: {where}; after: {after}");
+            growth <= (3L * transport.PieceBytes) + HeapBound,
+            $"the heap grew by {growth:N0} bytes while a file of {size:N0} was read, past three pieces and {HeapBound:N0}: {where}; after: {after}");
         Assert.True(held <= HeapBound, $"the heap held {held:N0} bytes more once the file was read, past the bound of {HeapBound:N0}: {after}");
         Assert.True(allocated <= 8L * size, $"reading {size:N0} bytes allocated {allocated:N0}");
     }
 
     /// <summary>
-    /// How long the file <paramref name="relativePath"/> read back from <paramref name="root"/> is, read in a method of its
-    /// own so that nothing of this test's holds its bytes once it returns.
+    /// How long the file <paramref name="relativePath"/> read back from <paramref name="root"/> a piece at a time is, read in
+    /// a method of its own so that nothing of this test's holds its bytes once it returns.
     /// </summary>
     private static async Task<int> LengthReadAsync(RemoteSyncTransport transport, string root, string relativePath, CancellationToken cancellationToken)
-        => (await transport.ReadFileAsync(root, relativePath, cancellationToken)).Length;
+    {
+        var read = 0L;
+        long length;
+
+        do
+        {
+            var piece = await transport.ReadFileAsync(root, relativePath, read, transport.PieceBytes, cancellationToken);
+
+            length = piece.Length;
+            read += piece.Bytes.Length;
+        }
+        while (read < length);
+
+        return (int)read;
+    }
+
+    /// <summary>
+    /// A file past what one request could hold whole - 804,519,909 bytes, the most whose base64 a single string holds - is
+    /// synced to a host and pulled back, both through this build's own agent as every host is reached, and lands byte for
+    /// byte the file it was: a piece to a request, each checked, put in place only once all of it has arrived. Neither way
+    /// does this machine's heap hold more than a few of its pieces, however large it is. Held whole inside one request, it
+    /// was refused by name before anything was sent, and a build output that size is ordinary.
+    /// </summary>
+    [Fact]
+    public async Task AFilePastAStringsHold_IsCarriedInPieces()
+    {
+        // One byte past the largest file one request held whole.
+        const long PastAStringsHold = 804_519_910;
+        const int Piece = 32 * 1024 * 1024;
+
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = new HarnessFactory();
+
+        // The file here, its copy there and the one pulled back, with the pieces of each kept aside as it lands.
+        Assert.SkipWhen(
+            harness.FileSystem.SpaceAt(temp.Path).FreeBytes < 4 * PastAStringsHold,
+            $"Carrying a file of {PastAStringsHold:N0} bytes there and back writes up to four times that, more than '{temp.Path}' has free.");
+
+        var here = temp.Combine("here");
+        var host = temp.Combine("host");
+        var back = temp.Combine("back");
+        var warm = temp.Combine("warm");
+        var transport = SyncKit.AgentHere(harness, pieceBytes: Piece);
+        var service = SyncKit.Service(harness);
+
+        Directory.CreateDirectory(here);
+        Directory.CreateDirectory(host);
+        Directory.CreateDirectory(warm);
+        Generated(Path.Combine(here, "big.bin"), PastAStringsHold, Piece);
+
+        // Once, so that what is made the first time anything runs is not counted as the carrying's - landing elsewhere, so the
+        // file pulled back lands where nothing is yet.
+        await File.WriteAllBytesAsync(Path.Combine(warm, "small.bin"), [1, 2, 3], cancellationToken);
+        await service.PullAsync(transport, warm, temp.Combine("warmed"), ["small.bin"], [], cancellationToken);
+
+        var read = await service.ReadDirectoryAsync(here, cancellationToken);
+        var expected = read.Entries["big.bin"].Identity;
+        long growth;
+        string where;
+
+        using (var heap = new HeapWatch())
+        {
+            await service.SyncDirectoryAsync(read, transport, host, cancellationToken);
+
+            // Gone here before it comes back, so this machine's disk holds it no more than twice at once.
+            File.Delete(Path.Combine(here, "big.bin"));
+
+            var pulled = await service.PullAsync(transport, host, back, ["big.bin"], [], cancellationToken);
+
+            growth = heap.Growth;
+            where = heap.Where;
+
+            Assert.Equal(["big.bin"], pulled.Files);
+            Assert.Null(pulled.Stopped);
+        }
+
+        TestContext.Current.TestOutputHelper?.WriteLine($"carrying {PastAStringsHold:N0} bytes there and back grew the heap by at most {growth:N0}");
+
+        Assert.Equal(expected, await FileContentHash.OfAsync(harness.FileSystem, Path.Combine(host, "big.bin"), cancellationToken));
+        Assert.Equal(expected, await FileContentHash.OfAsync(harness.FileSystem, Path.Combine(back, "big.bin"), cancellationToken));
+        Assert.Equal(PastAStringsHold, expected.Length);
+        Assert.False(Directory.Exists(Path.Combine(host, LocalSyncTransport.PiecesDirectory)), "pieces were kept aside on the host once the file was in place");
+        Assert.False(Directory.Exists(Path.Combine(back, HarnessLayout.DirectoryName)), "the pull left a harness directory where it landed");
+
+        // The first piece of the file is held while the rest cross, one more as it is sent and the next as it is read.
+        Assert.True(
+            growth <= (4L * Piece) + HeapBound,
+            $"the heap grew by {growth:N0} bytes while a file of {PastAStringsHold:N0} crossed in pieces of {Piece:N0}, past four pieces and {HeapBound:N0}: {where}");
+    }
+
+    /// <summary>
+    /// Makes a file of <paramref name="length"/> bytes at <paramref name="path"/>, holding nothing but where a block of its
+    /// own stands - at its start, either side of the first piece's end, in the middle, and at its end - so every piece is
+    /// told apart by what it holds, and a piece put in the wrong place makes another file.
+    /// </summary>
+    private static void Generated(string path, long length, int piece)
+    {
+        var random = new Random(112);
+        var block = new byte[4096];
+
+        using var file = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+
+        file.SetLength(length);
+
+        foreach (var at in new[] { 0L, piece - 2048L, length / 2, length - block.Length })
+        {
+            random.NextBytes(block);
+            file.Position = at;
+            file.Write(block);
+        }
+    }
 
     /// <summary>
     /// A host that reads each request and answers that it finished, keeping nothing of it: what the machine carrying holds
@@ -180,16 +296,16 @@ public sealed class SyncCarryTests
             return Task.FromResult(new ProcessResult(0, string.Empty, string.Empty, TimeSpan.Zero, TimedOut: false));
         }
 
-        public Task<ProcessResult> ProbeShellAsync(HostConnection connection, TimeSpan timeout, CancellationToken cancellationToken = default)
+        public Task<ProcessResult> ProbeShellAsync(HostConnection connection, CancellationToken cancellationToken = default)
             => throw new NotSupportedException();
 
-        public Task<ProcessResult> ReadSshSettingsAsync(HostConnection connection, TimeSpan timeout, CancellationToken cancellationToken = default)
+        public Task<ProcessResult> ReadSshSettingsAsync(HostConnection connection, CancellationToken cancellationToken = default)
             => throw new NotSupportedException();
 
-        public Task<ProcessResult> ProbeDefaultWslDistributionAsync(TimeSpan timeout, CancellationToken cancellationToken = default)
+        public Task<ProcessResult> ProbeDefaultWslDistributionAsync(CancellationToken cancellationToken = default)
             => throw new NotSupportedException();
 
-        public Task<ProcessResult> ListRunningWslDistributionsAsync(TimeSpan timeout, CancellationToken cancellationToken = default)
+        public Task<ProcessResult> ListRunningWslDistributionsAsync(CancellationToken cancellationToken = default)
             => throw new NotSupportedException();
     }
 

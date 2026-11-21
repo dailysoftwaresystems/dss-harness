@@ -8,10 +8,10 @@ namespace DssHarness.Core.Orchestration.Flow;
 
 /// <summary>What the workflow cache holds, and its pruning: the verbs' answer, said as lines or as JSON.</summary>
 /// <param name="Directory">The cache's own directory, where its entries, blobs and resolutions land.</param>
-/// <param name="Listed">Each entry, one line: where it came from, its commit, its files and bytes, when it was fetched and last used, and the refs whose newest resolution it is.</param>
+/// <param name="Listed">Each entry, as the cache lists it: said one line each (<see cref="WorkflowCacheService.EntryLine"/>).</param>
 /// <param name="Unread">Each file of the cache's own that could not be read, and why.</param>
 /// <param name="Pruning">What the pruning removed and could not; null for a listing.</param>
-public sealed record WorkflowCacheReport(string Directory, IReadOnlyList<string> Listed, IReadOnlyList<WorkflowCacheUnread> Unread, WorkflowCachePruning? Pruning = null);
+public sealed record WorkflowCacheReport(string Directory, IReadOnlyList<WorkflowCacheListed> Listed, IReadOnlyList<WorkflowCacheUnread> Unread, WorkflowCachePruning? Pruning = null);
 
 /// <summary>
 /// Reads and prunes the hash cache of remote workflows: <c>workflow-cache list</c> says each entry the cache holds, and
@@ -26,11 +26,11 @@ public interface IWorkflowCacheService : IUseCase
     Task<WorkflowCacheReport> ListAsync(CancellationToken cancellationToken = default);
 
     /// <summary>Prunes the entries no run used, and none was fetched, for <paramref name="unusedDays"/> days.</summary>
-    /// <param name="unusedDays">The days an entry may go unused before it is pruned, 0 to <see cref="WorkflowCache.MostUnusedDays"/>.</param>
+    /// <param name="unusedDays">The days an entry may go unused before it is pruned: 0 or more, any number (<see cref="WorkflowCache.Prune"/>).</param>
     /// <param name="cancellationToken">Stops the pruning before it begins.</param>
     /// <exception cref="HarnessException">
-    /// The days are below 0 or past <see cref="WorkflowCache.MostUnusedDays"/> (<see cref="HarnessExit.UsageError"/>), with
-    /// nothing removed; no directory of this user's own could be named, or the lock was held past its window (<see cref="WorkflowCache.FailedExit"/>).
+    /// The days are below 0 (<see cref="HarnessExit.UsageError"/>), with nothing removed; no directory of this user's own
+    /// could be named, or the lock could not be taken (<see cref="WorkflowCache.FailedExit"/>).
     /// </exception>
     Task<WorkflowCacheReport> PruneAsync(int unusedDays, CancellationToken cancellationToken = default);
 }
@@ -51,17 +51,19 @@ public sealed class WorkflowCacheService(WorkflowCache cache, TimeProvider clock
 
         var listing = _cache.List();
 
-        return Task.FromResult(new WorkflowCacheReport(_cache.Directory, [.. listing.Entries.Select(EntryLine)], listing.Unread));
+        return Task.FromResult(new WorkflowCacheReport(_cache.Directory, listing.Entries, listing.Unread));
     }
 
     /// <inheritdoc/>
     public Task<WorkflowCacheReport> PruneAsync(int unusedDays, CancellationToken cancellationToken = default)
     {
-        if (unusedDays is < 0 or > WorkflowCache.MostUnusedDays)
+        // Below none would move the cut-off into the future and prune every entry; any number above is a cut-off, clamped
+        // at the clock's start.
+        if (unusedDays < 0)
         {
             throw new HarnessException(
                 HarnessExit.UsageError,
-                $"--unused-days is {unusedDays.ToString(CultureInfo.InvariantCulture)}; it is a number of days from 0 to {WorkflowCache.MostUnusedDays.ToString("N0", CultureInfo.InvariantCulture)}. Nothing was removed from the workflow cache"
+                $"--unused-days is {unusedDays.ToString(CultureInfo.InvariantCulture)}; it is a number of days, 0 or more. Nothing was removed from the workflow cache"
                     + (WorkflowCache.DefaultDirectoryIfNamed() is { } directory ? $" '{directory}'." : "."));
         }
 
@@ -74,16 +76,19 @@ public sealed class WorkflowCacheService(WorkflowCache cache, TimeProvider clock
 
     /// <summary>
     /// One entry, one line, as list says it: where it came from, its commit, its files and bytes - and the blobs of it
-    /// not there, where any are not - when it was fetched and last used, and the refs whose newest resolution it is.
+    /// not there, where any are not - when it was fetched and last used, and the refs whose newest resolution it is. The
+    /// commit is named as every message names one (<see cref="ReportText.Commit"/>), and whole where the line is a
+    /// --json document's, which carries every value as it is.
     /// </summary>
     /// <param name="listed">The entry, as the cache lists it.</param>
-    public static string EntryLine(WorkflowCacheListed listed)
+    /// <param name="wholeCommit">Whether the commit is named whole: the --json document's line.</param>
+    public static string EntryLine(WorkflowCacheListed listed, bool wholeCommit = false)
     {
         ArgumentNullException.ThrowIfNull(listed);
 
         var entry = listed.Entry;
 
-        return $"{entry.Repository} at {entry.Commit[..12]}: {entry.Path} ({ReportText.Counted(entry.Files.Count, "file")}, {listed.Bytes.ToString("N0", CultureInfo.InvariantCulture)} bytes"
+        return $"{entry.Repository} at {(wholeCommit ? entry.Commit : ReportText.Commit(entry.Commit))}: {entry.Path} ({ReportText.Counted(entry.Files.Count, "file")}, {listed.Bytes.ToString("N0", CultureInfo.InvariantCulture)} bytes"
             + (listed.Missing > 0 ? $", {ReportText.Counted(listed.Missing, "blob")} of it not there - it is fetched again where a use resolves to it" : string.Empty)
             + $", fetched {Day(entry.FetchedAt)}, last used {Day(entry.LastUsedAt)}"
             + string.Concat(listed.Resolutions.Select(resolution => $", the newest resolution of {(resolution.Branch ? "the branch" : "the tag")} {resolution.Ref} on {Day(resolution.ResolvedAt)}"))
@@ -144,7 +149,7 @@ public static class WorkflowCacheReports
         {
             Data = json ? [Document(report.Directory, report).ToJsonString(ReportJson.Options)] : [],
             Quiet = json,
-            Details = json ? null : [.. report.Listed, .. unread],
+            Details = json ? null : [.. report.Listed.Select(listed => WorkflowCacheService.EntryLine(listed)), .. unread],
         };
     }
 
@@ -161,7 +166,7 @@ public static class WorkflowCacheReports
         => new()
         {
             ["cache"] = directory,
-            ["entries"] = report is null || report.Pruning is not null ? null : new JsonArray([.. report.Listed.Select(line => (JsonNode)line!)]),
+            ["entries"] = report is null || report.Pruning is not null ? null : new JsonArray([.. report.Listed.Select(listed => (JsonNode)WorkflowCacheService.EntryLine(listed, wholeCommit: true)!)]),
             ["unread"] = report is null ? null : Files(report.Unread),
             ["prunedEntries"] = report?.Pruning?.Entries,
             ["prunedBlobs"] = report?.Pruning?.Blobs,

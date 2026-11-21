@@ -8,9 +8,10 @@ namespace DssHarness.Core.Web.Search;
 /// <summary>
 /// The configuration's web search, resolved: every source - the built-in ones (<c>Templates/web-search-sources.json</c>)
 /// with the repository's entries laid over them key by key, then the repository's own - what a step that names no
-/// <c>search</c> searches, the bounds, and why any of it cannot be used (V56, and V55 for <c>defaults</c>). The one
-/// owner of what the sources are: the configuration's check, a step's <c>search</c>, the slot's appointed names and help
-/// all read them here.
+/// <c>search</c> searches, how many requests a step makes, and why any of it cannot be used (V56, and V55 for
+/// <c>defaults</c>). The one owner of what the sources are: the configuration's check, a step's <c>search</c>, the slot's
+/// appointed names and help all read them here. Every result of a page a source answers is given, and a later page is
+/// asked on demand: no count of results is configured.
 /// </summary>
 public sealed class WebSearchSources
 {
@@ -20,15 +21,13 @@ public sealed class WebSearchSources
     /// <summary>The most <c>maxPerStep</c> may be.</summary>
     public const int MostMaxPerStep = 1000;
 
-    /// <summary>The most results a source gives one search where the configuration says none.</summary>
-    public const int DefaultResultsPerSource = 8;
+    /// <summary>The key a source's count of results was once set by, refused naming what took its place (<see cref="Retired"/>).</summary>
+    public const string ResultsPerSourceKey = "resultsPerSource";
 
-    /// <summary>The most <c>resultsPerSource</c> may be.</summary>
-    public const int MostResultsPerSource = 20;
+    private const string MaxPerStepMeaning = "the most requests of sources one step makes, a later page of a source's results among them";
 
-    private const string MaxPerStepMeaning = "the most requests of sources one step makes";
-
-    private const string ResultsPerSourceMeaning = "the most results a source gives one search";
+    /// <summary>How a source's keys are written back to be read as one: at any depth.</summary>
+    private static readonly JsonSerializerOptions Deep = Json.JsonDepth.Serializer(JsonSerializerOptions.Default);
 
     private static AgentWebSearchConfig? _builtIn;
 
@@ -38,16 +37,31 @@ public sealed class WebSearchSources
         new("sources", $"each source by its name: its {string.Join(", ", WebSearchSource.OwnKeys.Select(key => key.Name))}, and its kind's own keys; a built-in's name changes it key by key, a new name adds a source"),
         new("defaults", "names of sources or tags a reason step that says no search searches, those turned on; absent, the built-in ones"),
         new("maxPerStep", $"{MaxPerStepMeaning}, from 1 to {MostMaxPerStep.ToString("N0", CultureInfo.InvariantCulture)}; {DefaultMaxPerStep} where none is said"),
-        new("resultsPerSource", $"{ResultsPerSourceMeaning}, from 1 to {MostResultsPerSource}; {DefaultResultsPerSource} where none is said"),
     ];
 
-    private WebSearchSources(IReadOnlyList<WebSearchSource> all, IReadOnlyList<string> defaults, int maxPerStep, int resultsPerSource, IReadOnlyList<string> problems)
+    private WebSearchSources(IReadOnlyList<WebSearchSource> all, IReadOnlyList<string> defaults, int maxPerStep, IReadOnlyList<string> problems)
     {
         All = all;
         Defaults = defaults;
         MaxPerStep = maxPerStep;
-        ResultsPerSource = resultsPerSource;
         Problems = problems;
+    }
+
+    /// <summary>
+    /// Each key of <c>agentWebSearch</c> the configuration file <paramref name="root"/> still writes that is read no
+    /// longer, said with what took its place: <c>resultsPerSource</c>, for a source gives every result of the page it
+    /// answers and a later page is asked on demand. What the configuration's reader refuses before any key is read.
+    /// </summary>
+    /// <param name="root">The configuration file, read as JSON.</param>
+    public static IEnumerable<string> Retired(JsonElement root)
+    {
+        if (root.ValueKind == JsonValueKind.Object
+            && JsonObjectKeys.Value(root, "agentWebSearch") is { ValueKind: JsonValueKind.Object } search
+            && JsonObjectKeys.Value(search, ResultsPerSourceKey) is not null)
+        {
+            yield return $"agentWebSearch.{ResultsPerSourceKey} is no longer read: a source gives every result of the page it answers, "
+                + "and an agent asks for the next page by web_search's page, each request counted against maxPerStep; delete the key";
+        }
     }
 
     /// <summary>
@@ -70,9 +84,6 @@ public sealed class WebSearchSources
 
     /// <summary>The most requests of sources one step makes.</summary>
     public int MaxPerStep { get; }
-
-    /// <summary>The most results a source gives one search.</summary>
-    public int ResultsPerSource { get; }
 
     /// <summary>Why the configuration's web search cannot be used, each problem one line naming where it is; empty where it can.</summary>
     public IReadOnlyList<string> Problems { get; }
@@ -98,7 +109,7 @@ public sealed class WebSearchSources
 
         foreach (var (name, keys) in BuiltIn.Sources ?? [])
         {
-            entries.Add((name, (JsonObject)JsonNode.Parse(keys.GetRawText())!));
+            entries.Add((name, (JsonObject)Json.JsonDepth.ParseNode(keys.GetRawText())!));
         }
 
         foreach (var (name, keys) in declared?.Sources ?? [])
@@ -127,7 +138,7 @@ public sealed class WebSearchSources
 
             if (index < 0)
             {
-                entries.Add((name, (JsonObject)JsonNode.Parse(keys.GetRawText())!));
+                entries.Add((name, (JsonObject)Json.JsonDepth.ParseNode(keys.GetRawText())!));
                 continue;
             }
 
@@ -142,7 +153,7 @@ public sealed class WebSearchSources
                     merged.Remove(held);
                 }
 
-                merged[member.Name] = JsonNode.Parse(member.Value.GetRawText());
+                merged[member.Name] = Json.JsonDepth.ParseNode(member.Value.GetRawText());
             }
         }
 
@@ -160,15 +171,14 @@ public sealed class WebSearchSources
         }
 
         var maxPerStep = Within(declared?.MaxPerStep, DefaultMaxPerStep, MostMaxPerStep, "maxPerStep", MaxPerStepMeaning, problems);
-        var resultsPerSource = Within(declared?.ResultsPerSource, DefaultResultsPerSource, MostResultsPerSource, "resultsPerSource", ResultsPerSourceMeaning, problems);
         var defaults = declared?.Defaults ?? BuiltIn.Defaults ?? [];
 
         HarnessConfigValidator.RefuseGivenEmpty(declared?.Defaults, "agentWebSearch.defaults", "name sources or tags", "the built-in defaults", problems);
         // A source turned off is left out of the defaults, never refused there: turning one off is one key of its own.
-        problems.AddRange(new WebSearchSources(all, defaults, maxPerStep, resultsPerSource, [])
+        problems.AddRange(new WebSearchSources(all, defaults, maxPerStep, [])
             .ListProblems(declared?.Defaults, "agentWebSearch.defaults", "agentWebSearch.defaults names", off: false));
 
-        return new WebSearchSources(all, defaults, maxPerStep, resultsPerSource, problems);
+        return new WebSearchSources(all, defaults, maxPerStep, problems);
     }
 
     /// <summary>The source named <paramref name="name"/>; <see langword="null"/> where none is.</summary>
@@ -257,7 +267,7 @@ public sealed class WebSearchSources
 
     private static WebSearchSource Source(string name, JsonObject keys)
     {
-        using var document = JsonDocument.Parse(keys.ToJsonString());
+        using var document = Json.JsonDepth.ParseDocument(keys.ToJsonString(Deep));
         return new WebSearchSource(name, document.RootElement);
     }
 

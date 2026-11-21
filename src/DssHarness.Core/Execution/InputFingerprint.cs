@@ -87,8 +87,8 @@ public sealed record InputComparison(InputChange Change, IReadOnlyList<string> C
     public ReachedVerdict? Verdict() => Change switch
     {
         InputChange.Unchanged => null,
-        InputChange.Moved => ReachedVerdict.Of(LegVerdict.InputsMoved, Detail),
-        InputChange.Unmeasured => ReachedVerdict.Of(LegVerdict.Unmeasured, Detail),
+        InputChange.Moved => ReachedVerdict.Of(LegVerdict.InputsMoved, Detail) with { Named = Changed },
+        InputChange.Unmeasured => ReachedVerdict.Of(LegVerdict.Unmeasured, Detail) with { Named = Changed },
         _ => throw new ArgumentOutOfRangeException(nameof(Change), Change, "This build cannot weigh that input change."),
     };
 }
@@ -228,8 +228,8 @@ public sealed class InputFingerprint
 
     /// <summary>
     /// What <paramref name="before"/>, <paramref name="after"/> and <paramref name="watch"/> say
-    /// together. An incomplete snapshot, or a watch that lost events or was itself lost while the
-    /// work ran, yields <c>unmeasured</c>: there is no escape hatch, because a command that rewrites
+    /// together. An incomplete snapshot, or a watch that lost events it could not read again from the
+    /// inputs, or was itself lost, while the work ran, yields <c>unmeasured</c>: there is no escape hatch, because a command that rewrites
     /// its own inputs is a build step, not a test. A watch that could not start never reaches here:
     /// its work was not begun (<see cref="InputsUnwatchedException"/>).
     /// </summary>
@@ -253,7 +253,7 @@ public sealed class InputFingerprint
             return new InputComparison(
                 InputChange.Unmeasured,
                 unmeasured,
-                $"{Describe(unmeasured.Count, "input")} could not be read: {ReportText.Listed(unmeasured)}");
+                $"{Describe(unmeasured.Count, "input")} could not be read: {Names.Line(unmeasured, WholeList)}");
         }
 
         if (watch?.Failure is { } failure)
@@ -275,7 +275,7 @@ public sealed class InputFingerprint
             : new InputComparison(
                 InputChange.Moved,
                 moved,
-                $"{Describe(moved.Count, "input")} changed: {ReportText.Listed(moved)}");
+                $"{Describe(moved.Count, "input")} changed: {Names.Line(moved, WholeList)}");
     }
 
     private static IEnumerable<string> Differences(InputSnapshot before, InputSnapshot after)
@@ -331,6 +331,12 @@ public sealed class InputFingerprint
 
     private static string Describe(int count, string noun) => count == 1 ? $"1 {noun}" : $"{count} {noun}s";
 
+    /// <summary>
+    /// Where a comparison's whole list of inputs is, as its detail says after <c>all in</c>: the leg's line in the
+    /// ledger, which keeps every one (<see cref="ReachedVerdict.Named"/>).
+    /// </summary>
+    internal const string WholeList = "the leg's named, in the ledger and --json";
+
     /// <summary>Forward slashes everywhere, so one input is one name in the report on every platform.</summary>
     private static string Normalize(string path) => path.Replace('\\', '/').TrimStart('/');
 
@@ -363,6 +369,7 @@ public sealed class InputWatch : IDisposable, IWatchSink
     private readonly IReadOnlyList<WatchTarget> _targets;
     private readonly IDisposable _watching;
     private readonly Action<string>? _heardElsewhere;
+    private readonly HashSet<string> _holding;
     private string? _failure;
 
     /// <summary>Watches <paramref name="inputs"/> under <paramref name="root"/>.</summary>
@@ -419,6 +426,28 @@ public sealed class InputWatch : IDisposable, IWatchSink
             }
         }
 
+        // The directories an input lies in or above, as the watch watches them: each directory that holds an input
+        // of its own for its entries, and each directory above one for the names in it alone. What a write below a
+        // directory no input lies in or above is - a build's, a copy's - that watch never hears, and never told of.
+        _holding = new HashSet<string>(_tracked.Keys.SelectMany(Above), comparer);
+
+        static IEnumerable<string> Above(string path)
+        {
+            // Each directory the input lies beneath, and each directory above those - watched for the names in them
+            // alone - short of the tree's root, which a watch of only reaches where an input lies in it: a file of the
+            // root's own, whose parent the root is.
+            for (var at = path.LastIndexOf('/'); at > 0; at = path.LastIndexOf('/', at - 1))
+            {
+                yield return path[..at];
+            }
+
+            if (path.LastIndexOf('/') < 0)
+            {
+                // An input of the root's own: the root holds it, watched for its entries.
+                yield return string.Empty;
+            }
+        }
+
         if (!Directory.Exists(_root))
         {
             // Nothing to watch and nothing watched. Left unsaid this would answer every question
@@ -427,49 +456,38 @@ public sealed class InputWatch : IDisposable, IWatchSink
         }
 
         // The root at least, wherever an input is: a directory of inputs that is not there yet is heard arriving.
-        _targets = [.. Targets(kind.MostDirectories)];
+        _targets = kind.WatchesTheRootWhole ? [WatchTarget.AllTheWayDown(_root)] : [.. Targets()];
 
         // Last, with everything it tells of in place: a kind may tell of something before it returns.
         _watching = kind.Start(_targets, this);
     }
 
     /// <summary>
-    /// The directories to watch, and how: each directory that holds a tracked input, for its own
-    /// entries only; each directory above one - the root among them - for the names of the
-    /// directories in it alone, so that one of those going, arriving or changing its name is heard
-    /// wherever the inputs lie; and, where those directories are more than <paramref name="most"/>,
-    /// the top-level directories holding the most of them all the way down instead, until the rest
-    /// fit. With no bound, none is watched all the way down.
+    /// The directories to watch through a kind of a watch for each directory, and how: each directory that holds a tracked
+    /// input, for its own entries only; and each directory above one - the root among them - for the names of the
+    /// directories in it alone, so that one of those going, arriving or changing its name is heard wherever the inputs lie.
+    /// However many there are, and none all the way down. A kind that watches a tree through one watch of its root takes
+    /// that alone, and keeps of what it hears what names an input or a directory above one
+    /// (<see cref="IWatchKind.WatchesTheRootWhole"/>).
     /// </summary>
-    /// <param name="most">
-    /// The kind's bound on the directories it watches besides the root, or <see langword="null"/> where it
-    /// has none. A directory watched for names alone counts as one holding inputs does - each is a watcher
-    /// of its own - and the root's own watch, which every tree takes, does not; inside a top-level directory
-    /// taken whole, its one watch hears them all.
-    /// </param>
     /// <remarks>
-    /// Not one watch over the whole tree, nor over a whole top-level directory. A build writes its
-    /// objects into <c>build/&lt;variant&gt;</c>, and other trees build below the worktrees root - a
-    /// directory init keeps in git by a placeholder, so it holds a tracked input. Each is inside the
-    /// tree and not tracked, so a watch reaching down into one receives every object file, dependency
-    /// file and generated header those builds emit. That overflows the operating system's buffer, and
-    /// an overflow is reported as a watch that cannot be trusted - so the work it watched reports
-    /// <c>unmeasured</c>, for nothing it did. A guard that fails work it cannot fault is worse than the
-    /// one it replaced.
+    /// Not one watch over the whole tree where each directory can be watched for itself. A build writes its objects into
+    /// <c>build/&lt;variant&gt;</c>, and other trees build below the worktrees root - a directory init keeps in git by a
+    /// placeholder, so it holds a tracked input. Each is inside the tree and not tracked, so a watch reaching down into one
+    /// receives every object file, dependency file and generated header those builds emit, and its queue overflows: each
+    /// overflow then has every input read again (<see cref="IWatchSink.Overflowed"/>), work a watch of where the inputs lie
+    /// never has to do.
     /// <para>
-    /// Watching only the directories the inputs are in, and the names in those above them, excludes
-    /// the build directory, <c>.git</c>, the worktrees root's trees and every other untracked
-    /// directory by construction, rather than by a list of names that would have to be kept correct.
-    /// Watched all the way down past the limit, a top-level directory takes in whatever is built below
-    /// it again.
+    /// Watching only the directories the inputs are in, and the names in those above them, excludes the build directory,
+    /// <c>.git</c>, the worktrees root's trees and every other untracked directory by construction, rather than by a list
+    /// of names that would have to be kept correct.
     /// </para>
     /// <para>
-    /// Which directories lie above an input is what <see cref="_below"/> keeps, told apart as input
-    /// paths are on this platform: where names fold case, a directory two inputs spell two ways is one
-    /// directory, and one watch.
+    /// Which directories lie above an input is what <see cref="_below"/> keeps, told apart as input paths are on this
+    /// platform: where names fold case, a directory two inputs spell two ways is one directory, and one watch.
     /// </para>
     /// </remarks>
-    private IEnumerable<WatchTarget> Targets(int? most)
+    private IEnumerable<WatchTarget> Targets()
     {
         var comparer = _below.Comparer;
         var holding = _tracked.Keys.Select(Above).ToHashSet(comparer);
@@ -480,41 +498,8 @@ public sealed class InputWatch : IDisposable, IWatchSink
         // The directory a path lies in, relative to the tree: the empty name for the root.
         static string Above(string path) => path.LastIndexOf('/') is var at and > 0 ? path[..at] : string.Empty;
 
-        static string TopOf(string directory) => directory.IndexOf('/', StringComparison.Ordinal) is var at and > 0 ? directory[..at] : directory;
-
-        // Every directory watched but the root, against the bound; the widest first: each taken whole saves a watch for
-        // every directory it watched, for files or for names, but one.
-        var watched = holding.Concat(above).Where(directory => directory.Length > 0).ToList();
-        var whole = new HashSet<string>(comparer);
-        var count = watched.Count;
-
-        foreach (var group in watched
-            .GroupBy(TopOf, comparer)
-            .Select(group => (Top: group.Key, Count: group.Count()))
-            .OrderByDescending(group => group.Count)
-            .ThenBy(group => group.Top, StringComparer.Ordinal))
-        {
-            if (count <= (most ?? count))
-            {
-                break;
-            }
-
-            whole.Add(group.Top);
-            count -= group.Count - 1;
-        }
-
-        if (count > (most ?? count))
-        {
-            yield return WatchTarget.AllTheWayDown(_root);
-            yield break;
-        }
-
-        // A directory inside one taken whole is heard through that one's watch.
-        bool Apart(string directory) => directory.Length == 0 || !whole.Contains(TopOf(directory));
-
-        var targets = holding.Where(Apart).Select(directory => (Directory: directory, Made: (Func<string, WatchTarget>)WatchTarget.Entries))
-            .Concat(above.Where(Apart).Select(directory => (Directory: directory, Made: (Func<string, WatchTarget>)WatchTarget.NamesOnly)))
-            .Concat(whole.Select(top => (Directory: top, Made: (Func<string, WatchTarget>)WatchTarget.AllTheWayDown)))
+        var targets = holding.Select(directory => (Directory: directory, Made: (Func<string, WatchTarget>)WatchTarget.Entries))
+            .Concat(above.Select(directory => (Directory: directory, Made: (Func<string, WatchTarget>)WatchTarget.NamesOnly)))
             .OrderBy(target => target.Directory, StringComparer.Ordinal);
 
         foreach (var (directory, made) in targets)
@@ -566,8 +551,8 @@ public sealed class InputWatch : IDisposable, IWatchSink
         => [.. _targets.OrderBy(watched => watched.Directory, StringComparer.Ordinal)];
 
     /// <summary>
-    /// Why the watch can no longer be trusted - events were lost, or the watch itself was, while the
-    /// work ran - or <see langword="null"/> when it can.
+    /// Why the watch can no longer be trusted - events were lost that the inputs could not be read again for, or the watch
+    /// itself was, while the work ran - or <see langword="null"/> when it can.
     /// </summary>
     public string? Failure
     {
@@ -595,6 +580,42 @@ public sealed class InputWatch : IDisposable, IWatchSink
         lock (_gate)
         {
             _failure ??= why;
+        }
+    }
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// Every input is looked at again, as it stands now, against how the work found it: one that no longer stands so
+    /// counts, as word of its change would have counted it. What the events lost could have told and this look cannot is
+    /// only a change undone before it - the class a watch told of writes late already passes over
+    /// (<see cref="ReportsEarlierWrites"/>). An input whose standing cannot be told - no record of how the work found it,
+    /// its times unread, or no look at it allowed - leaves the span unanswered for, with why.
+    /// </remarks>
+    void IWatchSink.Overflowed(string why) => ReadAgain(why);
+
+    /// <summary>Counts each input that no longer stands as the work found it, as an overflow has them read again.</summary>
+    /// <param name="why">What overflowed, as the span's failure says it where an input cannot be read again.</param>
+    internal void ReadAgain(string why)
+    {
+        foreach (var declared in _tracked.Values)
+        {
+            switch (StandsAsFound(declared))
+            {
+                case true:
+                    continue;
+
+                case false:
+                    Count(declared);
+                    continue;
+
+                default:
+                    lock (_gate)
+                    {
+                        _failure ??= $"{why}, and the input '{ReportText.Printable(declared)}' cannot be looked at again against how the work found it";
+                    }
+
+                    return;
+            }
         }
     }
 
@@ -647,7 +668,18 @@ public sealed class InputWatch : IDisposable, IWatchSink
         {
             if (!_tracked.TryGetValue(relative, out declared))
             {
-                _heardElsewhere?.Invoke(relative);
+                // Told of it only where a watch of the inputs' own directories would hear it: in a directory the watch
+                // watches - one that holds an input of its own, one above another for its names alone, or the tree's
+                // root where an input lies in it. A write anywhere deeper - a build below a slot, an agent's below the
+                // worktrees root - is what that watch never hears, and never told of here.
+                var at = relative.LastIndexOf('/');
+                var held = at > 0 ? relative[..at] : string.Empty;
+
+                if (_holding.Contains(held))
+                {
+                    _heardElsewhere?.Invoke(relative);
+                }
+
                 return;
             }
         }
@@ -691,6 +723,37 @@ public sealed class InputWatch : IDisposable, IWatchSink
         {
             _changed.Add(declared);
         }
+    }
+
+    /// <summary>
+    /// Whether the input <paramref name="declared"/> stands now as the work found it, looked at again: absent then and
+    /// absent now, or there then and there still, the same size, and written and created when it was; <see langword="null"/>
+    /// where that cannot be told - no record of how the work found it, its times unread then, or no look at it allowed now.
+    /// </summary>
+    private bool? StandsAsFound(string declared)
+    {
+        if (!_found.TryGetValue(declared, out var found))
+        {
+            return null;
+        }
+
+        FileStanding? now;
+
+        try
+        {
+            now = FileStanding.Of(Path.Combine(_root, declared));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+
+        if (found.Length == InputFingerprint.AbsentLength)
+        {
+            return now is null;
+        }
+
+        return found.Written is null || found.Created is null ? null : found.Standing.StandsAs(now);
     }
 
     /// <summary>

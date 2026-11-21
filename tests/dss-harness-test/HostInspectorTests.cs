@@ -158,6 +158,24 @@ public sealed class HostInspectorTests
         Assert.Equal("linux", report.Os);
     }
 
+    /// <summary>
+    /// No program a host is asked to run while it is reached and measured - uname, the lookups of where programs are, the
+    /// SDK's listing, the tool's, the survey itself - carries a bound of the code's own: each is waited for to its end, and
+    /// only the person's stop, or ssh's own bounds, ends one. Held to two minutes, a survey whose witnesses and developer
+    /// environments took longer was cut off, and the host said to have stopped answering.
+    /// </summary>
+    [Fact]
+    public async Task NoProgramAHostIsAsked_CarriesABoundOfTheCodesOwn()
+    {
+        using var fixture = new Fixture(PlatformId.Windows, respond: HostThat());
+
+        var report = await fixture.InspectAsync(HostId.Wsl(Distro));
+
+        Assert.True(report.Available, report.Reason);
+        Assert.Contains(fixture.Commands.Calls, call => call.Command.Program == "uname");
+        Assert.Contains(fixture.Commands.Calls, call => call.Command.Arguments.Contains(HostAgentProtocol.CommandName));
+        Assert.All(fixture.Commands.Calls, call => Assert.Null(call.Command.Timeout));
+    }
     [Fact]
     public async Task AHostWhoseDotnetIsOffThePath_RunsItByItsAbsolutePath()
     {
@@ -716,7 +734,7 @@ public sealed class HostInspectorTests
         Assert.True(report.Available, report.Reason);
         Assert.Equal(2, wakeLookup.Calls);
         Assert.Contains(report.Actions, action => action.StartsWith("answered after ", StringComparison.Ordinal)
-            && action.EndsWith("(5 lookup(s) of its name, 2 connection attempt(s))", StringComparison.Ordinal));
+            && action.EndsWith("(4 lookup(s) of its name, 2 connection attempt(s))", StringComparison.Ordinal));
     }
 
     /// <summary>
@@ -928,7 +946,7 @@ public sealed class HostInspectorTests
     /// <summary>
     /// The developer environments a host is asked about travel to it - the toolset one names with it, for the host's own
     /// survey to look for - what it found comes back under the names they were asked by, with the toolset it found, and
-    /// each one gives the host the time vswhere may take to answer.
+    /// the survey that carries them is waited for to its end, however long vswhere takes there.
     /// </summary>
     [Fact]
     public async Task DeveloperEnvironmentsTravelToTheHost_AndWhatItFoundComesBack()
@@ -966,12 +984,12 @@ public sealed class HostInspectorTests
             report.DeveloperEnvironments["VS"].Reason);
         Assert.Null(report.DeveloperEnvironments["vs"].ToolsVersion);
         Assert.Equal(DeveloperEnvironmentCheck.Installed(@"C:\VS", "18.11.0", "14.44.35207"), report.DeveloperEnvironments["cuda"]);
-        Assert.Equal(DeveloperEnvironmentProbe.ProbeBudget * 2, budgets[0] - budgets[1]);
+        Assert.All(budgets, budget => Assert.Null(budget));
     }
 
     /// <summary>
-    /// A declared tool's minimum version travels to the host with the survey, which gives it the time two of its copies
-    /// take to answer; the directories the host raised for it come back ahead of the PATH every leg there is given, and
+    /// A declared tool's minimum version travels to the host with the survey, which is waited for to its end however long
+    /// its copies take to answer; the directories the host raised for it come back ahead of the PATH every leg there is given, and
     /// the appended ones after it.
     /// </summary>
     [Fact]
@@ -1007,15 +1025,15 @@ public sealed class HostInspectorTests
         var floor = Assert.Single(asked[1].Floors);
         Assert.Equal(("python3", "3.12.0", "macos"), (floor.Name, floor.MinVersion, Assert.Single(floor.Platforms!)));
         Assert.Equal(["--version"], floor.Args);
-        Assert.Equal(ProgramFloors.Allowance(1), budgets[1] - budgets[0]);
+        Assert.All(budgets, budget => Assert.Null(budget));
         Assert.Equal(["/opt/homebrew/opt/python@3.13/bin"], report.ProgramDirectories.Raised);
         Assert.Equal(["/opt/homebrew/bin"], report.ProgramDirectories.Appended);
     }
 
     /// <summary>
     /// A look in a developer environment travels to the host with what the host declares under <c>env</c> for itself,
-    /// which the environment is set up over there as a leg's is, and the time setting it up and holding its programs to
-    /// their minimums takes; what it found comes back as the host said it.
+    /// which the environment is set up over there as a leg's is, waited for to its end however long setting it up and
+    /// holding its programs to their minimums takes; what it found comes back as the host said it.
     /// </summary>
     [Fact]
     public async Task ALookInADeveloperEnvironment_TravelsWithTheHostsOwnEnvironment_AndWhatItFoundComesBack()
@@ -1063,7 +1081,7 @@ public sealed class HostInspectorTests
             look => Assert.Equal(("vs", "x86_64", "1"), (look.Name, look.Processor, look.Environment["VSCMD_SKIP_SENDTELEMETRY"])),
             look => Assert.Equal(("vs", "arm64", "1"), (look.Name, look.Processor, look.Environment["VSCMD_SKIP_SENDTELEMETRY"])));
         Assert.Equal(["cl"], asked[1].InDeveloperEnvironments[0].Programs);
-        Assert.Equal((DeveloperEnvironmentProvider.CaptureBudget + ProgramFloors.Allowance(1)) * 2, budgets[1] - budgets[0]);
+        Assert.All(budgets, budget => Assert.Null(budget));
         Assert.Collection(
             report.InDeveloperEnvironments,
             look => Assert.Equal(("x86_64", "/vs/bin/cl", (string?)null), (look.Processor, Assert.Single(look.Programs).Path, look.Unestablished)),
@@ -1141,7 +1159,8 @@ public sealed class HostInspectorTests
 
         var report = await fixture.InspectAsync(HostId.Ssh(SshName));
 
-        Assert.Contains("resolved to no address", report.Reason, StringComparison.Ordinal);
+        Assert.Contains("'host.invalid' got no answer in 2 lookups", report.Reason, StringComparison.Ordinal);
+        Assert.Contains("check that the machine is on", report.Reason, StringComparison.Ordinal);
         Assert.Empty(fixture.Commands.ShellProbes);
     }
 
@@ -1369,7 +1388,8 @@ public sealed class HostInspectorTests
         var report = await fixture.InspectAsync(HostId.Ssh(SshName));
 
         Assert.False(report.Available);
-        Assert.Contains("'real.example.test', the HostName ssh's own configuration gives 'host.invalid', resolved to no address", report.Reason, StringComparison.Ordinal);
+        Assert.Contains("'real.example.test', the HostName ssh's own configuration gives 'host.invalid', got no answer in 2 lookups", report.Reason, StringComparison.Ordinal);
+        Assert.Contains("the HostName is a name this machine's network answers for", report.Reason, StringComparison.Ordinal);
         Assert.Empty(fixture.Commands.ShellProbes);
     }
 
@@ -1625,7 +1645,7 @@ public sealed class HostInspectorTests
                 HomeShorthand.Of(platform, fileSystem), new RecordingLastResort(), HostDoubles.MachineSettings(fileSystem));
             var secrets = new HostSecretsStore(fileSystem, Permissions, platform);
             _lookup = new FixedLookup(resolves ? resolvesTo ?? ["192.0.2.10"] : []);
-            var addresses = new HostAddressResolver(_lookup, TimeProvider.System, TimeSpan.Zero);
+            var addresses = new HostAddressResolver(_lookup, TimeProvider.System, TimeSpan.FromTicks(1));
             var programs = new HostProgramResolver(new LocalProgramResolver(platform, FilePermissionsFactory.Create()), Commands);
             CopyRefusals = new SyncedCopyRefusals(new ConsoleHarnessOutput(new StringWriter(), _copyNotices, verbose: false));
             var connector = new HostConnector(

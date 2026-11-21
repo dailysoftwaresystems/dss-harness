@@ -530,7 +530,7 @@ public sealed class LegRunServiceTests
         {
             Assert.Equal("passed", legs["arm"].Verdict);
             Assert.Contains(
-                "test: arm: passed (tree staged at 0123456789ab with 2 uncommitted change(s) by run 20260101-000000-0a1b2c3d)",
+                "test: arm: passed (tree staged at 0123456789abcdef0123 with 2 uncommitted change(s) by run 20260101-000000-0a1b2c3d)",
                 harness.StandardError.ToString() + harness.StandardOutput.ToString(),
                 StringComparison.Ordinal);
             Assert.Equal(1, asked);
@@ -599,7 +599,7 @@ public sealed class LegRunServiceTests
         {
             Assert.Equal("passed", arm.GetProperty("verdict").GetString());
             Assert.Equal(string.Empty, arm.GetProperty("detail").GetString());
-            Assert.Contains("test: arm: passed (tree read at 0123456789ab)", harness.StandardError.ToString() + harness.StandardOutput.ToString(), StringComparison.Ordinal);
+            Assert.Contains("test: arm: passed (tree read at 0123456789abcdef)", harness.StandardError.ToString() + harness.StandardOutput.ToString(), StringComparison.Ordinal);
             Assert.Equal(run.Value, tree.GetProperty("readBy").GetString());
             Assert.Equal("0123456789abcdef", tree.GetProperty("commit").GetString());
             Assert.Equal(0, tree.GetProperty("uncommittedChanges").GetInt32());
@@ -732,7 +732,7 @@ public sealed class LegRunServiceTests
                 hosts: hosts,
                 transports: transports);
 
-            var commit = (await harness.GitClient.ResolveCommitAsync(temp.Path, "HEAD", token))![..12];
+            var commit = (await harness.GitClient.ResolveCommitAsync(temp.Path, "HEAD", token))!;
             var uncommitted = changes > 0 ? $" with {changes} uncommitted change(s)" : string.Empty;
             var lines = (harness.StandardOutput.ToString() + harness.StandardError.ToString()).Split('\n').Select(line => line.TrimEnd('\r')).ToList();
 
@@ -1190,7 +1190,7 @@ public sealed class LegRunServiceTests
         using var temp = new TempDirectory();
         var harness = new HarnessFactory();
         const string Made = "'x' was made while it ran";
-        var leaving = new LegIsolationAnswer(new ExecutionIsolation(IsolatedExecution.Legs, AgentIsolationMode.Required, new PassThroughMechanism("bubblewrap", "0.9.0") { Leaves = "abstract Unix sockets" }, IsolationProfile.Nothing, null, null) { After = _ => Task.FromResult<string?>(Made) });
+        var leaving = new LegIsolationAnswer(new ExecutionIsolation(IsolatedExecution.Legs, AgentIsolationMode.Required, new PassThroughMechanism("bubblewrap", "0.9.0") { Leaves = "abstract Unix sockets" }, IsolationProfile.Nothing, null, null) { After = (_, _) => Task.FromResult<string?>(Made) });
         var sink = new RecordingSink();
         Dictionary<string, (string? Verdict, string? Detail)> verdicts;
 
@@ -2530,7 +2530,7 @@ public sealed class LegRunServiceTests
             hosts: hosts);
 
         // The check alone was sent - once, or once more where the distribution's DssHarness failed as it started.
-        Assert.Equal(checks == "fails" ? 1 + RemoteLegRunner.MostRestarts : 1, sent.Count);
+        Assert.Equal(checks == "fails" ? 2 : 1, sent.Count);
         Assert.All(sent, check => Assert.Equal(["test", "--legs", "remote", RemoteLegRunner.HereOption, "wsl Ubuntu", "corpus", "--check-there"], check));
 
         using var document = JsonDocument.Parse(Assert.Single(outcome.Data));
@@ -4782,17 +4782,17 @@ public sealed class LegRunServiceTests
     }
 
     /// <summary>
-    /// The time a set-up has to come down after an interruption counts from the interruption, as the command line's wait
-    /// does, not from when the leg's work let go: one whose turn comes after that time is said as not brought down.
+    /// A set-up comes down whole after an interruption, however long after it the leg's work lets go: bringing what a leg
+    /// brought up down is past its point of no return, and no time of the code's own counts against it.
     /// </summary>
     [Fact]
-    public async Task TheTimeASetUpHasToComeDown_CountsFromTheInterruption()
+    public async Task ASetUpComesDownWhole_HoweverLongAfterTheInterruptionTheLegLetsGo()
     {
         using var temp = new TempDirectory();
         using var state = new TempDirectory();
         using var stop = new CancellationTokenSource();
         var harness = new HarnessFactory();
-        var (setUps, holds) = SetUpsFor(harness, state, grace: TimeSpan.FromMilliseconds(400));
+        var (setUps, holds) = SetUpsFor(harness, state);
 
         SetUpScripts.Write(temp.Path);
 
@@ -4812,7 +4812,8 @@ public sealed class LegRunServiceTests
             cancellationToken: stop.Token);
 
         Assert.Equal(HarnessExit.Cancelled, outcome.ExitCode);
-        Assert.Contains("native did not bring set-up 'a' down", outcome.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("did not bring set-up", outcome.Message, StringComparison.Ordinal);
+        Assert.Contains("down-a", SetUpScripts.Logged(temp.Path));
         Assert.Empty(holds.HeldOn("a", temp.Path));
     }
 
@@ -4904,25 +4905,25 @@ public sealed class LegRunServiceTests
     }
 
     /// <summary>
-    /// A set-up whose down line outlasts the time an interrupted run gives it is said as stopped before it came down, with
-    /// the command that brings it down, and the leg still lets go of every set-up it held: none of its holds is left to
-    /// keep another leg from bringing one up, or a person from bringing one down.
+    /// A set-up whose down line takes a while after an interruption is waited for to its end, never stopped part way -
+    /// its down line given no token the interruption cancels - and the leg lets go of every set-up it held: none of its
+    /// holds is left to keep another leg from bringing one up, or a person from bringing one down.
     /// </summary>
     [Fact]
-    public async Task ASetUpStoppedComingDown_AfterAnInterruption_IsSaidSo_AndEveryHoldIsLetGo()
+    public async Task ASetUpComingDownAfterAnInterruption_ComesDownWhole_AndEveryHoldIsLetGo()
     {
         using var temp = new TempDirectory();
         using var state = new TempDirectory();
         using var stop = new CancellationTokenSource();
         var harness = new HarnessFactory();
-        var (setUps, holds) = SetUpsFor(harness, state, grace: TimeSpan.FromMilliseconds(500));
+        var (setUps, holds) = SetUpsFor(harness, state);
 
         SetUpScripts.Write(temp.Path);
 
         var outcome = await OutcomeAsync(
             temp,
             harness,
-            SetUpConfig(harness, ("a", SetUpScripts.SetUp("a")), ("b", SetUpScripts.SetUp("b", downSeconds: 30))),
+            SetUpConfig(harness, ("a", SetUpScripts.SetUp("a")), ("b", SetUpScripts.SetUp("b", downSeconds: 2))),
             SshAndLocal(harness),
             new LegRunRequest(temp.Path, ["native"], Json: true) { Workload = SetUpWorkload("a", "b") with { SetUp = true } },
             work: leg =>
@@ -4934,10 +4935,9 @@ public sealed class LegRunServiceTests
             cancellationToken: stop.Token);
 
         Assert.Equal(HarnessExit.Cancelled, outcome.ExitCode);
-        Assert.Contains(
-            "native did not bring set-up 'b' down; 'dssharness down b', run in the tree the leg worked in, brings it down",
-            outcome.Message,
-            StringComparison.Ordinal);
+        Assert.DoesNotContain("did not bring set-up", outcome.Message, StringComparison.Ordinal);
+        Assert.Contains("down-b", SetUpScripts.Logged(temp.Path));
+        Assert.Contains("down-a", SetUpScripts.Logged(temp.Path));
         Assert.Empty(holds.HeldOn("a", temp.Path));
         Assert.Empty(holds.HeldOn("b", temp.Path));
     }
@@ -5130,7 +5130,6 @@ public sealed class LegRunServiceTests
     private static (LegSetUps SetUps, SetUpHolds Holds) SetUpsFor(
         HarnessFactory harness,
         TempDirectory state,
-        TimeSpan? grace = null,
         Func<TimeSpan, CancellationToken, Task>? wait = null,
         IProcessRunner? phases = null)
     {
@@ -5145,10 +5144,7 @@ public sealed class LegRunServiceTests
             harness.Output);
 
         return (
-            new LegSetUps(service, holds, new PhaseRunner(phases ?? harness.ProcessRunner, harness.FileSystem, harness.Output))
-            {
-                InterruptionGrace = grace ?? WorktreeService.DefaultInterruptionGrace,
-            },
+            new LegSetUps(service, holds, new PhaseRunner(phases ?? harness.ProcessRunner, harness.FileSystem, harness.Output)),
             holds);
     }
 

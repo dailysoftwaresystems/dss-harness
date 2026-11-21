@@ -3,6 +3,8 @@ using System.Text.RegularExpressions;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Processes;
 using DssHarness.Core.Results;
+using DssHarness.Core.Text;
+using DssHarness.Core.Waiting;
 
 namespace DssHarness.Core.Build;
 
@@ -19,7 +21,7 @@ internal sealed record DepsRecord(string Object, int Count, List<string> Depende
 /// unit names in another case is, where that file system finds it by either, the one its
 /// precompiled header's object recorded.
 /// </summary>
-internal sealed partial class NinjaRebuildGraph(
+internal sealed class NinjaRebuildGraph(
     string buildDirectory,
     NinjaManifest manifest,
     IReadOnlyDictionary<string, DepsRecord> records,
@@ -36,32 +38,25 @@ internal sealed partial class NinjaRebuildGraph(
     /// a header starts its line, and the dependencies listed beneath it are indented, so none of them
     /// is ever read as an object.
     /// </remarks>
-    [GeneratedRegex(@"^(?<object>\S.*?):\s+#deps\s+(?<count>\d+)\b", RegexOptions.CultureInvariant)]
-    private static partial Regex DepsHeader { get; }
+    private static readonly Regex DepsHeader = LinearRegex.Compile(@"^(?<object>\S.*?):\s+#deps\s+(?<count>\d+)\b");
 
     /// <summary>A backslash ending a line, which joins it to the next before anything else is read.</summary>
-    [GeneratedRegex(@"\\\r?\n", RegexOptions.CultureInvariant)]
-    private static partial Regex Splice { get; }
+    private static readonly Regex Splice = LinearRegex.Compile(@"\\\r?\n");
 
     /// <summary>A directive line: its name - <c>include</c>, <c>ifdef</c> - and what follows the name.</summary>
-    [GeneratedRegex(@"^\s*#\s*(?<name>\w+)(?<rest>.*)$", RegexOptions.CultureInvariant)]
-    private static partial Regex Directive { get; }
+    private static readonly Regex Directive = LinearRegex.Compile(@"^\s*#\s*(?<name>\w+)(?<rest>.*)$");
 
     /// <summary>What a quoted include names: <c>"util.h"</c>.</summary>
-    [GeneratedRegex(@"^\s*""(?<header>[^""\r\n]+)""", RegexOptions.CultureInvariant)]
-    private static partial Regex QuotedHeader { get; }
+    private static readonly Regex QuotedHeader = LinearRegex.Compile(@"^\s*""(?<header>[^""\r\n]+)""");
 
     /// <summary>A condition asking whether a name is defined: <c>defined(NAME)</c> or <c>defined NAME</c>.</summary>
-    [GeneratedRegex(@"^defined\s*\(\s*(?<name>\w+)\s*\)$|^defined\s+(?<name>\w+)$", RegexOptions.CultureInvariant)]
-    private static partial Regex DefinedCondition { get; }
+    private static readonly Regex DefinedCondition = LinearRegex.Compile(@"^defined\s*\(\s*(?<name>\w+)\s*\)$|^defined\s+(?<name>\w+)$");
 
     /// <summary>A condition that is a decimal number: <c>0</c>, <c>1</c>.</summary>
-    [GeneratedRegex(@"^(?<digits>\d+)[uUlL]*$", RegexOptions.CultureInvariant)]
-    private static partial Regex NumberCondition { get; }
+    private static readonly Regex NumberCondition = LinearRegex.Compile(@"^(?<digits>\d+)[uUlL]*$");
 
     /// <summary>The name an <c>#ifdef</c> or an <c>#ifndef</c> asks about.</summary>
-    [GeneratedRegex(@"^\s*(?<name>\w+)", RegexOptions.CultureInvariant)]
-    private static partial Regex AskedName { get; }
+    private static readonly Regex AskedName = LinearRegex.Compile(@"^\s*(?<name>\w+)");
 
     /// <summary>The extensions cl compiles as C++ when no <c>/TP</c> or <c>/TC</c> says otherwise.</summary>
     private static readonly HashSet<string> CPlusPlusExtensions = new(StringComparer.OrdinalIgnoreCase)
@@ -78,9 +73,11 @@ internal sealed partial class NinjaRebuildGraph(
     /// <param name="programDirectories">The directories the build put around its PATH, which ninja is looked up on too.</param>
     /// <param name="program">The ninja the build ran, as its configuration recorded it, or <see langword="null"/> to look one up.</param>
     /// <param name="environment">The environment the build's phases ran in.</param>
+    /// <param name="told">Told where the wait for ninja stands, every <see cref="Waits.SaidEvery"/> it lasts; nothing where null.</param>
+    /// <param name="clock">Times the wait: ninja is waited for to its end, however long it takes.</param>
     /// <param name="cancellationToken">Stops ninja.</param>
     /// <exception cref="HarnessException">
-    /// ninja could not be started, did not answer, failed, or answered with nothing. An empty answer is a failure and
+    /// ninja could not be started, failed, or answered with nothing. An empty answer is a failure and
     /// never a pass - it is indistinguishable from every object having recorded its headers, and from no object
     /// depending on anything.
     /// </exception>
@@ -90,6 +87,8 @@ internal sealed partial class NinjaRebuildGraph(
         ProgramDirectories programDirectories,
         string? program,
         IReadOnlyDictionary<string, string?>? environment,
+        Action<WaitTold>? told,
+        TimeProvider clock,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(processRunner);
@@ -98,9 +97,12 @@ internal sealed partial class NinjaRebuildGraph(
 
         try
         {
-            result = await processRunner
-                .RunAsync(
+            result = await BuildProbes.RunAsync(
+                    processRunner,
                     NinjaDependencyCheck.Request(buildDirectory, ["-C", buildDirectory, "-t", "deps"], programDirectories, program, environment),
+                    $"'ninja -t deps' to list the dependency records of '{buildDirectory}'",
+                    told,
+                    clock,
                     cancellationToken)
                 .ConfigureAwait(false);
         }
@@ -114,12 +116,6 @@ internal sealed partial class NinjaRebuildGraph(
                 ex);
         }
 
-        if (result.TimedOut)
-        {
-            throw new HarnessException(
-                HarnessExit.CommandFailed,
-                $"'ninja -t deps' did not answer within {NinjaDependencyCheck.Budget.TotalMinutes:0} minutes for '{buildDirectory}'.");
-        }
 
         if (!result.Succeeded)
         {
@@ -348,28 +344,42 @@ internal sealed partial class NinjaRebuildGraph(
     /// <summary>
     /// What an <c>#if</c> or <c>#elif</c> asks, where the language alone answers it: a decimal number;
     /// whether <c>__cplusplus</c> is defined; <c>__cplusplus</c> itself, which a C++ compile defines
-    /// and a C one reads as <c>0</c>; or the negation of one of these. Anything else is unknown.
+    /// and a C one reads as <c>0</c>; or the negation of one of these, however many times negated. Anything else is
+    /// unknown.
     /// </summary>
+    /// <remarks>
+    /// The negations are counted off the front in one pass, never peeled by a recursion or a copy of the rest each: a
+    /// condition of a hundred thousand <c>!</c> is read in time linear in its length.
+    /// </remarks>
     private static Truth Condition(string expression, Language language)
     {
-        var condition = expression.Trim();
+        var rest = expression.AsSpan().Trim();
+        var negated = false;
 
-        if (condition.StartsWith('!'))
+        while (rest.StartsWith('!'))
         {
-            return Not(Condition(condition[1..], language));
+            negated = !negated;
+            rest = rest[1..].Trim();
         }
 
-        if (NumberCondition.Match(condition) is { Success: true } number)
-        {
-            return number.Groups["digits"].Value.Trim('0').Length > 0 ? Truth.True : Truth.False;
-        }
+        var truth = Asked(rest.ToString());
 
-        if (DefinedCondition.Match(condition) is { Success: true } defined)
-        {
-            return Defined(defined.Groups["name"].Value, language);
-        }
+        return negated ? Not(truth) : truth;
 
-        return condition == "__cplusplus" ? Defined(condition, language) : Truth.Unknown;
+        Truth Asked(string condition)
+        {
+            if (NumberCondition.Match(condition) is { Success: true } number)
+            {
+                return number.Groups["digits"].Value.Trim('0').Length > 0 ? Truth.True : Truth.False;
+            }
+
+            if (DefinedCondition.Match(condition) is { Success: true } defined)
+            {
+                return Defined(defined.Groups["name"].Value, language);
+            }
+
+            return condition == "__cplusplus" ? Defined(condition, language) : Truth.Unknown;
+        }
     }
 
     /// <summary>
@@ -567,12 +577,16 @@ internal sealed partial class NinjaRebuildGraph(
     /// <summary>What each file surely includes in each language, read once however many units read it.</summary>
     private readonly Dictionary<Language, Dictionary<string, List<string>?>> _includes = [];
 
-    /// <summary>What a change to rebuilds what each build line builds, worked out once however many objects reach it.</summary>
+    /// <summary>
+    /// Everything a change to which rebuilds what each build line asked of builds, through the build lines that build its
+    /// inputs: each answer worked out once, by its own walk, for the line it was asked of alone.
+    /// </summary>
     private readonly Dictionary<NinjaEdge, HashSet<string>> _rebuiltFor = new(ReferenceEqualityComparer.Instance);
 
     /// <summary>
-    /// What a change to rebuilds what each build line builds, following what each build recorded to the build line that
-    /// builds it too; worked out once however many objects reach it.
+    /// Everything a change to which rebuilds what each build line asked of builds, through the build lines that build its
+    /// inputs and those that build what its build recorded: each answer worked out once, by its own walk, for the line it
+    /// was asked of alone.
     /// </summary>
     private readonly Dictionary<NinjaEdge, HashSet<string>> _dependedOn = new(ReferenceEqualityComparer.Instance);
 
@@ -674,42 +688,60 @@ internal sealed partial class NinjaRebuildGraph(
             return true;
         }
 
-        var own = Own(edge);
-        var through = Producers(edge).Select(RebuiltFor).ToList();
+        var rebuiltFor = RebuiltFor(edge);
 
-        return headers.All(header => own.Contains(header) || through.Exists(rebuiltFor => rebuiltFor.Contains(header)));
+        return headers.All(rebuiltFor.Contains);
     }
 
     /// <summary>Everything a change to which rebuilds what <paramref name="edge"/> builds, however far back.</summary>
-    private HashSet<string> RebuiltFor(NinjaEdge edge) => RebuiltFor(edge, _rebuiltFor, Producers);
+    private HashSet<string> RebuiltFor(NinjaEdge edge) => Answered(_rebuiltFor, edge, Producers);
 
     /// <summary>
     /// Everything a change to which rebuilds what <paramref name="edge"/> builds, however far back, through the build lines
     /// that build its inputs and those that build what its build recorded.
     /// </summary>
-    private HashSet<string> DependedOn(NinjaEdge edge) => RebuiltFor(edge, _dependedOn, line => Producers(line).Concat(RecordedProducers(line)));
+    private HashSet<string> DependedOn(NinjaEdge edge)
+        => Answered(_dependedOn, edge, line => Producers(line).Concat(RecordedProducers(line)));
 
     /// <summary>
-    /// Everything a change to which rebuilds what <paramref name="edge"/> builds: what it reads itself, and what rebuilds each
-    /// build line <paramref name="producers"/> names for it, however far back, each worked out once in <paramref name="known"/>.
+    /// Everything a change to which rebuilds what <paramref name="edge"/> builds: what it reads itself, and what each build
+    /// line <paramref name="producers"/> names for it reads, and theirs, however far back - kept in <paramref name="answers"/>
+    /// once worked out, so a line asked again is answered from it.
     /// </summary>
-    private HashSet<string> RebuiltFor(NinjaEdge edge, Dictionary<NinjaEdge, HashSet<string>> known, Func<NinjaEdge, IEnumerable<NinjaEdge>> producers)
+    /// <remarks>
+    /// One walk back from the line, on a stack of its own, each line met once: so a chain of generated inputs however long
+    /// - each built from the one before - is followed to its start in time and memory linear in the lines and the files it
+    /// reaches, and a cycle, which ninja never builds, ends where it meets a line already met. Only the line asked of is
+    /// answered: a set of its own for every line on the way would hold the chain once for each of them.
+    /// </remarks>
+    private HashSet<string> Answered(Dictionary<NinjaEdge, HashSet<string>> answers, NinjaEdge edge, Func<NinjaEdge, IEnumerable<NinjaEdge>> producers)
     {
-        if (known.TryGetValue(edge, out var found))
+        if (answers.TryGetValue(edge, out var known))
         {
-            return found;
+            return known;
         }
 
-        // Held before it is complete, so a cycle - which ninja never builds - leads nowhere.
-        var rebuiltFor = Own(edge);
-        known[edge] = rebuiltFor;
+        var reached = new HashSet<string>(paths);
+        var met = new HashSet<NinjaEdge>(ReferenceEqualityComparer.Instance) { edge };
+        var waiting = new Stack<NinjaEdge>();
+        waiting.Push(edge);
 
-        foreach (var producer in producers(edge))
+        while (waiting.TryPop(out var line))
         {
-            rebuiltFor.UnionWith(RebuiltFor(producer, known, producers));
+            reached.UnionWith(Own(line));
+
+            foreach (var producer in producers(line))
+            {
+                if (met.Add(producer))
+                {
+                    waiting.Push(producer);
+                }
+            }
         }
 
-        return rebuiltFor;
+        answers[edge] = reached;
+
+        return reached;
     }
 
     /// <summary>What a change to rebuilds what <paramref name="edge"/> builds by itself: its inputs, and what its build recorded.</summary>

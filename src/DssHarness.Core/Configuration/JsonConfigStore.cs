@@ -66,7 +66,6 @@ public sealed class JsonConfigStore(IFileSystem fileSystem) : IConfigStore
             .. problems,
             .. DssHarness.Core.Agents.Policy.AgentPolicy.RuleProblems(config),
             .. search.Problems,
-            .. config.AgentContext?.Continuation?.Problems() ?? [],
             .. config.AgentContext?.Compaction?.Problems() ?? [],
         ] is [_, ..] refused)
         {

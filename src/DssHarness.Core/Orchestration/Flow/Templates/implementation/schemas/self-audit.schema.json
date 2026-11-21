@@ -29,7 +29,7 @@
     },
     "items": {
       "type": "array",
-      "description": "The work items of a further round that would settle the findings; empty where clean is true. At most 8, shaped as a plan's: each sized to one builder's cycle, with its own definition of done, each deciding item with its classes and each that decides none saying why in noClass.",
+      "description": "The work items of a further round that would settle the findings; empty where clean is true. As many as the findings need, shaped as a plan's: each sized to one builder's cycle, with its own definition of done, each deciding item with its classes and each that decides none saying why in noClass.",
       "items": {
         "$ref": "plan.schema.json#/$defs/workItem"
       }

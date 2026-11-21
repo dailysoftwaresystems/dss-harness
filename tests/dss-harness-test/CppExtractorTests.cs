@@ -194,7 +194,7 @@ public sealed class CppExtractorTests : CodeGraphExtractorContractTests<CppExtra
                 (14, "type", "Engine"), (15, "value", null), (16, "value", "other.thing"), (17, "named", "Engine"), (18, "named", "app"), (19, "this", null),
             ],
             extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Calls && reference.Name is "start" or "make" or "helper" or "stop")
-                .Select(reference => (reference.Line, reference.Qualifier?.Kind, reference.Qualifier?.Name)));
+                .Select(reference => (reference.Line, reference.Qualifier?.Kind, extract.Written(reference.Qualifier))));
     }
 
     /// <summary>A call's arity is its commas at its own depth: none inside a nested group, a lambda, or a type's arguments a call or a qualified name follows; a comparison's are commas.</summary>
@@ -243,10 +243,45 @@ public sealed class CppExtractorTests : CodeGraphExtractorContractTests<CppExtra
                 ("cpp:V.operator=(const V&)", "operator", 1, 1), ("cpp:V.operator<(const V&)const", "operator", 1, 1), ("cpp:V.operator<<=(int)", "operator", 1, 1),
                 ("cpp:V.operator bool()const", "operator", 0, 0), ("cpp:V.operator()(int)const", "operator", 1, 1),
             ],
-            extract.Nodes.Where(node => node.Kind == CodeNodeKinds.Member).Select(node => (node.Id, node.SubKind, node.MinArity ?? -1, node.MaxArity ?? -1)));
+            extract.Nodes.Where(node => node.Kind == CodeNodeKinds.Member).Select(node => (node.Id.Whole(), node.SubKind, node.MinArity ?? -1, node.MaxArity ?? -1)));
         Assert.Equal(
             ["cpp:V.operator=(const V&)", "cpp:V.operator<<=(int)"],
-            extract.Nodes.Where(node => node.Kind == CodeNodeKinds.Member && !node.Prototype).Select(node => node.Id));
+            extract.Nodes.Where(node => node.Kind == CodeNodeKinds.Member && !node.Prototype).Select(node => node.Id.Whole()));
+    }
+
+    /// <summary>
+    /// A conversion's operator is named by its type however many tokens the type takes - thirty here, a template's commas
+    /// among them - read back to the <c>operator</c> over what the grammar lets a type hold, never over a count of tokens.
+    /// </summary>
+    [Fact]
+    public void AThirtyTokenConversionOperator_IsNamed()
+    {
+        var extract = Read("v.hpp", """
+            struct V {
+                operator const std::map<std::string, std::vector<std::pair<std::size_t, std::int64_t>>, Less>&() const;
+            };
+            """);
+
+        Assert.Equal(
+            [("cpp:V.operator const std::map<std::string,std::vector<std::pair<std::size_t,std::int64_t>>,Less>&()const", "operator", 0, 0)],
+            extract.Nodes.Where(node => node.Kind == CodeNodeKinds.Member).Select(node => (node.Id.Whole(), node.SubKind, node.MinArity ?? -1, node.MaxArity ?? -1)));
+    }
+
+    /// <summary>
+    /// A list of a template's arguments a thousand tokens long is a list of them, its end found however far it is: the
+    /// call it follows is a call, and each of its five hundred types a reference, in the order written.
+    /// </summary>
+    [Fact]
+    public void AThousandTokenTypeArgumentList_IsRead()
+    {
+        // The types are lowercase: a name in capitals the reader reads as a macro's, and a macro names no type.
+        var types = Enumerable.Range(0, 500).Select(at => $"w{at}").ToList();
+        var extract = Read("m.cc", $"void f(int x) {{\n    make<{string.Join(", ", types)}>(x);\n}}\n");
+
+        Assert.Empty(extract.Dynamic);
+        Assert.Equal(
+            [("cpp:f(int)", CodeEdgeKinds.Calls, "make", (int?)1), .. types.Select(type => ("cpp:f(int)", CodeEdgeKinds.References, type, (int?)null))],
+            extract.References.Select(reference => (reference.From.Whole(), reference.Kind, reference.Name, reference.Arity)));
     }
 
     /// <summary>
@@ -273,8 +308,8 @@ public sealed class CppExtractorTests : CodeGraphExtractorContractTests<CppExtra
         Assert.Equal("file:x.cc", Node(extract, "cpp:x.cc:helper()").Scope);
         Assert.Equal("file:x.cc", Node(extract, "cpp:x.cc:count").Scope);
         Assert.Equal("file:x.cc", Node(extract, "cpp:x.cc:app.tick()").Scope);
-        Assert.Contains(extract.Scopes, scope => scope is { Name: "Local", Open: false });
-        Assert.Contains(extract.Scopes, scope => scope is { Name: "file:x.cc", Open: false });
+        Assert.Contains(extract.Scopes, scope => scope is { Open: false } && scope.Name.Is("Local"));
+        Assert.Contains(extract.Scopes, scope => scope is { Open: false } && scope.Name.Is("file:x.cc"));
     }
 
     /// <summary>A constructor's initializers call what their arguments call, and the members and bases they name are no calls.</summary>
@@ -333,7 +368,7 @@ public sealed class CppExtractorTests : CodeGraphExtractorContractTests<CppExtra
             extract.Imports,
             ImportComparer.Instance);
         Assert.Equal("alias", Node(extract, "cpp:Name").SubKind);
-        Assert.Contains(extract.References, reference => reference is { From: "cpp:Name", Kind: CodeEdgeKinds.References, Name: "Text", Qualifier.Name: "app" });
+        Assert.Contains(extract.References, reference => reference is { Kind: CodeEdgeKinds.References, Name: "Text" } && reference.From.Is("cpp:Name") && reference.Qualifier!.Name!.Is("app"));
     }
 
     /// <summary>A raw string, whatever its prefix and delimiter, is never read as code.</summary>
@@ -397,8 +432,8 @@ public sealed class CppExtractorTests : CodeGraphExtractorContractTests<CppExtra
         Assert.Equal(
             [(5, "a call through the function pointer cb_"), (5, "a call through the function pointer cb_"), (5, "a call through the function pointer later"), (5, "a call through the function pointer read"), (8, "a call through the function pointer read")],
             extract.Dynamic.Select(dynamic => (dynamic.Line, dynamic.Why)).Order());
-        Assert.Equal(["read"], extract.References.Where(reference => reference is { From: "cpp:top()", Kind: CodeEdgeKinds.Calls }).Select(reference => reference.Name));
-        Assert.DoesNotContain(extract.References, reference => reference.Kind == CodeEdgeKinds.Calls && reference.From is "cpp:Obj.go()" or "cpp:use(Obj*)");
+        Assert.Equal(["read"], extract.References.Where(reference => reference is { Kind: CodeEdgeKinds.Calls } && reference.From.Is("cpp:top()")).Select(reference => reference.Name));
+        Assert.DoesNotContain(extract.References, reference => reference.Kind == CodeEdgeKinds.Calls && (reference.From.Is("cpp:Obj.go()") || reference.From.Is("cpp:use(Obj*)")));
     }
 
     /// <summary>A function with a trailing return type is read whole, its body the brace after the type, and the next declaration is its own.</summary>
@@ -407,7 +442,7 @@ public sealed class CppExtractorTests : CodeGraphExtractorContractTests<CppExtra
     {
         var extract = Read("t.cc", "auto f() -> int { return g(); }\nint h() { return k(); }\nauto m() -> std::string { return n(); }\n");
 
-        Assert.Equal([("cpp:f()", "g", 1), ("cpp:h()", "k", 2), ("cpp:m()", "n", 3)], extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Calls).Select(reference => (reference.From, reference.Name, reference.Line)));
+        Assert.Equal([("cpp:f()", "g", 1), ("cpp:h()", "k", 2), ("cpp:m()", "n", 3)], extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Calls).Select(reference => (reference.From.Whole(), reference.Name, reference.Line)));
         Assert.Equal((1, 1), (Node(extract, "cpp:f()").Start, Node(extract, "cpp:f()").End));
     }
 
@@ -435,8 +470,8 @@ public sealed class CppExtractorTests : CodeGraphExtractorContractTests<CppExtra
             """);
 
         Assert.Equal(
-            [("cpp:Foo foo", "variable"), ("cpp:f(int)", "function"), ("cpp:v.cc:logger", "variable")],
-            extract.Nodes.Select(node => (node.Id == "cpp:foo" ? "cpp:Foo foo" : node.Id, node.SubKind)).Order());
+            [("cpp:f(int)", "function"), ("cpp:foo", "variable"), ("cpp:v.cc:logger", "variable")],
+            extract.Nodes.Select(node => (node.Id.Whole(), node.SubKind)).Order());
         Assert.Equal("Logger", Node(extract, "cpp:v.cc:logger").ValueType);
     }
 
@@ -476,7 +511,7 @@ public sealed class CppExtractorTests : CodeGraphExtractorContractTests<CppExtra
             };
             """);
 
-        Assert.Equal(["cpp:A", "cpp:B", "cpp:C"], extract.Nodes.Where(node => node.SubKind == "enumerator").Select(node => node.Id));
+        Assert.Equal(["cpp:A", "cpp:B", "cpp:C"], extract.Nodes.Where(node => node.SubKind == "enumerator").Select(node => node.Id.Whole()));
     }
 
     /// <summary><c>namespace a::b</c> is a part of <c>a</c> holding a part of <c>b</c>: one node each with <c>namespace a { namespace b {} }</c>.</summary>
@@ -485,7 +520,7 @@ public sealed class CppExtractorTests : CodeGraphExtractorContractTests<CppExtra
     {
         var extract = Read("n.cc", "namespace a { namespace b { void f(); } }\nnamespace a::b { void g(); }\n");
 
-        Assert.Equal(["cpp:a", "cpp:a.b", "cpp:a.b.f()", "cpp:a.b.g()"], extract.Nodes.Select(node => node.Id).Order(StringComparer.Ordinal));
+        Assert.Equal(["cpp:a", "cpp:a.b", "cpp:a.b.f()", "cpp:a.b.g()"], extract.Nodes.Select(node => node.Id.Whole()).Order(StringComparer.Ordinal));
         Assert.Equal("cpp:a", Node(extract, "cpp:a.b").Parent);
         Assert.Equal((1, 2), (Node(extract, "cpp:a").Start, Node(extract, "cpp:a").End));
     }
@@ -496,7 +531,7 @@ public sealed class CppExtractorTests : CodeGraphExtractorContractTests<CppExtra
     {
         var extract = Read("h.hpp", "namespace { int helper(); }\nstatic int count;\n");
 
-        Assert.Equal(["cpp:count", "cpp:helper()"], extract.Nodes.Select(node => node.Id).Order(StringComparer.Ordinal));
+        Assert.Equal(["cpp:count", "cpp:helper()"], extract.Nodes.Select(node => node.Id.Whole()).Order(StringComparer.Ordinal));
         Assert.DoesNotContain(extract.Scopes, scope => !scope.Open);
     }
 
@@ -518,7 +553,7 @@ public sealed class CppExtractorTests : CodeGraphExtractorContractTests<CppExtra
         Assert.Equal(
             [(2, "the macro DECLARE_MODULE stands here in the place of a declaration, which is not seen"), (4, "the macro Q_OBJECT stands here in the place of a declaration, which is not seen")],
             extract.Dynamic.Select(dynamic => (dynamic.Line, dynamic.Why)));
-        Assert.Equal(["cpp:app", "cpp:app.Widget", "cpp:app.Widget.show()"], extract.Nodes.Select(node => node.Id).Order(StringComparer.Ordinal));
+        Assert.Equal(["cpp:app", "cpp:app.Widget", "cpp:app.Widget.show()"], extract.Nodes.Select(node => node.Id.Whole()).Order(StringComparer.Ordinal));
     }
 
     /// <summary>A literal inside a parameter's type's arguments is the type's: such a function is no variable its type makes.</summary>
@@ -529,7 +564,7 @@ public sealed class CppExtractorTests : CodeGraphExtractorContractTests<CppExtra
 
         Assert.Equal(
             [("cpp:V.add(Vec<3>)const", "method"), ("cpp:V.fill(char[16])", "method"), ("cpp:V.half(std::array<int,N/2>)", "method"), ("cpp:V.pick(std::enable_if_t<N==2,int>)", "method"), ("cpp:V.set(std::array<int,4>)", "method"), ("cpp:mask(std::bitset<8>)", "function")],
-            extract.Nodes.Where(node => node.Kind == CodeNodeKinds.Member).Select(node => (node.Id, node.SubKind)).Order());
+            extract.Nodes.Where(node => node.Kind == CodeNodeKinds.Member).Select(node => (node.Id.Whole(), node.SubKind)).Order());
     }
 
     /// <summary>A member template's body, read once its class's is, is read with the template's parameters: a value of one of them is of no type the repository declares.</summary>
@@ -670,40 +705,106 @@ public sealed class CppExtractorTests : CodeGraphExtractorContractTests<CppExtra
         Assert.Equal(new ExtractQualifier(CodeQualifierKinds.Type, "Bar"), run.Qualifier);
     }
 
-    /// <summary>Namespaces nested deeper than a reader reads are marked and passed over, never the end of the reading.</summary>
-    [Fact]
-    public void NamespacesNestedTooDeep_AreMarked_AndPassedOver()
-    {
-        var depth = 2 * ScanFrame.MostDepth;
-        var text = string.Concat(Enumerable.Range(0, depth).Select(at => $"namespace n{at} {{ ")) + "void f(); " + new string('}', depth) + "\nvoid after();\n";
-        var extract = Read("deep.cc", text);
-
-        Assert.Contains(extract.Dynamic, dynamic => dynamic.Why == $"declarations nested more than {ScanFrame.MostDepth} blocks deep, which are not read");
-        Assert.Single(extract.Nodes, node => node.Id == "cpp:after()");
-    }
-
     /// <summary>
-    /// Placements of a <c>new</c> nested deeper than a reader reads are marked and passed over: no nesting of them reaches
-    /// past the reader's stack, and the reading goes on past them.
+    /// Namespaces nested five thousand blocks deep are read whole from a stack of a megabyte - each block's declarations
+    /// walked on the reader's stack of walks (<see cref="ScanStack"/>), never by a call a block - marking nothing dynamic:
+    /// the type at the bottom, its member and what the member's body calls, read once the type's members are, and the
+    /// declarations after them.
     /// </summary>
     [Fact]
-    public void PlacementsNestedTooDeep_AreMarked_AndPassedOver()
+    public async Task ABlockFiveThousandDeep_IsReadWhole()
     {
-        var depth = 2 * ScanFrame.MostDepth;
-        var placed = string.Concat(Enumerable.Repeat("new (", depth)) + "arena()" + string.Concat(Enumerable.Repeat(") T", depth));
+        Assert.Equal(
+            new ChildRunAnswer(0, $"cpp:Deep cpp:Deep.run() cpp:after()\ncpp:Deep.run() {CodeEdgeKinds.Calls} go 1", ""),
+            await ChildRun.MethodAsync(typeof(CppExtractorTests), nameof(BlockFiveThousandDeep), TestContext.Current.CancellationToken));
+    }
+
+    /// <summary>The child of <see cref="ABlockFiveThousandDeep_IsReadWhole"/>: the ids of the nodes read, in order, then the references.</summary>
+    internal static string BlockFiveThousandDeep() => SmallStack.Run(() =>
+    {
+        var text = string.Concat(Enumerable.Repeat("namespace { ", 5_000)) + "struct Deep { void run() { go(); } }; " + new string('}', 5_000) + "\nvoid after();\n";
+        var extract = Read("deep.hpp", text);
+
+        Assert.Empty(extract.Dynamic);
+        return $"{string.Join(' ', extract.Nodes.Select(node => node.Id.Whole()).Order(StringComparer.Ordinal))}\n{Runs(extract)}";
+    });
+
+    /// <summary>
+    /// Placements of a <c>new</c> nested five thousand deep are read whole from a stack of a megabyte, each placement's
+    /// code a reading of its own on the reader's stack of them: the innermost's call first, then each <c>new</c>'s type
+    /// from the inside out, and the code after them.
+    /// </summary>
+    [Fact]
+    public async Task PlacementsNestedFiveThousandDeep_AreReadWhole()
+    {
+        Assert.Equal(
+            new ChildRunAnswer(0, $"cpp:after() cpp:f()\ncpp:f() {CodeEdgeKinds.Calls} arena 2\ncpp:f() {CodeEdgeKinds.Instantiates} T 2 (5000 times)\ncpp:after() {CodeEdgeKinds.Calls} done 4", ""),
+            await ChildRun.MethodAsync(typeof(CppExtractorTests), nameof(PlacementsNestedFiveThousandDeep), TestContext.Current.CancellationToken));
+    }
+
+    /// <summary>The child of <see cref="PlacementsNestedFiveThousandDeep_AreReadWhole"/>: the ids of the nodes read, in order, then the references.</summary>
+    internal static string PlacementsNestedFiveThousandDeep() => SmallStack.Run(() =>
+    {
+        var placed = string.Concat(Enumerable.Repeat("new (", 5_000)) + "arena()" + string.Concat(Enumerable.Repeat(") T", 5_000));
         var extract = Read("p.cc", $"void f() {{\n    auto p = {placed};\n}}\nvoid after() {{ done(); }}\n");
 
-        Assert.Equal([(2, $"code nested more than {ScanFrame.MostDepth} placements of a new deep, which is not read")], extract.Dynamic.Select(dynamic => (dynamic.Line, dynamic.Why)));
-        Assert.Equal(["cpp:after()", "cpp:f()"], extract.Nodes.Select(node => node.Id).Order(StringComparer.Ordinal));
-        Assert.Equal(["done"], extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Calls).Select(reference => reference.Name));
+        Assert.Empty(extract.Dynamic);
+        return $"{string.Join(' ', extract.Nodes.Select(node => node.Id.Whole()).Order(StringComparer.Ordinal))}\n{Runs(extract)}";
+    });
+
+    /// <summary>
+    /// A type whose template's arguments nest a hundred thousand deep is read whole from a stack of a megabyte - each list
+    /// of arguments, and each type among them, a reading of its own on the reader's stack of them - its references each
+    /// template's from the outside in and the innermost type's last.
+    /// </summary>
+    [Fact]
+    public async Task ATemplateTypeAHundredThousandArgumentsDeep_IsReadWhole()
+    {
+        Assert.Equal(
+            new ChildRunAnswer(0, $"cpp:Tree.kids {CodeEdgeKinds.References} Box 2 (100000 times)\ncpp:Tree.kids {CodeEdgeKinds.References} Widget 2", ""),
+            await ChildRun.MethodAsync(typeof(CppExtractorTests), nameof(TemplateTypeAHundredThousandArgumentsDeep), TestContext.Current.CancellationToken));
     }
+
+    /// <summary>The child of <see cref="ATemplateTypeAHundredThousandArgumentsDeep_IsReadWhole"/>: the references read.</summary>
+    internal static string TemplateTypeAHundredThousandArgumentsDeep() => SmallStack.Run(() =>
+    {
+        var type = string.Concat(Enumerable.Repeat("Box<", 100_000)) + "Widget" + new string('>', 100_000);
+        var extract = Read("t.hpp", $"struct Tree {{\n    {type} kids;\n}};\n");
+
+        Assert.Empty(extract.Dynamic);
+        Assert.Equal("Box", Node(extract, "cpp:Tree.kids").ValueType);
+        return Runs(extract);
+    });
+
+    /// <summary>
+    /// A smart pointer's held type nested a hundred thousand deep is what a value of it is, read from a stack of a megabyte:
+    /// each pointer's held type read on in a loop to the innermost, which qualifies a call through the value; the
+    /// standard library's templates are referenced by none of their names.
+    /// </summary>
+    [Fact]
+    public async Task ASmartPointerAHundredThousandDeep_QualifiesACall_ByTheTypeItHolds()
+    {
+        Assert.Equal(
+            new ChildRunAnswer(0, $"cpp:f() {CodeEdgeKinds.References} Engine 2\ncpp:f() {CodeEdgeKinds.Calls} start 3 type Engine", ""),
+            await ChildRun.MethodAsync(typeof(CppExtractorTests), nameof(SmartPointerAHundredThousandDeep), TestContext.Current.CancellationToken));
+    }
+
+    /// <summary>The child of <see cref="ASmartPointerAHundredThousandDeep_QualifiesACall_ByTheTypeItHolds"/>: the references read.</summary>
+    internal static string SmartPointerAHundredThousandDeep() => SmallStack.Run(() =>
+    {
+        var type = string.Concat(Enumerable.Repeat("std::unique_ptr<", 100_000)) + "Engine" + new string('>', 100_000);
+        var extract = Read("f.cc", $"void f() {{\n    {type} p;\n    p->start();\n}}\n");
+
+        Assert.Empty(extract.Dynamic);
+        return Runs(extract);
+    });
 
     /// <summary>
     /// A head written under each branch of a conditional over one body is read by its first head, and the body holds what
     /// every branch writes after its own head - the first branch's members, enumerators, declarations and calls among
     /// them - the head another branch repeats none of it: a class, an enumeration, a namespace and a linkage block each
-    /// one node holding its members - never a nested one of its own name - and a function's body calls nothing another
-    /// head names.
+    /// one node holding its members - never a nested one of its own name - and a function calls what its first head's
+    /// defaults call, and nothing another head names.
     /// </summary>
     [Fact]
     public void AHeadUnderEachBranch_IsReadByItsFirst_TheOthersNoneOfItsBody()
@@ -757,9 +858,9 @@ public sealed class CppExtractorTests : CodeGraphExtractorContractTests<CppExtra
                 "cpp:Mode", "cpp:Mode.On", "cpp:Mode.Wide", "cpp:Sock", "cpp:Sock.fd_", "cpp:Sock.h_", "cpp:Sock.send()", "cpp:api()", "cpp:closed()", "cpp:net",
                 "cpp:net.open()", "cpp:net.wide()", "cpp:run(int)",
             ],
-            extract.Nodes.Select(node => node.Id).Order(StringComparer.Ordinal));
+            extract.Nodes.Select(node => node.Id.Whole()).Order(StringComparer.Ordinal));
         Assert.Equal(["A", "B"], extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Inherits).Select(reference => reference.Name));
-        Assert.Equal(["quick", "go"], extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Calls).Select(reference => reference.Name));
+        Assert.Equal(["fast", "quick", "go"], extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Calls).Select(reference => reference.Name));
     }
 
     /// <summary>
@@ -792,7 +893,7 @@ public sealed class CppExtractorTests : CodeGraphExtractorContractTests<CppExtra
                 ("cpp:Outer.n_", "field"), ("cpp:Outer.tv_", "field"), ("cpp:Part", "struct"), ("cpp:Part.p", "field"), ("cpp:Widget", "class"),
                 ("cpp:Widget.w_", "field"), ("cpp:net", null), ("cpp:net.any_", "variable"), ("cpp:shade_", "variable"),
             ],
-            extract.Nodes.OrderBy(node => node.Id, StringComparer.Ordinal).Select(node => (node.Id, node.SubKind)));
+            extract.Nodes.OrderBy(node => node.Id.Whole(), StringComparer.Ordinal).Select(node => (node.Id.Whole(), node.SubKind)));
         Assert.Equal(
             ("sockaddr_in", "timeval", "sockaddr_in", "Color"),
             (Node(extract, "cpp:Outer.addr_").ValueType, Node(extract, "cpp:Outer.tv_").ValueType, Node(extract, "cpp:net.any_").ValueType, Node(extract, "cpp:shade_").ValueType));
@@ -826,7 +927,7 @@ public sealed class CppExtractorTests : CodeGraphExtractorContractTests<CppExtra
                 ("cpp:Less", "struct"), ("cpp:Less.operator()(int,int)const", "operator"), ("cpp:Open", "struct"), ("cpp:Pair", "struct"), ("cpp:Pair.a", "field"),
                 ("cpp:Widget", "struct"), ("cpp:Widget.Widget()", "constructor"), ("cpp:cb_", "variable"),
             ],
-            extract.Nodes.OrderBy(node => node.Id, StringComparer.Ordinal).Select(node => (node.Id, node.SubKind!)));
+            extract.Nodes.OrderBy(node => node.Id.Whole(), StringComparer.Ordinal).Select(node => (node.Id.Whole(), node.SubKind!)));
     }
 
     /// <summary>
@@ -845,14 +946,167 @@ public sealed class CppExtractorTests : CodeGraphExtractorContractTests<CppExtra
 
         Assert.Equal(
             [("cpp:A", "enumerator"), ("cpp:E", "enum"), ("cpp:S", "struct"), ("cpp:S.c", "field"), ("cpp:S.d", "field"), ("cpp:Sealed", "class"), ("cpp:Sealed.s", "field")],
-            extract.Nodes.OrderBy(node => node.Id, StringComparer.Ordinal).Select(node => (node.Id, node.SubKind!)));
+            extract.Nodes.OrderBy(node => node.Id.Whole(), StringComparer.Ordinal).Select(node => (node.Id.Whole(), node.SubKind!)));
         Assert.Equal("Color", Node(extract, "cpp:S.c").ValueType);
-        Assert.Contains(extract.References, reference => reference is { From: "cpp:S.c", Kind: CodeEdgeKinds.References, Name: "Color" });
+        Assert.Contains(extract.References, reference => reference is { Kind: CodeEdgeKinds.References, Name: "Color" } && reference.From.Is("cpp:S.c"));
+    }
+
+    /// <summary>
+    /// A raw string's value is what its parentheses hold as written, its delimiter and its prefix none of it, and a
+    /// user-defined literal's suffix is no name the code reads; a parameter's default is its function's code; a structured
+    /// binding's names are its own variables, a type a declaration is written with is a reference and no use, a scope a
+    /// <c>::</c> follows no use, and a conditional's branch is one.
+    /// </summary>
+    [Fact]
+    public void ARawStringIsAsWritten_ASuffixAndABindingAndAScopeAreNoUses_ADefaultIsItsFunctions()
+    {
+        var extract = Read("src/t.cpp", """
+            #include <map>
+
+            namespace shapes
+            {
+            enum class Kind { One, Two };
+
+            void log(const char *name = "parameter default", int n = LIMIT);
+
+            int take(std::map<int, int> &m, bool c)
+            {
+                auto raw = R"x(not ) a "call(" here)x";
+                auto pattern = R"(\d+)";
+                auto wide = LR"(C:\temp)";
+                auto text = "abc"s;
+                Kind which = Kind::One;
+                for (auto& [key, value] : m) { use(key, value); }
+                return c ? COUNT : 0;
+            }
+            }
+            """);
+
+        const string Log = "cpp:shapes.log(const char*,int)";
+        const string Take = "cpp:shapes.take(std::map<int,int>&,bool)";
+
+        Assert.Equal(
+            [
+                new LiteralRow("parameter default", 7, Log),
+                new LiteralRow("not ) a \"call(\" here", 11, Take),
+                new LiteralRow("\\d+", 12, Take),
+                new LiteralRow("C:\\temp", 13, Take),
+                new LiteralRow("abc", 14, Take),
+            ],
+            LiteralRow.Of(extract));
+        Assert.Equal(
+            [(Log, CodeEdgeKinds.Uses, "LIMIT", 7), (Take, CodeEdgeKinds.References, "Kind", 15), (Take, CodeEdgeKinds.Uses, "One", 15), (Take, CodeEdgeKinds.Calls, "use", 16), (Take, CodeEdgeKinds.Uses, "COUNT", 17)],
+            extract.References.Select(reference => (reference.From.Whole(), reference.Kind, reference.Name, reference.Line)));
+    }
+
+    /// <summary>
+    /// A call's receiver is read by every name it writes, however many: a chain of two names or more is written as links
+    /// (<see cref="ExtractQualifier.Link"/>), each name's reference linking its qualifier to the reference of the name before
+    /// it, so a chain of sixty names is sixty references of one name each, and the call's qualifier reads them all.
+    /// </summary>
+    [Fact]
+    public void AReceiverOfSixtyNames_IsReadByThemAll_AsLinks()
+    {
+        var names = Enumerable.Range(0, 60).Select(at => $"n{at}").ToList();
+        var extract = Read("src/t.cpp", $"void run()\n{{\n    {string.Join('.', names)}.go();\n}}\n");
+
+        Assert.Equal(
+            [
+                (CodeEdgeKinds.Uses, "n0", null, (QualifiedName?)null, null), (CodeEdgeKinds.Uses, "n1", CodeQualifierKinds.Value, (QualifiedName?)"n0", null),
+                .. names.Skip(2).Select((name, at) => (CodeEdgeKinds.Uses, name, (string?)CodeQualifierKinds.Value, (QualifiedName?)null, (int?)(at + 1))),
+                (CodeEdgeKinds.Calls, "go", CodeQualifierKinds.Value, (QualifiedName?)null, 59),
+            ],
+            extract.References.Select(reference => (reference.Kind, reference.Name, reference.Qualifier?.Kind, reference.Qualifier?.Name, reference.Qualifier?.Link)));
+        Assert.Equal(string.Join('.', names), extract.Written(extract.References[^1].Qualifier));
+        Assert.Equal("n0.n1.n2", extract.Written(extract.References[3].Qualifier));
+    }
+
+    /// <summary>
+    /// A type C++ writes in a body is a reference and no use - a declaration's with its pointer's, reference's and
+    /// template's marks, a lambda's, a catch's and a range-for's parameter's, a cast's, a named cast's, a call's type
+    /// arguments, a scope's - and a type a brace initializes is made; a template's argument that is a value - a macro's
+    /// arithmetic, a member's address - is read as code, its names uses.
+    /// </summary>
+    [Fact]
+    public void ATypeABodyWrites_IsAReference_AndATemplatesValueArgumentCode()
+    {
+        var extract = Read("src/t.cpp", """
+            #define LIMIT 4
+
+            void take(void *p)
+            {
+                std::vector<VecModel> v;
+                const RefModel& r = make();
+                std::unique_ptr<UniqModel> u;
+                auto a = static_cast<CastModel*>(p);
+                auto s = std::make_shared<MadeModel>();
+                auto l = [](LambdaModel& m) { return m; };
+                auto b = (OldModel *)p;
+                std::array<int, LIMIT / 2> arr;
+                connect<&Listener::receive>(p);
+                auto q = Point{1, 2};
+                for (const Entry& e : entries) { }
+                try { } catch (const Failure& error) { }
+                Box<Inner>::make();
+            }
+            """);
+
+        Assert.Equal(
+            [
+                (CodeEdgeKinds.References, "VecModel", "", 5), (CodeEdgeKinds.References, "RefModel", "", 6), (CodeEdgeKinds.Calls, "make", "", 6),
+                (CodeEdgeKinds.References, "UniqModel", "", 7), (CodeEdgeKinds.References, "CastModel", "", 8), (CodeEdgeKinds.Calls, "make_shared", "named std", 9),
+                (CodeEdgeKinds.References, "MadeModel", "", 9), (CodeEdgeKinds.References, "LambdaModel", "", 10), (CodeEdgeKinds.References, "OldModel", "", 11),
+                (CodeEdgeKinds.Uses, "LIMIT", "", 12), (CodeEdgeKinds.Calls, "connect", "", 13), (CodeEdgeKinds.Uses, "receive", "named Listener", 13),
+                (CodeEdgeKinds.Instantiates, "Point", "", 14), (CodeEdgeKinds.References, "Entry", "", 15), (CodeEdgeKinds.Uses, "entries", "", 15),
+                (CodeEdgeKinds.References, "Failure", "", 16), (CodeEdgeKinds.References, "Inner", "", 17), (CodeEdgeKinds.Calls, "make", "named Box", 17),
+            ],
+            extract.References.Select(reference => (reference.Kind, reference.Name, $"{reference.Qualifier?.Kind} {reference.Qualifier?.Name}".Trim(), reference.Line)));
+    }
+
+    /// <summary>
+    /// An enumerator's value is its enumerator's code - a scoped enumeration's too - what it reads a use: the enumerators
+    /// before it, and a member of another type by its scope.
+    /// </summary>
+    [Fact]
+    public void AnEnumeratorsValue_IsTheEnumeratorsCode()
+    {
+        var extract = Read("src/t.cpp", """
+            enum class Flags { Read = 1, Write = 2, All = Read | Write, Max = Limits::top };
+            """);
+
+        Assert.Equal(
+            [("cpp:Flags.All", "Read", ""), ("cpp:Flags.All", "Write", ""), ("cpp:Flags.Max", "top", "named Limits")],
+            extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Uses).Select(reference => (reference.From.Whole(), reference.Name, $"{reference.Qualifier?.Kind} {reference.Qualifier?.Name}".Trim())));
     }
 
     private static FileExtract Read(string path, string text) => new CppExtractor().Extract(new CodeFileInput(path, text));
 
     private static ExtractNode Node(FileExtract extract, string id) => Assert.Single(extract.Nodes, node => node.Id == id);
+
+    /// <summary>
+    /// The references of <paramref name="extract"/>, a line each - its node, kind, name, line and qualifier, a chain its
+    /// qualifier writes as links read whole - in order, each run of lines alike written once with how many it is.
+    /// </summary>
+    private static string Runs(FileExtract extract)
+    {
+        var runs = new List<(string Line, int Count)>();
+
+        foreach (var reference in extract.References)
+        {
+            var line = $"{reference.From} {reference.Kind} {reference.Name} {reference.Line} {reference.Qualifier?.Kind} {extract.Written(reference.Qualifier)}".TrimEnd();
+
+            if (runs.Count > 0 && runs[^1].Line == line)
+            {
+                runs[^1] = (line, runs[^1].Count + 1);
+            }
+            else
+            {
+                runs.Add((line, 1));
+            }
+        }
+
+        return string.Join('\n', runs.Select(run => run.Count > 1 ? $"{run.Line} ({run.Count} times)" : run.Line));
+    }
 
     /// <summary>Two imports alike in every field, their filters by their names.</summary>
     private sealed class ImportComparer : IEqualityComparer<ExtractImport>
@@ -866,9 +1120,44 @@ public sealed class CppExtractorTests : CodeGraphExtractorContractTests<CppExtra
         public int GetHashCode(ExtractImport obj) => obj.Target.GetHashCode(StringComparison.Ordinal);
     }
 
+    private const string Reads = """
+        namespace reads {
+
+        const char *const greeting = "hello world";
+
+        struct Table {
+            static constexpr int count = 0;
+        };
+
+        enum class Kind { One, Two = One + 1 };
+
+        int take(int local)
+        {
+            int own = 4;
+            Table::count += local + own;
+            Kind which = Kind::One;
+            return greeting == " padding " ? Table::count : 0;
+        }
+
+        }
+        """;
+
     /// <inheritdoc/>
     public override IReadOnlyList<CodeGraphFixture> Fixtures { get; } =
     [
+        new("src/reads.cpp", Reads)
+        {
+            Edges =
+            [
+                // An enumerator's value read by its enumerator, a static read through its struct, a local's type a
+                // reference, and an enum member read through its enum.
+                new("cpp:reads.Kind.Two", "cpp:reads.Kind.One", CodeEdgeKinds.Uses, 9, CodeConfidences.Exact),
+                new("cpp:reads.take(int)", "cpp:reads.Table.count", CodeEdgeKinds.Uses, 14, CodeConfidences.Exact),
+                new("cpp:reads.take(int)", "cpp:reads.Kind", CodeEdgeKinds.References, 15, CodeConfidences.Exact),
+                new("cpp:reads.take(int)", "cpp:reads.Kind.One", CodeEdgeKinds.Uses, 15, CodeConfidences.Exact),
+                new("cpp:reads.take(int)", "cpp:reads.greeting", CodeEdgeKinds.Uses, 16, CodeConfidences.Exact),
+            ],
+        },
         new("include/shapes/shape.hpp", ShapeHeader)
         {
             Nodes =

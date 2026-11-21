@@ -5,6 +5,7 @@ using DssHarness.Core.Agents.Policy;
 using DssHarness.Core.Agents.Runtime;
 using DssHarness.Core.Codebase;
 using DssHarness.Core.FileSystem;
+using DssHarness.Core.Orchestration;
 using DssHarness.Core.Repository;
 using DssHarness.Core.Schemas;
 using NSubstitute;
@@ -120,24 +121,32 @@ public sealed partial class CodebaseGraphToolTests
         Assert.Equal(answer.Text, (await AskAsync(Tool(tree, await QueriesAsync(tree)), """{"op":"find","query":"Area"}""")).Text);
     }
 
-    /// <summary><c>find</c> gives <c>limit</c> nodes from <c>offset</c>, saying how many it showed of how many and the offset to ask again with.</summary>
+    /// <summary><c>find</c> answers in pages of whole entries at its bound: the first page with no <c>page</c>, the header naming the pages and the exact total, the last saying it is the last.</summary>
     [Fact]
-    public async Task Find_GivesItsPageFromTheOffset_SayingTheRestAndHowToAskForIt()
+    public async Task Find_AnswersInPagesOfWholeEntries_WithTheHeaderNamingThePagesAndTheTotal()
     {
-        using var tree = await TreeAsync();
+        using var tree = await TreeAsync(("src/Hub.cs", HubFile(50)));
         var tool = Tool(tree, await QueriesAsync(tree));
 
-        var first = (await AskAsync(tool, """{"op":"find","query":"Area","limit":1}""")).Text.Split('\n');
-        var second = (await AskAsync(tool, """{"op":"find","query":"Area","limit":2,"offset":1}""")).Text.Split('\n');
-        var last = (await AskAsync(tool, """{"op":"find","query":"Area","offset":3}""")).Text.Split('\n');
+        var first = (await AskAsync(tool, """{"op":"find","query":"M"}""")).Text.Split('\n');
+        var second = (await AskAsync(tool, """{"op":"find","query":"M","page":2}""")).Text.Split('\n');
+        var last = (await AskAsync(tool, """{"op":"find","query":"M","page":3}""")).Text.Split('\n');
+        var past = await AskAsync(tool, """{"op":"find","query":"M","page":4}""");
 
-        Assert.Equal(2, first.Length);
-        Assert.Equal("cut: 1 of 4 shown; ask again with offset 1", first[1]);
-        Assert.Equal(3, second.Length);
-        Assert.Contains("src/Shapes.cs:6-6", second[0], StringComparison.Ordinal);
-        Assert.Equal("cut: 2-3 of 4 shown; ask again with offset 3", second[2]);
-        Assert.Single(last);
-        Assert.Contains("src/Shapes.g.cs", last[0], StringComparison.Ordinal);
+        Assert.Equal(1 + CodebaseGraphTool.FindLines, first.Length);
+        Assert.Equal("page 1 of 3 · 50 results · ask again with page: 2 for the next", first[0]);
+        Assert.Equal(1 + CodebaseGraphTool.FindLines, second.Length);
+        Assert.Equal("page 2 of 3 · 50 results · ask again with page: 3 for the next", second[0]);
+        Assert.Equal("page 3 of 3 · the last", last[0]);
+        Assert.Equal(1 + 50 - 2 * CodebaseGraphTool.FindLines, last.Length);
+
+        // The pages hold the whole answer once: every entry appears on exactly one page, none cut, none repeated.
+        var whole = first[1..].Concat(second[1..]).Concat(last[1..]).ToList();
+
+        Assert.Equal(50, whole.Count);
+        Assert.Distinct(whole);
+        Assert.Equal("page 4 of 'find M': it has 3 pages (1 to 3)", past.Text);
+        Assert.Equal(GraphToolOutcome.Usage, past.Outcome);
     }
 
     /// <summary>
@@ -153,7 +162,7 @@ public sealed partial class CodebaseGraphToolTests
         var unmatched = await AskAsync(tool, """{"op":"find","query":"Okapi"}""");
         var sure = await AskAsync(tool, """{"op":"find","query":"Twice"}""");
 
-        Assert.Matches("^no node matched\ntext: lines that hold 'Okapi'\n  docs/zoo\\.txt:1 An Okapi grazes here\\.\n  \\[[0-9]+ file\\(s\\) you may not read were left out\\]$", unmatched.Text);
+        Assert.Matches("^no node matched\ntext: lines that hold 'Okapi'\n  docs/zoo\\.txt:1 An Okapi grazes here\\.\n\\[[0-9]+ file\\(s\\) you may not read were left out\\]$", unmatched.Text);
         Assert.Single(sure.Text.Split('\n'));
         Assert.DoesNotContain("text:", sure.Text, StringComparison.Ordinal);
     }
@@ -259,64 +268,142 @@ public sealed partial class CodebaseGraphToolTests
     }
 
     /// <summary>
-    /// A node with more edges of the kind walked than the view's 99th percentile, and at least fifty, is given and not gone
-    /// through; a walk past its bound, and a node's kind past its own, say how many they showed and how to ask for the rest.
+    /// A node with more edges of the kind walked than any other is gone through as any node is, every node it reaches
+    /// given; a walk and a node's kinds page at their own bounds, every page naming what it holds of.
     /// </summary>
     [Fact]
-    public async Task AHub_IsGivenAndNotGoneThrough_AndEachBoundSaysTheRest()
+    public async Task AHub_IsGoneThroughAsAnyNode_AndEachAnswerPagesAtItsOwnBound()
     {
         using var tree = await TreeAsync(("src/Hub.cs", HubFile(220)));
         var tool = Tool(tree, await QueriesAsync(tree));
 
         var throughHub = (await AskAsync(tool, """{"op":"related","symbol":"Leaf","relation":"callers","depth":3}""")).Text.Split('\n');
+        var throughHubLast = (await AskAsync(tool, """{"op":"related","symbol":"Leaf","relation":"callers","depth":3,"page":4}""")).Text.Split('\n');
         var firstPage = (await AskAsync(tool, """{"op":"related","symbol":"Center","relation":"callers"}""")).Text.Split('\n');
-        var secondPage = (await AskAsync(tool, """{"op":"related","symbol":"Center","relation":"callers","offset":60}""")).Text.Split('\n');
-        var node = (await AskAsync(tool, """{"op":"node","symbol":"Center"}""")).Text;
+        var secondPage = (await AskAsync(tool, """{"op":"related","symbol":"Center","relation":"callers","page":2}""")).Text.Split('\n');
+        var lastPage = (await AskAsync(tool, """{"op":"related","symbol":"Center","relation":"callers","page":4}""")).Text.Split('\n');
+        var node = (await AskAsync(tool, """{"op":"node","symbol":"Center"}""")).Text.Split('\n');
+        var nodeSecond = (await AskAsync(tool, """{"op":"node","symbol":"Center","page":2}""")).Text.Split('\n');
 
-        Assert.Single(throughHub);
-        Assert.StartsWith("1: ", throughHub[0], StringComparison.Ordinal);
-        Assert.EndsWith("| 220 callers, not gone through", throughHub[0], StringComparison.Ordinal);
-        Assert.Equal(61, firstPage.Length);
-        Assert.Equal("cut: 60 of 220 shown; ask again with offset 60", firstPage[^1]);
-        Assert.Equal("cut: 61-120 of 220 shown; ask again with offset 120", secondPage[^1]);
-        Assert.Contains("callers (220):", node, StringComparison.Ordinal);
-        Assert.Contains("\n  cut: 15 of 220 shown", node, StringComparison.Ordinal);
-        Assert.Equal(CodebaseGraphTool.NodeLinesAKind, node.Split("callers (220):\n")[1].Split("\n  cut:")[0].Split('\n').Length);
+        // The hub and its 220 callers, a hop past it: nothing is left out for how many edges a node has.
+        Assert.Equal("page 1 of 4 · 221 results · ask again with page: 2 for the next", throughHub[0]);
+        Assert.StartsWith("1: ", throughHub[1], StringComparison.Ordinal);
+        Assert.Contains(" void Center()", throughHub[1], StringComparison.Ordinal);
+        Assert.All(throughHub[2..], line => Assert.StartsWith("2: ", line, StringComparison.Ordinal));
+        Assert.Equal(["page 4 of 4 · the last", .. Enumerable.Repeat("2: ", 221 - (3 * CodebaseGraphTool.RelatedLines))], throughHubLast.Select(line => line.StartsWith("2: ", StringComparison.Ordinal) ? "2: " : line));
+        Assert.Equal(1 + CodebaseGraphTool.RelatedLines, firstPage.Length);
+        Assert.Equal("page 1 of 4 · 220 results · ask again with page: 2 for the next", firstPage[0]);
+        Assert.Equal("page 2 of 4 · 220 results · ask again with page: 3 for the next", secondPage[0]);
+        Assert.Equal("page 4 of 4 · the last", lastPage[0]);
+        Assert.Equal(1 + 220 - 3 * CodebaseGraphTool.RelatedLines, lastPage.Length);
+
+        // The whole walk is read across its pages, whole entries, every one once: as many as the walk holds, none twice.
+        var walked = firstPage[1..].Concat(secondPage[1..]).Concat((await AskAsync(tool, """{"op":"related","symbol":"Center","relation":"callers","page":3}""")).Text.Split('\n')[1..]).Concat(lastPage[1..]).ToList();
+        Assert.Equal(220, walked.Count);
+        Assert.Distinct(walked);
+
+        // A node's edges page at the node bound a kind, the caption said on every page that holds entries of the kind.
+        Assert.Equal("page 1 of 15 · 221 results · ask again with page: 2 for the next", node[0]);
+        Assert.Matches("^[0-9a-f]{6} member public static void Center\\(\\) \\| src/Hub\\.cs:9-12 #", node[1]);
+        Assert.Equal("callers (220):", node[2]);
+        Assert.All(node[3..18], line => Assert.Matches("^  [0-9a-f]{6} member public static void M[0-9]+\\(\\) \\| src/Hub\\.cs:", line));
+        Assert.Equal("callees (1):", node[18]);
+        Assert.Equal("page 2 of 15 · 221 results · ask again with page: 3 for the next", nodeSecond[0]);
+        Assert.Equal(node[1], nodeSecond[1]);
+        Assert.Equal("callers (220):", nodeSecond[2]);
+        Assert.Equal(CodebaseGraphTool.NodeLinesAKind, nodeSecond[3..].Length);
+
+        // Page 2's callers begin where page 1's ended, the callees' kind exhausted on page 1.
+        Assert.Equal(int.Parse(Regex.Match(node[17], "M([0-9]+)").Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture) + 1, int.Parse(Regex.Match(nodeSecond[3], "M([0-9]+)").Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture));
+        Assert.DoesNotContain(nodeSecond, line => line.Contains("callees", StringComparison.Ordinal));
     }
 
     /// <summary>
     /// <c>find</c> keeps the one kind and the one file it is given - a file named with backslashes as the view holds it -
-    /// and gives twenty where it names no limit, saying the rest.
+    /// and a page past the last of a one-page answer is refused with its range.
     /// </summary>
     [Fact]
-    public async Task Find_KeepsItsKindAndItsFile_AndGivesTwentyWhereItNamesNoLimit()
+    public async Task Find_KeepsItsKindAndItsFile_AndRefusesAPagePastTheLastOfAOnePageAnswer()
     {
         using var tree = await TreeAsync(("src/Hub.cs", HubFile(30)));
         var tool = Tool(tree, await QueriesAsync(tree));
 
         var inFile = (await AskAsync(tool, """{"op":"find","query":"Area","path":"src\\Shapes.cs"}""")).Text.Split('\n');
         var ofKind = (await AskAsync(tool, """{"op":"find","query":"Circle","kind":"member"}""")).Text.Split('\n');
-        var many = (await AskAsync(tool, """{"op":"find","query":"M"}""")).Text.Split('\n');
-        var past = (await AskAsync(tool, """{"op":"find","query":"Area","path":"src/Shapes.cs","offset":3}""")).Text;
+        var past = (await AskAsync(tool, """{"op":"find","query":"Area","path":"src/Shapes.cs","page":2}""")).Text;
 
         Assert.Equal(["7bfbc3", "dff23b", "4bed38"], inFile.Select(line => line[..6]));
         Assert.All(inFile, line => Assert.Contains(" | src/Shapes.cs:", line, StringComparison.Ordinal));
         Assert.All(ofKind, line => Assert.Contains(" member ", line, StringComparison.Ordinal));
-        Assert.Equal(CodebaseGraphTool.FindLines + 1, many.Length);
-        Assert.Matches($"^cut: {CodebaseGraphTool.FindLines} of [0-9]+ shown; ask again with offset {CodebaseGraphTool.FindLines}$", many[^1]);
-        Assert.Equal("offset 3 is past the last of 3", past);
+        Assert.Equal("page 2 of 'find Area': it has 1 page (1 to 1)", past);
     }
 
-    /// <summary><c>outline</c> gives at most its bound of declarations, short lines though they are, saying the rest.</summary>
+    /// <summary><c>outline</c> holds its bound of declarations a page, the header on its pages, and the whole outline is read across them.</summary>
     [Fact]
-    public async Task Outline_GivesAtMostItsBound()
+    public async Task Outline_HoldsItsBoundAPage_AndIsReadWholeAcrossItsPages()
     {
         using var tree = await TreeAsync(("a.cs", "class C\n{\n" + string.Concat(Enumerable.Range(0, CodebaseGraphTool.OutlineLines + 5).Select(at => $"int a{at};\n")) + "}\n"));
+        var tool = Tool(tree, await QueriesAsync(tree));
 
-        var outline = (await AskAsync(Tool(tree, await QueriesAsync(tree)), """{"op":"outline","path":"a.cs"}""")).Text.Split('\n');
+        var first = (await AskAsync(tool, """{"op":"outline","path":"a.cs"}""")).Text.Split('\n');
+        var second = (await AskAsync(tool, """{"op":"outline","path":"a.cs","page":2}""")).Text.Split('\n');
 
-        Assert.Equal(CodebaseGraphTool.OutlineLines + 2, outline.Length);
-        Assert.Matches($"^cut: {CodebaseGraphTool.OutlineLines} of {CodebaseGraphTool.OutlineLines + 6} shown; ask again with offset {CodebaseGraphTool.OutlineLines}$", outline[^1]);
+        Assert.Equal(2 + CodebaseGraphTool.OutlineLines, first.Length);
+        Assert.Equal("page 1 of 2 · 406 results · ask again with page: 2 for the next", first[0]);
+        Assert.Equal("outline of a.cs (406 declaration(s)):", first[1]);
+        Assert.Equal("page 2 of 2 · the last", second[0]);
+        Assert.Equal("outline of a.cs (406 declaration(s)):", second[1]);
+        Assert.Equal(2 + 6, second.Length);
+
+        // The pages hold the whole outline once: every declaration on exactly one page, none twice.
+        var outlined = first[2..].Concat(second[2..]).ToList();
+        Assert.Equal(406, outlined.Count);
+        Assert.Distinct(outlined);
+    }
+
+    /// <summary>
+    /// <c>styledBy</c> follows a node's uses of a style rule alone - the classes and ids a page is told by - and
+    /// <c>styles</c> the uses into a rule alone: a member's reads of a field, and the uses of a field, are neither.
+    /// </summary>
+    [Fact]
+    public async Task StyledByAndStyles_FollowTheUsesOfARuleAlone()
+    {
+        using var tree = await TreeAsync(
+            ("web/site.css", ".btn { color: red; }\n#cart { margin: 0; }\n"),
+            ("web/index.html", "<html>\n<body>\n<button class=\"btn\">Go</button>\n<div id=\"cart\"></div>\n</body>\n</html>\n"),
+            ("src/Reader.cs", "class Reader\n{\n    int count;\n    void Take() { count++; }\n}\n"));
+        var queries = await QueriesAsync(tree);
+        var read = Assert.Single(tree.Symbols().Edges, edge => edge.Kind == CodeEdgeKinds.Uses && edge.To.EndsWith("Reader.count", StringComparison.Ordinal));
+
+        string[] Reached(string id, string relation) => [.. queries.Related(id, relation, 1).Select(reached => reached.Card.Id)];
+
+        // The page's body is told by the class, the element of the id by the id; each rule styles what names it.
+        Assert.Equal(["css:web/site.css#.btn"], Reached("html:web/index.html#body", GraphRelations.StyledBy));
+        Assert.Equal(["css:web/site.css##cart"], Reached("html:web/index.html#cart", GraphRelations.StyledBy));
+        Assert.Equal(["html:web/index.html#body"], Reached("css:web/site.css#.btn", GraphRelations.Styles));
+        Assert.Equal(["html:web/index.html#cart"], Reached("css:web/site.css##cart", GraphRelations.Styles));
+
+        // A method's read of a field is no rule that styles it, and the field no rule that styles the method.
+        Assert.Empty(Reached(read.From, GraphRelations.StyledBy));
+        Assert.Empty(Reached(read.To, GraphRelations.Styles));
+    }
+
+    /// <summary>
+    /// What the graph does not hold of a file is said where an answer gives the file, before what it holds: an outline of
+    /// a data file that stopped reading says the line and why, and a node of one of its keys says so of its file.
+    /// </summary>
+    [Fact]
+    public async Task AnAnswerAboutAFile_SaysWhatTheGraphDoesNotHoldOfIt()
+    {
+        using var tree = await TreeAsync(("config/broken.yml", "first: 1\nsecond: @x\n"));
+        var queries = await QueriesAsync(tree);
+        var tool = Tool(tree, queries);
+        var stopped = Assert.Single(queries.Unread("config/broken.yml"));
+
+        Assert.StartsWith("line 2: the file stops reading as YAML here (", stopped, StringComparison.Ordinal);
+        Assert.Equal(["outline of config/broken.yml (1 declaration(s)):", stopped], (await AskAsync(tool, """{"op":"outline","path":"config/broken.yml"}""")).Text.Split('\n')[..2]);
+        Assert.Contains(stopped, (await AskAsync(tool, """{"op":"node","symbol":"first"}""")).Text.Split('\n'));
+        Assert.Empty(queries.Unread("src/Shapes.cs"));
     }
 
     /// <summary>
@@ -347,35 +434,49 @@ public sealed partial class CodebaseGraphToolTests
         Assert.Equal("namespace Demo;\n", File.ReadAllText(Path.Combine(tree.Tree, "src", "Geometry.cs")));
     }
 
-    /// <summary>An answer past its cap even within its bound of lines - a body of long lines - is cut at a whole line, saying so.</summary>
+    /// <summary>An answer past its character bound even within its bound of lines - a body of long lines - pages at whole entries, and nothing is cut: the pages hold all of it.</summary>
     [Fact]
-    public async Task ABodyPastTheCap_IsCutAtAWholeLine()
+    public async Task ABodyPastItsCharacterBound_PagesAtWholeEntries_AndNothingIsCut()
     {
         var line = "    // " + new string('w', 120) + "\n";
         using var tree = await TreeAsync(("src/Long.cs", "namespace Demo;\n\npublic static class Long\n{\n" + string.Concat(Enumerable.Repeat(line, 300)) + "}\n"));
+        var tool = Tool(tree, await QueriesAsync(tree));
 
-        var body = (await AskAsync(Tool(tree, await QueriesAsync(tree)), """{"op":"body","symbols":["Demo.Long"],"full":true}""")).Text;
-        var lines = body.Split('\n');
+        var first = await AskAsync(tool, """{"op":"body","symbols":["Demo.Long"],"full":true}""");
 
-        Assert.True(body.Length <= CodebaseGraphTool.MostCharacters, $"{body.Length} characters");
-        Assert.True(body.Length > CodebaseGraphTool.MostCharacters - 200, $"{body.Length} characters");
-        Assert.Equal("cut: the answer passed its cap; ask for less", lines[^1]);
-        Assert.All(lines[1..^1], one => Assert.Matches("^[0-9]+\t", one));
-        Assert.EndsWith(new string('w', 120), lines[^2], StringComparison.Ordinal);
+        Assert.Equal(2, first.Paging!.Pages);
+        Assert.True(first.Text.Length <= CodebaseGraphTool.MostCharacters, $"{first.Text.Length} characters");
+        Assert.Equal("… Demo.Long goes on", first.Text.Split('\n')[^1]);
+
+        var numbered = new List<string>();
+
+        for (var page = 1; page <= first.Paging.Pages; page++)
+        {
+            var asked = page == 1 ? first : await AskAsync(tool, $$"""{"op":"body","symbols":["Demo.Long"],"full":true,"page":{{page}}}""");
+
+            Assert.True(asked.Text.Length <= CodebaseGraphTool.MostCharacters, $"{asked.Text.Length} characters");
+            numbered.AddRange(asked.Text.Split('\n').Where(one => Numbered().IsMatch(one)));
+        }
+
+        Assert.Equal(first.Paging.Total, numbered.Count);
+        Assert.All(numbered, one => Assert.Matches("^[0-9]+\t", one));
+        Assert.Matches("^[0-9]+\t}$", numbered[^1]);
+        Assert.EndsWith(new string('w', 120), numbered[^2], StringComparison.Ordinal);
     }
 
-    /// <summary>An edit's text past its bound of lines is a usage error, and nothing is written.</summary>
+    /// <summary>An edit's text of any number of lines is written whole: an edit is bounded by no count of lines.</summary>
     [Fact]
-    public async Task AnEditPastItsBoundOfLines_IsAUsageError()
+    public async Task AnEditOfManyLines_IsWrittenWhole()
     {
         using var tree = await TreeAsync();
-        var before = File.ReadAllText(Path.Combine(tree.Tree, "src", "Geometry.cs"));
-        var input = new JsonObject { ["op"] = "edit", ["symbol"] = "Twice", ["hash"] = "aac0401c", ["text"] = string.Join('\n', Enumerable.Repeat("x", CodebaseGraphTool.MostEditLines + 1)) };
+        var lines = Enumerable.Range(0, 1000).Select(at => $"    // line {at}").ToList();
+        var text = string.Join('\n', ["    public static int Twice(int value)", "    {", .. lines, "        return value * 2;", "    }"]);
+        var input = new JsonObject { ["op"] = "edit", ["symbol"] = "Twice", ["hash"] = "aac0401c", ["text"] = text };
 
         var answer = await Tool(tree, await QueriesAsync(tree)).RunAsync(input, CodebaseGraphTool.Operations(write: true, narrow: false), TestContext.Current.CancellationToken);
 
-        Assert.Equal((GraphToolOutcome.Usage, $"text holds {CodebaseGraphTool.MostEditLines + 1} line(s): an edit gives at most {CodebaseGraphTool.MostEditLines}"), (answer.Outcome, answer.Text));
-        Assert.Equal(before, File.ReadAllText(Path.Combine(tree.Tree, "src", "Geometry.cs")));
+        Assert.Equal(GraphToolOutcome.Wrote, answer.Outcome);
+        Assert.Contains(string.Join('\n', lines), File.ReadAllText(Path.Combine(tree.Tree, "src", "Geometry.cs")).ReplaceLineEndings("\n"), StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -405,24 +506,31 @@ public sealed partial class CodebaseGraphToolTests
         Assert.Equal("the view holds no file at 'src/None.cs'", missing);
     }
 
-    /// <summary>An answer past its cap is cut at a whole line, saying how many it showed and the offset that gives the rest.</summary>
+    /// <summary>An outline past the answer's character bound pages before its own bound of entries, at whole entries, and the pages hold the whole answer.</summary>
     [Fact]
-    public async Task AnAnswerPastItsCap_IsCutAtAWholeLine_SayingTheOffsetToAskAgainWith()
+    public async Task AnAnswerPastItsCharacterBound_PagesAtWholeEntries_BeforeItsOwnBound()
     {
         using var tree = await TreeAsync(("src/Hub.cs", HubFile(220)));
         var tool = Tool(tree, await QueriesAsync(tree));
+        var first = (await AskAsync(tool, """{"op":"outline","path":"src/Hub.cs"}""")).Text.Split('\n');
+        var whole = new List<string>(first[2..]);
 
-        var first = (await AskAsync(tool, """{"op":"outline","path":"src/Hub.cs"}""")).Text;
-        var cut = CutLine().Match(first.Split('\n')[^1]);
-        var shown = int.Parse(cut.Groups["shown"].Value, System.Globalization.CultureInfo.InvariantCulture);
-        var next = (await AskAsync(tool, $$"""{"op":"outline","path":"src/Hub.cs","offset":{{shown}}}""")).Text.Split('\n');
+        // The header, the caption and the entries the characters hold: fewer than the outline's own bound of entries.
+        Assert.Equal((213, true), (first.Length, first.Length < 2 + CodebaseGraphTool.OutlineLines));
+        Assert.Equal("page 1 of 3 · 444 results · ask again with page: 2 for the next", first[0]);
+        Assert.Equal("outline of src/Hub.cs (444 declaration(s)):", first[1]);
 
-        Assert.True(first.Length <= CodebaseGraphTool.MostCharacters, $"{first.Length} characters");
-        Assert.True(cut.Success, first.Split('\n')[^1]);
-        Assert.Equal("444", cut.Groups["total"].Value);
-        Assert.InRange(shown, 100, CodebaseGraphTool.OutlineLines - 1);
-        Assert.Equal(shown, first.Split('\n').Length - 2);
-        Assert.StartsWith($"cut: {shown + 1}-", next[^1], StringComparison.Ordinal);
+        for (var page = 2; page <= 3; page++)
+        {
+            var asked = (await AskAsync(tool, $$"""{"op":"outline","path":"src/Hub.cs","page":{{page}}}""")).Text.Split('\n');
+            Assert.Matches($"^page {page} of 3( · 444 results · ask again with page: {page + 1} for the next| · the last)$", asked[0]);
+            Assert.Equal("outline of src/Hub.cs (444 declaration(s)):", asked[1]);
+            whole.AddRange(asked[2..]);
+        }
+
+        // The pages hold the whole answer once, whole entries, none cut and none twice.
+        Assert.Equal(444, whole.Count);
+        Assert.Distinct(whole);
     }
 
     /// <summary>
@@ -445,8 +553,12 @@ public sealed partial class CodebaseGraphToolTests
         Assert.DoesNotContain("3.14", type, StringComparison.Ordinal);
         Assert.Contains("14\t        return 3.14 * radius * radius;", full, StringComparison.Ordinal);
         Assert.Equal("8257a8 Demo.Geometry.Twice src/Geometry.cs:16-19 #aac0401c\n16\t    public static double Twice(IShape shape)\n17\t    {\n18\t        return Total([shape, shape]);\n19\t    }", member);
-        Assert.Equal(CodebaseGraphTool.BodyLines + 2, bounded.Length);
-        Assert.Equal($"cut: {CodebaseGraphTool.BodyLines} lines shown; ask for fewer symbols, or one at a time", bounded[^1]);
+
+        // The body's own bound holds a page: the page says the symbol goes on, and the rest is asked for with page.
+        Assert.Equal(3 + CodebaseGraphTool.BodyLines, bounded.Length);
+        Assert.Equal("page 1 of 4 · 2211 results · ask again with page: 2 for the next", bounded[0]);
+        Assert.Equal("… Demo.Hubs.Hub goes on", bounded[^1]);
+        Assert.Equal(CodebaseGraphTool.BodyLines, bounded.Count(Numbered().IsMatch));
     }
 
     /// <summary>
@@ -585,8 +697,8 @@ public sealed partial class CodebaseGraphToolTests
 
         Assert.Empty(JsonSchemaSubset.SubsetProblems(schema));
         Assert.Equal(ops, string.Join(',', schema["properties"]!["op"]!["enum"]!.AsArray().Select(op => op!.GetValue<string>())));
-        Assert.Superset(new HashSet<string>(["op", "query", "kind", "path", "limit", "offset", "symbol", "relation", "depth", "symbols", "full"], StringComparer.Ordinal), members);
-        Assert.Equal(extra.Split(',', StringSplitOptions.RemoveEmptyEntries).Order(StringComparer.Ordinal), members.Except(["op", "query", "kind", "path", "limit", "offset", "symbol", "relation", "depth", "symbols", "full"]).Order(StringComparer.Ordinal));
+        Assert.Superset(new HashSet<string>(["op", "query", "kind", "path", "symbol", "relation", "depth", "symbols", "full", "page"], StringComparer.Ordinal), members);
+        Assert.Equal(extra.Split(',', StringSplitOptions.RemoveEmptyEntries).Order(StringComparer.Ordinal), members.Except(["op", "query", "kind", "path", "symbol", "relation", "depth", "symbols", "full", "page"]).Order(StringComparer.Ordinal));
         Assert.Equal(write, JsonSchemaSubset.Problems(schema, JsonNode.Parse("""{"op":"edit","symbol":"a","hash":"b","text":"c"}""")).Count == 0);
         Assert.Equal(narrow, JsonSchemaSubset.Problems(schema, JsonNode.Parse("""{"op":"wholeFile","path":"a","reason":"b"}""")).Count == 0);
         Assert.Empty(JsonSchemaSubset.Problems(schema, JsonNode.Parse("""{"op":"find","query":"x"}""")));
@@ -603,23 +715,25 @@ public sealed partial class CodebaseGraphToolTests
     [InlineData("""{}""", "op is required: one of find, node, related, outline, body, edit, wholeFile")]
     [InlineData("""{"op":"teleport"}""", "op 'teleport' is not one this step may use: find, node, related, outline, body, edit, wholeFile")]
     [InlineData("""{"op":"find"}""", "op 'find' needs query: the words to match, split at case changes, underscores, digits and dots as a name is.")]
-    [InlineData("""{"op":"node","symbol":"Total","query":"x"}""", "op 'node' does not read query: it reads symbol")]
+    [InlineData("""{"op":"node","symbol":"Total","query":"x"}""", "op 'node' does not read query: it reads symbol, page")]
     [InlineData("""{"op":"related","symbol":"Total"}""", "op 'related' needs relation: which edge to follow.")]
-    [InlineData("""{"op":"related","symbol":"Total","relation":"siblings"}""", "relation is 'siblings': give one of callers, callees, derived, implementations, references, tests, includedBy")]
-    [InlineData("""{"op":"related","symbol":"Total","relation":"callers","depth":4}""", "depth is 4: give 1 to 3")]
-    [InlineData("""{"op":"related","symbol":"Total","relation":"callers","depth":0}""", "depth is 0: give 1 to 3")]
-    [InlineData("""{"op":"find","query":"x","limit":51}""", "limit is 51: give 1 to 50")]
-    [InlineData("""{"op":"find","query":"x","offset":-1}""", "offset is below 0: give how many to pass over, from 0")]
+    [InlineData("""{"op":"related","symbol":"Total","relation":"siblings"}""", "relation is 'siblings': give one of callers, callees, derived, implementations, references, tests, includedBy, styledBy, styles")]
+    [InlineData("""{"op":"related","symbol":"Total","relation":"callers","depth":0}""", "depth is 0: hops start at 1")]
+    [InlineData("""{"op":"related","symbol":"Total","relation":"callers","depth":-4}""", "depth is -4: hops start at 1")]
+    [InlineData("""{"op":"find","query":"x","offset":1}""", "op 'find' does not read offset: an answer's further pages are asked by page, from 1")]
+    [InlineData("""{"op":"find","query":"x","limit":10}""", "op 'find' does not read limit: an answer's further pages are asked by page, from 1")]
     [InlineData("""{"op":"outline","path":"a","symbol":"b"}""", "op 'outline' takes path or symbol, not both")]
-    [InlineData("""{"op":"body","symbols":[]}""", "op 'body' needs symbols: 1 to 8 handles, ids or names")]
-    [InlineData("""{"op":"body","symbols":["1","2","3","4","5","6","7","8","9"]}""", "op 'body' needs symbols: 1 to 8 handles, ids or names")]
-    [InlineData("""{"op":"edit","symbol":"Twice","hash":"x"}""", "op 'edit' needs text: the node's new lines, at most 600.")]
+    [InlineData("""{"op":"body","symbols":[]}""", "op 'body' needs symbols: one or more handles, ids or names")]
+    [InlineData("""{"op":"edit","symbol":"Twice","hash":"x"}""", "op 'edit' needs text: the node's new lines.")]
     [InlineData("""{"op":"wholeFile","path":"src/Geometry.cs"}""", "op 'wholeFile' needs reason: why the whole file is needed.")]
+    [InlineData("""{"op":"find","query":"x","page":0}""", "page is 0: pages start at 1")]
+    [InlineData("""{"op":"edit","symbol":"Twice","hash":"aac0401c","text":"x","page":2}""", "op 'edit' does not read page: what it answers is one page, said once it is done")]
+    [InlineData("""{"op":"wholeFile","path":"src/Geometry.cs","reason":"r","page":1}""", "op 'wholeFile' does not read page: what it answers is one page, said once it is done")]
     [InlineData("""{"op":"find","query":"  "}""", "query is empty: the words to match, split at case changes, underscores, digits and dots as a name is.")]
     [InlineData("""{"op":"node","symbol":""}""", "symbol is empty: a node: its handle, its id, a path:line, or a qualified or simple name.")]
     [InlineData("""{"op":"outline","path":" "}""", "path is empty: a file's path, relative to the tree with forward separators.")]
-    [InlineData("""{"op":"body","symbols":["Twice",""]}""", "op 'body' needs symbols: 1 to 8 handles, ids or names, none empty")]
-    [InlineData("""{"op":"body","symbols":["Twice"," "]}""", "op 'body' needs symbols: 1 to 8 handles, ids or names, none empty")]
+    [InlineData("""{"op":"body","symbols":["Twice",""]}""", "op 'body' needs symbols: one or more handles, ids or names, none empty")]
+    [InlineData("""{"op":"body","symbols":["Twice"," "]}""", "op 'body' needs symbols: one or more handles, ids or names, none empty")]
     public async Task AMisusedOperation_IsRefusedWithAUsageLine(string input, string usage)
     {
         using var tree = await TreeAsync();
@@ -652,11 +766,12 @@ public sealed partial class CodebaseGraphToolTests
         Assert.EndsWith("\n1 node(s) left out: in files your reads do not reach", found, StringComparison.Ordinal);
         Assert.DoesNotContain("tests/", node, StringComparison.Ordinal);
         Assert.DoesNotContain("tests (", node, StringComparison.Ordinal);
-        Assert.EndsWith("\n2 node(s) left out: in files your reads do not reach", node, StringComparison.Ordinal);
+        Assert.Contains("\n2 node(s) left out: in files your reads do not reach", node, StringComparison.Ordinal);
+        Assert.EndsWith("were left out]", node, StringComparison.Ordinal);
         Assert.Equal("'TotalAddsAreas' is in a file your reads do not reach", body);
         Assert.StartsWith("1: 8257a8 member public static double Twice", callers, StringComparison.Ordinal);
         Assert.DoesNotContain("tests/", callers, StringComparison.Ordinal);
-        Assert.EndsWith("\n1 node(s) left out: in files your reads do not reach", callers, StringComparison.Ordinal);
+        Assert.Contains("\n1 node(s) left out: in files your reads do not reach", callers, StringComparison.Ordinal);
         Assert.Equal("'tests/GeometryTests.cs' is a file your reads do not reach", outline);
         Assert.Equal("'Demo.Tests.GeometryTests' is in a file your reads do not reach", type);
         Assert.Contains("directory src/ (3 file(s))", repository);
@@ -699,6 +814,48 @@ public sealed partial class CodebaseGraphToolTests
 
         Assert.StartsWith("outline of src/Geometry.cs (0 declaration(s)):\nno declaration\n", outline, StringComparison.Ordinal);
         Assert.Matches("^[0-9a-f]{6} file src/Geometry\\.cs \\| src/Geometry\\.cs:1-20\n", atLine);
+    }
+
+    /// <summary>Every file whose extract the graph no longer holds is named, however many there are: none is left out for a count.</summary>
+    [Fact]
+    public async Task EveryFileWhoseExtractIsGone_IsNamed_HoweverManyThereAre()
+    {
+        var gone = Enumerable.Range(0, 12).Select(at => ($"src/Gone{at:D2}.cs", $"namespace Demo.Gone;\n\npublic sealed class Gone{at:D2}\n{{\n}}\n")).ToArray();
+        using var tree = await TreeAsync(gone);
+
+        foreach (var (path, _) in gone)
+        {
+            File.Delete(tree.Run.GraphExtractFile(tree.Manifest().Files[path].Extract!));
+        }
+
+        var queries = new CodebaseGraphQueries((await tree.ReadOnlyAsync())!);
+        var named = (await AskAsync(Tool(tree, queries, sync: false), """{"op":"node","symbol":"Circle"}""")).Text;
+
+        Assert.Equal(gone.Select(file => file.Item1), queries.Unheld);
+        Assert.EndsWith($"\n12 file(s) whose extract the graph no longer holds, its declarations in no answer: {string.Join(", ", gone.Select(file => file.Item1))}", named, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A body reads its node's file whole whatever the file holds - one grown past what a view of the runtime holds whole is
+    /// served as any other - and a text search reads every file whatever it holds, a hit past what <c>search_files</c>
+    /// searches found as any other.
+    /// </summary>
+    [Fact]
+    public async Task ABodyAndATextSearch_ReadAFileWhateverItHolds()
+    {
+        const int Huge = 16 * 1024 * 1024;
+
+        using var tree = await TreeAsync(("docs/huge.txt", new string('z', Huge + 10) + "\nAn Okapi grazes here.\n"));
+        var tool = Tool(tree, await QueriesAsync(tree), sync: false);
+        File.AppendAllText(Path.Combine(tree.Tree, "src", "Geometry.cs"), "//" + new string('y', Huge) + "\n");
+
+        var body = (await AskAsync(tool, """{"op":"body","symbols":["Twice"]}""")).Text;
+        var hits = (await AskAsync(tool, """{"op":"find","query":"Okapi"}""")).Text;
+
+        Assert.DoesNotContain("past the", body, StringComparison.Ordinal);
+        Assert.Contains(" #aac0401c\n", body, StringComparison.Ordinal);
+        Assert.Contains("\n  docs/huge.txt:2 An Okapi grazes here.", hits, StringComparison.Ordinal);
+        Assert.DoesNotContain("passed over", hits, StringComparison.Ordinal);
     }
 
     /// <summary>A qualified name written with its language's own separators - <c>::</c>, <c>\</c> - names the node the model holds dotted.</summary>
@@ -745,17 +902,57 @@ public sealed partial class CodebaseGraphToolTests
         Assert.Equal((GraphToolOutcome.Answered, "the narrowing of reads is lifted for 'src/Geometry.cs' for the rest of this step: to follow the whole flow"), (answer.Outcome, answer.Text));
     }
 
-    /// <summary>The description a step is given names only its operations, each with its bound.</summary>
+    /// <summary>
+    /// <c>pack</c> gives a page of the step's context pack as the pack laid it - page 1, the first message's, and each
+    /// later one laid as it is asked - a page past the last refused with how many there are; <c>changes</c> gives a page of
+    /// the codebase changes the step was told, and says where it was told none; each needs its page, and neither is given
+    /// a step whose operations do not hold it.
+    /// </summary>
+    [Fact]
+    public async Task ThePackAndChangesOps_GiveTheirTextsPages_AndRefuseAPagePastTheLast()
+    {
+        using var tree = await TreeAsync();
+        var queries = await QueriesAsync(tree);
+        var made = CodebaseContextPack.Make(queries, new ContextPackRequest("`Demo.Geometry.Total` and `Demo.Geometry.Twice`", _ => true) { Tokens = 150 });
+        var tool = Tool(tree, queries, pack: () => made.Paged);
+        var ops = CodebaseGraphTool.Operations(write: false, narrow: false, pack: true, changes: true);
+
+        var second = await AskAsync(tool, """{"op":"pack","page":2}""", ops);
+        var first = await AskAsync(tool, """{"op":"pack","page":1}""", ops);
+        var pages = CodebaseContextPackTests.Pages(made);
+        var past = await AskAsync(tool, $$"""{"op":"pack","page":{{pages.Count + 1}}}""", ops);
+        var unpaged = await AskAsync(tool, """{"op":"pack"}""", ops);
+        var untold = await AskAsync(tool, """{"op":"changes","page":1}""", ops);
+        var ungiven = await AskAsync(tool, """{"op":"pack","page":2}""", CodebaseGraphTool.Operations(write: false, narrow: false));
+
+        Assert.True(made.More, made.Text);
+        Assert.Equal((GraphToolOutcome.Answered, made.Page(2)!.Text), (second.Outcome, second.Text));
+        Assert.StartsWith("codebase graph: context pack page 2\n", second.Text, StringComparison.Ordinal);
+        Assert.Equal(made.Text, first.Text);
+        Assert.Equal((GraphToolOutcome.Usage, $"page {pages.Count + 1} of 'pack': it has {pages.Count} page{(pages.Count == 1 ? string.Empty : "s")} (1 to {pages.Count})"), (past.Outcome, past.Text));
+        Assert.Equal((GraphToolOutcome.Usage, "op 'pack' needs page: which page of the answer to give, from 1; the first where it is left out."), (unpaged.Outcome, unpaged.Text));
+        Assert.Equal((GraphToolOutcome.Usage, "this step was given no codebase changes to page"), (untold.Outcome, untold.Text));
+        Assert.Equal(GraphToolOutcome.Usage, ungiven.Outcome);
+        Assert.StartsWith("op 'pack' is not one this step may use: find, node, related, outline, body", ungiven.Text, StringComparison.Ordinal);
+        Assert.Contains("pack - a page of the context pack your first message began", CodebaseGraphTool.Description(ops), StringComparison.Ordinal);
+        Assert.Contains("\"pack\"", CodebaseGraphTool.Schema(ops), StringComparison.Ordinal);
+    }
+
+    /// <summary>The description a step is given names only its operations, each with its page's bound, and the pages every answer holds.</summary>
     [Fact]
     public void TheDescriptionAStepIsGiven_NamesOnlyItsOperations()
     {
         var reading = CodebaseGraphTool.Description(CodebaseGraphTool.Operations(write: false, narrow: false));
         var writing = CodebaseGraphTool.Description(CodebaseGraphTool.Operations(write: true, narrow: true));
 
-        Assert.Contains("find - the nodes a query's words match, best first, at most 20 (50 with limit)", reading, StringComparison.Ordinal);
+        Assert.Contains("find - the nodes a query's words match, best first, 20 a page", reading, StringComparison.Ordinal);
+        Assert.Contains("every answer of a read is pages of whole entries, a line wider than a page given in pieces marked …: one of more than one page starts with the line 'page k of n' and any page is asked for with page, from 1; an answer with no header holds all of it", reading, StringComparison.Ordinal);
+        Assert.DoesNotContain("offset", reading, StringComparison.Ordinal);
         Assert.DoesNotContain("edit -", reading, StringComparison.Ordinal);
         Assert.DoesNotContain("wholeFile -", reading, StringComparison.Ordinal);
-        Assert.Contains("edit - a node's lines replaced where the hash you give is its hash now, at most 600 lines", writing, StringComparison.Ordinal);
+        Assert.Contains("edit - a node's lines replaced where the hash you give is its hash now; wholeFile", writing, StringComparison.Ordinal);
+        Assert.Contains("related - the nodes a relation reaches, as many hops as you ask, 60 a page", reading, StringComparison.Ordinal);
+        Assert.Contains("body - the lines of the nodes you name, read fresh and numbered, 600 lines a page", reading, StringComparison.Ordinal);
         Assert.Contains("wholeFile - lifts the narrowing of reads for one file", writing, StringComparison.Ordinal);
     }
 
@@ -822,25 +1019,23 @@ public sealed partial class CodebaseGraphToolTests
 
     /// <summary>
     /// A whole file is no declaration: its body is served with its lines and no hash, never said changed nor checked again,
-    /// and one past the bytes a view holds is not read whole.
+    /// and one past the bytes a view of the runtime once held is read whole as any other: a body reads its file whatever it holds.
     /// </summary>
     [Fact]
-    public async Task Body_OfAWholeFile_HasNoHash_AndOnePastTheViewsBoundIsNotRead()
+    public async Task Body_OfAWholeFile_HasNoHash_AndOnePastTheViewsBoundIsReadWhole()
     {
         using var tree = await TreeAsync(("big.txt", new string('a', 1023) + "\n"));
         var queries = await QueriesAsync(tree);
         var tool = Tool(tree, queries);
-        await using (var big = File.OpenWrite(Path.Combine(tree.Tree, "big.txt")))
-        {
-            big.SetLength(AgentTools.MostViewedBytes + 1);
-        }
+        File.AppendAllText(Path.Combine(tree.Tree, "big.txt"), new string('b', 16 * 1024 * 1024) + "\n");
 
         var zoo = (await AskAsync(tool, """{"op":"body","symbols":["docs/zoo.txt"]}""")).Text;
         var large = (await AskAsync(tool, """{"op":"body","symbols":["big.txt"]}""")).Text;
 
         Assert.Matches("^[0-9a-f]{6} docs/zoo\\.txt docs/zoo\\.txt:1-1\n1\tAn Okapi grazes here\\.$", zoo);
         Assert.Same(queries, tool.Queries);
-        Assert.Matches("^'big\\.txt' is not read: 'big\\.txt' holds .+, past the .+ a body or an edit reads whole: read a range of it$", large);
+        Assert.Matches("^[0-9a-f]{6} big\\.txt big\\.txt:1-1\n1\ta{1023}(\n|$)", large);
+        Assert.DoesNotContain("is not read", large, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -864,35 +1059,23 @@ public sealed partial class CodebaseGraphToolTests
         Assert.StartsWith("member public int Other() | src/Wide.B.cs:5-8 #", other[(other.IndexOf(' ', StringComparison.Ordinal) + 1)..], StringComparison.Ordinal);
     }
 
-    /// <summary>A node with fifty edges of the kind walked, and more than the view's 99th percentile, is a hub: given, not gone through.</summary>
-    [Fact]
-    public async Task ANodeOfFiftyEdges_IsAHub()
-    {
-        using var tree = await TreeAsync(("src/Hub.cs", HubFile(50)));
-
-        var through = (await AskAsync(Tool(tree, await QueriesAsync(tree)), """{"op":"related","symbol":"Leaf","relation":"callers","depth":2}""")).Text;
-
-        Assert.EndsWith("| 50 callers, not gone through", Assert.Single(through.Split('\n')), StringComparison.Ordinal);
-    }
-
     /// <summary>
-    /// A node is a hub only with at least fifty edges of the kind walked and more than the view's 99th percentile: one of
-    /// fewer, however far past the percentile, is gone through, and so is one of fifty or more where as many nodes have as many.
+    /// A walk asked deeper than the graph goes ends where a hop reaches nothing new, and a cycle is walked once: a node it
+    /// reached is never reached again, whatever depth is asked.
     /// </summary>
     [Fact]
-    public async Task OnlyANodePastTheFloorAndThePercentile_IsAHub()
+    public async Task AWalk_ReachesEachNodeOnce_AndEndsWhereAHopReachesNothingNew_HoweverDeepAsked()
     {
-        using var few = await TreeAsync(("src/Hub.cs", HubFile(40)));
-        using var two = await TreeAsync(("src/Hubs.cs", TwoHubsFile(60)));
+        using var tree = await TreeAsync(("src/Ring.cs", "namespace Demo.Rings;\n\npublic static class Ring\n{\n    public static void A()\n    {\n        B();\n    }\n\n    public static void B()\n    {\n        C();\n    }\n\n    public static void C()\n    {\n        A();\n        B();\n    }\n}\n"));
+        var tool = Tool(tree, await QueriesAsync(tree));
 
-        var throughFew = (await AskAsync(Tool(few, await QueriesAsync(few)), """{"op":"related","symbol":"Leaf","relation":"callers","depth":2}""")).Text.Split('\n');
-        var throughTwo = (await AskAsync(Tool(two, await QueriesAsync(two)), """{"op":"related","symbol":"Leaf","relation":"callers","depth":2}""")).Text;
+        var ring = (await AskAsync(tool, """{"op":"related","symbol":"Demo.Rings.Ring.A","relation":"callees","depth":1000000}""")).Text.Split('\n');
 
-        Assert.Equal(41, throughFew.Length);
-        Assert.Equal(40, throughFew.Count(line => line.StartsWith("2: ", StringComparison.Ordinal)));
-        Assert.DoesNotContain("not gone through", throughFew[0], StringComparison.Ordinal);
-        Assert.DoesNotContain("not gone through", throughTwo, StringComparison.Ordinal);
-        Assert.Contains("\n2: ", throughTwo, StringComparison.Ordinal);
+        Assert.Equal(2, ring.Length);
+        Assert.StartsWith("1: ", ring[0], StringComparison.Ordinal);
+        Assert.Contains(" void B()", ring[0], StringComparison.Ordinal);
+        Assert.StartsWith("2: ", ring[1], StringComparison.Ordinal);
+        Assert.Contains(" void C()", ring[1], StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -977,14 +1160,14 @@ public sealed partial class CodebaseGraphToolTests
     }
 
     /// <summary>
-    /// Where the graph is not sure - a node in a <c>dynamic</c> or generated file, one with unresolved callees, a name the view
+    /// Where the graph is not sure - a node in a <c>dynamic</c> or generated file, one whose callees are candidates, a name the view
     /// does not hold - the answer adds the lines that hold the name, at most 20, saying how many more there were and what it
     /// did not read, each line cut whole within its bound; a path or a <c>path:line</c> is searched for by no word.
     /// </summary>
     [Fact]
     public async Task TheTextSearch_IsAddedWhereTheGraphIsNotSure_BoundedAndSayingWhatItLeftOut()
     {
-        var many = string.Concat(Enumerable.Range(1, CodeConfidences.MostCandidates + 1).Select(at => $"public sealed class G{at}\n{{\n    public void Go()\n    {{\n    }}\n}}\n\n"));
+        var many = string.Concat(Enumerable.Range(1, 6).Select(at => $"public sealed class G{at}\n{{\n    public void Go()\n    {{\n    }}\n}}\n\n"));
         using var tree = await TreeAsync(
             ("src/Loose.cs", "namespace Demo;\n\npublic static class Loose\n{\n    public static void Fly(dynamic bird)\n    {\n        bird.Flap();\n        Geometry.Twice(bird);\n    }\n}\n"),
             ("src/Lost.cs", "namespace Demo;\n\npublic static class Lost\n{\n    public static void Wander()\n    {\n        Vanished();\n    }\n}\n"),
@@ -1010,7 +1193,6 @@ public sealed partial class CodebaseGraphToolTests
         var goneRelated = (await AskAsync(tool, """{"op":"related","symbol":"Nope","relation":"callers"}""")).Text;
         var noLine = (await AskAsync(tool, """{"op":"node","symbol":"src/Missing.cs:3"}""")).Text;
         var noRootLine = (await AskAsync(tool, """{"op":"node","symbol":"Missing.cs:3"}""")).Text;
-        var herd = (await AskAsync(tool, """{"op":"find","query":"Gnu"}""")).Text.Split('\n');
 
         Assert.Contains("\ntext: lines that hold 'Fly'\n  src/Loose.cs:5 public static void Fly(dynamic bird)", dynamic, StringComparison.Ordinal);
         Assert.EndsWith(" | 0 caller(s), 1 callee(s), dynamic", dynamic.Split('\n')[0], StringComparison.Ordinal);
@@ -1029,24 +1211,56 @@ public sealed partial class CodebaseGraphToolTests
         Assert.DoesNotContain("text:", reachedSurely, StringComparison.Ordinal);
         Assert.DoesNotContain("text:", sure, StringComparison.Ordinal);
         Assert.DoesNotContain("text:", sureRelated, StringComparison.Ordinal);
-        Assert.StartsWith("'Demo.Nope' is not a node the view holds\ntext: no line holds 'Nope'\n  [", gone, StringComparison.Ordinal);
+        Assert.StartsWith("'Demo.Nope' is not a node the view holds\ntext: no line holds 'Nope'\n[", gone, StringComparison.Ordinal);
         Assert.StartsWith("'Nope' is not a node the view holds\ntext: no line holds 'Nope'", goneRelated, StringComparison.Ordinal);
         Assert.Equal("'src/Missing.cs:3' is not a node the view holds", noLine);
         Assert.Equal("'Missing.cs:3' is not a node the view holds", noRootLine);
-        Assert.Equal(["no node matched", "text: lines that hold 'Gnu'; 5 more line(s) left out"], herd[..2]);
+
+        // The text search's hits are all entries of the answer, paged at its own bound: nothing left out, and the files
+        // it did not read said at the answer's end.
+        var herd = (await AskAsync(tool, """{"op":"find","query":"Gnu"}""")).Text.Split('\n');
+        var herdLast = (await AskAsync(tool, """{"op":"find","query":"Gnu","page":2}""")).Text.Split('\n');
+
+        Assert.Equal(["page 1 of 2 · 25 results · ask again with page: 2 for the next", "no node matched", "text: lines that hold 'Gnu'"], herd[..3]);
         Assert.Equal(CodebaseGraphTool.TextHits, herd.Count(line => line.StartsWith("  docs/herd.txt:", StringComparison.Ordinal)));
-        Assert.Matches("^  \\[[0-9]+ file\\(s\\) you may not read were left out\\]$", herd[^1]);
+        Assert.Equal("page 2 of 2 · the last", herdLast[0]);
+        Assert.Equal("no node matched", herdLast[1]);
+        Assert.Equal("text: lines that hold 'Gnu'", herdLast[2]);
+        Assert.Equal(5, herdLast.Count(line => line.StartsWith("  docs/herd.txt:", StringComparison.Ordinal)));
+        Assert.Equal(25, herd.Concat(herdLast).Count(line => line.StartsWith("  docs/herd.txt:", StringComparison.Ordinal)));
+        Assert.Matches("^\\[[0-9]+ file\\(s\\) you may not read were left out\\]$", herdLast[^1]);
     }
 
-    /// <summary>A hit past its bound is cut whole: a character of two halves is never split.</summary>
+    /// <summary>
+    /// A hit's line is given whole, however long: one wider than a page in pieces, a page each, every character of it given
+    /// and a character of two halves never split.
+    /// </summary>
     [Fact]
-    public async Task ATextHitPastItsBound_IsCutWithoutSplittingACharacter()
+    public async Task ATextHitsLine_IsGivenWhole_InPiecesWhereItIsWiderThanAPage()
     {
-        using var tree = await TreeAsync(("docs/long.txt", "Gnu " + new string('x', 195) + "\U0001F600 and on\n"));
+        var wide = "Gnu " + string.Concat(Enumerable.Repeat("x\U0001F600", 15000)) + " and on";
+        using var tree = await TreeAsync(("docs/long.txt", "Gnu " + new string('x', 195) + "\U0001F600 and on\n"), ("docs/wide.txt", wide + "\n"));
+        var tool = Tool(tree, await QueriesAsync(tree));
 
-        var hit = (await AskAsync(Tool(tree, await QueriesAsync(tree)), """{"op":"find","query":"Gnu"}""")).Text.Split('\n')[2];
+        var first = await AskAsync(tool, """{"op":"find","query":"Gnu"}""");
+        var lines = new List<string>();
 
-        Assert.Equal("  docs/long.txt:1 Gnu " + new string('x', 195) + " …", hit);
+        for (var page = 1; page <= first.Paging!.Pages; page++)
+        {
+            lines.AddRange((await AskAsync(tool, $$"""{"op":"find","query":"Gnu","page":{{page}}}""")).Text.Split('\n'));
+        }
+
+        var pieces = lines.SkipWhile(line => !line.StartsWith("  docs/wide.txt:1 ", StringComparison.Ordinal))
+            .Where(line => line.StartsWith("  docs/wide.txt:1 ", StringComparison.Ordinal) || (line.StartsWith('…') && line != "… the line goes on"))
+            .ToList();
+
+        Assert.Contains("  docs/long.txt:1 Gnu " + new string('x', 195) + "\U0001F600 and on", lines);
+        Assert.True(first.Paging.Pages > 1, "a line wider than a page took one page");
+        Assert.True(pieces.Count > 1, "a line wider than a page was not given in pieces");
+        Assert.Equal(
+            "  docs/wide.txt:1 " + wide,
+            string.Concat(pieces.Select((piece, at) => piece[(at == 0 ? 0 : 1)..(at == pieces.Count - 1 ? piece.Length : piece.Length - 1)])));
+        Assert.All(pieces, piece => Assert.False(char.IsHighSurrogate(piece[^1]) || char.IsLowSurrogate(piece[0]), "a character of two halves was split"));
     }
 
     /// <summary>A type's body keeps each member's signature line where the member's body opens on it - K&amp;R, an arrow, a property.</summary>
@@ -1096,9 +1310,9 @@ public sealed partial class CodebaseGraphToolTests
 
     /// <summary>A member of the wrong type is a usage error, said with what the member is.</summary>
     [Theory]
-    [InlineData("""{"op":"related","symbol":"Total","relation":"callers","depth":"2"}""", "depth is not an integer: how many hops, 1 to 3; 1 where it is left out.")]
-    [InlineData("""{"op":"edit","symbol":"Twice","hash":"x","text":5}""", "text is not a string: the node's new lines, at most 600.")]
-    [InlineData("""{"op":"body","symbols":["Twice",3]}""", "symbols is not an array of strings: 1 to 8 nodes to read, each a handle, an id or a name.")]
+    [InlineData("""{"op":"related","symbol":"Total","relation":"callers","depth":"2"}""", "depth is not an integer: how many hops, from 1; 1 where it is left out.")]
+    [InlineData("""{"op":"edit","symbol":"Twice","hash":"x","text":5}""", "text is not a string: the node's new lines.")]
+    [InlineData("""{"op":"body","symbols":["Twice",3]}""", "symbols is not an array of strings: the nodes to read, one or more, each a handle, an id or a name.")]
     [InlineData("""{"op":"body","symbols":["Twice"],"full":"yes"}""", "full is not a boolean: whether a type's members' bodies are given too.")]
     public async Task AMemberOfTheWrongType_IsRefusedWithAUsageLine(string input, string usage)
     {
@@ -1122,19 +1336,6 @@ public sealed partial class CodebaseGraphToolTests
         return text.Append("}\n").ToString();
     }
 
-    /// <summary>A file of one class: <c>Leaf</c>, called by <c>Center</c> alone; <c>Center</c> and <c>Other</c>, each called by every <c>M</c>.</summary>
-    private static string TwoHubsFile(int methods)
-    {
-        var text = new StringBuilder("namespace Demo.Hubs;\n\npublic static class Hubs\n{\n    public static void Leaf()\n    {\n    }\n\n    public static void Center()\n    {\n        Leaf();\n    }\n\n    public static void Other()\n    {\n    }\n");
-
-        for (var at = 0; at < methods; at++)
-        {
-            text.Append(System.Globalization.CultureInfo.InvariantCulture, $"\n    public static void M{at}()\n    {{\n        Center();\n        Other();\n    }}\n");
-        }
-
-        return text.Append("}\n").ToString();
-    }
-
     /// <summary>A synced tree of <see cref="Demo"/> and <paramref name="more"/>, read by every implementation of this build.</summary>
     internal static async Task<CodebaseGraphTree> TreeAsync(params (string Path, string Text)[] more)
     {
@@ -1153,20 +1354,512 @@ public sealed partial class CodebaseGraphToolTests
 
     internal static async Task<CodebaseGraphQueries> QueriesAsync(CodebaseGraphTree tree) => new((await tree.CheckAsync(null, null)).Read);
 
+    /// <summary>
+    /// The first page of an answer keeps its whole result under the digest of the graph it was computed on: a later page of
+    /// the same graph reads what was kept, and a page asked after the view moved to another digest is made again on it and
+    /// says so.
+    /// </summary>
+    [Fact]
+    public async Task ASecondPage_ReadsTheKeptResult_AndAMovedGraphRecountsAndSaysSo()
+    {
+        using var tree = await TreeAsync(("src/Hub.cs", HubFile(30)));
+        using var pages = new TempDirectory();
+        var store = new GraphPageStore(Path.Combine(pages.Path, OrchestratorLayout.StepPagesDirectoryName), tree.Harness.FileSystem);
+        var tool = Tool(tree, await QueriesAsync(tree), pages: store);
+
+        var first = await AskAsync(tool, """{"op":"find","query":"M"}""");
+
+        Assert.Equal(1, first.Paging!.Page);
+        Assert.Equal("page 1 of 2 · 30 results · ask again with page: 2 for the next", first.Text.Split('\n')[0]);
+
+        var second = (await AskAsync(tool, """{"op":"find","query":"M","page":2}""")).Text.Split('\n');
+
+        Assert.Equal("page 2 of 2 · the last", second[0]);
+        Assert.Equal(10, second.Length - 1);
+
+        // A view moved to another digest - a file changed and the graph checked again - makes the answer again and says so.
+        tree.Write("src/Hub.cs", HubFile(31));
+        await AfterWrites.SyncGraphAsync(tree.Service, tree.Request(), AgentGraphWrite.Of("create_file", Path.Combine(tree.Tree, "src", "Hub.cs")), tree.Harness.Platform.PathComparison, tool, TestContext.Current.CancellationToken);
+
+        var recounted = (await AskAsync(tool, """{"op":"find","query":"M","page":2}""")).Text.Split('\n');
+
+        Assert.Equal("page 2 of 2 · the last · the graph changed since page 1: pages recounted", recounted[0]);
+        Assert.Equal(11, recounted.Length - 1);
+
+        // A page of the answer made again is itself kept, under the digest it was computed on: its next page reads it.
+        var third = (await AskAsync(tool, """{"op":"find","query":"M","page":1}""")).Text.Split('\n');
+        var afterRecount = (await AskAsync(tool, """{"op":"find","query":"M","page":2}""")).Text.Split('\n');
+
+        Assert.Equal("page 1 of 2 · 31 results · ask again with page: 2 for the next", third[0]);
+        Assert.Equal("page 2 of 2 · the last", afterRecount[0]);
+        var counted = third[1..].Concat(afterRecount[1..]).ToList();
+        Assert.Equal(31, counted.Count);
+        Assert.Distinct(counted);
+    }
+
+    /// <summary>
+    /// A result of more than one page is masked by the run's secrets before it is paged and kept: no page of it, and
+    /// nothing the conversation's graph-pages keeps of it, holds the secret a file's lines hold - each marked as the mask
+    /// marks it - while a tool given no mask, a person's own view, serves the lines as the file writes them.
+    /// </summary>
+    [Fact]
+    public async Task AResultOfMoreThanOnePage_IsMaskedBeforeItIsPagedAndKept()
+    {
+        using var tree = await TreeAsync(("src/Hub.cs", HubFile(220).Replace("        Center();\n", "        Center(\"tok-0123456789\");\n", StringComparison.Ordinal)));
+        using var pages = new TempDirectory();
+        var directory = Path.Combine(pages.Path, OrchestratorLayout.StepPagesDirectoryName);
+        var queries = await QueriesAsync(tree);
+        var tool = Tool(tree, queries, sync: false, pages: new GraphPageStore(directory, tree.Harness.FileSystem), mask: new Masking("0123456789"));
+        const string Ask = """{"op":"body","symbols":["Hub"],"full":true}""";
+
+        var first = await AskAsync(tool, Ask);
+        var served = new List<string> { first.Text };
+
+        for (var page = 2; page <= first.Paging!.Pages; page++)
+        {
+            served.Add((await AskAsync(tool, Ask.Replace("}", $",\"page\":{page}}}", StringComparison.Ordinal))).Text);
+        }
+
+        Assert.Equal(4, served.Count);
+        Assert.All(served, text => Assert.DoesNotContain("0123456789", text, StringComparison.Ordinal));
+        Assert.Contains("Center(\"tok-***\");", served[0], StringComparison.Ordinal);
+
+        string kept;
+
+        using (var reader = new StreamReader(new System.IO.Compression.GZipStream(File.OpenRead(Assert.Single(Directory.GetFiles(directory))), System.IO.Compression.CompressionMode.Decompress)))
+        {
+            kept = reader.ReadToEnd();
+        }
+
+        Assert.DoesNotContain("0123456789", kept, StringComparison.Ordinal);
+        Assert.Contains("tok-***", kept, StringComparison.Ordinal);
+        Assert.Contains("Center(\"tok-0123456789\");", (await AskAsync(Tool(tree, queries, sync: false), Ask)).Text, StringComparison.Ordinal);
+    }
+
+    /// <summary>A resumed conversation reads page 2 of what was kept before the pause: the store's file answers a tool made again, serving the result page 1 read.</summary>
+    [Fact]
+    public async Task AResumedConversation_ReadsPageTwoOfWhatWasKept()
+    {
+        using var tree = await TreeAsync(("src/Hub.cs", HubFile(220)));
+        using var pages = new TempDirectory();
+        var store = new GraphPageStore(Path.Combine(pages.Path, OrchestratorLayout.StepPagesDirectoryName), tree.Harness.FileSystem);
+        var queries = await QueriesAsync(tree);
+        var first = await AskAsync(Tool(tree, queries, sync: false, pages: store), """{"op":"body","symbols":["Hub"],"full":true}""");
+
+        // The file changes after page 1, with the view still the one page 1 read: a kept page 2 serves the result page 1
+        // read - the lines as they were - where a tool with no store reads the file as it now is.
+        tree.Write("src/Hub.cs", HubFile(220).Replace("        Center();\n", "        Changed();\n", StringComparison.Ordinal));
+        var second = (await AskAsync(Tool(tree, queries, sync: false, pages: store), """{"op":"body","symbols":["Hub"],"full":true,"page":2}""")).Text;
+        var fresh = (await AskAsync(Tool(tree, queries, sync: false), """{"op":"body","symbols":["Hub"],"full":true,"page":2}""")).Text;
+
+        Assert.Equal($"page 1 of 4 · {first.Paging!.Total} results · ask again with page: 2 for the next", first.Text.Split('\n')[0]);
+        Assert.Equal($"page 2 of 4 · {first.Paging.Total} results · ask again with page: 3 for the next", second.Split('\n')[0]);
+        Assert.DoesNotContain("Changed();", second, StringComparison.Ordinal);
+        Assert.Contains("        Changed();", fresh, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A XAML view and the C# type its <c>x:Class</c> names are walked as one: the node operation answers the other part
+    /// among its groups, a type's outline takes in both parts' declarations, and a body asked of one part reads the
+    /// other's lines too.
+    /// </summary>
+    [Fact]
+    public async Task AXamlViewAndItsXClassType_AreWalkedAsOne()
+    {
+        using var tree = await TreeAsync(
+            ("Views/Cart.xaml", """
+                <UserControl x:Class="Shop.Cart"
+                    xmlns="http://schemas.microsoft.com/winfx/2009/xaml"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml">
+                  <Button x:Name="Checkout" />
+                </UserControl>
+                """),
+            ("Views/Cart.xaml.cs", """
+                namespace Shop
+                {
+                    public partial class Cart
+                    {
+                        public void Checkout()
+                        {
+                        }
+                    }
+                }
+                """));
+        var queries = await QueriesAsync(tree);
+
+        Assert.Equal(["xml:Shop.Cart", "csharp:Shop.Cart"], queries.OneDeclaration("xml:Shop.Cart"));
+        Assert.Equal("csharp:Shop.Cart", Assert.Single(queries.Edges("xml:Shop.Cart").Parts).Card.Id);
+        Assert.Contains(queries.OutlineType("xml:Shop.Cart"), card => card.Name == "Checkout");
+        Assert.Equal(2, queries.At("xml:Shop.Cart").Count);
+    }
+
+    /// <summary>
+    /// A write is no paged read: <c>edit</c> and <c>wholeFile</c> take no <c>page</c>, refused before anything is written
+    /// or lifted; an edit's answer is one page, kept nowhere, that leaves the file it wrote viewed as it wrote it.
+    /// </summary>
+    [Fact]
+    public async Task AWrite_TakesNoPage_AndItsAnswerIsOnePage_KeptNowhere()
+    {
+        using var tree = await TreeAsync();
+        using var pages = new TempDirectory();
+        var directory = pages.Combine(OrchestratorLayout.StepPagesDirectoryName);
+        var tool = Tool(tree, await QueriesAsync(tree), pages: new GraphPageStore(directory, tree.Harness.FileSystem));
+        var geometry = Path.Combine(tree.Tree, "src", "Geometry.cs");
+        var before = File.ReadAllText(geometry);
+        const string Edit = """{"op":"edit","symbol":"Twice","hash":"aac0401c","text":"    public static double Twice(IShape shape) => 0;"}""";
+
+        var paged = await AskAsync(tool, Edit.Replace("}", ""","page":2}""", StringComparison.Ordinal));
+        var lifted = await AskAsync(tool, """{"op":"wholeFile","path":"src/Geometry.cs","reason":"r","page":2}""");
+
+        Assert.Equal((GraphToolOutcome.Usage, "op 'edit' does not read page: what it answers is one page, said once it is done"), (paged.Outcome, paged.Text));
+        Assert.Equal(before, File.ReadAllText(geometry));
+        Assert.Equal((GraphToolOutcome.Usage, "op 'wholeFile' does not read page: what it answers is one page, said once it is done"), (lifted.Outcome, lifted.Text));
+        Assert.Null(lifted.Escape);
+        Assert.False(tool.Lifted("src/Geometry.cs"));
+
+        var edited = await AskAsync(tool, Edit);
+
+        Assert.Equal(GraphToolOutcome.Wrote, edited.Outcome);
+        Assert.Matches("^edited 'Demo\\.Geometry\\.Twice' in 'src/Geometry\\.cs'; the file's later declarations moved 3 line\\(s\\) up\n8257a8 member public static double Twice\\(IShape shape\\) \\| src/Geometry\\.cs:16-16 #[0-9a-f]{8}$", edited.Text);
+        Assert.Equal([new GraphFileRead("src/Geometry.cs", FileContentHash.Of(File.ReadAllBytes(geometry)))], edited.Viewed);
+        Assert.False(Directory.Exists(directory), "an edit's answer was kept");
+    }
+
+    /// <summary>
+    /// A page counts as viewed the files whose lines it served, and no other, each as its lines were read: a body whose
+    /// first symbol fills page 1 leaves that symbol's file alone viewed there, and a later page read from what page 1 kept,
+    /// after a file of it changed, leaves the file viewed as page 1 read it.
+    /// </summary>
+    [Fact]
+    public async Task APageCountsAsViewed_TheFilesWhoseLinesItServed_AsTheyWereRead()
+    {
+        using var tree = await TreeAsync(("src/Big.cs", LongClass("Big", 700)));
+        using var pages = new TempDirectory();
+        var tool = Tool(tree, await QueriesAsync(tree), sync: false, pages: new GraphPageStore(pages.Combine(OrchestratorLayout.StepPagesDirectoryName), tree.Harness.FileSystem));
+        var geometry = Path.Combine(tree.Tree, "src", "Geometry.cs");
+        var big = FileContentHash.Of(File.ReadAllBytes(Path.Combine(tree.Tree, "src", "Big.cs")));
+        var seen = FileContentHash.Of(File.ReadAllBytes(geometry));
+        const string Ask = """{"op":"body","symbols":["Demo.Big","Twice"],"full":true}""";
+
+        var first = await AskAsync(tool, Ask);
+
+        Assert.Equal(2, first.Paging!.Pages);
+        Assert.Equal([new GraphFileRead("src/Big.cs", big)], first.Viewed);
+        Assert.Equal(["csharp:Demo.Big"], first.Facts.Served);
+
+        // A formatter rewrites the file after page 1: page 2 serves the lines page 1's result holds, and leaves the file
+        // viewed as they were read, so an edit made from them meets the file as it is and is refused.
+        File.WriteAllText(geometry, "// formatted\n" + File.ReadAllText(geometry));
+        var second = await AskAsync(tool, Ask.Replace("}", ""","page":2}""", StringComparison.Ordinal));
+
+        Assert.Equal("page 2 of 2 · the last", second.Text.Split('\n')[0]);
+        Assert.Equal([new GraphFileRead("src/Big.cs", big), new GraphFileRead("src/Geometry.cs", seen)], second.Viewed);
+        Assert.Equal(["csharp:Demo.Big", "csharp:Demo.Geometry.Twice(IShape)"], second.Facts.Served);
+    }
+
+    /// <summary>
+    /// An entry wider than a page - a line of a minified bundle in a body - is given in pieces, every page within the
+    /// characters an answer holds, the pieces read in order giving the line whole.
+    /// </summary>
+    [Fact]
+    public async Task ABodyLineWiderThanAPage_IsGivenInPieces_EveryPageWithinTheBound()
+    {
+        var wide = new string('x', 60_000);
+        using var tree = await TreeAsync(("src/Wide.cs", $"namespace Demo;\n\npublic static class Wide\n{{\n    // {wide}\n}}\n"));
+        var tool = Tool(tree, await QueriesAsync(tree));
+        const string Ask = """{"op":"body","symbols":["Demo.Wide"],"full":true}""";
+
+        var first = await AskAsync(tool, Ask);
+        var pages = new List<GraphToolAnswer> { first };
+
+        for (var page = 2; page <= first.Paging!.Pages; page++)
+        {
+            pages.Add(await AskAsync(tool, Ask.Replace("}", $$""","page":{{page}}}""", StringComparison.Ordinal)));
+        }
+
+        Assert.Equal(4, first.Paging.Pages);
+        Assert.All(pages, page => Assert.True(page.Text.Length <= CodebaseGraphTool.MostCharacters, $"{page.Text.Length} characters"));
+
+        var pieces = pages.SelectMany(page => page.Paging!.Entries).Where(entry => entry.Text.Contains("xxx", StringComparison.Ordinal)).Select(entry => entry.Text).ToList();
+
+        Assert.Equal($"5\t    // {wide}", string.Concat(pieces.Select((piece, at) => piece[(at == 0 ? 0 : 1)..(at == pieces.Count - 1 ? piece.Length : piece.Length - 1)])));
+        Assert.Equal(first.Paging.Total, pages.SelectMany(page => page.Paging!.Entries).Sum(entry => entry.Lines));
+    }
+
+    /// <summary>
+    /// The graph an agent's view answers from moves with the agent's own writes: a page asked after the step wrote a file
+    /// of its view, and the view was synced, is made again on the view as it stands and says so - where the base's digest
+    /// alone, which the view's own writes never move, would serve the result of the view as it was.
+    /// </summary>
+    [Fact]
+    public async Task AStepsOwnWrite_RecountsALaterPage_AndSaysSo()
+    {
+        using var tree = await TreeAsync(("src/Hub.cs", HubFile(30)));
+        var worktree = await tree.WorktreeAsync("ann");
+        await tree.SyncViewAsync("ann", worktree);
+        using var pages = new TempDirectory();
+        var tool = Tool(tree, new CodebaseGraphQueries((await tree.CheckAsync("ann", worktree)).Read), pages: new GraphPageStore(pages.Combine(OrchestratorLayout.StepPagesDirectoryName), tree.Harness.FileSystem));
+        var before = tool.Queries.Graph;
+
+        Assert.Equal("page 1 of 2 · 30 results · ask again with page: 2 for the next", (await AskAsync(tool, """{"op":"find","query":"M"}""")).Text.Split('\n')[0]);
+
+        CodebaseGraphTree.WriteIn(worktree, "src/Hub.cs", HubFile(30) + "// a note the step wrote\n");
+        await tool.RefreshAsync(async token => new CodebaseGraphQueries((await tree.CheckAsync("ann", worktree, "src/Hub.cs")).Read), TestContext.Current.CancellationToken);
+
+        var second = await AskAsync(tool, """{"op":"find","query":"M","page":2}""");
+
+        Assert.NotEqual(before, tool.Queries.Graph);
+        Assert.Equal("page 2 of 2 · the last · the graph changed since page 1: pages recounted", second.Text.Split('\n')[0]);
+    }
+
+    /// <summary>
+    /// A body whose node moved since the view was read extracts its file again and is served from the view that check
+    /// left: its result is kept under that view's digest, the one the tool answers from now, so its later page reads what
+    /// page 1 kept and says nothing was recounted - where the digest of the view the body began on would say the graph
+    /// changed on every later page.
+    /// </summary>
+    [Fact]
+    public async Task ABodyThatExtractsAMovedNodeAgain_KeepsItsResultUnderTheViewItEndedOn()
+    {
+        using var tree = await TreeAsync(("src/Big.cs", LongClass("Big", 700)));
+        using var pages = new TempDirectory();
+        var tool = Tool(tree, await QueriesAsync(tree), pages: new GraphPageStore(pages.Combine(OrchestratorLayout.StepPagesDirectoryName), tree.Harness.FileSystem));
+        var before = tool.Queries.Graph;
+        const string Ask = """{"op":"body","symbols":["Demo.Big"],"full":true}""";
+
+        // The file changes outside the runtime's writes: Big moves a line down, and the body checks the file again.
+        tree.Write("src/Big.cs", "// a line before\n" + LongClass("Big", 700));
+
+        var first = await AskAsync(tool, Ask);
+        var second = await AskAsync(tool, Ask.Replace("}", ""","page":2}""", StringComparison.Ordinal));
+
+        Assert.NotEqual(before, tool.Queries.Graph);
+        Assert.Equal("page 1 of 2 · 703 results · ask again with page: 2 for the next", first.Text.Split('\n')[0]);
+        Assert.Equal("page 2 of 2 · the last", second.Text.Split('\n')[0]);
+        Assert.Equal(703, first.Paging!.Entries.Sum(entry => entry.Lines) + second.Paging!.Entries.Sum(entry => entry.Lines));
+    }
+
+    /// <summary>
+    /// What a page says of a name is one line, whatever the name holds: a model's symbol with a stray line break is said
+    /// printable, never thrown at the pages - and a data key whose name held one, named on one line where its reader made
+    /// it, is served whole, its block's head as its node's name says it.
+    /// </summary>
+    [Fact]
+    public async Task ANameThatHeldALineBreak_IsSaidOnOneLine_AndItsBodyIsServed()
+    {
+        using var tree = await TreeAsync(("i18n/en.json", "{\n  \"Are you sure?\\nThis cannot be undone.\": \"Sure?\"\n}\n"));
+        var queries = await QueriesAsync(tree);
+        var tool = Tool(tree, queries);
+
+        var stray = await AskAsync(tool, """{"op":"body","symbols":["Zebu\n"]}""");
+
+        Assert.Matches("^'\"Zebu\\\\n\"' is not a node the view holds\ntext: no line holds 'Zebu'\n\\[[0-9]+ file\\(s\\) you may not read were left out\\]$", stray.Text);
+        Assert.Equal(GraphToolOutcome.Answered, stray.Outcome);
+
+        var key = Assert.Single(queries.OutlineFile("i18n/en.json")!);
+        var body = await AskAsync(tool, $$"""{"op":"body","symbols":["{{key.Handle}}"]}""");
+
+        Assert.Equal("[\"Are you sure?\\nThis cannot be undone.\"]", key.Qualified);
+        Assert.Equal(
+            $"{key.Handle} [\"Are you sure?\\nThis cannot be undone.\"] i18n/en.json:2-2 #{key.Hash}\n2\t  \"Are you sure?\\nThis cannot be undone.\": \"Sure?\"",
+            body.Text);
+    }
+
+    /// <summary>
+    /// A later page of an ask nothing was kept for cannot be shown to be of page 1's result: it is counted on the graph as
+    /// it stands and says so. An ask spelled another way - a name for a handle, a depth left to its default - is the same
+    /// ask, and reads what page 1 kept.
+    /// </summary>
+    [Fact]
+    public async Task ALaterPageWithNothingKept_SaysSo_AndAnAskSpelledAnotherWayReadsWhatWasKept()
+    {
+        using var tree = await TreeAsync(("src/Hub.cs", HubFile(220)));
+        using var pages = new TempDirectory();
+        var queries = await QueriesAsync(tree);
+        var center = ((GraphResolve.Found)queries.Resolve("Demo.Hubs.Hub.Center")).Card;
+        var tool = Tool(tree, queries, pages: new GraphPageStore(pages.Combine(OrchestratorLayout.StepPagesDirectoryName), tree.Harness.FileSystem));
+
+        var unkept = await AskAsync(tool, """{"op":"related","symbol":"Center","relation":"callers","page":2}""");
+
+        Assert.Equal("page 2 of 4 · 220 results · ask again with page: 3 for the next · page 1 of this ask is not kept: pages counted on the graph as it stands", unkept.Text.Split('\n')[0]);
+
+        var first = await AskAsync(tool, """{"op":"related","symbol":"Center","relation":"callers"}""");
+        var second = await AskAsync(tool, $$"""{"op":"related","symbol":"{{center.Handle}}","relation":"callers","depth":1,"page":2}""");
+
+        Assert.Equal("page 1 of 4 · 220 results · ask again with page: 2 for the next", first.Text.Split('\n')[0]);
+        Assert.Equal("page 2 of 4 · 220 results · ask again with page: 3 for the next", second.Text.Split('\n')[0]);
+        Assert.Equal(unkept.Text.Split('\n')[1..], second.Text.Split('\n')[1..]);
+    }
+
+    /// <summary>
+    /// What is kept is bounded: an answer of one page is never kept, for it has no later page, and page 1 computes its
+    /// answer without reading the store - a kept file of the same ask is never opened for it.
+    /// </summary>
+    [Fact]
+    public async Task AnAnswerOfOnePage_IsNeverKept_AndPageOneNeverReadsTheStore()
+    {
+        using var tree = await TreeAsync(("src/Hub.cs", HubFile(30)));
+        using var pages = new TempDirectory();
+        var directory = pages.Combine(OrchestratorLayout.StepPagesDirectoryName);
+        var reads = new ReadsUnder(tree.Harness.FileSystem, directory);
+        var tool = Tool(tree, await QueriesAsync(tree), pages: new GraphPageStore(directory, reads));
+
+        Assert.Single((await AskAsync(tool, """{"op":"find","query":"Twice"}""")).Text.Split('\n'));
+        Assert.False(Directory.Exists(directory), "an answer of one page was kept");
+
+        await AskAsync(tool, """{"op":"find","query":"M"}""");
+        Assert.Single(Directory.EnumerateFiles(directory));
+
+        var again = await AskAsync(Tool(tree, await QueriesAsync(tree), pages: new GraphPageStore(directory, reads)), """{"op":"find","query":"M"}""");
+
+        Assert.Equal("page 1 of 2 · 30 results · ask again with page: 2 for the next", again.Text.Split('\n')[0]);
+        Assert.Equal(0, reads.Count);
+    }
+
+    /// <summary>A result kept is laid out into pages once: a later page asked again is given from that layout, never filled again.</summary>
+    [Fact]
+    public async Task AKeptResult_IsLaidOutOnce_EveryLaterPageGivenFromThatLayout()
+    {
+        using var tree = await TreeAsync(("src/Hub.cs", HubFile(30)));
+        using var pages = new TempDirectory();
+        var tool = Tool(tree, await QueriesAsync(tree), pages: new GraphPageStore(pages.Combine(OrchestratorLayout.StepPagesDirectoryName), tree.Harness.FileSystem));
+
+        await AskAsync(tool, """{"op":"find","query":"M"}""");
+        var second = await AskAsync(tool, """{"op":"find","query":"M","page":2}""");
+        var again = await AskAsync(tool, """{"op":"find","query":"M","page":2}""");
+
+        Assert.Equal(second.Text, again.Text);
+        Assert.Same(second.Paging!.Sections[0].Entries, again.Paging!.Sections[0].Entries);
+    }
+
+    /// <summary>
+    /// A result whose file cannot be written - its directory is a file - is said on the page that computed it, never
+    /// thrown: the page is given, saying a resumed conversation counts its later pages again, and the result is held in
+    /// memory for the conversation's process, so a later page of this conversation reads it.
+    /// </summary>
+    [Fact]
+    public async Task AResultWhoseFileCannotBeWritten_IsSaidOnItsPage_AndHeldInMemory()
+    {
+        using var tree = await TreeAsync(("src/Hub.cs", HubFile(30)));
+        using var pages = new TempDirectory();
+        var blocked = pages.Combine(OrchestratorLayout.StepPagesDirectoryName);
+        File.WriteAllText(blocked, "not a directory");
+        var tool = Tool(tree, await QueriesAsync(tree), pages: new GraphPageStore(blocked, tree.Harness.FileSystem));
+
+        var first = (await AskAsync(tool, """{"op":"find","query":"M"}""")).Text.Split('\n')[0];
+        var second = (await AskAsync(tool, """{"op":"find","query":"M","page":2}""")).Text.Split('\n')[0];
+
+        Assert.StartsWith("page 1 of 2 · 30 results · ask again with page: 2 for the next · its result could not be written (", first, StringComparison.Ordinal);
+        Assert.EndsWith("): a resumed conversation counts its later pages again, and says so", first, StringComparison.Ordinal);
+        Assert.Equal("page 2 of 2 · the last", second);
+    }
+
+    /// <summary>
+    /// A body's text search pages as every text search does: its hits a section of their own, <see cref="CodebaseGraphTool.TextHits"/>
+    /// a page, never at the body's own bound of lines.
+    /// </summary>
+    [Fact]
+    public async Task ABodysTextSearch_PagesAtTheTextFallbacksBound()
+    {
+        using var tree = await TreeAsync(("docs/herd.txt", string.Concat(Enumerable.Range(1, 25).Select(at => $"Gnu {at} grazes here.\n"))));
+        var tool = Tool(tree, await QueriesAsync(tree));
+
+        var first = (await AskAsync(tool, """{"op":"body","symbols":["Gnu"]}""")).Text.Split('\n');
+        var second = (await AskAsync(tool, """{"op":"body","symbols":["Gnu"],"page":2}""")).Text.Split('\n');
+
+        Assert.Equal("page 1 of 2 · 25 results · ask again with page: 2 for the next", first[0]);
+        Assert.Equal([CodebaseGraphTool.TextHits, 5], new[] { first, second }.Select(page => page.Count(line => line.StartsWith("  docs/herd.txt:", StringComparison.Ordinal))));
+        Assert.Equal("page 2 of 2 · the last", second[0]);
+    }
+
+    /// <summary>
+    /// An answer of one sentence is held to the page asked as every answer is: page 1 is the sentence, a page past it is
+    /// refused with the answer's range.
+    /// </summary>
+    [Fact]
+    public async Task AnAnswerOfOneSentence_IsHeldToThePageAsked()
+    {
+        using var tree = await TreeAsync();
+        var tool = Tool(tree, await QueriesAsync(tree));
+
+        var first = await AskAsync(tool, """{"op":"outline","path":"src/None.cs","page":1}""");
+        var past = await AskAsync(tool, """{"op":"outline","path":"src/None.cs","page":2}""");
+
+        Assert.Equal((GraphToolOutcome.Answered, "the view holds no file at 'src/None.cs'"), (first.Outcome, first.Text));
+        Assert.Equal((GraphToolOutcome.Usage, "page 2 of 'outline src/None.cs': it has 1 page (1 to 1)"), (past.Outcome, past.Text));
+    }
+
+    /// <summary>
+    /// The work an answer is made of is done by the page that computes it alone: a later page read from what page 1 kept
+    /// searches no file again - the text search for a name the view does not hold among it.
+    /// </summary>
+    [Fact]
+    public async Task ALaterPageReadFromWhatWasKept_SearchesNoFileAgain()
+    {
+        using var tree = await TreeAsync(("docs/okapi.txt", string.Concat(Enumerable.Range(1, 50).Select(at => $"Okapi {at} grazes here.\n"))));
+        using var pages = new TempDirectory();
+        var okapi = Path.Combine(tree.Tree, "docs", "okapi.txt");
+        var reads = new ReadsUnder(tree.Harness.FileSystem, okapi);
+        var tool = Tool(tree, await QueriesAsync(tree), pages: new GraphPageStore(pages.Combine(OrchestratorLayout.StepPagesDirectoryName), tree.Harness.FileSystem), files: reads);
+
+        var first = await AskAsync(tool, """{"op":"node","symbol":"Okapi"}""");
+        var searched = reads.Count;
+        var second = await AskAsync(tool, """{"op":"node","symbol":"Okapi","page":2}""");
+
+        Assert.Equal("page 1 of 3 · 51 results · ask again with page: 2 for the next", first.Text.Split('\n')[0]);
+        Assert.Equal("page 2 of 3 · 51 results · ask again with page: 3 for the next", second.Text.Split('\n')[0]);
+        Assert.True(searched > 0, "page 1 searched no file");
+        Assert.Equal(searched, reads.Count);
+    }
+
+    /// <summary>A file system that counts the reads of the files at or under one path, and the looks whether one is there.</summary>
+    private sealed class ReadsUnder(IFileSystem inner, string directory) : PassThroughFileSystem(inner)
+    {
+        public int Count { get; private set; }
+
+        public override Stream OpenRead(string path)
+        {
+            if (path.StartsWith(directory, StringComparison.Ordinal))
+            {
+                Count++;
+            }
+
+            return base.OpenRead(path);
+        }
+
+        public override bool FileExists(string path)
+        {
+            if (path.StartsWith(directory, StringComparison.Ordinal))
+            {
+                Count++;
+            }
+
+            return base.FileExists(path);
+        }
+    }
+
+    /// <summary>A C# file of one class named <paramref name="name"/>, holding <paramref name="lines"/> lines of comment.</summary>
+    private static string LongClass(string name, int lines)
+        => $"namespace Demo;\n\npublic static class {name}\n{{\n" + string.Concat(Enumerable.Range(0, lines).Select(at => $"    // line {at}\n")) + "}\n";
+
     /// <summary>The tool over <paramref name="queries"/>, reading what the graph lists where no rule is given, and syncing a file again where <paramref name="sync"/>.</summary>
-    internal static CodebaseGraphTool Tool(CodebaseGraphTree tree, CodebaseGraphQueries queries, Func<string, bool>? mayRead = null, Func<string, AgentPolicyAnswer>? mayWrite = null, bool sync = true, GraphNearness? near = null)
+    internal static CodebaseGraphTool Tool(CodebaseGraphTree tree, CodebaseGraphQueries queries, Func<string, bool>? mayRead = null, Func<string, AgentPolicyAnswer>? mayWrite = null, bool sync = true, GraphNearness? near = null, GraphPageStore? pages = null, IFileSystem? files = null, Core.Execution.ILineMask? mask = null, Func<GraphTextPages?>? pack = null, Func<GraphTextPages?>? changes = null)
     {
         var never = CodebaseGraphService.NeverListed(tree.WorktreesRoot);
 
         return new(
             queries,
-            new AgentFiles(tree.Harness.GitClient, tree.Harness.FileSystem, TimeProvider.System),
-            tree.Harness.FileSystem,
+            new AgentFiles(tree.Harness.GitClient, files ?? tree.Harness.FileSystem),
+            files ?? tree.Harness.FileSystem,
             ConfinedPaths.Within(tree.Harness.FileSystem, tree.Harness.Platform, queries.Tree),
             path =>!PathPatterns.Matches(never, path, tree.Harness.Platform.PathComparison) && (mayRead?.Invoke(path) ?? true),
             mayWrite ?? (_ => AgentPolicyAnswer.Allow),
             sync ? async (path, _) => new CodebaseGraphQueries((await tree.CheckAsync(null, null, path)).Read) : null,
-            near is null ? null : () => near);
+            near is null ? null : () => near,
+            pages,
+            mask,
+            pack,
+            changes);
     }
 
     /// <summary>
@@ -1326,6 +2019,28 @@ public sealed partial class CodebaseGraphToolTests
         Assert.Same(before, tool.Queries);
     }
 
+    /// <summary>
+    /// A file whose uses are nearly all candidates - a member two types declare, read through a value of each - is not
+    /// unsure: a use is recall, never a doubt, so a candidates use counts nowhere the file's unsureness is read from.
+    /// </summary>
+    [Fact]
+    public async Task AFileOfMostlyCandidateUses_IsNotUnsure()
+    {
+        using var tree = await TreeAsync(
+            ("src/Twin.cs", "namespace Demo;\n\npublic class Left\n{\n    public int one;\n}\n\npublic class Right\n{\n    public int one;\n}\n\npublic class Reader\n{\n    public int Take()\n    {\n        return one;\n    }\n}\n"));
+        var queries = await QueriesAsync(tree);
+
+        var take = ((GraphResolve.Found)queries.Resolve("Demo.Reader.Take")).Card;
+
+        // A bare `one`, read where two types declare it: a use of both, candidates.
+        Assert.Contains(queries.Edges(take.Id).Uses, edge => string.Equals(edge.Confidence, CodeConfidences.Candidates, StringComparison.Ordinal));
+        Assert.Null(queries.UnsureOfFile("src/Twin.cs"));
+
+        var node = await AskAsync(Tool(tree, queries), """{"op":"node","symbol":"Take"}""");
+
+        Assert.DoesNotContain("text:", node.Text, StringComparison.Ordinal);
+    }
+
     /// <summary>A C# file of 222 lines, past the narrowing's bound.</summary>
     private static readonly string BigFile = string.Join("\n", ["namespace Demo;", string.Empty, .. Enumerable.Range(1, 220).Select(at => $"// line {at} of the big file")]) + "\n";
 
@@ -1335,6 +2050,6 @@ public sealed partial class CodebaseGraphToolTests
     [GeneratedRegex(@"(?<path>[\w./-]+):(?<start>\d+)-(?<end>\d+) #(?<hash>[0-9a-f]{8})")]
     private static partial Regex Range();
 
-    [GeneratedRegex(@"^cut: (?<shown>\d+) of (?<total>\d+) shown; ask again with offset \k<shown>$")]
-    private static partial Regex CutLine();
+    [GeneratedRegex(@"^[0-9]+\t")]
+    private static partial Regex Numbered();
 }

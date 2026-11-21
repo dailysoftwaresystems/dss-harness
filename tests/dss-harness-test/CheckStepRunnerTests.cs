@@ -4,6 +4,7 @@ using DssHarness.Core.Ci;
 using DssHarness.Core.Configuration;
 using DssHarness.Core.Orchestration;
 using DssHarness.Core.Orchestration.Flow;
+using DssHarness.Core.Pages;
 using DssHarness.Core.Results;
 using DssHarness.Core.Runners;
 using DssHarness.Core.Schemas;
@@ -227,9 +228,10 @@ public sealed class CheckStepRunnerTests : IDisposable
 
     /// <summary>
     /// A red check ends the wait red (1): each answered with where it failed, and of a job its whole log kept in the step's
-    /// directory, named for the job and its id - two jobs of one name keep one each - and its last lines in tail, both masked
-    /// by the repository's runner secrets, each attempt's logs its own; what could not be read of it said in unread; a red
-    /// status, no job, with its text and no log.
+    /// directory, named for the job and its id - two jobs of one name keep one each - with how many lines it holds and the
+    /// page where it failed, a log of one page given whole, each line by its number, both masked by the repository's runner
+    /// secrets, each attempt's logs its own; what could not be read of it said in unread; a red status, no job, with its
+    /// text and no log.
     /// </summary>
     [Fact]
     public async Task ARedCheck_IsAnsweredWithWhereItFailed_ItsLogKeptMasked()
@@ -265,14 +267,63 @@ public sealed class CheckStepRunnerTests : IDisposable
         var twinKept = Path.Combine(layout.InstanceDirectory("wait", null), OrchestratorLayout.StepLogsDirectoryName, "test (linux - x64).80.log");
         Assert.Equal(kept, red[0]!["log"]!.GetValue<string>());
         Assert.Equal(log.Replace("hush-123", ActionValues.Mask, StringComparison.Ordinal), File.ReadAllText(kept));
-        Assert.Equal(50, red[0]!["tail"]!.AsArray().Count);
-        Assert.Equal($"error: token {ActionValues.Mask} refused", red[0]!["tail"]!.AsArray()[^1]!.GetValue<string>());
+        Assert.Equal(
+            Enumerable.Range(1, 60).Select(line => $"{line}\tline {line}").Append($"61\terror: token {ActionValues.Mask} refused").ToArray(),
+            red[0]!["failing"]!.AsArray().Select(line => line!.GetValue<string>()).ToArray());
+        Assert.Equal(61L, red[0]!["lines"]!.GetValue<long>());
         Assert.Equal(("Pipeline", "Test", "linux", true), (red[0]!["workflow"]!.GetValue<string>(), red[0]!["step"]!.GetValue<string>(), red[0]!["leg"]!.GetValue<string>(), red[0]!["overran"]!.GetValue<bool>()));
         Assert.Equal(("license", "error", "no header"), (red[1]!["name"]!.GetValue<string>(), red[1]!["conclusion"]!.GetValue<string>(), red[1]!["description"]!.GetValue<string>()));
         Assert.Null(red[1]!["log"]);
+        Assert.Null(red[1]!["lines"]);
+        Assert.Empty(red[1]!["failing"]!.AsArray());
         Assert.Null(red[0]!["unread"]);
         Assert.Equal((twinKept, "docs log\n", "Its run was not read: HTTP 502"), (red[2]!["log"]!.GetValue<string>(), File.ReadAllText(twinKept), red[2]!["unread"]!.GetValue<string>()));
         Assert.False(File.Exists(stale));
+        Assert.Empty(JsonSchemaSubset.Problems(JsonNode.Parse(WorkflowStepTypes.Find("ci-wait")!.Output!)!, result.Output));
+    }
+
+    /// <summary>
+    /// A red job's log is given by reference - kept whole, its lines counted - with the page of it where the job failed
+    /// first: the page holding the last line GitHub marks an error, though three thousand lines of clean-up follow it, each
+    /// line by its number - never the log's last lines alone, which would be the clean-up's and none of the failure.
+    /// </summary>
+    [Fact]
+    public async Task ARedCheck_GivesItsLogByReference()
+    {
+        var (harness, repository) = await RepositoryAsync();
+        var layout = OrchestratorLayout.Of((await harness.ContextLoader.LoadAsync(repository.Path, Token)).Layout, "r1");
+        var log = string.Join(
+            "\n",
+            Enumerable.Range(1, 3000).Select(line => $"compiling unit {line}")
+                .Append("error CS1002: ; expected")
+                .Append($"{CiWaitStepRunner.ErrorMark}Process completed with exit code 1.")
+                .Concat(Enumerable.Range(1, 3000).Select(line => $"Post job cleanup {line}"))) + "\n";
+        var job = new CiCheck("build", CiCheckState.Red, "failure", "https://ci/build", 7, 70, null);
+        var checks = Substitute.For<ICiChecksService>();
+        checks.WaitAsync(Arg.Any<string>(), Arg.Any<CiChecksRequest>(), Arg.Any<CancellationToken>()).Returns(
+            new CiChecksReading("c1", CiChecksFound.Red, [job], [new CiRedCheck(job, "build", "Pipeline", "Build", null, false, log, null)]));
+
+        var result = await Runner(harness, checks).RunAsync(Run(new WorkflowStep { Name = "wait", Type = "ci-wait", Commit = "c1" }, repository.Path), Token);
+
+        var red = Assert.Single(result.Output!["red"]!.AsArray())!;
+        var kept = Path.Combine(layout.InstanceDirectory("wait", null), OrchestratorLayout.StepLogsDirectoryName, "build.70.log");
+        var failing = red["failing"]!.AsArray().Select(line => line!.GetValue<string>()).ToArray();
+
+        Assert.Equal(kept, red["log"]!.GetValue<string>());
+        Assert.Equal(log, File.ReadAllText(kept));
+        Assert.Equal(6002L, red["lines"]!.GetValue<long>());
+        Assert.Contains("3001\terror CS1002: ; expected", failing);
+        Assert.Contains($"3002\t{CiWaitStepRunner.ErrorMark}Process completed with exit code 1.", failing);
+        Assert.DoesNotContain("6002\tPost job cleanup 3000", failing);
+
+        // The page the kept log's pages hold there, as the one owner of a text's pages lays them: more than one page, and
+        // not the last.
+        var pages = await TextPages.LayAsync(harness.FileSystem, kept, "log", "the log", CiWaitStepRunner.LogPage, numbered: true, Token);
+        var holding = Enumerable.Range(1, pages.Marks.Count).Last(page => pages.Marks[page - 1].FirstLine <= 3002);
+        var page = await TextPages.PageAsync(harness.FileSystem, pages, holding, numbered: true, note: null, Token);
+
+        Assert.True(holding < pages.Marks.Count, $"page {holding} of {pages.Marks.Count}");
+        Assert.Equal(page.Entries.Select(entry => entry.Text).ToArray(), failing);
         Assert.Empty(JsonSchemaSubset.Problems(JsonNode.Parse(WorkflowStepTypes.Find("ci-wait")!.Output!)!, result.Output));
     }
 

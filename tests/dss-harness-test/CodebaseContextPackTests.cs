@@ -9,12 +9,16 @@ public sealed class CodebaseContextPackTests
 {
     private readonly CancellationToken _token = TestContext.Current.CancellationToken;
 
+    /// <summary>A page size a whole small pack fits on: the most a step's graphPromptTokens says.</summary>
+    private const int Wide = 20_000;
+
     /// <summary>The names of the C# shop's tasks.</summary>
     public static TheoryData<string> ShopTasks => [.. ContextPackFixtures.CSharpTasks.Select(task => task.Name)];
 
     /// <summary>
-    /// Measurement 1 over the C# repository: each task's pack holds the declarations its reference answer needs, at the
-    /// count stored; under change-first the changed nodes lead, then their tests.
+    /// Measurement 1 over the C# repository: each task's page 1 holds the declarations its reference answer needs, at the
+    /// count stored, and under a tight size goes on to a page after it; under change-first the changed nodes lead, then
+    /// their tests.
     /// </summary>
     [Theory]
     [MemberData(nameof(ShopTasks))]
@@ -32,7 +36,7 @@ public sealed class CodebaseContextPackTests
         Assert.True(held.Count == task.Held, $"{task.Name} holds {held.Count} of [{string.Join(", ", task.Needed)}], stored {task.Held}:\n{pack.Text}");
         Assert.True(pack.Tokens <= CodebaseContextPack.DefaultTokens, pack.Text);
         var heldTight = task.Needed.Count(qualified => tight.Nodes.Any(id => queries.Card(id).Qualified == qualified));
-        Assert.True(heldTight == task.HeldTight && tight.LeftOut > 0, $"{task.Name} holds {heldTight} under {ContextPackFixtures.TightTokens} tokens, stored {task.HeldTight}, {tight.LeftOut} left out:\n{tight.Text}");
+        Assert.True(heldTight == task.HeldTight && tight.More, $"{task.Name} holds {heldTight} on page 1 under {ContextPackFixtures.TightTokens} tokens, stored {task.HeldTight}, a page after it {(tight.More ? "following" : "none")}:\n{tight.Text}");
 
         if (task.Change is { } change)
         {
@@ -75,10 +79,10 @@ public sealed class CodebaseContextPackTests
 
         Assert.EndsWith(" | edited before", Line(edited, queries, "Shop.Orders.Order.Total"), StringComparison.Ordinal);
         Assert.Equal("edited before", Assert.Single(edited.Seeds, seed => seed.Id == total).Why);
-        Assert.Contains("; packed from the task: 1 working set node(s), the ", edited.Text.Split('\n')[0], StringComparison.Ordinal);
+        Assert.Matches("; packed from the task: 1 working set node\\(s\\), [0-9]+ node\\(s\\) its words match$", edited.Text.Split('\n')[0]);
         Assert.EndsWith(" | named", Line(filed, queries, "Shop.Orders.Order.Total"), StringComparison.Ordinal);
         Assert.Equal("named", Assert.Single(filed.Seeds, seed => seed.Id == total).Why);
-        Assert.Contains($"; packed from the task: 1 node(s) it names, {declared - 1} declaration(s) of the files it names, the ", filed.Text.Split('\n')[0], StringComparison.Ordinal);
+        Assert.Contains($"; packed from the task: 1 node(s) it names, {declared - 1} declaration(s) of the files it names, ", filed.Text.Split('\n')[0], StringComparison.Ordinal);
         Assert.Equal(filed.Seeds.Count, filed.Seeds.Select(seed => seed.Id).Distinct().Count());
     }
 
@@ -169,7 +173,7 @@ public sealed class CodebaseContextPackTests
                at Shop.Tests.OrderTests.Total_AddsEveryLine() in C:\agent\_work\1\s\tests\Shop.Tests\OrderTests.cs:line 10
             """;
 
-        var pack = CodebaseContextPack.Make(queries, new ContextPackRequest(prompt, All) { Tokens = CodebaseContextPack.MostTokens });
+        var pack = CodebaseContextPack.Make(queries, new ContextPackRequest(prompt, All) { Tokens = Wide });
 
         Assert.EndsWith(" | named", Line(pack, queries, "Shop.Reports.SalesReport.Sales"), StringComparison.Ordinal);
         Assert.EndsWith(" | in a file named", Line(pack, queries, "Shop.Orders.OrderLine.Amount"), StringComparison.Ordinal);
@@ -179,7 +183,7 @@ public sealed class CodebaseContextPackTests
         Assert.EndsWith(" | named", Line(pack, queries, "Shop.Storage.IOrderStore.Find"), StringComparison.Ordinal);
         Assert.EndsWith(" | named", Line(pack, queries, "Shop.Tests.OrderTests.Total_AddsEveryLine"), StringComparison.Ordinal);
         Assert.StartsWith("codebase graph: view 'base' at ", pack.Text, StringComparison.Ordinal);
-        Assert.Contains("; packed from the task: 6 node(s) it names, 5 declaration(s) of the files it names, the ", pack.Text.Split('\n')[0], StringComparison.Ordinal);
+        Assert.Contains("; packed from the task: 6 node(s) it names, 5 declaration(s) of the files it names, ", pack.Text.Split('\n')[0], StringComparison.Ordinal);
     }
 
     [Fact]
@@ -199,8 +203,9 @@ public sealed class CodebaseContextPackTests
         Assert.EndsWith(" | named", Line(parameters, queries, "Shop.Pricing.PriceCalculator.Price"), StringComparison.Ordinal);
     }
 
+    /// <summary>Every node the prompt's words match seeds the pack, however many, but those the step may not read: counted, never named.</summary>
     [Fact]
-    public async Task TheWordMatches_AreTheTenBestTheStepMayRead()
+    public async Task TheWordMatches_AreEveryOneTheStepMayRead()
     {
         using var tree = await TreeAsync(
             ("secret/Gadget.cs", "public class Gadget\n{\n}\n"),
@@ -209,13 +214,58 @@ public sealed class CodebaseContextPackTests
 
         var pack = CodebaseContextPack.Make(queries, new ContextPackRequest("Gadget", path => !path.StartsWith("secret/", StringComparison.Ordinal)));
 
-        Assert.EndsWith($"; packed from the task: the {CodebaseContextPack.WordSeeds} best word match(es)", pack.Text.Split('\n')[0], StringComparison.Ordinal);
+        Assert.EndsWith("; packed from the task: 12 node(s) its words match", pack.Text.Split('\n')[0], StringComparison.Ordinal);
+        Assert.Equal(12, pack.Seeds.Count(seed => seed.Why == "matches the task"));
         Assert.DoesNotContain("secret/", pack.Text, StringComparison.Ordinal);
+        Assert.True(pack.Refused > 0);
     }
 
+    /// <summary>
+    /// A hundred thousand nodes the prompt's words match each seed the pack, every one weighed by its score's share of the
+    /// best match's: none is left out of the seeds for a count, and page 1 holds the best of them. Red with the ten best
+    /// alone (WordSeeds).
+    /// </summary>
     [Fact]
-    public async Task ANameSeveralNodesCarry_SeedsEach_WhereAnEdgeCouldNameThemAll_AndNoneWhereMore()
+    public async Task AHundredThousandWordMatches_SeedThePack()
     {
+        const int Matches = 100_000;
+        using var tree = await CodebaseGraphTree.CreateAsync();
+        tree.Write("src/gadgets.toy", string.Concat(Enumerable.Range(0, Matches).Select(at => $"class Gadget{at.ToString(System.Globalization.CultureInfo.InvariantCulture)}\n")));
+        await tree.CommitAsync();
+        await tree.SyncAsync();
+        var queries = await QueriesAsync(tree);
+
+        var pack = CodebaseContextPack.Make(queries, new ContextPackRequest("Gadget", All));
+
+        Assert.Equal(Matches, pack.Seeds.Count(seed => seed.Why == "matches the task"));
+        Assert.EndsWith($"; packed from the task: {Matches} node(s) its words match", pack.Text.Split('\n')[0], StringComparison.Ordinal);
+        Assert.NotEmpty(pack.Nodes);
+        Assert.True(pack.More);
+    }
+
+    /// <summary>
+    /// A name several nodes the step may read carry seeds every one of them, however many, the weight of a name written
+    /// shared among them: of twelve, each the prompt's words match as well as the best weighs more as a word match than as a
+    /// twelfth of the name, and says so - one the step may not read none of them, and counted left out; of two, a word
+    /// match of each weighs more than its half.
+    /// </summary>
+    [Fact]
+    public async Task ANameSeveralNodesCarry_SeedsEveryOneTheStepMayRead_SharingTheWeightOfAName()
+    {
+        var many = string.Concat(Enumerable.Range(1, 12).Select(at => $"public class G{at}\n{{\n    public void Go()\n    {{\n    }}\n}}\n\n"));
+        using var crowded = await TreeAsync(("src/G.cs", many), ("secret/H.cs", "public class H\n{\n    public void Go()\n    {\n    }\n}\n"));
+        var crowdedQueries = await QueriesAsync(crowded);
+
+        var all = CodebaseContextPack.Make(crowdedQueries, new ContextPackRequest("see `Go`", path => !path.StartsWith("secret/", StringComparison.Ordinal)));
+
+        Assert.Equal(
+            [.. Enumerable.Range(1, 12).Select(at => $"csharp:G{at}.Go()").Order(StringComparer.Ordinal)],
+            all.Seeds.Select(seed => seed.Id).Where(id => id.EndsWith(".Go()", StringComparison.Ordinal)).Order(StringComparer.Ordinal));
+        Assert.Equal(
+            [("matches the task", 12)],
+            all.Seeds.Where(seed => seed.Id.EndsWith(".Go()", StringComparison.Ordinal)).GroupBy(seed => seed.Why).Select(why => (why.Key, why.Count())).OrderBy(why => why.Key, StringComparer.Ordinal));
+        Assert.True(all.Refused > 0);
+
         using var tree = await TreeAsync(
             ("src/A.cs", "public class A\n{\n    public void Go()\n    {\n    }\n}\n"),
             ("src/B.cs", "public class B\n{\n    public void Go()\n    {\n    }\n}\n"));
@@ -223,33 +273,12 @@ public sealed class CodebaseContextPackTests
 
         var pack = CodebaseContextPack.Make(queries, new ContextPackRequest("see `Go`", All));
 
-        Assert.EndsWith(" | one of 2 named 'Go'", Line(pack, queries, "A.Go"), StringComparison.Ordinal);
-        Assert.EndsWith(" | one of 2 named 'Go'", Line(pack, queries, "B.Go"), StringComparison.Ordinal);
-
-        var many = string.Concat(Enumerable.Range(1, CodeConfidences.MostCandidates + 1).Select(at => $"public class G{at}\n{{\n    public void Go()\n    {{\n    }}\n}}\n\n"));
-        using var crowded = await TreeAsync(("src/G.cs", many));
-        var crowdedQueries = await QueriesAsync(crowded);
-
-        var none = CodebaseContextPack.Make(crowdedQueries, new ContextPackRequest("see `Go`", All));
-
-        Assert.DoesNotContain(" named 'Go'", none.Text, StringComparison.Ordinal);
-        Assert.Contains("matches the task", none.Text, StringComparison.Ordinal);
-
-        // A node the step may not read is no candidate, and is counted left out.
-        using var hidden = await TreeAsync(
-            ("src/A.cs", "public class A\n{\n    public void Go()\n    {\n    }\n}\n"),
-            ("src/B.cs", "public class B\n{\n    public void Go()\n    {\n    }\n}\n"),
-            ("secret/C.cs", "public class C\n{\n    public void Go()\n    {\n    }\n}\n"));
-        var hiddenQueries = await QueriesAsync(hidden);
-
-        var readable = CodebaseContextPack.Make(hiddenQueries, new ContextPackRequest("see `Go`", path => !path.StartsWith("secret/", StringComparison.Ordinal)));
-
-        Assert.EndsWith(" | one of 2 named 'Go'", Line(readable, hiddenQueries, "A.Go"), StringComparison.Ordinal);
-        Assert.True(readable.Refused > 0);
+        Assert.Equal([("csharp:A.Go()", "matches the task"), ("csharp:B.Go()", "matches the task")], pack.Seeds.Select(seed => (seed.Id, seed.Why)));
     }
 
+    /// <summary>The walk goes on from a seed named and from a word match alike, as far as the pages need: no count of hops ends it.</summary>
     [Fact]
-    public async Task TheWalk_GoesTwoHopsFromANamedSeed_AndOneFromAWordMatch()
+    public async Task TheWalk_GoesOnFromEverySeed_WithNoCountOfHops()
     {
         using var tree = await TreeAsync(("src/Chain.cs", Chain));
         var queries = await QueriesAsync(tree);
@@ -260,17 +289,49 @@ public sealed class CodebaseContextPackTests
         Assert.EndsWith(" | named", Line(named, queries, "Chain.First"), StringComparison.Ordinal);
         Assert.Contains(" | called by First", Line(named, queries, "Chain.Second"), StringComparison.Ordinal);
         Assert.Contains(" | called by Second", Line(named, queries, "Chain.Third"), StringComparison.Ordinal);
-        Assert.Null(LineOrNull(named, queries, "Chain.Fourth"));
+        Assert.Contains(" | called by Third", Line(named, queries, "Chain.Fourth"), StringComparison.Ordinal);
         Assert.EndsWith(" | matches the task", Line(matched, queries, "Chain.First"), StringComparison.Ordinal);
         Assert.Contains(" | called by First", Line(matched, queries, "Chain.Second"), StringComparison.Ordinal);
-        Assert.Null(LineOrNull(matched, queries, "Chain.Third"));
+        Assert.Contains(" | called by Third", Line(matched, queries, "Chain.Fourth"), StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A node five hops from the seed is in the pack, on a page after the first where the first is full: the walk goes
+    /// best first with no count of hops, and the pages go on as far as it does. Red with the hops a seed was walked
+    /// (NamedHops, OtherHops), past which no page held it.
+    /// </summary>
+    [Fact]
+    public async Task ANodeFiveHopsAway_IsOnALaterPackPage()
+    {
+        var chain = new StringBuilder("public static class Long\n{\n");
+
+        for (var at = 0; at < 8; at++)
+        {
+            chain.Append(System.Globalization.CultureInfo.InvariantCulture, $"    public static void Step{at}()\n    {{\n        Step{at + 1}();\n    }}\n\n");
+        }
+
+        using var tree = await TreeAsync(("src/Long.cs", chain.Append("    public static void Step8()\n    {\n    }\n}\n").ToString()));
+        var queries = await QueriesAsync(tree);
+        var request = new ContextPackRequest("Review it.", All) { Worked = [new(Id(queries, "Long.Step0"), Edited: false)] };
+        var first = CodebaseContextPack.Make(queries, request with { Tokens = 150 });
+
+        var pages = Pages(first);
+        var five = Id(queries, "Long.Step5");
+
+        Assert.True(pages.Count > 1, first.Text);
+        Assert.DoesNotContain(five, first.Nodes);
+        var on = Assert.Single(pages, page => page.Lines.Any(line => line.Id == five));
+        Assert.True(on.Page > 1);
+        Assert.EndsWith(" | called by Step4", on.Lines.Single(line => line.Id == five).Text, StringComparison.Ordinal);
+        Assert.Contains(pages.SelectMany(page => page.Lines), line => line.Id == Id(queries, "Long.Step8"));
     }
 
     [Fact]
     public async Task EachNode_IsScoredByItsSeedsWeightHalvedAtEachHop_AndByTheEdgesConfidence_GeneratedCodeLast()
     {
-        // From the seed: Near (exact, 2), Far through Near (exact, 1), Loose by a call of candidates (0.6), Made in a
-        // generated file (exact, 2, but generated) - written by file, each file where its best node stands.
+        // From the seed, its four callees sharing what a call carries: Near (exact, 0.5), Far through Near (exact, 0.25),
+        // each Loose by a call of candidates (0.15), Made in a generated file (exact, 0.5, but generated) - written by
+        // file, each file where its best node stands.
         using var tree = await TreeAsync(
             ("src/Seed.cs", "public static class Seed\n{\n    public static void Start()\n    {\n        Near.Go();\n        Made.Go();\n        Run();\n    }\n}\n"),
             ("src/Near.cs", "public static class Near\n{\n    public static void Go()\n    {\n        Far.Go();\n    }\n}\n"),
@@ -291,16 +352,16 @@ public sealed class CodebaseContextPackTests
     }
 
     [Fact]
-    public async Task ANodeTwoHopsFromANamedSeed_ScoresBelowAWordMatch_ForItsScoreIsHalvedAtEachHop()
+    public async Task ANodeTwoHopsFromAWorkedSeed_ScoresBelowAWordMatch_ForItsScoreIsHalvedAtEachHop()
     {
-        // First is named (4): Second, one hop, scores 2; Third.Go, two hops, 1 - below Zebra, a word match (2).
+        // First is worked with (4): Second, one hop, scores 2; Third.Go, two hops, 1 - below Zebra, the best word match (2).
         using var tree = await TreeAsync(
             ("src/Chain.cs", "public static class Chain\n{\n    public static void First()\n    {\n        Second();\n    }\n\n    public static void Second()\n    {\n        Third.Go();\n    }\n}\n"),
             ("src/Third.cs", "public static class Third\n{\n    public static void Go()\n    {\n    }\n}\n"),
             ("src/Zebra.cs", "public sealed class Zebra\n{\n    public int Stripes() => 3;\n}\n"));
         var queries = await QueriesAsync(tree);
 
-        var pack = CodebaseContextPack.Make(queries, new ContextPackRequest("`Chain.First` and the zebra", All));
+        var pack = CodebaseContextPack.Make(queries, new ContextPackRequest("the zebra", All) { Worked = [new(Id(queries, "Chain.First"), Edited: false)] });
 
         Assert.Equal(["src/Chain.cs", "src/Zebra.cs", "src/Third.cs"], pack.Nodes.Select(id => queries.Card(id).Path).Distinct(StringComparer.Ordinal));
         Assert.Contains(" | called by Second", Line(pack, queries, "Third.Go"), StringComparison.Ordinal);
@@ -314,66 +375,80 @@ public sealed class CodebaseContextPackTests
             CodebaseContextPack.Walked.Select(edge => CodebaseContextPack.Phrase(new GraphStep("x", edge.Side, edge.Kind, CodeConfidences.Exact), "Run")));
     }
 
+    /// <summary>
+    /// A hub is gone through like any node: every caller of a method sixty call is in the pack, each scored by the sixtieth
+    /// share of what the hub carries on - so the node the hub calls, one share of one, stands above all sixty, and the
+    /// hub's line says no hub. Red with the hub left not gone through (Crowd).
+    /// </summary>
     [Fact]
-    public async Task AHub_IsListedAndNotGoneThrough()
+    public async Task ThePack_WalksThroughAHubScoredDown()
     {
         using var tree = await TreeAsync(("src/Hub.cs", CodebaseGraphToolTests.HubFile(60)));
         var queries = await QueriesAsync(tree);
+        var request = new ContextPackRequest("Review it.", All) { Worked = [new(Id(queries, "Demo.Hubs.Hub.M0"), Edited: false)] };
 
-        var pack = CodebaseContextPack.Make(queries, new ContextPackRequest("`Demo.Hubs.Hub.M0`", All) { Tokens = CodebaseContextPack.MostTokens });
+        var whole = CodebaseContextPack.Make(queries, request with { Tokens = Wide });
+        var small = CodebaseContextPack.Make(queries, request with { Tokens = 600 });
 
-        Assert.EndsWith(" | called by M0 | hub, not gone through its 60 callers", Line(pack, queries, "Demo.Hubs.Hub.Center"), StringComparison.Ordinal);
-        Assert.DoesNotContain(" | calls Center", pack.Text, StringComparison.Ordinal);
+        Assert.EndsWith(" | called by M0", Line(whole, queries, "Demo.Hubs.Hub.Center"), StringComparison.Ordinal);
+        Assert.Contains(" | called by Center", Line(whole, queries, "Demo.Hubs.Hub.Leaf"), StringComparison.Ordinal);
+        Assert.All(Enumerable.Range(1, 59), at => Assert.EndsWith(" | calls Center", Line(whole, queries, $"Demo.Hubs.Hub.M{at}"), StringComparison.Ordinal));
+        Assert.DoesNotContain(" | hub", whole.Text, StringComparison.Ordinal);
+
+        // Best first: what the hub calls before the hub's sixty callers, which go on to the pages after it.
+        Assert.Contains(Id(queries, "Demo.Hubs.Hub.Leaf"), small.Nodes);
+        Assert.DoesNotContain(Id(queries, "Demo.Hubs.Hub.M59"), small.Nodes);
+        Assert.Contains(Pages(small).SelectMany(page => page.Lines), line => line.Id == Id(queries, "Demo.Hubs.Hub.M59"));
     }
 
-    /// <summary>A hub named is walked from along every kind, as related walks from the node asked about, and its line says no hub.</summary>
+    /// <summary>
+    /// The pack is pages, best first: page 1 is the step's size, and its last line says how to ask for the next; each
+    /// page after it is the walk going on, at the same size, its first line naming it, the last saying it is the last -
+    /// and every node of the pack is on one page, each once, page 1 of a smaller size the head of a larger one's. Red with
+    /// the pack cut at its cap, what did not fit left out.
+    /// </summary>
     [Fact]
-    public async Task AHubNamed_IsWalkedFrom_AsRelatedWalksFromTheNodeAskedAbout()
-    {
-        using var tree = await TreeAsync(("src/Hub.cs", CodebaseGraphToolTests.HubFile(60)));
-        var queries = await QueriesAsync(tree);
-
-        var pack = CodebaseContextPack.Make(queries, new ContextPackRequest("`Demo.Hubs.Hub.Center`", All) { Tokens = CodebaseContextPack.MostTokens });
-
-        Assert.EndsWith(" | named", Line(pack, queries, "Demo.Hubs.Hub.Center"), StringComparison.Ordinal);
-        Assert.Contains(" | called by Center", Line(pack, queries, "Demo.Hubs.Hub.Leaf"), StringComparison.Ordinal);
-        Assert.Contains(" | calls Center", Line(pack, queries, "Demo.Hubs.Hub.M59"), StringComparison.Ordinal);
-    }
-
-    /// <summary>A node reached is not gone through along the kind it is a hub of, and is along the others.</summary>
-    [Fact]
-    public async Task AHubReached_IsGoneThroughAlongTheKindsItIsNoHubOf()
-    {
-        using var tree = await TreeAsync(("src/Hub.cs", CodebaseGraphToolTests.HubFile(60)), ("src/Seed.cs", "public static class Seed\n{\n    public static void Start()\n    {\n        Demo.Hubs.Hub.Center();\n    }\n}\n"));
-        var queries = await QueriesAsync(tree);
-
-        var pack = CodebaseContextPack.Make(queries, new ContextPackRequest("`Seed.Start`", All) { Tokens = CodebaseContextPack.MostTokens });
-
-        Assert.Contains(" | called by Start", Line(pack, queries, "Demo.Hubs.Hub.Center"), StringComparison.Ordinal);
-        Assert.Contains(" | called by Center", Line(pack, queries, "Demo.Hubs.Hub.Leaf"), StringComparison.Ordinal);
-        Assert.Null(LineOrNull(pack, queries, "Demo.Hubs.Hub.M0"));
-    }
-
-    [Fact]
-    public async Task WhatDoesNotFitTheCap_IsLeftOutWholeAndCounted()
+    public async Task ThePack_IsBestFirstPages_PageOneAtItsSize()
     {
         using var tree = await ShopAsync();
         var queries = await QueriesAsync(tree);
-        var whole = CodebaseContextPack.Make(queries, new ContextPackRequest(ContextPackFixtures.CSharpTasks[1].Text, All));
+        var request = new ContextPackRequest(ContextPackFixtures.CSharpTasks[1].Text, All);
+        var wide = CodebaseContextPack.Make(queries, request with { Tokens = Wide });
 
-        var cut = CodebaseContextPack.Make(queries, new ContextPackRequest(ContextPackFixtures.CSharpTasks[1].Text, All) { Tokens = 300 });
+        var cut = CodebaseContextPack.Make(queries, request with { Tokens = 300 });
+        var pages = Pages(cut);
+        var nodes = pages.SelectMany(page => page.Lines).Select(line => line.Id).OfType<string>().ToList();
 
         Assert.True(cut.Tokens <= 300, cut.Text);
-        Assert.True(cut.LeftOut > 0);
-        Assert.Equal(whole.Nodes.Count, cut.Nodes.Count + cut.LeftOut);
-        Assert.EndsWith($"; {cut.LeftOut} more left out whole, past the cap", cut.Text, StringComparison.Ordinal);
-        Assert.All(cut.Text.Split('\n')[1..^1], line => Assert.Contains(line, whole.Text.Split('\n')));
-        Assert.EndsWith("; nothing left out", whole.Text, StringComparison.Ordinal);
-        Assert.Matches($"\n{whole.Nodes.Count} node\\(s\\), ~{whole.Tokens} of 3000 tokens; nothing left out$", whole.Text);
+        Assert.True(cut.More);
+        Assert.Equal(cut.Text, pages[0].Text);
+        Assert.EndsWith(" tokens; context pack page 1 · ask graph for pack with page: 2 for the next", cut.Text, StringComparison.Ordinal);
+        Assert.All(pages, page => Assert.True(page.Tokens <= 300, page.Text));
+        Assert.All(pages.Skip(1), page => Assert.StartsWith($"codebase graph: context pack page {page.Page}\n", page.Text, StringComparison.Ordinal));
+        Assert.EndsWith($" tokens; context pack page {pages.Count} of {pages.Count} · the last", pages[^1].Text, StringComparison.Ordinal);
+        Assert.Equal((int?)pages.Count, cut.Pages);
+        Assert.Null(cut.Page(pages.Count + 1));
+        Assert.Equal(nodes.Count, nodes.Distinct(StringComparer.Ordinal).Count());
+        Assert.Equal(Pages(wide).SelectMany(page => page.Lines).Select(line => line.Id).OfType<string>().Order(StringComparer.Ordinal), nodes.Order(StringComparer.Ordinal));
+        Assert.Superset(cut.Nodes.ToHashSet(StringComparer.Ordinal), wide.Nodes.ToHashSet(StringComparer.Ordinal));
+    }
+
+    /// <summary>A pack that fits its page is one page, whose last line says nothing is left out.</summary>
+    [Fact]
+    public async Task APackThatFitsItsPage_IsOnePage_NothingLeftOut()
+    {
+        using var tree = await ShopAsync();
+        var queries = await QueriesAsync(tree);
+
+        var whole = CodebaseContextPack.Make(queries, new ContextPackRequest("`Order.Total`", All) { Tokens = Wide });
+
+        Assert.False(whole.More);
+        Assert.Equal((int?)1, whole.Pages);
+        Assert.Matches($"\n{whole.Nodes.Count} node\\(s\\), ~{whole.Tokens} of {Wide} tokens; nothing left out$", whole.Text);
     }
 
     [Fact]
-    public async Task ACapTooSmallForItsFirstAndLastLines_GivesNoPack_EveryLineLeftOut()
+    public async Task APageTooSmallForItsFirstAndLastLines_GivesNoPack()
     {
         using var tree = await ShopAsync();
 
@@ -381,7 +456,8 @@ public sealed class CodebaseContextPackTests
 
         Assert.Equal(string.Empty, pack.Text);
         Assert.Empty(pack.Nodes);
-        Assert.True(pack.LeftOut > 0);
+        Assert.Null(pack.Page(1));
+        Assert.False(pack.More);
     }
 
     [Fact]
@@ -389,7 +465,7 @@ public sealed class CodebaseContextPackTests
     {
         using var tree = await ShopAsync();
         var (queries, changes) = await ChangedAsync(tree, ("src/Pricing/LoyaltyDiscount.cs", "total * 0.95m", "total * 0.90m"));
-        var request = new ContextPackRequest("Review it.", All) { From = ContextPackFrom.Changes, Changes = changes, Tokens = CodebaseContextPack.MostTokens };
+        var request = new ContextPackRequest("Review it.", All) { From = ContextPackFrom.Changes, Changes = changes, Tokens = Wide };
         var whole = CodebaseContextPack.Make(queries, request);
         var changed = whole.Lines[0].Text;
         var alone = Encoding.UTF8.GetByteCount(whole.Text.Split('\n')[0]) + 1 + CodebaseContextPack.LastLineRoom + Encoding.UTF8.GetByteCount(changed) + 1;
@@ -411,7 +487,7 @@ public sealed class CodebaseContextPackTests
         Assert.Equal(string.Empty, pack.Text);
         Assert.Empty(pack.Nodes);
         Assert.Equal(0, pack.Tokens);
-        Assert.Equal(0, pack.LeftOut);
+        Assert.Null(pack.Page(1));
         Assert.NotEmpty(pack.Seeds);
     }
 
@@ -444,7 +520,12 @@ public sealed class CodebaseContextPackTests
 
         var pack = CodebaseContextPack.Make(queries, new ContextPackRequest("nothing here matches", All) { Writes = Covered("src/Storage/Memory*.cs"), Worked = [new(used, Edited: false), new(edited, Edited: true), new("gone:node", Edited: true)] });
 
-        Assert.Equal([edited, used], pack.Nodes.Take(2));
+        // The edited node of the working set stands above every other; a used one above the files' declarations - a node
+        // the walk reaches can weigh past a used one, its edges summed, but never past an edited one.
+        var nodes = pack.Nodes.ToList();
+
+        Assert.Equal(edited, nodes[0]);
+        Assert.True(nodes.IndexOf(used) < nodes.IndexOf(Id(queries, "Shop.Storage.MemoryOrderStore.Save")), $"the working set's used node is below a file's declaration:\n{pack.Text}");
         Assert.EndsWith(" | edited before", Line(pack, queries, "Shop.Reports.SalesReport.Sales"), StringComparison.Ordinal);
         Assert.EndsWith(" | used before", Line(pack, queries, "Shop.Orders.OrderLine.Amount"), StringComparison.Ordinal);
         Assert.EndsWith(" | in a file the step writes", Line(pack, queries, "Shop.Storage.MemoryOrderStore.Save"), StringComparison.Ordinal);
@@ -478,7 +559,7 @@ public sealed class CodebaseContextPackTests
         var unread = CodebaseContextPack.Make(queries, task with { ChangesUnread = "git could not compare\r\n  the tree with it.\n" });
         var undeclared = CodebaseContextPack.Make(queries, task with { Changes = new CodebaseGraphChanges(head, ["README.md"], []) });
 
-        var commit = head[..12];
+        var commit = head;
         Assert.Contains($", 0 file(s) differing from its base {commit}; no change against its base, so packed from the task: 1 node(s) it names", none.Text.Split('\n')[0], StringComparison.Ordinal);
         Assert.Contains("; its changes could not be read (git could not compare the tree with it), so packed from the task: 1 node(s) it names", unread.Text.Split('\n')[0], StringComparison.Ordinal);
         Assert.Contains($", 1 file(s) differing from its base {commit}; no declaration among them changed, so packed from the task: ", undeclared.Text.Split('\n')[0], StringComparison.Ordinal);
@@ -489,36 +570,39 @@ public sealed class CodebaseContextPackTests
     }
 
     /// <summary>
-    /// Under change-first, a differing file the view could not compare - too large now, so no extract tells its
-    /// declarations - is named on the pack's first line with why, and the line never says no declaration changed while one
-    /// was not compared: what it changed is not known.
+    /// Under change-first, a differing file the view could not compare - generated now, and kept out under exclude, so no
+    /// extract tells its declarations - is listed ahead of what the pack lists, with why, under a section of its own that
+    /// the first line names, and the line never says no declaration changed while one was not compared: what it changed
+    /// is not known.
     /// </summary>
     [Fact]
-    public async Task UnderChangeFirst_AFileThatCouldNotBeCompared_IsNamed_AndNoDeclarationIsSaidUnchanged()
+    public async Task UnderChangeFirst_AFileThatCouldNotBeCompared_IsListed_AndNoDeclarationIsSaidUnchanged()
     {
-        using var tree = await CodebaseGraphTree.CreateAsync(new CodebaseGraphShape([], [], null, 120, ExcludeGenerated: true, CodebaseGraphShape.DefaultMapTokens));
+        using var tree = await CodebaseGraphTree.CreateAsync(new CodebaseGraphShape([], [], null, ExcludeGenerated: true, CodebaseGraphShape.DefaultMapTokens));
         tree.Over([.. CodeGraphExtractors.OfThisBuild.All]);
         tree.Write("src/Grows.cs", "public static class Grows\n{\n}\n");
         await tree.CommitAsync();
         await tree.SyncAsync();
         var based = await tree.HeadAsync();
-        tree.Write("src/Grows.cs", "public static class Grows\n{\n" + string.Concat(Enumerable.Repeat("    // a comment that makes the file too large\n", 4)) + "}\n");
+        tree.Write("src/Grows.cs", "// <auto-generated/>\npublic static class Grows\n{\n}\n");
         var read = (await tree.CheckAsync(null, null, "src/Grows.cs")).Read;
         var changes = await tree.Service.ChangesAsync(tree.Request(), read, based, _token);
 
         var pack = CodebaseContextPack.Make(new CodebaseGraphQueries(read), new ContextPackRequest("Review it.", All) { From = ContextPackFrom.Changes, Changes = changes });
 
-        var first = pack.Text.Split('\n')[0];
-        Assert.Contains($", 1 file(s) differing from its base {based[..12]}; 1 differing file(s) could not be compared: src/Grows.cs (218 bytes, over maxFileBytes (120)), so packed from the task: ", first, StringComparison.Ordinal);
-        Assert.DoesNotContain("no declaration", first, StringComparison.Ordinal);
+        var lines = pack.Text.Split('\n');
+        Assert.Contains($", 1 file(s) differing from its base {based}; 1 differing file(s) could not be compared, each listed under '{CodebaseContextPack.NotCompared}', so packed from the task: ", lines[0], StringComparison.Ordinal);
+        Assert.DoesNotContain("no declaration", lines[0], StringComparison.Ordinal);
+        Assert.Equal([CodebaseContextPack.NotCompared, "src/Grows.cs (kept out as generated code)"], lines[1..3]);
+        Assert.DoesNotContain(pack.Lines, line => line.Text.StartsWith("src/Grows.cs (", StringComparison.Ordinal));
 
         // Beside a file compared, the line says no declaration among the rest changed; one the step may not read is never named.
         var some = changes with { Files = ["README.md", .. changes.Files] };
         var beside = CodebaseContextPack.Make(new CodebaseGraphQueries(read), new ContextPackRequest("Review it.", All) { From = ContextPackFrom.Changes, Changes = some });
         var unreadable = CodebaseContextPack.Make(new CodebaseGraphQueries(read), new ContextPackRequest("Review it.", path => path != "src/Grows.cs") { From = ContextPackFrom.Changes, Changes = some });
 
-        Assert.Contains($", 2 file(s) differing from its base {based[..12]}; 1 differing file(s) could not be compared: src/Grows.cs (218 bytes, over maxFileBytes (120)); no declaration among the rest changed, so packed from the task: ", beside.Text.Split('\n')[0], StringComparison.Ordinal);
-        Assert.Contains($", 1 file(s) differing from its base {based[..12]}; no declaration among them changed, so packed from the task: ", unreadable.Text.Split('\n')[0], StringComparison.Ordinal);
+        Assert.Contains($", 2 file(s) differing from its base {based}; 1 differing file(s) could not be compared, each listed under '{CodebaseContextPack.NotCompared}'; no declaration among the rest changed, so packed from the task: ", beside.Text.Split('\n')[0], StringComparison.Ordinal);
+        Assert.Contains($", 1 file(s) differing from its base {based}; no declaration among them changed, so packed from the task: ", unreadable.Text.Split('\n')[0], StringComparison.Ordinal);
         Assert.DoesNotContain("Grows", unreadable.Text, StringComparison.Ordinal);
     }
 
@@ -537,11 +621,17 @@ public sealed class CodebaseContextPackTests
         Assert.Equal("changed:", lines[1]);
         Assert.EndsWith(" | added", lines[2], StringComparison.Ordinal);
         Assert.Contains("public int Count()", lines[2], StringComparison.Ordinal);
-        Assert.Equal($"removed member Shop.Storage.MemoryOrderStore.All | was src/Storage/MemoryOrderStore.cs:17-17 at {changes!.Base[..12]}", lines[3]);
+        Assert.Equal($"removed member Shop.Storage.MemoryOrderStore.All | was src/Storage/MemoryOrderStore.cs:17-17 at {changes!.Base}", lines[3]);
     }
 
+    /// <summary>
+    /// Under change-first, the impact of what changed is walked best first from it: their tests - carried whole, so a
+    /// test of a direct caller among them - under a section of their own, then every other node the walk reaches, by its
+    /// score: what overrides a changed member, what answers one through dispatch and what derives from a changed type,
+    /// before its callers and theirs, as far as the walk goes.
+    /// </summary>
     [Fact]
-    public async Task UnderChangeFirst_TheImpactIsListedInItsOrder_CallersToTwoHops_Overrides_ImplementationsAndDispatches_DerivedTypes()
+    public async Task UnderChangeFirst_TheImpactIsListedBestFirst_TheirTestsAhead_EveryCallerAsFarAsItGoes()
     {
         using var tree = await TreeAsync(
             ("src/Shape.cs", "public interface IMeasure\n{\n    double Measure();\n}\n\npublic class Shape : IMeasure\n{\n    public virtual double Area()\n    {\n        return 0;\n    }\n\n    public double Measure() => 1;\n}\n"),
@@ -553,7 +643,7 @@ public sealed class CodebaseContextPackTests
         await File.WriteAllTextAsync(file, (await File.ReadAllTextAsync(file, _token)).Replace("double Measure();", "double Measure(); // in units", StringComparison.Ordinal).Replace("public class Shape : IMeasure\n{\n", "public class Shape : IMeasure\n{\n    // a shape\n", StringComparison.Ordinal).Replace("return 0;", "return 0.0;", StringComparison.Ordinal), _token);
         var (queries, changes) = await ChangedAsync(tree, null, "src/Shape.cs");
 
-        var pack = CodebaseContextPack.Make(queries, new ContextPackRequest("Review it.", All) { From = ContextPackFrom.Changes, Changes = changes, Tokens = CodebaseContextPack.MostTokens });
+        var pack = CodebaseContextPack.Make(queries, new ContextPackRequest("Review it.", All) { From = ContextPackFrom.Changes, Changes = changes, Tokens = Wide });
 
         // Nothing in the task names a node, so no task section follows the impact.
         var lines = pack.Text.Split('\n');
@@ -561,10 +651,10 @@ public sealed class CodebaseContextPackTests
         Assert.Equal(["changed:", "their tests:", "their impact:"], sections);
         var impact = lines.SkipWhile(line => line != "their impact:").Skip(1).TakeWhile(line => line.Contains(" | ", StringComparison.Ordinal)).ToList();
         Assert.Equal(
-            ["Geometry.Total", "Report.Print", "Circle.Area", "Shape.Measure", "Circle"],
+            ["Circle.Area", "Shape.Measure", "Circle", "Geometry.Total", "Report.Print"],
             impact.Select(line => pack.Nodes.Select(id => queries.Card(id)).Single(card => line.StartsWith(card.Handle + " ", StringComparison.Ordinal)).Qualified));
         Assert.Equal(
-            [" | calls Area", " | calls Total", " | overrides Area", " | answers Measure | unique", " | derives from Shape | unique"],
+            [" | overrides Area", " | answers Measure | unique", " | derives from Shape | unique", " | calls Area", " | calls Total"],
             impact.Select(line => line[line.IndexOf(" | ", line.IndexOf(" #", StringComparison.Ordinal), StringComparison.Ordinal)..].Replace(" | 2 caller(s), 1 callee(s)", string.Empty, StringComparison.Ordinal).Replace(" | 0 caller(s), 1 callee(s)", string.Empty, StringComparison.Ordinal)));
         var tests = lines.SkipWhile(line => line != "their tests:").Skip(1).TakeWhile(line => line != "their impact:").ToList();
         Assert.Equal([" | tests Area", " | tests Total"], tests.Select(line => line[line.LastIndexOf(" | ", StringComparison.Ordinal)..]));
@@ -599,8 +689,12 @@ public sealed class CodebaseContextPackTests
         Assert.Equal(pack.Nodes.Count, pack.Nodes.Distinct(StringComparer.Ordinal).Count());
     }
 
+    /// <summary>
+    /// Under change-first, a direct caller that is a hub is gone through like any node - its sixty callers in the impact,
+    /// each scored down by its share - and generated code is last in each section.
+    /// </summary>
     [Fact]
-    public async Task UnderChangeFirst_ADirectCallerThatIsAHub_IsMarkedAndNotGoneThrough_AndGeneratedCodeIsLastInEachSection()
+    public async Task UnderChangeFirst_ADirectCallerThatIsAHub_IsGoneThrough_ItsCallersScoredDown_AndGeneratedCodeIsLastInEachSection()
     {
         using var tree = await TreeAsync(
             ("src/Hub.cs", CodebaseGraphToolTests.HubFile(60)),
@@ -613,15 +707,17 @@ public sealed class CodebaseContextPackTests
         var queries = new CodebaseGraphQueries(read);
         var changes = await tree.Service.ChangesAsync(tree.Request(), read, await tree.HeadAsync(), _token);
 
-        var pack = CodebaseContextPack.Make(queries, new ContextPackRequest("Review it.", All) { From = ContextPackFrom.Changes, Changes = changes, Tokens = CodebaseContextPack.MostTokens });
+        var pack = CodebaseContextPack.Make(queries, new ContextPackRequest("Review it.", All) { From = ContextPackFrom.Changes, Changes = changes, Tokens = Wide });
 
         var lines = pack.Text.Split('\n');
         var changed = lines.SkipWhile(line => line != "changed:").Skip(1).TakeWhile(line => line.Contains(" | ", StringComparison.Ordinal)).Select(Qualified).ToList();
         var impact = lines.SkipWhile(line => line != "their impact:").Skip(1).TakeWhile(line => line.Contains(" | ", StringComparison.Ordinal)).Select(Qualified).ToList();
+        var callers = Enumerable.Range(0, 60).Select(at => $"Demo.Hubs.Hub.M{at.ToString(System.Globalization.CultureInfo.InvariantCulture)}").Order(StringComparer.Ordinal);
         Assert.Equal(["Demo.Hubs.Hub.Leaf", "Made.Go"], changed);
-        Assert.Equal(["Demo.Hubs.Hub.Center", "Zed.Go", "Kept.Go"], impact);
-        Assert.EndsWith(" | calls Leaf | hub, not gone through its 60 callers", Line(pack, queries, "Demo.Hubs.Hub.Center"), StringComparison.Ordinal);
-        Assert.Null(LineOrNull(pack, queries, "Demo.Hubs.Hub.M0"));
+        Assert.Equal(["Demo.Hubs.Hub.Center", "Zed.Go", .. callers, "Kept.Go"], impact);
+        Assert.EndsWith(" | calls Leaf", Line(pack, queries, "Demo.Hubs.Hub.Center"), StringComparison.Ordinal);
+        Assert.EndsWith(" | calls Center", Line(pack, queries, "Demo.Hubs.Hub.M0"), StringComparison.Ordinal);
+        Assert.DoesNotContain("hub,", pack.Text, StringComparison.Ordinal);
 
         string Qualified(string line) => pack.Nodes.Select(id => queries.Card(id)).Single(card => line.StartsWith(card.Handle + " ", StringComparison.Ordinal)).Qualified;
     }
@@ -656,7 +752,7 @@ public sealed class CodebaseContextPackTests
         var pack = CodebaseContextPack.Make(queries, new ContextPackRequest("Review it.", All) { From = ContextPackFrom.Changes, Changes = changes });
 
         var lines = pack.Text.Split('\n');
-        Assert.Equal(["changed:", $"removed type Wide | was src/Wide.B.cs:1-4 at {based[..12]}"], lines[1..3]);
+        Assert.Equal(["changed:", $"removed type Wide | was src/Wide.B.cs:1-4 at {based}"], lines[1..3]);
         Assert.DoesNotContain("Two", pack.Text, StringComparison.Ordinal);
         Assert.Contains("; packed from those changes first - 1 declaration(s) added, changed or taken out,", lines[0], StringComparison.Ordinal);
     }
@@ -692,7 +788,7 @@ public sealed class CodebaseContextPackTests
 
         var pack = CodebaseContextPack.Make(queries, new ContextPackRequest("Review it.", path => !path.StartsWith("secret/", StringComparison.Ordinal)) { From = ContextPackFrom.Changes, Changes = changes });
 
-        Assert.Contains($", 2 file(s) differing from its base {based[..12]}; packed from those changes first - 3 declaration(s) added, changed or taken out,", pack.Text.Split('\n')[0], StringComparison.Ordinal);
+        Assert.Contains($", 2 file(s) differing from its base {based}; packed from those changes first - 3 declaration(s) added, changed or taken out,", pack.Text.Split('\n')[0], StringComparison.Ordinal);
         Assert.DoesNotContain("secret", pack.Text, StringComparison.Ordinal);
         Assert.DoesNotContain("Through", pack.Text, StringComparison.Ordinal);
         Assert.DoesNotContain("Dropped", pack.Text, StringComparison.Ordinal);
@@ -834,6 +930,24 @@ public sealed class CodebaseContextPackTests
     }
 
     private static string Id(CodebaseGraphQueries queries, string qualified) => Assert.IsType<GraphResolve.Found>(queries.Resolve(qualified)).Card.Id;
+
+    /// <summary>Every page of <paramref name="pack"/>, from 1 to its last.</summary>
+    internal static IReadOnlyList<GraphTextPage> Pages(ContextPack pack)
+    {
+        var pages = new List<GraphTextPage>();
+
+        for (var at = 1; pack.Page(at) is { } page; at++)
+        {
+            pages.Add(page);
+
+            if (page.Last)
+            {
+                break;
+            }
+        }
+
+        return pages;
+    }
 
     private static string Line(ContextPack pack, CodebaseGraphQueries queries, string qualified)
         => LineOrNull(pack, queries, qualified) ?? throw new Xunit.Sdk.XunitException($"'{qualified}' is not in the pack:\n{pack.Text}");

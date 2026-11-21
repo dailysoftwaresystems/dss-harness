@@ -2,9 +2,11 @@ using System.Globalization;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using DssHarness.Core.Ci;
+using DssHarness.Core.Json;
 using DssHarness.Core.Output;
 using DssHarness.Core.Processes;
 using DssHarness.Core.Results;
+using DssHarness.Core.Text;
 
 namespace DssHarness.Core.Git;
 
@@ -254,26 +256,55 @@ public sealed partial class GitPublisher(IGitClient git, GhProcess gh) : IGitPub
     }
 
     /// <inheritdoc/>
+    /// <remarks>
+    /// The forge's tool matches a head by the branch's name in any repository, a fork's among them, and lists only as many
+    /// as it is asked for: so the list is asked for <see cref="PullRequestsAsked"/> long first, and again twice as long
+    /// each time it comes back full without the repository's own among it, until it holds that one or is shorter than
+    /// asked - every pull request open from the branch's name then read. Two thousand forks' pull requests from a branch of
+    /// the same name never hide the run's own.
+    /// </remarks>
     public async Task<GitPullRequest?> FindPullRequestAsync(string tree, GitPullRequestTarget target, TimeSpan? limit, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(target);
 
-        var listed = await gh.RunAsync(
-            tree,
-            [.. PublisherCommands.FindPullRequest.Leading, .. Where(target)],
-            $"so whether a pull request is open from '{target.Head}' to '{target.Base}' was NOT read",
-            limit,
-            cancellationToken).ConfigureAwait(false);
+        for (var asked = PullRequestsAsked; ; asked = asked > int.MaxValue / 2 ? int.MaxValue : asked * 2)
+        {
+            var listed = await gh.RunAsync(
+                tree,
+                [.. PublisherCommands.FindPullRequest.Leading, .. Where(target), "--limit", asked.ToString(CultureInfo.InvariantCulture)],
+                $"so whether a pull request is open from '{target.Head}' to '{target.Base}' was NOT read",
+                limit,
+                cancellationToken).ConfigureAwait(false);
 
+            var (own, count) = Listed(listed, target);
+
+            // A list shorter than asked is every one the forge holds; one of int's whole range is the most gh is asked for.
+            if (own is not null || count < asked || asked == int.MaxValue)
+            {
+                return own;
+            }
+        }
+    }
+
+    /// <summary>
+    /// The first pull request of the repository's own in what the forge's tool listed - one from a fork's branch of the same
+    /// name is none of it, as the tool says of each - and how many it listed.
+    /// </summary>
+    /// <exception cref="HarnessException">What it answered is no list of pull requests (<see cref="HarnessExit.CommandFailed"/>).</exception>
+    private static (GitPullRequest? Own, int Count) Listed(string listed, GitPullRequestTarget target)
+    {
         try
         {
-            using var document = JsonDocument.Parse(listed);
+            using var document = JsonDepth.ParseDocument(listed);
 
-            // The tool matches --head by the branch's name in any repository: a fork's branch of the same name is listed too,
-            // and is none of this repository's.
-            return document.RootElement.ValueKind == JsonValueKind.Array
-                ? document.RootElement.EnumerateArray().Where(entry => !entry.GetProperty("isCrossRepository").GetBoolean()).Select(Read).FirstOrDefault()
-                : throw new HarnessException(HarnessExit.CommandFailed, $"{GhProcess.Executable} answered no list of pull requests open from '{target.Head}': {listed.Trim()}");
+            if (document.RootElement.ValueKind != JsonValueKind.Array)
+            {
+                throw new HarnessException(HarnessExit.CommandFailed, $"{GhProcess.Executable} answered no list of pull requests open from '{target.Head}': {listed.Trim()}");
+            }
+
+            var entries = document.RootElement.EnumerateArray().ToList();
+
+            return (entries.Where(entry => !entry.GetProperty("isCrossRepository").GetBoolean()).Select(Read).FirstOrDefault(), entries.Count);
         }
         catch (Exception exception) when (exception is JsonException or InvalidOperationException or FormatException or KeyNotFoundException)
         {
@@ -282,6 +313,12 @@ public sealed partial class GitPublisher(IGitClient git, GhProcess gh) : IGitPub
 
         static GitPullRequest Read(JsonElement entry) => new(entry.GetProperty("number").GetInt64(), entry.GetProperty("url").GetString() ?? throw new FormatException("a pull request without its address"));
     }
+
+    /// <summary>
+    /// How many pull requests the first list asks for: the forge's page, the most one request of it answers. A first size,
+    /// never a bound - a list that comes back full is asked for again, longer.
+    /// </summary>
+    internal const int PullRequestsAsked = 100;
 
     /// <inheritdoc/>
     public async Task<GitPullRequest> OpenPullRequestAsync(string tree, GitPullRequestTarget target, string title, string bodyFile, bool draft, TimeSpan? limit, CancellationToken cancellationToken)
@@ -301,7 +338,7 @@ public sealed partial class GitPublisher(IGitClient git, GhProcess gh) : IGitPub
         // The tool says the address of what it opened, on its last line.
         var address = said.Split('\n').Select(line => line.Trim()).LastOrDefault(line => line.Length > 0) ?? string.Empty;
 
-        return PullRequestAddress().Match(address) is { Success: true } match
+        return PullRequestAddress.Match(address) is { Success: true } match
             ? new GitPullRequest(long.Parse(match.Groups["number"].Value, CultureInfo.InvariantCulture), address)
             : throw new HarnessException(HarnessExit.CommandFailed, $"{GhProcess.Executable} said it opened a pull request from '{target.Head}', and named no address of one: {said.Trim()}");
     }
@@ -375,8 +412,7 @@ public sealed partial class GitPublisher(IGitClient git, GhProcess gh) : IGitPub
     }
 
     /// <summary>The address the forge's tool says a pull request it opened is at, its number last.</summary>
-    [GeneratedRegex(@"^https?://\S+/pull/(?<number>\d+)/?$", RegexOptions.CultureInvariant)]
-    private static partial Regex PullRequestAddress();
+    private static readonly Regex PullRequestAddress = LinearRegex.Compile(@"^https?://\S+/pull/(?<number>\d+)/?$");
 
     /// <summary>A command of the list that runs the repository's hooks: the isolation it runs inside, and the credential it is handed.</summary>
     /// <param name="Isolation">The operating system's isolation it runs inside; null for none.</param>

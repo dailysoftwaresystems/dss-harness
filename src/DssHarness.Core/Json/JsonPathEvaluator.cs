@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text.Json;
+using DssHarness.Core.Walks;
 
 namespace DssHarness.Core.Json;
 
@@ -8,10 +9,23 @@ namespace DssHarness.Core.Json;
 /// turn for each value it is given, a descendant segment's for the value and each beneath it - itself first, then each
 /// child's in the document's order - and a filter's comparisons, logic and functions as the standard defines them.
 /// </summary>
+/// <remarks>
+/// A query nests as its parser read it - a filter's query holding a filter of its own, a call given a call - and is answered
+/// as it nests, each nested answer a frame on a stack of its own (<see cref="Frame{T}"/>), never the thread's; a document
+/// is gone down, and two values compared, on stacks of their own as well. So neither a query nor a document is answered
+/// only to some depth.
+/// </remarks>
 internal static class JsonPathEvaluator
 {
     /// <summary>Adds what <paramref name="query"/> selects - from <paramref name="current"/> or <paramref name="root"/> - to <paramref name="selected"/>.</summary>
     public static void Select(JsonPathQuery query, JsonElement current, JsonElement root, List<JsonElement> selected)
+        => selected.AddRange(Nodes(query, current, root).Run());
+
+    /// <summary>What <paramref name="query"/> selects - from <paramref name="current"/> or <paramref name="root"/> - in the standard's order.</summary>
+    private static Frame<List<JsonElement>> Nodes(JsonPathQuery query, JsonElement current, JsonElement root)
+        => new(self => Selecting(self, query, current, root));
+
+    private static IEnumerable<Frame> Selecting(Frame<List<JsonElement>> self, JsonPathQuery query, JsonElement current, JsonElement root)
     {
         List<JsonElement> values = [query.Relative ? current : root];
 
@@ -21,23 +35,36 @@ internal static class JsonPathEvaluator
 
             foreach (var value in values)
             {
-                if (segment.Descendant)
+                IEnumerable<JsonElement> given = segment.Descendant ? SelfAndBeneath(value) : [value];
+
+                foreach (var each in given)
                 {
-                    foreach (var beneath in SelfAndBeneath(value))
+                    foreach (var selector in segment.Selectors)
                     {
-                        SelectEach(segment.Selectors, beneath, root, next);
+                        if (selector is not JsonPathSelector.Filter filter)
+                        {
+                            SelectOne(selector, each, next);
+                            continue;
+                        }
+
+                        foreach (var child in Children(each))
+                        {
+                            var holds = Holds(filter.Test, child, root);
+                            yield return holds;
+
+                            if (holds.Result)
+                            {
+                                next.Add(child);
+                            }
+                        }
                     }
-                }
-                else
-                {
-                    SelectEach(segment.Selectors, value, root, next);
                 }
             }
 
             values = next;
         }
 
-        selected.AddRange(values);
+        self.Give(values);
     }
 
     /// <summary>
@@ -70,54 +97,41 @@ internal static class JsonPathEvaluator
         _ => [],
     };
 
-    private static void SelectEach(IReadOnlyList<JsonPathSelector> selectors, JsonElement value, JsonElement root, List<JsonElement> selected)
+    /// <summary>Adds what one selector that is no filter selects of <paramref name="value"/> to <paramref name="selected"/>.</summary>
+    private static void SelectOne(JsonPathSelector selector, JsonElement value, List<JsonElement> selected)
     {
-        foreach (var selector in selectors)
+        switch (selector)
         {
-            switch (selector)
-            {
-                case JsonPathSelector.Name name when value.ValueKind == JsonValueKind.Object:
-                    foreach (var member in value.EnumerateObject())
+            case JsonPathSelector.Name name when value.ValueKind == JsonValueKind.Object:
+                foreach (var member in value.EnumerateObject())
+                {
+                    if (member.NameEquals(name.Member))
                     {
-                        if (member.NameEquals(name.Member))
-                        {
-                            selected.Add(member.Value);
-                            break;
-                        }
+                        selected.Add(member.Value);
+                        break;
                     }
+                }
 
-                    break;
+                break;
 
-                case JsonPathSelector.Wildcard:
-                    selected.AddRange(Children(value));
-                    break;
+            case JsonPathSelector.Wildcard:
+                selected.AddRange(Children(value));
+                break;
 
-                case JsonPathSelector.Index index when value.ValueKind == JsonValueKind.Array:
-                    var length = value.GetArrayLength();
-                    var at = index.At >= 0 ? index.At : length + index.At;
+            case JsonPathSelector.Index index when value.ValueKind == JsonValueKind.Array:
+                var length = value.GetArrayLength();
+                var at = index.At >= 0 ? index.At : length + index.At;
 
-                    if (at >= 0 && at < length)
-                    {
-                        selected.Add(value[(int)at]);
-                    }
+                if (at >= 0 && at < length)
+                {
+                    selected.Add(value[(int)at]);
+                }
 
-                    break;
+                break;
 
-                case JsonPathSelector.Slice slice when value.ValueKind == JsonValueKind.Array:
-                    Slice(slice, value, selected);
-                    break;
-
-                case JsonPathSelector.Filter filter:
-                    foreach (var child in Children(value))
-                    {
-                        if (Holds(filter.Test, child, root))
-                        {
-                            selected.Add(child);
-                        }
-                    }
-
-                    break;
-            }
+            case JsonPathSelector.Slice slice when value.ValueKind == JsonValueKind.Array:
+                Slice(slice, value, selected);
+                break;
         }
     }
 
@@ -158,40 +172,133 @@ internal static class JsonPathEvaluator
     }
 
     /// <summary>Whether <paramref name="test"/> holds for <paramref name="current"/>, in <paramref name="root"/>.</summary>
-    private static bool Holds(JsonPathLogical test, JsonElement current, JsonElement root) => test switch
-    {
-        JsonPathLogical.Or or => or.Parts.Any(part => Holds(part, current, root)),
-        JsonPathLogical.And and => and.Parts.All(part => Holds(part, current, root)),
-        JsonPathLogical.Not not => !Holds(not.Part, current, root),
-        JsonPathLogical.Exists exists => Nodes(exists.Query, current, root).Count > 0,
-        JsonPathLogical.Test function => Truth(Call(function.Function, current, root)),
-        JsonPathLogical.Comparison comparison => Compare(Value(comparison.Left, current, root), comparison.Operator, Value(comparison.Right, current, root)),
-        _ => throw new InvalidOperationException($"A filter's expression is one the parser makes, not {test.GetType().Name}."),
-    };
+    private static Frame<bool> Holds(JsonPathLogical test, JsonElement current, JsonElement root)
+        => new(self => Holding(self, test, current, root));
 
-    private static List<JsonElement> Nodes(JsonPathQuery query, JsonElement current, JsonElement root)
+    private static IEnumerable<Frame> Holding(Frame<bool> self, JsonPathLogical test, JsonElement current, JsonElement root)
     {
-        var selected = new List<JsonElement>();
-        Select(query, current, root, selected);
-        return selected;
+        switch (test)
+        {
+            case JsonPathLogical.Or or:
+                foreach (var part in or.Parts)
+                {
+                    var holds = Holds(part, current, root);
+                    yield return holds;
+
+                    if (holds.Result)
+                    {
+                        self.Give(true);
+                        yield break;
+                    }
+                }
+
+                self.Give(false);
+                yield break;
+
+            case JsonPathLogical.And and:
+                foreach (var part in and.Parts)
+                {
+                    var holds = Holds(part, current, root);
+                    yield return holds;
+
+                    if (!holds.Result)
+                    {
+                        self.Give(false);
+                        yield break;
+                    }
+                }
+
+                self.Give(true);
+                yield break;
+
+            case JsonPathLogical.Not not:
+                var negated = Holds(not.Part, current, root);
+                yield return negated;
+
+                self.Give(!negated.Result);
+                yield break;
+
+            case JsonPathLogical.Exists exists:
+                var selected = Nodes(exists.Query, current, root);
+                yield return selected;
+
+                self.Give(selected.Result.Count > 0);
+                yield break;
+
+            case JsonPathLogical.Test function:
+                var answered = Function(function.Function, current, root);
+                yield return answered;
+
+                self.Give(Truth(answered.Result));
+                yield break;
+
+            case JsonPathLogical.Comparison comparison:
+                var left = Value(comparison.Left, current, root);
+                yield return left;
+
+                var right = Value(comparison.Right, current, root);
+                yield return right;
+
+                self.Give(Compare(left.Result, comparison.Operator, right.Result));
+                yield break;
+
+            default:
+                throw new InvalidOperationException($"A filter's expression is one the parser makes, not {test.GetType().Name}.");
+        }
     }
 
     /// <summary>A comparable's value: a literal, a singular query's one value, or a function's; <see langword="null"/> for nothing.</summary>
-    private static JsonElement? Value(JsonPathComparable comparable, JsonElement current, JsonElement root) => comparable switch
+    private static Frame<JsonElement?> Value(JsonPathComparable comparable, JsonElement current, JsonElement root)
+        => new(self => Valuing(self, comparable, current, root));
+
+    private static IEnumerable<Frame> Valuing(Frame<JsonElement?> self, JsonPathComparable comparable, JsonElement current, JsonElement root)
     {
-        JsonPathComparable.Literal literal => literal.Value,
-        JsonPathComparable.Query query => Nodes(query.Singular, current, root) is [var one] ? one : null,
-        JsonPathComparable.Function function => Call(function.Call, current, root).Value,
-        _ => throw new InvalidOperationException($"A comparable is one the parser makes, not {comparable.GetType().Name}."),
-    };
+        switch (comparable)
+        {
+            case JsonPathComparable.Literal literal:
+                self.Give(literal.Value);
+                yield break;
+
+            case JsonPathComparable.Query query:
+                var selected = Nodes(query.Singular, current, root);
+                yield return selected;
+
+                self.Give(selected.Result is [var one] ? one : null);
+                yield break;
+
+            case JsonPathComparable.Function function:
+                var answered = Function(function.Call, current, root);
+                yield return answered;
+
+                self.Give(answered.Result.Value);
+                yield break;
+
+            default:
+                throw new InvalidOperationException($"A comparable is one the parser makes, not {comparable.GetType().Name}.");
+        }
+    }
 
     /// <summary>A function's answer, of its type: a value or nothing, true or false, or a list of values.</summary>
-    private static Answer Call(JsonPathFunction function, JsonElement current, JsonElement root)
+    private static Frame<Answer> Function(JsonPathFunction function, JsonElement current, JsonElement root)
+        => new(self => Calling(self, function, current, root));
+
+    private static IEnumerable<Frame> Calling(Frame<Answer> self, JsonPathFunction function, JsonElement current, JsonElement root)
     {
+        // Each argument the function takes, answered in turn, as the type the function takes it.
+        var given = new List<Answer>();
+
+        foreach (var argument in function.Arguments)
+        {
+            var answered = Argument(argument, current, root);
+            yield return answered;
+
+            given.Add(answered.Result);
+        }
+
         switch (function.Name)
         {
             case "length":
-                return Argument(function.Arguments[0], current, root).Value is { } measured
+                self.Give(given[0].Value is { } measured
                     ? measured.ValueKind switch
                     {
                         JsonValueKind.String => Answer.Of(Number(CodePoints(measured.GetString()!))),
@@ -199,23 +306,24 @@ internal static class JsonPathEvaluator
                         JsonValueKind.Object => Answer.Of(Number(measured.EnumerateObject().Count())),
                         _ => Answer.Nothing,
                     }
-                    : Answer.Nothing;
+                    : Answer.Nothing);
+                break;
 
             case "count":
-                return Answer.Of(Number(Argument(function.Arguments[0], current, root).Nodes!.Count));
+                self.Give(Answer.Of(Number(given[0].Nodes!.Count)));
+                break;
 
             case "value":
-                return Argument(function.Arguments[0], current, root).Nodes is [var single] ? Answer.Of(single) : Answer.Nothing;
+                self.Give(given[0].Nodes is [var single] ? Answer.Of(single) : Answer.Nothing);
+                break;
 
             case "match":
             case "search":
-                var text = Argument(function.Arguments[0], current, root).Value;
-                var pattern = Argument(function.Arguments[1], current, root).Value;
-
-                return Answer.Logical(
-                    text is { ValueKind: JsonValueKind.String } subject
-                    && pattern is { ValueKind: JsonValueKind.String } expression
-                    && IRegexp.Matches(expression.GetString()!, subject.GetString()!, whole: function.Name == "match"));
+                self.Give(Answer.Logical(
+                    given[0].Value is { ValueKind: JsonValueKind.String } subject
+                    && given[1].Value is { ValueKind: JsonValueKind.String } expression
+                    && IRegexp.Matches(expression.GetString()!, subject.GetString()!, whole: function.Name == "match")));
+                break;
 
             default:
                 throw new InvalidOperationException($"'{function.Name}' is a function the parser takes, and is answered here.");
@@ -223,14 +331,42 @@ internal static class JsonPathEvaluator
     }
 
     /// <summary>What a function is given, as the type it takes it: a literal's or a singular query's value, a query's values, or a logical answer.</summary>
-    private static Answer Argument(JsonPathArgument argument, JsonElement current, JsonElement root) => argument switch
+    private static Frame<Answer> Argument(JsonPathArgument argument, JsonElement current, JsonElement root)
+        => new(self => Arguing(self, argument, current, root));
+
+    private static IEnumerable<Frame> Arguing(Frame<Answer> self, JsonPathArgument argument, JsonElement current, JsonElement root)
     {
-        JsonPathArgument.Literal literal => Answer.Of(literal.Value),
-        JsonPathArgument.Query query => Answer.Listing(Nodes(query.Of, current, root)),
-        JsonPathArgument.Logical logical => Answer.Logical(Holds(logical.Expression, current, root)),
-        JsonPathArgument.Function function => Call(function.Call, current, root),
-        _ => throw new InvalidOperationException($"An argument is one the parser makes, not {argument.GetType().Name}."),
-    };
+        switch (argument)
+        {
+            case JsonPathArgument.Literal literal:
+                self.Give(Answer.Of(literal.Value));
+                yield break;
+
+            case JsonPathArgument.Query query:
+                var selected = Nodes(query.Of, current, root);
+                yield return selected;
+
+                self.Give(Answer.Listing(selected.Result));
+                yield break;
+
+            case JsonPathArgument.Logical logical:
+                var holds = Holds(logical.Expression, current, root);
+                yield return holds;
+
+                self.Give(Answer.Logical(holds.Result));
+                yield break;
+
+            case JsonPathArgument.Function function:
+                var answered = Function(function.Call, current, root);
+                yield return answered;
+
+                self.Give(answered.Result);
+                yield break;
+
+            default:
+                throw new InvalidOperationException($"An argument is one the parser makes, not {argument.GetType().Name}.");
+        }
+    }
 
     /// <summary>A test's truth: a logical answer as it is, a list of values where it is not empty.</summary>
     private static bool Truth(Answer answer) => answer.Nodes is { } nodes ? nodes.Count > 0 : answer.Truth;
@@ -270,41 +406,78 @@ internal static class JsonPathEvaluator
     private static bool Equal(JsonElement? left, JsonElement? right)
         => left is null || right is null ? left is null && right is null : Equal(left.Value, right.Value);
 
+    /// <summary>
+    /// Whether two values are equal by the standard: numbers by their value, strings by their characters, arrays item by
+    /// item, objects member by member, found by name. Gone down on a stack of its own, every pair of values still to compare
+    /// held there, so values of any depth are compared.
+    /// </summary>
     private static bool Equal(JsonElement left, JsonElement right)
     {
-        if (left.ValueKind != right.ValueKind)
+        var pairs = new Stack<(JsonElement Left, JsonElement Right)>();
+        pairs.Push((left, right));
+
+        while (pairs.TryPop(out var pair))
         {
-            return false;
-        }
+            var (one, other) = pair;
 
-        switch (left.ValueKind)
-        {
-            case JsonValueKind.Number:
-                return NumberOf(left) == NumberOf(right);
+            if (one.ValueKind != other.ValueKind)
+            {
+                return false;
+            }
 
-            case JsonValueKind.String:
-                return string.Equals(left.GetString(), right.GetString(), StringComparison.Ordinal);
-
-            case JsonValueKind.Array:
-                return left.GetArrayLength() == right.GetArrayLength() && left.EnumerateArray().Zip(right.EnumerateArray()).All(pair => Equal(pair.First, pair.Second));
-
-            case JsonValueKind.Object:
-                if (left.GetPropertyCount() != right.GetPropertyCount())
-                {
+            switch (one.ValueKind)
+            {
+                case JsonValueKind.Number when NumberOf(one) != NumberOf(other):
+                case JsonValueKind.String when !string.Equals(one.GetString(), other.GetString(), StringComparison.Ordinal):
                     return false;
-                }
 
-                // As many members, and each found by its name, never sought among the rest: a name given twice is its last
-                // value's, as a reader of the object takes it.
-                var named = Members(left);
-                var others = Members(right);
+                case JsonValueKind.Array:
+                    if (one.GetArrayLength() != other.GetArrayLength())
+                    {
+                        return false;
+                    }
 
-                return named.Count == others.Count && named.All(member => others.TryGetValue(member.Key, out var other) && Equal(member.Value, other));
+                    foreach (var (first, second) in one.EnumerateArray().Zip(other.EnumerateArray()))
+                    {
+                        pairs.Push((first, second));
+                    }
 
-            default:
-                // true, false and null: one value each, the kind alone says which.
-                return true;
+                    break;
+
+                case JsonValueKind.Object:
+                    if (one.GetPropertyCount() != other.GetPropertyCount())
+                    {
+                        return false;
+                    }
+
+                    // As many members, and each found by its name, never sought among the rest: a name given twice is its last
+                    // value's, as a reader of the object takes it.
+                    var named = Members(one);
+                    var others = Members(other);
+
+                    if (named.Count != others.Count)
+                    {
+                        return false;
+                    }
+
+                    foreach (var (name, value) in named)
+                    {
+                        if (!others.TryGetValue(name, out var otherValue))
+                        {
+                            return false;
+                        }
+
+                        pairs.Push((value, otherValue));
+                    }
+
+                    break;
+
+                // true, false and null: one value each, the kind alone says which; a number or a string the cases above did
+                // not refuse is equal.
+            }
         }
+
+        return true;
     }
 
     private static Dictionary<string, JsonElement> Members(JsonElement value)

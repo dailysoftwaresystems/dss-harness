@@ -111,22 +111,22 @@ public sealed class AgentAttemptTests
                 Environment.NewLine,
                 "The files the attempt wrote:",
                 $"- made.txt ({AgentTools.CreateFile})",
-                "The last commands it ran: none.",
+                "The commands it ran: none.",
                 "The agent's last messages, word for word:",
                 "went on"),
             account);
     }
 
     /// <summary>
-    /// The engine's handoff lists the attempt's last commands, as many as it keeps, and says how many earlier ones it left
-    /// out: a long attempt's every command would crowd the handoff it heads.
+    /// The engine's handoff lists every command the attempt ran, in order, however many - an agent that ran 5,000 over two
+    /// days among them, past the 20 it once listed - for the continuation record holds the handoff whole, a page at a time.
     /// </summary>
     [Fact]
-    public void TheEnginesHandoff_ListsTheLastCommands_AndCountsTheRest()
+    public void AnAccountOfFiveThousandCommands_ListsEveryOne()
     {
         var stream = new List<AgentEvent> { new RunStarted(1) };
 
-        for (var each = 1; each <= AgentStreamAccount.LastCommands + 2; each++)
+        for (var each = 1; each <= 5000; each++)
         {
             var id = $"c-{each}";
             stream.Add(new ToolCallStarted(id, AgentTools.RunCommand, AgentToolRunner.Harness));
@@ -140,9 +140,8 @@ public sealed class AgentAttemptTests
                 Environment.NewLine,
                 [
                     "The files the attempt wrote: none.",
-                    "The last commands it ran and how each ended:",
-                    "- (2 earlier left out)",
-                    .. Enumerable.Range(3, AgentStreamAccount.LastCommands).Select(each => $"- step {each} (ended ok)"),
+                    "The commands it ran and how each ended, in order:",
+                    .. Enumerable.Range(1, 5000).Select(each => $"- step {each} (ended ok)"),
                     "The agent's last messages: the attempt wrote none.",
                 ]),
             account);
@@ -170,7 +169,7 @@ public sealed class AgentAttemptTests
                 Environment.NewLine,
                 "The files the attempt wrote:",
                 $"- made.txt ({AgentTools.CreateFile})",
-                "The last commands it ran: none.",
+                "The commands it ran: none.",
                 "The agent's last messages, word for word:",
                 "wrote it"),
             AgentStreamAccount.Of(stream, [], keepMessages: 1));

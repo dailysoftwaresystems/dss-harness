@@ -1,6 +1,7 @@
 using System.Text.RegularExpressions;
 using DssHarness.Core.Execution;
 using DssHarness.Core.Output;
+using DssHarness.Core.Text;
 
 namespace DssHarness.Core.Build;
 
@@ -45,25 +46,23 @@ internal static class Ninja
     private static readonly string[] Asides = ["warning: ", "Entering directory", "Leaving directory", "no work to do", "nothing to do", "explain "];
 
     /// <summary>A terminal's colour codes, which ninja writes around what it says where something makes it colour its output.</summary>
-    private static readonly Regex Colour = new(@"\x1B\[[0-9;]*m", RegexOptions.CultureInvariant);
+    private static readonly Regex Colour = LinearRegex.Compile(@"\x1B\[[0-9;]*m");
 
     /// <summary>What ninja 1.13 and later writes between <c>FAILED: </c> and a failed step's outputs: its exit code.</summary>
-    private static readonly Regex FailedCode = new(@"\A\[code=-?[0-9]+\] ", RegexOptions.CultureInvariant);
+    private static readonly Regex FailedCode = LinearRegex.Compile(@"\A\[code=-?[0-9]+\] ");
 
     /// <summary>
     /// What samurai says under its name of a step that failed, before the command the step ran - its own <c>FAILED:</c>
     /// line: the status it exited with, the signal that ended it, or a status samurai could not tell.
     /// </summary>
-    private static readonly Regex JobFailed = new(
-        @"\Ajob (?:failed with status -?[0-9]+|terminated due to signal [0-9]+|status unknown): ",
-        RegexOptions.CultureInvariant);
+    private static readonly Regex JobFailed = LinearRegex.Compile(@"\Ajob (?:failed with status -?[0-9]+|terminated due to signal [0-9]+|status unknown): ");
 
     /// <summary>
     /// What ninja, and samurai, begin a step's line with as its status says it where <c>NINJA_STATUS</c> sets none of its
     /// own: <c>[run/planned] </c> - ninja's <c>[%f/%t] </c> written as each step ends, where its output is no terminal, and
     /// samurai's <c>[%s/%t] </c> as each starts.
     /// </summary>
-    private static readonly Regex Status = new(@"\A\[(?<run>[0-9]+)/(?<planned>[0-9]+)\] ", RegexOptions.CultureInvariant);
+    private static readonly Regex Status = LinearRegex.Compile(@"\A\[(?<run>[0-9]+)/(?<planned>[0-9]+)\] ");
 
     /// <summary>
     /// What ninja, and samurai, are given to go on past every step that fails, until nothing more can be built: <c>-k 0</c>,

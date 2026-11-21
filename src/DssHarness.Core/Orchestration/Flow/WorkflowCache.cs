@@ -106,8 +106,8 @@ public sealed record WorkflowCachePruning(int Entries, int Blobs, IReadOnlyList<
 /// </summary>
 /// <remarks>
 /// One machine-wide lock orders what a pruning decides against what a fetch and a use record, and it is held for one
-/// record, or one batch of a pruning's removals, at a time - never across a fetch's blobs or a whole pruning, so it
-/// bounds what takes a moment, as every lock of the tool's does (<see cref="MachineWideFile.Window"/>). A blob is named
+/// record, or one batch of a pruning's removals, at a time - never across a fetch's blobs or a whole pruning, so another
+/// process waits for it a moment, and a wait that lasts is told every five minutes while its holder lives. A blob is named
 /// by its content, so it is written outside the lock, before its entry; the entry is written under the lock only once
 /// every blob it names is there, written again where a pruning took it meanwhile - so a pruning, which reads under the
 /// lock which blobs the entries hold before it removes one, never takes a blob an entry holds. A use is recorded under
@@ -121,7 +121,7 @@ public sealed class WorkflowCache
 
     /// <summary>
     /// The code every failure of the cache's own ends with: its directory that cannot be named, a file of it that cannot
-    /// be written, a record of it that cannot be read, its lock held past its window. Incomplete - nothing a command was
+    /// be written, a record of it that cannot be read, its lock that could not be taken. Incomplete - nothing a command was
     /// asked about failed, and running it again once the cache can be worked on finishes it - and never a refusal or a
     /// configuration's code, which a resolution of a remote use takes for the source's own (<see cref="WorkflowResolution.Fetch"/>):
     /// a cache that could not be worked on is never said as a problem of the definition's.
@@ -133,15 +133,6 @@ public sealed class WorkflowCache
     /// takes the lock for is a moment's work, whatever the cache holds.
     /// </summary>
     public const int BlobsPerHold = 256;
-
-    /// <summary>The most files one fetched directory may hold; a fetch past it is refused with the count.</summary>
-    public const int MostFiles = 2_000;
-
-    /// <summary>The most bytes one fetched directory may hold; a fetch past it is refused with the size.</summary>
-    public const long MostBytes = 20 * 1024 * 1024;
-
-    /// <summary>The most days a pruning may name: a hundred years, past which no entry's date reaches.</summary>
-    public const int MostUnusedDays = 36_500;
 
     /// <summary>The git modes a cached file may have: a plain file, and one that runs.</summary>
     public static IReadOnlyList<string> FileModes { get; } = ["100644", "100755"];
@@ -303,7 +294,7 @@ public sealed class WorkflowCache
     /// <param name="entry">The entry.</param>
     /// <param name="contents">Each file's bytes, by its path as the entry names it.</param>
     /// <param name="resolution">The resolution of a ref that led to the entry; null where a commit was named.</param>
-    /// <exception cref="HarnessException">Something of it could not be written, or the lock was held past its window (<see cref="FailedExit"/>): nothing of the fetch is used.</exception>
+    /// <exception cref="HarnessException">Something of it could not be written, or the lock could not be taken (<see cref="FailedExit"/>): nothing of the fetch is used.</exception>
     public void Write(WorkflowCacheEntry entry, IReadOnlyDictionary<string, byte[]> contents, WorkflowCacheResolution? resolution)
     {
         ArgumentNullException.ThrowIfNull(entry);
@@ -396,7 +387,7 @@ public sealed class WorkflowCache
     /// <param name="resolution">The resolution of a ref that led to it; null where a commit was named.</param>
     /// <param name="now">Now.</param>
     /// <exception cref="HarnessException">
-    /// It could not be read or written, or the lock was held past its window (<see cref="FailedExit"/>): what was read
+    /// It could not be read or written, or the lock could not be taken (<see cref="FailedExit"/>): what was read
     /// stands, and only the use's date and the resolution were not kept.
     /// </exception>
     public WorkflowCacheEntry? Hold(WorkflowCacheEntry entry, WorkflowCacheResolution? resolution, DateTimeOffset now)
@@ -473,15 +464,17 @@ public sealed class WorkflowCache
     /// before any blob of the batch goes - so a fetch is never held off for longer than one of them, and an entry a fetch
     /// records between two batches keeps its blobs.
     /// </remarks>
-    /// <param name="unusedDays">The days an entry may go unused before it is pruned, 0 to <see cref="MostUnusedDays"/>.</param>
+    /// <param name="unusedDays">
+    /// The days an entry may go unused before it is pruned: 0 or more, any number - days reaching back past the clock's
+    /// start put the cut-off there, before which no entry's date is.
+    /// </param>
     /// <param name="asOf">Now, as the caller knows it.</param>
-    /// <exception cref="HarnessException">No directory of this user's own could be named, or the lock was held past its window (<see cref="FailedExit"/>).</exception>
+    /// <exception cref="HarnessException">No directory of this user's own could be named, or the lock could not be taken (<see cref="FailedExit"/>).</exception>
     public WorkflowCachePruning Prune(int unusedDays, DateTimeOffset asOf)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(unusedDays);
-        ArgumentOutOfRangeException.ThrowIfGreaterThan(unusedDays, MostUnusedDays);
 
-        var cutoff = asOf - TimeSpan.FromDays(unusedDays);
+        var cutoff = Cutoff(unusedDays, asOf);
         bool Stale(WorkflowCacheEntry entry) => entry.LastUsedAt < cutoff && entry.FetchedAt < cutoff;
 
         var unread = new List<WorkflowCacheUnread>();
@@ -608,6 +601,15 @@ public sealed class WorkflowCache
             => resolution.Host.Equals(entry.Host, StringComparison.OrdinalIgnoreCase)
                 && resolution.Owner == entry.Owner && resolution.Repo == entry.Repo && resolution.Commit == entry.Commit && resolution.Path == entry.Path;
     }
+
+    /// <summary>
+    /// The moment <paramref name="unusedDays"/> days before <paramref name="asOf"/>, clamped at the clock's start: days of
+    /// any number name a cut-off, and those reaching back past the first moment the clock keeps put it there.
+    /// </summary>
+    /// <param name="unusedDays">The days, 0 or more.</param>
+    /// <param name="asOf">Now, as the caller knows it.</param>
+    internal static DateTimeOffset Cutoff(int unusedDays, DateTimeOffset asOf)
+        => unusedDays >= (asOf - DateTimeOffset.MinValue).TotalDays ? DateTimeOffset.MinValue : asOf - TimeSpan.FromDays(unusedDays);
 
     /// <summary>
     /// The bytes of one file of <paramref name="entry"/>, its blob hashed again as it is read; null where the entry
@@ -979,9 +981,9 @@ public sealed class WorkflowCache
 
     /// <summary>
     /// Runs <paramref name="work"/> under the cache's one machine-wide lock, which every record of an entry, a use or a
-    /// resolution, and every removal of a pruning's, takes - for one record or one batch, never for bulk work: a lock held
-    /// past its window by another process is the cache's own failure (<see cref="FailedExit"/>), never a refusal of what
-    /// was asked.
+    /// resolution, and every removal of a pruning's, takes - for one record or one batch, never for bulk work. A lock
+    /// another process holds is waited for while that process lives, the wait told every five minutes; a lock that could
+    /// not be taken is the cache's own failure (<see cref="FailedExit"/>), never a refusal of what was asked.
     /// </summary>
     private T Locked<T>(Func<T> work)
     {
@@ -993,8 +995,8 @@ public sealed class WorkflowCache
         }
         catch (HarnessException held) when (held.ExitCode != FailedExit)
         {
-            // Everything the work itself raises is the cache's own code already; what is left is the lock's refusal.
-            throw new HarnessException(FailedExit, $"{held.Message.TrimEnd('.')}: the workflow cache's lock was held past its window, and the command run again once that process is done finishes", held);
+            // Everything the work itself raises is the cache's own code already; what is left is the lock's own failure.
+            throw new HarnessException(FailedExit, $"{held.Message.TrimEnd('.')}: the workflow cache's lock could not be taken, so nothing it orders was written, and the command run again finishes", held);
         }
     }
 

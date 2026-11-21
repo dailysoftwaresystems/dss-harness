@@ -1,8 +1,10 @@
 using System.Globalization;
 using System.Runtime.CompilerServices;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using DssHarness.Core.Agents.Loop;
+using DssHarness.Core.Json;
 
 namespace DssHarness.Core.Agents.Http;
 
@@ -13,8 +15,8 @@ namespace DssHarness.Core.Agents.Http;
 /// </summary>
 public static class ApiAnswers
 {
-    /// <summary>The most of a body that is no error the API wrote said in a failure: the start of what came.</summary>
-    public const int MostSaid = 300;
+    /// <summary>How much of a refused body the reading of an API's error reads at a time, more where one of its values is longer.</summary>
+    private const int ReadPiece = 16 * 1024;
 
     /// <summary>Posts <paramref name="post"/> and streams the parts <paramref name="read"/> makes of each event, until one ends the answer.</summary>
     /// <param name="connection">How the request is posted and its stream read.</param>
@@ -54,7 +56,8 @@ public static class ApiAnswers
 
     /// <summary>
     /// The parts an event of an answer comes to: an item's as <paramref name="item"/> reads it, a refusal's failure as
-    /// <paramref name="refused"/> classes it, and a network that failed and a stream cut each failing for now.
+    /// <paramref name="refused"/> classes it, a piece of a refused body still coming heard - and told as a notice every
+    /// time it is to be told - and a network that failed and a stream cut each failing for now.
     /// </summary>
     /// <param name="happened">The event.</param>
     /// <param name="item">The parts an item comes to.</param>
@@ -68,12 +71,20 @@ public static class ApiAnswers
         return happened switch
         {
             ApiEvent.Item each => item(each),
+            ApiEvent.Refusing { Told: true } each => [new ChatPart.Notice(StillRefusing(each.Status, each.Bytes))],
+            ApiEvent.Refusing => [new ChatPart.Heard()],
             ApiEvent.Refused each => [new ChatPart.Failed(refused(each))],
             ApiEvent.Unreached each => [new ChatPart.Failed(Unreached(each.Why))],
             ApiEvent.Cut each => [new ChatPart.Failed(Cut(each.Why))],
             _ => throw new InvalidOperationException($"'{happened.GetType().Name}' is no event a connection yields."),
         };
     }
+
+    /// <summary>What is told of a refused body still coming: its status, and how much of it is kept so far.</summary>
+    /// <param name="status">The status the API answered with.</param>
+    /// <param name="bytes">How many bytes of its body are kept so far.</param>
+    public static string StillRefusing(int status, long bytes)
+        => $"the API answered {status.ToString(CultureInfo.InvariantCulture)} and its body is still coming: {bytes.ToString("N0", CultureInfo.InvariantCulture)} bytes of it kept so far";
 
     /// <summary>An answer failing, as the loop's part.</summary>
     /// <param name="kind">What the failure is to the loop.</param>
@@ -125,13 +136,16 @@ public static class ApiAnswers
     public static string Refusal(int status, string kind, string? message, string? request = null)
         => $"the API answered {status.ToString(CultureInfo.InvariantCulture)} {kind}: {message}{Named(request)}";
 
-    /// <summary>What an error the API sent part way through an answer's stream is said as: the error's kind and message, the start of the data where it holds none, and the request the API names.</summary>
+    /// <summary>
+    /// What an error the API sent part way through an answer's stream is said as: the error's kind and message - the data
+    /// whole, on one line, where it holds none - and the request the API names.
+    /// </summary>
     /// <param name="kind">The error's type or code; null where it names none.</param>
     /// <param name="message">The error's message; null where it holds none.</param>
     /// <param name="data">The data that holds the error.</param>
     /// <param name="request">The request the API names; null where it names none.</param>
     public static string StreamFailure(string? kind, string? message, string data, string? request = null)
-        => $"the API's stream failed: {kind ?? "an error"}: {message ?? Start(data)}{Named(request)}";
+        => $"the API's stream failed: {kind ?? "an error"}: {message ?? OneLine(data)}{Named(request)}";
 
     /// <summary>The object <paramref name="json"/> is; null where it reads as no JSON object.</summary>
     /// <param name="json">The text.</param>
@@ -141,7 +155,7 @@ public static class ApiAnswers
 
         try
         {
-            return JsonNode.Parse(json) as JsonObject;
+            return JsonDepth.ParseNode(json) as JsonObject;
         }
         catch (JsonException)
         {
@@ -161,25 +175,148 @@ public static class ApiAnswers
     /// <param name="status">The status.</param>
     public static bool FailsForNow(int status) => status is 408 or 409 or >= 500;
 
-    /// <summary>What a refusal whose body is no error the API wrote is said as: its status, and the start of what came.</summary>
+    /// <summary>
+    /// What a refusal whose body is no error the API wrote is said as: its status, and the body - nothing said, where it
+    /// holds no byte; where it is kept in the request's records, how many bytes it holds and the file that keeps them
+    /// whole, for a page of any size is no sentence; where it is held, the whole of it, on one line.
+    /// </summary>
     /// <param name="status">The status.</param>
-    /// <param name="body">The body.</param>
-    public static string Answered(int status, string body)
+    /// <param name="body">The body, as it is kept.</param>
+    public static string Answered(int status, ApiRefusedBody body)
     {
         ArgumentNullException.ThrowIfNull(body);
 
-        return $"the API answered {status.ToString(CultureInfo.InvariantCulture)}{(body.Length > 0 ? $": {Start(body)}" : " with nothing said")}";
+        var answered = $"the API answered {status.ToString(CultureInfo.InvariantCulture)}";
+
+        return body.Bytes == 0 ? $"{answered} with nothing said"
+            : body.File is { } file ? $"{answered} with {body.Bytes.ToString("N0", CultureInfo.InvariantCulture)} bytes that are no error of the API's own, kept whole in '{file}'"
+            : $"{answered}: {OneLine(body.HeldText!)}";
     }
 
-    /// <summary>The start of a body that is no error the API wrote, on one line.</summary>
-    /// <param name="body">The body.</param>
-    public static string Start(string body)
+    /// <summary>A text on one line, whole: each run of line breaks a space, and the ends trimmed.</summary>
+    /// <param name="text">The text.</param>
+    public static string OneLine(string text)
     {
-        ArgumentNullException.ThrowIfNull(body);
+        ArgumentNullException.ThrowIfNull(text);
 
-        var line = string.Join(' ', body.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+        return string.Join(' ', text.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+    }
 
-        return line.Length <= MostSaid ? line : $"{line[..MostSaid]}...";
+    /// <summary>
+    /// The text of each member <paramref name="paths"/> names in the JSON object <paramref name="json"/> holds - a string's
+    /// text, or a number as it is written - read as the JSON streams, never holding it whole: what an API's error says of
+    /// itself, from a body of any size. A member of another kind is left out; so is every member where the body is no JSON
+    /// object, or no JSON at all - a page of a proxy's - which says nothing of an API's error.
+    /// </summary>
+    /// <param name="json">The body, as a stream.</param>
+    /// <param name="paths">Each member by its path of names from the object: <c>["error", "type"]</c>.</param>
+    /// <returns>Each member found, by its path's names joined with dots.</returns>
+    public static IReadOnlyDictionary<string, string> Members(Stream json, IReadOnlyList<IReadOnlyList<string>> paths)
+    {
+        ArgumentNullException.ThrowIfNull(json);
+        ArgumentNullException.ThrowIfNull(paths);
+
+        var wanted = paths.Select(path => string.Join('.', path)).ToHashSet(StringComparer.Ordinal);
+        var found = new Dictionary<string, string>(StringComparer.Ordinal);
+        var names = new List<string>();
+        string? named = null;
+        var began = false;
+        var buffer = new byte[ReadPiece];
+        var filled = 0;
+        var final = false;
+        var state = new JsonReaderState(JsonDepth.Reader);
+
+        try
+        {
+            while (true)
+            {
+                if (!final)
+                {
+                    var read = json.Read(buffer, filled, buffer.Length - filled);
+                    filled += read;
+                    final = read == 0;
+                }
+
+                var reader = new Utf8JsonReader(buffer.AsSpan(0, filled), final, state);
+
+                while (reader.Read())
+                {
+                    switch (reader.TokenType)
+                    {
+                        case JsonTokenType.StartObject or JsonTokenType.StartArray when !began:
+                            if (reader.TokenType != JsonTokenType.StartObject)
+                            {
+                                return new Dictionary<string, string>(StringComparer.Ordinal);
+                            }
+
+                            began = true;
+                            break;
+
+                        case JsonTokenType.StartObject or JsonTokenType.StartArray:
+                            // An array's items are named by no name a path holds, so nothing beneath one is ever wanted.
+                            names.Add(named ?? "[]");
+                            named = null;
+                            break;
+
+                        case JsonTokenType.EndObject or JsonTokenType.EndArray:
+                            // The object's own end is all of it read: whatever follows it is no part of the error.
+                            if (names.Count == 0)
+                            {
+                                return found;
+                            }
+
+                            names.RemoveAt(names.Count - 1);
+                            break;
+
+                        case JsonTokenType.PropertyName:
+                            named = reader.GetString();
+                            break;
+
+                        case JsonTokenType.String or JsonTokenType.Number when named is not null:
+                            var path = names.Count == 0 ? named : $"{string.Join('.', names)}.{named}";
+
+                            if (wanted.Contains(path))
+                            {
+                                found[path] = reader.TokenType == JsonTokenType.String ? reader.GetString()! : Encoding.UTF8.GetString(reader.ValueSpan);
+                            }
+
+                            named = null;
+                            break;
+
+                        default:
+                            if (!began)
+                            {
+                                return new Dictionary<string, string>(StringComparer.Ordinal);
+                            }
+
+                            named = null;
+                            break;
+                    }
+                }
+
+                if (final)
+                {
+                    // A body that ended before its object did says nothing whole of an error.
+                    return new Dictionary<string, string>(StringComparer.Ordinal);
+                }
+
+                // What the reader did not take is a token that goes on in the next piece: kept at the buffer's head, and the
+                // buffer grown where that token fills it, so a value of any length is read whole.
+                var taken = (int)reader.BytesConsumed;
+                state = reader.CurrentState;
+                Buffer.BlockCopy(buffer, taken, buffer, 0, filled - taken);
+                filled -= taken;
+
+                if (filled == buffer.Length)
+                {
+                    Array.Resize(ref buffer, buffer.Length * 2);
+                }
+            }
+        }
+        catch (JsonException)
+        {
+            return new Dictionary<string, string>(StringComparer.Ordinal);
+        }
     }
 
     /// <summary>The request a failure names, as it is said after it.</summary>

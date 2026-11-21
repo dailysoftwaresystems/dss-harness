@@ -45,7 +45,7 @@ public sealed class AgentRunnerTests
 
         var seen = new List<AgentEvent>();
 
-        var search = new AgentWebSearch([], 3, 4, new Dictionary<string, DssHarness.Core.Web.Search.WebSearchKey>());
+        var search = new AgentWebSearch([], 4, new Dictionary<string, DssHarness.Core.Web.Search.WebSearchKey>());
         var entries = new AgentEntries(new AgentProviderConfig { Name = "anthropic" }, new AgentModelConfig { Code = "model-x" }, new AgentClientConfig { MaxRetries = 2 });
         var step = Step(temp, prompt: "do the login form") with { WebSearch = search, Withheld = ["DEPLOY_TOKEN"], Entries = entries };
 
@@ -142,7 +142,7 @@ public sealed class AgentRunnerTests
             new PassThroughMechanism("bubblewrap", "0.9.0") { Leaves = "abstract Unix sockets" },
             DssHarness.Core.Processes.IsolationProfile.Nothing,
             null,
-            null) { After = _ => Task.FromResult<string?>(Made) };
+            null) { After = (_, _) => Task.FromResult<string?>(Made) };
         var seen = new List<AgentEvent>();
 
         var result = await Runner(client).RunAsync(Step(temp) with { Isolation = leaving }, new Collecting(seen), TestContext.Current.CancellationToken);

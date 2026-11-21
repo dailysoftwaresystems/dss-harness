@@ -1,8 +1,9 @@
-using System.Globalization;
 using DssHarness.Core.Execution;
 using DssHarness.Core.FileSystem;
+using DssHarness.Core.Output;
 using DssHarness.Core.Repository;
 using DssHarness.Core.Results;
+using DssHarness.Core.Waiting;
 
 namespace DssHarness.Core.Runs;
 
@@ -23,20 +24,19 @@ namespace DssHarness.Core.Runs;
 /// <param name="stops">Asks the stop, and takes it back.</param>
 /// <param name="identity">This process, and how the dispatcher is told and described.</param>
 /// <param name="fileSystem">Whether the run's records are there.</param>
-/// <param name="clock">How long the stop is waited for.</param>
+/// <param name="clock">Measures the wait on the dispatcher, and times its looks.</param>
+/// <param name="output">Where the wait on the dispatcher is said every five minutes it lasts; nowhere where none is given.</param>
 public sealed class RunStopService(
     IHarnessContextLoader contextLoader,
     LogOwnership logOwnership,
     RunStops stops,
     IProcessIdentity identity,
     IFileSystem fileSystem,
-    TimeProvider? clock = null) : DssHarness.Core.Application.IUseCase
+    TimeProvider? clock = null,
+    IHarnessOutput? output = null) : DssHarness.Core.Application.IUseCase
 {
     /// <summary>The command's name.</summary>
     public const string CommandName = "stop-run";
-
-    /// <summary>How long the dispatcher is given to stop and give up its records once asked, and its process to go once ended.</summary>
-    public static readonly TimeSpan StopWait = TimeSpan.FromSeconds(60);
 
     private readonly IHarnessContextLoader _contextLoader = contextLoader;
     private readonly LogOwnership _logOwnership = logOwnership;
@@ -44,6 +44,7 @@ public sealed class RunStopService(
     private readonly IProcessIdentity _identity = identity;
     private readonly IFileSystem _fileSystem = fileSystem;
     private readonly TimeProvider _clock = clock ?? TimeProvider.System;
+    private readonly IHarnessOutput? _output = output;
 
     /// <summary>Stops the run <paramref name="run"/> names, in the tree <paramref name="startDirectory"/> is in.</summary>
     /// <param name="startDirectory">A directory of the tree the run ran in.</param>
@@ -139,9 +140,52 @@ public sealed class RunStopService(
 
         var file = RunStops.FileOf(runDirectory);
         report = report with { Record = file };
-        var until = _clock.GetUtcNow() + StopWait;
 
-        while (_clock.GetUtcNow() < until)
+        // Waited for while its dispatcher lives, however long its stop takes - a set-up's down line, a build's last step,
+        // among what it waits for - and said every five minutes it lasts: only the caller's interrupt ends the wait, and
+        // --now ends a dispatcher that no longer answers.
+        var waited = await Waits.ForAsync(
+                token => StoppedAsync(report, json, token),
+                new WaitWatch($"run {report.Run}'s dispatcher ({report.Dispatcher}) to stop", told => _output?.Info(CommandName, told.Line()), Bound: null, _clock),
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        if (waited is { Kind: WaitEndKind.Done, Value: { } stopped })
+        {
+            return stopped;
+        }
+
+        // Said as it stands: taken, the run is stopping, and the run's record says so; not yet, the stop stays asked for the
+        // dispatcher's next look.
+        return _stops.IsTaken(runDirectory, CommandName)
+            ? RunStopReports.Render(
+                CommandOutcome.Failed(
+                    HarnessExit.Cancelled,
+                    $"waiting for run {report.Run} to stop was cancelled; its dispatcher took the stop and is stopping",
+                    [$"stop: {RunStops.TakenFileOf(runDirectory)}"]),
+                report with { Record = RunStops.TakenFileOf(runDirectory) },
+                json)
+            : RunStopReports.Render(
+                CommandOutcome.Failed(
+                    HarnessExit.Cancelled,
+                    $"waiting for run {report.Run} to stop was cancelled; the stop stays asked, and its dispatcher takes it at its next look",
+                    [$"stop: {file}"]),
+                report,
+                json);
+    }
+
+    /// <summary>
+    /// How the run stands once its dispatcher has gone - stopped, where it took the stop, or ended first - looked at again
+    /// every <see cref="StopCadence.WatchEvery"/> for as long as it lives.
+    /// </summary>
+    /// <param name="report">The run, its dispatcher and the stop asked of it.</param>
+    /// <param name="json">Whether the answer is the command's document.</param>
+    /// <param name="cancellationToken">Ends the looking, by throwing.</param>
+    private async Task<CommandOutcome> StoppedAsync(RunStopReport report, bool json, CancellationToken cancellationToken)
+    {
+        var runDirectory = report.RunDirectory;
+
+        while (true)
         {
             var owner = _logOwnership.Owner(runDirectory);
 
@@ -192,49 +236,8 @@ public sealed class RunStopService(
                     json);
             }
 
-            try
-            {
-                await Task.Delay(StopCadence.WatchEvery, _clock, cancellationToken).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException)
-            {
-                // Said as it stands: taken, the run is stopping, and the run's record says so; not yet, the stop stays
-                // asked for the dispatcher's next look.
-                return _stops.IsTaken(runDirectory, CommandName)
-                    ? RunStopReports.Render(
-                        CommandOutcome.Failed(
-                            HarnessExit.Cancelled,
-                            $"waiting for run {report.Run} to stop was cancelled; its dispatcher took the stop and is stopping",
-                            [$"stop: {RunStops.TakenFileOf(runDirectory)}"]),
-                        report with { Record = RunStops.TakenFileOf(runDirectory) },
-                        json)
-                    : RunStopReports.Render(
-                        CommandOutcome.Failed(
-                            HarnessExit.Cancelled,
-                            $"waiting for run {report.Run} to stop was cancelled; the stop stays asked, and its dispatcher takes it at its next look",
-                            [$"stop: {file}"]),
-                        report,
-                        json);
-            }
+            await Task.Delay(StopCadence.WatchEvery, _clock, cancellationToken).ConfigureAwait(false);
         }
-
-        var waited = StopWait.TotalSeconds.ToString(CultureInfo.InvariantCulture);
-
-        // Taken, the dispatcher is still stopping - a set-up's down line among what it waits for - and --now would end it
-        // part way through; not yet taken, it has not looked, and the stop stays asked.
-        return _stops.IsTaken(runDirectory, CommandName)
-            ? RunStopReports.Render(
-                CommandOutcome.Refused(
-                    $"run {report.Run}'s dispatcher ({report.Dispatcher}) took the stop and is still stopping after {waited} s",
-                    [$"{CommandName} {report.Run} --now ends its process where it stands, part way through its stop", $"stop: {RunStops.TakenFileOf(runDirectory)}"]),
-                report with { Record = RunStops.TakenFileOf(runDirectory) },
-                json)
-            : RunStopReports.Render(
-                CommandOutcome.Refused(
-                    $"run {report.Run}'s dispatcher ({report.Dispatcher}) did not take the stop within {waited} s; the stop stays asked",
-                    [$"{CommandName} {report.Run} --now ends its process where it stands", $"stop: {file}"]),
-                report,
-                json);
     }
 
     /// <summary>
@@ -243,9 +246,19 @@ public sealed class RunStopService(
     /// </summary>
     private async Task<CommandOutcome> EndNowAsync(LogOwner owner, RunStopReport report, bool json, CancellationToken cancellationToken)
     {
-        var ending = await _identity.EndWhereItStandsAsync(owner.Machine, owner.ProcessId, owner.ProcessStamp, StopWait, cancellationToken).ConfigureAwait(false);
+        // Ended, then waited for until it has gone, however long its system takes to take its tree down, and said every
+        // five minutes it lasts: only the caller's interrupt ends the wait, thrown as one.
+        var waited = await Waits.ForAsync(
+                token => _identity.EndWhereItStandsAsync(owner.Machine, owner.ProcessId, owner.ProcessStamp, Timeout.InfiniteTimeSpan, token),
+                new WaitWatch($"run {report.Run}'s dispatcher ({report.Dispatcher}) to go", told => _output?.Info(CommandName, told.Line()), Bound: null, _clock),
+                cancellationToken)
+            .ConfigureAwait(false);
 
-        if (ending.NothingMoreToDo($"run {report.Run}'s dispatcher", report.Dispatcher!, "owner file", $"{CommandName} {report.Run}", StopWait) is { } nothingMore)
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var ending = waited.Value!;
+
+        if (ending.NothingMoreToDo($"run {report.Run}'s dispatcher", report.Dispatcher!, "owner file", $"{CommandName} {report.Run}", Timeout.InfiniteTimeSpan) is { } nothingMore)
         {
             return RunStopReports.Render(nothingMore, report, json);
         }

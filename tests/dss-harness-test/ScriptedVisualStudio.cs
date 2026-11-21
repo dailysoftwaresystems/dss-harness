@@ -72,9 +72,6 @@ internal sealed class ScriptedVisualStudio : IProcessRunner, IDisposable
     /// <summary>Whether the batch file stopped before its last <c>set</c>, leaving no listing of what came after.</summary>
     public bool WritesNoListingAfter { get; init; }
 
-    /// <summary>Whether the capture outlives its budget.</summary>
-    public bool TimesOut { get; init; }
-
     /// <summary>Whether cmd.exe is nowhere to be started.</summary>
     public bool ShellMissing { get; init; }
 
@@ -181,11 +178,6 @@ internal sealed class ScriptedVisualStudio : IProcessRunner, IDisposable
             throw new ExecutableNotFoundException(request.FileName);
         }
 
-        if (TimesOut)
-        {
-            return new ProcessResult(-1, string.Empty, string.Empty, TimeSpan.Zero, TimedOut: true);
-        }
-
         if (WritesNothing)
         {
             return new ProcessResult(1, string.Empty, "The system cannot find the path specified.", TimeSpan.Zero, TimedOut: false);
@@ -240,12 +232,14 @@ internal sealed class ScriptedVisualStudio : IProcessRunner, IDisposable
     /// <param name="processor">The machine's processor.</param>
     /// <param name="fileSystem">What it writes and reads the capture through; the real one when left out.</param>
     /// <param name="output">Where it says what it warns about; nowhere anyone reads, when left out.</param>
-    public DeveloperEnvironmentProvider Provider(string processor = "x86_64", IFileSystem? fileSystem = null, IHarnessOutput? output = null)
+    /// <param name="clock">The clock a capture that lasts is waited on; the machine's own when left out.</param>
+    public DeveloperEnvironmentProvider Provider(string processor = "x86_64", IFileSystem? fileSystem = null, IHarnessOutput? output = null, TimeProvider? clock = null)
         => new(
             HostDoubles.Platform(PlatformId.Windows, processor),
             this,
             fileSystem ?? new PhysicalFileSystem(FilePermissionsFactory.Create()),
-            output ?? new HarnessFactory().Output);
+            output ?? new HarnessFactory().Output,
+            clock);
 
     /// <summary>A survey of a Windows machine on which this is how Visual Studio's installer and instances answer.</summary>
     /// <param name="fileSystem">What the instances' toolsets are listed through; the real one when left out.</param>

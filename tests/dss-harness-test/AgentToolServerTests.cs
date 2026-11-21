@@ -252,7 +252,7 @@ public sealed class AgentToolServerTests : IDisposable
             DssHarness.Core.Web.Search.WebSearchKinds.OfThisBuild,
             fetch,
             new DssHarness.Core.Web.Index.WebIndexes(files, new DssHarness.Core.Web.Index.SitemapFill(files, fetch, TimeProvider.System, (_, _) => Task.CompletedTask), TimeProvider.System),
-            new DssHarness.Core.Web.Search.WebSearchPace(files, () => Path.Combine(_temp.Path, "pace.json"), TimeProvider.System, (_, _) => Task.CompletedTask),
+            new DssHarness.Core.Web.Search.WebSearchPace(files, () => Path.Combine(_temp.Path, "pace.json"), TimeProvider.System, (_, _) => Task.CompletedTask, new DssHarness.Core.Execution.ProcessIdentity(new DssHarness.Core.Platform.HostPlatform())),
             files,
             TimeProvider.System);
         var host = new AgentToolHost(files, _harness.Platform, _harness.GitClient, new PhaseRunner(_harness.ProcessRunner, files, _harness.Output), _harness.ChildSessions, fetch, new RunningToolDouble("1.2.3"), TimeProvider.System, search: searching);
@@ -277,7 +277,6 @@ public sealed class AgentToolServerTests : IDisposable
     private static AgentWebSearch Search()
         => new(
             [WebSearchFixtures.Source("alpha", """{ "kind": "json-api", "description": "Alpha's answers", "url": "https://alpha.example.test/?q={query}", "items": "$.items", "title": "{@.title}", "link": "{@.link}" }""")],
-            DssHarness.Core.Web.Search.WebSearchSources.DefaultResultsPerSource,
             60,
             new Dictionary<string, DssHarness.Core.Web.Search.WebSearchKey>());
 

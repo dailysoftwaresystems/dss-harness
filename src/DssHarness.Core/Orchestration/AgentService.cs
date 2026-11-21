@@ -652,7 +652,7 @@ public sealed class AgentService(
                 if (own.Count > 0)
                 {
                     return CommandOutcome.Refused(
-                        $"{Agent(record)} already holds {ReportText.Counted(own.Count, "changed path")} of its own - {ReportText.Listed(own)} - and seeding it now would overwrite "
+                        $"{Agent(record)} already holds {ReportText.Counted(own.Count, "changed path")} of its own - {Names.All(own)} - and seeding it now would overwrite "
                         + "them. Seed an agent before it starts; --empty hands it nothing more, and --force seeds it anyway.");
                 }
             }
@@ -1004,37 +1004,32 @@ public sealed class AgentService(
             if (except.Where(relative => !left.Contains(relative, StringComparer.Ordinal)).Order(StringComparer.Ordinal).ToList() is { Count: > 0 } stray)
             {
                 return (null, RefusedInDry(CommandOutcome.Refused(
-                    $"{RefreshRequest.ExceptOption} {ReportText.Listed([.. stray.Select(relative => $"'{relative}'")])} names no path to refresh{under} that "
+                    $"{RefreshRequest.ExceptOption} {Names.All([.. stray.Select(relative => $"'{relative}'")])} names no path to refresh{under} that "
                     + $"{Lower(Agent(record))} changed, so it leaves nothing out: check its spelling. Nothing was copied.")));
             }
 
             if (plan.StaleStray.Count > 0)
             {
                 return (null, RefusedInDry(CommandOutcome.Refused(
-                    $"{RefreshRequest.StaleOption} {ReportText.Listed([.. plan.StaleStray.Select(relative => $"'{relative}'")])} names no path{under} whose copy in "
+                    $"{RefreshRequest.StaleOption} {Names.All([.. plan.StaleStray.Select(relative => $"'{relative}'")])} names no path{under} whose copy in "
                     + "the agent is not the main tree's, so it hands nothing: check its spelling. Nothing was copied.")));
             }
 
             if (plan.MergeStray.Count > 0)
             {
                 return (null, RefusedInDry(CommandOutcome.Refused(
-                    $"{FoldAllowances.MergeOption} {ReportText.Listed([.. plan.MergeStray.Select(relative => $"'{relative}'")])} names no path{under} the refresh "
+                    $"{FoldAllowances.MergeOption} {Names.All([.. plan.MergeStray.Select(relative => $"'{relative}'")])} names no path{under} the refresh "
                     + "weighs, so it merges nothing: check its spelling. Nothing was copied.")));
             }
 
-            // Where the search stopped short of the main tree's whole history, a copy older than it reached is not found stale.
-            IReadOnlyList<string> bound = plan.Capped
-                ? [$"The last {ReportText.Counted(TwoChanges.MostCommits, "commit")} of the main tree that changed these paths were searched, and its history goes "
-                    + "further back: a copy older than that is not found stale."]
-                : [];
-
+            // The main tree's whole history was searched: a copy it never held is not stale, however old.
             if (plan.StaleRefused.Count > 0)
             {
                 return (null, plan.StaleRefused is [var one]
-                    ? RefusedInDry(CommandOutcome.Refused($"{one} Nothing was copied.", bound))
+                    ? RefusedInDry(CommandOutcome.Refused($"{one} Nothing was copied."))
                     : RefusedInDry(CommandOutcome.Refused(
                         $"{ReportText.Counted(plan.StaleRefused.Count, "path")} named with {RefreshRequest.StaleOption} are not proved stale, each said below. Nothing was copied.",
-                        [.. plan.StaleRefused.Select(why => $"  {why}"), .. bound])));
+                        [.. plan.StaleRefused.Select(why => $"  {why}")])));
             }
 
             if (changed.Count > 0)
@@ -1058,7 +1053,7 @@ public sealed class AgentService(
                 var weighing = Weighed(changed.Count, mergeable, plan.Conflicting, [], rowsOtherwiseRefused: false);
 
                 return (null, Weighs(CommandOutcome.Refused(
-                    $"{Agent(record)} changed {changed.Count} of the path(s) to refresh - {ReportText.Listed([.. changed.Select(change => change.Path)])} - and "
+                    $"{Agent(record)} changed {changed.Count} of the path(s) to refresh - {Names.All([.. changed.Select(change => change.Path)])} - and "
                     + "refreshing would undo those changes. Nothing was copied.",
                     [
                         .. changed.Select(change => new[] { change.StaleAt is { } commit ? StaleSaid(commit) : null, change.Merge }.OfType<string>().ToList() is { Count: > 0 } said
@@ -1082,7 +1077,6 @@ public sealed class AgentService(
                                 $"  {string.Join(' ', OrchestrationReports.PathArguments(FoldAllowances.MergeOption, mergeable))}",
                             ],
                         says.Count == 1 ? $"{says[0]}; it is not a --force." : $"{string.Join("; ", says)}. None is a --force.",
-                        .. bound,
                     ])));
 
                 // Weighed by the one rule a fold is: a clean merge nobody asked for a consent it lacks, a conflict told apart.
@@ -2131,7 +2125,7 @@ public sealed class AgentService(
                         return CommandOutcome.Failed(
                             HarnessExit.Incomplete,
                             $"{Agent(record)} was not deleted: after its fold was written, it still differs from the main tree - "
-                            + $"{ReportText.Listed([.. after.Written, .. after.Merged.Select(merge => merge.Path), .. after.Deleted, .. after.Handed.Files.Concat(after.Handed.Deletions), .. after.Refusals])}. {what}, and its worktree is kept; nothing was removed.",
+                            + $"{Names.All([.. after.Written, .. after.Merged.Select(merge => merge.Path), .. after.Deleted, .. after.Handed.Files.Concat(after.Handed.Deletions), .. after.Refusals])}. {what}, and its worktree is kept; nothing was removed.",
                             Live());
                     }
                 }
@@ -2219,7 +2213,7 @@ public sealed class AgentService(
 
             if (deleted.Left.Count > 0)
             {
-                lines.Add($"{ReportText.Counted(deleted.Left.Count, "evidence file")} were left: {ReportText.Listed(deleted.Left)}");
+                lines.Add($"{ReportText.Counted(deleted.Left.Count, "evidence file")} were left: {Names.All(deleted.Left)}");
             }
 
             return await RemoveAsync(target, lines).ConfigureAwait(false);
@@ -2874,7 +2868,7 @@ public sealed class AgentService(
 
             try
             {
-                read = System.Text.Json.Nodes.JsonNode.Parse(record);
+                read = Json.JsonDepth.ParseNode(record);
             }
             catch (System.Text.Json.JsonException ex)
             {
@@ -2913,7 +2907,7 @@ public sealed class AgentService(
 
     /// <summary>That the options <paramref name="allowances"/> gives let a fold through what it otherwise refuses, for a refusal of them.</summary>
     private static string Letting(FoldAllowances allowances)
-        => $"{ReportText.Listed(allowances.Given)} {(allowances.Given.Count == 1 ? "lets" : "let")} a fold through what it otherwise refuses";
+        => $"{Names.All(allowances.Given)} {(allowances.Given.Count == 1 ? "lets" : "let")} a fold through what it otherwise refuses";
 
     /// <summary>
     /// How the summary of a dry run of a fold ends, and the line it points at: where its rows have cells that need a
@@ -3976,10 +3970,10 @@ public sealed class AgentService(
         => [
             .. handable.Directories.Count == 0
                 ? Array.Empty<string>()
-                : [$"not handed: {ReportText.Listed(handable.Directories)} - a directory git will not look into, a repository of its own, which a fold never moves"],
+                : [$"not handed: {Names.All(handable.Directories)} - a directory git will not look into, a repository of its own, which a fold never moves"],
             .. handable.Links.Count == 0
                 ? Array.Empty<string>()
-                : [$"not handed: {ReportText.Listed(handable.Links)} - a symbolic link the main tree committed, never handed as the file it leads to; rebase-agent "
+                : [$"not handed: {Names.All(handable.Links)} - a symbolic link the main tree committed, never handed as the file it leads to; rebase-agent "
                     + "brings it in as git holds it"],
         ];
 
@@ -3989,7 +3983,7 @@ public sealed class AgentService(
     /// </summary>
     private static CommandOutcome InTheWay(string doing, AgentRecord record, IReadOnlyList<string> own)
         => CommandOutcome.Refused(
-            $"{doing} {Lower(Agent(record))} would write over or through {ReportText.Counted(own.Count, "path")} of its own - {ReportText.Listed(own)} - where the main tree "
+            $"{doing} {Lower(Agent(record))} would write over or through {ReportText.Counted(own.Count, "path")} of its own - {Names.All(own)} - where the main tree "
             + "holds a directory, or a file in place of the directory they are in: move them aside, and run again. Nothing was written.");
 
     /// <summary>What brings in what a live agent is refused for in a submodule of its worktree, where the main tree committed it.</summary>
@@ -4011,7 +4005,7 @@ public sealed class AgentService(
     private static CommandOutcome InSubmodules(string doing, string agent, string orchestrator, IReadOnlyList<SubmodulePath> paths, string remedy, string nothing)
         => CommandOutcome.Refused(
             $"{doing} agent '{agent}' of '{orchestrator}' would write into or remove from {ReportText.Counted(paths.Count, "path")} of a submodule of its worktree - "
-            + $"{ReportText.Listed([.. paths.Select(path => path.Path == path.Submodule ? $"'{path.Path}'" : $"'{path.Path}' in '{path.Submodule}'")])} - a "
+            + $"{Names.All([.. paths.Select(path => path.Path == path.Submodule ? $"'{path.Path}'" : $"'{path.Path}' in '{path.Submodule}'")])} - a "
             + $"repository of its own, which a hand-over never writes into or removes from: {remedy}. {nothing}");
 
     /// <summary>Where the agent's records are, as every exit after one is written names them: each that is there.</summary>

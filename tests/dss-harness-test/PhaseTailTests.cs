@@ -5,24 +5,65 @@ using DssHarness.Core.Results;
 namespace DssHarness.Tests;
 
 /// <summary>
-/// What a phase that did not pass shows of itself where its log is not to hand: its last lines, in
-/// the order the child printed them on either stream, with its secrets masked.
+/// What a phase that did not pass shows of itself where its log is not to hand: its last lines that fit a page, in
+/// the order the child printed them on either stream, with its secrets masked - the whole being in its log, read by page.
 /// </summary>
 public sealed class PhaseTailTests
 {
     /// <summary>
     /// A phase that failed shows its last lines, however it ended them, and no empty line after the
-    /// last; one that printed more shows only the last of them.
+    /// last; one that printed more than a page holds shows only the last of them that fit it.
     /// </summary>
     [Fact]
     public void APhaseThatFailed_ShowsItsLastLines()
     {
-        var many = string.Concat(Enumerable.Range(1, PhaseResult.TailLines + 10).Select(line => $"line {line}\r\n"));
+        // Lines of nine characters and an ending: ten to a line, so a page's room holds a tenth of its characters' worth.
+        var lines = PhaseResult.TailRoom;
+        var many = string.Concat(Enumerable.Range(0, lines).Select(line => $"line {line % 10_000:0000}\r\n"));
+        var fit = PhaseResult.TailRoom / 10;
 
         Assert.Equal(["compiling", "error: expected ';'"], Phase(2, "compiling\r\nerror: expected ';'\n\n").Tail);
         Assert.Equal(
-            [.. Enumerable.Range(11, PhaseResult.TailLines).Select(line => $"line {line}")],
+            [.. Enumerable.Range(lines - fit, fit).Select(line => $"line {line % 10_000:0000}")],
             Phase(1, many).Tail);
+    }
+
+    /// <summary>
+    /// A phase that did not pass is shown by the last of its lines that fit a page, however many that is - a thousand
+    /// short ones, where fifty once were all - and its whole output is in its log, which the ledger names below the
+    /// leg's line for a reader to page through: the last page first, and every other in the log.
+    /// </summary>
+    [Fact]
+    public async Task ARedPhasesLog_IsReferencedAndPaged()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        var log = temp.Combine("test.log");
+        string[] printed = [.. Enumerable.Range(0, 1000).Select(line => $"case {line} failed")];
+
+        var result = await new PhaseRunner(new Printing(printed), factory.FileSystem, factory.Output).RunAsync(
+            new PhaseRequest { Leg = "native", Phase = "test", FileName = "suite", Arguments = [], LogFile = log },
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(printed, result.Tail);
+        Assert.Equal(printed, result.Output.Lines());
+
+        var report = LedgerReport.From(
+        [
+            new LegEntry
+            {
+                Leg = "native",
+                Verdict = LegVerdict.Failed,
+                Duration = TimeSpan.FromSeconds(3),
+                Detail = "test exited 1",
+                LogTail = result.Tail,
+                TailPhase = result.Phase,
+                Logs = [new PhaseLogFile("build", temp.Combine("build.log")), new PhaseLogFile(result.Phase, log)],
+            },
+        ],
+        durationWarningFactor: 0);
+
+        Assert.Contains($"native: the last 1000 line(s) its phase printed, the whole in '{log}'", report.Render());
     }
 
     /// <summary>A phase that passed shows nothing, and neither does one that printed nothing.</summary>
@@ -83,19 +124,23 @@ public sealed class PhaseTailTests
     }
 
     /// <summary>
-    /// The last lines are kept in a ring of as many as are shown, whatever the child prints: a line divided by a
-    /// carriage return alone, or a form feed, is shown as the lines it divides into, while one ended by a carriage
-    /// return before its line feed is one line; and empty lines after the last that is not are not shown, however many
-    /// came - even more than the ring holds.
+    /// The last lines are kept to a page's room, whatever the child prints: a line divided by a carriage return alone, or
+    /// a form feed, is shown as the lines it divides into, while one ended by a carriage return before its line feed is
+    /// one line; empty lines after the last that is not are not shown, however many came - even more than the room
+    /// holds; and a line wider than the whole room is shown by its end, marked where it went on.
     /// </summary>
     [Fact]
-    public void TheLastLines_AreKeptInARing_ShownAsTheyDivide_WithNoEmptyOneAfterTheLast()
+    public void TheLastLines_AreKeptToAPagesRoom_ShownAsTheyDivide_WithNoEmptyOneAfterTheLast()
     {
-        var many = string.Concat(Enumerable.Range(1, 10_000).Select(line => $"line {line}\n"));
+        var many = string.Concat(Enumerable.Range(0, 100_000).Select(line => $"line {line:00000}\n"));
+        var fit = PhaseResult.TailRoom / 11;
 
         Assert.Equal(
-            [.. Enumerable.Range(10_001 - PhaseResult.TailLines, PhaseResult.TailLines).Select(line => $"line {line}")],
-            LastLinesOf(many + string.Concat(Enumerable.Repeat("\n", PhaseResult.TailLines * 3))));
+            [.. Enumerable.Range(100_000 - fit, fit).Select(line => $"line {line:00000}")],
+            LastLinesOf(many + string.Concat(Enumerable.Repeat("\n", PhaseResult.TailRoom * 2))));
+        Assert.Equal(
+            [DssHarness.Core.Output.TextCut.Ellipsis + new string('w', PhaseResult.TailRoom - 2)],
+            LastLinesOf("before\n" + new string('w', PhaseResult.TailRoom * 3) + "\n"));
 
         Assert.Equal(["50%", "100%", "page", "next", "done", "", "end"], LastLinesOf("50%\r100%\npage\fnext\ndone\r\r\n\nend\n\n"));
         Assert.Empty(LastLinesOf("\n\n\n"));
@@ -107,7 +152,7 @@ public sealed class PhaseTailTests
     /// </summary>
     private static IReadOnlyList<string> LastLinesOf(string output)
     {
-        var last = new LastLinesRing(PhaseResult.TailLines);
+        var last = new LastLinesRing(PhaseResult.TailRoom);
 
         foreach (var line in PhaseOutput.Of(output).Lines())
         {
@@ -134,6 +179,22 @@ public sealed class PhaseTailTests
         {
             LastLines = LastLinesOf(output),
         };
+
+    /// <summary>A runner that prints <paramref name="lines"/> on standard output, and fails.</summary>
+    private sealed class Printing(IReadOnlyList<string> lines) : DssHarness.Core.Processes.IProcessRunner
+    {
+        public Task<DssHarness.Core.Processes.ProcessResult> RunAsync(DssHarness.Core.Processes.ProcessRequest request, CancellationToken cancellationToken = default)
+        {
+            foreach (var line in lines)
+            {
+                request.OnOutputLine?.Invoke(line);
+            }
+
+            return Task.FromResult(new DssHarness.Core.Processes.ProcessResult(1, string.Empty, string.Empty, TimeSpan.FromMilliseconds(5), TimedOut: false));
+        }
+
+        public string? FindExecutable(string command) => command;
+    }
 
     /// <summary>A runner that prints on standard output, then standard error, then standard output again, and fails.</summary>
     private sealed class Interleaved : DssHarness.Core.Processes.IProcessRunner

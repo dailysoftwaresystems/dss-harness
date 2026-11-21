@@ -13,50 +13,30 @@ namespace DssHarness.Core.Execution;
 /// </remarks>
 internal sealed class StallClock
 {
-    /// <summary>What <see cref="_lastOutputMs"/> holds before the child has started.</summary>
-    private const long NotYet = -1;
-
     private readonly Stopwatch _elapsed = Stopwatch.StartNew();
-    private long _lastOutputMs = NotYet;
+
+    /// <summary>When the child was last seen: its launch, its start, or a line on either stream.</summary>
+    private long _lastOutputMs;
 
     /// <summary>How long the child has run.</summary>
     public TimeSpan Elapsed => _elapsed.Elapsed;
 
     /// <summary>
-    /// How long since the last line on either stream, and nothing at all until the child is
-    /// running. A process that has not started yet has not been quiet: the time spent starting
-    /// one belongs to this tool, and counting it against the child makes a machine under load
-    /// look like a hung command. That window has a bound of its own, in
-    /// <see cref="Overdue(TimeSpan, TimeSpan)"/>.
+    /// How long since the child was last seen - its launch, its start, or the last line on either stream: a child still
+    /// starting is as quiet as one that says nothing, under the one bound its user set.
     /// </summary>
-    public TimeSpan Quiet
-    {
-        get
-        {
-            var last = Interlocked.Read(ref _lastOutputMs);
-
-            return last == NotYet
-                ? TimeSpan.Zero
-                : TimeSpan.FromMilliseconds(_elapsed.ElapsedMilliseconds - last);
-        }
-    }
+    public TimeSpan Quiet => TimeSpan.FromMilliseconds(_elapsed.ElapsedMilliseconds - Interlocked.Read(ref _lastOutputMs));
 
     /// <summary>
-    /// Whether the child is past whichever bound is in force: how long it may take to
-    /// start before it has started, how long it may stay silent after.
+    /// Whether the child has been quiet for <paramref name="quiet"/>: from its launch until it starts, and from its last
+    /// line after - the user's own stall bound for both, never a multiple of it of the code's own for the start.
     /// </summary>
-    /// <param name="quiet">How long the child may say nothing.</param>
-    /// <param name="starting">How long the child may take to start.</param>
+    /// <param name="quiet">How long the child may say nothing, starting among it.</param>
     /// <remarks>
-    /// Two bounds rather than one because they measure different things. Counting the launch as
-    /// silence makes a slow machine read as a hung command, which is the defect this clock was
-    /// written for; leaving the launch unmeasured makes an unreachable PATH entry a child that
-    /// never ends and never reports.
+    /// A start that takes the whole bound - a PATH entry on an unreachable share, a working directory on a mount that has
+    /// gone - is a child that said nothing for as long as the user allows, and is stopped as one.
     /// </remarks>
-    public bool Overdue(TimeSpan quiet, TimeSpan starting)
-        => Interlocked.Read(ref _lastOutputMs) == NotYet
-            ? _elapsed.Elapsed >= starting
-            : Quiet >= quiet;
+    public bool Overdue(TimeSpan quiet) => Quiet >= quiet;
 
     /// <summary>
     /// Records that the child started, or said something. Called from the thread that starts the

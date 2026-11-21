@@ -18,7 +18,7 @@ namespace DssHarness.Core.Agents.Runtime;
 /// check and the tool's own act reaches nothing at the act: a file is read through the file as it was opened, where the
 /// open file stands decided again before a byte is read (<see cref="AgentFiles.ReadAsync"/>), and a file written, a
 /// directory made, and an entry moved or deleted is acted on relative to its directory held from the writable root it
-/// was decided in (<see cref="WritableRootOf"/>, <see cref="AgentFiles.Write"/>, <see cref="UnfollowedFiles"/>). A
+/// was decided in (<see cref="WritableRootOf"/>, <see cref="AgentFiles.Write(string, string, Action{Stream}, Func{string, AgentPolicyAnswer.Denied?})"/>, <see cref="UnfollowedFiles"/>). A
 /// directory listed goes by its path: what a link put in place of one leads to is listed by name, never read.
 /// </remarks>
 public sealed class ConfinedPaths

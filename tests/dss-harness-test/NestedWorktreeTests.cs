@@ -195,7 +195,7 @@ public sealed class NestedWorktreeTests
         var refused = await harness.WorktreeService.CreateAtAsync(temp.Path, WorktreeAddress.Nested("o1", "toolong"), TestContext.Current.CancellationToken);
 
         Assert.Equal(HarnessExit.UsageError, refused.Outcome.ExitCode);
-        Assert.StartsWith("'toolong' is 7 characters; the limit is 4.", refused.Outcome.Message, StringComparison.Ordinal);
+        Assert.StartsWith("'toolong' is 7 characters; the limit is 4, which worktrees.maxNameLength in config.json sets.", refused.Outcome.Message, StringComparison.Ordinal);
     }
 
     /// <summary>

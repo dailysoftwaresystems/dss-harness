@@ -221,7 +221,12 @@ internal sealed class InotifyHub
     {
         if (heard.Says(InotifyBits.QueueOverflow))
         {
-            TellEverySpan("this process's inotify queue overflowed (fs.inotify.max_queued_events), so events were lost", told);
+            // Events were dropped and every watch goes on: each span reads its inputs again.
+            foreach (var span in _watching.Values.SelectMany(spans => spans).Select(watching => watching.Span).Distinct())
+            {
+                told.Add((span, sink => sink.Overflowed("this process's inotify queue overflowed (fs.inotify.max_queued_events), so events were lost")));
+            }
+
             return;
         }
 

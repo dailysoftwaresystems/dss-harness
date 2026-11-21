@@ -36,9 +36,11 @@ internal sealed class ScannedText
     /// <param name="tokens">Its tokens, in order.</param>
     /// <param name="comments">Its comments, in order.</param>
     /// <param name="closer">A token that ends a statement as a <c>;</c> does, where the language has one - PHP's <c>?&gt;</c>.</param>
-    public ScannedText(string source, IReadOnlyList<ScanToken> tokens, IReadOnlyList<ScanComment> comments, string? closer = null)
+    /// <param name="literals">Its string literals, by where each token begins, as its lexer read them (<see cref="ScanLexing.Literals"/>).</param>
+    public ScannedText(CodeText source, IReadOnlyList<ScanToken> tokens, IReadOnlyList<ScanComment> comments, string? closer = null, IReadOnlyDictionary<long, ScanLiteral>? literals = null)
     {
         _closer = closer;
+        _literals = literals ?? new Dictionary<long, ScanLiteral>();
         Source = source;
         Tokens = tokens;
         Comments = comments;
@@ -46,11 +48,28 @@ internal sealed class ScannedText
         Stranded = [.. Enumerable.Range(0, tokens.Count).Where(at => _stranded[at])];
     }
 
+    private readonly IReadOnlyDictionary<long, ScanLiteral> _literals;
+
+    /// <summary>
+    /// The constant parts of the string literal <paramref name="token"/> is, each decoded with the line it begins on: a
+    /// plain string's one value, an interpolated one's parts between its holes, a markup element's attribute strings;
+    /// none of a token that is no string - a character literal, a regular expression, a directive.
+    /// </summary>
+    public IEnumerable<(string Value, int Line)> LiteralParts(ScanToken token)
+        => token.Kind == ScanTokenKind.Text && _literals.TryGetValue(token.Start, out var literal) ? literal.Values(Source) : [];
+
+    /// <summary>
+    /// The value of the string literal at <paramref name="at"/>, decoded, where it is one string with no holes - what an
+    /// import, an include or a directive names; <see langword="null"/> where the token is no such string.
+    /// </summary>
+    public string? Value(int at)
+        => at >= 0 && at < Tokens.Count && Tokens[at].Kind == ScanTokenKind.Text && _literals.TryGetValue(Tokens[at].Start, out var literal) ? literal.Whole(Source) : null;
+
     /// <summary>The indices of the brackets a conditional's branch left open that stand for none after it, in order.</summary>
     public IReadOnlyList<int> Stranded { get; }
 
     /// <summary>The text.</summary>
-    public string Source { get; }
+    public CodeText Source { get; }
 
     /// <summary>Its tokens, in order.</summary>
     public IReadOnlyList<ScanToken> Tokens { get; }
@@ -69,9 +88,9 @@ internal sealed class ScannedText
 
     /// <summary>The text from the token at <paramref name="first"/> to the one before <paramref name="end"/>, as written.</summary>
     public string Text(int first, int end)
-        => first < end ? Source[Tokens[first].Start..Tokens[end - 1].End] : string.Empty;
+        => first < end ? Source.Slice(Tokens[first].Start, Tokens[end - 1].End) : string.Empty;
 
-    /// <summary>The tokens from <paramref name="start"/> to the one before <paramref name="end"/> as a node's signature: spelled on one line, and cut to a signature's length.</summary>
+    /// <summary>The tokens from <paramref name="start"/> to the one before <paramref name="end"/> as a node's signature: spelled on one line, whole.</summary>
     public string Signature(int start, int end) => ExtractText.Signature(ExtractText.Flat(Spelled(start, end)));
 
     /// <summary>The index of the token before <paramref name="past"/>, within the text.</summary>
@@ -88,7 +107,7 @@ internal sealed class ScannedText
     public string Spelled(int first, int end)
     {
         var spelled = new System.Text.StringBuilder();
-        var after = -1;
+        var after = -1L;
 
         for (var at = first; at < end && at < Tokens.Count; at++)
         {
@@ -102,7 +121,7 @@ internal sealed class ScannedText
                 spelled.Append(' ');
             }
 
-            spelled.Append(Source, Tokens[at].Start, Tokens[at].Length);
+            Source.AppendTo(spelled, Tokens[at].Start, Tokens[at].End);
             after = Tokens[at].End;
         }
 
@@ -114,7 +133,7 @@ internal sealed class ScannedText
         => at >= 0 && at < Tokens.Count
             && Tokens[at] is { Kind: ScanTokenKind.Name or ScanTokenKind.Punctuation } token
             && token.Length == text.Length
-            && string.CompareOrdinal(Source, token.Start, text, 0, text.Length) == 0;
+            && Source.At(token.Start, text);
 
     /// <summary>Whether the token at <paramref name="at"/> is a name.</summary>
     public bool IsName(int at) => at >= 0 && at < Tokens.Count && Tokens[at].Kind == ScanTokenKind.Name;
@@ -343,7 +362,7 @@ internal sealed class ScannedText
     }
 
     /// <summary>The index of the last comment that begins before <paramref name="position"/>; -1 where none does.</summary>
-    private int LastCommentBefore(int position)
+    private int LastCommentBefore(long position)
     {
         var low = 0;
         var high = Comments.Count - 1;
@@ -409,7 +428,7 @@ internal sealed class ScannedText
     /// The match of every bracket of <paramref name="tokens"/>, -1 where none matches it, whether each is stranded, and for
     /// each opener joined to others the heads the other branches write before theirs (<see cref="Inside"/>).
     /// </summary>
-    private static (int[] Match, bool[] Stranded, Dictionary<int, List<(int Start, int End)>> Heads) Matched(string source, IReadOnlyList<ScanToken> tokens)
+    private static (int[] Match, bool[] Stranded, Dictionary<int, List<(int Start, int End)>> Heads) Matched(CodeText source, IReadOnlyList<ScanToken> tokens)
     {
         var match = new int[tokens.Count];
         var stranded = new bool[tokens.Count];

@@ -57,7 +57,8 @@ public sealed class VerifyGitServiceTests
 public sealed class InitServiceTests
 {
     /// <summary>
-    /// init's managed block is, rule for rule and in order: the lock, the runs, each root slot's contents ignored with its
+    /// init's managed block is, rule for rule and in order: the lock, the runs, the pieces of a file a sync is bringing in,
+    /// each root slot's contents ignored with its
     /// placeholder kept, each slot an earlier version kept copies in ignored whole, the same for each credential slot -
     /// made from the layout's lists of them, so a slot it gains is ignored the day it is added, and one it renames stays
     /// ignored - and what an action's steps write. Its placeholders under the harness directory
@@ -70,6 +71,7 @@ public sealed class InitServiceTests
             [
                 "/.harness-config/lock.json",
                 "/.harness-config/runs",
+                "/.harness-config/sync-pieces",
                 "/.worktrees/*", "!/.worktrees/.gitkeep",
                 "/.orchestrators/*", "!/.orchestrators/.gitkeep",
                 "/.m/*", "!/.m/.gitkeep",

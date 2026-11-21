@@ -38,11 +38,54 @@ public static class MutationFixture
     public const string DirectoryName = "mutation-fixture";
 
     /// <summary>
-    /// The longest path its build makes below its build directory - a file of CMake's own check of a compiler, the deepest
-    /// of them - with a little to spare, which a worker's paths are reckoned with in place of
-    /// <c>worktrees.pathBudgetReserve</c>, the leg's own project's.
+    /// The longest path a build of it made below its build directory on this machine, measured as it stands in the build
+    /// directories of <paramref name="workers"/>' first <paramref name="count"/> workers - each a build of it an earlier
+    /// self-test left warm - which a worker's paths are reckoned with in place of <c>worktrees.pathBudgetReserve</c>, the
+    /// leg's own project's. <see langword="null"/> where none of them holds a build of it yet: the reserve the repository
+    /// declares for its own builds is reckoned with until a build of the fixture is there to measure, and that build, as
+    /// every build is, is measured against it and warns where it went deeper.
     /// </summary>
-    public const int LongestBuildPath = 100;
+    /// <remarks>
+    /// The deepest of CMake's own files - its check of a compiler - lies deepest, at a depth that changes with CMake's
+    /// version and the compiler's: so it is measured where the fixture was built, never assumed. A build directory that
+    /// cannot be looked through is passed over: it measures nothing, and the others still do.
+    /// </remarks>
+    /// <param name="fileSystem">Looks through the build directories.</param>
+    /// <param name="workers">The self-test's workers.</param>
+    /// <param name="count">How many workers a sweep runs at most: <c>mutations.workers</c>.</param>
+    public static int? LongestBuildPath(IFileSystem fileSystem, WorkerFamily workers, int count)
+    {
+        ArgumentNullException.ThrowIfNull(fileSystem);
+        ArgumentNullException.ThrowIfNull(workers);
+
+        int? longest = null;
+
+        for (var number = 1; number <= count; number++)
+        {
+            var build = workers.BuildDirectoryOf(number);
+
+            try
+            {
+                if (!fileSystem.DirectoryExists(build))
+                {
+                    continue;
+                }
+
+                foreach (var file in fileSystem.EnumerateFiles(build, recursive: true))
+                {
+                    var below = Path.GetRelativePath(build, file).Length;
+
+                    longest = longest is { } deepest && deepest >= below ? deepest : below;
+                }
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // Measures nothing: the other workers' builds still do.
+            }
+        }
+
+        return longest;
+    }
 
     /// <summary>
     /// The project it is: built by CMake, from its root, its build witnessed by the test binary it links, as every whole

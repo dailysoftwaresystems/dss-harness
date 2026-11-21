@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using DssHarness.Core.Codebase.Languages.Scanning;
 
 namespace DssHarness.Core.Codebase.Languages;
@@ -26,12 +27,14 @@ namespace DssHarness.Core.Codebase.Languages;
 /// <c>test/</c>, or ending <c>_test.dart</c>), each <c>test</c>, <c>testWidgets</c> and <c>group</c> call is a node of its
 /// own, named by its description, the calls it makes its tests.
 /// </para>
+/// <para>
+/// Nothing it reads nests it past its stack, however deep the text nests: a type's members are walks on a stack of their
+/// own (<see cref="ScanStack"/>), and the code a body runs - a string's interpolations, a test call's own - runs of code on
+/// another, each read in the order the text writes it.
+/// </para>
 /// </remarks>
 internal sealed class DartReading
 {
-    /// <summary>What the reader reads code nested in no deeper than <see cref="ScanFrame.MostDepth"/> of, as its dynamic mark says it.</summary>
-    private const string Nesting = "interpolations and test groups";
-
     /// <summary>Dart's reserved words.</summary>
     private static readonly HashSet<string> Reserved = new(StringComparer.Ordinal)
     {
@@ -114,8 +117,20 @@ internal sealed class DartReading
     private readonly bool _testFile;
     private readonly ScanExtract _extract = new();
 
+    /// <summary>The walks of the file's declarations and its types' members.</summary>
+    private readonly ScanStack _walks = new();
+
+    /// <summary>
+    /// The use of each member read after a receiver's dot, by its text and its token, with the local declared
+    /// <c>dynamic</c> its chain begins at, where one does: what the chain of the member after it is linked to.
+    /// </summary>
+    private readonly Dictionary<(ScannedText Scan, int At), (int Reference, string? Dynamic)> _chained = [];
+
     /// <summary>The prefixes the file imports by (<c>as p</c>).</summary>
     private readonly HashSet<string> _prefixes = new(StringComparer.Ordinal);
+
+    /// <summary>The bracket each comma passed stands in, by the comma's index, for each text read: <see cref="Enclosing"/>'s.</summary>
+    private readonly ConditionalWeakTable<ScannedText, Dictionary<int, int>> _enclosing = new();
 
     /// <summary>The names of the type parameters in force: no type the repository declares.</summary>
     private readonly HashSet<string> _typeParameters = new(StringComparer.Ordinal);
@@ -139,10 +154,10 @@ internal sealed class DartReading
     private bool _privateExtension;
 
     /// <summary>The scope the file's declarations are put in: its library's, by the library's path or, for a part that names it so, its name.</summary>
-    private string _library;
+    private QualifiedName _library;
 
     /// <summary>The library's name, where it has one and parts that may name it by it; <see langword="null"/> otherwise.</summary>
-    private string? _named;
+    private QualifiedName? _named;
 
     /// <summary>Whether the file is a part of another's library.</summary>
     private bool _part;
@@ -151,13 +166,13 @@ internal sealed class DartReading
     /// <param name="language">The implementation's name, which prefixes every id.</param>
     /// <param name="path">The file's path.</param>
     /// <param name="text">Its text.</param>
-    public DartReading(string language, string path, string text)
+    public DartReading(string language, string path, CodeText text)
     {
         _text = DartLexer.Scan(text);
         _scan = _text.Scan;
         _prefix = $"{language}:";
         _path = path;
-        _library = path;
+        _library = QualifiedName.Of(path);
         _testFile = path.EndsWith("_test.dart", StringComparison.Ordinal) || path.StartsWith("test/", StringComparison.Ordinal) || path.Contains("/test/", StringComparison.Ordinal);
     }
 
@@ -177,7 +192,7 @@ internal sealed class DartReading
         }
 
         var top = new ScanFrame(_library, _library, null, null);
-        ScanFrame.Walk(0, _scan.Count, at => Declaration(at, _scan.Count, top));
+        _walks.Walk(0, _scan.Count, at => Declaration(at, _scan.Count, top));
         _extract.Generated = Generated();
         return _extract.Build();
     }
@@ -233,7 +248,7 @@ internal sealed class DartReading
             }
         }
 
-        _named = parts && !_part ? name : null;
+        _named = parts && !_part && name is not null ? QualifiedName.Of(name) : null;
     }
 
     /// <summary>An <c>import</c> or <c>export</c> at <paramref name="at"/>: its URI, its configurations' URIs, its prefix and its combinators.</summary>
@@ -377,28 +392,8 @@ internal sealed class DartReading
     /// <summary>Whether <paramref name="uri"/> begins with a scheme: letters, then a colon, before any slash.</summary>
     private static bool HasScheme(string uri) => uri.IndexOf(':', StringComparison.Ordinal) is var colon and > 1 && uri[..colon].All(char.IsAsciiLetter);
 
-    /// <summary>The URI the string at <paramref name="at"/> holds; <see langword="null"/> where it is none - empty, interpolated, or left open.</summary>
-    private string? Uri(int at)
-    {
-        var text = _scan.Text(at);
-        var raw = text.StartsWith('r');
-        var body = raw ? text[1..] : text;
-
-        if (body.Length < 2)
-        {
-            return null;
-        }
-
-        var quote = body.Length >= 6 && body[1] == body[0] && body[2] == body[0] ? 3 : 1;
-
-        if (body.Length < quote * 2 || !body.EndsWith(body[..quote], StringComparison.Ordinal))
-        {
-            return null;
-        }
-
-        var uri = body[quote..^quote];
-        return uri.Length == 0 || (!raw && uri.Contains('$', StringComparison.Ordinal)) ? null : uri;
-    }
+    /// <summary>The URI the string at <paramref name="at"/> holds, its value as Dart reads it; <see langword="null"/> where it is none - empty, interpolated, or left open.</summary>
+    private string? Uri(int at) => _scan.Value(at) is { Length: > 0 } uri ? uri : null;
 
     private bool IsText(int at) => at < _scan.Count && _scan[at].Kind == ScanTokenKind.Text;
 
@@ -495,9 +490,28 @@ internal sealed class DartReading
     /// </summary>
     private static int Annotations(ScannedText scan, int at, int end, List<string>? marks)
     {
+        foreach (var (written, _, past) in Annotated(scan, at, end))
+        {
+            marks?.Add("@" + written);
+            at = past;
+        }
+
+        return at;
+    }
+
+    /// <summary>
+    /// The annotations written at <paramref name="at"/> one after another - <c>@name</c>, <c>@p.name</c>, each with its
+    /// type's arguments and its own - each by its name as written, the parenthesis of its arguments (-1 where it has none)
+    /// and where the text goes on past it.
+    /// </summary>
+    private static List<(string? Written, int Arguments, int Past)> Annotated(ScannedText scan, int at, int end)
+    {
+        var annotations = new List<(string?, int, int)>();
+
         while (at < end && scan.Is(at, "@") && scan.IsName(scan.Next(at)))
         {
             var (written, past) = Chain(scan, scan.Next(at), end);
+            var arguments = -1;
 
             if (scan.Is(past, "<"))
             {
@@ -506,14 +520,30 @@ internal sealed class DartReading
 
             if (scan.Is(past, "("))
             {
+                arguments = past;
                 past = scan.Past(past);
             }
 
-            marks?.Add("@" + written);
+            annotations.Add((written, arguments, past));
             at = past;
         }
 
-        return at;
+        return annotations;
+    }
+
+    /// <summary>
+    /// What the arguments of the annotations from <paramref name="at"/> to <paramref name="end"/> read and hold -
+    /// <c>@JsonKey(name: 'user_id')</c> - as code of the node of <paramref name="key"/> they mark.
+    /// </summary>
+    private void AnnotationArguments(int at, int end, QualifiedName key, string? owner)
+    {
+        foreach (var (_, arguments, _) in Annotated(_scan, at, end))
+        {
+            if (arguments >= 0)
+            {
+                Calls(_text, arguments + 1, Math.Min(_scan.CloseOf(arguments), end), key, new Locals(), owner);
+            }
+        }
     }
 
     // ---- Types ----
@@ -556,16 +586,13 @@ internal sealed class DartReading
         var (inner, close) = _scan.Bounds(open, end);
         var key = DeclareType(start, head, Math.Min(inner, _scan.Count - 1), frame, name, subKind, modifiers, marks, signatureEnd: open);
 
+        // Its type parameters are in force for its members, read later on the stack, as for its clauses now.
         var added = typeParameters.Where(_typeParameters.Add).ToList();
 
-        try
+        using (_walks.Holding(() => _typeParameters.UnionWith(added), () => _typeParameters.ExceptWith(added)))
         {
             Clauses(key, at, open, kind: null);
             Members(open, inner, frame.Inside(frame.Qualify(name), frame.Qualify(name), key, name), subKind == "enum" ? key : null);
-        }
-        finally
-        {
-            _typeParameters.ExceptWith(added);
         }
 
         return close;
@@ -611,19 +638,19 @@ internal sealed class DartReading
         var hidden = name is null || IsPrivate(name);
         var key = DeclareType(start, head, Math.Min(inner, _scan.Count - 1), frame, named, "extension", [], marks, signatureEnd: open, seenIn: hidden ? _library : null);
         var added = typeParameters.Where(_typeParameters.Add).ToList();
+        var extended = ExtendedType(on, open);
 
-        try
+        // What it extends and whether it is private are its members', read later on the stack, as its type parameters are.
+        using (_walks.Holding(() => _typeParameters.UnionWith(added), () => _typeParameters.ExceptWith(added)))
         {
-            TypeReferences(key, on, open);
-            _extending = ExtendedType(on, open);
-            _privateExtension = hidden;
-            Members(open, inner, frame.Inside(frame.Qualify(named), frame.Qualify(named), key, named), enumKey: null);
-        }
-        finally
-        {
-            _extending = null;
-            _privateExtension = false;
-            _typeParameters.ExceptWith(added);
+            TypeReferences(_scan, key, on, open);
+
+            using (_walks.Holding(
+                () => (_extending, _privateExtension) = (extended, hidden),
+                () => (_extending, _privateExtension) = (null, false)))
+            {
+                Members(open, inner, frame.Inside(frame.Qualify(named), frame.Qualify(named), key, named), enumKey: null);
+            }
         }
 
         return close;
@@ -683,7 +710,7 @@ internal sealed class DartReading
         var inside = frame.Inside(frame.Qualify(name), frame.Qualify(name), key, name);
         var added = typeParameters.Where(_typeParameters.Add).ToList();
 
-        try
+        using (_walks.Holding(() => _typeParameters.UnionWith(added), () => _typeParameters.ExceptWith(added)))
         {
             Clauses(key, _scan.Next(close), open, kind: null);
 
@@ -704,7 +731,7 @@ internal sealed class DartReading
 
                 foreach (var (typeStart, typeEnd) in representation.TypeSpans)
                 {
-                    TypeReferences(fieldKey, typeStart, typeEnd);
+                    TypeReferences(_scan, fieldKey, typeStart, typeEnd);
                 }
             }
 
@@ -720,10 +747,6 @@ internal sealed class DartReading
             });
 
             Members(open, inner, inside, enumKey: null);
-        }
-        finally
-        {
-            _typeParameters.ExceptWith(added);
         }
 
         return past;
@@ -753,11 +776,11 @@ internal sealed class DartReading
         {
             if (aliased >= 0)
             {
-                TypeReferences(key, aliased + 1, aliasEnd);
+                TypeReferences(_scan, key, aliased + 1, aliasEnd);
             }
             else
             {
-                TypeReferences(key, _scan.Next(head), nameAt);
+                TypeReferences(_scan, key, _scan.Next(head), nameAt);
 
                 var parameters = ScanCalls.TopLevel(_scan, nameAt, stop, "(", DartTypes);
 
@@ -765,7 +788,7 @@ internal sealed class DartReading
                 {
                     foreach (var (typeStart, typeEnd) in ParametersOf(_scan, parameters, close).TypeSpans)
                     {
-                        TypeReferences(key, typeStart, typeEnd);
+                        TypeReferences(_scan, key, typeStart, typeEnd);
                     }
                 }
             }
@@ -804,9 +827,14 @@ internal sealed class DartReading
         return (_scan.IsName(nameAt) && nameAt >= at ? nameAt : -1, -1, stop);
     }
 
-    /// <summary>A type node over the tokens from <paramref name="start"/> to <paramref name="last"/>, its signature the tokens from <paramref name="head"/> before <paramref name="signatureEnd"/>; answers its key.</summary>
-    private string DeclareType(int start, int head, int last, ScanFrame frame, string name, string subKind, List<string> modifiers, List<string> marks, int signatureEnd, string? seenIn = null)
-        => _extract.Add(new ExtractNode(Id(frame.Qualify(name)), CodeNodeKinds.Type, name, frame.Qualify(name), _scan[start].Line, _scan[Math.Clamp(last, start, _scan.Count - 1)].EndLine, _scan.Signature(head, signatureEnd))
+    /// <summary>
+    /// A type node over the tokens from <paramref name="start"/> to <paramref name="last"/>, its signature the tokens from
+    /// <paramref name="head"/> before <paramref name="signatureEnd"/>, what its annotations' arguments hold its own; answers
+    /// its key.
+    /// </summary>
+    private QualifiedName DeclareType(int start, int head, int last, ScanFrame frame, string name, string subKind, List<string> modifiers, List<string> marks, int signatureEnd, QualifiedName? seenIn = null)
+    {
+        var key = _extract.Add(new ExtractNode(Id(frame.Qualify(name)), CodeNodeKinds.Type, name, frame.Qualify(name), _scan[start].Line, _scan[Math.Clamp(last, start, _scan.Count - 1)].EndLine, _scan.Signature(head, signatureEnd))
         {
             SubKind = subKind,
             Scope = frame.Scope,
@@ -817,13 +845,17 @@ internal sealed class DartReading
             SeenIn = seenIn ?? (IsPrivate(name) ? _library : null),
         });
 
+        AnnotationArguments(start, head, key, frame.Owner);
+        return key;
+    }
+
     /// <summary>
     /// A type's clauses from <paramref name="at"/> to <paramref name="end"/>: <c>extends</c> an <c>inherits</c> edge,
     /// <c>with</c> a <c>mixesIn</c> edge each, <c>implements</c> an <c>implements</c> edge each and a mixin's <c>on</c> an
     /// <c>inherits</c> edge each - its body sees their members, and its <c>super</c> reaches them - each type's arguments
     /// referenced. <paramref name="kind"/> is what a type before any clause is: a class alias's base.
     /// </summary>
-    private void Clauses(string key, int at, int end, string? kind)
+    private void Clauses(QualifiedName key, int at, int end, string? kind)
     {
         while (at < end)
         {
@@ -846,13 +878,13 @@ internal sealed class DartReading
                 // Object, num, double and the rest of dart:core: no type the repository declares.
                 if (!Builtins.Contains(chain!))
                 {
-                    Mention(key, kind, chain!, _scan[at].Line);
+                    Mention(key, kind, QualifiedName.Of(chain!), _scan[at].Line);
                 }
 
                 if (_scan.Is(past, "<"))
                 {
                     var arguments = _scan.AngleEnd(past, end);
-                    TypeReferences(key, past + 1, arguments - 1);
+                    TypeReferences(_scan, key, past + 1, arguments - 1);
                     past = arguments;
                 }
 
@@ -866,40 +898,33 @@ internal sealed class DartReading
 
     /// <summary>
     /// The members of the body <paramref name="open"/> opens, read in <paramref name="frame"/>, the type's own - an enum's
-    /// values first - their bodies read once every member is declared.
+    /// values first, now - their walk on the stack, their bodies read once every member is declared.
     /// </summary>
-    private void Members(int open, int inner, ScanFrame frame, string? enumKey)
+    private void Members(int open, int inner, ScanFrame frame, QualifiedName? enumKey)
     {
-        if (frame.TooDeep)
+        var at = enumKey is not null ? Values(open + 1, inner, frame, enumKey) : open + 1;
+        List<Action>? outer = null;
+
+        void Begin() => (outer, _bodies) = (_bodies, []);
+
+        void End()
         {
-            _extract.Dynamic(_scan[open].Line, ScanFrame.TooDeepWhy);
-            return;
-        }
-
-        var outer = _bodies;
-        _bodies = [];
-
-        try
-        {
-            var at = enumKey is not null ? Values(open + 1, inner, frame, enumKey) : open + 1;
-            ScanFrame.Walk(at, inner, next => Declaration(next, inner, frame));
-
-            foreach (var body in _bodies)
+            foreach (var body in _bodies!)
             {
                 body();
             }
-        }
-        finally
-        {
+
             _bodies = outer;
         }
+
+        _walks.Walk(at, inner, next => Declaration(next, inner, frame), Begin, End);
     }
 
     /// <summary>
     /// An enum's values from <paramref name="at"/>, to the <c>;</c> that ends them or the body's end: each a constant of
     /// the enum's type, a call of the constructor it names with what its arguments call; answers where its members begin.
     /// </summary>
-    private int Values(int at, int inner, ScanFrame frame, string enumKey)
+    private int Values(int at, int inner, ScanFrame frame, QualifiedName enumKey)
     {
         var stop = ScanCalls.TopLevel(_scan, at, inner, ";", DartTypes);
 
@@ -924,6 +949,7 @@ internal sealed class DartReading
                 SeenIn = IsPrivate(_scan.Text(name)) ? _library : null,
             });
 
+            AnnotationArguments(pieceStart, name, key, frame.Owner);
             var next = _scan.Next(name);
 
             if (_scan.Is(next, "<"))
@@ -943,7 +969,7 @@ internal sealed class DartReading
             {
                 var close = Math.Min(_scan.Bounds(next, pieceEnd).Inner, pieceEnd);
                 _extract.Reference(key, CodeEdgeKinds.Calls, constructor, _scan[next].Line, ScanCalls.CallArity(_scan, next, close, DartCalls), new ExtractQualifier(CodeQualifierKinds.This));
-                Calls(_text, next + 1, close, key, new Locals(), frame.Owner, depth: 0);
+                Calls(_text, next + 1, close, key, new Locals(), frame.Owner);
             }
         }
 
@@ -1088,7 +1114,7 @@ internal sealed class DartReading
 
         if (subKind == "getter")
         {
-            parameters = new Parameters(null, null, [], new Dictionary<string, string?>(), new HashSet<string>());
+            parameters = new Parameters(null, null, [], new Dictionary<string, string?>(), new HashSet<string>(), []);
             signatureEnd = at;
         }
         else if (_scan.Is(at, "(") && _scan.Match(at) is var close and > 0)
@@ -1144,11 +1170,11 @@ internal sealed class DartReading
         try
         {
             // What its signature names: its return type, and its parameters' types.
-            TypeReferences(key, typeStart, typeEnd);
+            TypeReferences(_scan, key, typeStart, typeEnd);
 
             foreach (var (spanStart, spanEnd) in parameters.TypeSpans)
             {
-                TypeReferences(key, spanStart, spanEnd);
+                TypeReferences(_scan, key, spanStart, spanEnd);
             }
         }
         finally
@@ -1157,6 +1183,8 @@ internal sealed class DartReading
         }
 
         Overriding(key, name, nameAt, marks);
+        AnnotationArguments(start, head, key, frame.Owner);
+        Signed(parameters, key, frame.Owner);
 
         if (body >= 0)
         {
@@ -1251,8 +1279,11 @@ internal sealed class DartReading
 
         foreach (var (spanStart, spanEnd) in parameters.TypeSpans)
         {
-            TypeReferences(key, spanStart, spanEnd);
+            TypeReferences(_scan, key, spanStart, spanEnd);
         }
+
+        AnnotationArguments(start, head, key, frame.Owner);
+        Signed(parameters, key, frame.Owner);
 
         if (redirect >= 0)
         {
@@ -1272,12 +1303,12 @@ internal sealed class DartReading
             {
                 if (initialized >= 0)
                 {
-                    Calls(_text, initialized + 1, body >= 0 ? body : last + 1, key, locals, frame.Owner, depth: 0);
+                    Calls(_text, initialized + 1, body >= 0 ? body : last + 1, key, locals, frame.Owner);
                 }
 
                 if (body >= 0)
                 {
-                    Calls(_text, body + 1, last, key, locals, frame.Owner, depth: 0);
+                    Calls(_text, body + 1, last, key, locals, frame.Owner);
                 }
             }
             finally
@@ -1290,8 +1321,22 @@ internal sealed class DartReading
         return last + 1;
     }
 
+    /// <summary>What each of <paramref name="parameters"/>' annotations and default holds, as code of the node of <paramref name="key"/>: <c>{String name = 'x'}</c>, <c>@Default(1) int n</c>.</summary>
+    private void Signed(Parameters parameters, QualifiedName key, string? owner)
+    {
+        foreach (var (start, annotated, written, end) in parameters.Written)
+        {
+            AnnotationArguments(start, annotated, key, owner);
+
+            if (written >= 0)
+            {
+                Calls(_text, written + 1, end, key, new Locals(), owner);
+            }
+        }
+    }
+
     /// <summary>The constructor a redirecting factory names from <paramref name="at"/>: <c>= Other;</c> instantiates it, <c>= Other.named;</c> calls that one.</summary>
-    private void Redirect(string key, int at, int last)
+    private void Redirect(QualifiedName key, int at, int last)
     {
         var (names, _) = ChainAt(_scan, at, last + 1);
 
@@ -1309,7 +1354,7 @@ internal sealed class DartReading
         }
         else
         {
-            Mention(key, CodeEdgeKinds.Instantiates, string.Join('.', written), line);
+            Mention(key, CodeEdgeKinds.Instantiates, QualifiedName.Of(string.Join('.', written)), line);
         }
     }
 
@@ -1382,12 +1427,18 @@ internal sealed class DartReading
                 }
             }
 
-            TypeReferences(key, typeStart, typeEnd);
+            TypeReferences(_scan, key, typeStart, typeEnd);
             Overriding(key, name, nameAt, marks);
+
+            // The declaration's annotations are its first variable's.
+            if (pieceStart == firstStart)
+            {
+                AnnotationArguments(start, head, key, frame.Owner);
+            }
 
             if (assign < pieceEnd)
             {
-                Calls(_text, assign + 1, pieceEnd, key, new Locals(), frame.Owner, depth: 0);
+                Calls(_text, assign + 1, pieceEnd, key, new Locals(), frame.Owner);
             }
         }
 
@@ -1399,7 +1450,7 @@ internal sealed class DartReading
     /// of its name its bases declare, where it is marked <c>@override</c>: a method's, an operator's, a getter's and a
     /// setter's, and a field's, which overrides a getter of its name as well.
     /// </summary>
-    private void Overriding(string key, string name, int nameAt, List<string> marks)
+    private void Overriding(QualifiedName key, string name, int nameAt, List<string> marks)
     {
         if (marks.Contains("@override", StringComparer.Ordinal))
         {
@@ -1411,7 +1462,7 @@ internal sealed class DartReading
     /// The body of a callable at <paramref name="body"/> - a block or an arrow - to <paramref name="last"/>: what it calls,
     /// its parameters its locals; read once its type's every member is declared.
     /// </summary>
-    private void ReadBody(int body, int last, string key, Parameters parameters, ScanFrame frame, IReadOnlyList<string> own)
+    private void ReadBody(int body, int last, QualifiedName key, Parameters parameters, ScanFrame frame, IReadOnlyList<string> own)
     {
         var typeParameters = _typeParameters.Concat(own).ToList();
 
@@ -1421,7 +1472,7 @@ internal sealed class DartReading
 
             try
             {
-                Calls(_text, body + 1, last, key, new Locals(parameters), frame.Owner, depth: 0);
+                Calls(_text, body + 1, last, key, new Locals(parameters), frame.Owner);
             }
             finally
             {
@@ -1532,8 +1583,16 @@ internal sealed class DartReading
     }
 
     /// <summary>Whether the brace at <paramref name="at"/> in an initializer list is a collection's - a map's or a set's - and no body: what comes before it is no part of a list's end.</summary>
-    private bool IsCollection(int at)
-        => _scan.Previous(at) is var before && (_scan.Is(before, "=") || _scan.Is(before, "(") || _scan.Is(before, ",") || _scan.Is(before, ":") || _scan.Is(before, ">") || _scan.Is(before, "const"));
+    private bool IsCollection(int at) => IsCollection(_scan, at);
+
+    /// <summary>
+    /// Whether the brace at <paramref name="at"/> is a collection's - a map's or a set's - and no body nor block: what comes
+    /// before it begins a value.
+    /// </summary>
+    private static bool IsCollection(ScannedText scan, int at)
+        => scan.Previous(at) is var before && (scan.Is(before, "=") || scan.Is(before, "(") || scan.Is(before, ",") || scan.Is(before, ":") || scan.Is(before, ">") || scan.Is(before, "const")
+            || scan.Is(before, "=>") || scan.Is(before, "[") || scan.Is(before, "?") || scan.Is(before, "??") || scan.Is(before, "return") || scan.Is(before, "yield") || scan.Is(before, "await")
+            || scan.Is(before, "...") || scan.Is(before, "...?") || scan.Is(before, "in"));
 
     /// <summary>The names of the type parameters the list at <paramref name="less"/> declares.</summary>
     private List<string> TypeParameters(int less, int end)
@@ -1548,8 +1607,12 @@ internal sealed class DartReading
 
     // ---- Parameters ----
 
-    /// <summary>A callable's parameters: how many a call gives - its required positional and named ones the fewest - the spans of their types, and the names each binds.</summary>
-    private sealed record Parameters(int? Least, int? Most, IReadOnlyList<(int Start, int End)> TypeSpans, IReadOnlyDictionary<string, string?> Locals, IReadOnlySet<string> Functions);
+    /// <summary>
+    /// A callable's parameters: how many a call gives - its required positional and named ones the fewest - the spans of
+    /// their types, the names each binds, and where each is written: its start, the end of its annotations, its default's
+    /// <c>=</c> or <c>:</c> (-1 where it has none) and its end, what its annotations and its default hold read from there.
+    /// </summary>
+    private sealed record Parameters(int? Least, int? Most, IReadOnlyList<(int Start, int End)> TypeSpans, IReadOnlyDictionary<string, string?> Locals, IReadOnlySet<string> Functions, IReadOnlyList<(int Start, int Annotated, int Default, int End)> Written);
 
     /// <summary>
     /// The parameters between the parentheses at <paramref name="open"/> and <paramref name="close"/>: positional ones, then
@@ -1563,6 +1626,7 @@ internal sealed class DartReading
         var spans = new List<(int, int)>();
         var locals = new Dictionary<string, string?>(StringComparer.Ordinal);
         var functions = new HashSet<string>(StringComparer.Ordinal);
+        var written = new List<(int, int, int, int)>();
 
         void One(int start, int end, bool optional, bool named)
         {
@@ -1572,6 +1636,8 @@ internal sealed class DartReading
             {
                 return;
             }
+
+            var annotated = at;
 
             var required = false;
 
@@ -1585,6 +1651,7 @@ internal sealed class DartReading
             least += (named && required) || (!optional && !named) ? 1 : 0;
 
             var stop = Math.Min(ScanCalls.TopLevel(scan, at, end, "=", DartTypes), ScanCalls.TopLevel(scan, at, end, ":", DartTypes));
+            written.Add((start, annotated, stop < end ? stop : -1, end));
 
             if ((scan.Is(at, "this") || scan.Is(at, "super")) && scan.Is(scan.Next(at), "."))
             {
@@ -1644,7 +1711,7 @@ internal sealed class DartReading
             }
         }
 
-        return new Parameters(least, most, spans, locals, functions);
+        return new Parameters(least, most, spans, locals, functions, written);
     }
 
     // ---- What a body calls ----
@@ -1682,133 +1749,337 @@ internal sealed class DartReading
     /// interpolations are read as text of their own, a test framework's test calls as nodes of their own, and a pattern's
     /// types as what it references. <paramref name="owner"/> is the type whose members the body sees.
     /// </summary>
-    private void Calls(InterpolatedText text, int from, int to, string key, Locals locals, string? owner, int depth)
+    /// <remarks>
+    /// The code a run holds that is read as code of its own - an interpolation's, a test call's - is a run on a stack of
+    /// the reading's own (<see cref="CodeRun"/>), read before the run it stands in goes on: in the order the text writes it,
+    /// and never a call into the reading, so no nesting of them reaches past its stack.
+    /// </remarks>
+    private void Calls(InterpolatedText text, int from, int to, QualifiedName key, Locals locals, string? owner)
     {
-        var scan = text.Scan;
+        var runs = new Stack<CodeRun>();
+        runs.Push(new CodeRun(text, from, to, key, locals));
 
-        // Where the test calls read are no longer too deep to be: past the first that was.
-        var shallowFrom = -1;
-
-        for (var at = from; at < to && at < scan.Count; at++)
+        while (runs.TryPeek(out var run))
         {
-            var token = scan[at];
-
-            if (token.Kind == ScanTokenKind.Text)
+            if (run.At >= run.To || run.At >= run.Text.Scan.Count)
             {
-                if (text.Interpolations.TryGetValue(token.Start, out var spans) && ScanFrame.ReadsDeeper(_extract, depth, token.Line, Nesting))
-                {
-                    foreach (var (spanStart, spanEnd) in spans)
-                    {
-                        var inner = DartLexer.Scan(scan.Source, spanStart, spanEnd, text.Lines);
-                        Calls(inner, 0, inner.Scan.Count, key, locals, owner, depth + 1);
-                    }
-                }
-
+                runs.Pop();
                 continue;
             }
 
-            if (token.Kind != ScanTokenKind.Name)
-            {
-                if (scan.Is(at, "(") && scan.Match(at) is var close and > 0 && OpensClosure(scan, at, close))
-                {
-                    locals.Add(ParametersOf(scan, at, close));
-                }
-
-                continue;
-            }
-
-            var word = scan.Text(at);
-            var line = token.Line;
-
-            if (word is "catch" && scan.Is(scan.Next(at), "(") && scan.Match(scan.Next(at)) is var caught and > 0)
-            {
-                Caught(scan, at, caught, locals);
-                at = caught;
-                continue;
-            }
-
-            if (word is "case")
-            {
-                var stop = PatternEnd(scan, at, to);
-                Pattern(scan, scan.Next(at), stop, key, locals);
-                at = stop - 1;
-                continue;
-            }
-
-            if (word is "new" or "const" && Instantiated(scan, at, key) is var made and > 0)
-            {
-                at = made - 1;
-                continue;
-            }
-
-            if (word is "super" or "this" && scan.Is(scan.Next(at), "(") && !IsMember(scan, scan.Previous(at)))
-            {
-                var open = scan.Next(at);
-                _extract.Reference(key, CodeEdgeKinds.Calls, "new", line, ScanCalls.CallArity(scan, open, scan.CloseOf(open), DartCalls),
-                    new ExtractQualifier(word == "super" ? CodeQualifierKinds.Base : CodeQualifierKinds.This));
-                continue;
-            }
-
-            Local(scan, at, locals);
-
-            if (ScanCalls.At(scan, at, IsMember(scan, scan.Previous(at)) ? DartMemberCalls : DartCalls) is not { } call)
-            {
-                continue;
-            }
-
-            var previous = scan.Previous(at);
-
-            if (IsMember(scan, previous))
-            {
-                MemberCall(scan, previous, call, key, locals, word, line);
-                continue;
-            }
-
-            if (scan.Is(previous, "var") || scan.Is(previous, "final") || IsSwitchArm(scan, at, call))
-            {
-                // A pattern: var Point(:x, :y) = p, or an arm of a switch expression.
-                Pattern(scan, at, call.Close + 1, key, locals);
-                at = call.Close;
-                continue;
-            }
-
-            if (IsLocalFunction(scan, previous, call))
-            {
-                locals.LocalFunctions.Add(word);
-                locals.Add(ParametersOf(scan, call.Open, call.Close));
-                at = call.Close;
-                continue;
-            }
-
-            // A test call nested too deep is marked once, those it holds read as its holder's calls.
-            if (_testFile && TestCalls.Contains(word) && at > shallowFrom)
-            {
-                if (!ScanFrame.ReadsDeeper(_extract, depth, line, Nesting))
-                {
-                    shallowFrom = call.Close;
-                }
-                else if (Test(text, at, call, key, locals, owner, depth) is var tested and > 0)
-                {
-                    at = tested;
-                    continue;
-                }
-            }
-
-            if (locals.LocalFunctions.Contains(word))
-            {
-                continue;
-            }
-
-            if (locals.Types.ContainsKey(word) || locals.Functions.Contains(word)
-                || (owner is not null && _functionFields.TryGetValue(owner, out var fields) && fields.Contains(word))
-                || _functionValues.Contains(word))
-            {
-                _extract.Dynamic(line, $"a call through the function value {word}");
-                continue;
-            }
-
-            _extract.Reference(key, CodeEdgeKinds.Calls, word, line, call.Arity);
+            run.At = CallAt(run, owner, runs) + 1;
         }
+    }
+
+    /// <summary>
+    /// One run of code <see cref="Calls"/> reads (<see cref="ScanRun{TKey, TLocals}"/>), with what it reads in a way of
+    /// its own where it reaches it, each by where it begins and with where it ends: the types a closure's or a local
+    /// function's parameters are written with, and the patterns a switch expression's arms match by.
+    /// </summary>
+    private sealed class CodeRun : ScanRun<QualifiedName, Locals>
+    {
+        /// <summary>A run of <paramref name="text"/> from <paramref name="from"/> to <paramref name="to"/>.</summary>
+        public CodeRun(InterpolatedText text, int from, int to, QualifiedName key, Locals locals)
+            : base(text, from, to, key, locals)
+        {
+        }
+
+        /// <summary>A run of the whole of the text <paramref name="scanned"/> scans, once it is reached.</summary>
+        public CodeRun(Func<InterpolatedText> scanned, QualifiedName key, Locals locals)
+            : base(scanned, key, locals)
+        {
+        }
+
+        public Dictionary<int, int> Typed { get; } = [];
+
+        public Dictionary<int, int> Arms { get; } = [];
+    }
+
+    /// <summary>
+    /// Reads the token where <paramref name="run"/> stands, as <see cref="Calls"/> reads each, stacking on
+    /// <paramref name="runs"/> the code it holds that is read as code of its own; answers the index of the last token it
+    /// read, the run going on past it.
+    /// </summary>
+    private int CallAt(CodeRun run, string? owner, Stack<CodeRun> runs)
+    {
+        var text = run.Text;
+        var scan = text.Scan;
+        var at = run.At;
+        var to = run.To;
+        var key = run.Key;
+        var locals = run.Locals;
+        var typed = run.Typed;
+        var arms = run.Arms;
+
+        if (arms.Remove(at, out var armEnd))
+        {
+            Pattern(scan, at, armEnd, key, locals, matching: true);
+            return Math.Max(at, armEnd - 1);
+        }
+
+        if (typed.Remove(at, out var typeEnd))
+        {
+            TypeReferences(scan, key, at, typeEnd);
+            return Math.Max(at, typeEnd - 1);
+        }
+
+        var token = scan[at];
+
+        if (token.Kind == ScanTokenKind.Text)
+        {
+            // The literal's constant parts - an interpolation's holes are code, read as code - are its data.
+            foreach (var (value, part) in scan.LiteralParts(token))
+            {
+                _extract.Literal(value, part, key);
+            }
+
+            // Each run of code it holds read in turn, the first on top, before the run goes on.
+            if (text.Interpolations.TryGetValue(token.Start, out var spans))
+            {
+                for (var index = spans.Count - 1; index >= 0; index--)
+                {
+                    var (spanStart, spanEnd) = spans[index];
+                    runs.Push(new CodeRun(() => DartLexer.Scan(scan.Source, spanStart, spanEnd, text.Lines, text.Closes), key, locals));
+                }
+            }
+
+            return at;
+        }
+
+        if (token.Kind != ScanTokenKind.Name)
+        {
+            if (scan.Is(at, "(") && scan.Match(at) is var close and > 0 && OpensClosure(scan, at, close))
+            {
+                Parameterized(scan, at, close, locals, typed);
+            }
+            else if (scan.Is(at, "{") && IsSwitchExpression(scan, at))
+            {
+                foreach (var (armStart, armStop) in ScanCalls.Split(scan, at + 1, scan.CloseOf(at), DartTypes))
+                {
+                    arms[armStart] = PatternEnd(scan, armStart, armStop);
+                }
+            }
+            else if (scan.Is(at, "<") && ScanCalls.TypeArgumentsAt(scan, at, DartTypes) is var listed and >= 0)
+            {
+                // A call's or a literal's type arguments name types: generic<Model>(x), <Item>[], const <String, int>{}.
+                TypeReferences(scan, key, at + 1, listed - 1);
+                at = listed - 1;
+            }
+
+            return at;
+        }
+
+        var word = scan.Text(at);
+        var line = token.Line;
+
+        if (word is "catch" && scan.Is(scan.Next(at), "(") && scan.Match(scan.Next(at)) is var caught and > 0)
+        {
+            Caught(scan, at, caught, locals);
+            return caught;
+        }
+
+        if (word is "case")
+        {
+            var stop = PatternEnd(scan, scan.Next(at), to);
+            Pattern(scan, scan.Next(at), stop, key, locals, matching: true);
+            return stop - 1;
+        }
+
+        if (word is "var" or "final" && scan.Next(at) is var bracket && scan.Opens(bracket))
+        {
+            var past = scan.Past(bracket);
+
+            // A record's type a local is declared with - final (int, String) pair - or a declaration's pattern:
+            // var (a, b) = pair, final [first, ...] = items, for (final (key, value) in pairs).
+            if (scan.Is(bracket, "(") && scan.IsName(past) && !Reserved.Contains(scan.Text(past)) && past < to)
+            {
+                TypeReferences(scan, key, bracket, past);
+                locals.Types[scan.Text(past)] = null;
+                at = past;
+            }
+            else
+            {
+                Pattern(scan, bracket, past, key, locals, matching: false);
+                at = past - 1;
+            }
+
+            return at;
+        }
+
+        // What a cast or a test names after as, is or is! is a type: o as Model, o is! Model.
+        if (word is "as" or "is" && !IsMember(scan, scan.Previous(at)) && (scan.Is(scan.Next(at), "!") ? scan.Next(scan.Next(at)) : scan.Next(at)) is var cast
+            && TypeAfter(scan, cast) is var castEnd && castEnd > cast)
+        {
+            TypeReferences(scan, key, cast, castEnd);
+            return castEnd - 1;
+        }
+
+        if (word is "new" or "const" && Instantiated(scan, at, key) is var made and > 0)
+        {
+            return made - 1;
+        }
+
+        if (word is "super" or "this" && scan.Is(scan.Next(at), "(") && !IsMember(scan, scan.Previous(at)))
+        {
+            var open = scan.Next(at);
+            _extract.Reference(key, CodeEdgeKinds.Calls, "new", line, ScanCalls.CallArity(scan, open, scan.CloseOf(open), DartCalls),
+                new ExtractQualifier(word == "super" ? CodeQualifierKinds.Base : CodeQualifierKinds.This));
+            return at;
+        }
+
+        // A declaration's type - Shape s = make(), (Item item) =>, Widget helper() {} - names types, no value the code
+        // reads: its references, and the reading goes on at the name it declares.
+        if (DeclaredType(scan, at) is var declarator and >= 0 && declarator < to)
+        {
+            TypeReferences(scan, key, at, declarator);
+            return declarator - 1;
+        }
+
+        Local(scan, at, locals);
+
+        if (ScanCalls.At(scan, at, IsMember(scan, scan.Previous(at)) ? DartMemberCalls : DartCalls) is not { } call)
+        {
+            Used(scan, at, key, locals, word, line);
+            return at;
+        }
+
+        var previous = scan.Previous(at);
+
+        if (IsMember(scan, previous))
+        {
+            MemberCall(scan, previous, call, key, locals, word, line);
+            return at;
+        }
+
+        if (scan.Is(previous, "var") || scan.Is(previous, "final"))
+        {
+            // A declaration's object pattern: var Point(:x, :y) = p.
+            Pattern(scan, at, call.Close + 1, key, locals, matching: false);
+            return call.Close;
+        }
+
+        if (IsLocalFunction(scan, previous, call))
+        {
+            // Its parameters are read as a closure's are: their types references, their defaults the body's code.
+            locals.LocalFunctions.Add(word);
+            Parameterized(scan, call.Open, call.Close, locals, typed);
+            return call.Open;
+        }
+
+        // A test call is a node of its own, what its arguments call a run of its own read next.
+        if (_testFile && TestCalls.Contains(word) && Test(scan, at, call, key) is { } test)
+        {
+            runs.Push(new CodeRun(text, test.From, call.Close, test.Key, locals));
+            return call.Close;
+        }
+
+        if (locals.LocalFunctions.Contains(word))
+        {
+            return at;
+        }
+
+        if (locals.Types.ContainsKey(word) || locals.Functions.Contains(word)
+            || (owner is not null && _functionFields.TryGetValue(owner, out var fields) && fields.Contains(word))
+            || _functionValues.Contains(word))
+        {
+            _extract.Dynamic(line, $"a call through the function value {word}");
+            return at;
+        }
+
+        _extract.Reference(key, CodeEdgeKinds.Calls, word, line, call.Arity);
+        return at;
+    }
+
+    /// <summary>
+    /// A member read or written without a call of it - <c>x.y</c>, <c>x?.y</c>, a cascade - or a bare name the code
+    /// reads, the first of a receiver's chain among them (<see cref="Bare"/>): a use of the member by its name, qualified
+    /// by what its receiver is where the file says. A name a named argument, a record or a label writes before a colon is
+    /// a name, not a read, where one a map's key, a case or a conditional writes there is.
+    /// </summary>
+    private void Used(ScannedText scan, int at, QualifiedName key, Locals locals, string word, int line)
+    {
+        var previous = scan.Previous(at);
+
+        if (IsMember(scan, previous))
+        {
+            MemberUse(scan, at, key, locals, word, line);
+            return;
+        }
+
+        if (scan.Is(scan.Next(at), ":") && !scan.Is(previous, "case") && !ScanCalls.IsConditionalColon(scan, scan.Next(at)) && !IsMapKey(scan, at))
+        {
+            return;
+        }
+
+        Bare(scan, at, key, locals, word, line);
+    }
+
+    /// <summary>
+    /// A bare name the code reads, the first of a receiver's chain among them: a use of it. A local, a parameter, a
+    /// function value, a word of the language and a label a <c>break</c> or a <c>continue</c> names are its own or none,
+    /// and no use, and so is a name a member is reached through that is no value - an import's prefix, a type's.
+    /// </summary>
+    private void Bare(ScannedText scan, int at, QualifiedName key, Locals locals, string word, int line)
+    {
+        if ((IsMember(scan, scan.Next(at)) && (_prefixes.Contains(word) || IsTypeName(word)))
+            || word == "_" || NoTypes.Contains(word) || Builtins.Contains(word) || ScanCalls.NamesLabel(scan, at)
+            || locals.Types.ContainsKey(word) || locals.Functions.Contains(word) || locals.LocalFunctions.Contains(word) || NoCalls.Contains(word))
+        {
+            return;
+        }
+
+        _extract.Reference(key, CodeEdgeKinds.Uses, word, line);
+    }
+
+    /// <summary>Whether the name at <paramref name="at"/>, a colon after it, is a map's key - <c>{kRed: 1}</c> - an entry's first, of a brace that is a collection's.</summary>
+    private bool IsMapKey(ScannedText scan, int at)
+        => scan.Previous(at) is var before && (scan.Is(before, "{") || scan.Is(before, ","))
+            && Enclosing(scan, at) is var open and >= 0 && scan.Is(open, "{") && IsCollection(scan, open);
+
+    /// <summary>
+    /// The bracket the token at <paramref name="at"/> stands in: back over the groups before it to their opener; each comma
+    /// passed is kept with it, so the entries of one long list find it once, in a time of the list's length.
+    /// </summary>
+    private int Enclosing(ScannedText scan, int at)
+    {
+        var known = _enclosing.GetValue(scan, _ => []);
+        var passed = new List<int>();
+        var found = -1;
+
+        for (var index = scan.Previous(at); index >= 0; index = scan.Previous(index))
+        {
+            if (scan.Is(index, ")") || scan.Is(index, "]") || scan.Is(index, "}"))
+            {
+                if (scan.Match(index) is not (var open and >= 0))
+                {
+                    break;
+                }
+
+                index = open;
+            }
+            else if (scan.Opens(index))
+            {
+                found = index;
+                break;
+            }
+            else if (scan.Is(index, ","))
+            {
+                if (known.TryGetValue(index, out var opener))
+                {
+                    found = opener;
+                    break;
+                }
+
+                passed.Add(index);
+            }
+        }
+
+        foreach (var comma in passed)
+        {
+            known[comma] = found;
+        }
+
+        return found;
     }
 
     /// <summary>
@@ -1816,7 +2087,7 @@ internal sealed class DartReading
     /// <paramref name="dot"/>: a reference qualified by that receiver, a cascade's its target; one through a function
     /// value's <c>call</c>, <c>Function.apply</c> or a field of a function type marked dynamic, and not linked.
     /// </summary>
-    private void MemberCall(ScannedText scan, int dot, ScannedCall call, string key, Locals locals, string word, int line)
+    private void MemberCall(ScannedText scan, int dot, ScannedCall call, QualifiedName key, Locals locals, string word, int line)
     {
         var target = scan.Is(dot, "..") || scan.Is(dot, "?..") ? CascadeHead(scan, dot) : dot;
 
@@ -1844,8 +2115,12 @@ internal sealed class DartReading
 
     /// <summary>Whether <paramref name="name"/> is a field of a function type of the type the node <paramref name="from"/> is a member of.</summary>
     private bool IsFunctionField(ExtractNode from, string name)
-        => from.Qualified.LastIndexOf('.') is var dot and > 0 && from.Qualified[..dot] is var holder
+    {
+        var qualified = from.Qualified.Whole();
+
+        return qualified.LastIndexOf('.') is var dot and > 0 && qualified[..dot] is var holder
             && _functionFields.TryGetValue(holder[(holder.LastIndexOf('.') + 1)..], out var fields) && fields.Contains(name);
+    }
 
     /// <summary>Whether the token at <paramref name="at"/> makes what follows it a member of what precedes it: <c>.</c>, <c>?.</c>, <c>..</c>, <c>?..</c>.</summary>
     private static bool IsMember(ScannedText scan, int at) => at >= 0 && at < scan.Count && Accessors.Contains(scan.Text(at));
@@ -1884,87 +2159,114 @@ internal sealed class DartReading
     }
 
     /// <summary>
+    /// A use of the member <paramref name="word"/> at <paramref name="at"/>, read after the <c>.</c>, <c>?.</c>, <c>..</c>
+    /// or <c>?..</c> before it: a reference qualified by its receiver, kept as what the chain of the member after it is
+    /// linked to.
+    /// </summary>
+    private void MemberUse(ScannedText scan, int at, QualifiedName key, Locals locals, string word, int line)
+    {
+        var made = _extract.Reference(key, CodeEdgeKinds.Uses, word, line, qualifier: Receiver(scan, scan.Previous(at), locals, out var dynamic));
+
+        if (made >= 0)
+        {
+            _chained[(scan, at)] = (made, dynamic);
+        }
+    }
+
+    /// <summary>
     /// What a call on the receiver before the token at <paramref name="dot"/> is qualified by: <c>this</c>, <c>super</c>,
     /// an import's prefix, the type a local is declared with, a type a constructor's call makes, a type's name, or a
-    /// value by its name - <paramref name="dynamic"/> the local's name where it is declared <c>dynamic</c>.
+    /// value by its name - <paramref name="dynamic"/> the local's name where it is declared <c>dynamic</c>; a chain of names
+    /// one more than the chain before its last (<see cref="Chained"/>).
     /// </summary>
     private ExtractQualifier Receiver(ScannedText scan, int dot, Locals locals, out string? dynamic)
     {
         dynamic = null;
-        var names = new List<string>();
         var at = Unasserted(scan, scan.Previous(dot));
-        var first = -1;
 
-        while (true)
+        if (scan.Is(at, ">") && ScanCalls.TypeArgumentsStart(scan, at, DartTypes) is var less and >= 0 && scan.IsName(scan.Previous(less)))
         {
-            if (scan.Is(at, ">") && ScanCalls.TypeArgumentsStart(scan, at, DartTypes) is var less and >= 0 && scan.IsName(scan.Previous(less)))
-            {
-                at = scan.Previous(less);
-            }
-
-            if (!scan.IsName(at))
-            {
-                break;
-            }
-
-            names.Add(scan.Text(at));
-            first = at;
-            var before = scan.Previous(at);
-
-            if (!(scan.Is(before, ".") || scan.Is(before, "?.")))
-            {
-                break;
-            }
-
-            at = Unasserted(scan, scan.Previous(before));
+            at = scan.Previous(less);
         }
 
-        // Read from its end, last first.
-        names.Reverse();
-
-        if (names.Count == 0)
+        if (!scan.IsName(at))
         {
-            var close = Unasserted(scan, scan.Previous(dot));
-
-            return scan.Is(close, ")") && scan.Match(close) is var open and >= 0 && Made(scan, open) is { } made
+            return scan.Is(at, ")") && scan.Match(at) is var open and >= 0 && Made(scan, open) is { } made
                 ? new ExtractQualifier(CodeQualifierKinds.Type, made)
                 : new ExtractQualifier(CodeQualifierKinds.Value);
         }
 
-        // A chain that is a member of something more - a call's result, a cascade's section - is a value of no type the file says.
-        if (IsMember(scan, scan.Previous(first)))
+        var before = scan.Previous(at);
+
+        if (scan.Is(before, ".") || scan.Is(before, "?."))
+        {
+            return Chained(scan, at, out dynamic);
+        }
+
+        // A name that is a member of something more - a cascade's section - is a value of no type the file says.
+        if (IsMember(scan, before))
         {
             return new ExtractQualifier(CodeQualifierKinds.Value);
         }
 
-        if (names[0] == "this")
+        var name = scan.Text(at);
+
+        if (name == "this")
         {
-            names.RemoveAt(0);
-            return names.Count == 0 ? new ExtractQualifier(CodeQualifierKinds.This) : new ExtractQualifier(CodeQualifierKinds.Value, string.Join('.', names));
+            return new ExtractQualifier(CodeQualifierKinds.This);
         }
 
-        if (names[0] == "super")
+        if (name == "super")
         {
-            return names.Count == 1 ? new ExtractQualifier(CodeQualifierKinds.Base) : new ExtractQualifier(CodeQualifierKinds.Value);
+            return new ExtractQualifier(CodeQualifierKinds.Base);
         }
 
-        if (locals.Types.TryGetValue(names[0], out var declared))
+        if (locals.Types.TryGetValue(name, out var declared))
         {
             if (declared == "dynamic")
             {
-                dynamic = names[0];
+                dynamic = name;
                 return new ExtractQualifier(CodeQualifierKinds.Value);
             }
 
-            return names.Count == 1 && declared is not null ? new ExtractQualifier(CodeQualifierKinds.Type, declared) : new ExtractQualifier(CodeQualifierKinds.Value);
+            return declared is not null ? new ExtractQualifier(CodeQualifierKinds.Type, declared) : new ExtractQualifier(CodeQualifierKinds.Value);
         }
 
-        if (_prefixes.Contains(names[0]))
+        if (_prefixes.Contains(name))
         {
-            return names.Count == 1 ? new ExtractQualifier(CodeQualifierKinds.Prefix, names[0]) : new ExtractQualifier(CodeQualifierKinds.Named, string.Join('.', names));
+            return new ExtractQualifier(CodeQualifierKinds.Prefix, name);
         }
 
-        return IsTypeName(names[0]) ? new ExtractQualifier(CodeQualifierKinds.Named, string.Join('.', names)) : new ExtractQualifier(CodeQualifierKinds.Value, string.Join('.', names));
+        return new ExtractQualifier(IsTypeName(name) ? CodeQualifierKinds.Named : CodeQualifierKinds.Value, name);
+    }
+
+    /// <summary>
+    /// What a receiver whose last name, at <paramref name="at"/>, is a member of the names before it is: what the use of
+    /// that member was qualified by says what the chain is - <c>this</c>'s member a value of its one name; a chain from a
+    /// value's name or a type's or a prefix's one name more, linked to that use (<see cref="ExtractQualifier.Link"/>),
+    /// which says the rest; a chain from anything else - <c>super</c>, a local, a call's result - a value of no type the
+    /// file says, its <paramref name="dynamic"/> the chain's first local's where it is declared <c>dynamic</c>. Each member
+    /// of a chain is read once, from the use of the member before it, so a chain of any length is read in a time of its
+    /// length and written in its names once.
+    /// </summary>
+    private ExtractQualifier Chained(ScannedText scan, int at, out string? dynamic)
+    {
+        dynamic = null;
+
+        if (!_chained.TryGetValue((scan, at), out var chained))
+        {
+            return new ExtractQualifier(CodeQualifierKinds.Value);
+        }
+
+        dynamic = chained.Dynamic;
+
+        return _extract.ReferenceAt(chained.Reference).Qualifier switch
+        {
+            { Kind: CodeQualifierKinds.This } => new ExtractQualifier(CodeQualifierKinds.Value, scan.Text(at)),
+            { Kind: CodeQualifierKinds.Value, Name: not null } or { Kind: CodeQualifierKinds.Value, Link: not null } => new ExtractQualifier(CodeQualifierKinds.Value) { Link = chained.Reference },
+            { Kind: CodeQualifierKinds.Named or CodeQualifierKinds.Prefix } => new ExtractQualifier(CodeQualifierKinds.Named) { Link = chained.Reference },
+            _ => new ExtractQualifier(CodeQualifierKinds.Value),
+        };
     }
 
     /// <summary><paramref name="at"/>, or the token before it where it is a non-null assertion's <c>!</c>.</summary>
@@ -2062,7 +2364,7 @@ internal sealed class DartReading
     /// its type; answers where the reading goes on - at a named constructor's name, read as a call of it - or 0 where it
     /// is none, a <c>const</c> declaration's or a collection's.
     /// </summary>
-    private int Instantiated(ScannedText scan, int at, string key)
+    private int Instantiated(ScannedText scan, int at, QualifiedName key)
     {
         var (names, past) = ChainAt(scan, scan.Next(at), scan.Count);
 
@@ -2086,7 +2388,11 @@ internal sealed class DartReading
         // p.Foo.named: the prefix, the type and the constructor's name.
         var written = names.Select(index => scan.Text(index)).ToList();
         var typeNames = written.Count > 1 && !IsTypeName(written[^1]) ? written.Count - 1 : written.Count;
-        Mention(key, CodeEdgeKinds.Instantiates, string.Join('.', written.Take(typeNames)), scan[names[0]].Line);
+        var made = Mention(key, CodeEdgeKinds.Instantiates, QualifiedName.Of(string.Join('.', written.Take(typeNames))), scan[names[0]].Line);
+
+        // The type's last name is what the constructor's name - read on as a call on the type - is chained to: the
+        // instantiation itself says what the type is written with, a prefix or a type's names.
+        _chained[(scan, names[typeNames - 1])] = (made, null);
 
         // A constructor named after its type is read on as a call of that name on the type: Foo.named( calls Foo's named.
         return typeNames < written.Count ? names[typeNames] : scan.Next(names[typeNames - 1]);
@@ -2115,27 +2421,27 @@ internal sealed class DartReading
 
     /// <summary>
     /// A local the body declares at <paramref name="at"/>, where it declares one: after <c>var</c>, <c>final</c>,
-    /// <c>const</c> or <c>late</c> - its type what its initializer makes - or after a type, which it is declared with.
+    /// <c>const</c> or <c>late</c> - its type what its initializer makes - or after a type, which it is declared with; and
+    /// each later declarator of its declaration.
     /// </summary>
     private void Local(ScannedText scan, int at, Locals locals)
     {
         var next = scan.Next(at);
         var word = scan.Text(at);
 
-        if (Reserved.Contains(word) || !(scan.Is(next, "=") || scan.Is(next, ";") || scan.Is(next, ",") || scan.Is(next, "in") || scan.Is(next, ")") || scan.Is(next, ":")))
+        if (Reserved.Contains(word) || !EndsDeclarator(scan, next))
         {
             return;
         }
 
         var previous = scan.Previous(at);
+        var inferred = scan.Is(previous, "var") || scan.Is(previous, "final") || scan.Is(previous, "const") || scan.Is(previous, "late");
 
-        if (scan.Is(previous, "var") || scan.Is(previous, "final") || scan.Is(previous, "const") || scan.Is(previous, "late"))
+        if (inferred)
         {
             locals.Types[word] = scan.Is(next, "=") ? Made(scan, scan.Next(next), scan.StatementEnd(next, scan.Count)) : null;
-            return;
         }
-
-        if (TypeBefore(scan, previous, nullableToo: !scan.Is(next, ":")) is { } typed)
+        else if (TypeBefore(scan, previous, nullableToo: !scan.Is(next, ":")) is { } typed)
         {
             locals.Types[word] = typed.Type;
 
@@ -2144,14 +2450,38 @@ internal sealed class DartReading
                 locals.Functions.Add(word);
             }
         }
+        else
+        {
+            return;
+        }
+
+        // A declaration's later declarators - final a = 1, b = 2 - are locals of it too: of its type, or of what each one's
+        // value makes where it is inferred.
+        if (!(scan.Is(next, "=") || scan.Is(next, ",") || scan.Is(next, ";")))
+        {
+            return;
+        }
+
+        foreach (var later in ScanCalls.LaterDeclarators(scan, at, scan.Count, lineEnds: false))
+        {
+            var after = scan.Next(later);
+
+            if (scan.IsName(later) && !Reserved.Contains(scan.Text(later)) && (scan.Is(after, "=") || scan.Is(after, ",") || scan.Is(after, ";")))
+            {
+                locals.Types[scan.Text(later)] = !inferred ? locals.Types[word]
+                    : scan.Is(after, "=") ? Made(scan, scan.Next(after), scan.StatementEnd(after, scan.Count))
+                    : null;
+            }
+        }
     }
 
     /// <summary>
     /// The type the tokens up to <paramref name="end"/> end with, where they end with one - a name, a prefix's chain, type
-    /// arguments, a nullable <c>?</c> where <paramref name="nullableToo"/>, a function type - and whether it is a function
-    /// type; <see langword="null"/> where no type ends there.
+    /// arguments, a nullable <c>?</c> where <paramref name="nullableToo"/>, a function type with its return type - whether
+    /// it is a function type, and where it begins; <see langword="null"/> where no type ends there. A function type's
+    /// return type is read where <paramref name="functions"/>, as no function type of its own.
     /// </summary>
-    private (string? Type, bool Function)? TypeBefore(ScannedText scan, int end, bool nullableToo)
+    private (string? Type, bool Function, int Start)? TypeBefore(ScannedText scan, int end, bool nullableToo, bool functions = true)
     {
         var at = end;
 
@@ -2176,8 +2506,14 @@ internal sealed class DartReading
         }
         else if (scan.Is(at, ")"))
         {
-            // void Function(int) callback
-            return scan.Match(at) is var open and >= 0 && scan.Is(scan.Previous(open), "Function") ? (null, true) : null;
+            // void Function(int) callback, Widget Function(BuildContext) builder: the return type before it, a function type's none.
+            if (!functions || scan.Match(at) is not (var open and >= 0) || !scan.Is(scan.Previous(open), "Function"))
+            {
+                return null;
+            }
+
+            var function = scan.Previous(open);
+            return (null, true, TypeBefore(scan, scan.Previous(function), nullableToo: true, functions: false)?.Start ?? function);
         }
 
         if (!scan.IsName(at) || (NoTypes.Contains(scan.Text(at)) && !scan.Is(at, "Function")))
@@ -2187,7 +2523,7 @@ internal sealed class DartReading
 
         if (scan.Is(at, "Function"))
         {
-            return (null, true);
+            return (null, true, at);
         }
 
         var last = at;
@@ -2199,7 +2535,68 @@ internal sealed class DartReading
         }
 
         var type = scan.Text(at, last + 1).Replace(" ", string.Empty, StringComparison.Ordinal);
-        return (type, IsFunctionTypeName(scan.Text(last)));
+        return (type, IsFunctionTypeName(scan.Text(last)), at);
+    }
+
+    /// <summary>
+    /// The index past the type written from <paramref name="at"/>, where one begins there - a name or a prefix's chain,
+    /// its type arguments, a nullable <c>?</c>, each function type written after it with its parameters
+    /// (<c>Widget Function(BuildContext)?</c>) - and <paramref name="at"/> where none does: the one reading a type is
+    /// passed over by, forward, as <see cref="TypeBefore"/> reads one back.
+    /// </summary>
+    private static int TypeAfter(ScannedText scan, int at)
+    {
+        if (!scan.IsName(at) || (NoTypes.Contains(scan.Text(at)) && !scan.Is(at, "Function")) || scan.Is(at, "_"))
+        {
+            return at;
+        }
+
+        var past = at;
+
+        if (!scan.Is(at, "Function"))
+        {
+            past = ChainAt(scan, at, scan.Count).Past;
+
+            if (scan.Is(past, "<") && ScanCalls.TypeArgumentsEnd(scan, past, DartTypes) is var arguments and >= 0)
+            {
+                past = arguments;
+            }
+
+            past = scan.Is(past, "?") ? scan.Next(past) : past;
+        }
+
+        while (scan.Is(past, "Function"))
+        {
+            past = scan.Is(scan.Next(past), "(") ? scan.Past(scan.Next(past)) : scan.Next(past);
+            past = scan.Is(past, "?") ? scan.Next(past) : past;
+        }
+
+        return past;
+    }
+
+    /// <summary>Whether the token at <paramref name="next"/> may follow the name a body's declaration declares: its value, its end, the next declarator, a for-in's <c>in</c>, a closure's parameter's end, a for-each's colon.</summary>
+    private static bool EndsDeclarator(ScannedText scan, int next)
+        => scan.Is(next, "=") || scan.Is(next, ";") || scan.Is(next, ",") || scan.Is(next, "in") || scan.Is(next, ")") || scan.Is(next, ":");
+
+    /// <summary>
+    /// The index of the name the declaration of a body whose type begins at <paramref name="at"/> declares - a local's, a
+    /// closure's parameter's, a local function's - as <see cref="Local"/> and <see cref="IsLocalFunction"/> tell a
+    /// declared name from the type before it; -1 where no declaration's type begins there. The type is no value the code
+    /// reads: its names are references.
+    /// </summary>
+    private int DeclaredType(ScannedText scan, int at)
+    {
+        var name = TypeAfter(scan, at);
+
+        if (IsMember(scan, scan.Previous(at)) || name == at || !scan.IsName(name) || Reserved.Contains(scan.Text(name)))
+        {
+            return -1;
+        }
+
+        var next = scan.Next(name);
+        var declares = EndsDeclarator(scan, next) || (ScanCalls.At(scan, name, DartCalls) is { } call && IsLocalFunction(scan, scan.Previous(name), call));
+
+        return declares && TypeBefore(scan, scan.Previous(name), nullableToo: !scan.Is(next, ":")) is { } typed && typed.Start == at ? name : -1;
     }
 
     /// <summary>A <c>catch</c>'s exception and stack trace at <paramref name="at"/>, as locals: the exception of the type its <c>on</c> names.</summary>
@@ -2253,8 +2650,29 @@ internal sealed class DartReading
     }
 
     /// <summary>
+    /// A closure's or a local function's parameters between the parentheses at <paramref name="open"/> and
+    /// <paramref name="close"/>: each a local of <paramref name="locals"/>, the span of each one's type among
+    /// <paramref name="typed"/>, so the walk reads it as the types it references and its default as code.
+    /// </summary>
+    private static void Parameterized(ScannedText scan, int open, int close, Locals locals, Dictionary<int, int> typed)
+    {
+        var parameters = ParametersOf(scan, open, close);
+        locals.Add(parameters);
+
+        foreach (var (start, end) in parameters.TypeSpans.Where(span => span.End > span.Start))
+        {
+            typed[start] = end;
+        }
+    }
+
+    /// <summary>Whether the brace at <paramref name="open"/> holds a switch expression's arms: a <c>switch</c>'s parenthesis before it, and no <c>case</c> or <c>default</c> a statement's would begin with.</summary>
+    private static bool IsSwitchExpression(ScannedText scan, int open)
+        => scan.Previous(open) is var close && scan.Is(close, ")") && scan.Match(close) is var paren and >= 0 && scan.Is(scan.Previous(paren), "switch")
+            && !scan.Is(scan.Next(open), "case") && !scan.Is(scan.Next(open), "default") && !scan.Is(scan.Next(open), "}");
+
+    /// <summary>
     /// Whether the call at <paramref name="call"/>, after <paramref name="previous"/>, declares a local function: a body
-    /// follows its parameters, and a type or a statement's start comes before its name.
+    /// follows its parameters, and a type - <c>void</c> among them - or a statement's start comes before its name.
     /// </summary>
     private bool IsLocalFunction(ScannedText scan, int previous, ScannedCall call)
     {
@@ -2265,50 +2683,13 @@ internal sealed class DartReading
             return false;
         }
 
-        return previous < 0 || scan.Is(previous, ";") || scan.Is(previous, "{") || scan.Is(previous, "}") || TypeBefore(scan, previous, nullableToo: true) is not null;
+        return previous < 0 || scan.Is(previous, ";") || scan.Is(previous, "{") || scan.Is(previous, "}") || scan.Is(previous, "void") || TypeBefore(scan, previous, nullableToo: true) is not null;
     }
 
-    /// <summary>Whether the call at <paramref name="at"/> is an object pattern of an arm of a switch expression: an arrow or a guard follows it, and a switch's body holds it.</summary>
-    private static bool IsSwitchArm(ScannedText scan, int at, ScannedCall call)
+    /// <summary>The index past the pattern that begins at <paramref name="first"/>: at its <c>:</c>, its arrow, its guard, or the bracket that ends what holds it.</summary>
+    private static int PatternEnd(ScannedText scan, int first, int to)
     {
-        var after = scan.Next(call.Close);
-
-        if (!(scan.Is(after, "=>") || scan.Is(after, "when")) || call.Close >= scan.Count)
-        {
-            return false;
-        }
-
-        var holder = Holder(scan, at);
-        return holder >= 0 && scan.Is(holder, "{") && scan.Is(scan.Previous(holder), ")") && scan.Match(scan.Previous(holder)) is var open and >= 0 && scan.Is(scan.Previous(open), "switch");
-    }
-
-    /// <summary>The index of the bracket that holds the token at <paramref name="at"/>; -1 where none does.</summary>
-    private static int Holder(ScannedText scan, int at)
-    {
-        for (var index = scan.Previous(at); index >= 0; index = scan.Previous(index))
-        {
-            if (scan.Is(index, ")") || scan.Is(index, "]") || scan.Is(index, "}"))
-            {
-                if (scan.Match(index) is not (var open and >= 0))
-                {
-                    return -1;
-                }
-
-                index = open;
-            }
-            else if (scan.Opens(index))
-            {
-                return index;
-            }
-        }
-
-        return -1;
-    }
-
-    /// <summary>The index past the pattern a <c>case</c> at <paramref name="at"/> begins: at its <c>:</c>, its arrow, its guard, or the bracket that ends what holds it.</summary>
-    private static int PatternEnd(ScannedText scan, int at, int to)
-    {
-        for (var index = scan.Next(at); index < to && index < scan.Count; index = scan.Next(index))
+        for (var index = first; index < to && index < scan.Count; index = scan.Next(index))
         {
             if (scan.Opens(index))
             {
@@ -2324,41 +2705,156 @@ internal sealed class DartReading
     }
 
     /// <summary>
-    /// A pattern from <paramref name="from"/> to <paramref name="to"/>: each object pattern a <c>references</c> edge to the
-    /// type it names, each constant one's constructor an <c>instantiates</c> edge, each name it binds a local.
+    /// A pattern from <paramref name="from"/> to <paramref name="to"/> - one a <c>case</c>, an <c>if</c>'s <c>case</c> or a
+    /// switch expression's arm matches by where <paramref name="matching"/>, one a declaration destructures by else: each
+    /// string's constant parts a literal; each object pattern a <c>references</c> edge to the type it names, each getter
+    /// its fields name a use of that type's member; each type a variable or a cast is written with a reference; each
+    /// variable it declares - after <c>var</c> or <c>final</c> or a type, and in a declaration's pattern each name alone - a
+    /// local; and in a matching one each constant a value read - a name alone, a member by its receiver, a relational
+    /// pattern's operand, a map pattern's key - and a const constructor's call an <c>instantiates</c> edge. A record's
+    /// field names a field, which no use is of, and <c>_</c> matches anything.
     /// </summary>
-    private void Pattern(ScannedText scan, int from, int to, string key, Locals locals)
+    private void Pattern(ScannedText scan, int from, int to, QualifiedName key, Locals locals, bool matching)
     {
+        // The brackets the pattern has open, each by where it closes, with the type an object pattern's tests.
+        var open = new Stack<(int Close, string? Type)>();
+        string? tested = null;
+
         for (var at = from; at < to && at < scan.Count; at++)
         {
-            if (!scan.IsName(at))
+            while (open.Count > 0 && at > open.Peek().Close)
+            {
+                open.Pop();
+            }
+
+            var token = scan[at];
+
+            if (token.Kind == ScanTokenKind.Text)
+            {
+                foreach (var (value, part) in scan.LiteralParts(token))
+                {
+                    _extract.Literal(value, part, key);
+                }
+
+                continue;
+            }
+
+            if (scan.Opens(at))
+            {
+                open.Push((scan.CloseOf(at), scan.Is(at, "(") ? tested : null));
+                tested = null;
+                continue;
+            }
+
+            if (!scan.IsName(at) || IsMember(scan, scan.Previous(at)))
             {
                 continue;
             }
 
-            if ((scan.Is(at, "const") || scan.Is(at, "new")) && Instantiated(scan, at, key) is var made and > 0)
+            var word = scan.Text(at);
+            var line = token.Line;
+            var next = scan.Next(at);
+            var previous = scan.Previous(at);
+            var field = open.Count > 0 && scan.Is(open.Peek().Close, ")") && (scan.Is(previous, "(") || scan.Is(previous, ","));
+            var type = open.Count > 0 ? open.Peek().Type : null;
+
+            if ((word is "const" or "new") && Instantiated(scan, at, key) is var made and > 0)
             {
                 at = made - 1;
                 continue;
             }
 
-            Local(scan, at, locals);
+            // A cast's type: case var count as int.
+            if (word == "as")
+            {
+                var typeEnd = TypeAfter(scan, next);
+                TypeReferences(scan, key, next, typeEnd);
+                at = Math.Max(at, typeEnd - 1);
+                continue;
+            }
 
-            if (IsMember(scan, scan.Previous(at)) || NoTypes.Contains(scan.Text(at)))
+            // A field an object pattern or a record's names - Point(x: 0), (count: var c) - before its pattern.
+            if (field && scan.Is(next, ":"))
+            {
+                if (type is not null)
+                {
+                    _extract.Reference(key, CodeEdgeKinds.Uses, word, line, qualifier: Qualifier(type));
+                }
+
+                at = next;
+                continue;
+            }
+
+            // A variable declared after var or final, its type where one is written: case final int n, :var x.
+            if (word is "var" or "final")
+            {
+                var named = TypeAfter(scan, next) is var past && past > next && scan.IsName(past) ? past : next;
+
+                if (named > next)
+                {
+                    TypeReferences(scan, key, next, named);
+                }
+
+                if (scan.IsName(named) && !Reserved.Contains(scan.Text(named)))
+                {
+                    Variable(scan, named, next, at, locals, type, key);
+                    at = named;
+                }
+
+                continue;
+            }
+
+            if (word == "_" || NoTypes.Contains(word))
             {
                 continue;
             }
 
-            var (names, past) = ChainAt(scan, at, to);
+            var (names, chainEnd) = ChainAt(scan, at, to);
+            var argued = scan.Is(chainEnd, "<") && ScanCalls.TypeArgumentsEnd(scan, chainEnd, DartTypes) is var arguments and >= 0 ? arguments : chainEnd;
 
-            if (scan.Is(past, "<") && ScanCalls.TypeArgumentsEnd(scan, past, DartTypes) is var arguments and >= 0)
+            // An object pattern: Point(...), p.Point<int>(...).
+            if (scan.Is(argued, "("))
             {
-                past = arguments;
+                var written = string.Join('.', names.Select(index => scan.Text(index)));
+                Mention(key, CodeEdgeKinds.References, QualifiedName.Of(written), line);
+                TypeReferences(scan, key, chainEnd, argued);
+                tested = written;
+                at = argued - 1;
+                continue;
             }
 
-            if (scan.Is(past, "("))
+            // A variable its type is written before: case int? n, Shape _.
+            if (TypeAfter(scan, at) is var typed && typed > at && scan.IsName(typed) && !Reserved.Contains(scan.Text(typed)))
             {
-                Mention(key, CodeEdgeKinds.References, string.Join('.', names.Select(index => scan.Text(index))), scan[at].Line);
+                TypeReferences(scan, key, at, typed);
+
+                if (!scan.Is(typed, "_"))
+                {
+                    Variable(scan, typed, at, at, locals, type, key);
+                }
+
+                at = typed;
+                continue;
+            }
+
+            if (!matching)
+            {
+                // A declaration's name alone binds it, and reads the getter of that name where an object's field is short.
+                Variable(scan, at, at, at, locals, type, key);
+                continue;
+            }
+
+            // A constant: a name alone, or a member by its receiver - Color.red, p.kLimit.
+            foreach (var name in names)
+            {
+                if (IsMember(scan, scan.Previous(name)))
+                {
+                    MemberUse(scan, name, key, locals, scan.Text(name), scan[name].Line);
+                }
+                else
+                {
+                    Bare(scan, name, key, locals, scan.Text(name), scan[name].Line);
+                }
             }
 
             at = names[^1];
@@ -2366,22 +2862,40 @@ internal sealed class DartReading
     }
 
     /// <summary>
-    /// A test framework's call at <paramref name="at"/> - <c>test</c>, <c>testWidgets</c>, <c>group</c> - as a node of its
-    /// own, named by its description and held by the node of <paramref name="parent"/>, what its arguments call its own;
-    /// answers the index of its closing parenthesis, or 0 where it gives no description.
+    /// A variable a pattern declares at <paramref name="at"/>, its type written from <paramref name="typeStart"/> - none
+    /// where it begins there - and the pattern itself from <paramref name="first"/>: a local of that type; where the pattern
+    /// is an object pattern's field written short, its colon first - <c>:var x</c>, <c>:x</c> - a use of the getter of its
+    /// name, of the type <paramref name="tested"/>.
     /// </summary>
-    private int Test(InterpolatedText text, int at, ScannedCall call, string parent, Locals locals, string? owner, int depth)
+    private void Variable(ScannedText scan, int at, int typeStart, int first, Locals locals, string? tested, QualifiedName key)
     {
-        var scan = text.Scan;
+        var name = scan.Text(at);
+        var colon = scan.Previous(first);
+
+        if (tested is not null && scan.Is(colon, ":") && (scan.Is(scan.Previous(colon), "(") || scan.Is(scan.Previous(colon), ",")))
+        {
+            _extract.Reference(key, CodeEdgeKinds.Uses, name, scan[at].Line, qualifier: Qualifier(tested));
+        }
+
+        locals.Types[name] = typeStart < at ? TypeKey(scan, typeStart, at) : null;
+    }
+
+    /// <summary>
+    /// A test framework's call at <paramref name="at"/> - <c>test</c>, <c>testWidgets</c>, <c>group</c> - as a node of its
+    /// own, named by its description and held by the node of <paramref name="parent"/>; answers where what its arguments
+    /// call - its own - begins and its node's key, or none where it gives no description.
+    /// </summary>
+    private (int From, QualifiedName Key)? Test(ScannedText scan, int at, ScannedCall call, QualifiedName? parent)
+    {
         var pieces = ScanCalls.Split(scan, call.Open + 1, call.Close, DartTypes);
 
         if (pieces.Count == 0 || call.Close >= scan.Count || ExtractText.Flat(scan.Spelled(pieces[0].Start, pieces[0].End)) is not { Length: > 0 } name)
         {
-            return 0;
+            return null;
         }
 
         var word = scan.Text(at);
-        var qualified = $"{_extract.Node(parent).Qualified}.{name}";
+        var qualified = _extract.Node(parent!).Qualified.Under(name);
         var key = _extract.Add(new ExtractNode(Id(qualified), CodeNodeKinds.Member, name, qualified, scan[at].Line, scan[call.Close].EndLine, ExtractText.Signature($"{word}({name})"))
         {
             SubKind = word == "group" ? "testGroup" : "test",
@@ -2391,8 +2905,7 @@ internal sealed class DartReading
             Test = true,
         });
 
-        Calls(text, pieces[0].Start, call.Close, key, locals, owner, depth + 1);
-        return call.Close;
+        return (pieces[0].Start, key);
     }
 
     // ---- Names and types ----
@@ -2406,57 +2919,48 @@ internal sealed class DartReading
 
     /// <summary>
     /// The type a reference of <paramref name="kind"/> names: its last name, qualified by the prefix written before it -
-    /// an import's, where the file imports by it - or the names before it as a type's.
+    /// an import's, where the file imports by it - or the names before it as a type's. Answers the reference it made.
     /// </summary>
-    private void Mention(string key, string kind, string chain, int line)
-    {
-        var dot = chain.LastIndexOf('.');
-
-        if (dot < 0)
-        {
-            _extract.Reference(key, kind, chain, line);
-            return;
-        }
-
-        _extract.Reference(key, kind, chain[(dot + 1)..], line, qualifier: Qualifier(chain[..dot]));
-    }
+    private int Mention(QualifiedName key, string kind, QualifiedName chain, int line)
+        => _extract.Reference(key, kind, chain.PastLastDot(), line, qualifier: chain.BeforeLastDot() is { } scopes ? Qualifier(scopes.Whole()) : null);
 
     /// <summary>What a name written after <paramref name="written"/> is qualified by: an import's prefix, where the file imports by it; a type's name otherwise.</summary>
     private ExtractQualifier Qualifier(string written)
         => _prefixes.Contains(written) ? new ExtractQualifier(CodeQualifierKinds.Prefix, written) : new ExtractQualifier(CodeQualifierKinds.Type, written);
 
     /// <summary>
-    /// A <c>references</c> edge from the node of <paramref name="key"/> to each type the tokens from <paramref name="start"/>
-    /// to <paramref name="end"/> name that <c>dart:core</c> does not declare, that no type parameter in force is, and that
-    /// is no record field's name.
+    /// A <c>references</c> edge from the node of <paramref name="key"/> to each type the tokens of <paramref name="scan"/>
+    /// from <paramref name="start"/> to <paramref name="end"/> name that <c>dart:core</c> does not declare, that no type
+    /// parameter in force is, and that is no record field's name: a signature's, and each a body writes - a local's, a
+    /// closure's parameter's, a cast's and a test's, a call's and a literal's type arguments, a pattern's.
     /// </summary>
-    private void TypeReferences(string key, int start, int end)
+    private void TypeReferences(ScannedText scan, QualifiedName key, int start, int end)
     {
-        for (var at = start; at < end && at < _scan.Count; at = _scan.Next(at))
+        for (var at = start; at < end && at < scan.Count; at = scan.Next(at))
         {
-            if (!_scan.IsName(at) || NoTypes.Contains(_scan.Text(at)) || MemberModifiers.Contains(_scan.Text(at)) || Builtins.Contains(_scan.Text(at))
-                || _typeParameters.Contains(_scan.Text(at)) || IsMember(_scan, _scan.Previous(at)) || _scan.Is(at, "dynamic"))
+            if (!scan.IsName(at) || NoTypes.Contains(scan.Text(at)) || MemberModifiers.Contains(scan.Text(at)) || Builtins.Contains(scan.Text(at))
+                || _typeParameters.Contains(scan.Text(at)) || IsMember(scan, scan.Previous(at)) || scan.Is(at, "dynamic"))
             {
                 continue;
             }
 
             // A record's field - (int count, String name) or {int count} - follows its type, within the span.
-            var next = _scan.Next(at);
+            var next = scan.Next(at);
 
-            if (next < end && (_scan.Is(next, ",") || _scan.Is(next, ")") || _scan.Is(next, "}")) && _scan.Previous(at) >= start
-                && TypeBefore(_scan, _scan.Previous(at), nullableToo: true) is not null)
+            if (next < end && (scan.Is(next, ",") || scan.Is(next, ")") || scan.Is(next, "}")) && scan.Previous(at) >= start
+                && TypeBefore(scan, scan.Previous(at), nullableToo: true) is not null)
             {
                 continue;
             }
 
-            var (chain, past) = Chain(_scan, at, end);
+            var (chain, past) = Chain(scan, at, end);
 
             if (chain is not null && !(chain.Contains('.', StringComparison.Ordinal) && !_prefixes.Contains(chain[..chain.IndexOf('.', StringComparison.Ordinal)])))
             {
-                Mention(key, CodeEdgeKinds.References, chain, _scan[at].Line);
+                Mention(key, CodeEdgeKinds.References, QualifiedName.Of(chain), scan[at].Line);
             }
 
-            at = Math.Max(at, _scan.Previous(past));
+            at = Math.Max(at, scan.Previous(past));
         }
     }
 
@@ -2509,6 +3013,6 @@ internal sealed class DartReading
     private static bool IsTypeName(string name) => name.TrimStart('_', '$') is { Length: > 0 } trimmed && char.IsUpper(trimmed[0]);
 
     /// <summary>The id of a declaration of the qualified name <paramref name="qualified"/>.</summary>
-    private string Id(string qualified) => _prefix + qualified;
+    private QualifiedName Id(QualifiedName qualified) => qualified.Prepend(_prefix);
 
 }

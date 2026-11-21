@@ -58,12 +58,13 @@ public sealed class FlowSessions(OrchestrationStore store, IFileSystem fileSyste
     /// </summary>
     /// <param name="layout">The repository.</param>
     /// <param name="work">The reading, the decision and the writing, all synchronous.</param>
-    public T AcrossRuns<T>(HarnessLayout layout, Func<T> work)
+    /// <param name="cancellationToken">Ends a wait for another process inside the section, before the work begins.</param>
+    public T AcrossRuns<T>(HarnessLayout layout, Func<T> work, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(layout);
         ArgumentNullException.ThrowIfNull(work);
 
-        return _store.AcrossRuns(layout, work);
+        return _store.AcrossRuns(layout, work, cancellationToken);
     }
 
     /// <summary>
@@ -115,7 +116,11 @@ public sealed class FlowSessions(OrchestrationStore store, IFileSystem fileSyste
 
             var run = OrchestratorLayout.Of(layout, name);
 
+            // The run's places come with it: its temp, where every launch's temporary directory is kept for the run's
+            // life, and its artifacts, kept for the run's life and copied wherever asked - both taken away with the run.
             _fileSystem.CreateDirectory(run.Directory);
+            _fileSystem.CreateDirectory(run.TempDirectory);
+            _fileSystem.CreateDirectory(run.ArtifactsDirectory);
             _store.WriteOrchestrator(
                 run,
                 new OrchestratorRecord
@@ -144,7 +149,7 @@ public sealed class FlowSessions(OrchestrationStore store, IFileSystem fileSyste
             _ = new FlowRunOwner(_store, _identity, _clock).Claim(run);
 
             return (run, context);
-        });
+        }, cancellationToken);
     }
 
     /// <summary>
@@ -197,7 +202,7 @@ public sealed class FlowSessions(OrchestrationStore store, IFileSystem fileSyste
             }
 
             return reclaimed;
-        });
+        }, cancellationToken);
     }
 
     /// <summary>The name <c>--run</c> gave, where nothing is there by it: a run's record refused as taken, and a directory that holds none refused as well.</summary>

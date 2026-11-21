@@ -38,6 +38,40 @@ public static class ResumeChain
     }
 
     /// <summary>
+    /// Whether a later step's conversation can go on with the work of the step declared at <paramref name="path"/>: the step
+    /// resumes itself, so a later visit of it goes on with this one, or a reason step of the definition names it in its
+    /// resume, found as the engine finds the step a resume names. Where none can, a visit of the step that is done is the
+    /// last conversation of its work.
+    /// </summary>
+    /// <param name="definition">The workflow the step is declared in.</param>
+    /// <param name="path">The step's declaration path - an instance's is <see cref="FlowInstanceId.PathOf"/>.</param>
+    /// <param name="step">The step, as declared at <paramref name="path"/>.</param>
+    public static bool GoneOnWith(WorkflowDefinition definition, string path, WorkflowStep step)
+    {
+        ArgumentNullException.ThrowIfNull(definition);
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        ArgumentNullException.ThrowIfNull(step);
+
+        if (string.Equals(step.Resume, step.Name, StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        foreach (var (declared, other) in FlowScope.Declared(definition))
+        {
+            if (other.Resume is { } name
+                && !string.Equals(declared, path, StringComparison.Ordinal)
+                && ReasonStepNamed(name, definition, FlowScope.ScopeOf(declared)) is { } named
+                && string.Equals(named.Path, path, StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
     /// The reason step <paramref name="name"/> names from <paramref name="scope"/>, as the engine finds the step a
     /// resume names: a member of the scope, else of each scope around it, outward to the flow's top level - a member of
     /// another type passed over; null where none is.

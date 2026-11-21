@@ -49,7 +49,7 @@ public static class ClaudeLaunch
         {
             [ClaudeCodeTools.Server] = new System.Text.Json.Nodes.JsonObject { ["type"] = "sdk", ["name"] = ClaudeCodeTools.Server },
         },
-    }.ToJsonString();
+    }.ToJsonString(ClaudeLine.Written);
 
     /// <summary>The names a Claude Code session sets, whole, in the environment of everything it starts.</summary>
     public static IReadOnlyList<string> SessionNames { get; } = ["CLAUDECODE", "CLAUDE_PID", "CLAUDE_EFFORT"];
@@ -122,7 +122,10 @@ public static class ClaudeLaunch
     /// <param name="run">The run.</param>
     /// <param name="model">The model it runs on, by its id.</param>
     /// <param name="sessionId">The session id the engine made for this launch.</param>
-    /// <param name="tools">The tools it is given.</param>
+    /// <param name="tools">
+    /// The tools of Claude Code's own it is given, as <c>--tools</c> names them: a side-task's own web tools, or none - an
+    /// empty <c>--tools</c>, which gives no tool of Claude Code's own, its shell and its file tools among them.
+    /// </param>
     /// <param name="otherRoots">Every root of the agent's other than its working directory, each an <c>--add-dir</c>.</param>
     /// <param name="settingsFile">The launch's settings file.</param>
     /// <param name="systemFile">The system prompt's file.</param>
@@ -232,7 +235,7 @@ public static class ClaudeLaunch
             environment[name] = null;
         }
 
-        foreach (var (name, value) in ClaudeSettings.Launched(run.Commands))
+        foreach (var (name, value) in ClaudeSettings.Launched)
         {
             environment[name] = value;
         }

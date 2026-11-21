@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
+using DssHarness.Core.Walks;
 
 namespace DssHarness.Core.Json;
 
@@ -8,6 +9,13 @@ namespace DssHarness.Core.Json;
 /// Reads a JSONPath query by RFC 9535's grammar, character by character, and checks the types of its function calls as it
 /// goes (the standard's "well-typedness"): a query that reads is one the evaluator can answer for any document.
 /// </summary>
+/// <remarks>
+/// The grammar nests - a filter within a query within a filter, parentheses within parentheses, a call within a call - and
+/// is read as it nests, each nested read a frame on a stack of the parser's own (<see cref="Frame{T}"/>), never the
+/// thread's: a query nests as deep as it is written. An argument is read first as an operand and, where a comparison or a
+/// logical operator follows it, read again as a logical expression from where it began; the operand read at a place is
+/// kept, so reading it again takes it as it was read, and a call nested in calls is read once however deep it stands.
+/// </remarks>
 internal sealed class JsonPathParser
 {
     /// <summary>The largest index or slice bound the standard takes: 2^53 - 1, the integers a double holds exactly.</summary>
@@ -24,6 +32,10 @@ internal sealed class JsonPathParser
     };
 
     private readonly string _text;
+
+    /// <summary>Every operand read, by the place it begins, with the place it ends: read again, it is taken as it was read.</summary>
+    private readonly Dictionary<int, (Operand Operand, int End)> _operands = [];
+
     private int _at;
 
     private JsonPathParser(string text) => _text = text;
@@ -42,7 +54,7 @@ internal sealed class JsonPathParser
             throw parser.Fail($"a query begins with '{root}'");
         }
 
-        var query = parser.ReadQuery();
+        var query = parser.ReadQuery().Run();
 
         if (parser._at < text.Length)
         {
@@ -55,7 +67,9 @@ internal sealed class JsonPathParser
     }
 
     /// <summary>A query: its root, <c>$</c> or <c>@</c>, then its segments.</summary>
-    private JsonPathQuery ReadQuery()
+    private Frame<JsonPathQuery> ReadQuery() => new(self => ReadingQuery(self));
+
+    private IEnumerable<Frame> ReadingQuery(Frame<JsonPathQuery> self)
     {
         var relative = _text[_at] == '@';
         _at++;
@@ -69,16 +83,22 @@ internal sealed class JsonPathParser
 
             if (At('[') || At('.'))
             {
-                segments.Add(ReadSegment());
+                var segment = ReadSegment();
+                yield return segment;
+
+                segments.Add(segment.Result);
                 continue;
             }
 
             _at = before;
-            return new JsonPathQuery(relative, segments);
+            self.Give(new JsonPathQuery(relative, segments));
+            yield break;
         }
     }
 
-    private JsonPathSegment ReadSegment()
+    private Frame<JsonPathSegment> ReadSegment() => new(self => ReadingSegment(self));
+
+    private IEnumerable<Frame> ReadingSegment(Frame<JsonPathSegment> self)
     {
         if (AtText(".."))
         {
@@ -86,18 +106,24 @@ internal sealed class JsonPathParser
 
             if (At('['))
             {
-                return new JsonPathSegment(true, ReadBracketed().Selectors, Singular: false);
+                var descendants = ReadBracketed();
+                yield return descendants;
+
+                self.Give(new JsonPathSegment(true, descendants.Result.Selectors, Singular: false));
+                yield break;
             }
 
             if (At('*'))
             {
                 _at++;
-                return new JsonPathSegment(true, [new JsonPathSelector.Wildcard()], Singular: false);
+                self.Give(new JsonPathSegment(true, [new JsonPathSelector.Wildcard()], Singular: false));
+                yield break;
             }
 
-            return AtNameFirst()
+            self.Give(AtNameFirst()
                 ? new JsonPathSegment(true, [new JsonPathSelector.Name(ReadShorthand())], Singular: false)
-                : throw Fail("'..' is followed by a name, '*' or '['");
+                : throw Fail("'..' is followed by a name, '*' or '['"));
+            yield break;
         }
 
         if (At('.'))
@@ -107,23 +133,30 @@ internal sealed class JsonPathParser
             if (At('*'))
             {
                 _at++;
-                return new JsonPathSegment(false, [new JsonPathSelector.Wildcard()], Singular: false);
+                self.Give(new JsonPathSegment(false, [new JsonPathSelector.Wildcard()], Singular: false));
+                yield break;
             }
 
-            return AtNameFirst()
+            self.Give(AtNameFirst()
                 ? new JsonPathSegment(false, [new JsonPathSelector.Name(ReadShorthand())], Singular: true)
-                : throw Fail("'.' is followed by a name or '*'");
+                : throw Fail("'.' is followed by a name or '*'"));
+            yield break;
         }
 
-        var (selectors, blank) = ReadBracketed();
+        var bracketed = ReadBracketed();
+        yield return bracketed;
+
+        var (selectors, blank) = bracketed.Result;
 
         // A singular query's bracketed segment holds one name or one index and no blank: the grammar's name-segment and
         // index-segment, which take no blank inside the brackets as a bracketed selection does.
-        return new JsonPathSegment(false, selectors, Singular: !blank && selectors is [JsonPathSelector.Name or JsonPathSelector.Index]);
+        self.Give(new JsonPathSegment(false, selectors, Singular: !blank && selectors is [JsonPathSelector.Name or JsonPathSelector.Index]));
     }
 
     /// <summary>A bracketed selection, and whether a blank stood anywhere inside its brackets.</summary>
-    private (IReadOnlyList<JsonPathSelector> Selectors, bool Blank) ReadBracketed()
+    private Frame<(IReadOnlyList<JsonPathSelector> Selectors, bool Blank)> ReadBracketed() => new(self => ReadingBracketed(self));
+
+    private IEnumerable<Frame> ReadingBracketed(Frame<(IReadOnlyList<JsonPathSelector> Selectors, bool Blank)> self)
     {
         _at++;
 
@@ -132,7 +165,10 @@ internal sealed class JsonPathParser
 
         while (true)
         {
-            selectors.Add(ReadSelector());
+            var selector = ReadSelector();
+            yield return selector;
+
+            selectors.Add(selector.Result);
             blank |= SkipBlank();
 
             if (At(','))
@@ -145,34 +181,44 @@ internal sealed class JsonPathParser
             if (At(']'))
             {
                 _at++;
-                return (selectors, blank);
+                self.Give((selectors, blank));
+                yield break;
             }
 
             throw Fail("a selector is followed by ',' or ']'");
         }
     }
 
-    private JsonPathSelector ReadSelector()
+    private Frame<JsonPathSelector> ReadSelector() => new(self => ReadingSelector(self));
+
+    private IEnumerable<Frame> ReadingSelector(Frame<JsonPathSelector> self)
     {
         if (At('\'') || At('"'))
         {
-            return new JsonPathSelector.Name(ReadString());
+            self.Give(new JsonPathSelector.Name(ReadString()));
+            yield break;
         }
 
         if (At('*'))
         {
             _at++;
-            return new JsonPathSelector.Wildcard();
+            self.Give(new JsonPathSelector.Wildcard());
+            yield break;
         }
 
         if (At('?'))
         {
             _at++;
             SkipBlank();
-            return new JsonPathSelector.Filter(ReadLogicalOr());
+
+            var test = ReadLogicalOr();
+            yield return test;
+
+            self.Give(new JsonPathSelector.Filter(test.Result));
+            yield break;
         }
 
-        return ReadIndexOrSlice();
+        self.Give(ReadIndexOrSlice());
     }
 
     /// <summary>An index, or a slice: <c>[start S] ":" S [end S] [":" [S step]]</c>.</summary>
@@ -407,85 +453,128 @@ internal sealed class JsonPathParser
         return builder.ToString();
     }
 
-    private JsonPathLogical ReadLogicalOr()
+    private Frame<JsonPathLogical> ReadLogicalOr() => new(self => ReadingLogicalOr(self));
+
+    private IEnumerable<Frame> ReadingLogicalOr(Frame<JsonPathLogical> self)
     {
-        var parts = new List<JsonPathLogical> { ReadLogicalAnd() };
+        var parts = new List<JsonPathLogical>();
 
         while (true)
         {
+            var part = ReadLogicalAnd();
+            yield return part;
+
+            parts.Add(part.Result);
+
             var before = _at;
             SkipBlank();
 
             if (!AtText("||"))
             {
                 _at = before;
-                return parts.Count == 1 ? parts[0] : new JsonPathLogical.Or(parts);
+                self.Give(parts.Count == 1 ? parts[0] : new JsonPathLogical.Or(parts));
+                yield break;
             }
 
             _at += 2;
             SkipBlank();
-            parts.Add(ReadLogicalAnd());
         }
     }
 
-    private JsonPathLogical ReadLogicalAnd()
+    private Frame<JsonPathLogical> ReadLogicalAnd() => new(self => ReadingLogicalAnd(self));
+
+    private IEnumerable<Frame> ReadingLogicalAnd(Frame<JsonPathLogical> self)
     {
-        var parts = new List<JsonPathLogical> { ReadBasic() };
+        var parts = new List<JsonPathLogical>();
 
         while (true)
         {
+            var part = ReadBasic();
+            yield return part;
+
+            parts.Add(part.Result);
+
             var before = _at;
             SkipBlank();
 
             if (!AtText("&&"))
             {
                 _at = before;
-                return parts.Count == 1 ? parts[0] : new JsonPathLogical.And(parts);
+                self.Give(parts.Count == 1 ? parts[0] : new JsonPathLogical.And(parts));
+                yield break;
             }
 
             _at += 2;
             SkipBlank();
-            parts.Add(ReadBasic());
         }
     }
 
     /// <summary>A parenthesized expression, a test or a comparison - each of the first two negated by a leading <c>!</c>.</summary>
-    private JsonPathLogical ReadBasic()
+    private Frame<JsonPathLogical> ReadBasic() => new(self => ReadingBasic(self));
+
+    private IEnumerable<Frame> ReadingBasic(Frame<JsonPathLogical> self)
     {
         if (At('!'))
         {
             _at++;
             SkipBlank();
 
-            return new JsonPathLogical.Not(At('(') ? ReadParenthesized() : AsTest(ReadOperand()));
+            if (At('('))
+            {
+                var negated = ReadParenthesized();
+                yield return negated;
+
+                self.Give(new JsonPathLogical.Not(negated.Result));
+                yield break;
+            }
+
+            var tested = ReadOperand();
+            yield return tested;
+
+            self.Give(new JsonPathLogical.Not(AsTest(tested.Result)));
+            yield break;
         }
 
         if (At('('))
         {
-            return ReadParenthesized();
+            var inner = ReadParenthesized();
+            yield return inner;
+
+            self.Give(inner.Result);
+            yield break;
         }
 
         var left = ReadOperand();
+        yield return left;
+
         var before = _at;
         SkipBlank();
 
         if (ReadComparisonOperator() is not { } comparison)
         {
             _at = before;
-            return AsTest(left);
+            self.Give(AsTest(left.Result));
+            yield break;
         }
 
         SkipBlank();
 
-        return new JsonPathLogical.Comparison(AsComparable(left), comparison, AsComparable(ReadOperand()));
+        var right = ReadOperand();
+        yield return right;
+
+        self.Give(new JsonPathLogical.Comparison(AsComparable(left.Result), comparison, AsComparable(right.Result)));
     }
 
-    private JsonPathLogical ReadParenthesized()
+    private Frame<JsonPathLogical> ReadParenthesized() => new(self => ReadingParenthesized(self));
+
+    private IEnumerable<Frame> ReadingParenthesized(Frame<JsonPathLogical> self)
     {
         _at++;
         SkipBlank();
 
         var inner = ReadLogicalOr();
+        yield return inner;
+
         SkipBlank();
 
         if (!At(')'))
@@ -495,60 +584,86 @@ internal sealed class JsonPathParser
 
         _at++;
 
-        return inner;
+        self.Give(inner.Result);
     }
 
-    /// <summary>A query, a literal or a function's call: what a comparison compares, a test tests, or a function is given.</summary>
-    private Operand ReadOperand()
+    /// <summary>
+    /// A query, a literal or a function's call: what a comparison compares, a test tests, or a function is given. One read
+    /// before at this place is given as it was read, the reading going on from where it ended.
+    /// </summary>
+    private Frame<Operand> ReadOperand()
+    {
+        if (_operands.TryGetValue(_at, out var read))
+        {
+            _at = read.End;
+            return Frame<Operand>.Of(read.Operand);
+        }
+
+        return new(self => ReadingOperand(self));
+    }
+
+    private IEnumerable<Frame> ReadingOperand(Frame<Operand> self)
     {
         if (_at >= _text.Length)
         {
             throw Fail("a query, a literal or a function's call is missing");
         }
 
+        var begun = _at;
         var character = _text[_at];
+        Operand operand;
 
         if (character is '@' or '$')
         {
-            return new Operand.Query(ReadQuery());
-        }
+            var query = ReadQuery();
+            yield return query;
 
-        if (character is '\'' or '"')
+            operand = new Operand.Query(query.Result);
+        }
+        else if (character is '\'' or '"')
         {
-            return new Operand.Literal(JsonSerializer.SerializeToElement(ReadString()));
+            operand = new Operand.Literal(JsonSerializer.SerializeToElement(ReadString()));
         }
-
-        if (character == '-' || char.IsAsciiDigit(character))
+        else if (character == '-' || char.IsAsciiDigit(character))
         {
-            return new Operand.Literal(ReadNumber());
+            operand = new Operand.Literal(ReadNumber());
         }
-
-        if (!char.IsAsciiLetterLower(character))
+        else if (!char.IsAsciiLetterLower(character))
         {
             throw Fail("a query, a literal or a function's call is expected");
         }
-
-        var start = _at;
-
-        while (_at < _text.Length && (char.IsAsciiLetterLower(_text[_at]) || char.IsAsciiDigit(_text[_at]) || _text[_at] == '_'))
+        else
         {
-            _at++;
+            var start = _at;
+
+            while (_at < _text.Length && (char.IsAsciiLetterLower(_text[_at]) || char.IsAsciiDigit(_text[_at]) || _text[_at] == '_'))
+            {
+                _at++;
+            }
+
+            var name = _text[start.._at];
+
+            if (At('('))
+            {
+                var call = ReadFunction(name, start);
+                yield return call;
+
+                operand = new Operand.Function(call.Result);
+            }
+            else
+            {
+                operand = name switch
+                {
+                    "true" => new Operand.Literal(JsonSerializer.SerializeToElement(true)),
+                    "false" => new Operand.Literal(JsonSerializer.SerializeToElement(false)),
+                    "null" => new Operand.Literal(JsonSerializer.SerializeToElement<object?>(null)),
+                    _ => throw Fail($"'{name}' is no literal, and no function's call: a call is its name and '(' with no blank between"),
+                };
+            }
         }
 
-        var name = _text[start.._at];
-
-        if (At('('))
-        {
-            return new Operand.Function(ReadFunction(name, start));
-        }
-
-        return name switch
-        {
-            "true" => new Operand.Literal(JsonSerializer.SerializeToElement(true)),
-            "false" => new Operand.Literal(JsonSerializer.SerializeToElement(false)),
-            "null" => new Operand.Literal(JsonSerializer.SerializeToElement<object?>(null)),
-            _ => throw Fail($"'{name}' is no literal, and no function's call: a call is its name and '(' with no blank between"),
-        };
+        _operands[begun] = (operand, _at);
+        self.Give(operand);
     }
 
     /// <summary>A number literal: <c>(int / "-0") [frac] [exp]</c>, as JSON writes one.</summary>
@@ -601,7 +716,7 @@ internal sealed class JsonPathParser
             ReadDigits("an exponent is a digit or more");
         }
 
-        using var number = JsonDocument.Parse(_text.AsMemory(start, _at - start));
+        using var number = JsonDocument.Parse(_text.AsMemory(start, _at - start), JsonDepth.Document);
         return number.RootElement.Clone();
     }
 
@@ -619,7 +734,9 @@ internal sealed class JsonPathParser
     }
 
     /// <summary>A function's call, from its <c>(</c>: its arguments read and each held to the type the function takes.</summary>
-    private JsonPathFunction ReadFunction(string name, int start)
+    private Frame<JsonPathFunction> ReadFunction(string name, int start) => new(self => ReadingFunction(self, name, start));
+
+    private IEnumerable<Frame> ReadingFunction(Frame<JsonPathFunction> self, string name, int start)
     {
         if (!Functions.TryGetValue(name, out var function))
         {
@@ -636,7 +753,10 @@ internal sealed class JsonPathParser
         {
             while (true)
             {
-                arguments.Add(ReadArgument());
+                var argument = ReadArgument();
+                yield return argument;
+
+                arguments.Add(argument.Result);
                 SkipBlank();
 
                 if (At(','))
@@ -670,20 +790,35 @@ internal sealed class JsonPathParser
             }
         }
 
-        return new JsonPathFunction(name, arguments, function.Answers);
+        // A pattern written into the query that the linear matcher cannot build is refused as the query is read, so the
+        // query is never asked of a value only to be refused there.
+        if (name is "match" or "search"
+            && arguments[1] is JsonPathArgument.Literal { Value.ValueKind: JsonValueKind.String } pattern
+            && IRegexp.Refusal(pattern.Value.GetString()!, whole: name == "match") is { } unbuilt)
+        {
+            _at = start;
+            throw Fail(unbuilt);
+        }
+
+        self.Give(new JsonPathFunction(name, arguments, function.Answers));
     }
 
     /// <summary>
     /// One argument: a literal, a query or a function's call alone, else a logical expression - which one that is followed
-    /// by a comparison, <c>&amp;&amp;</c> or <c>||</c>, or begins with <c>!</c> or <c>(</c>, is.
+    /// by a comparison, <c>&amp;&amp;</c> or <c>||</c>, or begins with <c>!</c> or <c>(</c>, is. Read again as a logical
+    /// expression, the operand it begins with is the one already read (<see cref="ReadOperand"/>).
     /// </summary>
-    private JsonPathArgument ReadArgument()
+    private Frame<JsonPathArgument> ReadArgument() => new(self => ReadingArgument(self));
+
+    private IEnumerable<Frame> ReadingArgument(Frame<JsonPathArgument> self)
     {
         var start = _at;
 
         if (!At('!') && !At('('))
         {
-            var operand = ReadOperand();
+            var read = ReadOperand();
+            yield return read;
+
             var after = _at;
             SkipBlank();
 
@@ -691,18 +826,23 @@ internal sealed class JsonPathParser
             {
                 _at = after;
 
-                return operand switch
+                self.Give(read.Result switch
                 {
                     Operand.Literal literal => new JsonPathArgument.Literal(literal.Value),
                     Operand.Query query => new JsonPathArgument.Query(query.Of),
                     Operand.Function function => new JsonPathArgument.Function(function.Call),
                     _ => throw new InvalidOperationException("An operand is a literal, a query or a function's call."),
-                };
+                });
+                yield break;
             }
         }
 
         _at = start;
-        return new JsonPathArgument.Logical(ReadLogicalOr());
+
+        var logical = ReadLogicalOr();
+        yield return logical;
+
+        self.Give(new JsonPathArgument.Logical(logical.Result));
     }
 
     /// <summary>Why <paramref name="argument"/> is not of <paramref name="type"/>, or <see langword="null"/> where it is.</summary>

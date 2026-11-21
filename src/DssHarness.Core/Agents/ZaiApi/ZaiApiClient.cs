@@ -32,6 +32,7 @@ public sealed class ZaiApiClient(
     /// <summary>The client's key under <c>agentClients</c>.</summary>
     public const string ClientName = "glm";
 
+    private readonly IFileSystem _fileSystem = fileSystem ?? throw new ArgumentNullException(nameof(fileSystem));
     private readonly ToolLoop _loop = new(fileSystem, tools, clock, wait, jitter);
     private readonly ApiConnection _connection = connection ?? throw new ArgumentNullException(nameof(connection));
 
@@ -71,7 +72,7 @@ public sealed class ZaiApiClient(
         }
 
         var entries = run.Entries!;
-        var provider = new ZaiApiProvider(_connection, entries.Provider.Api, ZaiApiSettings.Of(entries.Client), entries.Model.ContextTokens);
+        var provider = new ZaiApiProvider(_connection, entries.Provider.Api, ZaiApiSettings.Of(entries.Client), new ApiRecords(_fileSystem, run.StepDirectory));
 
         return _loop.RunAsync(run, events, provider, ToolLoopTerms.Of(ClientName, entries), cancellationToken);
     }

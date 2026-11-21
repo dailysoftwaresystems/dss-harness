@@ -12,8 +12,9 @@ public sealed class OrchestratorServiceTests
     private static CancellationToken Token => TestContext.Current.CancellationToken;
 
     /// <summary>
-    /// An orchestrator is its directory under .orchestrators: its record, logs, work and plans directories, and where its
-    /// agents are kept; run again, it changes only its limit and its session, and refuses another model.
+    /// An orchestrator is its directory under .orchestrators: its record, logs, work and plans directories, where its
+    /// agents are kept. Each run of it is a directory of its own beside its agents, holding its own temp and artifacts
+    /// directories; run again, it changes only its limit and its session, and refuses another model.
     /// </summary>
     [Fact]
     public async Task AnOrchestrator_IsMadeUnderOrchestrators_AndRunAgainChangesOnlyItsLimitAndSession()
@@ -27,6 +28,8 @@ public sealed class OrchestratorServiceTests
         Assert.True(Directory.Exists(kit.Layout.LogsDirectory));
         Assert.True(Directory.Exists(kit.Layout.PlansDirectory("o1")));
         Assert.True(Directory.Exists(kit.Layout.AgentsDirectory));
+        Assert.True(Directory.Exists(kit.Layout.TempDirectory), $"{kit.Layout.TempDirectory} is the run's temporary directories' own");
+        Assert.True(Directory.Exists(kit.Layout.ArtifactsDirectory), $"{kit.Layout.ArtifactsDirectory} is the run's artifacts' own");
 
         var changed = await kit.Harness.OrchestratorService.CreateAsync(kit.Main, "o1", "model-a", 6, "sess-9", Token);
         var model = await kit.Harness.OrchestratorService.CreateAsync(kit.Main, "o1", "model-z", null, null, Token);
@@ -103,7 +106,9 @@ public sealed class OrchestratorServiceTests
 
     /// <summary>
     /// An orchestrator is deleted only once every agent of it is deleted, and the evidence and transcripts its agents kept
-    /// go with it only when asked.
+    /// go with it only when asked. The temp and artifacts of every run of it go with the run's own directory, which the
+    /// deletion takes with the orchestrator's: both are held for the run's life - an artifact is there to be read and
+    /// copied for as long as the run is.
     /// </summary>
     [Fact]
     public async Task AnOrchestrator_IsDeletedOnlyOnceItsAgentsAre_AndItsKeptEvidenceOnlyWhenAsked()
@@ -112,11 +117,18 @@ public sealed class OrchestratorServiceTests
         var kit = await OrchestrationKit.PrepareAsync(temp);
         var worktree = await kit.CreateAgentAsync("ag");
         OrchestrationKit.Write(worktree, "evidence/run.log", "measured\n");
+        Directory.CreateDirectory(Path.Combine(kit.Layout.TempDirectory, "a-launch"));
+        await File.WriteAllTextAsync(Path.Combine(kit.Layout.TempDirectory, "a-launch", "scratch.txt"), "left by a child\n", Token);
+        await File.WriteAllTextAsync(Path.Combine(kit.Layout.ArtifactsDirectory, "report.html"), "<html>the run's artifact</html>\n", Token);
 
         var live = await kit.Harness.OrchestratorService.DeleteAsync(kit.Main, "o1", deleteEvidence: false, Token);
 
         Assert.Equal(HarnessExit.Refused, live.ExitCode);
         Assert.Contains("its agent(s) 'ag' are not deleted yet", live.Message);
+
+        // The artifact is readable for as long as the run is: the directories are the mechanism, and copying them
+        // elsewhere is copying a directory that is there.
+        Assert.Equal("<html>the run's artifact</html>\n", await File.ReadAllTextAsync(Path.Combine(kit.Layout.ArtifactsDirectory, "report.html"), Token));
 
         Assert.True((await kit.DeleteAsync("ag", apply: true, discard: true)).Succeeded);
 
@@ -129,6 +141,9 @@ public sealed class OrchestratorServiceTests
 
         Assert.True(deleted.Succeeded, OrchestrationKit.Describe(deleted));
         Assert.False(Directory.Exists(kit.Layout.Directory));
+        Assert.False(Directory.Exists(kit.Layout.TempDirectory), "the run's teardown takes its temp whole");
+        Assert.False(Directory.Exists(kit.Layout.ArtifactsDirectory), "the run's teardown takes its artifacts");
+        Assert.False(File.Exists(Path.Combine(kit.Layout.ArtifactsDirectory, "report.html")));
         Assert.False(Directory.Exists(kit.Worktrees));
     }
 
@@ -470,6 +485,43 @@ public sealed class OrchestratorServiceTests
         Assert.Equal(worktree, (string?)agent["path"]);
         Assert.Equal(HarnessExit.Refused, unknown.ExitCode);
         Assert.StartsWith("No orchestrator named 'nope'.", unknown.Message);
+    }
+
+    /// <summary>
+    /// A provider's ids are its own, of any length: an orchestrator made on a three-hundred-character model, recording a
+    /// three-hundred-character Claude session, keeps both whole; and a conversation whose id is as long is kept in the
+    /// directory its id's SHA-256 digest names, which every file system takes, while an id no longer than a digest still
+    /// names its own directory, where an earlier release kept it.
+    /// </summary>
+    [Fact]
+    public async Task AThreeHundredCharacterProviderId_IsAccepted()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var model = "accounts/acme/models/" + new string('m', 279);
+        var session = new string('s', 300);
+
+        var made = await kit.Harness.OrchestratorService.CreateAsync(kit.Main, "o2", model, null, session, Token);
+
+        Assert.True(made.Succeeded, OrchestrationKit.Describe(made));
+        var record = kit.Harness.OrchestrationStore.ReadOrchestrator(OrchestratorLayout.Of(new HarnessLayout(kit.Main, kit.Main), "o2"))!;
+        Assert.Equal((300, model, session), (record.Model.Length, record.Model, record.Session));
+
+        var conversation = new string('c', 300);
+        var sessions = Path.Combine(temp.Path, OrchestratorLayout.SessionsDirectoryName);
+        var digest = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(conversation)));
+        var kept = OrchestratorLayout.SessionDirectoryIn(sessions, conversation);
+
+        Assert.True(OrchestratorLayout.IsSessionId(conversation));
+        Assert.Equal(Path.Combine(sessions, digest), kept);
+
+        // The directory is one the file system takes, and holds the conversation.
+        Directory.CreateDirectory(kept);
+        File.WriteAllText(Path.Combine(kept, "conversation.jsonl"), "{}\n");
+        Assert.True(File.Exists(Path.Combine(OrchestratorLayout.SessionDirectoryIn(sessions, conversation), "conversation.jsonl")));
+
+        Assert.Equal(Path.Combine(sessions, "conv-1"), OrchestratorLayout.SessionDirectoryIn(sessions, "conv-1"));
+        Assert.Equal(Path.Combine(sessions, new string('a', 64)), OrchestratorLayout.SessionDirectoryIn(sessions, new string('a', 64)));
     }
 
     /// <summary>An orchestrator allowing no agent at all is a usage error.</summary>

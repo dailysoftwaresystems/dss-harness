@@ -147,6 +147,7 @@ public sealed record BuildResult(
         Leg = leg,
         Verdict = Verdict.Verdict,
         Detail = Verdict.Detail,
+        Named = Verdict.Named,
         Duration = duration,
         Emulated = emulated,
         TimingNotes = Notes,
@@ -581,7 +582,7 @@ public sealed class BuildService(
                 ReachedVerdict.Of(
                     LegVerdict.Failed,
                     $"{ReportText.Counted(dependencies.WithoutHeaders.Count, "object")} recorded no header dependencies: "
-                    + ReportText.Listed(dependencies.WithoutHeaders)),
+                    + Names.All(dependencies.WithoutHeaders)),
                 dependencies)
                 .ConfigureAwait(false);
         }
@@ -910,7 +911,7 @@ public sealed class BuildService(
         foreach (var compiler in identified)
         {
             var answer = await _compilerVersions
-                .AskAsync(compiler, new LegRecords(request.RunDirectory, request.Leg).Directory, environment, request.ProgramDirectories, cancellationToken)
+                .AskAsync(compiler, new LegRecords(request.RunDirectory, request.Leg).Directory, environment, request.ProgramDirectories, Told(request), cancellationToken)
                 .ConfigureAwait(false);
 
             // An id whose version this build does not know how to put together, as CMake's own formula does,
@@ -1423,6 +1424,12 @@ public sealed class BuildService(
         }
     }
 
+    /// <summary>
+    /// Where a probe of <paramref name="request"/>'s build tells how long it has been waited for - a compiler asked its
+    /// version, ninja asked its records - each said as the leg's own line: a probe runs to its end, however long it takes.
+    /// </summary>
+    private Action<Waiting.WaitTold> Told(BuildRequest request) => told => _output.Info(CommandName, $"{request.Leg}: {told.Line()}");
+
     /// <summary>What ninja says of the outputs no target of this build produces any more; never a failure of the build.</summary>
     private async Task<NinjaDeadOutputs> ReadDeadOutputsAsync(
         BuildRequest request,
@@ -1430,7 +1437,7 @@ public sealed class BuildService(
         IReadOnlyDictionary<string, string?> environment,
         CancellationToken cancellationToken)
         => await _deadOutputCheck
-            .CheckAsync(buildDirectory, request.ProgramDirectories, _buildDirectoryGuard.Read(buildDirectory)?.MakeProgram, environment, cancellationToken)
+            .CheckAsync(buildDirectory, request.ProgramDirectories, _buildDirectoryGuard.Read(buildDirectory)?.MakeProgram, environment, Told(request), cancellationToken)
             .ConfigureAwait(false);
 
     /// <summary>
@@ -1464,7 +1471,7 @@ public sealed class BuildService(
             // phases had, a host's own among them.
             var recorded = _buildDirectoryGuard.Read(buildDirectory)?.MakeProgram;
 
-            return (await _dependencyCheck.CheckAsync(buildDirectory, request.ProgramDirectories, recorded, environment, cancellationToken).ConfigureAwait(false), null);
+            return (await _dependencyCheck.CheckAsync(buildDirectory, request.ProgramDirectories, recorded, environment, Told(request), cancellationToken).ConfigureAwait(false), null);
         }
         catch (HarnessException ex)
         {

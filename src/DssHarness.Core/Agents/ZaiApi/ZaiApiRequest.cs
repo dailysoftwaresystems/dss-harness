@@ -1,4 +1,3 @@
-using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using DssHarness.Core.Agents.Http;
@@ -11,7 +10,7 @@ namespace DssHarness.Core.Agents.ZaiApi;
 /// What the glm client sends Z.AI with every request (part 03, "How the two API clients talk to their APIs"): one shape -
 /// the conversation's system prompt as its first message, every stored message after it as it was stored, its tools as it
 /// began with them, the calls' input streamed, the model's thinking on at the step's effort - and the one owner of what
-/// a glm client's <c>requestExtras</c> may add to it, and of the short form older answers go out in.
+/// a glm client's <c>requestExtras</c> may add to it.
 /// </summary>
 /// <remarks>
 /// The tool sends no sampling parameter and no tool choice of its own - a client's <c>requestExtras</c> may add them -
@@ -26,12 +25,6 @@ public static class ZaiApiRequest
 
     /// <summary>The path of the API's chat completions, under the provider's <c>api</c>.</summary>
     public const string CompletionsPath = "chat/completions";
-
-    /// <summary>
-    /// What an answer to a call is sent as once the conversation is sent shortened: the call is still there, and what it
-    /// answered is not, which the agent reads.
-    /// </summary>
-    public static readonly string ShortAnswer = $"(This call's answer is no longer sent: the conversation grew past most of the model's context, and only the answers to the calls of its last {ZaiApiProvider.WholeTurns.ToString(CultureInfo.InvariantCulture)} turns that called tools are sent whole.)";
 
     /// <summary>Every member of a request's body the tool sends itself, each by its path: what no <c>requestExtras</c> may set.</summary>
     public static readonly IReadOnlyList<OwnedMember> Owned =
@@ -57,13 +50,11 @@ public static class ZaiApiRequest
 
     /// <summary>
     /// The body of <paramref name="request"/>, as JSON: the system prompt first, then the stored messages as they were
-    /// stored, byte for byte - but each answer to a call before <paramref name="shortenedBefore"/>, sent in its short form;
-    /// a request that asks for JSON alone offers no tool and asks for a JSON object.
+    /// stored, byte for byte, every one whole; a request that asks for JSON alone offers no tool and asks for a JSON object.
     /// </summary>
     /// <param name="request">The request.</param>
     /// <param name="settings">The client's settings: whether the model's reasoning is kept across turns, and the fields it adds.</param>
-    /// <param name="shortenedBefore">The first message sent whole where the conversation is sent shortened; null where it is not.</param>
-    internal static byte[] Body(ChatRequest request, ZaiApiSettings settings, int? shortenedBefore)
+    internal static byte[] Body(ChatRequest request, ZaiApiSettings settings)
     {
         var thinking = new JsonObject { ["type"] = "enabled" };
 
@@ -107,7 +98,7 @@ public static class ZaiApiRequest
         }
 
         var system = new JsonObject { ["role"] = "system", ["content"] = request.System }.ToJsonString(ApiBody.Json);
-        IReadOnlyList<string> messages = [system, .. request.Messages.Select((message, at) => at < shortenedBefore ? Short(message) : message)];
+        IReadOnlyList<string> messages = [system, .. request.Messages];
 
         return ApiBody.Write(body, request.Tools, messages, settings.RequestExtras);
     }
@@ -119,18 +110,6 @@ public static class ZaiApiRequest
         var key = request.Key ?? throw new InvalidOperationException("A request of the glm client is signed with a key, and the loop gave it none.");
 
         return [new("Authorization", $"Bearer {key.Value}")];
-    }
-
-    /// <summary>A message as the conversation sent shortened sends it: an answer to a call in its short form, every other as it is.</summary>
-    private static string Short(string message)
-    {
-        if (JsonNode.Parse(message) is not JsonObject node || node["role"]?.GetValue<string>() != "tool")
-        {
-            return message;
-        }
-
-        node["content"] = ShortAnswer;
-        return node.ToJsonString(ApiBody.Json);
     }
 }
 

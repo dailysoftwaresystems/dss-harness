@@ -101,7 +101,7 @@ public sealed class PristineJudgeTests
         var outcome = PristineJudge.Judge("fixture_tests", Built, Ran(0, string.Empty, string.Empty), TimeSpan.FromSeconds(30), 10);
 
         Assert.Equal((null, null, TimeSpan.FromSeconds(300)), (outcome.Leg, outcome.Stops, outcome.Bound?.Limit));
-        Assert.Equal(PristineOutcome.Passed(PristineJudge.Bound(TimeSpan.FromSeconds(30), 10)), outcome);
+        Assert.Equal(PristineOutcome.Passed(PristineJudge.Bound(TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(30), 10)), outcome);
     }
 
     /// <summary>
@@ -187,36 +187,62 @@ public sealed class PristineJudgeTests
     }
 
     /// <summary>
-    /// The bound is the factor times the unmutated run, and never less than the unmutated run and a minute - a quick
-    /// binary is never stopped for a pause a busy machine makes - nor so large it cannot be waited for.
+    /// The bound is the factor times the unmutated run, and never less than the unmutated run and its start and exit
+    /// again - a binary whose own start and exit is most of its run is never stopped for a slower start - nor so large it
+    /// cannot be waited for.
     /// </summary>
     [Theory]
-    [InlineData(30, 10, 300)]
-    [InlineData(2, 10, 62)]
-    [InlineData(0, 10, 60)]
-    [InlineData(100, 1.5, 160)]
-    [InlineData(1000, 1.5, 1500)]
-    public void TheBound_IsTheFactorTimesTheRun_AndNeverLessThanTheRunAndAMinute(double seconds, double factor, double bound)
-        => Assert.Equal(TimeSpan.FromSeconds(bound), PristineJudge.Bound(TimeSpan.FromSeconds(seconds), factor).Limit);
+    [InlineData(30, 1, 10, 300)]
+    [InlineData(2, 1, 10, 20)]
+    [InlineData(2, 2, 1.5, 4)]
+    [InlineData(100, 60, 1.5, 160)]
+    [InlineData(1000, 1, 1.5, 1500)]
+    public void TheBound_IsTheFactorTimesTheRun_AndNeverLessThanTheRunAndItsStartAndExitAgain(double seconds, double startAndExit, double factor, double bound)
+        => Assert.Equal(TimeSpan.FromSeconds(bound), PristineJudge.Bound(TimeSpan.FromSeconds(seconds), TimeSpan.FromSeconds(startAndExit), factor).Limit);
 
     /// <summary>
     /// A bound says what set it, as the verdict of a run stopped at it then says: the factor times the unmutated run
-    /// where that is what it is; the unmutated run and a minute more where the factor would give less - every binary
-    /// whose unmutated run is under a minute over the factor less one, 6.7 seconds at a factor of 10; and the longest a
-    /// run is waited for where either is past it. Never the factor where the factor is not what stopped the run.
+    /// where that is what it is; the unmutated run and its start and exit again, naming what that was, where the factor
+    /// would give less; and the longest a run is waited for where either is past it. Never the factor where the factor is
+    /// not what stopped the run.
     /// </summary>
     [Theory]
-    [InlineData(30, 10, "10x the unmutated run")]
-    [InlineData(1, 10, "the unmutated run and 1m00s more")]
-    [InlineData(6, 10, "the unmutated run and 1m00s more")]
-    [InlineData(7, 10, "10x the unmutated run")]
-    [InlineData(100, 1.5, "the unmutated run and 1m00s more")]
-    [InlineData(120, 1.5, "1.5x the unmutated run")]
-    [InlineData(1000, 1.5, "1.5x the unmutated run")]
-    [InlineData(40 * 86400, 10, "the longest a run is waited for")]
-    [InlineData(60 * 86400, 1.5, "the longest a run is waited for")]
-    public void ABound_SaysWhatSetIt(double seconds, double factor, string setBy)
-        => Assert.Equal(setBy, PristineJudge.Bound(TimeSpan.FromSeconds(seconds), factor).SetBy);
+    [InlineData(30, 1, 10, "10x the unmutated run")]
+    [InlineData(1, 1, 10, "10x the unmutated run")]
+    [InlineData(2, 2, 1.5, "the unmutated run and its start and exit, 2s, again")]
+    [InlineData(100, 60, 1.5, "the unmutated run and its start and exit, 1m00s, again")]
+    [InlineData(120, 1, 1.5, "1.5x the unmutated run")]
+    [InlineData(1000, 1, 1.5, "1.5x the unmutated run")]
+    [InlineData(40 * 86400, 0, 10, "the longest a run is waited for")]
+    [InlineData(60 * 86400, 0, 1.5, "the longest a run is waited for")]
+    public void ABound_SaysWhatSetIt(double seconds, double startAndExit, double factor, string setBy)
+        => Assert.Equal(setBy, PristineJudge.Bound(TimeSpan.FromSeconds(seconds), TimeSpan.FromSeconds(startAndExit), factor).SetBy);
+
+    /// <summary>
+    /// The headroom a mutated run is given past the unmutated run is measured, never a minute of the code's own: what the
+    /// unmutated run took beyond the time its report gives its cases - a 40-second start and exit around a second of
+    /// cases bounds a run at 81 seconds where a factor of 1.5 alone would stop it at 61.5 - and the whole run where its
+    /// report gives its cases no time. Red with the minute put back as the least a bound is.
+    /// </summary>
+    [Fact]
+    public void TheHeadroom_IsMeasured()
+    {
+        var timed = JUnitReport.Read(
+            "<testsuites><testsuite><testcase classname=\"Fixture\" name=\"A\" time=\"0.25\"/><testcase classname=\"Fixture\" name=\"B\" time=\"0.75\"/></testsuite></testsuites>")!;
+        var untimed = JUnitReport.Read("<testsuites><testsuite><testcase classname=\"Fixture\" name=\"A\"/></testsuite></testsuites>")!;
+        var duration = TimeSpan.FromSeconds(41);
+
+        Assert.Equal(TimeSpan.FromSeconds(1), timed.CaseTime);
+        Assert.Null(untimed.CaseTime);
+        Assert.Equal(TimeSpan.FromSeconds(40), PristineJudge.StartAndExit(duration, timed));
+        Assert.Equal(duration, PristineJudge.StartAndExit(duration, untimed));
+        Assert.Equal(
+            new RunBound(TimeSpan.FromSeconds(81), "the unmutated run and its start and exit, 40s, again"),
+            PristineJudge.Bound(duration, PristineJudge.StartAndExit(duration, timed), 1.5));
+        Assert.Equal(
+            new RunBound(TimeSpan.FromSeconds(82), "the unmutated run and its start and exit, 41s, again"),
+            PristineJudge.Bound(duration, PristineJudge.StartAndExit(duration, untimed), 1.5));
+    }
 
     /// <summary>
     /// A bound past the longest a timer can wait - a factor so large it would overflow, or a run so long its bound would
@@ -228,10 +254,10 @@ public sealed class PristineJudgeTests
     {
         using var timer = new CancellationTokenSource();
 
-        Assert.Equal(PristineJudge.LongestBound, PristineJudge.Bound(TimeSpan.FromDays(1), 1e300).Limit);
-        Assert.Equal(PristineJudge.LongestBound, PristineJudge.Bound(TimeSpan.FromDays(40), 10).Limit);
-        Assert.Equal(PristineJudge.LongestBound, PristineJudge.Bound(TimeSpan.FromDays(60), 1.5).Limit);
-        Assert.Equal(new RunBound(PristineJudge.LongestBound, "the longest a run is waited for"), PristineJudge.Bound(TimeSpan.FromSeconds(30), double.NaN));
+        Assert.Equal(PristineJudge.LongestBound, PristineJudge.Bound(TimeSpan.FromDays(1), TimeSpan.Zero, 1e300).Limit);
+        Assert.Equal(PristineJudge.LongestBound, PristineJudge.Bound(TimeSpan.FromDays(40), TimeSpan.Zero, 10).Limit);
+        Assert.Equal(PristineJudge.LongestBound, PristineJudge.Bound(TimeSpan.FromDays(60), TimeSpan.Zero, 1.5).Limit);
+        Assert.Equal(new RunBound(PristineJudge.LongestBound, "the longest a run is waited for"), PristineJudge.Bound(TimeSpan.FromSeconds(30), TimeSpan.Zero, double.NaN));
         Assert.InRange(PristineJudge.LongestBound, TimeSpan.FromDays(49), TimeSpan.FromDays(50));
         timer.CancelAfter(PristineJudge.LongestBound);
         Assert.Throws<ArgumentOutOfRangeException>(() => timer.CancelAfter(PristineJudge.LongestBound + TimeSpan.FromMilliseconds(2)));

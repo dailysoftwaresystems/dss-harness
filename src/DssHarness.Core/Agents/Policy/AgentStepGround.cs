@@ -118,6 +118,7 @@ public static class AgentStepGround
             [.. trees.SelectMany(tree => HarnessLayout.StatePathsUnder(tree, config.Worktrees?.Root ?? WorktreeSettings.DefaultRoot)).Distinct(StringComparer.OrdinalIgnoreCase)])
         {
             Trees = trees,
+            RunDirectory = workspace.RunDirectory,
         };
     }
 

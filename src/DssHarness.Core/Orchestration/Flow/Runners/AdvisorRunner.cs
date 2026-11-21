@@ -5,6 +5,7 @@ using DssHarness.Core.Agents;
 using DssHarness.Core.Agents.Policy;
 using DssHarness.Core.Configuration;
 using DssHarness.Core.FileSystem;
+using DssHarness.Core.Json;
 using DssHarness.Core.Orchestration;
 using DssHarness.Core.Platform;
 using DssHarness.Core.Repository;
@@ -172,7 +173,7 @@ public sealed class AdvisorRunner(
 
         // What the run stored of the asking step, rendered as a continuation record renders a step and within the
         // same bounds - the question's own record, read by {question.record}.
-        call = call with { Record = call.Record ?? RecordOf(layout, context, call, directory) };
+        call = call with { Record = call.Record ?? await RecordOfAsync(layout, call, directory, cancellationToken).ConfigureAwait(false) };
 
         var prompt = PromptOf(files, context.Layout, call);
 
@@ -285,14 +286,15 @@ public sealed class AdvisorRunner(
     }
 
     /// <summary>
-    /// What the run stored of the asking step, rendered as a continuation record renders a step and within the same
-    /// bounds - the question's own record, read by <c>{question.record}</c>.
+    /// What the run stored of the asking step, rendered as a continuation record renders a step - the question's own
+    /// record, read by <c>{question.record}</c>: whole where it is one page, else its first page and how
+    /// <c>read_result</c> gives the rest, from the advisor's own results.
     /// </summary>
     /// <param name="layout">The run's own paths.</param>
-    /// <param name="context">The repository's context, whose configuration bounds the record.</param>
     /// <param name="call">The asking.</param>
-    /// <param name="directory">The advice's own directory, whose work directory holds the record's copies.</param>
-    private string? RecordOf(OrchestratorLayout layout, HarnessContext context, FlowAdvisorCall call, string directory)
+    /// <param name="directory">The advice's own directory - the advisor's run's - whose work directory holds the record's copies and whose results hold it whole.</param>
+    /// <param name="cancellationToken">Stops the laying of the record's pages.</param>
+    private async Task<string?> RecordOfAsync(OrchestratorLayout layout, FlowAdvisorCall call, string directory, CancellationToken cancellationToken)
     {
         var work = new AgentContinuationWork(
             call.Instance,
@@ -301,10 +303,11 @@ public sealed class AdvisorRunner(
             RedLegs: [],
             CutOff: false);
 
-        return new AgentContinuation(fileSystem, harnessOutput).Render(
+        return await new AgentContinuation(fileSystem, harnessOutput).RenderAsync(
             work,
             Path.Combine(directory, "work"),
-            AgentContinuationBounds.Of(context.Config.AgentContext?.Continuation));
+            directory,
+            cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -315,7 +318,7 @@ public sealed class AdvisorRunner(
     /// <param name="call">The asking, whose answers the schema named.</param>
     private static FlowAdvice? AdviceOf(AgentRunResult result, FlowAdvisorCall call)
     {
-        if (result.Status != AgentRunStatus.Completed || result.StructuredOutput is not { Length: > 0 } json || JsonNode.Parse(json) is not JsonObject read)
+        if (result.Status != AgentRunStatus.Completed || result.StructuredOutput is not { Length: > 0 } json || JsonDepth.ParseNode(json) is not JsonObject read)
         {
             return null;
         }

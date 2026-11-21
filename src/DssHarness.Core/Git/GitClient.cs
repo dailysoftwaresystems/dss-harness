@@ -1985,6 +1985,23 @@ public sealed partial class GitClient(
             hooks: new HookRun(isolation, values ?? new Dictionary<string, string>(StringComparer.Ordinal)));
 
     /// <inheritdoc/>
+    public Task<GitCommandResult> RunRemoteAsync(
+        string directory,
+        IReadOnlyList<string> arguments,
+        IReadOnlyDictionary<string, string>? values,
+        string? standardInput,
+        CancellationToken cancellationToken = default)
+        => RunCoreAsync(
+            directory,
+            arguments,
+            echoOutput: false,
+            untranslated: true,
+            indexFile: null,
+            standardInput is null ? null : ChildInput.Of(standardInput),
+            cancellationToken,
+            values: values);
+
+    /// <inheritdoc/>
     public async Task<GitCredential?> CredentialAsync(string directory, string url, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(url);
@@ -2058,7 +2075,8 @@ public sealed partial class GitClient(
         Encoding? outputEncoding = null,
         ObjectStore? objects = null,
         TimeSpan? limit = null,
-        HookRun? hooks = null)
+        HookRun? hooks = null,
+        IReadOnlyDictionary<string, string>? values = null)
     {
         ArgumentNullException.ThrowIfNull(arguments);
 
@@ -2107,7 +2125,7 @@ public sealed partial class GitClient(
 
         // What a command that runs the hooks is handed as values - a push's credential - set last, so nothing above
         // clears it.
-        foreach (var (name, value) in hooks?.Values ?? new Dictionary<string, string>())
+        foreach (var (name, value) in hooks?.Values ?? values ?? new Dictionary<string, string>())
         {
             environment[name] = value;
         }

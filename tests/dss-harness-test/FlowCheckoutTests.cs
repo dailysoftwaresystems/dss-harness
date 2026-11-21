@@ -212,9 +212,16 @@ public sealed class FlowCheckoutTests : IDisposable
             "a merge is under way in the main checkout, and a run folds its work into the tree the merge is writing: finish the merge, or abort it",
             On("work", merging: true).StartRefusal("main"));
         Assert.Equal(
-            "the main checkout has staged changes (6 path(s): a, b, c, d, e, ...), and a run's commit stages what it folded alone: commit them, or unstage them",
+            "the main checkout has staged changes (6 path(s): a, b, c, d, e, f), and a run's commit stages what it folded alone: commit them, or unstage them",
             On("work", false, "a", "b", "c", "d", "e", "f").StartRefusal("main"));
         Assert.Null(On("work").StartRefusal("main"));
+
+        // The staged paths are the one list a refusal names part of, and only where it is refused over them.
+        Assert.Equal(
+            [("staged", "a, b, c, d, e, f")],
+            On("work", false, "a", "b", "c", "d", "e", "f").StartNamed("main").Select(list => (list.Key, string.Join(", ", list.Value))));
+        Assert.Empty(On(null, false, "a").StartNamed("main"));
+        Assert.Empty(On("work").StartNamed("main"));
 
         // Where more than one holds, the first in that order is the one said.
         Assert.Equal(On(null).StartRefusal("main"), On(null, merging: true, "a").StartRefusal("main"));

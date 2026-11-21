@@ -5,6 +5,9 @@ using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
+using DssHarness.Core.Json;
+using DssHarness.Core.Text;
+using DssHarness.Core.Walks;
 
 namespace DssHarness.Core.Schemas;
 
@@ -20,8 +23,9 @@ namespace DssHarness.Core.Schemas;
 /// <c>items</c>, a scalar <c>enum</c> and <c>const</c>, <c>anyOf</c>, a local non-recursive <c>$ref</c> to one of
 /// the <c>$defs</c> the root holds, <c>description</c>, <c>title</c> and <c>default</c>, <c>minItems</c> and
 /// <c>maxItems</c>, the three <c>format</c>s that are checked (RFC 3339's date-time and full-date, and a uuid written
-/// in its hyphenated form) and an ECMA-262 <c>pattern</c> - refused where .NET, which runs it, would read it
-/// otherwise - read within one second. Anything else is refused where the definition is checked, naming the place
+/// in its hyphenated form) and an ECMA-262 <c>pattern</c> - written as .NET's, matched in time linear in the text it
+/// reads (<see cref="LinearRegex"/>), and refused where .NET would read it otherwise or that matcher lacks what it
+/// holds. Anything else is refused where the definition is checked, naming the place
 /// in the schema that says it. Each key is said of its own type alone - <c>properties</c>, <c>required</c> and
 /// <c>additionalProperties</c> of an object, <c>items</c> and the bounds of an array, <c>format</c> and
 /// <c>pattern</c> of a string - so a schema that names properties says an object, and closes it. A <c>$ref</c>
@@ -48,6 +52,12 @@ namespace DssHarness.Core.Schemas;
 /// defect. Both checks are pure, over the nodes as they were parsed, and each reads a definition once however
 /// many references reach it.
 /// </para>
+/// <para>
+/// A schema and a document nest as deep as they are written, and are read so: every walk here goes down on a stack of its
+/// own (<see cref="Frame{T}"/>, <see cref="JsonWalk"/>), never the thread's, and a place's path is spelt only where a
+/// problem names it (<see cref="JsonPlace"/>), so neither a deep schema nor a deep answer is refused, or ends the
+/// process, for its depth.
+/// </para>
 /// </remarks>
 public static class JsonSchemaSubset
 {
@@ -71,9 +81,6 @@ public static class JsonSchemaSubset
 
     /// <summary>How a <c>$ref</c> names a definition: the name follows, and the root's <c>$defs</c> holds it.</summary>
     private const string Definitions = "#/$defs/";
-
-    /// <summary>A pattern is read within one second, so a hostile one cannot hold a run.</summary>
-    private static readonly TimeSpan PatternLimit = TimeSpan.FromSeconds(1);
 
     /// <summary>
     /// ECMA-262's white space and line terminators, written as a class's members: tab, line feed, vertical tab,
@@ -103,7 +110,7 @@ public static class JsonSchemaSubset
         var problems = new List<string>();
         var references = new List<Reference>();
 
-        Walk(schema, "$", schema, null, problems, references);
+        Walk(schema, JsonPlace.Root, schema, null, problems, references).Run();
         problems.AddRange(Recursions(references));
 
         return problems;
@@ -146,7 +153,7 @@ public static class JsonSchemaSubset
 
         try
         {
-            parsed = JsonNode.Parse(text);
+            parsed = JsonDepth.ParseNode(text);
         }
         catch (JsonException ex)
         {
@@ -161,7 +168,7 @@ public static class JsonSchemaSubset
 
         var whole = neighbours is null ? schema : Shared(schema, neighbours);
 
-        return new WholeSchema(whole, TookIn: !JsonNode.DeepEquals(schema, whole), SubsetProblems(whole));
+        return new WholeSchema(whole, TookIn: !JsonWalk.Same(schema, whole), SubsetProblems(whole));
     }
 
     /// <summary>A schema's text as the engine reads it (<see cref="Whole"/>).</summary>
@@ -219,7 +226,7 @@ public static class JsonSchemaSubset
 
         var root = (JsonObject)schema;
 
-        return Check(root, document, at, new DocumentCheck(root));
+        return Check(root, document, JsonPlace.Root, new DocumentCheck(root, at)).Run();
     }
 
     /// <summary>
@@ -245,7 +252,7 @@ public static class JsonSchemaSubset
 
         var root = (JsonObject)schema;
 
-        return Respell(root, document?.DeepClone(), new DocumentCheck(root));
+        return Respell(root, JsonWalk.Copy(document), new DocumentCheck(root, "$")).Run();
     }
 
     /// <summary>
@@ -304,11 +311,8 @@ public static class JsonSchemaSubset
         ArgumentNullException.ThrowIfNull(schema);
         ArgumentNullException.ThrowIfNull(neighbours);
 
-        var whole = (JsonObject)schema.DeepClone();
-        var found = new List<(JsonObject Holder, string? File, string Name)>();
-        References(whole, found);
-
-        var sharing = found.Where(reference => reference.File is not null).ToList();
+        var whole = (JsonObject)JsonWalk.Copy(schema)!;
+        var sharing = References(whole).Where(reference => reference.File is not null).ToList();
 
         // Definitions that are no mapping are never replaced by one the file did not write: they are left for the
         // subset check to refuse, and with them every shared reference, which nothing could be taken in for.
@@ -326,7 +330,7 @@ public static class JsonSchemaSubset
 
         foreach (var (holder, file, name) in sharing)
         {
-            if (Take(file!, name) is { } local)
+            if (Take(file!, name).Run() is { } local)
             {
                 holder["$ref"] = local;
             }
@@ -335,25 +339,29 @@ public static class JsonSchemaSubset
         return whole;
 
         // Where a reference lands once taken - <c>#/$defs/name</c> - or null where nothing answers it beside the schema.
-        string? Take(string file, string name)
+        Frame<string?> Take(string file, string name) => new(self => Taking(self, file, name));
+
+        IEnumerable<Frame> Taking(Frame<string?> self, string file, string name)
         {
             var offered = DefinitionIn(neighbours(file), name);
 
             if (definitions.ContainsKey(name)
                 && !(taken.TryGetValue(name, out var from) && string.Equals(from, file, StringComparison.Ordinal))
-                && !JsonNode.DeepEquals(definitions[name], offered))
+                && !JsonWalk.Same(definitions[name], offered))
             {
-                return null;
+                self.Give(null);
+                yield break;
             }
 
             if (!definitions.ContainsKey(name))
             {
                 if (offered is not JsonObject definition)
                 {
-                    return null;
+                    self.Give(null);
+                    yield break;
                 }
 
-                var copy = (JsonObject)definition.DeepClone();
+                var copy = (JsonObject)JsonWalk.Copy(definition)!;
 
                 definitions[name] = copy;
                 taken[name] = file;
@@ -362,18 +370,17 @@ public static class JsonSchemaSubset
                 // is taken with it, for a definition left pointing at a file the schema does not hold is no whole. One
                 // that cannot be taken is written naming the file it reaches into, never left local: written as its own
                 // file writes it, it would name whatever this schema holds by that name.
-                var inner = new List<(JsonObject Holder, string? File, string Name)>();
-                References(copy, inner);
-
-                foreach (var (holder, innerFile, innerName) in inner)
+                foreach (var (holder, innerFile, innerName) in References(copy))
                 {
                     var reached = innerFile ?? file;
+                    var inner = Take(reached, innerName);
+                    yield return inner;
 
-                    holder["$ref"] = Take(reached, innerName) ?? $"{reached}{Definitions}{innerName}";
+                    holder["$ref"] = inner.Result ?? $"{reached}{Definitions}{innerName}";
                 }
             }
 
-            return Definitions + name;
+            self.Give(Definitions + name);
         }
     }
 
@@ -386,44 +393,34 @@ public static class JsonSchemaSubset
         => (root?["$defs"] as JsonObject)?[name];
 
     /// <summary>
-    /// Every reference the schema holds, with where each stands: the schema that says it, the file a shared one
-    /// names (<see cref="Shared"/>), and the definition it names - of the schema itself where the reference is
-    /// local, which the schema's own <c>$defs</c> already answers or does not, and never a take's to mend.
+    /// Every reference the schema holds, in the order it writes them, with where each stands: the schema that says it, the
+    /// file a shared one names (<see cref="Shared"/>), and the definition it names - of the schema itself where the
+    /// reference is local, which the schema's own <c>$defs</c> already answers or does not, and never a take's to mend.
     /// </summary>
-    private static void References(JsonNode? node, List<(JsonObject Holder, string? File, string Name)> found)
+    private static List<(JsonObject Holder, string? File, string Name)> References(JsonNode? node)
     {
-        switch (node)
+        var found = new List<(JsonObject Holder, string? File, string Name)>();
+
+        foreach (var (_, each) in JsonWalk.Descendants(node))
         {
-            case JsonObject schema:
-                if (schema["$ref"] is JsonValue reference && reference.TryGetValue<string>(out var written))
-                {
-                    if (SharedName(written, out var file, out var name))
-                    {
-                        found.Add((schema, file, name));
-                    }
-                    else if (written.StartsWith(Definitions, StringComparison.Ordinal)
-                        && written.AsSpan(Definitions.Length).IndexOfAny('/', '#') < 0
-                        && written.Length > Definitions.Length)
-                    {
-                        found.Add((schema, null, written[Definitions.Length..]));
-                    }
-                }
+            if (each is not JsonObject schema || schema["$ref"] is not JsonValue reference || !reference.TryGetValue<string>(out var written))
+            {
+                continue;
+            }
 
-                foreach (var (_, value) in schema)
-                {
-                    References(value, found);
-                }
-
-                break;
-
-            case JsonArray list:
-                foreach (var value in list)
-                {
-                    References(value, found);
-                }
-
-                break;
+            if (SharedName(written, out var file, out var name))
+            {
+                found.Add((schema, file, name));
+            }
+            else if (written.StartsWith(Definitions, StringComparison.Ordinal)
+                && written.AsSpan(Definitions.Length).IndexOfAny('/', '#') < 0
+                && written.Length > Definitions.Length)
+            {
+                found.Add((schema, null, written[Definitions.Length..]));
+            }
         }
+
+        return found;
     }
 
     /// <summary>
@@ -745,17 +742,29 @@ public static class JsonSchemaSubset
 
     /// <summary>A <c>$ref</c> as the walk found it: the definition it sits in, if any, where it is, and the definition it names.</summary>
     /// <param name="Owner">The name of the root's definition the reference is written in; <see langword="null"/> outside them.</param>
-    /// <param name="At">The reference's own path in the schema.</param>
+    /// <param name="At">The reference's own place in the schema, spelt as its path where a problem names it.</param>
     /// <param name="Target">The name of the definition it reaches.</param>
-    private readonly record struct Reference(string? Owner, string At, string Target);
+    private readonly record struct Reference(string? Owner, JsonPlace At, string Target);
 
     /// <summary>
     /// Walks a schema, refusing what the subset does not say. Every node is walked once, where it is written: a
-    /// <c>$ref</c> is noted, never followed, so its definition is walked where the root defines it.
+    /// <c>$ref</c> is noted, never followed, so its definition is walked where the root defines it. Each schema it holds is
+    /// walked as a frame of its own (<see cref="Frame{T}"/>), so a schema nests as deep as it is written.
     /// </summary>
-    private static void Walk(
+    private static Frame<bool> Walk(
         JsonNode? node,
-        string at,
+        JsonPlace at,
+        JsonNode root,
+        string? owner,
+        List<string> problems,
+        List<Reference> references)
+        => new(self => Walking(self, node, at, root, owner, problems, references));
+
+    /// <summary>The body of <see cref="Walk"/>: the problems of one schema, each schema it holds walked in turn where it is written.</summary>
+    private static IEnumerable<Frame> Walking(
+        Frame<bool> self,
+        JsonNode? node,
+        JsonPlace at,
         JsonNode root,
         string? owner,
         List<string> problems,
@@ -763,8 +772,9 @@ public static class JsonSchemaSubset
     {
         if (node is not JsonObject schema)
         {
-            problems.Add(NoObject(at));
-            return;
+            problems.Add(NoObject(at.Path()));
+            self.Give(true);
+            yield break;
         }
 
         var referred = schema.ContainsKey("$ref");
@@ -773,7 +783,7 @@ public static class JsonSchemaSubset
         {
             if (referred && key != "$ref" && !BesideAReference.Contains(key, StringComparer.Ordinal))
             {
-                problems.Add($"{at}{Member(key)}: is said beside $ref, which stands alone; say it in the definition");
+                problems.Add($"{at.Member(key)}: is said beside $ref, which stands alone; say it in the definition");
                 continue;
             }
 
@@ -789,14 +799,16 @@ public static class JsonSchemaSubset
                 case "properties":
                     if (value is JsonObject properties)
                     {
+                        var under = at.Member("properties");
+
                         foreach (var (name, property) in properties)
                         {
-                            Walk(property, $"{at}.properties{Member(name)}", root, owner, problems, references);
+                            yield return Walk(property, under.Member(name), root, owner, problems, references);
                         }
                     }
                     else
                     {
-                        problems.Add($"{at}.properties: is not a mapping of properties to schemas");
+                        problems.Add($"{at.Member("properties")}: is not a mapping of properties to schemas");
                     }
 
                     break;
@@ -804,7 +816,7 @@ public static class JsonSchemaSubset
                 case "required":
                     if (value is not JsonArray required || required.Any(name => name is null || name.GetValueKind() != JsonValueKind.String))
                     {
-                        problems.Add($"{at}.required: is not a list of property names");
+                        problems.Add($"{at.Member("required")}: is not a list of property names");
                     }
                     else if (schema["properties"] is JsonObject named)
                     {
@@ -812,13 +824,13 @@ public static class JsonSchemaSubset
                         {
                             if (!named.ContainsKey(name!.GetValue<string>()))
                             {
-                                problems.Add($"{at}.required: '{name.GetValue<string>()}' is named by no property");
+                                problems.Add($"{at.Member("required")}: '{name.GetValue<string>()}' is named by no property");
                             }
                         }
                     }
                     else
                     {
-                        problems.Add($"{at}.required: names properties the schema does not say; name them under properties");
+                        problems.Add($"{at.Member("required")}: names properties the schema does not say; name them under properties");
                     }
 
                     break;
@@ -826,19 +838,19 @@ public static class JsonSchemaSubset
                 case "additionalProperties":
                     if (value is not JsonValue isFalse || isFalse.GetValueKind() != JsonValueKind.False)
                     {
-                        problems.Add($"{at}.additionalProperties: the subset takes false, always, so every property is one the schema names");
+                        problems.Add($"{at.Member("additionalProperties")}: the subset takes false, always, so every property is one the schema names");
                     }
 
                     break;
 
                 case "items":
-                    Walk(value, $"{at}.items", root, owner, problems, references);
+                    yield return Walk(value, at.Member("items"), root, owner, problems, references);
                     break;
 
                 case "enum":
                     if (value is not JsonArray options || options.Count == 0 || options.Any(option => option is not null and not JsonValue))
                     {
-                        problems.Add($"{at}.enum: is not a non-empty list of scalars");
+                        problems.Add($"{at.Member("enum")}: is not a non-empty list of scalars");
                     }
 
                     break;
@@ -846,7 +858,7 @@ public static class JsonSchemaSubset
                 case "const":
                     if (value is not null and not JsonValue)
                     {
-                        problems.Add($"{at}.const: is not a scalar");
+                        problems.Add($"{at.Member("const")}: is not a scalar");
                     }
 
                     break;
@@ -854,14 +866,16 @@ public static class JsonSchemaSubset
                 case "anyOf":
                     if (value is JsonArray shapes && shapes.Count > 0)
                     {
-                        foreach (var (shape, index) in shapes.Select((shape, index) => (shape, index)))
+                        var under = at.Member("anyOf");
+
+                        for (var index = 0; index < shapes.Count; index++)
                         {
-                            Walk(shape, $"{at}.anyOf[{index}]", root, owner, problems, references);
+                            yield return Walk(shapes[index], under.Item(index), root, owner, problems, references);
                         }
                     }
                     else
                     {
-                        problems.Add($"{at}.anyOf: is not a non-empty list of schemas");
+                        problems.Add($"{at.Member("anyOf")}: is not a non-empty list of schemas");
                     }
 
                     break;
@@ -869,21 +883,21 @@ public static class JsonSchemaSubset
                 case "$ref":
                     if (value is not JsonValue reference || reference.GetValueKind() != JsonValueKind.String)
                     {
-                        problems.Add($"{at}.$ref: is not the name of a definition");
+                        problems.Add($"{at.Member("$ref")}: is not the name of a definition");
                     }
                     else if (Definition(root, reference.GetValue<string>()) is { } target)
                     {
-                        references.Add(new Reference(owner, $"{at}.$ref", target));
+                        references.Add(new Reference(owner, at.Member("$ref"), target));
                     }
                     else if (SharedName(reference.GetValue<string>(), out var file, out var name))
                     {
                         problems.Add(
-                            $"{at}.$ref: '{reference.GetValue<string>()}' names a definition of the schema file '{file}' beside this one, and it was not taken into this schema's own definitions"
+                            $"{at.Member("$ref")}: '{reference.GetValue<string>()}' names a definition of the schema file '{file}' beside this one, and it was not taken into this schema's own definitions"
                                 + $" - the file is not beside it, or holds no definition '{name}', or this schema holds the name already, said otherwise");
                     }
                     else
                     {
-                        problems.Add($"{at}.$ref: '{reference.GetValue<string>()}' names no definition of this schema");
+                        problems.Add($"{at.Member("$ref")}: '{reference.GetValue<string>()}' names no definition of this schema");
                     }
 
                     break;
@@ -891,18 +905,20 @@ public static class JsonSchemaSubset
                 case "$defs":
                     if (!ReferenceEquals(schema, root))
                     {
-                        problems.Add($"{at}.$defs: definitions are held at the schema's root, where '{Definitions}name' finds them");
+                        problems.Add($"{at.Member("$defs")}: definitions are held at the schema's root, where '{Definitions}name' finds them");
                     }
                     else if (value is JsonObject definitions)
                     {
+                        var under = at.Member("$defs");
+
                         foreach (var (name, definition) in definitions)
                         {
-                            Walk(definition, $"{at}.$defs{Member(name)}", root, name, problems, references);
+                            yield return Walk(definition, under.Member(name), root, name, problems, references);
                         }
                     }
                     else
                     {
-                        problems.Add($"{at}.$defs: is not a mapping of definitions to schemas");
+                        problems.Add($"{at.Member("$defs")}: is not a mapping of definitions to schemas");
                     }
 
                     break;
@@ -910,7 +926,7 @@ public static class JsonSchemaSubset
                 case "minItems" or "maxItems":
                     if (Count(value) is null)
                     {
-                        problems.Add($"{at}.{key}: is not a whole number from 0");
+                        problems.Add($"{at.Member(key)}: is not a whole number from 0");
                     }
 
                     break;
@@ -919,7 +935,7 @@ public static class JsonSchemaSubset
                     if (value is not JsonValue format || format.GetValueKind() != JsonValueKind.String
                         || !Formats.Contains(format.GetValue<string>(), StringComparer.Ordinal))
                     {
-                        problems.Add($"{at}.format: is not one of {string.Join(", ", Formats)}");
+                        problems.Add($"{at.Member("format")}: is not one of {string.Join(", ", Formats)}");
                     }
 
                     break;
@@ -927,25 +943,27 @@ public static class JsonSchemaSubset
                 case "pattern":
                     if (value is not JsonValue pattern || pattern.GetValueKind() != JsonValueKind.String)
                     {
-                        problems.Add($"{at}.pattern: is not text");
+                        problems.Add($"{at.Member("pattern")}: is not text");
                     }
                     else if (ReadPattern(pattern.GetValue<string>(), out var unread) is null)
                     {
-                        problems.Add($"{at}.pattern: {unread}");
+                        problems.Add($"{at.Member("pattern")}: {unread}");
                     }
 
                     break;
 
                 default:
-                    problems.Add($"{at}{Member(key)}: is said by no schema this engine reads");
+                    problems.Add($"{at.Member(key)}: is said by no schema this engine reads");
                     break;
             }
         }
 
+        self.Give(true);
+
         // What stands beside a reference was refused key by key above, and is not refused again for what it says.
         if (referred)
         {
-            return;
+            yield break;
         }
 
         // Every object says what it holds, so a property the schema does not name is refused, and never slips
@@ -960,31 +978,31 @@ public static class JsonSchemaSubset
         {
             if (schema.ContainsKey(key) && !SaysType(schema, "object"))
             {
-                problems.Add($"{at}.{key}: only an object's properties are said");
+                problems.Add($"{at.Member(key)}: only an object's properties are said");
             }
         }
 
         if (schema.ContainsKey("items") && !SaysType(schema, "array"))
         {
-            problems.Add($"{at}.items: only an array's items are said");
+            problems.Add($"{at.Member("items")}: only an array's items are said");
         }
 
         foreach (var bound in Bounds)
         {
             if (schema.ContainsKey(bound) && !SaysType(schema, "array"))
             {
-                problems.Add($"{at}.{bound}: only an array's length is bounded");
+                problems.Add($"{at.Member(bound)}: only an array's length is bounded");
             }
         }
 
         if (schema.ContainsKey("format") && !SaysType(schema, "string"))
         {
-            problems.Add($"{at}.format: only a string is formatted");
+            problems.Add($"{at.Member("format")}: only a string is formatted");
         }
 
         if (schema.ContainsKey("pattern") && !SaysType(schema, "string"))
         {
-            problems.Add($"{at}.pattern: only a string is matched");
+            problems.Add($"{at.Member("pattern")}: only a string is matched");
         }
     }
 
@@ -1033,13 +1051,13 @@ public static class JsonSchemaSubset
     }
 
     /// <summary>Adds the problems of a <c>type</c> key's value, where it is not one the subset takes.</summary>
-    private static void TypeProblems(JsonNode? value, string at, List<string> problems)
+    private static void TypeProblems(JsonNode? value, JsonPlace at, List<string> problems)
     {
         if (value is JsonValue one && one.GetValueKind() == JsonValueKind.String)
         {
             if (!Types.Contains(one.GetValue<string>(), StringComparer.Ordinal))
             {
-                problems.Add($"{at}.type: '{one.GetValue<string>()}' is not one of {string.Join(", ", Types)}, or one of them with null");
+                problems.Add($"{at.Member("type")}: '{one.GetValue<string>()}' is not one of {string.Join(", ", Types)}, or one of them with null");
             }
 
             return;
@@ -1054,7 +1072,7 @@ public static class JsonSchemaSubset
             return;
         }
 
-        problems.Add($"{at}.type: is not one of {string.Join(", ", Types)}, or one of them with null");
+        problems.Add($"{at.Member("type")}: is not one of {string.Join(", ", Types)}, or one of them with null");
     }
 
     /// <summary>Whether the schema's <c>type</c> says <paramref name="type"/>, alone or with null beside it.</summary>
@@ -1096,35 +1114,99 @@ public static class JsonSchemaSubset
     /// document, so a definition many references reach - through the shapes of an <c>anyOf</c>, say - is read
     /// once at each place, never once per way of reaching it.
     /// </summary>
-    /// <param name="Root">The schema's root, which holds the definitions.</param>
-    private sealed record DocumentCheck(JsonObject Root)
+    /// <remarks>
+    /// Each place of the document is one object however many shapes reach it (<see cref="Member"/>, <see cref="Item"/>), so
+    /// what a definition said of it is found by the place itself; and a place's path is spelt only where a problem names
+    /// it, from where the document stands in a larger one, so a deep document's paths are never all spelt.
+    /// </remarks>
+    /// <param name="root">The schema's root, which holds the definitions.</param>
+    /// <param name="at">The document's own path, from the root of what holds it.</param>
+    private sealed class DocumentCheck(JsonObject root, string at)
     {
-        /// <summary>The problems a definition, by name, found at a place in the document, by path.</summary>
-        public Dictionary<(string Definition, string At), IReadOnlyList<string>> Read { get; } = new();
+        private readonly Dictionary<(JsonPlace Holder, string Name), JsonPlace> _members = [];
+        private readonly Dictionary<(JsonPlace Holder, int Index), JsonPlace> _items = [];
+        private readonly Dictionary<string, Regex> _patterns = new(StringComparer.Ordinal);
+
+        /// <summary>The schema's root, which holds the definitions.</summary>
+        public JsonObject Root { get; } = root;
+
+        /// <summary>The problems a definition, by name, found at a place in the document.</summary>
+        public Dictionary<(string Definition, JsonPlace At), IReadOnlyList<string>> Read { get; } = [];
+
+        /// <summary>The place of the member <paramref name="name"/> of the object at <paramref name="holder"/>: one object, however often it is asked.</summary>
+        public JsonPlace Member(JsonPlace holder, string name)
+        {
+            if (!_members.TryGetValue((holder, name), out var place))
+            {
+                place = holder.Member(name);
+                _members.Add((holder, name), place);
+            }
+
+            return place;
+        }
+
+        /// <summary>The place of the item at <paramref name="index"/> of the array at <paramref name="holder"/>: one object, however often it is asked.</summary>
+        public JsonPlace Item(JsonPlace holder, int index)
+        {
+            if (!_items.TryGetValue((holder, index), out var place))
+            {
+                place = holder.Item(index);
+                _items.Add((holder, index), place);
+            }
+
+            return place;
+        }
+
+        /// <summary>The path of <paramref name="place"/>, from the root of what holds the document.</summary>
+        public string Spelt(JsonPlace place) => place.Depth == 0 ? at : at + place.Path()[1..];
+
+        /// <summary>A pattern the subset check passed, read once for every value of the document it is asked of.</summary>
+        public Regex Pattern(string pattern)
+        {
+            if (!_patterns.TryGetValue(pattern, out var regex))
+            {
+                regex = ReadPattern(pattern, out _)!;
+                _patterns.Add(pattern, regex);
+            }
+
+            return regex;
+        }
     }
 
     /// <summary>
     /// Spells each text of <paramref name="document"/> an <c>enum</c> or a <c>const</c> holds in another case as the
     /// schema spells it, in place, where exactly one value matches it so: what <see cref="Respelled"/> gives, walked as
-    /// the document check walks.
+    /// the document check walks, each schema a frame of its own.
     /// </summary>
-    private static JsonNode? Respell(JsonObject said, JsonNode? document, DocumentCheck check)
+    private static Frame<JsonNode?> Respell(JsonObject said, JsonNode? document, DocumentCheck check)
+        => new(self => Respelling(self, said, document, check));
+
+    /// <summary>The body of <see cref="Respell"/>.</summary>
+    private static IEnumerable<Frame> Respelling(Frame<JsonNode?> self, JsonObject said, JsonNode? document, DocumentCheck check)
     {
         if (said["$ref"] is JsonValue reference)
         {
-            return Respell((JsonObject)check.Root["$defs"]![reference.GetValue<string>()[Definitions.Length..]]!, document, check);
+            var defined = Respell((JsonObject)check.Root["$defs"]![reference.GetValue<string>()[Definitions.Length..]]!, document, check);
+            yield return defined;
+
+            self.Give(defined.Result);
+            yield break;
         }
 
         if (said["anyOf"] is JsonArray shapes)
         {
             foreach (var shape in shapes.Cast<JsonObject>())
             {
-                var spelled = Respell(shape, document?.DeepClone(), check);
+                var spelled = Respell(shape, JsonWalk.Copy(document), check);
+                yield return spelled;
 
                 // Each shape is tried on its own copy, so what one found at a place is never read for another.
-                if (Check(shape, spelled, "$", new DocumentCheck(check.Root)).Count == 0)
+                var tried = Check(shape, spelled.Result, JsonPlace.Root, new DocumentCheck(check.Root, "$"));
+                yield return tried;
+
+                if (tried.Result.Count == 0)
                 {
-                    document = spelled;
+                    document = spelled.Result;
                     break;
                 }
             }
@@ -1140,16 +1222,24 @@ public static class JsonSchemaSubset
                 .ToList();
             var alike = spellings.Where(value => string.Equals(value, text, StringComparison.OrdinalIgnoreCase)).ToList();
 
-            return spellings.Contains(text, StringComparer.Ordinal) || alike.Count != 1 ? document : JsonValue.Create(alike[0]);
+            self.Give(spellings.Contains(text, StringComparer.Ordinal) || alike.Count != 1 ? document : JsonValue.Create(alike[0]));
+            yield break;
         }
 
         if (document is JsonObject map && said["properties"] is JsonObject properties)
         {
             foreach (var name in map.Select(member => member.Key).ToList())
             {
-                if (properties[name] is JsonObject property && Respell(property, map[name], check) is var spelled && !ReferenceEquals(spelled, map[name]))
+                if (properties[name] is JsonObject property)
                 {
-                    map[name] = spelled;
+                    var member = map[name];
+                    var spelled = Respell(property, member, check);
+                    yield return spelled;
+
+                    if (!ReferenceEquals(spelled.Result, member))
+                    {
+                        map[name] = spelled.Result;
+                    }
                 }
             }
         }
@@ -1158,21 +1248,30 @@ public static class JsonSchemaSubset
         {
             for (var index = 0; index < list.Count; index++)
             {
-                if (Respell(items, list[index], check) is var spelled && !ReferenceEquals(spelled, list[index]))
+                var item = list[index];
+                var spelled = Respell(items, item, check);
+                yield return spelled;
+
+                if (!ReferenceEquals(spelled.Result, item))
                 {
-                    list[index] = spelled;
+                    list[index] = spelled.Result;
                 }
             }
         }
 
-        return document;
+        self.Give(document);
     }
 
     /// <summary>
     /// Checks a document against a schema the subset check passed, naming the document's own path at every break.
-    /// A path names one place in the document, since a name no identifier spells is written in brackets.
+    /// A path names one place in the document, since a name no identifier spells is written in brackets. Each schema
+    /// a member or an item is held to is checked as a frame of its own, so a document nests as deep as it is written.
     /// </summary>
-    private static IReadOnlyList<string> Check(JsonObject said, JsonNode? document, string at, DocumentCheck check)
+    private static Frame<IReadOnlyList<string>> Check(JsonObject said, JsonNode? document, JsonPlace at, DocumentCheck check)
+        => new(self => Checking(self, said, document, at, check));
+
+    /// <summary>The body of <see cref="Check"/>.</summary>
+    private static IEnumerable<Frame> Checking(Frame<IReadOnlyList<string>> self, JsonObject said, JsonNode? document, JsonPlace at, DocumentCheck check)
     {
         // A reference stands alone, so what it names is the whole of what is said here.
         if (said["$ref"] is JsonValue reference)
@@ -1181,36 +1280,58 @@ public static class JsonSchemaSubset
 
             if (!check.Read.TryGetValue((name, at), out var read))
             {
-                read = Check((JsonObject)check.Root["$defs"]![name]!, document, at, check);
+                var defined = Check((JsonObject)check.Root["$defs"]![name]!, document, at, check);
+                yield return defined;
+
+                read = defined.Result;
                 check.Read[(name, at)] = read;
             }
 
-            return read;
+            self.Give(read);
+            yield break;
         }
 
         var problems = new List<string>();
 
         // Every key holds at once: anyOf asks one of its shapes to answer, and what is said beside it is checked
         // all the same.
-        if (said["anyOf"] is JsonArray shapes && !shapes.Any(shape => Check((JsonObject)shape!, document, at, check).Count == 0))
+        if (said["anyOf"] is JsonArray shapes)
         {
-            problems.Add($"{at}: answers none of the {shapes.Count} shape{(shapes.Count == 1 ? string.Empty : "s")} its schema offers");
+            var answered = false;
+
+            foreach (var shape in shapes)
+            {
+                var tried = Check((JsonObject)shape!, document, at, check);
+                yield return tried;
+
+                if (tried.Result.Count == 0)
+                {
+                    answered = true;
+                    break;
+                }
+            }
+
+            if (!answered)
+            {
+                problems.Add($"{check.Spelt(at)}: answers none of the {shapes.Count} shape{(shapes.Count == 1 ? string.Empty : "s")} its schema offers");
+            }
         }
 
-        if (said.ContainsKey("const") && !JsonValue.DeepEquals(said["const"], document))
+        if (said.ContainsKey("const") && !JsonWalk.Same(said["const"], document))
         {
-            problems.Add($"{at}: {Said(document)} is not {Said(said["const"])}");
+            problems.Add($"{check.Spelt(at)}: {Said(document)} is not {Said(said["const"])}");
         }
 
-        if (said["enum"] is JsonArray options && !options.Any(option => JsonValue.DeepEquals(option, document)))
+        if (said["enum"] is JsonArray options && !options.Any(option => JsonWalk.Same(option, document)))
         {
-            problems.Add($"{at}: {Said(document)} is not one of {string.Join(", ", options.Select(option => Said(option)))}");
+            problems.Add($"{check.Spelt(at)}: {Said(document)} is not one of {string.Join(", ", options.Select(option => Said(option)))}");
         }
 
         if (TypeOf(said) is { } type && !Answers(type, document))
         {
-            problems.Add($"{at}: {Said(document)} is not {Kind(type)}");
-            return problems;
+            problems.Add($"{check.Spelt(at)}: {Said(document)} is not {Kind(type)}");
+            self.Give(problems);
+            yield break;
         }
 
         if (document is JsonObject map)
@@ -1219,7 +1340,7 @@ public static class JsonSchemaSubset
             {
                 if (!map.ContainsKey(name!.GetValue<string>()))
                 {
-                    problems.Add($"{at}: '{name.GetValue<string>()}' is required and missing");
+                    problems.Add($"{check.Spelt(at)}: '{name.GetValue<string>()}' is required and missing");
                 }
             }
 
@@ -1234,68 +1355,65 @@ public static class JsonSchemaSubset
             {
                 if (properties?[name] is JsonObject property)
                 {
-                    problems.AddRange(Check(property, value, $"{at}{Member(name)}", check));
+                    var member = Check(property, value, check.Member(at, name), check);
+                    yield return member;
+
+                    problems.AddRange(member.Result);
                 }
                 else if (closed)
                 {
-                    problems.Add($"{at}{Member(name)}: is said by no property of the schema");
+                    problems.Add($"{check.Spelt(check.Member(at, name))}: is said by no property of the schema");
                 }
             }
 
-            return problems;
+            self.Give(problems);
+            yield break;
         }
 
         if (document is JsonArray list)
         {
             if (Count(said["minItems"]) is { } least && list.Count < least)
             {
-                problems.Add($"{at}: holds {list.Count} item{(list.Count == 1 ? string.Empty : "s")} and at least {least} {(least == 1 ? "is" : "are")} asked");
+                problems.Add($"{check.Spelt(at)}: holds {list.Count} item{(list.Count == 1 ? string.Empty : "s")} and at least {least} {(least == 1 ? "is" : "are")} asked");
             }
 
             if (Count(said["maxItems"]) is { } cap && list.Count > cap)
             {
-                problems.Add($"{at}: holds {list.Count} item{(list.Count == 1 ? string.Empty : "s")} and at most {cap} {(cap == 1 ? "is" : "are")} taken");
+                problems.Add($"{check.Spelt(at)}: holds {list.Count} item{(list.Count == 1 ? string.Empty : "s")} and at most {cap} {(cap == 1 ? "is" : "are")} taken");
             }
 
             if (said["items"] is JsonObject items)
             {
-                foreach (var (value, index) in list.Select((value, index) => (value, index)))
+                for (var index = 0; index < list.Count; index++)
                 {
-                    problems.AddRange(Check(items, value, $"{at}[{index}]", check));
+                    var item = Check(items, list[index], check.Item(at, index), check);
+                    yield return item;
+
+                    problems.AddRange(item.Result);
                 }
             }
 
-            return problems;
+            self.Give(problems);
+            yield break;
         }
 
-        if (document is not JsonValue scalar || scalar.GetValueKind() != JsonValueKind.String)
+        if (document is JsonValue scalar && scalar.GetValueKind() == JsonValueKind.String)
         {
-            return problems;
-        }
+            var text = scalar.GetValue<string>();
 
-        var text = scalar.GetValue<string>();
-
-        if (said["format"] is JsonValue format && !FormatHolds(format.GetValue<string>(), text))
-        {
-            problems.Add($"{at}: {Said(document)} is not a {format.GetValue<string>()}");
-        }
-
-        if (said["pattern"] is JsonValue pattern)
-        {
-            try
+            if (said["format"] is JsonValue format && !FormatHolds(format.GetValue<string>(), text))
             {
-                if (!ReadPattern(pattern.GetValue<string>(), out _)!.IsMatch(text))
-                {
-                    problems.Add($"{at}: {Said(document)} does not match its pattern");
-                }
+                problems.Add($"{check.Spelt(at)}: {Said(document)} is not a {format.GetValue<string>()}");
             }
-            catch (RegexMatchTimeoutException)
+
+            // Matched in time linear in the text, so a pattern never holds the check, and none is cut short.
+            if (said["pattern"] is JsonValue pattern && !check.Pattern(pattern.GetValue<string>()).IsMatch(text))
             {
-                problems.Add($"{at}: its pattern could not be read within a second");
+                problems.Add($"{check.Spelt(at)}: {Said(document)} does not match its pattern");
             }
         }
 
-        return problems;
+        self.Give(problems);
     }
 
     /// <summary>Whether a document answers the schema's type, null answering only null and a type with null.</summary>
@@ -1545,29 +1663,36 @@ public static class JsonSchemaSubset
     }
 
     /// <summary>
-    /// A schema's pattern as .NET runs it the way ECMA-262 reads it, or why it cannot be read - the one reading
-    /// both checks share, so a pattern the subset check passes is one the document check runs. Read in .NET's
-    /// ECMAScript mode, where <c>\d</c> and <c>\w</c> are ASCII; with its end anchor <c>$</c> made the end of the
-    /// text alone, where .NET would also take the place before a final line feed; with <c>.</c> taking no line
-    /// terminator, where .NET takes all but the line feed; with <c>\s</c> and <c>\S</c> ECMA-262's white space and
-    /// its complement, in a class or out, where .NET takes ASCII's; and with a class closed at its first <c>]</c>,
-    /// <c>[]</c> the empty class and a <c>[</c> within it a character, where .NET reads class subtraction.
+    /// A schema's pattern as .NET runs it the way ECMA-262 reads it, or why it cannot be read - the one reading both checks
+    /// share, so a pattern the subset check passes is one the document check runs. ECMA-262's pattern is written in .NET's
+    /// grammar and matched by .NET's linear-time engine (<see cref="LinearRegex"/>), in time linear in the text however the
+    /// pattern nests, with no timeout: <c>\d</c> and <c>\w</c>, and their complements, are ASCII's, in a class or out;
+    /// <c>\s</c> and <c>\S</c> ECMA-262's white space and its complement; the end anchor <c>$</c> the end of the text alone,
+    /// where .NET would also take the place before a final line feed; <c>.</c> takes no line terminator, where .NET takes all
+    /// but the line feed; a class closes at its first <c>]</c>, <c>[]</c> the empty class and <c>[^]</c> any character, and a
+    /// <c>[</c> within it is a character, where .NET reads class subtraction; an identity escape - <c>\q</c> - is its
+    /// character, as ECMA-262 reads one; and a number escaped past the groups the pattern holds is the character its octal
+    /// digits code, as ECMA-262's Annex B reads it, where .NET would read a group.
     /// </summary>
     /// <remarks>
-    /// What .NET reads one way and ECMA-262 another, where no such rewriting gives ECMA-262's meaning, is refused: a
-    /// pattern that means one thing here and another to whoever else reads the schema is one nobody can rely on. So
-    /// are the groups ECMA-262 does not write - inline options, comments, atomic and conditional groups - since they
-    /// change what <c>$</c> and <c>.</c> mean; .NET's own escapes - the anchors <c>\A</c>, <c>\Z</c>, <c>\z</c> and
-    /// <c>\G</c> outside a class, and in a class or out the categories <c>\p{..}</c> and <c>\P{..}</c>, the bell
-    /// <c>\a</c> and the escape character <c>\e</c> - which ECMA-262 reads as the letter escaped; .NET's spellings
-    /// of a backreference beside ECMA-262's <c>\k&lt;name&gt;</c> - <c>\k'name'</c>, <c>\&lt;name&gt;</c>,
-    /// <c>\'name'</c> and a group's number in angle brackets - which ECMA-262 reads as characters or refuses; and a
-    /// backreference by number that the two read apart, .NET counting the named groups after every other and taking
-    /// <c>\12</c>, where there are fewer than twelve groups, as <c>\1</c> and a <c>2</c>, where ECMA-262 takes the
-    /// character it codes; and a group's name given twice, which .NET reads as one group and a provider refuses
-    /// outright, so a schema the subset passes would be no schema to whoever is sent it. The escapes are refused rather than read as ECMA-262 reads them: nobody writes <c>\A</c>
-    /// to mean the letter, and ECMA-262 read with its <c>u</c> flag, as a provider may read a schema's patterns,
-    /// refuses each of them - or, for <c>\p{..}</c>, reads the category .NET does.
+    /// What .NET reads one way and ECMA-262 another, where no such writing gives ECMA-262's meaning, is refused: a pattern
+    /// that means one thing here and another to whoever else reads the schema is one nobody can rely on. So are the groups
+    /// ECMA-262 does not write - inline options, comments, atomic and conditional groups - since they change what <c>$</c>
+    /// and <c>.</c> mean; .NET's own escapes - the anchors <c>\A</c>, <c>\Z</c>, <c>\z</c> and <c>\G</c> outside a class,
+    /// and in a class or out the categories <c>\p{..}</c> and <c>\P{..}</c>, the bell <c>\a</c> and the escape character
+    /// <c>\e</c> - which ECMA-262 reads as the letter escaped; a word boundary, <c>\b</c> or <c>\B</c> outside a class, which
+    /// ECMA-262 draws between ASCII's word characters and the linear engine between Unicode's; .NET's spellings of a
+    /// backreference beside ECMA-262's <c>\k&lt;name&gt;</c> - <c>\k'name'</c>, <c>\&lt;name&gt;</c>, <c>\'name'</c> and a
+    /// group's number in angle brackets - which ECMA-262 reads as characters or refuses; and a group's name given twice,
+    /// which .NET reads as one group and a provider refuses outright, so a schema the subset passes would be no schema to
+    /// whoever is sent it. The escapes are refused rather than read as ECMA-262 reads them: nobody writes <c>\A</c> to mean
+    /// the letter, and ECMA-262 read with its <c>u</c> flag, as a provider may read a schema's patterns, refuses each of
+    /// them - or, for <c>\p{..}</c>, reads the category .NET does.
+    /// <para>
+    /// What the linear engine lacks - a backreference, a lookahead or a lookbehind - is refused as that engine says it,
+    /// naming the pattern as the schema writes it: a pattern matched by backtracking could hold a check for as long as it
+    /// liked, and one cut short by a timeout would answer nothing.
+    /// </para>
     /// </remarks>
     /// <param name="pattern">The pattern as the schema writes it.</param>
     /// <param name="problem">Why it cannot be read; <see langword="null"/> where it can.</param>
@@ -1575,10 +1700,9 @@ public static class JsonSchemaSubset
     {
         var read = new StringBuilder(pattern.Length);
 
-        // Each capturing group in the order it opens, and whether it is named; and each backreference by number, as
-        // written - held to the groups once all of them are known, since a reference can come before its group.
-        var named = new List<bool>();
-        var numbered = new List<string>();
+        // Every capturing group the pattern holds, wherever it stands: a number escaped is a backreference only where the
+        // pattern holds that many groups, and a reference can come before its group.
+        var groups = GroupsIn(pattern);
 
         // Each group's name, once: .NET reads a name given twice as one group, which a provider refuses outright.
         var names = new HashSet<string>(StringComparer.Ordinal);
@@ -1594,30 +1718,23 @@ public static class JsonSchemaSubset
                         return null;
                     }
 
-                    // An escape is copied whole, so the character it escapes is never read as an anchor or a dot;
-                    // a control escape takes the character after its 'c' as well, and white space is ECMA-262's,
-                    // where .NET's ECMAScript mode takes ASCII's alone.
                     var escaped = index + 1 < pattern.Length ? pattern[index + 1] : '\0';
 
-                    if (escaped is 's' or 'S')
+                    if (escaped is >= '1' and <= '9')
                     {
-                        read.Append(escaped == 's' ? "[" : "[^").Append(Space).Append(']');
+                        index = CopyNumbered(pattern, index, groups, read);
+                        break;
+                    }
+
+                    if (Shorthand(escaped, inClass: false) is { } written)
+                    {
+                        read.Append(written);
                         index++;
                         break;
                     }
 
-                    if (escaped is >= '1' and <= '9')
-                    {
-                        var digits = index + 2;
-
-                        while (digits < pattern.Length && char.IsAsciiDigit(pattern[digits]))
-                        {
-                            digits++;
-                        }
-
-                        numbered.Add(pattern[index..digits]);
-                    }
-
+                    // Any other escape is copied whole, so the character it escapes is never read as an anchor or a dot; a
+                    // control escape takes the character after its 'c' as well.
                     var escape = escaped == 'c' ? 3 : 2;
 
                     read.Append(pattern, index, Math.Min(escape, pattern.Length - index));
@@ -1651,15 +1768,8 @@ public static class JsonSchemaSubset
                             problem = $"'(?<{name}>' names group '{name}' a second time, which a provider reading ECMA-262, the dialect a pattern is written in, refuses";
                             return null;
                         }
-
-                        named.Add(true);
                     }
 
-                    read.Append('(');
-                    break;
-
-                case '(':
-                    named.Add(false);
                     read.Append('(');
                     break;
 
@@ -1677,35 +1787,187 @@ public static class JsonSchemaSubset
             }
         }
 
-        if (numbered.FirstOrDefault(reference => CountedApart(reference, named)) is { } apart)
-        {
-            problem = ReadApart(apart);
-            return null;
-        }
-
-        try
+        if (LinearRegex.TryCompile(read.ToString(), RegexOptions.None, pattern, out var regex, out var refused))
         {
             problem = null;
-            return new Regex(read.ToString(), RegexOptions.ECMAScript, PatternLimit);
+            return regex;
         }
-        catch (ArgumentException)
-        {
-            problem = "is not a pattern this engine can read";
-            return null;
-        }
+
+        // The linear engine's own sentence, which names the pattern as the schema writes it, said after the place's path.
+        problem = char.ToLowerInvariant(refused[0]) + refused[1..].TrimEnd('.');
+        return null;
     }
 
     /// <summary>
+    /// How many capturing groups <paramref name="pattern"/> holds, as ECMA-262 counts them: every <c>(</c> that is neither
+    /// escaped, in a class, nor followed by <c>?</c>, and every named group, <c>(?&lt;name&gt;</c>.
+    /// </summary>
+    private static int GroupsIn(string pattern)
+    {
+        var groups = 0;
+
+        for (var index = 0; index < pattern.Length; index++)
+        {
+            switch (pattern[index])
+            {
+                case '\\':
+                    index++;
+                    break;
+
+                case '[':
+                    index = ClassEnd(pattern, index);
+                    break;
+
+                case '(' when index + 1 < pattern.Length && pattern[index + 1] == '?':
+                    if (pattern.AsSpan(index + 2) is ['<', not ('=' or '!'), ..])
+                    {
+                        groups++;
+                    }
+
+                    break;
+
+                case '(':
+                    groups++;
+                    break;
+            }
+        }
+
+        return groups;
+    }
+
+    /// <summary>
+    /// Where the class that opens at <paramref name="index"/> closes, as ECMA-262 closes one: at its first unescaped
+    /// <c>]</c>, the one right after <c>[</c> or <c>[^</c> among them; the pattern's end where it never closes.
+    /// </summary>
+    private static int ClassEnd(string pattern, int index)
+    {
+        index++;
+
+        if (index < pattern.Length && pattern[index] == '^')
+        {
+            index++;
+        }
+
+        for (; index < pattern.Length && pattern[index] != ']'; index++)
+        {
+            if (pattern[index] == '\\')
+            {
+                index++;
+            }
+        }
+
+        return Math.Min(index, pattern.Length);
+    }
+
+    /// <summary>
+    /// Copies a number escaped outside a class, from its backslash at <paramref name="index"/>, as ECMA-262 reads it, and
+    /// answers the index of its last digit: a backreference where its number - every digit written - is a group's the
+    /// pattern holds, copied for the linear engine to refuse; else, as Annex B reads it, a <c>8</c> or <c>9</c> its own
+    /// character, or the character up to three octal digits code - <c>\12</c> beside one group is a line feed - and any
+    /// digit after them a character of its own.
+    /// </summary>
+    private static int CopyNumbered(string pattern, int index, int groups, StringBuilder read)
+    {
+        var end = index + 1;
+
+        while (end < pattern.Length && char.IsAsciiDigit(pattern[end]))
+        {
+            end++;
+        }
+
+        var digits = pattern.AsSpan(index + 1, end - index - 1);
+
+        if (!int.TryParse(digits, NumberStyles.None, CultureInfo.InvariantCulture, out var number) || number <= groups)
+        {
+            read.Append('\\').Append(digits);
+            return end - 1;
+        }
+
+        var octal = 0;
+        var code = 0;
+
+        if (digits[0] is not ('8' or '9'))
+        {
+            // As many octal digits as stay within 0377: three where the first is 0 to 3, else two.
+            var most = digits[0] <= '3' ? 3 : 2;
+
+            while (octal < digits.Length && octal < most && digits[octal] is >= '0' and <= '7')
+            {
+                code = (code * 8) + (digits[octal] - '0');
+                octal++;
+            }
+
+            read.Append(CultureInfo.InvariantCulture, $@"\u{code:X4}");
+        }
+
+        foreach (var digit in digits[octal..])
+        {
+            read.Append(digit);
+        }
+
+        return end - 1;
+    }
+
+    /// <summary>
+    /// The class escapes ECMA-262 reads as ASCII's - <c>\d</c>, <c>\D</c>, <c>\w</c>, <c>\W</c> - and its white space, as
+    /// .NET is to read them: outside a class a class of its own, and within one its members, or <see langword="null"/>
+    /// where <paramref name="escaped"/> is none of them, or, within a class, <c>\S</c>, which no list of members spells
+    /// (<see cref="CopyClass"/>). An identity escape of a letter or a digit .NET does not read - <c>\q</c> - is its
+    /// character, by its code.
+    /// </summary>
+    private static string? Shorthand(char escaped, bool inClass)
+    {
+        var members = escaped switch
+        {
+            'd' => "0-9",
+            'D' => @"\u0000-/:-￿",
+            'w' => "0-9A-Za-z_",
+            'W' => @"\u0000-/:-@[-^`{-￿",
+            's' => Space,
+            _ => null,
+        };
+
+        if (members is not null)
+        {
+            return inClass ? members : $"[{members}]";
+        }
+
+        if (escaped == 'S')
+        {
+            return inClass ? null : $"[^{Space}]";
+        }
+
+        // ECMA-262 reads an escape it does not define as the character escaped. .NET refuses a word character it does not
+        // read as an escape of its own, and reads any other - punctuation, a space - as the character, as ECMA-262 does.
+        var known = inClass ? EscapesInAClass : EscapesOutsideAClass;
+
+        return (char.IsLetterOrDigit(escaped) || escaped == '_') && !known.Contains(escaped, StringComparison.Ordinal)
+            ? $@"\u{(int)escaped:X4}"
+            : null;
+    }
+
+    /// <summary>
+    /// The word characters a backslash leads outside a class that .NET reads as escapes of its own, each either read alike
+    /// by ECMA-262, written otherwise (<see cref="Shorthand"/>, <see cref="CopyNumbered"/>), or refused before
+    /// (<see cref="EscapeNotEcma"/>): every other is to ECMA-262 the character itself.
+    /// </summary>
+    private const string EscapesOutsideAClass = "0123456789aAbBcdDefGknpPrsStuvwWxzZ";
+
+    /// <summary>The word characters a backslash leads within a class that .NET reads as escapes of its own, as <see cref="EscapesOutsideAClass"/> are.</summary>
+    private const string EscapesInAClass = "01234567abcdDefnpPrsStuvwWx";
+
+    /// <summary>
     /// Copies a character class as ECMA-262 reads it and answers the index of its closing bracket. A class closes
-    /// at its first unescaped <c>]</c>: <c>[^]</c> takes any one character, as .NET's ECMAScript mode reads it
-    /// too, and <c>[]</c> is the empty class no character answers - written as a group that matches nothing,
-    /// since .NET would read that bracket as one of the class's characters. A <c>[</c> within is a character, and
-    /// is escaped so .NET never reads <c>-[...]</c> as the subtraction ECMA-262 does not have. <c>\s</c> within
-    /// is ECMA-262's white space, and a class holding <c>\S</c> - whose ECMA-262 meaning no list of .NET class
-    /// members spells - is written as the choice between its other members and every character but white space,
-    /// or, negated, as white space its other members do not hold. Within a class
-    /// <c>$</c> and <c>.</c> are characters, so nothing else in it is rewritten; an escape .NET reads otherwise there
-    /// is refused, as <see cref="ReadPattern"/> says.
+    /// at its first unescaped <c>]</c>: <c>[^]</c> takes any one character, and <c>[]</c> is the empty class no character
+    /// answers - each written as a class of every code unit or of none, since .NET would read that bracket as one of the
+    /// class's characters. A <c>[</c> within is a character, and is escaped so .NET never reads <c>-[...]</c> as the
+    /// subtraction ECMA-262 does not have. <c>\d</c>, <c>\w</c> and their complements within are ASCII's, written as the
+    /// code units they hold; <c>\s</c> within is ECMA-262's white space; and a class holding <c>\S</c> - whose ECMA-262
+    /// meaning no list of .NET class members spells - is written as the choice between its other members and every
+    /// character but white space, or, negated, as the white space its other members do not hold. A <c>-</c> beside a class
+    /// escape is a character, as ECMA-262's Annex B reads it, and is escaped so .NET never reads a range of it. Within a
+    /// class <c>$</c> and <c>.</c> are characters, so nothing else in it is rewritten; an escape .NET reads otherwise there is
+    /// refused, as <see cref="ReadPattern"/> says.
     /// </summary>
     /// <param name="pattern">The pattern.</param>
     /// <param name="index">Where the class opens.</param>
@@ -1717,7 +1979,7 @@ public static class JsonSchemaSubset
 
         if (index + 1 < pattern.Length && pattern[index + 1] == ']')
         {
-            read.Append("(?!)");
+            read.Append(@"[^\u0000-￿]");
             return index + 1;
         }
 
@@ -1726,6 +1988,11 @@ public static class JsonSchemaSubset
         var negated = index < pattern.Length && pattern[index] == '^';
         var members = new StringBuilder();
         var notSpace = false;
+
+        // Whether the member copied last is a class escape, which a '-' after it never makes a range of; and whether it is a
+        // '-' as written, which a class escape after it never makes a range of either.
+        var escapedLast = false;
+        var hyphenLast = false;
 
         for (index += negated ? 1 : 0; index < pattern.Length && pattern[index] != ']'; index++)
         {
@@ -1737,25 +2004,38 @@ public static class JsonSchemaSubset
                     return index;
                 }
 
-                switch (pattern[++index])
+                var escaped = pattern[++index];
+                var classEscape = escaped is 'd' or 'D' or 'w' or 'W' or 's' or 'S';
+
+                // A '-' just before a class escape is a character, never a range's: ECMA-262 makes no range of one.
+                if (classEscape && hyphenLast)
                 {
-                    case 's':
-                        members.Append(Space);
-                        break;
-
-                    case 'S':
-                        notSpace = true;
-                        break;
-
-                    default:
-                        members.Append('\\').Append(pattern[index]);
-                        break;
+                    members.Length--;
+                    members.Append(@"\-");
                 }
+
+                if (escaped == 'S')
+                {
+                    notSpace = true;
+                }
+                else
+                {
+                    members.Append(Shorthand(escaped, inClass: true) ?? $@"\{escaped}");
+                }
+
+                (escapedLast, hyphenLast) = (classEscape, false);
+                continue;
             }
-            else
+
+            var hyphen = pattern[index] == '-';
+
+            members.Append(pattern[index] switch
             {
-                members.Append(pattern[index] == '[' ? @"\[" : pattern[index].ToString());
-            }
+                '[' => @"\[",
+                '-' when escapedLast => @"\-",
+                var character => character.ToString(),
+            });
+            (escapedLast, hyphenLast) = (false, hyphen && !escapedLast);
         }
 
         if (index == pattern.Length)
@@ -1768,11 +2048,12 @@ public static class JsonSchemaSubset
         read.Append((negated, notSpace, members.Length) switch
         {
             (false, false, _) => $"[{members}]",
+            (true, false, 0) => @"[\u0000-￿]",
             (true, false, _) => $"[^{members}]",
             (false, true, 0) => $"[^{Space}]",
             (false, true, _) => $"(?:[{members}]|[^{Space}])",
             (true, true, 0) => $"[{Space}]",
-            (true, true, _) => $"(?:(?![{members}])[{Space}])",
+            (true, true, _) => $"[{Space}-[{members}]]",
         });
 
         return index;
@@ -1790,7 +2071,7 @@ public static class JsonSchemaSubset
         }
 
         // .NET names a group in word characters, so the names both read are identifiers without '$'.
-        if (rest is ['<', ..] && rest.IndexOf('>') is var close and > 1 && IsIdentifier(rest[1..close], dollar: false))
+        if (rest is ['<', ..] && rest.IndexOf('>') is var close and > 1 && IsIdentifier(rest[1..close]))
         {
             return null;
         }
@@ -1803,14 +2084,14 @@ public static class JsonSchemaSubset
     /// one way and ECMA-262 another, or <see langword="null"/> where the two read it alike or .NET cannot read it at all.
     /// </summary>
     /// <param name="rest">The pattern from the character after the backslash.</param>
-    /// <param name="inClass">Whether the escape is within a class, where .NET reads the anchors' letters and the
-    /// backreferences' characters as ECMA-262 does.</param>
+    /// <param name="inClass">Whether the escape is within a class, where .NET reads the anchors' letters, a backspace and
+    /// the backreferences' characters as ECMA-262 does.</param>
     private static string? EscapeNotEcma(ReadOnlySpan<char> rest, bool inClass)
     {
         switch (rest)
         {
             case ['p' or 'P' or 'a' or 'e', ..]:
-            case ['A' or 'Z' or 'z' or 'G', ..] when !inClass:
+            case ['A' or 'Z' or 'z' or 'G' or 'b' or 'B', ..] when !inClass:
                 return $@"\{rest[0]}";
 
             case ['k', '\'' or '<', ..] or ['<' or '\'', ..] when !inClass:
@@ -1822,7 +2103,7 @@ public static class JsonSchemaSubset
                 // Read as .NET reads a reference: a name or a number up to its closing mark. ECMA-262's own is
                 // \k<name>, by a name alone; anything else .NET either reads as ECMA-262 does or cannot read.
                 if (length < 1
-                    || (!IsIdentifier(name[..length], dollar: false) && !IsDigits(name[..length]))
+                    || (!IsIdentifier(name[..length]) && !IsDigits(name[..length]))
                     || (opens == 1 && close == '>' && !char.IsAsciiDigit(name[0])))
                 {
                     return null;
@@ -1835,29 +2116,6 @@ public static class JsonSchemaSubset
         }
     }
 
-    /// <summary>
-    /// Whether a backreference by number, as written - a backslash and its digits - reaches one group in .NET and
-    /// another, or a character, in ECMA-262: .NET counts the groups with no name first and the named ones after them
-    /// where ECMA-262 counts every group in the order it opens, and where the number is more than the groups there are,
-    /// .NET takes as many of its digits as name a group, where ECMA-262 takes them all as the code of a character.
-    /// </summary>
-    /// <param name="reference">The backreference as written.</param>
-    /// <param name="named">Each capturing group in the order it opens, and whether it is named.</param>
-    private static bool CountedApart(string reference, IReadOnlyList<bool> named)
-    {
-        var digits = reference.AsSpan(1);
-
-        if (!int.TryParse(digits, NumberStyles.None, CultureInfo.InvariantCulture, out var number) || number > named.Count)
-        {
-            return digits.Length > 1 && digits[0] - '0' <= named.Count;
-        }
-
-        // Ordered stably, so the groups with no name keep their order ahead of the named ones, which keep theirs.
-        var counted = Enumerable.Range(0, named.Count).OrderBy(group => named[group]).ToList();
-
-        return counted[number - 1] != number - 1;
-    }
-
     /// <summary>Why a pattern holding <paramref name="written"/> is refused: the two dialects read it apart.</summary>
     /// <param name="written">What the pattern writes, as it writes it.</param>
     private static string ReadApart(string written)
@@ -1867,15 +2125,8 @@ public static class JsonSchemaSubset
     private static bool IsDigits(ReadOnlySpan<char> text)
         => !text.IsEmpty && !text.ContainsAnyExceptInRange('0', '9');
 
-    /// <summary>
-    /// A member of a path: <c>.name</c> where the name is an identifier, and <c>["a.b"]</c>, written as JSON,
-    /// where it is anything else - so a path names one place, and a name holding a dot is never read as two.
-    /// </summary>
-    private static string Member(string name)
-        => IsIdentifier(name, dollar: true) ? $".{name}" : $"[{JsonValue.Create(name).ToJsonString(Written)}]";
-
-    /// <summary>Whether a name is an identifier in ASCII: a letter or '_' - or '$', where it is taken - then those or digits.</summary>
-    private static bool IsIdentifier(ReadOnlySpan<char> name, bool dollar)
+    /// <summary>Whether a group's name is one both dialects read: a letter or '_' in ASCII, then those or digits.</summary>
+    private static bool IsIdentifier(ReadOnlySpan<char> name)
     {
         if (name.IsEmpty || char.IsAsciiDigit(name[0]))
         {
@@ -1884,7 +2135,7 @@ public static class JsonSchemaSubset
 
         foreach (var character in name)
         {
-            if (!char.IsAsciiLetterOrDigit(character) && character != '_' && !(dollar && character == '$'))
+            if (!char.IsAsciiLetterOrDigit(character) && character != '_')
             {
                 return false;
             }

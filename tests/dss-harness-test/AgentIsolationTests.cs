@@ -1,5 +1,4 @@
 using DssHarness.Core.Agents;
-using DssHarness.Core.Agents.ClaudeCode;
 using DssHarness.Core.Agents.Isolation;
 using DssHarness.Core.Agents.Policy;
 using DssHarness.Core.Agents.SideTasks;
@@ -82,11 +81,12 @@ public sealed class AgentIsolationTests
     }
 
     /// <summary>
-    /// A program's outer layer is left a user namespace to make, for each command it hands over is started in a layer of its
-    /// own inside it; every other child is allowed none - its line otherwise the same.
+    /// Every layer of bubblewrap's allows no further namespace, a program's outer layer among them: nothing is started
+    /// inside one, for the program an outer layer holds runs no command of the agent's, and each command runs in a layer
+    /// of its own started outside it - so its line is every child's.
     /// </summary>
     [Fact]
-    public void ABubblewrapOuterLayer_LeavesAUserNamespaceToMake_EveryOtherChildNone()
+    public void ABubblewrapOuterLayer_AllowsNoFurtherNamespace_LikeEveryLayer()
     {
         var mechanism = new Bubblewrap("/usr/bin/bwrap", "0.9.0", []);
         var profile = new IsolationProfile([], [new IsolatedWrite("/r/w", Directory: true, Writable: true)]);
@@ -94,8 +94,8 @@ public sealed class AgentIsolationTests
         var (_, inner) = mechanism.Command(profile, "/bin/sh", ["-c", "true"]);
         var (_, outer) = mechanism.Command(profile with { Outer = true }, "/bin/sh", ["-c", "true"]);
 
+        Assert.Equal(inner, outer);
         Assert.Equal(["--unshare-user", "--disable-userns", "--unshare-pid"], inner.Take(3));
-        Assert.Equal([.. inner.Where(argument => argument != "--disable-userns")], outer);
     }
 
     /// <summary>
@@ -150,16 +150,18 @@ public sealed class AgentIsolationTests
     /// <summary>
     /// A step working in its worktree is given, by its launch's profile: the machine read-only; written its worktree, its
     /// work directory, what git writes of a tree it writes - a worktree a repository of its own writes its .git whole - and
-    /// the isolation's tool caches, with its own temporary directory; hidden every credential slot there is and the Claude
+    /// the isolation's tool caches, with its own temporary directory in the run's temp, one directory this launch's own,
+    /// held for the run's life and taken away with the run's directory; hidden every credential slot there is and the Claude
     /// Code directory and its .claude.json, the shell snapshots read again; written by nobody, inside what it writes, the
     /// worktree's configuration directory, the tool's state in the worktree, and the git directory's own code-running files,
     /// pointers and submodules: its hooks, its configuration, its replacements, its alternates and its commondir, made
     /// naming the directory itself, and its worktrees/. A place not there inside what it writes is made first; the launch's
-    /// own directory, which no command writes, is not. Under a mechanism that starts again inside a layer of its own, a
+    /// own directory, which no command writes, is not. Under a mechanism that holds a layer around a program of its own, a
     /// Claude Code launch's whole process is given the outer layer: the same profile, the slots still hidden, but Claude
-    /// Code's own directory and file written, and the receipts' directory and its own temporary directory in the launch's -
-    /// every rule parent first. Its records say the mechanism, its pins hold the git directories of the worktree and of the
-    /// main checkout alike, nothing is said of a linked worktree, and its disposal takes the temporary directory away.
+    /// Code's own directory and file written, and a temporary directory of its own beside the launch's commands' in the
+    /// run's temp - named to it by CLAUDE_CODE_TMPDIR - every rule parent first. Its records say the mechanism, its pins
+    /// hold the git directories of the worktree and of the main checkout alike, nothing is said of a linked worktree, and
+    /// its disposal leaves the temporary directory where it is, for the run's life: the run's teardown takes it.
     /// </summary>
     [Fact]
     public async Task AStepInItsWorktree_IsGivenTheMachineReadOnly_ItsRootsAndGitWritten_ItsGuardedPlacesSealed()
@@ -229,7 +231,7 @@ public sealed class AgentIsolationTests
         Assert.Equal(writes.OrderBy(write => write.Path, StringComparer.Ordinal), commands.Writes.OrderBy(write => write.Path, StringComparer.Ordinal));
         Assert.Equal([worktree, kit.Main, work], commands.Reads);
         Assert.Equal([Path.Combine(claude, AgentIsolation.ShellSnapshots)], commands.Reopened);
-        Assert.Equal(Path.Combine(root, IsolationCaches.TempDirectory), Path.GetDirectoryName(commands.Temp));
+        Assert.Equal(kit.Layout.TempDirectory, Path.GetDirectoryName(commands.Temp));
         Assert.Equal([new("TMPDIR", commands.Temp!), .. IsolationCaches.Environment(caches)], commands.Environment);
         Assert.True(Directory.Exists(Path.Combine(own, "modules")) && Directory.Exists(Path.Combine(own, "refs", "replace")) && Directory.Exists(Path.Combine(own, "worktrees")) && Directory.Exists(commands.Temp) && Directory.Exists(caches));
         Assert.Equal(AgentIsolation.ItsOwnDirectory, await File.ReadAllTextAsync(Path.Combine(own, AgentIsolation.CommonDirectoryFile), Token));
@@ -239,23 +241,28 @@ public sealed class AgentIsolationTests
         Assert.Equal((new GitDirectoryPin(worktree, own, own), new GitDirectoryPin(kit.Main, git, git)), (pins.Of(worktree), pins.Of(kit.Main)));
         Assert.Equal(new AgentIsolationRecord(AgentIsolationMode.Required) { Mechanism = "test", Version = "1.0" }, isolated.Record);
 
-        // Claude Code's whole process, in the outer layer each command is handed in from: the slots still hidden, Claude
-        // Code's own directory and file written, and the receipts' directory and its own temporary one in the launch's.
+        // Claude Code's whole process, in an outer layer of its own: the slots still hidden, and Claude Code's own
+        // directory and file written beside what the commands write, with a temporary directory of its own beside the
+        // launch's commands' in the run's temp - its /tmp and its CLAUDE_CODE_TMPDIR both, put away with the run and
+        // shared with no command's layer - and nothing else of the launch's directory, where nothing of Claude Code's is
+        // kept now that it runs no command of its own.
         var outer = isolated.ForClaudeCode!.Profile;
+        var claudeTemp = Path.Combine(kit.Layout.TempDirectory, Path.GetFileName(commands.Temp) + "-" + AgentIsolation.ClaudeCodeTempDirectory);
         IReadOnlyList<IsolatedWrite> outerWrites =
         [
             .. writes,
+            new(claudeTemp, Directory: true, Writable: true),
             new(claude, Directory: true, Writable: true),
             new(claude + ".json", Directory: false, Writable: true),
-            new(Path.Combine(launch, ClaudeShell.ReceiptsDirectoryName), Directory: true, Writable: true),
-            new(Path.Combine(launch, ClaudeShell.TempDirectoryName), Directory: true, Writable: true),
         ];
 
-        Assert.Equal((true, (string?)null, (string?)null), (outer.Outer, isolated.ClaudeCodeOutside, isolated.Processes.ClaudeCodeOutside));
+        Assert.True(outer.Outer);
         Assert.Equal([.. HarnessLayout.SecretSlotDirectoriesUnder(kit.Main).Where(Directory.Exists).Select(slot => new IsolatedPath(slot, Directory: true))], outer.Hidden);
         Assert.Equal(outerWrites.OrderBy(write => write.Path, StringComparer.Ordinal), outer.Writes.OrderBy(write => write.Path, StringComparer.Ordinal));
         Assert.Equal(outer.Writes.OrderBy(write => IsolationProfile.Depth(write.Path)), outer.Writes);
-        Assert.Equal((commands.Reads, commands.Temp, commands.Environment), (outer.Reads, outer.Temp, outer.Environment));
+        Assert.Equal(commands.Reads, outer.Reads);
+        Assert.Equal(claudeTemp, outer.Temp);
+        Assert.Equal([new(IsolationCaches.TempVariable, claudeTemp), new(AgentIsolation.ClaudeCodeTempVariable, claudeTemp), .. IsolationCaches.Environment(caches)], outer.Environment);
         Assert.Empty(outer.Reopened);
         Assert.False(commands.Outer);
 
@@ -265,7 +272,10 @@ public sealed class AgentIsolationTests
 
         isolated.Dispose();
 
-        Assert.False(Directory.Exists(commands.Temp), commands.Temp);
+        // The launch's end leaves its temporary directory where it is: the run's life holds it, and the run's teardown -
+        // the deletion of its directory - is what takes it, with every other launch's of the same run.
+        Assert.True(Directory.Exists(commands.Temp), commands.Temp);
+        Assert.False(Directory.Exists(Path.Combine(root, IsolationCaches.TempDirectory)), "a launch of a run keeps no temporary directory under the isolation's own");
     }
 
     /// <summary>
@@ -344,10 +354,11 @@ public sealed class AgentIsolationTests
 
     /// <summary>
     /// Under a mechanism that takes handed commands and starts none inside a layer of its own - macOS's sandbox - a Claude
-    /// Code launch's whole process is given no profile: it runs outside every layer, and the launch says why to its client.
+    /// Code launch's whole process is given no profile: it runs outside every layer, which its client sees as no isolation
+    /// for it.
     /// </summary>
     [Fact]
-    public async Task AMechanismThatStartsNoneInsideItself_LeavesClaudeCodeOutside_SayingWhy()
+    public async Task AMechanismThatStartsNoneInsideItself_LeavesClaudeCodeOutside()
     {
         using var temp = new TempDirectory();
         using var home = new TempDirectory();
@@ -360,7 +371,8 @@ public sealed class AgentIsolationTests
         using var isolated = await isolation.ForLaunchAsync(config, SideTaskPolicy.Ground(layout, config, [], []), kit.Main, SideTaskLayout.Of(layout, "one").Directory, Token);
 
         Assert.NotNull(isolated.ForCommands);
-        Assert.Equal(((ProcessIsolation?)null, (ProcessIsolation?)null, SandboxExec.NoSandboxInside), (isolated.ForClaudeCode, isolated.Processes.ClaudeCode, isolated.Processes.ClaudeCodeOutside));
+        Assert.Null(isolated.ForClaudeCode);
+        Assert.Null(isolated.Processes.ClaudeCode);
     }
 
     /// <summary>
@@ -1248,6 +1260,115 @@ public sealed class AgentIsolationTests
         Assert.Equal(new KeyValuePair<string, string>(AgentIsolation.SshAgentSocketVariable, socket), push.Profile.Environment[^1]);
         Assert.Empty(leg.Profile!.Sockets);
         Assert.DoesNotContain(leg.Profile.Environment, variable => variable.Key == AgentIsolation.SshAgentSocketVariable);
+    }
+
+    /// <summary>
+    /// An operation's state of two hundred megabytes is hashed whole as it streams: left as it was, it is no change, and
+    /// one byte more is. Red with <c>OperationStateBound</c>, which read a state past 64 MiB as unread - a text no other
+    /// equals - so the decision said it changed when nothing did.
+    /// </summary>
+    [Fact]
+    public async Task ATwoHundredMegabyteOperationState_IsHashed()
+    {
+        using var temp = new TempDirectory();
+        using var home = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var config = new HarnessConfig { Worktrees = OrchestrationKit.Settings };
+        var git = Path.Combine(kit.Main, ".git");
+        var isolation = new AgentIsolation(new FixedIsolationPlatform(IsolationAvailability.Of(new PassThroughMechanism())), kit.Harness.GitClient, kit.Harness.FileSystem, new HomedPlatform(home.Path), _ => null);
+        var rebase = Directory.CreateDirectory(Path.Combine(git, "rebase-merge")).FullName;
+        var todo = Path.Combine(rebase, "git-rebase-todo");
+
+        using (var large = File.Create(todo))
+        {
+            large.SetLength(200L * 1024 * 1024);
+        }
+
+        using var leftAsItWas = await isolation.ForExecutionAsync(config, ExecutionGrounds.OfHooks(config, kit.Main, kit.Main, sshAgent: false), kit.Main, Token);
+
+        Assert.Null(await leftAsItWas.AfterwardAsync(Token));
+
+        await File.AppendAllTextAsync(todo, "exec touch more\n", Token);
+
+        Assert.StartsWith($"'{rebase}' changed while it ran", await leftAsItWas.AfterwardAsync(Token), StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A main checkout's commondir is read whole, as git reads it - every line end at its end taken off, however many -
+    /// so one naming itself after five thousand characters of them leads to itself, and the launch is held. Red with the
+    /// 4,096-byte buffer, which read a longer file as leading elsewhere and left the launch with no isolation.
+    /// </summary>
+    [Fact]
+    public async Task AFiveThousandCharacterCommondir_IsReadWhole()
+    {
+        using var temp = new TempDirectory();
+        using var home = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var config = new HarnessConfig { Worktrees = OrchestrationKit.Settings };
+        var layout = new HarnessLayout(kit.Main, kit.Main);
+        var ground = SideTaskPolicy.Ground(layout, config, [], []);
+        var records = SideTaskLayout.Of(layout, "one").Directory;
+        var pointer = Path.Combine(kit.Main, ".git", AgentIsolation.CommonDirectoryFile);
+        AgentIsolation Isolation() => new(new FixedIsolationPlatform(IsolationAvailability.Of(new PassThroughMechanism())), kit.Harness.GitClient, kit.Harness.FileSystem, new HomedPlatform(home.Path), _ => null);
+
+        await File.WriteAllTextAsync(pointer, AgentIsolation.ItsOwnDirectory + new string('\n', 5000), Token);
+        using var named = await Isolation().ForLaunchAsync(config, ground, kit.Main, records, Token);
+
+        Assert.Equal((false, "test"), (named.Refused, named.Mechanism?.Name));
+
+        await File.WriteAllTextAsync(pointer, "/elsewhere/.git" + new string('\n', 5000), Token);
+        using var planted = await Isolation().ForLaunchAsync(config, ground, kit.Main, records, Token);
+
+        Assert.True(planted.Refused);
+    }
+
+    /// <summary>
+    /// The listing of a repository's replacements once the work has run is waited for to its end, however long git takes,
+    /// and told while it is waited for - every five minutes, on the clock the isolation is given - never cut off at a
+    /// limit. Red with <c>AfterwardLimit</c>, which ended the listing after a minute and told nothing while it waited.
+    /// </summary>
+    [Fact]
+    public async Task ForEachRef_IsWaitedAndTold()
+    {
+        using var temp = new TempDirectory();
+        using var home = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var config = new HarnessConfig { Worktrees = OrchestrationKit.Settings };
+        var layout = new HarnessLayout(kit.Main, kit.Main);
+        var ground = SideTaskPolicy.Ground(layout, config, [], []);
+        var records = SideTaskLayout.Of(layout, "one").Directory;
+        var clock = new TimerClock();
+        var holding = false;
+        using var listed = new ManualResetEventSlim();
+        var git = new InterceptingGitClient(kit.Harness.GitClient)
+        {
+            // Once the launch is made, the listing git answers is held until the test lets it go: a git that takes long.
+            AfterRun = (arguments, result) =>
+            {
+                if (Volatile.Read(ref holding) && arguments.Contains("for-each-ref"))
+                {
+                    listed.Wait(TestContext.Current.CancellationToken);
+                }
+
+                return result;
+            },
+        };
+        var isolation = new AgentIsolation(new FixedIsolationPlatform(IsolationAvailability.Of(new PassThroughMechanism())), git, kit.Harness.FileSystem, new HomedPlatform(home.Path), _ => null, clock: clock);
+        var told = new System.Collections.Concurrent.ConcurrentQueue<DssHarness.Core.Waiting.WaitTold>();
+
+        using var launched = await isolation.ForLaunchAsync(config, ground, kit.Main, records, Token);
+        Volatile.Write(ref holding, true);
+        var afterward = launched.AfterwardAsync(told.Enqueue, Token);
+
+        await clock.WaitingAsync().WaitAsync(ClockDrive.Within, Token);
+        Assert.Empty(told);
+
+        clock.Advance(DssHarness.Core.Waiting.Waits.SaidEvery);
+        await clock.WaitingAsync().WaitAsync(ClockDrive.Within, Token);
+        listed.Set();
+
+        Assert.Null(await afterward.WaitAsync(ClockDrive.Within, Token));
+        Assert.Contains("git to list the replacements of", Assert.Single(told).Subject, StringComparison.Ordinal);
     }
 
     /// <summary>The isolation's own directory under a test's home, as this machine places it.</summary>

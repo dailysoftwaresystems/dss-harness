@@ -25,7 +25,7 @@ namespace DssHarness.Core.Execution;
 /// <param name="CommandTime">The time the leg's own commands took.</param>
 /// <param name="Overhead">What the harness spent on syncing, fingerprinting and sampling.</param>
 /// <param name="TestCount">How many tests it reported running, where a count pattern extracted one.</param>
-/// <param name="Timings">What its phases reported about their own timing under <c>--time</c>.</param>
+/// <param name="Timings">What its phases reported about their own timing under <c>--time</c>: every mark, read as it is asked for.</param>
 public sealed record LedgerLine(
     string Leg,
     LegVerdict Verdict,
@@ -36,7 +36,7 @@ public sealed record LedgerLine(
     TimeSpan CommandTime,
     TimeSpan Overhead,
     int? TestCount,
-    IReadOnlyList<TimingMark> Timings)
+    IEnumerable<TimingMark> Timings)
 {
     /// <summary>
     /// Where the leg's records are when another host ran it, or <see langword="null"/> when they are
@@ -67,6 +67,9 @@ public sealed record LedgerLine(
 
     /// <summary>The steps of the runner's action the run did not select, by name.</summary>
     public IReadOnlyList<string> UnselectedSteps { get; init; } = [];
+
+    /// <summary>Every item the detail stands for, whole, as <see cref="LegEntry.Named"/> says.</summary>
+    public IReadOnlyList<string> Named { get; init; } = [];
 
     /// <summary>The last lines the leg's last phase that did not pass printed, as <see cref="LegEntry.LogTail"/> says.</summary>
     public IReadOnlyList<string> LogTail { get; init; } = [];
@@ -389,6 +392,7 @@ public sealed class LedgerReport
                     RanSteps = entry.RanSteps,
                     ManualSteps = entry.ManualSteps,
                     UnselectedSteps = entry.UnselectedSteps,
+                    Named = entry.Named,
                     LogTail = entry.LogTail,
                     TailPhase = entry.TailPhase,
                     Compilers = entry.Compilers,
@@ -437,6 +441,14 @@ public sealed class LedgerReport
             ? string.Create(CultureInfo.InvariantCulture, $"{(int)rounded.TotalMinutes}m{rounded.Seconds:00}s")
             : string.Create(CultureInfo.InvariantCulture, $"{(int)rounded.TotalSeconds}s");
     }
+
+    /// <summary>
+    /// A duration as a sentence says it - a wait, a pause, what is left of a bound: as the table writes it
+    /// (<see cref="FormatDuration"/>), and a duration of none as <c>0s</c>, where the table leaves a leg that took none
+    /// blank. The one spelling of a duration in a line, beside the table's.
+    /// </summary>
+    /// <param name="duration">The duration.</param>
+    public static string SaidDuration(TimeSpan duration) => FormatDuration(duration) is { Length: > 0 } said ? said : "0s";
 
     /// <summary>
     /// The table, heading first: <c>LEG / VERDICT / DURATION / DETAIL</c>; nothing when no leg has a row.
@@ -595,9 +607,10 @@ public sealed class LedgerReport
     }
 
     /// <summary>
-    /// The last lines each leg's last phase that did not pass printed, as a block below the table: what a
-    /// reader who cannot open the leg's log - another host's, which stays on that host - needs first.
-    /// Below rather than in the table, as the timings are, so no row is pushed apart.
+    /// The last lines each leg's last phase that did not pass printed - a page of them - as a block below the table: what
+    /// a reader who cannot open the leg's log - another host's, which stays on that host - needs first, and where the
+    /// whole is, the phase's log, read by page, where the leg's records name it. Below rather than in the table, as the
+    /// timings are, so no row is pushed apart.
     /// </summary>
     private IReadOnlyList<string> RenderTails()
     {
@@ -605,8 +618,10 @@ public sealed class LedgerReport
 
         foreach (var line in Lines.Where(line => line.LogTail.Count > 0))
         {
+            var whole = line.Logs.FirstOrDefault(log => string.Equals(log.Phase, line.TailPhase, StringComparison.Ordinal))?.File;
+
             rows.Add(string.Empty);
-            rows.Add($"{line.Leg}: the last {ReportText.Counted(line.LogTail.Count, "line")} its phase printed");
+            rows.Add($"{line.Leg}: the last {ReportText.Counted(line.LogTail.Count, "line")} its phase printed{(whole is null ? string.Empty : $", the whole in '{whole}'")}");
             rows.AddRange(line.LogTail.Select(QuotedLine.Of));
         }
 
@@ -625,18 +640,20 @@ public sealed class LedgerReport
     /// </remarks>
     private IReadOnlyList<string> RenderTimings()
     {
+        // Read as they are asked for, never gathered first: once for the columns' widths, and once for the rows.
         var marks = Lines
-            .SelectMany(line => line.Timings.Select(timing => (line.Leg, timing.Phase, timing.Text, timing.Value)))
-            .ToList();
+            .SelectMany(line => line.Timings.Select(timing => (line.Leg, timing.Phase, timing.Text, timing.Value)));
+        var (leg, phase, text, any) = ("LEG".Length, "PHASE".Length, "REPORTED".Length, false);
 
-        if (marks.Count == 0)
+        foreach (var mark in marks)
+        {
+            (leg, phase, text, any) = (Math.Max(leg, mark.Leg.Length), Math.Max(phase, mark.Phase.Length), Math.Max(text, mark.Text.Length), true);
+        }
+
+        if (!any)
         {
             return [];
         }
-
-        var leg = Width("LEG", marks.Select(mark => mark.Leg));
-        var phase = Width("PHASE", marks.Select(mark => mark.Phase));
-        var text = Width("REPORTED", marks.Select(mark => mark.Text));
 
         return
         [
@@ -826,6 +843,9 @@ public sealed class LedgerReport
                 ManualSteps = line.ManualSteps.Count > 0 ? line.ManualSteps : null,
                 UnselectedSteps = line.UnselectedSteps.Count > 0 ? line.UnselectedSteps : null,
 
+                // Only where the detail stands for a list: every item of it, whole, where the line names those that fit.
+                Named = line.Named.Count > 0 ? line.Named : null,
+
                 // Only for a leg that has one: a phase of its own did not pass.
                 LogTail = line.LogTail.Count > 0 ? line.LogTail : null,
                 line.TailPhase,
@@ -978,7 +998,7 @@ public sealed class LedgerReport
         Records = arm.Records is { } records ? show(records) : null,
         arm.Key,
         arm.Held,
-        Pending = arm.Pending is { } pending ? new { pending.Code, Said = show(pending.Said) } : null,
+        Pending = arm.Pending is { } pending ? new { pending.Code, Said = show(pending.Said), pending.Paths } : null,
     };
 
     /// <summary>

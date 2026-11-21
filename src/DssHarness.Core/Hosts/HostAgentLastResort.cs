@@ -3,11 +3,10 @@ using System.Diagnostics;
 using System.Globalization;
 using DssHarness.Core.Execution;
 using DssHarness.Core.Platform;
-using DssHarness.Core.Worktrees;
 
 namespace DssHarness.Core.Hosts;
 
-/// <summary>How long a host's agent waits on the machine that asked, and on what it started for that machine.</summary>
+/// <summary>How a host's agent counts the beat of the machine that asked, and the time between its looks at it.</summary>
 public sealed record HostAgentPatience
 {
     /// <summary>What a request's beat seconds are counted in: a second.</summary>
@@ -25,26 +24,6 @@ public sealed record HostAgentPatience
     /// <see cref="Clock"/> itself.
     /// </summary>
     public Func<TimeSpan, CancellationToken, Task> Pause { get; init; } = Task.Delay;
-
-    /// <summary>
-    /// How long what a request started is given to stop once it is cancelled, before the agent ends it and itself: long
-    /// enough for a build tool to be stopped and its output read to the end, and short beside any leg.
-    /// </summary>
-    public TimeSpan Unwind { get; init; } = TimeSpan.FromSeconds(60);
-
-    /// <summary>
-    /// How long a command past its point of no return (<see cref="PointOfNoReturn"/>) is given instead: as long as the
-    /// command line gives one interrupted where it was typed, which goes on to finish what it began and, where it cannot,
-    /// stops shortly before that time is up to say what is left. Cut off at <see cref="Unwind"/>, a deletion would be
-    /// ended part way with nothing said of what remains.
-    /// </summary>
-    public TimeSpan Finishing { get; init; } = WorktreeService.DefaultInterruptionGrace;
-
-    /// <summary>
-    /// How long the agent's words to a machine that may no longer be reading are given to be written: a line nobody reads
-    /// may never finish being written, and neither a cancellation nor the agent's end waits on one for longer.
-    /// </summary>
-    public TimeSpan Saying { get; init; } = TimeSpan.FromSeconds(2);
 }
 
 /// <summary>What a host's agent does when what it started will not stop.</summary>
@@ -55,6 +34,13 @@ public interface IHostAgentLastResort
     /// finish a sentence: what was ended, or why nothing could be. It never throws: the agent ends whatever this finds.
     /// </summary>
     Task<string> EndStartedAsync();
+
+    /// <summary>
+    /// Whether anything this process started still runs, as the process table says; <see langword="false"/> where the
+    /// table cannot say, since nothing is then known to run - and <see cref="EndStartedAsync"/> says why it listed none.
+    /// </summary>
+    /// <param name="cancellationToken">Stops the reading.</param>
+    Task<bool> AnyStartedRunsAsync(CancellationToken cancellationToken);
 
     /// <summary>Ends this process with <paramref name="exitCode"/>: it returns only where a test stands in for it.</summary>
     /// <param name="exitCode">The code this process ends with.</param>
@@ -106,33 +92,24 @@ public sealed record LastResortOutcome(IReadOnlyList<int> Ended, IReadOnlyList<i
 /// </remarks>
 /// <param name="processes">Reads what is running.</param>
 /// <param name="platform">Says which machine this is.</param>
-/// <param name="readingBudget">How long the process table is given to answer; <see cref="ReadingBudget"/> where none is given.</param>
-public sealed class HostAgentLastResort(IProcessTable processes, IHostPlatform platform, TimeSpan? readingBudget = null) : IHostAgentLastResort
+public sealed class HostAgentLastResort(IProcessTable processes, IHostPlatform platform) : IHostAgentLastResort
 {
-    /// <summary>How long the process table is given to answer: the agent ends whether or not it does.</summary>
-    public static readonly TimeSpan ReadingBudget = TimeSpan.FromSeconds(15);
-
     /// <summary>The program Windows runs a console in, as the process table names it.</summary>
     private const string ConsoleHost = "conhost";
 
     private readonly IProcessTable _processes = processes;
     private readonly IHostPlatform _platform = platform;
-    private readonly TimeSpan _readingBudget = readingBudget ?? ReadingBudget;
 
     /// <inheritdoc/>
+    /// <remarks>
+    /// The process table is read to its end, however long it takes to answer: a table that never answers is the system's
+    /// own fault, and the agent's own stop - which led here - stands over it.
+    /// </remarks>
     public async Task<string> EndStartedAsync()
     {
-        using var budget = new CancellationTokenSource(_readingBudget);
-
         try
         {
-            return (await EndStartedByAsync(_processes, _platform, Environment.ProcessId, budget.Token).ConfigureAwait(false)).Said;
-        }
-        catch (OperationCanceledException)
-        {
-            var seconds = Math.Ceiling(_readingBudget.TotalSeconds).ToString(CultureInfo.InvariantCulture);
-
-            return new LastResortOutcome([], [], $"this machine's processes were not listed within {seconds} s").Said;
+            return (await EndStartedByAsync(_processes, _platform, Environment.ProcessId, CancellationToken.None).ConfigureAwait(false)).Said;
         }
         catch (Exception ex)
         {
@@ -140,6 +117,14 @@ public sealed class HostAgentLastResort(IProcessTable processes, IHostPlatform p
             // nothing ended, said as that, and the agent ends all the same.
             return new LastResortOutcome([], [], ex.Message).Said;
         }
+    }
+
+    /// <inheritdoc/>
+    public async Task<bool> AnyStartedRunsAsync(CancellationToken cancellationToken)
+    {
+        var reading = await _processes.ReadAsync(cancellationToken).ConfigureAwait(false);
+
+        return reading.Degraded is null && StartedBy(reading, _platform, Environment.ProcessId).Any();
     }
 
     /// <inheritdoc/>
@@ -183,15 +168,10 @@ public sealed class HostAgentLastResort(IProcessTable processes, IHostPlatform p
             return new LastResortOutcome([], [], degraded);
         }
 
-        var parentStarted = reading.Processes.FirstOrDefault(process => process.Id == parent)?.StartedUtc;
-        var itsConsole = platform.Current == PlatformId.Windows;
         var ended = new List<int>();
         var left = new List<int>();
 
-        foreach (var child in reading.Processes
-            .Where(process => process.ParentId == parent && process.Id != parent && !(process.StartedUtc < parentStarted))
-            .Where(process => !(itsConsole && string.Equals(process.Name, ConsoleHost, StringComparison.OrdinalIgnoreCase)))
-            .OrderBy(process => process.Id))
+        foreach (var child in StartedBy(reading, platform, parent))
         {
             try
             {
@@ -212,5 +192,20 @@ public sealed class HostAgentLastResort(IProcessTable processes, IHostPlatform p
         }
 
         return new LastResortOutcome(ended, left, null);
+    }
+
+    /// <summary>
+    /// The processes <paramref name="reading"/> lists as started by <paramref name="parent"/>, in the order of their ids:
+    /// never one that started before it did, nor the console it runs in (see <see cref="EndStartedByAsync"/>).
+    /// </summary>
+    private static IEnumerable<SampledProcess> StartedBy(ProcessTableReading reading, IHostPlatform platform, int parent)
+    {
+        var parentStarted = reading.Processes.FirstOrDefault(process => process.Id == parent)?.StartedUtc;
+        var itsConsole = platform.Current == PlatformId.Windows;
+
+        return reading.Processes
+            .Where(process => process.ParentId == parent && process.Id != parent && !(process.StartedUtc < parentStarted))
+            .Where(process => !(itsConsole && string.Equals(process.Name, ConsoleHost, StringComparison.OrdinalIgnoreCase)))
+            .OrderBy(process => process.Id);
     }
 }

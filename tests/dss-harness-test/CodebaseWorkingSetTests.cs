@@ -267,18 +267,25 @@ public sealed class CodebaseWorkingSetTests
         Assert.Equal([twice, wordy], both.Served);
     }
 
+    /// <summary>
+    /// A step that touched fifty thousand nodes keeps every one in its working set, in the order the set ranks them, and
+    /// leaves none out; the record reads as one, however many it holds. Red with the working set cut at its cap (MostNodes).
+    /// </summary>
     [Fact]
-    public async Task AWorkingSet_KeepsAtMostItsCap_CountingTheRest()
+    public async Task AFiftyThousandNodeWorkingSet_IsKeptWhole()
     {
+        const int Touched = 50_000;
         using var tree = await CodebaseContextPackTests.ShopAsync();
         var view = await ViewAsync(tree);
-        GraphStepLine[] graph = [new GraphCallLine("node", GraphToolOutcome.Answered, [.. Enumerable.Range(0, CodebaseWorkingSet.MostNodes + 5).Select(at => $"gone:{at:D3}")], [], [])];
+        GraphStepLine[] graph = [new GraphCallLine("node", GraphToolOutcome.Answered, [.. Enumerable.Range(0, Touched).Select(at => $"gone:{at:D5}")], [], [])];
 
         var set = CodebaseWorkingSet.Make(view, [], graph, tree.Harness.FileSystem, tree.Harness.Platform.PathComparison);
 
-        Assert.Equal(CodebaseWorkingSet.MostNodes, set.Nodes.Count);
-        Assert.Equal(5, set.LeftOut);
-        Assert.Equal("gone:000", set.Nodes[0].Id);
+        Assert.Equal(Touched, set.Nodes.Count);
+        Assert.Equal(0, set.LeftOut);
+        Assert.Equal("gone:00000", set.Nodes[0].Id);
+        Assert.Equal($"gone:{Touched - 1:D5}", set.Nodes[^1].Id);
+        Assert.Null(set.Problem());
     }
 
     [Fact]
@@ -298,7 +305,7 @@ public sealed class CodebaseWorkingSetTests
         Assert.Equal("'a' is held, and named by its handle, its file and its lines", new CodebaseWorkingSet([held with { End = 0 }]).Problem());
         Assert.Equal("'a' is in the working set twice", new CodebaseWorkingSet([held, held]).Problem());
         Assert.Equal("a count is never below 0", new CodebaseWorkingSet([held], Unplaced: -1).Problem());
-        Assert.Equal("a working set keeps at most 200 nodes", new CodebaseWorkingSet([.. Enumerable.Range(0, 201).Select(at => held with { Id = $"n{at}" })]).Problem());
+        Assert.Null(new CodebaseWorkingSet([.. Enumerable.Range(0, 201).Select(at => held with { Id = $"n{at}" })]).Problem());
     }
 
     [Fact]
@@ -336,18 +343,36 @@ public sealed class CodebaseWorkingSetTests
         Assert.Equal(Hashed, (line with { Wrote = new GraphWrittenLines("src/a.cs", 1, 2, "0123abc") }).Problem());
     }
 
+    /// <summary>
+    /// The seeds of working sets are each node once, in the order given, edited where any set says so and used as often
+    /// as every set says it was touched together; no node gone is one - and a node touched more is the heavier seed, an
+    /// edited one above every one that was not.
+    /// </summary>
     [Fact]
-    public void TheSeedsOfWorkingSets_AreEachNodeOnceInTheOrderGiven_EditedWhereAnySaysSo_AndNoNodeGone()
+    public async Task TheSeedsOfWorkingSets_AreEachNodeOnceInTheOrderGiven_EditedWhereAnySaysSo_WeighedByUse_AndNoNodeGone()
     {
-        var read = new WorkingSetNode("a", [WorkingSetUses.Read], 1, "aaaaaa", "a.cs", 1, 1);
+        var read = new WorkingSetNode("a", [WorkingSetUses.Read], 3, "aaaaaa", "a.cs", 1, 1);
         var edited = new WorkingSetNode("a", [WorkingSetUses.Edited], 1, "aaaaaa", "a.cs", 1, 1);
         var other = new WorkingSetNode("b", [WorkingSetUses.Found], 1, "bbbbbb", "b.cs", 1, 1);
         var gone = new WorkingSetNode("c", [WorkingSetUses.Edited], 1, Gone: true);
 
         Assert.Equal(
-            [new ContextPackWorked("a", Edited: true), new ContextPackWorked("b", Edited: false)],
+            [new ContextPackWorked("a", Edited: true) { Uses = 4 }, new ContextPackWorked("b", Edited: false)],
             CodebaseWorkingSet.Seeds([new CodebaseWorkingSet([read, gone]), new CodebaseWorkingSet([other, edited])]));
-        Assert.Equal([new ContextPackWorked("a", Edited: true)], CodebaseWorkingSet.Seeds([new CodebaseWorkingSet([edited]), new CodebaseWorkingSet([read])]));
+        Assert.Equal([new ContextPackWorked("a", Edited: true) { Uses = 4 }], CodebaseWorkingSet.Seeds([new CodebaseWorkingSet([edited]), new CodebaseWorkingSet([read])]));
+
+        using var tree = await CodebaseContextPackTests.TreeAsync(
+            ("src/A.cs", "public class A\n{\n    public void One()\n    {\n    }\n}\n"),
+            ("src/B.cs", "public class B\n{\n    public void Two()\n    {\n    }\n}\n"),
+            ("src/C.cs", "public class C\n{\n    public void Three()\n    {\n    }\n}\n"));
+        var view = await ViewAsync(tree);
+        var once = Id(view, "A.One");
+        var often = Id(view, "B.Two");
+        var three = Id(view, "C.Three");
+
+        var pack = CodebaseContextPack.Make(view, new ContextPackRequest("nothing here matches", _ => true) { Worked = [new(once, Edited: false), new(often, Edited: false) { Uses = 9 }, new(three, Edited: true)] });
+
+        Assert.Equal([three, often, once], pack.Nodes);
     }
 
     [Fact]
@@ -490,7 +515,7 @@ public sealed class CodebaseWorkingSetTests
         var seeds = FlowWorkingSets.SeedsOf(tree.Store, tree.Run, [new FlowWorkedFrom("implement", "a1"), new FlowWorkedFrom("never-ran", null)]);
         var pack = CodebaseContextPack.Make(view, new ContextPackRequest("Make the tests pass.", _ => true) { Worked = seeds });
 
-        Assert.Equal([new ContextPackWorked(Id(view, "Shop.Pricing.LoyaltyDiscount.Apply"), Edited: true)], seeds);
+        Assert.Equal([(Id(view, "Shop.Pricing.LoyaltyDiscount.Apply"), true)], seeds.Select(seed => (seed.Id, seed.Edited)));
         Assert.Contains(pack.Text.Split('\n'), line => line.StartsWith(view.Card(seeds[0].Id).Handle + " ", StringComparison.Ordinal) && line.EndsWith(" | edited before", StringComparison.Ordinal));
         Assert.Contains("; packed from the task: 1 working set node(s)", pack.Text.Split('\n')[0], StringComparison.Ordinal);
     }

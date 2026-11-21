@@ -114,6 +114,12 @@ public sealed record HarnessLayout(string RepositoryRoot, string MainCheckoutRoo
     public const string MutationRecordDirectoryName = "mutation-record";
 
     /// <summary>
+    /// Where a file on its way into this machine's tree is kept in pieces until the whole of it has arrived: a directory for
+    /// each file, named by the hash of its path, removed once the file is placed.
+    /// </summary>
+    public const string SyncPiecesDirectoryName = "sync-pieces";
+
+    /// <summary>
     /// Name of the directory a mutation worker keeps the dependency sources its leg's own build fetched in, one
     /// directory to each: never carried by a sync, nor deleted by one, nor removed by a build from clean.
     /// </summary>
@@ -175,6 +181,22 @@ public sealed record HarnessLayout(string RepositoryRoot, string MainCheckoutRoo
 
     /// <summary>The directory at the root of a tree where every orchestrator keeps what it holds.</summary>
     public const string OrchestratorsDirectoryName = ".orchestrators";
+
+    /// <summary>
+    /// The directory, in each orchestrator's under the orchestrators', where every temporary directory a run's launches
+    /// and their children keep is put away with the run: one directory for each launch, made with it and held for the
+    /// run's life, and taken away whole with the run's directory - so a run's temp never lands in the user's own places,
+    /// and all of it is there to be looked at for as long as the run is.
+    /// </summary>
+    public const string OrchestratorTempDirectoryName = "temp";
+
+    /// <summary>
+    /// The directory, in each orchestrator's under the orchestrators', where a run's artifacts are kept: made with the
+    /// run, held for its life - read and copied wherever they are asked for while it runs - and taken away with the
+    /// run's directory, which is the whole of the mechanism: what a run keeps as artifacts is in its directory until it
+    /// goes, so copying them elsewhere is copying a directory that is there.
+    /// </summary>
+    public const string OrchestratorArtifactsDirectoryName = "artifacts";
 
     /// <summary>
     /// The directory at the root of a tree where its mutation workers are kept: each a copy of the tree a sweep of one of
@@ -287,8 +309,8 @@ public sealed record HarnessLayout(string RepositoryRoot, string MainCheckoutRoo
     /// Where the tool's own state is, relative to a tree's root with forward separators: the root
     /// slots (<see cref="RootSlots"/>), the former ones (<see cref="FormerRootSlots"/>), and what it keeps under the
     /// harness directory - its runs,
-    /// its hosts' copies record, its mutation record, a worker's dependency sources, the run lock
-    /// and a synced copy's marker. One list, from the names this layout already holds, so whatever
+    /// its hosts' copies record, its mutation record, a worker's dependency sources, the pieces of a
+    /// file a sync is bringing in, the run lock and a synced copy's marker. One list, from the names this layout already holds, so whatever
     /// refuses a write to the tool's own state reads the layout and not a list of its own: a place
     /// the layout gains joins this the day it is added.
     /// </summary>
@@ -306,6 +328,7 @@ public sealed record HarnessLayout(string RepositoryRoot, string MainCheckoutRoo
             HostCopiesDirectoryRelative,
             MutationRecordDirectoryRelative,
             DependencySourcesDirectoryRelative,
+            SyncPiecesDirectoryRelative,
             DirectoryName + "/" + LockFileName,
             DirectoryName + "/" + SyncedCopyMarkerName,
         ];
@@ -582,6 +605,9 @@ public sealed record HarnessLayout(string RepositoryRoot, string MainCheckoutRoo
 
     /// <summary>A mutation worker's dependency sources directory, relative to the worker's root, with forward separators.</summary>
     public const string DependencySourcesDirectoryRelative = DirectoryName + "/" + DependencySourcesDirectoryName;
+
+    /// <summary>Where a file on its way into a tree is kept in pieces, relative to the tree's root, with forward separators.</summary>
+    public const string SyncPiecesDirectoryRelative = DirectoryName + "/" + SyncPiecesDirectoryName;
 
     /// <summary>
     /// Where the values actions read live, resolved against the main checkout because they are

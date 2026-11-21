@@ -7,7 +7,9 @@ using DssHarness.Core.Agents.Runtime;
 using DssHarness.Core.Configuration;
 using DssHarness.Core.Execution;
 using DssHarness.Core.FileSystem;
+using DssHarness.Core.Json;
 using DssHarness.Core.Orchestration;
+using DssHarness.Core.Waiting;
 
 namespace DssHarness.Core.Agents.Loop;
 
@@ -131,8 +133,14 @@ public sealed class ToolLoop(
     /// <summary>How many times in a row an answer cut off at its length is nudged on before the run ends <see cref="AgentRunStatus.Truncated"/>.</summary>
     public const int MostNudges = 2;
 
-    /// <summary>How many paused turns in a row end the run <see cref="AgentRunStatus.Failed"/>.</summary>
-    public const int MostPausesInARow = 10;
+    /// <summary>
+    /// What a turn the provider paused is waited for as (<see cref="Retrying"/>): each pause a cause that passes, told, and
+    /// the turn sent again at once for as long as the provider pauses it, within the step's own bounds.
+    /// </summary>
+    public const string PausedTurn = "the turn the provider paused";
+
+    /// <summary>Why a paused turn is sent again, as each pause is told after <see cref="PausedTurn"/>.</summary>
+    public const string PausedAgain = "it is sent again with nothing added, and goes on where it stopped";
 
     /// <summary>Where a turn its request held to a schema was cut off, as the run says it: thrown away, never nudged on.</summary>
     public const string WhileHeld = "while it wrote an answer held to its schema";
@@ -336,7 +344,6 @@ public sealed class ToolLoop(
         private int _counted;
         private int _retries;
         private int _nudges;
-        private int _pauses;
         private bool _inTurn;
 
         // Whether the provider began an answer of the model asked, or answered a request: the conversation is begun, and a
@@ -484,19 +491,9 @@ public sealed class ToolLoop(
                     return Ended(AgentRunStatus.Cancelled, AgentTurnInterrupt.Cut);
                 }
 
-                if (_deadline!.HasPassed())
+                if (Bounded() is { } bounded)
                 {
-                    return TimedOut();
-                }
-
-                if (_searchUncounted is { } uncountedSearch)
-                {
-                    return uncountedSearch;
-                }
-
-                if (run.Limits.MaxBudgetUsd is { } budget && _cost >= budget)
-                {
-                    return Spent(budget);
+                    return bounded;
                 }
 
                 if (!_inTurn)
@@ -510,7 +507,7 @@ public sealed class ToolLoop(
                     await BeginTurnAsync().ConfigureAwait(false);
                 }
 
-                var sent = await SendAsync(stop, null).ConfigureAwait(false);
+                var sent = await AnswerAsync(stop, null).ConfigureAwait(false);
 
                 if (sent.Left)
                 {
@@ -617,7 +614,6 @@ public sealed class ToolLoop(
             _handing = true;
             _jsonAlone = false;
             _paused.Clear();
-            _pauses = 0;
             Forget();
 
             var asked = await run.Handoff.WhenAsked.ConfigureAwait(false);
@@ -652,7 +648,7 @@ public sealed class ToolLoop(
                     await BeginTurnAsync().ConfigureAwait(false);
                 }
 
-                var sent = await SendAsync(stop, bound).ConfigureAwait(false);
+                var sent = await AnswerAsync(stop, bound).ConfigureAwait(false);
 
                 if (sent.Left)
                 {
@@ -750,14 +746,13 @@ public sealed class ToolLoop(
 
         /// <summary>
         /// What becomes of a turn the agent goes on from - an answer cut off at its length, a turn cut off while it called a
-        /// tool, a turn the provider paused - in every turn alike, the handoff's among them; null for every other turn.
+        /// tool - in every turn alike, the handoff's among them; null for every other turn. A turn the provider paused is
+        /// gone on from where it was answered (<see cref="AnswerAsync"/>), and never comes here.
         /// </summary>
         /// <param name="turn">The turn.</param>
         /// <param name="held">Whether its request held the answer to a schema (<see cref="HeldToSchema"/>).</param>
         private async Task<Went?> GoesOnAsync(ChatTurn turn, bool held)
         {
-            _pauses = turn.Stop == ChatStop.Paused ? _pauses + 1 : 0;
-
             switch (turn.Stop)
             {
                 case ChatStop.CutOff when turn.Calls.Count == 0 && Says(turn) && !held:
@@ -799,22 +794,66 @@ public sealed class ToolLoop(
                     return Went.On;
                 }
 
-                case ChatStop.Paused:
-                {
-                    // Sent again with nothing added, as the same turn - the model goes on where it paused - and stored with
-                    // what goes on from it: a paused message is no point where the history is whole.
-                    await Emit(Assistant(turn)).ConfigureAwait(false);
-                    _paused.Add(turn.Message);
-                    _said.Append(turn.Text);
-
-                    return _pauses >= MostPausesInARow
-                        ? new Went(new Stuck(AgentRunStatus.Failed, $"the provider paused the turn {_pauses} times in a row"))
-                        : Went.On;
-                }
-
                 default:
                     return null;
             }
+        }
+
+        /// <summary>
+        /// Sends the conversation (<see cref="SendAsync"/>) and goes on as the same turn for as long as the provider pauses
+        /// it - a cause that passes (<see cref="Retrying"/>), never counted: each paused answer counted, kept with what goes
+        /// on from it, told as <see cref="PausedTurn"/> with how long the turn has waited, and sent again with nothing
+        /// added, the model going on where it paused. Only the step's own bounds end it: the pause or the person's cut, the
+        /// step's time and the handoff's bound, which the next request meets, and the budget the paused answers spent,
+        /// which the loop's top says.
+        /// </summary>
+        /// <param name="stop">The hard stop, which abandons the request and ends the run.</param>
+        /// <param name="bound">The handoff's bound, in the handoff turn; none otherwise.</param>
+        private async Task<Sent> AnswerAsync(CancellationToken stop, ClockLimit? bound)
+        {
+            List<string> told = [];
+            var watch = new RetryWatch(PausedTurn, waited => told.Add(waited.Line()), FirstWait, Bound: null, loop._clock);
+
+            var answered = await Retrying.RunAsync<Sent>(
+                async (_, _) =>
+                {
+                    // Each pause is told before the request that goes on from it.
+                    foreach (var line in told)
+                    {
+                        await Emit(new Notice(line)).ConfigureAwait(false);
+                    }
+
+                    told.Clear();
+
+                    var sent = await SendAsync(stop, bound).ConfigureAwait(false);
+
+                    if (sent.Turn is not { Stop: ChatStop.Paused } paused)
+                    {
+                        return new RetryTry<Sent>.Done(sent);
+                    }
+
+                    if (await CountedAsync(paused).ConfigureAwait(false) is { } uncounted)
+                    {
+                        return new RetryTry<Sent>.Done(new Sent(Ending: uncounted));
+                    }
+
+                    // Stored with what goes on from it: a paused message is no point where the history is whole.
+                    await Emit(Assistant(paused)).ConfigureAwait(false);
+                    _paused.Add(paused.Message);
+                    _said.Append(paused.Text);
+
+                    // A bound the paused answer met is the loop's top's to say, as every other: the request is left.
+                    return !_handing && Bounded() is not null
+                        ? new RetryTry<Sent>.Done(new Sent(Left: true))
+                        : new RetryTry<Sent>.Passing(PausedAgain, TimeSpan.Zero);
+                },
+                watch,
+                stop).ConfigureAwait(false);
+
+            // No try fails and no bound is given: a run of tries ends with an answer, or by the hard stop, which ends the run.
+            stop.ThrowIfCancellationRequested();
+
+            return answered.Value!;
         }
 
         /// <summary>
@@ -837,7 +876,7 @@ public sealed class ToolLoop(
                     return new Sent(Left: true);
                 }
 
-                var request = new ChatRequest(Now.Model, Now.Effort, Conversation.SystemPrompt, Conversation.Tools, [.. Conversation.Messages(), .. _pending, .. _paused], _maxTokens, Now.Key, _schemaRefused ? null : _gate?.Envelope, Credit: _goesOn, ShortenedBefore: Conversation.ShortenedBefore, JsonAlone: _jsonAlone, CreditToken: _credit, FirstEffort: _firstEffort);
+                var request = new ChatRequest(Now.Model, Now.Effort, Conversation.SystemPrompt, Conversation.Tools, [.. Conversation.Messages(), .. _pending, .. _paused], _maxTokens, Now.Key, _schemaRefused ? null : _gate?.Envelope, Credit: _goesOn, ContextTokens: Now.Terms!.Model.ContextTokens, JsonAlone: _jsonAlone, CreditToken: _credit, FirstEffort: _firstEffort);
 
                 // The handoff turn is held to its bound, not to the step's time: it counts against none of the step's
                 // turns, budget or time.
@@ -915,14 +954,6 @@ public sealed class ToolLoop(
                                         break;
                                     case ChatPart.Notice notice:
                                         await Emit(new Notice(Masked(notice.Message))).ConfigureAwait(false);
-                                        break;
-                                    case ChatPart.Shortened shortened:
-                                        // The first point holds: a provider that says another later is sending what it began with.
-                                        if (Conversation.Shorten(shortened.Before))
-                                        {
-                                            await Emit(new Notice($"The conversation {_session} is sent shortened before message {shortened.Before.ToString(CultureInfo.InvariantCulture)} from now on, to keep it within the context of '{Now.Terms!.Model.Code}'; what is stored stays whole.")).ConfigureAwait(false);
-                                        }
-
                                         break;
                                     case ChatPart.Answered done:
                                         answered = done.Turn;
@@ -1457,7 +1488,7 @@ public sealed class ToolLoop(
         {
             try
             {
-                return JsonNode.Parse(text);
+                return JsonDepth.ParseNode(text);
             }
             catch (JsonException)
             {
@@ -1512,13 +1543,15 @@ public sealed class ToolLoop(
         /// model and with the key serving the run then, through that key's lane as every request of the conversation goes
         /// (<see cref="LaneTurnAsync"/>: a hold past the longest wait fails the part at once, naming the limit; a shorter one
         /// waited, said as it is waited), a 429 it meets holding the lane's waiters it covers, and what it used counted at
-        /// once, at that entry's prices, to that model's part on that key. A request that never answers in time, or that
-        /// fails on the way, is a part that failed, saying why; the run's stop and the turn's cut go on as stops.
+        /// once, at that entry's prices, to that model's part on that key. The searches the provider ran of the one ask -
+        /// as many as it chose to make - are carried out with the part, for the step's bound counts each of them. A request
+        /// that never answers in time, or that fails on the way, is a part that failed, saying why; the run's stop and the
+        /// turn's cut go on as stops.
         /// </summary>
         /// <param name="native">The provider's own search, which the run carries.</param>
         /// <param name="query">The query, as the agent wrote it.</param>
         /// <param name="cancellationToken">The run's stop and the turn's cut.</param>
-        private async Task<Web.Search.WebSearchPart> NativeSearchAsync(IAgentNativeSearch native, string query, CancellationToken cancellationToken)
+        private async Task<AgentNativeAnswer> NativeSearchAsync(IAgentNativeSearch native, string query, CancellationToken cancellationToken)
         {
             var model = Now.Model;
             var key = Now.Key!;
@@ -1530,7 +1563,7 @@ public sealed class ToolLoop(
 
                 if (held is not null)
                 {
-                    return native.Failed(query, held.Message);
+                    return Failed(native, query, held.Message);
                 }
 
                 AgentNativeSearched searched;
@@ -1560,14 +1593,22 @@ public sealed class ToolLoop(
                     }
                 }
 
-                return searched.Part;
+                // The searches the provider ran, as its usage counted them - the one count both the cost and the step's bound read.
+                return new AgentNativeAnswer(searched.Part, (int)Math.Min(searched.Used.Searches, int.MaxValue));
             }
             catch (Exception ex) when (ex is IOException or System.Net.Http.HttpRequestException or JsonException
                 || (ex is OperationCanceledException && !cancellationToken.IsCancellationRequested))
             {
-                return native.Failed(query, ex is OperationCanceledException ? "the provider did not answer the search in time" : ex.Message);
+                return Failed(native, query, ex is OperationCanceledException ? "the provider did not answer the search in time" : ex.Message);
             }
         }
+
+        /// <summary>
+        /// The failed part of a search of <paramref name="query"/> that names no searches: the ask was made - its request
+        /// the step's to count - and no search of it is known to have run, whatever the provider did before it failed.
+        /// </summary>
+        private static AgentNativeAnswer Failed(IAgentNativeSearch native, string query, string why)
+            => new(native.Failed(query, why), 0);
 
         /// <summary>
         /// Counts what a request used - the run's totals, the model's part, the cost at the model's prices - and holds the
@@ -1799,6 +1840,16 @@ public sealed class ToolLoop(
         private AgentRunResult Ended(AgentRunStatus status, string error) => AgentEndings.Ended(status, error, run.Mask);
 
         private AgentRunResult TimedOut() => Ended(AgentRunStatus.TimedOut, $"the step ran past its {run.Limits.MaxDuration}");
+
+        /// <summary>
+        /// How the run ends where one of the step's bounds is met between its requests - past its time, a search whose cost
+        /// could not be counted, its budget spent, in that order; null where none is.
+        /// </summary>
+        private AgentRunResult? Bounded()
+            => _deadline!.HasPassed() ? TimedOut()
+                : _searchUncounted is { } uncountedSearch ? uncountedSearch
+                : run.Limits.MaxBudgetUsd is { } budget && _cost >= budget ? Spent(budget)
+                : null;
 
         private AgentRunResult Spent(decimal budget)
             => Ended(AgentRunStatus.BudgetSpent, string.Create(CultureInfo.InvariantCulture, $"the step spent {_cost:0.######} of its {budget} {AgentPrices.BudgetCurrency} budget"));

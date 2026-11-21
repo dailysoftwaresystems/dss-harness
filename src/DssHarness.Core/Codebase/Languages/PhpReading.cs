@@ -1,3 +1,4 @@
+using System.Globalization;
 using DssHarness.Core.Codebase.Languages.Scanning;
 
 namespace DssHarness.Core.Codebase.Languages;
@@ -27,12 +28,14 @@ namespace DssHarness.Core.Codebase.Languages;
 /// named by its description, the calls it makes its tests.
 /// What the file's top does outside its declarations is the calls of its <c>(script)</c> node.
 /// </para>
+/// <para>
+/// Nothing it reads nests it past its stack, however deep the text nests: a block's statements and a type's members are
+/// walks on a stack of their own (<see cref="ScanStack"/>), and the code a body runs - a string's interpolations, the
+/// arguments of an attribute, a test call's own - runs of code on another, each read in the order the text writes it.
+/// </para>
 /// </remarks>
 internal sealed class PhpReading
 {
-    /// <summary>What the reader reads code nested in no deeper than <see cref="ScanFrame.MostDepth"/> of, as its dynamic mark says it.</summary>
-    private const string Nesting = "interpolations and test groups";
-
     /// <summary>The words a parenthesis follows that call nothing: PHP's statements and the constructs that read like calls.</summary>
     private static readonly HashSet<string> NoCalls = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -63,6 +66,17 @@ internal sealed class PhpReading
     {
         "int", "integer", "bool", "boolean", "float", "double", "real", "string", "binary", "array", "object", "unset",
     };
+
+    /// <summary>
+    /// The words no use is of: those no call is, the types the language declares, a cast's, an alternative syntax's ends
+    /// (<c>endif</c>, <c>endforeach</c> and the rest) and the magic constants, which the language holds.
+    /// </summary>
+    private static readonly HashSet<string> NoUses = new(
+        [
+            .. NoCalls, .. Builtins, .. Casts, "endif", "endforeach", "endfor", "endwhile", "endswitch", "enddeclare",
+            "__CLASS__", "__DIR__", "__FILE__", "__FUNCTION__", "__LINE__", "__METHOD__", "__NAMESPACE__", "__TRAIT__", "__PROPERTY__",
+        ],
+        StringComparer.OrdinalIgnoreCase);
 
     /// <summary>The words that may stand before a class's declaration.</summary>
     private static readonly HashSet<string> TypeModifiers = new(StringComparer.OrdinalIgnoreCase) { "abstract", "final", "readonly" };
@@ -95,26 +109,35 @@ internal sealed class PhpReading
     private readonly bool _testFile;
     private readonly ScanExtract _extract = new();
 
+    /// <summary>The walks of the file's statements, members and hooks.</summary>
+    private readonly ScanStack _walks = new();
+
+    /// <summary>
+    /// The reference each member a receiver's chain may go on from is used by, by its text and its token: a member read
+    /// before an arrow (<c>$this-&gt;a-&gt;</c>), whose reference the next member's chain is linked to.
+    /// </summary>
+    private readonly Dictionary<(ScannedText Scan, int At), int> _chained = [];
+
     /// <summary>The classes, and the namespaces, the file's <c>use</c> declarations name, by the name each is reached by - PHP's names of them are alike whatever their case.</summary>
-    private readonly Dictionary<string, string> _classes = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, QualifiedName> _classes = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>The functions the file's <c>use function</c> declarations name, by the name each is reached by.</summary>
-    private readonly Dictionary<string, string> _functions = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, QualifiedName> _functions = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>The paths the file includes, each imported once.</summary>
     private readonly HashSet<string> _included = new(StringComparer.Ordinal);
 
     /// <summary>The namespace the file's code is in, as the model names it; <see langword="null"/> in the global one.</summary>
-    private string? _namespace;
+    private QualifiedName? _namespace;
 
     /// <summary>The key of the node the file's top code is the calls of, once made.</summary>
-    private string? _scriptKey;
+    private QualifiedName? _scriptKey;
 
     /// <summary>Reads <paramref name="text"/>, the file <paramref name="path"/>.</summary>
     /// <param name="language">The implementation's name, which prefixes every id.</param>
     /// <param name="path">The file's path.</param>
     /// <param name="text">Its text.</param>
-    public PhpReading(string language, string path, string text)
+    public PhpReading(string language, string path, CodeText text)
     {
         _text = PhpLexer.Scan(text);
         _scan = _text.Scan;
@@ -127,7 +150,7 @@ internal sealed class PhpReading
     /// <summary>The file's extract.</summary>
     public FileExtract Read()
     {
-        ScanFrame.Walk(0, _scan.Count, at => Statement(at, _scan.Count, ScanFrame.Top));
+        _walks.Walk(0, _scan.Count, at => Statement(at, _scan.Count, ScanFrame.Top));
         _extract.Generated = ScanComments.Generated(_scan);
         return _extract.Build();
     }
@@ -222,7 +245,7 @@ internal sealed class PhpReading
             to = past = NextNamespace(from, end);
         }
 
-        _namespace = name;
+        _namespace = name is null ? null : QualifiedName.Of(name);
         _classes.Clear();
         _functions.Clear();
         var frame = ScanFrame.Top.Deeper();
@@ -240,7 +263,7 @@ internal sealed class PhpReading
             frame = ScanFrame.Top.Inside(name, name, key, null);
         }
 
-        ScanFrame.Walk(from, to, index => Statement(index, to, frame));
+        _walks.Walk(from, to, index => Statement(index, to, frame));
         return past;
     }
 
@@ -265,10 +288,16 @@ internal sealed class PhpReading
     /// <summary>
     /// An <c>if</c> at the top or in a namespace, and its <c>elseif</c>s and <c>else</c>: what its conditions call the
     /// script's, and each block read as statements, so a function or a class declared in one - as one is where it is not
-    /// yet - is declared.
+    /// yet - is declared. Its branches are found first, then read in turn as a walk of their own - each condition's calls,
+    /// then its block's statements, a walk on the stack - so whatever the blocks nest, each is read in the order the text
+    /// writes it.
     /// </summary>
     private int Conditional(int at, int end, ScanFrame frame)
     {
+        // Each piece in order: a condition's code, a block's statements, or a statement alone that ends it.
+        var pieces = new List<(int From, int To, bool Block)>();
+        int past;
+
         while (true)
         {
             var open = _scan.Next(at);
@@ -276,7 +305,7 @@ internal sealed class PhpReading
             if (_scan.Is(open, "("))
             {
                 var close = Math.Min(_scan.Bounds(open, end).Inner, end);
-                Calls(_text, open + 1, close, null, new Locals(), null, depth: 0);
+                pieces.Add((open + 1, close, Block: false));
                 at = close;
                 open = _scan.Next(close);
             }
@@ -284,35 +313,51 @@ internal sealed class PhpReading
             if (!_scan.Is(open, "{"))
             {
                 // A statement alone, or a block the alternative syntax writes: code of the script's, past its condition.
-                return Code(Math.Min(at + 1, end), end);
+                var start = Math.Min(at + 1, end);
+                past = _scan.StatementEnd(start, end);
+                pieces.Add((start, past, Block: false));
+                break;
             }
 
-            var (inner, past) = _scan.Bounds(open, end);
+            var (inner, after) = _scan.Bounds(open, end);
+            pieces.Add((open + 1, inner, Block: true));
 
-            if (frame.Depth < ScanFrame.MostDepth)
+            if (IsWord(_scan, after, "elseif") || IsWord(_scan, after, "else"))
             {
-                ScanFrame.Walk(open + 1, inner, index => Statement(index, inner, frame.Deeper()));
-            }
-            else
-            {
-                _extract.Dynamic(_scan[open].Line, ScanFrame.TooDeepWhy);
-            }
-
-            if (IsWord(_scan, past, "elseif") || IsWord(_scan, past, "else"))
-            {
-                at = IsWord(_scan, past, "else") && IsWord(_scan, _scan.Next(past), "if") ? _scan.Next(past) : past;
+                at = IsWord(_scan, after, "else") && IsWord(_scan, _scan.Next(after), "if") ? _scan.Next(after) : after;
                 continue;
             }
 
-            return past;
+            past = after;
+            break;
         }
+
+        var inside = frame.Deeper();
+
+        _walks.Walk(0, pieces.Count, piece =>
+        {
+            var (from, to, block) = pieces[piece];
+
+            if (block)
+            {
+                _walks.Walk(from, to, index => Statement(index, to, inside));
+            }
+            else
+            {
+                Calls(_text, from, to, null, new Locals(), null);
+            }
+
+            return piece + 1;
+        });
+
+        return past;
     }
 
     /// <summary>Code at the top from <paramref name="start"/> to its statement's end: what it calls, the calls of the file's <c>(script)</c> node.</summary>
     private int Code(int start, int end)
     {
         var stop = _scan.StatementEnd(start, end);
-        Calls(_text, start, stop, null, new Locals(), null, depth: 0);
+        Calls(_text, start, stop, null, new Locals(), null);
         return stop;
     }
 
@@ -404,7 +449,7 @@ internal sealed class PhpReading
 
         if (kind == "function")
         {
-            _functions[reached] = name;
+            _functions[reached] = QualifiedName.Of(name);
         }
 
         if (name.LastIndexOf('.') is var dot and > 0)
@@ -429,7 +474,13 @@ internal sealed class PhpReading
             stop = scan.Opens(stop) ? Math.Min(scan.Past(stop), to) : stop + 1;
         }
 
-        var path = IncludedPath(scan, scan.Next(at), stop);
+        var path = IncludedPath(scan, scan.Next(at), stop, _path.Count(character => character == '/'), out var above);
+
+        if (above is { } levels)
+        {
+            _extract.Dynamic(line, $"an inclusion of a file outside the tree: dirname climbs {levels} directories, above the tree's root");
+            return stop;
+        }
 
         if (path is null)
         {
@@ -446,9 +497,20 @@ internal sealed class PhpReading
         return stop;
     }
 
-    /// <summary>The path the tokens from <paramref name="at"/> to <paramref name="stop"/> name from the file's directory, where the code writes it; empty where it is no file's; <see langword="null"/> where the code computes it.</summary>
-    private static string? IncludedPath(ScannedText scan, int at, int stop)
+    /// <summary>
+    /// The path the tokens from <paramref name="at"/> to <paramref name="stop"/> name from the file's directory, where the
+    /// code writes it - <c>dirname(__DIR__, n)</c> climbing any n - empty where it is no file's; <see langword="null"/> where
+    /// the code computes it, or where it climbs past the tree's root, with <paramref name="above"/> the levels it climbs.
+    /// </summary>
+    /// <param name="scan">The text.</param>
+    /// <param name="at">Where the path's code begins.</param>
+    /// <param name="stop">Where it ends.</param>
+    /// <param name="depth">How many directories deep the file is: the most a path from its directory climbs in the tree.</param>
+    /// <param name="above">How many directories the path climbs, where that is past the tree's root; none where it is not.</param>
+    private static string? IncludedPath(ScannedText scan, int at, int stop, int depth, out string? above)
     {
+        above = null;
+
         var tokens = scan.Code(at, stop).ToList();
 
         // include('x.php'): its parentheses.
@@ -470,13 +532,17 @@ internal sealed class PhpReading
         {
             var closeAt = tokens.IndexOf(scan.Match(tokens[1]));
 
+            // The levels as written, any number of them: one past the file's depth leaves the tree, however many past it.
+            var levels = closeAt == 5 && scan.Is(tokens[3], ",") ? scan.Text(tokens[4]) : null;
+
             if (closeAt == 3)
             {
                 climbs = 1;
             }
-            else if (closeAt == 5 && scan.Is(tokens[3], ",") && int.TryParse(scan.Text(tokens[4]), out var levels) && levels is > 0 and < 32)
+            else if (levels is { Length: > 0 } && levels.All(char.IsAsciiDigit) && levels.TrimStart('0').Length > 0)
             {
-                climbs = levels;
+                var digits = levels.TrimStart('0');
+                climbs = digits.Length > 9 ? int.MaxValue : int.Parse(digits, CultureInfo.InvariantCulture);
             }
 
             if (climbs < 0 || closeAt + 2 >= tokens.Count || !scan.Is(tokens[closeAt + 1], "."))
@@ -484,10 +550,16 @@ internal sealed class PhpReading
                 return null;
             }
 
+            if (climbs > depth)
+            {
+                above = climbs == int.MaxValue ? levels!.TrimStart('0') : climbs.ToString(CultureInfo.InvariantCulture);
+                return null;
+            }
+
             rest = closeAt + 2;
         }
 
-        if (tokens.Count != rest + 1 || scan[tokens[rest]].Kind != ScanTokenKind.Text || Unquoted(scan.Text(tokens[rest])) is not { } written)
+        if (tokens.Count != rest + 1 || scan.Value(tokens[rest]) is not { } written)
         {
             return null;
         }
@@ -496,22 +568,13 @@ internal sealed class PhpReading
         return joined.Contains("://", StringComparison.Ordinal) || joined.StartsWith('/') ? string.Empty : joined;
     }
 
-    /// <summary><paramref name="text"/>, a string, without its quotes; <see langword="null"/> where it is left open, holds an escape or an interpolation, or is a heredoc.</summary>
-    private static string? Unquoted(string text)
-        => text.Length >= 2 && text[0] is '\'' or '"' && text[^1] == text[0] && !text.Contains('\\', StringComparison.Ordinal) && !(text[0] == '"' && text.Contains('$', StringComparison.Ordinal))
-            ? text[1..^1]
-            : null;
-
     // ---- Attributes ----
 
     /// <summary>Past the attributes at <paramref name="at"/> - <c>#[A]</c>, <c>#[A(...), B]</c> - each named among <paramref name="marks"/> as <c>#[A]</c>.</summary>
     private int Attributes(int at, int end, List<string>? marks)
     {
-        while (at < end && _scan.Is(at, "#") && _scan.Is(_scan.Next(at), "[") && _scan[_scan.Next(at)].Start == _scan[at].End)
+        foreach (var (open, inner, past) in AttributeLists(_scan, at, end))
         {
-            var open = _scan.Next(at);
-            var (inner, past) = _scan.Bounds(open, end);
-
             foreach (var (pieceStart, _) in ScanCalls.Split(_scan, open + 1, inner, null))
             {
                 if (_scan.IsName(pieceStart))
@@ -524,6 +587,76 @@ internal sealed class PhpReading
         }
 
         return at;
+    }
+
+    /// <summary>The attribute lists written at <paramref name="at"/> one after another - <c>#[A]</c>, <c>#[A(...), B]</c> - each by its bracket, where its inside ends, and where the text goes on past it.</summary>
+    private static List<(int Open, int Inner, int Past)> AttributeLists(ScannedText scan, int at, int end)
+    {
+        var lists = new List<(int, int, int)>();
+
+        while (at < end && scan.Is(at, "#") && scan.Is(scan.Next(at), "[") && scan[scan.Next(at)].Start == scan[at].End)
+        {
+            var open = scan.Next(at);
+            var (inner, past) = scan.Bounds(open, end);
+            lists.Add((open, inner, past));
+            at = past;
+        }
+
+        return lists;
+    }
+
+    /// <summary>
+    /// What the arguments of the attributes from <paramref name="at"/> to <paramref name="end"/> read and hold -
+    /// <c>#[Route('/users')]</c> - as code of the node of <paramref name="key"/> they mark, the script's where none is
+    /// given; answers past them.
+    /// </summary>
+    private int AttributeArguments(InterpolatedText text, int at, int end, QualifiedName? key, QualifiedName? owner)
+    {
+        var (arguments, past) = AttributeArgumentsOf(text.Scan, at, end);
+
+        foreach (var (from, to) in arguments)
+        {
+            Calls(text, from, to, key, new Locals(), owner);
+        }
+
+        return past;
+    }
+
+    /// <summary>
+    /// Where the arguments of each attribute from <paramref name="at"/> to <paramref name="end"/> of
+    /// <paramref name="scan"/> are written - inside each one's parentheses - in order, and where the attributes end.
+    /// </summary>
+    private static (List<(int From, int To)> Arguments, int Past) AttributeArgumentsOf(ScannedText scan, int at, int end)
+    {
+        var arguments = new List<(int From, int To)>();
+
+        foreach (var (open, inner, past) in AttributeLists(scan, at, end))
+        {
+            foreach (var (pieceStart, pieceEnd) in ScanCalls.Split(scan, open + 1, inner, null))
+            {
+                if (ScanCalls.TopLevel(scan, pieceStart, pieceEnd, "(", null) is var opened and >= 0 && opened < pieceEnd)
+                {
+                    arguments.Add((opened + 1, scan.Bounds(opened, pieceEnd).Inner));
+                }
+            }
+
+            at = past;
+        }
+
+        return (arguments, at);
+    }
+
+    /// <summary>
+    /// What the value a declaration's <c>=</c> gives from <paramref name="start"/> to <paramref name="end"/> reads and
+    /// holds - a constant's, a property's, an enum case's, a parameter's default - as code of the node of
+    /// <paramref name="key"/>; none where no <c>=</c> stands at its top.
+    /// </summary>
+    private void Valued(int start, int end, QualifiedName key, QualifiedName? owner)
+    {
+        if (ScanCalls.TopLevel(_scan, start, end, "=", null) is var assign && assign < end)
+        {
+            Calls(_text, assign + 1, end, key, new Locals(), owner);
+        }
     }
 
     // ---- Types ----
@@ -562,8 +695,10 @@ internal sealed class PhpReading
 
         _extract.Scope(qualified, open: true, parent: frame.Scope);
         var testClass = Clauses(key, _scan.Next(nameAt), open, subKind) || (subKind == "class" && name.EndsWith("Test", StringComparison.Ordinal) && HasExtends(_scan.Next(nameAt), open));
+        var inside = frame.Inside(qualified, qualified, key, name);
 
-        Members(open, inner, frame.Inside(qualified, qualified, key, name), subKind, testClass);
+        AttributeArguments(_text, start, head, key, inside.Prefix);
+        Members(open, inner, inside, subKind, testClass);
         return close;
     }
 
@@ -575,7 +710,7 @@ internal sealed class PhpReading
     /// edge, an interface's an <c>inherits</c> edge each, <c>implements</c> an <c>implements</c> edge each; answers
     /// whether the class extends a <c>TestCase</c>, so its tests are its methods.
     /// </summary>
-    private bool Clauses(string key, int at, int end, string subKind)
+    private bool Clauses(QualifiedName key, int at, int end, string subKind)
     {
         string? kind = null;
         var test = false;
@@ -598,7 +733,7 @@ internal sealed class PhpReading
             else if (kind is not null && _scan.IsName(at) && ClassName(_scan.Text(at)) is { } named)
             {
                 Mention(key, kind, named, _scan[at].Line);
-                test |= kind == CodeEdgeKinds.Inherits && subKind == "class" && Simple(named).EndsWith("TestCase", StringComparison.Ordinal);
+                test |= kind == CodeEdgeKinds.Inherits && subKind == "class" && named.PastLastDot().EndsWith("TestCase", StringComparison.Ordinal);
             }
         }
 
@@ -628,15 +763,7 @@ internal sealed class PhpReading
 
     /// <summary>The members of the body <paramref name="open"/> opens, read in <paramref name="frame"/>, the type's own.</summary>
     private void Members(int open, int inner, ScanFrame frame, string subKind, bool testClass)
-    {
-        if (frame.TooDeep)
-        {
-            _extract.Dynamic(_scan[open].Line, ScanFrame.TooDeepWhy);
-            return;
-        }
-
-        ScanFrame.Walk(open + 1, inner, next => Member(next, inner, frame, subKind, testClass));
-    }
+        => _walks.Walk(open + 1, inner, next => Member(next, inner, frame, subKind, testClass));
 
     /// <summary>A member at <paramref name="at"/>: a trait's use, an enum's case, constants, a method, or properties; answers where the next begins.</summary>
     private int Member(int at, int end, ScanFrame frame, string subKind, bool testClass)
@@ -761,16 +888,19 @@ internal sealed class PhpReading
         var name = _scan.Text(nameAt);
         var qualified = frame.Qualify(name);
 
-        _extract.Add(new ExtractNode(Id(qualified), CodeNodeKinds.Member, name, qualified, _scan[start].Line, _scan[_scan.LastOf(stop)].EndLine, _scan.Signature(at, Ending(stop)))
+        var key = _extract.Add(new ExtractNode(Id(qualified), CodeNodeKinds.Member, name, qualified, _scan[start].Line, _scan[_scan.LastOf(stop)].EndLine, _scan.Signature(at, Ending(stop)))
         {
             SubKind = "case",
             Scope = frame.Scope,
             Parent = frame.Parent,
             Summary = ScanComments.Summary(_scan, start),
             Modifiers = marks,
-            ValueType = frame.Prefix,
+            ValueType = frame.Prefix?.Whole(),
         });
 
+        // A backed case's value, and what its attributes say.
+        AttributeArguments(_text, start, at, key, frame.Prefix);
+        Valued(_scan.Next(nameAt), Ending(stop), key, frame.Prefix);
         return stop;
     }
 
@@ -795,7 +925,7 @@ internal sealed class PhpReading
             var name = _scan.Text(nameAt);
             var qualified = frame.Qualify(name);
 
-            _extract.Add(new ExtractNode(Id(qualified), CodeNodeKinds.Member, name, qualified, _scan[pieceStart == at ? start : pieceStart].Line, _scan[_scan.LastOf(pieceEnd)].EndLine, _scan.Signature(pieceStart == at ? head : pieceStart, pieceEnd))
+            var key = _extract.Add(new ExtractNode(Id(qualified), CodeNodeKinds.Member, name, qualified, _scan[pieceStart == at ? start : pieceStart].Line, _scan[_scan.LastOf(pieceEnd)].EndLine, _scan.Signature(pieceStart == at ? head : pieceStart, pieceEnd))
             {
                 SubKind = "constant",
                 Scope = frame.Scope,
@@ -803,6 +933,16 @@ internal sealed class PhpReading
                 Summary = pieceStart == at ? ScanComments.Summary(_scan, start) : null,
                 Modifiers = modifiers,
             });
+
+            // Its value, and the declaration's attributes - its first constant's.
+            var owner = frame.Owner is null ? null : frame.Prefix;
+
+            if (pieceStart == at)
+            {
+                AttributeArguments(_text, start, head, key, owner);
+            }
+
+            Valued(nameAt, pieceEnd, key, owner);
         }
 
         return stop;
@@ -819,7 +959,7 @@ internal sealed class PhpReading
         var through = hooks >= 0 ? hooks : Ending(stop);
         var typeStart = at;
         var first = true;
-        string? last = null;
+        QualifiedName? last = null;
 
         foreach (var (pieceStart, pieceEnd) in ScanCalls.Split(_scan, at, through, null))
         {
@@ -841,14 +981,18 @@ internal sealed class PhpReading
                 Parent = frame.Parent,
                 Summary = first ? ScanComments.Summary(_scan, start) : null,
                 Modifiers = [.. modifiers, .. marks],
-                ValueType = type,
+                ValueType = type?.Whole(),
             });
 
+            // Its value, and the declaration's attributes - its first property's.
             if (first)
             {
-                TypeReferences(key, typeStart, variable, frame);
+                TypeReferences(_scan, key, typeStart, variable);
+                AttributeArguments(_text, start, head, key, frame.Prefix);
                 first = false;
             }
+
+            Valued(variable, pieceEnd, key, frame.Prefix);
 
             last = hooked ? key : null;
         }
@@ -898,14 +1042,14 @@ internal sealed class PhpReading
     /// <c>set(string $value) { ... }</c> - each one's arrow or body read as the calls of the property of
     /// <paramref name="key"/>.
     /// </summary>
-    private void Hooks(int open, int past, ScanFrame frame, string key)
+    private void Hooks(int open, int past, ScanFrame frame, QualifiedName key)
     {
         var inner = _scan.Bounds(open, past).Inner;
-        ScanFrame.Walk(open + 1, inner, at => Hook(at, inner, frame, key));
+        _walks.Walk(open + 1, inner, at => Hook(at, inner, frame, key));
     }
 
     /// <summary>The hook at <paramref name="at"/>, past its attributes, its <c>final</c> and its <c>&amp;</c>: what its arrow or its body calls; answers where the next begins.</summary>
-    private int Hook(int at, int end, ScanFrame frame, string key)
+    private int Hook(int at, int end, ScanFrame frame, QualifiedName key)
     {
         at = Attributes(at, end, null);
 
@@ -926,14 +1070,14 @@ internal sealed class PhpReading
         if (_scan.IsName(at) && _scan.Is(next, "=>"))
         {
             var stop = _scan.StatementEnd(next, end);
-            Calls(_text, next + 1, Ending(stop), key, locals, frame.Prefix, depth: 0);
+            Calls(_text, next + 1, Ending(stop), key, locals, frame.Prefix);
             return stop;
         }
 
         if (_scan.IsName(at) && _scan.Is(next, "{"))
         {
             var (inner, past) = _scan.Bounds(next, end);
-            Calls(_text, next + 1, inner, key, locals, frame.Prefix, depth: 0);
+            Calls(_text, next + 1, inner, key, locals, frame.Prefix);
             return past;
         }
 
@@ -1011,17 +1155,27 @@ internal sealed class PhpReading
 
         if (returnStart >= 0)
         {
-            TypeReferences(key, returnStart, returnEnd, frame);
+            TypeReferences(_scan, key, returnStart, returnEnd);
         }
 
         foreach (var (spanStart, spanEnd) in parameters.TypeSpans)
         {
-            TypeReferences(key, spanStart, spanEnd, frame);
+            TypeReferences(_scan, key, spanStart, spanEnd);
         }
 
         foreach (var promoted in parameters.Promoted)
         {
             Promoted(promoted, frame);
+        }
+
+        // What its attributes, and each parameter's attributes and default, hold.
+        var owner = frame.Owner is null ? null : frame.Prefix;
+        AttributeArguments(_text, start, head, key, owner);
+
+        foreach (var (parameterStart, attributed, variable, parameterEnd) in parameters.Written)
+        {
+            AttributeArguments(_text, parameterStart, attributed, key, owner);
+            Valued(variable, parameterEnd, key, owner);
         }
 
         if (marks.Contains("#[Override]", StringComparer.Ordinal))
@@ -1031,7 +1185,7 @@ internal sealed class PhpReading
 
         if (body >= 0)
         {
-            Calls(_text, body + 1, last, key, new Locals(parameters), frame.Owner is null ? null : frame.Prefix, depth: 0);
+            Calls(_text, body + 1, last, key, new Locals(parameters), owner);
         }
 
         return last + 1;
@@ -1042,12 +1196,12 @@ internal sealed class PhpReading
     {
         foreach (var comment in _scan.CommentsAbove(at))
         {
-            var text = _scan.Source.AsSpan(comment.Start, comment.Length);
+            var (start, end) = (comment.Start, comment.Start + comment.Length);
 
             // @test alone, past any @testdox or @testWith before it.
-            for (var mark = text.IndexOf("@test", StringComparison.Ordinal); mark >= 0; mark = text[(mark + 5)..].IndexOf("@test", StringComparison.Ordinal) is var next and >= 0 ? mark + 5 + next : -1)
+            for (var mark = _scan.Source.Find("@test", start, end); mark >= 0; mark = mark + 5 < end ? _scan.Source.Find("@test", mark + 5, end) : -1)
             {
-                if (mark + 5 == text.Length || !char.IsLetterOrDigit(text[mark + 5]))
+                if (mark + 5 == end || !char.IsLetterOrDigit(_scan.Source[mark + 5]))
                 {
                     return true;
                 }
@@ -1069,17 +1223,21 @@ internal sealed class PhpReading
             Scope = frame.Scope,
             Parent = frame.Parent,
             Modifiers = parameter.Modifiers,
-            ValueType = parameter.Type,
+            ValueType = parameter.Type?.Whole(),
         });
     }
 
     // ---- Parameters ----
 
     /// <summary>A constructor's parameter promoted to a property: its span, its variable, its modifiers and its type.</summary>
-    private sealed record PromotedParameter(int Start, int End, int Name, IReadOnlyList<string> Modifiers, string? Type);
+    private sealed record PromotedParameter(int Start, int End, int Name, IReadOnlyList<string> Modifiers, QualifiedName? Type);
 
-    /// <summary>A callable's parameters: how many a call gives - those with no default and no spread the fewest, none the most where one spreads - the spans of their types, the type each binds, and those promoted.</summary>
-    private sealed record Parameters(int? Least, int? Most, IReadOnlyList<(int Start, int End)> TypeSpans, IReadOnlyDictionary<string, string?> Locals, IReadOnlyList<PromotedParameter> Promoted);
+    /// <summary>
+    /// A callable's parameters: how many a call gives - those with no default and no spread the fewest, none the most where
+    /// one spreads - the spans of their types, the type each binds, those promoted, and where each is written: its start,
+    /// the end of its attributes, its variable and its end, what its attributes and its default hold read from there.
+    /// </summary>
+    private sealed record Parameters(int? Least, int? Most, IReadOnlyList<(int Start, int End)> TypeSpans, IReadOnlyDictionary<string, QualifiedName?> Locals, IReadOnlyList<PromotedParameter> Promoted, IReadOnlyList<(int Start, int Attributed, int Variable, int End)> Written);
 
     /// <summary>The parameters between the parentheses at <paramref name="open"/> and <paramref name="close"/>: each with its attributes, its modifiers, its type, a reference's <c>&amp;</c>, a spread's <c>...</c> and its default.</summary>
     private Parameters ParametersOf(int open, int close, ScanFrame frame)
@@ -1088,12 +1246,14 @@ internal sealed class PhpReading
         var most = 0;
         var spread = false;
         var spans = new List<(int, int)>();
-        var locals = new Dictionary<string, string?>(StringComparer.Ordinal);
+        var locals = new Dictionary<string, QualifiedName?>();
         var promoted = new List<PromotedParameter>();
+        var written = new List<(int, int, int, int)>();
 
         foreach (var (start, end) in ScanCalls.Split(_scan, open + 1, close, null))
         {
             var at = Attributes(start, end, null);
+            var attributed = at;
             var modifiers = new List<string>();
 
             while (at < end && Modifier(at, Visibilities, modifiers) is var past and >= 0)
@@ -1125,6 +1285,7 @@ internal sealed class PhpReading
             var type = TypeKey(at, typeEnd, frame);
             spans.Add((at, typeEnd));
             locals[_scan.Text(variable)] = type;
+            written.Add((start, attributed, variable, end));
 
             if (modifiers.Count > 0)
             {
@@ -1132,7 +1293,7 @@ internal sealed class PhpReading
             }
         }
 
-        return new Parameters(least, spread ? null : most, spans, locals, promoted);
+        return new Parameters(least, spread ? null : most, spans, locals, promoted, written);
     }
 
     // ---- Types written in a signature ----
@@ -1142,9 +1303,9 @@ internal sealed class PhpReading
     /// is one class alone - nullable or with <c>null</c> - <c>self</c> and <c>static</c> the type it is written in;
     /// <see langword="null"/> where it is none, a union of classes, or one of PHP's own types.
     /// </summary>
-    private string? TypeKey(int start, int end, ScanFrame frame)
+    private QualifiedName? TypeKey(int start, int end, ScanFrame frame)
     {
-        string? found = null;
+        QualifiedName? found = null;
 
         foreach (var index in _scan.Code(start, end))
         {
@@ -1163,7 +1324,7 @@ internal sealed class PhpReading
                 continue;
             }
 
-            found = IsWord(_scan, index, "self") || IsWord(_scan, index, "static") ? (frame.Owner is null ? null : frame.Prefix ?? string.Empty)
+            found = IsWord(_scan, index, "self") || IsWord(_scan, index, "static") ? (frame.Owner is null ? null : frame.Prefix)
                 : Builtins.Contains(_scan.Text(index)) ? null
                 : ClassName(_scan.Text(index));
 
@@ -1173,17 +1334,17 @@ internal sealed class PhpReading
             }
         }
 
-        return string.IsNullOrEmpty(found) ? null : found;
+        return found;
     }
 
-    /// <summary>A <c>references</c> edge from the node of <paramref name="key"/> to each class the type from <paramref name="start"/> to <paramref name="end"/> names that is none of PHP's own.</summary>
-    private void TypeReferences(string key, int start, int end, ScanFrame frame)
+    /// <summary>A <c>references</c> edge from the node of <paramref name="key"/> to each class the type of <paramref name="scan"/> from <paramref name="start"/> to <paramref name="end"/> names that is none of PHP's own.</summary>
+    private void TypeReferences(ScannedText scan, QualifiedName key, int start, int end)
     {
-        foreach (var index in _scan.Code(start, end))
+        foreach (var index in scan.Code(start, end))
         {
-            if (_scan.IsName(index) && !IsVariable(_scan, index) && !Builtins.Contains(_scan.Text(index)) && ClassName(_scan.Text(index)) is { } named)
+            if (scan.IsName(index) && !IsVariable(scan, index) && !Builtins.Contains(scan.Text(index)) && ClassName(scan.Text(index)) is { } named)
             {
-                Mention(key, CodeEdgeKinds.References, named, _scan[index].Line);
+                Mention(key, CodeEdgeKinds.References, named, scan[index].Line);
             }
         }
     }
@@ -1205,7 +1366,7 @@ internal sealed class PhpReading
             }
         }
 
-        public Dictionary<string, string?> Types { get; } = new(StringComparer.Ordinal);
+        public Dictionary<string, QualifiedName?> Types { get; } = new(StringComparer.Ordinal);
     }
 
     /// <summary>
@@ -1215,164 +1376,321 @@ internal sealed class PhpReading
     /// dynamic. A string's interpolations are read as text of their own, Pest's test calls as nodes of their own.
     /// <paramref name="owner"/> is the type the body is written in, as the model names it.
     /// </summary>
-    private void Calls(InterpolatedText text, int from, int to, string? key, Locals locals, string? owner, int depth)
+    /// <remarks>
+    /// The code a run holds that is read as code of its own - an interpolation's, an attribute's arguments, a test call's
+    /// - is a run on a stack of the reading's own (<see cref="CodeRun"/>), read before the run it stands in goes on: in the
+    /// order the text writes it, and never a call into the reading, so no nesting of them reaches past its stack.
+    /// </remarks>
+    private void Calls(InterpolatedText text, int from, int to, QualifiedName? key, Locals locals, QualifiedName? owner)
     {
-        var scan = text.Scan;
+        var runs = new Stack<CodeRun>();
+        runs.Push(new CodeRun(text, from, to, key, locals));
 
-        // Where the test calls read are no longer too deep to be: past the first that was.
-        var shallowFrom = -1;
-
-        string From() => key ?? ScriptKey();
-
-        for (var at = from; at < to && at < scan.Count; at++)
+        while (runs.TryPeek(out var run))
         {
-            var token = scan[at];
-
-            if (token.Kind == ScanTokenKind.Text)
+            if (run.At >= run.To || run.At >= run.Text.Scan.Count)
             {
-                if (text.Interpolations.TryGetValue(token.Start, out var spans) && ScanFrame.ReadsDeeper(_extract, depth, token.Line, Nesting))
-                {
-                    foreach (var (spanStart, spanEnd) in spans)
-                    {
-                        var inner = PhpLexer.Scan(scan.Source, spanStart, spanEnd, text.Lines);
-                        Calls(inner, 0, inner.Scan.Count, key, locals, owner, depth + 1);
-                    }
-                }
-
+                runs.Pop();
                 continue;
             }
 
-            if (token.Kind != ScanTokenKind.Name)
-            {
-                // A closure's or an anonymous class's attributes: kept on what they mark, no code of the body's.
-                if (scan.Is(at, "#") && scan.Next(at) is var bracket && scan.Is(bracket, "[") && scan[bracket].Start == token.End)
-                {
-                    at = Math.Min(scan.Past(bracket), to) - 1;
-                    continue;
-                }
-
-                if (scan.Is(at, "(") && Computed(scan, at) is { } computed)
-                {
-                    _extract.Dynamic(token.Line, computed);
-                }
-
-                if (scan.Is(at, "(") && scan.Match(at) is var close and > 0 && (IsWord(scan, scan.Previous(at), "function") || IsWord(scan, scan.Previous(at), "fn")))
-                {
-                    // A closure's or an arrow function's parameters: what it calls is the body's own.
-                    foreach (var (name, type) in ClosureParameters(scan, at, close))
-                    {
-                        locals.Types[name] = type;
-                    }
-                }
-
-                continue;
-            }
-
-            var word = scan.Text(at);
-            var line = token.Line;
-            var next = scan.Next(at);
-            var previous = scan.Previous(at);
-
-            // $q->catch(...), Factory::new(), Blade::include(...): a member's name, no keyword; function new(), const include: a name declared.
-            var member = scan.Is(previous, "->") || scan.Is(previous, "?->") || scan.Is(previous, "::");
-            var keyword = scan.Is(previous, "&") ? scan.Previous(previous) : previous;
-            var declared = (IsWord(scan, keyword, "function") || (keyword == previous && IsWord(scan, keyword, "const")))
-                && scan.Previous(keyword) is var access && !(scan.Is(access, "->") || scan.Is(access, "?->") || scan.Is(access, "::"));
-
-            if (declared)
-            {
-                continue;
-            }
-
-            // build(include: true): a named argument, no inclusion.
-            if (!member && Includes.Contains(word) && !scan.Is(next, ":"))
-            {
-                at = Included(scan, at, to) - 1;
-                continue;
-            }
-
-            if (!member && IsWord(scan, at, "new"))
-            {
-                at = Instantiated(scan, at, From(), locals, owner) - 1;
-                continue;
-            }
-
-            if (!member && IsWord(scan, at, "catch") && scan.Is(next, "(") && scan.Match(next) is var caught and > 0)
-            {
-                Caught(scan, next, caught, From(), locals);
-                at = caught;
-                continue;
-            }
-
-            if (IsWord(scan, at, "instanceof") && scan.IsName(next) && !IsVariable(scan, next) && !Builtins.Contains(scan.Text(next)) && ClassName(scan.Text(next)) is { } tested)
-            {
-                Mention(From(), CodeEdgeKinds.References, tested, line);
-                at = next;
-                continue;
-            }
-
-            // $v = new X(...): the variable is of that class.
-            if (IsVariable(scan, at) && scan.Is(next, "=") && IsWord(scan, scan.Next(next), "new") && Made(scan, scan.Next(next), owner) is { } made)
-            {
-                locals.Types[word] = made;
-            }
-
-            if (!scan.Is(next, "("))
-            {
-                // A class's name before ::class or a constant: what the code names of it.
-                if (scan.Is(next, "::") && scan.IsName(at) && !IsVariable(scan, at) && !NoCalls.Contains(word) && ClassName(word) is { } named && IsWord(scan, scan.Next(next), "class"))
-                {
-                    Mention(From(), CodeEdgeKinds.References, named, line);
-                }
-
-                continue;
-            }
-
-            if (member)
-            {
-                MemberCall(scan, at, previous, From(), locals, owner, line);
-                continue;
-            }
-
-            if (IsVariable(scan, at))
-            {
-                _extract.Dynamic(line, $"a call through the function value {word}");
-                continue;
-            }
-
-            if (IsWord(scan, at, "eval"))
-            {
-                _extract.Dynamic(line, "a call of eval");
-                continue;
-            }
-
-            if (word.Equals("call_user_func", StringComparison.OrdinalIgnoreCase) || word.Equals("call_user_func_array", StringComparison.OrdinalIgnoreCase))
-            {
-                _extract.Dynamic(line, $"a call through {word.ToLowerInvariant()}");
-                continue;
-            }
-
-            if (ScanCalls.At(scan, at, PhpCalls) is not { } call)
-            {
-                continue;
-            }
-
-            // A test call nested too deep is marked once, those it holds read as its holder's calls.
-            if (_testFile && TestCalls.Contains(word) && at > shallowFrom && (key is null || _extract.Node(key).Test))
-            {
-                if (!ScanFrame.ReadsDeeper(_extract, depth, line, Nesting))
-                {
-                    shallowFrom = call.Close;
-                }
-                else if (Test(text, at, call, key, locals, owner, depth) is var testEnd and > 0)
-                {
-                    at = testEnd;
-                    continue;
-                }
-            }
-
-            Function(From(), word, line, call.Arity);
+            run.At = CallAt(run, owner, runs) + 1;
         }
+    }
+
+    /// <summary>
+    /// One run of code <see cref="Calls"/> reads (<see cref="ScanRun{TKey, TLocals}"/>), with where the type of each
+    /// parameter of a closure or a function it writes begins and ends.
+    /// </summary>
+    private sealed class CodeRun : ScanRun<QualifiedName?, Locals>
+    {
+        /// <summary>A run of <paramref name="text"/> from <paramref name="from"/> to <paramref name="to"/>.</summary>
+        public CodeRun(InterpolatedText text, int from, int to, QualifiedName? key, Locals locals)
+            : base(text, from, to, key, locals)
+        {
+        }
+
+        /// <summary>A run of the whole of the text <paramref name="scanned"/> scans, once it is reached.</summary>
+        public CodeRun(Func<InterpolatedText> scanned, QualifiedName? key, Locals locals)
+            : base(scanned, key, locals)
+        {
+        }
+
+        public Dictionary<int, int>? Typed { get; set; }
+    }
+
+    /// <summary>
+    /// Reads the token where <paramref name="run"/> stands, as <see cref="Calls"/> reads each, stacking on
+    /// <paramref name="runs"/> the code it holds that is read as code of its own; answers the index of the last token it
+    /// read, the run going on past it.
+    /// </summary>
+    private int CallAt(CodeRun run, QualifiedName? owner, Stack<CodeRun> runs)
+    {
+        var text = run.Text;
+        var scan = text.Scan;
+        var at = run.At;
+        var to = run.To;
+        var key = run.Key;
+        var locals = run.Locals;
+
+        QualifiedName From() => key ?? ScriptKey();
+
+        var token = scan[at];
+
+        // A parameter's type - function (Foo|Bar $x, ?Baz &$y) - names classes, no value the code reads.
+        if (run.Typed is { } typed && typed.Remove(at, out var typedEnd))
+        {
+            TypeReferences(scan, From(), at, Math.Min(typedEnd, to));
+            return Math.Min(typedEnd, to) - 1;
+        }
+
+        if (token.Kind == ScanTokenKind.Text)
+        {
+            // The literal's constant parts - an interpolation's holes are code, read as code - are its data.
+            foreach (var (value, part) in scan.LiteralParts(token))
+            {
+                _extract.Literal(value, part, key);
+            }
+
+            // Each run of code it holds read in turn, the first on top, before the run goes on.
+            if (text.Interpolations.TryGetValue(token.Start, out var spans))
+            {
+                for (var index = spans.Count - 1; index >= 0; index--)
+                {
+                    var (spanStart, spanEnd) = spans[index];
+                    runs.Push(new CodeRun(() => PhpLexer.Scan(scan.Source, spanStart, spanEnd, text.Lines, text.Closes), key, locals));
+                }
+            }
+
+            return at;
+        }
+
+        if (token.Kind != ScanTokenKind.Name)
+        {
+            // A closure's or an anonymous class's attributes: no call of the body's, but what their arguments hold is
+            // the code it is written in.
+            if (scan.Is(at, "#") && scan.Next(at) is var bracket && scan.Is(bracket, "[") && scan[bracket].Start == token.End)
+            {
+                var (arguments, past) = AttributeArgumentsOf(scan, at, to);
+
+                for (var index = arguments.Count - 1; index >= 0; index--)
+                {
+                    runs.Push(new CodeRun(text, arguments[index].From, arguments[index].To, key, new Locals()));
+                }
+
+                return Math.Min(past, to) - 1;
+            }
+
+            if (scan.Is(at, "(") && Computed(scan, at) is { } computed)
+            {
+                _extract.Dynamic(token.Line, computed);
+            }
+
+            if (scan.Is(at, "(") && scan.Match(at) is var close and > 0 && OpensSignature(scan, at) && !IsWord(scan, scan.Previous(at), "use"))
+            {
+                // A closure's, an arrow function's or a function's parameters: what it calls is the body's own, their
+                // types the classes they name.
+                foreach (var (name, type, typeStart, typeEnd) in ClosureParameters(scan, at, close))
+                {
+                    locals.Types[name] = type;
+
+                    if (typeStart < typeEnd)
+                    {
+                        (run.Typed ??= [])[typeStart] = typeEnd;
+                    }
+                }
+            }
+
+            // A closure's or an arrow function's return type - function (): ?Foo {, fn ($x): A|B => - is its
+            // signature's, the classes it names, and no value the code reads.
+            if (scan.Is(at, ")") && scan.Is(scan.Next(at), ":") && scan.Match(at) is var opener and >= 0 && OpensSignature(scan, opener))
+            {
+                var returnStart = scan.Next(scan.Next(at));
+                var returnEnd = Math.Min(ReturnTypeEnd(scan, returnStart, to), to);
+                TypeReferences(scan, From(), returnStart, returnEnd);
+                at = returnEnd - 1;
+            }
+
+            return at;
+        }
+
+        var word = scan.Text(at);
+        var line = token.Line;
+        var next = scan.Next(at);
+        var previous = scan.Previous(at);
+
+        // $q->catch(...), Factory::new(), Blade::include(...): a member's name, no keyword; function new(), const include: a name declared.
+        var member = scan.Is(previous, "->") || scan.Is(previous, "?->") || scan.Is(previous, "::");
+        var keyword = scan.Is(previous, "&") ? scan.Previous(previous) : previous;
+        var declared = (IsWord(scan, keyword, "function") || (keyword == previous && IsWord(scan, keyword, "const")))
+            && scan.Previous(keyword) is var access && !(scan.Is(access, "->") || scan.Is(access, "?->") || scan.Is(access, "::"));
+
+        if (declared)
+        {
+            return at;
+        }
+
+        // build(include: true): a named argument, no inclusion.
+        if (!member && Includes.Contains(word) && !scan.Is(next, ":"))
+        {
+            return Included(scan, at, to) - 1;
+        }
+
+        if (!member && IsWord(scan, at, "new"))
+        {
+            return Instantiated(scan, at, From(), locals, owner) - 1;
+        }
+
+        if (!member && IsWord(scan, at, "catch") && scan.Is(next, "(") && scan.Match(next) is var caught and > 0)
+        {
+            Caught(scan, next, caught, From(), locals);
+            return caught;
+        }
+
+        if (IsWord(scan, at, "instanceof") && scan.IsName(next) && !IsVariable(scan, next) && !Builtins.Contains(scan.Text(next)) && ClassName(scan.Text(next)) is { } tested)
+        {
+            Mention(From(), CodeEdgeKinds.References, tested, line);
+            return next;
+        }
+
+        // $v = new X(...): the variable is of that class.
+        if (IsVariable(scan, at) && scan.Is(next, "=") && IsWord(scan, scan.Next(next), "new") && Made(scan, scan.Next(next), owner) is { } made)
+        {
+            locals.Types[word] = made;
+        }
+
+        if (!scan.Is(next, "("))
+        {
+            // A class's name before ::class or a constant: what the code names of it.
+            if (scan.Is(next, "::") && scan.IsName(at) && !IsVariable(scan, at) && !NoCalls.Contains(word) && ClassName(word) is { } named && IsWord(scan, scan.Next(next), "class"))
+            {
+                Mention(From(), CodeEdgeKinds.References, named, line);
+            }
+            else
+            {
+                Used(scan, at, previous, member, From, locals, line);
+            }
+
+            return at;
+        }
+
+        if (member)
+        {
+            MemberCall(scan, at, previous, From(), locals, owner, line);
+            return at;
+        }
+
+        if (IsVariable(scan, at))
+        {
+            _extract.Dynamic(line, $"a call through the function value {word}");
+            return at;
+        }
+
+        if (IsWord(scan, at, "eval"))
+        {
+            _extract.Dynamic(line, "a call of eval");
+            return at;
+        }
+
+        if (word.Equals("call_user_func", StringComparison.OrdinalIgnoreCase) || word.Equals("call_user_func_array", StringComparison.OrdinalIgnoreCase))
+        {
+            _extract.Dynamic(line, $"a call through {word.ToLowerInvariant()}");
+            return at;
+        }
+
+        if (ScanCalls.At(scan, at, PhpCalls) is not { } call)
+        {
+            return at;
+        }
+
+        // A test call is a node of its own, what its arguments call a run of its own read next.
+        if (_testFile && TestCalls.Contains(word) && (key is null || _extract.Node(key).Test) && Test(scan, at, call, key) is { } test)
+        {
+            runs.Push(new CodeRun(text, test.From, call.Close, test.Key, locals));
+            return call.Close;
+        }
+
+        Function(From(), word, line, call.Arity);
+        return at;
+    }
+
+    /// <summary>
+    /// A member read or written without a call of it - <c>$o-&gt;p</c>, <c>$o?-&gt;p</c>, <c>Color::Red</c> - or a bare
+    /// name the code reads, a constant: a use of the member by its name, qualified by what its receiver is where the file
+    /// says. A variable, a word or a type of the language written alone - a member's name is none of them, whatever word
+    /// it spells: <c>$node-&gt;parent</c>, <c>FieldType::String</c> - a class's <c>::class</c>, a name a <c>use</c> or a
+    /// <c>namespace</c> declares, a type a variable follows, a label a <c>goto</c> names, one the code writes before a
+    /// colon - a named argument's, a label's - or before a <c>::</c> - a class a member is reached through - is none; one
+    /// a <c>case</c> or a conditional writes before its colon is a value the code reads, and is.
+    /// </summary>
+    private void Used(ScannedText scan, int at, int accessor, bool member, Func<QualifiedName> key, Locals locals, int line)
+    {
+        var word = scan.Text(at);
+
+        if ((!member && (NoUses.Contains(word) || IsVariable(scan, at) || ScanCalls.NamesLabel(scan, at, caseless: true)))
+            || (scan.Is(accessor, "::") && IsWord(scan, at, "class")))
+        {
+            return;
+        }
+
+        if (member)
+        {
+            var name = MemberName(scan, accessor, word);
+
+            if (IsVariable(scan, at) && !scan.Is(accessor, "::"))
+            {
+                return;
+            }
+
+            var before = scan.Previous(accessor);
+
+            if (!scan.Is(accessor, "::"))
+            {
+                var made = _extract.Reference(key(), CodeEdgeKinds.Uses, name, line, qualifier: Receiver(scan, accessor, locals));
+
+                // A member a chain goes on from: the next member's chain is linked to this use.
+                if (made >= 0 && (scan.Is(scan.Next(at), "->") || scan.Is(scan.Next(at), "?->")))
+                {
+                    _chained[(scan, at)] = made;
+                }
+
+                return;
+            }
+
+            if (IsWord(scan, before, "self") || IsWord(scan, before, "static") || IsWord(scan, before, "$this"))
+            {
+                _extract.Reference(key(), CodeEdgeKinds.Uses, name, line, qualifier: new ExtractQualifier(CodeQualifierKinds.This));
+            }
+            else if (IsWord(scan, before, "parent"))
+            {
+                _extract.Reference(key(), CodeEdgeKinds.Uses, name, line, qualifier: new ExtractQualifier(CodeQualifierKinds.Base));
+            }
+            else if (scan.IsName(before) && !IsVariable(scan, before) && !NoCalls.Contains(scan.Text(before)) && ClassName(scan.Text(before)) is { } type)
+            {
+                _extract.Reference(key(), CodeEdgeKinds.Uses, name, line, qualifier: new ExtractQualifier(CodeQualifierKinds.Type, type));
+            }
+            else
+            {
+                _extract.Reference(key(), CodeEdgeKinds.Uses, name, line, qualifier: new ExtractQualifier(CodeQualifierKinds.Value));
+            }
+
+            return;
+        }
+
+        if ((scan.Is(scan.Next(at), ":") && !IsWord(scan, scan.Previous(at), "case") && !ScanCalls.IsConditionalColon(scan, scan.Next(at))) || scan.Is(scan.Next(at), "::")
+            || scan.Is(scan.Previous(at), "\\") || IsWord(scan, scan.Previous(at), "use") || IsWord(scan, scan.Previous(at), "namespace")
+            || locals.Types.ContainsKey(word))
+        {
+            return;
+        }
+
+        // A type a parameter declares before the variable it types is a reference the type's own reading names, not a use.
+        if (scan.IsName(scan.Next(at)) && IsVariable(scan, scan.Next(at)))
+        {
+            return;
+        }
+
+        _extract.Reference(key(), CodeEdgeKinds.Uses, word, line);
     }
 
     /// <summary>
@@ -1424,16 +1742,16 @@ internal sealed class PhpReading
         => scan.Match(close) is var open and >= 0 && scan.Previous(open) is var hash && scan.Is(hash, "#") && scan[hash].End == scan[open].Start;
 
     /// <summary>A call of the function <paramref name="written"/> from the node of <paramref name="key"/>: written out to the function it names, by its namespace, the file's <c>use function</c>s and the global namespace.</summary>
-    private void Function(string key, string written, int line, int? arity)
+    private void Function(QualifiedName key, string written, int line, int? arity)
     {
         var name = written.TrimStart('\\');
 
         // \f, \A\f: the name itself; A\f: its first part a use's, else the namespace's; f: a use's, else the namespace's, then the global one.
-        string? named;
+        QualifiedName? named;
 
         if (written.StartsWith('\\'))
         {
-            named = Dotted(name);
+            named = QualifiedName.Of(Dotted(name));
         }
         else if (name.Contains('\\', StringComparison.Ordinal))
         {
@@ -1454,8 +1772,9 @@ internal sealed class PhpReading
             return;
         }
 
-        var dot = named.LastIndexOf('.');
-        _extract.Reference(key, CodeEdgeKinds.Calls, named[(dot + 1)..], line, arity, dot > 0 ? new ExtractQualifier(CodeQualifierKinds.Type, named[..dot]) : new ExtractQualifier(CodeQualifierKinds.Scope));
+        var text = named.Whole();
+        var dot = text.LastIndexOf('.');
+        _extract.Reference(key, CodeEdgeKinds.Calls, text[(dot + 1)..], line, arity, dot > 0 ? new ExtractQualifier(CodeQualifierKinds.Type, text[..dot]) : new ExtractQualifier(CodeQualifierKinds.Scope));
     }
 
     /// <summary>
@@ -1463,7 +1782,7 @@ internal sealed class PhpReading
     /// <c>::</c> at <paramref name="accessor"/>: a reference qualified by that receiver; one the code names by a variable, or
     /// of a class the code computes, marked dynamic.
     /// </summary>
-    private void MemberCall(ScannedText scan, int at, int accessor, string key, Locals locals, string? owner, int line)
+    private void MemberCall(ScannedText scan, int at, int accessor, QualifiedName key, Locals locals, QualifiedName? owner, int line)
     {
         var word = scan.Text(at);
         var close = scan.CloseOf(scan.Next(at));
@@ -1508,63 +1827,62 @@ internal sealed class PhpReading
 
     /// <summary>
     /// What a call on the receiver before the arrow at <paramref name="arrow"/> is qualified by: <c>$this</c>; a chain of
-    /// its properties, by their names; the class a variable is of where the code says; a value by no name the code types,
-    /// else.
+    /// its properties, by their names - one property its name, two or more linked to the use of the last
+    /// (<see cref="ExtractQualifier.Link"/>), which says the rest; the class a variable is of where the code says; a value
+    /// by no name the code types, else. Each member of a chain is read once, from the use of the member before it, so a
+    /// chain of any length is read in a time of its length and written in its names once.
     /// </summary>
-    private static ExtractQualifier Receiver(ScannedText scan, int arrow, Locals locals)
+    private ExtractQualifier Receiver(ScannedText scan, int arrow, Locals locals)
     {
-        // Read from its end, last first, and turned once it is read.
-        var names = new List<string>();
         var at = scan.Previous(arrow);
 
-        while (scan.IsName(at))
-        {
-            var before = scan.Previous(at);
-
-            if (IsVariable(scan, at))
-            {
-                names.Add(scan.Text(at));
-                names.Reverse();
-
-                // self::$x, static::$x: a static property of the type's own.
-                if (scan.Is(before, "::") && (IsWord(scan, scan.Previous(before), "self") || IsWord(scan, scan.Previous(before), "static")))
-                {
-                    return new ExtractQualifier(CodeQualifierKinds.Value, string.Join('.', names));
-                }
-
-                // $a->$b, X::$y: a member the code names by a variable, or one of a class it holds.
-                if (scan.Is(before, "->") || scan.Is(before, "?->") || scan.Is(before, "::"))
-                {
-                    return new ExtractQualifier(CodeQualifierKinds.Value);
-                }
-
-                break;
-            }
-
-            if (!(scan.Is(before, "->") || scan.Is(before, "?->")))
-            {
-                return new ExtractQualifier(CodeQualifierKinds.Value);
-            }
-
-            names.Add("$" + scan.Text(at));
-            at = scan.Previous(before);
-        }
-
-        // A chain that begins at no variable - a call's result, an element's, a parenthesis's - is a value of no type the file says.
-        if (!IsVariable(scan, at))
+        // A receiver that is no name - a call's result, an element's, a parenthesis's - is a value of no type the file says.
+        if (!scan.IsName(at))
         {
             return new ExtractQualifier(CodeQualifierKinds.Value);
         }
 
-        if (names[0] == "$this")
+        var before = scan.Previous(at);
+
+        if (IsVariable(scan, at))
         {
-            names.RemoveAt(0);
-            return names.Count == 0 ? new ExtractQualifier(CodeQualifierKinds.This) : new ExtractQualifier(CodeQualifierKinds.Value, string.Join('.', names));
+            var variable = scan.Text(at);
+
+            // self::$x, static::$x: a static property of the type's own.
+            if (scan.Is(before, "::") && (IsWord(scan, scan.Previous(before), "self") || IsWord(scan, scan.Previous(before), "static")))
+            {
+                return new ExtractQualifier(CodeQualifierKinds.Value, variable);
+            }
+
+            // $a->$b, X::$y: a member the code names by a variable, or one of a class it holds.
+            if (scan.Is(before, "->") || scan.Is(before, "?->") || scan.Is(before, "::"))
+            {
+                return new ExtractQualifier(CodeQualifierKinds.Value);
+            }
+
+            if (variable == "$this")
+            {
+                return new ExtractQualifier(CodeQualifierKinds.This);
+            }
+
+            return locals.Types.TryGetValue(variable, out var type) && type is not null
+                ? new ExtractQualifier(CodeQualifierKinds.Type, type)
+                : new ExtractQualifier(CodeQualifierKinds.Value);
         }
 
-        return names.Count == 1 && locals.Types.TryGetValue(names[0], out var type) && type is not null
-            ? new ExtractQualifier(CodeQualifierKinds.Type, type)
-            : new ExtractQualifier(CodeQualifierKinds.Value);
+        if (!(scan.Is(before, "->") || scan.Is(before, "?->")) || !_chained.TryGetValue((scan, at), out var link))
+        {
+            return new ExtractQualifier(CodeQualifierKinds.Value);
+        }
+
+        // A member of a chain: what the use of it was qualified by says what the chain is - $this's member a chain of its
+        // one name, a chain of names one more, and a chain from anything else no chain the file types.
+        return _extract.ReferenceAt(link).Qualifier switch
+        {
+            { Kind: CodeQualifierKinds.This } => new ExtractQualifier(CodeQualifierKinds.Value, MemberName(scan, before, scan.Text(at))),
+            { Kind: CodeQualifierKinds.Value, Name: not null } or { Kind: CodeQualifierKinds.Value, Link: not null } => new ExtractQualifier(CodeQualifierKinds.Value) { Link = link },
+            _ => new ExtractQualifier(CodeQualifierKinds.Value),
+        };
     }
 
     /// <summary>
@@ -1572,7 +1890,7 @@ internal sealed class PhpReading
     /// the type it is written in - what its arguments call read after; one of a class the code computes marked dynamic,
     /// an anonymous class's passed over to its body, which is read as the code around it. Answers where reading goes on.
     /// </summary>
-    private int Instantiated(ScannedText scan, int at, string key, Locals locals, string? owner)
+    private int Instantiated(ScannedText scan, int at, QualifiedName key, Locals locals, QualifiedName? owner)
     {
         var name = scan.Next(at);
         var line = scan[at].Line;
@@ -1595,14 +1913,15 @@ internal sealed class PhpReading
 
         var open = scan.Next(name);
         var arity = scan.Is(open, "(") ? ScanCalls.CallArity(scan, open, scan.CloseOf(open), PhpCalls) : 0;
-        var dot = made.LastIndexOf('.');
+        var written = made.Whole();
+        var dot = written.LastIndexOf('.');
 
-        _extract.Reference(key, CodeEdgeKinds.Calls, made[(dot + 1)..], line, arity, dot > 0 ? new ExtractQualifier(CodeQualifierKinds.Type, made[..dot]) : new ExtractQualifier(CodeQualifierKinds.Scope));
+        _extract.Reference(key, CodeEdgeKinds.Calls, written[(dot + 1)..], line, arity, dot > 0 ? new ExtractQualifier(CodeQualifierKinds.Type, written[..dot]) : new ExtractQualifier(CodeQualifierKinds.Scope));
         return name + 1;
     }
 
     /// <summary>The class a <c>new</c> at <paramref name="at"/> makes, as the model names it - <c>self</c> and <c>static</c> the type it is written in; <see langword="null"/> where it names none the reader knows.</summary>
-    private string? Made(ScannedText scan, int at, string? owner)
+    private QualifiedName? Made(ScannedText scan, int at, QualifiedName? owner)
     {
         var name = scan.Next(at);
 
@@ -1617,9 +1936,9 @@ internal sealed class PhpReading
     }
 
     /// <summary>A <c>catch</c>'s parentheses at <paramref name="open"/> and <paramref name="close"/>: the classes it catches referenced from the node of <paramref name="key"/>, and its variable of the one class where it catches one.</summary>
-    private void Caught(ScannedText scan, int open, int close, string key, Locals locals)
+    private void Caught(ScannedText scan, int open, int close, QualifiedName key, Locals locals)
     {
-        string? one = null;
+        QualifiedName? one = null;
         var count = 0;
 
         foreach (var index in scan.Code(open + 1, close))
@@ -1637,8 +1956,13 @@ internal sealed class PhpReading
         }
     }
 
-    /// <summary>The parameters of a closure or an arrow function whose parentheses are at <paramref name="open"/> and <paramref name="close"/>: each variable with the class its type is, where it writes one.</summary>
-    private IEnumerable<(string Name, string? Type)> ClosureParameters(ScannedText scan, int open, int close)
+    /// <summary>
+    /// The parameters of a closure, an arrow function or a function a body declares, whose parentheses are at
+    /// <paramref name="open"/> and <paramref name="close"/>: each variable with the class its type is, where it writes one
+    /// alone, and where its type is written - from past its attributes and modifiers to its <c>&amp;</c>, its <c>...</c> or
+    /// its variable, <c>Foo|Bar</c>, <c>?Baz</c> - an empty span where it writes none.
+    /// </summary>
+    private IEnumerable<(string Name, QualifiedName? Type, int TypeStart, int TypeEnd)> ClosureParameters(ScannedText scan, int open, int close)
     {
         foreach (var (start, end) in ScanCalls.Split(scan, open + 1, close, null))
         {
@@ -1649,35 +1973,50 @@ internal sealed class PhpReading
                 continue;
             }
 
-            string? type = null;
-            var names = scan.Code(start, variable).Where(index => scan.IsName(index) && !Visibilities.Contains(scan.Text(index))).ToList();
+            var typeStart = start;
+
+            while (typeStart < variable && ((scan.Is(typeStart, "#") && scan.Is(scan.Next(typeStart), "[")) || (scan.IsName(typeStart) && Visibilities.Contains(scan.Text(typeStart)))))
+            {
+                typeStart = scan.Is(typeStart, "#") ? Math.Min(scan.Past(scan.Next(typeStart)), variable) : scan.Next(typeStart);
+            }
+
+            var typeEnd = typeStart;
+
+            // A by-reference parameter's & stands against its variable or its ...; an intersection's, Foo&Bar, between types.
+            while (typeEnd < variable && !scan.Is(typeEnd, "...") && !(scan.Is(typeEnd, "&") && (scan.Next(typeEnd) == variable || scan.Is(scan.Next(typeEnd), "..."))))
+            {
+                typeEnd = scan.Next(typeEnd);
+            }
+
+            QualifiedName? type = null;
+            var names = scan.Code(typeStart, typeEnd).Where(index => scan.IsName(index)).ToList();
 
             if (names.Count == 1 && !Builtins.Contains(scan.Text(names[0])))
             {
                 type = ClassName(scan.Text(names[0]));
             }
 
-            yield return (scan.Text(variable), type);
+            yield return (scan.Text(variable), type, typeStart, typeEnd);
         }
     }
 
     /// <summary>
     /// Pest's call at <paramref name="at"/> as a node of its own, named by its description and held by the node of
-    /// <paramref name="parent"/> - none at the file's top - what its arguments call its own; answers the index of its
-    /// closing parenthesis, or 0 where it gives no description.
+    /// <paramref name="parent"/> - none at the file's top - what its arguments call its own: answers its node's key and
+    /// where the code of its arguments past its description begins, which <see cref="Calls"/> reads as the node's; none
+    /// where it gives no description.
     /// </summary>
-    private int Test(InterpolatedText text, int at, ScannedCall call, string? parent, Locals locals, string? owner, int depth)
+    private (int From, QualifiedName Key)? Test(ScannedText scan, int at, ScannedCall call, QualifiedName? parent)
     {
-        var scan = text.Scan;
         var pieces = ScanCalls.Split(scan, call.Open + 1, call.Close, null);
 
         if (pieces.Count == 0 || call.Close >= scan.Count || ExtractText.Flat(scan.Spelled(pieces[0].Start, pieces[0].End)) is not { Length: > 0 } name)
         {
-            return 0;
+            return null;
         }
 
         var word = scan.Text(at);
-        var qualified = parent is null ? $"{_path}.{name}" : $"{_extract.Node(parent).Qualified}.{name}";
+        var qualified = parent is null ? QualifiedName.Of(_path).Under(name) : _extract.Node(parent).Qualified.Under(name);
         var key = _extract.Add(new ExtractNode(Id(qualified), CodeNodeKinds.Member, name, qualified, scan[at].Line, scan[call.Close].EndLine, ExtractText.Signature($"{word}({name})"))
         {
             SubKind = word == "describe" ? "testGroup" : "test",
@@ -1686,24 +2025,26 @@ internal sealed class PhpReading
             Test = true,
         });
 
-        Calls(text, pieces[0].End, call.Close, key, locals, owner, depth + 1);
-        return call.Close;
+        return (pieces[0].End, key);
     }
 
     /// <summary>The key of the node what the file's top does outside its declarations is the calls of: made the first time it is needed.</summary>
-    private string ScriptKey()
+    private QualifiedName ScriptKey()
     {
         if (_scriptKey is not null)
         {
             return _scriptKey;
         }
 
-        var qualified = $"{_path}.(script)";
+        var qualified = QualifiedName.Of(_path).Under("(script)");
 
-        return _scriptKey = _extract.Add(new ExtractNode(Id(qualified), CodeNodeKinds.Member, "(script)", qualified, 1, Math.Max(1, _text.Lines.Starts.Count), "(script)")
+        _scriptKey = _extract.Add(new ExtractNode(Id(qualified), CodeNodeKinds.Member, "(script)", qualified, 1, Math.Max(1, _text.Lines.Starts.Count), "(script)")
         {
             SubKind = "script",
         });
+
+        _extract.Top(_scriptKey);
+        return _scriptKey;
     }
 
     // ---- Names ----
@@ -1713,7 +2054,7 @@ internal sealed class PhpReading
     /// name itself; <c>namespace\X</c> the namespace's; else its first part a <c>use</c>'s, or the name in the file's
     /// namespace. <see langword="null"/> for <c>self</c>, <c>static</c> and <c>parent</c>, which name the type a call is in.
     /// </summary>
-    private string? ClassName(string written)
+    private QualifiedName? ClassName(string written)
     {
         if (written.Length == 0 || written[0] == '$' || IsSelf(written))
         {
@@ -1722,7 +2063,7 @@ internal sealed class PhpReading
 
         if (written[0] == '\\')
         {
-            return written.Length > 1 ? Dotted(written[1..]) : null;
+            return written.Length > 1 ? QualifiedName.Of(Dotted(written[1..])) : null;
         }
 
         if (written.StartsWith("namespace\\", StringComparison.OrdinalIgnoreCase))
@@ -1735,7 +2076,7 @@ internal sealed class PhpReading
 
         if (_classes.TryGetValue(head, out var used))
         {
-            return separator < 0 ? used : $"{used}.{Dotted(written[(separator + 1)..])}";
+            return separator < 0 ? used : used.Under(Dotted(written[(separator + 1)..]));
         }
 
         return ExtractText.Qualify(_namespace, Dotted(written));
@@ -1750,10 +2091,11 @@ internal sealed class PhpReading
     /// names, as the model names it: looked for in its namespace alone, or among the declarations in no scope where it is
     /// the global namespace's.
     /// </summary>
-    private void Mention(string key, string kind, string named, int line)
+    private void Mention(QualifiedName key, string kind, QualifiedName named, int line)
     {
-        var dot = named.LastIndexOf('.');
-        _extract.Reference(key, kind, named[(dot + 1)..], line, qualifier: dot > 0 ? new ExtractQualifier(CodeQualifierKinds.Type, named[..dot]) : new ExtractQualifier(CodeQualifierKinds.Scope));
+        var text = named.Whole();
+        var dot = text.LastIndexOf('.');
+        _extract.Reference(key, kind, text[(dot + 1)..], line, qualifier: dot > 0 ? new ExtractQualifier(CodeQualifierKinds.Type, text[..dot]) : new ExtractQualifier(CodeQualifierKinds.Scope));
     }
 
     /// <summary><paramref name="written"/>, a name PHP writes with its separator of namespaces, as the model writes it: each <c>\</c> a dot.</summary>
@@ -1765,14 +2107,67 @@ internal sealed class PhpReading
     /// <summary>Whether the token at <paramref name="at"/> is a variable: a name PHP writes after a <c>$</c>.</summary>
     private static bool IsVariable(ScannedText scan, int at) => scan.IsName(at) && scan.Source[scan[at].Start] == '$';
 
+    /// <summary>
+    /// Whether the parenthesis at <paramref name="open"/> opens a callable's own list - a closure's or an arrow function's
+    /// parameters, a closure's <c>use</c>, a function's - after which a colon writes its return type.
+    /// </summary>
+    private static bool OpensSignature(ScannedText scan, int open)
+    {
+        var before = scan.Previous(open);
+        before = scan.Is(before, "&") ? scan.Previous(before) : before;
+
+        if (IsWord(scan, before, "function") || IsWord(scan, before, "fn") || IsWord(scan, before, "use"))
+        {
+            return true;
+        }
+
+        var keyword = scan.Previous(before);
+        keyword = scan.Is(keyword, "&") ? scan.Previous(keyword) : keyword;
+        return scan.IsName(before) && !IsVariable(scan, before) && IsWord(scan, keyword, "function");
+    }
+
+    /// <summary>
+    /// Past the return type that begins at <paramref name="at"/>, within <paramref name="to"/>: its names, a nullable
+    /// one's <c>?</c>, a union's <c>|</c>, an intersection's <c>&amp;</c>, a namespace's <c>\</c> and a disjunctive one's
+    /// parentheses.
+    /// </summary>
+    private static int ReturnTypeEnd(ScannedText scan, int at, int to)
+    {
+        while (at < to && at < scan.Count)
+        {
+            if (scan.Is(at, "("))
+            {
+                at = scan.Past(at);
+            }
+            else if (scan.Is(at, "?") || scan.Is(at, "|") || scan.Is(at, "&") || scan.Is(at, "\\") || (scan.IsName(at) && !IsVariable(scan, at)))
+            {
+                at++;
+            }
+            else
+            {
+                break;
+            }
+        }
+
+        return at;
+    }
+
+    /// <summary>
+    /// The name the member written <paramref name="word"/> after the accessor at <paramref name="accessor"/> is declared
+    /// by: an instance's property - after <c>-&gt;</c> or <c>?-&gt;</c> - with its <c>$</c>; a class's constant or enum
+    /// case, after <c>::</c>, as written. The one rule a use and a receiver's chain name a property by.
+    /// </summary>
+    private static string MemberName(ScannedText scan, int accessor, string word)
+        => (scan.Is(accessor, "->") || scan.Is(accessor, "?->")) && word.Length > 0 && word[0] != '$' ? "$" + word : word;
+
     /// <summary>Whether the token at <paramref name="at"/> is the word <paramref name="word"/>, whatever its case, as PHP's keywords are.</summary>
     private static bool IsWord(ScannedText scan, int at, string word)
-        => scan.IsName(at) && scan[at].Length == word.Length && string.Compare(scan.Source, scan[at].Start, word, 0, word.Length, StringComparison.OrdinalIgnoreCase) == 0;
+        => scan.IsName(at) && scan[at].Length == word.Length && scan.Source.At(scan[at].Start, word, StringComparison.OrdinalIgnoreCase);
 
     /// <summary>The index of the <c>;</c> or <c>?&gt;</c> a statement ending before <paramref name="stop"/> ends with, or <paramref name="stop"/> where it ends with neither.</summary>
     private int Ending(int stop) => _scan.EndsStatement(_scan.LastOf(stop)) ? _scan.LastOf(stop) : stop;
 
     /// <summary>The id of a declaration of the qualified name <paramref name="qualified"/>.</summary>
-    private string Id(string qualified) => _prefix + qualified;
+    private QualifiedName Id(QualifiedName qualified) => qualified.Prepend(_prefix);
 
 }

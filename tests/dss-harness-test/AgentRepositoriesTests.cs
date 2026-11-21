@@ -150,7 +150,7 @@ public sealed class AgentRepositoriesTests
         Assert.Null(refused.BaseCommit);
         Assert.Equal(HarnessExit.CommandFailed, refused.Failure!.ExitCode);
         Assert.Equal(
-            $"The repository 'o1/b' works in could not be made at '{second}': the commit it is made at, {head![..12]}, could not be kept alive in the main "
+            $"The repository 'o1/b' works in could not be made at '{second}': the commit it is made at, {head!}, could not be kept alive in the main "
             + "checkout as 'refs/harness/worktree-base/o1/b': fatal: the ref store is read-only. Nothing was created.",
             refused.Failure.Message);
         Assert.False(Directory.Exists(second));
@@ -180,7 +180,7 @@ public sealed class AgentRepositoriesTests
 
         Assert.Equal(HarnessExit.CommandFailed, made.Failure!.ExitCode);
         Assert.Equal(
-            $"The repository 'o1/a' works in could not be made at '{path}': git could not check out {head![..12]} in it: error: the checkout was stopped. "
+            $"The repository 'o1/a' works in could not be made at '{path}': git could not check out {head!} in it: error: the checkout was stopped. "
             + "What was made of it was taken back: nothing was created.",
             made.Failure.Message);
         Assert.False(Directory.Exists(path));
@@ -376,7 +376,7 @@ public sealed class AgentRepositoriesTests
         var json = WorktreeReports.List(listed, new HostCopyListing(), json: true);
 
         Assert.Equal("2 worktree(s)", text.Message);
-        Assert.Equal([$"o1/a  base {head[..12]}", $"wt  base {head[..12]}"], text.Details);
+        Assert.Equal([$"o1/a  base {head}", $"wt  base {head}"], text.Details);
         Assert.True(
             System.Text.Json.Nodes.JsonNode.DeepEquals(
                 new System.Text.Json.Nodes.JsonArray(
@@ -459,7 +459,7 @@ public sealed class AgentRepositoriesTests
 
         Assert.Equal(HarnessExit.Refused, refused.Outcome.ExitCode);
         Assert.Equal(
-            $"Worktree 'o1/a' was not deleted, because 1 commit(s) up to {inside[..12]} were made in its own repository, and no ref of the main "
+            $"Worktree 'o1/a' was not deleted, because 1 commit(s) up to {inside} were made in its own repository, and no ref of the main "
             + $"checkout's reaches them (run 'git -C {main} fetch {path} HEAD' and branch FETCH_HEAD there, or push them); fix that, or pass "
             + "--force to delete it anyway.",
             refused.Outcome.Message);
@@ -602,7 +602,7 @@ public sealed class AgentRepositoriesTests
 
         Assert.Equal(HarnessExit.Refused, refusedAgain.Outcome.ExitCode);
         Assert.Equal(
-            $"Worktree 'o1/a' was not deleted, because 1 commit(s) up to {inside[..12]} were made in its own repository, and no ref of the main "
+            $"Worktree 'o1/a' was not deleted, because 1 commit(s) up to {inside} were made in its own repository, and no ref of the main "
             + $"checkout's reaches them (run 'git -C {main} fetch {path} HEAD' and branch FETCH_HEAD there, or push them); fix that, or pass "
             + "--force to delete it anyway. It changed since it was checked, and nothing of it was removed.",
             refusedAgain.Outcome.Message);

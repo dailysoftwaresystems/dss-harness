@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Text;
 using System.Text.Json;
 using DssHarness.Core.Codebase;
 using DssHarness.Core.FileSystem;
@@ -8,8 +9,8 @@ namespace DssHarness.Tests;
 /// <summary>
 /// The codebase graph contract's test kit: every implementation of <see cref="ICodeGraphExtractor"/> is held to the same
 /// rules by deriving from it and giving its fixtures, and inherits every test - fixtures for each of its claims, purity
-/// and determinism, answers alike from many threads at once, a sound model, tolerance, its claims, its stored extracts
-/// under its version, and the edges its fixtures name through the one linker. Each test is one of
+/// and determinism, answers alike from many threads at once and from a file's text as from a string's, a sound model,
+/// tolerance, its claims, its stored extracts under its version, and the edges its fixtures name through the one linker. Each test is one of
 /// <see cref="CodeGraphContract"/>'s checks, which <see cref="CodeGraphContractTests"/> shows going red on an
 /// implementation that breaks it.
 /// </summary>
@@ -41,6 +42,14 @@ public abstract class CodeGraphExtractorContractTests<TExtractor>
     /// <summary>Each fixture extracted from many threads at once gives the extract it gives alone: a sync reads files in parallel through one instance.</summary>
     [Fact]
     public void EachFixture_IsExtractedAlike_FromManyThreadsAtOnce() => CodeGraphContract.Concurrent(Extractor, Fixtures);
+
+    /// <summary>
+    /// Each fixture read over its file - in blocks of a few characters, its endings as written and as CR LF, in UTF-8 and in
+    /// UTF-16 - gives the extract and the digests it gives read from its string: a sync reads a file by position, a block at
+    /// a time, and what it reads is the text the fixture is.
+    /// </summary>
+    [Fact]
+    public Task EachFixture_ReadOverItsFile_GivesTheExtractItGivesFromItsString() => CodeGraphContract.OverItsFile(Extractor, Fixtures);
 
     /// <summary>Each fixture's extract is a sound model, digests left to the core, holding the nodes the fixture names.</summary>
     [Fact]
@@ -109,6 +118,12 @@ public static class CodeGraphContract
     /// <summary>How far apart the cuts past a fixture's first <see cref="EveryCut"/> characters are.</summary>
     public const int CutStride = 64;
 
+    /// <summary>
+    /// How many characters a block of a fixture read over its file holds: so few that every read crosses a block's end,
+    /// and so many blocks that each is let go and read again.
+    /// </summary>
+    public const int FileBlockCharacters = 3;
+
     /// <summary>The implementation gives fixtures, and one at least for each name and extension it claims - the fallback one at least.</summary>
     public static void Covered(ICodeGraphExtractor extractor, IReadOnlyList<CodeGraphFixture> fixtures)
     {
@@ -136,6 +151,41 @@ public static class CodeGraphContract
             Assert.Equal(once, Json(extractor.Extract(new CodeFileInput(fixture.Path, fixture.Text))));
             Assert.Equal(once, Json(extractor.Extract(new CodeFileInput(fixture.Path, lf))));
             Assert.Equal(once, Json(extractor.Extract(new CodeFileInput(fixture.Path, lf.Replace("\n", "\r\n", StringComparison.Ordinal)))));
+        }
+    }
+
+    /// <summary>
+    /// Every fixture read over its file (<see cref="CodeText"/>, in blocks of <see cref="FileBlockCharacters"/>) - its
+    /// endings as written and as CR LF, its bytes UTF-8 and UTF-16 by its mark - gives the extract, digested, it gives read
+    /// from its string: a reader that reads its text whole, or past what it was given, or a block twice, answers otherwise.
+    /// Red with a CR LF read again as two line feeds over a file (the LF after a CR not passed over in LineFedBlocks.Read).
+    /// </summary>
+    public static async Task OverItsFile(ICodeGraphExtractor extractor, IReadOnlyList<CodeGraphFixture> fixtures)
+    {
+        foreach (var fixture in fixtures)
+        {
+            var lf = fixture.Text.Replace("\r\n", "\n", StringComparison.Ordinal);
+
+            foreach (var text in new[] { fixture.Text, lf.Replace("\n", "\r\n", StringComparison.Ordinal) }.Distinct(StringComparer.Ordinal))
+            {
+                foreach (var (encoding, bytes) in new (string, byte[])[] { ("UTF-8", Encoding.UTF8.GetBytes(text)), ("UTF-16", [0xFF, 0xFE, .. Encoding.Unicode.GetBytes(text)]) })
+                {
+                    using var whole = CodeFileText.Decode(bytes);
+                    var file = () => CodeText.OpenAsync(() => new MemoryStream(bytes, writable: false), fixture.Path, FileBlockCharacters, TestContext.Current.CancellationToken);
+
+                    if (!whole.IsRead)
+                    {
+                        await Assert.ThrowsAsync<InvalidDataException>(file);
+                        continue;
+                    }
+
+                    using var read = await file();
+                    var expected = Json(extractor.Extract(new CodeFileInput(fixture.Path, whole.Text)).WithDigests(whole.Text));
+                    var answered = Json(extractor.Extract(new CodeFileInput(fixture.Path, read)).WithDigests(read));
+
+                    Assert.True(expected == answered, $"'{extractor.Language}' answers for {fixture.Path} read over its file in {encoding}{(text.Contains('\r', StringComparison.Ordinal) ? " with CR LF endings" : string.Empty)} otherwise than read from its string: {answered}");
+                }
+            }
         }
     }
 
@@ -197,7 +247,7 @@ public static class CodeGraphContract
 
             Assert.All(answered.Nodes, node => Assert.True(node.Digest is null, $"'{extractor.Language}' set the digest of '{node.Id}', which is the core's to set"));
 
-            var extract = answered.WithDigests(lines);
+            var extract = answered.WithDigests(input.Text);
             Assert.Null(extract.Problem(extractor.Language, lines.Count));
 
             foreach (var expected in fixture.Nodes)
@@ -225,7 +275,7 @@ public static class CodeGraphContract
             var extract = extractor.Extract(input);
 
             Assert.NotNull(extract);
-            Assert.Null(extract.WithDigests(input.Lines).Problem(extractor.Language, input.Lines.Count));
+            Assert.Null(extract.WithDigests(input.Text).Problem(extractor.Language, input.Lines.Count));
         }
     }
 
@@ -243,7 +293,7 @@ public static class CodeGraphContract
     {
         foreach (var claim in extractor.Claims.Names.Concat(extractor.Claims.Extensions).Where(claim => claim.ContentTest is not null))
         {
-            foreach (var probe in Texts(fixtures).Select(text => CodeFileText.Probe(text.Text)).Distinct(StringComparer.Ordinal))
+            foreach (var probe in Texts(fixtures).Select(text => text.Text).Distinct(StringComparer.Ordinal))
             {
                 var first = Asked(extractor, claim, probe);
 
@@ -256,7 +306,7 @@ public static class CodeGraphContract
 
         foreach (var fixture in fixtures)
         {
-            Assert.Equal(extractor.Language, registry.Route(fixture.Path, CodeFileText.Probe(fixture.Text)).Extractor?.Language);
+            Assert.Equal(extractor.Language, registry.Route(fixture.Path, fixture.Text).Extractor?.Language);
         }
 
         foreach (var (what, claimsOf) in new (string, Func<ICodeGraphExtractor, IReadOnlyList<CodeGraphClaim>>)[] { ("file name", one => one.Claims.Names), ("extension", one => one.Claims.Extensions) })
@@ -276,7 +326,7 @@ public static class CodeGraphContract
 
                     foreach (var fixture in fixtures.Concat(others.GetValueOrDefault(other.Language) ?? []))
                     {
-                        var probe = CodeFileText.Probe(fixture.Text);
+                        var probe = CodeText.Of(fixture.Text);
                         Assert.False(claim.ContentTest!(probe) && theirs.ContentTest!(probe), $"'{extractor.Language}' and '{other.Language}' both say {fixture.Path} is theirs");
                     }
                 }

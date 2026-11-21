@@ -7,6 +7,8 @@ using DssHarness.Core.Agents.Http;
 using DssHarness.Core.Agents.Loop;
 using DssHarness.Core.Agents.Runtime;
 using DssHarness.Core.Configuration;
+using DssHarness.Core.FileSystem;
+using DssHarness.Core.Platform;
 
 namespace DssHarness.Tests;
 
@@ -318,37 +320,106 @@ public sealed class ClaudeApiProviderTests : IDisposable
     }
 
     /// <summary>
-    /// A connection over the machine's own network sends through a handler that follows no redirect - which would carry
-    /// the key's header wherever it points - keeps no cookie, connects within its bound and decompresses nothing, and gives
-    /// a request no time of its own.
+    /// A connection over the machine's own network sends through a handler that sets no time to connect in of its own - a
+    /// slow link that connects at 45 s connects, and one that never does is ended by the operating system's own retries or
+    /// the loop's token - follows no redirect, which would carry the key's header wherever it points, keeps no cookie and
+    /// decompresses nothing, and gives a request no time of its own. Red where the handler connects within 30 s.
     /// </summary>
     [Fact]
-    public void AConnection_FollowsNoRedirect_KeepsNoCookie_AndGivesARequestNoTimeOfItsOwn()
+    public void TheConnection_SetsNoConnectTimeOfItsOwn()
     {
         using var connection = new ApiConnection(TimeProvider.System);
         var handler = Assert.IsType<SocketsHttpHandler>(connection.Sending);
 
-        Assert.Equal((false, false, ApiConnection.ConnectBound), (handler.AllowAutoRedirect, handler.UseCookies, handler.ConnectTimeout));
+        Assert.Equal((false, false, Timeout.InfiniteTimeSpan), (handler.AllowAutoRedirect, handler.UseCookies, handler.ConnectTimeout));
         Assert.Equal((TimeSpan.FromMinutes(5), System.Net.DecompressionMethods.None, Timeout.InfiniteTimeSpan), (handler.PooledConnectionLifetime, handler.AutomaticDecompression, connection.Bound));
     }
 
-    /// <summary>
-    /// A wait the API names by its date is read on the connection's clock - what is left of it, and none where it has
-    /// passed - and a refusal's body is read up to its bound, no further.
-    /// </summary>
+    /// <summary>A wait the API names by its date is read on the connection's clock: what is left of it, and none where it has passed.</summary>
     [Fact]
-    public async Task AWaitNamedByItsDate_IsWhatIsLeftOfIt_AndARefusalIsReadToItsBound()
+    public async Task AWaitNamedByItsDate_IsWhatIsLeftOfIt()
     {
         var clock = new ManualClock();
         using var connection = new ApiConnection(clock, _endpoint);
         _endpoint
             .Then(ApiReply.Status(429, "{}", retryAt: clock.GetUtcNow().AddSeconds(90)))
-            .Then(ApiReply.Status(429, "{}", retryAt: clock.GetUtcNow().AddSeconds(-30)))
-            .Then(ApiReply.Status(502, new string('x', ApiConnection.MostRefusalBytes + 4096), type: "text/html"));
+            .Then(ApiReply.Status(429, "{}", retryAt: clock.GetUtcNow().AddSeconds(-30)));
 
         Assert.Equal(TimeSpan.FromSeconds(90), (await Refusal(connection)).RetryAfter);
         Assert.Equal(TimeSpan.Zero, (await Refusal(connection)).RetryAfter);
-        Assert.Equal((502, ApiConnection.MostRefusalBytes, null), await Refusal(connection) is var page ? (page.Status, page.Body.Length, page.RetryAfter) : default);
+    }
+
+    /// <summary>
+    /// A refused request's body is read to its end, however long - a gateway's page past 64 KiB kept whole and said whole
+    /// - each piece of it heard as it comes, so a body that keeps coming is never a stall. Red where the body is read only
+    /// to 64 KiB (MostRefusalBytes).
+    /// </summary>
+    [Fact]
+    public async Task ARefusalBody_IsReadToItsEnd()
+    {
+        var page = new string('x', (64 * 1024) + 4096);
+        _endpoint
+            .Then(ApiReply.Status(502, page, type: "text/html"))
+            .Then(ApiReply.Status(502, page, type: "text/html"));
+
+        var refused = await Refusal(_connection);
+        var parts = await Sent(Request(), all: true);
+
+        Assert.Equal((502, page.Length, page), (refused.Status, refused.Body.Bytes, refused.Body.HeldText));
+        Assert.Equal(new ChatFailure(ChatFailureKind.Transient, $"the API answered 502: {page}"), Assert.IsType<ChatPart.Failed>(parts[^1]).Failure);
+        Assert.All(parts.SkipLast(1), part => Assert.IsType<ChatPart.Heard>(part));
+    }
+
+    /// <summary>
+    /// A proxy's 5 MB page that answers a request of a step is kept whole in the step's records as it streams, never held,
+    /// and the failure names it - its size and the file that keeps it - rather than quoting any part of it; an error of the
+    /// API's own kept the same way is read from where it is kept and said in the API's words. Red where the failure quotes
+    /// the body's first 300 characters (MostSaid).
+    /// </summary>
+    [Fact]
+    public async Task AFiveMegabyteErrorBody_IsKeptWholeAndNamed()
+    {
+        using var step = new TempDirectory();
+        var files = new PhysicalFileSystem(FilePermissionsFactory.Create());
+        var provider = new ClaudeApiProvider(_connection, Api, ClaudeApiSettings.Of(null), new ApiRecords(files, step.Path));
+        var page = $"<html>\n{new string('x', 5 * 1024 * 1024)}\n</html>";
+        _endpoint
+            .Then(ApiReply.Status(502, page, type: "text/html"))
+            .Then(ApiReply.Error(529, "overloaded_error", "Overloaded"));
+
+        var proxied = Assert.IsType<ChatPart.Failed>(Assert.Single(await Sent(Request(), provider: provider))).Failure;
+        var overloaded = Assert.IsType<ChatPart.Failed>(Assert.Single(await Sent(Request(), provider: provider))).Failure;
+        var kept = Directory.GetFiles(Path.Combine(step.Path, ApiRecords.DirectoryName), "*.txt");
+        var pageFile = Assert.Single(kept, file => File.ReadAllText(file) == page);
+        var bytes = Encoding.UTF8.GetByteCount(page).ToString("N0", System.Globalization.CultureInfo.InvariantCulture);
+
+        Assert.Equal(new ChatFailure(ChatFailureKind.Transient, $"the API answered 502 with {bytes} bytes that are no error of the API's own, kept whole in '{pageFile}'"), proxied);
+        Assert.Equal(new ChatFailure(ChatFailureKind.Transient, "the API answered 529 overloaded_error: Overloaded (request req_000000000000000000000009)"), overloaded);
+        Assert.Equal(2, kept.Length);
+    }
+
+    /// <summary>
+    /// A refused body that keeps coming is told every five minutes while it does - how much of it has come - and is read
+    /// on to its end, never cut at a size or a time of the tool's own.
+    /// </summary>
+    [Fact]
+    public async Task ARefusalStillComing_IsToldEveryFiveMinutes()
+    {
+        var clock = new ManualClock();
+        using var connection = new ApiConnection(clock, _endpoint);
+        var provider = new ClaudeApiProvider(connection, Api, ClaudeApiSettings.Of(null), records: null);
+        var page = new string('x', 12_000);
+        _endpoint.Then(ApiReply.Trickling(502, page, chunk: 1_000, eachRead: () => clock.Advance(TimeSpan.FromMinutes(1))));
+
+        var parts = await Sent(Request(), provider: provider);
+
+        Assert.Equal(
+            [
+                new ChatPart.Notice(ApiAnswers.StillRefusing(502, 5_000)),
+                new ChatPart.Notice(ApiAnswers.StillRefusing(502, 10_000)),
+                new ChatPart.Failed(new ChatFailure(ChatFailureKind.Transient, $"the API answered 502: {page}")),
+            ],
+            parts);
     }
 
     /// <summary>
@@ -435,8 +506,9 @@ public sealed class ClaudeApiProviderTests : IDisposable
     }
 
     /// <summary>
-    /// A body that is no error the API wrote is said by its start on one line, a gateway's page among them; an answer with
-    /// no stream is a refusal; a request that reaches nothing is the network failing for now.
+    /// A body that is no error the API wrote, held where the request keeps no records, is said whole on one line, a
+    /// gateway's page among them; an answer with no stream is a refusal; a request that reaches nothing is the network
+    /// failing for now.
     /// </summary>
     [Fact]
     public async Task WhatIsNoErrorOfTheApis_IsSaidAsItCame()
@@ -448,7 +520,7 @@ public sealed class ClaudeApiProviderTests : IDisposable
             .Then(ApiReply.Status(503, string.Empty))
             .Then(ApiReply.Unreachable("No such host is known."));
 
-        Assert.Equal(new ChatFailure(ChatFailureKind.Transient, $"the API answered 502: <html> <body>{new string('x', 287)}..."), Failure(await Sent(Request())));
+        Assert.Equal(new ChatFailure(ChatFailureKind.Transient, $"the API answered 502: <html> <body>{new string('x', 400)}</body> </html>"), Failure(await Sent(Request())));
         Assert.Equal(new ChatFailure(ChatFailureKind.Fatal, """the API answered 200: {"id":"msg_1"}"""), Failure(await Sent(Request())));
         Assert.Equal(new ChatFailure(ChatFailureKind.Transient, "the API answered 503 with nothing said"), Failure(await Sent(Request())));
         Assert.Equal(new ChatFailure(ChatFailureKind.Transient, "the API could not be reached: No such host is known."), Failure(await Sent(Request())));
@@ -622,7 +694,7 @@ public sealed class ClaudeApiProviderTests : IDisposable
 
         var failure = Assert.IsType<ChatPart.Failed>(Assert.Single(await Sent(Request()))).Failure;
 
-        Assert.Equal(new ChatFailure(ChatFailureKind.Transient, "the answer's stream was cut: the API answered 400, and its body could not be read: the connection was reset"), failure);
+        Assert.Equal(new ChatFailure(ChatFailureKind.Transient, "the answer's stream was cut: the API answered 400, and its body could not be read to its end: the connection was reset"), failure);
     }
 
     /// <summary>A conversation with no tools sends none; a step with no effort sends none; a client's cache of an hour marks both cache marks so.</summary>
@@ -866,7 +938,7 @@ public sealed class ClaudeApiProviderTests : IDisposable
         Assert.Equal(new ChatFailure(ChatFailureKind.Transient, "the answer's stream began with no model named"), Assert.IsType<ChatPart.Failed>((await Sent(Request()))[^1]).Failure);
     }
 
-    private ClaudeApiProvider Provider(ClaudeApiSettings? settings = null, string api = Api) => new(_connection, api, settings ?? ClaudeApiSettings.Of(null));
+    private ClaudeApiProvider Provider(ClaudeApiSettings? settings = null, string api = Api) => new(_connection, api, settings ?? ClaudeApiSettings.Of(null), records: null);
 
     /// <summary>
     /// The parts <paramref name="request"/> was answered with - by <paramref name="reply"/> where one is given - what is heard
@@ -892,7 +964,7 @@ public sealed class ClaudeApiProviderTests : IDisposable
         return parts;
     }
 
-    /// <summary>The refusal a post over <paramref name="connection"/> is answered with, alone.</summary>
+    /// <summary>The refusal a post over <paramref name="connection"/> is answered with, last, after each piece of its body as it came.</summary>
     private static async Task<ApiEvent.Refused> Refusal(ApiConnection connection)
     {
         var events = new List<ApiEvent>();
@@ -902,7 +974,9 @@ public sealed class ClaudeApiProviderTests : IDisposable
             events.Add(happened);
         }
 
-        return Assert.IsType<ApiEvent.Refused>(Assert.Single(events));
+        Assert.All(events.SkipLast(1), happened => Assert.IsType<ApiEvent.Refusing>(happened));
+
+        return Assert.IsType<ApiEvent.Refused>(events[^1]);
     }
 
     /// <summary>A request of a conversation <paramref name="messages"/> long: its first where it is one.</summary>

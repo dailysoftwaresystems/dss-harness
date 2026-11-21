@@ -528,11 +528,11 @@ public sealed class FoldStepTests
 
     /// <summary>
     /// An apply refused under its hold for what its dry run never named - its trees moved between the two - is weighed
-    /// again, at most three times, then fails with the apply's own words; one a run holds the tree of is waited out by the
-    /// retry table, never weighed again here; and the apply is held to exactly what the dry run named.
+    /// again, and the apply is held to exactly what the dry run named; one a run holds the tree of is waited out by the
+    /// retry table, never weighed again here.
     /// </summary>
     [Fact]
-    public async Task AnApplyItsTreesMovedUnder_IsWeighedAgain_AtMostThreeTimes()
+    public async Task AnApplyItsTreesMovedUnder_IsWeighedAgain_AndOneARunHolds_IsLeftToTheRetries()
     {
         using var temp = new TempDirectory();
         var kit = await OrchestrationKit.PrepareAsync(temp);
@@ -542,20 +542,74 @@ public sealed class FoldStepTests
         var held = Answer(HarnessExit.Refused, "held", RequestStanding.Sound, [], [], OutcomeCause.LockHeld);
 
         var once = Scripted(sound, moved, Answer(HarnessExit.Success, "folded", RequestStanding.Sound, [], []));
-        var always = Scripted(sound, moved);
         var waiting = Scripted(sound, held);
 
-        var passed = await new FoldStepRunner(kit.Harness.ContextLoader, kit.Harness.Platform, kit.Harness.OrchestrationStore, once, Ledger(kit), kit.Harness.GraphSyncs).RunAsync(Run(kit, Fold()), Token);
-        var failed = await new FoldStepRunner(kit.Harness.ContextLoader, kit.Harness.Platform, kit.Harness.OrchestrationStore, always, Ledger(kit), kit.Harness.GraphSyncs).RunAsync(Run(kit, Fold()), Token);
-        var lockHeld = await new FoldStepRunner(kit.Harness.ContextLoader, kit.Harness.Platform, kit.Harness.OrchestrationStore, waiting, Ledger(kit), kit.Harness.GraphSyncs).RunAsync(Run(kit, Fold()), Token);
+        var passed = await Folding(kit, once).RunAsync(Run(kit, Fold()), Token);
+        var lockHeld = await Folding(kit, waiting).RunAsync(Run(kit, Fold()), Token);
 
         Assert.True(passed.Passed, passed.Error);
         _ = await once.Received(2).FoldAsync(Arg.Is<FoldAgentRequest>(request => request.Apply && ReferenceEquals(request.Expected, named)), Arg.Any<CancellationToken>());
-        Assert.Equal((HarnessExit.Refused, "the trees moved"), (failed.Exit, failed.Error));
-        _ = await always.Received(FoldFamilyStepRunner.MostPasses).FoldAsync(Arg.Is<FoldAgentRequest>(request => request.Apply), Arg.Any<CancellationToken>());
         Assert.Equal((HarnessExit.Refused, OutcomeCause.LockHeld), (lockHeld.Exit, lockHeld.Cause));
         _ = await waiting.Received(1).FoldAsync(Arg.Is<FoldAgentRequest>(request => request.Apply), Arg.Any<CancellationToken>());
     }
+
+    /// <summary>
+    /// An apply its trees moved under is weighed again for as long as they keep moving, never to a count of passes: a fold
+    /// whose dry run names something new on each of five passes, its apply refused under its hold each time, applies on
+    /// the sixth, held to what that pass's dry run named - as one of many agents folding into one tree at once does.
+    /// </summary>
+    [Fact]
+    public async Task AFoldWhoseTreesMoveFiveTimes_AppliesOnTheSixth()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var dries = Enumerable.Range(1, 6).Select(pass => Sound("b.txt", $"moved-{pass}.txt")).ToArray();
+        var moved = Answer(HarnessExit.Refused, "the trees moved", RequestStanding.Refused, [], [RefusalKind.Other]);
+        var agents = Moving(dries, moved, moved, moved, moved, moved, Answer(HarnessExit.Success, "folded", RequestStanding.Sound, [], []));
+
+        var folded = await Folding(kit, agents).RunAsync(Run(kit, Fold()), Token);
+
+        Assert.True(folded.Passed, folded.Error);
+        _ = await agents.Received(6).FoldAsync(Arg.Is<FoldAgentRequest>(request => request.Apply), Arg.Any<CancellationToken>());
+        _ = await agents.Received(1).FoldAsync(Arg.Is<FoldAgentRequest>(request => request.Apply && ReferenceEquals(request.Expected, dries[5].Facts!.Planned)), Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>
+    /// A fold whose trees come back to a state a pass weighed before is a cycle: weighed again it would go round for ever,
+    /// so it fails on the pass that came back, with what its apply said and how its trees came round. One whose trees stand
+    /// as the pass before found them fails on its second pass the same way, for its apply would be refused the same.
+    /// </summary>
+    [Fact]
+    public async Task TreesThatReturnToAnEarlierState_AreACycle()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var one = Sound("b.txt");
+        var other = Sound("b.txt", "c.txt");
+        var moved = Answer(HarnessExit.Refused, "the trees moved", RequestStanding.Refused, [], [RefusalKind.Other]);
+        var cycling = Moving([one, other, one], moved);
+        var standing = Moving([one], moved);
+
+        var cycled = await Folding(kit, cycling).RunAsync(Run(kit, Fold()), Token);
+        var stood = await Folding(kit, standing).RunAsync(Run(kit, Fold()), Token);
+
+        Assert.Equal(
+            (HarnessExit.Refused, "the trees moved. Weighed 3 times, its trees came back to what an earlier pass weighed: weighed again, they would go round for ever."),
+            (cycled.Exit, cycled.Error));
+        _ = await cycling.Received(3).FoldAsync(Arg.Is<FoldAgentRequest>(request => request.Apply), Arg.Any<CancellationToken>());
+        Assert.Equal(
+            (HarnessExit.Refused, "the trees moved. Weighed 2 times, its trees held what the pass before weighed: weighed again, the apply would be refused the same."),
+            (stood.Exit, stood.Error));
+        _ = await standing.Received(2).FoldAsync(Arg.Is<FoldAgentRequest>(request => request.Apply), Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>A dry run that stands sound and would write <paramref name="written"/> into the main tree.</summary>
+    private static UseCaseResult<AgentVerbFacts> Sound(params string[] written)
+        => Answer(HarnessExit.Success, "would fold", RequestStanding.Sound, [], [], planned: new AgentPlanned([], [], [], [], null) { Written = written });
+
+    /// <summary>The fold step over <paramref name="agents"/> and the run's ledger of its folds.</summary>
+    private static FoldStepRunner Folding(OrchestrationKit kit, IAgentService agents)
+        => new(kit.Harness.ContextLoader, kit.Harness.Platform, kit.Harness.OrchestrationStore, agents, Ledger(kit), kit.Harness.GraphSyncs);
 
     /// <summary>
     /// The ledger settles each fold as it ended: an apply that stopped (21) stopped, with what it recorded it left - each
@@ -1288,9 +1342,19 @@ public sealed class FoldStepTests
     /// run's ledger under the main tree's lock, as the verb does, having written nothing.
     /// </summary>
     private static IAgentService Scripted(UseCaseResult<AgentVerbFacts> dry, params UseCaseResult<AgentVerbFacts>[] applies)
+        => Moving([dry], applies);
+
+    /// <summary>
+    /// An agent service whose fold answers each of <paramref name="dries"/> in turn to a dry run, and each of
+    /// <paramref name="applies"/> in turn to an apply, the last of each again once they run out - an apply that goes
+    /// through recording its write through the run's ledger under the main tree's lock, as the verb does, having written
+    /// nothing.
+    /// </summary>
+    private static IAgentService Moving(UseCaseResult<AgentVerbFacts>[] dries, params UseCaseResult<AgentVerbFacts>[] applies)
     {
         var agents = Substitute.For<IAgentService>();
         var at = 0;
+        var dryAt = 0;
 
         agents.FoldAsync(Arg.Any<FoldAgentRequest>(), Arg.Any<CancellationToken>())
             .Returns(async call =>
@@ -1299,7 +1363,7 @@ public sealed class FoldStepTests
 
                 if (!request.Apply)
                 {
-                    return dry;
+                    return dries[Math.Min(dryAt++, dries.Length - 1)];
                 }
 
                 var answer = applies[Math.Min(at++, applies.Length - 1)];

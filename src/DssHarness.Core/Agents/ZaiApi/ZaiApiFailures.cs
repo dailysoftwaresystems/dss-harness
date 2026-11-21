@@ -1,4 +1,4 @@
-using System.Text.Json;
+using System.Text;
 using DssHarness.Core.Agents.Http;
 using DssHarness.Core.Agents.Loop;
 
@@ -82,28 +82,29 @@ public static class ZaiApiFailures
         return new(kind, said, kind is ChatFailureKind.RateLimited or ChatFailureKind.Transient ? retryAfter : null, BalanceSpent: balanceSpent);
     }
 
-    /// <summary>An error's code and message, as Z.AI writes them - the code a string, or a number; nulls where the body is no error of its.</summary>
-    private static (string? Code, string? Message) Read(string body)
+    /// <summary>What an error of Z.AI's says of itself, by each member's path: its code and its message.</summary>
+    private static readonly IReadOnlyList<IReadOnlyList<string>> ErrorMembers = [["error", "code"], ["error", "message"]];
+
+    /// <summary>A refused body's error code and message, read as it streams from where it is kept, never whole; nulls where the body is no error of Z.AI's.</summary>
+    private static (string? Code, string? Message) Read(ApiRefusedBody body)
     {
-        try
-        {
-            using var document = JsonDocument.Parse(body);
+        using var stream = body.Open();
+        return Read(stream);
+    }
 
-            if (ApiAnswers.Member(document.RootElement, "error") is not { } error)
-            {
-                return (null, null);
-            }
+    /// <summary>An error's code and message, as Z.AI writes them in a chunk of its stream; nulls where the chunk is no error of its.</summary>
+    private static (string? Code, string? Message) Read(string data)
+    {
+        using var stream = new MemoryStream(Encoding.UTF8.GetBytes(data), writable: false);
+        return Read(stream);
+    }
 
-            var code = error.TryGetProperty("code", out var named) && named.ValueKind is JsonValueKind.String or JsonValueKind.Number
-                ? named.ValueKind == JsonValueKind.String ? named.GetString() : named.GetRawText()
-                : null;
+    /// <summary>An error's code - a string, or a number as it is written - and message, read from <paramref name="json"/> as it streams.</summary>
+    private static (string? Code, string? Message) Read(Stream json)
+    {
+        var members = ApiAnswers.Members(json, ErrorMembers);
 
-            return (code, ApiAnswers.Text(error, "message"));
-        }
-        catch (JsonException)
-        {
-            return (null, null);
-        }
+        return (members.GetValueOrDefault("error.code"), members.GetValueOrDefault("error.message"));
     }
 }
 

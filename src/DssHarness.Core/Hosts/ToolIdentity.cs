@@ -57,9 +57,6 @@ public static class ToolPackage
     public static IReadOnlyList<string> ChangeArguments(string verb, string version, string? toolPath = null)
         => ["tool", verb, .. Kept(toolPath), Id, "--version", version, "--source", Source];
 
-    /// <summary>Longest installing or updating the tool may take, which includes downloading it.</summary>
-    public static readonly TimeSpan ChangeBudget = TimeSpan.FromMinutes(10);
-
     /// <summary>Where dotnet keeps a user's global tools, below that user's home directory, a directory at a time.</summary>
     private static readonly string[] GlobalTools = [".dotnet", "tools"];
 

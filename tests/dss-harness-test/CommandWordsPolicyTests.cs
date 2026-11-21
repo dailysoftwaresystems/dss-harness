@@ -1394,9 +1394,9 @@ public sealed class CommandWordsPolicyTests
             Assert.False(WindowsNames.MayShorten(segment, name), $"'{segment}' was read as '{name}'");
         }
 
-        Assert.Equal(["/r/GIT~1/x", "/r/.git/x", "/r/.github/x"], WindowsNames.Lengthened("/r/GIT~1/x", [".git", ".github", "runner"], 64));
-        Assert.Equal(["/r/HEAD~1"], WindowsNames.Lengthened("/r/HEAD~1", [".git", ".harness-config"], 64));
-        Assert.Throws<NotSupportedException>(() => WindowsNames.Lengthened("/A~1/B~1/C~1", ["a1", "a2", "a3", "a4", "b1", "b2", "b3", "b4", "c1", "c2", "c3"], 64));
+        Assert.Equal(["/r/GIT~1/x", "/r/.git/x", "/r/.github/x"], WindowsNames.Lengthened("/r/GIT~1/x", [".git", ".github", "runner"]));
+        Assert.Equal(["/r/HEAD~1"], WindowsNames.Lengthened("/r/HEAD~1", [".git", ".harness-config"]));
+        Assert.Equal(5 * 4 * 4, WindowsNames.Lengthened("/A~1/B~1/C~1", ["a1", "a2", "a3", "a4", "b1", "b2", "b3", "c1", "c2", "c3"]).Count());
     }
 
     /// <summary>
@@ -1417,10 +1417,12 @@ public sealed class CommandWordsPolicyTests
         Assert.Equal([new NamedPath("-i./key", true, true), new NamedPath("./key", false, false)], CommandAnalysis.PathsNamed("-i./key"));
         Assert.Equal([new NamedPath("-Path:a/b", true, true), new NamedPath("a/b", true, false), new NamedPath("ath:a/b", false, false)], CommandAnalysis.PathsNamed("-Path:a/b"));
         Assert.Equal([new NamedPath("--file=x", true, true), new NamedPath("x", true, false)], CommandAnalysis.PathsNamed("--file=x"));
+        // Each word the braces spell is read by the same rules as the word itself, its own readings under it: the word's
+        // first alternative spelled first.
         Assert.Equal(
-            [new NamedPath("a {b,c}", true, true), new NamedPath("a", false, false), new NamedPath("{b,c}", false, false), new NamedPath("a c", true, true), new NamedPath("a b", true, true)],
+            [new NamedPath("a {b,c}", true, true), new NamedPath("a", false, false), new NamedPath("{b,c}", false, false), new NamedPath("a b", true, true), new NamedPath("a", false, false), new NamedPath("b", false, false), new NamedPath("a c", true, true), new NamedPath("a", false, false), new NamedPath("c", false, false)],
             CommandAnalysis.PathsNamed("a {b,c}"));
-        Assert.Equal([new NamedPath("{x,y}/k", true, true), new NamedPath("y/k", true, true), new NamedPath("x/k", true, true)], CommandAnalysis.PathsNamed("{x,y}/k"));
+        Assert.Equal([new NamedPath("{x,y}/k", true, true), new NamedPath("x/k", true, true), new NamedPath("y/k", true, true)], CommandAnalysis.PathsNamed("{x,y}/k"));
         Assert.Equal([new NamedPath("{x,y}/k", true, true)], CommandAnalysis.PathsNamed("{x,y}/k", braces: false));
         Assert.Equal([new NamedPath("file:///tmp/k", true, true), new NamedPath(new Uri("file:///tmp/k").LocalPath, true, false)], CommandAnalysis.PathsNamed("file:///tmp/k"));
 

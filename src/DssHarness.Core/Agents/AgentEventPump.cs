@@ -32,7 +32,10 @@ namespace DssHarness.Core.Agents;
 /// </remarks>
 public sealed class AgentEventPump : IAgentEventSink, IAsyncDisposable
 {
-    /// <summary>How many events may wait for their sinks before a producer is made to wait with them.</summary>
+    /// <summary>
+    /// How many events may wait for their sinks before a producer is made to wait with them: back-pressure, never a loss -
+    /// the channel waits (<see cref="BoundedChannelFullMode.Wait"/>), never drops, and its one reader drains it to the end.
+    /// </summary>
     public const int Capacity = 1024;
 
     private readonly Channel<AgentEvent> _incoming = Channel.CreateBounded<AgentEvent>(

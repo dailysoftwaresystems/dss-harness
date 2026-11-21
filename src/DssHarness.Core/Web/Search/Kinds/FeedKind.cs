@@ -9,12 +9,13 @@ public sealed class FeedKind : IWebSearchKind
     public string Kind => "feed";
 
     /// <inheritdoc/>
-    public int Version => 1;
+    public int Version => 2;
 
     /// <inheritdoc/>
     public IReadOnlyList<KeyDescription> Keys { get; } =
     [
-        new("url", "the address asked: a template whose {query} is the query, and {limit} the most results asked where the search takes one") { Required = true },
+        new("url", "the address asked: a template whose {query} is the query, {limit} how many results a page holds (pageSize) where the search takes one, {page} the page asked and {start} how many results come before it; one that names neither {page} nor {start} asks one page") { Required = true },
+        new("firstPage", "the number the source counts its first page as, which {page} is filled from: 1 where none is said, or 0"),
     ];
 
     /// <inheritdoc/>
@@ -35,7 +36,19 @@ public sealed class FeedKind : IWebSearchKind
             return [];
         }
 
-        return WebRequestTemplate.AddressProblem("url", url, [], needsQuery: true) is { } problem ? [problem] : [];
+        if (WebRequestTemplate.AddressProblem("url", url, [], needsQuery: true) is { } problem)
+        {
+            return [problem];
+        }
+
+        if (source.Value("firstPage") is { } first && (first.ValueKind != System.Text.Json.JsonValueKind.Number || !first.TryGetInt32(out var counted) || counted is not (0 or 1)))
+        {
+            return [$"'firstPage' is 1 or 0, the number the source counts its first page as, and is {first.GetRawText()}"];
+        }
+
+        return source.Has("firstPage") && !WebRequestTemplate.Parse(url).Names.Contains(WebRequestTemplate.Page)
+            ? [$"'firstPage' says what {{{WebRequestTemplate.Page}}} counts from, and 'url' names no {{{WebRequestTemplate.Page}}}"]
+            : [];
     }
 
     /// <inheritdoc/>
@@ -53,11 +66,15 @@ public sealed class FeedKind : IWebSearchKind
     }
 
     /// <inheritdoc/>
-    public WebSearchRequest Request(WebSearchSource source, WebSearchFound found, string query, int limit)
+    public WebSearchRequest Request(WebSearchSource source, WebSearchFound found, string query, int page)
     {
         ArgumentNullException.ThrowIfNull(source);
 
-        return WebSearchRequest.Http.Get(WebRequestTemplate.Parse(source.Text("url")!).Address(query, limit, WebSearchFound.None.Values), FeedItems.Accept);
+        var url = WebRequestTemplate.Parse(source.Text("url")!);
+
+        return page > 1 && !url.Pages
+            ? new WebSearchRequest.OnePage($"its address names no {{{WebRequestTemplate.Page}}} and no {{{WebRequestTemplate.Start}}}, so it answers one page, the first")
+            : WebSearchRequest.Http.Get(url.Address(query, new WebSearchPage(page, source.PageSize, source.Integer("firstPage") ?? 1), WebSearchFound.None.Values), FeedItems.Accept);
     }
 
     /// <inheritdoc/>

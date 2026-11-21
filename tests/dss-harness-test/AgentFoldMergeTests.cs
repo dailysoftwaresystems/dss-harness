@@ -371,21 +371,42 @@ public sealed class AgentFoldMergeTests
         Assert.Equal(Text((2, "AGENT 2")), OrchestrationKit.Read(worktree, Both));
     }
 
-    /// <summary>A file above the bound a merge is offered for is never read into memory to be merged: none is offered, and its size is said.</summary>
+    /// <summary>
+    /// A file of any size both trees changed is merged by git over files on disk, its merge kept as a blob in git's store
+    /// and checked out into each tree: a forty-megabyte file, a lock file regenerated on both sides, merges clean and is
+    /// written whole into both. Red where a merge is offered only up to 16 MiB.
+    /// </summary>
     [Fact]
-    public async Task AFileAboveTheBound_IsOfferedNoMerge_SayingHowLargeItIs()
+    public async Task AFortyMegabyteFileChangedOnBothSides_IsMerged()
     {
         using var temp = new TempDirectory();
-        var (kit, worktree) = await AtItsBaseAsync(temp);
-        OrchestrationKit.Write(worktree, Both, Text((2, "AGENT 2")));
-        OrchestrationKit.Write(kit.Main, Both, Text((9, "MAIN 9")) + new string('x', (int)TwoChanges.MostBytes + (1024 * 1024)));
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        const string Lock = "package-lock.json";
 
-        var refused = await kit.FoldAsync(Agent, apply: false, Merging(Both));
+        // Forty megabytes of lines; each side changes one of its own, far apart.
+        static string Large(string? first, string? last)
+        {
+            var text = new StringBuilder(41 * 1024 * 1024);
 
-        Assert.Equal(HarnessExit.Refused, refused.ExitCode);
-        Assert.Contains(refused.Details!, line => line.StartsWith($"  '{Both}': ", StringComparison.Ordinal)
-            && line.EndsWith("; no three-way merge is offered: it is 17 MiB, and a merge is offered for a file up to 16 MiB", StringComparison.Ordinal));
-        Assert.DoesNotContain(refused.Details!, line => line.StartsWith("to merge the", StringComparison.Ordinal));
+            for (var at = 0; at < 3_200_000; at++)
+            {
+                text.Append(at == 0 && first is not null ? first : at == 3_199_999 && last is not null ? last : $"line {at:D7}").Append('\n');
+            }
+
+            return text.ToString();
+        }
+
+        OrchestrationKit.Write(kit.Main, Lock, Large(null, null));
+        await kit.Harness.CommitAllAsync(kit.Main, "a large file", Token);
+        var worktree = await kit.CreateAgentAsync(Agent);
+        OrchestrationKit.Write(worktree, Lock, Large("AGENT", null));
+        OrchestrationKit.Write(kit.Main, Lock, Large(null, "MAIN"));
+
+        var applied = await kit.FoldAsync(Agent, apply: true, Merging(Lock));
+
+        Assert.True(applied.Succeeded, OrchestrationKit.Describe(applied));
+        Assert.True(File.ReadAllText(Path.Combine(kit.Main, Lock)) == Large("AGENT", "MAIN"), "The main tree's copy is not the merge.");
+        Assert.True(File.ReadAllText(Path.Combine(worktree, Lock)) == Large("AGENT", "MAIN"), "The agent's copy is not the merge.");
     }
 
     /// <summary>
@@ -448,10 +469,93 @@ public sealed class AgentFoldMergeTests
 
         Assert.Equal(HarnessExit.Refused, refused.ExitCode);
         Assert.Contains(refused.Details!, line => line.EndsWith(
-            $"; no three-way merge is offered: the bytes both trees shared (SHA-256 {recorded[..8]}...) were recorded by a build that kept no copy of them, and none of the "
-            + "1 version(s) of the path in the last 512 commit(s) of the main tree that changed it is those bytes",
+            $"; no three-way merge is offered: the bytes both trees shared (SHA-256 {recorded}) were recorded by a build that kept no copy of them, and none of the "
+            + "1 version(s) of the path in the main tree's history is those bytes",
             StringComparison.Ordinal));
         Assert.Equal(Text((9, "MAIN 9")), OrchestrationKit.Read(kit.Main, Both));
+    }
+
+    /// <summary>
+    /// The digest a refusal names is given whole in the fold's --json, as the seed records it - the key it is - never cut
+    /// to a few characters. Red where a digest is shown as its first eight.
+    /// </summary>
+    [Fact]
+    public async Task TwoChanges_GivesTheFullDigestInJson()
+    {
+        using var temp = new TempDirectory();
+        var (kit, worktree) = await HandedAsync(temp, Text((5, "HANDED, AND NEVER COMMITTED")));
+        var recorded = Seed(kit).Paths[Both];
+        Directory.Delete(kit.Layout.SharedDirectory(Agent), recursive: true);
+        OrchestrationKit.Write(kit.Main, Both, Text((9, "MAIN 9")));
+        await kit.Harness.CommitAllAsync(kit.Main, "another version than the one handed", Token);
+        OrchestrationKit.Write(worktree, Both, Text((2, "AGENT 2"), (5, "HANDED, AND NEVER COMMITTED")));
+
+        var answered = await CliRunner.RunAsync(["fold-agent", "o1", Agent, "--merge", Both, "--json"], Token, workingDirectory: kit.Main);
+
+        Assert.Equal(HarnessExit.Refused, answered.ExitCode);
+        using var document = System.Text.Json.JsonDocument.Parse(answered.StandardOutput);
+        Assert.Contains($"(SHA-256 {recorded})", document.RootElement.GetRawText(), StringComparison.Ordinal);
+        Assert.Equal(64, recorded.Length);
+    }
+
+    /// <summary>
+    /// A seed's bytes are found in the main tree's history however far back they are: the whole history is walked once,
+    /// each blob it held compared once, and the version six hundred commits back is what both held - so the merge is made.
+    /// Red where the search reads only the last 512 commits or 64 versions.
+    /// </summary>
+    [Fact]
+    public async Task ABlobSixHundredCommitsBack_IsFoundByItsId()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        const string Path6 = "src/h.txt";
+        OrchestrationKit.Write(kit.Main, Path6, Text((5, "AS HANDED")));
+        var worktree = await kit.CreateAgentAsync(Agent);
+
+        // As a build that kept no copies left it: the seed, and nothing beside it. The main tree then commits what it
+        // handed, and six hundred versions after it.
+        Directory.Delete(kit.Layout.SharedDirectory(Agent), recursive: true);
+        await kit.Harness.CommitAllAsync(kit.Main, "what the agent was handed", Token);
+        await GitImport.CommitManyAsync(kit.Main, Path6, 600, at => $"{Text((5, "AS HANDED"))}# version {at}\n", Token);
+        OrchestrationKit.Write(worktree, Path6, Text((2, "AGENT 2"), (5, "AS HANDED")));
+        OrchestrationKit.Write(kit.Main, Path6, Text((5, "AS HANDED"), (9, "MAIN 9")));
+
+        var applied = await kit.FoldAsync(Agent, apply: true, Merging(Path6));
+
+        Assert.True(applied.Succeeded, OrchestrationKit.Describe(applied));
+        Assert.Equal(Text((2, "AGENT 2"), (5, "AS HANDED"), (9, "MAIN 9")), OrchestrationKit.Read(kit.Main, Path6));
+    }
+
+    /// <summary>
+    /// Every conflict of a merge is given, counted by its markers: a fold whose one path conflicts in eight hundred places
+    /// says eight hundred, and its details hold every line of every one - the CLI whole, and an agent reading the result
+    /// through the tool runtime's pages (<c>read_result</c>) a page at a time. Red where the count is git's exit code, cut
+    /// at 127, or where only the first few conflicts are shown.
+    /// </summary>
+    [Fact]
+    public async Task EightHundredConflicts_AreGivenWholeByPage()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        const string Many = "src/many.txt";
+
+        static string Version(string changed) => string.Concat(Enumerable.Range(0, 800).Select(at => $"kept {at} a\nkept {at} b\nkept {at} c\nkept {at} d\n{changed} {at}\n"));
+
+        OrchestrationKit.Write(kit.Main, Many, Version("line"));
+        await kit.Harness.CommitAllAsync(kit.Main, "eight hundred lines to change", Token);
+        var worktree = await kit.CreateAgentAsync(Agent);
+        OrchestrationKit.Write(worktree, Many, Version("theirs"));
+        OrchestrationKit.Write(kit.Main, Many, Version("ours"));
+
+        var refused = await kit.FoldAsync(Agent, apply: false, Merging(Many));
+
+        Assert.Equal(HarnessExit.Refused, refused.ExitCode);
+        Assert.Contains(refused.Details!, line => line.StartsWith($"  '{Many}': ", StringComparison.Ordinal)
+            && line.Contains("a three-way merge of the two conflicts in 800 place(s), shown below", StringComparison.Ordinal));
+        var shown = refused.Details!.SkipWhile(line => !line.StartsWith($"conflicts of '{Many}', 800 place(s)", StringComparison.Ordinal)).Skip(1).Take(800 * 7).ToList();
+        Assert.Equal(800 * 7, shown.Count);
+        Assert.Equal(800, shown.Count(line => line == "  <<<<<<< the main tree"));
+        Assert.Equal(["  <<<<<<< the main tree", "  ours 799", "  ||||||| what both held", "  line 799", "  =======", "  theirs 799", "  >>>>>>> the agent"], shown.TakeLast(7));
     }
 
     /// <summary>
@@ -479,12 +583,12 @@ public sealed class AgentFoldMergeTests
         OrchestrationKit.Write(worktree, "b.txt", "two\nagent edit\n");
         OrchestrationKit.Write(kit.Main, "b.txt", "two\nmain edit\n");
 
-        // The version the history holds, as git stores it: checked out, it is what the seed recorded.
-        var stored = Encoding.UTF8.GetBytes(Text((5, "AS HANDED")));
-        const string Failed = "Could not read 'src/h.dos' as git would check it out: error: external filter 'smudge' failed";
+        // The blob the history holds the version in: checked out, it is what the seed recorded.
+        var stored = (await kit.Harness.RunGitAsync(kit.Main, ["rev-parse", $"HEAD:{Dos}"], Token)).StandardOutput.Trim();
+        const string Failed = "Could not write 'src/h.dos' as git would check it out: error: external filter 'smudge' failed";
         var git = new InterceptingGitClient(kit.Harness.GitClient)
         {
-            CheckOutFailure = (_, staged) => staged.AsSpan().SequenceEqual(stored) ? new HarnessException(HarnessExit.CommandFailed, Failed) : null,
+            CheckedOutFailure = (_, blob) => blob == stored ? new HarnessException(HarnessExit.CommandFailed, Failed) : null,
         };
         var agents = kit.Harness.Agents(kit.Harness.FileSystem, kit.Harness.AnchorRegistryService, git);
 
@@ -492,8 +596,8 @@ public sealed class AgentFoldMergeTests
 
         Assert.Equal(HarnessExit.Refused, refused.ExitCode);
         Assert.Contains(refused.Details!, line => line.StartsWith($"  '{Dos}': ", StringComparison.Ordinal) && line.EndsWith(
-            $"; no three-way merge is offered: the bytes both trees shared (SHA-256 {recorded[..8]}...) were recorded by a build that kept no copy of them, and none of the "
-            + $"1 version(s) of the path in the last 512 commit(s) of the main tree that changed it is those bytes - 1 of them could not be checked out to compare: {Failed}",
+            $"; no three-way merge is offered: the bytes both trees shared (SHA-256 {recorded}) were recorded by a build that kept no copy of them, and none of the "
+            + $"1 version(s) of the path in the main tree's history is those bytes - 1 of them could not be checked out to compare: {Failed}",
             StringComparison.Ordinal));
         Assert.Contains(refused.Details!, line => line.StartsWith("  'b.txt': the main tree changed it after the agent's base", StringComparison.Ordinal));
         Assert.Equal(Ended(Text((5, "AS HANDED"), (9, "MAIN 9"))), OrchestrationKit.Read(kit.Main, Dos));
@@ -514,7 +618,7 @@ public sealed class AgentFoldMergeTests
         // Taken for what both held, the changed copy would make the main tree's change no change, and the merge the agent's file.
         Assert.Equal(HarnessExit.Refused, refused.ExitCode);
         Assert.Contains(refused.Details!, line => line.EndsWith(
-            $"; no three-way merge is offered: its kept copy '{copy}' no longer holds the bytes recorded for it (SHA-256 {Path.GetFileName(copy)[..8]}...)",
+            $"; no three-way merge is offered: its kept copy '{copy}' no longer holds the bytes recorded for it (SHA-256 {Path.GetFileName(copy)})",
             StringComparison.Ordinal));
         Assert.Equal(Text((9, "MAIN 9")), OrchestrationKit.Read(kit.Main, Both));
     }
@@ -531,12 +635,12 @@ public sealed class AgentFoldMergeTests
         OrchestrationKit.Write(worktree, Both, Text((2, "AGENT 2")));
         OrchestrationKit.Write(kit.Main, Both, Text((9, "MAIN 9")));
 
-        // The main tree's copy is read when it is weighed, when its size is asked, and when the write asks whether it is
-        // still what was weighed: the agent saves its own just before that third.
+        // The main tree's copy is read when it is weighed - git reads it to merge it, and no size is asked - and when the
+        // write asks whether it is still what was weighed: the agent saves its own just before that second.
         var saving = new MeanwhileFileSystem(
             kit.Harness.FileSystem,
             Path.Combine(kit.Main, Both),
-            read: 3,
+            read: 2,
             () => File.WriteAllText(Path.Combine(worktree, Both), Text((2, "AGENT 2"), (4, "SAVED MEANWHILE"))));
         var agents = kit.Harness.Agents(saving, kit.Harness.AnchorRegistryService);
 
@@ -572,7 +676,7 @@ public sealed class AgentFoldMergeTests
         var meanwhile = new MeanwhileFileSystem(
             kit.Harness.FileSystem,
             Path.Combine(kit.Main, Both),
-            read: 3,
+            read: 2,
             () => kit.Harness.FilePermissions.SetExecutable(changed, executable: true));
         var agents = kit.Harness.Agents(meanwhile, kit.Harness.AnchorRegistryService);
 

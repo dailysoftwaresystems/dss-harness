@@ -1783,6 +1783,27 @@ public sealed class GitClientTests
     private static string Text(byte[]? bytes) => Encoding.UTF8.GetString(bytes ?? []);
 
     /// <summary>
+    /// Three versions merged as git merges them, each in hand as git stores it - in a repository of the test's own whose
+    /// attributes convert nothing - with the merged text read back from the blob the merge wrote, where it is clean.
+    /// </summary>
+    private static async Task<(GitTextMerge Merge, byte[]? Merged)> MergedAsync(byte[] ancestor, byte[] ours, byte[] theirs, CancellationToken cancellationToken)
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        await harness.InitializeGitRepositoryAsync(temp.Path, cancellationToken);
+        File.WriteAllText(temp.Combine(".gitattributes"), "* -text\n");
+
+        var merge = await harness.GitClient.MergeAsync(
+            temp.Path,
+            "a.txt",
+            [new GitContent.Bytes(ancestor), new GitContent.Bytes(ours), new GitContent.Bytes(theirs)],
+            MergeNames,
+            cancellationToken);
+
+        return (merge, merge.Blob is { } blob ? (await harness.GitClient.ReadBlobsAsync(temp.Path, [blob], cancellationToken))[0] : null);
+    }
+
+    /// <summary>
     /// Every loose object file in the repository's object directory: what a stored object would add to. Git's own
     /// book-keeping under <c>objects/info</c> and <c>objects/pack</c> is left out - a maintenance git runs in the
     /// background after a commit (git 2.55's) rewrites those while a test reads, never a loose object.
@@ -1857,10 +1878,10 @@ public sealed class GitClientTests
 
         byte[] Version(string first, string last) => [.. mark, .. Utf8($"{first}\ncafé\nthree\nfour\nfive\n{last}\n")];
 
-        var merge = await harness.GitClient.MergeTextAsync(Version("one", "six"), Version("ONÉ", "six"), Version("one", "SÍX"), MergeNames, cancellationToken);
+        var (merge, merged) = await MergedAsync(Version("one", "six"), Version("ONÉ", "six"), Version("one", "SÍX"), cancellationToken);
 
         Assert.True(merge.IsClean);
-        Assert.Equal(Version("ONÉ", "SÍX"), merge.Merged);
+        Assert.Equal(Version("ONÉ", "SÍX"), merged);
 
         byte[] checkedOut = [.. mark, .. Utf8("café\r\nmerged\r\n")];
 
@@ -2014,10 +2035,10 @@ public sealed class GitClientTests
         // A byte that is no UTF-8 among them: what is merged is bytes, carried as they are.
         byte[] Version(string first, string last) => [.. Utf8($"{first}\ntwo\ncaf"), 0xE9, .. Utf8($"\nfour\nfive\nsix\n{last}\n")];
 
-        var merge = await harness.GitClient.MergeTextAsync(Version("one", "seven"), Version("ONE", "seven"), Version("one", "SEVEN"), MergeNames, cancellationToken);
+        var (merge, merged) = await MergedAsync(Version("one", "seven"), Version("ONE", "seven"), Version("one", "SEVEN"), cancellationToken);
 
         Assert.True(merge.IsClean);
-        Assert.Equal(Version("ONE", "SEVEN"), merge.Merged);
+        Assert.Equal(Version("ONE", "SEVEN"), merged);
         Assert.Equal(0, merge.Conflicts);
         Assert.Empty(merge.Shown);
         Assert.Null(merge.NotMerged);
@@ -2028,7 +2049,7 @@ public sealed class GitClientTests
         File.WriteAllBytes(temp.Combine("t"), Version("one", "SEVEN"));
         await harness.RunGitAsync(temp.Path, ["merge-file", "o", "a", "t"], cancellationToken);
 
-        Assert.Equal(File.ReadAllBytes(temp.Combine("o")), merge.Merged);
+        Assert.Equal(File.ReadAllBytes(temp.Combine("o")), merged);
     }
 
     [Fact]
@@ -2038,10 +2059,11 @@ public sealed class GitClientTests
 
         static byte[] Version(string second, string eighth) => Utf8($"one\n{second}\nthree\nfour\nfive\nsix\nseven\n{eighth}\nnine\n");
 
-        var merge = await new HarnessFactory().GitClient.MergeTextAsync(Version("two", "eight"), Version("OURS", "eight of ours"), Version("THEIRS", "eight of theirs"), MergeNames, cancellationToken);
+        var (merge, merged) = await MergedAsync(Version("two", "eight"), Version("OURS", "eight of ours"), Version("THEIRS", "eight of theirs"), cancellationToken);
 
         Assert.False(merge.IsClean);
-        Assert.Null(merge.Merged);
+        Assert.Null(merge.Blob);
+        Assert.Null(merged);
         Assert.Null(merge.NotMerged);
         Assert.Equal(2, merge.Conflicts);
         Assert.Equal("2 place(s)", merge.ConflictsSaid);
@@ -2058,10 +2080,10 @@ public sealed class GitClientTests
     {
         var cancellationToken = TestContext.Current.CancellationToken;
 
-        var merge = await new HarnessFactory().GitClient.MergeTextAsync(Utf8("one\ntwo\nthree\n"), Utf8("one\nBOTH\nthree\n"), Utf8("one\nBOTH\nthree\n"), MergeNames, cancellationToken);
+        var (merge, merged) = await MergedAsync(Utf8("one\ntwo\nthree\n"), Utf8("one\nBOTH\nthree\n"), Utf8("one\nBOTH\nthree\n"), cancellationToken);
 
         Assert.True(merge.IsClean);
-        Assert.Equal("one\nBOTH\nthree\n", Text(merge.Merged));
+        Assert.Equal("one\nBOTH\nthree\n", Text(merged));
 
         // Counted for each side, since each made it.
         Assert.Equal((1, 1), (merge.OursHunks, merge.TheirsHunks));
@@ -2074,17 +2096,16 @@ public sealed class GitClientTests
     [Fact]
     public async Task AFileHoldingALineOfSevenOpeningMarks_IsStillMerged_AndItsLineIsNotShownAsAConflict()
     {
-        var git = new HarnessFactory().GitClient;
         var cancellationToken = TestContext.Current.CancellationToken;
 
         static byte[] Version(string first, string fifth) => Utf8($"{first}\n<<<<<<< not a marker\n=======\n>>>>>>> nor this\n{fifth}\nsix\n");
 
-        var clean = await git.MergeTextAsync(Version("one", "five"), Version("ONE", "five"), Version("one", "FIVE"), MergeNames, cancellationToken);
+        var (clean, merged) = await MergedAsync(Version("one", "five"), Version("ONE", "five"), Version("one", "FIVE"), cancellationToken);
 
         Assert.True(clean.IsClean);
-        Assert.Equal(Version("ONE", "FIVE"), clean.Merged);
+        Assert.Equal(Version("ONE", "FIVE"), merged);
 
-        var conflict = await git.MergeTextAsync(Version("one", "five"), Version("one", "OURS"), Version("one", "THEIRS"), MergeNames, cancellationToken);
+        var (conflict, _) = await MergedAsync(Version("one", "five"), Version("one", "OURS"), Version("one", "THEIRS"), cancellationToken);
 
         Assert.Equal(1, conflict.Conflicts);
         Assert.Equal(
@@ -2107,7 +2128,7 @@ public sealed class GitClientTests
 
         byte[] Version(string fifth) => Utf8($"one\n{new string(mark, 7)} not a marker\nthree\nfour\n{fifth}\nsix\n");
 
-        var conflict = await new HarnessFactory().GitClient.MergeTextAsync(Version("five"), Version("OURS"), Version("THEIRS"), MergeNames, cancellationToken);
+        var (conflict, _) = await MergedAsync(Version("five"), Version("OURS"), Version("THEIRS"), cancellationToken);
 
         Assert.Equal(1, conflict.Conflicts);
         Assert.Equal(
@@ -2122,7 +2143,7 @@ public sealed class GitClientTests
 
         static byte[] Version(byte changed) => [0x89, 0x50, 0x4E, 0x47, 0x00, 0x01, changed, 0x00, 0x0A, 0xFF];
 
-        var merge = await new HarnessFactory().GitClient.MergeTextAsync(Version(1), Version(2), Version(3), MergeNames, cancellationToken);
+        var (merge, _) = await MergedAsync(Version(1), Version(2), Version(3), cancellationToken);
 
         Assert.False(merge.IsClean);
         Assert.Equal(0, merge.Conflicts);
@@ -2130,40 +2151,46 @@ public sealed class GitClientTests
         Assert.False(string.IsNullOrWhiteSpace(merge.NotMerged), "git's reason was not kept.");
     }
 
+    /// <summary>
+    /// Conflicts are counted by their markers, never by git's exit code, which cuts its count at 127: eight hundred are
+    /// eight hundred, and every one is shown whole, the last as the first. Red where the count is git's code, or where
+    /// only the first few are shown.
+    /// </summary>
     [Fact]
-    public async Task MoreThan127Conflicts_AreSaidAs127OrMore_AndOnlyTheFirstAreShown()
+    public async Task EightHundredConflicts_AreCountedByTheirMarkers_AndEveryOneIsShownWhole()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
 
-        // Two hundred lines the two sides changed differently, each among lines neither changed.
+        // Eight hundred lines the two sides changed differently, each among lines neither changed.
         static byte[] Version(string changed)
-            => Utf8(string.Concat(Enumerable.Range(0, 200).Select(at => $"kept {at} a\nkept {at} b\nkept {at} c\nkept {at} d\n{changed} {at}\n")));
+            => Utf8(string.Concat(Enumerable.Range(0, 800).Select(at => $"kept {at} a\nkept {at} b\nkept {at} c\nkept {at} d\n{changed} {at}\n")));
 
-        var merge = await new HarnessFactory().GitClient.MergeTextAsync(Version("line"), Version("ours"), Version("theirs"), MergeNames, cancellationToken);
+        var (merge, _) = await MergedAsync(Version("line"), Version("ours"), Version("theirs"), cancellationToken);
 
         Assert.False(merge.IsClean);
-        Assert.Equal(GitTextMerge.MostConflictsCounted, merge.Conflicts);
-        Assert.Equal("127 place(s) or more", merge.ConflictsSaid);
-        Assert.Equal((GitTextMerge.MostConflictsShown * 7) + 1, merge.Shown.Count);
+        Assert.Equal(800, merge.Conflicts);
+        Assert.Equal("800 place(s)", merge.ConflictsSaid);
+        Assert.Equal(800 * 7, merge.Shown.Count);
         Assert.Equal(["<<<<<<< the main tree", "ours 5", "||||||| what both held", "line 5", "=======", "theirs 5", ">>>>>>> the agent"], merge.Shown.Skip(35).Take(7));
-        Assert.Equal("(194 more conflict(s), not shown)", merge.Shown[^1]);
+        Assert.Equal(["<<<<<<< the main tree", "ours 799", "||||||| what both held", "line 799", "=======", "theirs 799", ">>>>>>> the agent"], merge.Shown.TakeLast(7));
     }
 
+    /// <summary>A conflict of any length is shown whole: fifty lines of one side, every one of them. Red where its lines are cut.</summary>
     [Fact]
-    public async Task AConflictLongerThanIsShown_IsCutAtItsBound_WithHowMuchMoreThereIs()
+    public async Task AConflictOfFiftyLines_IsShownWhole()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
 
         static byte[] Version(string changed, int lines) => Utf8("first\n" + string.Concat(Enumerable.Range(0, lines).Select(at => $"{changed} {at}\n")) + "last\n");
 
-        var merge = await new HarnessFactory().GitClient.MergeTextAsync(Version("line", 1), Version("ours", 50), Version("theirs", 2), MergeNames, cancellationToken);
+        var (merge, _) = await MergedAsync(Version("line", 1), Version("ours", 50), Version("theirs", 2), cancellationToken);
 
         // Opening marker, fifty of ours, the marker of what both held, its one line, the divider, two of theirs, the closing marker.
         Assert.Equal(1, merge.Conflicts);
-        Assert.Equal(GitTextMerge.MostLinesShown + 1, merge.Shown.Count);
+        Assert.Equal(1 + 50 + 1 + 1 + 1 + 2 + 1, merge.Shown.Count);
         Assert.Equal("<<<<<<< the main tree", merge.Shown[0]);
-        Assert.Equal("ours 38", merge.Shown[GitTextMerge.MostLinesShown - 1]);
-        Assert.Equal("(17 more line(s) of this conflict, not shown)", merge.Shown[^1]);
+        Assert.Equal("ours 49", merge.Shown[50]);
+        Assert.Equal(">>>>>>> the agent", merge.Shown[^1]);
     }
 
     [Fact]
@@ -2175,10 +2202,10 @@ public sealed class GitClientTests
             => Utf8(string.Concat(Enumerable.Range(1, 30).Select(line => changed.Contains(line) ? $"CHANGED {line}\n" : $"line {line}\n")));
 
         // Ours: two runs of changed lines. Theirs: three, one of them two lines long.
-        var merge = await new HarnessFactory().GitClient.MergeTextAsync(Version(), Version(2, 10), Version(16, 17, 22, 29), MergeNames, cancellationToken);
+        var (merge, merged) = await MergedAsync(Version(), Version(2, 10), Version(16, 17, 22, 29), cancellationToken);
 
         Assert.True(merge.IsClean);
-        Assert.Equal(Version(2, 10, 16, 17, 22, 29), merge.Merged);
+        Assert.Equal(Version(2, 10, 16, 17, 22, 29), merged);
         Assert.Equal((2, 3), (merge.OursHunks, merge.TheirsHunks));
     }
 
@@ -2208,9 +2235,8 @@ public sealed class GitClientTests
         var third = await CommitAsync("a.txt", "third");
         var again = await CommitAsync("a.txt", "first");
 
-        var whole = await harness.GitClient.ListHeldInHistoryAsync(temp.Path, "HEAD", ["a.txt", "b.txt", "never.txt"], 64, cancellationToken);
+        var whole = await harness.GitClient.ListHeldInHistoryAsync(temp.Path, "HEAD", ["a.txt", "b.txt", "never.txt"], cancellationToken);
 
-        Assert.False(whole.Cut);
         Assert.Equal(5, whole.Commits);
 
         // The commit that changed only the other file holds the first version too, and is no version of its own: each run
@@ -2225,18 +2251,6 @@ public sealed class GitClientTests
             whole.Held["a.txt"]);
         Assert.Equal([new GitHeldAt(again, await BlobAsync(other, "b.txt"))], whole.Held["b.txt"]);
         Assert.Empty(whole.Held["never.txt"]);
-
-        var bounded = await harness.GitClient.ListHeldInHistoryAsync(temp.Path, "HEAD", ["a.txt"], 2, cancellationToken);
-
-        Assert.True(bounded.Cut, "A history cut short at its bound was not said to be.");
-        Assert.Equal(2, bounded.Commits);
-        Assert.Equal([again, third], bounded.Held["a.txt"].Select(held => held.Commit));
-
-        // Exactly as many as the bound is the whole of it, and is not said to be cut.
-        var exact = await harness.GitClient.ListHeldInHistoryAsync(temp.Path, "HEAD", ["a.txt"], 4, cancellationToken);
-
-        Assert.False(exact.Cut);
-        Assert.Equal(4, exact.Held["a.txt"].Count);
     }
 
     /// <summary>
@@ -2266,10 +2280,9 @@ public sealed class GitClientTests
         await harness.CommitAllAsync(temp.Path, "another file on the main side", cancellationToken);
         await harness.RunGitAsync(temp.Path, ["merge", "--quiet", "-s", "ours", "-m", "the other side merged, its file dropped", "side"], cancellationToken);
 
-        var history = await harness.GitClient.ListHeldInHistoryAsync(temp.Path, "HEAD", ["a.txt"], 64, cancellationToken);
+        var history = await harness.GitClient.ListHeldInHistoryAsync(temp.Path, "HEAD", ["a.txt"], cancellationToken);
 
         Assert.Contains(new GitHeldAt(dropped, droppedBlob), history.Held["a.txt"]);
-        Assert.False(history.Cut);
     }
 
     /// <summary>
@@ -2294,7 +2307,7 @@ public sealed class GitClientTests
             await harness.CommitAllAsync(temp.Path, $"{file}: {content}", cancellationToken);
         }
 
-        var history = await harness.GitClient.ListHeldInHistoryAsync(temp.Path, "HEAD", ["[id].tsx"], 64, cancellationToken);
+        var history = await harness.GitClient.ListHeldInHistoryAsync(temp.Path, "HEAD", ["[id].tsx"], cancellationToken);
 
         Assert.Equal(1, history.Commits);
         Assert.Equal([new GitHeldAt(made, blob)], history.Held["[id].tsx"]);
@@ -2332,9 +2345,8 @@ public sealed class GitClientTests
         await harness.StageAsync(temp.Path, "\"docs/line\\nbreak.md\"", "second\n", cancellationToken);
         var second = await CommitAsync("the wrapped name changed");
 
-        var history = await harness.GitClient.ListHeldInHistoryAsync(temp.Path, "HEAD", [Wrapped, "plain.md"], 64, cancellationToken);
+        var history = await harness.GitClient.ListHeldInHistoryAsync(temp.Path, "HEAD", [Wrapped, "plain.md"], cancellationToken);
 
-        Assert.False(history.Cut);
         Assert.Equal(2, history.Commits);
         Assert.Equal([new GitHeldAt(second, await BlobAsync(second)), new GitHeldAt(first, await BlobAsync(first))], history.Held[Wrapped]);
         Assert.Equal(

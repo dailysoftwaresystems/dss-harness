@@ -4,7 +4,7 @@ namespace DssHarness.Core.Configuration;
 
 /// <summary>
 /// The harness's own web search, as the configuration declares it: its sources by name, what a step that names none
-/// searches, and its bounds. Each source is kept as it is written - its kind decides which keys it takes - and read by
+/// searches, and how many requests a step makes. Each source is kept as it is written - its kind decides which keys it takes - and read by
 /// <see cref="Web.Search.WebSearchSources"/>, which lays the repository's entries over the built-in ones key by key.
 /// Left out, the built-in sources and the default bounds hold.
 /// </summary>
@@ -24,10 +24,4 @@ public sealed class AgentWebSearchConfig
     /// out, and at most <see cref="Web.Search.WebSearchSources.MostMaxPerStep"/>.
     /// </summary>
     public int? MaxPerStep { get; init; }
-
-    /// <summary>
-    /// The most results a source gives one search: <see cref="Web.Search.WebSearchSources.DefaultResultsPerSource"/> where
-    /// left out, and at most <see cref="Web.Search.WebSearchSources.MostResultsPerSource"/>.
-    /// </summary>
-    public int? ResultsPerSource { get; init; }
 }

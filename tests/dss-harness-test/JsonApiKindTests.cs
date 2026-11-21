@@ -118,17 +118,18 @@ public sealed class JsonApiKindTests
 
     /// <summary>
     /// A rate limit answers the query - 429; 403 or 503 with Retry-After, as GitHub's secondary limits answer - until the
-    /// time it gave, never later than a day.
+    /// time it gave, as given, a year as a year; one that says not for how long, for its source's pace, which a stored
+    /// answer reads as a second.
     /// </summary>
     [Theory]
-    [InlineData(429, "Retry-After", "120", 120)]
-    [InlineData(503, "Retry-After", "Sun, 25 Oct 2026 12:30:00 GMT", 1800)]
-    [InlineData(403, "Retry-After", "60", 60)]
-    [InlineData(429, null, null, 60)]
-    [InlineData(429, "Retry-After", "999999999", 86400)]
-    [InlineData(429, "Retry-After", "Thu, 25 Oct 2096 12:00:00 GMT", 86400)]
-    [InlineData(403, "X-RateLimit-Remaining", "0", 60)]
-    public void ARateLimit_IsToldWithItsTime(int status, string? header, string? value, int seconds)
+    [InlineData(429, "Retry-After", "120", 120L, true)]
+    [InlineData(503, "Retry-After", "Sun, 25 Oct 2026 12:30:00 GMT", 1800L, true)]
+    [InlineData(403, "Retry-After", "60", 60L, true)]
+    [InlineData(429, null, null, 1L, false)]
+    [InlineData(429, "Retry-After", "999999999", 999999999L, true)]
+    [InlineData(429, "Retry-After", "Thu, 25 Oct 2096 12:00:00 GMT", 2209075200L, true)]
+    [InlineData(403, "X-RateLimit-Remaining", "0", 1L, false)]
+    public void ARateLimit_IsToldWithItsTime(int status, string? header, string? value, long seconds, bool said)
     {
         var headers = header is null ? Headers() : Headers((header, value!));
         var answer = Kind.Read(Source("so", StackOverflow), WebSearchFound.None, Answer(Stored("stackexchange-throttle.json"), status, headers: headers));
@@ -138,23 +139,24 @@ public sealed class JsonApiKindTests
         Assert.Empty(answer.Results);
         Assert.Contains("asks to be left alone", answer.Why, StringComparison.Ordinal);
 
-        // A source that says not for how long is told so, and left a minute.
-        Assert.Equal(header is null, answer.Why!.Contains("saying not for how long", StringComparison.Ordinal));
+        // A source that says not for how long - no Retry-After, and no reset beside its spent requests - is told so, and
+        // left for its pace.
+        Assert.Equal(!said, answer.Why!.Contains("saying not for how long", StringComparison.Ordinal));
     }
 
     /// <summary>A header is read by its name in any case, whatever dictionary its answer comes in.</summary>
     [Fact]
     public void AHeader_IsReadInAnyCase()
-        => Assert.Equal(At + TimeSpan.FromSeconds(30), WebRateLimit.Read(429, new Dictionary<string, string>(StringComparer.Ordinal) { ["retry-after"] = "30" }, At)!.Until);
+        => Assert.Equal(At + TimeSpan.FromSeconds(30), WebRateLimit.Read(429, new Dictionary<string, string>(StringComparer.Ordinal) { ["retry-after"] = "30" }, At, TimeSpan.FromSeconds(1))!.Until);
 
     /// <summary>
-    /// GitHub's limit - a 403 with nothing remaining and a reset in seconds since 1970 - is a limit until that time; a
-    /// reset past a day from now is held to a day.
+    /// GitHub's limit - a 403 with nothing remaining and a reset in seconds since 1970 - is a limit until that time, as
+    /// given: a reset ten years away holds the source for its ten years.
     /// </summary>
     [Fact]
     public void A403WithNothingRemaining_IsALimitUntilItsReset()
     {
-        foreach (var (reset, until) in new[] { (At + TimeSpan.FromMinutes(7), At + TimeSpan.FromMinutes(7)), (At + TimeSpan.FromDays(3650), At + TimeSpan.FromDays(1)) })
+        foreach (var (reset, until) in new[] { (At + TimeSpan.FromMinutes(7), At + TimeSpan.FromMinutes(7)), (At + TimeSpan.FromDays(3650), At + TimeSpan.FromDays(3650)) })
         {
             var answer = Kind.Read(Source("gh", GitHub), WebSearchFound.None, Answer("""{"message":"API rate limit exceeded"}""", 403, headers: Headers(("X-RateLimit-Remaining", "0"), ("X-RateLimit-Reset", reset.ToUnixTimeSeconds().ToString(System.Globalization.CultureInfo.InvariantCulture)))));
 
@@ -203,16 +205,6 @@ public sealed class JsonApiKindTests
         Assert.Empty(answer.Results);
     }
 
-    /// <summary>A failure's body is told cut short, at a word.</summary>
-    [Fact]
-    public void AFailuresLongBody_IsCut()
-    {
-        var answer = Kind.Read(Source("so", StackOverflow), WebSearchFound.None, Answer(string.Concat(Enumerable.Repeat("word ", 400)), 500, "text/plain"));
-
-        Assert.EndsWith("word…", answer.Why, StringComparison.Ordinal);
-        Assert.True(answer.Why!.Length <= "it answered 500: ".Length + 200);
-    }
-
     /// <summary>A pause an answer's body asks for must be one: none at zero; a total below zero is none.</summary>
     [Fact]
     public void ABackoffOfNothing_AndATotalBelowZero_AreNone()
@@ -224,32 +216,88 @@ public sealed class JsonApiKindTests
         Assert.Equal((WebSearchOutcome.Ok, (DateTimeOffset?)null, (long?)null), (answer.Outcome, answer.Until, answer.Total));
     }
 
-    /// <summary>
-    /// An answer is read to its most: a hundred items, each title cut as a snippet is, and no field filled past what is
-    /// read of one - a link that reads the answer's root, as long as it likes, is no address.
-    /// </summary>
+    /// <summary>An answer is read whole: every item of its page, a hundred and fifty of them, each title as long as it is.</summary>
     [Fact]
-    public void AnAnswer_IsReadToItsMost()
+    public void AnAnswer_IsReadWhole()
     {
         const string Keys = """{ "kind": "json-api", "url": "https://a.test/?q={query}", "items": "$.items", "title": "{@.t}", "link": "{@.u}" }""";
         var many = Read(Keys, JsonSerializer.Serialize(new { items = Enumerable.Range(0, 150).Select(at => new { t = new string('T', 1000), u = $"https://a.test/{at}" }) }));
 
-        Assert.Equal(WebSearchAnswer.MostResults, many.Results.Count);
-        Assert.All(many.Results, result => Assert.True(result.Title.Length <= WebSearchResult.MostTitle));
+        Assert.Equal(150, many.Results.Count);
+        Assert.All(many.Results, result => Assert.Equal(1000, result.Title.Length));
+    }
 
+    /// <summary>A title three thousand characters long is given whole.</summary>
+    [Fact]
+    public void AThreeThousandCharacterTitle_IsWhole()
+    {
+        var title = string.Join(' ', Enumerable.Repeat("a long title", 250));
+        var answer = Read(
+            """{ "kind": "json-api", "url": "https://a.test/?q={query}", "items": "$.items", "title": "{@.t}", "link": "{@.u}" }""",
+            JsonSerializer.Serialize(new { items = new[] { new { t = title, u = "https://a.test/1" } } }));
+
+        Assert.Equal(title, Assert.Single(answer.Results).Title);
+        Assert.Equal(3249, title.Length);
+    }
+
+    /// <summary>A link ten thousand characters long - one read from the answer's root and the item together - is a link, whole.</summary>
+    [Fact]
+    public void ATenThousandCharacterLink_IsALink()
+    {
+        var root = "https://a.test/" + new string('x', 10_000);
         var rooted = Read(
             """{ "kind": "json-api", "url": "https://a.test/?q={query}", "items": "$.items", "title": "{@.t}", "link": "{$.base}{@.p}" }""",
-            JsonSerializer.Serialize(new { @base = "https://a.test/" + new string('x', 50_000), items = new[] { new { t = "T", p = "/1" } } }));
+            JsonSerializer.Serialize(new { @base = root, items = new[] { new { t = "T", p = "/1" } } }));
 
-        Assert.Equal(WebSearchOutcome.Changed, rooted.Outcome);
-        Assert.StartsWith("none of its 1 results gave a title", rooted.Why, StringComparison.Ordinal);
+        Assert.Equal(WebSearchOutcome.Ok, rooted.Outcome);
+        Assert.Equal(root + "/1", Assert.Single(rooted.Results).Link);
+    }
 
-        using var document = JsonDocument.Parse(JsonSerializer.Serialize(new { @base = new string('x', 50_000) }));
-        Assert.Equal(WebPageText.MostFieldRead + 2, WebItemTemplate.Parse("{$.base}{$.base}").Fill(document.RootElement, document.RootElement)!.Length);
+    /// <summary>A field is filled whole: two hundred kilobytes of a value of the answer's root, twice, and a pair of surrogates at its end kept.</summary>
+    [Fact]
+    public void ATwoHundredKilobyteField_IsReadWhole()
+    {
+        var value = new string('x', 200 * 1024) + "\uD83D\uDE00";
+        using var document = JsonDocument.Parse(JsonSerializer.Serialize(new { @base = value }));
 
-        // A pair the cut would part is left out whole, and what is filled still longer than a field is read for.
-        using var paired = JsonDocument.Parse(JsonSerializer.Serialize(new { @base = new string('x', WebPageText.MostFieldRead + 1) + "\uD83D\uDE00" }));
-        Assert.Equal(WebPageText.MostFieldRead + 1, WebItemTemplate.Parse("{$.base}{$.base}").Fill(paired.RootElement, paired.RootElement)!.Length);
+        Assert.Equal(value + value, WebItemTemplate.Parse("{$.base}{$.base}").Fill(document.RootElement, document.RootElement));
+
+        var answer = Read(
+            """{ "kind": "json-api", "url": "https://a.test/?q={query}", "items": "$.items", "title": "{@.t}", "link": "{@.u}", "snippet": "{@.s}", "markup": ["snippet"] }""",
+            JsonSerializer.Serialize(new { items = new[] { new { t = "T", u = "https://a.test/1", s = "<p>" + value + "</p>" } } }));
+
+        Assert.Equal(value, Assert.Single(answer.Results).Snippet);
+    }
+
+    /// <summary>A failure's body is told whole: the source's own words are what says why.</summary>
+    [Fact]
+    public void AFailedBody_IsKeptWhole()
+    {
+        var said = string.Join(' ', Enumerable.Repeat("the reason it gave", 100));
+        var answer = Kind.Read(Source("source", GitHub), WebSearchFound.None, Answer(JsonSerializer.Serialize(new { message = said }), 422));
+
+        Assert.Equal(WebSearchOutcome.Failed, answer.Outcome);
+        Assert.Equal($$"""it answered 422: {"message":"{{said}}"}""", answer.Why);
+    }
+
+    /// <summary>
+    /// The shipped readthedocs source joins every highlight of every block of a result into its snippet, never the first
+    /// alone.
+    /// </summary>
+    [Fact]
+    public void TheShippedSourcesSnippet_JoinsEveryHighlight()
+    {
+        var source = WebSearchSources.Of(new DssHarness.Core.Configuration.HarnessConfig(), WebSearchKinds.OfThisBuild).Find("readthedocs")!;
+        var body = """
+            { "count": 1, "results": [ { "title": "Configuration", "domain": "https://example-docs.readthedocs.io", "path": "/config.html",
+              "blocks": [
+                { "highlights": { "content": ["Every <span>option</span>.", "Its <span>default</span>."] } },
+                { "highlights": { "content": ["An <span>option</span> again."] } } ] } ] }
+            """;
+
+        var answer = Kind.Read(source, WebSearchFound.None, Answer(body));
+
+        Assert.Equal("Every option., Its default., An option again.", Assert.Single(answer.Results).Snippet);
     }
 
     /// <summary>Lookups that cannot be used still hold the source for every pause their answers asked for: the one that failed, and those read before it.</summary>
@@ -314,47 +362,44 @@ public sealed class JsonApiKindTests
         Assert.Equal(3, answer.LeftOut);
     }
 
-    /// <summary>A snippet is cut to its most, at a blank, marked where it was cut.</summary>
+    /// <summary>A snippet is given whole, as long as the source wrote it.</summary>
     [Fact]
-    public void ALongSnippet_IsCut()
+    public void ALongSnippet_IsWhole()
     {
         var words = string.Join(' ', Enumerable.Repeat("word", 200));
         var answer = Read(
             """{ "kind": "json-api", "url": "https://api.example.test/?q={query}", "items": "$.items", "title": "{@.t}", "link": "{@.u}", "snippet": "{@.s}" }""",
             JsonSerializer.Serialize(new { items = new[] { new { t = "T", u = "https://example.test/", s = words } } }));
 
-        var snippet = Assert.Single(answer.Results).Snippet;
-
-        Assert.True(snippet.Length <= WebSearchResult.MostSnippet, snippet);
-        Assert.EndsWith("word…", snippet, StringComparison.Ordinal);
+        Assert.Equal(words, Assert.Single(answer.Results).Snippet);
     }
 
-    /// <summary>A GET fills its address - the query escaped, the limit a number - and asks for JSON, with the source's headers.</summary>
+    /// <summary>A GET fills its address - the query escaped, the page's size a number - and asks for JSON, with the source's headers.</summary>
     [Fact]
     public void AGet_FillsItsAddress_AndSendsItsHeaders()
     {
-        var request = Assert.IsType<WebSearchRequest.Http>(Kind.Request(Source("gh", GitHub), WebSearchFound.None, "c# & linq/x", 5));
+        var request = Assert.IsType<WebSearchRequest.Http>(Kind.Request(Source("gh", GitHub), WebSearchFound.None, "c# & linq/x", 1));
 
         Assert.Equal("GET", request.Method);
-        Assert.Equal("https://api.github.com/search/repositories?q=c%23%20%26%20linq%2Fx&per_page=5", request.Address);
+        Assert.Equal("https://api.github.com/search/repositories?q=c%23%20%26%20linq%2Fx&per_page=10", request.Address);
         Assert.Equal("application/vnd.github+json", request.Headers["Accept"]);
         Assert.Equal("2022-11-28", request.Headers["X-GitHub-Api-Version"]);
         Assert.Null(request.Body);
     }
 
-    /// <summary>A POST fills its body's texts - the query as it is, a text that is the limit alone a number - and sends JSON.</summary>
+    /// <summary>A POST fills its body's texts - the query as it is, a text that is the page's size alone a number - and sends JSON.</summary>
     [Fact]
     public void APost_FillsItsBody()
     {
         var source = Source("post", """
-            { "kind": "json-api", "url": "https://api.example.test/search", "method": "POST",
+            { "kind": "json-api", "url": "https://api.example.test/search", "method": "POST", "pageSize": 4,
               "body": { "q": "{query}", "size": "{limit}", "label": "top {limit}", "filters": ["{query}", 3, true, null] },
               "items": "$.hits", "title": "{@.t}", "link": "{@.u}" }
             """);
 
         Assert.Empty(WebSearchKinds.OfThisBuild.Problems(source));
 
-        var request = Assert.IsType<WebSearchRequest.Http>(Kind.Request(source, WebSearchFound.None, "say \"hi\"", 4));
+        var request = Assert.IsType<WebSearchRequest.Http>(Kind.Request(source, WebSearchFound.None, "say \"hi\"", 1));
 
         Assert.Equal("POST", request.Method);
         Assert.Equal("https://api.example.test/search", request.Address);
@@ -403,8 +448,8 @@ public sealed class JsonApiKindTests
         var unread = Kind.Found(source, [Answer("not json", headers: Headers(("X-RateLimit-Remaining", "0"), ("X-RateLimit-Reset", "45")), address: lookup.Address)]);
         Assert.Equal((WebSearchOutcome.Changed, At + TimeSpan.FromSeconds(45)), (unread.Failure!.Outcome, unread.Until));
 
-        var request = Assert.IsType<WebSearchRequest.Http>(Kind.Request(source, found, "json reader", 5));
-        Assert.Equal("https://search-primary.example-packages.test/query?q=json%20reader&take=5", request.Address);
+        var request = Assert.IsType<WebSearchRequest.Http>(Kind.Request(source, found, "json reader", 1));
+        Assert.Equal("https://search-primary.example-packages.test/query?q=json%20reader&take=10", request.Address);
 
         var answer = Kind.Read(source, found, Answer(Stored("nuget-search.json")));
         Assert.Equal(["Example.Json", "Example.Json.Extensions"], answer.Results.Select(result => result.Title));
@@ -421,12 +466,12 @@ public sealed class JsonApiKindTests
     [InlineData("{\"resources\":[{\"@type\":\"SearchQueryService\",\"@id\":\"x\\ud800\"}]}", 200, WebSearchOutcome.Changed, "its 'search', looked up at 'https://example-packages.test/v3/index.json': it is no JSON: line 1: 'x\\ud800' spells half a character, an escape of a lone surrogate that no text can hold")]
     public void ADocumentDiscoverCannotRead_IsTheSourcesAnswer(string body, int status, WebSearchOutcome outcome, string why)
     {
-        var found = Kind.Found(Source("nuget", NuGet), [Answer(body, status)]);
+        var found = Kind.Found(Source("nuget", NuGet), [Answer(body, status) with { Unsaid = TimeSpan.FromMinutes(1) }]);
 
         Assert.Equal(outcome, found.Failure!.Outcome);
         Assert.StartsWith(why, found.Failure.Why, StringComparison.Ordinal);
 
-        // A limit holds the source as the found values' pause: a minute, where it said not how long.
+        // A limit holds the source as the found values' pause: for the asker's unsaid wait, where it said not how long.
         Assert.Equal(outcome == WebSearchOutcome.RateLimited ? At + TimeSpan.FromMinutes(1) : null, found.Until);
     }
 

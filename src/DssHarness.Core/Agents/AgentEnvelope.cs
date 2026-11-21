@@ -43,7 +43,7 @@ public static class AgentEnvelope
     /// How the envelope, and a value a problem of an answer quotes, are written: as JSON, escaping only what JSON itself
     /// must, so a model reads it as it was written.
     /// </summary>
-    internal static readonly JsonSerializerOptions Written = new() { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
+    internal static readonly JsonSerializerOptions Written = Json.JsonDepth.Serializer(new() { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping });
 
     /// <summary>The schema of one assumption: what was open, what was taken, and why.</summary>
     public static JsonObject Assumption() => Closed(
@@ -156,7 +156,7 @@ public static class AgentEnvelope
     {
         ArgumentNullException.ThrowIfNull(output);
 
-        var step = JsonNode.Parse(output.Schema) as JsonObject ?? throw new ArgumentException("The output's schema is no JSON object.", nameof(output));
+        var step = DssHarness.Core.Json.JsonDepth.ParseNode(output.Schema) as JsonObject ?? throw new ArgumentException("The output's schema is no JSON object.", nameof(output));
         var definitions = step["$defs"];
         step.Remove("$defs");
 

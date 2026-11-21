@@ -496,7 +496,7 @@ public sealed class ClaudeApiClientTests : IDisposable
 
         var connection = new ApiConnection(TimeProvider.System, _endpoint);
         _opened.Add(connection);
-        var search = new ClaudeApiNativeSearch(connection, "https://api.anthropic.com");
+        var search = new ClaudeApiNativeSearch(connection, "https://api.anthropic.com", records: null, new Dictionary<string, long> { ["claude-sonnet-5-5"] = 64_000 });
 
         var (part, used, failure) = await search.SearchAsync("polymorphism in System.Text.Json", "claude-sonnet-5-5", new AgentKey("SPARE_KEY", "sk-2"), TestContext.Current.CancellationToken);
 
@@ -513,6 +513,54 @@ public sealed class ClaudeApiClientTests : IDisposable
         Assert.Equal([ClaudeApiNativeSearch.ToolType], body["tools"]!.AsArray().Select(tool => tool!["type"]!.GetValue<string>()));
         Assert.Equal(("claude-sonnet-5-5", "sk-2"), (body["model"]!.GetValue<string>(), asked.Headers.Single(header => header.Key == "x-api-key").Value));
         Assert.Equal(DssHarness.Core.Codebase.EstimatedTokens.Of(asked.Body!), search.InputTokens("polymorphism in System.Text.Json", "claude-sonnet-5-5"));
+    }
+
+    /// <summary>
+    /// A native search asks as much of an answer as the loop's own first request does - a quarter of the most a reply of
+    /// the model holds - and names no number of searches; an answer cut off before its search returned anything is asked
+    /// again with twice as much, up to the most, what every request used counted; one cut off at the most is a failed part
+    /// saying so. Red where the request asks 64 tokens and one search (max_uses 1).
+    /// </summary>
+    [Fact]
+    public async Task TheNativeSearchRequest_AsksTheModelsRuleAndNoMaxUses()
+    {
+        static string CutOff(int input, int output)
+            => "event: message_start\n"
+                + $"data: {{\"type\":\"message_start\",\"message\":{{\"usage\":{{\"input_tokens\":{input},\"output_tokens\":1}}}}}}\n\n"
+                + "event: message_delta\n"
+                + $"data: {{\"type\":\"message_delta\",\"delta\":{{\"stop_reason\":\"max_tokens\"}},\"usage\":{{\"output_tokens\":{output}}}}}\n\n"
+                + "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n";
+
+        _endpoint
+            .Then(ApiReply.Stream(CutOff(100, 1_000)))
+            .Then(ApiReply.Stream(
+                "event: message_start\n"
+                + "data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":100,\"output_tokens\":1}}}\n\n"
+                + "event: content_block_start\n"
+                + "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"web_search_tool_result\",\"content\":"
+                + "[{\"type\":\"web_search_result\",\"title\":\"One\",\"url\":\"https://example.org/1\"}]}}\n\n"
+                + "event: message_delta\n"
+                + "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"input_tokens\":2100,\"output_tokens\":40,\"server_tool_use\":{\"web_search_requests\":3}}}\n\n"
+                + "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"))
+            .Then(ApiReply.Stream(CutOff(100, 500)))
+            .Then(ApiReply.Stream(CutOff(100, 1_000)))
+            .Then(ApiReply.Stream(CutOff(100, 2_000)));
+
+        var connection = new ApiConnection(TimeProvider.System, _endpoint);
+        _opened.Add(connection);
+        var search = new ClaudeApiNativeSearch(connection, "https://api.anthropic.com", records: null, new Dictionary<string, long> { [Model] = 4_000, ["claude-haiku-5"] = 2_000 });
+
+        var (found, used, failure) = await search.SearchAsync("anything", Model, new AgentKey("WORK_KEY", "sk-1"), TestContext.Current.CancellationToken);
+        var (unfound, spent, _) = await search.SearchAsync("anything", "claude-haiku-5", new AgentKey("WORK_KEY", "sk-1"), TestContext.Current.CancellationToken);
+        var bodies = _endpoint.Asked.Select(asked => JsonNode.Parse(asked.Body!)!).ToList();
+
+        Assert.Equal([1_000L, 2_000L, 500L, 1_000L, 2_000L], bodies.Select(body => body["max_tokens"]!.GetValue<long>()));
+        Assert.All(bodies, body => Assert.Equal(["type", "name"], body["tools"]![0]!.AsObject().Select(member => member.Key)));
+        Assert.Equal(["One"], found.Answer.Results.Select(result => result.Title));
+        Assert.Equal((new AgentUsage(2200, 1040, 0, 0, 0, 3), (ChatFailure?)null), (used, failure));
+        Assert.Equal(
+            (WebSearchOutcome.Failed, "the provider's own search was not made: the answer was cut off at 2,000 tokens before its search returned anything, the most a reply of 'claude-haiku-5' holds", new AgentUsage(300, 3500, 0, 0, 0, 0)),
+            (unfound.Answer.Outcome, unfound.Answer.Why, spent));
     }
 
     /// <summary>
@@ -545,7 +593,7 @@ public sealed class ClaudeApiClientTests : IDisposable
             endpoint.Then(reply);
             var connection = new ApiConnection(TimeProvider.System, endpoint);
             _opened.Add(connection);
-            var search = new ClaudeApiNativeSearch(connection, "https://api.anthropic.com");
+            var search = new ClaudeApiNativeSearch(connection, "https://api.anthropic.com", records: null, new Dictionary<string, long> { [Model] = 64_000 });
 
             var (part, _, _) = await search.SearchAsync("anything", Model, new AgentKey("WORK_KEY", "sk-1"), TestContext.Current.CancellationToken);
 
@@ -568,12 +616,12 @@ public sealed class ClaudeApiClientTests : IDisposable
         _endpoint.Then(ApiReply.Error(429, "rate_limit_error", "slow down", TimeSpan.FromSeconds(30)));
         var connection = new ApiConnection(TimeProvider.System, _endpoint);
         _opened.Add(connection);
-        var step = Run() with { WebSearch = new AgentWebSearch([], 3, 4, new Dictionary<string, WebSearchKey>()) };
+        var step = Run() with { WebSearch = new AgentWebSearch([], 4, new Dictionary<string, WebSearchKey>()) };
         var sideTask = step with { Ground = step.Ground! with { SideTask = true } };
 
-        Assert.Null(ClaudeApiClient.WithNativeSearch(connection, step, step.Entries!).NativeSearch);
+        Assert.Null(ClaudeApiClient.WithNativeSearch(connection, step, step.Entries!, records: null).NativeSearch);
 
-        var search = ClaudeApiClient.WithNativeSearch(connection, sideTask, sideTask.Entries!).NativeSearch!;
+        var search = ClaudeApiClient.WithNativeSearch(connection, sideTask, sideTask.Entries!, records: null).NativeSearch!;
         var (part, _, failure) = await search.SearchAsync("anything", Model, new AgentKey("WORK_KEY", "sk-1"), TestContext.Current.CancellationToken);
 
         Assert.Equal(WebSearchOutcome.Failed, part.Answer.Outcome);

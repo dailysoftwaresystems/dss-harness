@@ -44,6 +44,9 @@ internal sealed class WindowsHeld : IHeldNative
     private const uint ForBackup = 0x4000;
     private const uint OpenReparsePoint = 0x200000;
 
+    /// <summary>FILE_FLAG_OPEN_REPARSE_POINT: Win32's flag for what <see cref="OpenReparsePoint"/> asks of NtCreateFile.</summary>
+    private const uint OpenReparsePointFlag = 0x00200000;
+
     private const uint CaseInsensitive = 0x40;
 
     private const uint DirectoryAttribute = 0x10;
@@ -60,6 +63,10 @@ internal sealed class WindowsHeld : IHeldNative
     private const int FileFullDirectoryInfo = 14;
     private const int FileFullDirectoryRestartInfo = 15;
     private const int FileDispositionInfoEx = 21;
+    private const int FileIdInfo = 18;
+
+    /// <summary>ExtendedFileIdType: a file id of 128 bits, as FILE_ID_INFO gives it.</summary>
+    private const int ExtendedFileIdType = 2;
 
     /// <summary>The native information classes of a rename: FileRenameInformation and FileRenameInformationEx.</summary>
     private const int FileRenameInformation = 10;
@@ -352,6 +359,50 @@ internal sealed class WindowsHeld : IHeldNative
     /// </remarks>
     public bool IsMountedOn(SafeFileHandle parent, SafeFileHandle child, string path) => false;
 
+    /// <inheritdoc/>
+    /// <remarks>
+    /// Its volume's serial number and its 128-bit file id (<c>FILE_ID_INFO</c>); none on a volume that keeps no such id - FAT,
+    /// a share that does not pass it on.
+    /// </remarks>
+    public byte[]? IdentityOf(SafeFileHandle directory, string path)
+    {
+        var info = new byte[24];
+
+        return GetFileInformationByHandleEx(directory, FileIdInfo, info, (uint)info.Length) && info.AsSpan(8).ContainsAnyExcept((byte)0) ? info : null;
+    }
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// By its file id on the volume the directory below is on (<c>OpenFileById</c>), as itself: the very directory it was,
+    /// wherever it stands now, its volume's serial number checked as it was.
+    /// </remarks>
+    public SafeFileHandle OpenAbove(SafeFileHandle child, byte[] identity, string path)
+    {
+        ArgumentNullException.ThrowIfNull(identity);
+
+        var descriptor = new byte[24];
+        BinaryPrimitives.WriteInt32LittleEndian(descriptor, descriptor.Length);
+        BinaryPrimitives.WriteInt32LittleEndian(descriptor.AsSpan(4), ExtendedFileIdType);
+        identity.AsSpan(8, 16).CopyTo(descriptor.AsSpan(8));
+
+        var handle = OpenFileById(child, descriptor, ListDirectory | Traverse | ReadAttributes | Synchronize, ShareAll, IntPtr.Zero, Win32Files.BackupSemantics | OpenReparsePointFlag);
+
+        if (handle.IsInvalid)
+        {
+            var error = Marshal.GetLastPInvokeError();
+            handle.Dispose();
+            throw Failed(error, path);
+        }
+
+        if (IdentityOf(handle, path) is { } reached && reached.AsSpan().SequenceEqual(identity))
+        {
+            return handle;
+        }
+
+        handle.Dispose();
+        throw new IOException($"'{path}' is no longer the directory a directory being removed below it stood in: it was replaced while that was emptied, so nothing more is removed through it");
+    }
+
     /// <summary>
     /// Renames what <paramref name="handle"/> holds to <paramref name="name"/> in the directory <paramref name="into"/> holds,
     /// replacing what is there only where <paramref name="replace"/> - a link there replaced as itself.
@@ -540,6 +591,10 @@ internal sealed class WindowsHeld : IHeldNative
     [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool SetFileInformationByHandle(SafeFileHandle file, int informationClass, byte[] information, uint size);
+
+    [DllImport("kernel32.dll", SetLastError = true, ExactSpelling = true)]
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    private static extern SafeFileHandle OpenFileById(SafeFileHandle volumeHint, byte[] fileId, uint access, uint share, IntPtr security, uint flags);
 
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true, ExactSpelling = true)]
     [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]

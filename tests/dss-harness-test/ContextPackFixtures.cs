@@ -407,7 +407,7 @@ internal static class ContextPackFixtures
             "Add a gift-card discount: a new `IDiscount` that takes the card's balance off the total, applied by `PriceCalculator.Price` with the others.",
             Change: null,
             ["Shop.Pricing.IDiscount", "Shop.Pricing.IDiscount.Apply", "Shop.Pricing.PriceCalculator.Price", "Shop.Pricing.LoyaltyDiscount.Apply", "Shop.Pricing.SeasonalDiscount.Apply", "Shop.Tests.PriceCalculatorTests.Price_TakesEachDiscountOff"],
-            Held: 6, HeldTight: 2),
+            Held: 6, HeldTight: 3),
         new(
             "gateway-timeout",
             """
@@ -420,13 +420,13 @@ internal static class ContextPackFixtures
             """,
             Change: null,
             ["Shop.Checkout.CheckoutService.Checkout", "Shop.Checkout.IPaymentGateway.Charge", "Shop.Checkout.RetryingGateway.Charge", "Shop.Tests.CheckoutServiceTests.Checkout_ChargesThePriceAndClosesTheOrder"],
-            Held: 4, HeldTight: 2),
+            Held: 4, HeldTight: 3),
         new(
             "shipping-fee",
             "Make Order.Total include a flat shipping fee for an order of fewer than three lines.",
             Change: null,
             ["Shop.Orders.Order.Total", "Shop.Orders.OrderLine.Amount", "Shop.Pricing.PriceCalculator.Price", "Shop.Tests.OrderTests.Total_AddsEveryLine"],
-            Held: 4, HeldTight: 3),
+            Held: 4, HeldTight: 2),
         new(
             "review-loyalty",
             "Review the change to the loyalty discount.",
@@ -438,7 +438,7 @@ internal static class ContextPackFixtures
             "Review the change.",
             Change: ("src/Orders/Order.cs", "total += line.Amount();", "total += line.Amount() * 1;"),
             ["Shop.Orders.Order.Total", "Shop.Tests.OrderTests.Total_AddsEveryLine", "Shop.Pricing.PriceCalculator.Price", "Shop.Tests.PriceCalculatorTests.Price_TakesEachDiscountOff", "Shop.Checkout.CheckoutService.Checkout", "Shop.Reports.SalesReport.Sales"],
-            Held: 6, HeldTight: 5),
+            Held: 6, HeldTight: 3),
     ];
 }
 

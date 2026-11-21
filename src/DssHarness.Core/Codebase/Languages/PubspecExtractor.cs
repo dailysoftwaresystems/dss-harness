@@ -12,11 +12,8 @@ namespace DssHarness.Core.Codebase.Languages;
 /// </summary>
 public sealed class PubspecExtractor : ICodeGraphExtractor
 {
-    /// <summary>What a pubspec is held to before it is read into nodes.</summary>
-    private static readonly YamlBounds Bounds = new(
-        MaxDepth: 32,
-        NoAlias: "a pubspec writes each entry out, so what it says is what it reads",
-        TooDeep: "no pubspec does");
+    /// <summary>What a pubspec is held to before it is read into nodes: no alias; it is read however deep it nests.</summary>
+    private static readonly YamlRules Rules = new(NoAlias: "a pubspec writes each entry out, so what it says is what it reads");
 
     /// <summary>The sections that name a package's dependencies.</summary>
     private static readonly string[] Sections = ["dependencies", "dev_dependencies", "dependency_overrides"];
@@ -25,7 +22,7 @@ public sealed class PubspecExtractor : ICodeGraphExtractor
     public string Language => "pubspec";
 
     /// <inheritdoc/>
-    public int Version => 1;
+    public int Version => 2;
 
     /// <inheritdoc/>
     public CodeGraphClaims Claims { get; } = new([new("pubspec.yaml")], []);
@@ -39,7 +36,7 @@ public sealed class PubspecExtractor : ICodeGraphExtractor
         [
             "a dependency from a package host, from git or from an SDK: no project of the repository",
             "a workspace's members (workspace:), and resolution: workspace: what a root pubspec lists is not read as references",
-            "a file that is no mapping of keys - one that does not parse, holds an alias, is empty, holds several documents or nests past the reader's bounds: nothing in it is read, the line it stops at marked dynamic",
+            "a file that is no mapping of keys - one that does not parse, holds an alias, is empty or holds several documents: nothing in it is read, the line it stops at marked dynamic; a file is read however deep it nests",
         ]);
 
     /// <inheritdoc/>
@@ -49,7 +46,7 @@ public sealed class PubspecExtractor : ICodeGraphExtractor
 
         var lines = input.Lines;
         var id = $"{Language}:{input.Path}";
-        var root = YamlReading.Load(input.Text, "a pubspec is one document", Bounds, out var stop);
+        var root = YamlReading.Load(input.Text.Reader(), "a pubspec is one document", Rules, out var stop);
         var name = root is not null && Value(root, "name") is { } named ? named : null;
         var references = new List<ExtractReference>();
 

@@ -1,3 +1,4 @@
+using DssHarness.Core.Output;
 using DssHarness.Core.Platform;
 using DssHarness.Core.Processes;
 using DssHarness.Core.Tools;
@@ -34,24 +35,15 @@ namespace DssHarness.Core.Hosts;
 /// <param name="resolver">Finds programs, and every copy of one.</param>
 /// <param name="processRunner">Starts a copy to ask its version.</param>
 /// <param name="platform">This machine.</param>
-public sealed class ProgramFloors(LocalProgramResolver resolver, IProcessRunner processRunner, IHostPlatform platform)
+/// <param name="output">Where a copy slow to say its version is told; nowhere where none is given.</param>
+/// <param name="clock">The clock that wait is measured on; the machine's own where none is given.</param>
+public sealed class ProgramFloors(LocalProgramResolver resolver, IProcessRunner processRunner, IHostPlatform platform, IHarnessOutput? output = null, TimeProvider? clock = null)
 {
     private readonly LocalProgramResolver _programs = resolver;
     private readonly IProcessRunner _processRunner = processRunner;
     private readonly IHostPlatform _platform = platform;
-
-    /// <summary>Longest one copy is given to say its version: a probe that prints a line, which a hung copy must not hold a survey on.</summary>
-    public static readonly TimeSpan ProbeBudget = TimeSpan.FromSeconds(30);
-
-    /// <summary>
-    /// What a survey that carries <paramref name="floors"/> tools' floors allows for them, beyond the rest of its work:
-    /// two copies of each, which is what a host asks where an older copy comes first - the first, and the one that
-    /// meets it. A ceiling for a copy that hangs, not a measure: a floor the host passes over asks nothing, most
-    /// copies answer in a moment, and so do the further ones a host asks only where raising one tool's directory would
-    /// start an older copy of another.
-    /// </summary>
-    /// <param name="floors">How many floors the survey carries.</param>
-    public static TimeSpan Allowance(int floors) => ProbeBudget * 2 * floors;
+    private readonly IHarnessOutput? _output = output;
+    private readonly TimeProvider? _clock = clock;
 
     /// <summary>Finds each of <paramref name="programs"/>, holding the ones <paramref name="floors"/> names to their floor.</summary>
     /// <param name="programs">The names, or paths, to find.</param>
@@ -353,20 +345,24 @@ public sealed class ProgramFloors(LocalProgramResolver resolver, IProcessRunner 
     private async Task<FloorCopy> JudgeAsync(ToolFloor floor, string copy, CancellationToken cancellationToken)
         => floor.Judge(copy, await ProbeAsync(floor)(copy, cancellationToken).ConfigureAwait(false));
 
-    /// <summary>Starts one copy of <paramref name="floor"/>'s tool, by its path, to ask its version.</summary>
+    /// <summary>
+    /// Starts one copy of <paramref name="floor"/>'s tool, by its path, to ask its version: waited for to its end, and
+    /// told while it lasts - a copy on a network share that answers in minutes is waited for, and the person's stop ends a
+    /// copy that hangs.
+    /// </summary>
     private Func<string, CancellationToken, Task<ProcessResult>> ProbeAsync(ToolFloor floor)
         => async (copy, cancellationToken) =>
         {
             try
             {
-                return await _processRunner.RunAsync(
-                    new ProcessRequest
-                    {
-                        FileName = copy,
-                        Arguments = floor.Args,
-                        Timeout = ProbeBudget,
-                    },
-                    cancellationToken).ConfigureAwait(false);
+                return await ProgramWait
+                    .ToItsEndAsync(
+                        token => _processRunner.RunAsync(new ProcessRequest { FileName = copy, Arguments = floor.Args }, token),
+                        $"'{copy}' to say its version",
+                        ProgramWait.Told(_output, ToolPackage.Command),
+                        _clock,
+                        cancellationToken)
+                    .ConfigureAwait(false);
             }
             catch (ProgramStartException ex)
             {

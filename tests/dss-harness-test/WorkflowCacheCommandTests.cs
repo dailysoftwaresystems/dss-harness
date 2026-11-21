@@ -5,9 +5,9 @@ using DssHarness.Core.Results;
 namespace DssHarness.Tests;
 
 /// <summary>
-/// <c>workflow-cache</c> through the real binary: a pruning names the days it prunes by - left out, or outside what it
-/// takes, the command is refused as a usage and removes nothing - and every answer names the cache's directory, in
-/// text and in <c>--json</c>, a refused one included.
+/// <c>workflow-cache</c> through the real binary: a pruning names the days it prunes by - left out, or below none, the
+/// command is refused as a usage and removes nothing; any other number prunes - and every answer names the cache's
+/// directory, in text and in <c>--json</c>, a refused one included.
 /// </summary>
 public sealed class WorkflowCacheCommandTests
 {
@@ -28,15 +28,13 @@ public sealed class WorkflowCacheCommandTests
     }
 
     /// <summary>
-    /// Days below none, or past what a pruning takes, are refused as a usage naming the cache's directory, in text and
-    /// in --json, and nothing of the cache is removed - a day count below none would move the cutoff into the future
-    /// and prune every entry.
+    /// Days below none are refused as a usage naming the cache's directory, in text and in --json, and nothing of the
+    /// cache is removed - a day count below none would move the cutoff into the future and prune every entry.
     /// </summary>
-    [Theory]
-    [InlineData("-1")]
-    [InlineData("36501")]
-    public async Task Prune_WithDaysOutsideWhatItTakes_IsAUsageError_NamingTheCache_AndRemovesNothing(string days)
+    [Fact]
+    public async Task Prune_WithDaysBelowNone_IsAUsageError_NamingTheCache_AndRemovesNothing()
     {
+        const string days = "-1";
         using var temp = new TempDirectory();
         var (environment, cache) = OwnUserData(temp);
         var blob = Path.Combine(cache, "blobs", "aa", new string('a', 38));
@@ -46,7 +44,7 @@ public sealed class WorkflowCacheCommandTests
         var text = await CliRunner.RunAsync(["workflow-cache", "prune", "--unused-days", days], Token, temp.Path, environment: environment);
         var json = await CliRunner.RunAsync(["workflow-cache", "prune", "--unused-days", days, "--json"], Token, temp.Path, environment: environment);
 
-        var refusal = $"--unused-days is {days}; it is a number of days from 0 to 36,500. Nothing was removed from the workflow cache '{cache}'.";
+        var refusal = $"--unused-days is {days}; it is a number of days, 0 or more. Nothing was removed from the workflow cache '{cache}'.";
 
         Assert.Equal((HarnessExit.UsageError, HarnessExit.UsageError), (text.ExitCode, json.ExitCode));
         Assert.Contains(refusal, text.StandardOutput + text.StandardError, StringComparison.Ordinal);
@@ -55,6 +53,31 @@ public sealed class WorkflowCacheCommandTests
 
         Assert.Equal((HarnessExit.UsageError, refusal, cache), (document["exitCode"]!.GetValue<int>(), document["summary"]!.GetValue<string>(), document["cache"]!.GetValue<string>()));
         Assert.True(File.Exists(blob));
+    }
+
+    /// <summary>
+    /// Days of any number prune: a hundred thousand, and the most the option holds - reaching back past the clock's start,
+    /// which puts the cut-off there - each prunes as any other count does, the blob no entry holds removed, and ends whole.
+    /// </summary>
+    [Theory]
+    [InlineData("100000")]
+    [InlineData("2147483647")]
+    public async Task PruneUnusedDaysOfAHundredThousand_PrunesEveryUnused(string days)
+    {
+        using var temp = new TempDirectory();
+        var (environment, cache) = OwnUserData(temp);
+        var blob = Path.Combine(cache, "blobs", "aa", new string('a', 38));
+        Directory.CreateDirectory(Path.GetDirectoryName(blob)!);
+        await File.WriteAllTextAsync(blob, "held by no entry\n", Token);
+
+        var json = await CliRunner.RunAsync(["workflow-cache", "prune", "--unused-days", days, "--json"], Token, temp.Path, environment: environment);
+
+        Assert.Equal(HarnessExit.Success, json.ExitCode);
+
+        var document = JsonNode.Parse(json.StandardOutput)!.AsObject();
+
+        Assert.Equal((0, 1, cache), (document["prunedEntries"]!.GetValue<int>(), document["prunedBlobs"]!.GetValue<int>(), document["cache"]!.GetValue<string>()));
+        Assert.False(File.Exists(blob));
     }
 
     /// <summary>The listing names the cache's directory in its line and in its document, beside what it holds.</summary>

@@ -16,6 +16,12 @@ namespace DssHarness.Tests;
 public sealed class CompilerNameEndToEndTests
 {
     /// <summary>The C and C++ compilers a leg here builds with: MinGW's on Windows, the system's own elsewhere.</summary>
+    /// <summary>
+    /// The reserve these runs declare for their builds, the fixture being their project: its deepest file, a file of
+    /// CMake's own check of a compiler, lies within it, with a little to spare.
+    /// </summary>
+    private const int FixtureReserve = 100;
+
     private static readonly (string C, string Cxx) Compilers = OperatingSystem.IsWindows() ? ("gcc", "g++") : ("cc", "c++");
 
     /// <summary>
@@ -144,6 +150,6 @@ public sealed class CompilerNameEndToEndTests
             },
         },
         PredefinedRunners = { ["census"] = new RunnerConfig { Action = "census/census.yml" } },
-        Worktrees = new WorktreeSettings { PathBudgetReserve = MutationFixture.LongestBuildPath },
+        Worktrees = new WorktreeSettings { PathBudgetReserve = FixtureReserve },
     };
 }

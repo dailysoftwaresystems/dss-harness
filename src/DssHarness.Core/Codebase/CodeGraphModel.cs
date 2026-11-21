@@ -72,6 +72,19 @@ public static class CodeEdgeKinds
     /// <summary>A member or a type to a type it names.</summary>
     public const string References = "references";
 
+    /// <summary>
+    /// A declaration to what it reads, writes or names without calling it: a field, a property, a constant or an enum
+    /// member, and a name a <c>nameof</c> names; a style rule a page's markup names; a configuration key a project's
+    /// <c>$(Name)</c> names, and one the keys' join gives the code that names it.
+    /// </summary>
+    public const string Uses = "uses";
+
+    /// <summary>
+    /// One part of a declaration to another: a XAML view and the C# type its <c>x:Class</c> names, a Blazor component and
+    /// its code-behind partial - derived when linking, never asked for by an extract.
+    /// </summary>
+    public const string PartOf = "partOf";
+
     /// <summary>A declaration with no body to the one with a body and the same qualified name: derived when linking.</summary>
     public const string Declares = "declares";
 
@@ -82,7 +95,7 @@ public static class CodeEdgeKinds
     public const string ProjectReference = "projectReference";
 
     /// <summary>The kinds an implementation's references may ask for: what a reference to resolve can be, before linking makes it an edge.</summary>
-    public static IReadOnlyList<string> Referenced { get; } = [Inherits, Implements, MixesIn, Overrides, Calls, Instantiates, References, ProjectReference];
+    public static IReadOnlyList<string> Referenced { get; } = [Inherits, Implements, MixesIn, Overrides, Calls, Instantiates, References, Uses, ProjectReference];
 
     /// <summary>Every kind an edge of a graph may be, with what it means as help says it: the one list of both.</summary>
     public static IReadOnlyList<(string Kind, string Meaning)> Described { get; } =
@@ -97,6 +110,8 @@ public static class CodeEdgeKinds
         (Dispatches, "an interface's member to each member that answers it for a type"),
         (Instantiates, "a member to a type it makes"),
         (References, "a member or a type to a type it names"),
+        (Uses, "a declaration to what it reads, writes or names without calling it: a member, a style rule its markup names, a configuration key its code names"),
+        (PartOf, "one part of a declaration to another: a view and the type its x:Class names, a component and its code-behind"),
         (Declares, "a declaration with no body to the one with a body"),
         (Tests, "a test to a member it calls directly"),
         (ProjectReference, "a project to a project it names"),
@@ -104,6 +119,99 @@ public static class CodeEdgeKinds
 
     /// <summary>Every kind an edge of a graph may be.</summary>
     public static IReadOnlyList<string> All { get; } = [.. Described.Select(described => described.Kind)];
+
+    /// <summary>
+    /// Whether an edge of <paramref name="kind"/> is recall, never a doubt - a use: what it reaches, or fails to, and how
+    /// sure it is say nothing of how sure the graph is of what it declares, so no count of a node's or a file's
+    /// unsureness, and no answer's, is read from it. The one owner of that rule, which the linker, the queries and the
+    /// <c>graph</c> tool ask.
+    /// </summary>
+    /// <param name="kind">An edge's kind.</param>
+    public static bool Recall(string kind) => kind == Uses;
+}
+
+/// <summary>
+/// The kinds within a kind the linker reads, of the nodes of data files and style sheets - a configuration key, an
+/// element, each node a style sheet declares - which no reference reaches by its name alone: only one whose qualifier
+/// says it names one (<see cref="ReachedBy"/>), a use through an import's prefix, which names what the file it imports
+/// declares, and a use an import binds by a name the file exports the node by - a CSS module's class.
+/// Every kind a style sheet's node is of is one of these, spelt so no code's kind is, so a name code writes - a PHP
+/// <c>$radius</c>, a C# <c>Button()</c> - reaches none of them. Every other kind within a kind is its implementation's
+/// to name freely.
+/// </summary>
+public static class CodeSubKinds
+{
+    /// <summary>
+    /// A configuration key - JSON's and YAML's, a <c>.resx</c>'s <c>data</c>, a <c>.props</c> file's property - named by
+    /// its path: reached by a key qualifier, an MSBuild project's <c>$(Name)</c>, and joined by the keys' join to the
+    /// code that names it.
+    /// </summary>
+    public const string Key = "key";
+
+    /// <summary>An element of an XML file named by an id-like attribute: data, which no reference reaches by its name alone.</summary>
+    public const string Element = "element";
+
+    /// <summary>
+    /// A style sheet's rule - a selector's simple part, <c>.btn</c>, <c>#main</c>, an element, or a suffix a <c>&amp;</c>
+    /// writes onto several selectors (<c>&amp;-x</c>, <see cref="ExtractNode.SuffixOf"/>) standing for each name it writes:
+    /// reached by a selector - markup's <c>class</c> and <c>id</c>, a sheet's <c>@extend</c>, <c>@apply</c> and
+    /// <c>composes</c> - that names it, or one of those names.
+    /// </summary>
+    public const string Rule = "rule";
+
+    /// <summary>A style sheet's <c>@keyframes</c>, by its animation's name: reached by an animation that names it.</summary>
+    public const string Keyframes = "keyframes";
+
+    /// <summary>A Sass <c>@mixin</c>: reached by an <c>@include</c> of it.</summary>
+    public const string StyleMixin = "style-mixin";
+
+    /// <summary>
+    /// A Sass <c>@function</c>, or CSS's own custom one (<c>@function --x</c>): reached by a value's call of it - its name
+    /// before its parenthesis, <c>rem(2px)</c> - and through a module's namespace, <c>m.rem(2px)</c>.
+    /// </summary>
+    public const string StyleFunction = "style-function";
+
+    /// <summary>
+    /// A style sheet's <c>@font-face</c>, by the family it names, its ASCII letters in lower case as CSS matches a family's
+    /// name: reached by a <c>font-family</c> or a <c>font</c> that names the family.
+    /// </summary>
+    public const string FontFace = "font-face";
+
+    /// <summary>
+    /// A style sheet's variable - a custom property (<c>--x</c>, an <c>@property</c>'s among them), a Sass variable
+    /// (<c>$x</c>), a Less variable or detached ruleset (<c>@x</c>): reached by a value that names it.
+    /// </summary>
+    public const string StyleVariable = "style-variable";
+
+    /// <summary>
+    /// A style sheet's top, <c>(sheet)</c>: what it does outside every node it declares - a top-level <c>@include</c>, a
+    /// flow control's head, a rule of no parts - the node those references are made from, as a script's module node is;
+    /// reached by no name.
+    /// </summary>
+    public const string Sheet = "sheet";
+
+    /// <summary>Whether <paramref name="subKind"/> is a data file's or a style sheet's, which no reference reaches by its name alone.</summary>
+    /// <param name="subKind">A node's kind within its kind, or <see langword="null"/>.</param>
+    public static bool IsData(string? subKind) => subKind is Key or Element or Rule or Keyframes or StyleMixin or StyleFunction or FontFace or StyleVariable or Sheet;
+
+    /// <summary>
+    /// The kind within a kind a reference of the qualifier <paramref name="qualifier"/> reaches alone: a rule for a
+    /// selector, a key for a key qualifier, and for each qualifier a style sheet writes where its syntax says what a name
+    /// names - a variable, a mixin, a function, an animation's keyframes, a font's face - that kind; <see langword="null"/>
+    /// for every other, which reaches no node of data by its name alone.
+    /// </summary>
+    /// <param name="qualifier">The kind of a reference's qualifier (<see cref="CodeQualifierKinds"/>), or <see langword="null"/>.</param>
+    public static string? ReachedBy(string? qualifier) => qualifier switch
+    {
+        CodeQualifierKinds.Selector => Rule,
+        CodeQualifierKinds.Key => Key,
+        CodeQualifierKinds.StyleVariable => StyleVariable,
+        CodeQualifierKinds.StyleMixin => StyleMixin,
+        CodeQualifierKinds.StyleFunction => StyleFunction,
+        CodeQualifierKinds.Keyframes => Keyframes,
+        CodeQualifierKinds.FontFace => FontFace,
+        _ => null,
+    };
 }
 
 /// <summary>How sure an edge is of its target.</summary>
@@ -116,13 +224,11 @@ public static class CodeConfidences
     public const string Unique = "unique";
 
     /// <summary>
-    /// Two to <see cref="MostCandidates"/> declarations have that name and arity: an edge to each, none picked. A name
-    /// with more is counted unresolved.
+    /// Two or more declarations have that name and arity: an edge to each, none picked and none dropped, however many
+    /// they are. The keys' join is candidates whatever it finds, one key among them, for nothing says the code reads that
+    /// key; a literal or a member is joined to every key it names.
     /// </summary>
     public const string Candidates = "candidates";
-
-    /// <summary>The most declarations a reference is made an edge to each of; past it, it is counted unresolved.</summary>
-    public const int MostCandidates = 5;
 
     /// <summary>Every confidence an edge may carry, the surest first.</summary>
     public static IReadOnlyList<string> All { get; } = [Exact, Unique, Candidates];
@@ -172,7 +278,11 @@ public static class CodeFileStates
     /// <summary>A NUL in its first bytes, or a Git LFS pointer.</summary>
     public const string Binary = "binary";
 
-    /// <summary>Larger than <c>codebaseGraph.maxFileBytes</c>.</summary>
+    /// <summary>
+    /// Retired: what an earlier build of this tool held a file larger than its <c>codebaseGraph.maxFileBytes</c> in, unread.
+    /// No file is held in it now - every file claimed is read whole, whatever its size - and a view that still holds one says
+    /// so once, at the sync that reads it.
+    /// </summary>
     public const string TooLarge = "tooLarge";
 
     /// <summary>
@@ -325,7 +435,105 @@ public static class CodeGraphIds
         ArgumentOutOfRangeException.ThrowIfLessThan(end, start);
         ArgumentOutOfRangeException.ThrowIfGreaterThan(end, lines.Count);
 
-        return Sha256(string.Join('\n', Enumerable.Range(start - 1, end - start + 1).Select(at => lines[at])));
+        return FileContentHash.Of(into =>
+        {
+            var joined = new JoinedLines(into);
+
+            for (var at = start - 1; at < end; at++)
+            {
+                joined.Line();
+                joined.Write(lines[at]);
+            }
+
+            joined.End();
+        });
+    }
+
+    /// <summary>
+    /// The digest of the lines <paramref name="start"/> to <paramref name="end"/> of <paramref name="text"/>, as
+    /// <see cref="Digest(IReadOnlyList{string}, int, int)"/> gives of its lines: each line's characters read by position a
+    /// piece at a time and taken into the hash as they are read, so neither a line nor the lines together is ever one
+    /// string - a node over a whole file of any size is digested in the memory of a piece.
+    /// </summary>
+    /// <param name="text">The file's text.</param>
+    /// <param name="start">The first line, from 1.</param>
+    /// <param name="end">The last line, inclusive.</param>
+    public static string Digest(CodeText text, int start, int end)
+    {
+        ArgumentNullException.ThrowIfNull(text);
+
+        var lines = text.LineIndex;
+        ArgumentOutOfRangeException.ThrowIfLessThan(start, 1);
+        ArgumentOutOfRangeException.ThrowIfLessThan(end, start);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(end, lines.Count);
+
+        return FileContentHash.Of(into =>
+        {
+            var joined = new JoinedLines(into);
+            var piece = new char[DigestPiece];
+
+            for (var line = start; line <= end; line++)
+            {
+                joined.Line();
+                var (from, to) = lines.Span(text, line);
+
+                for (var at = from; at < to;)
+                {
+                    var count = (int)Math.Min(piece.Length, to - at);
+                    text.CopyTo(at, piece.AsSpan(0, count));
+                    joined.Write(piece.AsSpan(0, count));
+                    at += count;
+                }
+            }
+
+            joined.End();
+        });
+    }
+
+    /// <summary>How many characters of a line <see cref="Digest(CodeText, int, int)"/> reads at a time.</summary>
+    private const int DigestPiece = 4096;
+
+    /// <summary>
+    /// Lines written into a stream as the UTF-8 bytes of their join by a line feed - what a digest hashes - through one
+    /// encoder, so a line given in pieces is written as it would be whole and the bytes are those of the joined string's.
+    /// </summary>
+    private sealed class JoinedLines(Stream into)
+    {
+        private readonly Encoder _encoder = Encoding.UTF8.GetEncoder();
+        private readonly byte[] _bytes = new byte[16 * 1024];
+        private bool _begun;
+
+        /// <summary>A line begins: the line feed that parts it from the one before, where there is one.</summary>
+        public void Line()
+        {
+            if (_begun)
+            {
+                Write("\n");
+            }
+
+            _begun = true;
+        }
+
+        /// <summary>Characters of the line, in order.</summary>
+        public void Write(ReadOnlySpan<char> characters) => Encode(characters, flush: false);
+
+        /// <summary>The lines end: what the encoder holds is written.</summary>
+        public void End() => Encode([], flush: true);
+
+        private void Encode(ReadOnlySpan<char> characters, bool flush)
+        {
+            while (true)
+            {
+                _encoder.Convert(characters, _bytes, flush, out var used, out var written, out var completed);
+                into.Write(_bytes, 0, written);
+                characters = characters[used..];
+
+                if (characters.IsEmpty && (!flush || completed))
+                {
+                    return;
+                }
+            }
+        }
     }
 
     /// <summary>The SHA-256 of <paramref name="text"/>'s UTF-8 bytes, in lowercase hexadecimal, as every content hash of the tool is (<see cref="FileContentHash"/>).</summary>
@@ -340,14 +548,37 @@ public static class CodeGraphIds
     /// The name, under a graph's <c>extracts</c> directory and with forward separators, of the extract of the file at
     /// <paramref name="path"/> whose content is <paramref name="blob"/>, made by <paramref name="language"/> at
     /// <paramref name="version"/>: <c>&lt;ab&gt;/&lt;blob&gt;-&lt;path&gt;.&lt;language&gt;-&lt;version&gt;.json</c>, <c>ab</c> the blob's first
-    /// two characters and the path's part the first eight hexadecimal characters of its SHA-256 - an implementation's
-    /// answer may read the path, so a file's extract is its path's.
+    /// two characters and the path's part its whole SHA-256 - an implementation's answer may read the path, so a file's
+    /// extract is its path's, and two paths of one blob never share an extract, however many files a tree holds. Every name
+    /// is of one length for a blob, a language and a version, whatever the path, so the graphify step checks the longest a
+    /// run makes against the platform's path budget before it syncs (<c>PathBudget</c>).
     /// </summary>
     /// <param name="blob">The blob id git gives the file's content.</param>
     /// <param name="path">The file's path, relative to the tree with forward separators.</param>
     /// <param name="language">The implementation that made it.</param>
     /// <param name="version">Its version.</param>
     public static string ExtractName(string blob, string path, string language, int version)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(blob);
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        ArgumentException.ThrowIfNullOrWhiteSpace(language);
+
+        return string.Create(
+            CultureInfo.InvariantCulture,
+            $"{blob[..2]}/{blob}-{Sha256(path)}.{language}-{version}{OrchestratorLayout.GraphExtractExtension}");
+    }
+
+    /// <summary>
+    /// The name an earlier build of this tool gave the same extract, the path's part the first eight characters of its
+    /// SHA-256 alone - which two paths of one blob could share: read so a manifest that build wrote still reads, its
+    /// extracts served as they are until its next sync, which finds each name not the one <see cref="ExtractName"/> makes
+    /// and reads the file again. Never written.
+    /// </summary>
+    /// <param name="blob">The blob id git gives the file's content.</param>
+    /// <param name="path">The file's path, relative to the tree with forward separators.</param>
+    /// <param name="language">The implementation that made it.</param>
+    /// <param name="version">Its version.</param>
+    public static string EarlierExtractName(string blob, string path, string language, int version)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(blob);
         ArgumentException.ThrowIfNullOrWhiteSpace(path);

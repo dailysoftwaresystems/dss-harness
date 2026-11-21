@@ -143,7 +143,6 @@ public sealed class ImplementationFlowTests
             new NoTests(),
             harness.ChildSessions,
             harness.GitClient,
-            harness.ConfigStore,
             updates);
 
         var machineTypes = "build test run check-mutations anchor-balance anchor-citations class-closure ci-read ci-wait fold delete-agent refresh rebase"

@@ -10,7 +10,8 @@ namespace DssHarness.Core.Hosts;
 /// was dropped - as <see cref="HostCommandRunner"/> does it, so that whichever address ssh then dials is already
 /// among them when it names it, in a line relayed as it arrives, wherever this machine's own lookup returns it too.
 /// A machine that slept can wake with another lease, and ssh, looking the name up itself, dials the address it has
-/// now; an answer learnt at the start of a command, or kept from a moment ago, would leave that one said.
+/// now; an answer learnt at the start of a command would leave that one said. No answer is kept of this tool's own: the
+/// system's resolver keeps each for as long as its own time to live says.
 /// </remarks>
 public sealed class ResolvedAddresses
 {
@@ -53,13 +54,13 @@ public sealed class ResolvedAddresses
     }
 
     /// <summary>
-    /// Looks the name up again, past the answer kept from a moment ago, and keeps every address it finds that was not
-    /// already among them.
+    /// Looks the name up again, afresh, and keeps every address it finds that was not already among them: a lookup that
+    /// finds none - no answer came, or the name is gone - takes none away.
     /// </summary>
     /// <param name="cancellationToken">Stops the lookup.</param>
     public async Task LearnAsync(CancellationToken cancellationToken)
     {
-        var resolution = await _resolver.ResolveAgainAsync(Name, cancellationToken).ConfigureAwait(false);
+        var resolution = await _resolver.ResolveAsync(Name, cancellationToken).ConfigureAwait(false);
 
         lock (_gate)
         {

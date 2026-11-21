@@ -262,7 +262,7 @@ public sealed class WorkflowExportService(
 
         try
         {
-            resolution = await _remotes.ResolveAsync(parsed, context.Config.WorkflowSources, context.Layout.MainCheckoutRoot, Environment.GetEnvironmentVariable, recorded: null, cancellationToken).ConfigureAwait(false);
+            resolution = await _remotes.ResolveAsync(parsed, context.Config.WorkflowSources, Environment.GetEnvironmentVariable, recorded: null, cancellationToken).ConfigureAwait(false);
         }
         catch (HarnessException failed) when (!WorkflowResolution.RefusesTheSource(failed) && _cache.DirectoryIfNamed is { } kept)
         {

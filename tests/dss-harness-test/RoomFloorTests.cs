@@ -239,6 +239,32 @@ public sealed class RoomFloorTests
     }
 
     /// <summary>
+    /// A floor of no ceiling may stand above the whole of a filesystem: a build there is stopped saying so - the floor, and
+    /// the size of the whole filesystem it is more than - and what to do, for no build there could ever leave it free.
+    /// </summary>
+    [Fact]
+    public async Task AFloorAboveTheWholeFilesystem_IsSaid_WhereTheBuildIsStopped()
+    {
+        using var temp = new TempDirectory();
+        var room = new Room(new HarnessFactory().FileSystem) { Free = 100L << 30 };
+
+        await using var watch = RoomFloorWatch.Start(
+            room,
+            RoomFloor.Of("native", 2048L << 30),
+            temp.Path,
+            (_, cancel) => Task.Delay(Timeout.Infinite, cancel),
+            _ => { },
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(
+            "stopped with 100 GiB free on '/data', under the 2 TiB admission.minFreeGiB keeps free for every leg there, which is more than the "
+                + "whole of '/data' holds, 200 GiB: lower admission.minFreeGiB, or no build there runs; what it built is left for "
+                + "'dssharness clean --legs native'",
+            watch.Why);
+        Assert.True(watch.Stopping.IsCancellationRequested);
+    }
+
+    /// <summary>
     /// The watch's waits between readings, each let go by the test: <see cref="Waiting"/> ends once the given wait has begun,
     /// which is once the reading before it has ended.
     /// </summary>

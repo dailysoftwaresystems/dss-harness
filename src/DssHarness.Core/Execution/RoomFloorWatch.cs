@@ -316,11 +316,18 @@ public sealed class RoomFloorWatch : IAsyncDisposable
         return false;
     }
 
-    /// <summary>Stops the build for <paramref name="space"/> under the floor, as its line says it; called holding the reading's lock.</summary>
+    /// <summary>
+    /// Stops the build for <paramref name="space"/> under the floor, as its line says it; called holding the reading's lock.
+    /// A floor above the whole filesystem's size is said so, for no build there could ever leave it free.
+    /// </summary>
     private bool Stop(DiskSpace space, string where)
     {
         _why = $"stopped with {DiskSpace.Size(space.FreeBytes)} free on '{space.Filesystem}'{where}, under the {DiskSpace.Size(_floor.Bytes)} "
-            + $"admission.minFreeGiB keeps free for every leg there; what it built is left for '{ToolPackage.Command} clean --legs {_floor.Leg}'";
+            + "admission.minFreeGiB keeps free for every leg there"
+            + (_floor.Bytes > space.TotalBytes
+                ? $", which is more than the whole of '{space.Filesystem}' holds, {DiskSpace.Size(space.TotalBytes)}: lower admission.minFreeGiB, or no build there runs"
+                : string.Empty)
+            + $"; what it built is left for '{ToolPackage.Command} clean --legs {_floor.Leg}'";
         _stopping.Cancel();
 
         return true;

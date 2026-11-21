@@ -1,5 +1,6 @@
 using DssHarness.Core.Platform;
 using DssHarness.Core.Results;
+using DssHarness.Core.Waiting;
 
 namespace DssHarness.Tests;
 
@@ -25,56 +26,100 @@ public sealed class MachineWideMutexTests
     }
 
     /// <summary>
-    /// An open that fails for a moment - as two processes racing to create the runtime's directory for
-    /// named mutexes make it fail - is tried again, a little later each time, and the mutex it then
-    /// opens is the one returned.
+    /// An open that fails for a moment - as two processes racing to create the runtime's directory for named mutexes make
+    /// it fail - is tried again after a wait that doubles from the first, and the mutex it then opens is the one returned.
     /// </summary>
     [Fact]
-    public void AnOpenThatFailsForAMoment_IsTriedAgain_ALittleLaterEachTime()
+    public async Task AnOpenThatFailsForAMoment_IsTriedAgain_ALittleLaterEachTime()
     {
         var name = MachineWideMutex.NameFor("test", [Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))], ignoreCase: true);
+        var clock = new TimerClock();
         var tries = 0;
-        var pauses = new List<TimeSpan>();
 
-        using var mutex = MachineWideMutex.Open(
-            name,
-            "a test's subject",
-            () => ++tries < 3
-                ? throw new IOException("One or more system calls failed: stat(\"/tmp/.dotnet/shm\", ...) == -1; errno == ENOENT;")
-                : new Mutex(initiallyOwned: false, name),
-            pauses.Add);
+        using var mutex = await ClockDrive.UntilEndedAsync(
+            clock,
+            Task.Run(() => MachineWideMutex.Open(
+                name,
+                "a test's subject",
+                () => ++tries switch
+                {
+                    1 => throw new IOException("One or more system calls failed: stat(\"/tmp/.dotnet/shm\", ...) == -1; errno == ENOENT;"),
+                    2 => throw new IOException("One or more system calls failed: mkdir(\"/tmp/.dotnet/shm\", ...) == -1; errno == EEXIST;"),
+                    _ => new Mutex(initiallyOwned: false, name),
+                },
+                clock)),
+            MachineWideMutex.FirstWait,
+            mostSteps: 10,
+            TestContext.Current.CancellationToken);
 
         Assert.Equal(3, tries);
-        Assert.Equal([MachineWideMutex.Backoff, MachineWideMutex.Backoff * 2], pauses);
+        Assert.Equal(MachineWideMutex.FirstWait * 3, clock.Moved);
         Assert.True(MachineWideMutex.Wait(mutex, TimeSpan.FromSeconds(5)));
         mutex.ReleaseMutex();
     }
 
     /// <summary>
-    /// One that keeps failing is said as this machine being unavailable, naming the lock, what the system
-    /// said the last time and the fix - never an internal error, never a refusal that would end a run of
-    /// which this machine is one host, and never a run that goes on without the lock.
+    /// An open the system fails in a new way each time is tried again for as long as it does - past any count of tries:
+    /// nine failures, each saying something new, and then the mutex.
     /// </summary>
     [Fact]
-    public void AnOpenThatKeepsFailing_IsUnavailable_NamingTheLockAndWhatTheSystemSaidLast()
+    public async Task TheMutexOpen_IsRetriedWhileTransient()
     {
+        var name = MachineWideMutex.NameFor("test", [Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))], ignoreCase: true);
+        var clock = new TimerClock();
         var tries = 0;
 
-        var refusal = Assert.Throws<HarnessException>(() => MachineWideMutex.Open(
-            @"Global\dss-harness-test-lock",
-            "a test's subject",
-            () =>
-            {
-                tries++;
-                throw new IOException($"One or more system calls failed: mkdir(\"/tmp/.dotnet/shm/global\", ...) == -1; errno == EEXIST; try {tries}");
-            },
-            _ => { }));
+        using var mutex = await ClockDrive.UntilEndedAsync(
+            clock,
+            Task.Run(() => MachineWideMutex.Open(
+                name,
+                "a test's subject",
+                () => ++tries <= 9
+                    ? throw new IOException($"One or more system calls failed: mkdir(\"/tmp/.dotnet/shm/global\", ...) == -1; errno == EEXIST; try {tries}")
+                    : new Mutex(initiallyOwned: false, name),
+                clock)),
+            Waits.SaidEvery,
+            mostSteps: 20,
+            TestContext.Current.CancellationToken);
 
-        Assert.Equal(MachineWideMutex.Attempts, tries);
+        Assert.Equal(10, tries);
+        Assert.True(MachineWideMutex.Wait(mutex, TimeSpan.FromSeconds(5)));
+        mutex.ReleaseMutex();
+    }
+
+    /// <summary>
+    /// One that fails the same way twice is said as this machine being unavailable, naming the lock, what the system said
+    /// and the fix - never an internal error, never a refusal that would end a run of which this machine is one host, and
+    /// never a run that goes on without the lock: the same answer twice is one no further try changes.
+    /// </summary>
+    [Fact]
+    public async Task AnOpenThatKeepsFailing_IsUnavailable_NamingTheLockAndWhatTheSystemSaid()
+    {
+        var clock = new TimerClock();
+        var tries = 0;
+
+        var refusal = await Assert.ThrowsAsync<HarnessException>(() => ClockDrive.UntilEndedAsync(
+            clock,
+            Task.Run(() => MachineWideMutex.Open(
+                @"Global\dss-harness-test-lock",
+                "a test's subject",
+                () =>
+                {
+                    tries++;
+                    throw new IOException("One or more system calls failed: mkdir(\"/tmp/.dotnet/shm/global\", ...) == -1; errno == ENOSPC.");
+                },
+                clock)),
+            Waits.SaidEvery,
+            mostSteps: 10,
+            TestContext.Current.CancellationToken));
+
+        Assert.Equal(2, tries);
         Assert.Equal(HarnessExit.HostUnavailable, refusal.ExitCode);
-        Assert.Contains(@"'Global\dss-harness-test-lock' on a test's subject", refusal.Message, StringComparison.Ordinal);
-        Assert.Contains($"errno == EEXIST; try {MachineWideMutex.Attempts}.", refusal.Message, StringComparison.Ordinal);
-        Assert.Contains("fix what the system said, and run the command again", refusal.Message, StringComparison.Ordinal);
+        Assert.Equal(
+            "The lock 'Global\\dss-harness-test-lock' on a test's subject could not be opened, the system refusing it the same way twice, saying: "
+            + "One or more system calls failed: mkdir(\"/tmp/.dotnet/shm/global\", ...) == -1; errno == ENOSPC. Nothing it guards was read or changed, "
+            + "and nothing can run on this machine until it opens: fix what the system said, and run the command again.",
+            refusal.Message);
     }
 
     /// <summary>
@@ -242,7 +287,7 @@ public sealed class MachineWideMutexTests
                 tries++;
                 throw new UnauthorizedAccessException();
             },
-            _ => throw new InvalidOperationException("paused before refusing")));
+            TimeProvider.System));
 
         Assert.Equal(1, tries);
         Assert.Equal(HarnessExit.Refused, refusal.ExitCode);

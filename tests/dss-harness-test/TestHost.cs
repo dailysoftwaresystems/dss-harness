@@ -28,6 +28,40 @@ internal static class TestHost
     /// <summary>The dotnet host running this suite, so children use the same runtime.</summary>
     internal static string DotnetExecutable { get; } = ResolveDotnet();
 
+    /// <summary>
+    /// Takes the terminal's interruption back for the children a test starts, where the runner of this process had it
+    /// ignored: a script's background job - a shard run of the suite among them - is started with the interruption
+    /// ignored, and a child inherits an ignored signal whole, so the interruption a test sends one would move nothing -
+    /// and .NET keeps an interruption it inherited ignored, so no registration the child makes arms it either. This
+    /// puts the default back in this process alone, and a test that sends a child the terminal's interruption calls it
+    /// first; where the interruption was never ignored, or a registration of this process holds it, nothing changes.
+    /// </summary>
+    internal static void InterruptionTakenBack()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        // Answered while the interruption is held ignored for an instant, so nothing a test is doing in that instant
+        // is interrupted by it: what comes back says whether it was ignored at all, and is put back where it was.
+        var was = signal(Interrupt, Ignored);
+
+        _ = signal(Interrupt, was == Ignored ? Default : was);
+    }
+
+    /// <summary>The terminal's interruption, SIGINT, as Linux and macOS number it.</summary>
+    private const int Interrupt = 2;
+
+    /// <summary>What makes a signal end a process as it always did.</summary>
+    private static readonly nint Default = 0;
+
+    /// <summary>What makes a signal move nothing.</summary>
+    private static readonly nint Ignored = 1;
+
+    [System.Runtime.InteropServices.DllImport("libc")]
+    private static extern nint signal(int number, nint action);
+
     /// <summary>This test assembly, which doubles as the child process.</summary>
     internal static string AssemblyPath => typeof(TestHost).Assembly.Location;
 

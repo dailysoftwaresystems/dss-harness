@@ -6,8 +6,9 @@ namespace DssHarness.Core.Execution;
 /// <summary>Which kind of watch a span of work on this machine watches through: chosen in one place.</summary>
 /// <remarks>
 /// On Linux, the process's one inotify instance, wherever its calls can be bound; elsewhere, and on a Linux whose C
-/// library they could not be found in, .NET's watcher - said once in a process, since there each watched directory
-/// takes an instance of its own. A limit met is never a reason to fall back: it is said, and the work is not run.
+/// library they could not be found in, .NET's watcher, one watch of a tree's root all the way down - said once in a
+/// process on Linux, since there it watches every directory of the tree, the untracked among them. A limit met is never
+/// a reason to fall back: it is said, and the work is not run.
 /// </remarks>
 internal static class WatchKinds
 {
@@ -46,7 +47,7 @@ internal static class WatchKinds
 
         if (platform != PlatformId.Linux)
         {
-            return new FileSystemWatcherKind();
+            return new FileSystemWatcherKind(fsEvents: platform == PlatformId.MacOs);
         }
 
         var (hub, why) = linux();
@@ -57,14 +58,14 @@ internal static class WatchKinds
                 new FileSystemWatcherKind(),
                 () => said.Once(() => output.Warn(
                     Command,
-                    $"inotify could not be called directly on this machine ({why}), so each watched directory takes an "
-                    + "inotify instance of its own, as .NET's watcher does.")));
+                    $"inotify could not be called directly on this machine ({why}), so the tree is watched through .NET's "
+                    + "watcher, one watch of its root all the way down, each directory below it taking an inotify watch.")));
     }
 
     /// <summary>A kind that says something before the first time it watches, and then watches as another does.</summary>
     private sealed class Saying(IWatchKind kind, Action say) : IWatchKind
     {
-        public int? MostDirectories => kind.MostDirectories;
+        public bool WatchesTheRootWhole => kind.WatchesTheRootWhole;
 
         public IDisposable Start(IReadOnlyList<WatchTarget> targets, IWatchSink sink)
         {

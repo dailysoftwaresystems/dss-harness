@@ -170,14 +170,14 @@ public sealed class RunnerLegs(
         var (harness, runner, file, legs, selected) = await PrepareAsync(request, cancellationToken).ConfigureAwait(false);
         var runnerName = request.Runner;
 
-        // The runners its expected exceptions' run checks name, which run within its legs, each with the steps a run of
+        // The runners its expected exceptions' run checks name, and theirs to any depth, which run within its legs, each with the steps a run of
         // it that names none runs: one among them that needs the build builds the legs first, since a check runs on the
         // leg as this runner left it, and a heavy one makes them heavy, as this runner would. Read only to know those:
         // one whose steps cannot be read counts heavy, said here, builds nothing, and is refused by the run check that
         // runs it, as it always was, rather than refusing a run whose checks may never run.
         var checks = new List<(string Name, RunnerConfig Runner, ActionFile? Action, bool Unread)>();
 
-        foreach (var check in runner.RunCheckRunners())
+        foreach (var check in RunnerConfig.RunCheckRunners(harness.Config.PredefinedRunners, runnerName))
         {
             var checkRunner = RunnerSelection.Resolve(harness.Config, check);
 
@@ -620,9 +620,9 @@ public sealed class RunnerLegs(
                     ManualSteps = manualSteps,
                     NamedOnCommandLine = true,
 
-                    // One level deep by construction: the runner a check names carries no checks of
-                    // its own, and this delegate reaches the service only for that one.
-                    InvokeRunner = (name, token) => ConfirmAsync(runners, toolchains, config, work, name, building, token),
+                    // A check's run is given the same way to run its own checks, to any depth, each knowing the runners
+                    // it is confirming for: a chain that led back to one would confirm itself, and is refused.
+                    InvokeRunner = (name, token) => ConfirmAsync(runners, toolchains, config, work, name, building, [runnerName], token),
                 },
                 cancellationToken)
             .ConfigureAwait(false);
@@ -639,23 +639,48 @@ public sealed class RunnerLegs(
     /// Runs the runner a check names, for the gate that confirms an expected exception.
     /// </summary>
     /// <remarks>
-    /// One level deep, and enforced here as well as by the configuration: the runner this reaches is
-    /// given no way to invoke another, so even a configuration that slipped past validation cannot
-    /// make a check confirm itself. A runner reached this way never builds the leg: the runner
-    /// carrying the check built it first where the check needs the build, and rebuilding it mid-run
-    /// would replace the binaries the failure being explained came from.
+    /// The runner this reaches may carry checks of its own, and is given the same way to run them, to any depth; each
+    /// run knows the runners it is confirming for (<paramref name="along"/>), and one that a chain of checks leads back to
+    /// is refused here as well as by the configuration, so even a configuration that slipped past validation cannot make a
+    /// check confirm itself or its runs never end. A runner reached this way never builds the leg: the runner carrying
+    /// the check built it first where the check needs the build, and rebuilding it mid-run would replace the binaries the
+    /// failure being explained came from.
     /// </remarks>
-    private static async Task<RunOutcome> ConfirmAsync(
+    /// <param name="runners">What runs a runner.</param>
+    /// <param name="toolchains">What reads a leg's CMake toolchain, for the run's request.</param>
+    /// <param name="config">The configuration the runner is declared in.</param>
+    /// <param name="work">The leg the check is confirming a failure on.</param>
+    /// <param name="runnerName">The runner the check names.</param>
+    /// <param name="built">Whether this run built the leg.</param>
+    /// <param name="along">The runners whose checks led here, the leg's own runner first.</param>
+    /// <param name="cancellationToken">Stops the run.</param>
+    internal static async Task<RunOutcome> ConfirmAsync(
         IRunnerRunService runners,
         CMakeToolchainReader toolchains,
         HarnessConfig config,
         LegWork work,
         string runnerName,
         bool built,
+        IReadOnlyList<string> along,
         CancellationToken cancellationToken)
     {
+        if (along.FirstOrDefault(earlier => string.Equals(earlier, runnerName, StringComparison.OrdinalIgnoreCase)) is { } repeated)
+        {
+            throw new HarnessException(
+                HarnessExit.Refused,
+                $"a run check leads back to predefined runner '{repeated}' through {string.Join(" -> ", along.Select(name => $"'{name}'"))}, "
+                + "so it would confirm itself; nothing it gates is excused");
+        }
+
+        IReadOnlyList<string> further = [.. along, runnerName];
         var result = await runners
-            .RunAsync(config, RequestFor(work, runnerName, RunnerSelection.Resolve(config, runnerName), built, toolchains), cancellationToken)
+            .RunAsync(
+                config,
+                RequestFor(work, runnerName, RunnerSelection.Resolve(config, runnerName), built, toolchains) with
+                {
+                    InvokeRunner = (name, token) => ConfirmAsync(runners, toolchains, config, work, name, built, further, token),
+                },
+                cancellationToken)
             .ConfigureAwait(false);
 
         return result.Outcome;

@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using DssHarness.Core.Json;
 using DssHarness.Core.Orchestration.Flow;
 
 namespace DssHarness.Core.Orchestration;
@@ -457,7 +458,7 @@ public static class ClassClosureRules
     /// <c>closure.json</c> are both held to. Null where this build holds no shipped schema, which never is.
     /// </summary>
     public static JsonNode? RecordSchema()
-        => JsonNode.Parse(Flow.WorkflowTemplates.TextOf("item-pipeline/schemas/implement.schema.json") ?? "{}")?["properties"]?["closure"];
+        => JsonDepth.ParseNode(Flow.WorkflowTemplates.TextOf("item-pipeline/schemas/implement.schema.json") ?? "{}")?["properties"]?["closure"];
 
     /// <summary>
     /// Judges <paramref name="record"/> against the classes <paramref name="planned"/> declares and the proof

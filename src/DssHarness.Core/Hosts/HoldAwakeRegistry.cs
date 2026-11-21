@@ -21,17 +21,16 @@ namespace DssHarness.Core.Hosts;
 /// <param name="hostCommands">Asks the DssHarness on a host.</param>
 /// <param name="output">Says what was left, and what could not be.</param>
 /// <param name="stopsWithin">How long an ended hold takes to stop; <see cref="Execution.HoldAwakeService.PollInterval"/> unless a test says.</param>
-public sealed class HoldAwakeRegistry(IHostCommandRunner hostCommands, IHarnessOutput output, TimeSpan? stopsWithin = null)
+/// <param name="clock">The clock a host's answer is waited on; the machine's own where none is given.</param>
+public sealed class HoldAwakeRegistry(IHostCommandRunner hostCommands, IHarnessOutput output, TimeSpan? stopsWithin = null, TimeProvider? clock = null)
 {
-    /// <summary>How long a host has to answer a hold: it starts one process and answers at once.</summary>
-    private static readonly TimeSpan Budget = TimeSpan.FromMinutes(1);
-
     /// <summary>How long a hold takes to stop once ended: it reads its state again this often.</summary>
     public TimeSpan StopsWithin { get; } = stopsWithin ?? Execution.HoldAwakeService.PollInterval;
 
     private readonly ConcurrentDictionary<HostId, HostReport> _reached = new();
     private readonly IHostCommandRunner _hostCommands = hostCommands;
     private readonly IHarnessOutput _output = output;
+    private readonly TimeProvider? _clock = clock;
 
     /// <summary>Records <paramref name="host"/> as reached, to be held when the command ends, where it asks for a hold.</summary>
     /// <param name="host">What measuring a host found.</param>
@@ -88,6 +87,7 @@ public sealed class HoldAwakeRegistry(IHostCommandRunner hostCommands, IHarnessO
                     connection,
                     toolPath,
                     nonce => new HostAgentRequest { Kind = HostAgentRequestKind.Hold, HoldAwakeSeconds = 0, Nonce = nonce },
+                    ToolPackage.Command,
                     cancellationToken)
                 .ConfigureAwait(false);
 
@@ -117,6 +117,7 @@ public sealed class HoldAwakeRegistry(IHostCommandRunner hostCommands, IHarnessO
                         KeepAwakeDirectories = [.. host.ProgramDirectories.All],
                         Nonce = nonce,
                     },
+                    commandName,
                     cancellationToken)
                 .ConfigureAwait(false);
 
@@ -143,38 +144,46 @@ public sealed class HoldAwakeRegistry(IHostCommandRunner hostCommands, IHarnessO
 
     /// <summary>
     /// Sends the DssHarness at <paramref name="toolPath"/> the hold request <paramref name="requestFor"/> makes
-    /// with a nonce of its own, and says how it finished, what it refused with, and what the transport did.
+    /// with a nonce of its own, and says how it finished, what it refused with, and what the transport did. Waited for to
+    /// its end, and told under <paramref name="commandName"/> while it lasts: a host starts one process and answers at
+    /// once, and one slow to - a link that crawls - is waited for rather than cut off.
     /// </summary>
     private async Task<(int? Finished, string? Said, ProcessResult Result)> AskAsync(
         HostConnection connection,
         string toolPath,
         Func<string, HostAgentRequest> requestFor,
+        string commandName,
         CancellationToken cancellationToken)
     {
         var nonce = HostAgentProtocol.NewNonce();
         var lines = new HostAgentLines(nonce);
         string? said = null;
 
-        var result = await _hostCommands.RunAsync(
-                connection,
-                new HostCommand
-                {
-                    Program = toolPath,
-                    Arguments = [HostAgentProtocol.CommandName],
-                    StandardInput = HostAgentProtocol.Input(requestFor(nonce)),
-                    Timeout = Budget,
-
-                    // Read line by line as it comes, for the hold's refusal; only its end is kept, for the
-                    // message that says the hold never finished.
-                    ErrorKept = StreamKept.Tail,
-                    OnErrorLine = line =>
+        var request = HostAgentProtocol.Input(requestFor(nonce));
+        var result = await ProgramWait.ToItsEndAsync(
+                token => _hostCommands.RunAsync(
+                    connection,
+                    new HostCommand
                     {
-                        if (lines.Error(line) && FailureLine.TryRead(line, HostAgentProtocol.CommandName, out var refusal))
+                        Program = toolPath,
+                        Arguments = [HostAgentProtocol.CommandName],
+                        StandardInput = request,
+
+                        // Read line by line as it comes, for the hold's refusal; only its end is kept, for the
+                        // message that says the hold never finished.
+                        ErrorKept = StreamKept.Tail,
+                        OnErrorLine = line =>
                         {
-                            said = HostProbes.AsConfigured(refusal, connection);
-                        }
+                            if (lines.Error(line) && FailureLine.TryRead(line, HostAgentProtocol.CommandName, out var refusal))
+                            {
+                                said = HostProbes.AsConfigured(refusal, connection);
+                            }
+                        },
                     },
-                },
+                    token),
+                $"{connection.Host} to answer the hold",
+                ProgramWait.Told(_output, commandName),
+                _clock,
                 cancellationToken)
             .ConfigureAwait(false);
 

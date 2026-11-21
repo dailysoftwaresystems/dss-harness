@@ -433,9 +433,13 @@ public static class FlowStatus
     private static string Span(TimeSpan span)
         => LedgerReport.FormatDuration(span) is { Length: > 0 } said ? said : "0s";
 
-    /// <summary>The steps named, where the facts name them: at most five, each by its declaration path, and a count where there are more.</summary>
+    /// <summary>
+    /// The steps named, where the facts name them, each by its declaration path: every one the line has room for, and for
+    /// the rest how many there are and that the run's status record lists every step with its instances
+    /// (<see cref="Names.Line"/>) - none is left out of the facts for how many there are.
+    /// </summary>
     private static string Named(IReadOnlyList<string> paths)
-        => paths.Count <= 5 ? $": {string.Join(", ", paths)}" : $": {string.Join(", ", paths.Take(5))} and {(paths.Count - 5).ToString(CultureInfo.InvariantCulture)} more";
+        => $": {Names.Line(paths, $"the run's {OrchestratorLayout.WorkflowStatusFileName}")}";
 
     /// <summary>
     /// Whether the run's status is one it has ended in: done or failed. A stopped run goes on at its resume, and so is

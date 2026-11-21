@@ -84,6 +84,29 @@ public sealed class ArtifactCarryTests
     }
 
     /// <summary>
+    /// An action grouped sixty directories deep keeps its run's artifacts where they are found: the walk goes each
+    /// directory once, on a stack of its own, with no depth it stops at. Held to thirty two, a run whose action was
+    /// grouped deeper was refused as one that kept nothing.
+    /// </summary>
+    [Fact]
+    public async Task ArtifactsSixtyDeep_AreFound()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var (_, service) = await PrepareAsync(temp, cancellationToken);
+        var action = string.Join('/', [.. Enumerable.Repeat("g", 59), "probe"]);
+        var kept = Path.Combine(temp.Path, HarnessLayout.ActionArtifactsRelative(action, RunId, Leg), "pack");
+
+        Directory.CreateDirectory(kept);
+        await File.WriteAllTextAsync(Path.Combine(kept, "payload.txt"), "carried", cancellationToken);
+
+        var outcome = await service.SyncHostsAsync(temp.Path, null, new SyncOptions { Artifact = RunId }, [], cancellationToken);
+
+        Assert.Equal(HarnessExit.Success, outcome.ExitCode);
+        Assert.DoesNotContain("has kept anything", outcome.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// One direction or the other. Asked for both, which one this runs in is undecided, and picking
     /// either would be picking for the reader.
     /// </summary>
@@ -658,49 +681,6 @@ public sealed class ArtifactCarryTests
         Assert.Contains("could not be taken back", said, StringComparison.Ordinal);
         Assert.Contains("payload-0.txt", said, StringComparison.Ordinal);
         Assert.Contains("payload-1.txt", said, StringComparison.Ordinal);
-    }
-
-    /// <summary>
-    /// A file larger than one request can hold is refused by name and with its size. Left to
-    /// throw, it is an OutOfMemoryException, which every command reports as a defect in the tool -
-    /// and a build output of that size is ordinary.
-    /// </summary>
-    [Fact]
-    public void AFileTooLargeToCrossWhole_IsRefusedByName_RatherThanRunningOutOfMemory()
-    {
-        var refusal = Assert.Throws<HarnessException>(() => SyncServe.RefuseAFileTooLargeToCarry(
-            SyncServe.LargestFile + 1,
-            "build/pack/corpus.bin",
-            "ssh vps"));
-
-        Assert.Contains("corpus.bin", refusal.Message, StringComparison.Ordinal);
-        Assert.Contains("ssh vps", refusal.Message, StringComparison.Ordinal);
-        Assert.Contains("one request", refusal.Message, StringComparison.Ordinal);
-
-        // And everything up to the bound crosses, so the bound is the encoding's and not a policy.
-        SyncServe.RefuseAFileTooLargeToCarry(SyncServe.LargestFile, "build/pack/corpus.bin", "ssh vps");
-    }
-
-    /// <summary>
-    /// A file whose base64 text would fill the longest string there is - 1,073,741,791 characters - is refused by name before
-    /// anything crosses: the far side reads the request carrying it as one line, and that line holds the rest of the request
-    /// too. Reckoned from int.MaxValue, the bound was twice that, and a file between the two was turned away only by this
-    /// machine running out of memory encoding it, in words naming a limit the file was under.
-    /// </summary>
-    [Fact]
-    public void AFileWhoseTextNoLineCanHold_IsRefusedByName_BeforeAnythingCrosses()
-    {
-        const int LongestString = 0x3FFFFFDF;
-
-        var refusal = Assert.Throws<HarnessException>(() => SyncServe.RefuseAFileTooLargeToCarry(
-            LongestString / 4 * 3L,
-            "build/pack/corpus.bin",
-            "ssh vps"));
-
-        Assert.Contains("corpus.bin", refusal.Message, StringComparison.Ordinal);
-
-        // What the bound lets cross still leaves the request room around its text on that one line.
-        Assert.True((SyncServe.LargestFile + 2) / 3 * 4 < LongestString - (64 * 1024), $"{SyncServe.LargestFile:N0} bytes encode to a line no string holds");
     }
 
     /// <summary>A run's artifacts here, a host holding a copy of this tree, and what joins them.</summary>

@@ -36,7 +36,7 @@ internal static class QueryCodebaseGraphCommand
 
     private static readonly Option<int?> DepthOption = new("--depth")
     {
-        Description = $"How many hops --related walks, 1 to {CodebaseGraphTool.MostDepth}.",
+        Description = "How many hops --related walks, from 1.",
     };
 
     private static readonly Option<string> OutlineOption = new("--outline")
@@ -47,9 +47,14 @@ internal static class QueryCodebaseGraphCommand
 
     private static readonly Option<string[]> BodyOption = new("--body")
     {
-        Description = $"Give the exact lines of nodes, read fresh: 1 to {CodebaseGraphTool.BodySymbols} handles, ids or names.",
+        Description = "Give the exact lines of nodes, read fresh: one or more handles, ids or names.",
         Arity = ArgumentArity.OneOrMore,
         AllowMultipleArgumentsPerToken = true,
+    };
+
+    private static readonly Option<int?> PageOption = new("--page")
+    {
+        Description = "Which page of the answer to give, from 1; the first where it is left out.",
     };
 
     private static readonly Option<string> AgentOption = new("--agent")
@@ -59,14 +64,14 @@ internal static class QueryCodebaseGraphCommand
 
     private static readonly Option<bool> JsonOption = new("--json")
     {
-        Description = "Write the answer as JSON: the run, the view, the commit, the operation, and the answer.",
+        Description = "Write the answer as JSON: the run, the view, the commit, the digest of the graph answered from, the operation, the answer, and its page, pages, total and entries.",
     };
 
     internal static Command Create()
     {
         var command = new Command(
             Name,
-            "Read a run's codebase graph: one of the graph tool's read operations - find, node, related, outline or body - on the base or an agent's view, printing the answer an agent would be given. It reads only: no sync, nothing written.");
+            "Read a run's codebase graph: one of the graph tool's read operations - find, node, related, outline or body - on the base or an agent's view, printing the answer an agent would be given, in pages of whole entries with any page asked by --page. It reads only: no sync, nothing written.");
 
         command.Arguments.Add(RunArgument);
         command.Options.Add(FindOption);
@@ -76,6 +81,7 @@ internal static class QueryCodebaseGraphCommand
         command.Options.Add(DepthOption);
         command.Options.Add(OutlineOption);
         command.Options.Add(BodyOption);
+        command.Options.Add(PageOption);
         command.Options.Add(AgentOption);
         command.Options.Add(JsonOption);
         GlobalOptions.AddTo(command);
@@ -100,5 +106,6 @@ internal static class QueryCodebaseGraphCommand
             Outline = parseResult.GetResult(OutlineOption) is { Implicit: false },
             OutlineOf = parseResult.GetValue(OutlineOption),
             Body = parseResult.GetResult(BodyOption) is { Implicit: false } ? parseResult.GetValue(BodyOption) : null,
+            Page = parseResult.GetValue(PageOption),
         };
 }

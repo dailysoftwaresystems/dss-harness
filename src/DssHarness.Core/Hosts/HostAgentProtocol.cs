@@ -6,6 +6,7 @@ using System.Text.Json.Serialization;
 using DssHarness.Core.Configuration;
 using DssHarness.Core.Execution;
 using DssHarness.Core.FileSystem;
+using DssHarness.Core.Json;
 using DssHarness.Core.Processes;
 using DssHarness.Core.Results;
 
@@ -38,7 +39,7 @@ public static class HostAgentProtocol
     /// and its own version. With the number left as it was, the same host refuses the request over
     /// whichever field it happens not to know, which says nothing about why.
     /// </remarks>
-    public const int Version = 14;
+    public const int Version = 15;
 
     /// <summary>
     /// How often, in seconds, the machine that asked writes <see cref="BeatLine"/> on the input it holds open while a run
@@ -57,9 +58,6 @@ public static class HostAgentProtocol
     /// within that time and a quarter of it of the last beat heard, never sooner than the time itself.
     /// </summary>
     public const int SilenceLooks = 4;
-
-    /// <summary>The longest beat a request may say its asker writes: an hour, past which a host would wait most of a day on silence.</summary>
-    public const int LongestBeatSeconds = 3600;
 
     /// <summary>What a beat writes: anything read on the input counts as one, and this says what it is to whoever reads a capture.</summary>
     public const string BeatLine = CommandName + ": beat";
@@ -88,6 +86,9 @@ public static class HostAgentProtocol
         Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
         RespectNullableAnnotations = true,
         UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
+
+        // At any depth (JsonDepth): a request is refused for what its own shape cannot hold, never for how deep it nests.
+        MaxDepth = JsonDepth.Unbounded,
         Converters =
         {
             new JsonStringEnumConverter(JsonNamingPolicy.CamelCase),
@@ -217,9 +218,9 @@ public static class HostAgentProtocol
     /// <summary>
     /// One line of a note: what a command a host runs for the machine that asked tells it while it runs, which that
     /// machine reads and never relays. The note's text crosses as the base64 of pieces of at most
-    /// <see cref="NotePiece"/> bytes - each small enough that its whole line fits what that machine hands lines on
-    /// in (<see cref="Processes.ProcessRunner.LongestLine"/>), so no piece is cut in two on the way - each piece
-    /// one line, <paramref name="last"/> marking the last of them.
+    /// <see cref="NotePiece"/> bytes - each small enough that its whole line fits <see cref="NoteLineLength"/>, which
+    /// every build of the tool hands on whole, so no piece is cut in two on the way - each piece one line,
+    /// <paramref name="last"/> marking the last of them.
     /// </summary>
     /// <param name="nonce">The nonce of the request whose command writes the note.</param>
     /// <param name="kind">The note's kind, which says what its text holds.</param>
@@ -277,16 +278,24 @@ public static class HostAgentProtocol
     public const int CarriedPiece = 24 * 1024;
 
     /// <summary>
+    /// The longest line of a note, its prefix and its base64 together: what every build of the tool hands a line of a
+    /// stream kept as a tail on in whole, where the machine that asked reads the host's standard error - this build hands
+    /// on far longer ones (<see cref="Processes.ProcessRunner.LongestLine"/>), and an older one cut a line at this length.
+    /// The protocol's own, so a note's pieces never follow what one build reads: a host and the machine that asked may
+    /// run different builds.
+    /// </summary>
+    public const int NoteLineLength = 32 * 1024;
+
+    /// <summary>
     /// How many bytes one piece of a note of <paramref name="kind"/> carries: the most whose whole line - the prefix
-    /// <see cref="NoteLine"/> writes and the base64 of the piece - never runs past the longest line a stream kept as a
-    /// tail is handed on in (<see cref="Processes.ProcessRunner.LongestLine"/>), where the machine that asked reads the
-    /// host's standard error. A line cut there arrives as two, the first holding damaged base64, and the note it belongs
-    /// to is lost; a multiple of three, so the base64 of a piece is whole. Smaller than
-    /// <see cref="CarriedPiece"/>, whose pieces cross by other roads.
+    /// <see cref="NoteLine"/> writes and the base64 of the piece - never runs past <see cref="NoteLineLength"/>. A line
+    /// cut on the way arrives as two, the first holding damaged base64, and the note it belongs to is lost; a multiple of
+    /// three, so the base64 of a piece is whole. Smaller than <see cref="CarriedPiece"/>, whose pieces cross by other
+    /// roads.
     /// </summary>
     /// <param name="kind">The note's kind, which says what its text holds.</param>
     public static int NotePiece(string kind)
-        => (ProcessRunner.LongestLine - NoteLine(NewNonce(), kind, last: false, string.Empty).Length) / 4 * 3;
+        => (NoteLineLength - NoteLine(NewNonce(), kind, last: false, string.Empty).Length) / 4 * 3;
 
     /// <summary>How much of a request is gathered before it is written on: what a piece of what it carries encodes to, twice.</summary>
     private const int Gathered = CarriedPiece / 3 * 4 * 2;

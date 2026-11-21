@@ -10,9 +10,11 @@ internal static class TestLinks
     /// <param name="target">The directory it leads to.</param>
     public static void Junction(string link, string target)
     {
+        // Both in Windows' own separators: mklink reads what cmd hands it, and cmd reads a name of forward slashes as a
+        // switch - a path git answers with, as `rev-parse --absolute-git-dir` does, would be read as its first part.
         using var mklink = Process.Start(new ProcessStartInfo(Path.Combine(Environment.SystemDirectory, "cmd.exe"))
         {
-            ArgumentList = { "/c", "mklink", "/J", link, target },
+            ArgumentList = { "/c", "mklink", "/J", Path.GetFullPath(link), Path.GetFullPath(target) },
             UseShellExecute = false,
             CreateNoWindow = true,
             RedirectStandardOutput = true,

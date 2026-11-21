@@ -165,21 +165,90 @@ public sealed class FlowExpressionTests
     }
 
     /// <summary>
-    /// Nothing nests more than 64 deep - a group, a '!', an empty(...) and an any(...) inside another, and each name of
-    /// a path after its first, go one deeper each - so no file can spend the stack however it is written: 64 is read,
-    /// and one more is refused.
+    /// An expression nests as deep as it is written and is read whole: a condition of ten thousand terms nested ten
+    /// thousand deep, a hundred thousand '!', a group, an empty(...) and an any(...) inside each other that deep, and a
+    /// path of a hundred thousand names are each parsed, read for their names, written back, typed and evaluated. They
+    /// are read in a child on a small stack, so a reader, a writer, a typing or an evaluation that recursed once a level
+    /// would end that child, never this run - and a bound on the nesting would refuse them.
     /// </summary>
-    [Theory]
-    [InlineData(64, null)]
-    [InlineData(65, "the expression nests more than 64 deep")]
-    public void NothingNestsMoreThanSixtyFourDeep(int levels, string? problem)
+    [Fact]
+    public async Task ATenThousandTermCondition_Parses()
     {
-        Assert.Equal(64, FlowExpression.MostNesting);
-        Assert.Equal(problem, FlowExpression.GrammarProblem(new string('(', levels) + "plan" + new string(')', levels)));
-        Assert.Equal(problem, FlowExpression.GrammarProblem(new string('!', levels - 1) + "plan.ok"));
-        Assert.Equal(problem, FlowExpression.GrammarProblem("plan" + string.Concat(Enumerable.Repeat(".ok", levels))));
-        Assert.Equal(problem, FlowExpression.GrammarProblem(string.Concat(Enumerable.Repeat("empty(", levels)) + "plan" + new string(')', levels)));
+        var answer = await ChildRun.MethodAsync(typeof(FlowExpressionTests), nameof(ReadDeep), TestContext.Current.CancellationToken);
+
+        Assert.Equal(
+            new ChildRunAnswer(
+                0,
+                "condition: 10000 reads, written back as read, 0 misuses, yields true\n"
+                + "not: 0 reads, written back as read, 0 misuses, yields true\n"
+                + "group: 0 reads, written back as true, 0 misuses, yields true\n"
+                + "empty: 1 reads, written back as read, 0 misuses, yields false\n"
+                + "any: 2 reads, written back as read, 0 misuses, yields true\n"
+                + "path: 1 reads, written back as read, 0 misuses, yields missing\n",
+                string.Empty),
+            answer);
     }
+
+    /// <summary>
+    /// The child's side of <see cref="ATenThousandTermCondition_Parses"/>: each deep expression read on a small stack, and
+    /// what came of it said a line each - its reads, whether it is written back as it was read, its misuses and what it
+    /// yields, every path a boolean true and 'items' a list of one true.
+    /// </summary>
+    private static string ReadDeep() => SmallStack.Run(() =>
+    {
+        var condition = "t9998 && t9999";
+
+        for (var term = 9997; term >= 0; term--)
+        {
+            condition = $"t{term} && ({condition})";
+        }
+
+        var any = "it";
+
+        for (var level = 0; level < 10_000; level++)
+        {
+            any = $"any(items, {any})";
+        }
+
+        var deep = new (string Name, string Text)[]
+        {
+            ("condition", condition),
+            ("not", new string('!', 100_000) + "true"),
+            ("group", new string('(', 100_000) + "true" + new string(')', 100_000)),
+            ("empty", string.Concat(Enumerable.Repeat("empty(", 100_000)) + "true" + new string(')', 100_000)),
+            ("any", any),
+            ("path", "plan" + string.Concat(Enumerable.Repeat(".ok", 99_999))),
+        };
+
+        var said = new System.Text.StringBuilder();
+
+        foreach (var (name, text) in deep)
+        {
+            var expression = FlowExpression.Parse(text);
+            var written = expression.Written;
+            var misuses = new List<string>();
+
+            _ = expression.TypeOf(
+                path => path.Root switch
+                {
+                    "items" => JsonSchemaSubset.Reading.ListOf(JsonSchemaSubset.Reading.Of("boolean")),
+                    "plan" => JsonSchemaSubset.Reading.Anything,
+                    _ => JsonSchemaSubset.Reading.Of("boolean"),
+                },
+                misuses.Add);
+
+            var value = expression.Evaluate(path => path.Root switch
+            {
+                "items" => FlowValue.Of(new JsonArray(true)),
+                "plan" => FlowValue.Missing,
+                _ => FlowValue.Of(true),
+            });
+
+            said.Append(System.Globalization.CultureInfo.InvariantCulture, $"{name}: {expression.Reads().Count} reads, written back {(written == text ? "as read" : $"as {written}")}, {misuses.Count} misuses, yields {(value.IsMissing ? "missing" : value.ToNode()!.ToJsonString())}\n");
+        }
+
+        return said.ToString();
+    });
 
     /// <summary>A plan's output as the operator tests read it: a text, a text or null, a boolean, a whole number, a list of objects, an object.</summary>
     private static readonly IReadOnlyDictionary<string, JsonSchemaSubset.Reading> Plan = new Dictionary<string, JsonSchemaSubset.Reading>(StringComparer.Ordinal)

@@ -238,6 +238,29 @@ public sealed class FileSystemWatcherKindTests
     }
 
     /// <summary>
+    /// An error that says events were dropped while the watch goes on - the runtime's buffer overflowing, or through
+    /// FSEvents the one error it raises once started - is told as an overflow, for the inputs to be looked at again, and
+    /// loses nothing; any other error, and an <see cref="IOException"/> where the watch is not FSEvents', loses the span.
+    /// </summary>
+    [Theory]
+    [InlineData(false, false, RecordingWatchSink.WasOverflowed)]
+    [InlineData(true, false, RecordingWatchSink.WasOverflowed)]
+    [InlineData(false, true, RecordingWatchSink.WasLost)]
+    [InlineData(true, true, RecordingWatchSink.WasOverflowed)]
+    public void AnErrorThatSaysEventsWereDropped_IsToldAsAnOverflow(bool fsEvents, bool plainIo, string told)
+    {
+        using var temp = new TempDirectory();
+        using var watcher = new RaisingWatcher(temp.Path);
+        var sink = new RecordingWatchSink();
+        Exception error = plainIo ? new IOException("Too many changes at once in directory.") : new InternalBufferOverflowException("Too many changes at once in directory.");
+
+        FileSystemWatcherKind.Started(watcher, sink, _ => { }, fsEvents);
+        watcher.Fail(error);
+
+        Assert.Equal([(told, "Too many changes at once in directory.")], sink.Heard);
+    }
+
+    /// <summary>
     /// With the runtime's watcher, a directory watched for names alone - one above inputs that holds none - tells of a
     /// directory made in it, and of nothing a file does there.
     /// </summary>

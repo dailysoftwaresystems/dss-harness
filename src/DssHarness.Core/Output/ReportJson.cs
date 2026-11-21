@@ -2,6 +2,7 @@ using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
+using DssHarness.Core.Json;
 
 namespace DssHarness.Core.Output;
 
@@ -17,13 +18,14 @@ namespace DssHarness.Core.Output;
 public static class ReportJson
 {
     /// <summary>The options a document is written with.</summary>
-    public static JsonSerializerOptions Options { get; } = new()
+    /// <remarks>At any depth (<see cref="JsonDepth"/>): a document is never refused for how deep what it carries is nested.</remarks>
+    public static JsonSerializerOptions Options { get; } = JsonDepth.Serializer(new()
     {
         WriteIndented = true,
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
         Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
-    };
+    });
 
     /// <summary>
     /// The document a command whose document carries the code it exits with and the line it ends on only where it stops -

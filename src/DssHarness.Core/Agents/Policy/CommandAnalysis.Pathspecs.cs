@@ -55,7 +55,9 @@ public static partial class CommandAnalysis
     /// <param name="start">Where its program stands among them.</param>
     internal static IReadOnlyList<GitPathspec> UntrackedPathspecs(IReadOnlyList<string> words, int start)
     {
-        if (start < 0 || start >= words.Count || GitWords([.. words.Skip(start)]) is not { } git)
+        // The words from the start on are a view over the command's own, never a copy: a program that runs its words is
+        // asked at each of them.
+        if (start < 0 || start >= words.Count || GitWords(new WordsFrom(words, start)) is not { } git)
         {
             return [];
         }

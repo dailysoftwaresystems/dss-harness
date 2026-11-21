@@ -1,3 +1,5 @@
+using DssHarness.Core.Text;
+
 namespace DssHarness.Core.Anchors;
 
 /// <summary>What becomes of a stored cell's text when the text declared for it is written.</summary>
@@ -26,15 +28,6 @@ public enum AnchorCellFate
 /// </remarks>
 public static class AnchorCellComparison
 {
-    /// <summary>How many unchanged words a diff keeps on each side of a change.</summary>
-    private const int ContextWords = 4;
-
-    /// <summary>
-    /// The most word pairs a diff compares: past it, the two texts are shown as one removed and the other written,
-    /// never a comparison left to run for as long as a cell is long.
-    /// </summary>
-    private const long MostComparisons = 4_000_000;
-
     /// <summary>What writing <paramref name="written"/> over <paramref name="stored"/> does to the stored text.</summary>
     /// <param name="stored">The cell as it reads.</param>
     /// <param name="written">The text as the cell would store it.</param>
@@ -66,9 +59,14 @@ public static class AnchorCellComparison
 
     /// <summary>
     /// What writing <paramref name="written"/> over <paramref name="stored"/> removes, <c>[-like this-]</c>, and writes,
-    /// <c>{+like this+}</c>, word by word, with a few unchanged words either side of each change and a <c>…</c> for the rest;
-    /// two texts too long to compare word by word are shown the one removed and the other written, and said to be.
+    /// <c>{+like this+}</c>, word by word, every unchanged word quoted as it stands: the whole of both, however long, so
+    /// what a reader is asked to accept losing is never shown in part.
     /// </summary>
+    /// <remarks>
+    /// Compared by the one diff of two sequences (<see cref="SequenceDiff"/>), over words: linear in memory, with no
+    /// bound on the words compared, so a cell of two hundred thousand words is compared exactly rather than shown as the
+    /// one removed and the other written.
+    /// </remarks>
     /// <param name="stored">The cell as it reads.</param>
     /// <param name="written">The text as the cell would store it.</param>
     public static string WordDiff(string stored, string written)
@@ -78,140 +76,72 @@ public static class AnchorCellComparison
 
         var before = AnchorCells.Words(stored);
         var after = AnchorCells.Words(written);
-        var start = 0;
+        var pieces = new List<string>();
 
-        while (start < before.Length && start < after.Length && before[start] == after[start])
+        foreach (var run in SequenceDiff.Of(before, after, StringComparer.Ordinal))
         {
-            start++;
+            if (run.Equal)
+            {
+                pieces.Add(string.Join(' ', before, run.Before, run.BeforeCount));
+                continue;
+            }
+
+            if (run.BeforeCount > 0)
+            {
+                pieces.Add($"[-{string.Join(' ', before, run.Before, run.BeforeCount)}-]");
+            }
+
+            if (run.AfterCount > 0)
+            {
+                pieces.Add($"{{+{string.Join(' ', after, run.After, run.AfterCount)}+}}");
+            }
         }
 
-        var (endBefore, endAfter) = (before.Length, after.Length);
-
-        while (endBefore > start && endAfter > start && before[endBefore - 1] == after[endAfter - 1])
-        {
-            (endBefore, endAfter) = (endBefore - 1, endAfter - 1);
-        }
-
-        var steps = new List<(char Kind, string Word)>();
-        var middle = Middle(before[start..endBefore], after[start..endAfter]);
-        steps.AddRange(before[..start].Select(word => ('=', word)));
-        steps.AddRange(middle.Steps);
-        steps.AddRange(before[endBefore..].Select(word => ('=', word)));
-
-        return middle.Compared ? Render(steps) : $"{Render(steps)} (too long to compare word by word)";
+        return string.Join(' ', pieces);
     }
 
-    /// <summary>Whether <paramref name="words"/> holds <paramref name="run"/>, its words together and in order.</summary>
+    /// <summary>
+    /// Whether <paramref name="words"/> holds <paramref name="run"/>, its words together and in order: found in one pass
+    /// over each (Knuth, Morris and Pratt), so a long cell held inside a longer one is found in time linear in the two.
+    /// </summary>
     private static bool Holds(string[] words, string[] run)
     {
-        for (var start = 0; start + run.Length <= words.Length; start++)
+        if (run.Length == 0)
         {
-            if (words.AsSpan(start, run.Length).SequenceEqual(run))
+            return true;
+        }
+
+        // fallback[i]: how long the longest proper prefix of run[..(i + 1)] is that is also its suffix.
+        var fallback = new int[run.Length];
+
+        for (int index = 1, matched = 0; index < run.Length; index++)
+        {
+            while (matched > 0 && !string.Equals(run[index], run[matched], StringComparison.Ordinal))
+            {
+                matched = fallback[matched - 1];
+            }
+
+            if (string.Equals(run[index], run[matched], StringComparison.Ordinal))
+            {
+                matched++;
+            }
+
+            fallback[index] = matched;
+        }
+
+        for (int index = 0, matched = 0; index < words.Length; index++)
+        {
+            while (matched > 0 && !string.Equals(words[index], run[matched], StringComparison.Ordinal))
+            {
+                matched = fallback[matched - 1];
+            }
+
+            if (string.Equals(words[index], run[matched], StringComparison.Ordinal) && ++matched == run.Length)
             {
                 return true;
             }
         }
 
         return false;
-    }
-
-    /// <summary>
-    /// The words of <paramref name="before"/> kept, removed and written to make <paramref name="after"/>: as many kept as
-    /// the two share in order, together or not; and whether they were compared at all, rather than the one shown removed
-    /// and the other written for being too long to compare.
-    /// </summary>
-    private static (List<(char Kind, string Word)> Steps, bool Compared) Middle(string[] before, string[] after)
-    {
-        var steps = new List<(char Kind, string Word)>();
-
-        if ((long)before.Length * after.Length > MostComparisons)
-        {
-            steps.AddRange(before.Select(word => ('-', word)));
-            steps.AddRange(after.Select(word => ('+', word)));
-            return (steps, false);
-        }
-
-        // kept[i, j] is how many words the rest of each, from i and from j, have in common, in order.
-        var kept = new int[before.Length + 1, after.Length + 1];
-
-        for (var i = before.Length - 1; i >= 0; i--)
-        {
-            for (var j = after.Length - 1; j >= 0; j--)
-            {
-                kept[i, j] = before[i] == after[j] ? kept[i + 1, j + 1] + 1 : Math.Max(kept[i + 1, j], kept[i, j + 1]);
-            }
-        }
-
-        var (x, y) = (0, 0);
-
-        while (x < before.Length && y < after.Length)
-        {
-            if (before[x] == after[y])
-            {
-                steps.Add(('=', before[x]));
-                (x, y) = (x + 1, y + 1);
-            }
-            else if (kept[x + 1, y] >= kept[x, y + 1])
-            {
-                steps.Add(('-', before[x++]));
-            }
-            else
-            {
-                steps.Add(('+', after[y++]));
-            }
-        }
-
-        steps.AddRange(before[x..].Select(word => ('-', word)));
-        steps.AddRange(after[y..].Select(word => ('+', word)));
-        return (steps, true);
-    }
-
-    private static string Render(List<(char Kind, string Word)> steps)
-    {
-        var pieces = new List<string>();
-        var index = 0;
-
-        while (index < steps.Count)
-        {
-            var kind = steps[index].Kind;
-            var run = new List<string>();
-
-            while (index < steps.Count && steps[index].Kind == kind)
-            {
-                run.Add(steps[index++].Word);
-            }
-
-            switch (kind)
-            {
-                case '-':
-                    pieces.Add($"[-{string.Join(' ', run)}-]");
-                    break;
-
-                case '+':
-                    pieces.Add($"{{+{string.Join(' ', run)}+}}");
-                    break;
-
-                default:
-                    var first = pieces.Count == 0;
-                    var last = index == steps.Count;
-                    var head = first ? 0 : ContextWords;
-                    var tail = last ? 0 : ContextWords;
-
-                    if (run.Count <= head + tail)
-                    {
-                        pieces.Add(string.Join(' ', run));
-                    }
-                    else
-                    {
-                        pieces.AddRange(
-                            new[] { string.Join(' ', run.Take(head)), "…", string.Join(' ', run.Skip(run.Count - tail)) }
-                                .Where(piece => piece.Length > 0));
-                    }
-
-                    break;
-            }
-        }
-
-        return string.Join(' ', pieces);
     }
 }

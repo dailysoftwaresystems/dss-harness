@@ -15,10 +15,27 @@ public sealed class WorktreeNameTests
     [InlineData("1a")]
     [InlineData("a-b-c-d-e")]
     [InlineData("abcdefghij")]
-    public void Validate_AcceptsWellFormedNames_WithinTheDefaultLimit(string name)
+    public void Validate_AcceptsWellFormedNames(string name)
     {
         Assert.True(WorktreeName.Validate(name).TryGetName(out var accepted, out var error), error);
         Assert.Equal(name, accepted);
+    }
+
+    /// <summary>
+    /// A name's length is the path budget's to decide, and nothing else's where the repository sets no longest name: a
+    /// forty-character name is taken, as one of any length is - the budget, measured against the real path where the
+    /// tree is made, refuses one that would not fit. Red with a default of ten characters put back.
+    /// </summary>
+    [Fact]
+    public void AFortyCharacterWorktreeName_IsTaken()
+    {
+        var name = "a-forty-character-name-for-a-long-branch";
+
+        Assert.Equal(40, name.Length);
+        Assert.Null(new WorktreeSettings().MaxNameLength);
+        Assert.True(WorktreeName.Validate(name, new WorktreeSettings().MaxNameLength).TryGetName(out var accepted, out var error), error);
+        Assert.Equal(name, accepted);
+        Assert.True(WorktreeName.Validate(new string('a', 500)).IsValid);
     }
 
     [Theory]
@@ -33,15 +50,14 @@ public sealed class WorktreeNameTests
     [Theory]
     [InlineData("abcdefghijk")]
     [InlineData("this-name-is-far-too-long")]
-    public void Validate_RejectsNamesOverTheDefaultLimit_AndSaysWhyTheLimitExists(string name)
+    public void Validate_RejectsNamesOverTheLimitTheRepositorySets_AndSaysWhereItIsSet(string name)
     {
-        Assert.False(WorktreeName.Validate(name).TryGetName(out _, out var error));
+        Assert.False(WorktreeName.Validate(name, maxLength: 10).TryGetName(out _, out var error));
 
-        // The failure the limit prevents appears as compile errors in unrelated files rather
-        // than as a path error, so the refusal has to explain itself and where to change it.
-        Assert.Contains($"the limit is {WorktreeSettings.DefaultMaxNameLength}", error, StringComparison.Ordinal);
+        // The refusal says where the limit is set, and what holds a name where none is.
+        Assert.Contains("the limit is 10, which worktrees.maxNameLength in config.json sets", error, StringComparison.Ordinal);
+        Assert.Contains("held to the path budget alone", error, StringComparison.Ordinal);
         Assert.Contains(HostPlatform.WindowsMaxPath.ToString(System.Globalization.CultureInfo.InvariantCulture), error, StringComparison.Ordinal);
-        Assert.Contains("worktrees.maxNameLength", error, StringComparison.Ordinal);
     }
 
     [Theory]
@@ -132,6 +148,45 @@ public sealed class WorktreeNameTests
         // Collisions are possible in principle; a run of 200 producing duplicates
         // would mean the generator is not actually random.
         Assert.True(generated.Count > 190, $"only {generated.Count} distinct names");
+    }
+
+    /// <summary>
+    /// A new name is never one of the existing names, however crowded its length: with all but one of the 1,296 names of
+    /// two characters taken, the one left is drawn, every time; with every one taken, none is - said as that fact, never
+    /// as a count of draws run out; and where the names taken fold case, a name taken in another case is taken. Red with
+    /// the ten draws put back.
+    /// </summary>
+    [Fact]
+    public void ANewName_IsNeverAnExistingOne()
+    {
+        const string Alphabet = "abcdefghijklmnopqrstuvwxyz0123456789";
+        var all = Alphabet.SelectMany(first => Alphabet.Select(second => $"{first}{second}")).ToList();
+        var taken = new HashSet<string>(all.Where(name => name != "q7"), StringComparer.Ordinal);
+
+        Assert.Equal(1296, all.Count);
+
+        for (var draw = 0; draw < 50; draw++)
+        {
+            Assert.Equal("q7", WorktreeName.Generate(2, taken));
+        }
+
+        taken.Add("q7");
+        Assert.Null(WorktreeName.Generate(2, taken));
+
+        var folded = new HashSet<string>(all.Where(name => name != "q7").Select(name => name.ToUpperInvariant()), StringComparer.OrdinalIgnoreCase);
+
+        Assert.Equal("q7", WorktreeName.Generate(2, folded));
+
+        // Past twice the names taken, a draw is free more often than not, and still never one of them.
+        var few = new HashSet<string>(["ab", "cd", "ef"], StringComparer.Ordinal);
+
+        for (var draw = 0; draw < 200; draw++)
+        {
+            var drawn = WorktreeName.Generate(2, few) ?? throw new InvalidOperationException("no name was drawn, though most are free");
+
+            Assert.DoesNotContain(drawn, few);
+            Assert.True(WorktreeName.ValidateFormat(drawn).IsValid, drawn);
+        }
     }
 }
 

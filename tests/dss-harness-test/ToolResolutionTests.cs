@@ -543,6 +543,35 @@ public sealed class ToolResolutionTests
     }
 
     /// <summary>
+    /// A copy that takes four minutes to say its version - one on a network share - is waited for and told, and held to
+    /// its minimum as any other: held to thirty seconds of the code's own, it was said not to be known to meet it.
+    /// </summary>
+    [Fact]
+    public async Task AFourMinuteCopy_IsWaitedAndTold()
+    {
+        using var temp = new TempDirectory();
+        var onPath = Directory.CreateDirectory(temp.Combine("path")).FullName;
+        var python = Executable(onPath, "python3");
+        var clock = new TimerClock();
+        var output = Substitute.For<DssHarness.Core.Output.IHarnessOutput>();
+        var processes = Substitute.For<IProcessRunner>();
+        var ends = new TaskCompletionSource<ProcessResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var requests = new List<ProcessRequest>();
+
+        processes.RunAsync(Arg.Do<ProcessRequest>(requests.Add), Arg.Any<CancellationToken>()).Returns(_ => ends.Task);
+
+        var search = await FourMinutes.WaitedAndToldAsync(
+            clock,
+            new ProgramFloors(Resolver(onPath), processes, HostDoubles.Platform(PlatformId.Linux, "x86_64"), output, clock)
+                .ResolveAsync(["python3"], [], [Floor("python3", "3.12.0")], TestContext.Current.CancellationToken),
+            () => ends.SetResult(HostResults.Ok("Python 3.13.1\n")),
+            TestContext.Current.CancellationToken);
+
+        Assert.True(search.Found["python3"].Present, search.Found["python3"].Reason);
+        Assert.Null(Assert.Single(requests).Timeout);
+        output.Received().Info(ToolPackage.Command, Arg.Is<string>(line => line == $"has waited 5m00s for '{python}' to say its version"));
+    }
+    /// <summary>
     /// A copy that will not start at all - a file that is no program for this machine, or may not be run - could not
     /// say its version, and leaves the tool not known to meet its minimum, saying what starting it said.
     /// </summary>
