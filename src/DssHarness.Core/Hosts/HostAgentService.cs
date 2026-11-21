@@ -247,7 +247,7 @@ public sealed class HostAgentService(
         var waited = await Waits
             .ForAsync(
                 token => finishing ? AnsweredAsync(serving, token) : WhileStartedRunsAsync(serving, token),
-                new WaitWatch("what the request started here to stop", told => _ = Gone.SayingAsync(error, [told.Line()]).Begun, Bound: null, _patience.Clock),
+                new WaitWatch("what the request started here to stop", gone.Told, Bound: null, _patience.Clock),
                 finishing ? CancellationToken.None : stopped)
             .ConfigureAwait(false);
 
@@ -907,6 +907,27 @@ public sealed class HostAgentService(
             }
 
             return Task.WhenAll(said);
+        }
+
+        /// <summary>
+        /// Begins writing what a wait told while the request unwinds, as <see cref="BecauseAsync"/> says a sign, and holds
+        /// the writing among what this one has said: each tell is a say of this one's, told on the thread the wait runs
+        /// on, so the line that says a run finished stands behind it. Nothing where this one says nothing.
+        /// </summary>
+        /// <param name="told">What the wait told.</param>
+        public void Told(WaitTold told)
+        {
+            if (error is null)
+            {
+                return;
+            }
+
+            var (_, written) = SayingAsync(error, [told.Line()]);
+
+            lock (_said)
+            {
+                _saidWrites.Add(written);
+            }
         }
 
         /// <summary>

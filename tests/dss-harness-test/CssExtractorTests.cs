@@ -297,7 +297,10 @@ public sealed class CssExtractorTests : CodeGraphExtractorContractTests<CssExtra
         Assert.Equal([".a", ".c"], interpolations.Nodes.Select(node => node.Name));
         Assert.Equal([("css:a.scss#.a", "$deep", 1)], interpolations.References.Select(reference => (reference.From.Whole(), reference.Name, reference.Line)));
         Assert.Empty(blocks.Dynamic.Concat(selectors.Dynamic).Concat(interpolations.Dynamic));
-        Assert.True(watch.Elapsed < TimeSpan.FromSeconds(10), $"reading nesting {Depth} deep took {watch.Elapsed}");
+
+        // The slowest runner of the matrix - a shared two-core macOS under the suite's own load - read these three
+        // sheets in twenty seconds; a wrong read, one that walks its stack for every depth, is minutes past any bound here.
+        Assert.True(watch.Elapsed < TimeSpan.FromSeconds(60), $"reading nesting {Depth} deep took {watch.Elapsed}");
     }
 
     /// <summary>A selector written over several lines counts each line once: the rules after it keep their own lines.</summary>
@@ -946,7 +949,10 @@ public sealed class CssExtractorTests : CodeGraphExtractorContractTests<CssExtra
         watch.Stop();
 
         Assert.Equal(40_000, extract.Nodes.Count);
-        Assert.True(watch.Elapsed < TimeSpan.FromSeconds(10), $"reading 40,000 rules took {watch.Elapsed}");
+
+        // As above: the bound holds on the matrix's slowest runner, and a wrong read - one that walks its rules for
+        // each rule - is far past it.
+        Assert.True(watch.Elapsed < TimeSpan.FromSeconds(60), $"reading 40,000 rules took {watch.Elapsed}");
     }
 
     private static string Dir(string target) => target[..(target.LastIndexOf('/') + 1)];

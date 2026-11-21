@@ -1332,7 +1332,12 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
     /// From then on nothing more is kept or handed on: what that process writes is its own.
     /// </para>
     /// </remarks>
-    private sealed class StreamCapture
+    /// <summary>
+    /// Reads a child's output from its first character: what the child wrote is kept, whole or as a tail, handed on
+    /// line by line, and written to a log; a read of it can be asked whether it has waited on a quiet pipe across two
+    /// looks, which is how a runner tells a child's own whole output from one a process it left running holds open.
+    /// </summary>
+    internal sealed class StreamCapture
     {
         private readonly Lock _gate = new();
         private readonly Action<string>? _onLine;
@@ -1350,6 +1355,13 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
 
         /// <summary>Whether a read of the pipe is under way, waiting for what the child writes next.</summary>
         private volatile bool _waiting;
+
+        /// <summary>
+        /// The read now waiting on the pipe, as the task it answers: completed, the read has returned - what it read is
+        /// the child's own, kept already, whatever delay a busy machine puts between the read's return and the loop that
+        /// keeps it - so a waiting read is one whose task is still to end.
+        /// </summary>
+        private volatile Task<int>? _pending;
 
         /// <summary>How many reads have returned: a reading that waits across two looks has had nothing in between.</summary>
         private long _reads;
@@ -1395,9 +1407,11 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
         /// Whether every character the child wrote to the stream has been read: the stream has ended; or a read of the
         /// pipe has waited across two looks with none returning in between - the pipe holding nothing more, for
         /// anything more would have ended the waiting read - what a process the child left running holds open, once
-        /// the child has ended. The system is asked nothing: the pending read is itself the answer, and on Windows
-        /// the handle a synchronous read pends on answers no other question - a peek on it waits for that read, which
-        /// is what the child left running holds. A stream that is no pipe of a child's is read to its end.
+        /// the child has ended. A read is waiting only where its own task has not completed: one whose task has
+        /// completed has returned, and what it returned is the child's own, kept, however long a busy machine holds
+        /// back the loop that keeps it. The system is asked nothing: the pending read is itself the answer, and on
+        /// Windows the handle a synchronous read pends on answers no other question - a peek on it waits for that
+        /// read, which is what the child left running holds. A stream that is no pipe of a child's is read to its end.
         /// </summary>
         public bool ReadAll()
         {
@@ -1407,7 +1421,7 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
             }
 
             var reads = Interlocked.Read(ref _reads);
-            var quiet = _waiting && _pipe is not null;
+            var quiet = _waiting && _pipe is not null && _pending is { IsCompleted: false };
             var settled = quiet && reads == _lookedAt;
 
             _lookedAt = quiet ? reads : -1;
@@ -1470,17 +1484,25 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
             }
         }
 
-        /// <summary>The next read, marked as waiting while it is under way.</summary>
+        /// <summary>
+        /// The next read, marked as waiting while it is under way. The task the read answers is kept, so a look can
+        /// tell a read that still waits from one that has returned, its keeping not yet run: a busy machine can hold
+        /// that back long past the read's own return.
+        /// </summary>
         private async Task<int> Next(StreamReader reader, char[] buffer)
         {
             _waiting = true;
 
             try
             {
-                return await reader.ReadAsync(buffer.AsMemory()).ConfigureAwait(false);
+                var reading = reader.ReadAsync(buffer.AsMemory()).AsTask();
+                _pending = reading;
+
+                return await reading.ConfigureAwait(false);
             }
             finally
             {
+                _pending = null;
                 _waiting = false;
                 Interlocked.Increment(ref _reads);
             }
@@ -1575,7 +1597,7 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
             : process.StandardOutput;
 
     /// <summary>A stream as it was read: what is kept of it, and what its line handler raised, where it raised anything.</summary>
-    private sealed record Captured(string Text, ExceptionDispatchInfo? Failed);
+    internal sealed record Captured(string Text, ExceptionDispatchInfo? Failed);
 
     /// <summary>
     /// Raises what the line handlers raised: nothing where neither failed; the failure where one did, or where both raised

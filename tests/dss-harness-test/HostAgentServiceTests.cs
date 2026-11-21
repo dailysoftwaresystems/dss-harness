@@ -1036,11 +1036,27 @@ public sealed class HostAgentServiceTests
             await stepped.StepAsync(meanwhile: null, cancellationToken).WaitAsync(TimeSpan.FromSeconds(30), cancellationToken);
         }
 
+        // The look of a step lands as the step ends, after it: waited for, so the ten steps were all looked at before
+        // the run is released to answer as it ends - a look still owed would read as one that never happened.
+        await Until(() => lastResort.Looks >= 10);
+
         release.SetResult(HarnessExit.Cancelled);
 
         Assert.Equal(HarnessExit.Cancelled, await serving.WaitAsync(TimeSpan.FromSeconds(30), cancellationToken));
         Assert.False(lastResort.Asked, "What the run started was ended while it still stopped.");
         Assert.True(lastResort.Looks >= 10);
+    }
+
+    /// <summary>Waits until <paramref name="condition"/> holds, failing the test where it does not within thirty seconds.</summary>
+    private static async Task Until(Func<bool> condition)
+    {
+        var bound = DateTime.UtcNow.AddSeconds(30);
+
+        while (!condition())
+        {
+            Assert.True(DateTime.UtcNow < bound, "the condition never came to hold");
+            await Task.Delay(10, TestContext.Current.CancellationToken);
+        }
     }
 
     /// <summary>

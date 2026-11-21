@@ -226,7 +226,9 @@ public sealed class YamlExtractorTests : CodeGraphExtractorContractTests<YamlExt
             [.. names.Skip(1).SelectMany((name, at) => Enumerable.Range(0, 10).Select(item => ($"yaml:bomb.yml#{name}[{item}]", names[at], at + 2, $"yaml:bomb.yml#{names[at]}")))],
             References(extract));
         Assert.Empty(extract.Dynamic);
-        Assert.True(watch.Elapsed < TimeSpan.FromSeconds(10), $"the file took {watch.Elapsed} to read");
+
+        // As below: the bound is the matrix's slowest runner, and what a wrong read takes is far past it.
+        Assert.True(watch.Elapsed < TimeSpan.FromSeconds(60), $"the file took {watch.Elapsed} to read");
     }
 
     /// <summary>
@@ -246,7 +248,10 @@ public sealed class YamlExtractorTests : CodeGraphExtractorContractTests<YamlExt
         Assert.All(extract.References, reference => Assert.Equal(new ExtractQualifier(CodeQualifierKinds.Own, "yaml:wide.yml#a"), reference.Qualifier));
         Assert.Equal(("*a", "yaml:wide.yml#b"), (extract.Nodes[^1].Summary, extract.Nodes[^1].Parent));
         Assert.Empty(extract.Dynamic);
-        Assert.True(watch.Elapsed < TimeSpan.FromSeconds(10), $"the file took {watch.Elapsed} to read");
+
+        // The slowest runner of the matrix - a shared two-core macOS under the suite's own load - reads this in twenty
+        // seconds; a read that is wrong, the anchor read again for each of its aliases, is minutes past any bound here.
+        Assert.True(watch.Elapsed < TimeSpan.FromSeconds(60), $"the file took {watch.Elapsed} to read");
     }
 
     /// <summary>

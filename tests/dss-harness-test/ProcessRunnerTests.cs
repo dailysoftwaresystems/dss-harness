@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Globalization;
+using System.IO.Pipes;
 using System.Runtime.Versioning;
 using System.Text;
 using DssHarness.Core.Platform;
@@ -1208,6 +1209,66 @@ public sealed class ProcessRunnerTests
             ProcessRunner.ProgramsOnPath(["npm.exe", "npm.cmd"], path, windows: true, candidate => present.Contains(candidate)));
     }
 
+    /// <summary>
+    /// A look at a child's output settles on a quiet pipe only where a read of it waits - a read whose task is still to
+    /// end: one being made, its task not yet given, has not returned, and what a runner once read from such a look was
+    /// that the pipe was held by a leftover while the child's own answer was still coming - git asked to name a
+    /// repository answered nothing, its output given up with the pipe. The read that waits is told from one that does
+    /// not, so what a child wrote is kept.
+    /// </summary>
+    /// <remarks>
+    /// The second read is held where it is being made - the capture's loop parked inside the reader, its task not yet
+    /// given - which holds the state a look must settle or refuse for as long as the test wants, on however busy a
+    /// machine: no wait of the test's own rides on the pool scheduling a continuation, and every wait is bounded. A
+    /// first read that answered at once would park the constructor itself, on the test's own thread, and the test
+    /// would never begin.
+    /// </remarks>
+    [Fact]
+    public async Task AReadIsQuietOnlyWhereItsTaskWaits()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var first = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var second = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var made = new ManualResetEventSlim(false);
+        using var letGo = new ManualResetEventSlim(false);
+
+        // A real pipe under the reader, as a child's output is read through, for what a capture asks whether its read waits on.
+        using Stream pipe = OperatingSystem.IsWindows()
+            ? new FileStream(Path.Combine(temp.Path, "pipe"), FileMode.OpenOrCreate, FileAccess.Read, FileShare.Read)
+            : new AnonymousPipeServerStream(PipeDirection.In);
+        using var reader = new HeldRead(first.Task, second.Task, pipe)
+        {
+            // Where the second read is being made: the capture's loop waits here, the read's task not yet given, and
+            // lets go of its own accord, so nothing is held longer than this test's moment.
+            OnSecond = () =>
+            {
+                made.Set();
+                letGo.Wait(TimeSpan.FromSeconds(30));
+            },
+        };
+
+        var capture = new ProcessRunner.StreamCapture(reader, onLine: null, StreamKept.Whole, cut: null, pieced: null, log: null);
+
+        // The first read returns the child's answer; the capture's loop keeps it and comes for a second, and is held
+        // where that second is being made - its task not yet given, the read itself out.
+        const string Said = "the child's answer\n";
+        Said.AsSpan().CopyTo(reader.Asked.Span);
+        first.TrySetResult(Said.Length);
+        Assert.True(made.Wait(TimeSpan.FromSeconds(30), cancellationToken), "the capture never came for its second read");
+
+        // Two looks while the read is being made: neither settles the pipe as quiet - a read with no task to wait on
+        // is not a leftover holding it - and the second look is where one that read the waiting mark alone would settle.
+        Assert.False(capture.ReadAll());
+        Assert.False(capture.ReadAll(), "a read being made was read as a pipe waiting on a leftover");
+
+        // Let the second read out, at the stream's end: the answer is kept, whole, as the child's own.
+        letGo.Set();
+        second.TrySetResult(0);
+        await capture.Reading.WaitAsync(TimeSpan.FromSeconds(30), cancellationToken);
+        Assert.Equal(Said, capture.Taken().Text);
+    }
+
     private static List<string> Lines(string text)
         => [.. text.Split('\n', StringSplitOptions.RemoveEmptyEntries).Select(line => line.TrimEnd('\r'))];
 
@@ -1240,5 +1301,39 @@ public sealed class ProcessRunnerTests
 
         Assert.Fail($"The child never recorded its grandchild's process id in '{path}'.");
         return 0;
+    }
+
+    /// <summary>
+    /// A reader whose first read answers by a task a test completes, into the buffer the read was given, whose second
+    /// is held where it is being made - before its task is given - until the test lets it go, and whose third says the
+    /// stream has ended: the capture's loop can be parked mid-read, its task not yet given, for as long as a look at
+    /// the capture needs, on however busy a machine.
+    /// </summary>
+    private sealed class HeldRead(Task<int> first, Task<int> second, Stream pipe) : StreamReader(pipe)
+    {
+        private Memory<char> _asked;
+        private int _read;
+
+        /// <summary>Runs where the second read is being made, before its task is given: the reader waits here as long as it says.</summary>
+        public Action? OnSecond { get; init; }
+
+        /// <summary>The buffer a read was given, the same for each.</summary>
+        public Memory<char> Asked => _asked;
+
+        public override ValueTask<int> ReadAsync(Memory<char> buffer, CancellationToken cancellationToken = default)
+        {
+            _asked = buffer;
+
+            switch (_read++)
+            {
+                case 0:
+                    return new ValueTask<int>(first);
+                case 1:
+                    OnSecond?.Invoke();
+                    return new ValueTask<int>(second);
+                default:
+                    return ValueTask.FromResult(0);
+            }
+        }
     }
 }
