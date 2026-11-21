@@ -2388,7 +2388,11 @@ internal sealed class DartReading
         // p.Foo.named: the prefix, the type and the constructor's name.
         var written = names.Select(index => scan.Text(index)).ToList();
         var typeNames = written.Count > 1 && !IsTypeName(written[^1]) ? written.Count - 1 : written.Count;
-        Mention(key, CodeEdgeKinds.Instantiates, QualifiedName.Of(string.Join('.', written.Take(typeNames))), scan[names[0]].Line);
+        var made = Mention(key, CodeEdgeKinds.Instantiates, QualifiedName.Of(string.Join('.', written.Take(typeNames))), scan[names[0]].Line);
+
+        // The type's last name is what the constructor's name - read on as a call on the type - is chained to: the
+        // instantiation itself says what the type is written with, a prefix or a type's names.
+        _chained[(scan, names[typeNames - 1])] = (made, null);
 
         // A constructor named after its type is read on as a call of that name on the type: Foo.named( calls Foo's named.
         return typeNames < written.Count ? names[typeNames] : scan.Next(names[typeNames - 1]);
@@ -2915,9 +2919,9 @@ internal sealed class DartReading
 
     /// <summary>
     /// The type a reference of <paramref name="kind"/> names: its last name, qualified by the prefix written before it -
-    /// an import's, where the file imports by it - or the names before it as a type's.
+    /// an import's, where the file imports by it - or the names before it as a type's. Answers the reference it made.
     /// </summary>
-    private void Mention(QualifiedName key, string kind, QualifiedName chain, int line)
+    private int Mention(QualifiedName key, string kind, QualifiedName chain, int line)
         => _extract.Reference(key, kind, chain.PastLastDot(), line, qualifier: chain.BeforeLastDot() is { } scopes ? Qualifier(scopes.Whole()) : null);
 
     /// <summary>What a name written after <paramref name="written"/> is qualified by: an import's prefix, where the file imports by it; a type's name otherwise.</summary>
