@@ -725,23 +725,6 @@ public abstract record WordPart
 /// <param name="alternatives">The alternatives, in order.</param>
 public sealed class WordChoice(IReadOnlyList<WordPattern> alternatives)
 {
-    private readonly IReadOnlyList<AgentPolicy.PlaceForm>? _forms;
-
     /// <summary>The alternatives, in order.</summary>
     public IReadOnlyList<WordPattern> Alternatives { get; } = alternatives ?? throw new ArgumentNullException(nameof(alternatives));
-
-    /// <summary>
-    /// A choice that stands for a directory the shell may stand in - <c>PWD</c>'s own - each alternative the pattern of
-    /// the places one form holds: a decision that walks a path reads the forms themselves, at one place of each way they
-    /// stand, never every alternative.
-    /// </summary>
-    /// <param name="alternatives">The alternatives, in order.</param>
-    /// <param name="forms">The forms, one per alternative.</param>
-    internal WordChoice(IReadOnlyList<WordPattern> alternatives, IReadOnlyList<AgentPolicy.PlaceForm> forms) : this(alternatives) => _forms = forms;
-
-    /// <summary>
-    /// The places the alternatives stand for, one form per alternative, where the choice is a directory the shell may
-    /// stand in; null where the alternatives are the choice entire.
-    /// </summary>
-    internal IReadOnlyList<AgentPolicy.PlaceForm>? Forms => _forms;
 }

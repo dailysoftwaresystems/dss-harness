@@ -248,6 +248,30 @@ public sealed class AgentPolicyPatternTests
     }
 
     /// <summary>
+    /// A word held as a core whose alternatives stand for the places the shell may stand in - <c>$PWD</c> after a
+    /// <c>cd</c> a <c>CDPATH</c> doubled, each alternative the pattern of a form - is walked at the places those forms
+    /// hold: a script written through it is recorded beneath every one of them, so the plain word that runs it beneath
+    /// the same places is decided by the text it holds, also where a later write replaced one copy's text. Red with
+    /// the walk reading only the text before a nested choice and stepping the alternatives off it, which left the
+    /// written script never read and the command it holds running unrefused.
+    /// </summary>
+    [Fact]
+    public void AWordHeldAsACore_IsWalkedAtThePlacesItsAlternativesReach()
+    {
+        using var temp = new TempDirectory();
+        var worktree = Directory.CreateDirectory(temp.Combine("tree")).FullName;
+        var elsewhere = Directory.CreateDirectory(temp.Combine("elsewhere")).FullName;
+        var denied = new AgentPolicyAnswer.Denied("Run(git push *)", AgentPolicySource.Config, "'git push' is denied by Run(git push *), a restriction of agentPolicy.restrictions");
+        var policy = new AgentPolicy(
+            new PassThroughFileSystem(new PhysicalFileSystem(FilePermissionsFactory.Create())),
+            HostDoubles.Platform(PlatformId.Linux),
+            PolicyGrounds.Of(worktree, [worktree], [worktree, elsewhere], [], [], [new AgentRestriction("Run(git push *)", AgentPolicySource.Config)]));
+
+        Assert.Equal(denied, policy.Run("CDPATH=../elsewhere; cd name; cat <<< 'git push' > $PWD/script.sh; sh script.sh"));
+        Assert.Equal(denied, policy.Run("CDPATH=../elsewhere; cd name; cat <<< 'git push' > $PWD/script.sh; cat <<< 'echo ok' > ../elsewhere/name/script.sh; sh script.sh"));
+    }
+
+    /// <summary>
     /// A command that reads thirty variables, each holding every place a move's readings reach - two places each, so
     /// 2^30 ways one value may be made - is decided by the forms of those places, never by a reading per way: the
     /// thirty read together are allowed where every place they reach is, and the slot one of them reaches refused - in
