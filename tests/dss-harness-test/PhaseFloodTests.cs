@@ -100,10 +100,17 @@ public sealed class PhaseFloodTests
     /// characters - has it kept, every character in order, as lines of at most the longest the runner hands on, and the
     /// heap no larger than the bound: the runner that held a line until it ended held this one whole, several times over.
     /// </summary>
+    /// <remarks>
+    /// The runner's own hand-on is the longest string .NET makes, which this line never reaches, so the test sets what
+    /// the runner hands on (<see cref="ProcessRunner.LinesHandedOnIn"/>), as a test may: handed on whole, the line alone
+    /// would hold the heap at hundreds of megabytes past any bound, whatever became of it after.
+    /// </remarks>
     [Fact]
     public async Task AChildPrintingOneLineThatNeverEnds_HasItKeptWhole_InPieces_WithinABoundedHeap()
     {
         const long Giant = 200L * 1024 * 1024;
+        const int Piece = 32 * 1024;
+        using var cut = ProcessRunner.LinesHandedOnIn(Piece);
 
         using var temp = new TempDirectory();
         var factory = new HarnessFactory();
@@ -135,7 +142,7 @@ public sealed class PhaseFloodTests
 
         while (lines.MoveNext())
         {
-            Assert.InRange(lines.Current.Length, 1, ProcessRunner.LongestLine);
+            Assert.InRange(lines.Current.Length, 1, Piece);
 
             if (lines.Current.AsSpan().ContainsAnyExcept('g'))
             {

@@ -38,6 +38,11 @@ public sealed class CodebaseGraphMemoryTests
         graph.Write("package-lock.toy", text.ToString());
         text.Clear();
         text.Capacity = 0;
+
+        // The lock is the tree's one file: the README the fixture seeds would be outlined with it, and this measures
+        // the lock alone.
+        File.Delete(Path.Combine(graph.Tree, "README.md"));
+
         await graph.CommitAsync();
         var bytes = new FileInfo(Path.Combine(graph.Tree, "package-lock.toy")).Length;
         CodebaseGraphSynced synced;

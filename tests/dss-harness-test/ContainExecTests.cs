@@ -18,6 +18,14 @@ public sealed class ContainExecTests
     private static readonly TimeSpan LongBound = TimeSpan.FromMinutes(2);
 
     /// <summary>
+    /// How long a test here waits for a chain of processes to say it is ready: the five processes such a chain
+    /// starts have taken close to two minutes to come up where the suite's own shards ran beside it, so this is a
+    /// guard against a hang far above that - the suite's own notices name a test still running every two minutes,
+    /// and a hang is named long before this ends it.
+    /// </summary>
+    private static readonly TimeSpan ReadyBound = TimeSpan.FromMinutes(5);
+
+    /// <summary>
     /// A contained child on Linux and macOS is a session and group of its own: the terminal's
     /// signals go to a foreground group of the session the terminal belongs to, and a session of
     /// one's own is not it - which is what keeps a contained agent alive to be asked for its
@@ -1138,30 +1146,46 @@ public sealed class ContainExecTests
     /// always were, and a SIGINT to the parent's group - what a terminal sends at Ctrl+C - ends the
     /// parent and the child in its group, and leaves the contained one running.
     /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The signal must reach the parent as a terminal's would, so the interruption is taken back for this process's
+    /// children first: a shard run of the suite is a script's background job, started with the interruption ignored,
+    /// and a chain that inherits it ignored is ended by no SIGINT at all.
+    /// </para>
+    /// <para>
+    /// The chain this waits to say its ids - the parent, the container and both children, five processes, each
+    /// waiting on the last - has taken close to two minutes to come up where the suite's own shards ran beside it, so
+    /// the child is asked for within <see cref="ReadyBound"/> and given no time limit of its own: a limit as long as
+    /// the wait would stop the child, by its whole tree, while the test still believed in it, and end the contained
+    /// child the test asks about. The child ends itself where the test never learns its ids, and the
+    /// <c>finally</c> ends it where the test lets go of a run still going.
+    /// </para>
+    /// </remarks>
     [Fact]
     public async Task ASignalToTheParentsGroup_DoesNotReachItsContainedChild_OnLinuxAndMacOS()
     {
         Assert.SkipWhen(OperatingSystem.IsWindows(), "groups and their signals are the C library's; AContainedChild_OnWindows_IsInAGroupOfItsOwn_ThatTheConsolesInterruptDoesNotReach holds Windows.");
 
+        TestHost.InterruptionTakenBack();
+
         var ids = new TaskCompletionSource<(int Parent, LearnedProcess Contained, LearnedProcess Ordinary)>(TaskCreationOptions.RunContinuationsAsynchronously);
         (int Parent, LearnedProcess Contained, LearnedProcess Ordinary) said = default;
+        using var stop = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        var run = ContainingRunner().RunAsync(
+            Child("contain-and-wait", CliRunner.CliProgram, "300000") with
+            {
+                ApartFromTerminal = true,
+                OnOutputLine = line =>
+                {
+                    var words = line.Split(' ').Select(word => word.Split('=')).ToDictionary(pair => pair[0], pair => int.Parse(pair[1], CultureInfo.InvariantCulture));
+                    ids.TrySetResult((words["parent"], LearnedProcess.Of(words["contained"]), LearnedProcess.Of(words["ordinary"])));
+                },
+            },
+            stop.Token);
 
         try
         {
-            var run = ContainingRunner().RunAsync(
-                Child("contain-and-wait", CliRunner.CliProgram, "300000") with
-                {
-                    ApartFromTerminal = true,
-                    Timeout = LongBound,
-                    OnOutputLine = line =>
-                    {
-                        var words = line.Split(' ').Select(word => word.Split('=')).ToDictionary(pair => pair[0], pair => int.Parse(pair[1], CultureInfo.InvariantCulture));
-                        ids.TrySetResult((words["parent"], LearnedProcess.Of(words["contained"]), LearnedProcess.Of(words["ordinary"])));
-                    },
-                },
-                TestContext.Current.CancellationToken);
-
-            said = await ids.Task.WaitAsync(LongBound, TestContext.Current.CancellationToken);
+            said = await ids.Task.WaitAsync(ReadyBound, TestContext.Current.CancellationToken);
 
             Assert.Equal(0, kill(-said.Parent, Interrupt));
 
@@ -1172,6 +1196,20 @@ public sealed class ContainExecTests
         }
         finally
         {
+            // The chain ends with the test however it ends: the child stopped by its tree, as a stop stops it, and what
+            // it started ended by its id. The run is waited for, for where the test never came to: a run stopped here
+            // answers the stop by raising, and the raising is the finally's own to take.
+            await stop.CancelAsync();
+
+            try
+            {
+                await run;
+            }
+            catch (Exception ex) when (ex is ProcessStoppedException or OperationCanceledException)
+            {
+                // The stop above ended it, not the child anything went wrong with.
+            }
+
             said.Contained.TryEnding();
             said.Ordinary.TryEnding();
         }

@@ -4487,10 +4487,17 @@ public sealed class FlowServiceTests
     /// In a real process on Linux and macOS, SIGINT is the run's first interrupt: the process is not ended by it, the
     /// interrupt is said, the run pauses safely, its report is written and its owner released, and the process exits 130.
     /// </summary>
+    /// <remarks>
+    /// The interruption is taken back for this process's children first: a shard run of the suite is a script's
+    /// background job, started with SIGINT ignored, and .NET keeps an interruption it inherited ignored, so the child
+    /// would register a handler that never armed and take no notice of the signal at all.
+    /// </remarks>
     [Fact]
     public async Task ARealSigint_IsTheRunsFirstInterrupt_OnLinuxAndMacOS()
     {
         Assert.SkipWhen(OperatingSystem.IsWindows(), "SIGINT is sent by the C library's kill; on Windows the console's Ctrl+C reaches the same registration, which FlowTerminal's other tests drive without a console.");
+
+        TestHost.InterruptionTakenBack();
 
         var (repository, _) = await RepositoryAsync(InterruptedFlow);
         using var disposed = repository;
