@@ -87,7 +87,7 @@ public sealed class AgentPolicyPatternTests
     /// 2^50 places - are followed as one form whose fifty steps may each be passed, and a path is decided at one place of
     /// each way those places stand, as at every one: a read of the slot fifty levels up, which only the place every move
     /// held reaches, is refused, one two levels up refused from the places two moves deep, and the same moves making
-    /// something allowed - in well under a second. Red with each move followed from every place the one before held and
+    /// something allowed - in a moment, where following them one by one never ends. Red with each move followed from every place the one before held and
     /// failed, one by one, which never ends.
     /// </summary>
     [Fact]
@@ -104,7 +104,9 @@ public sealed class AgentPolicyPatternTests
         var twoDeep = policy.Run($"{moves}; cat ../../.harness-config/workflows/.env/keys.env");
         var tooDeep = policy.Run($"{moves}; cat {string.Concat(Enumerable.Repeat("../", 51))}tree/x/.harness-config/workflows/.env/keys.env");
 
-        Assert.True(clock.Elapsed < TimeSpan.FromSeconds(1), $"deciding fifty moves took {clock.Elapsed}");
+        // The slowest runner of the matrix, under the suite's own load, decides this in little over a second; a wrong
+        // deciding - each move followed one by one - never ends, far past any bound here.
+        Assert.True(clock.Elapsed < TimeSpan.FromSeconds(30), $"deciding fifty moves took {clock.Elapsed}");
         Assert.Equal(AgentPolicyAnswer.Allow, allowed);
         Assert.Equal("the credential slots", Assert.IsType<AgentPolicyAnswer.Denied>(deepest).Rule);
         Assert.Equal("the credential slots", Assert.IsType<AgentPolicyAnswer.Denied>(twoDeep).Rule);
@@ -115,7 +117,7 @@ public sealed class AgentPolicyPatternTests
     /// A word of forty names each followed by a dot pattern that may match <c>..</c> - 2^40 places, a step back up folding
     /// the name before it away - is decided as reading every one would decide it, by the forms of the places it reaches: the
     /// slot beyond them, which only the reading of every pattern as <c>..</c> reaches, is refused, and the same word ending
-    /// in a plain file allowed - in well under a second. Red with the dot readings spelled out one combination at a time,
+    /// in a plain file allowed - in a moment. Red with the dot readings spelled out one combination at a time,
     /// which never ends.
     /// </summary>
     [Fact]
@@ -130,7 +132,7 @@ public sealed class AgentPolicyPatternTests
         var refused = policy.Run($"cat {forty}.harness-config/workflows/.env/keys.env");
         var allowed = policy.Run($"cat {forty}x.txt");
 
-        Assert.True(clock.Elapsed < TimeSpan.FromSeconds(1), $"deciding forty dot patterns took {clock.Elapsed}");
+        Assert.True(clock.Elapsed < TimeSpan.FromSeconds(30), $"deciding forty dot patterns took {clock.Elapsed}");
         Assert.Equal("the credential slots", Assert.IsType<AgentPolicyAnswer.Denied>(refused).Rule);
         Assert.Equal(AgentPolicyAnswer.Allow, allowed);
     }
@@ -140,7 +142,7 @@ public sealed class AgentPolicyPatternTests
     /// readings stand to the policy, never one reading at a time, and decided as reading every one would decide it: a
     /// <c>Read</c> rule over one of those names refuses the path whose last name it names and allows the same path ending
     /// in another, a command's write of it beneath the tree is refused as git's own and one beneath no tree allowed - all of
-    /// it in well under a second. Red with <c>Spelled</c> deciding every reading <see cref="WindowsNames.Lengthened"/>
+    /// it in a moment. Red with <c>Spelled</c> deciding every reading <see cref="WindowsNames.Lengthened"/>
     /// gives, which never ends.
     /// </summary>
     [Fact]
@@ -163,7 +165,7 @@ public sealed class AgentPolicyPatternTests
         var written = policy.Run($"echo x > \"{worktree + sixty}\\x\"");
         var writtenElsewhere = policy.Run($"echo x > \"{elsewhere + sixty}\\x\"");
 
-        Assert.True(clock.Elapsed < TimeSpan.FromSeconds(1), $"deciding sixty short names took {clock.Elapsed}");
+        Assert.True(clock.Elapsed < TimeSpan.FromSeconds(30), $"deciding sixty short names took {clock.Elapsed}");
         Assert.Equal("Read(**/.github/secret)", Assert.IsType<AgentPolicyAnswer.Denied>(refused).Rule);
         Assert.Equal(AgentPolicyAnswer.Allow, allowed);
         Assert.Equal(AgentPolicy.GitsOwnRule, Assert.IsType<AgentPolicyAnswer.Denied>(written).Rule);
@@ -293,7 +295,7 @@ public sealed class AgentPolicyPatternTests
         var allowed = policy.Run($"cd a || cd b; {thirty}; cat {read}");
         var refused = policy.Run($"cd a || cd b; {thirty}; cat $x1/../.harness-config/workflows/.env/keys.env");
 
-        Assert.True(clock.Elapsed < TimeSpan.FromSeconds(1), $"deciding thirty variables took {clock.Elapsed}");
+        Assert.True(clock.Elapsed < TimeSpan.FromSeconds(30), $"deciding thirty variables took {clock.Elapsed}");
         Assert.Equal(AgentPolicyAnswer.Allow, allowed);
         Assert.Equal("the credential slots", Assert.IsType<AgentPolicyAnswer.Denied>(refused).Rule);
     }
@@ -317,7 +319,7 @@ public sealed class AgentPolicyPatternTests
         var valued = policy.Run($"tar --f={forty} --delete x");
         var starred = policy.Run($"cat {forty}*");
 
-        Assert.True(clock.Elapsed < TimeSpan.FromSeconds(1), $"deciding forty non-plain groups took {clock.Elapsed}");
+        Assert.True(clock.Elapsed < TimeSpan.FromSeconds(30), $"deciding forty non-plain groups took {clock.Elapsed}");
         Assert.Equal(AgentPolicyAnswer.Allow, quoted);
         Assert.Equal(AgentPolicyAnswer.Allow, valued);
         Assert.Equal(AgentPolicyAnswer.Allow, starred);

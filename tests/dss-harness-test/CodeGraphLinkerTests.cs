@@ -2901,7 +2901,9 @@ public sealed class CodeGraphLinkerTests
         Assert.Equal(
             [new CodeEdge(page.Id.Whole(), $"css:a.css#l{Levels - 1}a", CodeEdgeKinds.Uses, 1, CodeConfidences.Candidates), new CodeEdge(page.Id.Whole(), $"css:a.css#l{Levels - 1}b", CodeEdgeKinds.Uses, 1, CodeConfidences.Candidates)],
             linked.Edges.Where(edge => edge.From == page.Id));
-        Assert.True(watch.Elapsed < TimeSpan.FromSeconds(5), $"matching {Levels} levels took {watch.Elapsed}");
+        // The slowest runner of the matrix, under the suite's own load, matches these levels in six seconds; a wrong
+        // matching - each level matched through every one below it - is the square of them, far past any bound here.
+        Assert.True(watch.Elapsed < TimeSpan.FromSeconds(60), $"matching {Levels} levels took {watch.Elapsed}");
     }
 
     /// <summary>
@@ -2937,7 +2939,9 @@ public sealed class CodeGraphLinkerTests
         Assert.Equal(
             [new CodeEdge("css:main.css#.m", "css:elsewhere.css#.found", CodeEdgeKinds.Uses, 2, CodeConfidences.Unique)],
             linked.Edges.Where(edge => edge.Kind == CodeEdgeKinds.Uses));
-        Assert.True(watch.Elapsed < TimeSpan.FromSeconds(5), $"linking {Imports} imports of one hub forwarding {Shared} files took {watch.Elapsed}");
+        // As above: the slowest runner of the matrix links these in six seconds; a walk made for each import is the
+        // imports times what they share, far past any bound here.
+        Assert.True(watch.Elapsed < TimeSpan.FromSeconds(60), $"linking {Imports} imports of one hub forwarding {Shared} files took {watch.Elapsed}");
     }
 
     /// <summary>
@@ -3103,7 +3107,9 @@ public sealed class CodeGraphLinkerTests
 
         Assert.Equal([new CodeEdge("t:Go", $"t:{deepest}.Run", CodeEdgeKinds.Calls, 1, CodeConfidences.Exact)], linked.Edges.Where(edge => edge.Kind == CodeEdgeKinds.Calls));
         Assert.InRange(linked.Memory!.Keys.Characters, deepest.Length, 20L * deepest.Length);
-        Assert.True(watch.Elapsed < TimeSpan.FromSeconds(5), $"linking a chain of {Links} names took {watch.Elapsed}");
+        // As above: the slowest runner of the matrix links a chain of this many names in eight seconds; the chains'
+        // names written out is the square of them, far past any bound here.
+        Assert.True(watch.Elapsed < TimeSpan.FromSeconds(60), $"linking a chain of {Links} names took {watch.Elapsed}");
     }
 
     /// <summary>

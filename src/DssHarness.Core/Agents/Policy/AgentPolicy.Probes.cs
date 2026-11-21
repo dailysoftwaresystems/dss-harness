@@ -101,8 +101,12 @@ public sealed partial class AgentPolicy
     /// </summary>
     internal static bool EverySpelling { get; set; }
 
-    /// <summary>The cores of the decision of the string being read; null outside a decision of a string.</summary>
-    private Probes? _probes;
+    /// <summary>
+    /// The cores of the decision of the string being read; null outside a decision of a string. Held per decision by
+    /// the decision's own asynchronous flow, as the policy's other per-decision keeps are: the calls of a turn are
+    /// decided at once, each its own decision.
+    /// </summary>
+    private readonly AsyncLocal<Probes?> _probes = new();
 
     /// <summary>
     /// <paramref name="word"/> with every whole core in it standing for the choice it was made for: the pattern of the
@@ -111,7 +115,7 @@ public sealed partial class AgentPolicy
     /// </summary>
     private WordPattern? Templated(string word)
     {
-        if (!word.Contains('\u0001', StringComparison.Ordinal) || _probes is not { } probes)
+        if (!word.Contains('\u0001', StringComparison.Ordinal) || _probes.Value is not { } probes)
         {
             return null;
         }

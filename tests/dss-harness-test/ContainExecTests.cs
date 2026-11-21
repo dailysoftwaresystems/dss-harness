@@ -858,15 +858,24 @@ public sealed class ContainExecTests
             Assert.True(Until(() => orphan.Id != 0 && File.Exists(ready)), "the leftover never said it refuses to be asked");
             await stop.CancelAsync();
 
-            // Asked, and waited for: past the five seconds it was once given, and told at five minutes.
-            await clock.WaitingAsync().WaitAsync(ClockDrive.Within, cancellationToken);
-            clock.Advance(DssHarness.Core.Waiting.Waits.SaidEvery);
-            await clock.WaitingAsync().WaitAsync(ClockDrive.Within, cancellationToken);
+            // Asked, and waited for: past the five seconds it was once given, and told at five minutes. The clock serves
+            // every wait the run makes - the drain of the output the leftover holds among them - so the telling of the
+            // session's own wait is waited for, not assumed to be whatever wait the clock's first moves reached: on a
+            // busy runner the session's wait can arm its timer only after them, its five minutes unpassed by the moves
+            // that came before it armed.
+            var toldAt = DateTime.UtcNow.AddSeconds(30);
+
+            while (!told.Any(line => line.StartsWith("has waited 5m00s for the contained child's session", StringComparison.Ordinal)))
+            {
+                Assert.True(DateTime.UtcNow < toldAt, "the wait for the contained child's session was never told");
+                await clock.WaitingAsync().WaitAsync(ClockDrive.Within, cancellationToken);
+                clock.Advance(DssHarness.Core.Waiting.Waits.SaidEvery);
+            }
+
             await Task.Delay(TimeSpan.FromSeconds(6), cancellationToken);
 
             Assert.False(run.IsCompleted, "the stop gave up on the leftover before the run's bound");
             Assert.True(orphan.Running, $"the leftover {orphan} was killed before the run's bound");
-            Assert.Contains(told, line => line.StartsWith("has waited 5m00s for the contained child's session", StringComparison.Ordinal));
 
             // The run's bound reached: made to end.
             clock.Advance(TimeSpan.FromHours(1));

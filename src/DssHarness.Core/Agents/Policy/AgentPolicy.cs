@@ -844,7 +844,7 @@ public sealed partial class AgentPolicy
     /// <summary><paramref name="path"/> made whole (<see cref="Whole"/>), kept for the decision being made: one disk, read once a path.</summary>
     private string WholeOf(string path)
     {
-        var wholes = _wholes;
+        var wholes = _wholes.Value;
 
         if (wholes is not null && wholes.TryGetValue(path, out var whole))
         {
@@ -919,8 +919,13 @@ public sealed partial class AgentPolicy
         return false;
     }
 
-    /// <summary>Each path made whole this decision, by its spelling: the short names a whole expands are the disk's, read once a path a decision.</summary>
-    private Dictionary<string, string>? _wholes;
+    /// <summary>
+    /// Each path made whole this decision, by its spelling: the short names a whole expands are the disk's, read once a
+    /// path a decision. Held per decision by the decision's own asynchronous flow, for the calls of a turn are decided
+    /// at once, each its own decision: as a field of the policy itself they would be one dictionary shared by decisions
+    /// running together.
+    /// </summary>
+    private readonly AsyncLocal<Dictionary<string, string>?> _wholes = new();
 
     /// <summary>A read, decided: a place no action reaches never (<see cref="Unreached"/>), then the reporter's one root, then the <c>Read</c> rules on the path as asked and as resolved.</summary>
     private AgentPolicyAnswer ReadDecision(string asked, string resolved)
@@ -1559,7 +1564,7 @@ public sealed partial class AgentPolicy
     /// <remarks>What the decision being made found at each path, it keeps (<see cref="_kinds"/>): one decision reads one disk, so a path asked again is given the kind it was found to have.</remarks>
     private PathKind KindAt(string path)
     {
-        var kinds = _kinds;
+        var kinds = _kinds.Value;
 
         if (kinds is not null && kinds.TryGetValue(path, out var kind))
         {
@@ -1587,9 +1592,10 @@ public sealed partial class AgentPolicy
 
     /// <summary>
     /// What the decision being made found at each path it asked, by its spelling: one decision reads one disk, so its
-    /// paths' kinds are its own to keep. Null outside a decision, where every ask reads the disk.
+    /// paths' kinds are its own to keep. Null outside a decision, where every ask reads the disk. Held per decision by
+    /// the decision's own asynchronous flow, as <see cref="_wholes"/> is.
     /// </summary>
-    private Dictionary<string, PathKind>? _kinds;
+    private readonly AsyncLocal<Dictionary<string, PathKind>?> _kinds = new();
 
     /// <summary>Three answers a walk's test may give an entry: it does not hold, it may, it does.</summary>
     private enum Truth
@@ -1993,20 +1999,20 @@ public sealed partial class AgentPolicy
 
         // The cores of this decision of the string: a script it runs is decided as a decision of its own, with cores of
         // its own, and what lies outside this decision's readings is left as it was.
-        var outer = _probes;
-        _probes = probes ?? new Probes();
+        var outer = _probes.Value;
+        _probes.Value = probes ?? new Probes();
 
         // What each path this decision asks resolves to, kept for the decision: one disk, read once a path.
-        var outerResolutions = _resolutions;
-        _resolutions = [];
+        var outerResolutions = _resolutions.Value;
+        _resolutions.Value = [];
 
         // What each path this decision asks is, kept for the decision as well.
-        var outerKinds = _kinds;
-        _kinds = [];
+        var outerKinds = _kinds.Value;
+        _kinds.Value = [];
 
         // Each path this decision makes whole, kept for the decision as well.
-        var outerWholes = _wholes;
-        _wholes = [];
+        var outerWholes = _wholes.Value;
+        _wholes.Value = [];
 
         try
         {
@@ -2056,7 +2062,7 @@ public sealed partial class AgentPolicy
 
             // The command as it is spelled, and with the variables the string set before it given each value they may hold
             // together - every value kept, one value of a variable wherever it stands.
-            var readings = Readings(analyzed, state, forms, _probes);
+            var readings = Readings(analyzed, state, forms, _probes.Value);
 
             // Each word a reading spells is decided once, however many readings spell it alike: a word no variable reaches
             // is the same in every reading.
@@ -2264,10 +2270,10 @@ public sealed partial class AgentPolicy
         }
         finally
         {
-            _probes = outer;
-            _resolutions = outerResolutions;
-            _kinds = outerKinds;
-            _wholes = outerWholes;
+            _probes.Value = outer;
+            _resolutions.Value = outerResolutions;
+            _kinds.Value = outerKinds;
+            _wholes.Value = outerWholes;
         }
     }
 
@@ -4841,16 +4847,16 @@ public sealed partial class AgentPolicy
     private AgentPolicyAnswer Decide(string path, IReadOnlyList<(DssHarness.Core.Repository.GlobPattern Pattern, string Root, StringComparison Comparison)>? matchers, Func<string, string, AgentPolicyAnswer> decide)
     {
         // What each path this decision asks resolves to, kept for the decision: one disk, read once a path.
-        var outerResolutions = _resolutions;
-        _resolutions = [];
+        var outerResolutions = _resolutions.Value;
+        _resolutions.Value = [];
 
         // What each path this decision asks is, kept for the decision as well.
-        var outerKinds = _kinds;
-        _kinds = [];
+        var outerKinds = _kinds.Value;
+        _kinds.Value = [];
 
         // Each path this decision makes whole, kept for the decision as well.
-        var outerWholes = _wholes;
-        _wholes = [];
+        var outerWholes = _wholes.Value;
+        _wholes.Value = [];
 
         try
         {
@@ -4878,9 +4884,9 @@ public sealed partial class AgentPolicy
         }
         finally
         {
-            _resolutions = outerResolutions;
-            _kinds = outerKinds;
-            _wholes = outerWholes;
+            _resolutions.Value = outerResolutions;
+            _kinds.Value = outerKinds;
+            _wholes.Value = outerWholes;
         }
     }
 
@@ -4982,7 +4988,7 @@ public sealed partial class AgentPolicy
     /// </remarks>
     private string Resolved(string path)
     {
-        var known = _resolutions;
+        var known = _resolutions.Value;
 
         if (known is not null && known.TryGetValue(path, out var resolved))
         {
@@ -5064,7 +5070,7 @@ public sealed partial class AgentPolicy
     /// </summary>
     private string ResolvedOnce(string path)
     {
-        var known = _resolutions;
+        var known = _resolutions.Value;
 
         if (known is not null && known.TryGetValue(path, out var resolved))
         {
@@ -5099,9 +5105,10 @@ public sealed partial class AgentPolicy
 
     /// <summary>
     /// Where each path the decision being made resolved to, by its spelling: one decision reads one disk, so its paths'
-    /// resolutions are its own to keep. Null outside a decision, where every ask walks the disk.
+    /// resolutions are its own to keep. Null outside a decision, where every ask walks the disk. Held per decision by
+    /// the decision's own asynchronous flow, as <see cref="_wholes"/> is.
     /// </summary>
-    private Dictionary<string, string>? _resolutions;
+    private readonly AsyncLocal<Dictionary<string, string>?> _resolutions = new();
 
     /// <summary>
     /// <paramref name="path"/> without the device prefix at its start, on Windows - <c>\\?\</c>,

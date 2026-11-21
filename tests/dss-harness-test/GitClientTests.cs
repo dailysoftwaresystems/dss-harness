@@ -32,6 +32,28 @@ public sealed class GitClientTests
     }
 
     /// <summary>
+    /// A listing of a repository's worktrees that names none at all is no answer: git always names the main worktree
+    /// first, so a git that printed nothing and left with success - as one was seen to on a shared runner - is refused
+    /// as the failure it is, never read as an empty list a caller would take for a repository that "names no checkout".
+    /// </summary>
+    [Fact]
+    public async Task GetMainWorktreeAsync_RefusesAnAnswerThatNamesNoWorktrees()
+    {
+        using var temp = new TempDirectory();
+        var processes = Substitute.For<DssHarness.Core.Processes.IProcessRunner>();
+
+        _ = processes.RunAsync(Arg.Any<DssHarness.Core.Processes.ProcessRequest>(), Arg.Any<CancellationToken>())
+            .Returns(call => new DssHarness.Core.Processes.ProcessResult(0, string.Empty, string.Empty, TimeSpan.Zero, TimedOut: false));
+
+        var git = new GitClient(processes, new HarnessFactory().Output, localVariables: GitLocalVariables.Fixed(["GIT_DIR"]));
+
+        var raised = await Assert.ThrowsAsync<HarnessException>(() => git.GetMainWorktreeAsync(temp.Path, TestContext.Current.CancellationToken));
+
+        Assert.Equal(HarnessExit.CommandFailed, raised.ExitCode);
+        Assert.Contains("listed no worktrees", raised.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// Whether a repository ignores case in the names of its paths is its core.ignorecase: as set where it is set, false
     /// where it is not - git's own default - and a configuration git cannot read is refused, never answered as either.
     /// </summary>
