@@ -213,7 +213,7 @@ public sealed class HostAgentService(
             return await HoldAsync(request, output, error).ConfigureAwait(false);
         }
 
-        return await WithinTheUnwindAsync(RunAsync(request, output, error, run, abandoned), request, error, gone, abandoned, cancellationToken).ConfigureAwait(false);
+        return await WithinTheUnwindAsync(RunAsync(request, output, error, run, gone, abandoned), request, error, gone, abandoned, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -247,7 +247,7 @@ public sealed class HostAgentService(
         var waited = await Waits
             .ForAsync(
                 token => finishing ? AnsweredAsync(serving, token) : WhileStartedRunsAsync(serving, token),
-                new WaitWatch("what the request started here to stop", told => _ = Gone.SayAsync(error, [told.Line()]), Bound: null, _patience.Clock),
+                new WaitWatch("what the request started here to stop", told => _ = Gone.SayingAsync(error, [told.Line()]).Begun, Bound: null, _patience.Clock),
                 finishing ? CancellationToken.None : stopped)
             .ConfigureAwait(false);
 
@@ -266,7 +266,7 @@ public sealed class HostAgentService(
                     + "child left behind, or a line nobody reads"
                 : "and this agent was stopped before it had stopped";
 
-            await Gone.SayAsync(
+            await Gone.SayingAsync(
                 error,
                 [
                     FailureLine.For(
@@ -275,7 +275,7 @@ public sealed class HostAgentService(
                             $"what the request started here was cancelled{(gone.Why is { } why ? $" - {why}" : string.Empty)} - {still}: "
                             + $"{ended}, and this process ends")),
                     .. request.Nonce is { Length: > 0 } nonce ? [HostAgentProtocol.CompletionLine(nonce, HarnessExit.Cancelled)] : Array.Empty<string>(),
-                ]).ConfigureAwait(false);
+                ]).Begun.ConfigureAwait(false);
         }
         finally
         {
@@ -630,6 +630,7 @@ public sealed class HostAgentService(
         TextWriter output,
         TextWriter error,
         Func<string, string[], Dispatch, CancellationToken, Task<int>> run,
+        Gone gone,
         CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(request.Nonce))
@@ -647,6 +648,12 @@ public sealed class HostAgentService(
         await WriteStartedAsync(output, error, request.Nonce).ConfigureAwait(false);
 
         var exitCode = await ServeRunAsync(request, error, run, cancellationToken).ConfigureAwait(false);
+
+        // Everything the run said where the machine that asked reads - why it was stopped, if it was - stands before
+        // the line that says it finished, whatever thread each was said on: the machine reads its exit code from that
+        // line, so it is the last thing written here. A say that never finishes being written, for a reader that is
+        // gone, keeps this line unwritten too - a line that never arrives tells it the connection failed first.
+        await gone.SaidAsync().ConfigureAwait(false);
 
         await error.WriteLineAsync(HostAgentProtocol.CompletionLine(request.Nonce, exitCode)).ConfigureAwait(false);
         await error.FlushAsync(CancellationToken.None).ConfigureAwait(false);
@@ -863,8 +870,27 @@ public sealed class HostAgentService(
         /// <summary>Why the machine that asked was taken to have gone; <see langword="null"/> where it was not.</summary>
         public string? Why { get; private set; }
 
+        private readonly List<Task> _saidWrites = [];
+
         /// <summary>The request was answered: no sign that comes after it says or cancels anything.</summary>
         public void Served() => Interlocked.Exchange(ref _settled, 1);
+
+        /// <summary>
+        /// The writing of everything this one has said, together: what anything said after it - the line that says a run
+        /// finished - waits on, so each stands behind what was said before it whatever thread each was said on. A say
+        /// that never finishes being written keeps what waits on it unwritten.
+        /// </summary>
+        public Task SaidAsync()
+        {
+            Task[] said;
+
+            lock (_saidWrites)
+            {
+                said = [.. _saidWrites];
+            }
+
+            return Task.WhenAll(said);
+        }
 
         /// <summary>
         /// The machine that asked has gone, <paramref name="why"/> saying how that was told, and <paramref name="say"/>
@@ -883,9 +909,16 @@ public sealed class HostAgentService(
             // completion line.
             if (say && error is not null)
             {
-                await SayAsync(
+                var (begun, written) = SayingAsync(
                     error,
-                    [FailureLine.For(HostAgentProtocol.CommandName, $"the machine that asked has gone - {why} - so what it started here is stopped")]).ConfigureAwait(false);
+                    [FailureLine.For(HostAgentProtocol.CommandName, $"the machine that asked has gone - {why} - so what it started here is stopped")]);
+
+                lock (_saidWrites)
+                {
+                    _saidWrites.Add(written);
+                }
+
+                await begun.ConfigureAwait(false);
             }
 
             // A request served as this was told has let go of its token already.
@@ -893,41 +926,36 @@ public sealed class HostAgentService(
         }
 
         /// <summary>
-        /// Writes <paramref name="lines"/> where the machine that asked reads, from another thread, and waits only until
-        /// the writing has begun: it is said where the machine that asked has gone, or this agent was stopped, and a line
-        /// nobody reads may never finish being written - the console's own writer writes where it is called and hands back
-        /// nothing to stop waiting on, and one whose reader had stopped reading held the cancellation it came before, for as
-        /// long as the connection stood. Begun first, it is first through the writer, whose lock orders what follows it.
+        /// Begins writing <paramref name="lines"/> where the machine that asked reads, from another thread, and answers
+        /// the writing begun and the writing itself: the begun, so nothing waits on a line nobody reads - the console's
+        /// own writer writes where it is called and hands back nothing to stop waiting on, and one whose reader had
+        /// stopped reading held the cancellation it came before, for as long as the connection stood; the writing, so
+        /// what is said after it can stand behind it.
         /// </summary>
-        public static Task SayAsync(TextWriter error, IReadOnlyList<string> lines)
+        public static (Task Begun, Task Written) SayingAsync(TextWriter error, IReadOnlyList<string> lines)
         {
             var begun = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
-            _ = Task.Run(() =>
+            var written = Task.Run(async () =>
             {
                 begun.TrySetResult();
-                return WriteAsync(error, lines);
+
+                try
+                {
+                    foreach (var line in lines)
+                    {
+                        await error.WriteLineAsync(line).ConfigureAwait(false);
+                    }
+
+                    await error.FlushAsync(CancellationToken.None).ConfigureAwait(false);
+                }
+                catch (Exception ex) when (ex is IOException or ObjectDisposedException)
+                {
+                    // Nobody is reading.
+                }
             });
 
-            return begun.Task;
-        }
-
-        /// <summary>Writes <paramref name="lines"/> where the machine that asked reads, which may no longer be there to.</summary>
-        private static async Task WriteAsync(TextWriter error, IReadOnlyList<string> lines)
-        {
-            try
-            {
-                foreach (var line in lines)
-                {
-                    await error.WriteLineAsync(line).ConfigureAwait(false);
-                }
-
-                await error.FlushAsync(CancellationToken.None).ConfigureAwait(false);
-            }
-            catch (Exception ex) when (ex is IOException or ObjectDisposedException)
-            {
-                // Nobody is reading.
-            }
+            return (begun.Task, written);
         }
     }
 
