@@ -3,6 +3,7 @@ using System.Text.Json.Nodes;
 using DssHarness.Core.Agents.Http;
 using DssHarness.Core.Agents.Loop;
 using DssHarness.Core.Configuration;
+using DssHarness.Core.Json;
 using DssHarness.Core.Schemas;
 
 namespace DssHarness.Core.Agents.ClaudeApi;
@@ -104,7 +105,7 @@ public static class ClaudeApiRequest
     /// <param name="schema">The schema, as JSON, free of the subset's problems.</param>
     public static JsonObject Sent(string schema)
     {
-        var sent = JsonNode.Parse(schema) as JsonObject ?? throw new ArgumentException("The schema is no JSON object.", nameof(schema));
+        var sent = JsonDepth.ParseNode(schema) as JsonObject ?? throw new ArgumentException("The schema is no JSON object.", nameof(schema));
 
         foreach (var each in JsonSchemaSubset.SchemasIn(sent))
         {

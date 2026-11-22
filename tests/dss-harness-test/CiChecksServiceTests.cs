@@ -162,23 +162,16 @@ public sealed class CiChecksServiceTests : IDisposable
     }
 
     /// <summary>
-    /// A read the forge failed - 20 - or that passed its limit - 21 - is said and read again at the next poll; the wait ends
-    /// with the failure only where three reads running failed - a read that answered between starts the count again - or
-    /// one did as its time was spent; and one refused - 13 - ends it at once.
+    /// A read the forge failed with a server error - 20 - or that passed its limit - 21 - says nothing of the checks, and
+    /// is said and read again, a poll after the failure and then twice as long each time; the wait ends on the failure
+    /// only where one came as its time was spent, where one of no known kind came twice alike - the same failure on the
+    /// same state, which a third read only meets again - or at once where the forge answered that the thing asked is not
+    /// there (404); and a refusal of the command's own - 13 - ends it at once.
     /// </summary>
     [Fact]
-    public async Task AReadThatFailed_IsReadAgain_UntilThreeRunningOrTheWaitsEnd()
+    public async Task AReadThatFailed_IsReadAgain_WhileItsFailureCanChange()
     {
         var mended = new StubCiJobSource([])
-        {
-            Readings = [([Check("build")], [])],
-            FailedReadings = new Dictionary<int, Exception>
-            {
-                [0] = new HarnessException(HarnessExit.CommandFailed, "HTTP 502"),
-                [1] = new HarnessException(HarnessExit.Incomplete, "no answer"),
-            },
-        };
-        var broken = new StubCiJobSource([])
         {
             Readings = [([Check("build")], [])],
             FailedReadings = new Dictionary<int, Exception>
@@ -193,15 +186,19 @@ public sealed class CiChecksServiceTests : IDisposable
             Readings = [([Check("build", "in_progress", null)], [])],
             FailedReadings = new Dictionary<int, Exception> { [2] = new HarnessException(HarnessExit.CommandFailed, "HTTP 500") },
         };
-        var between = new StubCiJobSource([])
+        var twice = new StubCiJobSource([])
         {
             Readings = [([Check("build")], [])],
             FailedReadings = new Dictionary<int, Exception>
             {
-                [0] = new HarnessException(HarnessExit.CommandFailed, "HTTP 502"),
-                [1] = new HarnessException(HarnessExit.CommandFailed, "HTTP 502"),
-                [3] = new HarnessException(HarnessExit.CommandFailed, "HTTP 502"),
+                [0] = new HarnessException(HarnessExit.CommandFailed, "gh answered something that is not JSON"),
+                [1] = new HarnessException(HarnessExit.CommandFailed, "gh answered something that is not JSON"),
             },
+        };
+        var missing = new StubCiJobSource([])
+        {
+            Readings = [([Check("build")], [])],
+            FailedReadings = new Dictionary<int, Exception> { [0] = new HarnessException(HarnessExit.CommandFailed, "gh: Not Found (HTTP 404)") },
         };
         var refused = new StubCiJobSource([])
         {
@@ -212,26 +209,58 @@ public sealed class CiChecksServiceTests : IDisposable
 
         var green = await service.WaitAsync(_repository.Path, new CiChecksRequest(Commit, Waiting), Token);
         var said = _harness!.StandardError.ToString();
-        var third = await Assert.ThrowsAsync<HarnessException>(async () => await (await ServiceAsync(broken)).Service.WaitAsync(_repository.Path, new CiChecksRequest(Commit, Waiting), Token));
         var spent = await Assert.ThrowsAsync<HarnessException>(async () => await (await ServiceAsync(late)).Service.WaitAsync(
             _repository.Path,
             new CiChecksRequest(Commit, Waiting) { Wait = TimeSpan.FromMinutes(1), Poll = TimeSpan.FromSeconds(30) },
             Token));
+        var repeated = await Assert.ThrowsAsync<HarnessException>(async () => await (await ServiceAsync(twice)).Service.WaitAsync(_repository.Path, new CiChecksRequest(Commit, Waiting), Token));
+        var notThere = await Assert.ThrowsAsync<HarnessException>(async () => await (await ServiceAsync(missing)).Service.WaitAsync(_repository.Path, new CiChecksRequest(Commit, Waiting), Token));
         var first = await Assert.ThrowsAsync<HarnessException>(async () => await (await ServiceAsync(refused)).Service.WaitAsync(_repository.Path, new CiChecksRequest(Commit, Waiting), Token));
-        var counted = await (await ServiceAsync(between)).Service.WaitAsync(_repository.Path, new CiChecksRequest(Commit, Waiting), Token);
 
-        Assert.Equal((CiChecksFound.Green, 4), (green.Found, mended.ChecksRead));
+        Assert.Equal((CiChecksFound.Green, 5), (green.Found, mended.ChecksRead));
         Assert.Equal(
             [
-                $"ci-wait: WARN - a read of the checks of {Commit} failed, 1 running of the 3 that end the wait: HTTP 502. They are read again in 30 s.",
-                $"ci-wait: WARN - a read of the checks of {Commit} failed, 2 running of the 3 that end the wait: no answer. They are read again in 30 s.",
+                $"ci-wait: WARN - waits for a read of the checks of {Commit}: HTTP 502; tries again in 30s",
+                $"ci-wait: WARN - has waited 30s for a read of the checks of {Commit}: no answer; tries again in 1m00s",
+                $"ci-wait: WARN - has waited 1m30s for a read of the checks of {Commit}: HTTP 503; tries again in 2m00s",
             ],
             said.Split('\n').Select(line => line.TrimEnd('\r')).Where(line => line.Contains("WARN", StringComparison.Ordinal)));
-        Assert.Equal(3, clock.Waits.Count);
-        Assert.Equal((HarnessExit.CommandFailed, "HTTP 503", 3), (third.ExitCode, third.Message, broken.ChecksRead));
+        Assert.Equal([TimeSpan.FromSeconds(30), TimeSpan.FromMinutes(1), TimeSpan.FromMinutes(2), TimeSpan.FromSeconds(30)], clock.Waits);
         Assert.Equal((HarnessExit.CommandFailed, "HTTP 500", 3), (spent.ExitCode, spent.Message, late.ChecksRead));
+        Assert.Equal((HarnessExit.CommandFailed, "gh answered something that is not JSON", 2), (repeated.ExitCode, repeated.Message, twice.ChecksRead));
+        Assert.Equal((HarnessExit.CommandFailed, "gh: Not Found (HTTP 404)", 1), (notThere.ExitCode, notThere.Message, missing.ChecksRead));
         Assert.Equal((HarnessExit.Refused, 1), (first.ExitCode, refused.ChecksRead));
-        Assert.Equal((CiChecksFound.Green, 5), (counted.Found, between.ChecksRead));
+    }
+
+    /// <summary>
+    /// A network that drops five times running is waited out, each read again said, and the checks are read once it is
+    /// back - three failures running are no reason to end an hour's wait - while a credential the forge refuses (401)
+    /// ends the wait at the first read, for reading again asks the same and is refused the same.
+    /// </summary>
+    [Fact]
+    public async Task FiveNetworkFailures_KeepWaiting_A401Ends()
+    {
+        var dropped = new HarnessException(HarnessExit.CommandFailed, "gh api repos/acme/widgets/commits/x/check-runs failed: error connecting to api.github.com");
+        var network = new StubCiJobSource([])
+        {
+            Readings = [([Check("build")], [])],
+            FailedReadings = Enumerable.Range(0, 5).ToDictionary(at => at, _ => (Exception)dropped),
+        };
+        var denied = new StubCiJobSource([])
+        {
+            Readings = [([Check("build")], [])],
+            FailedReadings = new Dictionary<int, Exception> { [0] = new HarnessException(HarnessExit.CommandFailed, "gh: Bad credentials (HTTP 401)") },
+        };
+        var (service, clock) = await ServiceAsync(network);
+
+        var green = await service.WaitAsync(_repository.Path, new CiChecksRequest(Commit, Waiting), Token);
+        var said = _harness!.StandardError.ToString();
+        var refusal = await Assert.ThrowsAsync<HarnessException>(async () => await (await ServiceAsync(denied)).Service.WaitAsync(_repository.Path, new CiChecksRequest(Commit, Waiting), Token));
+
+        Assert.Equal((CiChecksFound.Green, 7), (green.Found, network.ChecksRead));
+        Assert.Equal(5, said.Split('\n').Count(line => line.Contains($"for a read of the checks of {Commit}: {dropped.Message}; tries again in", StringComparison.Ordinal)));
+        Assert.Equal([TimeSpan.FromSeconds(30), TimeSpan.FromMinutes(1), TimeSpan.FromMinutes(2), TimeSpan.FromMinutes(4), TimeSpan.FromMinutes(5), TimeSpan.FromSeconds(30)], clock.Waits);
+        Assert.Equal((HarnessExit.CommandFailed, "gh: Bad credentials (HTTP 401)", 1), (refusal.ExitCode, refusal.Message, denied.ChecksRead));
     }
 
     /// <summary>

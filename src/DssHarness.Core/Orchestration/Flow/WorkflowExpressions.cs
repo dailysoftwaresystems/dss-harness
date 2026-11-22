@@ -203,10 +203,13 @@ public static class WorkflowExpressions
         ArgumentNullException.ThrowIfNull(expression);
 
         var reads = new List<Read>();
+        var read = new HashSet<string>(StringComparer.Ordinal);
         var index = 0;
 
-        // One entry per open '(': whether it opened an any(...) call, whose test may read 'it'.
+        // One entry per open '(': whether it opened an any(...) call, whose test may read 'it' - and how many of them
+        // are open, so a read is told inside one in a step however deep the calls nest.
         var calls = new Stack<bool>();
+        var anys = 0;
 
         while (index < expression.Length)
         {
@@ -235,7 +238,7 @@ public static class WorkflowExpressions
                     break;
                 }
 
-                Add(reads, expression[(index + 1)..end], Template: true, calls.Any(call => call));
+                Add(reads, read, expression[(index + 1)..end], Template: true, anys > 0);
                 index = end + 1;
                 continue;
             }
@@ -249,7 +252,7 @@ public static class WorkflowExpressions
 
             if (character == ')' && calls.Count > 0)
             {
-                calls.Pop();
+                anys -= calls.Pop() ? 1 : 0;
                 index++;
                 continue;
             }
@@ -264,6 +267,7 @@ public static class WorkflowExpressions
                 if (string.Equals(name, "any", StringComparison.Ordinal) && NextIsOpenParenthesis(expression, index))
                 {
                     calls.Push(true);
+                    anys++;
                     index = AfterOpenParenthesis(expression, index);
                     continue;
                 }
@@ -273,7 +277,7 @@ public static class WorkflowExpressions
                     continue;
                 }
 
-                Add(reads, name, Template: false, calls.Any(call => call));
+                Add(reads, read, name, Template: false, anys > 0);
                 continue;
             }
 
@@ -294,12 +298,13 @@ public static class WorkflowExpressions
         ArgumentNullException.ThrowIfNull(text);
 
         var reads = new List<Read>();
+        var read = new HashSet<string>(StringComparer.Ordinal);
 
         foreach (var piece in FlowTemplate.Pieces(text).TakeWhile(piece => piece.Kind != FlowTemplate.PieceKind.Unclosed))
         {
             if (piece.Kind == FlowTemplate.PieceKind.Placeholder && piece.Name is { Length: > 0 } name)
             {
-                Add(reads, name, Template: true, insideAny: false);
+                Add(reads, read, name, Template: true, insideAny: false);
             }
         }
 
@@ -414,13 +419,14 @@ public static class WorkflowExpressions
     /// <summary>The column, counted from 1, that <paramref name="index"/> sits at on its own line.</summary>
     private static int ColumnOf(string text, int index) => index - text[..index].LastIndexOf('\n');
 
-    private static void Add(List<Read> reads, string name, bool Template, bool insideAny)
+    /// <summary>Adds the read <paramref name="name"/> is where its whole name is not among <paramref name="read"/>, the names read already.</summary>
+    private static void Add(List<Read> reads, HashSet<string> read, string name, bool Template, bool insideAny)
     {
-        var read = ReadOf(name, Template, insideAny);
+        var named = ReadOf(name, Template, insideAny);
 
-        if (reads.All(earlier => !string.Equals(earlier.Whole, read.Whole, StringComparison.Ordinal)))
+        if (read.Add(named.Whole))
         {
-            reads.Add(read);
+            reads.Add(named);
         }
     }
 

@@ -6,24 +6,14 @@ using DssHarness.Core.Worktrees;
 
 namespace DssHarness.Tests;
 
-/// <summary>The commands the command line waits for after Ctrl+C, rather than cut off part way.</summary>
+/// <summary>The commands that finish what they began after Ctrl+C, rather than stop part way, and those that count their own interrupts.</summary>
 public sealed class PointOfNoReturnTests
 {
     /// <summary>
-    /// What such a command still does after an interruption is stopped a little before the command line stops waiting
-    /// for it - ten seconds before, or a quarter of a shorter wait - so what is left is said before the process ends.
-    /// </summary>
-    [Theory]
-    [InlineData(120_000, 110_000)]
-    [InlineData(4_000, 3_000)]
-    public void WhatComesAfterAnInterruption_IsStopped_ALittleBeforeTheCommandLineStopsWaiting(int waitedMilliseconds, int stoppedMilliseconds)
-        => Assert.Equal(TimeSpan.FromMilliseconds(stoppedMilliseconds), PointOfNoReturn.StoppedAfter(TimeSpan.FromMilliseconds(waitedMilliseconds)));
-
-    /// <summary>
     /// Every command that finishes what it began once it has written - a removal, a hand-over, a move of an agent's base, a
     /// fold, a host agent, which may be running one of them for another machine, and an update of the installed tool,
-    /// which is read back once it has begun - is waited for after Ctrl+C as long as a deletion expects; a command that
-    /// leaves nothing half written when it stops is not.
+    /// which is read back once it has begun - is waited for after Ctrl+C to the end of what it began, only the second
+    /// interrupt, the hard stop, ending it; a command that leaves nothing half written when it stops is not.
     /// </summary>
     [Theory]
     [InlineData(WorktreeService.DeleteCommand, true)]
@@ -43,9 +33,9 @@ public sealed class PointOfNoReturnTests
         => Assert.Equal(waited, PointOfNoReturn.Commands.Contains(command));
 
     /// <summary>
-    /// A run asked to set up is waited for after Ctrl+C too, for its legs to bring down what they brought up - and only
-    /// where the option is the command's own, never a word after '--', and only for the commands that take it; any
-    /// command on the list is waited for whatever it was given.
+    /// A run asked to set up is waited for after Ctrl+C too, for its legs to bring down what they brought up, each down
+    /// line to its end - and only where the option is the command's own, never a word after '--', and only for the
+    /// commands that take it; any command on the list is waited for whatever it was given.
     /// </summary>
     [Theory]
     [InlineData(new[] { "test", "--set-up" }, true)]
@@ -59,30 +49,6 @@ public sealed class PointOfNoReturnTests
     public void ARunAskedToSetUp_IsWaitedForAfterCtrlC_AsWhatIsOnTheListIs(string[] commandLine, bool waited)
         => Assert.Equal(waited, PointOfNoReturn.Holds(commandLine));
 
-    /// <summary>
-    /// How long the command line waits is asked beside whether it waits at all: as long as a deletion expects for a
-    /// command past its point of no return, as long as a hard stop of a run can take for the run verbs that pause
-    /// safely - never cut off part way - and no grace of this tool's for any other - the command line's own short
-    /// wait, which nothing here widens - so a front end holding a window open holds it exactly as long.
-    /// </summary>
-    [Theory]
-    [InlineData(new[] { WorktreeService.DeleteCommand, "w" }, 120_000)]
-    [InlineData(new[] { AgentService.FoldCommand }, 120_000)]
-    [InlineData(new[] { "test", "--set-up" }, 120_000)]
-    [InlineData(new[] { FlowService.RunCommand, "implementation" }, 120_000)]
-    [InlineData(new[] { FlowService.ResumeCommand, "r1" }, 120_000)]
-    [InlineData(new[] { FlowService.AnswerCommand, "r1", "more" }, 120_000)]
-    [InlineData(new[] { FlowService.PauseCommand, "r1" }, null)]
-    [InlineData(new[] { FlowService.StopCommand, "r1" }, null)]
-    [InlineData(new[] { DssHarness.Core.Agents.SideTasks.SideTaskService.RunCommand }, null)]
-    [InlineData(new[] { "build" }, null)]
-    [InlineData(new[] { WorktreeService.ListCommand }, null)]
-    [InlineData(new string[0], null)]
-    public void TheGraceOfACommandLine_IsAskedBesideWhetherItHoldsOne(string[] commandLine, int? waitedMilliseconds)
-        => Assert.Equal(
-            waitedMilliseconds is { } milliseconds ? TimeSpan.FromMilliseconds(milliseconds) : null,
-            PointOfNoReturn.GraceFor(commandLine));
-
     /// <summary>The run verbs that pause safely are on that list and no other list: a run's sessions are never cut off part way, and they pass no point of no return of their own.</summary>
     [Theory]
     [InlineData(FlowService.RunCommand, true)]
@@ -95,9 +61,8 @@ public sealed class PointOfNoReturnTests
 
     /// <summary>
     /// The run verbs that pause safely count their own interrupts, and so does a side-task - its first cutting the agent's
-    /// turn, a second ending its chat - so the command line's own handling of termination, which cancels at the first
-    /// interrupt and ends the process when its clock runs out, is turned off for them alone: a deletion keeps its grace,
-    /// the listing of side-tasks and every other command its short wait.
+    /// turn, a second ending its chat - so the command line takes none of theirs, while for a deletion, the listing of
+    /// side-tasks and every other command it takes them: the first cancelling the command, the second the hard stop.
     /// </summary>
     [Theory]
     [InlineData(new[] { FlowService.RunCommand, "implementation" }, true)]
@@ -113,26 +78,4 @@ public sealed class PointOfNoReturnTests
     [InlineData(new string[0], false)]
     public void TheRunVerbsThatPauseSafely_AndASideTask_CountTheirOwnInterrupts(string[] commandLine, bool counted)
         => Assert.Equal(counted, PointOfNoReturn.CountsItsOwnInterrupts(commandLine));
-
-    /// <summary>
-    /// The termination timeout the command line runs a command with is chosen in one place, which the command line
-    /// calls: none for the run verbs and the side-task that count their own interrupts - so its handling, which cancels at the first
-    /// Ctrl+C and ends the process when its clock runs out, is off - the grace for a command past its point of no
-    /// return, and the command line's own, as it is, for every other.
-    /// </summary>
-    [Theory]
-    [InlineData(new[] { FlowService.RunCommand, "implementation" }, null)]
-    [InlineData(new[] { FlowService.ResumeCommand, "r1" }, null)]
-    [InlineData(new[] { FlowService.AnswerCommand, "r1", "more" }, null)]
-    [InlineData(new[] { DssHarness.Core.Agents.SideTasks.SideTaskService.RunCommand }, null)]
-    [InlineData(new[] { DssHarness.Core.Agents.SideTasks.SideTaskService.ListCommand }, 2_000)]
-    [InlineData(new[] { WorktreeService.DeleteCommand, "w" }, 120_000)]
-    [InlineData(new[] { "test", "--set-up" }, 120_000)]
-    [InlineData(new[] { FlowService.PauseCommand, "r1" }, 2_000)]
-    [InlineData(new[] { "build" }, 2_000)]
-    [InlineData(new string[0], 2_000)]
-    public void TheTerminationTimeout_IsNoneForTheRunVerbs_TheGraceForAPointOfNoReturn_AndTheCommandLinesOwnOtherwise(string[] commandLine, int? timeoutMilliseconds)
-        => Assert.Equal(
-            timeoutMilliseconds is { } milliseconds ? TimeSpan.FromMilliseconds(milliseconds) : null,
-            PointOfNoReturn.TerminationTimeoutFor(commandLine, TimeSpan.FromSeconds(2)));
 }

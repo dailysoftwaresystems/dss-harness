@@ -10,24 +10,26 @@ namespace DssHarness.Tests;
 public sealed class TreeReadingTests
 {
     /// <summary>
-    /// The line a run says once it has read a tree names the commit by its first twelve characters, and the uncommitted
-    /// changes only where there are any; a tree with no commit yet says so, and no count.
+    /// The line a run says once it has read a tree names the commit whole - said here outside an operation, which has no
+    /// repository whose abbreviation to name it by; an operation's line abbreviates it as git abbreviates it there - and
+    /// the uncommitted changes only where there are any; a tree with no commit yet says so, and no count.
     /// </summary>
     [Theory]
-    [InlineData("1a2b3c4d5e6f7a8b9c0d1a2b3c4d5e6f7a8b9c0d", 0, "'/src/repo' was read at commit 1a2b3c4d5e6f")]
-    [InlineData("1a2b3c4d5e6f7a8b9c0d1a2b3c4d5e6f7a8b9c0d", 1, "'/src/repo' was read at commit 1a2b3c4d5e6f with 1 uncommitted change(s)")]
+    [InlineData("1a2b3c4d5e6f7a8b9c0d1a2b3c4d5e6f7a8b9c0d", 0, "'/src/repo' was read at commit 1a2b3c4d5e6f7a8b9c0d1a2b3c4d5e6f7a8b9c0d")]
+    [InlineData("1a2b3c4d5e6f7a8b9c0d1a2b3c4d5e6f7a8b9c0d", 1, "'/src/repo' was read at commit 1a2b3c4d5e6f7a8b9c0d1a2b3c4d5e6f7a8b9c0d with 1 uncommitted change(s)")]
     [InlineData(null, 3, "'/src/repo' was read with no commit yet")]
     public void TheReadingLine_NamesTheCommit_AndTheUncommittedChanges_OrThatThereIsNoCommitYet(string? commit, int changes, string said)
         => Assert.Equal(said, new TreeReading("/src/repo", commit, changes).Said);
 
     /// <summary>
     /// A leg on a copy says the tree it tested: read at the commit by its own run, or staged there by the run the copy
-    /// records - and by no run where the sync that made it kept none.
+    /// records - and by no run where the sync that made it kept none. The commit whole, as a line said outside an
+    /// operation names it.
     /// </summary>
     [Theory]
-    [InlineData("20261012-150233-1a2b3c4d", false, "tree read at 1a2b3c4d5e6f with 2 uncommitted change(s)")]
-    [InlineData("20261012-150233-1a2b3c4d", true, "tree staged at 1a2b3c4d5e6f with 2 uncommitted change(s) by run 20261012-150233-1a2b3c4d")]
-    [InlineData(null, true, "tree staged at 1a2b3c4d5e6f with 2 uncommitted change(s)")]
+    [InlineData("20261012-150233-1a2b3c4d", false, "tree read at 1a2b3c4d5e6f7a8b9c0d1a2b3c4d5e6f7a8b9c0d with 2 uncommitted change(s)")]
+    [InlineData("20261012-150233-1a2b3c4d", true, "tree staged at 1a2b3c4d5e6f7a8b9c0d1a2b3c4d5e6f7a8b9c0d with 2 uncommitted change(s) by run 20261012-150233-1a2b3c4d")]
+    [InlineData(null, true, "tree staged at 1a2b3c4d5e6f7a8b9c0d1a2b3c4d5e6f7a8b9c0d with 2 uncommitted change(s)")]
     public void ALegsLine_SaysTheTreeItTested_ReadByItsRun_OrStagedByTheRunTheCopyRecords(string? run, bool staged, string said)
         => Assert.Equal(said, new CopyReading(run, "1a2b3c4d5e6f7a8b9c0d1a2b3c4d5e6f7a8b9c0d", 2).Said(staged));
 

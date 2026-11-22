@@ -9,6 +9,7 @@ using DssHarness.Core.Ci;
 using DssHarness.Core.Configuration;
 using DssHarness.Core.Execution;
 using DssHarness.Core.FileSystem;
+using DssHarness.Core.Json;
 using DssHarness.Core.Orchestration;
 using DssHarness.Core.Platform;
 using DssHarness.Core.Repository;
@@ -39,7 +40,6 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// <param name="clock">Tells the week a balanced key's spend is counted for.</param>
 /// <param name="isolation">Decides the operating system's isolation the step's agent runs under.</param>
 /// <param name="gitClient">Asks git, for the paths an agent's worktree holds that no fold has taken.</param>
-/// <param name="configStore">Reads the repository's configuration, for the bounds of the engine's own account of a stream.</param>
 /// <param name="updates">Makes the Claude Code a run needs ready, where the step's order holds the client that starts one.</param>
 /// <param name="graphService">The one graph service every graph is read and written by, for the step's serving of the run's graph; null where none is given, and no step is served.</param>
 /// <param name="graphClock">Times the graph tool's searches; the machine's clock where none is given.</param>
@@ -60,7 +60,6 @@ public sealed class ReasonStepRunner(
     Application.Legs.ITestLegs tests,
     ChildSessions children,
     Git.IGitClient? gitClient = null,
-    Configuration.IConfigStore? configStore = null,
     ClaudeCodeUpdateService? updates = null,
     Codebase.ICodebaseGraphService? graphService = null,
     TimeProvider? graphClock = null) : IFlowStepTypeRunner, IFlowHandoffRunner
@@ -220,11 +219,12 @@ public sealed class ReasonStepRunner(
         // words, or what a granted bound tells the agent - in the attempt's own conversation; a compaction sends the
         // engine's record as the run's first message and the filled prompt stands for the files that read it; every
         // other start fills the step's prompt, the resume prompt - what a step that goes on with earlier work is asked
-        // with when it runs again - only where earlier work there is: its own attempt before this one, work another
-        // step began, or a handoff. A step that resumes its own work is asked with its prompt the first time it runs.
+        // with when it runs again - only where earlier work there is: its own attempt before this one, the work its
+        // conversation goes on with (FlowStepRun.GoesOnWith), or a handoff. A step that resumes its own work is asked with
+        // its prompt the first time it runs, whatever steps it depends on.
         IReadOnlyList<FlowTemplate.Piece>? resume = null;
 
-        if (goingOn is null && run.Step.ResumePrompt is not null && (run.Attempt > 1 || run.Handoff is not null || run.WorkedFrom is [_, ..])
+        if (goingOn is null && run.Step.ResumePrompt is not null && (run.Attempt > 1 || run.Handoff is not null || run.GoesOnWith is [_, ..])
             && run.Prompts.TryGetValue("resumePrompt", out var readResume))
         {
             resume = readResume;
@@ -263,6 +263,7 @@ public sealed class ReasonStepRunner(
         // <codebase> part of the first message of each launch that begins a conversation of its own, the graph tool
         // offered where its step says tools, its view the one the engine syncs at the step's start. A step whose mode is
         // off is served nothing, and one whose graph cannot be served goes on without it.
+        var mask = launch.Mask(context.Layout, providers, webMask);
         var stepGraph = graphService is null
             ? null
             : await FlowStepGraph.OfAsync(
@@ -282,6 +283,7 @@ public sealed class ReasonStepRunner(
                 agentRecord,
                 ground,
                 filled,
+                mask,
                 cancellationToken).ConfigureAwait(false);
 
         // The conversation this attempt goes on with, where its answers gave it one to go on with: the session the
@@ -335,7 +337,7 @@ public sealed class ReasonStepRunner(
                 definition?.MaxMinutes is { } minutes ? TimeSpan.FromMinutes(minutes) : null,
                 definition?.StallSeconds,
                 place.Definition.HandoffSeconds),
-            Mask: launch.Mask(context.Layout, providers, webMask))
+            Mask: mask)
         {
             RecordDirectory = StepDirectoryOf(layout, run.Instance, agent),
             Ground = ground,
@@ -404,8 +406,15 @@ public sealed class ReasonStepRunner(
             var ended = Ended(result, run.Instance, stored, FlowRunBudget.RunsShareBinds(definition?.MaxBudgetUsd, run.BudgetLeftUsd));
 
             // The step's graph, where it was given one, ends with the step: its working set written beside its output,
-            // the seeds of the packs of the steps after it, and its figures gathered for its record.
+            // the seeds of the packs of the steps after it, and its figures gathered for its record. A step done whose
+            // work no later step's conversation goes on with puts away the pages its conversation kept - its graph answers'
+            // and its call results': none is asked again.
             var graphUse = stepGraph?.Ended(graphService!, fileSystem, platform.PathComparison, layout, cancellationToken);
+
+            if (ended is { Passed: true, Asked: null } && !ResumeChain.GoneOnWith(place.Definition, run.DeclarationPath, run.Step))
+            {
+                FlowStepGraph.PutAwayPages(fileSystem, harnessOutput, StepDirectoryOf(layout, run.Instance, agent), run.Instance);
+            }
 
             return result.Status == AgentRunStatus.NotStarted ? ended : ended with { Skills = skills, Graph = graphUse };
         }
@@ -592,28 +601,16 @@ public sealed class ReasonStepRunner(
             return null;
         }
 
-        // The steps before it that left notes: each source of the work its directory holds a record of, named by step
-        // and never by path, for the next attempt has their notes in what it is given.
-        var before = (run.WorkedFrom ?? [])
+        // The steps before it that left notes: each step of the work its conversation goes on with whose directory holds
+        // them, named by step and never by path, for the next attempt has their notes in its continuation record.
+        var before = run.GoesOnWith
             .Where(source => fileSystem.KindOf(Path.Combine(DirectoryOf(layout, source), OrchestratorLayout.StepNotesFileName)) == PathKind.File)
             .Select(source => new AgentContinuedStep(source.Instance, "done", string.Empty))
             .ToList();
 
-        return AgentStreamAccount.Of(stream, before, BoundsOf(place).LastIterations);
-    }
-
-    /// <summary>The repository's bounds of a continuation record, read where the step starts; the defaults where its configuration cannot be read, for the engine's account never refuses a pause.</summary>
-    /// <param name="place">The run's place, whose repository holds the configuration.</param>
-    private AgentContinuationBounds BoundsOf(FlowRunPlace place)
-    {
-        try
-        {
-            return AgentContinuationBounds.Of(configStore?.Load(new HarnessLayout(place.Repository, place.Repository).ConfigFile).AgentContext?.Continuation);
-        }
-        catch (Configuration.ConfigException)
-        {
-            return new AgentContinuationBounds();
-        }
+        // Its last messages word for word, as many as the compaction keeps of its last iterations: every message is in
+        // the continuation record whole, which the account is a part of.
+        return AgentStreamAccount.Of(stream, before, AgentCompactionBounds.LastIterations);
     }
 
     /// <summary>
@@ -638,7 +635,7 @@ public sealed class ReasonStepRunner(
 
         // The output an answer read against its schema, and the issues it reports there that were before the run - each
         // raising the triage the step's onPreExisting names.
-        var output = result.Status == AgentRunStatus.Completed && result.StructuredOutput is { Length: > 0 } json ? JsonNode.Parse(json) : null;
+        var output = result.Status == AgentRunStatus.Completed && result.StructuredOutput is { Length: > 0 } json ? JsonDepth.ParseNode(json) : null;
 
         return result.Status switch
         {
@@ -879,7 +876,7 @@ public sealed class ReasonStepRunner(
             ["agentWebSearch"] = webSearch is null ? null : new JsonObject
             {
                 ["sources"] = new JsonArray([.. webSearch.Sources.Select(source => (JsonNode?)source.Name)]),
-                ["resultsPerSource"] = webSearch.ResultsPerSource,
+                ["maxPerStep"] = webSearch.MaxPerStep,
             },
             ["runsOn"] = new JsonArray([.. order.Select(entry => (JsonNode?)new JsonObject
             {
@@ -895,20 +892,21 @@ public sealed class ReasonStepRunner(
     }
 
     /// <summary>
-    /// The continuation record of the work the step goes on with, where it goes on with any: the instances the engine
-    /// named as its sources rendered whole - each as its own record says it ended - the paths this agent's folds wrote
-    /// and its worktree holds unfolded, and the red legs of its newest red build or test, their copies put in what the
-    /// step's agent is handed. Null where the step begins its own work.
+    /// The continuation record of the work the step's conversation goes on with (<see cref="FlowStepRun.GoesOnWith"/>),
+    /// where it goes on with any: that work's instances rendered whole, oldest first - each as its own record says it
+    /// ended, the newest's last iterations word for word - the paths this agent's folds wrote and its worktree holds
+    /// unfolded, and the red legs of its newest red build or test, their copies put in what the step's agent is handed.
+    /// Null where the step begins its own work, whatever steps it depends on.
     /// </summary>
-    /// <param name="run">The step, with the instances whose working sets its context pack is seeded from.</param>
+    /// <param name="run">The step, with the work its conversation goes on with.</param>
     /// <param name="layout">The run's own paths.</param>
     /// <param name="agent">The agent the step works as.</param>
     /// <param name="handed">Where the step's agent is handed what it reads, the copies put under it.</param>
-    /// <param name="context">The repository's context, whose configuration bounds the record.</param>
+    /// <param name="context">The repository's context.</param>
     /// <param name="cancellationToken">Stops the reading of the worktree.</param>
     private async Task<string?> ContinuationOfAsync(FlowStepRun run, OrchestratorLayout layout, string agent, string handed, HarnessContext context, CancellationToken cancellationToken)
     {
-        if (!GoesOnWithEarlierWork(run) || run.WorkedFrom is not [_, ..] worked)
+        if (run.GoesOnWith is not [_, ..] worked)
         {
             return null;
         }
@@ -926,10 +924,11 @@ public sealed class ReasonStepRunner(
             RedLegsOf(layout, agent),
             CutOff: run.Handoff is not null);
 
-        return new AgentContinuation(fileSystem, harnessOutput).Render(
+        return await new AgentContinuation(fileSystem, harnessOutput).RenderAsync(
             work,
             handed,
-            AgentContinuationBounds.Of(context.Config.AgentContext?.Continuation));
+            StepDirectoryOf(layout, run.Instance, agent),
+            cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -942,7 +941,7 @@ public sealed class ReasonStepRunner(
     /// <param name="agent">The agent the step works as.</param>
     /// <param name="run">The step.</param>
     /// <param name="handed">Where the step's agent is handed what it reads, the copies put under it.</param>
-    /// <param name="context">The repository's context, whose configuration bounds the record.</param>
+    /// <param name="context">The repository's context.</param>
     /// <param name="cancellationToken">Stops the reading of the worktree.</param>
     private async Task<string?> OwnContinuationOfAsync(OrchestratorLayout layout, string agent, FlowStepRun run, string handed, HarnessContext context, CancellationToken cancellationToken)
     {
@@ -953,10 +952,11 @@ public sealed class ReasonStepRunner(
             RedLegsOf(layout, agent),
             CutOff: false);
 
-        return new AgentContinuation(fileSystem, harnessOutput).Render(
+        return await new AgentContinuation(fileSystem, harnessOutput).RenderAsync(
             work,
             handed,
-            AgentContinuationBounds.Of(context.Config.AgentContext?.Continuation));
+            StepDirectoryOf(layout, run.Instance, agent),
+            cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>Where one source of the work the step goes on with keeps its records.</summary>
@@ -1069,11 +1069,6 @@ public sealed class ReasonStepRunner(
         return [];
     }
 
-    /// <summary>Whether the step goes on with earlier work: another step's, or its own attempt that a stop cut.</summary>
-    /// <param name="run">The step.</param>
-    private static bool GoesOnWithEarlierWork(FlowStepRun run)
-        => run.Step.Resume is not null || run.Attempt > 1 || run.Handoff is not null;
-
     /// <summary>
     /// The events the step's own stream holds, masked as it holds them, read by the store's one reader of it: the step's
     /// transcript, from which the engine reads what no agent can say any more - the session a conversation goes on as,
@@ -1173,10 +1168,7 @@ public sealed class ReasonStepRunner(
     {
         var window = AgentAttempt.Of(stream, attempt);
 
-        return window.Count == 0 ? null : AgentCompaction.Reduce(
-            window,
-            AgentContinuationBounds.Of(context.Config.AgentContext?.Continuation),
-            AgentCompactionBounds.Of(context.Config.AgentContext?.Compaction));
+        return window.Count == 0 ? null : AgentCompaction.Reduce(window, AgentCompactionBounds.Of(context.Config.AgentContext?.Compaction));
     }
 
     /// <summary>

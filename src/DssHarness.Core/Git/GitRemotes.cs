@@ -1,5 +1,6 @@
 using System.Text.RegularExpressions;
 using DssHarness.Core.Results;
+using DssHarness.Core.Text;
 
 namespace DssHarness.Core.Git;
 
@@ -117,7 +118,7 @@ public static partial class GitRemotes
 
         var parts = path.Trim('/').Split('/');
 
-        if (Authority().Match(authority) is not { Success: true } reached || parts.Length != 2 || parts.Any(part => part.Length == 0))
+        if (Authority.Match(authority) is not { Success: true } reached || parts.Length != 2 || parts.Any(part => part.Length == 0))
         {
             return null;
         }
@@ -131,8 +132,7 @@ public static partial class GitRemotes
     }
 
     /// <summary>An address's authority: a user up to its last '@', the host - an IPv6 one in brackets - and a port after a colon.</summary>
-    [GeneratedRegex(@"^(?:.*@)?(?<host>\[[^\]]*\]|[^@:\[\]]+)(?::(?<port>[0-9]*))?$", RegexOptions.CultureInvariant)]
-    private static partial Regex Authority();
+    private static readonly Regex Authority = LinearRegex.Compile(@"^(?:.*@)?(?<host>\[[^\]]*\]|[^@:\[\]]+)(?::(?<port>[0-9]*))?$");
 
     /// <summary>The names of the repository's remotes, as git lists them.</summary>
     /// <param name="gitClient">Git.</param>

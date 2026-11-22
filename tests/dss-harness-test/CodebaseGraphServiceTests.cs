@@ -108,13 +108,13 @@ public sealed class CodebaseGraphServiceTests
     }
 
     /// <summary>
-    /// A file kept unread for its state - binary, too large, claimed by two - whose content changed is looked at again:
-    /// its state is its blob's, never its path's.
+    /// A file kept unread for its state - binary, claimed by two - whose content changed is looked at again, as is a file
+    /// read whatever its size: its state is its blob's, never its path's.
     /// </summary>
     [Fact]
     public async Task ASettledFileWhoseContentChanged_IsLookedAtAgain()
     {
-        using var graph = await Graph.CreateAsync(shape: CodebaseGraphShape.Default with { MaxFileBytes = 200 });
+        using var graph = await Graph.CreateAsync();
         graph.WriteBytes("logo.toy", [0x63, 0x00, 0x0A]);
         graph.Write("big.toy", "class Big\n" + new string('x', 300) + "\n");
         graph.Write("both.amb", "either\n");
@@ -168,6 +168,60 @@ public sealed class CodebaseGraphServiceTests
         Assert.Equal((2, 1, 1), (before.Extracted, after.Extracted, after.Reused));
         Assert.Equal(CodeFileStates.Parsed, graph.Manifest().Files["src/a.toy"].State);
         Assert.Contains(graph.Symbols().Nodes, node => node.Id == "toy:A");
+    }
+
+    /// <summary>
+    /// A claim the workflow maps an ending by, come since the last sync, gives the files of that ending to the
+    /// implementation it names: they are read again by it, and every other file keeps its extract.
+    /// </summary>
+    [Fact]
+    public async Task AClaimCome_ReadsAgainTheFilesItGivesAnotherImplementation_AndNoOther()
+    {
+        using var graph = await Graph.CreateAsync();
+        graph.Write("src/a.toy", "class A\n");
+        graph.Write("src/b.lang.json", "class B\n");
+        await graph.CommitAsync();
+        await graph.Over(graph.Toy, new JsonExtractor(), new ListedExtractor(), new MarkdownExtractor()).SyncAsync();
+
+        Assert.Equal("json", graph.Manifest().Files["src/b.lang.json"].Language);
+
+        var claimed = await graph.Shaped(CodebaseGraphShape.Of(null, null, null, null, null, null, claims: new Dictionary<string, IReadOnlyList<string>> { ["toy"] = [".lang.json"] })).SyncAsync();
+
+        Assert.Equal((1, 2), (claimed.Extracted, claimed.Reused));
+        Assert.Equal("toy", graph.Manifest().Files["src/b.lang.json"].Language);
+        Assert.Contains(graph.Symbols().Nodes, node => node.Id == "toy:B");
+    }
+
+    /// <summary>
+    /// The keys' join follows the workflow's keyNaming: a policy come since the last sync links the graph again, reading
+    /// no file, and an agent's view is linked under the policies its base was synced by.
+    /// </summary>
+    [Fact]
+    public async Task AChangedKeyNaming_LinksAgainReadingNoFile_AndAViewJoinsUnderItsBases()
+    {
+        const string Key = "json:app.json#calling_convention";
+        const string Property = "csharp:Reader.CallingConvention";
+
+        using var graph = await Graph.CreateAsync();
+        graph.Write("app.json", "{ \"calling_convention\": \"cdecl\" }\n");
+        graph.Write("Reader.cs", "class Reader\n{\n}\n");
+        graph.Write("Other.cs", "class Other\n{\n    public string CallingConvention { get; set; }\n}\n");
+        await graph.CommitAsync();
+        await graph.Over(new CSharpExtractor(), new JsonExtractor(), new ListedExtractor(), new MarkdownExtractor()).SyncAsync();
+
+        Assert.DoesNotContain(graph.Symbols().Edges, edge => edge is { To: Key, Kind: CodeEdgeKinds.Uses });
+
+        var snake = await graph.Shaped(CodebaseGraphShape.Of(null, null, null, null, null, keyNaming: [CodebaseGraphShape.SnakeCase])).SyncAsync();
+
+        Assert.Equal(0, snake.Extracted);
+        Assert.Contains(graph.Symbols().Edges, edge => edge is { From: "csharp:Other.CallingConvention", To: Key, Kind: CodeEdgeKinds.Uses });
+
+        var worktree = await graph.WorktreeAsync("w");
+        Graph.WriteIn(worktree, "Reader.cs", "class Reader\n{\n    public string CallingConvention { get; set; }\n}\n");
+        await graph.SyncViewAsync("w", worktree);
+        var read = (await graph.CheckAsync("w", worktree, "Reader.cs")).Read;
+
+        Assert.Contains(read.Symbols.Edges, edge => edge is { From: Property, To: Key, Kind: CodeEdgeKinds.Uses, Confidence: CodeConfidences.Candidates });
     }
 
     /// <summary>A manifest that does not read is never guessed at: the graph is built again whole, and says why.</summary>
@@ -347,13 +401,13 @@ public sealed class CodebaseGraphServiceTests
     }
 
     /// <summary>
-    /// Every state a file the core does not give an implementation is in: larger than the shape reads, a Git LFS pointer,
-    /// undecodable, claimed by two that both say yes, a link git records as one, a submodule - each listed with why.
+    /// Every state a file the core does not give an implementation is in: a Git LFS pointer, undecodable, claimed by two
+    /// that both say yes, a link git records as one, a submodule - each listed with why; and none for its size alone.
     /// </summary>
     [Fact]
     public async Task EveryStateTheCoreGivesAFile_IsListedWithWhy()
     {
-        using var graph = await Graph.CreateAsync(shape: CodebaseGraphShape.Default with { MaxFileBytes = 200 });
+        using var graph = await Graph.CreateAsync();
         var head = await graph.HeadAsync();
         graph.Write("big.toy", "class Big\n" + new string('x', 300) + "\n");
         graph.Write("model.toy", "version https://git-lfs.github.com/spec/v1\noid sha256:" + new string('a', 64) + "\nsize 9\n");
@@ -377,8 +431,8 @@ public sealed class CodebaseGraphServiceTests
         // A link and a submodule are listed without a read, and a first sync keeps nothing it never had.
         Assert.Equal(0, synced.Reused);
 
-        Assert.Equal(CodeFileStates.TooLarge, states["big.toy"].State);
-        Assert.Equal("311 bytes, over maxFileBytes (200)", states["big.toy"].Why);
+        Assert.False(states.ContainsKey("big.toy"));
+        Assert.Equal(CodeFileStates.Parsed, graph.Manifest().Files["big.toy"].State);
         Assert.Equal((CodeFileStates.Binary, "a Git LFS pointer, whose file git keeps elsewhere"), states["model.toy"]);
         Assert.Equal(CodeFileStates.Unreadable, states["bad.toy"].State);
         Assert.Equal((CodeFileStates.Ambiguous, "'ambone', 'ambtwo' each say by their content tests that it is theirs"), states["both.amb"]);
@@ -645,36 +699,38 @@ public sealed class CodebaseGraphServiceTests
     }
 
     /// <summary>
-    /// A file over maxFileBytes is kept unread while the limit stands; raised, it is read, and nothing else is; lowered
-    /// again, it is listed too large once more, its declarations leave the graph and its extract goes.
+    /// A view an earlier build left holding a file <c>tooLarge</c> - unread for its size - reads it at its next sync, says
+    /// so once, and holds no file in that state again: the next sync reads nothing and says nothing of it. Red with the
+    /// retired state settled as it was kept.
     /// </summary>
     [Fact]
-    public async Task ARaisedOrLoweredMaxFileBytes_ReadsAgainWhatItNowDecides_AndNoOther()
+    public async Task AViewThatHoldsAFileTooLarge_ReadsIt_AndSaysSoOnce()
     {
-        using var graph = await Graph.CreateAsync(shape: CodebaseGraphShape.Default with { MaxFileBytes = 200 });
+        using var graph = await Graph.CreateAsync();
         graph.Write("big.toy", "class Big\n" + new string('x', 300) + "\n");
         graph.Write("small.toy", "class Small\n");
         await graph.CommitAsync();
         await graph.SyncAsync();
 
-        Assert.Equal(CodeFileStates.TooLarge, graph.Manifest().Files["big.toy"].State);
+        // The manifest as an earlier build wrote it: the file kept unread for its size, with no extract.
+        var manifest = graph.Manifest();
+        var files = new SortedDictionary<string, CodeGraphFileEntry>(manifest.Files.ToDictionary(), StringComparer.Ordinal)
+        {
+            ["big.toy"] = new CodeGraphFileEntry(manifest.Files["big.toy"].Blob, CodeFileStates.TooLarge, manifest.Files["big.toy"].Bytes) { Why = "311 bytes, over maxFileBytes (200)" },
+        };
+        graph.Store.WriteGraphManifest(graph.Run, manifest with { Files = files, Digest = CodeGraphManifest.DigestOf(manifest.Extractors, files) });
 
-        var same = await graph.SyncAsync();
+        var read = await graph.Restarted().SyncAsync();
 
-        Assert.Equal((0, 3), (same.Extracted, same.Reused));
-
-        var raised = await graph.Shaped(CodebaseGraphShape.Default with { MaxFileBytes = 1000 }).SyncAsync();
-
-        Assert.Equal((1, 2), (raised.Extracted, raised.Reused));
+        Assert.Equal(1, read.Extracted);
         Assert.Equal(CodeFileStates.Parsed, graph.Manifest().Files["big.toy"].State);
         Assert.Contains(graph.Symbols().Nodes, node => node.Id == "toy:Big");
+        graph.Output.Received(1).Info("graph", $"the codebase graph of run 'run' read {ReportText.Counted(1, "file")} an earlier build of this tool listed {CodeFileStates.TooLarge}, when the graph left a file past a size unread: every file it claims is read whole now, whatever its size.");
 
-        var lowered = await graph.Shaped(CodebaseGraphShape.Default with { MaxFileBytes = 200 }).SyncAsync();
+        var again = await graph.SyncAsync();
 
-        Assert.Equal((0, 2), (lowered.Extracted, lowered.Reused));
-        Assert.Equal(CodeFileStates.TooLarge, graph.Manifest().Files["big.toy"].State);
-        Assert.DoesNotContain(graph.Symbols().Nodes, node => node.Id == "toy:Big");
-        Assert.Equal(2, graph.Extracts().Count);
+        Assert.Equal(0, again.Extracted);
+        graph.Output.Received(1).Info("graph", Arg.Is<string>(said => said.Contains(CodeFileStates.TooLarge, StringComparison.Ordinal)));
     }
 
     /// <summary>
@@ -820,24 +876,22 @@ public sealed class CodebaseGraphServiceTests
         Assert.Equal(graphed, graph.Manifest().Files.Keys);
     }
 
-    /// <summary>
-    /// A file kept unread for its state - binary, claimed by two - is listed too large once maxFileBytes is lowered under
-    /// it, as a graph made afresh would list it.
-    /// </summary>
+    /// <summary>A file kept unread for its state - binary, claimed by two - keeps the state its content gives it, and a file of any size is read.</summary>
     [Fact]
-    public async Task AKeptFileOverALoweredLimit_IsListedTooLarge_WhateverItsState()
+    public async Task AFilePastAnySize_IsRead_AndItsStateKept()
     {
-        using var graph = await Graph.CreateAsync(shape: CodebaseGraphShape.Default with { MaxFileBytes = 1000 });
+        using var graph = await Graph.CreateAsync();
         graph.WriteBytes("bin.toy", [.. Enumerable.Repeat((byte)'a', 300), 0]);
         graph.Write("both.amb", new string('e', 300) + "\n");
+        graph.Write("big.toy", "class Big\n" + new string('x', 300) + "\n");
         await graph.CommitAsync();
         await graph.SyncAsync();
 
-        Assert.Equal((CodeFileStates.Binary, CodeFileStates.Ambiguous), (graph.Manifest().Files["bin.toy"].State, graph.Manifest().Files["both.amb"].State));
+        var again = await graph.Shaped(CodebaseGraphShape.Default).SyncAsync();
+        var files = graph.Manifest().Files;
 
-        await graph.Shaped(CodebaseGraphShape.Default with { MaxFileBytes = 200 }).SyncAsync();
-
-        Assert.Equal((CodeFileStates.TooLarge, CodeFileStates.TooLarge), (graph.Manifest().Files["bin.toy"].State, graph.Manifest().Files["both.amb"].State));
+        Assert.Equal((0, 4), (again.Extracted, again.Reused));
+        Assert.Equal((CodeFileStates.Binary, CodeFileStates.Ambiguous, CodeFileStates.Parsed), (files["bin.toy"].State, files["both.amb"].State, files["big.toy"].State));
     }
 
     /// <summary>A content test that fails on a file lists that file unreadable, naming its implementation and claim, and the sync goes on.</summary>
@@ -854,6 +908,115 @@ public sealed class CodebaseGraphServiceTests
 
         Assert.Equal(("a.chk", "its implementation 'checking' failed on it in the content test of its claim '.chk': no test of this"), (failed.Path, failed.Why));
         Assert.Contains(graph.Symbols().Nodes, node => node.Id == "toy:A");
+    }
+
+    /// <summary>
+    /// Two files of one content whose paths' digests begin with the same eight characters keep two extracts, each named by
+    /// its path's whole digest, so neither file's extract is the other's. Red with the path's part of an extract's name cut
+    /// to eight characters ([..8]).
+    /// </summary>
+    [Fact]
+    public async Task CollidingShortDigests_KeepTwoExtracts()
+    {
+        var seen = new Dictionary<string, string>(StringComparer.Ordinal);
+        (string First, string Second)? colliding = null;
+
+        for (var at = 0; colliding is null; at++)
+        {
+            var path = $"c/{at.ToString(System.Globalization.CultureInfo.InvariantCulture)}.toy";
+
+            if (!seen.TryAdd(CodeGraphIds.Sha256(path)[..8], path))
+            {
+                colliding = (seen[CodeGraphIds.Sha256(path)[..8]], path);
+            }
+        }
+
+        var (first, second) = colliding.Value;
+        using var graph = await Graph.CreateAsync();
+        graph.Write(first, "same\n");
+        graph.Write(second, "same\n");
+        await graph.CommitAsync();
+        await graph.SyncAsync();
+        var files = graph.Manifest().Files;
+
+        Assert.NotEqual(files[first].Extract, files[second].Extract);
+        Assert.Equal(CodeGraphIds.ExtractName(files[first].Blob!, first, "toy", graph.Toy.Version), files[first].Extract);
+        Assert.Equal(3, graph.Extracts().Count);
+        Assert.Equal(CodeGraphIds.Sha256(first)[..8], CodeGraphIds.Sha256(second)[..8]);
+    }
+
+    /// <summary>
+    /// What the graph does not hold of a file whose reader could not bind it is every place it could not, however many -
+    /// how many, then each by its line and why, in the file's order - never the first alone. Red with the first mark alone
+    /// said (First()).
+    /// </summary>
+    [Fact]
+    public async Task EveryDynamicMark_IsListed()
+    {
+        const int Marks = 300;
+        using var graph = await Graph.CreateAsync();
+        graph.Write("calls.dyn", string.Concat(Enumerable.Range(1, Marks).Select(at => $"dyn{at.ToString(System.Globalization.CultureInfo.InvariantCulture)}\nplain\n")));
+        await graph.CommitAsync();
+        await graph.Over(graph.Toy, new ListedExtractor(), new DynamicExtractor()).SyncAsync();
+        var queries = new CodebaseGraphQueries((await graph.ReadOnlyAsync())!);
+
+        var unread = queries.Unread("calls.dyn");
+
+        Assert.Equal(
+            [$"{Marks} place(s) the graph cannot bind:", .. Enumerable.Range(1, Marks).Select(at => $"line {((at * 2) - 1).ToString(System.Globalization.CultureInfo.InvariantCulture)}: a call through dyn{at.ToString(System.Globalization.CultureInfo.InvariantCulture)}")],
+            unread);
+    }
+
+    /// <summary>
+    /// A manifest an earlier build wrote, naming each extract by the first eight characters of its path's digest, still
+    /// reads - its extracts served as they are - and its next sync reads each file again, naming its extract by the whole
+    /// digest. Red with an extract name other than the one made now refused.
+    /// </summary>
+    [Fact]
+    public async Task AManifestThatNamesItsExtractsAsAnEarlierBuildDid_StillReads_AndItsNextSyncNamesThemWhole()
+    {
+        using var graph = await Graph.CreateAsync();
+        graph.Write("a.toy", "class A\n");
+        await graph.CommitAsync();
+        await graph.SyncAsync();
+
+        // The manifest as an earlier build wrote it: the extract under the name it gave.
+        var manifest = graph.Manifest();
+        var entry = manifest.Files["a.toy"];
+        var earlier = CodeGraphIds.EarlierExtractName(entry.Blob!, "a.toy", "toy", graph.Toy.Version);
+        Directory.CreateDirectory(Path.GetDirectoryName(graph.Run.GraphExtractFile(earlier))!);
+        File.Copy(graph.Run.GraphExtractFile(entry.Extract!), graph.Run.GraphExtractFile(earlier));
+        var files = new SortedDictionary<string, CodeGraphFileEntry>(manifest.Files.ToDictionary(), StringComparer.Ordinal) { ["a.toy"] = entry with { Extract = earlier } };
+        graph.Store.WriteGraphManifest(graph.Run, manifest with { Files = files, Digest = CodeGraphManifest.DigestOf(manifest.Extractors, files) });
+
+        Assert.NotNull(await graph.Restarted().ReadOnlyAsync());
+
+        var synced = await graph.SyncAsync();
+
+        Assert.Equal(1, synced.Extracted);
+        Assert.Equal(CodeGraphIds.ExtractName(entry.Blob!, "a.toy", "toy", graph.Toy.Version), graph.Manifest().Files["a.toy"].Extract);
+        Assert.Contains(graph.Symbols().Nodes, node => node.Id == "toy:A");
+    }
+
+    /// <summary>
+    /// Where two implementations claim one extension, the one whose content test finds its marker claims the file, wherever
+    /// in its text the marker stands - past its first eight thousand characters too - and a file neither marks is listed
+    /// ambiguous. Red with the probe cut at the text's first characters (ProbeCharacters), which hold neither marker.
+    /// </summary>
+    [Fact]
+    public async Task AClaimMarkerPastEightThousandCharacters_Claims()
+    {
+        using var graph = await Graph.CreateAsync();
+        graph.Write("far.mk", new string('x', 9000) + "\n@late\n");
+        graph.Write("none.mk", new string('x', 9000) + "\n");
+        await graph.CommitAsync();
+
+        await graph.Over(graph.Toy, new ListedExtractor(), new MarkedExtractor("early", "@early"), new MarkedExtractor("late", "@late")).SyncAsync();
+        var files = graph.Manifest().Files;
+
+        Assert.Equal("late", files["far.mk"].Language);
+        Assert.NotEqual(CodeFileStates.Ambiguous, files["far.mk"].State);
+        Assert.Equal(CodeFileStates.Ambiguous, files["none.mk"].State);
     }
 
     /// <summary>A file whose name is not UTF-8, listed by the index and by status alike, is said once, unreadable, with why.</summary>
@@ -1814,6 +1977,32 @@ public sealed class CodebaseGraphServiceTests
     }
 
     /// <summary>
+    /// A link result an older linker wrote - its head counting what references named ambiguously, those counts after the
+    /// others - is no link result this build reads: the next process links the graph again, though no file changed, reading
+    /// no file again, and what it writes counts nothing of the kind.
+    /// </summary>
+    [Fact]
+    public async Task ALinkResultAnOlderLinkerWrote_IsLinkedAgain_ByTheNextProcess()
+    {
+        using var graph = await Graph.CreateAsync();
+        graph.Write("a.toy", "class A\ncall B\n");
+        graph.Write("b.toy", "class B\n");
+        await graph.CommitAsync();
+        await graph.SyncAsync();
+        var lines = File.ReadAllText(graph.Run.GraphSymbolsFile).TrimEnd('\n').Split('\n');
+        lines[0] = lines[0][..^1] + ",\"unresolved\":1}";
+        File.WriteAllText(graph.Run.GraphSymbolsFile, string.Concat(lines.Append("{\"node\":\"toy:A\",\"count\":1}").Select(line => line + "\n")));
+        var reads = graph.Toy.Reads;
+
+        var synced = await graph.Restarted().SyncAsync();
+
+        Assert.Equal((0, null), (synced.Extracted, synced.Rebuilt));
+        Assert.Equal(reads, graph.Toy.Reads);
+        Assert.Contains(graph.Symbols().Edges, edge => edge is { From: "toy:A", To: "toy:B" });
+        Assert.DoesNotContain("unresolved", File.ReadAllText(graph.Run.GraphSymbolsFile), StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// A link result a crash left of an earlier manifest - the manifest written, its link result not - is linked again by
     /// the next process, though no file changed, and no file is read again.
     /// </summary>
@@ -2195,31 +2384,6 @@ public sealed class CodebaseGraphServiceTests
     }
 
     /// <summary>
-    /// A file too large is not read, so nothing asks git of it once more after the reads: a smudged Git LFS file is never
-    /// run through its clean filter again.
-    /// </summary>
-    [Fact]
-    public async Task AFileTooLarge_IsNotAskedOfGitAgain_AfterTheReads()
-    {
-        using var graph = await Graph.CreateAsync(shape: CodebaseGraphShape.Default with { MaxFileBytes = 100 });
-        graph.Write("a.toy", "class A\n");
-        graph.Write("big.toy", new string('x', 500));
-        graph.Write("new.toy", "class New\n");
-        await graph.CommitAsync();
-        graph.Write("big.toy", new string('y', 600));
-        var real = graph.Harness.GitClient;
-        var git = Forwarding(real);
-
-        var synced = await graph.WithGit(git).SyncAsync();
-
-        Assert.Equal(CodeFileStates.TooLarge, graph.Manifest().Files["big.toy"].State);
-        Assert.Equal(1, git.ReceivedCalls().Count(call => call.GetMethodInfo().Name == nameof(IGitClient.HashWorkingFilesAsync) && ((IReadOnlyList<string>)call.GetArguments()[1]!).Contains("big.toy")));
-        Assert.DoesNotContain(git.ReceivedCalls(), call => call.GetArguments() is [_, IReadOnlyList<string> paths, _] && call.GetMethodInfo().Name != nameof(IGitClient.HashWorkingFilesAsync) && paths.Contains("big.toy"));
-        Assert.Contains(git.ReceivedCalls(), call => call.GetArguments() is [_, IReadOnlyList<string> paths, _] && call.GetMethodInfo().Name == nameof(IGitClient.ListIndexAsync) && paths.Contains("new.toy"));
-        Assert.Equal(1, synced.Hashed);
-    }
-
-    /// <summary>
     /// A file the tree could not read is read again by the next check that names it, though its blob did not move, as every
     /// sync reads such a file again: the tree takes it, and is no dirtier for it - git finds the file as HEAD holds it.
     /// </summary>
@@ -2372,13 +2536,13 @@ public sealed class CodebaseGraphServiceTests
     }
 
     /// <summary>
-    /// A file grown past maxFileBytes as it was looked at, and back as it was, is not kept too large under the blob git
-    /// lists of it: it stands otherwise once the reads are done than when it was looked at.
+    /// A file grown as it was looked at, and back as it was, is not kept as read under the blob git lists of it: it stands
+    /// otherwise once the reads are done than when it was looked at.
     /// </summary>
     [Fact]
-    public async Task AFileGrownPastTheLimitAndBack_WhileItWasLookedAt_IsNotKeptTooLarge()
+    public async Task AFileGrownAndBack_WhileItWasLookedAt_IsNotKeptAsRead()
     {
-        using var graph = await Graph.CreateAsync(shape: CodebaseGraphShape.Default with { MaxFileBytes = 100 });
+        using var graph = await Graph.CreateAsync();
         graph.Write("x.toy", "class X\n");
         await graph.CommitAsync();
         var path = Path.Combine(graph.Tree, "x.toy");

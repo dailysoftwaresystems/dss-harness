@@ -122,8 +122,8 @@ public sealed class CodeGraphExtractorsTests
     [Fact]
     public void ASharedClaim_IsRefusedWithoutAContentTestOnEach_AndAcceptedWithOne()
     {
-        static bool Yes(string probe) => probe.StartsWith("toy", StringComparison.Ordinal);
-        static bool No(string probe) => !Yes(probe);
+        static bool Yes(CodeText probe) => probe.StartsWith("toy");
+        static bool No(CodeText probe) => !Yes(probe);
 
         var extension = Refused(Fake("toy", ".x", Yes), Fake("other", ".X"), Fallback());
         Assert.Contains("'other', 'toy' each claim the extension '.x'", extension.Message, StringComparison.OrdinalIgnoreCase);
@@ -154,6 +154,30 @@ public sealed class CodeGraphExtractorsTests
         Assert.Equal("listed", registry.Route("dir.json/file", string.Empty).Extractor?.Language);
         Assert.Empty(registry.ClaimantsOf("web/Makefile"));
         Assert.Equal(["byname"], registry.ClaimantsOf("package.json").Select(claimed => claimed.Extractor.Language));
+    }
+
+    /// <summary>
+    /// Where a repository maps file name endings to implementations, the longest ending a file's name ends with is
+    /// claimed between the registry's exact names and its extensions: an exact name still wins, and an ending wins over
+    /// an extension, the longest ending over a shorter one.
+    /// </summary>
+    [Fact]
+    public void AMappedEndingIsClaimedBetweenExactNamesAndExtensions_TheLongestFirst()
+    {
+        var registry = new CodeGraphExtractors([Fake("byext", ".json"), Fake("byname", names: ["package.json"]), Fake("mapper", ".map"), Fallback()]);
+
+        Assert.Equal("byname", registry.Route("web/Package.JSON", string.Empty).Extractor?.Language);
+
+        var claims = new Dictionary<string, IReadOnlyList<string>> { ["byext"] = [".target.json"], ["mapper"] = [".values.map", ".map"] };
+
+        Assert.Equal("byext", registry.Route("app/settings.target.json", string.Empty, claims).Extractor?.Language);
+        Assert.Equal("mapper", registry.Route("app/values.map", string.Empty, claims).Extractor?.Language);
+        Assert.Equal("byext", registry.Route("app/settings.json", string.Empty, claims).Extractor?.Language);
+        Assert.Equal("listed", registry.Route("app/other.yml", string.Empty, claims).Extractor?.Language);
+        Assert.Equal([("mapper", ".map")], registry.ClaimantsOf("app/values.map", claims).Select(claimed => (claimed.Extractor.Language, claimed.Claim.Value)));
+
+        // An implementation the build holds none of is left out, as its workflow's check refuses one before any run.
+        Assert.Equal("byext", registry.Route("app/settings.target.json", string.Empty, new Dictionary<string, IReadOnlyList<string>> { ["gone"] = [".target.json"] }).Extractor?.Language);
     }
 
     /// <summary>Where no claimant's test says yes, or several do, no implementation reads the file, and the route says why.</summary>
@@ -194,7 +218,21 @@ public sealed class CodeGraphExtractorsTests
         return refused;
     }
 
-    private static FakeExtractor Fake(string language, string? extension = null, Func<string, bool>? test = null, string[]? names = null)
+    /// <summary>
+    /// What a content test is given is the decoded text itself, read by position however long - its surrogate pairs whole
+    /// with it - so a marker anywhere in a file decides its claim. Red with the text the test is given cut at its head.
+    /// </summary>
+    [Fact]
+    public void AContentTest_IsGivenTheWholeText_HoweverLong()
+    {
+        var text = CodeText.Of(new string('a', 100_000) + "\U0001F600" + "tail");
+        var registry = new CodeGraphExtractors([Fake("toy", ".x", probe => probe.EndsWith("\U0001F600tail")), Fake("other", ".x", probe => !probe.EndsWith("\U0001F600tail")), Fallback()]);
+
+        Assert.Equal("toy", registry.Route("a.x", text).Extractor?.Language);
+        Assert.Equal("other", registry.Route("a.x", "a").Extractor?.Language);
+    }
+
+    private static FakeExtractor Fake(string language, string? extension = null, Func<CodeText, bool>? test = null, string[]? names = null)
         => new(language, new CodeGraphClaims(
             [.. (names ?? []).Select(name => new CodeGraphClaim(name, test))],
             extension is null ? [] : [new CodeGraphClaim(extension, test)]));
@@ -211,6 +249,26 @@ public sealed class CodeGraphExtractorsTests
         public CodeGraphExtractorHelp Help { get; } = new("nothing", []);
 
         public FileExtract Extract(CodeFileInput input) => FileExtract.Empty;
+    }
+
+    /// <summary>
+    /// The architecture and the help say what the code holds of how a file is claimed and how keys are joined: a
+    /// workflow's claimed endings after an exact name and before an extension, the keys' join of candidates and its bound,
+    /// and the default naming policies the shape holds.
+    /// </summary>
+    [Fact]
+    public void TheDocs_SayTheClaimOrderTheKeysJoinAndItsDefault_AsTheCodeHoldsThem()
+    {
+        var architecture = Prose.Document("docs", "architecture.md");
+        var help = Prose.Words(DssHarness.Core.Help.HelpTopics.Render("codebase-graph"));
+        var defaults = string.Join(" and ", CodebaseGraphShape.DefaultKeyNaming.Select(naming => $"`{naming}`"));
+        var policies = string.Join(", ", CodebaseGraphShape.NamingValues.SkipLast(1).Select(naming => $"`{naming}`")) + $" or `{CodebaseGraphShape.NamingValues[^1]}`";
+
+        Assert.Contains($"(`codebaseGraph.keyNaming`: {policies}, {defaults} the default)", architecture, StringComparison.Ordinal);
+        Assert.Contains("every key a literal or a name names is joined, however many keys share it", architecture, StringComparison.Ordinal);
+        Assert.Contains("A file goes to the claimants of its exact name, else of an ending `codebaseGraph.claims` maps, else of its extension, else to the fallback", architecture, StringComparison.Ordinal);
+        Assert.Contains("by its exact name, else by an ending codebaseGraph.claims maps, else by its extension, else by the fallback", help, StringComparison.Ordinal);
+        Assert.Contains("every key a literal or a name names is joined, however many keys share it", help, StringComparison.Ordinal);
     }
 
     /// <summary>

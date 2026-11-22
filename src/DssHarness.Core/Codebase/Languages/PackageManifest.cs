@@ -28,7 +28,10 @@ internal static class PackageManifest
         var lines = input.Lines;
         var id = $"{language}:{input.Path}";
         var root = JsonOutline.Load(input.Text, lenient: false, out var stop);
-        var named = root?.Properties!.LastOrDefault(property => property.Name == "name" && property.Value.NonEmpty is not null);
+
+        // The package's name is read only where the file parsed whole: a file that stops reading as JSON part way is no
+        // JSON object, and its project is named by its file, nothing in it read.
+        var named = stop is null ? root?.Properties!.LastOrDefault(property => property.Name == "name" && property.Value.NonEmpty is not null) : null;
         var name = named?.Value.Text;
         var references = new List<ExtractReference>();
 

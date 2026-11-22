@@ -28,7 +28,7 @@ public sealed class NpmExtractor : ICodeGraphExtractor
     public string Language => "npm";
 
     /// <inheritdoc/>
-    public int Version => 1;
+    public int Version => 2;
 
     /// <inheritdoc/>
     public CodeGraphClaims Claims { get; } = new([new("package.json")], []);
@@ -89,30 +89,44 @@ public sealed class NpmExtractor : ICodeGraphExtractor
         return roots;
     }
 
-    /// <summary>Each file an export's target names, in the order the file writes them: a string itself, an object's conditions each in turn, an array's items.</summary>
+    /// <summary>
+    /// Each file an export's target names, in the order the file writes them: a string itself, an object's conditions each
+    /// in turn, an array's items - nested any depth, followed on a stack of its own rather than the call's.
+    /// </summary>
     private static IEnumerable<string> Files(JsonOutlineValue? target)
     {
-        switch (target?.Kind)
+        var pending = new Stack<JsonOutlineValue>();
+
+        if (target is not null)
         {
-            case JsonValueKind.String when target.NonEmpty is { } file:
-                yield return file;
-                break;
+            pending.Push(target);
+        }
 
-            case JsonValueKind.Object:
-                foreach (var file in target.Properties!.SelectMany(property => Files(property.Value)))
-                {
+        while (pending.TryPop(out var value))
+        {
+            switch (value.Kind)
+            {
+                case JsonValueKind.String when value.NonEmpty is { } file:
                     yield return file;
-                }
+                    break;
 
-                break;
+                // What it holds pushed last first, so the first is read next.
+                case JsonValueKind.Object:
+                    for (var at = value.Properties!.Count - 1; at >= 0; at--)
+                    {
+                        pending.Push(value.Properties[at].Value);
+                    }
 
-            case JsonValueKind.Array:
-                foreach (var file in target.Items!.SelectMany(Files))
-                {
-                    yield return file;
-                }
+                    break;
 
-                break;
+                case JsonValueKind.Array:
+                    for (var at = value.Items!.Count - 1; at >= 0; at--)
+                    {
+                        pending.Push(value.Items[at]);
+                    }
+
+                    break;
+            }
         }
     }
 }

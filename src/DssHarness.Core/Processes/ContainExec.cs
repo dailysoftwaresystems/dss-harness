@@ -2,7 +2,10 @@ using System.ComponentModel;
 using System.Globalization;
 using System.IO.Pipes;
 using System.Text;
+using DssHarness.Core.Execution;
+using DssHarness.Core.Platform;
 using DssHarness.Core.Results;
+using DssHarness.Core.Waiting;
 
 namespace DssHarness.Core.Processes;
 
@@ -27,7 +30,10 @@ namespace DssHarness.Core.Processes;
 /// </para>
 /// <para>
 /// Whether the program started is said on a channel of the process runner's own, never on the
-/// program's streams or in an exit code a program could end with too: the step connects to it,
+/// program's streams or in an exit code a program could end with too: the step connects to it, waits for the process
+/// runner to say it has taken the connection (<see cref="Taken"/>) - so whatever the step says comes after its connection
+/// was taken, and a step that ended with its connection not taken said nothing, however late the system hands the
+/// process runner a connection made just before that end -
 /// says what failed where anything did, and says the program is placed just before it is become or
 /// once it is started - on Linux and macOS with its own start, which the program it becomes keeps, so the process
 /// runner records what tells the child from a later process however soon the program ends. The channel closes with the
@@ -53,6 +59,12 @@ public static class ContainExec
     /// <summary>The option naming the channel the step says whether the program started on.</summary>
     public const string StatusOption = "--status";
 
+    /// <summary>
+    /// The option naming the process that started the step, by its id: the process runner, which listens on the channel
+    /// for as long as it lives, so the step waits to reach the channel for as long as its starter does.
+    /// </summary>
+    public const string StarterOption = "--starter";
+
     /// <summary>What separates the step's own options from the program and its arguments.</summary>
     public const string Separator = "--";
 
@@ -63,14 +75,17 @@ public static class ContainExec
     /// </summary>
     public const int Failed = HarnessExit.InternalError;
 
+    /// <summary>
+    /// The byte the process runner writes on the channel once it has taken the step's connection, and the step waits for
+    /// before it says anything: what makes "ended with its connection not taken" mean "said nothing".
+    /// </summary>
+    internal const byte Taken = 0x06;
+
     /// <summary>The line that says the program is placed and about to be become, or started.</summary>
     private const string PlacedLine = "placed";
 
     /// <summary>The word a line that says what failed begins with.</summary>
     private const string FailedWord = "failed";
-
-    /// <summary>How long the step waits to reach the channel, which the process runner opened before starting it.</summary>
-    private static readonly TimeSpan ReachBound = TimeSpan.FromSeconds(30);
 
     private static readonly UTF8Encoding Utf8NoBom = new(encoderShouldEmitUTF8Identifier: false);
 
@@ -101,28 +116,15 @@ public static class ContainExec
     /// <param name="group">Whether a process group of one's own is the containment asked for, apart from the terminal alone.</param>
     /// <param name="scope">Whether the program is become inside Landlock's scope of abstract sockets and signals, on Linux.</param>
     /// <param name="status">The name of the channel the process runner reads the start from.</param>
+    /// <param name="starter">The process that started the step, by its id: the process runner, which listens on the channel.</param>
     /// <param name="program">The program, by its resolved path.</param>
     /// <param name="arguments">The program's arguments.</param>
-    /// <param name="error">Where a refusal of the step's own command line is said.</param>
+    /// <param name="error">
+    /// Where a refusal of the step's own command line is said, and its wait for the channel told every five minutes
+    /// (<see cref="Waits.SaidEvery"/>): before the program starts, the step's streams are its own.
+    /// </param>
     /// <returns>The program's own exit code, or <see cref="Failed"/> where the step did not start it.</returns>
-    public static int Run(string? job, bool group, bool scope, string? status, string program, IReadOnlyList<string> arguments, TextWriter error)
-        => Run(job, group, scope, status, program, arguments, error, ReachBound);
-
-    /// <summary>
-    /// The step as <see cref="Run(string?, bool, bool, string?, string, IReadOnlyList{string}, TextWriter)"/> runs it, waiting
-    /// <paramref name="reachBound"/> to reach its channel: a test's bound, shorter than the step's own, so that a channel
-    /// never reached is given up within a test's time.
-    /// </summary>
-    /// <param name="job">The name of the Windows job object to join, for full containment there.</param>
-    /// <param name="group">Whether a process group of one's own is the containment asked for, apart from the terminal alone.</param>
-    /// <param name="scope">Whether the program is become inside Landlock's scope of abstract sockets and signals, on Linux.</param>
-    /// <param name="status">The name of the channel the process runner reads the start from.</param>
-    /// <param name="program">The program, by its resolved path.</param>
-    /// <param name="arguments">The program's arguments.</param>
-    /// <param name="error">Where a refusal of the step's own command line is said.</param>
-    /// <param name="reachBound">How long the step waits to reach the channel.</param>
-    /// <returns>The program's own exit code, or <see cref="Failed"/> where the step did not start it.</returns>
-    internal static int Run(string? job, bool group, bool scope, string? status, string program, IReadOnlyList<string> arguments, TextWriter error, TimeSpan reachBound)
+    public static int Run(string? job, bool group, bool scope, string? status, int? starter, string program, IReadOnlyList<string> arguments, TextWriter error)
     {
         ArgumentNullException.ThrowIfNull(program);
         ArgumentNullException.ThrowIfNull(arguments);
@@ -160,15 +162,27 @@ public static class ContainExec
             return Failed;
         }
 
-        StartStatus channel;
+        if (starter is not > 0)
+        {
+            error.WriteLine($"contain-exec was given no '{StarterOption}'; it takes the id of the process runner that started it.");
+            return Failed;
+        }
+
+        StartStatus? channel;
 
         try
         {
-            channel = StartStatus.Reach(status, reachBound);
+            channel = StartStatus.Reach(status, StarterLives(starter.Value), told => error.WriteLine($"{CommandName}: {told.Line()}"), TimeProvider.System);
         }
-        catch (Exception ex) when (ex is IOException or TimeoutException or UnauthorizedAccessException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             error.WriteLine($"contain-exec could not reach the channel '{status}' it says the start on: {ex.Message}");
+            return Failed;
+        }
+
+        if (channel is null)
+        {
+            error.WriteLine(StarterEndedLine(status, starter.Value));
             return Failed;
         }
 
@@ -176,6 +190,24 @@ public static class ContainExec
         {
             return Containment.Place(job, group, scope, program, arguments, channel, error);
         }
+    }
+
+    /// <summary>What the step says where its starter ended before the step reached the channel it listened on.</summary>
+    /// <param name="status">The channel.</param>
+    /// <param name="starter">The starter's id.</param>
+    internal static string StarterEndedLine(string status, int starter)
+        => string.Create(CultureInfo.InvariantCulture, $"contain-exec could not reach the channel '{status}' it says the start on: the process {starter} that started it, and listened on it, has ended.");
+
+    /// <summary>
+    /// Whether the process <paramref name="starter"/> - the step's starter, alive as the step begins - still lives: the
+    /// process it is, told from a later holder of its id by its start, read now.
+    /// </summary>
+    private static Func<bool> StarterLives(int starter)
+    {
+        var identity = new ProcessIdentity(new HostPlatform());
+        var stamp = identity.StampOf(starter);
+
+        return () => identity.IsAlive(starter, stamp);
     }
 
     /// <summary>What the step said on its channel, as the process runner reads it.</summary>
@@ -242,23 +274,80 @@ public static class ContainExec
         }
 
         /// <summary>
-        /// Reaches the channel <paramref name="name"/> names, which only this user's processes can open, within
-        /// <paramref name="bound"/>.
+        /// Reaches the channel <paramref name="name"/> names, which only this user's processes can open, for as long as
+        /// its starter lives: the process runner listens on it before it starts the step, so a step not yet through - a
+        /// machine too busy to schedule it, a disk that stalls - waits, looking again every second
+        /// (<see cref="Waits.LooksAgainEvery"/>) and told every five minutes, and gives up only once the starter has
+        /// ended and nobody can listen on it any more. Reached, it waits for the process runner to say it has taken the
+        /// connection (<see cref="Taken"/>) - for as long as that takes, the channel closing ending the wait where the
+        /// process runner gave the start up or has gone - and only then is anything said on it.
         /// </summary>
-        /// <exception cref="TimeoutException">The channel was not reached within the bound.</exception>
-        public static StartStatus Reach(string name, TimeSpan bound)
+        /// <param name="name">The channel.</param>
+        /// <param name="starterLives">Whether the process that started the step, and listens on the channel, still lives.</param>
+        /// <param name="tell">Told of the wait every five minutes.</param>
+        /// <param name="clock">What the wait is told by: the system's, or a test's.</param>
+        /// <returns>The channel reached and its connection taken; <see langword="null"/> where the starter ended first.</returns>
+        /// <exception cref="IOException">The channel closed before its connection was said taken, or said something else.</exception>
+        public static StartStatus? Reach(string name, Func<bool> starterLives, Action<WaitTold> tell, TimeProvider clock)
         {
-            var pipe = new NamedPipeClientStream(".", name, PipeDirection.Out, PipeOptions.CurrentUserOnly);
+            ArgumentNullException.ThrowIfNull(starterLives);
 
-            try
+            var reached = Waits.ForAsync(
+                cancellationToken => ReachingAsync(name, starterLives, cancellationToken),
+                new WaitWatch($"the channel '{name}' it says the start on", tell, null, clock),
+                CancellationToken.None).GetAwaiter().GetResult();
+
+            return reached.Value;
+        }
+
+        /// <summary>Reaches the channel in slices of a second, while the starter lives, and waits for its connection to be said taken.</summary>
+        private static async Task<StartStatus?> ReachingAsync(string name, Func<bool> starterLives, CancellationToken cancellationToken)
+        {
+            var slice = (int)Waits.LooksAgainEvery.TotalMilliseconds;
+
+            while (true)
             {
-                pipe.Connect(bound);
-                return new StartStatus(pipe);
-            }
-            catch
-            {
-                pipe.Dispose();
-                throw;
+                var pipe = new NamedPipeClientStream(".", name, PipeDirection.InOut, PipeOptions.CurrentUserOnly);
+
+                try
+                {
+                    await pipe.ConnectAsync(slice, cancellationToken).ConfigureAwait(false);
+                }
+                catch (TimeoutException)
+                {
+                    await pipe.DisposeAsync().ConfigureAwait(false);
+
+                    if (!starterLives())
+                    {
+                        return null;
+                    }
+
+                    continue;
+                }
+                catch
+                {
+                    await pipe.DisposeAsync().ConfigureAwait(false);
+                    throw;
+                }
+
+                try
+                {
+                    var taken = new byte[1];
+
+                    // The channel's own end is what ends this wait where no word comes: the process runner gave the start
+                    // up, or has gone.
+                    return await pipe.ReadAsync(taken, cancellationToken).ConfigureAwait(false) switch
+                    {
+                        0 => throw new IOException("the process runner closed it before it took the connection"),
+                        _ when taken[0] != Taken => throw new IOException($"the process runner said {taken[0]} where it says it took the connection"),
+                        _ => new StartStatus(pipe),
+                    };
+                }
+                catch
+                {
+                    await pipe.DisposeAsync().ConfigureAwait(false);
+                    throw;
+                }
             }
         }
 

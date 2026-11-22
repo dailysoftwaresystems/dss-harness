@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using DssHarness.Core.Text;
 using Microsoft.Win32;
 using DssHarness.Core.FileSystem;
 
@@ -66,7 +67,7 @@ public sealed class WslDiskImages : IWslDiskImages
 /// WSL mounts each drive as a filesystem of its own - <c>C:\</c> at <c>/mnt/c</c>, by default - whose room is the drive's,
 /// where the distribution's own root is its virtual disk's: measured, a terabyte where the drive had 477 GiB free.
 /// </remarks>
-public static partial class WindowsDriveMounts
+public static class WindowsDriveMounts
 {
     /// <summary>Where the system lists what is mounted, as <c>mount</c> reads it.</summary>
     public const string MountsFile = "/proc/mounts";
@@ -137,8 +138,8 @@ public static partial class WindowsDriveMounts
 
     /// <summary><paramref name="field"/> as it is, each three octal digits after a backslash read back into what they stand for.</summary>
     private static string Unescaped(string field)
-        => Escaped().Replace(field, match => ((char)Convert.ToInt32(match.Groups[1].Value, 8)).ToString());
+        => Escaped.Replace(field, match => ((char)Convert.ToInt32(match.Groups[1].Value, 8)).ToString());
 
-    [GeneratedRegex(@"\\([0-7]{3})", RegexOptions.CultureInvariant)]
-    private static partial Regex Escaped();
+    /// <summary>Three octal digits after a backslash, as the mount table escapes a character.</summary>
+    private static readonly Regex Escaped = LinearRegex.Compile(@"\\([0-7]{3})");
 }

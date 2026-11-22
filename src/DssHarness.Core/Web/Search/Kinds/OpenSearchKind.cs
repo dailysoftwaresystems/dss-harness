@@ -10,7 +10,9 @@ namespace DssHarness.Core.Web.Search.Kinds;
 /// <summary>
 /// <c>opensearch</c>: a site that describes its own search in an OpenSearch description, kept for the run once read, whose template
 /// for results is taken where it answers a feed - Atom first, then RSS - or JSON the source says how to read; one that
-/// offers only <c>text/html</c> is refused, for that is a results page for people.
+/// offers only <c>text/html</c> is refused, for that is a results page for people. A page past the first is asked by the
+/// template's <c>startPage</c>, else by its <c>startIndex</c> beside its <c>count</c>; a template that names neither answers
+/// one page.
 /// </summary>
 public sealed class OpenSearchKind : IWebSearchKind
 {
@@ -24,7 +26,7 @@ public sealed class OpenSearchKind : IWebSearchKind
     public string Kind => "opensearch";
 
     /// <inheritdoc/>
-    public int Version => 1;
+    public int Version => 2;
 
     /// <inheritdoc/>
     public IReadOnlyList<KeyDescription> Keys { get; } =
@@ -156,11 +158,22 @@ public sealed class OpenSearchKind : IWebSearchKind
     }
 
     /// <inheritdoc/>
-    public WebSearchRequest Request(WebSearchSource source, WebSearchFound found, string query, int limit)
+    public WebSearchRequest Request(WebSearchSource source, WebSearchFound found, string query, int page)
     {
+        ArgumentNullException.ThrowIfNull(source);
         ArgumentNullException.ThrowIfNull(found);
 
-        return WebSearchRequest.Http.Get(Filled(found["template"], query, limit, found["indexOffset"], found["pageOffset"]), found["type"]);
+        var template = found["template"];
+        var names = Parameters(template).Select(parameter => parameter.Name).ToList();
+
+        // A later page is asked by its number, else by the place of its first result beside how many a page holds, which
+        // its count says: a place asked without the count could part a page or ask one twice.
+        if (page > 1 && !names.Contains("startPage") && !(names.Contains("startIndex") && names.Contains("count")))
+        {
+            return new WebSearchRequest.OnePage("its description's template names no startPage, and no startIndex beside a count, so it answers one page, the first");
+        }
+
+        return WebSearchRequest.Http.Get(Filled(template, query, new WebSearchPage(page, source.PageSize), found["indexOffset"], found["pageOffset"]), found["type"]);
     }
 
     /// <inheritdoc/>
@@ -196,7 +209,7 @@ public sealed class OpenSearchKind : IWebSearchKind
 
         return names.Any(parameter => parameter.Name == "searchTerms")
             && names.All(parameter => parameter.Optional || Known(parameter.Name))
-            && WebAddresses.IsWeb(Filled(template, "q", 1, "1", "1"));
+            && WebAddresses.IsWeb(Filled(template, "q", new WebSearchPage(1, 1), "1", "1"));
     }
 
     /// <summary>An offset a template's element says - a whole number - else 1, the specification's own.</summary>
@@ -228,8 +241,11 @@ public sealed class OpenSearchKind : IWebSearchKind
         return parameters;
     }
 
-    /// <summary>The template filled: the query escaped, the count the limit, an offset where one is asked, and what it may leave out left out.</summary>
-    private static string Filled(string template, string query, int limit, string indexOffset, string pageOffset)
+    /// <summary>
+    /// The template filled: the query escaped, the count a page's size, the page's first result and its number counted
+    /// from the description's offsets, and what it may leave out left out.
+    /// </summary>
+    private static string Filled(string template, string query, WebSearchPage page, string indexOffset, string pageOffset)
     {
         var filled = new StringBuilder();
         var at = 0;
@@ -252,9 +268,9 @@ public sealed class OpenSearchKind : IWebSearchKind
             filled.Append(name switch
             {
                 "searchTerms" => Uri.EscapeDataString(query),
-                "count" => limit.ToString(CultureInfo.InvariantCulture),
-                "startIndex" => indexOffset,
-                "startPage" => pageOffset,
+                "count" => page.Size.ToString(CultureInfo.InvariantCulture),
+                "startIndex" => (long.Parse(indexOffset, CultureInfo.InvariantCulture) + page.Start).ToString(CultureInfo.InvariantCulture),
+                "startPage" => (long.Parse(pageOffset, CultureInfo.InvariantCulture) + page.Number - 1).ToString(CultureInfo.InvariantCulture),
                 "language" => "*",
                 "inputEncoding" or "outputEncoding" => "UTF-8",
                 _ => string.Empty,

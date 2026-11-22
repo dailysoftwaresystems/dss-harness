@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using DssHarness.Core.Repository;
 
 namespace DssHarness.Core.Orchestration;
@@ -22,6 +24,8 @@ namespace DssHarness.Core.Orchestration;
 /// agents/&lt;agent&gt;/sessions/&lt;id&gt;/   API clients only: one conversation with the provider, in the provider's own form
 /// agents/&lt;agent&gt;/steps/&lt;instance&gt;/   one step the agent runs, or that runs in or for its worktree, everything of the step in it
 /// steps/&lt;instance&gt;/          one step of the run that no agent owns, the create-agent that makes an agent included
+/// temp/&lt;launch&gt;/             every temporary directory a run's launch and its children keep: one directory a launch, held for the run's life
+/// artifacts/                  the run's artifacts, kept for the run's life and copied wherever asked; both go with the run's directory
 /// &lt;step&gt;/step.json            in either kind of step's directory: the step's own record
 /// &lt;step&gt;/output.json          the step's output, validated
 /// &lt;step&gt;/handoff.md           the handoff a stop cut the step off with, until its next attempt is given it
@@ -31,11 +35,12 @@ namespace DssHarness.Core.Orchestration;
 /// &lt;step&gt;/commit-message.txt   a commit step: the message it commits with
 /// &lt;step&gt;/pull-request-body.md  a pull-request step: the body it opens the pull request with, its file filled
 /// &lt;step&gt;/graph.jsonl          a reason step that has a codebase graph: one line for each call of the graph tool; nothing writes it yet
+/// &lt;step&gt;/graph-pages/         a reason step given the graph tool or read_result: the whole result of each graph ask of more than one page, and where each page of a call's whole result begins, which their later pages read
 /// &lt;step&gt;/working-set.json     a reason step that has a codebase graph: the nodes it edited, served, read and found, which seed the packs of the steps after it; nothing writes it yet
 /// &lt;step&gt;/targets/&lt;agent&gt;/     a refresh or a rebase of others: one target's fold.json
 /// &lt;step&gt;/web.jsonl            a step whose agent asks the web: each address and each search source asked, decided before it was asked and what it answered; written by every client whose step has the web
 /// &lt;step&gt;/denials.jsonl        a step whose agent's calls the engine decides, on every client: each call the policy refused, with its rule
-/// &lt;step&gt;/tool-results/&lt;id&gt;.txt   a step whose agent's calls the engine decides, on every client: an answer longer than the cap, whole
+/// &lt;step&gt;/tool-results/call-&lt;digest&gt;.txt   a step whose agent's calls the engine decides, on every client: an answer longer than a page, whole, named by the digest of the call's id, which read_result gives a page at a time
 /// &lt;step&gt;/children/&lt;id&gt;.json   in either kind of step's directory, on Linux and macOS: a session a contained child of the step leads while it runs, or the process group a phase of its legs - a set-up's up line apart - its keepAwake command or what carries a leg to a host leads while anything is in it
 /// flow.json                   a run's state, whole: the truth a resume goes on from
 /// workflow.json               a run's status, for a person and a client to read
@@ -204,6 +209,15 @@ public sealed record OrchestratorLayout(string Name, string Directory)
 
     /// <summary>The name of the file a reason step that has a codebase graph keeps a line for each call of the <c>graph</c> tool in, in its directory; nothing writes it yet.</summary>
     public const string StepGraphFileName = "graph.jsonl";
+
+    /// <summary>
+    /// The name of the directory a conversation keeps its kept answers in (<see cref="Pages.KeptAnswers{TKept}"/>) - a
+    /// reason step's, in its own directory, and a side-task's, in its records: one file an ask - the whole result of a graph
+    /// ask of more than one page, under the digest of the graph it was computed on, and where each page of a call's whole
+    /// result begins, under the digest of its file - so a later page, a resumed conversation and one that goes on with the
+    /// step's work read pages of that one result. The one spelling of the name.
+    /// </summary>
+    public const string StepPagesDirectoryName = "graph-pages";
 
     /// <summary>
     /// The name of the file a reason step that has a codebase graph keeps its working set in, in its directory: the nodes it
@@ -391,7 +405,11 @@ public sealed record OrchestratorLayout(string Name, string Directory)
     /// <param name="id">The conversation's id.</param>
     public string AgentSessionDirectory(string agent, string id) => SessionDirectoryIn(AgentSessionsDirectory(agent), id);
 
-    /// <summary>Where one conversation is kept among an agent's: its own directory in <paramref name="sessions"/>, by its id.</summary>
+    /// <summary>
+    /// Where one conversation is kept among an agent's: its own directory in <paramref name="sessions"/>, named by
+    /// <see cref="SessionDirectoryName"/> - the one owner of how a conversation's id names its directory, so the run that
+    /// keeps a conversation and the one that goes on with it find the same directory.
+    /// </summary>
     /// <param name="sessions">The agent's sessions directory (<see cref="AgentSessionsDirectory"/>).</param>
     /// <param name="id">The conversation's id: <see cref="IsSessionId"/>.</param>
     /// <exception cref="ArgumentException">The id is no conversation's id, and would name another directory.</exception>
@@ -400,17 +418,38 @@ public sealed record OrchestratorLayout(string Name, string Directory)
         ArgumentNullException.ThrowIfNull(sessions);
 
         return IsSessionId(id)
-            ? Path.Combine(sessions, id)
+            ? Path.Combine(sessions, SessionDirectoryName(id))
             : throw new ArgumentException($"'{id}' is no conversation's id: {SessionIdShape}.", nameof(id));
     }
 
-    /// <summary>What a conversation's id is, as a refusal says it.</summary>
-    public const string SessionIdShape = "letters, digits, '-' and '_', at most 64";
+    /// <summary>
+    /// The name of the directory a conversation is kept in: its id, where the id is no longer than a SHA-256 digest is
+    /// written - every directory an earlier release made is so found where it made it - and otherwise the id's SHA-256
+    /// digest, in lower-case hexadecimal. A provider's ids are its own and of any length, and a directory's name is held
+    /// to what the file system takes; named by its digest, an id of any length names a directory every file system takes,
+    /// one id always the same one.
+    /// </summary>
+    /// <param name="id">The conversation's id: <see cref="IsSessionId"/>.</param>
+    public static string SessionDirectoryName(string id)
+    {
+        ArgumentNullException.ThrowIfNull(id);
 
-    /// <summary>Whether <paramref name="id"/> is a conversation's id, which names its directory: the engine's own, and a handed one alike.</summary>
+        return id.Length <= SHA256.HashSizeInBytes * 2
+            ? id
+            : Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(id)));
+    }
+
+    /// <summary>What a conversation's id is, as a refusal says it.</summary>
+    public const string SessionIdShape = "letters, digits, '-' and '_'";
+
+    /// <summary>
+    /// Whether <paramref name="id"/> is a conversation's id - the engine's own, and a handed one alike: at least one
+    /// character, each a letter, a digit, <c>-</c> or <c>_</c>, as many as it has. Its directory is named by
+    /// <see cref="SessionDirectoryName"/>, so no length of the id is refused for the directory it names.
+    /// </summary>
     /// <param name="id">The id.</param>
     public static bool IsSessionId(string? id)
-        => id is { Length: > 0 and <= 64 } && id.All(character => char.IsAsciiLetterOrDigit(character) || character is '-' or '_');
+        => id is { Length: > 0 } && id.All(character => char.IsAsciiLetterOrDigit(character) || character is '-' or '_');
 
     /// <summary>
     /// The handoff of one step <paramref name="agent"/> ran, kept in the step's own directory: what its agent said when
@@ -445,6 +484,29 @@ public sealed record OrchestratorLayout(string Name, string Directory)
     /// <summary>A keeping of evidence named <paramref name="name"/>, relative to its agent's directory, as records and listings name it.</summary>
     /// <param name="name">The keeping's own name: the moment it was made.</param>
     public static string KeptEvidence(string name) => $"{EvidenceDirectoryName}/{name}";
+
+    /// <summary>
+    /// Where every temporary directory of the run's launches is kept (<see cref="HarnessLayout.OrchestratorTempDirectoryName"/>):
+    /// one directory for each launch - its children's temporary directory, and Claude Code's own process's beside it -
+    /// made with the launch and held for the run's life, so everything the run's children leave as temp is put away with
+    /// the run and taken away only with its directory. The one owner of the shape: a launch names its own directory
+    /// under it, and never spells the run's temp for itself.
+    /// </summary>
+    public string TempDirectory => Path.Combine(Directory, Repository.HarnessLayout.OrchestratorTempDirectoryName);
+
+    /// <summary>Where a launch of the run at <paramref name="runDirectory"/> keeps its temporary directory: the name the
+    /// launch is known by, in the run's temp.</summary>
+    /// <param name="runDirectory">The run's own directory.</param>
+    /// <param name="name">The name the launch's directory is known by in the run's temp.</param>
+    public static string LaunchTemp(string runDirectory, string name)
+        => Path.Combine(Path.Combine(runDirectory, Repository.HarnessLayout.OrchestratorTempDirectoryName), name);
+
+    /// <summary>
+    /// Where the run's artifacts are kept (<see cref="HarnessLayout.OrchestratorArtifactsDirectoryName"/>), for the run's
+    /// life: made with the run, read and copied wherever they are asked for while it runs, and taken away with the run's
+    /// directory - which is the whole of the mechanism, for what a run keeps as artifacts is in its directory until it goes.
+    /// </summary>
+    public string ArtifactsDirectory => Path.Combine(Directory, Repository.HarnessLayout.OrchestratorArtifactsDirectoryName);
 
     /// <summary>
     /// The run's state in one file: every step instance and what runs next. Shaped for a resume; written after the

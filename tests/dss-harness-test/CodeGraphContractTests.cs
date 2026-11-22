@@ -58,10 +58,10 @@ public sealed class CodeGraphContractTests
         var calls = 0;
 
         Red(() => CodeGraphContract.Deterministic(new Toy { Answer = input => Toy.Read(input) with { Generated = (++calls % 2).ToString(System.Globalization.CultureInfo.InvariantCulture) } }, Fixtures));
-        Red(() => CodeGraphContract.Deterministic(new Toy { Answer = input => new([new("toy:A", CodeNodeKinds.Type, "A", "A", 1, 1, input.Text.Split('\n')[0])]) }, [A with { Text = "class A\r\ncall B\r\n" }]));
+        Red(() => CodeGraphContract.Deterministic(new Toy { Answer = input => new([new("toy:A", CodeNodeKinds.Type, "A", "A", 1, 1, input.Text.Slice(0, input.Text.IndexOf('\n') is var end and >= 0 ? end : input.Text.Length))]) }, [A with { Text = "class A\r\ncall B\r\n" }]));
 
         // Fixtures written with line feeds, read otherwise only once their endings are carriage return and line feed.
-        Red(() => CodeGraphContract.Deterministic(new Toy { Answer = input => Toy.Read(input) with { Generated = input.Text.Contains('\r', StringComparison.Ordinal) ? "crlf" : null } }, Fixtures));
+        Red(() => CodeGraphContract.Deterministic(new Toy { Answer = input => Toy.Read(input) with { Generated = input.Text.Contains('\r') ? "crlf" : null } }, Fixtures));
     }
 
     /// <summary>An answer that state shared between calls spoils when many threads extract at once fails.</summary>
@@ -101,7 +101,7 @@ public sealed class CodeGraphContractTests
     public void Tolerant_Fails_OnAnExceptionOrAnUnsoundExtract_OfACutOrAnEmptyFile()
     {
         Assert.IsType<InvalidOperationException>(Record.Exception(() => CodeGraphContract.Tolerant(new Toy { Answer = input => input.Text.Length == 0 ? throw new InvalidOperationException("empty") : Toy.Read(input) }, Fixtures)));
-        Red(() => CodeGraphContract.Tolerant(new Toy { Answer = input => input.Text.EndsWith('\n') ? Toy.Read(input) : new([new("toy:X", CodeNodeKinds.Type, "X", "X", 1, 2, "x")]) }, Fixtures));
+        Red(() => CodeGraphContract.Tolerant(new Toy { Answer = input => input.Text.EndsWith("\n") ? Toy.Read(input) : new([new("toy:X", CodeNodeKinds.Type, "X", "X", 1, 2, "x")]) }, Fixtures));
     }
 
     /// <summary>
@@ -127,15 +127,15 @@ public sealed class CodeGraphContractTests
 
         Red(() => CodeGraphContract.Claimed(firstOnly, [B], Registry(firstOnly), new Dictionary<string, IReadOnlyList<CodeGraphFixture>>()), "then otherwise of the same text");
 
-        var throwing = new Toy { Claims = new([], [new(".toy", probe => probe.Length == 0 ? throw new InvalidOperationException("no text") : probe.Contains("class", StringComparison.Ordinal))]) };
+        var throwing = new Toy { Claims = new([], [new(".toy", probe => probe.Length == 0 ? throw new InvalidOperationException("no text") : probe.Contains("class"))]) };
 
         Red(() => CodeGraphContract.Claimed(throwing, [B], Registry(throwing), new Dictionary<string, IReadOnlyList<CodeGraphFixture>>()), "threw on a text: no text");
 
         var dotted = new Toy { Language = "dotted", Claims = new([new(".toy")], []) };
         CodeGraphContract.Claimed(toy, Fixtures, Registry(toy, dotted), new Dictionary<string, IReadOnlyList<CodeGraphFixture>> { ["dotted"] = [new(".toy", "class D\n")] });
 
-        var mine = new Toy { Claims = new([], [new(".toy", probe => probe.Contains("class", StringComparison.Ordinal))]) };
-        var theirs = new Toy { Language = "other", Claims = new([], [new(".toy", probe => probe.Contains("other", StringComparison.Ordinal))]) };
+        var mine = new Toy { Claims = new([], [new(".toy", probe => probe.Contains("class"))]) };
+        var theirs = new Toy { Language = "other", Claims = new([], [new(".toy", probe => probe.Contains("other"))]) };
         var registry = Registry(mine, theirs);
 
         CodeGraphContract.Claimed(mine, Fixtures, registry, new Dictionary<string, IReadOnlyList<CodeGraphFixture>> { ["other"] = [new("c.toy", "other")] });

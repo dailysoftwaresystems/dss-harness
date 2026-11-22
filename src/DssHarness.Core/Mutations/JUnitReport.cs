@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Xml;
 using System.Xml.Linq;
 
@@ -27,10 +28,21 @@ public sealed record JUnitCase(string Id, bool Ran, bool Red);
 /// </remarks>
 public sealed class JUnitReport
 {
-    private JUnitReport(IReadOnlyList<JUnitCase> cases) => Cases = cases;
+    private JUnitReport(IReadOnlyList<JUnitCase> cases, TimeSpan? caseTime)
+    {
+        Cases = cases;
+        CaseTime = caseTime;
+    }
 
     /// <summary>Every case, in the order the report names them.</summary>
     public IReadOnlyList<JUnitCase> Cases { get; }
+
+    /// <summary>
+    /// How long the cases took by the runner's own clock: the sum of every case's <c>time</c>, in seconds as the report
+    /// writes it, or <see langword="null"/> where no case says - what the run took beyond it is the program's start and
+    /// exit.
+    /// </summary>
+    public TimeSpan? CaseTime { get; }
 
     /// <summary>How many cases ran, skipped ones included.</summary>
     public int Ran => Cases.Count(@case => @case.Ran);
@@ -86,13 +98,21 @@ public sealed class JUnitReport
             return null;
         }
 
+        var cases = root.DescendantsAndSelf("testcase").ToList();
+        var timed = cases
+            .Select(@case => double.TryParse((string?)@case.Attribute("time"), NumberStyles.Float, CultureInfo.InvariantCulture, out var seconds)
+                && double.IsFinite(seconds) && seconds >= 0 ? seconds : (double?)null)
+            .OfType<double>()
+            .ToList();
+
         return new JUnitReport(
-        [
-            .. root.DescendantsAndSelf("testcase").Select(@case => new JUnitCase(
-                Id(@case),
-                !string.Equals((string?)@case.Attribute("status"), "notrun", StringComparison.Ordinal),
-                @case.Elements().Any(child => child.Name.LocalName is "failure" or "error"))),
-        ]);
+            [
+                .. cases.Select(@case => new JUnitCase(
+                    Id(@case),
+                    !string.Equals((string?)@case.Attribute("status"), "notrun", StringComparison.Ordinal),
+                    @case.Elements().Any(child => child.Name.LocalName is "failure" or "error"))),
+            ],
+            timed.Count == 0 ? null : TimeSpan.FromSeconds(Math.Min(timed.Sum(), TimeSpan.MaxValue.TotalSeconds)));
     }
 
     /// <summary>

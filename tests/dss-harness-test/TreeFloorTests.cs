@@ -100,6 +100,7 @@ public sealed class TreeFloorTests
             ".harness-config/host-copies",
             ".harness-config/mutation-record",
             ".harness-config/deps",
+            ".harness-config/sync-pieces",
             ".harness-config/lock.json",
             ".harness-config/synced-copy.json",
         ],

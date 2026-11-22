@@ -83,24 +83,39 @@ public readonly record struct FlowValue
     /// refuses the read.
     /// </summary>
     /// <param name="written">The value as the expression wrote it, named in the refusal.</param>
-    public bool AsBoolean(string written)
-        => _value is bool truth ? truth : throw new UnresolvedReadException($"'{written}' is {InWords()}, and nothing is read as true or as false but true and false");
+    public bool AsBoolean(string written) => AsBoolean(() => written);
+
+    /// <summary>
+    /// <inheritdoc cref="AsBoolean(string)"/> The value as written is made only where the read is refused: a part of an
+    /// expression is written out for the refusal alone, never for every read that goes through.
+    /// </summary>
+    /// <param name="written">Writes the value as the expression wrote it, for the refusal.</param>
+    public bool AsBoolean(Func<string> written)
+        => _value is bool truth ? truth : throw new UnresolvedReadException($"'{written()}' is {InWords()}, and nothing is read as true or as false but true and false");
 
     /// <summary>
     /// This value as a list, where it is one - a copy, so what changes it changes nothing the run holds; anything else -
     /// Missing and null among them - refuses the read, for <c>any(...)</c> looks into a list.
     /// </summary>
     /// <param name="written">The value as the expression wrote it, named in the refusal.</param>
-    public JsonArray AsList(string written)
-        => _value is JsonArray list ? (JsonArray)list.DeepClone() : throw new UnresolvedReadException($"'{written}' is {InWords()}, and any looks into a list");
+    public JsonArray AsList(string written) => AsList(() => written);
+
+    /// <summary><inheritdoc cref="AsList(string)"/> The value as written is made only where the read is refused.</summary>
+    /// <param name="written">Writes the value as the expression wrote it, for the refusal.</param>
+    public JsonArray AsList(Func<string> written)
+        => _value is JsonArray list ? (JsonArray)list.DeepClone() : throw new UnresolvedReadException($"'{written()}' is {InWords()}, and any looks into a list");
 
     /// <summary>
     /// This value as a scalar, where it is one or is <see langword="null"/>: a comparison compares two scalars, or null,
     /// and a value that is neither - Missing, a list, an object - refuses the read.
     /// </summary>
     /// <param name="written">The value as the expression wrote it, named in the refusal.</param>
-    public object? AsScalar(string written)
-        => IsScalar ? _value : throw new UnresolvedReadException($"'{written}' is {InWords()}, and a comparison compares two scalars, or null");
+    public object? AsScalar(string written) => AsScalar(() => written);
+
+    /// <summary><inheritdoc cref="AsScalar(string)"/> The value as written is made only where the read is refused.</summary>
+    /// <param name="written">Writes the value as the expression wrote it, for the refusal.</param>
+    public object? AsScalar(Func<string> written)
+        => IsScalar ? _value : throw new UnresolvedReadException($"'{written()}' is {InWords()}, and a comparison compares two scalars, or null");
 
     /// <summary>The value under <paramref name="key"/>, where this is an object that holds it; Missing otherwise.</summary>
     /// <param name="key">A member's name.</param>

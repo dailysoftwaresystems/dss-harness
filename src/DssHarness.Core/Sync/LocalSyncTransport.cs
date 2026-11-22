@@ -4,6 +4,8 @@ using System.Text.Json.Serialization;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Git;
 using DssHarness.Core.Hosts;
+using DssHarness.Core.Json;
+using DssHarness.Core.Output;
 using DssHarness.Core.Platform;
 using DssHarness.Core.Processes;
 using DssHarness.Core.Repository;
@@ -42,6 +44,20 @@ public sealed class LocalSyncTransport(
 
     /// <inheritdoc/>
     public HostId Host { get; } = HostId.Local;
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// As large as a batch of files may be (<see cref="SyncServe.LargestBatch"/>): what this machine holds of a file at once
+    /// as it reads or writes one a piece at a time, and what a host serving its own copy is asked a piece at a time of.
+    /// </remarks>
+    public int PieceBytes => (int)SyncServe.LargestBatch;
+
+    /// <summary>
+    /// Where the pieces of a file on its way into a copy are kept until the whole of it has arrived, relative to the copy's
+    /// root: in its own harness directory, which no sync carries or deletes (<see cref="HarnessDirectorySync.Withholds"/>),
+    /// a directory for each file, named by the hash of its path.
+    /// </summary>
+    public const string PiecesDirectory = HarnessLayout.SyncPiecesDirectoryRelative;
 
     /// <inheritdoc/>
     public Task<bool> RootExistsAsync(string root, CancellationToken cancellationToken = default)
@@ -266,7 +282,7 @@ public sealed class LocalSyncTransport(
 
         var policy = new PathSet(withheld);
 
-        return _manifestBuilder.BuildAsync(Home(root), policy.Contains, cancellationToken);
+        return _manifestBuilder.BuildAsync(Home(root), policy.Contains, cancellationToken: cancellationToken);
     }
 
     /// <inheritdoc/>
@@ -323,6 +339,253 @@ public sealed class LocalSyncTransport(
         {
             cancellationToken.ThrowIfCancellationRequested();
             await WriteFileAsync(root, file.Path, file.Contents, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// Each piece is a file of its own in the file's directory of pieces, named by where it ends, written whole and at once as
+    /// every write into a copy is (<see cref="HeldDirectory.Write"/>): never through a link, and never part written, so a
+    /// piece is all there or not there at all, however its writing stopped. A piece follows what arrived where the one
+    /// before it ends where it starts, which one look at that name tells, however many pieces arrived before.
+    /// </remarks>
+    public Task WritePieceAsync(string root, string relativePath, long offset, ReadOnlyMemory<byte> piece, CancellationToken cancellationToken = default)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(offset);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        Resolve(root, relativePath);
+
+        // Named by where it ends, a piece of nothing would take the name of the one before it, and stand for it.
+        if (piece.IsEmpty)
+        {
+            throw new HarnessException(
+                HarnessExit.UsageError,
+                $"A piece of '{relativePath}' sent to '{root}' holds nothing, and every piece of a file holds some of it. The two ends are different builds.");
+        }
+
+        try
+        {
+            // The root made first where it is not there, as every write into a copy makes it (UnfollowedFiles): a pull's
+            // landing, before its first file, is a root that is not there yet.
+            _fileSystem.CreateDirectory(Home(root));
+
+            using var pieces = _fileSystem.Hold(Home(root), PiecesOf(root, relativePath), make: true);
+
+            // The first begins the file again: whatever an earlier carrying of it left aside is no part of this one.
+            if (offset == 0)
+            {
+                pieces.Empty();
+            }
+            else if (pieces.KindOf(PieceName(offset)) != PathKind.File)
+            {
+                // Refused rather than kept where it landed: a file with a piece lost, or one out of its turn, is no file
+                // anybody sent.
+                throw new HarnessException(
+                    HarnessExit.CommandFailed,
+                    $"A piece of '{relativePath}' sent to '{root}' did not follow what arrived before it: it starts at byte "
+                    + $"{offset.ToString(CultureInfo.InvariantCulture)}, and {ReportText.Counted(Arrived(root, relativePath, pieces).Bytes, "byte")} "
+                    + "had arrived. Nothing of it was kept.");
+            }
+
+            pieces.Write(PieceName(offset + piece.Length), stream => stream.Write(piece.Span));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            throw new HarnessException(
+                HarnessExit.CommandFailed,
+                $"A piece of '{relativePath}' could not be kept in '{root}' until the rest of it arrives: {ex.Message.TrimEnd('.')}.",
+                ex);
+        }
+
+        return Task.CompletedTask;
+    }
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// Written as every file of a copy is, whole and at once (<see cref="UnfollowedFiles"/>): the pieces copied in order into
+    /// a file made new beside it, which is read back and hashed before it is renamed over what was there, so the file at its
+    /// path is either what was sent or what it was before - never part of either. The pieces go once it is placed; where it
+    /// is not, the carrying that sent them removes them (<see cref="DropPiecesAsync"/>).
+    /// </remarks>
+    public Task PlacePiecesAsync(string root, string relativePath, FileContent whole, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var path = Resolve(root, relativePath);
+
+        try
+        {
+            HeldDirectory? pieces;
+
+            try
+            {
+                pieces = _fileSystem.Hold(Home(root), PiecesOf(root, relativePath), make: false);
+            }
+            catch (DirectoryNotFoundException)
+            {
+                pieces = null;
+            }
+
+            using (pieces)
+            {
+                var arrived = pieces is null ? (Names: [], Bytes: 0L) : Arrived(root, relativePath, pieces);
+
+                if (pieces is null || arrived.Bytes != whole.Length)
+                {
+                    throw new HarnessException(
+                        HarnessExit.CommandFailed,
+                        $"'{relativePath}' did not arrive whole in '{root}': {ReportText.Counted(arrived.Bytes, "byte")} of its "
+                        + $"{whole.Length.ToString(CultureInfo.InvariantCulture)} did. Nothing was put in its place.");
+                }
+
+                UnfollowedFiles.Written(
+                    _fileSystem,
+                    Home(root),
+                    path,
+                    write: stream =>
+                    {
+                        foreach (var name in arrived.Names)
+                        {
+                            using var read = pieces.OpenRead(name);
+                            read.CopyTo(stream);
+                        }
+                    },
+                    mode: null,
+                    check: back =>
+                    {
+                        var landed = new FileContent(back.Length, FileContentHash.Of(sink => back.CopyTo(sink)));
+
+                        if (landed != whole)
+                        {
+                            throw new HarnessException(
+                                HarnessExit.CommandFailed,
+                                $"'{relativePath}' did not arrive in '{root}' as it was read: it was read as {whole.Content}, "
+                                + $"{ReportText.Counted(whole.Length, "byte")}, and its pieces hold {landed.Content}, "
+                                + $"{ReportText.Counted(landed.Length, "byte")}. Nothing was put in its place.");
+                        }
+                    });
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // Named, with the likeliest cause offered as a possibility, as a whole file's write is (WriteFileAsync).
+            throw new HarnessException(
+                HarnessExit.CommandFailed,
+                $"'{relativePath}' could not be put in place in '{root}' from its pieces: {ex.Message.TrimEnd('.')}. If something "
+                + "along that path is there as the other kind of thing - a file where this tree has a directory, or a directory "
+                + "where it has a file - remove it there and sync again.",
+                ex);
+        }
+
+        try
+        {
+            RemovePieces(root, relativePath);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            throw new HarnessException(
+                HarnessExit.CommandFailed,
+                $"'{relativePath}' was put in place in '{root}', and the pieces it was made from could not be removed: {ex.Message.TrimEnd('.')}.",
+                ex);
+        }
+
+        return Task.CompletedTask;
+    }
+
+    /// <inheritdoc/>
+    public Task DropPiecesAsync(string root, string relativePath, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        Resolve(root, relativePath);
+
+        try
+        {
+            RemovePieces(root, relativePath);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            throw new HarnessException(
+                HarnessExit.CommandFailed,
+                $"The pieces of '{relativePath}' kept in '{root}' could not be removed: {ex.Message.TrimEnd('.')}.",
+                ex);
+        }
+
+        return Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// The directory the pieces of <paramref name="relativePath"/> on its way into the copy at <paramref name="root"/> are
+    /// kept in: named by the hash of the path as a sync spells it, so every path has a name of one length and any spelling.
+    /// </summary>
+    private static string PiecesOf(string root, string relativePath)
+        => Path.Combine(
+            Home(root),
+            PiecesDirectory.Replace('/', Path.DirectorySeparatorChar),
+            FileContentHash.Of(System.Text.Encoding.UTF8.GetBytes(relativePath.Replace('\\', '/'))));
+
+    /// <summary>A piece's name: where it ends, in digits enough for any length, so the pieces sort in the order they follow.</summary>
+    private static string PieceName(long end) => end.ToString("D19", CultureInfo.InvariantCulture);
+
+    /// <summary>
+    /// The pieces of <paramref name="relativePath"/> kept in <paramref name="pieces"/>, in the order they follow, and how many
+    /// bytes of the file they hold from its start: each must hold exactly the bytes between the end of the one before it and
+    /// its own, or they are no file sent.
+    /// </summary>
+    /// <exception cref="HarnessException">One is named as no piece is, or does not hold what its name says.</exception>
+    private static (IReadOnlyList<string> Names, long Bytes) Arrived(string root, string relativePath, HeldDirectory pieces)
+    {
+        var names = pieces.Entries().Select(entry => entry.Name).Order(StringComparer.Ordinal).ToList();
+        var bytes = 0L;
+
+        foreach (var name in names)
+        {
+            using var read = pieces.OpenRead(name);
+
+            if (!long.TryParse(name, NumberStyles.None, CultureInfo.InvariantCulture, out var end) || end <= bytes || read.Length != end - bytes)
+            {
+                throw new HarnessException(
+                    HarnessExit.CommandFailed,
+                    $"What is kept of '{relativePath}' in '{root}' until the rest of it arrives is no file sent: '{name}' does not "
+                    + $"follow the {ReportText.Counted(bytes, "byte")} before it. Send it again from its start.");
+            }
+
+            bytes = end;
+        }
+
+        return (names, bytes);
+    }
+
+    /// <summary>
+    /// Removes the pieces of <paramref name="relativePath"/> kept for the copy at <paramref name="root"/>, and the directories
+    /// they are kept in where nothing else is left in them - the copy's harness directory among them, which a plain
+    /// directory synced holds only for this; nothing where none are kept.
+    /// </summary>
+    private void RemovePieces(string root, string relativePath)
+    {
+        var home = Home(root);
+        var kept = PiecesOf(root, relativePath);
+        var all = Path.GetDirectoryName(kept)!;
+
+        UnfollowedFiles.DeleteDirectory(_fileSystem, home, kept);
+
+        if (RemovedIfEmpty(all))
+        {
+            RemovedIfEmpty(Path.GetDirectoryName(all)!);
+        }
+
+        // Whether nothing is left at the directory: it held nothing and was removed, or was not there.
+        bool RemovedIfEmpty(string directory)
+        {
+            if (!_fileSystem.DirectoryExists(directory))
+            {
+                return true;
+            }
+
+            using var above = _fileSystem.Hold(home, Path.GetDirectoryName(directory)!, make: false);
+
+            return above.RemoveIfEmpty(Path.GetFileName(directory));
         }
     }
 
@@ -1062,7 +1325,8 @@ public sealed class LocalSyncTransport(
 
         return Task.FromResult<IReadOnlyList<EmptiedDirectory>>(answered);
 
-        // The first names a directory still holds, as an answer for it gives them.
+        // Every name a directory still holds, in order, as an answer for it gives them: the warning that says what kept it
+        // names those that fit its line, and says where the rest are.
         IReadOnlyList<string> HeldNames(string full)
             => [.. _fileSystem
                 .EnumerateFiles(full, recursive: false)
@@ -1070,15 +1334,8 @@ public sealed class LocalSyncTransport(
                 .Select(Path.GetFileName)
                 .OfType<string>()
                 .Where(name => name.Length > 0)
-                .Order(StringComparer.Ordinal)
-                .Take(HeldNamesReported)];
+                .Order(StringComparer.Ordinal)];
     }
-
-    /// <summary>
-    /// How many of a surviving directory's names are reported. Enough to recognise what kept it
-    /// without printing somebody's whole cache.
-    /// </summary>
-    private const int HeldNamesReported = 5;
 
     /// <inheritdoc/>
     /// <exception cref="HarnessException">No file is at the path: nothing, a directory, or nothing along it.</exception>
@@ -1090,27 +1347,33 @@ public sealed class LocalSyncTransport(
     /// configuration would: the same read serves a sync's own plan and a carry, and a file removed since
     /// the plan was made stops that transfer part way, for the legs that needed it alone.
     /// </remarks>
-    public Task<byte[]> ReadFileAsync(
+    public Task<SyncFilePiece> ReadFileAsync(
         string root,
         string relativePath,
+        long offset,
+        int count,
         CancellationToken cancellationToken = default)
-        => ReadAsync(root, relativePath, hidden: null, cancellationToken);
+        => ReadAsync(root, relativePath, offset, count, hidden: null, cancellationToken);
 
     /// <inheritdoc/>
     /// <remarks>Read as <see cref="ReadFileAsync"/> reads, its failures said alike, but for the links along the path.</remarks>
-    public Task<byte[]> PullFileAsync(string root, string relativePath, IReadOnlyList<IsolatedPath> hidden, CancellationToken cancellationToken = default)
+    public Task<SyncFilePiece> PullFileAsync(string root, string relativePath, long offset, int count, IReadOnlyList<IsolatedPath> hidden, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(hidden);
 
-        return ReadAsync(root, relativePath, hidden, cancellationToken);
+        return ReadAsync(root, relativePath, offset, count, hidden, cancellationToken);
     }
 
     /// <summary>
-    /// Reads one file out of the copy: through no link the copy holds where <paramref name="hidden"/> is null, else
-    /// following a link along its path but never into a place it names, by where the file opened stands.
+    /// Reads one piece of a file out of the copy: through no link the copy holds where <paramref name="hidden"/> is null, else
+    /// following a link along its path but never into a place it names, by where the file opened stands. A piece that starts
+    /// the file says what all of it holds: hashed from that one open, its first bytes as they were read and the rest after.
     /// </summary>
-    private async Task<byte[]> ReadAsync(string root, string relativePath, IReadOnlyList<IsolatedPath>? hidden, CancellationToken cancellationToken)
+    private async Task<SyncFilePiece> ReadAsync(string root, string relativePath, long offset, int count, IReadOnlyList<IsolatedPath>? hidden, CancellationToken cancellationToken)
     {
+        ArgumentOutOfRangeException.ThrowIfNegative(offset);
+        ArgumentOutOfRangeException.ThrowIfNegative(count);
+
         var path = Resolve(root, relativePath);
 
         if (_fileSystem.DirectoryExists(path))
@@ -1129,10 +1392,27 @@ public sealed class LocalSyncTransport(
 
             await using (read.ConfigureAwait(false))
             {
-                using var bytes = new MemoryStream();
-                await read.CopyToAsync(bytes, cancellationToken).ConfigureAwait(false);
+                var length = read.Length;
+                var bytes = new byte[(int)Math.Clamp(length - offset, 0, count)];
 
-                return bytes.ToArray();
+                if (offset > 0)
+                {
+                    read.Seek(offset, SeekOrigin.Begin);
+                }
+
+                await read.ReadExactlyAsync(bytes, cancellationToken).ConfigureAwait(false);
+
+                // Where the piece is the whole file, its hash is the piece's; where it only starts it, the rest is read on
+                // from the same open, never held - so the hash is of the very file the piece was read of.
+                var content = offset > 0 ? null
+                    : bytes.LongLength == length ? FileContentHash.Of(bytes)
+                    : FileContentHash.Of(sink =>
+                    {
+                        sink.Write(bytes);
+                        read.CopyTo(sink);
+                    });
+
+                return new SyncFilePiece(length, content, bytes);
             }
         }
         catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
@@ -1227,27 +1507,15 @@ public sealed class LocalSyncTransport(
             throw new HarnessException(HarnessExit.CommandFailed, Hidden(named, opened, root, place));
         }
 
-        var most = SyncServe.MostFilesPulledFromADirectory;
-
-        // One more than may cross, and no further: a directory holding a build tree is refused without every file of it
-        // being listed.
-        var walked = _fileSystem.EnumerateWrittenFiles(directory).Take(most + 1).ToList();
-
-        cancellationToken.ThrowIfCancellationRequested();
-
-        if (walked.Count > most)
-        {
-            throw new HarnessException(
-                HarnessExit.CommandFailed,
-                $"'{named}' holds more than {most.ToString(CultureInfo.InvariantCulture)} files in '{root}', the most a pull brings back from one "
-                + "directory, each in a request of its own: name a directory that holds fewer, or the files, or keep them as one archive.");
-        }
-
+        // Every file below it, however many and however much they hold together: what a pull brings back is what was
+        // named, and the side it comes to weighs the room it takes there (SyncService.PullAsync).
         var files = new List<SyncListedFile>();
         var links = new List<string>();
 
-        foreach (var file in walked)
+        foreach (var file in _fileSystem.EnumerateWrittenFiles(directory))
         {
+            cancellationToken.ThrowIfCancellationRequested();
+
             var relative = ManifestBuilder.Relative(expanded, file.Path);
 
             if (_fileSystem.IsLink(file.Path))
@@ -1262,20 +1530,7 @@ public sealed class LocalSyncTransport(
 
         links.AddRange(_fileSystem.EnumerateDirectoryLinks(directory).Select(link => ManifestBuilder.Relative(expanded, link) + "/"));
 
-        if (files.FirstOrDefault(file => file.Length > SyncServe.LargestFile) is { } large)
-        {
-            throw new HarnessException(HarnessExit.CommandFailed, SyncServe.TooLargeToCarry(large.Length, large.Path, "this host"));
-        }
-
-        if (files.Sum(file => file.Length) is var bytes && bytes > SyncServe.LargestDirectoryPulled)
-        {
-            throw new HarnessException(
-                HarnessExit.CommandFailed,
-                $"'{named}' holds {bytes.ToString(CultureInfo.InvariantCulture)} bytes in '{root}', past the "
-                + $"{SyncServe.LargestDirectoryPulled.ToString(CultureInfo.InvariantCulture)} a pull brings back from one directory: name a directory "
-                + "that holds less, or the files, or keep the smaller thing a later step actually reads.");
-        }
-
+        // However large each is: one larger than a piece crosses a piece at a time (SyncPieces).
         return new SyncDirectoryListing([.. files.OrderBy(file => file.Path, StringComparer.Ordinal)])
         {
             Links = [.. links.Order(StringComparer.Ordinal)],
@@ -1358,6 +1613,9 @@ public sealed class LocalSyncTransport(
         // it is wherever this tool reads JSON that decides something. This file decides whose
         // directory a sync is about to delete into, so it is the last one that should guess.
         UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
+
+        // At any depth (JsonDepth): a marker is refused for what its shape cannot hold, never for how deep it nests.
+        MaxDepth = JsonDepth.Unbounded,
     };
 
     /// <summary>What the marker file records, so a reader can tell where a copy came from.</summary>

@@ -85,20 +85,20 @@ public sealed class ArmVerdictRecordTests : IDisposable
     }
 
     /// <summary>
-    /// A verdict on another key is kept beside the arm's others, up to eight, the oldest by its place in the file going
-    /// first - never by when it was reached, which a host whose clock steps may say out of order. A verdict with no key
-    /// replaces the arm's entry with no key, as one on a key replaces that key's.
+    /// A verdict on another key is kept beside the arm's others, in their order in the log - never by when it was reached,
+    /// which a host whose clock steps may say out of order. A verdict with no key replaces the arm's entry with no key, as
+    /// one on a key replaces that key's.
     /// </summary>
     [Fact]
-    public void AVerdictOnAnotherKey_IsKeptBesideIt_UpToTheBound_TheOldestGoingFirst()
+    public void AVerdictOnAnotherKey_IsKeptBesideIt_InTheLogsOrder()
     {
-        for (var index = 1; index <= ArmVerdictRecord.KeptPerArm + 1; index++)
+        for (var index = 1; index <= 9; index++)
         {
             // Each reached earlier than the one before, by the clock.
             Assert.Null(Record.Merge(Leg, "charge", Verdict("passed", $"k{index}", Noon.AddHours(-index)), []));
         }
 
-        Assert.Equal([.. Enumerable.Range(2, ArmVerdictRecord.KeptPerArm).Select(index => ("passed", $"k{index}"))], Entries("charge"));
+        Assert.Equal([.. Enumerable.Range(1, 9).Select(index => ("passed", $"k{index}"))], Entries("charge"));
 
         Assert.Null(Record.Merge(Leg, "floor", Verdict("failed", null, Noon), []));
         Assert.Null(Record.Merge(Leg, "floor", Verdict("passed", "k1", Noon), []));
@@ -106,6 +106,31 @@ public sealed class ArmVerdictRecordTests : IDisposable
 
         Assert.Equal([("passed", "k1"), ("poisoned", null)], Entries("floor"));
         Assert.Equal("a file it reads is gone", Record.Read(Leg).Arms["floor"][^1].KeyUnread);
+    }
+
+    /// <summary>
+    /// Every verdict entry is kept: a year of daily sweeps, each judging an arm on a key of its own, leaves all 365 of its
+    /// entries in the record, oldest first, each a line of the log - none dropped to a count of the code's own, and none of
+    /// them rewritten to add the next. Red with the eight kept per arm put back.
+    /// </summary>
+    [Fact]
+    public void AYearOfVerdicts_IsKept()
+    {
+        var day = new DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero);
+
+        for (var index = 0; index < 365; index++)
+        {
+            Assert.Null(Record.Merge(Leg, "charge", Verdict(index % 7 == 0 ? "violated" : "passed", $"day{index}", day.AddDays(index)), []));
+        }
+
+        var kept = Record.Read(Leg).Arms["charge"];
+
+        Assert.Equal(365, kept.Count);
+        Assert.Equal([.. Enumerable.Range(0, 365).Select(index => $"day{index}")], kept.Select(entry => entry.Key));
+        Assert.Equal([.. Enumerable.Range(0, 365).Select(index => day.AddDays(index))], kept.Select(entry => entry.At));
+
+        // The header and one line to each verdict: every change appended its own, and nothing else was written.
+        Assert.Equal(366, File.ReadAllLines(Record.FileOf(Leg)).Length);
     }
 
     /// <summary>
@@ -173,10 +198,10 @@ public sealed class ArmVerdictRecordTests : IDisposable
 
     /// <summary>
     /// A table is written with the first entry that names it - never one no entry names - indexed beside the entries by the
-    /// digests of its parts, and removed with the last entry naming it, from the index and from the disk.
+    /// digests of its parts, and kept: written once under its digest, it stays though no live entry names it any more.
     /// </summary>
     [Fact]
-    public void ATable_IsWrittenWithTheFirstEntryThatNamesIt_AndRemovedWithTheLast()
+    public void ATable_IsWrittenWithTheFirstEntryThatNamesIt_AndKept()
     {
         var shared = Table("fixture", "src/fixture.cpp");
         var other = Table("fixture_tests", "src/tests.cpp");
@@ -196,9 +221,11 @@ public sealed class ArmVerdictRecordTests : IDisposable
 
         Assert.Null(Record.Merge(Leg, "floor", Verdict("passed", "k1", Noon, other), [other]));
 
-        Assert.False(File.Exists(Record.TableFile(Leg, shared.Digest())));
+        // A table is written once and kept: the entries that once named it are gone, and the table stays for the record's
+        // life - its history's to read, not the newest entry's alone.
+        Assert.True(File.Exists(Record.TableFile(Leg, shared.Digest())));
         Assert.True(File.Exists(Record.TableFile(Leg, other.Digest())));
-        Assert.Equal([other.Digest()], Record.Read(Leg).Tables.Keys);
+        Assert.Equal([shared.Digest(), other.Digest()], Record.Read(Leg).Tables.Keys);
         var index = other.Index();
 
         Assert.Equal(index, Record.Read(Leg).Tables[other.Digest()] with { Fetched = index.Fetched });
@@ -240,17 +267,20 @@ public sealed class ArmVerdictRecordTests : IDisposable
     }
 
     /// <summary>
-    /// A record that cannot be read - one that is not JSON, one holding a member this build does not know - or one a newer
-    /// build wrote is never written: a sweep handing it verdicts says so once, as a warning naming the file and what to do,
-    /// and once more on the leg's line, and records none.
+    /// A record that cannot be read - a log line that is not JSON, one holding a member this build does not know, the
+    /// retired whole document so held where no log is there yet - or a log a newer build wrote is never written: a sweep
+    /// handing it verdicts says so once, as a warning naming the file it read and what to do, and once more on the leg's
+    /// line, and records none.
     /// </summary>
     [Theory]
-    [InlineData("{ \"format\": 1, \"leg\": \"native\", \"arms\":", null)]
-    [InlineData("{ \"format\": 1, \"leg\": \"native\", \"arms\": {}, \"tables\": {}, \"shards\": [] }", null)]
-    [InlineData("{ \"format\": 2, \"leg\": \"native\", \"shards\": [] }", 2)]
-    public void ARecordThatCannotBeRead_OrOfANewerFormat_IsNeverWritten_AndSaysSoOnce(string held, int? newer)
+    [InlineData("{ \"format\": 2, \"leg\": \"native\", \"arms\":\n", false, null)]
+    [InlineData("{ \"format\": 2, \"leg\": \"native\", \"shards\": [] }\n", false, null)]
+    [InlineData("{ \"format\": 3, \"leg\": \"native\", \"shards\": [] }\n", false, 3)]
+    [InlineData("{ \"format\": 1, \"leg\": \"native\", \"arms\":", true, null)]
+    [InlineData("{ \"format\": 1, \"leg\": \"native\", \"arms\": {}, \"tables\": {}, \"shards\": [] }", true, null)]
+    public void ARecordThatCannotBeRead_OrOfANewerFormat_IsNeverWritten_AndSaysSoOnce(string held, bool document, int? newer)
     {
-        var file = Record.FileOf(Leg);
+        var file = document ? Record.DocumentOf(Leg) : Record.FileOf(Leg);
         var table = Table("fixture_tests", "src/fixture.cpp");
 
         Directory.CreateDirectory(Path.GetDirectoryName(file)!);
@@ -262,6 +292,7 @@ public sealed class ArmVerdictRecordTests : IDisposable
         sink.Judged("floor", Verdict("passed", "k2", Noon, table), [table]);
 
         Assert.Equal(held, File.ReadAllText(file));
+        Assert.Equal(document, !File.Exists(Record.FileOf(Leg)));
         Assert.False(Directory.Exists(Record.TablesOf(Leg)));
 
         var warnings = _harness.StandardError.ToString().Split('\n', StringSplitOptions.RemoveEmptyEntries);
@@ -271,7 +302,7 @@ public sealed class ArmVerdictRecordTests : IDisposable
         {
             Assert.Equal(format, Record.Read(Leg).Unread?.Format);
             Assert.Equal(
-                $"check-mutations: WARN - '{file}' was written by a newer {ToolPackage.Id} (format 2; this one reads 1), so every arm of "
+                $"check-mutations: WARN - '{file}' was written by a newer {ToolPackage.Id} (format 3; this one reads 2), so every arm of "
                 + $"'native' is pending and this sweep records none. Update the tool (update-tool).",
                 warning.TrimEnd('\r'));
             Assert.Equal($"none of its verdicts was recorded: '{file}' was written by a newer {ToolPackage.Id}", sink.Unrecorded);
@@ -292,7 +323,8 @@ public sealed class ArmVerdictRecordTests : IDisposable
     /// <summary>
     /// A record a hand damaged - an arm's entries or a table's index turned to null, a null inside an arm's entries, an
     /// entry given a key and nothing it was judged on, a null inside what it was judged on where no null goes - is refused
-    /// as unreadable, naming the file and what to do, never reaching a comparison of it as a crash.
+    /// as unreadable, naming the file and what to do, never reaching a comparison of it as a crash: the retired whole
+    /// document, read where no log is there yet, as surely as the log.
     /// </summary>
     [Theory]
     [InlineData("""{ "format": 1, "leg": "native", "arms": { "charge": null }, "tables": {} }""", "it holds no list of entries for arm 'charge'")]
@@ -307,7 +339,7 @@ public sealed class ArmVerdictRecordTests : IDisposable
     [InlineData(DamagedSettings, "it holds what no build of DssHarness writes - another build wrote it, or a hand changed it")]
     public void ARecordAHandDamaged_IsRefusedAsUnreadable_NamingWhatIsWrong(string held, string why)
     {
-        var file = Record.FileOf(Leg);
+        var file = Record.DocumentOf(Leg);
 
         Directory.CreateDirectory(Path.GetDirectoryName(file)!);
         File.WriteAllText(file, held);
@@ -463,13 +495,16 @@ public sealed class ArmVerdictRecordTests : IDisposable
     [Fact]
     public void TheRecord_IsCarriedByNoSync_AndDeletedByNone()
     {
-        var kept = $"{HarnessLayout.MutationRecordDirectoryRelative}/{Leg}.json";
+        var kept = $"{HarnessLayout.MutationRecordDirectoryRelative}/{Leg}.jsonl";
+        var retired = $"{HarnessLayout.MutationRecordDirectoryRelative}/{Leg}.json";
         var table = $"{HarnessLayout.MutationRecordDirectoryRelative}/{ArmVerdictRecord.TablesDirectoryName}/{Leg}/abc.json";
         var exclusions = new SyncExclusions(new SyncConfig(), ".worktrees");
 
         Assert.Equal(Path.Combine(Layout.MainCheckoutRoot, HarnessLayout.DirectoryName, HarnessLayout.MutationRecordDirectoryName), Layout.MutationRecordDirectory);
+        Assert.Equal(Path.Combine(Layout.MutationRecordDirectory, $"{Leg}.jsonl"), Record.FileOf(Leg));
+        Assert.Equal(Path.Combine(Layout.MutationRecordDirectory, $"{Leg}.json"), Record.DocumentOf(Leg));
 
-        foreach (var path in new[] { HarnessLayout.MutationRecordDirectoryRelative, kept, table })
+        foreach (var path in new[] { HarnessLayout.MutationRecordDirectoryRelative, kept, retired, table })
         {
             Assert.True(HarnessDirectorySync.IsRunState(path), path);
             Assert.True(exclusions.IsWithheldFromTransfer(path), path);

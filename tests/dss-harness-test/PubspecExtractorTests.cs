@@ -92,11 +92,9 @@ public sealed class PubspecExtractorTests : CodeGraphExtractorContractTests<Pubs
     [Fact]
     public void AFileThatIsNoMapping_IsAProjectOfItsFileName_NothingReadAndTheLineItStopsAtMarked()
     {
-        var deep = "name: app\n" + string.Concat(Enumerable.Range(0, 40).Select(level => new string(' ', 2 * level) + $"k{level}:\n")) + new string(' ', 80) + "v: 1\n";
-
         foreach (var (text, line) in new[]
         {
-            ("name: app\ndependencies: [\n", 2), ("base: &b\n  path: x\ndependencies:\n  a: *b\n", 4), ("- a\n- b\n", 1), ("", 1), ("name: a\n---\nname: b\n", 1), (deep, 34),
+            ("name: app\ndependencies: [\n", 2), ("base: &b\n  path: x\ndependencies:\n  a: *b\n", 4), ("- a\n- b\n", 1), ("", 1), ("name: a\n---\nname: b\n", 1),
         })
         {
             var extract = Read("pubspec.yaml", text);
@@ -110,6 +108,26 @@ public sealed class PubspecExtractorTests : CodeGraphExtractorContractTests<Pubs
         var unnamed = Read("tool/pubspec.yaml", "description: no name\n");
         Assert.Empty(unnamed.AddressRoots);
         Assert.Empty(unnamed.Dynamic);
+    }
+
+    /// <summary>
+    /// A pubspec nested forty levels deep - past the thirty-two its reader once refused - is read whole: its package
+    /// named, what it depends on by a path a reference, its address root declared, and no line marked.
+    /// </summary>
+    [Fact]
+    public void APubspecNestedFortyDeep_IsRead()
+    {
+        var deep = "name: app\ndependencies:\n  shapes:\n    path: ../shapes\nflutter:\n"
+            + string.Concat(Enumerable.Range(0, 40).Select(level => new string(' ', 2 * level + 2) + $"k{level}:\n"))
+            + new string(' ', 82) + "v: 1\n";
+
+        var extract = Read("pubspec.yaml", deep);
+        var node = Assert.Single(extract.Nodes);
+
+        Assert.Equal(("app", "name: app", 1, 46), (node.Name, node.Signature, node.Start, node.End));
+        Assert.Equal([("shapes", 3)], extract.References.Select(reference => (reference.Name, reference.Line)));
+        Assert.Equal([new ExtractAddressRoot("package:app/", "lib")], extract.AddressRoots);
+        Assert.Empty(extract.Dynamic);
     }
 
     private static FileExtract Read(string path, string text) => new PubspecExtractor().Extract(new CodeFileInput(path, text));

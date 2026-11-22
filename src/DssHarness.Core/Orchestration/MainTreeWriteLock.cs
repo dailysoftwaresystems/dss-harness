@@ -45,19 +45,10 @@ public static class MainTreeWriteLock
 
     /// <summary>
     /// The rule a side-task's write or command is refused by where the lock cannot hold it for its duration, on every
-    /// client: a lock that could not be taken (<see cref="Refusal"/>), a command run in the background (<see cref="InBackground"/>),
-    /// and a command that leaves a process running after it ends (<see cref="LeftBehind"/>).
+    /// client: a lock that could not be taken (<see cref="Refusal"/>) and a command that leaves a process running after
+    /// it ends (<see cref="LeftBehind"/>).
     /// </summary>
     public const string Rule = "the main tree's lock";
-
-    /// <summary>
-    /// What a side-task's shell command asked to run in the background - Claude Code's <c>run_in_background</c> - is refused
-    /// with: its result comes back as it starts, and its end is never seen.
-    /// </summary>
-    public static Agents.Policy.AgentPolicyAnswer.Denied InBackground { get; } = new(
-        Rule,
-        Agents.Policy.AgentPolicySource.Builtin,
-        "a side-task's command holds the main tree's lock for its duration, and a command run in the background is never seen to end: run it in the foreground, without run_in_background");
 
     /// <summary>
     /// What a side-task's write or command is refused with where the lock could not be taken for it - the mutex not

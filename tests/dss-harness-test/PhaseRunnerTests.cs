@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.Text;
 using DssHarness.Core.Execution;
 using DssHarness.Core.Processes;
@@ -141,25 +142,27 @@ public sealed class PhaseRunnerTests
     }
 
     /// <summary>
-    /// Starting a process is this tool's own time, not the child being quiet. A machine under load
-    /// can take longer over it than a short bound allows, and counting that as silence made a slow
-    /// launch read as a hung command — which is exactly what made this suite's own stall test flake.
+    /// Starting a process is bounded by the stall bound itself, never by a multiple of it of the code's own: a start
+    /// that takes three times the bound is a child that said nothing for as long as its user allows, and is stopped as
+    /// one. A grace of the code's own invention - four times the bound, say - is a number nobody set, and this bound
+    /// carries none.
     /// </summary>
     [Fact]
-    public async Task AStallBound_DoesNotCountTheTimeSpentStartingAChild()
+    public async Task AStallBound_BoundsAStartByTheBoundItself_NeverAMultipleOfItsOwn()
     {
         using var temp = new TempDirectory();
         var factory = new HarnessFactory();
 
-        // Three times the bound before the child is running, and then it finishes at once.
+        // Three times the bound before the child is running: past the bound, though a former grace of
+        // four times it would have let it run. Red with such a grace restored.
         var slow = new SlowToStartRunner(TimeSpan.FromSeconds(3));
 
         var result = await new PhaseRunner(slow, factory.FileSystem, factory.Output).RunAsync(
             Child("echo-args", temp.Combine("slow.log")) with { StallSeconds = 1 },
             TestContext.Current.CancellationToken);
 
-        Assert.Equal(PhaseStop.None, result.Stopped);
-        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(PhaseStop.Silence, result.Stopped);
+        Assert.True(result.Duration < TimeSpan.FromSeconds(3), "the bound waited on the whole launch");
     }
 
     /// <summary>
@@ -292,78 +295,166 @@ public sealed class PhaseRunnerTests
     }
 
     /// <summary>
-    /// A success pattern that cannot be evaluated in time against a line is never read as one that did not match: what it
-    /// could not decide is raised once the child has ended, with every line of it kept in the log and the exit line after.
+    /// A success pattern written in a form that backtracks is decided against every line in linear time, never given up
+    /// as unknown after five seconds, as once; and one using what the linear engine lacks - a backreference - is refused
+    /// by name as the phase's configuration.
     /// </summary>
     [Fact]
-    public async Task ASuccessPatternThatCannotBeEvaluatedInTime_IsRaisedOnceTheChildHasEnded()
+    public async Task ABacktrackingSuccessPattern_IsDecidedInLinearTime_AndALinearlessOneRefused()
     {
         using var temp = new TempDirectory();
         var factory = new HarnessFactory();
-        var log = temp.Combine("slow.log");
-        var lines = new ScriptedLines((new string('a', 40) + "!", false), ("after it", false));
+        var lines = new ScriptedLines((new string('a', 40_000) + "!", false), (new string('a', 40), false), ("after it", false));
 
-        var refusal = await Assert.ThrowsAsync<HarnessException>(() => new PhaseRunner(lines, factory.FileSystem, factory.Output).RunAsync(
-            Child("exit", log) with { SuccessPattern = "^(a+)+$" },
+        var result = await new PhaseRunner(lines, factory.FileSystem, factory.Output).RunAsync(
+            Child("exit", temp.Combine("slow.log")) with { SuccessPattern = "^(a+)+$" },
+            TestContext.Current.CancellationToken);
+
+        Assert.True(result.Witnessed);
+
+        var refusal = await Assert.ThrowsAsync<HarnessException>(() => new PhaseRunner(new ScriptedLines(("x", false)), factory.FileSystem, factory.Output).RunAsync(
+            Child("exit", temp.Combine("refused.log")) with { SuccessPattern = "(a)\\1" },
             TestContext.Current.CancellationToken));
 
         Assert.Equal(HarnessExit.ConfigInvalid, refusal.ExitCode);
-        Assert.Contains("took longer than 5s against a line of this phase's output", refusal.Message, StringComparison.Ordinal);
-        Assert.True(lines.Finished, "the child was not left to end");
-
-        var kept = await File.ReadAllLinesAsync(log, TestContext.Current.CancellationToken);
-
-        Assert.Equal("after it", kept[^2]);
-        Assert.StartsWith("# exit 0 after ", kept[^1], StringComparison.Ordinal);
+        Assert.StartsWith("'(a)\\1' is not a success pattern: ", refusal.Message, StringComparison.Ordinal);
     }
 
     /// <summary>
-    /// Timing marks are read from each line as it arrives, pattern by pattern; of a pattern that matches a flood, only the
-    /// first are kept, and that is said, since a report holding the first marks and none after reads as a phase that
-    /// stopped reporting them.
+    /// A child still starting is as quiet as one that says nothing, under the one stall bound its user set: a start that
+    /// takes the whole bound is past it, never given four times the bound of the code's own.
     /// </summary>
     [Fact]
-    public async Task TimingPatterns_AreReadFromEachLine_AndKeepOnlyTheFirstMarksOfAFlood_SayingSo()
+    public void ASlowStartingChild_IsBoundByTheStallAlone()
     {
+        var clock = new StallClock();
+
+        Thread.Sleep(TimeSpan.FromMilliseconds(300));
+
+        Assert.True(clock.Overdue(TimeSpan.FromMilliseconds(200)), $"a launch quiet for {clock.Quiet} was not past a stall bound of 200 ms");
+
+        clock.Saw();
+        Assert.False(clock.Overdue(TimeSpan.FromMilliseconds(200)), "a child seen just now was past its stall bound");
+    }
+
+    /// <summary>
+    /// Every timing mark is recorded - two million of one pattern among them - each written to the phase's timing record
+    /// beside its log as it is found, none held, and read back pattern by pattern, each in the order it appeared, with
+    /// nothing said: a cap once kept the first ten thousand of a pattern and said the rest were dropped.
+    /// </summary>
+    [Fact]
+    public async Task TwoMillionTimingMarks_AreRecorded()
+    {
+        const int PerLine = 1000;
+        const int Marks = 2_000_000;
         using var temp = new TempDirectory();
         var factory = new HarnessFactory();
-        var flood = Enumerable.Range(0, PhaseRunner.MostTimings + 5).Select(index => ($"case {index} took {index}ms", false));
-        var lines = new ScriptedLines([("link took 7s", true), .. flood, ("link took 9s", true)]);
+        var log = temp.Combine("time.log");
+
+        // A thousand marks a line, so the flood is two thousand lines long.
+        var lines = new GeneratedLines(
+            (Marks / PerLine) + 2,
+            line => line == 0 ? ("link took 7s", true)
+                : line == (Marks / PerLine) + 1 ? ("link took 9s", true)
+                : (string.Join(' ', Enumerable.Range((line - 1) * PerLine, PerLine).Select(mark => $"case {mark} took {mark}ms")), false));
 
         var result = await new PhaseRunner(lines, factory.FileSystem, factory.Output).RunAsync(
-            Child("exit", temp.Combine("time.log")) with { TimingPatterns = ["took ([0-9]+)ms", "link took ([0-9]+)s"] },
+            Child("exit", log) with { TimingPatterns = ["took ([0-9]+)ms", "link took ([0-9]+)s"] },
             TestContext.Current.CancellationToken);
 
-        Assert.Equal(PhaseRunner.MostTimings + 2, result.Timings.Count);
-        Assert.Equal(Enumerable.Range(0, PhaseRunner.MostTimings).Select(index => $"{index}"), result.Timings.Take(PhaseRunner.MostTimings).Select(timing => timing.Value));
-        Assert.Equal(["7", "9"], result.Timings.Skip(PhaseRunner.MostTimings).Select(timing => timing.Value));
-        Assert.Contains(
-            $"the timing pattern 'took ([0-9]+)ms' matched this phase's output {PhaseRunner.MostTimings + 5} times; only the first {PhaseRunner.MostTimings} were kept",
-            factory.StandardError.ToString(),
-            StringComparison.Ordinal);
-        Assert.DoesNotContain("link took", factory.StandardError.ToString(), StringComparison.Ordinal);
+        Assert.Equal(Marks + 2, result.Timings.Count);
+        Assert.Equal(temp.Combine("time" + PhaseTimings.Extension), result.Timings.Record);
+
+        long at = 0;
+
+        foreach (var timing in result.Timings)
+        {
+            var (pattern, value) = at < Marks
+                ? ("took ([0-9]+)ms", at.ToString(CultureInfo.InvariantCulture))
+                : ("link took ([0-9]+)s", at == Marks ? "7" : "9");
+
+            if (!string.Equals(timing.Pattern, pattern, StringComparison.Ordinal) || !string.Equals(timing.Value, value, StringComparison.Ordinal))
+            {
+                Assert.Fail($"mark {at} was ({timing.Pattern}, {timing.Value}), not ({pattern}, {value})");
+            }
+
+            at++;
+        }
+
+        Assert.Equal(Marks + 2, at);
+        Assert.Empty(factory.StandardError.ToString());
     }
 
     /// <summary>
-    /// A timing pattern that cannot be read in time against a line leaves the phase unmeasured by it - none of its marks,
-    /// not even those read before - and says so, while every other pattern keeps its marks and the phase its verdict.
+    /// A phase that declares no timing pattern writes no timing record and has no marks; one whose record was written again
+    /// since is never read as holding its marks, saying where.
     /// </summary>
     [Fact]
-    public async Task ATimingPatternThatCannotBeReadInTime_LeavesThePhaseUnmeasuredByIt_AndSaysSo()
+    public async Task APhasesTimingRecord_IsWrittenOnlyWhereItDeclaresAPattern_AndReadOnlyWhileItHoldsItsMarks()
     {
         using var temp = new TempDirectory();
         var factory = new HarnessFactory();
-        var lines = new ScriptedLines(("compile took 3s", false), (new string('a', 40) + "!", false), ("link took 9s", false));
+        var lines = new ScriptedLines(("link took 7s", false), ("link took 9s", false));
+
+        var plain = await new PhaseRunner(lines, factory.FileSystem, factory.Output).RunAsync(Child("exit", temp.Combine("plain.log")), TestContext.Current.CancellationToken);
+        var timed = await new PhaseRunner(lines, factory.FileSystem, factory.Output).RunAsync(
+            Child("exit", temp.Combine("timed.log")) with { TimingPatterns = ["link took ([0-9]+)s"] },
+            TestContext.Current.CancellationToken);
+
+        Assert.Same(PhaseTimings.None, plain.Timings);
+        Assert.False(File.Exists(temp.Combine("plain" + PhaseTimings.Extension)), "a phase with no timing pattern wrote a timing record");
+        Assert.Equal(["7", "9"], timed.Timings.Select(timing => timing.Value));
+
+        await File.WriteAllTextAsync(timed.Timings.Record!, string.Empty, TestContext.Current.CancellationToken);
+
+        var unread = Assert.Throws<InvalidDataException>(() => timed.Timings.ToList());
+        Assert.Equal($"the timing marks of the phase could not be read back from '{timed.Timings.Record}': it holds 0 marks, where the phase wrote 2", unread.Message);
+    }
+
+    /// <summary>
+    /// A phase whose child left a process running that holds its output says so in its output, with what the runner said
+    /// of it: every character the child wrote is in the log, and what that process writes from then on is not read - left
+    /// unsaid, a log ending where the child's output did read as all a server its build started went on to write.
+    /// </summary>
+    [Fact]
+    public async Task APhaseWhoseChildLeftItsOutputHeld_SaysSo()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        const string Held = "'build' left a process running that holds its output: every character it wrote was read, and what that process writes from now on is its own, and is not read";
+
+        var result = await new PhaseRunner(new HeldRunner(Held), factory.FileSystem, factory.Output).RunAsync(
+            Child("exit", temp.Combine("held.log")),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal([$"build: WARN - win-msvc-release: {Held}"], Lines(factory.StandardError.ToString()));
+
+        // A child whose output ended with it says nothing of the kind.
+        var plain = new HarnessFactory();
+        await new PhaseRunner(new ScriptedLines(("done", false)), plain.FileSystem, plain.Output).RunAsync(
+            Child("exit", temp.Combine("plain.log")),
+            TestContext.Current.CancellationToken);
+        Assert.Empty(plain.StandardError.ToString());
+    }
+
+    /// <summary>
+    /// A timing pattern written in a form that backtracks is read in linear time against every line, its marks kept as
+    /// any pattern's are, never left unmeasured for the time a match took, as once.
+    /// </summary>
+    [Fact]
+    public async Task ABacktrackingTimingPattern_IsReadInLinearTime()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        var lines = new ScriptedLines(("compile took 3s", false), (new string('a', 40_000) + "!", false), ("link took 9s", false));
 
         var result = await new PhaseRunner(lines, factory.FileSystem, factory.Output).RunAsync(
             Child("exit", temp.Combine("time.log")) with { TimingPatterns = ["^(a+)+$|compile took ([0-9]+)s", "link took ([0-9]+)s"] },
             TestContext.Current.CancellationToken);
 
-        Assert.Equal(["9"], result.Timings.Select(timing => timing.Value));
-        Assert.Contains(
-            "the timing pattern '^(a+)+$|compile took ([0-9]+)s' could not be matched against this phase's output in time; no timing was taken from it",
-            factory.StandardError.ToString(),
-            StringComparison.Ordinal);
+        Assert.Equal(["compile took 3s", "9"], result.Timings.Select(timing => timing.Value));
+        Assert.DoesNotContain("timing pattern", factory.StandardError.ToString(), StringComparison.Ordinal);
         Assert.Equal(0, result.ExitCode);
     }
 
@@ -378,9 +469,11 @@ public sealed class PhaseRunnerTests
         using var temp = new TempDirectory();
         var factory = new HarnessFactory(verbose: true);
         const string Secret = "s3cr3t-T0KEN-value";
+        const int Piece = 32 * 1024;
+        using var cut = ProcessRunner.LinesHandedOnIn(Piece);
 
         // The secret spans the first place the line would be cut, were it cut where it is full.
-        var line = new string('x', ProcessRunner.LongestLine - 5) + Secret + new string('y', ProcessRunner.LongestLine) + Secret + "z";
+        var line = new string('x', Piece - 5) + Secret + new string('y', Piece) + Secret + "z";
         var file = temp.WriteFile("long.txt", "before\n" + line + "\nafter\n");
         var values = new Core.Runners.ActionValues(
             new Dictionary<string, string>(StringComparer.Ordinal),
@@ -397,7 +490,7 @@ public sealed class PhaseRunnerTests
         Assert.DoesNotContain(Secret, factory.StandardOutput.ToString() + factory.StandardError, StringComparison.Ordinal);
         Assert.Equal(values.Redact(line), string.Concat(read.Skip(1).SkipLast(1)));
         Assert.Equal(["before", "after"], [read[0], read[^1]]);
-        Assert.All(read, piece => Assert.True(piece.Length <= ProcessRunner.LongestLine, $"a piece of {piece.Length} characters"));
+        Assert.All(read, piece => Assert.True(piece.Length <= Piece, $"a piece of {piece.Length} characters"));
         Assert.True(result.Witnessed);
     }
 
@@ -411,9 +504,11 @@ public sealed class PhaseRunnerTests
         using var temp = new TempDirectory();
         var factory = new HarnessFactory();
         const string Secret = "ab";
+        const int Piece = 32 * 1024;
+        using var cut = ProcessRunner.LinesHandedOnIn(Piece);
 
         // Every two characters masked as three: a line exactly as long as a line is kept in comes out half as long again.
-        var line = string.Concat(Enumerable.Repeat(Secret, ProcessRunner.LongestLine / 2));
+        var line = string.Concat(Enumerable.Repeat(Secret, Piece / 2));
         var file = temp.WriteFile("short.txt", line + "\n");
         var values = new Core.Runners.ActionValues(
             new Dictionary<string, string>(StringComparer.Ordinal),
@@ -427,7 +522,16 @@ public sealed class PhaseRunnerTests
 
         Assert.Equal(values.Redact(line), string.Concat(read));
         Assert.Equal(2, read.Count);
-        Assert.Equal(read, result.LastLines);
+
+        // The last lines the phase kept as it ran are those the pieces read back keep, piece for piece.
+        var readBack = new LastLinesRing(PhaseResult.TailRoom);
+
+        foreach (var piece in read)
+        {
+            readBack.Add(piece);
+        }
+
+        Assert.Equal(readBack.ToList(), result.LastLines);
     }
 
     [Fact]
@@ -699,6 +803,48 @@ public sealed class PhaseRunnerTests
 
     private static PhaseRunner Runner(HarnessFactory factory)
         => new(factory.ProcessRunner, factory.FileSystem, factory.Output);
+
+    /// <summary>What was written, as its lines, without the ending the last one closes with.</summary>
+    private static string[] Lines(string written) => written.ReplaceLineEndings("\n").TrimEnd('\n').Split('\n');
+
+    /// <summary>
+    /// A runner that prints <paramref name="count"/> lines, each made by <paramref name="line"/> as it is printed - never held
+    /// all at once - on standard error where it says so and standard output otherwise, and exits 0.
+    /// </summary>
+    private sealed class GeneratedLines(int count, Func<int, (string Line, bool Error)> line) : IProcessRunner
+    {
+        public Task<ProcessResult> RunAsync(ProcessRequest request, CancellationToken cancellationToken = default)
+        {
+            ArgumentNullException.ThrowIfNull(request);
+
+            request.OnStarted?.Invoke();
+
+            for (var index = 0; index < count; index++)
+            {
+                var (text, error) = line(index);
+                (error ? request.OnErrorLine : request.OnOutputLine)?.Invoke(text);
+            }
+
+            return Task.FromResult(new ProcessResult(0, string.Empty, string.Empty, TimeSpan.FromMilliseconds(5), TimedOut: false));
+        }
+
+        public string? FindExecutable(string command) => command;
+    }
+
+    /// <summary>A runner whose child exits 0 having said nothing, and left a process running that holds its output, as <paramref name="held"/> says.</summary>
+    private sealed class HeldRunner(string held) : IProcessRunner
+    {
+        public Task<ProcessResult> RunAsync(ProcessRequest request, CancellationToken cancellationToken = default)
+        {
+            ArgumentNullException.ThrowIfNull(request);
+
+            request.OnStarted?.Invoke();
+
+            return Task.FromResult(new ProcessResult(0, string.Empty, string.Empty, TimeSpan.FromMilliseconds(5), TimedOut: false) { OutputHeld = held });
+        }
+
+        public string? FindExecutable(string command) => command;
+    }
 
     /// <summary>A phase that runs this assembly as a child, exactly as the process tests do.</summary>
     private static PhaseRequest Child(string mode, string logFile, params string[] arguments)

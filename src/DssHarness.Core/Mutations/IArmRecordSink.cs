@@ -82,8 +82,10 @@ internal sealed class RecordSink(ArmVerdictRecord record, string leg, IHarnessOu
             {
                 if (_record.Merge(_leg, arm, verdict, tables) is { } unread)
                 {
-                    _output.Warn(_commandName, unread.Warning(file, _leg));
-                    _unrecorded = unread.Note(file);
+                    var held = _record.ReadFrom(_leg);
+
+                    _output.Warn(_commandName, unread.Warning(held, _leg));
+                    _unrecorded = unread.Note(held);
                 }
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or HarnessException)
@@ -112,8 +114,10 @@ internal sealed class RecordSink(ArmVerdictRecord record, string leg, IHarnessOu
             {
                 if (_record.Verified(_leg, keys, by) is { } unread)
                 {
-                    _output.Warn(_commandName, unread.Warning(file, _leg));
-                    _unrecorded = unread.Note(file);
+                    var held = _record.ReadFrom(_leg);
+
+                    _output.Warn(_commandName, unread.Warning(held, _leg));
+                    _unrecorded = unread.Note(held);
                 }
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or HarnessException)

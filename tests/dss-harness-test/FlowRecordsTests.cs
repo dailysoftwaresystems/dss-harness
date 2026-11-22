@@ -708,7 +708,6 @@ public sealed class FlowRecordsTests
         var frozen = JsonNode.Parse(System.Text.Json.JsonSerializer.Serialize(definition with { Path = string.Empty }, JsonStateFile.Options))!;
 
         Assert.Equal("""{"include":["src/**"]}""", frozen["codebaseGraph"]!.ToJsonString());
-        Assert.Equal(DssHarness.Core.Codebase.CodebaseGraphShape.DefaultMaxFileBytes, definition.CodebaseGraph!.Shape.MaxFileBytes);
     }
 
     /// <summary>A runner that answers each step as its test scripted it, holding open the steps the test wants to time and recording the handoffs its attempts are given.</summary>

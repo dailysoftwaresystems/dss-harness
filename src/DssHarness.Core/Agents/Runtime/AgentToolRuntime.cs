@@ -8,12 +8,14 @@ using DssHarness.Core.Execution;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Git;
 using DssHarness.Core.Hosts;
+using DssHarness.Core.Json;
 using DssHarness.Core.Orchestration;
 using DssHarness.Core.Output;
 using DssHarness.Core.Platform;
 using DssHarness.Core.Processes;
 using DssHarness.Core.Results;
 using DssHarness.Core.Schemas;
+using DssHarness.Core.Waiting;
 using DssHarness.Core.Web;
 
 namespace DssHarness.Core.Agents.Runtime;
@@ -27,8 +29,8 @@ public sealed record AgentToolCallRequest(string Id, string Name, string Input);
 /// <summary>What a call of the runtime answered, as the model is given it.</summary>
 /// <param name="Id">The call's id.</param>
 /// <param name="Ok">Whether it did what it was asked; false for a refusal and a failure, whose text says why.</param>
-/// <param name="Text">What the model is given: the answer, masked, cut where it is too large for its event.</param>
-/// <param name="File">The file the whole answer is kept in: a command's log, and any other answer where it was cut; null where there is none.</param>
+/// <param name="Text">What the model is given: the answer, masked - whole where it is one page, else its first page, whose header says how <c>read_result</c> gives the rest.</param>
+/// <param name="File">The file the whole answer is kept in: a command's log, and any other answer longer than a page; null where there is none.</param>
 /// <param name="Ran">
 /// Whether its tool ran, however it ended - a command that exited non-zero among them - or did nothing: false for a
 /// refusal, recorded as every denial is, and for an input that did not read.
@@ -125,8 +127,8 @@ public sealed class AgentToolTally
 /// The harness's own tools, run for one agent's run on an API client, and for a Claude Code launch the tools it takes from
 /// the engine's tool server (part 03, "The tool runtime"): each call decided before it runs - its tool among those the step
 /// is given, its input held to the tool's schema, each path held to the agent's roots (<see cref="ConfinedPaths"/>) and
-/// asked of the policy, a command and an address asked of it too - then run, its answer masked and cut to its event's
-/// bound, the whole kept beside the stream, and recorded: each denial and each request of the web by
+/// asked of the policy, a command and an address asked of it too - then run, its answer masked, one longer than a page
+/// kept whole beside the stream and given as its first page, and recorded: each denial and each request of the web by
 /// <see cref="AgentCallRecords"/>, each call's end a <see cref="ToolCallFinished"/> (<see cref="RunAsync"/>) - or, for a
 /// client whose own stream tells it, that stream's (<see cref="ServeAsync"/>). The client's loop emits the call's start, as
 /// its provider's stream shows it.
@@ -134,13 +136,17 @@ public sealed class AgentToolTally
 /// <remarks>
 /// A replace or an insert needs its file viewed first, by its content: a view records the file's hash, the runtime's own
 /// write records the new one, and an edit of a file whose hash moved since is refused, nothing written. In a turn, calls
-/// that read run together, at most <see cref="MostTogether"/> at once; a call that writes or runs stands alone between
-/// them; answers are given in the order the calls were made.
+/// that read run together, as many at once as <see cref="MostTogether"/> says; a call that writes or runs stands alone
+/// between them; answers are given in the order the calls were made, every one of them.
 /// </remarks>
 public sealed partial class AgentToolRuntime : IDisposable
 {
-    /// <summary>The most calls that read run at once in a turn.</summary>
-    public const int MostTogether = 4;
+    /// <summary>
+    /// How many calls that read run at once in a turn: the machine's processors less the share the one owner of reading
+    /// beside a build keeps for it (<see cref="CodebaseGraphService.ReadShare"/>), one at the least. Every call runs and is
+    /// answered in its order whatever it is: it bounds only how many read at once.
+    /// </summary>
+    public static int MostTogether { get; } = Math.Max(1, Environment.ProcessorCount / CodebaseGraphService.ReadShare);
 
     /// <summary>The rule a call of a tool the step was not given is refused by.</summary>
     public const string ToolsRule = "the step's tools";
@@ -167,6 +173,9 @@ public sealed partial class AgentToolRuntime : IDisposable
     private readonly Web.Search.WebSearchStep? _webSearch;
     private readonly AgentNativeAsk? _native;
 
+    /// <summary>The whole results of the run's calls, which <c>read_result</c> pages: the conversation's, beside its stream.</summary>
+    private readonly KeptResults _results;
+
     /// <summary>The runtime of <paramref name="run"/>, its ground decided once.</summary>
     /// <param name="run">The run.</param>
     /// <param name="events">Where its calls' ends are emitted.</param>
@@ -187,6 +196,7 @@ public sealed partial class AgentToolRuntime : IDisposable
         _paths = new ConfinedPaths(host.FileSystem, host.Platform, ground);
         _records = records ?? new AgentCallRecords(host.FileSystem, run, host.Clock, events);
         _ownsRecords = records is null;
+        _results = KeptResults.Of(host.FileSystem, run.StepDirectory);
         var tools = AgentTools.Offered(ground, run.Commands, run.WebSearch).Where(tool => only?.Contains(tool.Name) != false).ToList();
 
         // The run's graph tool, where it is given one: offered among the harness's own, with the operations the run's
@@ -220,7 +230,7 @@ public sealed partial class AgentToolRuntime : IDisposable
 
         Tools = tools;
         _tools = tools.ToDictionary(tool => tool.Name, StringComparer.Ordinal);
-        _schemas = Tools.ToDictionary(tool => tool.Name, tool => JsonNode.Parse(tool.Schema)!, StringComparer.Ordinal);
+        _schemas = Tools.ToDictionary(tool => tool.Name, tool => JsonDepth.ParseNode(tool.Schema)!, StringComparer.Ordinal);
         _viewed = new ConcurrentDictionary<string, string>(StringComparer.FromComparison(host.Platform.PathComparison));
 
         // The step's search, where it has a source to search: its sources' endpoints held to the Web(...) rules, an index's
@@ -229,7 +239,6 @@ public sealed partial class AgentToolRuntime : IDisposable
         _webSearch = _tools.ContainsKey(AgentTools.WebSearch) && run.WebSearch is { } search
             ? new Web.Search.WebSearchStep(
                 search.Sources,
-                search.ResultsPerSource,
                 search.MaxPerStep,
                 run.Workspace.RunDirectory,
                 new Repository.HarnessLayout(run.Workspace.MainCheckout, run.Workspace.MainCheckout),
@@ -237,6 +246,12 @@ public sealed partial class AgentToolRuntime : IDisposable
                 search.Keys,
                 new Web.Search.WebSearchRules(_policy.WebSource, _policy.WebFill, _policy.Web),
                 new SearchRecords(this))
+            {
+                Stall = run.Limits.StallSeconds is { } stall and > 0 ? TimeSpan.FromSeconds(stall) : null,
+
+                // Told where the running operation says everything else, looked up as each wait tells.
+                Tell = static told => Waits.Told(told),
+            }
             : null;
 
         if (host.Unserved(Tools) is { } unserved)
@@ -351,7 +366,7 @@ public sealed partial class AgentToolRuntime : IDisposable
     }
 
     /// <summary>
-    /// Runs one call as <see cref="RunAsync"/> does - decided first, recorded, its answer masked and cut - for a client whose
+    /// Runs one call as <see cref="RunAsync"/> does - decided first, recorded, its answer masked and paged - for a client whose
     /// own stream tells the call's end: Claude Code's, whose calls of the engine's tool server end in its stream.
     /// </summary>
     /// <param name="call">The call.</param>
@@ -427,7 +442,7 @@ public sealed partial class AgentToolRuntime : IDisposable
     {
         try
         {
-            return JsonNode.Parse(input) is JsonObject members && members["op"] is JsonValue op && op.TryGetValue<string>(out var name)
+            return JsonDepth.ParseNode(input) is JsonObject members && members["op"] is JsonValue op && op.TryGetValue<string>(out var name)
                 ? CodebaseGraphTool.OpOf(name)
                 : null;
         }
@@ -463,7 +478,10 @@ public sealed partial class AgentToolRuntime : IDisposable
         }
     }
 
-    /// <summary>A call's answer recorded: a denial as every denial is, and its text masked and cut, the whole kept beside the stream.</summary>
+    /// <summary>
+    /// A call's answer recorded: a denial as every denial is, and its text masked - a page of something paged already
+    /// given as it is, and any other answer longer than a page kept whole beside the stream and given as its first page.
+    /// </summary>
     private async Task<AgentToolCallResult> KeptAsync(AgentToolCallRequest call, Answer answer)
     {
         if (answer.Denial is { } denial)
@@ -472,8 +490,8 @@ public sealed partial class AgentToolRuntime : IDisposable
             await _records.DeniedAsync(call.Name, denial.Subject, denial.Denied).ConfigureAwait(false);
         }
 
-        var (shown, file) = answer.File is { } kept
-            ? (_run.Mask.Redact(answer.Text), kept)
+        var (shown, file) = answer.File is { } kept ? (_run.Mask.Redact(answer.Text), kept)
+            : answer.Paged ? (_run.Mask.Redact(answer.Text), null)
             : _records.Kept(call.Id, answer.Text);
 
         return new AgentToolCallResult(call.Id, answer.Ok, shown, file, answer.Ran);
@@ -509,12 +527,19 @@ public sealed partial class AgentToolRuntime : IDisposable
 
         try
         {
-            input = JsonNode.Parse(call.Input) as JsonObject ?? throw new JsonException("it is no JSON object");
+            input = JsonDepth.ParseNode(call.Input) as JsonObject ?? throw new JsonException("it is no JSON object");
             ReadWhole(input);
         }
         catch (Exception ex) when (ex is JsonException or InvalidOperationException)
         {
             return Answer.NotRun($"{call.Name}'s input does not read as JSON ({ex.Message.TrimEnd('.')}); {Usage(tool)}");
+        }
+
+        // A member a tool no longer takes is refused in its own words, saying what takes its place, before the schema
+        // would refuse it as one it never knew.
+        if (Retired(tool.Name, input) is { } retired)
+        {
+            return Answer.NotRun($"{retired}; {Usage(tool)}");
         }
 
         if (JsonSchemaSubset.Problems(_schemas[tool.Name], input) is [_, ..] problems)
@@ -525,8 +550,9 @@ public sealed partial class AgentToolRuntime : IDisposable
         return tool.Name switch
         {
             AgentTools.ViewFile => await ViewAsync(input, cancellationToken).ConfigureAwait(false),
-            AgentTools.FindFiles => await FindAsync(input, cancellationToken).ConfigureAwait(false),
-            AgentTools.SearchFiles => await SearchAsync(input, cancellationToken).ConfigureAwait(false),
+            AgentTools.FindFiles => await FindAsync(call.Id, input, cancellationToken).ConfigureAwait(false),
+            AgentTools.SearchFiles => await SearchAsync(call.Id, input, cancellationToken).ConfigureAwait(false),
+            AgentTools.ReadResult => await ReadResultAsync(input, cancellationToken).ConfigureAwait(false),
             AgentTools.CreateFile => await Create(input).ConfigureAwait(false),
             AgentTools.ReplaceInFile => await ReplaceAsync(input, cancellationToken).ConfigureAwait(false),
             AgentTools.InsertInFile => await InsertAsync(input, cancellationToken).ConfigureAwait(false),
@@ -535,7 +561,7 @@ public sealed partial class AgentToolRuntime : IDisposable
             AgentTools.DeleteDirectory => await DeleteDirectory(input).ConfigureAwait(false),
             AgentTools.MovePath => await MovePath(input).ConfigureAwait(false),
             AgentTools.RunCommand => await RunCommandAsync(call.Id, input, cancellationToken).ConfigureAwait(false),
-            AgentTools.WebFetch => await FetchAsync(input, cancellationToken).ConfigureAwait(false),
+            AgentTools.WebFetch => await FetchAsync(call.Id, input, cancellationToken).ConfigureAwait(false),
             AgentTools.WebSearch => await WebSearchAsync(input, cancellationToken).ConfigureAwait(false),
             AgentGraphSupport.ToolName => await GraphAsync(input, cancellationToken).ConfigureAwait(false),
             AgentMeasureSupport.ToolName => await MeasureAsync(call.Id, input, cancellationToken).ConfigureAwait(false),
@@ -546,8 +572,9 @@ public sealed partial class AgentToolRuntime : IDisposable
     /// <summary>
     /// One call of the run's graph tool, answered by the tool it was given and recorded as each of its calls is: a usage
     /// the agent can correct is answered as a failed call with the tool's own words, a refusal with the policy's, recorded
-    /// as every denial is. An edit the tool made counts among the files written, and is followed as every write is; a body
-    /// it served and an edit it made count as views of their files for the edit check, as a <c>view_file</c> is a view; a
+    /// as every denial is. An edit the tool made counts among the files written, and is followed as every write is; the
+    /// files whose lines a page served, and the one an edit wrote, count as views of them for the edit check - each as its
+    /// lines were read, or as the edit wrote it - as a <c>view_file</c> is a view of the bytes it read; a
     /// <c>wholeFile</c> that lifted the narrowing of reads is an escape <c>stated</c>, recorded as the tool made it - its
     /// file as the view holds it, with the agent's reason.
     /// </summary>
@@ -575,9 +602,12 @@ public sealed partial class AgentToolRuntime : IDisposable
             await WroteAsync(AgentGraphSupport.ToolName, Path.Combine(tree, wrote.Replace('/', Path.DirectorySeparatorChar))).ConfigureAwait(false);
         }
 
+        // A file the answer's page served lines of is viewed as those lines were read - an edit's as it wrote it - never as
+        // it stands now: a page read from what page 1 kept leaves the file as page 1 read it, and an edit made from its
+        // lines after the file changed is refused as changed since viewed.
         foreach (var viewed in answer.Viewed)
         {
-            ViewedAgain(Path.Combine(tree, viewed.Replace('/', Path.DirectorySeparatorChar)));
+            _viewed[Path.Combine(tree, viewed.Path.Replace('/', Path.DirectorySeparatorChar))] = viewed.Digest;
         }
 
         if (answer.Escape is { } escape)
@@ -622,68 +652,31 @@ public sealed partial class AgentToolRuntime : IDisposable
     }
 
     /// <summary>
-    /// The lines of the file at <paramref name="full"/> as they stand now, recorded as a view of it for the edit check -
-    /// what a body the graph served and an edit it made leave, as a <c>view_file</c> leaves them.
+    /// Reads every string <paramref name="node"/> holds, at any depth and in a loop (<see cref="JsonWalk"/>), so a text no
+    /// string holds - half of a surrogate pair, which the parser lets by - refuses the input here rather than meeting a tool.
     /// </summary>
-    /// <param name="full">The file, absolute.</param>
-    private void ViewedAgain(string full)
+    private static void ReadWhole(JsonNode? node)
     {
-        try
+        foreach (var (_, each) in JsonWalk.Descendants(node))
         {
-            if (_host.FileSystem.StandingOf(full) is { Length: <= AgentTools.MostViewedBytes } && _host.FileSystem.OpenRead(full) is { } read)
+            if (each is JsonValue value && value.GetValueKind() == JsonValueKind.String)
             {
-                using (read)
-                {
-                    _viewed[full] = Hash(ReadAll(read));
-                }
+                _ = value.GetValue<string>();
             }
         }
-        catch (IOException)
-        {
-            // A file that cannot be read now leaves no view of it: an edit of it asks for one first, as any edit does.
-        }
-    }
-
-    /// <summary>Everything a stream holds.</summary>
-    /// <param name="stream">The stream.</param>
-    private static byte[] ReadAll(Stream stream)
-    {
-        using var copied = new MemoryStream();
-        stream.CopyTo(copied);
-        return copied.ToArray();
     }
 
     /// <summary>
-    /// Reads every string <paramref name="node"/> holds, so a text no string holds - half of a surrogate pair, which the
-    /// parser lets by - refuses the input here rather than meeting a tool.
+    /// Why <paramref name="input"/> is refused for a member <paramref name="tool"/> no longer takes, naming what takes its
+    /// place; null where it names none: <c>search_files</c>' <c>max_results</c>, for every hit is given, a page at a time.
     /// </summary>
-    private static void ReadWhole(JsonNode? node)    {
-        switch (node)
-        {
-            case JsonObject members:
-                foreach (var (_, value) in members)
-                {
-                    ReadWhole(value);
-                }
-
-                break;
-            case JsonArray items:
-                foreach (var item in items)
-                {
-                    ReadWhole(item);
-                }
-
-                break;
-            case JsonValue value when value.GetValueKind() == JsonValueKind.String:
-                _ = value.GetValue<string>();
-                break;
-        }
-    }
+    private static string? Retired(string tool, JsonObject input)
+        => tool == AgentTools.SearchFiles && input.ContainsKey("max_results") ? MaxResultsRetired : null;
 
     /// <summary>How a tool is called, said in a refused call's answer: each member it takes, the required ones marked.</summary>
     private static string Usage(AgentToolDefinition tool)
     {
-        var schema = JsonNode.Parse(tool.Schema)!.AsObject();
+        var schema = JsonDepth.ParseNode(tool.Schema)!.AsObject();
         var required = schema["required"]!.AsArray().Select(name => name!.GetValue<string>()).ToHashSet(StringComparer.Ordinal);
 
         return $"{tool.Name} takes " + string.Join(", ", schema["properties"]!.AsObject().Select(member =>
@@ -763,8 +756,14 @@ public sealed partial class AgentToolRuntime : IDisposable
         /// <summary>A call refused by <paramref name="denied"/>, of <paramref name="subject"/>: recorded as every denial is, its tool never run.</summary>
         public static Answer Refused(string subject, AgentPolicyAnswer.Denied denied) => new(false, denied.Reason, null, (subject, denied), Ran: false);
 
-        /// <summary>An answer whose whole is kept in <paramref name="file"/> already: a command's log.</summary>
+        /// <summary>An answer whose whole is kept in <paramref name="file"/> already, given as its first page: a command's log, an answer written a line at a time.</summary>
         public static Answer Kept(bool ok, string text, string file) => new(ok, text, file, null);
+
+        /// <summary>A page of something paged already - a file viewed, a result read - given as it is, never paged again.</summary>
+        public static Answer Page(string text) => new(true, text, null, null) { Paged = true };
+
+        /// <summary>Whether the text is a page of something paged already, given as it is.</summary>
+        public bool Paged { get; init; }
     }
 }
 
@@ -780,7 +779,7 @@ public sealed partial class AgentToolRuntime : IDisposable
 /// <param name="sessions">Where a contained command's session is recorded while it runs.</param>
 /// <param name="fetch">The harness's own fetch.</param>
 /// <param name="identity">The tool's own identity, whose version the engine's tool server names itself by.</param>
-/// <param name="clock">Times each call, and a search's pattern on each file.</param>
+/// <param name="clock">Times each call.</param>
 /// <param name="environment">The tool's own environment, which a command would otherwise inherit; <see cref="AgentChildEnvironment.Own"/> where none is given.</param>
 /// <param name="search">The harness's own web search; none for a host whose runs search no source.</param>
 public sealed class AgentToolHost(
@@ -802,7 +801,7 @@ public sealed class AgentToolHost(
     internal IHostPlatform Platform { get; } = platform ?? throw new ArgumentNullException(nameof(platform));
 
     /// <summary>Lists and searches a directory's files.</summary>
-    internal AgentFiles Files { get; } = new(git ?? throw new ArgumentNullException(nameof(git)), fileSystem, clock);
+    internal AgentFiles Files { get; } = new(git ?? throw new ArgumentNullException(nameof(git)), fileSystem);
 
     /// <summary>Runs a command as a phase.</summary>
     internal PhaseRunner Phases { get; } = phases ?? throw new ArgumentNullException(nameof(phases));

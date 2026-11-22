@@ -37,6 +37,12 @@ internal abstract record ApiReply
     public static ApiReply Status(int status, string body, TimeSpan? retryAfter = null, string type = "application/json", DateTimeOffset? retryAt = null, bool cut = false)
         => new Refusing(status, body, retryAfter, type, retryAt, cut);
 
+    /// <summary>
+    /// A refusal: <paramref name="status"/> with <paramref name="body"/>, which comes <paramref name="chunk"/> bytes at a
+    /// time, <paramref name="eachRead"/> done as each read of it begins - a clock moved on, for a body that trickles.
+    /// </summary>
+    public static ApiReply Trickling(int status, string body, int chunk, Action eachRead) => new Trickled(status, body, chunk, eachRead);
+
     /// <summary>The API's own error body: its type and message, and the request it names.</summary>
     public static ApiReply Error(int status, string type, string message, TimeSpan? retryAfter = null)
         => Status(status, $$"""{"type":"error","error":{"type":"{{type}}","message":"{{message}}"},"request_id":"req_000000000000000000000009"}""", retryAfter);
@@ -65,6 +71,9 @@ internal abstract record ApiReply
 
     /// <summary>A request that reaches nothing.</summary>
     public sealed record Unreached(string Why) : ApiReply;
+
+    /// <summary>A refused request whose body trickles: so many bytes at a time, something done as each read begins.</summary>
+    public sealed record Trickled(int Code, string Body, int Chunk, Action EachRead) : ApiReply;
 }
 
 /// <summary>An API a test answers in place of the network: each request answered by the next reply scripted, and every request kept as it was sent.</summary>
@@ -133,6 +142,10 @@ internal sealed class ApiEndpoint : HttpMessageHandler
                 }
 
                 return refused;
+            case ApiReply.Trickled trickled:
+                var trickle = new StreamContent(new Chunked(Encoding.UTF8.GetBytes(trickled.Body), trickled.Chunk, ApiReply.After.Ends, eachRead: trickled.EachRead));
+                trickle.Headers.ContentType = new MediaTypeHeaderValue("text/html");
+                return new HttpResponseMessage((HttpStatusCode)trickled.Code) { Content = trickle, RequestMessage = request };
             case ApiReply.Streamed streamed:
                 var content = new StreamContent(new Chunked(Encoding.UTF8.GetBytes(streamed.Events), streamed.Chunk, streamed.Then, streamed.Held));
                 content.Headers.ContentType = new MediaTypeHeaderValue("text/event-stream");
@@ -142,8 +155,11 @@ internal sealed class ApiEndpoint : HttpMessageHandler
         }
     }
 
-    /// <summary>A body read a few bytes at a time, then ended, reset or silent - <paramref name="held"/> done once as it falls silent.</summary>
-    private sealed class Chunked(byte[] bytes, int chunk, ApiReply.After then, Action? held = null) : Stream
+    /// <summary>
+    /// A body read a few bytes at a time, then ended, reset or silent - <paramref name="held"/> done once as it falls
+    /// silent, <paramref name="eachRead"/> as each read that gives bytes begins.
+    /// </summary>
+    private sealed class Chunked(byte[] bytes, int chunk, ApiReply.After then, Action? held = null, Action? eachRead = null) : Stream
     {
         private int _at;
         private Action? _held = held;
@@ -164,6 +180,8 @@ internal sealed class ApiEndpoint : HttpMessageHandler
         {
             if (_at < bytes.Length)
             {
+                eachRead?.Invoke();
+
                 var count = Math.Min(Math.Min(chunk, buffer.Length), bytes.Length - _at);
                 bytes.AsMemory(_at, count).CopyTo(buffer);
                 _at += count;

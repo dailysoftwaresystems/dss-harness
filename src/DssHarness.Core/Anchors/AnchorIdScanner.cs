@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using DssHarness.Core.Text;
 
 namespace DssHarness.Core.Anchors;
 
@@ -77,8 +78,6 @@ public sealed class AnchorIdScanner
     /// </remarks>
     public const int CitationSegments = 2;
 
-    /// <summary>Most hex digits a numeric escape may carry before the id.</summary>
-    private const int MaximumHexDigits = 8;
 
     /// <summary>The one-character escapes whose letter may sit immediately before an id.</summary>
     private const string SimpleEscapeLetters = "abefnrtv0";
@@ -87,9 +86,7 @@ public sealed class AnchorIdScanner
     /// The segments a line opens with, past whatever comes before them - indentation, a comment's
     /// marker: what an id cut at a hyphen that ends the line before carries on with.
     /// </summary>
-    private static readonly Regex Opening = new(
-        $@"^[^A-Za-z0-9_]*(?<run>{AnchorIdRules.Segment}(?:-{AnchorIdRules.Segment})*)",
-        RegexOptions.CultureInvariant);
+    private static readonly Regex Opening = LinearRegex.Compile($@"^[^A-Za-z0-9_]*(?<run>{AnchorIdRules.Segment}(?:-{AnchorIdRules.Segment})*)");
 
     /// <summary>
     /// A hyphen a line opens with, past its indentation and a comment's marker, and the segments
@@ -97,17 +94,13 @@ public sealed class AnchorIdScanner
     /// where the two join into a row's id. A list's '- ' and an option's '--' open with no segment after
     /// the hyphen, and carry nothing on.
     /// </summary>
-    private static readonly Regex HyphenOpening = new(
-        $@"^[^A-Za-z0-9_-]*-(?<run>{AnchorIdRules.Segment}(?:-{AnchorIdRules.Segment})*)",
-        RegexOptions.CultureInvariant);
+    private static readonly Regex HyphenOpening = LinearRegex.Compile($@"^[^A-Za-z0-9_-]*-(?<run>{AnchorIdRules.Segment}(?:-{AnchorIdRules.Segment})*)");
 
     /// <summary>
     /// The segments a line opens with straight away, past its indentation and a comment's marker but with no hyphen before
     /// them: what an id cut inside a segment would carry on with - which it does only where the two join into a row's id.
     /// </summary>
-    private static readonly Regex StraightOpening = new(
-        $@"^[^A-Za-z0-9_-]*(?<run>{AnchorIdRules.Segment}(?:-{AnchorIdRules.Segment})*)",
-        RegexOptions.CultureInvariant);
+    private static readonly Regex StraightOpening = LinearRegex.Compile($@"^[^A-Za-z0-9_-]*(?<run>{AnchorIdRules.Segment}(?:-{AnchorIdRules.Segment})*)");
 
     private readonly Regex _candidate;
 
@@ -131,13 +124,9 @@ public sealed class AnchorIdScanner
         // Segments as IsWellFormed spells them, so a candidate this finds is an id the registry
         // could hold. The separation from what precedes it is decided below rather than here: a
         // regex boundary cannot see the backslash two characters back.
-        _candidate = new Regex(
-            $@"{escaped}-{AnchorIdRules.Segment}(?:-{AnchorIdRules.Segment}){{{CitationSegments - 1},}}",
-            RegexOptions.CultureInvariant);
+        _candidate = LinearRegex.Compile($@"{escaped}-{AnchorIdRules.Segment}(?:-{AnchorIdRules.Segment}){{{CitationSegments - 1},}}");
 
-        _shortTail = new Regex(
-            $@"(?<id>{escaped}(?:-{AnchorIdRules.Segment}){{0,{CitationSegments - 1}}})(?<hyphen>-)?\s*\z",
-            RegexOptions.CultureInvariant);
+        _shortTail = LinearRegex.Compile($@"(?<id>{escaped}(?:-{AnchorIdRules.Segment}){{0,{CitationSegments - 1}}})(?<hyphen>-)?\s*\z");
     }
 
     /// <summary>The spelling rules this scanner derives the id shape from.</summary>
@@ -326,8 +315,9 @@ public sealed class AnchorIdScanner
             return true;
         }
 
-        // A numeric escape: its hex digits, the marker that opened them, and the backslash.
-        for (var digits = 1; digits <= MaximumHexDigits && index - digits - 1 >= 0; digits++)
+        // A numeric escape: its hex digits, the marker that opened them, and the backslash. \x takes any count of hex
+        // digits, as C's own does; \u four and \U eight, the standard's own counts.
+        for (var digits = 1; index - digits - 1 >= 0; digits++)
         {
             if (!Uri.IsHexDigit(line[index - digits]))
             {

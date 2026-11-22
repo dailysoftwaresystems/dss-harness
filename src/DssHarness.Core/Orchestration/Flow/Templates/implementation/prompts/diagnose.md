@@ -6,8 +6,8 @@ The step `{source.step}` ended with exit code {source.code}:
 
 {source.error}
 
-What it found, where it is a check - each red leg, check or finding with its last lines and where its whole output
-is:
+What it found, where it is a check - each red leg, check or finding with the lines where it failed and where its whole
+output is:
 
 {source.red}
 

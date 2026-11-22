@@ -150,11 +150,10 @@ public sealed record LegGuardReport(InputComparison? Inputs, ContentionReport? C
         }
 
         var worst = Verdicts.Worst(candidates.Select(candidate => candidate.Verdict));
+        var chosen = candidates.First(candidate => candidate.Verdict == worst);
 
-        return ReachedVerdict.OrPoisoned(
-            worst,
-            leg,
-            candidates.First(candidate => candidate.Verdict == worst).Detail);
+        // The list the chosen detail stands for goes with it, whole, for the leg's line to keep.
+        return ReachedVerdict.OrPoisoned(worst, leg, chosen.Detail) with { Named = chosen.Named };
     }
 }
 

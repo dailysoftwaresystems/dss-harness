@@ -2,6 +2,7 @@ using DssHarness.Core.Configuration;
 using DssHarness.Core.Hosts;
 using DssHarness.Core.Output;
 using DssHarness.Core.Repository;
+using NSubstitute;
 
 namespace DssHarness.Tests;
 
@@ -239,20 +240,49 @@ public sealed class SyncedCopyToolCheckTests
         Assert.Equal(PublishedAnswer.NotTold(why), await versions.NewestAsync(Version("0.5.10"), TestContext.Current.CancellationToken));
     }
 
-    /// <summary>A feed that cannot be reached, or does not answer in time, is said as that, in the system's own words where it has any.</summary>
-    [Theory]
-    [InlineData(false, "it could not be reached: No such host is known")]
-    [InlineData(true, "it did not answer within 3 s")]
-    public async Task AFeedThatCannotBeReached_OrDoesNotAnswerInTime_IsSaidAsThat(bool silent, string why)
+    /// <summary>
+    /// A feed that cannot be reached is said as that, in the system's own words; one slow to answer is waited for, never
+    /// cut off at a number of the code's own (see <see cref="AFeedSlowToAnswer_IsWaitedForAndTold"/>).
+    /// </summary>
+    [Fact]
+    public async Task AFeedThatCannotBeReached_IsSaidAsThat()
     {
         using var versions = new NuGetPublishedToolVersions(new FeedDouble(new Dictionary<string, string>())
         {
-            Fails = silent ? new TaskCanceledException("The request timed out.") : new HttpRequestException("No such host is known."),
+            Fails = new HttpRequestException("No such host is known."),
         });
 
-        Assert.Equal(PublishedAnswer.NotTold(why), await versions.NewestAsync(Version("0.5.10"), TestContext.Current.CancellationToken));
+        Assert.Equal(
+            PublishedAnswer.NotTold("it could not be reached: No such host is known"),
+            await versions.NewestAsync(Version("0.5.10"), TestContext.Current.CancellationToken));
     }
 
+    /// <summary>
+    /// A feed slow to answer is waited for and told, and its answer read as any other: held to three seconds of the
+    /// code's own, a machine on a slow link was told nuget.org did not answer.
+    /// </summary>
+    [Fact]
+    public async Task AFeedSlowToAnswer_IsWaitedForAndTold()
+    {
+        var clock = new TimerClock();
+        var output = NSubstitute.Substitute.For<IHarnessOutput>();
+        var answering = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        using var versions = new NuGetPublishedToolVersions(
+            new FeedDouble(new Dictionary<string, string> { [NuGetPublishedToolVersions.VersionsAddress.ToString()] = """{"versions": ["0.5.10"]}""" })
+            {
+                Holds = answering.Task,
+            },
+            output,
+            clock);
+
+        var answer = await FourMinutes.WaitedAndToldAsync(clock, versions.NewestAsync(Version("0.5.10"), TestContext.Current.CancellationToken), answering.SetResult, TestContext.Current.CancellationToken);
+
+        Assert.Equal(PublishedAnswer.Of(Version("0.5.10")), answer);
+        output.Received().Info(
+            ToolPackage.Command,
+            NSubstitute.Arg.Is<string>(line => line == $"has waited 5m00s for nuget.org to say which {ToolPackage.Id} release is the newest"));
+    }
     /// <summary>A leaf says whether its version is listed; one that says nothing is listed, as the feed's rule has it.</summary>
     [Theory]
     [InlineData("""{"listed":true}""", true)]
@@ -278,19 +308,27 @@ public sealed class SyncedCopyToolCheckTests
         /// <summary>What every request raises instead of an answer, where a test says the feed gives none.</summary>
         public Exception? Fails { get; init; }
 
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        /// <summary>What each answer waits for before it is given, where a test holds the feed part way.</summary>
+        public Task? Holds { get; init; }
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             var address = request.RequestUri!.ToString();
             Asked.Add(address);
 
-            if (Fails is not null)
+            if (Holds is not null)
             {
-                return Task.FromException<HttpResponseMessage>(Fails);
+                await Holds.WaitAsync(cancellationToken).ConfigureAwait(false);
             }
 
-            return Task.FromResult(answers.TryGetValue(address, out var body)
+            if (Fails is not null)
+            {
+                throw Fails;
+            }
+
+            return answers.TryGetValue(address, out var body)
                 ? new HttpResponseMessage(System.Net.HttpStatusCode.OK) { Content = new StringContent(body) }
-                : new HttpResponseMessage(System.Net.HttpStatusCode.NotFound));
+                : new HttpResponseMessage(System.Net.HttpStatusCode.NotFound);
         }
     }
 

@@ -83,9 +83,6 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
     /// <summary>Why a step paused between two launches of its walk has no handoff: no launch was running to give one.</summary>
     public const string PausedBeforeItsNextLaunch = "the run was paused between two launches, before its next began";
 
-    /// <summary>How long a failed agent's first retry waits, in seconds, where neither its step nor the workflow names one.</summary>
-    public const int WorkflowBackoffSeconds = 30;
-
     /// <summary>The most a failed agent's retry waits, doubling from its backoff: the cap a step's own backoff answers to.</summary>
     public const int MostBackoffSeconds = Orchestration.Flow.WorkflowStep.MostBackoffSeconds;
 
@@ -696,8 +693,9 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
                 }
 
                 // A failed agent is tried again on its model before the step moves past it: `retries` times - the
-                // step's own, the workflow's where it says none - waiting `backoffSeconds` before the first and
-                // twice as long before each later one, at most fifteen minutes - on the first of the model's entries
+                // step's own, the workflow's where it says none - waiting `backoffSeconds` before the first, the
+                // engine's default where neither names one, and twice as long before each later one, at most
+                // fifteen minutes - on the first of the model's entries
                 // from where it stands that the walk may still take, for a key refused or limited is never asked
                 // again. The provider's service failing past the client's own tries is never retried, for every
                 // model of the step is reached through the same service.
@@ -711,7 +709,7 @@ public sealed class AgentRunner(IEnumerable<IAgentClient> clients, IFileSystem f
                         retried[model] = spent + 1;
 
                         var wait = TimeSpan.FromSeconds(Math.Min(
-                            (step.BackoffSeconds ?? WorkflowBackoffSeconds) * Math.Pow(2, spent),
+                            (step.BackoffSeconds ?? Orchestration.Flow.WorkflowStep.DefaultBackoffSeconds) * Math.Pow(2, spent),
                             (double)MostBackoffSeconds));
 
                         await watching.EmitAsync(new WaitingToRetry(

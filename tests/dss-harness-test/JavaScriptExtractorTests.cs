@@ -1,3 +1,4 @@
+using System.Globalization;
 using DssHarness.Core.Codebase;
 using DssHarness.Core.Codebase.Languages;
 
@@ -220,9 +221,55 @@ public sealed class JavaScriptExtractorTests : CodeGraphExtractorContractTests<J
 
     internal const string Minified = "function a(){b()}function b(){}";
 
+    private const string Reads = """
+        export const GREETING = 'hello world';
+
+        const KIND = 'one';
+
+        export class Reader {
+            constructor() {
+                this.own = 0;
+            }
+
+            take(table) {
+                const local = 4;
+                this.own += local + table.count;
+                return GREETING + ' padding ' + `${KIND} part`;
+            }
+        }
+
+        export const Settings = { retries: 3 };
+
+        export function retry() {
+            return Settings.retries;
+        }
+        """;
+
     /// <inheritdoc/>
     public override IReadOnlyList<CodeGraphFixture> Fixtures { get; } =
     [
+        new("src/reads.js", Reads)
+        {
+            Nodes =
+            [
+                new("javascript:src/reads.js.GREETING", CodeNodeKinds.Member, (1, 1)),
+                new("javascript:src/reads.js.KIND", CodeNodeKinds.Member, (3, 3)),
+                new("javascript:src/reads.js.Reader", CodeNodeKinds.Type, (5, 15)),
+                new("javascript:src/reads.js.Reader.constructor", CodeNodeKinds.Member, (6, 8)),
+                new("javascript:src/reads.js.Reader.take", CodeNodeKinds.Member, (10, 14)),
+                new("javascript:src/reads.js.Settings", CodeNodeKinds.Member, (17, 17)),
+                new("javascript:src/reads.js.retry", CodeNodeKinds.Member, (19, 21)),
+            ],
+            Edges =
+            [
+                // A module's own constant, read bare, and one read inside a template's hole.
+                new("javascript:src/reads.js.Reader.take", "javascript:src/reads.js.GREETING", CodeEdgeKinds.Uses, 13, CodeConfidences.Exact),
+                new("javascript:src/reads.js.Reader.take", "javascript:src/reads.js.KIND", CodeEdgeKinds.Uses, 13, CodeConfidences.Exact),
+
+                // A capitalized constant a member is read through is the value it is.
+                new("javascript:src/reads.js.retry", "javascript:src/reads.js.Settings", CodeEdgeKinds.Uses, 20, CodeConfidences.Exact),
+            ],
+        },
         new("src/shapes.mjs", Shapes)
         {
             Nodes =
@@ -410,7 +457,7 @@ public sealed class JavaScriptExtractorTests : CodeGraphExtractorContractTests<J
             extract.Nodes.Select(node => (node.Name, node.SubKind!)));
         Assert.Equal(["static"], Node(extract, "javascript:src/k.mjs.Box.of").Modifiers);
         Assert.Equal(["async", "*"], Node(extract, "javascript:src/k.mjs.Box.each").Modifiers);
-        Assert.Equal("src/k.mjs.Box", Node(extract, "javascript:src/k.mjs.Box.#hidden").SeenIn);
+        Assert.Equal("src/k.mjs.Box", Node(extract, "javascript:src/k.mjs.Box.#hidden").SeenIn?.Whole());
         Assert.Equal(["Base"], extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Inherits).Select(reference => reference.Name));
     }
 
@@ -466,7 +513,38 @@ public sealed class JavaScriptExtractorTests : CodeGraphExtractorContractTests<J
                 ("one", null, null), ("two", "prefix", "second"), ("default", "prefix", "Main"), ("default", "prefix", "Main"), ("three", "prefix", "all"),
                 ("make", "named", "Main.default"), ("default", "prefix", "fallback"),
             ],
-            extract.References.Where(reference => reference.Kind is CodeEdgeKinds.Calls or CodeEdgeKinds.Instantiates).Select(reference => (reference.Name, reference.Qualifier?.Kind, reference.Qualifier?.Name)));
+            extract.References.Where(reference => reference.Kind is CodeEdgeKinds.Calls or CodeEdgeKinds.Instantiates).Select(reference => (reference.Name, reference.Qualifier?.Kind, extract.Written(reference.Qualifier))));
+    }
+
+    /// <summary>
+    /// A default import of a single-file component binds the component it exports by default, as one of a script does -
+    /// a member through it is that export's - one of a CSS module or of data, which export nothing by a name, binds its
+    /// prefix alone, a member through it what the file declares and exports, and one of any other style sheet binds
+    /// nothing: its prefix lets no name through.
+    /// </summary>
+    [Fact]
+    public void ADefaultImportOfAComponent_BindsItsDefaultExport_AndOneOfAStyleSheetNone()
+    {
+        var extract = Read("src/main.js", """
+            import Cart from './Cart.vue';
+            import styles from './site.css';
+            import classes from './Cart.module.scss';
+            import config from './config.yaml';
+
+            export function go() {
+              Cart.open();
+              styles.paint();
+              classes.wide();
+              config.load();
+            }
+            """);
+
+        Assert.Equal(
+            [("./Cart.vue", "Cart", "default"), ("./site.css", "styles", ""), ("./Cart.module.scss", "classes", null), ("./config.yaml", "config", null)],
+            extract.Imports.Select(import => (import.Target, import.Prefix, import.Show is null ? null : string.Join(',', import.Show))));
+        Assert.Equal(
+            [("open", "named", "Cart.default"), ("paint", "prefix", "styles"), ("wide", "prefix", "classes"), ("load", "prefix", "config")],
+            extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Calls).Select(reference => (reference.Name, reference.Qualifier?.Kind, extract.Written(reference.Qualifier))));
     }
 
     /// <summary>
@@ -528,15 +606,14 @@ public sealed class JavaScriptExtractorTests : CodeGraphExtractorContractTests<J
         Assert.Equal(
             [("./all", "all", null, false), ("./parts", "second", "two", false), ("./parts", null, "one", false), ("./side", null, "", false)],
             extract.Imports.Where(import => !import.Fallback).Select(import => (import.Target, import.Prefix, import.Show is null ? null : string.Join(',', import.Show), import.Export)));
-        Assert.Equal("lib/c.js", Node(extract, "javascript:lib/c.js.hidden").SeenIn);
+        Assert.Equal("lib/c.js", Node(extract, "javascript:lib/c.js.hidden").SeenIn?.Whole());
         Assert.Null(Node(extract, "javascript:lib/c.js.shown").SeenIn);
         Assert.Equal(["alias"], Node(extract, "javascript:lib/c.js.Kept").Exports);
         Assert.Null(Node(extract, "javascript:lib/c.js.inline").SeenIn);
         Assert.Null(Node(extract, "javascript:lib/c.js.later").SeenIn);
-        Assert.Equal([("go", "all"), ("one", null), ("two", "second")], extract.References.Select(reference => (reference.Name, reference.Qualifier?.Name)));
+        Assert.Equal([("go", "all"), ("one", null), ("two", "second")], extract.References.Select(reference => (reference.Name, extract.Written(reference.Qualifier))));
 
         var again = Read("lib/r.js", "module.exports = require('./impl');");
-
         Assert.True(Assert.Single(again.Imports, import => !import.Fallback).Export);
     }
 
@@ -572,7 +649,7 @@ public sealed class JavaScriptExtractorTests : CodeGraphExtractorContractTests<J
         Assert.Equal(
             [("Maker", "lib/u.js", "make"), ("build", null, "")],
             extract.Nodes.Where(node => node.Name is "Maker" or "build").Select(node => (node.Name, node.SeenIn, string.Join(',', node.Exports ?? []))));
-        Assert.Equal([("make", null), ("default", "run")], extract.References.Select(reference => (reference.Name, reference.Qualifier?.Name)));
+        Assert.Equal([("make", null), ("module", null), ("default", "run")], extract.References.Select(reference => (reference.Name, extract.Written(reference.Qualifier))));
         Assert.Empty(extract.Dynamic);
     }
 
@@ -621,7 +698,9 @@ public sealed class JavaScriptExtractorTests : CodeGraphExtractorContractTests<J
         var exported = Read("lib/o.js", "module.exports = { async f() {}, *g() {}, get x() { return 1; }, [k]() { run(); } };");
 
         Assert.Equal(["f", "g", "x"], exported.Nodes.Where(node => node.Kind == CodeNodeKinds.Member && node.Name != "(module)").Select(node => node.Name));
-        Assert.Equal(["run"], exported.References.Select(reference => reference.Name));
+
+        // The computed key k is read to name the method: a use, beside the call the method's body makes.
+        Assert.Equal(["k", "run"], exported.References.Select(reference => reference.Name));
     }
 
     /// <summary>
@@ -699,15 +778,15 @@ public sealed class JavaScriptExtractorTests : CodeGraphExtractorContractTests<J
         Assert.Equal(
             [("a", null, null), ("b", null, null), ("c", "src/m.js", "see"), ("d", "src/m.js", "default"), ("handler", "src/m.js", "default")],
             module.Nodes.Select(node => (node.Name, node.SeenIn, node.Exports is null ? null : string.Join(',', node.Exports))));
-        Assert.Equal(["src/m.js"], module.Scopes.Select(scope => scope.Name));
-        Assert.Equal([("javascript:a", null), ("javascript:b", null)], script.Nodes.Select(node => (node.Id, node.SeenIn)));
+        Assert.Equal(["src/m.js"], module.Scopes.Select(scope => scope.Name.Whole()));
+        Assert.Equal([("javascript:a", null), ("javascript:b", null)], script.Nodes.Select(node => (node.Id.Whole(), node.SeenIn?.Whole())));
         Assert.Empty(script.Scopes);
         Assert.Equal(listed.Nodes.Single(node => node.Name == "a").Id, Assert.Single(listed.References, reference => reference.Name == "b").From);
         Assert.Equal(listed.Nodes.Single(node => node.Name == "K").Id, listed.Nodes.Single(node => node.Name == "m").Parent);
 
         foreach (var path in (string[])["src/plain.mjs", "src/plain.cjs"])
         {
-            Assert.Equal(path, Assert.Single(Read(path, "function f() {}").Nodes).SeenIn);
+            Assert.Equal(path, Assert.Single(Read(path, "function f() {}").Nodes).SeenIn?.Whole());
         }
 
         var linked = Link(
@@ -754,7 +833,7 @@ public sealed class JavaScriptExtractorTests : CodeGraphExtractorContractTests<J
                 ("one", "this", null), ("two", "base", null), ("three", "prefix", "p"), ("four", "type", "Thing"), ("five", "named", "Thing"),
                 ("six", "value", "store.items"), ("seven", "type", "Thing"), ("eight", "type", "Thing"), ("css", null, null), ("div", "value", "styled"),
             ],
-            extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Calls).Select(reference => (reference.Name, reference.Qualifier?.Kind, reference.Qualifier?.Name)));
+            extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Calls).Select(reference => (reference.Name, reference.Qualifier?.Kind, extract.Written(reference.Qualifier))));
     }
 
     /// <summary>
@@ -814,7 +893,7 @@ public sealed class JavaScriptExtractorTests : CodeGraphExtractorContractTests<J
 
         Assert.Equal(
             [("heading", null, null), ("body", null, null), ("default", "prefix", "Layout"), ("Side", "named", "Layout.default")],
-            extract.References.Select(reference => (reference.Name, reference.Qualifier?.Kind, reference.Qualifier?.Name)));
+            extract.References.Select(reference => (reference.Name, reference.Qualifier?.Kind, extract.Written(reference.Qualifier))));
     }
 
     /// <summary>
@@ -886,27 +965,345 @@ public sealed class JavaScriptExtractorTests : CodeGraphExtractorContractTests<J
     }
 
     /// <summary>
-    /// Code nested past the scanner's depth - templates, elements, test groups - is marked dynamic where it stops, and
-    /// what is read before it is kept: no text nests the reader past its stack.
+    /// Blocks nested five thousand deep in a body are read whole, each a scope of its own on the reader's stack of them:
+    /// the const each declares hides the module's function of its name inside it, and the call after the last one closes
+    /// is the module's function's - in a child given a small stack, which a reading by recursion would overflow.
     /// </summary>
     [Fact]
-    public void CodeNestedTooDeep_IsMarkedDynamic_AndNeverOverflows()
-    {
-        var templates = Read("src/t.js", $"function go() {{ return {string.Concat(Enumerable.Repeat("`${", 200))}deep(){string.Concat(Enumerable.Repeat("}`", 200))}; }}");
-        var elements = Read("src/e.jsx", $"function go() {{ return {string.Concat(Enumerable.Repeat("<a>{", 200))}deep(){string.Concat(Enumerable.Repeat("}</a>", 200))}; }}");
-        var groups = Read("test/g.js", string.Concat(Enumerable.Repeat("describe('g', () => {", 200)) + "deep();" + string.Concat(Enumerable.Repeat("});", 200)));
+    public async Task ABlockFiveThousandDeep_IsReadWhole()
+        => Assert.Equal(
+            new ChildRunAnswer(0, "calls probe 3, calls helper 4; 0 dynamic", ""),
+            await ChildRun.MethodAsync(typeof(JavaScriptExtractorTests), nameof(BlocksFiveThousandDeep), TestContext.Current.CancellationToken));
 
-        Assert.Contains(templates.Dynamic, dynamic => dynamic.Why.Contains("nested more than", StringComparison.Ordinal));
-        Assert.Contains(groups.Dynamic, dynamic => dynamic.Why.Contains("nested more than", StringComparison.Ordinal));
-        Assert.Single(templates.Nodes);
-        Assert.Single(elements.Nodes);
-        Assert.Single(groups.Dynamic, dynamic => dynamic.Why.Contains("nested more than", StringComparison.Ordinal));
+    /// <summary>The child of <see cref="ABlockFiveThousandDeep_IsReadWhole"/>: what the deep body references, and how much is marked dynamic.</summary>
+    internal static string BlocksFiveThousandDeep() => SmallStack.Run(() => Said(Read(
+        "src/deep.js",
+        $"export function helper() {{}}\nexport function deep() {{\n{string.Concat(Enumerable.Repeat("{ const helper = 1; ", 5_000))}probe(helper);{new string('}', 5_000)}\nhelper();\n}}\n")));
+
+    /// <summary>
+    /// Templates nested five thousand deep are read whole, each hole's code a run of its own on the reader's stack of
+    /// runs and none a call into the reading - the call the deepest makes among what the body calls, nothing marked
+    /// dynamic - in a child given a small stack.
+    /// </summary>
+    [Fact]
+    public async Task InterpolationsNestedFiveThousandDeep_AreReadWhole()
+        => Assert.Equal(
+            new ChildRunAnswer(0, "calls deep 1; 0 dynamic", ""),
+            await ChildRun.MethodAsync(typeof(JavaScriptExtractorTests), nameof(InterpolationsFiveThousandDeep), TestContext.Current.CancellationToken));
+
+    /// <summary>The child of <see cref="InterpolationsNestedFiveThousandDeep_AreReadWhole"/>: what the body references, and how much is marked dynamic.</summary>
+    internal static string InterpolationsFiveThousandDeep() => SmallStack.Run(() => Said(Read(
+        "src/t.js",
+        $"export function go() {{ return {string.Concat(Enumerable.Repeat("`${", 5_000))}deep(){string.Concat(Enumerable.Repeat("}`", 5_000))}; }}")));
+
+    /// <summary>
+    /// Test groups nested five thousand deep are read whole, each a node in the group that holds it and what its
+    /// arguments hold a run of code on the reader's stack of runs - the deepest group's call its own - in a child given a
+    /// small stack.
+    /// </summary>
+    [Fact]
+    public async Task TestGroupsNestedFiveThousandDeep_AreReadWhole()
+        => Assert.Equal(
+            new ChildRunAnswer(0, "5000 groups, deep called from one 5000 deep; 0 dynamic", ""),
+            await ChildRun.MethodAsync(typeof(JavaScriptExtractorTests), nameof(TestGroupsFiveThousandDeep), TestContext.Current.CancellationToken));
+
+    /// <summary>The child of <see cref="TestGroupsNestedFiveThousandDeep_AreReadWhole"/>: how many groups were read, how deep the one that calls is, and how much is marked dynamic.</summary>
+    internal static string TestGroupsFiveThousandDeep() => SmallStack.Run(() =>
+    {
+        var extract = Read("test/g.js", string.Concat(Enumerable.Repeat("describe(g, () => {", 5_000)) + "deep();" + string.Concat(Enumerable.Repeat("});", 5_000)));
+        var nodes = extract.Nodes.ToDictionary(node => node.Id);
+        var depth = 0;
+
+        for (var id = Assert.Single(extract.References, reference => reference.Kind == CodeEdgeKinds.Calls).From; id is not null; id = nodes[id].Parent)
+        {
+            depth++;
+        }
+
+        return string.Create(CultureInfo.InvariantCulture, $"{extract.Nodes.Count(node => node.SubKind == "testGroup")} groups, deep called from one {depth} deep; {extract.Dynamic.Count} dynamic");
+    });
+
+    /// <summary>What <paramref name="extract"/> references, each by its kind, name and line, and how many lines it marks dynamic: a depth test child's answer.</summary>
+    private static string Said(FileExtract extract)
+        => string.Create(CultureInfo.InvariantCulture, $"{string.Join(", ", extract.References.Select(reference => $"{reference.Kind} {reference.Name} {reference.Line}"))}; {extract.Dynamic.Count} dynamic");
+
+    /// <summary>
+    /// A local is its scope's, as JavaScript scopes it: a let, a const, a class and a function a block declares - the
+    /// function from the block's first line - are the block's, a loop head's the loop's, a catch's error its block's, an
+    /// arrow's parameter the arrow's, and a var its function's. Each hides the same name of the module's or an import's
+    /// inside its scope alone: past it, a call of the name is a call of the module's.
+    /// </summary>
+    [Fact]
+    public void ALocal_IsItsScopes_AndHidesANameInsideItAlone()
+    {
+        var extract = Read("src/scope.js", """
+            import { format } from './fmt';
+            export function item() {}
+            export function render(list) {
+              if (list.length === 0) {
+                const format = 'none';
+                return format;
+              }
+              list.map(item => item.id);
+              { inner(); function inner() {} }
+              { class Shape {} new Shape(); }
+              { var later = make(); }
+              for (let step = 0; step < 1; step++) {}
+              try { go(); } catch (error) { log(error); }
+              inner();
+              item();
+              later();
+              error();
+              step();
+              new Shape();
+              return format(list);
+            }
+            """);
+
+        Assert.Equal(
+            [
+                ("calls", "map", 8), ("calls", "make", 11), ("calls", "go", 13), ("calls", "log", 13), ("calls", "inner", 14), ("calls", "item", 15),
+                ("calls", "error", 17), ("calls", "step", 18), ("instantiates", "Shape", 19), ("calls", "format", 20),
+            ],
+            extract.References.Where(reference => reference.Kind is CodeEdgeKinds.Calls or CodeEdgeKinds.Instantiates).Select(reference => (reference.Kind, reference.Name, reference.Line)));
+        Assert.Equal(["a call through the function value later"], extract.Dynamic.Select(dynamic => dynamic.Why));
     }
 
     /// <summary>A shebang says how the file is run, and is no summary of the declaration below it.</summary>
     [Fact]
     public void AShebang_IsNoSummary()
         => Assert.Null(Assert.Single(Read("bin/cli.js", "#!/usr/bin/env node\nexport function main() {}").Nodes).Summary);
+
+    /// <summary>
+    /// A string's value is what JavaScript reads of it, its escapes decoded; a template's constant parts are each a literal
+    /// of their own, a <c>$</c> before a hole's <c>${</c> one of them; a regular expression is none, nor is a JSX element's
+    /// markup, whose attributes' quoted texts are, their character references decoded; and a parameter's default is its
+    /// function's code. A use is of a value the code reads: a receiver's first name where it is a value - a namespace an
+    /// import binds and a type the language declares not - each branch of a conditional, and no key of an object literal.
+    /// </summary>
+    [Fact]
+    public void AStringsValue_IsWhatJavaScriptReadsOfIt_AndAUseIsOfAValueTheCodeReads()
+    {
+        var extract = Read("src/price.jsx", """
+            import * as ns from './ns';
+            import { config } from './config';
+
+            export function Price({ amount }, label = 'parameter default') {
+              const re = /a\/b"c/g, plain = /plain text/;
+              const tab = 'a\tb \u{41}\x42C';
+              const total = `USD $${amount} due`;
+              const view = <Badge title="Tom &amp; Jerry &#33;" kind='second'>{label} text</Badge>;
+              const port = config.port;
+              ns.helper();
+              Math.max(1, 2);
+              const big = isBig ? LIMIT : SMALL;
+              return { key: value, other: 2 };
+            }
+            """);
+
+        const string Price = "javascript:src/price.jsx.Price";
+
+        Assert.Equal(
+            [
+                new LiteralRow("parameter default", 4, Price),
+                new LiteralRow("a\tb ABC", 6, Price),
+                new LiteralRow("USD $", 7, Price),
+                new LiteralRow(" due", 7, Price),
+                new LiteralRow("Tom & Jerry !", 8, Price),
+                new LiteralRow("second", 8, Price),
+            ],
+            LiteralRow.Of(extract));
+        Assert.Equal(
+            [("config", 9, ""), ("port", 9, "value config"), ("isBig", 12, ""), ("LIMIT", 12, ""), ("SMALL", 12, ""), ("value", 13, "")],
+            extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Uses).Select(reference => (reference.Name, reference.Line, $"{reference.Qualifier?.Kind} {extract.Written(reference.Qualifier)}".Trim())));
+    }
+
+    /// <summary>
+    /// Every literal that holds a character is kept, however short - a one-letter one too, an empty one none - and each
+    /// value once, however many times the file writes it: ten thousand of one value are one literal of ten thousand places,
+    /// each its own line. A floor of three characters dropped the one letter; a literal kept a place at a time held the
+    /// value ten thousand times.
+    /// </summary>
+    [Fact]
+    public void EveryNonEmptyLiteral_IsKeptOnce()
+    {
+        var text = "const one = 'a';\nconst none = '';\n" + string.Concat(Enumerable.Repeat("use('same');\n", 10_000));
+        var extract = Read("src/many.js", text);
+
+        Assert.Equal(["a", "same"], (extract.Literals ?? []).Select(literal => literal.Value));
+        Assert.Equal([1], extract.Literals![0].Places.Select(place => place.Line));
+        Assert.Equal(Enumerable.Range(3, 10_000), extract.Literals[1].Places.Select(place => place.Line));
+        Assert.Null(extract.Problem("javascript", CodeFileText.Lines(text).Count));
+    }
+
+    /// <summary>
+    /// A call's receiver of any count of names is read by them all; and an import whose string its line leaves open
+    /// names nothing.
+    /// </summary>
+    [Fact]
+    public void AReceiverOfAnyCountOfNames_IsReadByThemAll_AndAnImportLeftOpenNamesNothing()
+    {
+        var extract = Read("src/run.js", """
+            import open from './open
+            import closed from './closed';
+
+            export function run() {
+              a.b.c.d.e.f.g.h.go();
+              a.b.c.d.e.f.g.h.i.go();
+            }
+            """);
+
+        Assert.Equal(
+            [(5, "value a.b.c.d.e.f.g.h"), (6, "value a.b.c.d.e.f.g.h.i")],
+            extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Calls).Select(reference => (reference.Line, $"{reference.Qualifier?.Kind} {extract.Written(reference.Qualifier)}".Trim())));
+        Assert.Equal([2], extract.Imports.Select(import => import.Line).Distinct());
+    }
+
+    /// <summary>
+    /// A chain of sixty names is written as sixty references of one name each: the second qualified by the first's name,
+    /// each after by a link to the reference the name before it made - one link a name, so the chain costs its length -
+    /// and the call at its end by a link to the last; its names read whole from the links (<see cref="FileExtract.Written"/>).
+    /// </summary>
+    [Fact]
+    public void ASixtyNameChain_IsWrittenAsSixtyLinks()
+    {
+        var names = Enumerable.Range(1, 60).Select(index => string.Create(CultureInfo.InvariantCulture, $"n{index}")).ToList();
+        var text = $"export function run() {{\n  {string.Join('.', names)}.go();\n}}\n";
+        var extract = Read("src/chain.js", text);
+        var uses = extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Uses).ToList();
+        var call = Assert.Single(extract.References, reference => reference.Kind == CodeEdgeKinds.Calls);
+
+        Assert.Equal(names, uses.Select(reference => reference.Name));
+        Assert.Null(uses[0].Qualifier);
+        Assert.Equal(new ExtractQualifier(CodeQualifierKinds.Value, "n1"), uses[1].Qualifier);
+        Assert.All(Enumerable.Range(2, 58), at => Assert.Equal(new ExtractQualifier(CodeQualifierKinds.Value) { Link = at - 1 }, uses[at].Qualifier));
+        Assert.Equal(new ExtractQualifier(CodeQualifierKinds.Value) { Link = 59 }, call.Qualifier);
+        Assert.Equal(string.Join('.', names), extract.Written(call.Qualifier));
+        Assert.Null(extract.Problem("javascript", CodeFileText.Lines(text).Count));
+    }
+
+    /// <summary>
+    /// A member a string names in brackets - <c>styles['btn-big']</c>, a name no dot can write - is a use of it as the
+    /// member a dot names is, qualified by its receiver alike: by the prefix a style sheet's import binds; a member the
+    /// code computes is none.
+    /// </summary>
+    [Fact]
+    public void AMemberAStringNames_IsAUse_QualifiedAsADotsIs()
+    {
+        var extract = Read("src/view.js", """
+            import styles from './site.css';
+            import classes from './Cart.module.css';
+            export function view(key) {
+              return [styles['btn-big'], styles.wide, classes['is-open'], classes.closed, styles[key]];
+            }
+            """);
+
+        Assert.Equal(
+            [("btn-big", "prefix", "styles"), ("wide", "prefix", "styles"), ("is-open", "prefix", "classes"), ("closed", "prefix", "classes")],
+            extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Uses).Select(reference => (reference.Name, reference.Qualifier?.Kind, extract.Written(reference.Qualifier))));
+    }
+
+    /// <summary>
+    /// Every declarator of a declaration declares a local - <c>const a = 1, b = 2</c>, one on the next line after a comma,
+    /// a pattern and a <c>for</c>'s among them - and none is a use, while a line the declaration does not go on to with a
+    /// comma is code of its own.
+    /// </summary>
+    [Fact]
+    public void EachDeclaratorOfADeclaration_IsALocal_AndNoUse()
+    {
+        var extract = Read("src/sum.js", """
+            export function sum() {
+              const a = 1, b = total;
+              let c = 0, d = first
+              seen = q, rest = 1
+              const e = 2,
+                { f, g } = second;
+              for (let i = 0, j = limit; i < j; i++) {}
+              return a + b + c + d + e + f + g;
+            }
+            """);
+
+        Assert.Equal(
+            [("total", 2), ("first", 3), ("seen", 4), ("q", 4), ("rest", 4), ("second", 6), ("limit", 7)],
+            extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Uses).Select(reference => (reference.Name, reference.Line)));
+    }
+
+    /// <summary>
+    /// The first name of a receiver's chain - a member's or an element's - is a use where it is a value, by what the file
+    /// says of it whatever its case: a constant it declares, a name an import binds, a default import by its export, a
+    /// name it says nothing of and writes as a value's; a type it declares and a namespace an import binds are none.
+    /// </summary>
+    [Fact]
+    public void AReceiversFirstName_IsAUse_WhereTheFileSaysItIsAValue()
+    {
+        var extract = Read("src/h.js", """
+            import Router from 'next/router';
+            import { Config, routes } from './config';
+            import * as tools from './tools';
+            export const Settings = { retries: 3 };
+            export class Store { static size = 1; }
+            export function go(type) {
+              Router.push('/home');
+              const t = Config.timeout + Settings.retries + tools.limit + Store.size;
+              return routes[0] + handlers[type] + t;
+            }
+            """);
+
+        Assert.Equal(
+            [
+                ("default", "prefix", "Router", 7), ("Config", null, null, 8), ("timeout", "named", "Config", 8), ("Settings", null, null, 8), ("retries", "named", "Settings", 8),
+                ("limit", "prefix", "tools", 8), ("size", "named", "Store", 8), ("routes", null, null, 9), ("handlers", null, null, 9),
+            ],
+            extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Uses).Select(reference => (reference.Name, reference.Qualifier?.Kind, extract.Written(reference.Qualifier), reference.Line)));
+    }
+
+    /// <summary>A label a break or a continue names is no use, where a case's name is one.</summary>
+    [Fact]
+    public void ALabelABreakOrAContinueNames_IsNoUse()
+    {
+        var extract = Read("src/c.js", """
+            export function walk(items, limit) {
+              outer: for (const item of items) {
+                for (const other of items) {
+                  if (other === item) continue outer;
+                  if (!other) break outer;
+                }
+              }
+              switch (items.length) { case LIMIT: return limit; }
+            }
+            """);
+
+        Assert.Equal([("length", 8), ("LIMIT", 8)], extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Uses).Select(reference => (reference.Name, reference.Line)));
+    }
+
+    /// <summary>
+    /// A JSX attribute's character reference is read as HTML reads one, of any length: a number written with any count of
+    /// digits its character, one past every character's the replacement character, and a name no entity has its text.
+    /// </summary>
+    [Fact]
+    public void AnAttributesCharacterReference_IsReadAsHtmlReadsOne_OfAnyLength()
+    {
+        var digits = new string('0', 40);
+        var extract = Read("src/a.jsx", $$"""
+            export const view = <a title="x&#{{digits}}65;y &notanentityofanyname; &#99999999999999; &amp" />;
+            """);
+
+        Assert.Equal(["xAy &notanentityofanyname; � &amp"], LiteralRow.Of(extract).Select(literal => literal.Value));
+    }
+
+    /// <summary>A String.raw template's value is its text as written, no escape read in it, where another tag's template is read by JavaScript's escapes.</summary>
+    [Fact]
+    public void AStringRawTemplate_KeepsItsTextAsWritten()
+    {
+        var extract = Read("src/n.js", """
+            export function f() {
+              const raw = String.raw`^\d+$ raw pattern`;
+              const tagged = html`tab\tseparated text`;
+              return raw + tagged;
+            }
+            """);
+
+        Assert.Equal(["^\\d+$ raw pattern", "tab\tseparated text"], LiteralRow.Of(extract).Select(literal => literal.Value));
+    }
 
     private static FileExtract Read(string path, string text) => new JavaScriptExtractor().Extract(new CodeFileInput(path, text));
 

@@ -11,14 +11,13 @@ namespace DssHarness.Core.Web.Index;
 /// <param name="Sitemap">The sitemap's address; <see langword="null"/> where those <c>robots.txt</c> names are read, else <c>/sitemap.xml</c>.</param>
 /// <param name="Include">Patterns of the paths of the pages read; every page where empty.</param>
 /// <param name="Exclude">Patterns of the paths of pages never read.</param>
-/// <param name="MaxPages">The most pages it holds.</param>
 /// <param name="Refresh">How old it may be, and how long a page that could not be read waits, before it is read again.</param>
 /// <remarks>Its pace is not its own: the source's turn on this machine is the run's gate's to give (<see cref="WebFetchGate.Pace"/>), its crawl delay the site's.</remarks>
-public sealed record SitemapSettings(string Site, string? Sitemap, IReadOnlyList<GlobPattern> Include, IReadOnlyList<GlobPattern> Exclude, int MaxPages, TimeSpan Refresh)
+public sealed record SitemapSettings(string Site, string? Sitemap, IReadOnlyList<GlobPattern> Include, IReadOnlyList<GlobPattern> Exclude, TimeSpan Refresh)
 {
     /// <summary>
-    /// What its index holds depends on, said as one text: the site, the sitemap read, the patterns and <c>maxPages</c> -
-    /// not how old the index may be, nor its pace. An index filled under another is filled again.
+    /// What its index holds depends on, said as one text: the site, the sitemap read and the patterns - not how old the
+    /// index may be, nor its pace. An index filled under another is filled again.
     /// </summary>
     public string Fingerprint
     {
@@ -30,7 +29,6 @@ public sealed record SitemapSettings(string Site, string? Sitemap, IReadOnlyList
                 Sitemap ?? string.Empty,
                 string.Join('\n', Include),
                 string.Join('\n', Exclude),
-                MaxPages.ToString(CultureInfo.InvariantCulture),
             });
 
             return Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(said)));

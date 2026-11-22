@@ -14,8 +14,8 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// <para>
 /// Parsed through the one YAML reader, <see cref="YamlReading"/>, which owns the reasons it reads
 /// YamlDotNet's representation model rather than a serialiser: the position of the key that was
-/// wrong, and the fact that a key was not recognised at all. It holds a workflow file to the bounds
-/// this reader asks of it (<see cref="Bounds"/>) before the file is read into nodes.
+/// wrong, and the fact that a key was not recognised at all. It holds a workflow file to the rules
+/// this reader asks of it (<see cref="Rules"/>) before the file is read into nodes.
 /// </para>
 /// <para>
 /// Every problem in a file is collected and reported together, each with the line and column it was
@@ -29,27 +29,17 @@ public static class WorkflowFileParser
     /// <summary>How deep steps may nest: a group's steps inside a group's steps, and so on.</summary>
     /// <remarks>
     /// Bounded here, in the reader, the one owner of the rule: a step nested deeper is refused before anything reads
-    /// it. The file's YAML is bounded before that, more loosely (<see cref="MaxYamlDepth"/>), so that no file can nest
-    /// deeper than the reader itself can bear.
+    /// it. The file's YAML is held to no depth of its own: a value nested however deep is read, and judged by the rules
+    /// of the key it is given to.
     /// </remarks>
     public const int MaxDepth = 10;
 
     /// <summary>
-    /// How deep the file's YAML may nest at all - mappings and lists inside one another - before it is read into
-    /// nodes. A definition that keeps to <see cref="MaxDepth"/> nests a few levels for each level of steps; one past
-    /// this bound is no definition, and reading it whole could exhaust the reader before any rule saw it.
-    /// </summary>
-    public const int MaxYamlDepth = 64;
-
-    /// <summary>
     /// What a workflow file's YAML is held to before it is read into nodes, by the one reader: no alias - <c>*name</c>,
     /// a merge key's included - which repeats a part of the file by reference, and so lets a few hundred bytes stand for
-    /// millions of steps; and no nesting past <see cref="MaxYamlDepth"/>, which reading into nodes would recurse through.
+    /// millions of steps.
     /// </summary>
-    private static readonly YamlBounds Bounds = new(
-        MaxYamlDepth,
-        "a definition writes each of its steps out, so that what it says is what it reads",
-        $"no definition does, and steps themselves nest at most {MaxDepth}");
+    private static readonly YamlRules Rules = new("a definition writes each of its steps out, so that what it says is what it reads");
 
     /// <summary>Top-level keys a workflow file takes.</summary>
     private static readonly IReadOnlyList<string> FileKeys = KeyDescription.Names(WorkflowKeys.File);
@@ -70,7 +60,7 @@ public static class WorkflowFileParser
             text,
             "a workflow's definition holds one, so that nothing has to decide which of them a run ran",
             problems,
-            Bounds);
+            Rules);
 
         if (root is null)
         {
@@ -266,14 +256,15 @@ public static class WorkflowFileParser
             return null;
         }
 
-        var keys = CollectKeys(mapping, "codebaseGraph", KeyDescription.Names(WorkflowKeys.CodebaseGraph), problems);
+        var keys = CollectKeys(mapping, "codebaseGraph", KeyDescription.Names(WorkflowKeys.CodebaseGraph), problems, RetiredGraphKey);
 
         IReadOnlyList<string>? include = null;
         IReadOnlyList<string>? exclude = null;
         IReadOnlyList<string>? languages = null;
-        int? maxFileBytes = null;
         string? generated = null;
         int? mapTokens = null;
+        IReadOnlyList<string>? keyNaming = null;
+        IReadOnlyDictionary<string, IReadOnlyList<string>>? claims = null;
 
         foreach (var (key, value) in keys)
         {
@@ -291,10 +282,6 @@ public static class WorkflowFileParser
                     languages = RequireStringList(value, "codebaseGraph.languages", problems);
                     break;
 
-                case "maxFileBytes":
-                    maxFileBytes = RequireInt(value, "codebaseGraph.maxFileBytes", problems);
-                    break;
-
                 case "generated":
                     generated = YamlReading.RequireScalar(value, "codebaseGraph.generated", problems);
                     break;
@@ -303,12 +290,56 @@ public static class WorkflowFileParser
                     mapTokens = RequireInt(value, "codebaseGraph.mapTokens", problems);
                     break;
 
+                case "keyNaming":
+                    keyNaming = RequireStringList(value, "codebaseGraph.keyNaming", problems);
+                    break;
+
+                case "claims":
+                    claims = ReadClaims(value, problems);
+                    break;
+
                 default:
                     throw Unread(key);
             }
         }
 
-        return new FlowCodebaseGraph(include, exclude, languages, maxFileBytes, generated, mapTokens);
+        return new FlowCodebaseGraph(include, exclude, languages, Generated: generated, MapTokens: mapTokens, KeyNaming: keyNaming, Claims: claims);
+    }
+
+    /// <summary>
+    /// The keys <c>codebaseGraph</c> took before what they set went: each is refused naming why, so a reader takes the
+    /// line out knowing what became of it rather than looking for where it moved.
+    /// </summary>
+    internal static string? RetiredGraphKey(string key)
+        => key == "maxFileBytes"
+            ? "every file the graph claims is read whole, streamed, whatever its size, so no size is set"
+            : null;
+
+    /// <summary>
+    /// Reads the <c>codebaseGraph.claims</c> mapping: each key an implementation's name, its value the file name endings,
+    /// each with its dot, it claims.
+    /// </summary>
+    private static IReadOnlyDictionary<string, IReadOnlyList<string>>? ReadClaims(YamlNode node, List<string> problems)
+    {
+        if (node is not YamlMappingNode mapping)
+        {
+            problems.Add(YamlReading.At(node, "'codebaseGraph.claims' is not a mapping of an implementation's name to the endings it claims."));
+            return null;
+        }
+
+        var claims = new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal);
+
+        foreach (var (key, value) in mapping.Children)
+        {
+            if (YamlReading.KeyOf(key, problems) is not { } language)
+            {
+                continue;
+            }
+
+            claims[language] = RequireStringList(value, $"codebaseGraph.claims.{language}", problems) ?? [];
+        }
+
+        return claims;
     }
 
     private static FlowRecover? ReadRecover(YamlNode node, List<string> problems)
@@ -1137,9 +1168,12 @@ public static class WorkflowFileParser
         {
             foreach (var (path, scalar) in TextsIn(key, value, inList: false))
             {
+                string? spelled = null;
+
                 foreach (var read in WorkflowExpressions.TemplateReads(scalar.Value!))
                 {
-                    problems.Add(YamlReading.At(scalar, $"'{where}.{path}' holds {{{read.Whole}}}, and {path} is no template: it is read as it is written, never filled; {owner} fills {fills}."));
+                    spelled ??= path.Spelled();
+                    problems.Add(YamlReading.At(scalar, $"'{where}.{spelled}' holds {{{read.Whole}}}, and {spelled} is no template: it is read as it is written, never filled; {owner} fills {fills}."));
                 }
             }
         }
@@ -1150,40 +1184,103 @@ public static class WorkflowFileParser
     /// expression: a key of <see cref="WorkflowStepTypes.ExpressionKeys"/> is one, and so is a key of
     /// <see cref="WorkflowStepTypes.ListOrExpressionKeys"/> given a single value; a list such a key is given is names.
     /// </summary>
-    private static IEnumerable<(string Path, YamlScalarNode Scalar)> TextsIn(string path, YamlNode node, bool inList)
+    /// <remarks>
+    /// Walked on a stack of its own, in the order the file writes them, so a value nested however deep is read and no
+    /// level of it is recursed through. A scalar's path is the chain of names that leads to it, matched against the
+    /// expression keys from its end and spelled out only where a problem names it, so a deep value's path is never
+    /// spelled out at each level it passes. A workflow file holds no alias (<see cref="Rules"/>), so its values are
+    /// trees, and no node is met twice.
+    /// </remarks>
+    private static IEnumerable<(ValuePath Path, YamlScalarNode Scalar)> TextsIn(string path, YamlNode node, bool inList)
     {
-        switch (node)
+        var waiting = new Stack<(ValuePath Path, YamlNode Node, bool InList)>();
+        waiting.Push((new ValuePath(null, path), node, inList));
+
+        while (waiting.TryPop(out var next))
         {
-            case YamlScalarNode { Value: not null } scalar:
-                if (inList || !(WorkflowStepTypes.ExpressionKeys.Contains(path, StringComparer.Ordinal) || WorkflowStepTypes.ListOrExpressionKeys.Contains(path, StringComparer.Ordinal)))
-                {
-                    yield return (path, scalar);
-                }
-
-                break;
-
-            case YamlSequenceNode sequence:
-                foreach (var found in sequence.Children.SelectMany(child => TextsIn(path, child, inList: child is YamlScalarNode)))
-                {
-                    yield return found;
-                }
-
-                break;
-
-            case YamlMappingNode mapping:
-                foreach (var (key, value) in mapping.Children)
-                {
-                    if (YamlReading.ScalarOf(key) is { } name)
+            switch (next.Node)
+            {
+                case YamlScalarNode { Value: not null } scalar:
+                    if (next.InList || !(WorkflowStepTypes.ExpressionKeys.Any(next.Path.Is) || WorkflowStepTypes.ListOrExpressionKeys.Any(next.Path.Is)))
                     {
-                        foreach (var found in TextsIn($"{path}.{name}", value, inList: false))
+                        yield return (next.Path, scalar);
+                    }
+
+                    break;
+
+                case YamlSequenceNode sequence:
+                    for (var index = sequence.Children.Count - 1; index >= 0; index--)
+                    {
+                        waiting.Push((next.Path, sequence.Children[index], sequence.Children[index] is YamlScalarNode));
+                    }
+
+                    break;
+
+                case YamlMappingNode mapping:
+                    List<KeyValuePair<YamlNode, YamlNode>> pairs = [.. mapping.Children];
+
+                    for (var index = pairs.Count - 1; index >= 0; index--)
+                    {
+                        if (YamlReading.ScalarOf(pairs[index].Key) is { } name)
                         {
-                            yield return found;
+                            waiting.Push((new ValuePath(next.Path, name), pairs[index].Value, false));
                         }
                     }
+
+                    break;
+            }
+        }
+    }
+
+    /// <summary>
+    /// The path to a value under a step's key (<see cref="TextsIn"/>), as the chain of names that leads to it: a class, not
+    /// a record, so nothing walks the chain but its own members, none of which recurses.
+    /// </summary>
+    /// <param name="parent">The path to the mapping that holds the value; <see langword="null"/> for the step's key itself.</param>
+    /// <param name="name">The value's key in that mapping, or the step's key.</param>
+    private sealed class ValuePath(ValuePath? parent, string name)
+    {
+        /// <summary>
+        /// Whether the path is <paramref name="dotted"/>, names joined by dots - <c>repeat.until</c> - compared name by name
+        /// from its end, so a path however long is told apart in as many steps as the dotted one has names.
+        /// </summary>
+        public bool Is(string dotted)
+        {
+            var at = this;
+            var parts = dotted.Split('.');
+
+            for (var index = parts.Length - 1; index >= 0; index--)
+            {
+                if (at is null || !string.Equals(at.Name, parts[index], StringComparison.Ordinal))
+                {
+                    return false;
                 }
 
-                break;
+                at = at.Parent;
+            }
+
+            return at is null;
         }
+
+        /// <summary>The path spelled out, its names joined by dots: <c>outputs.findings.type</c>.</summary>
+        public string Spelled()
+        {
+            var names = new List<string>();
+
+            for (var at = this; at is not null; at = at.Parent)
+            {
+                names.Add(at.Name);
+            }
+
+            names.Reverse();
+            return string.Join('.', names);
+        }
+
+        /// <summary>The path to the mapping that holds the value.</summary>
+        private ValuePath? Parent { get; } = parent;
+
+        /// <summary>The value's key in that mapping.</summary>
+        private string Name { get; } = name;
     }
 
     /// <summary>Reads the keys that belong to a step's type alone.</summary>

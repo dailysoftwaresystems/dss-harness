@@ -59,12 +59,15 @@ internal sealed record WatchTarget
 internal interface IWatchKind
 {
     /// <summary>
-    /// How many directories a watch through this kind takes at most besides the root's own - each holding inputs and each
-    /// above them watched for the names in it alone, counted alike - or <see langword="null"/> where it has no bound of its
-    /// own. Past a bound, the watch takes some directories all the way down instead; with none, every directory that holds
-    /// an input, or lies above one, is watched for itself, and none all the way down.
+    /// Whether this kind watches a tree through one watch of its root, all the way down, rather than a watch for each
+    /// directory: one of .NET's watchers takes a handle, a buffer and a thread whatever it covers - on Linux an inotify
+    /// instance besides - so a tree is one watch of its root, what it hears kept only where it names an input or a
+    /// directory above one, and an overflow of its buffer read again from the inputs themselves
+    /// (<see cref="IWatchSink.Overflowed"/>). A kind that does not - inotify's hub on Linux - watches every directory that
+    /// holds an input for its own entries, and every one above them for names alone, however many there are, and none
+    /// all the way down.
     /// </summary>
-    int? MostDirectories { get; }
+    bool WatchesTheRootWhole { get; }
 
     /// <summary>
     /// Watches every one of <paramref name="targets"/> until what it returns is disposed, telling
@@ -97,4 +100,11 @@ internal interface IWatchSink
     /// <summary>Events were lost, or the watch is gone: the span can no longer be answered for.</summary>
     /// <param name="why">What was lost, in the words a verdict will carry.</param>
     void Lost(string why);
+
+    /// <summary>
+    /// Events were lost to the watch's buffer or queue overflowing, and the watch goes on: what changed while they were
+    /// lost is read again from the inputs themselves, each against how the work found it.
+    /// </summary>
+    /// <param name="why">What overflowed, in the system's words, for a verdict to carry where the inputs cannot be read again.</param>
+    void Overflowed(string why);
 }

@@ -88,9 +88,10 @@ public sealed record LegEntry
 
     /// <summary>
     /// What the leg's phases reported about their own timing under <c>--time</c>. Empty without it,
-    /// and empty with it where no timing pattern is configured or none matched.
+    /// and empty with it where no timing pattern is configured or none matched. Every mark: where the phases kept them in
+    /// their timing records, read from there each time the marks are asked for, never held (<see cref="PhaseTimings"/>).
     /// </summary>
-    public IReadOnlyList<TimingMark> Timings { get; init; } = [];
+    public IEnumerable<TimingMark> Timings { get; init; } = [];
 
     /// <summary>
     /// Anything already known to make this leg's timings meaningless, such as a phase that spanned a
@@ -160,6 +161,13 @@ public sealed record LegEntry
     /// run that left a step out is never read as having run it.
     /// </summary>
     public IReadOnlyList<string> UnselectedSteps { get; init; } = [];
+
+    /// <summary>
+    /// Every item the verdict's detail stands for, whole and in order (<see cref="ReachedVerdict.Named"/>): the detail
+    /// names as many as fit its line, and the rest are here, in the ledger and as the leg's <c>named</c> in
+    /// <c>--json</c>. Empty where the detail names no list.
+    /// </summary>
+    public IReadOnlyList<string> Named { get; init; } = [];
 
     /// <summary>
     /// The compilers CMake configured the leg's build with, as it reported them: named on its line
@@ -240,7 +248,7 @@ public sealed record LegEntry
 
     /// <summary>
     /// What each start of the leg's command on its host said, in order, where the host's DssHarness failed there as a
-    /// defect before anything ran and the command was started once more (<see cref="Runs.RemoteLegRunner.MostRestarts"/>) -
+    /// defect before anything ran and the command was started once more, for each cause not met before -
     /// its check's before this machine took its slot first, then its run's: said on the line whatever the leg then
     /// reached, so a failure the next start did not meet is never hidden (<see cref="Runs.HostRestarts"/>, the one owner of
     /// how it is said). Empty where each was started once.

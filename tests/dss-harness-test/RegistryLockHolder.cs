@@ -21,12 +21,17 @@ internal sealed class RegistryLockHolder : IDisposable
         {
             try
             {
-                registryLock.RunExclusive(registries, () =>
-                {
-                    _held.Set();
-                    _release.Wait(TimeSpan.FromSeconds(60));
-                    return 0;
-                });
+                registryLock.RunExclusiveAsync(
+                        registries,
+                        () =>
+                        {
+                            _held.Set();
+                            _release.Wait(TimeSpan.FromSeconds(60));
+                            return 0;
+                        },
+                        CancellationToken.None)
+                    .GetAwaiter()
+                    .GetResult();
             }
             catch (Exception ex)
             {

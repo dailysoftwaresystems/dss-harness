@@ -71,10 +71,9 @@ public sealed partial class AgentKeyStore(IFileSystem fileSystem, IFilePermissio
     /// <c>apiKeyNames</c> are held to where the configuration is read, and the slot's names where it is.
     /// </summary>
     /// <param name="name">The name.</param>
-    public static bool IsVariableName(string name) => VariableName().IsMatch(name);
+    public static bool IsVariableName(string name) => VariableName.IsMatch(name);
 
-    [System.Text.RegularExpressions.GeneratedRegex("^[A-Z][A-Z0-9_]*$")]
-    private static partial System.Text.RegularExpressions.Regex VariableName();
+    private static readonly System.Text.RegularExpressions.Regex VariableName = Text.LinearRegex.Compile("^[A-Z][A-Z0-9_]*$");
 
     /// <summary>What a provider's key holds, as a refusal asks for it: the company's own name, whose API it is.</summary>
     public static string WhatHolds(AgentProviderConfig provider)

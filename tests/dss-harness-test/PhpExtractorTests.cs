@@ -1,6 +1,6 @@
+using System.Globalization;
 using DssHarness.Core.Codebase;
 using DssHarness.Core.Codebase.Languages;
-using DssHarness.Core.Codebase.Languages.Scanning;
 
 namespace DssHarness.Tests;
 
@@ -220,9 +220,65 @@ public sealed class PhpExtractorTests : CodeGraphExtractorContractTests<PhpExtra
         """;
 
 
+    private const string Reads = """
+        <?php
+        namespace Reads;
+
+        class Table
+        {
+            public const GREETING = 'hello world';
+
+            public static int $count = 0;
+        }
+
+        enum Kind
+        {
+            case One;
+            case String;
+        }
+
+        class Reader
+        {
+            private int $own = 0;
+
+            public function take(): int
+            {
+                $local = 4;
+                Table::$count += $local + $this->own;
+                $which = Kind::One ?? Kind::String;
+                return strlen(Table::GREETING . ' padding ' . "{$which->name} part");
+            }
+        }
+        """;
+
     /// <inheritdoc/>
     public override IReadOnlyList<CodeGraphFixture> Fixtures { get; } =
     [
+        new("src/reads.php", Reads)
+        {
+            Nodes =
+            [
+                new("php:Reads", CodeNodeKinds.Namespace, (2, 28)),
+                new("php:Reads.Table", CodeNodeKinds.Type, (4, 9)),
+                new("php:Reads.Table.GREETING", CodeNodeKinds.Member, (6, 6)),
+                new("php:Reads.Table.$count", CodeNodeKinds.Member, (8, 8)),
+                new("php:Reads.Kind", CodeNodeKinds.Type, (11, 15)),
+                new("php:Reads.Kind.One", CodeNodeKinds.Member, (13, 13)),
+                new("php:Reads.Kind.String", CodeNodeKinds.Member, (14, 14)),
+                new("php:Reads.Reader", CodeNodeKinds.Type, (17, 28)),
+                new("php:Reads.Reader.$own", CodeNodeKinds.Member, (19, 19)),
+                new("php:Reads.Reader.take", CodeNodeKinds.Member, (21, 27)),
+            ],
+            Edges =
+            [
+                // A property read through $this - declared with its $ - a constant read through its class, and an enum case,
+                // one named as a type of the language among them.
+                new("php:Reads.Reader.take", "php:Reads.Reader.$own", CodeEdgeKinds.Uses, 24, CodeConfidences.Exact),
+                new("php:Reads.Reader.take", "php:Reads.Table.GREETING", CodeEdgeKinds.Uses, 26, CodeConfidences.Exact),
+                new("php:Reads.Reader.take", "php:Reads.Kind.One", CodeEdgeKinds.Uses, 25, CodeConfidences.Exact),
+                new("php:Reads.Reader.take", "php:Reads.Kind.String", CodeEdgeKinds.Uses, 25, CodeConfidences.Exact),
+            ],
+        },
         new("src/Models/User.php", User)
         {
             Nodes =
@@ -338,11 +394,12 @@ public sealed class PhpExtractorTests : CodeGraphExtractorContractTests<PhpExtra
     ];
 
     /// <summary>
-    /// Text outside PHP's tags, comments, strings, heredocs, nowdocs and attributes are never read as code, and a string's
-    /// or a heredoc's interpolation is - a nowdoc's not.
+    /// Text outside PHP's tags, comments, strings, heredocs and nowdocs are never read as code, and a string's or a
+    /// heredoc's interpolation is - a nowdoc's not; an attribute calls nothing itself, but its arguments are read as the
+    /// code they are, a closure's the code it is written in.
     /// </summary>
     [Fact]
-    public void TextCommentsStringsAndAttributes_AreNeverReadAsCode_ButAnInterpolationIs()
+    public void TextCommentsAndStrings_AreNeverReadAsCode_ButAnInterpolationAndAnAttributesArgumentsAre()
     {
         var extract = Read("src/a.php", """
             <p>first()</p>
@@ -364,7 +421,7 @@ public sealed class PhpExtractorTests : CodeGraphExtractorContractTests<PhpExtra
             }
             """);
 
-        Assert.Equal(["seventh", "tenth", "fourteenth", "sixteenth"], Calls(extract, "php:go"));
+        Assert.Equal(["seventh", "tenth", "fourteenth", "fifteenth", "sixteenth"], Calls(extract, "php:go"));
         Assert.Equal((3, 17), Lines(extract, "php:go"));
     }
 
@@ -425,7 +482,7 @@ public sealed class PhpExtractorTests : CodeGraphExtractorContractTests<PhpExtra
                 ("Shop.Suit", "enum"), ("Shop.Suit.Hearts", "case"), ("Shop.Suit.Spades", "case"), ("Shop.Suit.Wild", "constant"),
                 ("Shop.Suit.size", "method"), ("Shop.Point", "class"), ("Shop.Point.__construct", "constructor"), ("Shop.Point.$x", "property"),
             ],
-            extract.Nodes.Select(node => (node.Qualified, node.SubKind!)));
+            extract.Nodes.Select(node => (node.Qualified.Whole(), node.SubKind!)));
 
         Assert.Equal(["final"], Node(extract, "php:Shop.Cart").Modifiers);
         Assert.Equal(["readonly"], Node(extract, "php:Shop.Point").Modifiers);
@@ -450,7 +507,7 @@ public sealed class PhpExtractorTests : CodeGraphExtractorContractTests<PhpExtra
                 ("php:Shop.Sized", CodeEdgeKinds.Inherits, "Measured", "type", "Shop"), ("php:Shop.Suit", CodeEdgeKinds.Implements, "Sized", "type", "Shop"),
             ],
             extract.References.Where(reference => reference.Kind is CodeEdgeKinds.Inherits or CodeEdgeKinds.Implements or CodeEdgeKinds.MixesIn)
-                .Select(reference => (reference.From, reference.Kind, reference.Name, reference.Qualifier?.Kind, reference.Qualifier?.Name)));
+                .Select(reference => (reference.From.Whole(), reference.Kind, reference.Name, reference.Qualifier?.Kind, extract.Written(reference.Qualifier))));
         Assert.Equal(["strtoupper", "name", "apply"], Calls(extract, "php:Shop.Cart.$label"));
         Assert.Equal(["Cart"], Calls(extract, "php:Shop.Cart.make"));
     }
@@ -483,10 +540,10 @@ public sealed class PhpExtractorTests : CodeGraphExtractorContractTests<PhpExtra
             class Y {}
             """);
 
-        Assert.Equal([("php:A", 2, 5), ("php:A.f", 4, 4), ("php:C", 6, 8), ("php:C.g", 7, 7), ("php:h", 10, 10)], braced.Nodes.Select(node => (node.Id, node.Start, node.End)));
-        Assert.Equal([("make", "B.Thing"), ("make", "C.Thing")], braced.References.Select(reference => (reference.Name, reference.Qualifier?.Name)));
-        Assert.Equal([("php:A", 2, 3), ("php:A.X", 3, 3), ("php:B.Deep", 4, 5), ("php:B.Deep.Y", 5, 5)], ended.Nodes.Select(node => (node.Id, node.Start, node.End)));
-        Assert.Equal([("A", null), ("A.X", "A"), ("B.Deep", null), ("B.Deep.Y", "B.Deep")], ended.Scopes.Select(scope => (scope.Name, scope.Parent)));
+        Assert.Equal([("php:A", 2, 5), ("php:A.f", 4, 4), ("php:C", 6, 8), ("php:C.g", 7, 7), ("php:h", 10, 10)], braced.Nodes.Select(node => (node.Id.Whole(), node.Start, node.End)));
+        Assert.Equal([("make", "B.Thing"), ("make", "C.Thing")], braced.References.Select(reference => (reference.Name, braced.Written(reference.Qualifier))));
+        Assert.Equal([("php:A", 2, 3), ("php:A.X", 3, 3), ("php:B.Deep", 4, 5), ("php:B.Deep.Y", 5, 5)], ended.Nodes.Select(node => (node.Id.Whole(), node.Start, node.End)));
+        Assert.Equal([("A", null), ("A.X", "A"), ("B.Deep", null), ("B.Deep.Y", "B.Deep")], ended.Scopes.Select(scope => (scope.Name.Whole(), scope.Parent?.Whole())));
         Assert.Equal("Deep", Node(ended, "php:B.Deep").Name);
     }
 
@@ -526,7 +583,7 @@ public sealed class PhpExtractorTests : CodeGraphExtractorContractTests<PhpExtra
         Assert.All(extract.Imports, import => Assert.Equal(CodeImportForms.Scope, import.Form));
         Assert.Equal(
             [("a", "Lib.One"), ("b", "Lib.Two"), ("helper", "Lib"), ("run", "Lib.Fns"), ("c", "Lib.Lead"), ("d", "Lib.Two.Deep"), ("e", "App.Two.Deep")],
-            extract.References.Select(reference => (reference.Name, reference.Qualifier?.Name)));
+            extract.References.Select(reference => (reference.Name, extract.Written(reference.Qualifier))));
         Assert.All(extract.References, reference => Assert.Equal(CodeQualifierKinds.Type, reference.Qualifier?.Kind));
     }
 
@@ -554,7 +611,7 @@ public sealed class PhpExtractorTests : CodeGraphExtractorContractTests<PhpExtra
 
         Assert.Equal(
             [("full", "type", "Lib"), ("strlen", "scope", null), ("local", "type", "App"), ("inner", "type", "App.Sub"), ("plain", "scope", "App"), ("Top", "scope", null), ("Near", "type", "App")],
-            extract.References.Select(reference => (reference.Name, reference.Qualifier?.Kind, reference.Qualifier?.Name)));
+            extract.References.Select(reference => (reference.Name, reference.Qualifier?.Kind, extract.Written(reference.Qualifier))));
 
         var linked = Link(
             ("src/a.php", "<?php\nnamespace App;\nfunction go() {\n    helper();\n    local();\n    strlen('x');\n}\n"),
@@ -615,7 +672,7 @@ public sealed class PhpExtractorTests : CodeGraphExtractorContractTests<PhpExtra
                 ("up", "base", null), ("make", "type", "Lib.Mailer"), ("full", "type", "Lib.Mailer"), ("mine", "this", null), ("report", "type", "App.Problem"),
                 ("closure", "type", "Lib.Mailer"), ("b", "value", null), ("make", "scope", "App"), ("chained", "value", null),
             ],
-            extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Calls).Select(reference => (reference.Name, reference.Qualifier?.Kind, reference.Qualifier?.Name)));
+            extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Calls).Select(reference => (reference.Name, reference.Qualifier?.Kind, extract.Written(reference.Qualifier))));
         Assert.Contains(extract.References, reference => reference is { Kind: CodeEdgeKinds.References, Name: "Problem", Line: 24 });
     }
 
@@ -714,7 +771,7 @@ public sealed class PhpExtractorTests : CodeGraphExtractorContractTests<PhpExtra
 
         Assert.Equal(
             ["php:Tests.CartTest.testAdds", "php:Tests.CartTest.removes", "php:Tests.CartTest.empties", "php:Tests.ShopTest.testOpen", "php:Tests.FeatureTestCase.testInherited"],
-            extract.Nodes.Where(node => node.Test).Select(node => node.Id));
+            extract.Nodes.Where(node => node.Test).Select(node => node.Id.Whole()));
 
         var linked = Link(
             ("src/A.php", "<?php\nclass A { public function m(): void {} }\n"),
@@ -749,8 +806,8 @@ public sealed class PhpExtractorTests : CodeGraphExtractorContractTests<PhpExtra
                 extract.Nodes.Select(node => (node.Name, node.SubKind!, node.Start, node.End)));
             Assert.All(extract.Nodes, node => Assert.True(node.Test));
             Assert.Equal(extract.Nodes[0].Id, extract.Nodes[1].Parent);
-            Assert.Equal(["beforeEach", "setup", "skip"], Calls(extract, extract.Nodes[0].Id));
-            Assert.Equal(["run"], Calls(extract, extract.Nodes[1].Id));
+            Assert.Equal(["beforeEach", "setup", "skip"], Calls(extract, extract.Nodes[0].Id.Whole()));
+            Assert.Equal(["run"], Calls(extract, extract.Nodes[1].Id.Whole()));
         }
 
         Assert.DoesNotContain(Read("src/x.php", Text).Nodes, node => node.Test);
@@ -775,33 +832,82 @@ public sealed class PhpExtractorTests : CodeGraphExtractorContractTests<PhpExtra
             <?php $x = 1 ?><?php function g() {} ?>
             """);
 
-        Assert.Equal([("php:f", 1, 1), ("php:views/a.php.(script)", 1, 4), ("php:g", 4, 4)], extract.Nodes.Select(node => (node.Id, node.Start, node.End)));
+        Assert.Equal([("php:f", 1, 1), ("php:views/a.php.(script)", 1, 4), ("php:g", 4, 4)], extract.Nodes.Select(node => (node.Id.Whole(), node.Start, node.End)));
         Assert.Equal([2, 3, 3], extract.References.Where(reference => reference.Name == "f").Select(reference => reference.Line));
     }
 
     /// <summary>
-    /// Code nested past the scanner's depth - interpolations, test groups, conditional declarations - is marked dynamic where
-    /// it stops, and what is read before it is kept: no text nests the reader past its stack.
+    /// Blocks nested five thousand deep are read whole - a function declared in the innermost of as many conditionals a
+    /// node, what it calls its own, the function after them read; a call in the innermost of as many braces a body writes
+    /// its call - nothing marked, in a child given a small stack: a reading of a block's statements that recursed a frame a
+    /// block would overflow it, and end the child.
     /// </summary>
     [Fact]
-    public void CodeNestedTooDeep_IsMarkedDynamic_AndNeverOverflows()
-    {
-        var strings = Read("src/s.php", $"<?php function go($a) {{ return {string.Concat(Enumerable.Repeat("\"{$a->b(", 200))}1{string.Concat(Enumerable.Repeat(")}\"", 200))}; }}");
-        var groups = Read("tests/g.php", "<?php " + string.Concat(Enumerable.Repeat("describe('g', function () {", 200)) + "deep();" + string.Concat(Enumerable.Repeat("});", 200)));
-        var conditionals = Read("src/c.php", "<?php " + string.Concat(Enumerable.Repeat("if (true) {", 400)) + "function f() {}" + string.Concat(Enumerable.Repeat("}", 400)));
-        var braces = Read("src/b.php", "<?php function go() { " + new string('{', 400) + "deep();" + new string('}', 400) + " }");
+    public async Task ABlockFiveThousandDeep_IsReadWhole()
+        => Assert.Equal(new ChildRunAnswer(0, "deep True deep 0", ""), await ChildRun.MethodAsync(typeof(PhpExtractorTests), nameof(BlocksFiveThousandDeep), TestContext.Current.CancellationToken));
 
-        Assert.Single(strings.Dynamic, dynamic => dynamic.Why.Contains("nested more than", StringComparison.Ordinal));
-        Assert.Single(groups.Dynamic, dynamic => dynamic.Why.Contains("nested more than", StringComparison.Ordinal));
-        Assert.Contains(conditionals.Dynamic, dynamic => dynamic.Why == ScanFrame.TooDeepWhy);
-        Assert.Single(strings.Nodes);
-        Assert.DoesNotContain(conditionals.Nodes, node => node.Id == "php:f");
-        Assert.Equal(["deep"], Calls(braces, "php:go"));
-    }
+    /// <summary>
+    /// The child of <see cref="ABlockFiveThousandDeep_IsReadWhole"/>: what the function the conditionals hold calls, whether
+    /// the function after them is read, what the function the braces are in calls, and how many places they mark dynamic.
+    /// </summary>
+    internal static string BlocksFiveThousandDeep() => SmallStack.Run(() =>
+    {
+        var conditionals = Read("src/c.php", "<?php " + string.Concat(Enumerable.Repeat("if (true) {", Deep)) + "function f() { deep(); }" + new string('}', Deep) + "\nfunction after() {}\n");
+        var braces = Read("src/b.php", "<?php function go() { " + new string('{', Deep) + "deep();" + new string('}', Deep) + " }");
+
+        return string.Create(
+            CultureInfo.InvariantCulture,
+            $"{string.Join(',', Calls(conditionals, "php:f"))} {conditionals.Nodes.Any(node => node.Id == "php:after")} {string.Join(',', Calls(braces, "php:go"))} {conditionals.Dynamic.Count + braces.Dynamic.Count}");
+    });
+
+    /// <summary>
+    /// Interpolations nested five thousand deep - each a call whose argument is a string of the next - are read whole, each
+    /// a run of code read in its turn, nothing marked, in a child given a small stack: a reading that recursed a frame an
+    /// interpolation would overflow it.
+    /// </summary>
+    [Fact]
+    public async Task AnInterpolationFiveThousandDeep_IsReadWhole()
+        => Assert.Equal(new ChildRunAnswer(0, "5000 b 0 1", ""), await ChildRun.MethodAsync(typeof(PhpExtractorTests), nameof(InterpolationsFiveThousandDeep), TestContext.Current.CancellationToken));
+
+    /// <summary>
+    /// The child of <see cref="AnInterpolationFiveThousandDeep_IsReadWhole"/>: how many calls the function makes, of what,
+    /// how many places it marks dynamic, and how many nodes the file holds.
+    /// </summary>
+    internal static string InterpolationsFiveThousandDeep() => SmallStack.Run(() =>
+    {
+        var extract = Read("src/s.php", "<?php function go($a) { return " + string.Concat(Enumerable.Repeat("\"{$a->b(", Deep)) + "1" + string.Concat(Enumerable.Repeat(")}\"", Deep)) + "; }");
+        var calls = Calls(extract, "php:go").ToList();
+
+        return string.Create(CultureInfo.InvariantCulture, $"{calls.Count} {string.Join(',', calls.Distinct(StringComparer.Ordinal))} {extract.Dynamic.Count} {extract.Nodes.Count}");
+    });
+
+    /// <summary>
+    /// Pest's groups nested five thousand deep are read whole - each a node held by the one it is in, the innermost test's
+    /// calls its own, nothing marked - in a child given a small stack: a reading that recursed a frame a group would
+    /// overflow it.
+    /// </summary>
+    [Fact]
+    public async Task ATestGroupFiveThousandDeep_IsReadWhole()
+        => Assert.Equal(new ChildRunAnswer(0, "5000 True deep 0", ""), await ChildRun.MethodAsync(typeof(PhpExtractorTests), nameof(TestGroupsFiveThousandDeep), TestContext.Current.CancellationToken));
+
+    /// <summary>
+    /// The child of <see cref="ATestGroupFiveThousandDeep_IsReadWhole"/>: how many groups it reads, whether each but the
+    /// first is held by the group before it, what the innermost test calls, and how many places it marks dynamic.
+    /// </summary>
+    internal static string TestGroupsFiveThousandDeep() => SmallStack.Run(() =>
+    {
+        var extract = Read("tests/g.php", "<?php " + string.Concat(Enumerable.Repeat("describe('g', function () {", Deep)) + "it('t', function () { deep(); });" + string.Concat(Enumerable.Repeat("});", Deep)));
+        var groups = extract.Nodes.Where(node => node.SubKind == "testGroup").ToList();
+        var test = Assert.Single(extract.Nodes, node => node.SubKind == "test");
+        var held = groups.Skip(1).Select((group, at) => group.Parent == groups[at].Id).All(holds => holds) && test.Parent == groups[^1].Id;
+
+        return string.Create(CultureInfo.InvariantCulture, $"{groups.Count} {held} {string.Join(',', Calls(extract, test.Id.Whole()))} {extract.Dynamic.Count}");
+    });
 
     /// <summary>
     /// A word after an arrow or colons is a member's name, whatever word it is - <c>new</c>, <c>catch</c>,
-    /// <c>include</c>, <c>instanceof</c> - and a call of it, never the keyword.
+    /// <c>include</c>, <c>instanceof</c>, <c>function</c> - and a call or a use of it, never the keyword; an anonymous
+    /// class's method's parameter's type is a reference, as any type the body writes is.
     /// </summary>
     [Fact]
     public void AKeywordAfterAnArrowOrColons_IsAMembersName()
@@ -821,8 +927,11 @@ public sealed class PhpExtractorTests : CodeGraphExtractorContractTests<PhpExtra
             """);
 
         Assert.Equal(
-            [("new", "type", "Factory"), ("make", "value", null), ("catch", "value", null), ("handle", "scope", null), ("include", "type", "Blade"), ("include", "value", null), ("instanceof", "value", null), ("build", "value", null), ("Foo", "scope", null)],
-            extract.References.Select(reference => (reference.Name, reference.Qualifier?.Kind, reference.Qualifier?.Name)));
+            [
+                ("new", "type", "Factory"), ("make", "value", null), ("catch", "value", null), ("handle", "scope", null), ("include", "type", "Blade"), ("include", "value", null),
+                ("instanceof", "value", null), ("build", "value", null), ("$function", "value", null), ("Foo", "scope", null), ("Foo", "scope", null),
+            ],
+            extract.References.Select(reference => (reference.Name, reference.Qualifier?.Kind, extract.Written(reference.Qualifier))));
         Assert.Empty(extract.Imports);
         Assert.Empty(extract.Dynamic);
     }
@@ -863,18 +972,18 @@ public sealed class PhpExtractorTests : CodeGraphExtractorContractTests<PhpExtra
                 ("php:App.T.$b", "A", 6), ("php:App.T.$b", "B", 6), ("php:App.T.$c", "X", 7), ("php:App.T.$d", "Resource", 8), ("php:App.T.f", "Boolean", 11),
                 ("php:App.T.f", "Resource", 11), ("php:App.T.f", "Handle", 11), ("php:App.T.f", "Handle", 13), ("php:App.T.f", "Handle", 14), ("php:App.T.f", "First", 15), ("php:App.T.f", "Second", 15),
             ],
-            extract.References.Where(reference => reference.Kind == CodeEdgeKinds.References).Select(reference => (reference.From, reference.Name, reference.Line)));
+            extract.References.Where(reference => reference.Kind == CodeEdgeKinds.References).Select(reference => (reference.From.Whole(), reference.Name, reference.Line)));
         Assert.Equal(
             [("m", "value", null), ("close", "type", "App.Handle")],
-            extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Calls).Select(reference => (reference.Name, reference.Qualifier?.Kind, reference.Qualifier?.Name)));
-        Assert.Equal(["php:App.T.NAME", "php:App.T.ONE", "php:App.T.TWO"], extract.Nodes.Where(node => node.SubKind == "constant").Select(node => node.Id));
+            extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Calls).Select(reference => (reference.Name, reference.Qualifier?.Kind, extract.Written(reference.Qualifier))));
+        Assert.Equal(["php:App.T.NAME", "php:App.T.ONE", "php:App.T.TWO"], extract.Nodes.Where(node => node.SubKind == "constant").Select(node => node.Id.Whole()));
         Assert.Equal((4, (int?)5), Arity(extract, "php:App.T.f"));
     }
 
     /// <summary>
     /// A conditional's blocks - <c>if</c>, <c>elseif</c>, <c>else if</c> and <c>else</c> - declare what they hold, as PHP
-    /// declares a function where it is not yet; an anonymous class's calls and an arrow function's typed parameter are the
-    /// body's they are written in.
+    /// declares a function where it is not yet; an anonymous class's calls and an arrow function's typed parameter - its
+    /// type a reference - are the body's they are written in.
     /// </summary>
     [Fact]
     public void AConditionalsBlocksDeclare_AndAnAnonymousClassesCallsAreTheBodys()
@@ -889,11 +998,11 @@ public sealed class PhpExtractorTests : CodeGraphExtractorContractTests<PhpExtra
             }
             """);
 
-        Assert.Equal(["php:src/c.php.(script)", "php:f", "php:g", "php:h", "php:i", "php:go"], extract.Nodes.Select(node => node.Id));
+        Assert.Equal(["php:src/c.php.(script)", "php:f", "php:g", "php:h", "php:i", "php:go"], extract.Nodes.Select(node => node.Id.Whole()));
         Assert.Equal(["a", "b", "c"], Calls(extract, "php:src/c.php.(script)"));
         Assert.Equal(
-            [("send", "type", "Lib.Mailer"), ("inner", "scope", null)],
-            extract.References.Where(reference => reference.From == "php:go").Select(reference => (reference.Name, reference.Qualifier?.Kind, reference.Qualifier?.Name)));
+            [("Mailer", "type", "Lib"), ("send", "type", "Lib.Mailer"), ("inner", "scope", null)],
+            extract.References.Where(reference => reference.From == "php:go").Select(reference => (reference.Name, reference.Qualifier?.Kind, extract.Written(reference.Qualifier))));
     }
 
     /// <summary>
@@ -962,7 +1071,7 @@ public sealed class PhpExtractorTests : CodeGraphExtractorContractTests<PhpExtra
             }
             """);
 
-        Assert.Equal(["php:Checks.marked", "php:OrderTest.orders"], extract.Nodes.Where(node => node.Test).Select(node => node.Id));
+        Assert.Equal(["php:Checks.marked", "php:OrderTest.orders"], extract.Nodes.Where(node => node.Test).Select(node => node.Id.Whole()));
     }
 
     /// <summary>
@@ -983,7 +1092,7 @@ public sealed class PhpExtractorTests : CodeGraphExtractorContractTests<PhpExtra
             }
             """);
 
-        Assert.Equal([("make", "Lib.Mailer"), ("helper", "Lib")], extract.References.Select(reference => (reference.Name, reference.Qualifier?.Name)));
+        Assert.Equal([("make", "Lib.Mailer"), ("helper", "Lib")], extract.References.Select(reference => (reference.Name, extract.Written(reference.Qualifier))));
         Assert.Equal("Computes the tax.", Node(extract, "php:tax").Summary);
     }
 
@@ -1044,13 +1153,17 @@ public sealed class PhpExtractorTests : CodeGraphExtractorContractTests<PhpExtra
             """);
 
         Assert.Equal(["first", "second"], Calls(extract, "php:H.$a"));
-        Assert.Equal([("m", "value", null), ("n", "value", null)], extract.References.Where(reference => reference.From == "php:H.go").Select(reference => (reference.Name, reference.Qualifier?.Kind, reference.Qualifier?.Name)));
+
+        // The call of m on Foo::$bar's value is a value's; the static property read before it is a use of $bar through Foo.
+        Assert.Equal([("$bar", "type", "Foo"), ("m", "value", null), ("n", "value", null)], extract.References.Where(reference => reference.From == "php:H.go").Select(reference => (reference.Name, reference.Qualifier?.Kind, extract.Written(reference.Qualifier))));
         Assert.Empty(extract.Dynamic);
     }
 
     /// <summary>
-    /// An inclusion's path the code computes is read as the code it is; <c>dirname(__DIR__, n)</c> climbs from 1 to 31
-    /// levels, and none else; and a text with an escape is computed, one with a <c>$</c> in single quotes not.
+    /// An inclusion's path the code computes is read as the code it is - <c>dirname(__DIR__, 0)</c>'s among them, which
+    /// climbs nowhere - and one that climbs past the tree's root is of a file outside it; and a text is the path its quotes
+    /// say, its escapes read as PHP reads them - <c>'c\\d.php'</c> is <c>c\d.php</c> - and a <c>$</c> in single quotes no
+    /// variable.
     /// </summary>
     [Fact]
     public void AComputedInclusionsCode_IsRead_AndOnlyAPlainTextIsAPath()
@@ -1064,9 +1177,38 @@ public sealed class PhpExtractorTests : CodeGraphExtractorContractTests<PhpExtra
             require 'e$f.php';
             """);
 
-        Assert.Equal(["base_path", "dirname", "dirname"], Calls(extract, "php:src/i.php.(script)"));
-        Assert.Equal([2, 3, 4, 5], extract.Dynamic.Select(dynamic => dynamic.Line));
-        Assert.Equal(["e$f.php"], extract.Imports.Select(import => import.Target));
+        Assert.Equal(["base_path", "dirname"], Calls(extract, "php:src/i.php.(script)"));
+        Assert.Equal(
+            [
+                (2, "an inclusion of a file whose path the code computes"), (3, "an inclusion of a file whose path the code computes"),
+                (4, "an inclusion of a file outside the tree: dirname climbs 40 directories, above the tree's root"),
+            ],
+            extract.Dynamic.Select(dynamic => (dynamic.Line, dynamic.Why)));
+        Assert.Equal(["c\\d.php", "e$f.php"], extract.Imports.Select(import => import.Target));
+    }
+
+    /// <summary>
+    /// <c>dirname(__DIR__, n)</c> climbs any n directories: in a file forty directories deep, forty reach the tree's root
+    /// and include the file there, and forty-one climb past it, an inclusion of a file outside the tree.
+    /// </summary>
+    [Fact]
+    public void DirnameFortyLevels_ResolvesOrSaysOutside()
+    {
+        var path = string.Concat(Enumerable.Repeat("d/", 40)) + "i.php";
+        var text = """
+            <?php
+            require dirname(__DIR__, 40) . '/root.php';
+            require dirname(__DIR__, 41) . '/above.php';
+            """;
+        var extract = Read(path, text);
+
+        Assert.Equal([(string.Concat(Enumerable.Repeat("../", 40)) + "root.php", 2)], extract.Imports.Select(import => (import.Target, import.Line)));
+        Assert.Equal([(3, "an inclusion of a file outside the tree: dirname climbs 41 directories, above the tree's root")], extract.Dynamic.Select(dynamic => (dynamic.Line, dynamic.Why)));
+        Assert.Empty(extract.References);
+
+        var linked = Link((path, text), ("root.php", "<?php\nfunction root() {}\n"));
+
+        Assert.Contains(new CodeEdge($"file:{path}", "file:root.php", CodeEdgeKinds.Imports, 2, CodeConfidences.Exact), linked.Edges);
     }
 
     /// <summary>
@@ -1082,8 +1224,208 @@ public sealed class PhpExtractorTests : CodeGraphExtractorContractTests<PhpExtra
 
         Assert.Empty(namespaces.Nodes);
         Assert.Empty(mixed.Nodes);
-        Assert.Equal(CodeQualifierKinds.Value, Assert.Single(chain.References).Qualifier?.Kind);
+
+        // The call is one; every member the chain reads is a use of it, in a time of the chain's length.
+        Assert.Equal(CodeQualifierKinds.Value, Assert.Single(chain.References, reference => reference.Kind == CodeEdgeKinds.Calls).Qualifier?.Kind);
+        Assert.Equal(200_000, chain.References.Count(reference => reference.Kind == CodeEdgeKinds.Uses && reference.Name == "$a"));
     }
+
+    /// <summary>
+    /// A string's value is what PHP reads of it: a single-quoted one's escapes <c>\\</c> and <c>\'</c> alone, a
+    /// double-quoted one's every escape, a heredoc's and a nowdoc's lines past their closing indentation from the line after
+    /// their label - a nowdoc's as written - and an interpolated one's constant parts each a literal of its own: a bare
+    /// hole from its <c>$</c>, with one <c>-&gt;name</c> or one <c>[...]</c> after it, a <c>${name}</c> a variable read by its
+    /// name and no code, a key in brackets the hole's own.
+    /// </summary>
+    [Fact]
+    public void AStringsValue_IsWhatPhpReadsOfIt_HeredocsNowdocsAndHolesAmongThem()
+    {
+        var extract = Read("src/t.php", """
+            <?php
+            function greet($user, $items, $row)
+            {
+                $a = "Hello $user";
+                $b = "Dear $user->name, welcome";
+                $c = "$items[0] left $row[key] end";
+                $d = "${name} and {$user->title}";
+                $e = 'C:\temp \'quoted\'';
+                $f = "Tab\there \u{48}\x49 \$x";
+                $g = <<<EOT
+                    first line
+                      second line
+                    EOT;
+                $h = <<<'EOT'
+                    raw $x\n
+                    EOT;
+            }
+            """);
+
+        Assert.Equal(
+            [
+                new LiteralRow("Hello ", 4, "php:greet"),
+                new LiteralRow("Dear ", 5, "php:greet"),
+                new LiteralRow(", welcome", 5, "php:greet"),
+                new LiteralRow(" left ", 6, "php:greet"),
+                new LiteralRow(" end", 6, "php:greet"),
+                new LiteralRow(" and ", 7, "php:greet"),
+                new LiteralRow("C:\\temp 'quoted'", 8, "php:greet"),
+                new LiteralRow("Tab\there HI $x", 9, "php:greet"),
+                new LiteralRow("first line\n  second line", 11, "php:greet"),
+                new LiteralRow("raw $x\\n", 15, "php:greet"),
+            ],
+            LiteralRow.Of(extract));
+        Assert.Equal(
+            [("$name", 5, CodeQualifierKinds.Value), ("$title", 7, CodeQualifierKinds.Value)],
+            extract.References.Select(reference => (reference.Name, reference.Line, reference.Qualifier?.Kind)));
+    }
+
+    /// <summary>
+    /// A use is of a value the code reads: a nullsafe read's property by its <c>$</c>, each branch of a conditional and a
+    /// short one, a named argument's value and not its name; a word or a type of the language - <c>true</c>, a cast's, a
+    /// closure's return type - is none; and a constant's, a property's and an enum case's value, a parameter's default, and
+    /// the arguments of the attributes each of them - a parameter among them - is written with are the code of what they
+    /// are written on.
+    /// </summary>
+    [Fact]
+    public void AUseIsOfAValueTheCodeReads_DeclaredValuesAndAttributesTheirDeclarations()
+    {
+        var extract = Read("src/Users.php", """
+            <?php
+            namespace App;
+
+            #[Route('/users')]
+            class Users
+            {
+                #[Deprecated('old_const')]
+                public const GREETING = 'hello world';
+                #[Inject('svc_prop')]
+                protected $table = 'users';
+
+                #[Get('/list')]
+                public function list(#[Sensitive('param_attr')] User $user, $mode = DEFAULT_MODE): ?string
+                {
+                    $n = $user?->name;
+                    $t = $debug ? DEBUG_LEVEL : INFO_LEVEL;
+                    $u = $x ?: FALLBACK_LEVEL;
+                    $v = fn ($x): ?Model => (string) $x;
+                    build(named: VALUE);
+                    return true;
+                }
+            }
+
+            enum Status: string
+            {
+                #[Label('case_label')]
+                case Active = 'active';
+            }
+            """);
+
+        const string List = "php:App.Users.list";
+
+        Assert.Equal(
+            [
+                new LiteralRow("/users", 4, "php:App.Users"),
+                new LiteralRow("old_const", 7, "php:App.Users.GREETING"),
+                new LiteralRow("hello world", 8, "php:App.Users.GREETING"),
+                new LiteralRow("svc_prop", 9, "php:App.Users.$table"),
+                new LiteralRow("users", 10, "php:App.Users.$table"),
+                new LiteralRow("/list", 12, List),
+                new LiteralRow("param_attr", 13, List),
+                new LiteralRow("case_label", 26, "php:App.Status.Active"),
+                new LiteralRow("active", 27, "php:App.Status.Active"),
+            ],
+            LiteralRow.Of(extract));
+        Assert.Equal(
+            [
+                (List, "DEFAULT_MODE", 13, ""), (List, "$name", 15, "type App.User"), (List, "DEBUG_LEVEL", 16, ""), (List, "INFO_LEVEL", 16, ""), (List, "FALLBACK_LEVEL", 17, ""),
+                (List, "VALUE", 19, ""),
+            ],
+            extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Uses).Select(reference => (reference.From.Whole(), reference.Name, reference.Line, $"{reference.Qualifier?.Kind} {extract.Written(reference.Qualifier)}".Trim())));
+    }
+
+    /// <summary>A call's receiver of any number of names is read by them all - a long chain is read once, not crawled from each member.</summary>
+    [Fact]
+    public void AReceiverOfAnyNames_IsReadByThemAll()
+    {
+        var extract = Read("src/Run.php", """
+            <?php
+            class Run
+            {
+                function run()
+                {
+                    $this->b->c->d->e->f->g->h->go();
+                    $this->b->c->d->e->f->g->h->i->go();
+                }
+            }
+            """);
+
+        Assert.Equal(
+            [(6, "value $b.$c.$d.$e.$f.$g.$h"), (7, "value $b.$c.$d.$e.$f.$g.$h.$i")],
+            extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Calls).Select(reference => (reference.Line, $"{reference.Qualifier?.Kind} {extract.Written(reference.Qualifier)}".Trim())));
+    }
+
+    /// <summary>
+    /// A receiver of sixty properties is written as links: the use of its first is <c>$this</c>'s, the use of its second
+    /// names the first, and the use of each from the third on and the call each link to the use of the one before - each
+    /// read once, from the use before it - and its sixty names are read back whole.
+    /// </summary>
+    [Fact]
+    public void ASixtyNameChain_IsWrittenAsLinks()
+    {
+        var names = Enumerable.Range(1, 60).Select(at => string.Create(CultureInfo.InvariantCulture, $"n{at}")).ToList();
+        var text = $"<?php\nclass Run {{ function run() {{ $this->{string.Join("->", names)}->go(); }} }}\n";
+        var extract = Read("src/Run.php", text);
+        var first = extract.References.ToList().FindIndex(reference => reference.Name == "$n1");
+
+        Assert.Equal([.. names.Select(name => "$" + name), "go"], extract.References.Skip(first).Select(reference => reference.Name));
+        Assert.Equal(new ExtractQualifier(CodeQualifierKinds.This), extract.References[first].Qualifier);
+        Assert.Equal(new ExtractQualifier(CodeQualifierKinds.Value, "$n1"), extract.References[first + 1].Qualifier);
+        Assert.Equal(
+            Enumerable.Range(first + 1, 59).Select(link => new ExtractQualifier(CodeQualifierKinds.Value) { Link = link }),
+            extract.References.Skip(first + 2).Select(reference => reference.Qualifier));
+        Assert.Equal(string.Join('.', names.Select(name => "$" + name)), extract.Written(extract.References[^1].Qualifier));
+        Assert.Null(extract.Problem("php", CodeFileText.Lines(text).Count));
+    }
+
+    /// <summary>
+    /// A parameter's type a body writes - a closure's, an arrow function's, each member of a union, a by-reference, a
+    /// variadic and an intersection one's - names classes, references and no uses, as a closure's return type does; a
+    /// member named as a word or a type of the language is a use, a class's <c>::class</c> none, and a label a
+    /// <c>goto</c> names none.
+    /// </summary>
+    [Fact]
+    public void AParametersTypeInABody_IsAReference_AMemberNamedAsAWordAUse_AndALabelNone()
+    {
+        var extract = Read("src/V.php", """
+            <?php
+            namespace App;
+
+            class V
+            {
+                public function go($node)
+                {
+                    $f = function (Foo|Bar $x, ?Baz $y, Qux &$z, Many ...$more, A&B $both): ?Ret { return $x; };
+                    $g = fn (Arrowed $v): int => $v;
+                    $k = FieldType::String . $node->parent . $node->object . Foo::class;
+                    if ($node) goto done;
+                    done:
+                    return $k;
+                }
+            }
+            """);
+
+        Assert.Equal(
+            [
+                (CodeEdgeKinds.References, "Foo", 8), (CodeEdgeKinds.References, "Bar", 8), (CodeEdgeKinds.References, "Baz", 8), (CodeEdgeKinds.References, "Qux", 8),
+                (CodeEdgeKinds.References, "Many", 8), (CodeEdgeKinds.References, "A", 8), (CodeEdgeKinds.References, "B", 8), (CodeEdgeKinds.References, "Ret", 8),
+                (CodeEdgeKinds.References, "Arrowed", 9),
+                (CodeEdgeKinds.Uses, "String", 10), (CodeEdgeKinds.Uses, "$parent", 10), (CodeEdgeKinds.Uses, "$object", 10), (CodeEdgeKinds.References, "Foo", 10),
+            ],
+            extract.References.Where(reference => reference.From == "php:App.V.go").Select(reference => (reference.Kind, reference.Name, reference.Line)));
+    }
+
+    /// <summary>How deep the depth tests nest what they read.</summary>
+    private const int Deep = 5_000;
 
     private static FileExtract Read(string path, string text) => new PhpExtractor().Extract(new CodeFileInput(path, text));
 

@@ -4,17 +4,23 @@ namespace DssHarness.Core.Codebase.Languages;
 
 /// <summary>
 /// The lexical rules of C and C++ for the structural scanner: comments (<c>//</c>, its line continued by a backslash,
-/// and <c>/* */</c>) kept apart; string and character literals - with their prefixes, and C++'s raw strings - as one
-/// token each, never read as code; a preprocessor line, its continuations and comments with it, as one directive,
-/// marked where it opens, continues or ends a conditional; numbers with their separators; <c>::</c>, <c>-&gt;</c> and
-/// <c>...</c> whole and every other punctuator alone, so <c>&gt;&gt;</c> closes two lists of type arguments.
+/// and <c>/* */</c>) kept apart; string and character literals - with their prefixes, raw strings (C++'s, and C's as
+/// GCC's GNU dialects, its default, read them), and a C++ user-defined literal's suffix - as one token each, never read
+/// as code, each string's value said where it is written
+/// and how its escapes read (<see cref="ScanLiteral"/>); a preprocessor line, its continuations and comments with it, as
+/// one directive, marked where it opens, continues or ends a conditional; numbers with their separators; <c>::</c>,
+/// <c>-&gt;</c> and <c>...</c> whole and every other punctuator alone, so <c>&gt;&gt;</c> closes two lists of type
+/// arguments.
 /// </summary>
 internal static class CFamilyLexer
 {
     /// <summary>The prefixes a string or a character literal may carry.</summary>
     private static readonly HashSet<string> LiteralPrefixes = new(StringComparer.Ordinal) { "L", "u", "U", "u8" };
 
-    /// <summary>The prefixes of a C++ raw string, before its quote.</summary>
+    /// <summary>The prefixes of a wide string, whose octal and hex escapes are characters' codes and no bytes.</summary>
+    private static readonly HashSet<string> WidePrefixes = new(StringComparer.Ordinal) { "L", "u", "U", "LR", "uR", "UR" };
+
+    /// <summary>The prefixes of a raw string, before its quote.</summary>
     private static readonly HashSet<string> RawPrefixes = new(StringComparer.Ordinal) { "R", "LR", "uR", "UR", "u8R" };
 
     /// <summary>The longest delimiter a raw string may have.</summary>
@@ -22,13 +28,13 @@ internal static class CFamilyLexer
 
     /// <summary>Scans <paramref name="text"/> by C's rules, and C++'s where <paramref name="cpp"/>.</summary>
     /// <param name="text">A file's text.</param>
-    /// <param name="cpp">Whether it is C++, whose raw strings C does not have.</param>
-    public static ScannedText Scan(string text, bool cpp)
+    /// <param name="cpp">Whether it is C++, whose user-defined literals' suffixes C does not have.</param>
+    public static ScannedText Scan(CodeText text, bool cpp)
     {
-        var lines = CodeFileText.LineIndex(text);
+        var lines = text.LineIndex;
         var lexing = new Lexing(text, lines, cpp, directive: false);
         lexing.Run(0, text.Length);
-        return new ScannedText(text, lexing.Tokens, lexing.Comments);
+        return new ScannedText(text, lexing.Tokens, lexing.Comments, literals: lexing.Literals);
     }
 
     /// <summary>
@@ -40,18 +46,18 @@ internal static class CFamilyLexer
     /// <param name="start">Where the directive's text to read begins.</param>
     /// <param name="end">Where it ends.</param>
     /// <param name="cpp">Whether it is C++.</param>
-    public static ScannedText ScanDirective(string text, CodeLineIndex lines, int start, int end, bool cpp)
+    public static ScannedText ScanDirective(CodeText text, CodeLineIndex lines, long start, long end, bool cpp)
     {
         var lexing = new Lexing(text, lines, cpp, directive: true);
         lexing.Run(start, end);
-        return new ScannedText(text, lexing.Tokens, lexing.Comments);
+        return new ScannedText(text, lexing.Tokens, lexing.Comments, literals: lexing.Literals);
     }
 
     /// <summary>
     /// The name of the directive at <paramref name="start"/> - the word after its <c>#</c> - and where the text after it
     /// begins; an empty name where none follows the <c>#</c>.
     /// </summary>
-    public static (string Name, int After) DirectiveName(string text, int start, int end)
+    public static (string Name, long After) DirectiveName(CodeText text, long start, long end)
     {
         var at = start + 1;
 
@@ -67,7 +73,7 @@ internal static class CFamilyLexer
             at++;
         }
 
-        return (text[name..at], at);
+        return (text.Slice(name, at), at);
     }
 
     private static Dictionary<string, ScanBranch> Branches { get; } = new(StringComparer.Ordinal)
@@ -86,7 +92,7 @@ internal static class CFamilyLexer
     /// Whether the text at <paramref name="at"/> is white space the code is not cut by - a blank, or a backslash that ends a
     /// line, which joins it to the next - and how wide it is. A line break is no such space.
     /// </summary>
-    private static bool IsSpace(string text, int at, int end, out int width)
+    private static bool IsSpace(CodeText text, long at, long end, out long width)
     {
         width = 1;
 
@@ -105,9 +111,9 @@ internal static class CFamilyLexer
     }
 
     /// <summary>One run of the lexer over a span of a text.</summary>
-    private sealed class Lexing(string text, CodeLineIndex lines, bool cpp, bool directive) : ScanLexing(lines)
+    private sealed class Lexing(CodeText text, CodeLineIndex lines, bool cpp, bool directive) : ScanLexing(lines)
     {
-        public void Run(int start, int end)
+        public void Run(long start, long end)
         {
             var at = start;
 
@@ -172,14 +178,14 @@ internal static class CFamilyLexer
         }
 
         /// <summary>C's comments: <c>//</c> to its line's end, a backslash continuing it (<see cref="LineEnd"/>), <c>/* */</c> past its closer.</summary>
-        protected override int CommentEnd(int at, int end)
+        protected override long CommentEnd(long at, long end)
             => at + 1 >= end || text[at] != '/' ? at
                 : text[at + 1] == '/' ? LineEnd(at, end)
-                : text[at + 1] == '*' ? (text.IndexOf("*/", at + 2, end - at - 2, StringComparison.Ordinal) is var close and >= 0 ? close + 2 : end)
+                : text[at + 1] == '*' ? (text.Find("*/", at + 2, end) is var close and >= 0 ? close + 2 : end)
                 : at;
 
         /// <summary>Where the line <paramref name="at"/> is on ends: at a line break no backslash continues.</summary>
-        private int LineEnd(int at, int end)
+        private long LineEnd(long at, long end)
         {
             while (at < end)
             {
@@ -204,7 +210,7 @@ internal static class CFamilyLexer
         /// A preprocessor line from its <c>#</c>: to the line break no backslash continues and no comment or literal holds,
         /// its comments kept apart as every comment is.
         /// </summary>
-        private int Directive(int start, int end)
+        private long Directive(long start, long end)
         {
             var at = start + 1;
 
@@ -224,7 +230,7 @@ internal static class CFamilyLexer
                 }
                 else if (text[at] is '"' or '\'' && !(text[at] == '\'' && IsNamePart(text[at - 1])))
                 {
-                    at = Quoted(at, text[at], end);
+                    at = Quoted(at, text[at], end).Past;
                 }
                 else
                 {
@@ -237,7 +243,7 @@ internal static class CFamilyLexer
             return at;
         }
 
-        private int Name(int start, int end)
+        private long Name(long start, long end)
         {
             var at = start;
 
@@ -246,9 +252,9 @@ internal static class CFamilyLexer
                 at++;
             }
 
-            var name = text[start..at];
+            var name = text.Slice(start, at);
 
-            if (at < end && text[at] == '"' && cpp && RawPrefixes.Contains(name) && Raw(start, at, end) is var raw and > 0)
+            if (at < end && text[at] == '"' && RawPrefixes.Contains(name) && Raw(start, at, end) is var raw and > 0)
             {
                 return raw;
             }
@@ -263,7 +269,7 @@ internal static class CFamilyLexer
         }
 
         /// <summary>A number as the preprocessor reads one: digits, letters, dots, an exponent's sign and the separators between digits.</summary>
-        private int Number(int start, int end)
+        private long Number(long start, long end)
         {
             var at = start;
 
@@ -291,19 +297,48 @@ internal static class CFamilyLexer
             return at;
         }
 
-        /// <summary>A literal whose quote is at <paramref name="quote"/>, its prefix from <paramref name="start"/>.</summary>
-        private int Literal(int start, int quote, int end)
+        /// <summary>
+        /// A literal whose quote is at <paramref name="quote"/>, its prefix from <paramref name="start"/>: a string's value
+        /// what its quotes hold, its escapes read as its prefix says - a character literal, <c>'a'</c> or <c>'RIFF'</c>,
+        /// is a number and no string - and a closed one's user-defined suffix (<c>"abc"s</c>) the token's.
+        /// </summary>
+        private long Literal(long start, long quote, long end)
         {
-            var at = Quoted(quote, text[quote], end);
+            var (at, closed) = Quoted(quote, text[quote], end);
+
+            if (text[quote] == '"')
+            {
+                var escapes = WidePrefixes.Contains(text.Slice(start, quote)) ? ScanEscapes.CWide : ScanEscapes.C;
+                KeepLiteral(start, new ScanLiteral([Part(quote + 1, closed ? at - 1 : at)], escapes) { LeftOpen = !closed });
+            }
+
+            at = closed ? Suffix(at, end) : at;
             Add(ScanTokenKind.Text, start, at);
+            return at;
+        }
+
+        /// <summary>Past a C++ user-defined literal's suffix at <paramref name="at"/>, written against its literal - <c>"abc"s</c>, <c>"{}"_json</c>; <paramref name="at"/> in C, or where none is.</summary>
+        private long Suffix(long at, long end)
+        {
+            if (!cpp || at >= end || !IsNameStart(text[at]))
+            {
+                return at;
+            }
+
+            while (at < end && IsNamePart(text[at]))
+            {
+                at++;
+            }
+
             return at;
         }
 
         /// <summary>
         /// Past the literal whose quote is at <paramref name="quote"/>: to its closing quote, an escaped one and a line its
-        /// backslash continues read past - or to the end of its line, where a literal left open ends.
+        /// backslash continues read past - or to the end of its line, where a literal left open ends - and whether a
+        /// closing quote ended it.
         /// </summary>
-        private int Quoted(int quote, char mark, int end)
+        private (long Past, bool Closed) Quoted(long quote, char mark, long end)
         {
             var at = quote + 1;
 
@@ -315,11 +350,11 @@ internal static class CFamilyLexer
                 }
                 else if (text[at] == mark)
                 {
-                    return at + 1;
+                    return (at + 1, true);
                 }
                 else if (LineBreakAt(text, at, end) > 0)
                 {
-                    return at;
+                    return (at, false);
                 }
                 else
                 {
@@ -327,14 +362,16 @@ internal static class CFamilyLexer
                 }
             }
 
-            return Math.Min(at, end);
+            return (Math.Min(at, end), false);
         }
 
         /// <summary>
-        /// A C++ raw string whose prefix is at <paramref name="start"/> and quote at <paramref name="quote"/>: to its
-        /// <c>)delimiter"</c>, over any line; 0 where what follows the quote is no delimiter and <c>(</c>.
+        /// A raw string - C++'s, and C's as GCC's GNU dialects, its default, read one - whose prefix is at
+        /// <paramref name="start"/> and quote at <paramref name="quote"/>: to its
+        /// <c>)delimiter"</c>, over any line, its value what the parentheses hold as written; 0 where what follows the
+        /// quote is no delimiter and <c>(</c>.
         /// </summary>
-        private int Raw(int start, int quote, int end)
+        private long Raw(long start, long quote, long end)
         {
             var open = quote + 1;
 
@@ -348,16 +385,17 @@ internal static class CFamilyLexer
                 return 0;
             }
 
-            var closing = ")" + text[(quote + 1)..open] + "\"";
-            var close = text.IndexOf(closing, open + 1, end - open - 1, StringComparison.Ordinal);
-            var at = close < 0 ? end : close + closing.Length;
+            var closing = ")" + text.Slice(quote + 1, open) + "\"";
+            var close = text.Find(closing, open + 1, end);
+            var at = close < 0 ? end : Suffix(close + closing.Length, end);
 
+            KeepLiteral(start, new ScanLiteral([Part(open + 1, close < 0 ? end : close)], ScanEscapes.None) { LeftOpen = close < 0 });
             Add(ScanTokenKind.Text, start, at);
             return at;
         }
 
         /// <summary>How long the punctuator at <paramref name="at"/> is: <c>::</c>, <c>-&gt;</c>, <c>...</c> and, in a directive, <c>##</c> whole; 0 where no punctuator is.</summary>
-        private int Punctuator(int at, int end)
+        private long Punctuator(long at, long end)
         {
             var character = text[at];
 

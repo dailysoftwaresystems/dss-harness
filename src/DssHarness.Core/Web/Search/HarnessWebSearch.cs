@@ -18,9 +18,10 @@ namespace DssHarness.Core.Web.Search;
 /// source's pace on this machine taken first and a pause its own answer asks for kept - or answered from what the run
 /// asked before, under the step's own rules; each request made counted against the step's <c>maxPerStep</c>; a source's
 /// key, where the step was given one, sent by the fetch to the scheme, host and port its configuration writes alone - never
-/// to a host a document it fetched names - and never in an address any record holds; the results held to the
-/// step's web rules, those they refuse left out and counted. One source's failure never hides another's results, and a
-/// search none of whose sources answered is no answer.
+/// to a host a document it fetched names - and never in an address any record holds; every result of the page a source
+/// answered given, held to the step's web rules, those they refuse left out and counted, and a later page asked of the
+/// source by its number when the agent asks for it, a request counted as any is. One source's failure never hides
+/// another's results, and a search none of whose sources answered is no answer.
 /// </summary>
 /// <remarks>Nothing is retried on its own: a limit is told, and the source left alone until the time it gave.</remarks>
 public sealed class HarnessWebSearch(WebSearchKinds kinds, HarnessFetch fetch, WebIndexes indexes, WebSearchPace pace, IFileSystem fileSystem, TimeProvider clock) : IDisposable
@@ -46,8 +47,9 @@ public sealed class HarnessWebSearch(WebSearchKinds kinds, HarnessFetch fetch, W
     /// <param name="step">The step searching: its sources, bounds, rules and records.</param>
     /// <param name="query">The query, as the agent wrote it.</param>
     /// <param name="names">The sources the agent named, among the step's; every one of the step's where none.</param>
+    /// <param name="page">The page of each source's results asked, from 1: a later one is asked of each source on demand.</param>
     /// <param name="cancellationToken">Stops the search.</param>
-    public async Task<WebSearched> SearchAsync(WebSearchStep step, string query, IReadOnlyList<string>? names, CancellationToken cancellationToken)
+    public async Task<WebSearched> SearchAsync(WebSearchStep step, string query, IReadOnlyList<string>? names, int page, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(step);
         ArgumentNullException.ThrowIfNull(query);
@@ -55,6 +57,11 @@ public sealed class HarnessWebSearch(WebSearchKinds kinds, HarnessFetch fetch, W
         if (string.IsNullOrWhiteSpace(query))
         {
             return WebSearched.Refused("the query says nothing; a search asks its sources for words");
+        }
+
+        if (page < 1)
+        {
+            return WebSearched.Refused($"page is {page.ToString(CultureInfo.InvariantCulture)}; a source's pages are counted from 1");
         }
 
         // Held to the mask as it was written - behind its escapes too, as an address is - before any source reads it: a
@@ -79,7 +86,7 @@ public sealed class HarnessWebSearch(WebSearchKinds kinds, HarnessFetch fetch, W
 
         // Each source in its own part, asked together: a slow source or a long pace holds none of the others back - and a
         // defect of one never hides another's, every one raised where more than one failed.
-        var asking = Task.WhenAll(asked.Select(source => GuardedPartAsync(step, run, source, query, cancellationToken)));
+        var asking = Task.WhenAll(asked.Select(source => GuardedPartAsync(step, run, source, query, page, cancellationToken)));
         WebSearchPart[] parts;
 
         try
@@ -113,26 +120,26 @@ public sealed class HarnessWebSearch(WebSearchKinds kinds, HarnessFetch fetch, W
     /// record or the run's, reach a file - is that part's failure, said as this machine's and never the source's, and never
     /// hides another source's answer. What the source was asked and answered before it, the step's record holds.
     /// </summary>
-    private async Task<WebSearchPart> GuardedPartAsync(WebSearchStep step, WebSearchRun run, WebSearchSource source, string query, CancellationToken cancellationToken)
+    private async Task<WebSearchPart> GuardedPartAsync(WebSearchStep step, WebSearchRun run, WebSearchSource source, string query, int page, CancellationToken cancellationToken)
     {
         try
         {
-            return await PartAsync(step, run, source, query, cancellationToken).ConfigureAwait(false);
+            return await PartAsync(step, run, source, query, page, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (OnThisMachine(ex))
         {
-            return PartOf(step, source, Kind(source), query, WebSearchAnswer.Failed($"its search failed on this machine, not at the source: {ex.Message}"));
+            return PartOf(step, source, Kind(source), query, WebSearchAnswer.Failed($"its search failed on this machine, not at the source: {ex.Message}")) with { Page = page };
         }
     }
 
     /// <summary>Whether <paramref name="failure"/> is this machine's - a record, a pace, a file - rather than a defect.</summary>
     private static bool OnThisMachine(Exception failure) => failure is Results.HarnessException or IOException or UnauthorizedAccessException;
 
-    private async Task<WebSearchPart> PartAsync(WebSearchStep step, WebSearchRun run, WebSearchSource source, string query, CancellationToken cancellationToken)
+    private async Task<WebSearchPart> PartAsync(WebSearchStep step, WebSearchRun run, WebSearchSource source, string query, int page, CancellationToken cancellationToken)
     {
         var kind = Kind(source);
         var key = step.Keys.GetValueOrDefault(source.Name);
-        WebSearchPart Part(WebSearchAnswer answer, bool cached = false) => PartOf(step, source, kind, query, answer, cached);
+        WebSearchPart Part(WebSearchAnswer answer, bool cached = false) => PartOf(step, source, kind, query, answer, cached) with { Page = page };
 
         // What the fetch sends as the source's key, where the step was given one - to the scheme, host and port the source's
         // configuration writes alone, never to one a document it fetched names: an answer made with it is no answer to a step
@@ -150,7 +157,7 @@ public sealed class HarnessWebSearch(WebSearchKinds kinds, HarnessFetch fetch, W
 
         // What the run asked before is answered again under this step's own rules: each address the source asked for it -
         // its redirects among them - held to its Web(...) rules, as a request would be, and each result to every rule of its web.
-        if (run.Searched(source, kind.Version, query, step.ResultsPerSource, keyed: sent is not null) is { } stored)
+        if (run.Searched(source, kind.Version, query, page, keyed: sent is not null) is { } stored)
         {
             return Part(Refusal(step, stored.Addresses!) ?? stored.Answer(), cached: true);
         }
@@ -179,11 +186,14 @@ public sealed class HarnessWebSearch(WebSearchKinds kinds, HarnessFetch fetch, W
             return Part(failure);
         }
 
-        var request = kind.Request(source, found, query, step.ResultsPerSource);
+        var request = kind.Request(source, found, query, page);
         var (response, refusal, addresses, unrecorded) = request switch
         {
             WebSearchRequest.Http http => await AskAsync(step, source, http, sent, cancellationToken).ConfigureAwait(false),
             WebSearchRequest.Indexed indexed => Indexed(step, source, indexed),
+
+            // A page past the one the source answers asks nothing: no results, said why, and nothing counted.
+            WebSearchRequest.OnePage one => ((WebSearchResponse?)null, WebSearchAnswer.NoPage(one.Why), (IReadOnlyList<string>)[], (Exception?)null),
             _ => throw new InvalidOperationException($"The kind '{kind.Kind}' asked for a request this search does not send: {request.GetType().Name}."),
         };
 
@@ -196,7 +206,7 @@ public sealed class HarnessWebSearch(WebSearchKinds kinds, HarnessFetch fetch, W
         catch (Exception ex) when (ex is not OperationCanceledException && response is WebSearchResponse.Http http)
         {
             // A kind's defect still leaves its source held for the pause its answer's headers asked for.
-            if (Beside(ex, unrecorded, () => Pause(step, source, WebRateLimit.Read(http.Status, http.Headers, http.At)?.Until, null, "it")) is { } both)
+            if (Beside(ex, unrecorded, () => Pause(step, source, WebRateLimit.Read(http.Status, http.Headers, http.At, http.Unsaid), null, "it", http.Unsaid)) is { } both)
             {
                 throw both;
             }
@@ -205,10 +215,19 @@ public sealed class HarnessWebSearch(WebSearchKinds kinds, HarnessFetch fetch, W
         }
 
         // A pause is the source's own to ask, in what it answered: never one this search made of a refusal or of a turn its
-        // pace held - which the pace already holds - nor an index's, which its fill keeps.
-        if (response is WebSearchResponse.Http && answer.Until is { } until)
+        // pace held - which the pace already holds - nor an index's, which its fill keeps. A wait it asked for without saying
+        // how long is doubled the next time it asks so; an answer forgets it.
+        if (response is WebSearchResponse.Http answered)
         {
-            Pause(step, source, until, answer, "it");
+            if (answer.Until is { } until)
+            {
+                var limit = WebRateLimit.Read(answered.Status, answered.Headers, answered.At, answered.Unsaid);
+                Pause(step, source, until, answer, "it", limit is { Said: false } ? answered.Unsaid : null);
+            }
+            else if (answer.Outcome is WebSearchOutcome.Ok or WebSearchOutcome.NoResults)
+            {
+                _pace.Answered(source.Name);
+            }
         }
 
         // What of the answer could not be recorded is raised once the pause it asks for - in its headers, or in its body,
@@ -220,9 +239,9 @@ public sealed class HarnessWebSearch(WebSearchKinds kinds, HarnessFetch fetch, W
 
         // The kind's answer is kept as any step may be told it (Masked), so a later step of the run is given it under its own
         // rules; an index's once it is no longer being filled.
-        if (answer.Outcome is WebSearchOutcome.Ok or WebSearchOutcome.NoResults && response is not WebSearchResponse.Indexed { Answer.Filling: true })
+        if (answer.Outcome is WebSearchOutcome.Ok or WebSearchOutcome.NoResults && response is not (null or WebSearchResponse.Indexed { Answer.Filling: true }))
         {
-            run.Keep(source, kind.Version, query, step.ResultsPerSource, keyed: sent is not null, addresses, Masked(step, answer), step.Mask);
+            run.Keep(source, kind.Version, query, page, keyed: sent is not null, addresses, Masked(step, answer), step.Mask);
         }
 
         return Part(answer);
@@ -262,8 +281,8 @@ public sealed class HarnessWebSearch(WebSearchKinds kinds, HarnessFetch fetch, W
 
     /// <summary>
     /// What <paramref name="step"/> is given of <paramref name="answer"/>: the answer as it may be told it (<see
-    /// cref="Masked"/>), its results its web rules let it read, at most its <c>resultsPerSource</c>, and how many they left
-    /// out - an agent is never handed an address it could not then read.
+    /// cref="Masked"/>), every result of it its web rules let it read, and how many they left out - an agent is never handed
+    /// an address it could not then read.
     /// </summary>
     private static (WebSearchAnswer Given, int Withheld) Given(WebSearchStep step, WebSearchAnswer answer)
     {
@@ -276,7 +295,7 @@ public sealed class HarnessWebSearch(WebSearchKinds kinds, HarnessFetch fetch, W
 
         var kept = told.Results.Where(result => step.Rules.Result(result.Link) is AgentPolicyAnswer.Allowed).ToList();
 
-        return (WebSearchAnswer.Read([.. kept.Take(step.ResultsPerSource)]) with { Total = told.Total, Held = told.Held, LeftOut = told.LeftOut }, told.Results.Count - kept.Count);
+        return (WebSearchAnswer.Read(kept) with { Total = told.Total, Held = told.Held, LeftOut = told.LeftOut }, told.Results.Count - kept.Count);
     }
 
     /// <summary>
@@ -366,7 +385,7 @@ public sealed class HarnessWebSearch(WebSearchKinds kinds, HarnessFetch fetch, W
 
                 // An answer that asks the source to be left alone holds the lookups after it as it holds the request: the
                 // pause is kept before the next is asked, which is then told rather than sent.
-                Pause(step, source, WebRateLimit.Read(answered.Status, answered.Headers, answered.At)?.Until, null, "its lookup");
+                Pause(step, source, WebRateLimit.Read(answered.Status, answered.Headers, answered.At, answered.Unsaid), null, "its lookup", answered.Unsaid);
             }
         }
 
@@ -374,7 +393,7 @@ public sealed class HarnessWebSearch(WebSearchKinds kinds, HarnessFetch fetch, W
         // would - a document its kind could not use ends the kind's reading before the answers after it, whose pauses hold
         // all the same, as they do beside a defect of the kind's: the request after it is not sent before then, and is
         // told so.
-        var asked = answers.Aggregate((DateTimeOffset?)null, (later, answered) => WebRateLimit.Later(later, WebRateLimit.Read(answered.Status, answered.Headers, answered.At)?.Until));
+        var asked = answers.Aggregate((DateTimeOffset?)null, (later, answered) => WebRateLimit.Later(later, WebRateLimit.Read(answered.Status, answered.Headers, answered.At, answered.Unsaid)?.Until));
         WebSearchFound found;
 
         try
@@ -422,7 +441,12 @@ public sealed class HarnessWebSearch(WebSearchKinds kinds, HarnessFetch fetch, W
         var allowed = new List<string>();
         Exception? unrecorded = null;
 
+        // How long the source is left where it asks to be left alone and says not for how long: read before it is asked,
+        // doubled from its own pace each time it asks so again.
+        var unsaid = _pace.Unsaid(source);
+
         WebSearchHold? hold = null;
+        string? lease = null;
         (string Address, AgentPolicyAnswer Answer)? turning = null;
         AgentPolicyAnswer? refused = null;
         var gate = new WebFetchGate(
@@ -468,7 +492,8 @@ public sealed class HarnessWebSearch(WebSearchKinds kinds, HarnessFetch fetch, W
             {
                 try
                 {
-                    hold = await _pace.TurnAsync(source, token).ConfigureAwait(false);
+                    var turn = await _pace.TurnAsync(source, lease, step.Tell, token).ConfigureAwait(false);
+                    (hold, lease) = (turn.Hold, turn.Lease ?? lease);
 
                     // A turn taken is recorded as it was decided, before it is asked.
                     if (hold is null && turning is var (address, answer))
@@ -491,6 +516,9 @@ public sealed class HarnessWebSearch(WebSearchKinds kinds, HarnessFetch fetch, W
 
                 return hold?.Until;
             },
+            Ended = () => Done(source, ref lease),
+            Stall = step.Stall,
+            Tell = step.Tell,
         };
 
         var ask = new WebFetchAsk { Method = request.Method, Body = request.Body, Headers = request.Headers, Key = sent, AnyType = true, Html = WebFetchHtml.Markup };
@@ -542,28 +570,45 @@ public sealed class HarnessWebSearch(WebSearchKinds kinds, HarnessFetch fetch, W
 
             // A limit its status and headers say is told as one, its body unread, and a pause they ask for holds the source
             // all the same - as its status and headers alone answer them (WebSearchStatus).
+            TimeSpan? doubled = null;
+
             if (fetched.Status is { } answered)
             {
-                before = WebSearchStatus.Before(new WebSearchResponse.Http(fetched.Address, answered, fetched.Type, fetched.Headers, string.Empty, _clock.GetUtcNow()), out paused);
+                var head = new WebSearchResponse.Http(fetched.Address, answered, fetched.Type, fetched.Headers, string.Empty, _clock.GetUtcNow()) { Unsaid = unsaid };
+                before = WebSearchStatus.Before(head, out paused);
 
                 if (before is { Outcome: WebSearchOutcome.RateLimited, Until: { } limited, Why: { } limit })
                 {
                     failed = WebSearchAnswer.Limited(limited, $"{limit}; {said}");
                     paused = limited;
                 }
+
+                doubled = WebRateLimit.Read(head.Status, head.Headers, head.At, unsaid) is { Said: false } ? unsaid : null;
             }
 
             // Held in the limit's own words: an answer that was not read is never the reason a later query is told.
             if (paused is { } held)
             {
-                Pause(step, source, held, before, "it");
+                Pause(step, source, held, before, "it", doubled);
                 failed = failed with { Until = held };
             }
 
             return (null, failed, allowed, unrecorded);
         }
 
-        return (new WebSearchResponse.Http(fetched.Address, status, fetched.Type, fetched.Headers, body!, _clock.GetUtcNow()), null, allowed, unrecorded);
+        return (new WebSearchResponse.Http(fetched.Address, status, fetched.Type, fetched.Headers, body!, _clock.GetUtcNow()) { Unsaid = unsaid }, null, allowed, unrecorded);
+    }
+
+    /// <summary>Lets go of the turn <paramref name="lease"/> holds of <paramref name="source"/>, where its pace took one: the fetch that held it has ended.</summary>
+    private Task Done(WebSearchSource source, ref string? lease)
+    {
+        if (lease is { } held)
+        {
+            lease = null;
+            _pace.Done(source.Name, held);
+        }
+
+        return Task.CompletedTask;
     }
 
     /// <summary>
@@ -581,31 +626,49 @@ public sealed class HarnessWebSearch(WebSearchKinds kinds, HarnessFetch fetch, W
             return (null, Refused(site, denied), [site], null);
         }
 
+        // The fill's own gate, for the run: a turn its pace holds for one fetch let go as that fetch ends, its fetches one at a
+        // time; an answer's silence bounded and told as the step's are.
+        string? lease = null;
         var gate = new WebFetchGate(address => Task.FromResult(step.Rules.Fill(address)), _ => Task.CompletedTask)
         {
-            Pace = async token => (await _pace.TurnAsync(source, token).ConfigureAwait(false))?.Until,
+            Pace = async token =>
+            {
+                var turn = await _pace.TurnAsync(source, lease, step.Tell, token).ConfigureAwait(false);
+                lease = turn.Lease ?? lease;
+                return turn.Hold?.Until;
+            },
+            Ended = () => Done(source, ref lease),
+            Stall = step.Stall,
+            Tell = step.Tell,
         };
 
         var directory = OrchestratorLayout.WebIndexDirectory(step.Repository, source.Name);
 
-        return (new WebSearchResponse.Indexed(_indexes.Search(directory, request.Settings, request.Query, request.Limit, gate)), null, [site], null);
+        return (new WebSearchResponse.Indexed(_indexes.Search(directory, request.Settings, request.Query, request.Page, gate)), null, [site], null);
     }
 
     /// <summary>
     /// Holds <paramref name="source"/> on this machine until <paramref name="until"/>, a pause its own answer asked for,
     /// where it asked one: in a limit's own words where <paramref name="answer"/> is one, as <paramref name="step"/> may be
     /// told them - every run on the machine reads them - else as <paramref name="asker"/> asking; an answer that could not
-    /// be read is never the reason a later query is told.
+    /// be read is never the reason a later query is told. <paramref name="unsaid"/> is the wait it was left for where it
+    /// said not how long, which the next such wait doubles from.
     /// </summary>
-    private void Pause(WebSearchStep step, WebSearchSource source, DateTimeOffset? until, WebSearchAnswer? answer, string asker)
+    private void Pause(WebSearchStep step, WebSearchSource source, DateTimeOffset? until, WebSearchAnswer? answer, string asker, TimeSpan? unsaid = null)
     {
         if (until is { } held)
         {
-            _pace.Pause(source.Name, held, answer is { Outcome: WebSearchOutcome.RateLimited, Why: { } why } ? Told(step.Mask, why) : $"{asker} asked to be left alone until {WebRateLimit.Said(held)}");
+            _pace.Pause(source.Name, held, answer is { Outcome: WebSearchOutcome.RateLimited, Why: { } why } ? Told(step.Mask, why) : $"{asker} asked to be left alone until {WebRateLimit.Said(held)}", unsaid);
         }
     }
 
-    private static string Spent(WebSearchStep step)
+    /// <summary>Holds <paramref name="source"/> for the limit <paramref name="limit"/> its answer's headers say, where they say one: the wait it was left for kept where it said not how long.</summary>
+    private void Pause(WebSearchStep step, WebSearchSource source, WebLimit? limit, WebSearchAnswer? answer, string asker, TimeSpan unsaid)
+        => Pause(step, source, limit?.Until, answer, asker, limit is { Said: false } ? unsaid : null);
+
+    /// <summary>What a request the step's search may no longer make is refused with: the step's requests are spent.</summary>
+    /// <param name="step">The step's search.</param>
+    internal static string Spent(WebSearchStep step)
         => $"this step's {step.MaxPerStep.ToString("N0", CultureInfo.InvariantCulture)} requests of the web search's sources are spent (agentWebSearch.maxPerStep)";
 }
 
@@ -647,8 +710,7 @@ public sealed class WebSearchStep
 
     /// <summary>The search of a step.</summary>
     /// <param name="sources">The step's sources, in its order, those turned on.</param>
-    /// <param name="resultsPerSource">The most results a source gives one search.</param>
-    /// <param name="maxPerStep">The most requests of sources the step makes.</param>
+    /// <param name="maxPerStep">The most requests of sources the step makes: a later page of a source's results one more.</param>
     /// <param name="runDirectory">The run's directory, whose record its searches share.</param>
     /// <param name="repository">The repository, whose index of a sitemap source's site it searches.</param>
     /// <param name="mask">The step's mask: it holds every form each key in <paramref name="keys"/> is sent in (<see cref="WebSearchCredential.Forms"/>).</param>
@@ -656,7 +718,7 @@ public sealed class WebSearchStep
     /// <param name="rules">The step's rules.</param>
     /// <param name="records">Its records.</param>
     /// <exception cref="ArgumentException">The mask does not hold a form of a key: a record would write it.</exception>
-    public WebSearchStep(IReadOnlyList<WebSearchSource> sources, int resultsPerSource, int maxPerStep, string runDirectory, HarnessLayout repository, ILineMask mask, IReadOnlyDictionary<string, WebSearchKey> keys, WebSearchRules rules, IWebSearchRecords records)
+    public WebSearchStep(IReadOnlyList<WebSearchSource> sources, int maxPerStep, string runDirectory, HarnessLayout repository, ILineMask mask, IReadOnlyDictionary<string, WebSearchKey> keys, WebSearchRules rules, IWebSearchRecords records)
     {
         ArgumentNullException.ThrowIfNull(sources);
         ArgumentException.ThrowIfNullOrWhiteSpace(runDirectory);
@@ -665,7 +727,6 @@ public sealed class WebSearchStep
         ArgumentNullException.ThrowIfNull(keys);
         ArgumentNullException.ThrowIfNull(rules);
         ArgumentNullException.ThrowIfNull(records);
-        ArgumentOutOfRangeException.ThrowIfLessThan(resultsPerSource, 1);
         ArgumentOutOfRangeException.ThrowIfLessThan(maxPerStep, 1);
 
         if (keys.FirstOrDefault(pair => pair.Value.Value is { } value
@@ -675,7 +736,6 @@ public sealed class WebSearchStep
         }
 
         Sources = sources;
-        ResultsPerSource = resultsPerSource;
         MaxPerStep = maxPerStep;
         RunDirectory = runDirectory;
         Repository = repository;
@@ -688,11 +748,17 @@ public sealed class WebSearchStep
     /// <summary>The step's sources, in its order.</summary>
     public IReadOnlyList<WebSearchSource> Sources { get; }
 
-    /// <summary>The most results a source gives one search.</summary>
-    public int ResultsPerSource { get; }
-
     /// <summary>The most requests of sources the step makes.</summary>
     public int MaxPerStep { get; }
+
+    /// <summary>
+    /// How long a source's answer may fall silent before it is given up: the step's <c>stallSeconds</c>; <see langword="null"/>
+    /// where it has none, and an answer that goes on coming, however slowly, is read to its end (<see cref="WebFetchGate.Stall"/>).
+    /// </summary>
+    public TimeSpan? Stall { get; init; }
+
+    /// <summary>Told where a wait of the step's search stands - an answer, a source's turn - every five minutes it lasts; none where nothing is told.</summary>
+    public Action<Waiting.WaitTold>? Tell { get; init; }
 
     /// <summary>The run's directory.</summary>
     public string RunDirectory { get; }
@@ -734,6 +800,15 @@ public sealed class WebSearchStep
         }
     }
 
+    /// <summary>
+    /// Records the searches a request already taken made: the provider's own search runs as many as it chose of one ask,
+    /// and each of them is a request of the step's search as any source's is - spent as the ask says how many it ran,
+    /// past the bound where the provider ran them, for they were made. An ask that names none keeps the one request its
+    /// being made spent.
+    /// </summary>
+    /// <param name="searches">How many searches the ask ran in all, its own request one of them.</param>
+    internal void Made(int searches) => Interlocked.Add(ref _spent, Math.Max(searches, 1) - 1);
+
     /// <summary>Gives back what <see cref="Take"/> counted for a request that was never made: a turn the source's pace refused.</summary>
     internal void GiveBack() => Interlocked.Decrement(ref _spent);
 }
@@ -747,7 +822,20 @@ public sealed class WebSearchStep
 /// <param name="Withheld">How many of its results the step's web rules left out.</param>
 /// <param name="Cached">Whether it was answered from what the run asked before, with no request.</param>
 /// <param name="KeyMissing">Why it was asked without its key, where it names one and the step had none.</param>
-public sealed record WebSearchPart(string Source, string Kind, int Version, string Query, WebSearchAnswer Answer, int Withheld, bool Cached, string? KeyMissing);
+public sealed record WebSearchPart(string Source, string Kind, int Version, string Query, WebSearchAnswer Answer, int Withheld, bool Cached, string? KeyMissing)
+{
+    /// <summary>The name, and the kind, of the part the provider's own search answers beside the configured sources'.</summary>
+    public const string Native = "native";
+
+    /// <summary>The page of the source's results it answers, from 1.</summary>
+    public int Page { get; init; } = 1;
+
+    /// <summary>The provider's own search's part of <paramref name="query"/>, refused unasked, for <paramref name="why"/>.</summary>
+    /// <param name="query">The query, as the agent wrote it.</param>
+    /// <param name="why">Why it was not asked.</param>
+    internal static WebSearchPart NativeRefused(string query, string why)
+        => new(Native, Native, Version: 1, query, WebSearchAnswer.Refused(why), Withheld: 0, Cached: false, KeyMissing: null);
+}
 
 /// <summary>What a search came to: each source's part, in the step's order, or why it asked none.</summary>
 /// <param name="Query">The query.</param>
@@ -800,7 +888,8 @@ public sealed record WebSearched(string Query, IReadOnlyList<WebSearchPart> Part
 
         return WebBlocks.Search(part.Query, part.Source, answer.Outcome switch
         {
-            WebSearchOutcome.NoResults => $"no results for '{part.Query}' from {part.Source}{(Notes(part) is { } notes ? $" {notes}" : string.Empty)}",
+            WebSearchOutcome.NoResults when answer.Why is { } why => $"no page {part.Page.ToString(CultureInfo.InvariantCulture)} of results for '{part.Query}' from {part.Source}: {why}",
+            WebSearchOutcome.NoResults => $"no results for '{part.Query}' from {part.Source}{(part.Page > 1 ? $" on page {part.Page.ToString(CultureInfo.InvariantCulture)}" : string.Empty)}{(Notes(part) is { } notes ? $" {notes}" : string.Empty)}",
             WebSearchOutcome.Changed => $"{part.Source}'s answer could not be read (it changed); nothing was read from it: {answer.Why}",
             WebSearchOutcome.Refused => $"{part.Source} was refused: {answer.Why}",
             _ => $"{part.Source}: {answer.Why}",
@@ -811,6 +900,11 @@ public sealed record WebSearched(string Query, IReadOnlyList<WebSearchPart> Part
     {
         var answer = part.Answer;
         var notes = new List<string>();
+
+        if (part.Page > 1)
+        {
+            notes.Add($"page {part.Page.ToString(CultureInfo.InvariantCulture)}");
+        }
 
         if (answer.Total is { } total)
         {

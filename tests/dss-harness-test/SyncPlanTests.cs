@@ -29,13 +29,44 @@ public sealed class SyncPlanTests
         Assert.Equal(2, plan.Writes.Count);
 
         // And the loss report names it as what it is, ahead of the deletions.
-        Assert.Contains("overwrite kept.c", plan.DescribeLoss());
+        Assert.Contains("overwrite kept.c", plan.DescribeLoss(SyncPlan.DryRunList));
 
         // So does the listing a refusal sends the reader to for the whole of it. Spelled the same as
         // a write there, the lossy half would arrive looking like the half that costs nothing.
         var described = plan.Describe(SyncVerb.Planned);
         Assert.Contains("would overwrite  kept.c", described);
         Assert.Contains("would write  fresh.c", described);
+    }
+
+    /// <summary>
+    /// A refusal over thirty thousand overwrites names every one its message's room holds, worst first, and for the rest
+    /// how many there are and that the dry run's list has them all - which it does, every one by name. Cut at twenty and
+    /// a count, the refusal named twenty files of a copy about to lose thirty thousand, and said nowhere where the rest were.
+    /// </summary>
+    [Fact]
+    public void ThirtyThousandOverwrites_AreNamedWhereTheyFit_AndAllInTheDryRunsList()
+    {
+        const int Files = 30_000;
+        var paths = Enumerable.Range(0, Files).Select(file => $"src/kept-{file:D5}.c").ToList();
+        var plan = SyncPlan.Between(
+            Manifest([.. paths.Select(path => (path, "this tree's"))]),
+            Manifest([.. paths.Select(path => (path, "their own edit"))]),
+            Default);
+
+        var loss = plan.DescribeLoss(SyncPlan.DryRunList);
+        var named = loss.Take(loss.Count - 1).ToList();
+        var rest = Files - named.Count;
+
+        Assert.Equal(Files, plan.Overwrites.Count);
+        Assert.True(named.Count > 20, $"the refusal named {named.Count} of {Files}");
+        Assert.Equal([.. paths.Take(named.Count).Select(path => $"overwrite {path}")], named);
+        Assert.True(named.Sum(line => line.Length + 1) <= DssHarness.Core.Pages.PageRoom.Line, "the names took more than the line's room");
+        Assert.Equal($"and {rest} more (all in {SyncPlan.DryRunList})", loss[^1]);
+
+        var describedSet = plan.Describe(SyncVerb.Planned).ToHashSet(StringComparer.Ordinal);
+        Assert.Subset(
+            paths.Select(path => $"would overwrite  {path}").Append("unchanged 0 file(s)").ToHashSet(StringComparer.Ordinal),
+            describedSet);
     }
 
     [Fact]
@@ -288,6 +319,36 @@ public sealed class SyncPlanTests
         // a source directory nobody excluded.
         Assert.False(Default.IsWithheldFromTransfer("buildings/plan.md"));
         Assert.False(Default.IsWithheldFromTransfer(".gitattributes"));
+    }
+
+    /// <summary>
+    /// A refusal over the delete bound names every deletion and says how to go on: the files it would delete, in order,
+    /// and the share sync.maxDeleteFraction would have to allow for the sync to go on. Where the deletions outrun a line,
+    /// the sync command's reader is given those that fit and sent to the dry run's list for the rest; a sweep's reader,
+    /// who has no dry run, is given every one.
+    /// </summary>
+    [Fact]
+    public void AFractionRefusal_ListsEveryDeletion()
+    {
+        var destination = Manifest(("a.c", "1"), ("b.c", "2"), ("c.c", "3"), ("d.c", "4"));
+        var plan = SyncPlan.Between(Manifest(("a.c", "1")), destination, Default);
+
+        Assert.Equal(
+            $"This sync would delete 3 of the 4 file(s) in '/tree': b.c, c.c, d.c. That is {0.75:P0} of it, over the "
+            + $"{SyncConfig.DefaultMaxDeleteFraction:P0} sync.maxDeleteFraction allows, which would have to be 0.75 or more for it to go on. "
+            + "Nothing was changed. Confirm the source tree is the one you meant, then raise sync.maxDeleteFraction or run with --dry-run to see the list.",
+            plan.OverTheBound(destination, SyncConfig.DefaultMaxDeleteFraction));
+
+        var files = Enumerable.Range(0, 3000).Select(file => ($"src/file{file:D4}.c", "x")).ToArray();
+        var many = Manifest(files);
+        var emptied = SyncPlan.Between(Manifest(), many, Default);
+        var refused = emptied.OverTheBound(many, SyncConfig.DefaultMaxDeleteFraction)!;
+        var swept = emptied.OverTheBound(many, SyncConfig.DefaultMaxDeleteFraction, reader: SyncBoundReader.Sweep)!;
+
+        Assert.StartsWith("This sync would delete 3000 of the 3000 file(s) in '/tree': src/file0000.c, src/file0001.c, ", refused, StringComparison.Ordinal);
+        Assert.Matches(@"src/file\d{4}\.c and \d+ more \(all in the list --dry-run prints\)\. That is ", refused);
+        Assert.All(files, file => Assert.Contains(file.Item1, swept, StringComparison.Ordinal));
+        Assert.Contains("which would have to be 1 or more for it to go on", swept, StringComparison.Ordinal);
     }
 
     private static SyncManifest Manifest(params (string Path, string Content)[] files)

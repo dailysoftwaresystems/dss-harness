@@ -15,8 +15,6 @@ namespace DssHarness.Core.Anchors;
 /// </remarks>
 public static class AnchorReports
 {
-    private const int ValueWidth = 60;
-
     private static readonly JsonSerializerOptions JsonOptions = ReportJson.Options;
 
     /// <summary>What write-anchor or set-anchor reports.</summary>
@@ -69,6 +67,7 @@ public static class AnchorReports
             $"{ReportText.Counted(lookup.Missing.Count, "id")} not found: {string.Join(", ", lookup.Missing.Select(miss => miss.Id))}",
         };
 
+        // Every id beginning the same way is named: the refusal is the one place they are said.
         message.AddRange(lookup.Missing
             .Where(miss => miss.SameNamespace.Count > 0)
             .Select(miss => $"  {miss.Id}: ids beginning the same way: {string.Join(", ", miss.SameNamespace)}"));
@@ -458,10 +457,11 @@ public static class AnchorReports
     private static string SignedCount(int value)
         => value > 0 ? "+" + value.ToString(CultureInfo.InvariantCulture) : value.ToString(CultureInfo.InvariantCulture);
 
+    /// <summary>A value as a change's line quotes it: whole, on one line, or <c>(empty)</c>.</summary>
     private static string Show(string value)
     {
         var flat = AnchorCells.Collapse(value);
-        return flat.Length == 0 ? "(empty)" : flat.Length > ValueWidth ? flat[..ValueWidth] + "..." : flat;
+        return flat.Length == 0 ? "(empty)" : flat;
     }
 
     private static string Unset(string value) => value.Length == 0 ? "(unset)" : value;

@@ -31,7 +31,10 @@ public sealed record NinjaDependencyReport(
 /// to be, it leaves every other leg unchecked, and the leg most likely to be misconfigured is the
 /// one nobody is sitting at.
 /// </remarks>
-public sealed class NinjaDependencyCheck(IProcessRunner processRunner, IFileSystem fileSystem)
+/// <param name="processRunner">Runs ninja.</param>
+/// <param name="fileSystem">Reads the build directory.</param>
+/// <param name="clock">Times the wait for ninja's answer; the system's where none is given.</param>
+public sealed class NinjaDependencyCheck(IProcessRunner processRunner, IFileSystem fileSystem, TimeProvider? clock = null)
 {
     /// <summary>The file a ninja build directory describes itself in.</summary>
     public const string ManifestFileName = "build.ninja";
@@ -43,12 +46,9 @@ public sealed class NinjaDependencyCheck(IProcessRunner processRunner, IFileSyst
     public const string Program = "ninja";
 
     /// <summary>
-    /// How long <c>ninja -t deps</c> may take. A probe, not a phase: it reads a log and prints, so a
-    /// budget here bounds a hang rather than guessing at a workload.
+    /// Runs ninja in <paramref name="buildDirectory"/> as the build ran it: a probe, run to its end through
+    /// <see cref="BuildProbes"/>, so it sets no timeout of its own.
     /// </summary>
-    internal static readonly TimeSpan Budget = TimeSpan.FromMinutes(10);
-
-    /// <summary>Runs ninja in <paramref name="buildDirectory"/> as the build ran it, within the budget of a probe.</summary>
     /// <param name="buildDirectory">The build directory, which ninja runs in.</param>
     /// <param name="arguments">What ninja is asked.</param>
     /// <param name="programDirectories">
@@ -69,11 +69,11 @@ public sealed class NinjaDependencyCheck(IProcessRunner processRunner, IFileSyst
             ProgramDirectories = programDirectories,
             Environment = environment ?? new Dictionary<string, string?>(StringComparer.Ordinal),
             WorkingDirectory = buildDirectory,
-            Timeout = Budget,
         };
 
     private readonly IProcessRunner _processRunner = processRunner;
     private readonly IFileSystem _fileSystem = fileSystem;
+    private readonly TimeProvider _clock = clock ?? TimeProvider.System;
 
     /// <summary>Checks one build directory.</summary>
     /// <param name="buildDirectory">The directory to read.</param>
@@ -88,6 +88,10 @@ public sealed class NinjaDependencyCheck(IProcessRunner processRunner, IFileSyst
     /// The environment the build's phases ran in, which the check runs in too: a ninja looked up by
     /// name is found on the PATH the build had.
     /// </param>
+    /// <param name="told">
+    /// Told where the wait for ninja stands, every <see cref="Waiting.Waits.SaidEvery"/> it lasts: ninja is waited for to its
+    /// end, however long it takes. Nothing is told where null.
+    /// </param>
     /// <param name="cancellationToken">Stops the check.</param>
     /// <exception cref="HarnessException">
     /// The check could not run: the directory is missing, ninja could not be started, or it answered
@@ -100,6 +104,7 @@ public sealed class NinjaDependencyCheck(IProcessRunner processRunner, IFileSyst
         ProgramDirectories programDirectories,
         string? program = null,
         IReadOnlyDictionary<string, string?>? environment = null,
+        Action<Waiting.WaitTold>? told = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(programDirectories);
@@ -121,7 +126,7 @@ public sealed class NinjaDependencyCheck(IProcessRunner processRunner, IFileSyst
         }
 
         var records = await NinjaRebuildGraph
-            .ReadRecordsAsync(_processRunner, buildDirectory, programDirectories, program, environment, cancellationToken)
+            .ReadRecordsAsync(_processRunner, buildDirectory, programDirectories, program, environment, told, _clock, cancellationToken)
             .ConfigureAwait(false);
 
         var withoutHeaders = records.Values.Where(record => record.Count == 0).Select(record => record.Object).ToList();

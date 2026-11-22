@@ -71,7 +71,7 @@ public sealed class CodeGraphExtractors
         {
             0 => "no implementation of the codebase graph's contract is the fallback, and a file no other claims would be read by none: one is, and lists every file no other reads",
             1 => null,
-            _ => $"{ReportText.Listed([.. fallbacks.Select(extractor => $"'{extractor.Language}'")])} are each the fallback; one implementation reads every file no other claims",
+            _ => $"{Named(fallbacks)} are each the fallback; one implementation reads every file no other claims",
         });
 
         foreach (var (what, claimsOf) in new (string, Func<ICodeGraphExtractor, IReadOnlyList<CodeGraphClaim>>)[] { ("file name", extractor => extractor.Claims.Names), ("extension", extractor => extractor.Claims.Extensions) })
@@ -82,7 +82,7 @@ public sealed class CodeGraphExtractors
                 .FirstOrDefault(group => group.Count() > 1 && group.Any(claimed => claimed.Claim.ContentTest is null));
 
             Refuse(shared is null ? null
-                : $"{ReportText.Listed([.. shared.Select(claimed => $"'{claimed.Extractor.Language}'")])} each claim the {what} '{shared.Key}', and {ReportText.Listed([.. shared.Where(claimed => claimed.Claim.ContentTest is null).Select(claimed => $"'{claimed.Extractor.Language}'")])} give{(shared.Count(claimed => claimed.Claim.ContentTest is null) == 1 ? "s" : string.Empty)} it no content test: two that claim one {what} each say by a test of a file's first characters which file is theirs, and a file is never given to one by order");
+                : $"{Named([.. shared.Select(claimed => claimed.Extractor)])} each claim the {what} '{shared.Key}', and {Named([.. shared.Where(claimed => claimed.Claim.ContentTest is null).Select(claimed => claimed.Extractor)])} give{(shared.Count(claimed => claimed.Claim.ContentTest is null) == 1 ? "s" : string.Empty)} it no content test: two that claim one {what} each say by a test of a file's text which file is theirs, and a file is never given to one by order");
         }
 
         All = all;
@@ -122,10 +122,13 @@ public sealed class CodeGraphExtractors
 
     /// <summary>
     /// The implementations that claim <paramref name="path"/> at the narrowest level any does - its exact name, else its
-    /// extension - before any content test is asked; none where only the fallback reads it.
+    /// extension - before any content test is asked; none where only the fallback reads it. Where
+    /// <paramref name="endingClaims"/> maps endings of a file's name to implementations, the longest of them its name
+    /// ends with is claimed between the two, after any exact name and before any extension.
     /// </summary>
     /// <param name="path">The file's path, relative to the tree's root with forward separators.</param>
-    public IReadOnlyList<(ICodeGraphExtractor Extractor, CodeGraphClaim Claim)> ClaimantsOf(string path)
+    /// <param name="endingClaims">The endings a repository maps to implementations, by name, or null where it maps none.</param>
+    public IReadOnlyList<(ICodeGraphExtractor Extractor, CodeGraphClaim Claim)> ClaimantsOf(string path, IReadOnlyDictionary<string, IReadOnlyList<string>>? endingClaims = null)
     {
         ArgumentNullException.ThrowIfNull(path);
 
@@ -137,6 +140,11 @@ public sealed class CodeGraphExtractors
             return byName;
         }
 
+        if (EndingOf(name, endingClaims) is { } byEnding)
+        {
+            return byEnding;
+        }
+
         var dot = name.LastIndexOf('.');
 
         return dot <= 0
@@ -145,17 +153,62 @@ public sealed class CodeGraphExtractors
     }
 
     /// <summary>
-    /// Which implementation reads <paramref name="path"/>, whose text begins with <paramref name="probe"/>: the one
+    /// The claimants of the longest ending <paramref name="name"/> ends with among <paramref name="endingClaims"/>, each
+    /// mapped ending to the implementation its language names; none where no mapped ending matches. A mapped language
+    /// this build holds no implementation of is left out, as its workflow's check refuses one before any run.
+    /// </summary>
+    private List<(ICodeGraphExtractor Extractor, CodeGraphClaim Claim)>? EndingOf(string name, IReadOnlyDictionary<string, IReadOnlyList<string>>? endingClaims)
+    {
+        if (endingClaims is not { Count: > 0 })
+        {
+            return null;
+        }
+
+        var (longest, of) = (0, null as List<(ICodeGraphExtractor, CodeGraphClaim)>);
+
+        foreach (var (language, endings) in endingClaims)
+        {
+            if (Find(language) is not { } extractor)
+            {
+                continue;
+            }
+
+            foreach (var ending in endings)
+            {
+                if (ending.Length == 0 || !name.EndsWith(ending, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                if (ending.Length > longest || of is null)
+                {
+                    of = [];
+                    longest = ending.Length;
+                }
+
+                if (ending.Length == longest)
+                {
+                    of.Add((extractor, new CodeGraphClaim(ending)));
+                }
+            }
+        }
+
+        return of;
+    }
+
+    /// <summary>
+    /// Which implementation reads <paramref name="path"/>, whose text is <paramref name="probe"/>: the one
     /// claimant whose content test says yes - a claim with none says yes - or the fallback where none claims it. Where
     /// none or several of its claimants say yes, no implementation reads it, and it is listed <c>ambiguous</c>.
     /// </summary>
     /// <param name="path">The file's path, relative to the tree's root with forward separators.</param>
-    /// <param name="probe">Its first characters, decoded (<see cref="CodeFileText.Probe"/>).</param>
-    public CodeGraphRoute Route(string path, string probe)
+    /// <param name="probe">Its decoded text, whole (<see cref="CodeText"/>): each test reads of it as far as it needs.</param>
+    /// <param name="endingClaims">The endings a repository maps to implementations, by name, or null where it maps none.</param>
+    public CodeGraphRoute Route(string path, CodeText probe, IReadOnlyDictionary<string, IReadOnlyList<string>>? endingClaims = null)
     {
         ArgumentNullException.ThrowIfNull(probe);
 
-        var claimants = ClaimantsOf(path);
+        var claimants = ClaimantsOf(path, endingClaims);
 
         if (claimants.Count == 0)
         {
@@ -188,9 +241,16 @@ public sealed class CodeGraphExtractors
         return yes.Count == 1
             ? CodeGraphRoute.To(yes[0])
             : CodeGraphRoute.AmbiguousFor(yes.Count == 0
-                ? $"{ReportText.Listed([.. claimants.Select(claimed => $"'{claimed.Extractor.Language}'")])} claim it, and none of their content tests says it is theirs"
-                : $"{ReportText.Listed([.. yes.Select(extractor => $"'{extractor.Language}'")])} each say by their content tests that it is theirs");
+                ? $"{Named([.. claimants.Select(claimed => claimed.Extractor)])} claim it, and none of their content tests says it is theirs"
+                : $"{Named(yes)} each say by their content tests that it is theirs");
     }
+
+    /// <summary>
+    /// <paramref name="extractors"/> named in one line, each quoted: every one that fits, and for the rest how many and
+    /// where every implementation and its claims are listed - <c>help codebase-graph</c> (<see cref="Names.Line"/>).
+    /// </summary>
+    private static string Named(IReadOnlyList<ICodeGraphExtractor> extractors)
+        => Names.Line([.. extractors.Select(extractor => $"'{extractor.Language}'")], "help codebase-graph");
 
     /// <summary>Whether <paramref name="language"/> is a name a node id and an extract's file name can carry.</summary>
     private static bool IsName(string? language)

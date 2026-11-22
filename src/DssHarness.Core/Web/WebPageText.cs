@@ -18,13 +18,6 @@ public static class WebPageText
         ["script", "style", "noscript", "template", "svg", "canvas", "iframe", "object", "embed", "head"],
         StringComparer.OrdinalIgnoreCase);
 
-    /// <summary>
-    /// How much of a field is read: 16 KiB - a title, a snippet and an error's words are each far shorter, and markup
-    /// nested deep within more would take long to read. A field cut so is read with its cut marked
-    /// (<see cref="Output.TextCut.Ellipsis"/>), within the most.
-    /// </summary>
-    public const int MostFieldRead = 16 * 1024;
-
     /// <summary>How many of a page's nodes are walked between two looks at the reading's token.</summary>
     private const int NodesBetweenLooks = 1024;
 
@@ -55,10 +48,61 @@ public static class WebPageText
     /// <summary>The text of <paramref name="document"/>, as <see cref="OfAsync"/> gives it; its walk stopped by <paramref name="cancellationToken"/>.</summary>
     internal static string Of(IHtmlDocument document, CancellationToken cancellationToken)
     {
-        var title = Collapsed(document.Title ?? string.Empty);
-        var text = BodyText(document, null, cancellationToken);
+        using var text = new StringWriter();
+        Write(document, text, cancellationToken);
+        return text.ToString();
+    }
 
-        return title.Length > 0 ? $"{title}\n\n{text}" : text;
+    /// <summary>
+    /// Writes the text of <paramref name="html"/> - as <see cref="OfAsync"/> gives it - into <paramref name="into"/>, a line
+    /// at a time, never as one text: what a page an agent fetches is kept in as it is read. Its reading is stopped by
+    /// <paramref name="cancellationToken"/>.
+    /// </summary>
+    /// <param name="html">The page's markup, decoded.</param>
+    /// <param name="into">Where its text is written.</param>
+    /// <param name="cancellationToken">Stops the reading.</param>
+    /// <returns>How many characters were written.</returns>
+    public static async Task<long> WriteAsync(string html, TextWriter into, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(html);
+        ArgumentNullException.ThrowIfNull(into);
+
+        var document = await new HtmlParser(new HtmlParserOptions { IsScripting = false }).ParseDocumentAsync(html, cancellationToken).ConfigureAwait(false);
+        return Write(document, into, cancellationToken);
+    }
+
+    /// <summary>
+    /// Writes the text of <paramref name="document"/>: its title on the first line where it has one, a blank line, then its
+    /// body's text, a block a line, each line written as it is made. How many characters were written.
+    /// </summary>
+    private static long Write(IHtmlDocument document, TextWriter into, CancellationToken cancellationToken)
+    {
+        var title = Collapsed(document.Title ?? string.Empty);
+        var written = 0L;
+
+        if (title.Length > 0)
+        {
+            into.Write(title);
+            into.Write("\n\n");
+            written += title.Length + 2;
+        }
+
+        var first = true;
+
+        foreach (var line in BodyLines(document, null, cancellationToken))
+        {
+            if (!first)
+            {
+                into.Write('\n');
+                written++;
+            }
+
+            into.Write(line);
+            written += line.Length;
+            first = false;
+        }
+
+        return written;
     }
 
     /// <summary>
@@ -81,80 +125,42 @@ public static class WebPageText
 
     /// <summary>
     /// A field that is markup - an excerpt's highlights, an entity, an element of its author's own - reduced to the text a
-    /// reader of it sees, on one line, read no further than its most, its cut marked. Whether a field is markup is its
-    /// source's word, never guessed: plain text that names an element, as <c>the &lt;canvas&gt; tag</c> does, is text
-    /// (<see cref="OfText"/>).
+    /// reader of it sees, on one line, read whole however long it is. Whether a field is markup is its source's word, never
+    /// guessed: plain text that names an element, as <c>the &lt;canvas&gt; tag</c> does, is text (<see cref="OfText"/>).
     /// </summary>
     /// <param name="field">The field as the source answered it.</param>
     public static string OfMarkup(string field)
     {
         ArgumentNullException.ThrowIfNull(field);
 
-        var read = Read(field);
-
-        if (read.IndexOfAny(['<', '&']) < 0)
+        if (field.IndexOfAny(['<', '&']) < 0)
         {
-            return Marked(field, read, Collapsed(read));
+            return Collapsed(field);
         }
 
-        var cut = read.Length < field.Length;
-        // A cut that fell just after a tag's '<' leaves it read as text, and the cut's end so no end of the field's text: it
-        // is dropped first.
-        var document = new HtmlParser(new HtmlParserOptions { IsScripting = false }).ParseDocument($"<body>{(cut ? read.TrimEnd('<') + CutHere : read)}</body>");
-        var text = string.Join(" ", BodyText(document, null, CancellationToken.None).Split('\n'));
+        var document = new HtmlParser(new HtmlParserOptions { IsScripting = false }).ParseDocument($"<body>{field}</body>");
 
-        // A field cut short is read up to where its cut fell, in the order its reader reads it - which a page's reader may
-        // change, a table's stray text read before the table - so its end is the cut's; a cut that fell where no text is
-        // read - in a tag, a script, a hidden element - is nowhere in it, and nothing of the field is read.
-        if (!cut)
-        {
-            return text;
-        }
-
-        var at = text.LastIndexOf(CutHere, StringComparison.Ordinal);
-
-        return at < 0 ? string.Empty : Marked(field, read, text[..at].TrimEnd());
+        // On one line: a preformatted block's own breaks among them.
+        return string.Join(" ", BodyText(document, null, CancellationToken.None).Split('\n'));
     }
 
     /// <summary>
     /// A field that is text, never markup - an index's own text, a feed's text construct, a JSON source's field where it
-    /// does not say it is markup - read no further than its most, its cut marked, its blanks made single, a '&lt;' or an
-    /// '&amp;' in it as it stands.
+    /// does not say it is markup - read whole, its blanks made single, a '&lt;' or an '&amp;' in it as it stands.
     /// </summary>
     /// <param name="field">The field.</param>
     public static string OfText(string field)
     {
         ArgumentNullException.ThrowIfNull(field);
-
-        var read = Read(field);
-
-        return Marked(field, read, Collapsed(read));
+        return Collapsed(field);
     }
 
-    /// <summary>What marks, in a field cut short before it is parsed, where its cut fell: text no page writes.</summary>
-    private const string CutHere = "\uE000\uF8FF\uE000";
-
     /// <summary>
-    /// What of <paramref name="field"/> is read: all of it where it is no longer than its most, else as much as leaves room
-    /// for its cut's mark, cut before an escape the cut would part (<see cref="Execution.LineMasks.Finished"/>) - a page's
-    /// reader makes another character of half of one.
+    /// The text of <paramref name="document"/>'s body, a block a line - each line that says anything, in the page's order -
+    /// as <see cref="Of"/> gives it after the title; each heading's text added to <paramref name="headings"/>, where it is
+    /// given.
     /// </summary>
-    private static string Read(string field)
-        => field.Length > MostFieldRead ? Execution.LineMasks.Finished(Output.TextCut.Head(field, MostFieldRead - 1)) : field;
-
-    /// <summary>
-    /// <paramref name="text"/>, read from <paramref name="read"/>, marked as cut short where <paramref name="field"/> was:
-    /// whoever is told it knows its end is none of the field's - a step told a text of the web is told none of what could
-    /// be a secret's start there (<see cref="Execution.LineMasks.RedactHead"/>).
-    /// </summary>
-    private static string Marked(string field, string read, string text)
-        => read.Length < field.Length && text.Length > 0 ? text + Output.TextCut.Ellipsis : text;
-
-    /// <summary>
-    /// The text of <paramref name="document"/>'s body, a block a line, as <see cref="Of"/> gives it after the title; each
-    /// heading's text added to <paramref name="headings"/>, where it is given.
-    /// </summary>
-    private static string BodyText(IHtmlDocument document, List<string>? headings, CancellationToken cancellationToken)
+    private static IEnumerable<string> BodyLines(IHtmlDocument document, List<string>? headings, CancellationToken cancellationToken)
     {
         var pieces = new List<Piece> { new(new StringBuilder(), Preformatted: false) };
 
@@ -163,11 +169,13 @@ public static class WebPageText
             Write(body, pieces, headings, cancellationToken);
         }
 
-        return string.Join(
-            "\n",
-            pieces.Select(piece => piece.Preformatted ? piece.Text.ToString().Trim('\n', '\r') : Collapsed(piece.Text.ToString()))
-                .Where(line => line.Length > 0));
+        return pieces.Select(piece => piece.Preformatted ? piece.Text.ToString().Trim('\n', '\r') : Collapsed(piece.Text.ToString()))
+            .Where(line => line.Length > 0);
     }
+
+    /// <summary>The text of <paramref name="document"/>'s body, a block a line, as <see cref="BodyLines"/> gives it, joined.</summary>
+    private static string BodyText(IHtmlDocument document, List<string>? headings, CancellationToken cancellationToken)
+        => string.Join("\n", BodyLines(document, headings, cancellationToken));
 
     /// <summary>
     /// Writes the text under <paramref name="root"/> into <paramref name="pieces"/>: a block a piece of its own, a

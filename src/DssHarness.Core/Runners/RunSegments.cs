@@ -2,6 +2,7 @@ using System.Buffers;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using DssHarness.Core.FileSystem;
+using DssHarness.Core.Json;
 using DssHarness.Core.Output;
 using DssHarness.Core.Results;
 
@@ -130,6 +131,9 @@ public sealed class RunSegments(IFileSystem fileSystem, IHarnessOutput output)
         PropertyNameCaseInsensitive = true,
         WriteIndented = true,
         NewLine = "\n",
+
+        // At any depth (JsonDepth): a record is refused for what its shape cannot hold, never for how deep it nests.
+        MaxDepth = JsonDepth.Unbounded,
     };
 
     private readonly IFileSystem _fileSystem = fileSystem;

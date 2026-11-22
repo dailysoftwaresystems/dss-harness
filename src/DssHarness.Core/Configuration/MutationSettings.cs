@@ -45,7 +45,7 @@ public sealed class MutationSettings
 
     /// <summary>
     /// Worker copies a leg sweeps its arms with at once, at least 1: fewer where the leg has fewer arms, or its
-    /// machine fewer rooms for them, and one in a WSL distribution.
+    /// machine fewer rooms for them, in a WSL distribution as anywhere.
     /// </summary>
     [Description("worker copies a leg sweeps with at once, at least 1 (2)")]
     public int Workers { get; init; } = DefaultWorkers;

@@ -171,8 +171,9 @@ public sealed class BuildLegs(IBuildService builds, LegRunService runs) : IBuild
             Detail = Detail(result),
             CommandTime = result.Phases.Aggregate(TimeSpan.Zero, (total, phase) => total + phase.Duration),
             Phases = [.. result.Phases.Select(phase => new PhaseRecord(phase.Phase, phase.Duration, phase.ClockStepped))],
-            Timings = [.. result.Phases.SelectMany(phase =>
-                phase.Timings.Select(timing => new TimingMark(phase.Phase, timing.Text, timing.Value)))],
+            // Read from each phase's timing record as the ledger asks for them, never gathered here.
+            Timings = result.Phases.SelectMany(phase =>
+                phase.Timings.Select(timing => new TimingMark(phase.Phase, timing.Text, timing.Value))),
         };
     }
 

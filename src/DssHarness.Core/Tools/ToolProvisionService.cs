@@ -48,19 +48,11 @@ public sealed class ToolProvisionService(
     IHostProgramResolver programs,
     IHostInspector inspector,
     IHarnessOutput output,
-    ISuperuserPrompt prompt) : IToolProvisionService
+    ISuperuserPrompt prompt,
+    TimeProvider? clock = null) : IToolProvisionService
 {
     /// <summary>The command's name, which prefixes what it reports.</summary>
     public const string CommandName = "install-missing-tools";
-
-    /// <summary>Longest one probe of a host may take.</summary>
-    public static readonly TimeSpan ProbeBudget = TimeSpan.FromMinutes(2);
-
-    /// <summary>
-    /// Longest one install may take. Generous because it includes a download over whatever link the
-    /// host has, and a package manager that has to refresh its index first.
-    /// </summary>
-    public static readonly TimeSpan InstallBudget = TimeSpan.FromMinutes(30);
 
     private readonly IHarnessContextLoader _contextLoader = contextLoader;
     private readonly IHostConnector _connector = connector;
@@ -69,6 +61,7 @@ public sealed class ToolProvisionService(
     private readonly IHostInspector _inspector = inspector;
     private readonly IHarnessOutput _output = output;
     private readonly ISuperuserPrompt _prompt = prompt;
+    private readonly TimeProvider? _clock = clock;
 
     public async Task<ToolProvisionReport> ProvisionAsync(
         string directory,
@@ -341,7 +334,6 @@ public sealed class ToolProvisionService(
             connection,
             "sh",
             [],
-            InstallBudget,
             cancellationToken,
             InstallScript).ConfigureAwait(false);
 
@@ -355,7 +347,7 @@ public sealed class ToolProvisionService(
         // Measured again rather than assumed: the installer's own directory is what the next command
         // has to spell, and the run that put it there is the only one that can find out where it went.
         connection = await _programs
-            .ResolveAsync(connection.Forget(Name), [Name], ToolSearchDirectories.Posix, ProbeBudget, cancellationToken)
+            .ResolveAsync(connection.Forget(Name), [Name], ToolSearchDirectories.Posix, cancellationToken)
             .ConfigureAwait(false);
 
         var installed = await HighestSdkAsync(connection, cancellationToken).ConfigureAwait(false);
@@ -382,7 +374,6 @@ public sealed class ToolProvisionService(
             connection,
             connection.Spell(HostInspector.DotnetProgram),
             ["--list-sdks"],
-            ProbeBudget,
             cancellationToken).ConfigureAwait(false);
 
         return sdks.Succeeded
@@ -643,7 +634,6 @@ public sealed class ToolProvisionService(
             connection,
             privileged.Command[0],
             [.. privileged.Command.Skip(1)],
-            InstallBudget,
             cancellationToken,
             privileged.Input).ConfigureAwait(false);
 
@@ -666,7 +656,7 @@ public sealed class ToolProvisionService(
             return (null, null);
         }
 
-        var result = await RunAsync(connection, connection.Spell(located), probe.Args, ProbeBudget, cancellationToken)
+        var result = await RunAsync(connection, connection.Spell(located), probe.Args, cancellationToken)
             .ConfigureAwait(false);
 
         return ToolVersion.Of(tool.Name, probe.Regex, result, connection);
@@ -697,9 +687,9 @@ public sealed class ToolProvisionService(
             return PlatformNames.Windows;
         }
 
-        var uname = await RunAsync(connection, "uname", ["-s"], ProbeBudget, cancellationToken).ConfigureAwait(false);
+        var uname = await RunAsync(connection, "uname", ["-s"], cancellationToken).ConfigureAwait(false);
 
-        // A host that did not answer at all - it timed out, or ssh itself failed - said nothing about
+        // A host that did not answer at all - ssh itself failed, or its own bounds ended it - said nothing about
         // what it is. Read as Windows, it would be searched in no POSIX directory and asked about no
         // tool scoped to Linux, and then reported as having everything it needs.
         if (!HostProbes.Answered(uname))
@@ -729,26 +719,36 @@ public sealed class ToolProvisionService(
             : $"it is not installed there{why}; its install declares nothing for {platform} or for 'all'";
     }
 
+    /// <summary>
+    /// Runs <paramref name="program"/> on the host, waited for to its end (<see cref="ProgramWait"/>): an install that
+    /// downloads over a slow link, or a package manager refreshing its index first, takes as long as it takes, told every
+    /// few minutes while it lasts; only the person's stop - or ssh's own bounds, which the host's settings give - ends it.
+    /// </summary>
     private async Task<ProcessResult> RunAsync(
         HostConnection connection,
         string program,
         IReadOnlyList<string> arguments,
-        TimeSpan budget,
         CancellationToken cancellationToken,
         string input = "")
     {
         try
         {
-            return await _hostCommands.RunAsync(
-                connection,
-                new HostCommand
-                {
-                    Program = program,
-                    Arguments = arguments,
-                    Timeout = budget,
-                    StandardInput = input,
-                },
-                cancellationToken).ConfigureAwait(false);
+            return await ProgramWait
+                .ToItsEndAsync(
+                    token => _hostCommands.RunAsync(
+                        connection,
+                        new HostCommand
+                        {
+                            Program = program,
+                            Arguments = arguments,
+                            StandardInput = input,
+                        },
+                        token),
+                    $"'{program}' on {connection.Host} to end",
+                    ProgramWait.Told(_output, CommandName),
+                    _clock,
+                    cancellationToken)
+                .ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is ArgumentException or ProgramStartException)
         {
@@ -1008,7 +1008,7 @@ public sealed class ToolProvisionService(
             }
 
             _passwordless ??= (await service
-                .RunAsync(connection, "sudo", ["-n", "true"], ProbeBudget, cancellationToken)
+                .RunAsync(connection, "sudo", ["-n", "true"], cancellationToken)
                 .ConfigureAwait(false)).Succeeded;
 
             if (_passwordless.Value)
@@ -1038,7 +1038,7 @@ public sealed class ToolProvisionService(
 
         /// <summary>
         /// Asks for a password and finds out whether this host accepts it, or <see langword="null"/>
-        /// when nothing was typed. Checked before an install that may run for half an hour rides on it,
+        /// when nothing was typed. Checked before an install that may run for hours rides on it,
         /// and checked once: a second guess is a second failed authentication counted against that
         /// account, and some hosts count those toward locking it.
         /// </summary>
@@ -1063,7 +1063,7 @@ public sealed class ToolProvisionService(
             _typed = new HostCredential(typed);
 
             var answer = await service
-                .RunAsync(connection, "sudo", ["-S", "-v"], ProbeBudget, cancellationToken, _typed.Reveal() + "\n")
+                .RunAsync(connection, "sudo", ["-S", "-v"], cancellationToken, _typed.Reveal() + "\n")
                 .ConfigureAwait(false);
 
             if (answer.Succeeded)
@@ -1072,8 +1072,8 @@ public sealed class ToolProvisionService(
                 return (true, _accepted.Reveal() + "\n");
             }
 
-            // A check that never finished is not a password the host refused. A probe that ran out of
-            // time, a host that stopped answering, a transport that failed: calling any of those a
+            // A check that never finished is not a password the host refused. A probe ended by ssh's own
+            // bounds, a host that stopped answering, a transport that failed: calling any of those a
             // wrong password blames somebody's typing for a machine that went away, and this verdict
             // is then remembered for every later tool on that host.
             if (!answer.TimedOut && answer.ExitCode == PasswordRefused)

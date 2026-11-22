@@ -131,12 +131,23 @@ public sealed partial class GitClient(
             return null;
         }
 
+        // git always names the main worktree first, so an answer that names none is no answer: a git that
+        // printed nothing and left with success, as one was once seen to on a shared runner. Read as an
+        // empty listing it reaches the caller as "names no checkout", which says a repository answered a
+        // question it was never asked; refused here, the answer that named nothing names itself.
+        var worktrees = ParseWorktrees(result.StandardOutput);
+
+        if (worktrees.Count == 0)
+        {
+            throw new HarnessException(
+                HarnessExit.CommandFailed,
+                $"git listed no worktrees of '{directory}' (exit code {result.ExitCode}, no answer at all)");
+        }
+
         // git always lists the main worktree first - named for the git directory its worktrees share:
         // that directory's parent, where it is called .git, and the directory itself otherwise, which is
         // no checkout. A submodule's is named so, kept under its superproject's .git/modules, and so is
         // one made apart from its checkout with --separate-git-dir.
-        var worktrees = ParseWorktrees(result.StandardOutput);
-
         return worktrees.FirstOrDefault() is { IsBare: false } main
             && await IsGitDirectoryAsync(main.Path, cancellationToken).ConfigureAwait(false)
             ? await CheckoutOfAsync(directory, main, worktrees, cancellationToken).ConfigureAwait(false)
@@ -1985,6 +1996,23 @@ public sealed partial class GitClient(
             hooks: new HookRun(isolation, values ?? new Dictionary<string, string>(StringComparer.Ordinal)));
 
     /// <inheritdoc/>
+    public Task<GitCommandResult> RunRemoteAsync(
+        string directory,
+        IReadOnlyList<string> arguments,
+        IReadOnlyDictionary<string, string>? values,
+        string? standardInput,
+        CancellationToken cancellationToken = default)
+        => RunCoreAsync(
+            directory,
+            arguments,
+            echoOutput: false,
+            untranslated: true,
+            indexFile: null,
+            standardInput is null ? null : ChildInput.Of(standardInput),
+            cancellationToken,
+            values: values);
+
+    /// <inheritdoc/>
     public async Task<GitCredential?> CredentialAsync(string directory, string url, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(url);
@@ -2058,7 +2086,8 @@ public sealed partial class GitClient(
         Encoding? outputEncoding = null,
         ObjectStore? objects = null,
         TimeSpan? limit = null,
-        HookRun? hooks = null)
+        HookRun? hooks = null,
+        IReadOnlyDictionary<string, string>? values = null)
     {
         ArgumentNullException.ThrowIfNull(arguments);
 
@@ -2107,7 +2136,7 @@ public sealed partial class GitClient(
 
         // What a command that runs the hooks is handed as values - a push's credential - set last, so nothing above
         // clears it.
-        foreach (var (name, value) in hooks?.Values ?? new Dictionary<string, string>())
+        foreach (var (name, value) in hooks?.Values ?? values ?? new Dictionary<string, string>())
         {
             environment[name] = value;
         }

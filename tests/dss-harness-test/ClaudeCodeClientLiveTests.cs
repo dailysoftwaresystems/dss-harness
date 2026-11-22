@@ -65,13 +65,13 @@ public sealed class ClaudeCodeClientLiveTests
 
         var allowed = new RecordedEvents();
         var read = await runner.RunAsync(
-            Step(temp.Path, tree, work, slot, program!, model, "s1", "Use the Read tool to read the file a.txt, then give as your answer the one word it holds."),
+            Step(temp.Path, tree, work, slot, program!, model, "s1", "Use the tool mcp__dssharness__view_file to read the file a.txt, then give as your answer the one word it holds."),
             allowed,
             Token);
 
         var refused = new RecordedEvents();
         var denied = await runner.RunAsync(
-            Step(temp.Path, tree, work, slot, program!, model, "s2", $"Use the Read tool to read the file {slot}. If you cannot, give as your answer the word refused."),
+            Step(temp.Path, tree, work, slot, program!, model, "s2", $"Use the tool mcp__dssharness__view_file to read the file {slot}. If you cannot, give as your answer the word refused."),
             refused,
             Token);
 
@@ -79,7 +79,7 @@ public sealed class ClaudeCodeClientLiveTests
         pausing.Ask("the run is pausing");
         var paused = new RecordedEvents();
         var handed = await runner.RunAsync(
-            Step(temp.Path, tree, work, slot, program!, model, "s3", "Use the Read tool to read the file a.txt, then give as your answer the one word it holds.") with { Handoff = pausing },
+            Step(temp.Path, tree, work, slot, program!, model, "s3", "Use the tool mcp__dssharness__view_file to read the file a.txt, then give as your answer the one word it holds.") with { Handoff = pausing },
             paused,
             Token);
 

@@ -143,6 +143,29 @@ public sealed class RunnerConfig
             .SelectMany(entry => entry.RunChecks)
             .Select(check => check.PredefinedRunner)
             .Distinct(StringComparer.OrdinalIgnoreCase)];
+
+    /// <summary>
+    /// Every runner a run of <paramref name="runner"/> may run through its run checks, to any depth: those its checks name,
+    /// those their checks name, and on - each once, as a walk from it first meets them, and never the runner itself, which
+    /// a chain of checks leading back to it would have confirm itself. A name declared nowhere is met and goes no further.
+    /// </summary>
+    /// <param name="runners">The runners declared, by name in any case.</param>
+    /// <param name="runner">The runner whose run is asked about.</param>
+    public static IReadOnlyList<string> RunCheckRunners(IReadOnlyDictionary<string, RunnerConfig> runners, string runner)
+    {
+        ArgumentNullException.ThrowIfNull(runners);
+        ArgumentNullException.ThrowIfNull(runner);
+
+        return
+        [
+            .. Walks.Walk.Visit(
+                    [runner],
+                    name => name,
+                    name => DeclaredName.In(runners.Keys, name) is { } declared ? runners[declared].RunCheckRunners() : [],
+                    comparer: StringComparer.OrdinalIgnoreCase)
+                .Skip(1),
+        ];
+    }
 }
 
 /// <summary>One phase of a runner.</summary>

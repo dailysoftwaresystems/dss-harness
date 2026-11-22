@@ -382,7 +382,7 @@ public sealed class HostExecServiceTests
     }
 
     [Theory]
-    [InlineData(true, "WSL did not name its default distribution within 120 seconds")]
+    [InlineData(true, "WSL did not name a default distribution (exit -1)")]
     [InlineData(false, "WSL did not name a default distribution (exit 0)")]
     public async Task ADefaultDistributionThatIsNeverNamed_IsUnavailable_AndSaysWhy(bool timedOut, string expected)
     {

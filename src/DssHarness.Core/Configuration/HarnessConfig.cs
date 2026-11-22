@@ -91,8 +91,8 @@ public sealed class HarnessConfig
 
     /// <summary>
     /// The runners a run of <paramref name="runner"/> has write the tree it works in (<c>writesTree</c>), in order: the
-    /// runner itself where it says so, then each runner its run checks name that does - each once, as
-    /// <see cref="RunnerConfig.RunCheckRunners"/> names it, for a run check runs within the run's legs and writes where
+    /// runner itself where it says so, then each runner its run checks name, to any depth, that does - each once, as
+    /// <see cref="RunnerConfig.RunCheckRunners(IReadOnlyDictionary{string, RunnerConfig}, string)"/> names it, for a run check runs within the run's legs and writes where
     /// they work. Empty where none writes, and for a runner nobody declared, which is refused where it is run. The one
     /// answer the definition's check (V24), the run command's placement refusals, a run step's claim and where its legs
     /// work all read.
@@ -110,7 +110,7 @@ public sealed class HarnessConfig
         return
         [
             .. declared.WritesTree ? [(runner, false)] : Array.Empty<(string, bool)>(),
-            .. declared.RunCheckRunners()
+            .. RunnerConfig.RunCheckRunners(PredefinedRunners, runner)
                 .Where(check => PredefinedRunners.TryGetValue(check, out var checkRunner) && checkRunner.WritesTree)
                 .Select(check => (check, true)),
         ];
@@ -178,7 +178,7 @@ public sealed class HarnessConfig
 
     /// <summary>
     /// Patterns whose every match on a line is pulled out of a build's output when <c>build --time</c>
-    /// runs - a line at a time, the first 10,000 marks of a phase - so timings come from what the build
+    /// runs - a line at a time, every mark written to the phase's timing record as it is found - so timings come from what the build
     /// itself reported rather than from the harness guessing which part of the wall clock was the
     /// build. Configured with none, <c>--time</c> measures the phases itself.
     /// </summary>
@@ -242,9 +242,9 @@ public sealed class HarnessConfig
     public AgentWebSearchConfig? AgentWebSearch { get; init; }
 
     /// <summary>
-    /// What an agent is given of the work it goes on with: the bounds of the continuation record and of the engine's
-    /// compaction. Left out, the defaults hold - each bound a repository changes where its agents work better with more,
-    /// or its models hold less.
+    /// What an agent is given of the work it goes on with: the bounds of the engine's compaction. Left out, the defaults
+    /// hold - each bound a repository changes where its agents work better with more, or its models hold less. The
+    /// continuation record has no bounds: it holds the whole of the work, a page at a time.
     /// </summary>
     public AgentContextConfig? AgentContext { get; init; }
 
@@ -252,60 +252,13 @@ public sealed class HarnessConfig
 }
 
 /// <summary>
-/// What an agent is given of the work it goes on with, under <c>agentContext</c>: the continuation record's bounds and the
-/// compaction's.
-/// How much of earlier work an agent needs is not the same for every repository, so each is a key and not a constant;
-/// the rule that nothing is cut in the middle and that whatever is cut is named is not configurable.
+/// What an agent is given of the work it goes on with, under <c>agentContext</c>: the compaction's bounds. How much of a
+/// conversation a compaction reduces to is not the same for every repository, so each is a key and not a constant.
 /// </summary>
 public sealed class AgentContextConfig
 {
-    /// <summary>The continuation record's bounds. Left out, the defaults hold.</summary>
-    public AgentContinuationConfig? Continuation { get; init; }
-
     /// <summary>The compaction's bounds. Left out, the defaults hold.</summary>
     public AgentCompactionConfig? Compaction { get; init; }
-}
-
-/// <summary>The bounds of the continuation record, under <c>agentContext.continuation</c>: each a positive number, each with its default.</summary>
-public sealed class AgentContinuationConfig
-{
-    /// <summary>The most characters of the record's own parts (all but the last iterations): <see cref="Agents.AgentContinuationBounds.DefaultRecordChars"/> where left out.</summary>
-    public int? RecordChars { get; init; }
-
-    /// <summary>The most characters of one step's notes and of its output, each its own bound: <see cref="Agents.AgentContinuationBounds.DefaultStepChars"/> where left out.</summary>
-    public int? StepChars { get; init; }
-
-    /// <summary>The most changed paths listed, the count of the rest said: <see cref="Agents.AgentContinuationBounds.DefaultPaths"/> where left out.</summary>
-    public int? Paths { get; init; }
-
-    /// <summary>How many of the last iterations are kept whole, whatever their size: <see cref="Agents.AgentContinuationBounds.DefaultLastIterations"/> where left out.</summary>
-    public int? LastIterations { get; init; }
-
-    /// <summary>The most characters of the earlier iterations kept, none cut in the middle of one: <see cref="Agents.AgentContinuationBounds.DefaultIterationChars"/> where left out.</summary>
-    public int? IterationChars { get; init; }
-
-    /// <summary>Each bound said, where one is not a positive number; empty where every one is.</summary>
-    public IReadOnlyList<string> Problems()
-    {
-        var problems = new List<string>();
-
-        foreach (var (name, value) in new (string Name, int? Value)[]
-        {
-            ("agentContext.continuation.recordChars", RecordChars),
-            ("agentContext.continuation.stepChars", StepChars),
-            ("agentContext.continuation.paths", Paths),
-            ("agentContext.continuation.lastIterations", LastIterations),
-            ("agentContext.continuation.iterationChars", IterationChars),
-        })
-        {
-            if (value is < 1)
-            {
-                problems.Add($"'{name}' is {value}, and a bound of the continuation record is a positive number");
-            }
-        }
-
-        return problems;
-    }
 }
 
 /// <summary>The bounds of the engine's compaction, under <c>agentContext.compaction</c>: each a positive number, each with its default.</summary>

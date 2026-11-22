@@ -70,12 +70,17 @@ public static class WebAddresses
         return false;
     }
 
-    /// <summary>The longest address a link read from a document names: 2,048 characters, as a sitemap's and a browser's are; a longer one names none.</summary>
-    public const int MostLength = 2048;
+    /// <summary>
+    /// How long a sitemap's <c>&lt;loc&gt;</c> may be: less than 2,048 characters, as the sitemaps protocol writes it - a fact of
+    /// that protocol alone, which no other link is held to. A longer one is refused by name where a sitemap is read
+    /// (<see cref="Index.SitemapDocument"/>), never dropped unsaid.
+    /// </summary>
+    public const int SitemapLocLength = 2048;
 
     /// <summary>
     /// <paramref name="link"/> as an absolute <c>http</c> or <c>https</c> address - read against <paramref name="relativeTo"/>
-    /// where it is relative - or <see langword="null"/> where it names none, or one longer than <see cref="MostLength"/>.
+    /// where it is relative - or <see langword="null"/> where it names none. A link is an address however long it is: the
+    /// one bound on a link's length is a sitemap's (<see cref="SitemapLocLength"/>), its reader's to hold.
     /// </summary>
     /// <param name="link">The link, as a page or an answer wrote it.</param>
     /// <param name="relativeTo">The address a relative link is read against; none where there is none.</param>
@@ -88,11 +93,6 @@ public static class WebAddresses
 
         var trimmed = link.Trim();
 
-        if (trimmed.Length > MostLength)
-        {
-            return null;
-        }
-
         // Asked as relative first: on Linux and macOS a path from the root ('/docs/x') also reads as an absolute address,
         // a file's, which it never is here.
         if (Uri.TryCreate(trimmed, UriKind.Relative, out var relative))
@@ -101,12 +101,11 @@ public static class WebAddresses
                 && Uri.TryCreate(relativeTo, UriKind.Absolute, out var basis)
                 && Uri.TryCreate(basis, relative, out var read)
                 && IsWeb(read.AbsoluteUri)
-                && read.AbsoluteUri.Length <= MostLength
                     ? read.AbsoluteUri
                     : null;
         }
 
-        return IsWeb(trimmed, out var whole) && whole.AbsoluteUri.Length <= MostLength ? whole.AbsoluteUri : null;
+        return IsWeb(trimmed, out var whole) ? whole.AbsoluteUri : null;
     }
 
     /// <summary>Why <paramref name="address"/> is no public address, in a few words; null where it is one.</summary>

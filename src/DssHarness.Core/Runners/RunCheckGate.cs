@@ -44,7 +44,7 @@ public sealed record RunCheckGateResult(
 /// <para>
 /// The runner a check names is invoked through a delegate rather than reached directly, so the
 /// gate's decisions are testable without a machine, a leg or a child process, and so the lead can
-/// wire the real runner in one place. A check is one level deep: the runner it names is never the
+/// wire the real runner in one place. A check never recurses: the runner it names is never the
 /// one carrying the entry, which is refused here as well as by the configuration lint — a check
 /// that invoked its own runner would either recurse or confirm itself.
 /// </para>

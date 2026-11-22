@@ -74,10 +74,10 @@ public sealed class HostConnector(
     IHostAddressResolver addresses,
     IHostProgramResolver programs,
     SshWakeWindow wakeWindow,
-    SyncedCopyRefusals copyRefusals) : IHostConnector
+    SyncedCopyRefusals copyRefusals,
+    IHarnessOutput? output = null,
+    TimeProvider? clock = null) : IHostConnector
 {
-    /// <summary>Longest one probe of a connected host may take.</summary>
-    public static readonly TimeSpan ProbeBudget = TimeSpan.FromMinutes(2);
 
     /// <summary>
     /// What is said, once a command typed in a copy the harness synced to a host could not reach a host: that
@@ -103,6 +103,8 @@ public sealed class HostConnector(
     private readonly IHostProgramResolver _programs = programs;
     private readonly SshWakeWindow _wakeWindow = wakeWindow;
     private readonly SyncedCopyRefusals _copyRefusals = copyRefusals;
+    private readonly IHarnessOutput? _output = output;
+    private readonly TimeProvider? _clock = clock;
 
     public Task<HostConnectionResult> ConnectAsync(
         HarnessContext context,
@@ -180,7 +182,6 @@ public sealed class HostConnector(
                 new HostConnection { Host = HostId.Local },
                 wanted,
                 ToolSearchDirectories.BuiltIn(_platform.PlatformKey),
-                ProbeBudget,
                 cancellationToken)
             .ConfigureAwait(false);
 
@@ -218,7 +219,7 @@ public sealed class HostConnector(
         // Running a program in the distribution is the test that it exists and starts; the program
         // chosen also measures what the distribution is.
         var connection = new HostConnection { Host = host, Distribution = item.Distribution };
-        var uname = await RunAsync(connection, "uname", ["-sm"], ProbeBudget, cancellationToken).ConfigureAwait(false);
+        var uname = await RunAsync(connection, "uname", ["-sm"], cancellationToken).ConfigureAwait(false);
 
         if (!uname.Succeeded)
         {
@@ -233,7 +234,7 @@ public sealed class HostConnector(
         return new HostConnectionResult
         {
             Connection = await _programs
-                .ResolveAsync(connection, wanted, ToolSearchDirectories.Posix, ProbeBudget, cancellationToken)
+                .ResolveAsync(connection, wanted, ToolSearchDirectories.Posix, cancellationToken)
                 .ConfigureAwait(false),
             Superuser = item.Superuser,
             Os = os,
@@ -265,8 +266,8 @@ public sealed class HostConnector(
         }
 
         // The window a host that sleeps is given to wake, measured from here; none for any other host, which is
-        // asked as it always was. One whose window ran out a moment ago, earlier in this command, is refused as
-        // it was then, rather than waited for again by every leg placed there.
+        // asked as it always was. One whose window ran out less than a window ago, earlier in this command, is refused
+        // as it was then, rather than waited for again by every leg placed there.
         TimeSpan? window = settings.WakeWaitSeconds > 0 ? TimeSpan.FromSeconds(settings.WakeWaitSeconds) : null;
         var started = _wakeWindow.Now;
 
@@ -295,7 +296,7 @@ public sealed class HostConnector(
         // would reach the host through something else. Unsaid where ssh could not say, and ssh is then
         // left to itself, with the name declared looked up here all the same.
         var seen = SshSettings.Read(
-            await _hostCommands.ReadSshSettingsAsync(connection, ProbeBudget, cancellationToken).ConfigureAwait(false));
+            await WaitedAsync(token => _hostCommands.ReadSshSettingsAsync(connection, token), "ssh to say what it would do", cancellationToken).ConfigureAwait(false));
 
         // Through a jump host or a command, the name is theirs to look up: the jump host looks it up on its
         // side, where an address this machine found means nothing, and a command is given the name to
@@ -314,9 +315,9 @@ public sealed class HostConnector(
             {
                 var unresolved = HostAddressResolver.Unresolved(resolution, item.Address, window);
 
-                if (window is not null)
+                if (window is { } given)
                 {
-                    _wakeWindow.Remember(host, unresolved);
+                    _wakeWindow.Remember(host, unresolved, given);
                 }
 
                 return HostConnectionResult.Refused(unresolved);
@@ -329,14 +330,16 @@ public sealed class HostConnector(
             };
         }
 
-        var budget = TimeSpan.FromSeconds(settings.ConnectTimeoutSeconds) + ProbeBudget;
-        var probe = await _hostCommands.ProbeShellAsync(connection, budget, cancellationToken).ConfigureAwait(false);
+        // Waited for to its end: ssh's own ConnectTimeout, the bound the host's settings give, ends a connection that
+        // never opens, and its keep-alive one that stops answering; a host merely slow to start a shell is waited for.
+        var answered = $"{host} to answer over ssh";
+        var probe = await WaitedAsync(token => _hostCommands.ProbeShellAsync(connection, token), answered, cancellationToken).ConfigureAwait(false);
 
         if (!probe.Succeeded && window is { } waking)
         {
             var probing = connection;
             (probe, connections) = await _wakeWindow
-                .KeepProbingAsync(probe, started, waking, token => _hostCommands.ProbeShellAsync(probing, budget, token), cancellationToken)
+                .KeepProbingAsync(probe, started, waking, token => WaitedAsync(each => _hostCommands.ProbeShellAsync(probing, each), answered, token), cancellationToken)
                 .ConfigureAwait(false);
         }
 
@@ -354,7 +357,6 @@ public sealed class HostConnector(
             // among them - the host could not be reached for this command.
             var refusal = probe switch
             {
-                { TimedOut: true } => $"the host could not be reached: it did not answer within {budget.TotalSeconds:0} seconds ({client})",
                 { ExitCode: HostProbes.SshFailed } => $"{HostProbes.CouldNotReach(probe, connection)} ({client})",
                 _ => $"{HostProbes.Failure("its shell could not run echo", probe, connection)} ({client})",
             };
@@ -364,7 +366,7 @@ public sealed class HostConnector(
                 refusal = string.Create(
                     CultureInfo.InvariantCulture,
                     $"{refusal}; tried {ReportText.Counted(connections, "time")} over the {waited.TotalSeconds:0} seconds wakeWaitSeconds gives it to wake");
-                _wakeWindow.Remember(host, refusal);
+                _wakeWindow.Remember(host, refusal, waited);
             }
 
             return HostConnectionResult.Refused(refusal);
@@ -383,7 +385,6 @@ public sealed class HostConnector(
                     connection,
                     wanted,
                     RemoteCommandLine.IsWindows(connection.Shell) ? ToolSearchDirectories.BuiltIn(PlatformNames.Windows) : ToolSearchDirectories.Posix,
-                    budget,
                     cancellationToken)
                 .ConfigureAwait(false),
             Superuser = item.Superuser,
@@ -421,7 +422,7 @@ public sealed class HostConnector(
         }
 
         var pinned = SshSettings.Read(
-            await _hostCommands.ReadSshSettingsAsync(connection with { Pin = pin }, ProbeBudget, cancellationToken).ConfigureAwait(false));
+            await WaitedAsync(token => _hostCommands.ReadSshSettingsAsync(connection with { Pin = pin }, token), "ssh to say what it would do pinned", cancellationToken).ConfigureAwait(false));
 
         return pinned is not null && seen.DifferOnlyInWhereTheyGo(pinned) ? pin : null;
     }
@@ -446,17 +447,17 @@ public sealed class HostConnector(
 
         try
         {
-            var version = await _processRunner
-                .RunAsync(
-                    // Bounded like every other probe here. This runs whatever PATH resolved first,
-                    // on the failure path of every ssh connection, and a client that prompts or sits
-                    // on a stalled mount would otherwise hang a run whose outcome is already decided.
-                    new ProcessRequest { FileName = path, Arguments = ["-V"], Timeout = ProbeBudget },
+            // Waited for like every other probe here, and told while it lasts: this runs whatever PATH resolved first,
+            // on the failure path of every ssh connection, and a client that prompts or sits on a stalled mount is said
+            // to, every few minutes, until the person stops the command.
+            var version = await WaitedAsync(
+                    token => _processRunner.RunAsync(new ProcessRequest { FileName = path, Arguments = ["-V"] }, token),
+                    $"'{path} -V' to say its version",
                     cancellationToken)
                 .ConfigureAwait(false);
 
             // ssh -V writes its banner to standard error, and has done for as long as it has had one.
-            var banner = HostProbes.Excerpt(
+            var banner = HostProbes.Quoted(
                 version.StandardError.Length > 0 ? version.StandardError : version.StandardOutput);
 
             return banner.Length > 0 ? $"using {path}: {banner}" : $"using {path}";
@@ -474,10 +475,16 @@ public sealed class HostConnector(
         HostConnection connection,
         string program,
         IReadOnlyList<string> arguments,
-        TimeSpan budget,
         CancellationToken cancellationToken)
-        => _hostCommands.RunAsync(
-            connection,
-            new HostCommand { Program = program, Arguments = arguments, Timeout = budget },
+        => WaitedAsync(
+            token => _hostCommands.RunAsync(connection, new HostCommand { Program = program, Arguments = arguments }, token),
+            $"'{program}' on {connection.Host} to answer",
             cancellationToken);
+
+    /// <summary>
+    /// <paramref name="run"/>'s answer, waited for to its end (<see cref="ProgramWait"/>): told every few minutes it
+    /// lasts, and ended only by the person's token, or by ssh's own bounds, which the host's settings give.
+    /// </summary>
+    private Task<T> WaitedAsync<T>(Func<CancellationToken, Task<T>> run, string subject, CancellationToken cancellationToken)
+        => ProgramWait.ToItsEndAsync(run, subject, ProgramWait.Told(_output, ToolPackage.Command), _clock, cancellationToken);
 }

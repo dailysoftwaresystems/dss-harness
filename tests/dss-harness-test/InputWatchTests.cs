@@ -252,9 +252,9 @@ public sealed class InputWatchTests
     }
 
     /// <summary>
-    /// Through a kind with no bound - inotify's hub on Linux - every directory that holds an input is watched for its own
-    /// entries, the root among them, and none all the way down: past the 64 .NET's watcher takes, and however far past,
-    /// spread over one top-level directory or over many, the tree's other directories stay unheard.
+    /// Through a kind of a watch a directory - inotify's hub on Linux - every directory that holds an input is watched for
+    /// its own entries, the root among them, and none all the way down: past the 64 .NET's watcher once took, and however
+    /// far past, spread over one top-level directory or over many, the tree's other directories stay unheard.
     /// </summary>
     [Theory]
     [InlineData(65, 1)]
@@ -274,7 +274,7 @@ public sealed class InputWatchTests
             temp.WriteFile(input, "f");
         }
 
-        var kind = new ScriptedWatchKind(mostDirectories: null);
+        var kind = new ScriptedWatchKind();
 
         using var watch = new InputWatch(temp.Path, inputs, StringComparer.Ordinal, kind);
 

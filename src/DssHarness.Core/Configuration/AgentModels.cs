@@ -158,17 +158,12 @@ public sealed class AgentPolicyConfig
     public List<string>? KeepEnvironment { get; init; }
 
     /// <summary>
-    /// How many seconds a command an agent runs may take where its call names no time:
-    /// <see cref="Agents.AgentCommandSettings.DefaultTimeoutSeconds"/> where nothing is said.
+    /// How many seconds a command an agent runs may take where its call names no time, at most
+    /// <see cref="Agents.AgentCommandSettings.MostTimeoutSeconds"/>, what a command's timer holds. Left out, which is the
+    /// default, such a command has no time of its own: it runs until it ends, the step's stall bound ends it, or the
+    /// step's own bounds do. A call names any time up to what a timer holds, whatever this says.
     /// </summary>
     public int? CommandTimeoutSeconds { get; init; }
-
-    /// <summary>
-    /// The most seconds a call may name for a command an agent runs:
-    /// <see cref="Agents.AgentCommandSettings.DefaultMaxTimeoutSeconds"/> where nothing is said, and at most
-    /// <see cref="Agents.AgentCommandSettings.MostTimeoutSeconds"/>, as the time without a call's is.
-    /// </summary>
-    public int? MaxCommandTimeoutSeconds { get; init; }
 
     /// <summary>
     /// Whether an agent may start where this machine has no operating-system isolation of its commands

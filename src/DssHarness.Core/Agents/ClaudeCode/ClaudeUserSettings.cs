@@ -64,7 +64,7 @@ public static class ClaudeUserSettings
 
         try
         {
-            settings = JsonNode.Parse(bytes.AsSpan().StartsWith(Utf8Mark) ? bytes.AsSpan(Utf8Mark.Length) : bytes, documentOptions: new JsonDocumentOptions { CommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true });
+            settings = JsonNode.Parse(bytes.AsSpan().StartsWith(Utf8Mark) ? bytes.AsSpan(Utf8Mark.Length) : bytes, documentOptions: Json.JsonDepth.Document with { CommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true });
         }
         catch (JsonException ex)
         {

@@ -2,6 +2,7 @@ using System.Text;
 using System.Text.Json;
 using DssHarness.Core.Execution;
 using DssHarness.Core.FileSystem;
+using DssHarness.Core.Json;
 using DssHarness.Core.Output;
 using DssHarness.Core.Results;
 
@@ -35,8 +36,8 @@ public sealed class OrchestrationLog(IFileSystem fileSystem, TimeProvider clock,
     /// <summary>What a log is, as <see cref="RecordWritten"/> names the kind of record it is.</summary>
     public const string RecordKind = "an orchestrator's log";
 
-    /// <summary>How long one append waits for another process's.</summary>
-    private static readonly TimeSpan Window = TimeSpan.FromSeconds(30);
+    /// <summary>A log's line as it is written and read: a state file's line (<see cref="JsonStateFile.LineOptions"/>), at whatever depth its message holds.</summary>
+    private static readonly JsonSerializerOptions Line = JsonDepth.Serializer(JsonStateFile.LineOptions);
 
     private readonly IFileSystem _fileSystem = fileSystem;
     private readonly TimeProvider _clock = clock;
@@ -47,11 +48,14 @@ public sealed class OrchestrationLog(IFileSystem fileSystem, TimeProvider clock,
     /// <param name="subject">The orchestrator's name, or an agent's.</param>
     /// <param name="command">The command.</param>
     /// <param name="outcome">What it did.</param>
+    /// <param name="cancellationToken">Ends a wait for another process's append, before anything is written.</param>
     /// <remarks>
     /// The whole file is written again with the line added - the lines before it copied a block at a time - under the one
-    /// lock every append to it takes, so a line is never half written and two appends never interleave.
+    /// lock every append to it takes, so a line is never half written and two appends never interleave. An append another
+    /// process holds the lock for is waited for while it holds it, told as the command's own line every five minutes
+    /// (<see cref="MachineWideFile.Update{T}(string, TimeSpan, Action{Waiting.WaitTold}, TimeProvider, Func{T}, CancellationToken)"/>).
     /// </remarks>
-    public string Append(OrchestratorLayout orchestrator, string subject, string command, CommandOutcome outcome)
+    public string Append(OrchestratorLayout orchestrator, string subject, string command, CommandOutcome outcome, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(orchestrator);
         ArgumentException.ThrowIfNullOrWhiteSpace(subject);
@@ -60,9 +64,9 @@ public sealed class OrchestrationLog(IFileSystem fileSystem, TimeProvider clock,
         var path = orchestrator.LogFile(subject);
         var line = JsonSerializer.Serialize(
             new OrchestrationEvent(_clock.GetUtcNow(), command, HarnessExit.Describe(outcome.ExitCode)?.Name ?? outcome.ExitCode.ToString(System.Globalization.CultureInfo.InvariantCulture), outcome.ExitCode, outcome.Message, outcome.Details is { Count: > 0 } details ? details : null),
-            JsonStateFile.LineOptions);
+            Line);
 
-        MachineWideFile.Update(path, Window, () =>
+        MachineWideFile.Update(path, MachineWideFile.Window, told => _output.Info(command, told.Line()), _clock, () =>
         {
             // The lines before it copied as they are, a block at a time: the log grows with its orchestrator.
             _fileSystem.WriteAtomic(path, written =>
@@ -76,7 +80,7 @@ public sealed class OrchestrationLog(IFileSystem fileSystem, TimeProvider clock,
                 written.Write(Encoding.UTF8.GetBytes(line + "\n"));
             });
             return true;
-        });
+        }, cancellationToken);
 
         _output.Publish(new RecordWritten(RecordKind, path));
         return path;
@@ -130,7 +134,7 @@ public sealed class OrchestrationLog(IFileSystem fileSystem, TimeProvider clock,
 
             try
             {
-                events.Add(JsonSerializer.Deserialize<OrchestrationEvent>(line, JsonStateFile.LineOptions)
+                events.Add(JsonSerializer.Deserialize<OrchestrationEvent>(line, Line)
                     ?? throw new JsonException("it holds null"));
             }
             catch (JsonException ex)

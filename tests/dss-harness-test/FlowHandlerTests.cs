@@ -1214,6 +1214,40 @@ public sealed class FlowHandlerTests
         Assert.Equal("done; 1 failure was handled: check, by fix", end.Summary);
     }
 
+    /// <summary>
+    /// The engine's bound on the visits of one step in one scope has one owner, <see cref="FlowRecover.MostVisits"/>, which
+    /// the recovery's maxVisits is held to as well: no file of the engine spells the number itself, so the bound a redirect
+    /// meets and the one the recovery is held to cannot drift apart.
+    /// </summary>
+    [Fact]
+    public void TheRecoverVisitBound_HasOneOwner()
+    {
+        var engine = Path.Combine(Prose.RepositoryRoot(), "src", "DssHarness.Core", "Orchestration");
+        var spelt = FlowRecover.MostVisits.ToString(System.Globalization.CultureInfo.InvariantCulture);
+
+        static bool Spells(string line, string number)
+        {
+            for (var at = line.IndexOf(number, StringComparison.Ordinal); at >= 0; at = line.IndexOf(number, at + 1, StringComparison.Ordinal))
+            {
+                var before = at == 0 ? ' ' : line[at - 1];
+                var after = at + number.Length >= line.Length ? ' ' : line[at + number.Length];
+
+                if (!char.IsLetterOrDigit(before) && before is not '_' and not '.' && !char.IsLetterOrDigit(after) && after is not '_' and not '.')
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        var spelling = Directory.EnumerateFiles(engine, "*.cs", SearchOption.AllDirectories)
+            .SelectMany(file => File.ReadAllLines(file).Where(line => Spells(line, spelt)).Select(line => (Path.GetFileName(file), line.Trim())))
+            .ToList();
+
+        Assert.Equal([("WorkflowModels.cs", $"public const int MostVisits = {spelt};")], spelling);
+    }
+
     /// <summary>A step that a redirect would visit a hundredth time fails, saying so.</summary>
     [Fact]
     public async Task ARedirectThatWouldVisitAStepMoreThan99Times_FailsItSayingSo()
@@ -1249,7 +1283,7 @@ public sealed class FlowHandlerTests
                 Assert.Equal(100, bound.Visit);
                 Assert.Equal(99, runner.Started.Count(started => started == "build" || started.StartsWith("build+", StringComparison.Ordinal)));
                 Assert.Equal(13, bound.Exit);
-                Assert.Equal("'build' was visited 99 times in its scope; at most 99 visits of one step in one scope are allowed", bound.Error);
+                Assert.Equal($"'build' was visited {FlowRecover.MostVisits} times in its scope; at most {FlowRecover.MostVisits} visits of one step in one scope are allowed", bound.Error);
                 return;
             }
 

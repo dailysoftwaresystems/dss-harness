@@ -68,7 +68,7 @@ public sealed record RecordedArms
     public static RecordedArms OfCarried(ReadOnlySpan<byte> carried)
         => carried.IsEmpty
             ? new RecordedArms()
-            : JsonSerializer.Deserialize<RecordedArms>(carried, JsonStateFile.LineOptions) ?? new RecordedArms();
+            : JsonSerializer.Deserialize<RecordedArms>(carried, ArmVerdictRecord.LineReading) ?? new RecordedArms();
 
     /// <summary>The verdict a recorded entry holds where it passed, as the ledger names it.</summary>
     private static readonly string Passed = Execution.Verdicts.Display(Execution.LegVerdict.Passed);

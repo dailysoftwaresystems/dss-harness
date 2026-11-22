@@ -129,6 +129,10 @@ public sealed class InotifyHubTests
         public void Lost(string why)
         {
         }
+
+        public void Overflowed(string why)
+        {
+        }
     }
 
     /// <summary>
@@ -337,9 +341,12 @@ public sealed class InotifyHubTests
         Assert.Equal([(RecordingWatchSink.WasNamed, Path.Combine(B, "sentinel"))], sink.Heard);
     }
 
-    /// <summary>The instance's queue overflowing loses every span: what any of them was not told is not known.</summary>
+    /// <summary>
+    /// The instance's queue overflowing tells every span its events were lost, the watch going on - each reads its inputs
+    /// again - and loses none: what any of them was not told is read from the inputs themselves.
+    /// </summary>
     [Fact]
-    public async Task AnOverflow_LosesEverySpan()
+    public async Task AnOverflow_TellsEverySpan_ToReadItsInputsAgain_AndLosesNone()
     {
         using var calls = new ScriptedInotifyCalls();
         var hub = Hub(calls);
@@ -350,9 +357,11 @@ public sealed class InotifyHubTests
 
         calls.Give(new InotifyEvent(-1, InotifyBits.QueueOverflow, string.Empty));
 
-        await WaitLostAsync(first);
-        await WaitLostAsync(second);
-        Assert.Contains(first.Heard, heard => heard.What == RecordingWatchSink.WasLost && heard.Path.Contains("overflowed", StringComparison.Ordinal));
+        const string Overflowed = "this process's inotify queue overflowed (fs.inotify.max_queued_events), so events were lost";
+
+        await WaitUntilAsync(() => first.Heard.Count > 0 && second.Heard.Count > 0);
+        Assert.Equal([(RecordingWatchSink.WasOverflowed, Overflowed)], first.Heard);
+        Assert.Equal([(RecordingWatchSink.WasOverflowed, Overflowed)], second.Heard);
     }
 
     /// <summary>A record cut short loses every span, after each whole record before it is told.</summary>
@@ -465,7 +474,7 @@ public sealed class InotifyHubTests
         using var watch = new InputWatch(temp.Path, inputs, StringComparer.Ordinal, kind);
 
         // And the two above them, the root and src, for the names of the directories in them.
-        Assert.Null(kind.MostDirectories);
+        Assert.False(kind.WatchesTheRootWhole);
         Assert.Equal(67, calls.Added.Count);
         Assert.All(watch.Watched, watched => Assert.NotEqual(WatchDepth.AllTheWayDown, watched.Depth));
     }

@@ -202,12 +202,51 @@ public sealed class JsonPathTests
         Assert.Equal(["\U0001F600"], JsonPath.Parse("$[?@ > '\\uFFFF']").Select(texts.RootElement).Select(value => value.GetString()));
     }
 
-    /// <summary>A pattern is read to 4 KiB at most: a document's value as long as it likes is no pattern.</summary>
-    [Theory]
-    [InlineData(4096, true)]
-    [InlineData(4097, false)]
-    public void IRegexpPatterns_AreReadToTheirMost(int length, bool matches)
-        => Assert.Equal(matches, IRegexp.Matches("[" + new string('a', length - 2) + "]", "a", whole: true));
+    /// <summary>
+    /// A pattern of any length is read and matched like any other, and kept once read: a class of a hundred thousand
+    /// characters matches what it says - where once a pattern past 4 KiB silently matched nothing. Four thousand classes
+    /// in a row are past the automaton .NET's linear matcher builds for this machine, and are refused in the matcher's
+    /// words (<see cref="AnIRegexpPastTheLinearMatcher_IsRefusedInItsWords_NeverMatchedAsNothing"/>): the limit is
+    /// .NET's own fact, never raised by this tool, and the pairs that fit under it match what they say.
+    /// </summary>
+    [Fact]
+    public void ALongIRegexp_Matches()
+    {
+        var pairs = string.Concat(Enumerable.Repeat("[ab]", 500));
+
+        Assert.True(IRegexp.Matches("[" + new string('a', 100_000) + "]", "a", whole: true));
+        Assert.True(IRegexp.Matches(pairs, string.Concat(Enumerable.Repeat("ab", 250)), whole: true));
+        Assert.False(IRegexp.Matches(pairs, string.Concat(Enumerable.Repeat("ab", 249)), whole: true));
+        Assert.True(IRegexp.Matches(pairs, "x" + string.Concat(Enumerable.Repeat("ba", 250)) + "x", whole: false));
+    }
+
+    /// <summary>
+    /// An I-Regexp past the automaton .NET's linear matcher builds is refused in the matcher's words and never matched as
+    /// nothing: written in the query, as the query is read; read from the document, where the filter meets it. A pattern
+    /// that is no I-Regexp still matches nothing, as RFC 9535 asks.
+    /// </summary>
+    [Fact]
+    public void AnIRegexpPastTheLinearMatcher_IsRefusedInItsWords_NeverMatchedAsNothing()
+    {
+        const string Tail = "; it is an I-Regexp, so JSONPath's match of it is not answered, never answered as no match: RFC 9535 answers no "
+            + "match only for a pattern that is no I-Regexp, and RFC 9485 (section 8) lets an implementation refuse one it cannot match in linear time";
+
+        var written = Assert.Throws<JsonPathException>(() => JsonPath.Parse("$[?match(@, '.{10000}')]"));
+
+        Assert.StartsWith("The pattern '.{10000}' is refused by .NET's linear-time matcher: ", written.Message, StringComparison.Ordinal);
+        Assert.Contains(Tail + " (character 4 of ", written.Message, StringComparison.Ordinal);
+        Assert.Equal(written.Message, JsonPath.Problem("$[?match(@, '.{10000}')]"));
+
+        using var document = JsonDocument.Parse("""[ { "a": "x", "p": ".{10000}" }, { "a": "x", "p": "(" } ]""");
+        var query = JsonPath.Parse("$[?match(@.a, @.p)]");
+        var read = Assert.Throws<DssHarness.Core.Results.HarnessException>(() => query.Select(document.RootElement));
+
+        Assert.Equal(DssHarness.Core.Results.HarnessExit.Refused, read.ExitCode);
+        Assert.EndsWith(Tail, read.Message, StringComparison.Ordinal);
+
+        using var unread = JsonDocument.Parse("""[ { "a": "(", "p": "(" } ]""");
+        Assert.Empty(query.Select(unread.RootElement));
+    }
 
     /// <summary>Two objects compare in time, each member found by its name, however many they hold.</summary>
     [Fact]
@@ -238,11 +277,54 @@ public sealed class JsonPathTests
         Assert.Equal(equal ? 1 : 0, JsonPath.Parse("$[?@.x == @.y]").Select(document.RootElement).Count);
     }
 
-    /// <summary>Groups nest 64 deep at most: a pattern a document holds may nest them as deep as it likes, and deeper is none.</summary>
-    [Theory]
-    [InlineData(64, true)]
-    [InlineData(65, false)]
-    [InlineData(100_000, false)]
-    public void IRegexpGroups_NestAsDeepAsTheBoundAtMost(int depth, bool matches)
-        => Assert.Equal(matches, IRegexp.Matches(new string('(', depth) + "a" + new string(')', depth), "a", whole: true));
+    /// <summary>
+    /// Groups nested a thousand deep are read and matched, a group left open is no pattern, and one closed too often is
+    /// none either: the grammar is read on a stack of its own, so no depth is refused for itself. Read in a child on a
+    /// small stack, so a reading that recursed would end that child, never this run.
+    /// </summary>
+    [Fact]
+    public async Task IRegexpGroupsAThousandDeep_AreRead()
+    {
+        var answer = await ChildRun.MethodAsync(typeof(JsonPathTests), nameof(ReadDeepGroups), TestContext.Current.CancellationToken);
+
+        Assert.Equal(new ChildRunAnswer(0, "nested: True; searched: True; left open: False; closed too often: False\n", string.Empty), answer);
+    }
+
+    /// <summary><see cref="IRegexpGroupsAThousandDeep_AreRead"/>'s child.</summary>
+    private static string ReadDeepGroups() => SmallStack.Run(() =>
+    {
+        const int Depth = 1000;
+        var nested = new string('(', Depth) + "a|b" + new string(')', Depth) + "+";
+
+        return $"nested: {IRegexp.Matches(nested, "abba", whole: true)}; "
+            + $"searched: {IRegexp.Matches(nested, "xxbxx", whole: false)}; "
+            + $"left open: {IRegexp.Matches(new string('(', Depth) + "a" + new string(')', Depth - 1), "a", whole: true)}; "
+            + $"closed too often: {IRegexp.Matches(new string('(', Depth) + "a" + new string(')', Depth + 1), "a", whole: true)}\n";
+    });
+
+    /// <summary>
+    /// A filter nested five thousand deep - a comparison inside as many negations, each in parentheses - is read and
+    /// evaluated, selecting what the comparison selects. Read and evaluated in a child on a small stack, so a parser or an
+    /// evaluator that recursed would end that child, never this run.
+    /// </summary>
+    [Fact]
+    public async Task AThousandsDeepJsonPathFilter_Evaluates()
+    {
+        var answer = await ChildRun.MethodAsync(typeof(JsonPathTests), nameof(EvaluateDeepFilter), TestContext.Current.CancellationToken);
+
+        Assert.Equal(new ChildRunAnswer(0, "even: [{\"a\":1}]; odd: [{\"a\":2},{\"b\":3}]\n", string.Empty), answer);
+    }
+
+    /// <summary><see cref="AThousandsDeepJsonPathFilter_Evaluates"/>'s child.</summary>
+    private static string EvaluateDeepFilter() => SmallStack.Run(() =>
+    {
+        using var document = JsonDocument.Parse("""[ { "a": 1 }, { "a": 2 }, { "b": 3 } ]""");
+
+        static string Selected(int negations, JsonElement root)
+            => "[" + string.Join(",", JsonPath.Parse("$[?" + string.Concat(Enumerable.Repeat("!(", negations)) + "@.a == 1" + new string(')', negations) + "]")
+                .Select(root)
+                .Select(value => value.GetRawText().Replace(" ", string.Empty, StringComparison.Ordinal))) + "]";
+
+        return $"even: {Selected(5000, document.RootElement)}; odd: {Selected(5001, document.RootElement)}\n";
+    });
 }

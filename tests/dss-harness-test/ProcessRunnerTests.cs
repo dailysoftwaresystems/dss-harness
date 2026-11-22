@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Globalization;
+using System.IO.Pipes;
 using System.Runtime.Versioning;
 using System.Text;
 using DssHarness.Core.Platform;
@@ -161,6 +162,62 @@ public sealed class ProcessRunnerTests
     }
 
     /// <summary>
+    /// A stream kept as a tail whose request names its log is written there whole, every character as the child wrote
+    /// it, and the result names the log beside the tail it quotes: the tail is quoted by reference to the whole, never
+    /// all there is of a stream two megabytes long.
+    /// </summary>
+    [Fact]
+    public async Task AStreamsWholeOutput_IsQuotedByReference()
+    {
+        const int Count = 20_000;
+        const int Length = 100;
+        using var temp = new TempDirectory();
+        var log = temp.Combine("output.log");
+        var printed = string.Concat(Enumerable.Range(0, Count).Select(index => TestChild.FloodLine(index, Length) + "\n"));
+
+        var result = await CreateRunner().RunAsync(
+            TestHost.ChildRequest("flood", $"{Count}", $"{Length}") with
+            {
+                OnOutputLine = _ => { },
+                OutputKept = StreamKept.Tail,
+                OutputLog = log,
+            },
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(log, result.OutputLog);
+        Assert.Equal(printed, await File.ReadAllTextAsync(log, TestContext.Current.CancellationToken));
+        Assert.Equal(printed[^ProcessRunner.TailLength..], result.StandardOutput);
+    }
+
+    /// <summary>
+    /// A line thirty megabytes long - a test printing a whole JSON document on one line - is handed on whole, as one line,
+    /// on a stream kept as a tail, and the request is told of no line in pieces: lines are cut only past the longest string
+    /// .NET makes, never at 32K characters of the code's own, as once.
+    /// </summary>
+    [Fact]
+    public async Task AThirtyMegabyteLine_IsKeptWholeAndMatched()
+    {
+        const int Giant = 30_000_000;
+        var lines = new List<string>();
+        var pieced = 0;
+
+        await CreateRunner().RunAsync(
+            TestHost.ChildRequest("flood", "0", "200", $"{Giant}") with
+            {
+                OnOutputLine = lines.Add,
+                OutputKept = StreamKept.Tail,
+                OnLineInPieces = () => Interlocked.Increment(ref pieced),
+            },
+            TestContext.Current.CancellationToken);
+
+        var line = Assert.Single(lines);
+
+        Assert.Equal(Giant, line.Length);
+        Assert.Matches("^g+$", line);
+        Assert.Equal(0, pieced);
+    }
+
+    /// <summary>
     /// A line handler that fails - of the output or of the error output - is handed no more lines, and its stream is still
     /// read to the end: a child writing more than a pipe holds would otherwise block on a pipe nobody reads, and one whose
     /// input is held open, as a host's agent's is, would never end. What the handler raised is raised once the child has
@@ -241,14 +298,24 @@ public sealed class ProcessRunnerTests
     public async Task RunAsync_HandsOnALineThatNeverEnds_InPieces_OnAStreamKeptAsATail()
     {
         const int Giant = 100_000;
+        const int Piece = 32 * 1024;
+        using var cut = ProcessRunner.LinesHandedOnIn(Piece);
         var pieces = new List<string>();
+        var pieced = 0;
 
         var result = await CreateRunner().RunAsync(
-            TestHost.ChildRequest("flood", "0", "200", $"{Giant}") with { OnOutputLine = pieces.Add, OutputKept = StreamKept.Tail },
+            TestHost.ChildRequest("flood", "0", "200", $"{Giant}") with
+            {
+                OnOutputLine = pieces.Add,
+                OutputKept = StreamKept.Tail,
+                OnLineInPieces = () => Interlocked.Increment(ref pieced),
+            },
             TestContext.Current.CancellationToken);
 
+        Assert.Equal(1, pieced);
+
         Assert.Equal(
-            [ProcessRunner.LongestLine, ProcessRunner.LongestLine, ProcessRunner.LongestLine, Giant - (3 * ProcessRunner.LongestLine)],
+            [Piece, Piece, Piece, Giant - (3 * Piece)],
             pieces.Select(piece => piece.Length));
         Assert.Equal(TestChild.GiantLine(Giant), string.Concat(pieces));
         Assert.Equal(TestChild.GiantLine(ProcessRunner.TailLength), result.StandardOutput);
@@ -264,7 +331,7 @@ public sealed class ProcessRunnerTests
             },
             TestContext.Current.CancellationToken);
 
-        Assert.All(cutShort.SkipLast(1), piece => Assert.Equal(ProcessRunner.LongestLine - 100, piece.Length));
+        Assert.All(cutShort.SkipLast(1), piece => Assert.Equal(Piece - 100, piece.Length));
         Assert.Equal(TestChild.GiantLine(Giant), string.Concat(cutShort));
 
         var whole = new List<string>();
@@ -676,12 +743,15 @@ public sealed class ProcessRunnerTests
     /// child - a carrier to another machine - has stopped hearing this process and goes on, and whatever counts on the
     /// beat at its far end will give this process up. Passed over, as the child ceasing to read its input always was,
     /// that left whoever started it with a run stopped for a machine that had gone, and nothing here to say why.
-    /// A child that takes its input with it as it exits has lost no beat.
+    /// However soon the child ends after: the system is asked, as the beat fails, whether the child is in its exit - a
+    /// child going on for less than the two seconds once given to be "found exiting" stopped hearing this process all the
+    /// same. A child that takes its input with it as it exits has lost no beat
+    /// (<see cref="RunAsync_WritesABeatOnAnInputHeldOpen_UntilTheChildExits_AndNoneOnOneThatIsNot"/>).
     /// </summary>
     [Theory]
-    [InlineData("4000", true)]
-    [InlineData("300", false)]
-    public async Task RunAsync_SaysABeatWasLost_WhereAChildStillRunningStoppedTakingIt(string runsFor, bool lost)
+    [InlineData("4000")]
+    [InlineData("600")]
+    public async Task RunAsync_SaysABeatWasLost_WhereAChildStillRunningStoppedTakingIt(string runsFor)
     {
         // A child that takes its request, closes its own end of its input and goes on: this build's own on Windows, and
         // a shell elsewhere, where the runtime keeps a second descriptor of its input that closing the first does not
@@ -703,8 +773,44 @@ public sealed class ProcessRunnerTests
 
         Assert.False(result.TimedOut);
         Assert.Equal(0, result.ExitCode);
-        Assert.Equal(lost, result.BeatLost is { Length: > 0 });
+        Assert.False(string.IsNullOrWhiteSpace(result.BeatLost), "a child that closed its input and ran on was said to have lost no beat");
     }
+
+    /// <summary>
+    /// A child is going once the system marks it as in its exit or it has ended, and not while it runs: what tells a
+    /// child whose input closed with its exit from one that closed it and runs on, asked the moment the beat fails
+    /// rather than waited on for a guess at how long an exit takes.
+    /// </summary>
+    [Fact]
+    public async Task AChild_IsGoingOnceItHasEnded_AndNotWhileItRuns()
+    {
+        using var process = Process.Start(TestHost.StartOf(TestHost.ChildRequest("sleep", "300000")))!;
+
+        try
+        {
+            Assert.False(ProcessGoing.IsGoing(process), "a child sleeping was said to be going");
+        }
+        finally
+        {
+            process.Kill(entireProcessTree: true);
+            await process.WaitForExitAsync(TestContext.Current.CancellationToken);
+        }
+
+        Assert.True(ProcessGoing.IsGoing(process), "a child that has ended was not said to be going");
+    }
+
+    /// <summary>
+    /// A thread's <c>stat</c> line says it is exiting where it is a zombie or dead, or its flags hold <c>PF_EXITING</c>,
+    /// read after the last parenthesis of its name - which may hold spaces and parentheses of its own - and not otherwise.
+    /// </summary>
+    [Theory]
+    [InlineData("41 (sleep) S 40 41 41 0 -1 4194304 120 0 0 0", false)]
+    [InlineData("41 (sleep) S 40 41 41 0 -1 4194308 120 0 0 0", true)]
+    [InlineData("41 (a (b) c) R 40 41 41 0 -1 4194304 120 0 0 0", false)]
+    [InlineData("41 (a (b) c) Z 40 41 41 0 -1 4194304 120 0 0 0", true)]
+    [InlineData("41 (x) X 40 41 41 0 -1 0 1 0 0 0", true)]
+    public void AThreadsStatLine_SaysWhetherItIsExiting(string stat, bool exiting)
+        => Assert.Equal(exiting, ProcessGoing.ThreadExiting(stat));
 
     /// <summary>
     /// A start that fails as a program being written does is made again until it succeeds, where the system refuses to
@@ -725,19 +831,44 @@ public sealed class ProcessRunnerTests
                 }
             },
             busyPasses: true,
-            TimeSpan.FromSeconds(30),
             TestContext.Current.CancellationToken);
 
         Assert.Equal(3, tries);
     }
 
     /// <summary>
-    /// A program still held once the grace is spent fails as what it is; any other failure is the start's own at once,
-    /// as is that one where the system gives the number another meaning; and the waiting between two tries stops when
-    /// the run is cancelled.
+    /// A start the system refuses as a program being written is made again for as long as the system says so - here past
+    /// the two seconds it was once given before the start failed - and then starts.
     /// </summary>
     [Fact]
-    public async Task AStartStillFailingOnceTheGraceIsSpent_OrFailingAnotherWay_IsItsOwnFailure()
+    public async Task ETxtBusy_IsRetriedWhileTheOsSaysIt()
+    {
+        var busyFor = Stopwatch.StartNew();
+        var tries = 0;
+
+        await ProcessRunner.StartAsync(
+            () =>
+            {
+                tries++;
+
+                if (busyFor.Elapsed < TimeSpan.FromSeconds(3))
+                {
+                    throw new System.ComponentModel.Win32Exception(ProcessRunner.TextFileBusy);
+                }
+            },
+            busyPasses: true,
+            TestContext.Current.CancellationToken);
+
+        Assert.True(busyFor.Elapsed >= TimeSpan.FromSeconds(3), $"the start succeeded after {busyFor.Elapsed}, before the system stopped saying busy");
+        Assert.InRange(tries, 2, int.MaxValue);
+    }
+
+    /// <summary>
+    /// Any other failure is the start's own at once, as is a busy one where the system gives the number another meaning;
+    /// and the waiting between two tries stops when the run is cancelled.
+    /// </summary>
+    [Fact]
+    public async Task AStartFailingAnotherWay_IsItsOwnFailure_AndTheWaitsEndWithTheRun()
     {
         var token = TestContext.Current.CancellationToken;
         var tries = 0;
@@ -748,15 +879,8 @@ public sealed class ProcessRunnerTests
             throw new System.ComponentModel.Win32Exception(ProcessRunner.TextFileBusy);
         }
 
-        var spent = await Assert.ThrowsAsync<System.ComponentModel.Win32Exception>(
-            () => ProcessRunner.StartAsync(Busy, busyPasses: true, TimeSpan.FromMilliseconds(100), token));
-
-        Assert.Equal(ProcessRunner.TextFileBusy, spent.NativeErrorCode);
-        Assert.InRange(tries, 2, 50);
-
-        tries = 0;
         await Assert.ThrowsAsync<System.ComponentModel.Win32Exception>(
-            () => ProcessRunner.StartAsync(Busy, busyPasses: false, TimeSpan.FromSeconds(30), token));
+            () => ProcessRunner.StartAsync(Busy, busyPasses: false, token));
         Assert.Equal(1, tries);
 
         tries = 0;
@@ -768,7 +892,6 @@ public sealed class ProcessRunnerTests
                     throw new System.ComponentModel.Win32Exception(2);
                 },
                 busyPasses: true,
-                TimeSpan.FromSeconds(30),
                 token));
         Assert.Equal(1, tries);
 
@@ -783,7 +906,6 @@ public sealed class ProcessRunnerTests
                     Busy();
                 },
                 busyPasses: true,
-                TimeSpan.FromSeconds(30),
                 cancelled.Token));
         Assert.Equal(1, tries);
     }
@@ -1087,6 +1209,97 @@ public sealed class ProcessRunnerTests
             ProcessRunner.ProgramsOnPath(["npm.exe", "npm.cmd"], path, windows: true, candidate => present.Contains(candidate)));
     }
 
+    /// <summary>
+    /// A look at a child's output settles on a quiet pipe only where a read of it waits and the pipe itself holds
+    /// nothing: on Linux and macOS a read can wait merely to be run, its task no answer at all while what the child
+    /// wrote already sits in the pipe - and what a runner once read from such a look was that the pipe was held by a
+    /// leftover, the child's own answer given up with it, so git asked to size an object, or to name a repository,
+    /// answered nothing. Where the pipe answers while a read pends on it, it is asked: a read whose pipe holds what
+    /// the child wrote is no quiet pipe, whatever its task says; one whose pipe holds nothing, still waiting, is - the
+    /// leftover's hold, told as it always was.
+    /// </summary>
+    [Fact]
+    public void AReadWhosePipeHoldsTheChildsAnswer_IsNotAQuietPipe()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "The pipe is asked only where a read pending on it leaves it askable: Linux and macOS.");
+
+        using var server = new AnonymousPipeServerStream(PipeDirection.In);
+        using var client = new AnonymousPipeClientStream(PipeDirection.Out, server.GetClientHandleAsString());
+
+        // The child's answer, in the pipe before any read has taken it.
+        var said = "the child's answer"u8;
+        client.Write(said);
+        client.Flush();
+
+        var first = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var reader = new HeldRead(first.Task, first.Task, server);
+        var capture = new ProcessRunner.StreamCapture(reader, onLine: null, StreamKept.Whole, cut: null, pieced: null, log: null);
+
+        // The read waits - by its task alone, a quiet pipe, twice over - while the pipe holds the child's answer.
+        Assert.False(capture.ReadAll());
+        Assert.False(capture.ReadAll(), "a read whose pipe holds the child's answer was read as a pipe waiting on a leftover");
+    }
+
+    /// <summary>
+    /// A look at a child's output settles on a quiet pipe only where a read of it waits - a read whose task is still to
+    /// end: one being made, its task not yet given, has not returned, and what a runner once read from such a look was
+    /// that the pipe was held by a leftover while the child's own answer was still coming - git asked to name a
+    /// repository answered nothing, its output given up with the pipe. The read that waits is told from one that does
+    /// not, so what a child wrote is kept.
+    /// </summary>
+    /// <remarks>
+    /// The second read is held where it is being made - the capture's loop parked inside the reader, its task not yet
+    /// given - which holds the state a look must settle or refuse for as long as the test wants, on however busy a
+    /// machine: no wait of the test's own rides on the pool scheduling a continuation, and every wait is bounded. A
+    /// first read that answered at once would park the constructor itself, on the test's own thread, and the test
+    /// would never begin.
+    /// </remarks>
+    [Fact]
+    public async Task AReadIsQuietOnlyWhereItsTaskWaits()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var first = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var second = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var made = new ManualResetEventSlim(false);
+        using var letGo = new ManualResetEventSlim(false);
+
+        // A real pipe under the reader, as a child's output is read through, for what a capture asks whether its read waits on.
+        using Stream pipe = OperatingSystem.IsWindows()
+            ? new FileStream(Path.Combine(temp.Path, "pipe"), FileMode.OpenOrCreate, FileAccess.Read, FileShare.Read)
+            : new AnonymousPipeServerStream(PipeDirection.In);
+        using var reader = new HeldRead(first.Task, second.Task, pipe)
+        {
+            // Where the second read is being made: the capture's loop waits here, the read's task not yet given, and
+            // lets go of its own accord, so nothing is held longer than this test's moment.
+            OnSecond = () =>
+            {
+                made.Set();
+                letGo.Wait(TimeSpan.FromSeconds(30));
+            },
+        };
+
+        var capture = new ProcessRunner.StreamCapture(reader, onLine: null, StreamKept.Whole, cut: null, pieced: null, log: null);
+
+        // The first read returns the child's answer; the capture's loop keeps it and comes for a second, and is held
+        // where that second is being made - its task not yet given, the read itself out.
+        const string Said = "the child's answer\n";
+        Said.AsSpan().CopyTo(reader.Asked.Span);
+        first.TrySetResult(Said.Length);
+        Assert.True(made.Wait(TimeSpan.FromSeconds(30), cancellationToken), "the capture never came for its second read");
+
+        // Two looks while the read is being made: neither settles the pipe as quiet - a read with no task to wait on
+        // is not a leftover holding it - and the second look is where one that read the waiting mark alone would settle.
+        Assert.False(capture.ReadAll());
+        Assert.False(capture.ReadAll(), "a read being made was read as a pipe waiting on a leftover");
+
+        // Let the second read out, at the stream's end: the answer is kept, whole, as the child's own.
+        letGo.Set();
+        second.TrySetResult(0);
+        await capture.Reading.WaitAsync(TimeSpan.FromSeconds(30), cancellationToken);
+        Assert.Equal(Said, capture.Taken().Text);
+    }
+
     private static List<string> Lines(string text)
         => [.. text.Split('\n', StringSplitOptions.RemoveEmptyEntries).Select(line => line.TrimEnd('\r'))];
 
@@ -1119,5 +1332,39 @@ public sealed class ProcessRunnerTests
 
         Assert.Fail($"The child never recorded its grandchild's process id in '{path}'.");
         return 0;
+    }
+
+    /// <summary>
+    /// A reader whose first read answers by a task a test completes, into the buffer the read was given, whose second
+    /// is held where it is being made - before its task is given - until the test lets it go, and whose third says the
+    /// stream has ended: the capture's loop can be parked mid-read, its task not yet given, for as long as a look at
+    /// the capture needs, on however busy a machine.
+    /// </summary>
+    private sealed class HeldRead(Task<int> first, Task<int> second, Stream pipe) : StreamReader(pipe)
+    {
+        private Memory<char> _asked;
+        private int _read;
+
+        /// <summary>Runs where the second read is being made, before its task is given: the reader waits here as long as it says.</summary>
+        public Action? OnSecond { get; init; }
+
+        /// <summary>The buffer a read was given, the same for each.</summary>
+        public Memory<char> Asked => _asked;
+
+        public override ValueTask<int> ReadAsync(Memory<char> buffer, CancellationToken cancellationToken = default)
+        {
+            _asked = buffer;
+
+            switch (_read++)
+            {
+                case 0:
+                    return new ValueTask<int>(first);
+                case 1:
+                    OnSecond?.Invoke();
+                    return new ValueTask<int>(second);
+                default:
+                    return ValueTask.FromResult(0);
+            }
+        }
     }
 }

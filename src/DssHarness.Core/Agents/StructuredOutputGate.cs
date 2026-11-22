@@ -66,7 +66,7 @@ public sealed class StructuredOutputGate
     {
         _output = output ?? throw new ArgumentNullException(nameof(output));
         _mask = mask ?? throw new ArgumentNullException(nameof(mask));
-        _step = JsonNode.Parse(output.Schema) as JsonObject ?? throw new ArgumentException("The output's schema is no JSON object.", nameof(output));
+        _step = DssHarness.Core.Json.JsonDepth.ParseNode(output.Schema) as JsonObject ?? throw new ArgumentException("The output's schema is no JSON object.", nameof(output));
         _members = AgentEnvelope.Members(output);
         Envelope = AgentEnvelope.Schema(output);
     }

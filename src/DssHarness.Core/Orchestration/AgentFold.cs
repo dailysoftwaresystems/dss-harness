@@ -251,9 +251,6 @@ public sealed record RefreshPlan
     /// <summary>The paths named with <see cref="RefreshRequest.StaleOption"/> that are not under the paths weighed, or never handed: a misspelling, most likely.</summary>
     public required IReadOnlyList<string> StaleStray { get; init; }
 
-    /// <summary>Whether the search of the main tree's history stopped at its bound with more history left: a copy older than that is not found stale.</summary>
-    public required bool Capped { get; init; }
-
     /// <summary>What of the agent's own handing <see cref="Handed"/> would write over or through, which refuses the refresh.</summary>
     public required IReadOnlyList<string> InTheWay { get; init; }
 
@@ -714,7 +711,7 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
 
         // The arm registry merged by arm is judged as a registry of the main tree as the fold leaves it: what it removes
         // gone, and what it writes and merges there - each read only where the registry cites it.
-        await JudgeAsync(changes, policy, weighed, main, FoldWriter, merges => TreeAfter.Copied(_fileSystem, worktree, deleted, written, merges), cancellationToken).ConfigureAwait(false);
+        await JudgeAsync(changes, policy, weighed, main, FoldWriter, () => TreeAfter.Copied(_fileSystem, worktree, deleted, written, []), cancellationToken).ConfigureAwait(false);
 
         // A merge that is clean and was asked for - or the arm registry's, which reads as one - is taken, and any other ends
         // the path's refusal with what a merge of it gives.
@@ -729,7 +726,7 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
 
             if (TwoChanges.Taken(policy, offer))
             {
-                merged.Add(new MergedPath(path, offer.Working!, offer.Digest!, offer.Executable, offer.Listed, into));
+                merged.Add(offer.Into(into));
                 mainContent[path] = into[0].Weighed.Digest;
                 agentContent[path] = into[1].Weighed;
                 continue;
@@ -791,7 +788,7 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
             }
 
             refused.Add((file.Key, $"'{file.Key}': the main tree holds a directory there with files the fold does not remove - "
-                + $"{ReportText.Listed(listed)} - which writing it would remove"));
+                + $"{Names.All(listed)} - which writing it would remove"));
         }
 
         // What is settled by hand is sorted as any hand-over sorts what the main tree holds, and is handed over nothing of
@@ -811,7 +808,7 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
         foreach (var file in inTheWayOfHanding.Where(way => way.Below).GroupBy(way => way.Written, StringComparer.Ordinal))
         {
             refused.Add((file.Key, $"{FoldAllowances.SettledOption} '{file.Key}': the agent holds a directory there with files of its own - "
-                + $"{ReportText.Listed([.. file.Select(way => way.Own)])} - which handing it the main tree's copy would remove"));
+                + $"{Names.All([.. file.Select(way => way.Own)])} - which handing it the main tree's copy would remove"));
         }
 
         foreach (var (path, held) in await HoldingAsync(worktree, [.. handed.Deletions, .. handed.Files], cancellationToken).ConfigureAwait(false))
@@ -862,7 +859,7 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
     /// <param name="weighed">Every path both trees changed, with what a merge of it gives.</param>
     /// <param name="tree">The tree the merged registry is written into.</param>
     /// <param name="writer">What writes it, as a refusal names it.</param>
-    /// <param name="changed">What the command changes in that tree, given the merges it writes there.</param>
+    /// <param name="changed">What the command changes in that tree besides the merges it writes there: they follow, each read only where asked.</param>
     /// <param name="cancellationToken">Stops the reading.</param>
     private static async Task JudgeAsync(
         TwoChanges changes,
@@ -870,7 +867,7 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
         List<(TwoChangeOffer Offer, string Why, IReadOnlyList<MergeTarget> Into)> weighed,
         string tree,
         string writer,
-        Func<IEnumerable<(string Path, byte[] Bytes)>, IEnumerable<(string Path, Func<CancellationToken, Task<byte[]>>? Read)>> changed,
+        Func<IEnumerable<(string Path, Func<CancellationToken, Task<byte[]>>? Read)>> changed,
         CancellationToken cancellationToken)
     {
         if (weighed.FindIndex(one => one.Offer.Registry is not null) is var at && at < 0)
@@ -878,11 +875,12 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
             return;
         }
 
-        var merges = weighed.Where(one => TwoChanges.Taken(policy, one.Offer)).Select(one => (one.Offer.Path, one.Offer.Working!)).ToList();
+        // The merges after every other change, as a write makes them: each merged path read as its tree would hold it.
+        var merges = weighed.Where(one => TwoChanges.Taken(policy, one.Offer)).Select(one => (one.Offer.Path, (Func<CancellationToken, Task<byte[]>>?)changes.Reader(one.Offer))).ToList();
 
         weighed[at] = weighed[at] with
         {
-            Offer = await changes.JudgedAsync(policy, weighed[at].Offer, tree, writer, changed(merges), cancellationToken).ConfigureAwait(false),
+            Offer = await changes.JudgedAsync(policy, weighed[at].Offer, tree, writer, [.. changed(), .. merges], cancellationToken).ConfigureAwait(false),
         };
     }
 
@@ -986,16 +984,48 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
 
     /// <summary>
     /// Writes a merged path's bytes to one tree's copy of it, with the bit the merge gave it, unless the file is that
-    /// already: a tree that holds what the merge gives is not written again. Written relative to the file's directory held
+    /// already: a tree that holds what the merge gives is not written again. A merge of text is its blob checked out by
+    /// git into a directory of its own and copied from there, required to be what was weighed - so a file of any size
+    /// never passes through memory - and a merge by arm the bytes in hand. Written relative to the file's directory held
     /// from the tree's root, so no link put on its way leads the merge elsewhere.
     /// </summary>
     /// <param name="into">One tree's copy of the path.</param>
     /// <param name="merge">The merge.</param>
+    /// <exception cref="IOException">The copy could not be written, or git could not check the merge out as it did when it was weighed.</exception>
     private async Task WriteMergedAsync(MergeTarget into, MergedPath merge)
     {
-        if (await IdentityAsync(into.File, CancellationToken.None).ConfigureAwait(false) != new FileIdentity(merge.Digest, merge.Executable))
+        if (await IdentityAsync(into.File, CancellationToken.None).ConfigureAwait(false) == new FileIdentity(merge.Digest, merge.Executable))
         {
-            await VerifiedFileCopy.WriteUnfollowedAsync(_fileSystem, merge.Working, into.Root, into.File, merge.Executable, CancellationToken.None).ConfigureAwait(false);
+            return;
+        }
+
+        switch (merge.Merged.Content)
+        {
+            case GitContent.Bytes bytes:
+                await VerifiedFileCopy.WriteUnfollowedAsync(_fileSystem, bytes.Content, into.Root, into.File, merge.Executable, CancellationToken.None).ConfigureAwait(false);
+                break;
+
+            case GitContent.Blob blob:
+                try
+                {
+                    await _gitClient.CheckedOutAsync(
+                            merge.Merged.Tree,
+                            merge.Path,
+                            blob.Id,
+                            merge.Executable,
+                            file => VerifiedFileCopy.CopyUnfollowedAsync(_fileSystem, Path.GetDirectoryName(file)!, file, into.Root, into.File, merge.Digest, CancellationToken.None),
+                            CancellationToken.None)
+                        .ConfigureAwait(false);
+                }
+                catch (HarnessException ex) when (ex.ExitCode == HarnessExit.CommandFailed)
+                {
+                    throw new IOException($"'{into.File}' was not written: git could not check the merge of '{merge.Path}' out as it did when it was weighed - {ex.Message.TrimEnd('.')}.", ex);
+                }
+
+                break;
+
+            case var other:
+                throw new System.Diagnostics.UnreachableException($"A merge is held as a blob or as bytes, and {other.GetType().Name} is neither.");
         }
     }
 
@@ -1327,7 +1357,7 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
                 + "it, first. Nothing was handed over."),
             _ => throw new HarnessException(
                 HarnessExit.Refused,
-                $"{ReportText.Listed(links)} are symbolic links, which are never handed to an agent as the files they lead to: commit them, or remove "
+                $"{Names.All(links)} are symbolic links, which are never handed to an agent as the files they lead to: commit them, or remove "
                 + "them, first. Nothing was handed over."),
         };
     }
@@ -1347,8 +1377,8 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
     /// The proof is git's, asked once for every path a refusal or a <see cref="RefreshRequest.StaleOption"/> names: the
     /// agent's copy as git would store it in its worktree (<see cref="IGitClient.ListStagedIdsAsync"/>), so a copy that
     /// differs from a commit's file only by a line-ending conversion is that commit's file, against the blobs the main
-    /// tree's history held at the path (<see cref="IGitClient.ListHeldInHistoryAsync"/>, among the last
-    /// <see cref="TwoChanges.MostCommits"/> commits that changed it, merges' other sides included). Bytes that history
+    /// tree's history held at the path (<see cref="IGitClient.ListHeldInHistoryAsync"/>, the whole of it, merges' other
+    /// sides included). Bytes that history
     /// holds are the main tree's own there, so handing its copy over them loses nothing the history does not keep.
     /// </remarks>
     /// <param name="main">The main checkout's root.</param>
@@ -1427,15 +1457,14 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
 
         foreach (var path in edited.Where(stale.Contains).Concat(unmoved).Order(StringComparer.Ordinal))
         {
-            if (proved.At.TryGetValue(path, out var commit))
+            if (proved.TryGetValue(path, out var commit))
             {
                 staleCopies.Add(new StaleCopy(path, commit));
             }
             else
             {
                 refused.Add(_fileSystem.KindOf(Path.Combine(worktree, path)) == PathKind.File
-                    ? $"{RefreshRequest.StaleOption} '{path}': its copy is no file the main tree held at that path in the last "
-                        + $"{ReportText.Counted(TwoChanges.MostCommits, "commit")} that changed it, so nothing proves it stale. "
+                    ? $"{RefreshRequest.StaleOption} '{path}': its copy is no file the main tree's history held at that path, so nothing proves it stale. "
                         + $"{RefreshRequest.ExceptOption} leaves it as the agent's change, for its fold to weigh."
                     : $"{RefreshRequest.StaleOption} '{path}': the agent holds no file there, and a deletion is its change. {RefreshRequest.ExceptOption} leaves it.");
             }
@@ -1461,7 +1490,7 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
             .ConfigureAwait(false);
         var twice = weighed.Select(one => (one.Offer, Why: string.Empty, one.Into)).ToList();
 
-        await JudgeAsync(changes, policy, twice, worktree, RefreshWriter, merges => TreeAfter.Copied(_fileSystem, main, handed.Deletions, handed.Files, merges), cancellationToken)
+        await JudgeAsync(changes, policy, twice, worktree, RefreshWriter, () => TreeAfter.Copied(_fileSystem, main, handed.Deletions, handed.Files, []), cancellationToken)
             .ConfigureAwait(false);
 
         var mains = weighed.ToDictionary(one => one.Offer.Path, one => one.Main, StringComparer.Ordinal);
@@ -1475,7 +1504,7 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
         {
             if (TwoChanges.Taken(policy, offer))
             {
-                merged.Add(new RefreshMerge(new MergedPath(offer.Path, offer.Working!, offer.Digest!, offer.Executable, offer.Listed, into), mains[offer.Path]));
+                merged.Add(new RefreshMerge(offer.Into(into), mains[offer.Path]));
                 continue;
             }
 
@@ -1505,7 +1534,7 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
             Left = [.. edited.Where(except.Contains)],
             Changed = [.. edited
                 .Where(path => !except.Contains(path) && !handing.Contains(path) && !merging.Contains(path))
-                .Select(path => new RefreshChange(path, proved.At.GetValueOrDefault(path), gives.GetValueOrDefault(path)))],
+                .Select(path => new RefreshChange(path, proved.GetValueOrDefault(path), gives.GetValueOrDefault(path)))],
             Merged = merged,
             Shown = shown,
             Mergeable = mergeable,
@@ -1517,7 +1546,6 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
             Stale = staleCopies,
             StaleRefused = refused,
             StaleStray = strays,
-            Capped = proved.Capped,
             InTheWay = InTheWayOfHanding(worktree, handed),
             InSubmodules = await InSubmodulesAsync(worktree, [.. handed.Deletions, .. handed.Files, .. alike], commit: null, cancellationToken).ConfigureAwait(false),
             Held = await HoldingAsync(worktree, [.. handed.Deletions, .. handed.Files, .. alike], cancellationToken).ConfigureAwait(false),
@@ -1644,11 +1672,11 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
     }
 
     /// <summary>
-    /// The newest commit of the main tree's history that holds, at each of <paramref name="paths"/> the agent holds a file
-    /// at, the very bytes the agent's copy is as git would store it; and whether the search stopped at its bound with more
-    /// history left. A path the agent holds no file at, or whose bytes that history does not hold, has none.
+    /// The newest commit of the main tree's history - the whole of it - that holds, at each of <paramref name="paths"/>
+    /// the agent holds a file at, the very bytes the agent's copy is as git would store it. A path the agent holds no file
+    /// at, or whose bytes that history does not hold, has none.
     /// </summary>
-    private async Task<(IReadOnlyDictionary<string, string> At, bool Capped)> StaleAtAsync(
+    private async Task<IReadOnlyDictionary<string, string>> StaleAtAsync(
         string main,
         string worktree,
         IReadOnlyList<string> paths,
@@ -1659,11 +1687,11 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
 
         if (files.Count == 0)
         {
-            return (at, false);
+            return at;
         }
 
         var staged = await _gitClient.ListStagedIdsAsync(worktree, files, cancellationToken).ConfigureAwait(false);
-        var history = await _gitClient.ListHeldInHistoryAsync(main, "HEAD", files, TwoChanges.MostCommits, cancellationToken).ConfigureAwait(false);
+        var history = await _gitClient.ListHeldInHistoryAsync(main, "HEAD", files, cancellationToken).ConfigureAwait(false);
 
         for (var index = 0; index < files.Count; index++)
         {
@@ -1673,7 +1701,7 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
             }
         }
 
-        return (at, history.Cut);
+        return at;
     }
 
     /// <summary>
@@ -2174,7 +2202,7 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
             weighed,
             worktree,
             RebaseWriter,
-            merges => TreeAfter.Moved(_gitClient, worktree, taken.Select(path => (path, atTo[path].Blob)), merges),
+            () => TreeAfter.Moved(_gitClient, worktree, taken.Select(path => (path, atTo[path].Blob)), []),
             cancellationToken).ConfigureAwait(false);
 
         // A clean merge that was asked for - or the arm registry's, which reads as one - is taken, and any other ends the
@@ -2188,7 +2216,7 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
         {
             if (TwoChanges.Taken(policy, offer))
             {
-                merged.Add(new MergedPath(offer.Path, offer.Working!, offer.Digest!, offer.Executable, offer.Listed, into));
+                merged.Add(offer.Into(into));
                 continue;
             }
 
@@ -2240,19 +2268,19 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
 
             if (ownBelow.Count > 0)
             {
-                refused.Add((written.Key, $"{there}, where the agent's worktree holds a directory with files of its own - {ReportText.Listed(ownBelow)} - that writing "
+                refused.Add((written.Key, $"{there}, where the agent's worktree holds a directory with files of its own - {Names.All(ownBelow)} - that writing "
                     + $"it would {lost}: move them aside, and run again"));
             }
 
             if (sharedBelow.Count > 0)
             {
-                refused.Add((written.Key, $"{there}, where the agent shares {ReportText.Listed(sharedBelow)} with the main tree, which writing it would {lost}: "
+                refused.Add((written.Key, $"{there}, where the agent shares {Names.All(sharedBelow)} with the main tree, which writing it would {lost}: "
                     + "refresh-agent hands it what the main tree holds there first"));
             }
 
             if (settledBelow.Count > 0)
             {
-                refused.Add((written.Key, $"{there}, and writing it would {lost} {ReportText.Listed(settledBelow)}, declared settled: reconcile them by hand, and "
+                refused.Add((written.Key, $"{there}, and writing it would {lost} {Names.All(settledBelow)}, declared settled: reconcile them by hand, and "
                     + "run again without --settled for them"));
             }
         }

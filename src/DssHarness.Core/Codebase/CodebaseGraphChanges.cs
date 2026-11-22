@@ -39,10 +39,10 @@ public sealed record CodebaseGraphChanges(string Base, IReadOnlyList<string> Fil
         var hunks = CodeLineDiff.Hunks(beforeLines, afterLines);
         var then = Declared(before);
         var now = Declared(after);
-        var was = then.ToLookup(node => node.Id, StringComparer.Ordinal);
+        var was = then.ToLookup(node => node.Id);
         var innerThen = Inner(then);
         var innerNow = Inner(now);
-        var nowIds = now.Select(node => node.Id).ToHashSet(StringComparer.Ordinal);
+        var nowIds = now.Select(node => node.Id).ToHashSet();
         var changed = new List<CodeChangedNode>();
 
         foreach (var node in now)
@@ -75,11 +75,11 @@ public sealed record CodebaseGraphChanges(string Base, IReadOnlyList<string> Fil
         => [.. (extract?.Nodes ?? []).Where(node => CodeNodeKinds.Declarations.Contains(node.Kind, StringComparer.Ordinal))];
 
     /// <summary>What is declared inside each node, by the node's id: built once a file.</summary>
-    private static ILookup<string, ExtractNode> Inner(List<ExtractNode> nodes)
-        => nodes.Where(node => node.Parent is not null).ToLookup(node => node.Parent!, StringComparer.Ordinal);
+    private static ILookup<QualifiedName, ExtractNode> Inner(List<ExtractNode> nodes)
+        => nodes.Where(node => node.Parent is not null).ToLookup(node => node.Parent!);
 
     private static CodeChangedNode Changed(string path, ExtractNode node, string change, IReadOnlyList<CodeLineHunk> lines)
-        => new(node.Id, node.Kind, node.Qualified, path, node.Start, node.End, change, lines, node.Parent);
+        => new(node.Id.Whole(), node.Kind, node.Qualified.Whole(), path, node.Start, node.End, change, lines, node.Parent?.Whole());
 
     /// <summary>
     /// The hunks that meet <paramref name="node"/>'s own lines: each run of its new lines among the node's own lines now,

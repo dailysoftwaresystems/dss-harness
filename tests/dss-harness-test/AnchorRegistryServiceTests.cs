@@ -1,6 +1,7 @@
 using DssHarness.Core.Anchors;
 using DssHarness.Core.Configuration;
 using DssHarness.Core.FileSystem;
+using DssHarness.Core.Hosts;
 using DssHarness.Core.Results;
 
 namespace DssHarness.Tests;
@@ -289,6 +290,64 @@ public sealed class AnchorRegistryServiceTests
         Assert.Contains("2 rows", next.Message, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// The registry lock waits while its holder lives: a change that finds another holding the registries says so as it
+    /// begins - naming what holds them - and waits on past the ten seconds it once refused at, writing the moment the
+    /// holder lets go; and a change interrupted while it waits ends, nothing written. Red with the ten seconds put back.
+    /// </summary>
+    [Fact]
+    public async Task TheRegistryLock_WaitsWhileTheHolderLives()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = await PrepareAsync(temp);
+        var context = await harness.ContextLoader.LoadAsync(temp.Path, cancellationToken);
+        var registries = await harness.AnchorRegistryLocator.LocateAsync(context, cancellationToken);
+        var before = File.ReadAllText(PendingPath(temp));
+        var patient = new AnchorRegistryService(harness.ContextLoader, harness.AnchorRegistryLocator, harness.AnchorRegistryLock, harness.FileSystem);
+        var waiting = $"anchors: waits for the anchor registries, held by another {ToolPackage.Id} process";
+
+        var holder = RegistryLockHolder.Take(harness.AnchorRegistryLock, registries, cancellationToken);
+        Task<AnchorChange> write;
+
+        try
+        {
+            using var interruption = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            var interrupted = patient.WriteAsync(temp.Path, Anchor(Two), dryRun: false, interruption.Token);
+
+            await UntilSaidAsync(harness, waiting, cancellationToken);
+            await interruption.CancelAsync();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => interrupted);
+
+            write = patient.WriteAsync(temp.Path, Anchor(One), dryRun: false, cancellationToken);
+
+            await Task.Delay(TimeSpan.FromSeconds(11), cancellationToken);
+
+            Assert.False(write.IsCompleted, "the change stopped waiting while the holder lived");
+            Assert.Equal(before, File.ReadAllText(PendingPath(temp)));
+        }
+        finally
+        {
+            holder.Dispose();
+        }
+
+        await write;
+
+        Assert.Equal([One], Rows(harness, PendingPath(temp)).Select(row => row.Id));
+    }
+
+    /// <summary>Waits until <paramref name="harness"/>'s output holds <paramref name="line"/>.</summary>
+    private static async Task UntilSaidAsync(HarnessFactory harness, string line, CancellationToken cancellationToken)
+    {
+        var waited = System.Diagnostics.Stopwatch.StartNew();
+
+        while (!(harness.StandardOutput.ToString() + harness.StandardError.ToString()).Contains(line, StringComparison.Ordinal))
+        {
+            Assert.True(waited.Elapsed < TimeSpan.FromSeconds(60), $"'{line}' was never said");
+            await Task.Delay(20, cancellationToken);
+        }
+    }
+
     [Fact]
     public async Task AChange_RefusesWhenAnotherHoldsTheLockTooLong_AndWritesNothing()
     {
@@ -491,6 +550,30 @@ public sealed class AnchorRegistryServiceTests
         Assert.Equal(3, lookup.Missing.Count);
         Assert.Equal([One], lookup.Missing[1].SameNamespace);
         Assert.Empty(lookup.Missing[2].SameNamespace);
+    }
+
+    /// <summary>
+    /// Every id of a missing id's namespace is suggested, never the first eight: with twelve rows beginning the same way,
+    /// the lookup holds all twelve, in order, and the refusal names every one. Red with the eight put back.
+    /// </summary>
+    [Fact]
+    public async Task EverySameNamespaceId_IsSuggested()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = await PrepareAsync(temp);
+        var ids = Enumerable.Range(10, 12).Select(index => $"D-AREA-TOPIC-N{index}").ToList();
+
+        foreach (var id in ids)
+        {
+            await harness.AnchorRegistryService.WriteAsync(temp.Path, Anchor(id), dryRun: false, cancellationToken);
+        }
+
+        var lookup = await harness.AnchorRegistryService.ReadAsync(temp.Path, ["D-AREA-ELSEWHERE"], AnchorScope.All, cancellationToken);
+        var outcome = AnchorReports.Lookup(lookup, json: false);
+
+        Assert.Equal(ids, Assert.Single(lookup.Missing).SameNamespace);
+        Assert.Contains($"D-AREA-ELSEWHERE: ids beginning the same way: {string.Join(", ", ids)}", outcome.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -1691,10 +1774,10 @@ public sealed class AnchorRegistryServiceTests
     {
         public int Taken { get; private set; }
 
-        public T RunExclusive<T>(AnchorRegistries registries, Func<T> work)
+        public Task<T> RunExclusiveAsync<T>(AnchorRegistries registries, Func<T> work, CancellationToken cancellationToken)
         {
             Taken++;
-            return inner.RunExclusive(registries, work);
+            return inner.RunExclusiveAsync(registries, work, cancellationToken);
         }
     }
 

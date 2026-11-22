@@ -458,6 +458,7 @@ public sealed class LegExecutor(IHostPlatform platform, IHarnessOutput output)
             Leg = leg.Name,
             Verdict = reached.Verdict,
             Detail = reached.Detail,
+            Named = reached.Named,
             Emulated = leg.Emulated,
         };
 }

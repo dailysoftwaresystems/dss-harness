@@ -186,7 +186,7 @@ public sealed class OrchestratorService(
                 Session = session,
             };
 
-            foreach (var directory in new[] { orchestrator.LogsDirectory, orchestrator.WorkRoot, orchestrator.PlansDirectory(name), orchestrator.AgentsDirectory })
+            foreach (var directory in new[] { orchestrator.LogsDirectory, orchestrator.WorkRoot, orchestrator.PlansDirectory(name), orchestrator.AgentsDirectory, orchestrator.TempDirectory, orchestrator.ArtifactsDirectory })
             {
                 _fileSystem.CreateDirectory(directory);
             }
@@ -313,7 +313,7 @@ public sealed class OrchestratorService(
             if (below.Worktrees.Count > 0)
             {
                 return CommandOutcome.Refused(
-                    $"Orchestrator '{name}' was not deleted: worktrees are left below '{group}' - {ReportText.Listed(below.Worktrees)}. Delete each with "
+                    $"Orchestrator '{name}' was not deleted: worktrees are left below '{group}' - {Names.Line(below.Worktrees, "git worktree list")}. Delete each with "
                     + $"{OrchestrationReports.Line(WorktreeService.DeleteCommand, "<address>")} first. Nothing was changed.");
             }
 

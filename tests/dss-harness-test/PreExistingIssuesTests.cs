@@ -86,22 +86,30 @@ public sealed class PreExistingIssuesTests
     }
 
     /// <summary>
-    /// A quote or an output is cut to 4,000 characters with the cut said inside them - so what is cut is a proof the
-    /// reader takes - and one that fits is kept whole.
+    /// A quote and an output of two megabytes each are a proof like any other, written to the run's list and read back
+    /// whole: no length makes a proof wrong, and none is cut.
     /// </summary>
     [Fact]
-    public void AQuoteOrAnOutputIsCutToWhatItMayHold_TheCutSaid_AndTheReaderTakesIt()
+    public void ATwoMegabyteQuoteAndOutput_AreKeptWhole()
     {
-        var cut = PreExistingIssuesWriter.Cut(new string('x', PreExistingProof.Most + 100));
-        var exactly = new string('y', PreExistingProof.Most);
+        using var temp = new TempDirectory();
+        var (harness, layout, issues, records) = Writer(temp.Path);
+        var at = DateTimeOffset.UtcNow;
+        var quote = new string('q', 2 * 1024 * 1024);
+        // Sixteen characters a line with its separator, and one line more than 2 MiB holds: the join names a
+        // separator only between lines, so 2 MiB / 16 lines alone is one character short of 2 MiB.
+        var output = string.Join("\n", Enumerable.Range(1, 2 * 1024 * 1024 / 16 + 1).Select(line => $"line {line,10}"));
 
-        Assert.Equal(PreExistingProof.Most, cut.Length);
-        Assert.EndsWith("… (cut to 4000 characters)", cut, StringComparison.Ordinal);
-        Assert.Equal(new string('x', PreExistingProof.Most - PreExistingIssuesWriter.CutMark.Length), cut[..^PreExistingIssuesWriter.CutMark.Length]);
-        Assert.Null(new PreExistingProof("ran", "abc123", Command: "make", Output: cut).Problem());
-        Assert.Null(new PreExistingProof("read", "abc123", "a.c", "1-2", Quote: cut).Problem());
-        Assert.Equal(exactly, PreExistingIssuesWriter.Cut(exactly));
-        Assert.Equal("short", PreExistingIssuesWriter.Cut("short"));
+        using (records)
+        {
+            _ = issues.Add("A long read", "What it is.", ["src/A.cs"], new PreExistingProof("read", "3e0b8f5", "src/A.cs", "1-65536", Quote: quote), "why", "one", at, at);
+            _ = issues.Add("A long run", "What it is.", ["src/B.cs"], new PreExistingProof("ran", "3e0b8f5", Command: "make test", Output: output), "why", "one", at, at);
+        }
+
+        var read = harness.OrchestrationStore.ReadPreExistingIssues(layout)!.Issues;
+
+        Assert.Equal((quote, output), (read[0].Proof.Quote, read[1].Proof.Output));
+        Assert.True(output.Length >= 2 * 1024 * 1024, $"{output.Length} characters");
     }
 
     /// <summary>Every entry is proven: what the triage read or ran on the base commit, never what the reporting agent said, and a proof that names nothing of its kind is refused.</summary>
@@ -120,17 +128,6 @@ public sealed class PreExistingIssuesTests
                     "What it is.",
                     ["src/A.cs"],
                     new PreExistingProof("read", "3e0b8f5", null, "1-2", "quote", null, null),
-                    "why",
-                    "one",
-                    at,
-                    at));
-
-            Assert.Throws<InvalidOperationException>(
-                () => issues.Add(
-                    "A quote over the bound",
-                    "What it is.",
-                    ["src/A.cs"],
-                    new PreExistingProof("read", "3e0b8f5", "src/A.cs", "1-2", new string('x', PreExistingProof.Most + 1), null, null),
                     "why",
                     "one",
                     at,

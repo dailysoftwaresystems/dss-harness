@@ -130,6 +130,76 @@ public sealed class MachineWideFileTests
         Assert.Equal(unread.Message, refusal.InnerException.Message);
     }
 
+    /// <summary>
+    /// An update of a file another process - here another thread - is updating waits for as long as that holder holds
+    /// it, twelve seconds here, and then makes its change: no bound of the code's own refuses it, as ten seconds once did
+    /// whatever the holder was doing.
+    /// </summary>
+    [Fact]
+    public void MachineWideFile_WaitsWhileTheHolderLives()
+    {
+        using var temp = new TempDirectory();
+        var path = temp.Combine("held.json");
+        using var holding = new ManualResetEventSlim();
+        Exception? held = null;
+
+        var holder = new Thread(() => held = Record.Exception(() => MachineWideFile.Update(path, MachineWideFile.Window, () =>
+        {
+            holding.Set();
+            Thread.Sleep(TimeSpan.FromSeconds(12));
+            return 0;
+        })));
+
+        holder.Start();
+        Assert.True(holding.Wait(TimeSpan.FromMinutes(1), TestContext.Current.CancellationToken), "the holder never took the file");
+
+        var waited = System.Diagnostics.Stopwatch.StartNew();
+        var changed = MachineWideFile.Update(path, MachineWideFile.Window, () => true);
+
+        Assert.True(changed);
+        Assert.True(waited.Elapsed > TimeSpan.FromSeconds(10), $"the update waited {waited.Elapsed}, so the holder had let go before the old bound");
+        Assert.True(holder.Join(TimeSpan.FromMinutes(1)), "the holder never ended");
+        Assert.Null(held);
+    }
+
+    /// <summary>
+    /// An update given a bound of its caller's own for another process's is refused there, saying so, and changes nothing.
+    /// </summary>
+    [Fact]
+    public void AnUpdateWaitingForAnother_IsRefusedAtItsCallersBound()
+    {
+        using var temp = new TempDirectory();
+        var path = temp.Combine("held.json");
+        using var holding = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+
+        var holder = new Thread(() => MachineWideFile.Update(path, MachineWideFile.Window, () =>
+        {
+            holding.Set();
+            release.Wait(TimeSpan.FromMinutes(1));
+            return 0;
+        }));
+
+        holder.Start();
+        Assert.True(holding.Wait(TimeSpan.FromMinutes(1), TestContext.Current.CancellationToken), "the holder never took the file");
+
+        try
+        {
+            var changed = false;
+            var refused = Assert.Throws<HarnessException>(() => MachineWideFile.Update(path, TimeSpan.FromMilliseconds(300), () => changed = true));
+
+            Assert.Equal(
+                (HarnessExit.Refused, $"Another {DssHarness.Core.Hosts.ToolPackage.Id} process has been updating '{path}' for 0 seconds, so nothing was changed."),
+                (refused.ExitCode, refused.Message));
+            Assert.False(changed);
+        }
+        finally
+        {
+            release.Set();
+            Assert.True(holder.Join(TimeSpan.FromMinutes(1)), "the holder never ended");
+        }
+    }
+
     /// <summary>What the test's file holds.</summary>
     /// <param name="Name">A member the file must give.</param>
     /// <param name="Count">Another.</param>

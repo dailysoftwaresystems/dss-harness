@@ -86,6 +86,6 @@ public static class SideTaskPolicy
         ArgumentNullException.ThrowIfNull(sources);
         ArgumentNullException.ThrowIfNull(keys);
 
-        return new([.. sources.On], sources.ResultsPerSource, int.MaxValue, keys);
+        return new([.. sources.On], int.MaxValue, keys);
     }
 }

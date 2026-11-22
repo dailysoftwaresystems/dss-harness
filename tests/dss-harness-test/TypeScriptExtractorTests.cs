@@ -1,3 +1,4 @@
+using System.Globalization;
 using DssHarness.Core.Codebase;
 using DssHarness.Core.Codebase.Languages;
 
@@ -184,9 +185,56 @@ public sealed class TypeScriptExtractorTests : CodeGraphExtractorContractTests<T
         });
         """;
 
+    private const string Reads = """
+        export const GREETING = 'hello world';
+
+        export enum Kind {
+            One = 'one',
+            Two = One,
+        }
+
+        export class Reader {
+            private own = 0;
+
+            take(table: { count: number }): string {
+                const local = 4;
+                this.own += local + table.count;
+                return GREETING + ' padding ' + `${Kind.One} part`;
+            }
+        }
+
+        export type Picked<T> = T extends string ? Reader : Kind;
+        """;
+
     /// <inheritdoc/>
     public override IReadOnlyList<CodeGraphFixture> Fixtures { get; } =
     [
+        new("src/reads.ts", Reads)
+        {
+            Nodes =
+            [
+                new("typescript:src/reads.ts.GREETING", CodeNodeKinds.Member, (1, 1)),
+                new("typescript:src/reads.ts.Kind", CodeNodeKinds.Type, (3, 6)),
+                new("typescript:src/reads.ts.Kind.One", CodeNodeKinds.Member, (4, 4)),
+                new("typescript:src/reads.ts.Kind.Two", CodeNodeKinds.Member, (5, 5)),
+                new("typescript:src/reads.ts.Reader", CodeNodeKinds.Type, (8, 16)),
+                new("typescript:src/reads.ts.Reader.own", CodeNodeKinds.Member, (9, 9)),
+                new("typescript:src/reads.ts.Reader.take", CodeNodeKinds.Member, (11, 15)),
+                new("typescript:src/reads.ts.Picked", CodeNodeKinds.Type, (18, 18)),
+            ],
+            Edges =
+            [
+                // A field read through this, a constant read bare, and an enum member read inside a template's hole.
+                new("typescript:src/reads.ts.Reader.take", "typescript:src/reads.ts.Reader.own", CodeEdgeKinds.Uses, 13, CodeConfidences.Exact),
+                new("typescript:src/reads.ts.Reader.take", "typescript:src/reads.ts.GREETING", CodeEdgeKinds.Uses, 14, CodeConfidences.Exact),
+                new("typescript:src/reads.ts.Reader.take", "typescript:src/reads.ts.Kind.One", CodeEdgeKinds.Uses, 14, CodeConfidences.Exact),
+
+                // An enum member's value is its code, and a conditional type's first branch names a type as its second does.
+                new("typescript:src/reads.ts.Kind.Two", "typescript:src/reads.ts.Kind.One", CodeEdgeKinds.Uses, 5, CodeConfidences.Exact),
+                new("typescript:src/reads.ts.Picked", "typescript:src/reads.ts.Reader", CodeEdgeKinds.References, 18, CodeConfidences.Exact),
+                new("typescript:src/reads.ts.Picked", "typescript:src/reads.ts.Kind", CodeEdgeKinds.References, 18, CodeConfidences.Exact),
+            ],
+        },
         new("src/shapes.ts", Shapes)
         {
             Nodes =
@@ -373,17 +421,17 @@ public sealed class TypeScriptExtractorTests : CodeGraphExtractorContractTests<T
                 ("typescript:src/k.ts.Animal.changed", "method"), ("typescript:src/k.ts.over~2", "function"), ("typescript:src/k.ts.over~3", "function"),
                 ("typescript:src/k.ts.over", "function"),
             ],
-            extract.Nodes.Select(node => (node.Id, node.SubKind!)));
+            extract.Nodes.Select(node => (node.Id.Whole(), node.SubKind!)));
         Assert.Equal((1, 2), (Node(extract, "typescript:src/k.ts.Shape").Start, Node(extract, "typescript:src/k.ts.Shape").End));
         Assert.Equal([true, true, false], extract.Nodes.Where(node => node.Name == "over").Select(node => node.Prototype));
         Assert.True(Node(extract, "typescript:src/k.ts.Animal.speak").Prototype);
-        Assert.Equal("src/k.ts.Animal", Node(extract, "typescript:src/k.ts.Animal.id").SeenIn);
+        Assert.Equal("src/k.ts.Animal", Node(extract, "typescript:src/k.ts.Animal.id").SeenIn?.Whole());
         Assert.Null(Node(extract, "typescript:src/k.ts.'lib'").SeenIn);
         Assert.Equal(["const"], Node(extract, "typescript:src/k.ts.Flag").Modifiers.Except(["export"]));
         Assert.Equal(["@Watch"], Node(extract, "typescript:src/k.ts.Animal.changed").Modifiers);
         Assert.Equal(
             [("typescript:src/k.ts.Animal.changed", "Watch"), ("typescript:src/k.ts.Animal", "register")],
-            extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Calls).Select(reference => (reference.From, reference.Name)));
+            extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Calls).Select(reference => (reference.From.Whole(), reference.Name)));
     }
 
     /// <summary>A TypeScript callable takes from its required parameters to all of them - none most where a rest one takes any - and its this parameter is none.</summary>
@@ -456,7 +504,7 @@ public sealed class TypeScriptExtractorTests : CodeGraphExtractorContractTests<T
 
         Assert.Equal(
             [("area", "type", "Shape"), ("make", null, null), ("scale", "type", "Shape"), ("read", "value", "service"), ("whatever", "value", null)],
-            extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Calls).Select(reference => (reference.Name, reference.Qualifier?.Kind, reference.Qualifier?.Name)));
+            extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Calls).Select(reference => (reference.Name, reference.Qualifier?.Kind, extract.Written(reference.Qualifier))));
         Assert.Equal(
             ["a call on the any value loose", "a call through the function value onChange", "a call through the function value run"],
             extract.Dynamic.Select(dynamic => dynamic.Why));
@@ -473,7 +521,7 @@ public sealed class TypeScriptExtractorTests : CodeGraphExtractorContractTests<T
         var extract = Read("types/lib.d.ts", "declare function f(): void;\ndeclare class C { m(): void; field: number; }\ndeclare const v: string;\nfunction g() { return 1; }\nconst h = () => 1;");
 
         Assert.All(extract.Nodes.Where(node => node.Kind == CodeNodeKinds.Member), node => Assert.True(node.Prototype));
-        Assert.Equal(["typescript:f", "typescript:C", "typescript:C.m", "typescript:C.field", "typescript:v", "typescript:g", "typescript:h"], extract.Nodes.Select(node => node.Id));
+        Assert.Equal(["typescript:f", "typescript:C", "typescript:C.m", "typescript:C.field", "typescript:v", "typescript:g", "typescript:h"], extract.Nodes.Select(node => node.Id.Whole()));
         Assert.Null(extract.Generated);
     }
 
@@ -515,7 +563,9 @@ public sealed class TypeScriptExtractorTests : CodeGraphExtractorContractTests<T
         Assert.Equal([("id", "function"), ("wide", "function"), ("after", "function")], tsx.Nodes.Select(node => (node.Name, node.SubKind!)));
         Assert.Equal(["show"], tsx.References.Select(reference => reference.Name));
         Assert.Equal([("cast", "constant"), ("after", "function")], ts.Nodes.Select(node => (node.Name, node.SubKind!)));
-        Assert.Equal(["go"], ts.References.Select(reference => reference.Name));
+
+        // The angle's cast names its type, and the value it casts is read: a use of each, beside the call after them.
+        Assert.Equal(["Shape", "value", "go"], ts.References.Select(reference => reference.Name));
     }
 
     /// <summary>
@@ -533,7 +583,7 @@ public sealed class TypeScriptExtractorTests : CodeGraphExtractorContractTests<T
             Assert.Equal([("List", 1, 1), ("Other", 2, 2)], extract.Nodes.Select(node => (node.Name, node.Start, node.End)));
             Assert.Equal(
                 element.Contains("draw", StringComparison.Ordinal) ? ["List:map", "List:draw", "List:Table", "Other:helper"] : ["List:Table", "Other:helper"],
-                extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Calls).Select(reference => $"{reference.From[(reference.From.LastIndexOf('.') + 1)..]}:{reference.Name}"));
+                extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Calls).Select(reference => $"{reference.From.PastLastDot()}:{reference.Name}"));
         }
     }
 
@@ -607,7 +657,7 @@ public sealed class TypeScriptExtractorTests : CodeGraphExtractorContractTests<T
 
         Assert.Equal(
             [("post", "value", "api"), ("apply", "type", "Patch"), ("m", "value", null), ("take", null, null)],
-            extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Calls).Select(reference => (reference.Name, reference.Qualifier?.Kind, reference.Qualifier?.Name)));
+            extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Calls).Select(reference => (reference.Name, reference.Qualifier?.Kind, extract.Written(reference.Qualifier))));
         Assert.Equal(["a call on the any value x as any"], extract.Dynamic.Select(dynamic => dynamic.Why));
         Assert.DoesNotContain(extract.References, reference => reference.Name is "T" or "U" or "V");
         Assert.Contains(extract.References, reference => reference is { Name: "Item", Kind: CodeEdgeKinds.References });
@@ -616,6 +666,149 @@ public sealed class TypeScriptExtractorTests : CodeGraphExtractorContractTests<T
 
         Assert.Contains(new CodeEdge("typescript:src/c.ts.go", "typescript:src/c.ts.take", CodeEdgeKinds.Calls, 2, CodeConfidences.Exact), linked.Edges);
     }
+
+    /// <summary>
+    /// A parameter's decorators and its default are the code of the callable it is written on - what a decorator calls
+    /// and holds, what a default reads and holds - and a conditional's branches are uses, its type annotations none.
+    /// </summary>
+    [Fact]
+    public void AParametersDecoratorsAndDefault_AreItsCallablesCode()
+    {
+        var extract = Read("src/api.ts", """
+            export class Api {
+              constructor(@Inject('api_token') private readonly token: string, retries: number = DEFAULT_RETRIES) {}
+
+              get(path: string = '/default/path'): string {
+                return enabled ? path : FALLBACK;
+              }
+            }
+            """);
+
+        const string Constructor = "typescript:src/api.ts.Api.constructor";
+        const string Get = "typescript:src/api.ts.Api.get";
+
+        Assert.Equal(
+            [new LiteralRow("api_token", 2, Constructor), new LiteralRow("/default/path", 4, Get)],
+            LiteralRow.Of(extract));
+        Assert.Equal(
+            [(Constructor, CodeEdgeKinds.Calls, "Inject", 2), (Constructor, CodeEdgeKinds.Uses, "DEFAULT_RETRIES", 2), (Get, CodeEdgeKinds.Uses, "enabled", 5), (Get, CodeEdgeKinds.Uses, "FALLBACK", 5)],
+            extract.References.Select(reference => (reference.From.Whole(), reference.Kind, reference.Name, reference.Line)));
+    }
+
+    /// <summary>
+    /// Every declarator of a declaration declares a local, an annotated one's among them, and none is a use; a local's
+    /// annotation names the types it writes, no value the code reads - a name a type argument writes after a comma among
+    /// them.
+    /// </summary>
+    [Fact]
+    public void EachAnnotatedDeclarator_IsALocal_ItsAnnotationTypesNoUses()
+    {
+        var extract = Read("src/sum.ts", """
+            export function sum(): number {
+              const a: Foo = 1, b: Map<string, Bar> = new Map(), c = total;
+              let d: Baz;
+              return a + b.size + c;
+            }
+            """);
+
+        Assert.Equal(
+            [(CodeEdgeKinds.References, "Foo", 2), (CodeEdgeKinds.References, "Bar", 2), (CodeEdgeKinds.Uses, "total", 2), (CodeEdgeKinds.References, "Baz", 3), (CodeEdgeKinds.Uses, "size", 4)],
+            extract.References.Select(reference => (reference.Kind, reference.Name, reference.Line)));
+    }
+
+    /// <summary>
+    /// A type a body writes names types, no value it reads - an arrow's parameters' and return type's, an optional
+    /// parameter's, a function expression's and its this parameter's, an object's method's, a call's type arguments, an
+    /// assertion's, a generic arrow's constraint - each a reference, a generic arrow's own type parameter none, and a
+    /// parameter's default still code.
+    /// </summary>
+    [Fact]
+    public void ATypeABodyWrites_IsAReference_AndNoUse()
+    {
+        var extract = Read("src/b.ts", """
+            export function total(items: OrderItem[]) {
+              const sum = items.map((item: LineItem) => item.price);
+              const pick = (x: Picked, y?: Maybe): Result => x;
+              const f = function (this: Window, a: ArgModel = DEFAULT_A): FnResult { return a; };
+              const o = { area(s: AreaModel): AreaResult { return s; } };
+              const g = <T extends BaseModel>(x: T): T => x;
+              const [u] = useState<UserModel | null>(null);
+              const c = <CastModel>u;
+              return sum;
+            }
+            """);
+
+        Assert.Equal(
+            [
+                (CodeEdgeKinds.References, "OrderItem", 1), (CodeEdgeKinds.Calls, "map", 2), (CodeEdgeKinds.References, "LineItem", 2), (CodeEdgeKinds.Uses, "price", 2),
+                (CodeEdgeKinds.References, "Picked", 3), (CodeEdgeKinds.References, "Maybe", 3), (CodeEdgeKinds.References, "Result", 3),
+                (CodeEdgeKinds.References, "Window", 4), (CodeEdgeKinds.References, "ArgModel", 4), (CodeEdgeKinds.Uses, "DEFAULT_A", 4), (CodeEdgeKinds.References, "FnResult", 4),
+                (CodeEdgeKinds.References, "AreaModel", 5), (CodeEdgeKinds.References, "AreaResult", 5),
+                (CodeEdgeKinds.References, "BaseModel", 6),
+                (CodeEdgeKinds.Calls, "useState", 7), (CodeEdgeKinds.References, "UserModel", 7),
+                (CodeEdgeKinds.References, "CastModel", 8),
+            ],
+            extract.References.Select(reference => (reference.Kind, reference.Name, reference.Line)));
+    }
+
+    /// <summary>An enum member's value is code read from the member's node: a string enum's values its literals, the members another's value reads its uses.</summary>
+    [Fact]
+    public void AnEnumMembersValue_IsTheMembersCode()
+    {
+        var extract = Read("src/e.ts", """
+            export enum Status { Active = 'active status', Gone = 'gone status' }
+            export enum Flags { Read = 1, Write = 2, All = Read | Write }
+            """);
+
+        Assert.Equal(
+            [new LiteralRow("active status", 1, "typescript:src/e.ts.Status.Active"), new LiteralRow("gone status", 1, "typescript:src/e.ts.Status.Gone")],
+            LiteralRow.Of(extract));
+        Assert.Equal(
+            [("typescript:src/e.ts.Flags.All", CodeEdgeKinds.Uses, "Read"), ("typescript:src/e.ts.Flags.All", CodeEdgeKinds.Uses, "Write")],
+            extract.References.Select(reference => (reference.From.Whole(), reference.Kind, reference.Name)));
+    }
+
+    /// <summary>A conditional type's first branch names a type as its second does, where an object type's key - an optional one's among them - names none.</summary>
+    [Fact]
+    public void AConditionalTypesFirstBranch_IsAReference_AsItsSecondIs()
+    {
+        var extract = Read("src/o.ts", """
+            export type Outcome<T> = T extends Error ? Failure : Success;
+            export type Shaped = { first?: First; second: Second };
+            """);
+
+        Assert.Equal(
+            [("typescript:src/o.ts.Outcome", "Failure"), ("typescript:src/o.ts.Outcome", "Success"), ("typescript:src/o.ts.Shaped", "First"), ("typescript:src/o.ts.Shaped", "Second")],
+            extract.References.Where(reference => reference.Kind == CodeEdgeKinds.References).Select(reference => (reference.From.Whole(), reference.Name)));
+    }
+
+    /// <summary>
+    /// Namespaces nested five thousand deep are read whole, each a node in the one that holds it and each body a walk on
+    /// the reader's stack of walks - the class the deepest declares, its method and what the method calls among them - in
+    /// a child given a small stack, which a reading by recursion would overflow.
+    /// </summary>
+    [Fact]
+    public async Task ABlockFiveThousandDeep_IsReadWhole()
+        => Assert.Equal(
+            new ChildRunAnswer(0, "5002 nodes, m 5002 deep, calls g; 0 dynamic", ""),
+            await ChildRun.MethodAsync(typeof(TypeScriptExtractorTests), nameof(NamespacesFiveThousandDeep), TestContext.Current.CancellationToken));
+
+    /// <summary>The child of <see cref="ABlockFiveThousandDeep_IsReadWhole"/>: how many nodes were read, how deep the method is, what it references, and how much is marked dynamic.</summary>
+    internal static string NamespacesFiveThousandDeep() => SmallStack.Run(() =>
+    {
+        var extract = Read("src/deep.ts", string.Concat(Enumerable.Repeat("namespace n { ", 5_000)) + "export class C { m() { g(); } }" + new string('}', 5_000));
+        var nodes = extract.Nodes.ToDictionary(node => node.Id);
+        var depth = 0;
+
+        for (var id = Assert.Single(extract.Nodes, node => node.Name == "m").Id; id is not null; id = nodes[id].Parent)
+        {
+            depth++;
+        }
+
+        return string.Create(
+            CultureInfo.InvariantCulture,
+            $"{extract.Nodes.Count} nodes, m {depth} deep, {string.Join(", ", extract.References.Select(reference => $"{reference.Kind} {reference.Name}"))}; {extract.Dynamic.Count} dynamic");
+    });
 
     private static FileExtract Read(string path, string text) => new TypeScriptExtractor().Extract(new CodeFileInput(path, text));
 

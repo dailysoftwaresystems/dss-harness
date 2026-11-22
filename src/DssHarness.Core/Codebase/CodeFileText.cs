@@ -12,18 +12,14 @@ namespace DssHarness.Core.Codebase;
 /// </summary>
 public static class CodeFileText
 {
-    /// <summary>
-    /// How many of a file's first characters, once decoded, are given to a claim's content test: as many as the bytes of
-    /// the window a file is binary by a NUL in (<see cref="BinaryContent.Window"/>), so a test is given about what was
-    /// looked at.
-    /// </summary>
-    public const int ProbeCharacters = BinaryContent.Window;
-
     /// <summary>How a Git LFS pointer begins: a file of a few lines that stands for one git keeps elsewhere.</summary>
     private static readonly byte[] LfsPointer = "version https://git-lfs.github.com/spec/"u8.ToArray();
 
-    /// <summary>The longest a Git LFS pointer is, in bytes: a file that begins like one and is longer is a file of its own.</summary>
-    private const int MostLfsPointer = 1024;
+    /// <summary>
+    /// What a Git LFS pointer is under, in bytes, by the Git LFS specification's own rule: a file that begins like one and
+    /// holds this many bytes or more is a file of its own.
+    /// </summary>
+    private const int LfsPointerUnder = 1024;
 
     /// <summary>
     /// What <paramref name="bytes"/>, a file's whole content, are to the graph: a Git LFS pointer and a file with a NUL in
@@ -32,19 +28,50 @@ public static class CodeFileText
     /// </summary>
     /// <param name="bytes">The file's bytes.</param>
     public static CodeFileDecoding Decode(ReadOnlySpan<byte> bytes)
+        => bytes.StartsWith(LfsPointer) && bytes.Length < LfsPointerUnder ? LfsPointerDecoding : Of(EncodedText.Read(bytes));
+
+    /// <summary>
+    /// What the file at <paramref name="path"/>, of <paramref name="length"/> bytes as it stood, is to the graph, by the rules
+    /// <see cref="Decode"/> holds a file's bytes to - whatever its size: a file as short as a Git LFS pointer is read whole,
+    /// for what it begins with tells; any other is read through once, streamed, and its text opened over the file
+    /// (<see cref="CodeText.OpenAsync(Func{Stream}, string, CancellationToken)"/>) - each block decoded again as an
+    /// implementation reads it - so neither its bytes nor its text is ever held whole, and what reading it holds is what its
+    /// implementation keeps. The text holds the file open until it is disposed; a block read again that no longer decodes as
+    /// it did throws <see cref="CodeTextChangedException"/>, which the reader of the file answers as a file that changed
+    /// while it was read.
+    /// </summary>
+    /// <param name="fileSystem">The file system the file is read through.</param>
+    /// <param name="path">The file, absolute.</param>
+    /// <param name="length">Its size, as it stood before it was read.</param>
+    /// <param name="cancellationToken">Stops the read.</param>
+    public static async Task<CodeFileDecoding> DecodeAsync(IFileSystem fileSystem, string path, long length, CancellationToken cancellationToken)
     {
-        if (bytes.StartsWith(LfsPointer) && bytes.Length <= MostLfsPointer)
+        ArgumentNullException.ThrowIfNull(fileSystem);
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+
+        if (length < LfsPointerUnder)
         {
-            return CodeFileDecoding.Refused(CodeFileStates.Binary, "a Git LFS pointer, whose file git keeps elsewhere");
+            return Decode(await fileSystem.ReadAllBytesAsync(path, cancellationToken).ConfigureAwait(false));
         }
 
-        // Which encodings are read is the file system's one rule (EncodedText), the graph's states named here.
-        var reading = EncodedText.Read(bytes);
-
-        return reading.IsRead
-            ? CodeFileDecoding.Read(reading.Text.Text)
-            : CodeFileDecoding.Refused(reading.Binary ? CodeFileStates.Binary : CodeFileStates.Unreadable, reading.Why);
+        try
+        {
+            return CodeFileDecoding.Read(await CodeText.OpenAsync(() => fileSystem.OpenRead(path), path, cancellationToken).ConfigureAwait(false));
+        }
+        catch (InvalidDataException ex) when (Pages.TextPages.ReadingOf(ex) is { } reading)
+        {
+            return Of(reading);
+        }
     }
+
+    /// <summary>What a Git LFS pointer is to the graph: binary, its file kept by git elsewhere.</summary>
+    private static CodeFileDecoding LfsPointerDecoding { get; } = CodeFileDecoding.Refused(CodeFileStates.Binary, "a Git LFS pointer, whose file git keeps elsewhere");
+
+    /// <summary>What a file's reading by the one rule of which encodings are read (<see cref="EncodedText"/>) is to the graph, its states named here.</summary>
+    private static CodeFileDecoding Of(EncodedTextReading reading)
+        => reading.IsRead
+            ? CodeFileDecoding.Read(CodeText.Of(reading.Text.Text))
+            : CodeFileDecoding.Refused(reading.Binary ? CodeFileStates.Binary : CodeFileStates.Unreadable, reading.Why);
 
     /// <summary>
     /// <paramref name="text"/>'s lines, without their endings: cut at each CR LF, LF and CR, a final ending closing the
@@ -65,53 +92,16 @@ public static class CodeFileText
     /// lines also break where this does not, at NEL and the Unicode separators.
     /// </summary>
     /// <param name="text">A file's text.</param>
-    public static CodeLineIndex LineIndex(string text)
-        => new([.. Spans(text).Select(line => line.Start)]);
+    public static CodeLineIndex LineIndex(string text) => CodeText.Of(text).LineIndex;
 
     /// <summary>
     /// Each line of <paramref name="text"/> as <see cref="Lines"/> cuts it - at each CR LF, LF and CR, a final ending
-    /// closing the last line, an empty text one empty line - with where its text ends and where its ending does. The one
-    /// cut of a text into lines.
+    /// closing the last line, an empty text one empty line, by the one rule of where a line ends
+    /// (<see cref="Text.LineEnds"/>) - with where its text ends and where its ending does.
     /// </summary>
     /// <param name="text">A file's text.</param>
     public static IReadOnlyList<CodeLineSpan> Spans(string text)
-    {
-        ArgumentNullException.ThrowIfNull(text);
-
-        var lines = new List<CodeLineSpan>();
-        var start = 0;
-
-        for (var at = 0; at < text.Length; at++)
-        {
-            if (text[at] is '\r' or '\n')
-            {
-                var end = at;
-
-                if (text[at] == '\r' && at + 1 < text.Length && text[at + 1] == '\n')
-                {
-                    at++;
-                }
-
-                lines.Add(new CodeLineSpan(start, end, at + 1));
-                start = at + 1;
-            }
-        }
-
-        if (start < text.Length || lines.Count == 0)
-        {
-            lines.Add(new CodeLineSpan(start, text.Length, text.Length));
-        }
-
-        return lines;
-    }
-
-    /// <summary>The first <see cref="ProbeCharacters"/> characters of a file's decoded text, as a claim's content test is given them.</summary>
-    /// <param name="text">The file's decoded text.</param>
-    public static string Probe(string text)
-    {
-        ArgumentNullException.ThrowIfNull(text);
-        return Output.TextCut.Head(text, ProbeCharacters);
-    }
+        => Text.LineEnds.Spans(text, (start, end, next) => new CodeLineSpan(start, end, next));
 }
 
 /// <summary>One line of a text, as <see cref="CodeFileText.Spans"/> cuts it.</summary>
@@ -120,51 +110,21 @@ public static class CodeFileText
 /// <param name="Next">Where its ending ends: where the next line begins, or the text's end.</param>
 public readonly record struct CodeLineSpan(int Start, int End, int Next);
 
-/// <summary>Where a text's lines begin (<see cref="CodeFileText.LineIndex"/>): a position in it told as the line it is on.</summary>
-/// <param name="Starts">Where each line begins, in order; the first at 0.</param>
-public sealed record CodeLineIndex(IReadOnlyList<int> Starts)
-{
-    /// <summary>The line, from 1, that <paramref name="position"/> - a character of the text, or its end - is on.</summary>
-    /// <param name="position">A position in the text.</param>
-    public int LineAt(int position)
-    {
-        var low = 0;
-        var high = Starts.Count - 1;
-
-        // The last line that begins at or before the position.
-        while (low < high)
-        {
-            var middle = (low + high + 1) / 2;
-
-            if (Starts[middle] <= position)
-            {
-                low = middle;
-            }
-            else
-            {
-                high = middle - 1;
-            }
-        }
-
-        return low + 1;
-    }
-}
-
 /// <summary>
 /// What a file's bytes are to the graph: its text, or the state it is listed with and why - one or the other, as
-/// <see cref="Read"/> and <see cref="Refused"/> alone make it.
+/// <see cref="Read"/> and <see cref="Refused"/> alone make it. Disposing it lets go of the file its text reads.
 /// </summary>
-public sealed record CodeFileDecoding
+public sealed record CodeFileDecoding : IDisposable
 {
-    private CodeFileDecoding(string? text, string? state, string? why)
+    private CodeFileDecoding(CodeText? text, string? state, string? why)
     {
         Text = text;
         State = state;
         Why = why;
     }
 
-    /// <summary>The decoded text; <see langword="null"/> where it is not read.</summary>
-    public string? Text { get; }
+    /// <summary>The decoded text, read by position (<see cref="CodeText"/>); <see langword="null"/> where it is not read.</summary>
+    public CodeText? Text { get; }
 
     /// <summary>The state it is listed with where it is not read (<see cref="CodeFileStates"/>); <see langword="null"/> where it is.</summary>
     public string? State { get; }
@@ -190,7 +150,7 @@ public sealed record CodeFileDecoding
     }
 
     /// <summary>A file read as <paramref name="text"/>.</summary>
-    internal static CodeFileDecoding Read(string text)
+    internal static CodeFileDecoding Read(CodeText text)
     {
         ArgumentNullException.ThrowIfNull(text);
         return new(text, null, null);
@@ -203,4 +163,16 @@ public sealed record CodeFileDecoding
         ArgumentException.ThrowIfNullOrWhiteSpace(why);
         return new(null, state, why);
     }
+
+    /// <summary>
+    /// Whether the file was found to have changed while it was read - a block of its text read again no longer decoding as
+    /// its reading through found it (<see cref="CodeTextChangedException"/>) - and nothing is made of what was read.
+    /// </summary>
+    public bool Changed { get; private init; }
+
+    /// <summary>A file found to have changed while it was read: unreadable, as one that changed while it was read is.</summary>
+    internal static CodeFileDecoding ChangedWhileRead { get; } = new(null, CodeFileStates.Unreadable, "it changed while it was read") { Changed = true };
+
+    /// <inheritdoc/>
+    public void Dispose() => Text?.Dispose();
 }

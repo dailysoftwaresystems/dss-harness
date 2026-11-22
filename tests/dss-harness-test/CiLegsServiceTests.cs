@@ -1,5 +1,7 @@
+using System.Text.Json;
 using DssHarness.Core.Ci;
 using DssHarness.Core.Configuration;
+using DssHarness.Core.Output;
 using DssHarness.Core.Results;
 
 namespace DssHarness.Tests;
@@ -52,6 +54,28 @@ public sealed class CiLegsServiceTests
         Assert.Equal(CiExit.LegRed, outcome.ExitCode);
         Assert.Contains("1 real failure(s)", outcome.Message, StringComparison.Ordinal);
         Assert.Contains("1 possible budget overrun(s)", outcome.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A run's commit is shown as every message of the tool's shows a commit, by the one rule that says how
+    /// (<see cref="ReportText.Commit"/>), never cut by a length of the command's own; and --json carries it whole, so a
+    /// reader who needs the commit never has only its start.
+    /// </summary>
+    [Fact]
+    public async Task CheckCiLegs_ShowsTheFullShaInJson()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = await PrepareAsync(temp);
+        const string Sha = "0123456789abcdef0123456789abcdef01234567";
+        var run = Run(Leg("linux-clang-asan", budgetMinutes: 45, testSeconds: 60, testFailed: false)) with { HeadSha = Sha, Workflow = "Pipeline" };
+
+        var report = await Service(harness, run).CheckAsync(temp.Path, Request(), cancellationToken);
+        var text = CiLegsReports.Render(report, json: false).Data;
+        using var document = JsonDocument.Parse(Assert.Single(CiLegsReports.Render(report, json: true).Data));
+
+        Assert.Equal($"run 4242  {Assert.Single(report.Runs).Workflow}  work  {ReportText.Commit(Sha)}  2026-09-16T00:00:00Z", text[0]);
+        Assert.Equal(Sha, document.RootElement.GetProperty("runs")[0].GetProperty("headSha").GetString());
     }
 
     [Fact]
@@ -332,28 +356,47 @@ public sealed class CiLegsServiceTests
     }
 
     /// <summary>
-    /// A pattern that cannot be evaluated in time is refused as that, never read as no match: the job it could not
-    /// read would be missing from the report, and a red leg with it.
+    /// A pattern is matched in time linear in the job's name however it nests, so one written to backtrack - which a match
+    /// timeout once refused - answers, here that the job is no leg; and a pattern the linear engine cannot match is
+    /// refused naming what it lacks, never read as no match: the job it could not read would be missing from the report,
+    /// and a red leg with it.
     /// </summary>
     [Fact]
-    public async Task APatternThatRunsOutOfTime_IsRefused_NeverReadAsNoMatch()
+    public async Task APatternIsMatchedLinearly_AndOneTheLinearEngineLacks_IsRefused_NeverReadAsNoMatch()
     {
         using var temp = new TempDirectory();
         var cancellationToken = TestContext.Current.CancellationToken;
-        var harness = await PrepareAsync(temp, ci: new CiSettings
+        var nested = await PrepareAsync(temp, ci: new CiSettings
         {
             LegJobPattern = "^(?<leg>(?:a|aa)+)$",
             BuildStep = "Build",
             TestStep = "Test",
             LegBudgetMinutes = 2,
         });
+        var run = Run(new CiJob(new string('a', 4_000) + "!", CiConclusions.Failure, []));
 
-        var run = Run(new CiJob(new string('a', 48) + "!", CiConclusions.Failure, []));
+        var answered = await Service(nested, run).CheckAsync(temp.Path, Request(), cancellationToken);
 
-        var refusal = await Assert.ThrowsAsync<HarnessException>(() => Service(harness, run).CheckAsync(temp.Path, Request(), cancellationToken));
+        Assert.Empty(answered.Legs);
+        Assert.Equal([$"{new string('a', 4_000)}!=failure"], Assert.Single(answered.Runs).JobsPresent);
 
-        Assert.Equal(HarnessExit.ConfigInvalid, refusal.ExitCode);
-        Assert.Contains("ci.legJobPattern took longer than 1s", refusal.Message, StringComparison.Ordinal);
+        using var other = new TempDirectory();
+        var backreference = await PrepareAsync(other, ci: new CiSettings
+        {
+            LegJobPattern = @"^(?<leg>(a)\2)$",
+            BuildStep = "Build",
+            TestStep = "Test",
+            LegBudgetMinutes = 2,
+        });
+
+        // The refusal comes from the one check a pattern a file declares is held to, at the configuration's own
+        // door: the pattern never reaches a job, so no job is read as no match.
+        var refused = await Assert.ThrowsAsync<ConfigException>(() => Service(backreference, run).CheckAsync(other.Path, Request(), cancellationToken));
+
+        Assert.Contains(
+            "ci.legJobPattern is not a valid regular expression: The pattern '^(?<leg>(a)\\2)$' holds a backreference, which .NET's linear-time matcher lacks",
+            refused.Message,
+            StringComparison.Ordinal);
     }
 
     [Fact]

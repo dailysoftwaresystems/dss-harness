@@ -36,20 +36,37 @@ public sealed class LineMasksTests
     }
 
     /// <summary>
-    /// A text's escapes are undone at most so many times: a secret escaped that deep is held, and a text that unescapes into
-    /// itself a hundred thousand times costs no more passes.
+    /// A secret under fifty layers of escapes - an address carried in another's parameter fifty times over, each escaping
+    /// it once more - is held and masked: a text's escapes are undone until a reading undoes none, never a count of passes,
+    /// which eight once were and a ninth layer passed the mask.
     /// </summary>
     [Fact]
-    public void ATextsEscapes_AreUndoneSoDeepAndNoDeeper()
+    public void ASecretUnderFiftyLayers_IsMasked()
     {
         var mask = new Secrets("deep/2");
-        var deep = Enumerable.Range(0, LineMasks.DeepestReading).Aggregate("deep/2", (escaped, _) => Uri.EscapeDataString(escaped));
-        var endless = "%" + string.Concat(Enumerable.Repeat("25", 100_000)) + "41";
+        var deep = Enumerable.Range(0, 50).Aggregate("deep/2", (escaped, _) => Uri.EscapeDataString(escaped));
 
         Assert.True(mask.HoldsUnescaped(deep));
-        Assert.False(mask.HoldsUnescaped(Uri.EscapeDataString(deep)));
-        Assert.False(mask.HoldsUnescaped(endless));
-        Assert.Equal(endless, mask.RedactUnescaped(endless));
+        Assert.Equal("***", mask.RedactUnescaped(deep));
+        Assert.Equal("https://a.test/?k=***", mask.RedactUnescaped("https://a.test/?k=" + deep));
+    }
+
+    /// <summary>
+    /// A text that unescapes into another two thousand times over, each reading shorter than the one before, is read to its
+    /// last reading and ends there: a text that holds no secret in any reading is itself, and one whose last reading holds
+    /// one is masked at it.
+    /// </summary>
+    [Fact]
+    public void ATextReadTwoThousandTimesOver_EndsAtItsLastReading()
+    {
+        var mask = new Secrets("A");
+        var endless = "%" + string.Concat(Enumerable.Repeat("25", 2_000)) + "41";
+        var plain = new Secrets("deep/2");
+
+        Assert.True(mask.HoldsUnescaped(endless));
+        Assert.Equal("***", mask.RedactUnescaped(endless));
+        Assert.False(plain.HoldsUnescaped(endless));
+        Assert.Equal(endless, plain.RedactUnescaped(endless));
     }
 
     /// <summary>

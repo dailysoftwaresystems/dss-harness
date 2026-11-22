@@ -1,5 +1,6 @@
 using System.Text.Json;
 using DssHarness.Core.FileSystem;
+using DssHarness.Core.Json;
 
 namespace DssHarness.Tests;
 
@@ -100,6 +101,46 @@ public sealed class JsonStateFileTests
         Assert.InRange(read.Count, 1, 19_999);
         Assert.Equal(["line 0"], read[0].Names);
     }
+
+    /// <summary>How deep the deep value a state file and a file of lines hold nests: objects in objects, a number at the bottom.</summary>
+    private const int Deep = 10_000;
+
+    /// <summary>
+    /// A value ten thousand deep is written to a state file and read back whole, and so is it as a line of a file of
+    /// lines: the depth a state holds is its own, never a reader's default. Written and read in a child on a small stack,
+    /// so a reading that recursed would end that child, never this run.
+    /// </summary>
+    [Fact]
+    public async Task JsonStateAndLinesTenThousandDeep_AreRead()
+    {
+        var answer = await ChildRun.MethodAsync(typeof(JsonStateFileTests), nameof(ReadDeep), TestContext.Current.CancellationToken);
+
+        Assert.Equal(new ChildRunAnswer(0, "state: 10001 places, 10000 deep\nlines: 10001 places, 10000 deep\n", string.Empty), answer);
+    }
+
+    /// <summary><see cref="JsonStateAndLinesTenThousandDeep_AreRead"/>'s child.</summary>
+    private static string ReadDeep() => SmallStack.Run(() =>
+    {
+        using var temp = new TempDirectory();
+        var fileSystem = new HarnessFactory().FileSystem;
+        using var deep = JsonDepth.ParseDocument(string.Concat(Enumerable.Repeat("""{"a":""", Deep)) + "0" + new string('}', Deep));
+        var state = temp.Combine("state.json");
+        var lines = temp.Combine("lines.jsonl");
+
+        JsonStateFile.Write(fileSystem, state, deep.RootElement);
+        JsonStateFile.WriteLines(fileSystem, lines, writer => writer.Write(deep.RootElement));
+
+        var read = JsonStateFile.Read<JsonElement>(fileSystem, state);
+        var line = JsonStateFile.ReadLines(fileSystem, lines, reader => reader.Next<JsonElement>("the deep value"));
+
+        static string Said(JsonElement value)
+        {
+            var places = JsonWalk.Descendants(value).ToList();
+            return $"{places.Count} places, {places.Max(place => place.Place.Depth)} deep";
+        }
+
+        return $"state: {Said(read)}\nlines: {Said(line)}\n";
+    });
 
     private sealed record Named(IReadOnlyList<string> Names, int Count);
 

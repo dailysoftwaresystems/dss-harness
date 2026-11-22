@@ -10,6 +10,7 @@ using DssHarness.Core.Output;
 using DssHarness.Core.Processes;
 using DssHarness.Core.Repository;
 using DssHarness.Core.Results;
+using DssHarness.Core.Text;
 
 namespace DssHarness.Core.Ci;
 
@@ -98,12 +99,8 @@ public sealed class CiLegsService(
     /// <summary>Fraction of its budget a green leg may reach before the budget is worth re-deriving.</summary>
     public const double WarningFraction = 0.8;
 
-    /// <summary>How long one of the repository's patterns may take against one job's name or one workflow's text.</summary>
-    private static readonly TimeSpan MatchBudget = TimeSpan.FromSeconds(1);
-
     /// <summary>A workflow's own name, which is what the forge lists its runs under.</summary>
-    private static readonly Regex WorkflowName =
-        new(@"^name:\s*(?<name>.+?)\s*$", RegexOptions.CultureInvariant | RegexOptions.Multiline);
+    private static readonly Regex WorkflowName = LinearRegex.Compile(@"^name:\s*(?<name>.+?)\s*$", RegexOptions.Multiline);
 
     private readonly IHarnessContextLoader _contextLoader = contextLoader;
     private readonly ICiJobSource _jobSource = jobSource;
@@ -392,27 +389,23 @@ public sealed class CiLegsService(
         return branch;
     }
 
-    /// <summary>What <paramref name="pattern"/> finds in <paramref name="text"/>, refused where it could not be evaluated.</summary>
-    /// <param name="pattern">One of the repository's patterns.</param>
-    /// <param name="text">A job's name, or a workflow's text.</param>
+    /// <summary>
+    /// One of the repository's patterns as the linear engine matches it (<see cref="LinearRegex"/>): in time linear in the
+    /// text it reads, however it is written, so no match is ever cut short and none is ever unknown. A pattern that engine
+    /// cannot match is refused naming what it lacks, never read as one that matched nothing: a job left out because its
+    /// pattern could not be read would be a leg missing from the answer, and a leg missing from the answer is how a red one
+    /// reads as green.
+    /// </summary>
+    /// <param name="pattern">The pattern, as configuration writes it.</param>
+    /// <param name="options">What it is matched with beside the linear engine's own.</param>
     /// <param name="setting">Where the pattern is set, as the refusal names it.</param>
-    private static Match Matched(Regex pattern, string text, string setting)
-    {
-        try
-        {
-            return pattern.Match(text);
-        }
-        catch (RegexMatchTimeoutException ex)
-        {
-            // Never read as no match: a job left out because its pattern could not be evaluated would be a
-            // leg missing from the answer, and a leg missing from the answer is how a red one reads as green.
-            throw new HarnessException(
+    /// <exception cref="HarnessException">The linear engine cannot match the pattern (<see cref="HarnessExit.ConfigInvalid"/>).</exception>
+    private static Regex Compiled(string pattern, RegexOptions options, string setting)
+        => LinearRegex.TryCompile(pattern, options, out var regex, out var refusal)
+            ? regex
+            : throw new HarnessException(
                 HarnessExit.ConfigInvalid,
-                $"{setting} took longer than {MatchBudget.TotalSeconds:0}s, so whether it matched is unknown: it is "
-                + "written in a form that backtracks. CI was NOT read. This is not a pass.",
-                ex);
-        }
-    }
+                $"{setting}: {refusal.TrimEnd('.')}; write it without that construct. CI was NOT read. This is not a pass.");
 
     /// <summary>The whole number of minutes a budget group captured, or <see langword="null"/> where it captured nothing.</summary>
     /// <param name="group">The pattern's <c>budget</c> group.</param>
@@ -463,7 +456,7 @@ public sealed class CiLegsService(
             }
 
             return new Conventions(
-                new Regex(settings.LegJobPattern!, RegexOptions.CultureInvariant, MatchBudget),
+                Compiled(settings.LegJobPattern!, RegexOptions.None, "ci.legJobPattern"),
                 settings.BuildStep!,
                 settings.TestStep!,
                 settings.WorkflowBudgetPattern);
@@ -476,7 +469,7 @@ public sealed class CiLegsService(
         /// </summary>
         /// <param name="jobName">The job's name, as the forge reports it.</param>
         public (string Leg, int? BudgetMinutes)? Recognize(string jobName)
-            => Matched(LegJob, jobName, "ci.legJobPattern") is { Success: true } match
+            => LegJob.Match(jobName) is { Success: true } match
                 && match.Groups["leg"].Value.Trim() is { Length: > 0 } leg
                     ? (leg, Minutes(match.Groups["budget"], "ci.legJobPattern", $"job '{jobName}'"))
                     : null;
@@ -500,12 +493,12 @@ public sealed class CiLegsService(
         /// </remarks>
         public int? BudgetMinutes(string leg, string pattern)
         {
-            var named = new Regex(
+            var named = Compiled(
                 pattern.Replace(CiSettings.LegPlaceholder, Regex.Escape(leg), StringComparison.Ordinal),
-                RegexOptions.CultureInvariant | RegexOptions.Multiline,
-                MatchBudget);
+                RegexOptions.Multiline,
+                "ci.workflowBudgetPattern");
 
-            return Matched(named, Text, "ci.workflowBudgetPattern") is { Success: true } match
+            return named.Match(Text) is { Success: true } match
                 ? Minutes(match.Groups["budget"], "ci.workflowBudgetPattern", $"workflow '{Identifier}'")
                 : null;
         }
@@ -561,7 +554,7 @@ public static class CiLegsReports
         {
             lines.Add(
                 $"run {run.Run.Id}  {run.Workflow}  {run.Run.Branch ?? report.Branch}  "
-                + $"{Short(run.Run.HeadSha)}  {run.Run.CreatedAt}");
+                + $"{(run.Run.HeadSha is { } sha ? ReportText.Commit(sha) : "-")}  {run.Run.CreatedAt}");
 
             if (!run.MatrixRan)
             {
@@ -590,8 +583,6 @@ public static class CiLegsReports
 
         return $"{used} / {cap}";
     }
-
-    private static string Short(string? sha) => sha is { Length: > 8 } ? sha[..8] : sha ?? "-";
 
     /// <summary>
     /// The document check-ci-legs answers with where it stops before it reads any run - a <c>--directory</c> that is not

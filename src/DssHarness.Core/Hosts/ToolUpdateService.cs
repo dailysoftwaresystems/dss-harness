@@ -113,9 +113,6 @@ public sealed class ToolUpdateService(
     /// <summary>How often a wait says again who it waits for, as a leg waiting for its machine does.</summary>
     public static readonly TimeSpan SaidAgainEvery = LegAdmission.SaidAgainEvery;
 
-    /// <summary>Longest listing the installed tools may take.</summary>
-    private static readonly TimeSpan ListBudget = TimeSpan.FromMinutes(2);
-
     private readonly IProcessTable _processes = processes;
     private readonly IProcessRunner _processRunner = processRunner;
     private readonly IPublishedToolVersions _published = published;
@@ -310,9 +307,9 @@ public sealed class ToolUpdateService(
     /// <remarks>
     /// Never stopped by this command once it has begun, nor is the reading of what it left: an update cut off part way
     /// leaves a machine with no tool, or half of one, and a command that then says nothing of which. An interruption
-    /// that reaches dotnet itself, as one typed at a terminal can, is read back as any failure is. dotnet has its own bound
-    /// (<see cref="ToolPackage.ChangeBudget"/>), and the command line waits for this as for any command past its point
-    /// of no return (<see cref="PointOfNoReturn"/>). The lock is taken before anything is said or loaded: an update
+    /// that reaches dotnet itself, as one typed at a terminal can, is read back as any failure is. dotnet is waited for to
+    /// its end, however long it takes, and told every few minutes while it lasts; the command line waits for this as for
+    /// any command past its point of no return (<see cref="PointOfNoReturn"/>). The lock is taken before anything is said or loaded: an update
     /// refused by it has begun nothing.
     /// </remarks>
     private async Task<CommandOutcome> ChangeAsync(ToolUpdateRequest request, string kept, string move, string? installed, string target)
@@ -347,12 +344,12 @@ public sealed class ToolUpdateService(
                 {
                     FileName = HostInspector.DotnetProgram,
                     Arguments = ToolPackage.ChangeArguments(verb, target, request.ToolPath),
-                    Timeout = ToolPackage.ChangeBudget,
                 },
                 ListRequest(request.ToolPath),
                 listing => HostProbes.TryReadToolVersion(listing, ToolPackage.Id, out var release)
                     ? ListedRelease.Read(release)
-                    : ListedRelease.Unreadable)
+                    : ListedRelease.Unreadable,
+                ProgramWait.Told(_output, CommandName))
             .ConfigureAwait(false);
 
         var (ran, listing, reading) = change;
@@ -374,8 +371,8 @@ public sealed class ToolUpdateService(
                 _process.CurrentId);
 
             // dotnet says a feed it did not reach in the machine's own language, with no code a reader could match
-            // (measured on a machine set to Portuguese), so only its bound tells an update begun and not finished from
-            // one it refused.
+            // (measured on a machine set to Portuguese), and it is waited for to its own end, so what it refused and what
+            // ended it part way - a signal from outside - read alike, by the code it ended with.
             var code = ProgramUpdate.FailedExit(ran, unreached: false, HarnessExit.CommandFailed);
 
             return new CommandOutcome(
@@ -420,15 +417,20 @@ public sealed class ToolUpdateService(
         _output.Info(CommandName, $"no {ToolPackage.Id} is running on this machine now");
     }
 
+    /// <summary>Lists what is installed, waited for to its end and told while it lasts.</summary>
     private Task<ProcessResult> ListAsync(ToolUpdateRequest request, CancellationToken cancellationToken)
-        => _processRunner.RunAsync(ListRequest(request.ToolPath), cancellationToken);
+        => ProgramWait.ToItsEndAsync(
+            token => _processRunner.RunAsync(ListRequest(request.ToolPath), token),
+            "dotnet to list the installed tools",
+            ProgramWait.Told(_output, CommandName),
+            clock: null,
+            cancellationToken);
 
     /// <summary>The one request that lists what is installed, wherever the update reads it: before it begins, and since it changed.</summary>
     private static ProcessRequest ListRequest(string? toolPath) => new()
     {
         FileName = HostInspector.DotnetProgram,
         Arguments = ToolPackage.ListArguments(toolPath),
-        Timeout = ListBudget,
     };
 
     /// <summary>

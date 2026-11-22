@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using DssHarness.Core.Json;
 using DssHarness.Core.Orchestration.Flow;
 using DssHarness.Core.Schemas;
 
@@ -831,9 +832,9 @@ public sealed class JsonSchemaSubsetTests
     [InlineData(@"^[a-z-[aeiou]]$", "b", "\"b\"")]
     [InlineData(@"^[\A\Z\z\G]+$", "AZzG", null)]
     [InlineData(@"^a\<b$", "a<b", null)]
-    [InlineData(@"^(a)(?<x>b)\1$", "aba", null)]
-    [InlineData(@"^(?<x>a)\1\k<x>$", "aaa", null)]
     [InlineData(@"^(a)\2$", "a\u0002", null)]
+    [InlineData(@"^(a)\12$", "a\n", null)]
+    [InlineData(@"^(a)\18$", "a\u00018", null)]
     public void APattern_IsReadAsEcma262ReadsIt(string pattern, string text, string? refused)
     {
         var schema = new JsonObject { ["type"] = "string", ["pattern"] = pattern };
@@ -843,17 +844,17 @@ public sealed class JsonSchemaSubsetTests
     }
 
     /// <summary>
-    /// A pattern ECMA-262 does not write - an inline option, a comment, an atomic group - or one that cannot be
-    /// read at all is refused where the schema says it, and a named group, which both dialects write, is read.
+    /// A pattern ECMA-262 does not write - an inline option, a comment, an atomic group - or one that cannot be read at
+    /// all is refused where the schema says it, naming it, and a named group, which both dialects write, is read.
     /// </summary>
     [Theory]
     [InlineData("(?i)abc", "$.pattern: '(?i' is not ECMA-262, the dialect a pattern is written in")]
     [InlineData("(?#note)a$", "$.pattern: '(?#' is not ECMA-262, the dialect a pattern is written in")]
     [InlineData("(?>a)", "$.pattern: '(?>' is not ECMA-262, the dialect a pattern is written in")]
     [InlineData("(?<a-b>c)", "$.pattern: '(?<' is not ECMA-262, the dialect a pattern is written in")]
-    [InlineData("(", "$.pattern: is not a pattern this engine can read")]
-    [InlineData(@"\c$", "$.pattern: is not a pattern this engine can read")]
-    [InlineData("(?<name>a)(?:b)(?=c)(?!d)(?<=e)(?<!f)", null)]
+    [InlineData("(", "$.pattern: the pattern '(' is no regular expression .NET reads")]
+    [InlineData(@"\c$", @"$.pattern: the pattern '\c$' is no regular expression .NET reads")]
+    [InlineData("(?<name>a)(?:b)", null)]
     public void APatternNotEcma262Writes_IsRefusedWhereTheSchemaIs(string pattern, string? problem)
     {
         var schema = new JsonObject { ["type"] = "string", ["pattern"] = pattern };
@@ -866,9 +867,8 @@ public sealed class JsonSchemaSubsetTests
     /// What .NET, which runs a pattern, reads one way and ECMA-262 another is refused where the schema says it, rather
     /// than read either way: .NET's anchors outside a class, its categories, bell and escape character in a class or
     /// out, its spellings of a backreference beside ECMA-262's <c>\k&lt;name&gt;</c>, and a backreference by number
-    /// that reaches another group in each - .NET counting the named groups last - or that .NET reads as a group and a
-    /// digit where ECMA-262 reads the character it codes. What both read alike is read
-    /// (<see cref="APattern_IsReadAsEcma262ReadsIt"/>).
+    /// whose number in angle brackets ECMA-262 does not write. What both read alike is read, and a number escaped past the
+    /// pattern's groups is the character its octal digits code (<see cref="APattern_IsReadAsEcma262ReadsIt"/>).
     /// </summary>
     [Theory]
     [InlineData(@"\Aabc", @"\A")]
@@ -885,15 +885,35 @@ public sealed class JsonSchemaSubsetTests
     [InlineData(@"^(?<x>a)\<x>$", @"\<x>")]
     [InlineData(@"^(?<x>a)\'x'$", @"\'x'")]
     [InlineData(@"^(a)\k<1>$", @"\k<1>")]
-    [InlineData(@"^(?<x>a)(b)\1$", @"\1")]
-    [InlineData(@"^(a)\12$", @"\12")]
-    [InlineData(@"^\2(?<x>a)(b)$", @"\2")]
     public void APatternDotNetReadsOtherwise_IsRefusedWhereTheSchemaIs(string pattern, string written)
     {
         var schema = new JsonObject { ["type"] = "string", ["pattern"] = pattern };
 
         Assert.Equal(
             [$"$.pattern: '{written}' means one thing to .NET and another to ECMA-262, the dialect a pattern is written in"],
+            JsonSchemaSubset.SubsetProblems(schema));
+    }
+
+    /// <summary>
+    /// What .NET's linear-time matcher lacks - a backreference, by a number or by ECMA-262's <c>\k&lt;name&gt;</c>, a
+    /// lookahead or a lookbehind - is refused where the schema says it, as that matcher says it, naming the pattern as the
+    /// schema writes it: a pattern matched by backtracking could hold a check without end.
+    /// </summary>
+    [Theory]
+    [InlineData(@"^(a)(?<x>b)\1$", "a backreference")]
+    [InlineData(@"^(?<x>a)\k<x>$", "a backreference")]
+    [InlineData(@"^(?<x>a)(b)\1$", "a backreference")]
+    [InlineData(@"^\2(?<x>a)(b)$", "a backreference")]
+    [InlineData("^a(?=b)", "a lookahead or lookbehind")]
+    [InlineData("^a(?!b)", "a lookahead or lookbehind")]
+    [InlineData("(?<=a)b$", "a lookahead or lookbehind")]
+    [InlineData("(?<!a)b$", "a lookahead or lookbehind")]
+    public void WhatTheLinearMatcherLacks_IsRefusedWhereTheSchemaIs(string pattern, string construct)
+    {
+        var schema = new JsonObject { ["type"] = "string", ["pattern"] = pattern };
+
+        Assert.Equal(
+            [$"$.pattern: the pattern '{pattern}' holds {construct}, which .NET's linear-time matcher lacks"],
             JsonSchemaSubset.SubsetProblems(schema));
     }
 
@@ -964,18 +984,55 @@ public sealed class JsonSchemaSubsetTests
             JsonSchemaSubset.Problems(schema!, JsonNode.Parse("true")));
     }
 
-    /// <summary>A pattern is matched within one second: one that cannot be read says so, and never holds the run.</summary>
+    /// <summary>
+    /// A pattern is matched by .NET's linear-time matcher, with no timeout: one a backtracking matcher takes exponential
+    /// time over - nested repetitions against a text they almost match, thousands of characters long - is answered, and
+    /// what it answers is the document's problem, never a pattern that could not be read in time.
+    /// </summary>
     [Fact]
-    public void APatternIsReadWithinOneSecond()
+    public void SchemaPatterns_AreLinear()
     {
         var schema = JsonNode.Parse("""{"type":"string","pattern":"^(a+)+$"}""");
+        var text = new string('a', 5000) + "b";
 
         Assert.Empty(JsonSchemaSubset.SubsetProblems(schema!));
-
-        var problems = JsonSchemaSubset.Problems(schema!, JsonNode.Parse("\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaab\""));
-
-        Assert.Equal(["$: its pattern could not be read within a second"], problems);
+        Assert.Equal([$"$: \"{text}\" does not match its pattern"], JsonSchemaSubset.Problems(schema!, JsonValue.Create(text)));
+        Assert.Empty(JsonSchemaSubset.Problems(schema!, JsonValue.Create(new string('a', 5000))));
     }
+
+    /// <summary>
+    /// A schema ten thousand properties deep, and a document as deep, are checked and respelled whole: the subset finds
+    /// nothing to refuse, the document's one problem is named at its place at the bottom, and its respelling is the
+    /// document as it was. Walked in a child on a small stack, so a walk that recursed would end that child, never this run.
+    /// </summary>
+    [Fact]
+    public async Task ASchemaAndADocumentTenThousandDeep_AreCheckedAndRespelled()
+    {
+        var answer = await ChildRun.MethodAsync(typeof(JsonSchemaSubsetTests), nameof(CheckDeep), TestContext.Current.CancellationToken);
+
+        Assert.Equal(
+            new ChildRunAnswer(0, "subset: 0 problems\ndocument: its one problem named at the bottom\nrespelled: the document as it was\n", string.Empty),
+            answer);
+    }
+
+    /// <summary>How deep the deep schema's properties, and the deep document's members, nest.</summary>
+    private const int Deep = 10_000;
+
+    /// <summary><see cref="ASchemaAndADocumentTenThousandDeep_AreCheckedAndRespelled"/>'s child.</summary>
+    private static string CheckDeep() => SmallStack.Run(() =>
+    {
+        var schema = JsonDepth.ParseNode(
+            string.Concat(Enumerable.Repeat("""{"type":"object","additionalProperties":false,"properties":{"a":""", Deep))
+            + """{"type":"string"}"""
+            + string.Concat(Enumerable.Repeat("}}", Deep)))!;
+        var document = JsonDepth.ParseNode(string.Concat(Enumerable.Repeat("""{"a":""", Deep)) + "7" + new string('}', Deep));
+        var problems = JsonSchemaSubset.Problems(schema, document);
+        var bottom = "$" + string.Concat(Enumerable.Repeat(".a", Deep)) + ": 7 is not a string";
+
+        return $"subset: {JsonSchemaSubset.SubsetProblems(schema).Count} problems\n"
+            + $"document: {(problems is [var one] && one == bottom ? "its one problem named at the bottom" : string.Join(" | ", problems.Select(problem => problem[..Math.Min(problem.Length, 200)])))}\n"
+            + $"respelled: {(JsonWalk.Same(JsonSchemaSubset.Respelled(schema, document), document) ? "the document as it was" : "another document")}\n";
+    });
 
     /// <summary>
     /// A schema is read for what it says of a document, as an expression's path is typed: the kinds a value may be -

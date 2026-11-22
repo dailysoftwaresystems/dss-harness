@@ -30,6 +30,22 @@ public sealed class AgentPolicyShortNamesTests
     }
 
     /// <summary>
+    /// A path of ten short-name components, each of which may shorten two guarded names, is read as every place it may
+    /// reach - 3^10 of them, the path itself first - one at a time, as the pattern of the names each component may be.
+    /// Red with the 64 caps (<c>MaxShortNameReadings</c>, <c>MaxDotReadings</c>), which denied it as undecided.
+    /// </summary>
+    [Fact]
+    public void TenShortNameComponents_AreDecided()
+    {
+        var path = "/r" + string.Concat(Enumerable.Repeat("/GIT~1", 10)) + "/x";
+        var readings = WindowsNames.Lengthened(path, [".git", ".github"]);
+
+        Assert.Equal(path, readings.First());
+        Assert.Equal(59_049, readings.Distinct(StringComparer.Ordinal).Count());
+        Assert.Contains("/r" + string.Concat(Enumerable.Repeat("/.git", 10)) + "/x", readings);
+    }
+
+    /// <summary>
     /// A directory Windows keeps a short name for, by both its names: one made here where the volume makes short names,
     /// else the program files directory, which keeps one where any does; the test is skipped where there is neither.
     /// </summary>

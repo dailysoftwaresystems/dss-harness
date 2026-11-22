@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using DssHarness.Core.Text;
 using DssHarness.Core.Output;
 
 namespace DssHarness.Core.Mutations;
@@ -31,7 +32,7 @@ namespace DssHarness.Core.Mutations;
 /// past: a row that looks as though it still decides something, and does not, is the same defect as a misspelt key.
 /// </para>
 /// </remarks>
-public static partial class MutationRegistryParser
+public static class MutationRegistryParser
 {
     /// <summary>What a BUILD-RED arm's diag says: its expectation is its paired control, never a diagnostic's text.</summary>
     public const string PairedControlToken = "PAIRED-CONTROL";
@@ -158,20 +159,28 @@ public static partial class MutationRegistryParser
     }
 
     /// <summary>An arm's id: one or more of <see cref="IdCharacterClass"/>, and nothing else.</summary>
-    [GeneratedRegex(@"\A" + IdCharacterClass + @"+\z", RegexOptions.CultureInvariant)]
-    private static partial Regex IdCharacters();
+    private static readonly Regex IdPattern = LinearRegex.Compile(@"\A" + IdCharacterClass + @"+\z");
 
     /// <summary>A path a row names.</summary>
-    [GeneratedRegex(@"\A[A-Za-z0-9_./-]+\z", RegexOptions.CultureInvariant)]
-    private static partial Regex PathCharacters();
+    private static readonly Regex PathPattern = LinearRegex.Compile(@"\A[A-Za-z0-9_./-]+\z");
 
     /// <summary>A build target's name, as CMake allows one.</summary>
-    [GeneratedRegex(@"\A[A-Za-z0-9_.+-]+\z", RegexOptions.CultureInvariant)]
-    private static partial Regex TargetCharacters();
+    private static readonly Regex TargetPattern = LinearRegex.Compile(@"\A[A-Za-z0-9_.+-]+\z");
 
     /// <summary>A case count.</summary>
-    [GeneratedRegex(@"\A[0-9]+\z", RegexOptions.CultureInvariant)]
-    private static partial Regex Digits();
+    private static readonly Regex DigitsPattern = LinearRegex.Compile(@"\A[0-9]+\z");
+
+    /// <summary>An arm's id: one or more of <see cref="IdCharacterClass"/>, and nothing else.</summary>
+    private static Regex IdCharacters() => IdPattern;
+
+    /// <summary>A path a row names.</summary>
+    private static Regex PathCharacters() => PathPattern;
+
+    /// <summary>A build target's name, as CMake allows one.</summary>
+    private static Regex TargetCharacters() => TargetPattern;
+
+    /// <summary>A case count.</summary>
+    private static Regex Digits() => DigitsPattern;
 
     /// <summary>"an" or "a", as a row's kind is read aloud.</summary>
     private static string Article(string kind) => kind is "A" or "F" or "I" or "M" or "R" or "S" or "X" ? "an" : "a";

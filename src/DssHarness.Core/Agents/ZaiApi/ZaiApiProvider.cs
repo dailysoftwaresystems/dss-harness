@@ -6,6 +6,7 @@ using System.Text.Json.Nodes;
 using DssHarness.Core.Agents.Http;
 using DssHarness.Core.Agents.Loop;
 using DssHarness.Core.Agents.Runtime;
+using DssHarness.Core.Json;
 
 namespace DssHarness.Core.Agents.ZaiApi;
 
@@ -13,8 +14,8 @@ namespace DssHarness.Core.Agents.ZaiApi;
 /// Z.AI's side of the loop the two API clients share (<see cref="ToolLoop"/>): the request every model is sent
 /// (<see cref="ZaiApiRequest"/>), its answer's chunks read as they come into the loop's parts, the message it ends with
 /// put back together - its text, its reasoning and each call's arguments as the API streamed them - every failure classed
-/// (<see cref="ZaiApiFailures"/>), and the one rewrite of what is sent that keeps a conversation within its model's
-/// context, for Z.AI clears nothing of it itself.
+/// (<see cref="ZaiApiFailures"/>), and the conversation sent whole until its model's context is full, for Z.AI clears
+/// nothing of it itself.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -26,37 +27,27 @@ namespace DssHarness.Core.Agents.ZaiApi;
 /// calls answered by a tool message each, in order, and then each message of the engine's as a user message.
 /// </para>
 /// <para>
-/// Once what the next request holds - what the model last read, and what it wrote where that goes on in the
-/// conversation - passes <see cref="ShortenAt"/> of its context, the answers to calls older than the last
-/// <see cref="WholeTurns"/> turns that called tools go out in their short form from the next request on - the point
-/// stored with the conversation (<see cref="ChatPart.Shortened"/>), so every later request sends the same and the cache
-/// misses once - and the reasoning as it was; past <see cref="FullAt"/> as measured on a request sent shortened, the
-/// context is full.
+/// Every request sends the conversation whole, each answer to a call as it was. What the last answer had the model read,
+/// and what it wrote where that goes on in the conversation, is what the next request holds at least - the provider's own
+/// count of it, never a guess - so once that reaches the <c>contextTokens</c> of the model asked
+/// (<see cref="ChatRequest.ContextTokens"/>) the next request would pass its context and is not sent: the context is full
+/// (<see cref="ChatFailureKind.ContextFull"/>), as it is where Z.AI refuses a prompt too long itself, and the step's own
+/// answer to a full context - its compaction among them - carries the work on.
 /// </para>
 /// </remarks>
 /// <param name="connection">How the request is posted and its stream read.</param>
 /// <param name="api">The provider's <c>api</c>, an absolute address.</param>
 /// <param name="settings">The client's settings: whether the reasoning is kept across turns, the fields it adds.</param>
-/// <param name="contextTokens">The most the model's context holds, as its entry says it: what the conversation is kept within.</param>
-public sealed class ZaiApiProvider(ApiConnection connection, string api, ZaiApiSettings settings, long contextTokens) : IChatProvider
+/// <param name="records">Where the body of a request Z.AI refuses is kept whole: the step's records; null where none are kept, and it is held.</param>
+public sealed class ZaiApiProvider(ApiConnection connection, string api, ZaiApiSettings settings, ApiRecords? records) : IChatProvider
 {
-    /// <summary>The share of the model's context past which the conversation is sent shortened.</summary>
-    public const double ShortenAt = 0.7;
-
-    /// <summary>The share of the model's context past which a conversation sent shortened is full.</summary>
-    public const double FullAt = 0.9;
-
-    /// <summary>How many of the last turns that called tools have their answers sent whole once the conversation is sent shortened.</summary>
-    public const int WholeTurns = 6;
-
     private readonly ApiConnection _connection = connection ?? throw new ArgumentNullException(nameof(connection));
     private readonly Uri _endpoint = ZaiApiRequest.Endpoint(api ?? throw new ArgumentNullException(nameof(api)));
     private readonly ZaiApiSettings _settings = settings ?? throw new ArgumentNullException(nameof(settings));
 
     // What the last answer had the model read and write where that goes on in the conversation: what the next request
-    // holds at least - and whether it was measured on a request sent shortened, the only measure a full context is told by.
+    // holds at least.
     private long? _held;
-    private bool _heldShortened;
 
     /// <inheritdoc cref="IChatProvider.SendsSchema"/>
     public bool SendsSchema => ZaiApiRequest.HoldsToSchema;
@@ -73,7 +64,7 @@ public sealed class ZaiApiProvider(ApiConnection connection, string api, ZaiApiS
             {
                 ["name"] = tool.Name,
                 ["description"] = tool.Description,
-                ["parameters"] = JsonNode.Parse(tool.Schema),
+                ["parameters"] = JsonDepth.ParseNode(tool.Schema),
             },
         })]);
 
@@ -108,26 +99,14 @@ public sealed class ZaiApiProvider(ApiConnection connection, string api, ZaiApiS
     {
         ArgumentNullException.ThrowIfNull(request);
 
-        var shortened = request.ShortenedBefore;
-
-        if (_held is { } held && contextTokens > 0)
+        // The next request holds all the last one read and wrote, and more: once that is the whole context, it would pass it.
+        if (_held is { } held && request.ContextTokens > 0 && held >= request.ContextTokens)
         {
-            if (_heldShortened && held >= FullAt * contextTokens)
-            {
-                yield return new ChatPart.Failed(new ChatFailure(
-                    ChatFailureKind.ContextFull,
-                    $"the conversation holds {held.ToString(CultureInfo.InvariantCulture)} tokens, past {Math.Round(FullAt * 100).ToString(CultureInfo.InvariantCulture)}% of the {contextTokens.ToString(CultureInfo.InvariantCulture)} the context of '{request.Model}' holds, and is sent shortened already"));
-                yield break;
-            }
-
-            if (shortened is null && held >= ShortenAt * contextTokens && Boundary(request.Messages) is { } before)
-            {
-                shortened = before;
-                yield return new ChatPart.Shortened(before);
-            }
+            yield return new ChatPart.Failed(new ChatFailure(ChatFailureKind.ContextFull, ContextFull(held, request.ContextTokens, request.Model)));
+            yield break;
         }
 
-        var post = new ApiPost(_endpoint, ZaiApiRequest.Headers(request), ZaiApiRequest.Body(request, _settings, shortened));
+        var post = new ApiPost(_endpoint, ZaiApiRequest.Headers(request), ZaiApiRequest.Body(request, _settings), records);
         var answer = new Answer();
 
         await foreach (var part in ApiAnswers.ReadAsync(_connection, post, answer.Read, cancellationToken).ConfigureAwait(false))
@@ -137,7 +116,6 @@ public sealed class ZaiApiProvider(ApiConnection connection, string api, ZaiApiS
             if (part is ChatPart.Answered { Turn: { Usage: var usage } turn })
             {
                 _held = usage.InputTokens + usage.CacheReadTokens + (turn.Stop == ChatStop.CutOff ? 0 : usage.OutputTokens);
-                _heldShortened = shortened is not null;
             }
 
             yield return part;
@@ -145,20 +123,14 @@ public sealed class ZaiApiProvider(ApiConnection connection, string api, ZaiApiS
     }
 
     /// <summary>
-    /// The first message sent whole once the conversation is sent shortened: the beginning of the last
-    /// <see cref="WholeTurns"/> turns that called tools; null where it holds no more turns than that, and nothing is
-    /// older than them.
+    /// What a conversation whose next request would pass its model's context is said as: what its last answer had the
+    /// model read and write, which the next request holds and more, and what the context holds.
     /// </summary>
-    private static int? Boundary(IReadOnlyList<string> messages)
-    {
-        var calling = messages
-            .Select((message, at) => (Calls: JsonNode.Parse(message) is JsonObject node && node["role"]?.GetValue<string>() == "assistant" && node["tool_calls"] is JsonArray, At: at))
-            .Where(each => each.Calls)
-            .Select(each => each.At)
-            .ToList();
-
-        return calling.Count > WholeTurns ? calling[^WholeTurns] : null;
-    }
+    /// <param name="held">What the last answer had the model read and write where that goes on in the conversation.</param>
+    /// <param name="contextTokens">The most the model's context holds.</param>
+    /// <param name="model">The model.</param>
+    public static string ContextFull(long held, long contextTokens, string model)
+        => $"the conversation's last answer had '{model}' read and write {held.ToString("N0", CultureInfo.InvariantCulture)} tokens, which its next request holds and more, and the model's context holds {contextTokens.ToString("N0", CultureInfo.InvariantCulture)}: the next request would pass it";
 
     /// <summary>One request's answer as it is read: its text, reasoning and calls put back together, its usage, its ending.</summary>
     private sealed class Answer
@@ -188,7 +160,7 @@ public sealed class ZaiApiProvider(ApiConnection connection, string api, ZaiApiS
 
             try
             {
-                using var document = JsonDocument.Parse(item.Data);
+                using var document = JsonDepth.ParseDocument(item.Data);
                 data = document.RootElement.Clone();
             }
             catch (JsonException ex)

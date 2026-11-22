@@ -39,11 +39,17 @@ internal static class ContainExecCommand
             Description = "The channel the process runner reads whether the program started from.",
             HelpName = "channel",
         };
+        var starter = new Option<int?>(ContainExec.StarterOption)
+        {
+            Description = "The id of the process runner that started the step, which listens on the channel for as long as it lives.",
+            HelpName = "pid",
+        };
 
         command.Options.Add(job);
         command.Options.Add(group);
         command.Options.Add(scope);
         command.Options.Add(status);
+        command.Options.Add(starter);
 
         // The program and its arguments are everything after '--', handed on as they are given:
         // this command owns no word of theirs.
@@ -66,6 +72,7 @@ internal static class ContainExecCommand
                 parseResult.GetValue(group),
                 parseResult.GetValue(scope),
                 parseResult.GetValue(status),
+                parseResult.GetValue(starter),
                 tokens[0],
                 tokens.Skip(1).ToArray(),
                 Console.Error));

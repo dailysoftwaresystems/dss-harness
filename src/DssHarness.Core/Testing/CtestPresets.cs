@@ -1,5 +1,7 @@
 using System.Text.Json;
 using DssHarness.Core.FileSystem;
+using DssHarness.Core.Json;
+using DssHarness.Core.Walks;
 
 namespace DssHarness.Core.Testing;
 
@@ -7,6 +9,7 @@ namespace DssHarness.Core.Testing;
 /// Which of its filters a ctest test preset sets, read from the preset files ctest reads it from.
 /// </summary>
 /// <remarks>
+/// <para>
 /// Only whether each filter is set to something, never what it matches: a value may hold macros only
 /// ctest expands, and whether a preset sets a filter at all is what decides whether an option given on
 /// ctest's command line is read beside it. The one value read is a flag's: whether the preset takes a
@@ -17,6 +20,13 @@ namespace DssHarness.Core.Testing;
 /// something, and an empty one says nothing - a preset that sets a filter to "" still has the one it
 /// inherits. Whether a preset takes the union of what it chooses is decided by the first to say, itself
 /// before the ones it inherits, in order.
+/// </para>
+/// <para>
+/// Each file and each preset is read once (<see cref="Memo{TKey, TAnswer}"/>): a file included by several is read
+/// the first time, and a preset several inherit - a diamond, however many levels of them - is answered once and its
+/// answer reused, on a stack of the memo's own, so neither the chain of includes nor that of inherits reaches past a
+/// thread's stack however long it is. Only a preset that inherits itself, through any chain, is refused.
+/// </para>
 /// </remarks>
 internal static class CtestPresets
 {
@@ -45,11 +55,11 @@ internal static class CtestPresets
 
         try
         {
-            var read = new HashSet<string>(StringComparer.Ordinal);
+            var load = Loading(fileSystem, presets);
 
             foreach (var file in Files.Select(file => Path.GetFullPath(Path.Combine(directory, file))).Where(fileSystem.FileExists))
             {
-                Load(fileSystem, file, presets, read);
+                _ = load.Of(file);
             }
 
             if (!presets.ContainsKey(name))
@@ -57,17 +67,36 @@ internal static class CtestPresets
                 return (null, $"no test preset '{name}' is in the preset files in '{directory}'");
             }
 
-            var filters = new HashSet<string>(StringComparer.Ordinal);
-
-            foreach (var filter in Ctest.PresetFilters)
-            {
-                if (Sets(presets, name, filter, []))
+            // Every filter a preset or any it inherits sets to something, each preset answered once.
+            var sets = new Memo<string, IReadOnlySet<string>>(
+                preset => Parents(Preset(presets, preset), preset),
+                (preset, inherited) =>
                 {
-                    filters.Add(filter);
-                }
-            }
+                    var own = Preset(presets, preset);
+                    var set = new HashSet<string>(
+                        Ctest.PresetFilters.Where(filter => Own(own, filter) is { } value && (value.ValueKind != JsonValueKind.String || value.GetString()!.Length > 0)),
+                        StringComparer.Ordinal);
 
-            if (Decides(presets, name, Union, []) is { ValueKind: JsonValueKind.True })
+                    foreach (var parents in inherited)
+                    {
+                        set.UnionWith(parents);
+                    }
+
+                    return set;
+                },
+                InheritsItself<IReadOnlySet<string>>,
+                StringComparer.Ordinal);
+
+            // The value the first to say gives the union: the preset itself, then those it inherits in order.
+            var union = new Memo<string, JsonElement?>(
+                preset => Parents(Preset(presets, preset), preset),
+                (preset, inherited) => Own(Preset(presets, preset), Union) ?? inherited.FirstOrDefault(value => value is not null),
+                InheritsItself<JsonElement?>,
+                StringComparer.Ordinal);
+
+            var filters = new HashSet<string>(sets.Of(name), StringComparer.Ordinal);
+
+            if (union.Of(name) is { ValueKind: JsonValueKind.True })
             {
                 filters.Add(Union);
             }
@@ -81,74 +110,81 @@ internal static class CtestPresets
         }
     }
 
-    /// <summary>Reads the test presets in <paramref name="file"/>, and in each file it includes, into <paramref name="presets"/>.</summary>
-    private static void Load(IFileSystem fileSystem, string file, Dictionary<string, JsonElement> presets, HashSet<string> read)
+    /// <summary>
+    /// What reads a preset file, and before it each file it includes, into <paramref name="presets"/>: each file once, the
+    /// files it includes before its own presets, so a file's own preset stands over one of the same name it includes - and
+    /// one included again, or by a file it includes, read no second time.
+    /// </summary>
+    private static Memo<string, bool> Loading(IFileSystem fileSystem, Dictionary<string, JsonElement> presets)
     {
-        if (!read.Add(file))
-        {
-            return;
-        }
+        var roots = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
 
-        using var document = JsonDocument.Parse(fileSystem.ReadAllText(file));
-        var root = document.RootElement;
-
-        if (root.TryGetProperty("include", out var include))
-        {
-            foreach (var entry in include.EnumerateArray())
+        return new Memo<string, bool>(
+            file => Includes(file, Root(file)),
+            (file, _) =>
             {
-                var path = entry.GetString() ?? throw new InvalidOperationException($"'{file}' includes a file it does not name");
-
-                // Expanded by CMake alone, from values this build cannot see.
-                if (path.Contains('$', StringComparison.Ordinal))
+                if (Root(file).TryGetProperty("testPresets", out var tests))
                 {
-                    throw new InvalidOperationException($"'{file}' includes '{path}', whose macros only CMake expands");
+                    foreach (var preset in tests.EnumerateArray())
+                    {
+                        presets[preset.GetProperty("name").GetString() ?? throw new InvalidOperationException($"'{file}' holds a test preset with no name")] = preset;
+                    }
                 }
 
-                Load(fileSystem, Path.GetFullPath(Path.Combine(Path.GetDirectoryName(file)!, path)), presets, read);
-            }
-        }
+                return true;
+            },
+            _ => true,
+            StringComparer.Ordinal);
 
-        if (root.TryGetProperty("testPresets", out var tests))
+        // The file's document, read the first time it is asked and kept: its includes are asked first, its presets after.
+        JsonElement Root(string file)
         {
-            foreach (var preset in tests.EnumerateArray())
+            if (!roots.TryGetValue(file, out var root))
             {
-                presets[preset.GetProperty("name").GetString() ?? throw new InvalidOperationException($"'{file}' holds a test preset with no name")] = preset.Clone();
+                using var document = JsonDepth.ParseDocument(fileSystem.ReadAllText(file));
+
+                root = document.RootElement.Clone();
+                roots[file] = root;
             }
+
+            return root;
         }
     }
 
-    /// <summary>
-    /// Whether preset <paramref name="name"/>, or any it inherits however far along, sets <paramref name="filter"/>
-    /// to something: an empty value says nothing, and leaves the one it inherits in force.
-    /// </summary>
-    private static bool Sets(Dictionary<string, JsonElement> presets, string name, string filter, HashSet<string> along)
+    /// <summary>The files <paramref name="root"/>, the document of <paramref name="file"/>, includes, each as a whole path, in order.</summary>
+    private static IEnumerable<string> Includes(string file, JsonElement root)
     {
-        var preset = Preset(presets, name, along);
+        if (!root.TryGetProperty("include", out var include))
+        {
+            return [];
+        }
 
-        return Own(preset, filter) is { } value && (value.ValueKind != JsonValueKind.String || value.GetString()!.Length > 0)
-            || Parents(preset, name).Any(parent => Sets(presets, parent, filter, [.. along]));
+        var included = new List<string>();
+
+        foreach (var entry in include.EnumerateArray())
+        {
+            var path = entry.GetString() ?? throw new InvalidOperationException($"'{file}' includes a file it does not name");
+
+            // Expanded by CMake alone, from values this build cannot see.
+            if (path.Contains('$', StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException($"'{file}' includes '{path}', whose macros only CMake expands");
+            }
+
+            included.Add(Path.GetFullPath(Path.Combine(Path.GetDirectoryName(file)!, path)));
+        }
+
+        return included;
     }
 
-    /// <summary>
-    /// The value the first to say gives <paramref name="setting"/>: preset <paramref name="name"/> itself, or else
-    /// the presets it inherits in order, each asked the same way; <see langword="null"/> where none says.
-    /// </summary>
-    private static JsonElement? Decides(Dictionary<string, JsonElement> presets, string name, string setting, HashSet<string> along)
-    {
-        var preset = Preset(presets, name, along);
+    /// <summary>A preset met again while it is still being answered: it inherits itself, which ctest refuses too.</summary>
+    private static T InheritsItself<T>(string name) => throw new InvalidOperationException($"test preset '{name}' inherits itself");
 
-        return Own(preset, setting) ?? Parents(preset, name)
-            .Select(parent => Decides(presets, parent, setting, [.. along]))
-            .FirstOrDefault(value => value is not null);
-    }
-
-    /// <summary>Preset <paramref name="name"/>, refused where the presets along the way to it inherit it again, or never declare it.</summary>
-    private static JsonElement Preset(Dictionary<string, JsonElement> presets, string name, HashSet<string> along)
-        => !along.Add(name)
-            ? throw new InvalidOperationException($"test preset '{name}' inherits itself")
-            : presets.TryGetValue(name, out var preset)
-                ? preset
-                : throw new InvalidOperationException($"test preset '{name}' is inherited and not declared");
+    /// <summary>Preset <paramref name="name"/>, refused where no preset file declares it.</summary>
+    private static JsonElement Preset(Dictionary<string, JsonElement> presets, string name)
+        => presets.TryGetValue(name, out var preset)
+            ? preset
+            : throw new InvalidOperationException($"test preset '{name}' is inherited and not declared");
 
     /// <summary>What <paramref name="preset"/> itself gives <paramref name="setting"/>, under <c>filter</c>, or <see langword="null"/>.</summary>
     private static JsonElement? Own(JsonElement preset, string setting)

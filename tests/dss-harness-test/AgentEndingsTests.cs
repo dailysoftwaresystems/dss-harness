@@ -137,14 +137,17 @@ public sealed class AgentEndingsTests
         Assert.Null(AgentHandoffSignal.AnswerOf(null, null));
     }
 
-    /// <summary>A conversation's directory is named by its id alone: an id that would name another directory is refused.</summary>
+    /// <summary>
+    /// A conversation's directory is named by its id alone - the id itself where it is no longer than a SHA-256 digest,
+    /// else its digest: an id that would name another directory is refused, and no length of one is.
+    /// </summary>
     [Theory]
     [InlineData("conv-1_A", true)]
     [InlineData("../other", false)]
     [InlineData("a/b", false)]
     [InlineData("", false)]
     [InlineData("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", true)]
-    [InlineData("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", false)]
+    [InlineData("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", true)]
     public void AConversationsDirectory_IsNamedByItsIdAlone(string id, bool named)
     {
         var sessions = Path.Combine(Path.GetTempPath(), "sessions");
@@ -153,7 +156,9 @@ public sealed class AgentEndingsTests
 
         if (named)
         {
-            Assert.Equal(Path.Combine(sessions, id), OrchestratorLayout.SessionDirectoryIn(sessions, id));
+            var name = id.Length <= 64 ? id : Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(id)));
+
+            Assert.Equal(Path.Combine(sessions, name), OrchestratorLayout.SessionDirectoryIn(sessions, id));
         }
         else
         {

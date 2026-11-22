@@ -1,4 +1,6 @@
 using System.Globalization;
+using System.Text;
+using System.Text.Json.Nodes;
 using DssHarness.Core.Schemas;
 
 namespace DssHarness.Core.Orchestration.Flow;
@@ -20,9 +22,10 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// expressions select and never compute.
 /// </para>
 /// <para>
-/// Every expression ends: nothing nests more than <see cref="MostNesting"/> deep - a group, a <c>!</c>, an
-/// <c>empty(...)</c>, an <c>any(...)</c> and a <c>union(...)</c> inside another each go one deeper, as does each name of a path after
-/// its first - so no text a file holds can spend the stack of the process that reads it.
+/// An expression nests as deep as it is written, and no depth is refused: the reader keeps the rules it is inside on a
+/// stack of its own, and the tree is written, read for its names, typed and evaluated the same way - each a walk on a
+/// stack of its own, never a call per level - so a condition a generator nests ten thousand deep is read whole, and no
+/// text a file holds can spend the stack of the process that reads it.
 /// </para>
 /// <para>
 /// <see cref="WorkflowExpressions"/> stays the one owner of the names an expression reads and of what must be
@@ -33,9 +36,6 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// </remarks>
 public abstract record FlowExpression
 {
-    /// <summary>The most an expression nests: a guard, so no file can spend the stack however it is written.</summary>
-    public const int MostNesting = 64;
-
     /// <summary>
     /// Parses <paramref name="text"/> as one expression, refusing what the grammar does not say: the refusal
     /// names the column it stopped at, as <see cref="WorkflowExpressions.SyntaxProblem"/> does.
@@ -47,7 +47,7 @@ public abstract record FlowExpression
         ArgumentException.ThrowIfNullOrWhiteSpace(text);
 
         var parser = new Parser(text);
-        var expression = parser.Or();
+        var expression = parser.Expression();
 
         if (!parser.Done)
         {
@@ -76,17 +76,62 @@ public abstract record FlowExpression
         }
     }
 
-    /// <summary>Every name this expression reads, in the order it reads them, once each: the tree's own account, agreeing with <see cref="WorkflowExpressions.ReadsOf"/>.</summary>
+    /// <summary>
+    /// Every name this expression reads, in the order it reads them, once each: the tree's own account, agreeing with
+    /// <see cref="WorkflowExpressions.ReadsOf"/>. The tree is gone down on a stack of this walk's own, each node's parts
+    /// in the order they are written, and every name already read is kept, so a read written again is passed over.
+    /// </summary>
     public IReadOnlyList<WorkflowExpressions.Read> Reads()
     {
         var reads = new List<WorkflowExpressions.Read>();
-        Collect(reads, insideAny: false);
-        return reads;
-    }
+        var read = new HashSet<string>(StringComparer.Ordinal);
+        var pending = new Stack<(FlowExpression Node, bool InsideAny)>();
 
-    /// <summary>Gathers this node's reads into <paramref name="reads"/>, once each, in order.</summary>
-    protected internal virtual void Collect(List<WorkflowExpressions.Read> reads, bool insideAny)
-    {
+        void Add(WorkflowExpressions.Read named)
+        {
+            if (read.Add(named.Whole))
+            {
+                reads.Add(named);
+            }
+        }
+
+        pending.Push((this, false));
+
+        while (pending.TryPop(out var at))
+        {
+            switch (at.Node)
+            {
+                case Path path:
+                    Add(Read(path.Whole, Template: false, at.InsideAny));
+                    continue;
+
+                case Placeholder placeholder:
+                    Add(Read(placeholder.Whole, Template: true, at.InsideAny));
+                    continue;
+
+                // The scanner reads each function's word itself, as a root of the run's own: the tree reads it too, so
+                // the two agree on every expression.
+                case Empty:
+                    Add(new WorkflowExpressions.Read("empty", "empty", Template: false, at.InsideAny));
+                    break;
+
+                case Union:
+                    Add(new WorkflowExpressions.Read("union", "union", Template: false, at.InsideAny));
+                    break;
+            }
+
+            // The scanner marks every read within an any(...) call, its list as its test: the tree reads it the same,
+            // so the two agree on every expression, wherever the member's own name binds.
+            var insideAny = at.InsideAny || at.Node is Any;
+            var parts = PartsOf(at.Node);
+
+            for (var index = parts.Count - 1; index >= 0; index--)
+            {
+                pending.Push((parts[index], insideAny));
+            }
+        }
+
+        return reads;
     }
 
     /// <summary>
@@ -107,7 +152,7 @@ public abstract record FlowExpression
         ArgumentNullException.ThrowIfNull(read);
         ArgumentNullException.ThrowIfNull(problem);
 
-        return Typed(new Typing(read, problem));
+        return Typing.Of(this, read, problem);
     }
 
     /// <summary>
@@ -146,66 +191,46 @@ public abstract record FlowExpression
     {
         ArgumentNullException.ThrowIfNull(read);
 
-        return Yield(new Evaluating(read));
-    }
-
-    /// <summary>What this node yields, given what its paths yield and the items the <c>any(...)</c> calls around it look into.</summary>
-    private protected abstract FlowValue Yield(Evaluating evaluating);
-
-    /// <summary>
-    /// One reading of one expression at run time: what its paths yield, and the items the <c>any(...)</c> calls around
-    /// the part being read look into, the nearest last.
-    /// </summary>
-    private protected sealed record Evaluating(Func<Path, PathRead> Read)
-    {
-        /// <summary>Each <c>any(...)</c> around the part being read: the item its test names <c>it</c>.</summary>
-        public Stack<FlowValue> Items { get; } = new();
+        return Evaluation.Of(this, read);
     }
 
     /// <summary>
     /// The expression as it reads, rebuilt from the tree: spaced as this class writes it, and parenthesized only where
-    /// the grammar needs it, so a refusal quotes a part of it as one would write it.
+    /// the grammar needs it, so a refusal quotes a part of it as one would write it. Written on a stack of the writer's
+    /// own, in time linear in what it writes.
     /// </summary>
-    public abstract string Written { get; }
-
-    /// <summary>How tightly this node binds, loosest first: a part written inside a tighter one is parenthesized.</summary>
-    private protected virtual int Binding => Primary;
+    public string Written => Writing.Of(this);
 
     /// <summary>The binding of a primary - a path, a literal, a placeholder, a call - which nothing parenthesizes.</summary>
     private const int Primary = 6;
 
-    /// <summary><paramref name="part"/> written inside a node that takes parts binding at least <paramref name="least"/>.</summary>
-    private static string Inside(FlowExpression part, int least) => part.Binding < least ? $"({part.Written})" : part.Written;
-
-    /// <summary>What this node yields, given what its paths yield, saying each misuse as it is found.</summary>
-    private protected abstract JsonSchemaSubset.Reading Typed(Typing typing);
-
-    /// <summary>
-    /// One typing of one expression: what its paths yield, where its misuses go, and the items the <c>any(...)</c>
-    /// calls around the part being typed look into, the nearest last.
-    /// </summary>
-    private protected sealed record Typing(Func<Path, JsonSchemaSubset.Reading> Read, Action<string> Problem)
+    /// <summary>How tightly <paramref name="node"/> binds, loosest first: a part written inside a tighter one is parenthesized.</summary>
+    private static int BindingOf(FlowExpression node) => node switch
     {
-        /// <summary>Each <c>any(...)</c> around the part being typed: what an item of its list is, and the list as written.</summary>
-        public Stack<(JsonSchemaSubset.Reading Item, string List)> Items { get; } = new();
-    }
+        Or => 1,
+        And => 2,
+        Compare => 3,
+        Not => 4,
+        Coalesce => 5,
+        _ => Primary,
+    };
+
+    /// <summary>The parts <paramref name="node"/> joins, in the order they are written, read, typed and evaluated; none for a leaf.</summary>
+    private static IReadOnlyList<FlowExpression> PartsOf(FlowExpression node) => node switch
+    {
+        Or or => or.Terms,
+        And and => and.Terms,
+        Compare compare => [compare.Left, compare.Right],
+        Not not => [not.Inner],
+        Coalesce coalesce => coalesce.Terms,
+        Empty empty => [empty.Inner],
+        Any any => [any.List, any.Test],
+        Union union => union.Lists,
+        _ => [],
+    };
 
     /// <summary>A boolean, as every comparison, every test and every join yields.</summary>
     private static JsonSchemaSubset.Reading Boolean => JsonSchemaSubset.Reading.Of("boolean");
-
-    /// <summary>
-    /// Says <paramref name="part"/> is no boolean where it can be none, as <paramref name="what"/> words the misuse
-    /// around it: nothing is read as true or as false but <c>true</c> and <c>false</c>.
-    /// </summary>
-    private static void HeldToABoolean(FlowExpression part, Typing typing, Func<string, string> what)
-    {
-        var reading = part.Typed(typing);
-
-        if (!reading.MayBe("boolean"))
-        {
-            typing.Problem(what(Said(reading)));
-        }
-    }
 
     /// <summary>
     /// The kinds <paramref name="reading"/> may be, in words: <c>a text</c>, <c>a list or an object</c>, <c>a whole
@@ -256,7 +281,7 @@ public abstract record FlowExpression
         ArgumentNullException.ThrowIfNull(steps);
 
         var reading = start;
-        var at = written;
+        var at = new StringBuilder(written);
 
         foreach (var step in steps)
         {
@@ -270,12 +295,12 @@ public abstract record FlowExpression
 
                 if (reading.Member(key) is not { } member)
                 {
-                    why = at == written ? $"has no property '{key}'" : $"has no property '{key}' in '{at}'";
+                    why = at.Length == written.Length ? $"has no property '{key}'" : $"has no property '{key}' in '{at}'";
                     return null;
                 }
 
                 reading = member;
-                at = $"{at}.{key}";
+                at.Append('.').Append(key);
                 continue;
             }
 
@@ -286,383 +311,57 @@ public abstract record FlowExpression
             }
 
             reading = reading.Items ?? JsonSchemaSubset.Reading.Anything;
-            at = $"{at}[{step.Index}]";
+            at.Append('[').Append(step.Index?.ToString(CultureInfo.InvariantCulture)).Append(']');
         }
 
         why = null;
         return reading;
     }
 
-    /// <summary>Adds <paramref name="read"/> where its whole name is not read already, as the scanner adds one.</summary>
-    private protected static void Add(List<WorkflowExpressions.Read> reads, WorkflowExpressions.Read read)
-    {
-        if (reads.All(earlier => !string.Equals(earlier.Whole, read.Whole, StringComparison.Ordinal)))
-        {
-            reads.Add(read);
-        }
-    }
-
     /// <summary><c>a || b || c</c>: true where any term is true, short-circuiting left to right.</summary>
-    public sealed record Or(IReadOnlyList<FlowExpression> Terms) : FlowExpression
-    {
-        /// <inheritdoc/>
-        public override string Written => string.Join(" || ", Terms.Select(term => Inside(term, 2)));
-
-        private protected override int Binding => 1;
-
-        protected internal override void Collect(List<WorkflowExpressions.Read> reads, bool insideAny)
-        {
-            foreach (var term in Terms)
-            {
-                term.Collect(reads, insideAny);
-            }
-        }
-
-        private protected override JsonSchemaSubset.Reading Typed(Typing typing)
-        {
-            foreach (var term in Terms)
-            {
-                HeldToABoolean(term, typing, said => $"joins '{term.Written}', which is {said}, with ||; || joins booleans, and nothing is read as true or as false but true and false");
-            }
-
-            return Boolean;
-        }
-
-        private protected override FlowValue Yield(Evaluating evaluating)
-        {
-            foreach (var term in Terms)
-            {
-                // A true term settles the join; the terms after it are not read, which is the short-circuit.
-                if (term.Yield(evaluating).AsBoolean(term.Written))
-                {
-                    return FlowValue.Of(true);
-                }
-            }
-
-            return FlowValue.Of(false);
-        }
-    }
+    public sealed record Or(IReadOnlyList<FlowExpression> Terms) : FlowExpression;
 
     /// <summary><c>a &amp;&amp; b</c>: true where every term is true, short-circuiting left to right.</summary>
-    public sealed record And(IReadOnlyList<FlowExpression> Terms) : FlowExpression
-    {
-        /// <inheritdoc/>
-        public override string Written => string.Join(" && ", Terms.Select(term => Inside(term, 3)));
+    public sealed record And(IReadOnlyList<FlowExpression> Terms) : FlowExpression;
 
-        private protected override int Binding => 2;
-
-        protected internal override void Collect(List<WorkflowExpressions.Read> reads, bool insideAny)
-        {
-            foreach (var term in Terms)
-            {
-                term.Collect(reads, insideAny);
-            }
-        }
-
-        private protected override JsonSchemaSubset.Reading Typed(Typing typing)
-        {
-            foreach (var term in Terms)
-            {
-                HeldToABoolean(term, typing, said => $"joins '{term.Written}', which is {said}, with &&; && joins booleans, and nothing is read as true or as false but true and false");
-            }
-
-            return Boolean;
-        }
-
-        private protected override FlowValue Yield(Evaluating evaluating)
-        {
-            foreach (var term in Terms)
-            {
-                // A false term settles the join; the terms after it are not read, which is the short-circuit.
-                if (!term.Yield(evaluating).AsBoolean(term.Written))
-                {
-                    return FlowValue.Of(false);
-                }
-            }
-
-            return FlowValue.Of(true);
-        }
-    }
-
-    /// <summary><c>a == b</c> or <c>a != b</c>: two scalars, or null, compared for equality or its opposite.</summary>
-    public sealed record Compare(FlowExpression Left, string Operator, FlowExpression Right) : FlowExpression
-    {
-        /// <inheritdoc/>
-        public override string Written => $"{Inside(Left, 4)} {Operator} {Inside(Right, 4)}";
-
-        private protected override int Binding => 3;
-
-        protected internal override void Collect(List<WorkflowExpressions.Read> reads, bool insideAny)
-        {
-            Left.Collect(reads, insideAny);
-            Right.Collect(reads, insideAny);
-        }
-
-        /// <remarks>
-        /// Two scalars of different kinds are unequal, never an error, and null equals only null; a side that can be
-        /// nothing but a list or an object is refused, since no scalar is ever one.
-        /// </remarks>
-        private protected override JsonSchemaSubset.Reading Typed(Typing typing)
-        {
-            foreach (var side in new[] { Left, Right })
-            {
-                var reading = side.Typed(typing);
-
-                if (reading.Kinds is { Count: > 0 } kinds && kinds.All(kind => kind is "array" or "object"))
-                {
-                    typing.Problem($"compares '{side.Written}', which is {Said(reading)}, with {Operator}; {Operator} compares two scalars, or null, and a list or an object is never one");
-                }
-            }
-
-            return Boolean;
-        }
-
-        private protected override FlowValue Yield(Evaluating evaluating)
-        {
-            var left = Left.Yield(evaluating).AsScalar(Left.Written);
-            var right = Right.Yield(evaluating).AsScalar(Right.Written);
-            var equal = FlowValue.ScalarsEqual(left, right);
-
-            return FlowValue.Of(Operator == "==" ? equal : !equal);
-        }
-    }
+    /// <summary>
+    /// <c>a == b</c> or <c>a != b</c>: two scalars, or null, compared for equality or its opposite. Two scalars of
+    /// different kinds are unequal, never an error, and null equals only null; a side that can be nothing but a list or
+    /// an object is refused, since no scalar is ever one.
+    /// </summary>
+    public sealed record Compare(FlowExpression Left, string Operator, FlowExpression Right) : FlowExpression;
 
     /// <summary><c>!a</c>: the opposite of a boolean.</summary>
-    public sealed record Not(FlowExpression Inner) : FlowExpression
-    {
-        /// <inheritdoc/>
-        public override string Written => $"!{Inside(Inner, 4)}";
+    public sealed record Not(FlowExpression Inner) : FlowExpression;
 
-        private protected override int Binding => 4;
+    /// <summary>
+    /// <c>a ?? b</c>: the left side where it is there and not null, the right otherwise. Takes anything: it yields any
+    /// side but the last where that side is not null, and the last as it is.
+    /// </summary>
+    public sealed record Coalesce(IReadOnlyList<FlowExpression> Terms) : FlowExpression;
 
-        protected internal override void Collect(List<WorkflowExpressions.Read> reads, bool insideAny)
-            => Inner.Collect(reads, insideAny);
-
-        private protected override JsonSchemaSubset.Reading Typed(Typing typing)
-        {
-            HeldToABoolean(Inner, typing, said => $"applies ! to '{Inner.Written}', which is {said}; ! takes a boolean, and nothing is read as true or as false but true and false");
-            return Boolean;
-        }
-
-        private protected override FlowValue Yield(Evaluating evaluating)
-            => FlowValue.Of(!Inner.Yield(evaluating).AsBoolean(Inner.Written));
-    }
-
-    /// <summary><c>a ?? b</c>: the left side where it is there and not null, the right otherwise.</summary>
-    public sealed record Coalesce(IReadOnlyList<FlowExpression> Terms) : FlowExpression
-    {
-        /// <inheritdoc/>
-        public override string Written => string.Join(" ?? ", Terms.Select(term => Inside(term, Primary)));
-
-        private protected override int Binding => 5;
-
-        protected internal override void Collect(List<WorkflowExpressions.Read> reads, bool insideAny)
-        {
-            foreach (var term in Terms)
-            {
-                term.Collect(reads, insideAny);
-            }
-        }
-
-        /// <remarks>Takes anything: it yields any side but the last where that side is not null, and the last as it is.</remarks>
-        private protected override JsonSchemaSubset.Reading Typed(Typing typing)
-        {
-            JsonSchemaSubset.Reading? yielded = null;
-
-            foreach (var (term, index) in Terms.Select((term, index) => (term, index)))
-            {
-                var reading = term.Typed(typing);
-                var given = index < Terms.Count - 1 ? reading.Without("null") : reading;
-
-                yielded = yielded is null ? given : yielded.Or(given);
-            }
-
-            return yielded!;
-        }
-
-        private protected override FlowValue Yield(Evaluating evaluating)
-        {
-            // The first term that is there and not null settles it: Missing and null both fall through, and the last
-            // term is yielded as it is.
-            for (var index = 0; index < Terms.Count; index++)
-            {
-                var value = Terms[index].Yield(evaluating);
-
-                if (index < Terms.Count - 1 && (value.IsMissing || value.IsNull))
-                {
-                    continue;
-                }
-
-                return value;
-            }
-
-            return FlowValue.Missing;
-        }
-    }
-
-    /// <summary><c>empty(x)</c>: true for null, <c>""</c>, <c>[]</c>, <c>{}</c> and a name that reads nothing.</summary>
-    public sealed record Empty(FlowExpression Inner) : FlowExpression
-    {
-        /// <inheritdoc/>
-        public override string Written => $"empty({Inner.Written})";
-
-        protected internal override void Collect(List<WorkflowExpressions.Read> reads, bool insideAny)
-        {
-            // The scanner reads the word itself, as a root of the run's own: the tree reads it too, so the two
-            // agree on every expression.
-            Add(reads, new WorkflowExpressions.Read("empty", "empty", Template: false, insideAny));
-            Inner.Collect(reads, insideAny);
-        }
-
-        /// <remarks>Takes anything, and says whether it holds nothing.</remarks>
-        private protected override JsonSchemaSubset.Reading Typed(Typing typing)
-        {
-            _ = Inner.Typed(typing);
-            return Boolean;
-        }
-
-        private protected override FlowValue Yield(Evaluating evaluating)
-            => FlowValue.Of(Inner.Yield(evaluating).HoldsNothing);
-    }
+    /// <summary><c>empty(x)</c>: true for null, <c>""</c>, <c>[]</c>, <c>{}</c> and a name that reads nothing. Takes anything, and says whether it holds nothing.</summary>
+    public sealed record Empty(FlowExpression Inner) : FlowExpression;
 
     /// <summary>
     /// <c>any(list, test)</c>: true where <c>test</c> is true of at least one member of <c>list</c>, the member
     /// named <c>it</c> inside the test.
     /// </summary>
-    public sealed record Any(FlowExpression List, FlowExpression Test) : FlowExpression
-    {
-        /// <inheritdoc/>
-        public override string Written => $"any({List.Written}, {Test.Written})";
-
-        protected internal override void Collect(List<WorkflowExpressions.Read> reads, bool insideAny)
-        {
-            // The scanner marks every read within an any(...) call, its list as its test: the tree reads it the
-            // same, so the two agree on every expression, wherever the member's own name binds.
-            List.Collect(reads, insideAny: true);
-            Test.Collect(reads, insideAny: true);
-        }
-
-        private protected override JsonSchemaSubset.Reading Typed(Typing typing)
-        {
-            var list = List.Typed(typing);
-
-            if (!list.MayBe("array"))
-            {
-                typing.Problem($"looks into '{List.Written}' with any, and it is {Said(list)}; any looks into a list");
-            }
-
-            typing.Items.Push((list.Items ?? JsonSchemaSubset.Reading.Anything, List.Written));
-            HeldToABoolean(Test, typing, said => $"tests each item of '{List.Written}' with '{Test.Written}', which is {said}; the test of any yields a boolean for each item");
-            typing.Items.Pop();
-
-            return Boolean;
-        }
-
-        private protected override FlowValue Yield(Evaluating evaluating)
-        {
-            var list = List.Yield(evaluating).AsList(List.Written);
-
-            foreach (var item in list)
-            {
-                evaluating.Items.Push(FlowValue.Of(item));
-
-                try
-                {
-                    if (Test.Yield(evaluating).AsBoolean(Test.Written))
-                    {
-                        return FlowValue.Of(true);
-                    }
-                }
-                finally
-                {
-                    evaluating.Items.Pop();
-                }
-            }
-
-            return FlowValue.Of(false);
-        }
-    }
+    public sealed record Any(FlowExpression List, FlowExpression Test) : FlowExpression;
 
     /// <summary>
     /// <c>union(a, b, ...)</c>: the members of every list it is given, in the order given, each once - two members are
     /// one where they are the same JSON. A list given as null holds no member; anything else it is given - nothing, a
-    /// text, an object - refuses the read, for union joins lists.
+    /// text, an object - refuses the read, for union joins lists. Each part a list, or null: a list whose members are
+    /// what any of them may hold.
     /// </summary>
-    public sealed record Union(IReadOnlyList<FlowExpression> Lists) : FlowExpression
-    {
-        /// <inheritdoc/>
-        public override string Written => $"union({string.Join(", ", Lists.Select(list => list.Written))})";
-
-        protected internal override void Collect(List<WorkflowExpressions.Read> reads, bool insideAny)
-        {
-            // The scanner reads the word itself, as a root of the run's own: the tree reads it too, so the two agree on
-            // every expression.
-            Add(reads, new WorkflowExpressions.Read("union", "union", Template: false, insideAny));
-
-            foreach (var list in Lists)
-            {
-                list.Collect(reads, insideAny);
-            }
-        }
-
-        /// <remarks>Each part a list, or null: a list whose members are what any of them may hold.</remarks>
-        private protected override JsonSchemaSubset.Reading Typed(Typing typing)
-        {
-            JsonSchemaSubset.Reading? items = null;
-
-            foreach (var list in Lists)
-            {
-                var reading = list.Typed(typing);
-
-                if (!reading.MayBe("array") && !reading.MayBe("null"))
-                {
-                    typing.Problem($"joins '{list.Written}', which is {Said(reading)}, with union; union joins lists");
-                    continue;
-                }
-
-                var member = reading.Items ?? JsonSchemaSubset.Reading.Anything;
-                items = items is null ? member : items.Or(member);
-            }
-
-            return JsonSchemaSubset.Reading.ListOf(items ?? JsonSchemaSubset.Reading.Anything);
-        }
-
-        private protected override FlowValue Yield(Evaluating evaluating)
-        {
-            var joined = new System.Text.Json.Nodes.JsonArray();
-
-            foreach (var list in Lists)
-            {
-                var value = list.Yield(evaluating);
-
-                if (value.IsNull)
-                {
-                    continue;
-                }
-
-                if (value.ToNode() is not System.Text.Json.Nodes.JsonArray members)
-                {
-                    throw new UnresolvedReadException($"'{list.Written}' is {value.InWords()}, and union joins lists");
-                }
-
-                foreach (var member in members)
-                {
-                    if (!joined.Any(held => System.Text.Json.Nodes.JsonNode.DeepEquals(held, member)))
-                    {
-                        joined.Add(member?.DeepClone());
-                    }
-                }
-            }
-
-            return FlowValue.Of(joined);
-        }
-    }
+    public sealed record Union(IReadOnlyList<FlowExpression> Lists) : FlowExpression;
 
     /// <summary>A literal as written: <c>true</c>, <c>false</c>, <c>null</c>, a number, or a quoted string.</summary>
     public sealed record Literal(object? Value) : FlowExpression
     {
-        /// <inheritdoc/>
-        public override string Written => Value switch
+        /// <summary>The literal as the expression writes it.</summary>
+        internal string Text => Value switch
         {
             null => "null",
             true => "true",
@@ -672,7 +371,8 @@ public abstract record FlowExpression
             _ => Value.ToString() ?? string.Empty,
         };
 
-        private protected override JsonSchemaSubset.Reading Typed(Typing typing)
+        /// <summary>What the literal is, as the definition is typed.</summary>
+        internal JsonSchemaSubset.Reading Reading
             => JsonSchemaSubset.Reading.Of(Value switch
             {
                 null => "null",
@@ -681,27 +381,21 @@ public abstract record FlowExpression
                 double => "number",
                 _ => "string",
             });
-
-        private protected override FlowValue Yield(Evaluating evaluating) => FlowValue.Of(Value);
     }
 
-    /// <summary>A <c>{path}</c> placeholder read inside an expression: a read of its own, filled as templates are.</summary>
+    /// <summary>
+    /// A <c>{path}</c> placeholder read inside an expression: a read of its own, filled as templates are - its value
+    /// written as text whatever it reads.
+    /// </summary>
     public sealed record Placeholder(string Whole) : FlowExpression
     {
-        /// <inheritdoc/>
-        public override string Written => $"{{{Whole}}}";
-
-        protected internal override void Collect(List<WorkflowExpressions.Read> reads, bool insideAny)
-            => Add(reads, Read(Whole, Template: true, insideAny));
-
-        /// <remarks>Filled as a template is, its value written as text whatever it reads.</remarks>
-        private protected override JsonSchemaSubset.Reading Typed(Typing typing) => JsonSchemaSubset.Reading.Of("string");
-
-        private protected override FlowValue Yield(Evaluating evaluating)
+        /// <summary>
+        /// What the placeholder yields: the one value its path names, read as every path is - its first name the root,
+        /// each name after it walked - written as text, as a template fills it.
+        /// </summary>
+        internal FlowValue Yield(Func<Path, PathRead> read, Stack<FlowValue> items)
         {
-            // A placeholder names one value by its path, read as every path is - its first name the root, each name
-            // after it walked - and what it yields is written as text, as a template fills it.
-            var value = Named().Yield(evaluating);
+            var value = Named().Yield(read, items);
 
             if (value.IsMissing)
             {
@@ -732,27 +426,34 @@ public abstract record FlowExpression
     public sealed record Path(string Root, IReadOnlyList<Segment> Steps) : FlowExpression
     {
         /// <summary>The whole name as the expression wrote it, indexes included.</summary>
-        public string Whole => $"{Root}{string.Concat(Steps.Select(step => step.IsKey ? $".{step.Key}" : $"[{step.Index}]"))}";
+        public string Whole
+        {
+            get
+            {
+                var whole = new StringBuilder(Root);
 
-        /// <inheritdoc/>
-        public override string Written => Whole;
+                foreach (var step in Steps)
+                {
+                    _ = step.IsKey ? whole.Append('.').Append(step.Key) : whole.Append('[').Append(step.Index?.ToString(CultureInfo.InvariantCulture)).Append(']');
+                }
 
-        protected internal override void Collect(List<WorkflowExpressions.Read> reads, bool insideAny)
-            => Add(reads, Read(Whole, Template: false, insideAny));
+                return whole.ToString();
+            }
+        }
 
-        /// <remarks>
-        /// A path from <c>it</c> walks an item of the list the nearest <c>any(...)</c> looks into; every other path is
-        /// the caller's to say. Outside every <c>any(...)</c>, <c>it</c> names nothing, which its read's own check
-        /// refuses.
-        /// </remarks>
-        private protected override JsonSchemaSubset.Reading Typed(Typing typing)
+        /// <summary>
+        /// What the path is, as the definition is typed. A path from <c>it</c> walks an item of the list the nearest
+        /// <c>any(...)</c> looks into; every other path is the caller's to say. Outside every <c>any(...)</c>, <c>it</c>
+        /// names nothing, which its read's own check refuses.
+        /// </summary>
+        internal JsonSchemaSubset.Reading Typed(Func<Path, JsonSchemaSubset.Reading> read, Action<string> problem, Stack<(JsonSchemaSubset.Reading Item, FlowExpression List)> items)
         {
             if (Root != "it")
             {
-                return typing.Read(this);
+                return read(this);
             }
 
-            if (!typing.Items.TryPeek(out var around))
+            if (!items.TryPeek(out var around))
             {
                 return JsonSchemaSubset.Reading.Anything;
             }
@@ -762,29 +463,31 @@ public abstract record FlowExpression
                 return walked;
             }
 
-            typing.Problem($"reads '{Whole}', and each item of '{around.List}' {why}");
+            problem($"reads '{Whole}', and each item of '{around.List.Written}' {why}");
             return JsonSchemaSubset.Reading.Anything;
         }
 
-        private protected override FlowValue Yield(Evaluating evaluating)
+        /// <summary>What the path yields as a run reads it: its root's value, or the item of the nearest <c>any(...)</c> for <c>it</c>, walked by every step its reader did not walk.</summary>
+        internal FlowValue Yield(Func<Path, PathRead> read, Stack<FlowValue> items)
         {
-            var read = Root == "it"
-                ? evaluating.Items.TryPeek(out var item)
+            var reached = Root == "it"
+                ? items.TryPeek(out var item)
                     ? new PathRead(item, 0)
                     : throw new UnresolvedReadException($"'it' names the member of the list any looks into, and there is none here")
-                : evaluating.Read(this);
+                : read(this);
 
-            if (read.Walked < 0 || read.Walked > Steps.Count || Steps.Take(read.Walked).Any(step => !step.IsKey))
+            if (reached.Walked < 0 || reached.Walked > Steps.Count || Steps.Take(reached.Walked).Any(step => !step.IsKey))
             {
-                throw new InvalidOperationException($"The reader of '{Whole}' says it walked {read.Walked} of its {Steps.Count} steps, and those are not keys of it.");
+                throw new InvalidOperationException($"The reader of '{Whole}' says it walked {reached.Walked} of its {Steps.Count} steps, and those are not keys of it.");
             }
 
             // Each step the reader did not walk walks what the last one named; a step that finds nothing leaves the value
             // Missing, which ?? and empty(...) take and nothing else does.
-            var value = read.Value;
+            var value = reached.Value;
 
-            foreach (var step in Steps.Skip(read.Walked))
+            for (var at = reached.Walked; at < Steps.Count; at++)
             {
+                var step = Steps[at];
                 value = step.Key is { } key ? value.Member(key) : value.At(step.Index ?? 0);
             }
 
@@ -796,13 +499,453 @@ public abstract record FlowExpression
     private static WorkflowExpressions.Read Read(string whole, bool Template, bool insideAny)
         => WorkflowExpressions.ReadOf(whole, Template, insideAny);
 
-    /// <summary>The recursive-descent reader of the grammar, over the text as written.</summary>
+    /// <summary>
+    /// The writer of a tree back to its text: each node's pieces - its parts and the words between them - pushed on a
+    /// stack of the writer's own, last first, so the text comes out in order whatever the depth.
+    /// </summary>
+    private static class Writing
+    {
+        /// <summary><paramref name="root"/> written as the grammar spells it.</summary>
+        public static string Of(FlowExpression root)
+        {
+            var text = new StringBuilder();
+            var pending = new Stack<object>();
+
+            pending.Push(root);
+
+            while (pending.TryPop(out var piece))
+            {
+                if (piece is string said)
+                {
+                    _ = text.Append(said);
+                    continue;
+                }
+
+                var pieces = PiecesOf((FlowExpression)piece);
+
+                for (var index = pieces.Count - 1; index >= 0; index--)
+                {
+                    pending.Push(pieces[index]);
+                }
+            }
+
+            return text.ToString();
+        }
+
+        /// <summary>What <paramref name="node"/> is written as: words, and parts each written in its turn.</summary>
+        private static List<object> PiecesOf(FlowExpression node)
+        {
+            switch (node)
+            {
+                case Or or:
+                    return Joined(or.Terms, " || ", least: 2);
+                case And and:
+                    return Joined(and.Terms, " && ", least: 3);
+                case Compare compare:
+                    return [.. Inside(compare.Left, 4), $" {compare.Operator} ", .. Inside(compare.Right, 4)];
+                case Not not:
+                    return ["!", .. Inside(not.Inner, 4)];
+                case Coalesce coalesce:
+                    return Joined(coalesce.Terms, " ?? ", least: Primary);
+                case Empty empty:
+                    return ["empty(", empty.Inner, ")"];
+                case Any any:
+                    return ["any(", any.List, ", ", any.Test, ")"];
+                case Union union:
+                    return ["union(", .. Joined(union.Lists, ", ", least: 0), ")"];
+                case Literal literal:
+                    return [literal.Text];
+                case Placeholder placeholder:
+                    return [$"{{{placeholder.Whole}}}"];
+                case Path path:
+                    return [path.Whole];
+                default:
+                    throw new InvalidOperationException($"An expression holds a node of a kind the writer does not know: {node.GetType().Name}.");
+            }
+        }
+
+        /// <summary><paramref name="parts"/> joined by <paramref name="between"/>, each inside a node that takes parts binding at least <paramref name="least"/>.</summary>
+        private static List<object> Joined(IReadOnlyList<FlowExpression> parts, string between, int least)
+        {
+            var pieces = new List<object>();
+
+            foreach (var (part, index) in parts.Select((part, index) => (part, index)))
+            {
+                if (index > 0)
+                {
+                    pieces.Add(between);
+                }
+
+                pieces.AddRange(Inside(part, least));
+            }
+
+            return pieces;
+        }
+
+        /// <summary><paramref name="part"/> written inside a node that takes parts binding at least <paramref name="least"/>: parenthesized where it binds more loosely.</summary>
+        private static object[] Inside(FlowExpression part, int least)
+            => BindingOf(part) < least ? ["(", part, ")"] : [part];
+    }
+
+    /// <summary>
+    /// One typing of one expression: the tree gone down on a stack of frames of its own, each part typed before the node
+    /// that joins it weighs it - in the order a part is written, each misuse said as it is met - and the items the
+    /// <c>any(...)</c> calls around the part being typed look into, the nearest last.
+    /// </summary>
+    private sealed class Typing
+    {
+        private readonly Func<Path, JsonSchemaSubset.Reading> _read;
+        private readonly Action<string> _problem;
+
+        /// <summary>Each <c>any(...)</c> around the part being typed: what an item of its list is, and the list as written.</summary>
+        private readonly Stack<(JsonSchemaSubset.Reading Item, FlowExpression List)> _items = new();
+
+        private Typing(Func<Path, JsonSchemaSubset.Reading> read, Action<string> problem)
+        {
+            _read = read;
+            _problem = problem;
+        }
+
+        /// <summary>What <paramref name="root"/> yields, as far as the definition says, each misuse given to <paramref name="problem"/>.</summary>
+        public static JsonSchemaSubset.Reading Of(FlowExpression root, Func<Path, JsonSchemaSubset.Reading> read, Action<string> problem)
+            => new Typing(read, problem).Typed(root);
+
+        /// <summary>One node being typed: how many of its parts are typed, and what it has gathered of them.</summary>
+        private sealed class Frame(FlowExpression node)
+        {
+            public FlowExpression Node { get; } = node;
+
+            public IReadOnlyList<FlowExpression> Parts { get; } = PartsOf(node);
+
+            /// <summary>How many of its parts have been handed down to be typed.</summary>
+            public int Next { get; set; }
+
+            /// <summary>Whether the last part handed down has been typed and waits to be weighed.</summary>
+            public bool Waiting { get; set; }
+
+            /// <summary>What a <c>??</c> yields so far, or what the members of a <c>union</c>'s lists may be.</summary>
+            public JsonSchemaSubset.Reading? Gathered { get; set; }
+
+            /// <summary>What an <c>any(...)</c>'s list is, once it is typed.</summary>
+            public JsonSchemaSubset.Reading? List { get; set; }
+        }
+
+        private JsonSchemaSubset.Reading Typed(FlowExpression root)
+        {
+            var frames = new Stack<Frame>();
+            var reading = JsonSchemaSubset.Reading.Anything;
+
+            frames.Push(new Frame(root));
+
+            while (frames.TryPeek(out var frame))
+            {
+                if (frame.Waiting)
+                {
+                    frame.Waiting = false;
+                    Weigh(frame, frame.Next - 1, reading);
+                }
+
+                if (frame.Next < frame.Parts.Count)
+                {
+                    // An any(...)'s test is typed for an item of its list, which its 'it' names.
+                    if (frame.Node is Any any && frame.Next == 1)
+                    {
+                        _items.Push((frame.List!.Items ?? JsonSchemaSubset.Reading.Anything, any.List));
+                    }
+
+                    frame.Waiting = true;
+                    frames.Push(new Frame(frame.Parts[frame.Next++]));
+                    continue;
+                }
+
+                reading = Ended(frame);
+                _ = frames.Pop();
+            }
+
+            return reading;
+        }
+
+        /// <summary>Weighs the part at <paramref name="index"/> of <paramref name="frame"/>'s node, typed <paramref name="reading"/>, saying a misuse where it is one.</summary>
+        private void Weigh(Frame frame, int index, JsonSchemaSubset.Reading reading)
+        {
+            var part = frame.Parts[index];
+
+            switch (frame.Node)
+            {
+                case Or:
+                    HeldToABoolean(reading, said => $"joins '{part.Written}', which is {said}, with ||; || joins booleans, and nothing is read as true or as false but true and false");
+                    break;
+
+                case And:
+                    HeldToABoolean(reading, said => $"joins '{part.Written}', which is {said}, with &&; && joins booleans, and nothing is read as true or as false but true and false");
+                    break;
+
+                case Compare compare:
+                    if (reading.Kinds is { Count: > 0 } kinds && kinds.All(kind => kind is "array" or "object"))
+                    {
+                        _problem($"compares '{part.Written}', which is {Said(reading)}, with {compare.Operator}; {compare.Operator} compares two scalars, or null, and a list or an object is never one");
+                    }
+
+                    break;
+
+                case Not:
+                    HeldToABoolean(reading, said => $"applies ! to '{part.Written}', which is {said}; ! takes a boolean, and nothing is read as true or as false but true and false");
+                    break;
+
+                case Coalesce coalesce:
+                    var given = index < coalesce.Terms.Count - 1 ? reading.Without("null") : reading;
+                    frame.Gathered = frame.Gathered is null ? given : frame.Gathered.Or(given);
+                    break;
+
+                case Any any when index == 0:
+                    if (!reading.MayBe("array"))
+                    {
+                        _problem($"looks into '{any.List.Written}' with any, and it is {Said(reading)}; any looks into a list");
+                    }
+
+                    frame.List = reading;
+                    break;
+
+                case Any any:
+                    HeldToABoolean(reading, said => $"tests each item of '{any.List.Written}' with '{any.Test.Written}', which is {said}; the test of any yields a boolean for each item");
+                    _ = _items.Pop();
+                    break;
+
+                case Union:
+                    if (!reading.MayBe("array") && !reading.MayBe("null"))
+                    {
+                        _problem($"joins '{part.Written}', which is {Said(reading)}, with union; union joins lists");
+                        break;
+                    }
+
+                    var member = reading.Items ?? JsonSchemaSubset.Reading.Anything;
+                    frame.Gathered = frame.Gathered is null ? member : frame.Gathered.Or(member);
+                    break;
+            }
+        }
+
+        /// <summary>What <paramref name="frame"/>'s node yields, its parts all weighed.</summary>
+        private JsonSchemaSubset.Reading Ended(Frame frame) => frame.Node switch
+        {
+            Or or And or Compare or Not or Empty or Any => Boolean,
+            Coalesce => frame.Gathered!,
+            Union => JsonSchemaSubset.Reading.ListOf(frame.Gathered ?? JsonSchemaSubset.Reading.Anything),
+            Literal literal => literal.Reading,
+            Placeholder => JsonSchemaSubset.Reading.Of("string"),
+            Path path => path.Typed(_read, _problem, _items),
+            _ => throw new InvalidOperationException($"An expression holds a node of a kind the typing does not know: {frame.Node.GetType().Name}."),
+        };
+
+        /// <summary>
+        /// Says a part typed <paramref name="reading"/> is no boolean where it can be none, as <paramref name="what"/> words
+        /// the misuse around it: nothing is read as true or as false but <c>true</c> and <c>false</c>.
+        /// </summary>
+        private void HeldToABoolean(JsonSchemaSubset.Reading reading, Func<string, string> what)
+        {
+            if (!reading.MayBe("boolean"))
+            {
+                _problem(what(Said(reading)));
+            }
+        }
+    }
+
+    /// <summary>
+    /// One reading of one expression at run time: the tree gone down on a stack of frames of its own, left to right, each
+    /// part read before the node that joins it weighs it and a join settled by a part leaving the parts after it unread -
+    /// the short-circuits - with the items the <c>any(...)</c> calls around the part being read look into, the nearest last.
+    /// </summary>
+    private sealed class Evaluation
+    {
+        private readonly Func<Path, PathRead> _read;
+
+        /// <summary>Each <c>any(...)</c> around the part being read: the item its test names <c>it</c>.</summary>
+        private readonly Stack<FlowValue> _items = new();
+
+        private Evaluation(Func<Path, PathRead> read)
+        {
+            _read = read;
+        }
+
+        /// <summary>What <paramref name="root"/> yields, each path read through <paramref name="read"/>.</summary>
+        public static FlowValue Of(FlowExpression root, Func<Path, PathRead> read) => new Evaluation(read).Yielded(root);
+
+        /// <summary>One node being read: how many of its parts are handed down, and what it has gathered of them.</summary>
+        private sealed class Frame(FlowExpression node)
+        {
+            public FlowExpression Node { get; } = node;
+
+            /// <summary>How many of its parts have been handed down to be read.</summary>
+            public int Next { get; set; }
+
+            /// <summary>Whether the last part handed down has been read and waits to be weighed.</summary>
+            public bool Waiting { get; set; }
+
+            /// <summary>A comparison's left side, once it is read.</summary>
+            public object? Left { get; set; }
+
+            /// <summary>The list an <c>any(...)</c> looks into, once it is read.</summary>
+            public JsonArray? Items { get; set; }
+
+            /// <summary>How many of an <c>any(...)</c>'s items its test has been read for.</summary>
+            public int Item { get; set; }
+
+            /// <summary>What a <c>union</c> has joined so far.</summary>
+            public JsonArray Joined { get; } = [];
+        }
+
+        private FlowValue Yielded(FlowExpression root)
+        {
+            var frames = new Stack<Frame>();
+            var value = FlowValue.Missing;
+
+            frames.Push(new Frame(root));
+
+            while (frames.TryPeek(out var frame))
+            {
+                if (frame.Waiting)
+                {
+                    frame.Waiting = false;
+
+                    if (Weigh(frame, value) is { } settled)
+                    {
+                        value = settled;
+                        _ = frames.Pop();
+                        continue;
+                    }
+                }
+
+                if (NextOf(frame) is { } part)
+                {
+                    frame.Waiting = true;
+                    frames.Push(new Frame(part));
+                    continue;
+                }
+
+                value = Ended(frame);
+                _ = frames.Pop();
+            }
+
+            return value;
+        }
+
+        /// <summary>The part of <paramref name="frame"/>'s node to read next, or null where it has read all it reads.</summary>
+        private FlowExpression? NextOf(Frame frame)
+        {
+            switch (frame.Node)
+            {
+                case Any any:
+                    if (frame.Next == 0)
+                    {
+                        frame.Next = 1;
+                        return any.List;
+                    }
+
+                    // The test is read once for each item, which its 'it' names while it is read.
+                    if (frame.Item < frame.Items!.Count)
+                    {
+                        _items.Push(FlowValue.Of(frame.Items[frame.Item++]));
+                        return any.Test;
+                    }
+
+                    return null;
+
+                default:
+                    var parts = PartsOf(frame.Node);
+                    return frame.Next < parts.Count ? parts[frame.Next++] : null;
+            }
+        }
+
+        /// <summary>Weighs the part of <paramref name="frame"/>'s node just read, <paramref name="value"/>: what the node yields where that settles it, null where it reads on.</summary>
+        private FlowValue? Weigh(Frame frame, FlowValue value)
+        {
+            switch (frame.Node)
+            {
+                case Or or:
+                    // A true term settles the join; the terms after it are not read, which is the short-circuit.
+                    var term = or.Terms[frame.Next - 1];
+                    return value.AsBoolean(() => term.Written) ? FlowValue.Of(true) : null;
+
+                case And and:
+                    // A false term settles the join; the terms after it are not read, which is the short-circuit.
+                    var joined = and.Terms[frame.Next - 1];
+                    return value.AsBoolean(() => joined.Written) ? null : FlowValue.Of(false);
+
+                case Compare compare when frame.Next == 1:
+                    frame.Left = value.AsScalar(() => compare.Left.Written);
+                    return null;
+
+                case Compare compare:
+                    var equal = FlowValue.ScalarsEqual(frame.Left, value.AsScalar(() => compare.Right.Written));
+                    return FlowValue.Of(compare.Operator == "==" ? equal : !equal);
+
+                case Not not:
+                    return FlowValue.Of(!value.AsBoolean(() => not.Inner.Written));
+
+                case Coalesce coalesce:
+                    // The first term that is there and not null settles it: Missing and null both fall through, and the
+                    // last term is yielded as it is.
+                    return frame.Next < coalesce.Terms.Count && (value.IsMissing || value.IsNull) ? null : value;
+
+                case Empty:
+                    return FlowValue.Of(value.HoldsNothing);
+
+                case Any any when frame.Items is null:
+                    frame.Items = value.AsList(() => any.List.Written);
+                    return null;
+
+                case Any any:
+                    _ = _items.Pop();
+                    return value.AsBoolean(() => any.Test.Written) ? FlowValue.Of(true) : null;
+
+                case Union union:
+                    if (value.IsNull)
+                    {
+                        return null;
+                    }
+
+                    if (value.ToNode() is not JsonArray members)
+                    {
+                        throw new UnresolvedReadException($"'{union.Lists[frame.Next - 1].Written}' is {value.InWords()}, and union joins lists");
+                    }
+
+                    foreach (var member in members)
+                    {
+                        if (!frame.Joined.Any(held => JsonNode.DeepEquals(held, member)))
+                        {
+                            frame.Joined.Add(member?.DeepClone());
+                        }
+                    }
+
+                    return null;
+
+                default:
+                    return null;
+            }
+        }
+
+        /// <summary>What <paramref name="frame"/>'s node yields once it has read all it reads and nothing settled it.</summary>
+        private FlowValue Ended(Frame frame) => frame.Node switch
+        {
+            Or => FlowValue.Of(false),
+            And => FlowValue.Of(true),
+            Any => FlowValue.Of(false),
+            Coalesce => FlowValue.Missing,
+            Union => FlowValue.Of(frame.Joined),
+            Literal literal => FlowValue.Of(literal.Value),
+            Placeholder placeholder => placeholder.Yield(_read, _items),
+            Path path => path.Yield(_read, _items),
+            _ => throw new InvalidOperationException($"An expression holds a node of a kind the evaluation does not know: {frame.Node.GetType().Name}."),
+        };
+    }
+
+    /// <summary>
+    /// The reader of the grammar, over the text as written: each rule it is inside kept on a stack of its own - a rule
+    /// asks for the rule it reads next, and takes what that rule read when it ends - never a call per level, so an
+    /// expression nested however deep is read, and refused only for what the grammar does not say.
+    /// </summary>
     private sealed class Parser(string text)
     {
         private readonly string _text = text;
-
-        /// <summary>How deep the reader is: each construct inside another, and each name of a path after its first.</summary>
-        private int _depth;
 
         /// <summary>The parameter a refusal names.</summary>
         private const string Text = nameof(text);
@@ -816,75 +959,226 @@ public abstract record FlowExpression
         /// <summary>Where the reader sits, past any space: the column a refusal names.</summary>
         public int Stuck => Skip();
 
-        /// <summary>or = and { "||" and }</summary>
-        public FlowExpression Or()
+        /// <summary>The rules of the grammar, as the reader keeps them on its stack.</summary>
+        private enum Kind
         {
-            var terms = new List<FlowExpression> { And() };
+            /// <summary>or = and { "||" and }</summary>
+            Or,
 
-            while (Takes("||"))
-            {
-                terms.Add(And());
-            }
+            /// <summary>and = cmp { "&amp;&amp;" cmp }</summary>
+            And,
 
-            return terms.Count == 1 ? terms[0] : new Or(terms);
+            /// <summary>cmp = not [ ("==" | "!=") not ]</summary>
+            Cmp,
+
+            /// <summary>not = "!" not | coalesce</summary>
+            Not,
+
+            /// <summary>coalesce = primary { "??" primary }</summary>
+            Coalesce,
+
+            /// <summary>primary = "(" or ")" | empty( or ) | any( or , or ) | union( or { , or } ) | literal | placeholder | path</summary>
+            Primary,
         }
 
-        /// <summary>and = cmp { "&amp;&amp;" cmp }</summary>
-        private FlowExpression And()
+        /// <summary>Where a rule stands: what it asked for last, which says what it does with what that rule read.</summary>
+        private enum Stage
         {
-            var terms = new List<FlowExpression> { Cmp() };
+            /// <summary>Not begun.</summary>
+            Begun,
 
-            while (Takes("&&"))
-            {
-                terms.Add(Cmp());
-            }
+            /// <summary>Its next term asked for: an <c>or</c>'s, an <c>and</c>'s, a <c>??</c>'s or a <c>union</c>'s.</summary>
+            Term,
 
-            return terms.Count == 1 ? terms[0] : new And(terms);
+            /// <summary>A comparison's right side asked for.</summary>
+            Right,
+
+            /// <summary>A group's inside asked for.</summary>
+            Group,
+
+            /// <summary>An <c>empty(...)</c>'s inside asked for.</summary>
+            Empty,
+
+            /// <summary>An <c>any(...)</c>'s list asked for.</summary>
+            List,
+
+            /// <summary>An <c>any(...)</c>'s test asked for.</summary>
+            Test,
+
+            /// <summary>A <c>union(...)</c>'s next list asked for.</summary>
+            Union,
         }
 
-        /// <summary>cmp = not [ ("==" | "!=") not ]</summary>
-        private FlowExpression Cmp()
+        /// <summary>One rule being read: where it stands, and what it has read so far.</summary>
+        private sealed class Rule(Kind kind)
         {
-            var left = Not();
+            public Kind Kind { get; } = kind;
 
-            if (Takes("=="))
-            {
-                return new Compare(left, "==", Not());
-            }
+            public Stage Stage { get; set; }
 
-            return Takes("!=") ? new Compare(left, "!=", Not()) : left;
+            /// <summary>The terms an <c>or</c>, an <c>and</c>, a <c>??</c> or a <c>union</c> has read.</summary>
+            public List<FlowExpression> Terms { get; } = [];
+
+            /// <summary>A comparison's left side, or an <c>any(...)</c>'s list.</summary>
+            public FlowExpression? Left { get; set; }
+
+            /// <summary>A comparison's operator.</summary>
+            public string? Operator { get; set; }
+
+            /// <summary>How many <c>!</c> a <c>not</c> read before what they apply to.</summary>
+            public int Nots { get; set; }
         }
 
-        /// <summary>not = "!" not | coalesce</summary>
-        private FlowExpression Not()
+        /// <summary>The one expression the text holds from where the reader sits, read as far as the grammar reaches.</summary>
+        public FlowExpression Expression()
         {
-            if (!Takes("!"))
+            var rules = new Stack<Rule>();
+            FlowExpression? read = null;
+
+            rules.Push(new Rule(Kind.Or));
+
+            while (rules.TryPeek(out var rule))
             {
-                return Coalesce();
+                if (Step(rule, ref read) is { } asked)
+                {
+                    rules.Push(asked);
+                    read = null;
+                    continue;
+                }
+
+                // The rule ended: what it read is what the rule under it asked for.
+                _ = rules.Pop();
             }
 
-            Deeper();
-            var inner = Not();
-            _depth--;
-            return new Not(inner);
+            return read!;
         }
 
-        /// <summary>coalesce = primary { "??" primary }</summary>
-        private FlowExpression Coalesce()
+        /// <summary>
+        /// Moves <paramref name="rule"/> on, given <paramref name="read"/> - what the rule it asked for last read: the rule
+        /// it asks for next, or null where it ended, what it read left in <paramref name="read"/>.
+        /// </summary>
+        private Rule? Step(Rule rule, ref FlowExpression? read)
         {
-            var terms = new List<FlowExpression> { Primary() };
-
-            while (Takes("??"))
+            switch (rule.Kind)
             {
-                terms.Add(Primary());
+                case Kind.Or:
+                    return Joined(rule, ref read, "||", Kind.And, terms => new Or(terms));
+
+                case Kind.And:
+                    return Joined(rule, ref read, "&&", Kind.Cmp, terms => new And(terms));
+
+                case Kind.Coalesce:
+                    return Joined(rule, ref read, "??", Kind.Primary, terms => new Coalesce(terms));
+
+                case Kind.Cmp:
+                    switch (rule.Stage)
+                    {
+                        case Stage.Begun:
+                            rule.Stage = Stage.Term;
+                            return new Rule(Kind.Not);
+
+                        case Stage.Term:
+                            rule.Left = read;
+                            rule.Operator = Takes("==") ? "==" : Takes("!=") ? "!=" : null;
+
+                            if (rule.Operator is null)
+                            {
+                                return null;
+                            }
+
+                            rule.Stage = Stage.Right;
+                            return new Rule(Kind.Not);
+
+                        default:
+                            read = new Compare(rule.Left!, rule.Operator!, read!);
+                            return null;
+                    }
+
+                case Kind.Not:
+                    if (rule.Stage == Stage.Begun)
+                    {
+                        while (Takes("!"))
+                        {
+                            rule.Nots++;
+                        }
+
+                        rule.Stage = Stage.Term;
+                        return new Rule(Kind.Coalesce);
+                    }
+
+                    for (var not = 0; not < rule.Nots; not++)
+                    {
+                        read = new Not(read!);
+                    }
+
+                    return null;
+
+                default:
+                    return Primary(rule, ref read);
+            }
+        }
+
+        /// <summary>
+        /// One rule that joins terms of <paramref name="term"/> by <paramref name="operator"/>: its first term asked for,
+        /// then one more for each operator the text has next; one term is itself, more are joined by <paramref name="join"/>.
+        /// </summary>
+        private Rule? Joined(Rule rule, ref FlowExpression? read, string @operator, Kind term, Func<List<FlowExpression>, FlowExpression> join)
+        {
+            if (rule.Stage == Stage.Begun)
+            {
+                rule.Stage = Stage.Term;
+                return new Rule(term);
             }
 
-            return terms.Count == 1 ? terms[0] : new Coalesce(terms);
+            rule.Terms.Add(read!);
+
+            if (Takes(@operator))
+            {
+                return new Rule(term);
+            }
+
+            read = rule.Terms.Count == 1 ? rule.Terms[0] : join(rule.Terms);
+            return null;
         }
 
         /// <summary>primary = "(" or ")" | empty( or ) | any( or , or ) | union( or { , or } ) | literal | placeholder | path</summary>
-        private FlowExpression Primary()
+        private Rule? Primary(Rule rule, ref FlowExpression? read)
         {
+            switch (rule.Stage)
+            {
+                case Stage.Group:
+                    Expect(')');
+                    return null;
+
+                case Stage.Empty:
+                    Expect(')');
+                    read = new Empty(read!);
+                    return null;
+
+                case Stage.List:
+                    rule.Left = read;
+                    Expect(',');
+                    rule.Stage = Stage.Test;
+                    return new Rule(Kind.Or);
+
+                case Stage.Test:
+                    Expect(')');
+                    read = new Any(rule.Left!, read!);
+                    return null;
+
+                case Stage.Union:
+                    rule.Terms.Add(read!);
+
+                    if (Takes(","))
+                    {
+                        return new Rule(Kind.Or);
+                    }
+
+                    Expect(')');
+                    read = new Union(rule.Terms);
+                    return null;
+            }
+
             var at = Skip();
 
             if (at >= _text.Length)
@@ -894,12 +1188,9 @@ public abstract record FlowExpression
 
             if (_text[at] == '(')
             {
-                Deeper();
                 At = at + 1;
-                var inner = Or();
-                Expect(')');
-                _depth--;
-                return inner;
+                rule.Stage = Stage.Group;
+                return new Rule(Kind.Or);
             }
 
             if (_text[at] == '{')
@@ -912,92 +1203,74 @@ public abstract record FlowExpression
                 }
 
                 At = end + 1;
-                return new Placeholder(_text[(at + 1)..end].Trim());
+                read = new Placeholder(_text[(at + 1)..end].Trim());
+                return null;
             }
 
             if (_text[at] is '\'' or '"')
             {
-                return String(at);
+                read = String(at);
+                return null;
             }
 
             if (char.IsDigit(_text[at]))
             {
-                return Number(at);
+                read = Number(at);
+                return null;
             }
 
-            if (StartsName(_text[at]))
+            if (!StartsName(_text[at]))
             {
-                var (name, next) = Name(at);
-                At = next;
-
-                if (string.Equals(name, "empty", StringComparison.Ordinal))
-                {
-                    Expect('(');
-                    Deeper();
-                    var inner = Or();
-                    Expect(')');
-                    _depth--;
-                    return new Empty(inner);
-                }
-
-                if (string.Equals(name, "any", StringComparison.Ordinal))
-                {
-                    Expect('(');
-                    Deeper();
-                    var list = Or();
-                    Expect(',');
-                    var test = Or();
-                    Expect(')');
-                    _depth--;
-                    return new Any(list, test);
-                }
-
-                if (string.Equals(name, "union", StringComparison.Ordinal))
-                {
-                    Expect('(');
-                    Deeper();
-                    var lists = new List<FlowExpression> { Or() };
-
-                    while (Takes(","))
-                    {
-                        lists.Add(Or());
-                    }
-
-                    Expect(')');
-                    _depth--;
-                    return new Union(lists);
-                }
-
-                if (name is "true" or "false")
-                {
-                    return new Literal(name == "true");
-                }
-
-                if (name == "null")
-                {
-                    return new Literal(null);
-                }
-
-                var walked = Walk(name);
-
-                if (string.Equals(name, "previous", StringComparison.Ordinal) && walked is FlowExpression.Path { Steps: [] })
-                {
-                    throw new ArgumentException($"column {at + 1}: 'previous' names a step's work; say which one", Text);
-                }
-
-                return walked;
+                throw new ArgumentException($"column {at + 1}: '{_text[at]}' does not start a value", Text);
             }
 
-            throw new ArgumentException($"column {at + 1}: '{_text[at]}' does not start a value", Text);
+            var (name, next) = Name(at);
+            At = next;
+
+            switch (name)
+            {
+                case "empty":
+                    Expect('(');
+                    rule.Stage = Stage.Empty;
+                    return new Rule(Kind.Or);
+
+                case "any":
+                    Expect('(');
+                    rule.Stage = Stage.List;
+                    return new Rule(Kind.Or);
+
+                case "union":
+                    Expect('(');
+                    rule.Stage = Stage.Union;
+                    return new Rule(Kind.Or);
+
+                case "true" or "false":
+                    read = new Literal(name == "true");
+                    return null;
+
+                case "null":
+                    read = new Literal(null);
+                    return null;
+            }
+
+            var walked = Walk(name);
+
+            if (string.Equals(name, "previous", StringComparison.Ordinal) && walked.Steps.Count == 0)
+            {
+                throw new ArgumentException($"column {at + 1}: 'previous' names a step's work; say which one", Text);
+            }
+
+            read = walked;
+            return null;
         }
 
         /// <summary>
         /// path = root { "." key | "[" int "]" }, the root already read: written whole, so a dot or a bracket is part
         /// of the path only where it follows the name with no space between.
         /// </summary>
-        private FlowExpression Walk(string root)
+        private Path Walk(string root)
         {
-            var steps = new List<Path.Segment>();
+            var steps = new List<Segment>();
 
             while (true)
             {
@@ -1005,14 +1278,12 @@ public abstract record FlowExpression
 
                 if (at < _text.Length && _text[at] == '.' && at + 1 < _text.Length && StartsName(_text[at + 1]))
                 {
-                    Deeper();
                     var (key, next) = Name(at + 1);
-                    steps.Add(new Path.Segment(key, null));
+                    steps.Add(new Segment(key, null));
                     At = next;
                 }
                 else if (at < _text.Length && _text[at] == '[')
                 {
-                    Deeper();
                     var close = _text.IndexOf(']', at + 1);
 
                     if (close < 0 || WorkflowExpressions.WholeNumber(_text[(at + 1)..close]) is not { } index)
@@ -1020,29 +1291,18 @@ public abstract record FlowExpression
                         throw new ArgumentException($"the index at column {at + 1} is not a whole number from 0, written in digits alone with no leading zero", Text);
                     }
 
-                    steps.Add(new Path.Segment(null, index));
+                    steps.Add(new Segment(null, index));
                     At = close + 1;
                 }
                 else
                 {
-                    // A path's names went one deeper each; past the path the reader is as deep as before it.
-                    _depth -= steps.Count;
                     return new Path(root, steps);
                 }
             }
         }
 
-        /// <summary>Goes one deeper, refusing past <see cref="MostNesting"/>: the one bound on every recursion of the reader and of the tree it builds.</summary>
-        private void Deeper()
-        {
-            if (++_depth > MostNesting)
-            {
-                throw new ArgumentException($"the expression nests more than {MostNesting} deep", Text);
-            }
-        }
-
         /// <summary>A quoted string literal, its quote at <paramref name="at"/>.</summary>
-        private FlowExpression String(int at)
+        private Literal String(int at)
         {
             var quote = _text[at];
             var end = _text.IndexOf(quote, at + 1);
@@ -1057,7 +1317,7 @@ public abstract record FlowExpression
         }
 
         /// <summary>A number literal, its digits at <paramref name="at"/>.</summary>
-        private FlowExpression Number(int at)
+        private Literal Number(int at)
         {
             var end = at;
 
@@ -1075,7 +1335,7 @@ public abstract record FlowExpression
                 return new Literal(whole);
             }
 
-            return double.TryParse(text, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var fraction)
+            return double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out var fraction)
                 ? new Literal(fraction)
                 : throw new ArgumentException($"column {at + 1}: '{text}' is not a number an expression reads", Text);
         }
@@ -1085,7 +1345,7 @@ public abstract record FlowExpression
         {
             var at = Skip();
 
-            if (at + @operator.Length > _text.Length || !string.Equals(_text.Substring(at, @operator.Length), @operator, StringComparison.Ordinal))
+            if (at + @operator.Length > _text.Length || string.CompareOrdinal(_text, at, @operator, 0, @operator.Length) != 0)
             {
                 return false;
             }

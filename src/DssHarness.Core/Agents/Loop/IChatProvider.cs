@@ -85,10 +85,9 @@ public interface IChatProvider
 /// Whether the step has a model after this one to go on with, so a request the model declines is to leave it a credit,
 /// where the provider gives one (<see cref="ChatTurn.Credit"/>).
 /// </param>
-/// <param name="ShortenedBefore">
-/// Where the provider began sending the conversation shortened (<see cref="ChatPart.Shortened"/>): the messages before
-/// this one go out in the provider's short form, as every request of the conversation since sent them; null where it
-/// never began.
+/// <param name="ContextTokens">
+/// The most the context of the model asked holds, as its entry says it: what a provider that keeps its own count of the
+/// conversation sends no request past; 0 where the entry says nothing.
 /// </param>
 /// <param name="JsonAlone">
 /// Whether the agent's last answer read as no JSON and was sent back: a provider whose wire holds no answer to the schema
@@ -116,7 +115,7 @@ public sealed record ChatRequest(
     AgentKey? Key,
     string? Schema,
     bool Credit = false,
-    int? ShortenedBefore = null,
+    long ContextTokens = 0,
     bool JsonAlone = false,
     AgentFallbackCredit? CreditToken = null,
     string? FirstEffort = null);
@@ -144,20 +143,10 @@ public abstract record ChatPart
 
     /// <summary>
     /// Something the provider says of the request that is none of the answer's - what its server cleared of the
-    /// conversation's context for it - told as the run's notice; where the provider sends the conversation shortened, it
-    /// says so by <see cref="Shortened"/>, and the loop tells it.
+    /// conversation's context for it, a refused body still coming - told as the run's notice.
     /// </summary>
     /// <param name="Message">What it says.</param>
     public sealed record Notice(string Message) : ChatPart;
-
-    /// <summary>
-    /// The provider sends the messages before <paramref name="Before"/> shortened from this request on, to keep the
-    /// conversation within its model's context: the loop stores the point with the conversation and gives it with every
-    /// later request of it (<see cref="ChatRequest.ShortenedBefore"/>), a step that goes on in it among them, so each
-    /// sends what the last did and the cache misses once. Nothing stored is changed: only what is sent is shortened.
-    /// </summary>
-    /// <param name="Before">The first message sent whole, by its place in the conversation.</param>
-    public sealed record Shortened(int Before) : ChatPart;
 
     /// <summary>A fragment of the answer's text.</summary>
     /// <param name="Fragment">The fragment.</param>

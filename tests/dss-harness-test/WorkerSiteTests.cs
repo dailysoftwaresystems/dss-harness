@@ -12,8 +12,9 @@ namespace DssHarness.Tests;
 public sealed class WorkerSiteTests
 {
     /// <summary>
-    /// A site is dated two seconds past the clock where the worker's last build left nothing newer: no record, a record
-    /// naming no newest file, or one whose newest file is older than now.
+    /// A site is dated past the clock, by the granularity its build directory's file system dates files at, where the
+    /// worker's last build left nothing newer: no record, a record naming no newest file, or one whose newest file is
+    /// older than now.
     /// </summary>
     [Theory]
     [InlineData(false, null)]
@@ -32,20 +33,21 @@ public sealed class WorkerSiteTests
             Record(build, newestFromNow is { } seconds ? now.AddSeconds(seconds) : null);
         }
 
-        Assert.Equal(now + WorkerSite.Margin, new WorkerSite(harness.FileSystem, clock).Stamp(build));
+        var site = new WorkerSite(harness.FileSystem, clock);
+
+        Assert.Equal(now + site.Granularity(build), site.Stamp(build));
     }
 
     /// <summary>
     /// A site is dated past the newest file the worker's last build left where that is ahead of the clock, as a clock
-    /// stepped back since the build leaves it - unless it is more than a minute ahead, which no build waits out: it is
-    /// dated by the clock, and the build's own rule answers what that leaves.
+    /// stepped back since the build leaves it, or a WSL distribution's clock ahead of this machine's - however far ahead,
+    /// since the build waits it out.
     /// </summary>
     [Theory]
-    [InlineData(30.0, true)]
-    [InlineData(60.0, true)]
-    [InlineData(61.0, false)]
-    [InlineData(7200.0, false)]
-    public void ASite_IsDatedPastTheLastBuildsNewestFile_WhereThatIsAheadOfTheClock_ByAMinuteAtMost(double ahead, bool fromNewest)
+    [InlineData(30.0)]
+    [InlineData(61.0)]
+    [InlineData(7200.0)]
+    public void ASite_IsDatedPastTheLastBuildsNewestFile_WhereThatIsAheadOfTheClock_HoweverFar(double ahead)
     {
         using var temp = new TempDirectory();
         var harness = new HarnessFactory();
@@ -53,10 +55,38 @@ public sealed class WorkerSiteTests
         var now = clock.GetUtcNow().UtcDateTime;
         var build = temp.Combine("build");
         var newest = now.AddSeconds(ahead);
+        var site = new WorkerSite(harness.FileSystem, clock);
 
         Record(build, newest);
 
-        Assert.Equal((fromNewest ? newest : now) + WorkerSite.Margin, new WorkerSite(harness.FileSystem, clock).Stamp(build));
+        Assert.Equal(newest + site.Granularity(build), site.Stamp(build));
+    }
+
+    /// <summary>
+    /// The granularity a site is dated past by is the file system's own, measured where the build is: no time the file
+    /// system can tell apart from the one before it - a tick where it keeps ticks, a second or two where it dates coarsely
+    /// - and measured once for each build directory, on a file it removes at once.
+    /// </summary>
+    [Fact]
+    public void TheGranularity_IsTheFileSystemsOwn_MeasuredOnceWhereTheBuildIs()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var build = temp.Combine("build");
+        var site = new WorkerSite(harness.FileSystem, new JumpingClock());
+        var granularity = site.Granularity(build);
+        var probe = temp.Combine("probe");
+
+        Assert.InRange(granularity, TimeSpan.FromTicks(1), TimeSpan.FromSeconds(2) + TimeSpan.FromTicks(1));
+        Assert.Equal(granularity, site.Granularity(build));
+        Assert.Empty(Directory.EnumerateFileSystemEntries(build));
+
+        // Two times a granularity apart are kept apart there.
+        File.WriteAllText(probe, string.Empty);
+        File.SetLastWriteTimeUtc(probe, new DateTime(2026, 3, 1, 12, 0, 0, DateTimeKind.Utc));
+        var first = File.GetLastWriteTimeUtc(probe);
+        File.SetLastWriteTimeUtc(probe, first + granularity);
+        Assert.True(File.GetLastWriteTimeUtc(probe) > first);
     }
 
     /// <summary>A site is written whole and dated as it was stamped, and read back as the bytes it holds; a site that is no file reads as none.</summary>
@@ -120,11 +150,11 @@ public sealed class WorkerSiteTests
         var site = new WorkerSite(new HarnessFactory().FileSystem, clock);
         var stamp = clock.GetUtcNow().UtcDateTime + TimeSpan.FromSeconds(42);
 
-        await site.UntilPastAsync(stamp, TestContext.Current.CancellationToken);
+        await site.UntilPastAsync(stamp, _ => { }, TestContext.Current.CancellationToken);
 
         Assert.True(clock.GetUtcNow().UtcDateTime > stamp, $"the wait ended at {clock.GetUtcNow():O}, not past {stamp:O}");
         Assert.True(clock.GetUtcNow().UtcDateTime <= stamp + TimeSpan.FromSeconds(1), $"the wait ended at {clock.GetUtcNow():O}, long past {stamp:O}");
-        Assert.All(clock.Waits, wait => Assert.True(wait <= WorkerSite.LongestWait + TimeSpan.FromSeconds(1), $"one wait was {wait}"));
+        Assert.All(clock.Waits, wait => Assert.True(wait <= TimeSpan.FromSeconds(42) + TimeSpan.FromTicks(1), $"one wait was {wait}"));
     }
 
     /// <summary>
@@ -138,7 +168,7 @@ public sealed class WorkerSiteTests
         var site = new WorkerSite(new HarnessFactory().FileSystem, clock);
         var stamp = clock.GetUtcNow().UtcDateTime + TimeSpan.FromSeconds(42);
 
-        await site.UntilPastAsync(stamp, TestContext.Current.CancellationToken);
+        await site.UntilPastAsync(stamp, _ => { }, TestContext.Current.CancellationToken);
 
         Assert.True(clock.GetUtcNow().UtcDateTime > stamp, $"the wait ended at {clock.GetUtcNow():O}, not past {stamp:O}");
     }
@@ -150,24 +180,44 @@ public sealed class WorkerSiteTests
         var clock = new JumpingClock();
         var site = new WorkerSite(new HarnessFactory().FileSystem, clock);
 
-        await site.UntilPastAsync(clock.GetUtcNow().UtcDateTime - TimeSpan.FromSeconds(1), TestContext.Current.CancellationToken);
+        var told = new List<string>();
+
+        await site.UntilPastAsync(clock.GetUtcNow().UtcDateTime - TimeSpan.FromSeconds(1), wait => told.Add(wait.Line()), TestContext.Current.CancellationToken);
 
         Assert.Empty(clock.Waits);
+        Assert.Empty(told);
     }
 
     /// <summary>
-    /// A clock that never reaches the stamp - stepped back while the build waited - is waited for no longer than a stamp
-    /// is ever ahead of it: the build that follows is the one to answer for the step.
+    /// A clock behind the stamp - a WSL distribution's clock three minutes ahead of this machine's left the build's files
+    /// dated there - is waited for until it is past it, however far behind, and told: as the wait begins, how far behind
+    /// this machine's clock is, and every five minutes while a longer one lasts. Red with the minute's longest wait put back.
     /// </summary>
     [Fact]
-    public async Task AClockThatNeverReachesTheStamp_IsWaitedForNoLongerThanAStampIsEverAhead()
+    public async Task AClockBehindTheStamp_IsWaitedAndTold()
     {
-        var clock = new StoppedWallClock();
+        var clock = new JumpingClock();
         var site = new WorkerSite(new HarnessFactory().FileSystem, clock);
+        var told = new List<string>();
+        var stamp = clock.GetUtcNow().UtcDateTime + TimeSpan.FromMinutes(3);
+        var subject = $"the clock to pass {stamp.ToString("yyyy-MM-dd HH:mm:ss.fffffff", System.Globalization.CultureInfo.InvariantCulture)}Z, which its site was dated by";
 
-        await site.UntilPastAsync(clock.GetUtcNow().UtcDateTime + TimeSpan.FromMinutes(30), TestContext.Current.CancellationToken);
+        await site.UntilPastAsync(stamp, wait => told.Add(wait.Line()), TestContext.Current.CancellationToken);
 
-        Assert.InRange(clock.Moved, WorkerSite.LongestWait + WorkerSite.Margin, WorkerSite.LongestWait + WorkerSite.Margin + WorkerSite.LongestWait + TimeSpan.FromSeconds(1));
+        Assert.True(clock.GetUtcNow().UtcDateTime > stamp, $"the wait ended at {clock.GetUtcNow():O}, not past {stamp:O}");
+        Assert.Equal([$"waits for {subject}: this machine's clock is 3m00s behind it"], told);
+
+        // Twelve minutes behind: told as it begins, and at five and ten minutes.
+        told.Clear();
+        var further = clock.GetUtcNow().UtcDateTime + TimeSpan.FromMinutes(12);
+
+        await site.UntilPastAsync(further, wait => told.Add(wait.Line()), TestContext.Current.CancellationToken);
+
+        Assert.True(clock.GetUtcNow().UtcDateTime > further);
+        Assert.Equal(3, told.Count);
+        Assert.EndsWith(": this machine's clock is 12m00s behind it", told[0], StringComparison.Ordinal);
+        Assert.StartsWith("has waited 5m00s for the clock to pass ", told[1], StringComparison.Ordinal);
+        Assert.StartsWith("has waited 10m00s for the clock to pass ", told[2], StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -206,28 +256,10 @@ public sealed class WorkerSiteTests
                 new Dictionary<string, DateTime>()).Write());
     }
 
-    /// <summary>A clock whose time of day stands still while time itself passes, as one stepped back as fast as it goes.</summary>
-    private sealed class StoppedWallClock : ManualClock
-    {
-        private readonly DateTimeOffset _wall = new(2026, 9, 30, 16, 32, 14, TimeSpan.Zero);
-
-        public override DateTimeOffset GetUtcNow() => _wall;
-
-        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
-        {
-            ArgumentNullException.ThrowIfNull(callback);
-
-            if (dueTime != Timeout.InfiniteTimeSpan)
-            {
-                Advance(dueTime);
-                ThreadPool.QueueUserWorkItem(_ => callback(state));
-            }
-
-            return new Inert();
-        }
-    }
-
-    /// <summary>A clock whose timers fire early: each wait it is given ends once half of it has passed.</summary>
+    /// <summary>
+    /// A clock whose timers fire early: each wait it is given ends once half of it has passed, rounded up to a whole tick,
+    /// since no timer ends before any time has passed.
+    /// </summary>
     private sealed class EarlyClock : ManualClock
     {
         public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
@@ -236,7 +268,7 @@ public sealed class WorkerSiteTests
 
             if (dueTime != Timeout.InfiniteTimeSpan)
             {
-                Advance(dueTime / 2);
+                Advance(TimeSpan.FromTicks((dueTime.Ticks + 1) / 2));
                 ThreadPool.QueueUserWorkItem(_ => callback(state));
             }
 

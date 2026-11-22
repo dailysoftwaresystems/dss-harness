@@ -24,9 +24,6 @@ public sealed class HostExecService(
     /// <summary>The command's name, which prefixes what it reports.</summary>
     public const string CommandName = "host-exec";
 
-    /// <summary>Longest asking WSL for its default distribution may take.</summary>
-    private static readonly TimeSpan DefaultDistributionBudget = TimeSpan.FromMinutes(2);
-
     private readonly IHarnessContextLoader _contextLoader = contextLoader;
     private readonly IHostInspector _inspector = inspector;
     private readonly IHostCommandRunner _hostCommands = hostCommands;
@@ -233,17 +230,16 @@ public sealed class HostExecService(
         }
 
         // wsl.exe that would not start - not installed, or mid-update - is raised by the runner that
-        // starts it, as WSL not being reachable, in the words the system gave.
-        var result = await _hostCommands
-            .ProbeDefaultWslDistributionAsync(DefaultDistributionBudget, cancellationToken)
+        // starts it, as WSL not being reachable, in the words the system gave. One that is slow to answer - a
+        // distribution starting cold - is waited for, and told while it lasts.
+        var result = await ProgramWait
+            .ToItsEndAsync(
+                _hostCommands.ProbeDefaultWslDistributionAsync,
+                "WSL to name its default distribution",
+                ProgramWait.Told(_output, CommandName),
+                clock: null,
+                cancellationToken)
             .ConfigureAwait(false);
-
-        if (result.TimedOut)
-        {
-            throw new HarnessException(
-                HarnessExit.HostUnavailable,
-                $"WSL did not name its default distribution within {DefaultDistributionBudget.TotalSeconds:0} seconds");
-        }
 
         var name = result.TrimmedOutput;
 
@@ -251,7 +247,7 @@ public sealed class HostExecService(
         {
             throw new HarnessException(
                 HarnessExit.HostUnavailable,
-                $"WSL did not name a default distribution (exit {result.ExitCode}): {HostProbes.Excerpt(result.StandardError + "\n" + result.StandardOutput)}");
+                $"WSL did not name a default distribution (exit {result.ExitCode}): {HostProbes.Quoted(result.StandardError + "\n" + result.StandardOutput)}");
         }
 
         return name;

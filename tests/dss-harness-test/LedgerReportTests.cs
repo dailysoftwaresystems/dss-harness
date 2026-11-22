@@ -379,6 +379,28 @@ public sealed class LedgerReportTests
     }
 
     /// <summary>
+    /// A leg's line keeps every item its detail stands for, whole, as the leg's named in the document - where a detail
+    /// names as many as fit and says the rest are there - and a leg whose detail names no list has none.
+    /// </summary>
+    [Fact]
+    public void TheDocument_KeepsEveryItemALegsDetailStandsFor()
+    {
+        var named = Enumerable.Range(0, 300).Select(index => $"in/{index:000}.txt").ToList();
+        var report = LedgerReport.From(
+        [
+            Entry("win", LegVerdict.Passed, TimeSpan.FromSeconds(1), string.Empty),
+            Entry("lin", LegVerdict.InputsMoved, TimeSpan.FromSeconds(1), "300 inputs changed") with { Named = named },
+        ],
+        durationWarningFactor: 0);
+
+        using var document = JsonDocument.Parse(report.ToJson(cancelled: false, unfinished: []));
+        var legs = document.RootElement.GetProperty("legs").EnumerateArray().ToList();
+
+        Assert.False(legs[0].TryGetProperty("named", out _));
+        Assert.Equal(named, legs[1].GetProperty("named").EnumerateArray().Select(item => item.GetString()));
+    }
+
+    /// <summary>
     /// A leg's line names each file its steps kept, as sync --pull takes it; a leg that kept nothing names none.
     /// </summary>
     [Fact]

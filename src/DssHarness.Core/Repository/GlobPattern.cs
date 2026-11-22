@@ -260,6 +260,101 @@ public sealed class GlobPattern
     }
 
     /// <summary>
+    /// How far a path read one segment at a time from its start has gone in being matched, as <see cref="Matches"/> reads
+    /// the whole path: the places in the pattern its segments so far may stand at, each <c>**</c> that may take no segment
+    /// passed; whether the pattern was matched by a directory above the segment read last; and whether by the path read so
+    /// far itself. Two paths whose readings stand alike are matched alike by every continuation of them, so a reader that
+    /// follows many spellings of one path at once - each segment of it one of several names - keeps one spelling of each
+    /// way the pattern can stand, never every spelling (the agents' policy, reading a Windows short name as each name it
+    /// may shorten). Read by <see cref="Begin"/>, <see cref="Next"/> and <see cref="Ends"/>, which decide what
+    /// <see cref="Matches"/> decides of the same path.
+    /// </summary>
+    /// <param name="Places">The places in the pattern, ascending, joined by commas; empty once a directory above is matched.</param>
+    /// <param name="MatchedAbove">Whether a directory above the segment read last - a path of fewer segments - is matched.</param>
+    /// <param name="MatchedHere">Whether the segments read so far are matched.</param>
+    internal readonly record struct Progress(string Places, bool MatchedAbove, bool MatchedHere);
+
+    /// <summary>Where a path stands before its first segment is read (<see cref="Progress"/>).</summary>
+    internal Progress Begin() => new(_anchored ? Joined(Passed([0])) : string.Empty, MatchedAbove: false, MatchedHere: false);
+
+    /// <summary>
+    /// Where a path stands once <paramref name="segment"/> is read after <paramref name="progress"/>: a segment's pattern
+    /// it matches passed, a <c>**</c> taking it, a trailing <c>**</c> - one segment or more - matched by it.
+    /// </summary>
+    /// <param name="progress">Where the path stood.</param>
+    /// <param name="segment">Its next segment.</param>
+    /// <param name="comparison">How names are compared, as <see cref="Matches"/> compares them.</param>
+    internal Progress Next(Progress progress, string segment, StringComparison comparison)
+    {
+        ArgumentNullException.ThrowIfNull(segment);
+
+        var above = progress.MatchedAbove || progress.MatchedHere;
+
+        if (above)
+        {
+            // A matched directory is matched all the way down: nothing below it changes that.
+            return new Progress(string.Empty, MatchedAbove: true, MatchedHere: false);
+        }
+
+        if (!_anchored)
+        {
+            return new Progress(string.Empty, MatchedAbove: false, MatchedHere: SegmentMatches(_segments[0], segment, comparison));
+        }
+
+        var reached = new HashSet<int>();
+        var matched = false;
+
+        foreach (var place in progress.Places.Split(',', StringSplitOptions.RemoveEmptyEntries).Select(int.Parse))
+        {
+            if (place >= _segments.Length)
+            {
+                continue;
+            }
+
+            if (_segments[place] == "**")
+            {
+                // A trailing '**' is matched by one segment or more; any other takes this one and stays.
+                matched |= place == _segments.Length - 1;
+                reached.Add(place);
+            }
+            else if (SegmentMatches(_segments[place], segment, comparison))
+            {
+                matched |= place + 1 == _segments.Length;
+                reached.Add(place + 1);
+            }
+        }
+
+        return new Progress(Joined(Passed(reached)), MatchedAbove: false, MatchedHere: matched);
+    }
+
+    /// <summary>
+    /// Whether the path read to <paramref name="progress"/> is matched, as <see cref="Matches"/> decides it: a directory
+    /// above it matched, or - where the pattern does not name a directory, which matches only what lies beneath one - the
+    /// path itself.
+    /// </summary>
+    internal bool Ends(Progress progress) => progress.MatchedAbove || (!_directoriesOnly && progress.MatchedHere);
+
+    /// <summary>The places <paramref name="places"/> stand for once each <c>**</c> but a trailing one is passed, taking no segment.</summary>
+    private SortedSet<int> Passed(IEnumerable<int> places)
+    {
+        var passed = new SortedSet<int>(places);
+        var waiting = new Stack<int>(passed);
+
+        while (waiting.TryPop(out var place))
+        {
+            if (place < _segments.Length - 1 && _segments[place] == "**" && passed.Add(place + 1))
+            {
+                waiting.Push(place + 1);
+            }
+        }
+
+        return passed;
+    }
+
+    /// <summary>The places, ascending, joined by commas: a progress's own spelling of them.</summary>
+    private static string Joined(SortedSet<int> places) => string.Join(',', places);
+
+    /// <summary>
     /// Whether some path is matched by this pattern and by <paramref name="other"/> both - one that exists or one that
     /// does not yet - so two patterns that would each let a different owner write a file are told apart from two that
     /// never meet.

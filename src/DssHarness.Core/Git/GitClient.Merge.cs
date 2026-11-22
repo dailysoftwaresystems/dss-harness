@@ -28,6 +28,9 @@ public sealed partial class GitClient
 
     private const string TheirsFile = "theirs";
 
+    /// <summary>The copy of ours the merge is written over.</summary>
+    private const string MergedFile = "merged";
+
     /// <summary>The file a directory of a work tree declares git's attributes for the paths below it in.</summary>
     private const string AttributesFile = ".gitattributes";
 
@@ -36,6 +39,12 @@ public sealed partial class GitClient
     /// -- 32,767 characters on Windows -- and a repository has more files than that allows.
     /// </summary>
     internal const int CommandLineBatchSize = 200;
+
+    /// <summary>
+    /// How many bytes of blobs one batch reads into memory together (<see cref="SizeBatches"/>): a working size, and never
+    /// a bound on what is read - a blob larger is read alone.
+    /// </summary>
+    internal const long ReadTogether = 16 * 1024 * 1024;
 
     /// <summary>
     /// Characters of path a single batch may carry, well inside the bound above, so a tree of long paths is batched by
@@ -80,12 +89,10 @@ public sealed partial class GitClient
         string directory,
         string tip,
         IReadOnlyList<string> paths,
-        int most,
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(tip);
         ArgumentNullException.ThrowIfNull(paths);
-        ArgumentOutOfRangeException.ThrowIfLessThan(most, 1);
 
         if (tip.StartsWith('-') || HoldsLineBreak(tip))
         {
@@ -95,14 +102,12 @@ public sealed partial class GitClient
         var asked = paths.Distinct(StringComparer.Ordinal).ToList();
         var held = new Dictionary<string, IReadOnlyList<GitHeldAt>>(StringComparer.Ordinal);
         var commits = 0;
-        var cut = false;
 
         // A path holding a line break can travel neither as a line of the walk's input nor as one of the batch's, so
         // such paths are asked about apart, each commit's listing read for them.
         foreach (var group in asked.GroupBy(HoldsLineBreak).Select(group => (Apart: group.Key, Paths: group.ToList())))
         {
-            var walked = await WalkAsync(directory, tip, group.Paths, group.Apart, most, cancellationToken).ConfigureAwait(false);
-            var read = walked.Take(most).ToList();
+            var read = await WalkAsync(directory, tip, group.Paths, group.Apart, cancellationToken).ConfigureAwait(false);
             var blobs = group.Apart
                 ? await BlobsApartAsync(directory, read, group.Paths, cancellationToken).ConfigureAwait(false)
                 : await BlobsAsync(directory, read, group.Paths, cancellationToken).ConfigureAwait(false);
@@ -113,10 +118,9 @@ public sealed partial class GitClient
             }
 
             commits = Math.Max(commits, read.Count);
-            cut |= walked.Count > most;
         }
 
-        return new GitPathHistory(held, commits, cut);
+        return new GitPathHistory(held, commits);
     }
 
     public async Task<IReadOnlyList<GitRename>> ListRenamesAsync(
@@ -182,14 +186,14 @@ public sealed partial class GitClient
     }
 
     /// <summary>
-    /// The commits of the history of <paramref name="tip"/> that changed any of <paramref name="paths"/>, newest first:
-    /// one more than <paramref name="most"/> at most, whose being there is what says the history goes further back.
+    /// Every commit of the history of <paramref name="tip"/> that changed any of <paramref name="paths"/>, newest first, as
+    /// git's own walk lists them: each commit once, however many merges reach it.
     /// </summary>
-    private async Task<IReadOnlyList<string>> WalkAsync(string directory, string tip, IReadOnlyList<string> paths, bool asArguments, int most, CancellationToken cancellationToken)
+    private async Task<IReadOnlyList<string>> WalkAsync(string directory, string tip, IReadOnlyList<string> paths, bool asArguments, CancellationToken cancellationToken)
     {
         // --full-history, because a version a merge dropped was still that history's: simplified, the walk follows only
         // the side a merge took, and what the other side held at the path is never listed.
-        string[] walk = ["--literal-pathspecs", "rev-list", "--full-history", $"--max-count={most + 1}"];
+        string[] walk = ["--literal-pathspecs", "rev-list", "--full-history"];
 
         // The paths travel on standard input, after the commit and the line that ends the commits, so no list of them
         // outgrows a command line; a path that cannot be a line of it is named as an argument instead.
@@ -299,41 +303,8 @@ public sealed partial class GitClient
         return InScratchAsync<IReadOnlyList<byte[]>>(what, async scratch =>
         {
             var store = await StoreAsync(directory, scratch, cancellationToken).ConfigureAwait(false);
-            var ids = new string?[contents.Count];
-            var files = new List<(int At, string File)>();
-
-            for (var at = 0; at < contents.Count; at++)
-            {
-                switch (contents[at])
-                {
-                    case GitContent.Blob blob:
-                        ids[at] = blob.Id;
-                        break;
-                    case GitContent.File file:
-                        files.Add((at, Path.GetFullPath(file.Path)));
-                        break;
-                    case GitContent.Bytes bytes:
-                        var held = Path.Combine(scratch, $"content-{at}");
-                        await File.WriteAllBytesAsync(held, bytes.Content, cancellationToken).ConfigureAwait(false);
-                        files.Add((at, held));
-                        break;
-                }
-            }
-
-            if (files.Count > 0)
-            {
-                // Written, since it is the object that is read back - into the store of this question's own, never the
-                // repository's.
-                var hashed = await StoredIdsAsync(directory, [.. files.Select(file => file.File)], path, written: true, store, what, cancellationToken)
-                    .ConfigureAwait(false);
-
-                for (var at = 0; at < files.Count; at++)
-                {
-                    ids[files[at].At] = hashed[at];
-                }
-            }
-
-            var read = await ReadBatchAsync(directory, [.. ids.Select(id => id!)], what, store, cancellationToken).ConfigureAwait(false);
+            var ids = await StoredVersionsAsync(directory, path, contents, scratch, store, what, cancellationToken).ConfigureAwait(false);
+            var read = await ReadBatchAsync(directory, ids, what, store, cancellationToken).ConfigureAwait(false);
 
             return [.. read.Select((answer, at) => answer is { Type: "blob" } blob
                 ? Encoding.Latin1.GetBytes(blob.Content)
@@ -667,43 +638,276 @@ public sealed partial class GitClient
         });
     }
 
-    public Task<GitTextMerge> MergeTextAsync(byte[] ancestor, byte[] ours, byte[] theirs, GitMergeNames names, CancellationToken cancellationToken = default)
+    public Task<GitTextMerge> MergeAsync(string directory, string path, IReadOnlyList<GitContent> versions, GitMergeNames names, CancellationToken cancellationToken = default)
     {
-        ArgumentNullException.ThrowIfNull(ancestor);
-        ArgumentNullException.ThrowIfNull(ours);
-        ArgumentNullException.ThrowIfNull(theirs);
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        ArgumentNullException.ThrowIfNull(versions);
         ArgumentNullException.ThrowIfNull(names);
 
-        return InScratchAsync("merge three versions of a file", async scratch =>
+        if (versions.Count != 3)
         {
-            await File.WriteAllBytesAsync(Path.Combine(scratch, AncestorFile), ancestor, cancellationToken).ConfigureAwait(false);
-            await File.WriteAllBytesAsync(Path.Combine(scratch, OursFile), ours, cancellationToken).ConfigureAwait(false);
-            await File.WriteAllBytesAsync(Path.Combine(scratch, TheirsFile), theirs, cancellationToken).ConfigureAwait(false);
+            throw new ArgumentException($"A merge is of three versions - what both held, ours and theirs - and {versions.Count} were given.", nameof(versions));
+        }
+
+        var what = $"merge three versions of '{path}'";
+
+        return InScratchAsync(what, async scratch =>
+        {
+            // Each version as git stores it at the path - a blob as it is, a file or bytes through the path's clean filters -
+            // into a store of the question's own, then unpacked as those bytes into a file of the scratch: what is merged.
+            var store = await StoreAsync(directory, scratch, cancellationToken).ConfigureAwait(false);
+            IReadOnlyList<string> ids;
+
+            try
+            {
+                ids = await StoredVersionsAsync(directory, path, versions, scratch, store, $"read '{path}' as git would store it", cancellationToken).ConfigureAwait(false);
+            }
+            catch (HarnessException ex) when (ex.ExitCode == HarnessExit.CommandFailed)
+            {
+                // A version git cannot bring to the form it stores - a filter that fails on it - is an answer: nothing to merge.
+                return GitTextMerge.Unstored(ex.Message);
+            }
+
+            var gitDirectory = await AbsoluteGitDirectoryAsync(directory, what, cancellationToken).ConfigureAwait(false);
+            string[] named = [AncestorFile, OursFile, TheirsFile];
+
+            for (var at = 0; at < named.Length; at++)
+            {
+                await UnpackAsync(gitDirectory, scratch, store, ids[at], Path.Combine(scratch, named[at]), what, cancellationToken).ConfigureAwait(false);
+            }
+
+            // The merge is written over a copy of ours, a file on disk, and never through this process; ours itself is kept,
+            // for the hunks it changed are counted against what both held.
+            File.Copy(Path.Combine(scratch, OursFile), Path.Combine(scratch, MergedFile));
 
             // Run where the three are, outside any repository, and told how a conflict is written: --diff3, so no
             // configuration changes what is shown, and markers no line of the three could be taken for.
-            var size = MarkerSize(ancestor, ours, theirs);
+            var size = MarkerSize([.. named.Select(name => Path.Combine(scratch, name))]);
             var merged = await RunForBytesAsync(
                     scratch,
-                    ["merge-file", "-p", "--diff3", $"--marker-size={size}", "-L", names.Ours, "-L", names.Ancestor, "-L", names.Theirs, OursFile, AncestorFile, TheirsFile],
+                    ["merge-file", "--diff3", $"--marker-size={size}", "-L", names.Ours, "-L", names.Ancestor, "-L", names.Theirs, MergedFile, AncestorFile, TheirsFile],
                     cancellationToken)
                 .ConfigureAwait(false);
 
-            // git's exit code is the answer, read as it is and never as success or failure: 0 is a clean merge, whose
-            // output is the merged bytes; 1 to 127 is that many conflicts, 127 standing for as many or more; anything
-            // else is no merge at all - a binary file, for one - said in git's own words.
+            // git's exit code is the answer, read as it is and never as success or failure: 0 is a clean merge; 1 to 127
+            // says the merge conflicts, its count cut at 127, so the conflicts are counted by their markers; anything else
+            // is no merge at all - a binary file, for one - said in git's own words.
             if (merged is { TimedOut: false, ExitCode: 0 })
             {
+                var blob = (await HashAsync(directory, [Path.Combine(scratch, MergedFile)], new Hashing(Written: true, Filtered: false), what, cancellationToken).ConfigureAwait(false))[0];
+
                 return GitTextMerge.Clean(
-                    Encoding.Latin1.GetBytes(merged.StandardOutput),
+                    blob,
                     await HunksAsync(scratch, OursFile, cancellationToken).ConfigureAwait(false),
                     await HunksAsync(scratch, TheirsFile, cancellationToken).ConfigureAwait(false));
             }
 
-            return merged is { TimedOut: false, ExitCode: >= 1 and <= GitTextMerge.MostConflictsCounted }
-                ? GitTextMerge.Conflicting(merged.ExitCode, ConflictsShown(Encoding.Latin1.GetBytes(merged.StandardOutput), size))
-                : GitTextMerge.Unmerged(merged.FailureMessage);
+            if (merged is { TimedOut: false, ExitCode: >= 1 and <= GitTextMerge.MostConflictsCounted })
+            {
+                var (conflicts, shown) = ConflictsOf(Path.Combine(scratch, MergedFile), size);
+
+                return conflicts > 0
+                    ? GitTextMerge.Conflicting(conflicts, shown)
+                    : throw new HarnessException(HarnessExit.CommandFailed, $"Could not {what}: git said the merge conflicts, and its output holds no conflict's markers.");
+            }
+
+            return GitTextMerge.Unmerged(merged.FailureMessage);
         });
+    }
+
+    public Task<T> CheckedOutAsync<T>(string directory, string path, string blob, bool executable, Func<string, Task<T>> use, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        ArgumentException.ThrowIfNullOrWhiteSpace(blob);
+        ArgumentNullException.ThrowIfNull(use);
+
+        var what = $"write '{path}' as git would check it out";
+
+        return HandedAsync(what, scratch => CheckOutIntoAsync(directory, path, blob, executable, scratch, what, cancellationToken), use);
+    }
+
+    public Task<T> UnpackedAsync<T>(string directory, string blob, Func<string, Task<T>> use, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(blob);
+        ArgumentNullException.ThrowIfNull(use);
+
+        var what = $"read blob {blob} as git stores it";
+
+        return HandedAsync(
+            what,
+            async scratch =>
+            {
+                var unpacked = Path.Combine(scratch, "unpacked");
+                await UnpackAsync(await AbsoluteGitDirectoryAsync(directory, what, cancellationToken).ConfigureAwait(false), scratch, store: null, blob, unpacked, what, cancellationToken)
+                    .ConfigureAwait(false);
+                return unpacked;
+            },
+            use);
+    }
+
+    /// <summary>
+    /// Checks <paramref name="blob"/> out at <paramref name="path"/> as the work tree at <paramref name="directory"/> would,
+    /// under a directory of <paramref name="scratch"/>, and names the file written: an index of the question's own holding
+    /// the one entry, so git reads the work tree's attributes and settings for the path as a checkout does, and writes
+    /// nothing of the tree's.
+    /// </summary>
+    private async Task<string> CheckOutIntoAsync(string directory, string path, string blob, bool executable, string scratch, string what, CancellationToken cancellationToken)
+    {
+        var index = Path.Combine(scratch, $"index-{Guid.NewGuid():N}");
+        var written = Path.Combine(scratch, $"checked-out-{Guid.NewGuid():N}") + Path.DirectorySeparatorChar;
+
+        // git makes the directories that lead to the file inside the prefix, but not the prefix itself, so it is made
+        // here before anything is checked out into it.
+        Directory.CreateDirectory(written);
+
+        var entry = await RunWithIndexAsync(
+                directory,
+                index,
+                ["--literal-pathspecs", "update-index", "--add", "--cacheinfo", $"{(executable ? "100755" : "100644")},{blob},{path}"],
+                standardInput: null,
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        Ensure(entry, what);
+
+        var checkedOut = await RunWithIndexAsync(directory, index, ["--literal-pathspecs", "checkout-index", $"--prefix={written}", "--", path], standardInput: null, cancellationToken)
+            .ConfigureAwait(false);
+
+        Ensure(checkedOut, what);
+
+        return Path.Combine(written, path.Replace('/', Path.DirectorySeparatorChar));
+    }
+
+    /// <summary>
+    /// Hands <paramref name="use"/> the file <paramref name="make"/> writes in a scratch of the question's own, removed once
+    /// <paramref name="use"/> has answered. What <paramref name="use"/> raises is its own, and reaches the caller as it was
+    /// raised: never taken for a scratch that could not be written.
+    /// </summary>
+    private static async Task<T> HandedAsync<T>(string what, Func<string, Task<string>> make, Func<string, Task<T>> use)
+    {
+        System.Runtime.ExceptionServices.ExceptionDispatchInfo? failed = null;
+
+        var answer = await InScratchAsync(what, async scratch =>
+            {
+                var file = await make(scratch).ConfigureAwait(false);
+
+                try
+                {
+                    return await use(file).ConfigureAwait(false);
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    failed = System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(ex);
+                    return default!;
+                }
+            })
+            .ConfigureAwait(false);
+
+        failed?.Throw();
+
+        return answer;
+    }
+
+    /// <summary>
+    /// The blob each of <paramref name="versions"/> is as git stores it at <paramref name="path"/>, in order: a blob's own
+    /// id, and a file's or bytes' read through the path's rules and written into <paramref name="store"/>.
+    /// </summary>
+    private async Task<IReadOnlyList<string>> StoredVersionsAsync(
+        string directory,
+        string path,
+        IReadOnlyList<GitContent> versions,
+        string scratch,
+        ObjectStore store,
+        string what,
+        CancellationToken cancellationToken)
+    {
+        var ids = new string?[versions.Count];
+        var files = new List<(int At, string File)>();
+        string? gitDirectory = null;
+
+        for (var at = 0; at < versions.Count; at++)
+        {
+            var held = Path.Combine(scratch, $"content-{at}");
+
+            switch (versions[at])
+            {
+                case GitContent.Blob blob:
+                    ids[at] = blob.Id;
+                    break;
+                case GitContent.File file:
+                    files.Add((at, Path.GetFullPath(file.Path)));
+                    break;
+                case GitContent.Bytes bytes:
+                    await File.WriteAllBytesAsync(held, bytes.Content, cancellationToken).ConfigureAwait(false);
+                    files.Add((at, held));
+                    break;
+                case GitContent.BlobAsFile { CheckedOutIn: null } raw:
+                    gitDirectory ??= await AbsoluteGitDirectoryAsync(directory, what, cancellationToken).ConfigureAwait(false);
+                    await UnpackAsync(gitDirectory, scratch, store, raw.Id, held, what, cancellationToken).ConfigureAwait(false);
+                    files.Add((at, held));
+                    break;
+                case GitContent.BlobAsFile checkedOut:
+                    files.Add((at, await CheckOutIntoAsync(checkedOut.CheckedOutIn!, path, checkedOut.Id, executable: false, scratch, what, cancellationToken).ConfigureAwait(false)));
+                    break;
+                default:
+                    throw new ArgumentException($"Content is one of four kinds, and {versions[at].GetType().Name} is none of them.", nameof(versions));
+            }
+        }
+
+        if (files.Count > 0)
+        {
+            // Written, since it is the object that is read back - into the store of this question's own, never the
+            // repository's.
+            var hashed = await StoredIdsAsync(directory, [.. files.Select(file => file.File)], path, written: true, store, what, cancellationToken).ConfigureAwait(false);
+
+            for (var at = 0; at < files.Count; at++)
+            {
+                ids[files[at].At] = hashed[at];
+            }
+        }
+
+        return [.. ids.Select(id => id!)];
+    }
+
+    /// <summary>The git directory of the work tree at <paramref name="directory"/>, as an absolute path.</summary>
+    private async Task<string> AbsoluteGitDirectoryAsync(string directory, string what, CancellationToken cancellationToken)
+    {
+        var result = await RunQueryAsync(directory, ["rev-parse", "--absolute-git-dir"], cancellationToken).ConfigureAwait(false);
+
+        Ensure(result, what);
+
+        return result.StandardOutput.Trim();
+    }
+
+    /// <summary>
+    /// Writes the bytes of <paramref name="blob"/>, as git stores them, to the file <paramref name="into"/>: unpacked by
+    /// git itself (<c>git unpack-file</c>), which converts nothing, into the scratch, and named.
+    /// </summary>
+    private async Task UnpackAsync(string gitDirectory, string scratch, ObjectStore? store, string blob, string into, string what, CancellationToken cancellationToken)
+    {
+        // Run in the scratch, which git unpacks into, and told the repository whose objects it reads: the store of the
+        // question's own, where there is one, the repository's beside it.
+        var unpacked = await RunCoreAsync(
+                scratch,
+                [$"--git-dir={gitDirectory}", "unpack-file", blob],
+                echoOutput: false,
+                untranslated: false,
+                indexFile: null,
+                standardInput: null,
+                cancellationToken,
+                objects: store)
+            .ConfigureAwait(false);
+
+        Ensure(unpacked, what);
+
+        var name = unpacked.StandardOutput.Trim();
+
+        if (name.Length == 0 || name.IndexOfAny(['/', '\\']) >= 0)
+        {
+            throw new HarnessException(HarnessExit.CommandFailed, $"Could not {what}: git unpack-file named '{name}', which is no file of the directory it ran in.");
+        }
+
+        File.Move(Path.Combine(scratch, name), into);
     }
 
     public async Task<IReadOnlyList<byte[]?>> ReadBlobsAsync(string directory, IReadOnlyList<string> objects, CancellationToken cancellationToken = default)
@@ -818,6 +1022,41 @@ public sealed partial class GitClient
         return declared.ToDictionary(pair => pair.Key, pair => (IReadOnlyDictionary<string, string>)pair.Value, StringComparer.Ordinal);
     }
 
+    /// <summary>
+    /// Groups blobs, by the index of each in <paramref name="sizes"/>, into batches read together - each by one git
+    /// process (<see cref="ReadBlobsAsync"/>) - of at most <see cref="ReadTogether"/> bytes in all: every blob is in one,
+    /// in order, and one larger than that is a batch of its own, which a reader that need not hold it whole reads from a
+    /// file instead (<see cref="UnpackedAsync"/>). A history of any size so costs no more memory than its largest batch.
+    /// A blob git holds no size for counts as none.
+    /// </summary>
+    /// <param name="sizes">Each blob's size, as <see cref="ReadBlobSizesAsync"/> answers it.</param>
+    internal static IEnumerable<IReadOnlyList<int>> SizeBatches(IReadOnlyList<long?> sizes)
+    {
+        ArgumentNullException.ThrowIfNull(sizes);
+
+        var batch = new List<int>();
+        long held = 0;
+
+        for (var at = 0; at < sizes.Count; at++)
+        {
+            var size = sizes[at] ?? 0;
+
+            if (batch.Count > 0 && held + size > ReadTogether)
+            {
+                yield return batch;
+                (batch, held) = ([], 0);
+            }
+
+            batch.Add(at);
+            held += size;
+        }
+
+        if (batch.Count > 0)
+        {
+            yield return batch;
+        }
+    }
+
     /// <summary>Groups paths into invocations neither too many nor too long for one command line.</summary>
     internal static IEnumerable<List<string>> CommandLineBatches(IReadOnlyList<string> paths)
     {
@@ -844,89 +1083,132 @@ public sealed partial class GitClient
     }
 
     /// <summary>
-    /// How long a conflict's markers are made for these three versions: <see cref="DefaultMarkerSize"/>, or one more than
-    /// the longest run of a marker's character that begins a line of any of them, so that a file holding such a line
-    /// cannot have it taken for a conflict.
+    /// How long a conflict's markers are made for these three versions, each a file read a block at a time:
+    /// <see cref="DefaultMarkerSize"/>, or one more than the longest run of a marker's character that begins a line of any
+    /// of them, so that a file holding such a line cannot have it taken for a conflict.
     /// </summary>
-    private static int MarkerSize(params byte[][] versions)
+    private static int MarkerSize(IReadOnlyList<string> versions)
     {
         var longest = 0;
+        var buffer = new byte[64 * 1024];
 
         foreach (var version in versions)
         {
-            for (var at = 0; at < version.Length; at++)
-            {
-                if ((at == 0 || version[at - 1] == (byte)'\n') && MarkerCharacters.Contains((char)version[at], StringComparison.Ordinal))
-                {
-                    var run = 1;
+            using var read = File.OpenRead(version);
 
-                    while (at + run < version.Length && version[at + run] == version[at])
+            // Where the scan stands: at a line's start, inside a run of one marker character from a line's start, or past it.
+            var atStart = true;
+            byte runOf = 0;
+            var run = 0;
+
+            for (var got = read.Read(buffer); got > 0; got = read.Read(buffer))
+            {
+                foreach (var next in buffer.AsSpan(0, got))
+                {
+                    if (run > 0 && next == runOf)
                     {
                         run++;
+                        continue;
                     }
 
                     longest = Math.Max(longest, run);
-                    at += run - 1;
+                    run = 0;
+
+                    if (atStart && MarkerCharacters.Contains((char)next, StringComparison.Ordinal))
+                    {
+                        (runOf, run) = (next, 1);
+                    }
+
+                    atStart = next == (byte)'\n';
                 }
             }
+
+            longest = Math.Max(longest, run);
         }
 
         return Math.Max(DefaultMarkerSize, longest + 1);
     }
 
     /// <summary>
-    /// The conflicts of a merge's output, each from its opening marker to its closing one, a line to an element: the
-    /// first <see cref="GitTextMerge.MostConflictsShown"/>, <see cref="GitTextMerge.MostLinesShown"/> lines of each,
-    /// with a line saying how much more there is. A marker is a line that begins with as many of its character as the
-    /// merge was told to write, which no line of the three versions does.
+    /// The conflicts of a merge's output, the file <paramref name="merged"/> read a line at a time - a line ends at a line
+    /// feed, as git's do - each from its opening marker to its closing one, a line to an element: every conflict, counted,
+    /// and every line of each. A marker is a line that begins with as many of its character as the merge was told to
+    /// write, which no line of the three versions does. A line outside a conflict is read past and held nowhere, so the
+    /// merged file's size costs nothing but its conflicts.
     /// </summary>
-    private static List<string> ConflictsShown(byte[] output, int markerSize)
+    private static (int Conflicts, List<string> Shown) ConflictsOf(string merged, int markerSize)
     {
         var opening = new string('<', markerSize);
         var closing = new string('>', markerSize);
         var shown = new List<string>();
         var conflicts = 0;
-        var lines = 0;
         var inside = false;
+        var line = new List<byte>();
+        var buffer = new byte[64 * 1024];
 
-        foreach (var line in Encoding.UTF8.GetString(output).Split('\n').Select(line => line.TrimEnd('\r')))
+        // A line outside a conflict is held only as far as its marker would reach; one inside is held whole.
+        void Ended()
         {
-            if (!inside && line.StartsWith(opening, StringComparison.Ordinal))
+            var text = Encoding.UTF8.GetString([.. line]).TrimEnd('\r');
+
+            if (!inside && text.StartsWith(opening, StringComparison.Ordinal))
             {
                 inside = true;
                 conflicts++;
-                lines = 0;
             }
 
-            if (!inside)
+            if (inside)
             {
-                continue;
-            }
+                shown.Add(Shown(text));
 
-            lines++;
-
-            if (conflicts <= GitTextMerge.MostConflictsShown && lines <= GitTextMerge.MostLinesShown)
-            {
-                shown.Add(Shown(line));
-            }
-
-            if (line.StartsWith(closing, StringComparison.Ordinal))
-            {
-                if (conflicts <= GitTextMerge.MostConflictsShown && lines > GitTextMerge.MostLinesShown)
+                if (text.StartsWith(closing, StringComparison.Ordinal))
                 {
-                    shown.Add($"({ReportText.Counted(lines - GitTextMerge.MostLinesShown, "more line")} of this conflict, not shown)");
+                    inside = false;
                 }
+            }
 
-                inside = false;
+            line.Clear();
+        }
+
+        using (var read = File.OpenRead(merged))
+        {
+            var last = (byte)'\n';
+
+            // How many of the line's first bytes open a conflict's marker; once the marker's length, the line opens one.
+            var opened = 0;
+
+            for (var got = read.Read(buffer); got > 0; got = read.Read(buffer))
+            {
+                foreach (var next in buffer.AsSpan(0, got))
+                {
+                    last = next;
+
+                    if (next == (byte)'\n')
+                    {
+                        Ended();
+                        opened = 0;
+                        continue;
+                    }
+
+                    if (line.Count == opened && opened < markerSize && next == (byte)'<')
+                    {
+                        opened++;
+                    }
+
+                    if (inside || line.Count < markerSize || opened == markerSize)
+                    {
+                        line.Add(next);
+                    }
+                }
+            }
+
+            if (last != (byte)'\n')
+            {
+                Ended();
             }
         }
 
-        if (conflicts > GitTextMerge.MostConflictsShown)
-        {
-            shown.Add($"({ReportText.Counted(conflicts - GitTextMerge.MostConflictsShown, "more conflict")}, not shown)");
-        }
-
-        return shown;
+        return (conflicts, shown);
     }
 
     /// <summary>
@@ -942,9 +1224,11 @@ public sealed partial class GitClient
     /// </summary>
     private async Task<int> HunksAsync(string scratch, string side, CancellationToken cancellationToken)
     {
+        // Written by git to a file, and read back a line at a time: a regenerated file's diff is as large as the file.
+        var hunks = Path.Combine(scratch, $"{side}.diff");
         var result = await RunForBytesAsync(
                 scratch,
-                ["diff", "--no-index", "--no-color", "--no-ext-diff", "--no-textconv", "-U0", "--", AncestorFile, side],
+                ["diff", "--no-index", "--no-color", "--no-ext-diff", "--no-textconv", "-U0", $"--output={hunks}", "--", AncestorFile, side],
                 cancellationToken)
             .ConfigureAwait(false);
 
@@ -954,7 +1238,42 @@ public sealed partial class GitClient
             throw new HarnessException(HarnessExit.CommandFailed, $"Could not count the hunks of a merge: {result.FailureMessage}");
         }
 
-        return result.StandardOutput.Split('\n').Count(line => line.StartsWith("@@", StringComparison.Ordinal));
+        if (!File.Exists(hunks))
+        {
+            return 0;
+        }
+
+        // A hunk's header is a line that begins with "@@", a line ending at a line feed as git's do.
+        var count = 0;
+        var atStart = true;
+        var matched = 0;
+        var buffer = new byte[64 * 1024];
+
+        using var read = File.OpenRead(hunks);
+
+        for (var got = read.Read(buffer); got > 0; got = read.Read(buffer))
+        {
+            foreach (var next in buffer.AsSpan(0, got))
+            {
+                if (next == (byte)'\n')
+                {
+                    (atStart, matched) = (true, 0);
+                    continue;
+                }
+
+                if (atStart && next == (byte)'@')
+                {
+                    matched++;
+                    atStart = matched < 2;
+                    count += matched == 2 ? 1 : 0;
+                    continue;
+                }
+
+                atStart = false;
+            }
+        }
+
+        return count;
     }
 
     /// <summary>

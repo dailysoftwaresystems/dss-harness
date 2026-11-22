@@ -1,23 +1,14 @@
 namespace DssHarness.Core.Execution;
 
 /// <summary>
-/// Watches through .NET's own watcher, one for each directory watched: a handle, a buffer and a thread apiece - on Linux
-/// an inotify instance apiece besides - which is why a watch through it bounds how many watchers it makes besides the
-/// root's (<see cref="MostDirectoriesWatched"/>). Windows and macOS watch through it, and Linux where inotify cannot be
-/// called directly.
+/// Watches through .NET's own watcher: one for a tree, of its root all the way down, since each watcher is a handle, a
+/// buffer and a thread - on Linux an inotify instance besides - whatever it covers. What it hears is kept only where it
+/// names an input or a directory above one, and an overflow of its buffer - a build below the root writing faster than
+/// it is read - is read again from the inputs themselves (<see cref="IWatchSink.Overflowed"/>). Windows and macOS watch
+/// through it, and Linux where inotify cannot be called directly.
 /// </summary>
 public sealed class FileSystemWatcherKind : IWatchKind
 {
-    /// <summary>
-    /// How many directories a watch through .NET's watcher takes at most besides the root's own - each holding inputs,
-    /// and each above them watched for the names in it alone, alike: each is a watcher, a handle, a buffer and a thread.
-    /// Past it, the top-level directories watching the most are watched all the way down instead, one watch each, until
-    /// the rest fit, and a tree whose inputs lie in more top-level directories than this is watched whole: a watcher per
-    /// directory would spend handles to no purpose. The bound is this kind's, and no watch's: a kind with none, as
-    /// inotify's hub on Linux is, watches every such directory for itself.
-    /// </summary>
-    public const int MostDirectoriesWatched = 64;
-
     /// <summary>
     /// The largest buffer the operating system accepts. Events arrive faster than they can be read
     /// during a build, and a buffer that overflows loses them silently, which this exists to avoid.
@@ -27,8 +18,13 @@ public sealed class FileSystemWatcherKind : IWatchKind
     private readonly Func<WatchTarget, IWatchSink, IDisposable> _watch;
 
     /// <summary>Watches through the runtime's own watcher.</summary>
-    internal FileSystemWatcherKind()
-        : this(Watch)
+    /// <param name="fsEvents">
+    /// Whether the runtime watches through macOS's FSEvents, which says events were dropped by an <see cref="IOException"/>
+    /// of its own - the only error it raises once a watch has started - rather than the
+    /// <see cref="InternalBufferOverflowException"/> it raises elsewhere.
+    /// </param>
+    internal FileSystemWatcherKind(bool fsEvents = false)
+        : this((target, sink) => Watch(target, sink, fsEvents))
     {
     }
 
@@ -40,7 +36,7 @@ public sealed class FileSystemWatcherKind : IWatchKind
     }
 
     /// <inheritdoc/>
-    public int? MostDirectories => MostDirectoriesWatched;
+    public bool WatchesTheRootWhole => true;
 
     /// <inheritdoc/>
     IDisposable IWatchKind.Start(IReadOnlyList<WatchTarget> targets, IWatchSink sink) => Start(targets, sink);
@@ -96,8 +92,9 @@ public sealed class FileSystemWatcherKind : IWatchKind
     /// <param name="watcher">The watcher, not yet started.</param>
     /// <param name="sink">Told of what it hears.</param>
     /// <param name="start">Starts it: the runtime's own enables its events.</param>
+    /// <param name="fsEvents">Whether the runtime watches through macOS's FSEvents, as <see cref="FileSystemWatcherKind(bool)"/> says.</param>
     /// <exception cref="InputsUnwatchedException">It raised an error while it started: it is let go first.</exception>
-    internal static FileSystemWatcher Started(FileSystemWatcher watcher, IWatchSink sink, Action<FileSystemWatcher> start)
+    internal static FileSystemWatcher Started(FileSystemWatcher watcher, IWatchSink sink, Action<FileSystemWatcher> start, bool fsEvents = false)
     {
         ArgumentNullException.ThrowIfNull(watcher);
         ArgumentNullException.ThrowIfNull(sink);
@@ -131,7 +128,17 @@ public sealed class FileSystemWatcherKind : IWatchKind
                     }
                 }
 
-                sink.Lost(e.GetException().Message);
+                // Events dropped while the watch goes on are read again from the inputs; any other error is the watch lost.
+                var error = e.GetException();
+
+                if (Overflow(error, fsEvents))
+                {
+                    sink.Overflowed(error.Message);
+                }
+                else
+                {
+                    sink.Lost(error.Message);
+                }
             };
 
             start(watcher);
@@ -151,10 +158,20 @@ public sealed class FileSystemWatcherKind : IWatchKind
     }
 
     /// <summary>
+    /// Whether <paramref name="error"/>, raised by a watcher that has started, says events were dropped while the watch goes
+    /// on: the runtime's buffer overflowing - or, through FSEvents, the one error it raises once started, its word that
+    /// a tree must be scanned again.
+    /// </summary>
+    /// <param name="error">What the watcher raised.</param>
+    /// <param name="fsEvents">Whether the runtime watches through macOS's FSEvents.</param>
+    internal static bool Overflow(Exception error, bool fsEvents)
+        => error is InternalBufferOverflowException || (fsEvents && error.GetType() == typeof(IOException));
+
+    /// <summary>
     /// The runtime's watcher over <paramref name="target"/>'s directory, started: for every entry in it, or, where only
     /// names are wanted, for the directories in it alone.
     /// </summary>
-    private static FileSystemWatcher Watch(WatchTarget target, IWatchSink sink)
+    private static FileSystemWatcher Watch(WatchTarget target, IWatchSink sink, bool fsEvents)
         => Started(
             new FileSystemWatcher(target.Directory)
             {
@@ -169,7 +186,8 @@ public sealed class FileSystemWatcherKind : IWatchKind
                         | NotifyFilters.CreationTime,
             },
             sink,
-            watcher => watcher.EnableRaisingEvents = true);
+            watcher => watcher.EnableRaisingEvents = true,
+            fsEvents);
 
     private static void Release(IEnumerable<IDisposable> watchers)
     {

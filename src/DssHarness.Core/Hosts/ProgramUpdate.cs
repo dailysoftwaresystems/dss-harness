@@ -1,6 +1,7 @@
 using DssHarness.Core.Platform;
 using DssHarness.Core.Processes;
 using DssHarness.Core.Results;
+using DssHarness.Core.Waiting;
 
 namespace DssHarness.Core.Hosts;
 
@@ -187,28 +188,34 @@ public sealed class ProgramUpdate(IProcessRunner processRunner, IHostPlatform pl
         return MachineWideMutex.NameFor(LockKind, [place], _platform.PathComparison == StringComparison.OrdinalIgnoreCase);
     }
 
+    /// <summary>What a wait for a change <paramref name="program"/> makes is told as, after <c>waits for</c>.</summary>
+    /// <param name="program">The program that changes what is installed, as its request names it.</param>
+    public static string ChangeSubject(string program) => $"'{program}' to change what is installed";
+
     /// <summary>
     /// The change itself, under <paramref name="held"/>: <paramref name="change"/> run never stopped,
     /// then what is installed read back the same way through <paramref name="listSince"/> and
-    /// <paramref name="readRelease"/>.
+    /// <paramref name="readRelease"/>. Each is waited for to its end, however long it takes - an install over a slow
+    /// link takes as long as it takes, and one cut off part way leaves half a program - and told through
+    /// <paramref name="told"/> every <see cref="Waits.SaidEvery"/> while it lasts; a bound a request carries is its own.
     /// </summary>
     /// <param name="held">The lock on the place the change writes, from <see cref="TryHold"/>, held for as long as this runs.</param>
-    /// <param name="change">The request that changes what is installed; its own bound is its budget.</param>
-    /// <param name="listSince">The request that lists what is installed since the change; its own bound is its budget.</param>
+    /// <param name="change">The request that changes what is installed.</param>
+    /// <param name="listSince">The request that lists what is installed since the change.</param>
     /// <param name="readRelease">
     /// What a listing that ran says of the program: the release it names, that the program is absent
     /// from it, or that it is not something the reader can read.
     /// </param>
-    /// <exception cref="ArgumentException">
-    /// <paramref name="held"/> has been let go, so it guards nothing; or <paramref name="change"/> or
-    /// <paramref name="listSince"/> carries no bound: neither can be stopped once begun, so one with none
-    /// would hold the change for good on a machine that never answers.
-    /// </exception>
+    /// <param name="told">Told where a change or a listing that lasts stands; nowhere where none is given.</param>
+    /// <param name="clock">The clock those waits are measured on; the machine's own where none is given.</param>
+    /// <exception cref="ArgumentException"><paramref name="held"/> has been let go, so it guards nothing.</exception>
     public async Task<ProgramChange> ChangeAsync(
         MachineWideHold held,
         ProcessRequest change,
         ProcessRequest listSince,
-        Func<string, ListedRelease> readRelease)
+        Func<string, ListedRelease> readRelease,
+        Action<WaitTold>? told = null,
+        TimeProvider? clock = null)
     {
         ArgumentNullException.ThrowIfNull(held);
         ArgumentNullException.ThrowIfNull(change);
@@ -220,18 +227,13 @@ public sealed class ProgramUpdate(IProcessRunner processRunner, IHostPlatform pl
             throw new ArgumentException("A change is run under the lock on the place it writes, and this one has been let go.", nameof(held));
         }
 
-        if (change.Timeout is null)
-        {
-            throw new ArgumentException("A change is run never stopped, so it carries a bound of its own.", nameof(change));
-        }
-
-        if (listSince.Timeout is null)
-        {
-            throw new ArgumentException("A listing since a change is run never stopped, so it carries a bound of its own.", nameof(listSince));
-        }
-
-        var ran = await _processRunner.RunAsync(change, CancellationToken.None).ConfigureAwait(false);
-        var listed = await _processRunner.RunAsync(listSince, CancellationToken.None).ConfigureAwait(false);
+        var tell = told ?? (_ => { });
+        var ran = await ProgramWait
+            .ToItsEndAsync(_ => _processRunner.RunAsync(change, CancellationToken.None), ChangeSubject(change.FileName), tell, clock, CancellationToken.None)
+            .ConfigureAwait(false);
+        var listed = await ProgramWait
+            .ToItsEndAsync(_ => _processRunner.RunAsync(listSince, CancellationToken.None), $"'{listSince.FileName}' to list what is installed since", tell, clock, CancellationToken.None)
+            .ConfigureAwait(false);
 
         return new ProgramChange(
             ran,

@@ -16,9 +16,6 @@ namespace DssHarness.Core.Web.Search;
 /// <param name="gh">Runs <c>gh</c>.</param>
 public sealed class WebSearchKeys(AgentKeyStore slot, GhProcess gh)
 {
-    /// <summary>How long the machine's <c>gh</c> login is waited for.</summary>
-    public static readonly TimeSpan GhLimit = TimeSpan.FromSeconds(30);
-
     private readonly AgentKeyStore _slot = slot;
     private readonly GhProcess _gh = gh;
 
@@ -95,7 +92,8 @@ public sealed class WebSearchKeys(AgentKeyStore slot, GhProcess gh)
     {
         try
         {
-            var token = (await _gh.RunAsync(layout.MainCheckoutRoot, ["auth", "token", "--hostname", host], "so the source is asked without the machine's gh login", GhLimit, cancellationToken).ConfigureAwait(false)).Trim();
+            // Waited for as every call of gh is, by the runner's own limit: no shorter one of this reader's.
+            var token = (await _gh.RunAsync(layout.MainCheckoutRoot, ["auth", "token", "--hostname", host], "so the source is asked without the machine's gh login", limit: null, cancellationToken).ConfigureAwait(false)).Trim();
 
             return token.Length > 0 ? new WebSearchKey(token, null) : new WebSearchKey(null, $"gh answered no token: the machine's gh login for {host} is signed out");
         }

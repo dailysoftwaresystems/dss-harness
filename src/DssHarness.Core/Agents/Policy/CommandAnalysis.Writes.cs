@@ -69,14 +69,18 @@ public static partial class CommandAnalysis
     /// </summary>
     /// <param name="analyzed">The command, as the analysis read it.</param>
     /// <param name="start">Where its program stands among its words: past its environment, or where a wrapper's program is.</param>
+    /// <param name="braces">
+    /// Whether a word's braces are spelled, each word they spell a place of its own; false where the caller decides a
+    /// brace word by its pattern (<see cref="AgentPolicy.SpelledAgainst"/>) rather than by each spelling.
+    /// </param>
     /// <returns>Each place, as spelled; empty where the command writes no file this reads.</returns>
-    public static IReadOnlyList<string> WriteTargets(AnalyzedCommand analyzed, int start)
+    public static IReadOnlyList<string> WriteTargets(AnalyzedCommand analyzed, int start, bool braces = true)
     {
         ArgumentNullException.ThrowIfNull(analyzed);
 
         var targets = analyzed.Redirects
             .Where(redirect => redirect.Operator is ">" or ">>" or "<>")
-            .SelectMany(redirect => PathsNamed(redirect.Target).Where(path => path.Whole).Select(path => path.Path))
+            .SelectMany(redirect => PathsNamed(redirect.Target, braces).Where(path => path.Whole).Select(path => path.Path))
             .ToList();
 
         var words = analyzed.Words;
@@ -86,9 +90,12 @@ public static partial class CommandAnalysis
             return targets;
         }
 
+        // The words from the program on are a view over the command's own, never a copy: a program that runs its words is
+        // asked at each of them, and a list as long as the command made for each would be the command's length twice over
+        // for every word of it.
         var program = Name(words[start]);
-        var command = words.Skip(start).ToList();
-        var arguments = command.Skip(1).ToList();
+        var command = new WordsFrom(words, start);
+        var arguments = new WordsFrom(words, start + 1);
 
         if (Is(program, "dd"))
         {
@@ -108,7 +115,7 @@ public static partial class CommandAnalysis
 
         if (Is(program, [.. CopyWriters]))
         {
-            targets.AddRange(CopyDestinations(program, command).SelectMany(word => PathsNamed(word).Where(path => path.Whole).Select(path => path.Path)));
+            targets.AddRange(CopyDestinations(program, command).SelectMany(word => PathsNamed(word, braces).Where(path => path.Whole).Select(path => path.Path)));
             return targets;
         }
 
@@ -124,12 +131,38 @@ public static partial class CommandAnalysis
 
             // A word that is no option names its paths; an option's word names the values it gives, never itself. A word of
             // text a writer is handed (Set-Content -Value 'see .git/x') is what it writes, not where.
-            targets.AddRange(PathsNamed(word)
+            targets.AddRange(PathsNamed(word, braces)
                 .Where(path => (ended || !word.StartsWith('-') || path.Path != word) && (path.Whole || !word.Any(char.IsWhiteSpace)))
                 .Select(path => path.Path));
         }
 
         return targets;
+    }
+
+    /// <summary>
+    /// The words of <paramref name="words"/> from <paramref name="start"/> on, as one list: a view over the words it is
+    /// given, nothing copied, so a reader asked at each word of a long command never makes a list as long as the command
+    /// for each of them.
+    /// </summary>
+    private readonly struct WordsFrom(IReadOnlyList<string> words, int start) : IReadOnlyList<string>
+    {
+        /// <inheritdoc/>
+        public int Count => Math.Max(0, words.Count - start);
+
+        /// <inheritdoc/>
+        public string this[int at] => words[start + at];
+
+        /// <inheritdoc/>
+        public IEnumerator<string> GetEnumerator()
+        {
+            for (var at = start; at < words.Count; at++)
+            {
+                yield return words[at];
+            }
+        }
+
+        /// <inheritdoc/>
+        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
     }
 
     /// <summary>
@@ -528,8 +561,12 @@ public static partial class CommandAnalysis
         }
 
         var program = Name(words[start]);
-        var command = words.Skip(start).ToList();
-        var arguments = command.Skip(1).ToList();
+
+        // The words from the program on are a view over the command's own, never a copy: a program that runs its words is
+        // asked at each of them, and a list as long as the command made for each would be the command's length twice over
+        // for every word of it.
+        var command = new WordsFrom(words, start);
+        var arguments = new WordsFrom(words, start + 1);
 
         IEnumerable<string> Plain(IEnumerable<string> each) => each.Where(word => word.Length > 0 && word[0] is not '-' and not '/');
 

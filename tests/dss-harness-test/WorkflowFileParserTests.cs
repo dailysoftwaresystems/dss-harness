@@ -1032,12 +1032,11 @@ public sealed class WorkflowFileParserTests
     }
 
     /// <summary>
-    /// An alias repeats a part of the file by reference, so a few hundred bytes could stand for millions of steps; and
-    /// YAML nested past any definition's depth would be recursed through to be read at all. Both are refused before the
-    /// file is read into nodes, with the line where each is met.
+    /// An alias repeats a part of the file by reference, so a few hundred bytes could stand for millions of steps: it is
+    /// refused before the file is read into nodes, with the line where it is met.
     /// </summary>
     [Fact]
-    public void AnAliasOrNestingNoDefinitionHolds_IsRefusedBeforeTheFileIsRead()
+    public void AnAlias_IsRefusedBeforeTheFileIsRead()
     {
         var aliased = Problems(
             """
@@ -1050,11 +1049,44 @@ public sealed class WorkflowFileParserTests
             """);
 
         Assert.Equal(["line 6, column 5: the alias '*step' repeats a part of the file by reference; a definition writes each of its steps out, so that what it says is what it reads."], aliased);
-
-        var nested = Problems($"name: default\ndescription: {new string('[', 20_000)}\nsteps: []\n");
-
-        Assert.Equal([$"line 2, column {WorkflowFileParser.MaxYamlDepth + 13}: the file nests more than {WorkflowFileParser.MaxYamlDepth} levels deep; no definition does, and steps themselves nest at most {WorkflowFileParser.MaxDepth}."], nested);
     }
+
+    /// <summary>
+    /// A value nested twenty thousand levels deep is no longer refused for its depth: it is read, on a stack of a
+    /// megabyte, and judged by the rule of the key it is given to, as a value one level deep would be - a description is
+    /// a single value.
+    /// </summary>
+    [Fact]
+    public async Task AValueTwentyThousandDeep_IsReadAndJudgedByItsKey()
+    {
+        Assert.Equal(
+            new ChildRunAnswer(0, "line 2, column 14: 'description' is not a single value.", ""),
+            await ChildRun.MethodAsync(typeof(WorkflowFileParserTests), nameof(ValueTwentyThousandDeep), TestContext.Current.CancellationToken));
+    }
+
+    /// <summary>The child of <see cref="AValueTwentyThousandDeep_IsReadAndJudgedByItsKey"/>: the file's problems.</summary>
+    internal static string ValueTwentyThousandDeep()
+        => SmallStack.Run(() => string.Join('\n', Problems($"name: default\ndescription: {new string('[', 20_000)}{new string(']', 20_000)}\nsteps:\n  - name: orient\n    type: orient\n")));
+
+    /// <summary>
+    /// A step's value nested a hundred thousand levels deep is walked for placeholders on a stack of the reader's own, on a
+    /// stack of a megabyte: the placeholder at its bottom is found and named, and the value is judged by its key's rule.
+    /// </summary>
+    [Fact]
+    public async Task AStepsValueAHundredThousandDeep_IsWalkedForPlaceholdersWithoutRecursion()
+    {
+        Assert.Equal(
+            new ChildRunAnswer(
+                0,
+                "line 7, column 200007: 'corpus.description' holds {inputs.x}, and description is no template: it is read as it is written, never filled; a run step fills inputs.\n"
+                + "line 7, column 7: 'corpus.description' is not a single value.",
+                ""),
+            await ChildRun.MethodAsync(typeof(WorkflowFileParserTests), nameof(StepsValueAHundredThousandDeep), TestContext.Current.CancellationToken));
+    }
+
+    /// <summary>The child of <see cref="AStepsValueAHundredThousandDeep_IsWalkedForPlaceholdersWithoutRecursion"/>: the file's problems.</summary>
+    internal static string StepsValueAHundredThousandDeep()
+        => SmallStack.Run(() => string.Join('\n', Problems($"name: default\nsteps:\n  - name: corpus\n    type: run\n    runner: corpus\n    description:\n      {string.Concat(Enumerable.Repeat("- ", 100_000))}'{{inputs.x}}'\n")));
 
     /// <summary>
     /// A budget is a number a run can count down - never NaN or infinity, and its tokens a whole number; a loop past its rounds may be bounded by
@@ -1295,9 +1327,11 @@ public sealed class WorkflowFileParserTests
               include: ["src/**"]
               exclude: []
               languages: [markdown]
-              maxFileBytes: 8192
               generated: exclude
               mapTokens: 900
+              keyNaming: [snake_case]
+              claims:
+                json: [.lang.json]
             steps:
               - name: map
                 type: graphify-codebase
@@ -1307,9 +1341,11 @@ public sealed class WorkflowFileParserTests
         Assert.Equal(["src/**"], read.CodebaseGraph!.Include!);
         Assert.Empty(read.CodebaseGraph.Exclude!);
         Assert.Equal(["markdown"], read.CodebaseGraph.Languages!);
-        Assert.Equal((8192, "exclude", 900), (read.CodebaseGraph.MaxFileBytes, read.CodebaseGraph.Generated, read.CodebaseGraph.MapTokens));
+        Assert.Equal(("exclude", 900), (read.CodebaseGraph.Generated, read.CodebaseGraph.MapTokens));
+        Assert.Equal(["snake_case"], read.CodebaseGraph.KeyNaming!);
+        Assert.Equal([".lang.json"], read.CodebaseGraph.Claims!["json"]);
         Assert.True(read.Steps[0].Rebuild);
-        Assert.Equal((8192L, true, 900), (read.CodebaseGraph.Shape.MaxFileBytes, read.CodebaseGraph.Shape.ExcludeGenerated, read.CodebaseGraph.Shape.MapTokens));
+        Assert.Equal((true, 900), (read.CodebaseGraph.Shape.ExcludeGenerated, read.CodebaseGraph.Shape.MapTokens));
 
         Assert.Single(Problems("""
             name: flow
@@ -1331,12 +1367,43 @@ public sealed class WorkflowFileParserTests
         Assert.Contains(Problems("""
             name: flow
             codebaseGraph:
-              maxFileBytes: lots
+              mapTokens: lots
             steps:
               - name: map
                 type: graphify-codebase
                 rebuild: often
             """), problem => problem.Contains("rebuild", StringComparison.Ordinal));
+
+        Assert.Contains(Problems("""
+            name: flow
+            codebaseGraph:
+              claims: [json]
+            steps:
+              - name: map
+                type: graphify-codebase
+            """), problem => problem.EndsWith("'codebaseGraph.claims' is not a mapping of an implementation's name to the endings it claims.", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// codebaseGraph.maxFileBytes is retired: every file the graph claims is read whole, streamed, whatever its size, so a
+    /// file that sets one is refused naming why - a key that loads is a key that is read - and the block's other keys read on.
+    /// </summary>
+    [Fact]
+    public void MaxFileBytes_IsRefusedNamingWhy()
+    {
+        Assert.Equal(
+            ["line 3, column 3: 'maxFileBytes' is not a key of codebaseGraph; every file the graph claims is read whole, streamed, whatever its size, so no size is set."],
+            Problems("""
+                name: flow
+                codebaseGraph:
+                  maxFileBytes: 8192
+                  mapTokens: 900
+                steps:
+                  - name: map
+                    type: graphify-codebase
+                """));
+
+        Assert.DoesNotContain(WorkflowKeys.CodebaseGraph, key => key.Name == "maxFileBytes");
     }
 
     /// <summary>A step's failOn takes its own type's values: incomplete is a graph step's, and a build's is refused it.</summary>

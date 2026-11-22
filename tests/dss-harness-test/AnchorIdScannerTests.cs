@@ -162,6 +162,24 @@ public sealed class AnchorIdScannerTests
         Assert.Equal(["D-FOO-BAR-BAZ"], Scanner.ScanLine(line));
     }
 
+    /// <summary>
+    /// <c>\x</c> is scanned whole, as C reads it: an id straight after a twelve-digit hex escape is followed, as one after
+    /// a two-digit one is, since C lets <c>\x</c> take any count of hex digits; a <c>\u</c> of other than four, or a
+    /// <c>\U</c> of other than eight, is still no escape, those counts being the standard's own. Red with the eight digits
+    /// put back.
+    /// </summary>
+    [Fact]
+    public void ATwelveDigitHexEscape_IsFollowed()
+    {
+        // Assembled from pieces, so no tool reading this file turns an escape into the character it names.
+        const string Backslash = "\\";
+
+        Assert.Equal(["D-FOO-BAR-BAZ"], Scanner.ScanLine("\"" + Backslash + "x0000000000AA" + "D-FOO-BAR-BAZ\""));
+        Assert.Equal(["D-FOO-BAR-BAZ"], Scanner.ScanLine("\"" + Backslash + "x" + new string('f', 40) + "D-FOO-BAR-BAZ\""));
+        Assert.Equal(["D-FOO-BAR-BAZ"], Scanner.ScanLine("\"" + Backslash + "U000000AAD-FOO-BAR-BAZ\""));
+        Assert.Empty(Scanner.ScanLine("\"" + Backslash + "u0000000000AAD-FOO-BAR-BAZ\""));
+    }
+
     [Theory]
     [InlineData("seeD-FOO-BAR-BAZ")]
     [InlineData("word1D-FOO-BAR-BAZ")]

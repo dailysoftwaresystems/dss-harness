@@ -153,32 +153,33 @@ public sealed class ToolLoopTests : IDisposable
     }
 
     /// <summary>
-    /// Where the provider says it began sending the conversation shortened is stored with it, which a notice says once,
-    /// and given with every later request - the one asked again after a failure, and a later step's that goes on in it,
-    /// among them; the first point holds, and a later one the provider says is let go of.
+    /// Every request sends the conversation whole - the one asked again after a failure, and a later step's that goes on
+    /// in it, among them, each holding the last one's messages first - and carries the context of the model asked, for a
+    /// provider that keeps its own count of the conversation to send none past it.
     /// </summary>
     [Fact]
-    public async Task WhereTheProviderBeganSendingTheConversationShortened_IsKept_ForEveryLaterRequest()
+    public async Task EveryRequest_SendsTheConversationWhole_WithTheContextOfTheModelAsked()
     {
         Write("a.txt", "alpha");
         _chat.Answer(FakeChat.Calling(View("c1", "a.txt")))
-            .Reply(new ChatPart.Shortened(2), new ChatPart.Failed(new ChatFailure(ChatFailureKind.Transient, "overloaded")))
+            .Reply(new ChatPart.Failed(new ChatFailure(ChatFailureKind.Transient, "overloaded")))
             .Answer(FakeChat.Calling(View("c2", "a.txt")))
             .Answer(FakeChat.Said("first"));
 
         var first = await Ran(Run());
 
-        _chat.Reply(new ChatPart.Shortened(4), new ChatPart.Began(FakeChat.Model), new ChatPart.Answered(FakeChat.Said("second")));
+        _chat.Answer(FakeChat.Said("second"));
 
         var second = await Ran(Run(userPrompt: "the next task", conversation: new AgentSessionRef("claude-api", "anthropic", first.Session!)));
 
         Assert.Equal((AgentRunStatus.Completed, AgentRunStatus.Completed), (first.Status, second.Status));
-        Assert.Equal([null, null, 2, 2, 2], _chat.Requests.Select(request => request.ShortenedBefore));
-        Assert.Equal("{\"before\":2}", File.ReadAllText(Path.Combine(_sessions, first.Session!, StoredConversation.ShortenedFileName)));
-        Assert.Equal(
-            $"The conversation {first.Session} is sent shortened before message 2 from now on, to keep it within the context of '{FakeChat.Model}'; what is stored stays whole.",
-            Assert.Single(_events.All.OfType<Notice>(), notice => notice.Text.Contains("is sent shortened", StringComparison.Ordinal)).Text);
-        Assert.Equal(_chat.Requests[3].Messages, _chat.Requests[4].Messages.Take(_chat.Requests[3].Messages.Count));
+        Assert.All(_chat.Requests, request => Assert.Equal(200000, request.ContextTokens));
+        Assert.Equal(_chat.Requests[1].Messages, _chat.Requests[2].Messages);
+
+        for (var at = 1; at < _chat.Requests.Count; at++)
+        {
+            Assert.Equal(_chat.Requests[at - 1].Messages, _chat.Requests[at].Messages.Take(_chat.Requests[at - 1].Messages.Count));
+        }
     }
 
     /// <summary>
@@ -244,51 +245,23 @@ public sealed class ToolLoopTests : IDisposable
 
     /// <summary>
     /// A turn the provider paused is stored as it is and sent again with nothing added, as the same turn - no turn of the
-    /// step's bound - and ten in a row end the run failed.
+    /// step's bound - each pause told before the request that goes on from it.
     /// </summary>
     [Fact]
     public async Task APausedTurn_IsSentAgainWithNothingAdded_AsTheSameTurn()
     {
+        Write("a.txt", "alpha");
         var paused = FakeChat.Said("a", stop: ChatStop.Paused);
         _chat.Answer(paused).Answer(FakeChat.Said("b"));
 
-        var result = await Ran(Run(limits: Limits(maxTurns: 1)));
+        var result = await Ran(Run(limits: Limits(maxTurns: 1)), loop: Loop(clock: new ManualClock()));
 
         Assert.Equal((AgentRunStatus.Completed, "ab", 1), (result.Status, result.FinalText, result.Turns));
         Assert.Equal([FakeChat.User(Asked), paused.Message], _chat.Requests[1].Messages);
         Assert.Equal(new AgentUsage(200, 20, 0, 0, 0, 0), Assert.Single(_events.All.OfType<TurnFinished>()).Usage);
         Assert.Equal(["a", "b"], _events.All.OfType<AssistantMessage>().Select(message => message.Text));
         Assert.Equal(["user", "assistant", "assistant"], Roles(Assert.Single(File.ReadAllLines(Path.Combine(_sessions, result.Session!, StoredConversation.ConversationFileName)))));
-
-        var chat = new FakeChat();
-
-        for (var each = 0; each < ToolLoop.MostPausesInARow; each++)
-        {
-            chat.Answer(paused);
-        }
-
-        var failed = await Ran(Run(), chat: chat);
-
-        Assert.Equal((AgentRunStatus.Failed, "the provider paused the turn 10 times in a row"), (failed.Status, failed.Error));
-
-        Write("a.txt", "alpha");
-        var broken = new FakeChat();
-
-        for (var each = 1; each < ToolLoop.MostPausesInARow; each++)
-        {
-            broken.Answer(paused);
-        }
-
-        broken.Answer(FakeChat.Calling(View("c1", "a.txt")));
-
-        for (var each = 1; each < ToolLoop.MostPausesInARow; each++)
-        {
-            broken.Answer(paused);
-        }
-
-        broken.Answer(FakeChat.Said("b"));
-
-        Assert.Equal(AgentRunStatus.Completed, (await Ran(Run(), chat: broken)).Status);
+        Assert.Equal($"waits for {ToolLoop.PausedTurn}: {ToolLoop.PausedAgain}; tries again now", Assert.Single(_events.All.OfType<Notice>()).Text);
 
         // Once stored, a paused turn is in the history: it is sent once, never again beside it.
         var stored = new FakeChat();
@@ -296,6 +269,54 @@ public sealed class ToolLoopTests : IDisposable
 
         Assert.Equal(AgentRunStatus.Completed, (await Ran(Run(), chat: stored)).Status);
         Assert.Single(stored.Requests[2].Messages, message => message == paused.Message);
+    }
+
+    /// <summary>
+    /// A provider that pauses a turn eleven times in a row is waited on for as long as it pauses - no count of pauses
+    /// ends the turn - each pause told with how long the turn has waited, and the answer is every piece of it. Red where
+    /// ten pauses in a row fail the run (MostPausesInARow).
+    /// </summary>
+    [Fact]
+    public async Task ElevenPausesInARow_KeepWaiting_Told()
+    {
+        var clock = new ManualClock();
+        var paused = FakeChat.Said("a", stop: ChatStop.Paused);
+
+        for (var each = 0; each < 11; each++)
+        {
+            _chat.Answer(paused);
+        }
+
+        _chat.Answer(FakeChat.Said("b"));
+
+        var result = await Ran(Run(), loop: Loop(clock: clock));
+        var told = _events.All.OfType<Notice>().Select(notice => notice.Text).ToList();
+
+        Assert.Equal((AgentRunStatus.Completed, $"{new string('a', 11)}b", 1), (result.Status, result.FinalText, result.Turns));
+        Assert.Equal(12, _chat.Requests.Count);
+        Assert.Equal([FakeChat.User(Asked), .. Enumerable.Repeat(paused.Message, 11)], _chat.Requests[^1].Messages);
+        Assert.Equal(11, told.Count);
+        Assert.All(told, line => Assert.Equal($"waits for {ToolLoop.PausedTurn}: {ToolLoop.PausedAgain}; tries again now", line));
+    }
+
+    /// <summary>
+    /// The pauses a turn waits through end at the step's own bounds, never at a count: a step's budget the paused
+    /// answers spent ends the run at it, said as the budget, before another request is sent.
+    /// </summary>
+    [Fact]
+    public async Task APausedTurnThatSpentTheBudget_EndsAtTheBudget()
+    {
+        var paused = FakeChat.Said("a", stop: ChatStop.Paused);
+
+        for (var each = 0; each < 5; each++)
+        {
+            _chat.Answer(paused);
+        }
+
+        var result = await Ran(Run(limits: Limits(budget: 0.002m)));
+
+        Assert.Equal((AgentRunStatus.BudgetSpent, "the step spent 0.00225 of its 0.002 USD budget"), (result.Status, result.Error));
+        Assert.Equal(3, _chat.Requests.Count);
     }
 
     /// <summary>
@@ -1052,8 +1073,7 @@ public sealed class ToolLoopTests : IDisposable
     [InlineData("noSessions", "ConfigurationWrong", "the run was given no place to keep its conversation")]
     [InlineData("otherEntry", "ConfigurationWrong", "the step runs on 'claude-sonnet-5-5', and the model's entry it was given is 'claude-opus-5-5'")]
     [InlineData("noMaxOutput", "ConfigurationWrong", "the entry of 'claude-opus-5-5' says no maxOutputTokens, and a request asks for at most that many")]
-    [InlineData("longSession", "ConfigurationWrong", "the conversation it was handed is named 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', which is no conversation's id: letters, digits, '-' and '_', at most 64")]
-    [InlineData("badSession", "ConfigurationWrong", "the conversation it was handed is named '../other', which is no conversation's id: letters, digits, '-' and '_', at most 64")]
+    [InlineData("badSession", "ConfigurationWrong", "the conversation it was handed is named '../other', which is no conversation's id: letters, digits, '-' and '_'")]
     [InlineData("otherClient", "ConfigurationWrong", "the conversation it was handed is client 'claude-code''s, and a conversation is gone on with by the client that began it")]
     [InlineData("search", "ConfigurationWrong", "the run's step has sources to search, and its host was given no web search to search them with")]
     public async Task ARunTheLoopCannotSignKeepOrServe_NeverStarts(string kind, string because, string why)
@@ -1067,9 +1087,8 @@ public sealed class ToolLoopTests : IDisposable
             "noModel" => Run() with { Model = null },
             "noSessions" => Run() with { SessionsDirectory = null },
             "otherEntry" => Run() with { Model = "claude-sonnet-5-5" },
-            "longSession" => Run(conversation: new AgentSessionRef("claude-api", "anthropic", new string('a', 65))),
             "noMaxOutput" => Run(),
-            "search" => Run() with { WebSearch = new AgentWebSearch([WebSearchFixtures.Source("alpha", """{ "kind": "json-api", "url": "https://alpha.example.test/?q={query}", "items": "$.items", "title": "{@.title}", "link": "{@.link}" }""")], 8, 60, new Dictionary<string, DssHarness.Core.Web.Search.WebSearchKey>()) },
+            "search" => Run() with { WebSearch = new AgentWebSearch([WebSearchFixtures.Source("alpha", """{ "kind": "json-api", "url": "https://alpha.example.test/?q={query}", "items": "$.items", "title": "{@.title}", "link": "{@.link}" }""")], 60, new Dictionary<string, DssHarness.Core.Web.Search.WebSearchKey>()) },
             _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, "no such run"),
         };
 
@@ -1091,7 +1110,7 @@ public sealed class ToolLoopTests : IDisposable
     {
         var run = Run(capabilities: [AgentCapability.Read, AgentCapability.Web]) with
         {
-            WebSearch = new AgentWebSearch([WebSearchFixtures.Source("alpha", """{ "kind": "json-api", "url": "https://alpha.example.test/?q={query}", "items": "$.items", "title": "{@.title}", "link": "{@.link}" }""")], 8, 60, new Dictionary<string, DssHarness.Core.Web.Search.WebSearchKey>()),
+            WebSearch = new AgentWebSearch([WebSearchFixtures.Source("alpha", """{ "kind": "json-api", "url": "https://alpha.example.test/?q={query}", "items": "$.items", "title": "{@.title}", "link": "{@.link}" }""")], 60, new Dictionary<string, DssHarness.Core.Web.Search.WebSearchKey>()),
             NativeSearch = new UsingNativeSearch(new AgentUsage(1000, 50, 0, 0, 0, 1)),
         };
         _chat.Answer(FakeChat.Calling(FakeChat.Call("c1", AgentTools.WebSearch, ("query", "group by")))).Answer(FakeChat.Said("done"));
@@ -1189,7 +1208,7 @@ public sealed class ToolLoopTests : IDisposable
     private AgentRun Searching(IAgentNativeSearch native)
         => Run(capabilities: [AgentCapability.Read, AgentCapability.Web]) with
         {
-            WebSearch = new AgentWebSearch([WebSearchFixtures.Source("alpha", """{ "kind": "json-api", "url": "https://alpha.example.test/?q={query}", "items": "$.items", "title": "{@.title}", "link": "{@.link}" }""")], 8, 60, new Dictionary<string, DssHarness.Core.Web.Search.WebSearchKey>()),
+            WebSearch = new AgentWebSearch([WebSearchFixtures.Source("alpha", """{ "kind": "json-api", "url": "https://alpha.example.test/?q={query}", "items": "$.items", "title": "{@.title}", "link": "{@.link}" }""")], 60, new Dictionary<string, DssHarness.Core.Web.Search.WebSearchKey>()),
             NativeSearch = native,
         };
 
@@ -1304,7 +1323,7 @@ public sealed class ToolLoopTests : IDisposable
     {
         var files = new PhysicalFileSystem(DssHarness.Core.Platform.FilePermissionsFactory.Create());
         var indexes = new DssHarness.Core.Web.Index.WebIndexes(files, new DssHarness.Core.Web.Index.SitemapFill(files, fetch, TimeProvider.System, (_, _) => Task.CompletedTask), TimeProvider.System);
-        var pace = new DssHarness.Core.Web.Search.WebSearchPace(files, () => Path.Combine(_step, "..", "pace.json"), TimeProvider.System, (_, _) => Task.CompletedTask);
+        var pace = new DssHarness.Core.Web.Search.WebSearchPace(files, () => Path.Combine(_step, "..", "pace.json"), TimeProvider.System, (_, _) => Task.CompletedTask, new DssHarness.Core.Execution.ProcessIdentity(new DssHarness.Core.Platform.HostPlatform()));
         var search = new DssHarness.Core.Web.Search.HarnessWebSearch(DssHarness.Core.Web.Search.WebSearchKinds.OfThisBuild, fetch, indexes, pace, files, TimeProvider.System);
 
         _opened.Add(search);
@@ -1897,14 +1916,17 @@ public sealed class ToolLoopTests : IDisposable
         Assert.Equal((AgentRunStatus.HandedOff, "z"), (result.Status, result.Handoff!.Answer));
     }
 
-    /// <summary>The handoff turn begins its own streak of pauses: the turn it abandoned counts nothing against it.</summary>
+    /// <summary>
+    /// The handoff turn goes on through its own pauses, and leaves behind what the provider paused of the turn it
+    /// abandoned: the handoff is the handoff turn's answer alone.
+    /// </summary>
     [Fact]
-    public async Task AStreakOfPauses_BeginsAfreshInTheHandoffTurn()
+    public async Task APausedTurnAbandonedForAHandoff_LeavesItsPiecesBehind()
     {
         var run = Run();
         var paused = FakeChat.Said("a", stop: ChatStop.Paused);
 
-        for (var each = 1; each < ToolLoop.MostPausesInARow; each++)
+        for (var each = 0; each < 9; each++)
         {
             _chat.Answer(paused);
         }

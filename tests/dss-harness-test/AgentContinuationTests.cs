@@ -14,8 +14,8 @@ namespace DssHarness.Tests;
 
 /// <summary>
 /// Going on with earlier work: the continuation record the engine puts together from the step directories of
-/// the agent - its parts in their order, its bounds, whatever is cut named with the copy that holds it whole, the last
-/// iterations word for word from the stored stream of the newest attempt - and the first user message's parts, the run
+/// the agent - its parts in their order, the last iterations first, word for word from the stored stream of the newest
+/// attempt, nothing of it cut, its pages by read_result - and the first user message's parts, the run
 /// context, the plan updates and the continuation record, as each client is sent them.
 /// </summary>
 public sealed class AgentContinuationTests : IDisposable
@@ -27,119 +27,131 @@ public sealed class AgentContinuationTests : IDisposable
 
     private static CancellationToken Token => TestContext.Current.CancellationToken;
 
-    /// <summary>The whole record: its parts in their order, the handoff and the cut-off message and the last iterations last.</summary>
+    /// <summary>
+    /// The whole record: what it is, then its last iterations word for word, the newest first, then the handoff, the
+    /// cut-off message, the last red build or test, the steps so far, the newest first, and the files changed.
+    /// </summary>
     [Fact]
-    public void TheRecord_HoldsItsPartsInTheirOrder()
+    public async Task TheRecord_HoldsItsPartsInTheirOrder()
     {
         var (work, workDirectory) = Work();
 
-        var record = Render(work, workDirectory);
+        var record = await RenderAsync(work, workDirectory);
+        var nl = Environment.NewLine;
 
         Assert.StartsWith(
-            "You are going on with work begun by step 'items[2].implement'. This is a new conversation. What follows is the engine's record of that work, ending with its last iterations word for word; the files are as that work left them.",
+            "You are going on with work begun by step 'items[2].implement'. This is a new conversation. What follows is the engine's record of that work, its last iterations first, word for word; the files are as that work left them.",
             record,
             StringComparison.Ordinal);
-        Assert.Contains("The steps so far, oldest first:", record, StringComparison.Ordinal);
-        Assert.Contains("step 'items[1].plan' ended done.", record, StringComparison.Ordinal);
-        Assert.Contains("step 'items[2].implement' ended stopped by a pause.", record, StringComparison.Ordinal);
-        Assert.Contains("  Notes: what was done and why", record, StringComparison.Ordinal);
-        Assert.Contains("  Output: {\"items\":[1]}", record, StringComparison.Ordinal);
-        Assert.Contains($"The files changed so far, by name:{Environment.NewLine}src/one.cs{Environment.NewLine}src/two.cs", record, StringComparison.Ordinal);
-        Assert.Contains($"- leg 'windows', phase 'build': the ledger's line (the ledger and its logs: {_temp.Combine("logs")})", record, StringComparison.Ordinal);
-        Assert.Contains($"{AgentContinuation.HandoffHeading}:{Environment.NewLine}{Environment.NewLine}Done: the form.", record, StringComparison.Ordinal);
-        Assert.Contains(AgentContinuation.CutOffMessage, record, StringComparison.Ordinal);
-        var expectedEnd =
-            $"iteration 2 of 2:{Environment.NewLine}the work stands{Environment.NewLine}{Environment.NewLine}call c-9 (view_file):{Environment.NewLine}  input: {{\"path\":\"a.txt\"}}{Environment.NewLine}  result: alpha{Environment.NewLine}  [the whole result is '{Path.Combine(work.StepDirectory, AgentCallRecords.ToolResultsDirectoryName, "c-9.txt")}']";
 
-        Assert.True(record.TrimEnd().EndsWith(expectedEnd, StringComparison.Ordinal), $"EXPECTED: [{expectedEnd}]{Environment.NewLine}ACTUAL: [{record.TrimEnd()[^Math.Min(400, record.Length)..]}]");
+        var copies = Path.Combine(workDirectory, AgentContinuation.CopiesFolder);
+        var newest = $"iteration 2 of 2:{nl}the work stands{nl}{nl}call c-9 (view_file):{nl}  input: {{\"path\":\"a.txt\"}}{nl}  result: alpha{nl}  [the whole result is '{Path.Combine(copies, AgentCallRecords.ToolResultsDirectoryName, "c-9.txt")}']";
+        var parts = new[]
+        {
+            "The last iterations, the newest first:",
+            newest,
+            "iteration 1 of 2:",
+            $"{AgentContinuation.HandoffHeading}:{nl}{nl}Done: the form.",
+            AgentContinuation.CutOffMessage,
+            $"- leg 'windows', phase 'build': the ledger's line (the ledger and its logs: {_temp.Combine("logs")})",
+            "The steps so far, the newest first:",
+            "- step 'items[2].implement' ended stopped by a pause.",
+            "  Notes: what was done and why",
+            "  Output: {\"items\":[1]}",
+            "- step 'items[1].plan' ended done.",
+            $"The files changed so far, by name:{nl}src/one.cs{nl}src/two.cs",
+        };
+
+        var at = 0;
+
+        foreach (var part in parts)
+        {
+            var found = record.IndexOf(part, at, StringComparison.Ordinal);
+            Assert.True(found >= 0, $"'{part}' is not after what came before it in:{nl}{record}");
+            at = found + part.Length;
+        }
+
+        // Kept whole among the results of the conversation it begins, as read_result reads it.
+        Assert.Equal(record, File.ReadAllText(AgentCallRecords.ResultFile(_temp.Combine("new-step"), KeptResults.ContinuationId)));
     }
 
     /// <summary>An agent that changed none says so; a chain that kept no step says the attempt wrote none.</summary>
     [Fact]
-    public void WhereNothingWasChangedOrWritten_TheRecordSaysSo()
+    public async Task WhereNothingWasChangedOrWritten_TheRecordSaysSo()
     {
         var work = new AgentContinuationWork("s-1", [], [], [], CutOff: false);
-        var record = Render(work, _temp.Combine("work"));
+        var record = await RenderAsync(work, _temp.Combine("work"));
 
         Assert.Contains("The files: this agent has changed none.", record, StringComparison.Ordinal);
         Assert.Contains("The last iterations: the attempt wrote none.", record, StringComparison.Ordinal);
+        Assert.Contains("The steps so far: none.", record, StringComparison.Ordinal);
     }
 
-    /// <summary>A step's notes and its output are each held to their own bound, cut at a whole line and named with the copy that holds the whole.</summary>
+    /// <summary>
+    /// A record of a hundred steps - each with its notes of 2,000 characters and its output, past the 60,000 the record's
+    /// own parts were once cut to - lists every step whole, the newest first, every changed path and every iteration: the
+    /// step's first message holds what it is, how many pages it is, what each page holds and its first page, and
+    /// read_result with the record's id gives every page of it, page 1 first, so every step's notes are read whole.
+    /// </summary>
     [Fact]
-    public void AStepsNotesAndOutput_AreHeldToTheirOwnBound_NamedWithTheCopy()
+    public async Task AContinuationRecordOfAHundredSteps_ListsEveryStep_PageOneInThePrompt()
     {
-        var (work, workDirectory) = Work();
-        var notes = new string('n', 40);
-        File.WriteAllText(Path.Combine(work.Steps[0].Directory, OrchestratorLayout.StepNotesFileName), $"first line{Environment.NewLine}{notes}");
+        var steps = new List<AgentContinuedStep>();
 
-        var record = Render(work, workDirectory, with => with with { StepChars = 12 });
-
-        Assert.Contains($"  Notes: first line{Environment.NewLine}  [... ", record, StringComparison.Ordinal);
-        Assert.DoesNotContain(notes, record, StringComparison.Ordinal);
-
-        var copy = Path.Combine(workDirectory, AgentContinuation.CopiesFolder, $"{work.Steps[0].Instance}-notes.md");
-
-        Assert.True(File.Exists(copy));
-        Assert.Equal($"first line{Environment.NewLine}{notes}", File.ReadAllText(copy));
-    }
-
-    /// <summary>The files list is cut at its bound of paths, the count of the rest said.</summary>
-    [Fact]
-    public void TheFilesList_IsCutAtItsBoundOfPaths()
-    {
-        var (work, workDirectory) = Work();
-        work = work with { ChangedPaths = [.. Enumerable.Range(1, 5).Select(each => $"src/file{each}.cs")] };
-
-        var record = Render(work, workDirectory, with => with with { Paths = 3 });
-
-        Assert.Contains($"src/file1.cs{Environment.NewLine}src/file2.cs{Environment.NewLine}src/file3.cs{Environment.NewLine}... and 2 more, not listed", record, StringComparison.Ordinal);
-        Assert.DoesNotContain("src/file4.cs", record, StringComparison.Ordinal);
-    }
-
-    /// <summary>What is over the record's own bound is given up by the oldest steps, each named by its copies; the newest step is never dropped, and the last iterations are never crowded out.</summary>
-    [Fact]
-    public void TheOldestStepsAreDroppedToTheirCopies_WhereTheRecordIsOverItsBound()
-    {
-        var (work, workDirectory) = Work();
-        File.WriteAllText(Path.Combine(work.Steps[0].Directory, OrchestratorLayout.StepNotesFileName), new string('n', 4_000));
-
-        var record = Render(work, workDirectory, with => with with { RecordChars = 1_200 });
-
-        Assert.Contains("1 older step left out here; each one's notes and output are in '", record, StringComparison.Ordinal);
-        Assert.DoesNotContain("step 'items[1].plan' ended done.", record, StringComparison.Ordinal);
-        Assert.Contains("step 'items[2].implement' ended stopped by a pause.", record, StringComparison.Ordinal);
-        Assert.Contains("iteration 2 of 2:", record, StringComparison.Ordinal);
-    }
-
-    /// <summary>The last iterations: the last ones whole whatever their size, then as many earlier ones as fit, never cut in the middle of one, the stream's copy named where earlier ones were left out.</summary>
-    [Fact]
-    public void TheLastIterations_AreTheLastWhole_ThenAsManyEarlierAsFit_NeverCutInOne()
-    {
-        var stream = new AgentEvent[]
+        foreach (var each in Enumerable.Range(1, 100))
         {
-            new RunStarted(1),
-            new TurnStarted(1),
-            new AssistantMessage("first", []),
-            new TurnStarted(2),
-            new AssistantMessage("second", []),
-            new TurnStarted(3),
-            new AssistantMessage("third", []),
-            new TurnStarted(4),
-            new AssistantMessage("fourth", []),
-            new TurnStarted(5),
-            new AssistantMessage("fifth", []),
-        };
+            var directory = Directory.CreateDirectory(_temp.Combine("chain", $"items[{each}].implement")).FullName;
+            File.WriteAllText(Path.Combine(directory, OrchestratorLayout.StepNotesFileName), $"notes of step {each}: " + new string((char)('a' + (each % 26)), 2_000));
+            File.WriteAllText(Path.Combine(directory, "output.json"), $$"""{"step":{{each}}}""");
+            steps.Add(new AgentContinuedStep($"items[{each}].implement", "done", directory));
+        }
 
-        // The last two whole; of the earlier ones only 'third' fits the six characters left, so two are left out.
-        var told = AgentContinuation.Iterations(stream, new AgentContinuationBounds(LastIterations: 2, IterationChars: 6), _temp.Combine("copies"));
+        var paths = Enumerable.Range(1, 500).Select(each => $"src/file{each}.cs").ToList();
+        var work = new AgentContinuationWork("items[1].implement", steps, paths, [], CutOff: false);
+        var stepDirectory = _temp.Combine("new-step");
 
-        Assert.StartsWith("[2 earlier iterations left out: the stream of the attempt is in '", told, StringComparison.Ordinal);
-        Assert.Contains("iteration 4 of 5:", told, StringComparison.Ordinal);
-        Assert.Contains("iteration 5 of 5:", told, StringComparison.Ordinal);
-        Assert.Contains("third", told, StringComparison.Ordinal);
-        Assert.DoesNotContain("first", told, StringComparison.Ordinal);
-        Assert.DoesNotContain("second", told, StringComparison.Ordinal);
+        var prompt = await RenderAsync(work, _temp.Combine("work"));
+        var nl = Environment.NewLine;
+        var file = AgentCallRecords.ResultFile(stepDirectory, KeptResults.ContinuationId);
+        var whole = File.ReadAllText(file);
+
+        // Three times the 60,000 characters the retired recordChars cut the record's own parts to.
+        Assert.True(whole.Length > 180_000, $"the record is {whole.Length} characters");
+        Assert.StartsWith("You are going on with work begun by step 'items[1].implement'.", prompt, StringComparison.Ordinal);
+        Assert.True(prompt.Length < whole.Length / 2, "the prompt holds the record's first page, not the record");
+
+        var said = $"The record is ";
+        var pages = int.Parse(prompt[(prompt.IndexOf(said, StringComparison.Ordinal) + said.Length)..].Split(' ')[0], System.Globalization.CultureInfo.InvariantCulture);
+        Assert.Contains($"read_result with id '{KeptResults.ContinuationId}' and page gives each of the rest. What each page holds:", prompt, StringComparison.Ordinal);
+        Assert.Contains($"- the last iterations: page 1", prompt, StringComparison.Ordinal);
+        Assert.Contains($"- the steps so far, the newest first (100 of them): pages ", prompt, StringComparison.Ordinal);
+        Assert.Contains($"- the files changed (500 of them): page", prompt, StringComparison.Ordinal);
+        Assert.Contains($"page 1 of {pages} · ", prompt, StringComparison.Ordinal);
+        Assert.Contains($"ask read_result with id: '{KeptResults.ContinuationId}', page: 2 for the next · the whole is '{file}'", prompt, StringComparison.Ordinal);
+
+        // Every page, read as the new conversation reads it, is the record whole, line by line.
+        var results = KeptResults.Of(new PhysicalFileSystem(FilePermissionsFactory.Create()), stepDirectory);
+        var lines = new List<string>();
+
+        for (var page = 1; page <= pages; page++)
+        {
+            var answer = await results.ReadAsync(KeptResults.ContinuationId, page, Token);
+            lines.AddRange(answer!.Text.Split('\n').Skip(1));
+        }
+
+        Assert.Equal(whole.Split(nl), lines);
+
+        // Every step whole, the newest first; every path.
+        var newestAt = whole.IndexOf("- step 'items[100].implement' ended done.", StringComparison.Ordinal);
+        var oldestAt = whole.IndexOf("- step 'items[1].implement' ended done.", StringComparison.Ordinal);
+        Assert.True(newestAt >= 0 && oldestAt > newestAt);
+
+        foreach (var each in Enumerable.Range(1, 100))
+        {
+            Assert.Contains($"  Notes: notes of step {each}: " + new string((char)('a' + (each % 26)), 2_000), whole, StringComparison.Ordinal);
+        }
+
+        Assert.Contains(string.Join(nl, paths), whole, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -165,7 +177,7 @@ public sealed class AgentContinuationTests : IDisposable
             new AssistantMessage("answered", []),
         };
 
-        var told = AgentContinuation.Iterations(AgentAttempt.Newest(stream), new AgentContinuationBounds(), _temp.Combine("copies"));
+        var told = AgentContinuation.WordForWord(AgentAttempt.Newest(stream), int.MaxValue);
 
         Assert.Equal(
             string.Join(
@@ -202,7 +214,7 @@ public sealed class AgentContinuationTests : IDisposable
             new AssistantMessage("answered", []),
         };
 
-        var told = AgentContinuation.Iterations(AgentAttempt.Newest(stream), new AgentContinuationBounds(), _temp.Combine("copies"));
+        var told = AgentContinuation.WordForWord(AgentAttempt.Newest(stream), int.MaxValue);
 
         Assert.Equal(
             string.Join(
@@ -340,7 +352,7 @@ public sealed class AgentContinuationTests : IDisposable
             new AssistantMessage("answered", []),
         };
 
-        var told = AgentContinuation.Iterations(AgentAttempt.Newest(stream), new AgentContinuationBounds(), _temp.Combine("copies"));
+        var told = AgentContinuation.WordForWord(AgentAttempt.Newest(stream), int.MaxValue);
 
         Assert.Equal(
             string.Join(
@@ -373,42 +385,6 @@ public sealed class AgentContinuationTests : IDisposable
     }
 
     /// <summary>
-    /// The earlier iterations are kept back from the last until the first that does not fit, and none past it: one kept
-    /// beyond it would leave a hole the count of those left out could not name.
-    /// </summary>
-    [Fact]
-    public void TheEarlierIterations_EndAtTheFirstThatDoesNotFit()
-    {
-        var stream = new AgentEvent[]
-        {
-            new RunStarted(1),
-            new TurnStarted(1),
-            new AssistantMessage("a", []),
-            new TurnStarted(2),
-            new AssistantMessage(new string('b', 100), []),
-            new TurnStarted(3),
-            new AssistantMessage("c", []),
-            new TurnStarted(4),
-            new AssistantMessage("d", []),
-        };
-
-        var copies = _temp.Combine("copies");
-        var told = AgentContinuation.Iterations(stream, new AgentContinuationBounds(LastIterations: 1, IterationChars: 10), copies);
-
-        Assert.Equal(
-            string.Join(
-                Environment.NewLine,
-                $"[2 earlier iterations left out: the stream of the attempt is in '{Path.Combine(copies, StoredStream.FileName)}']",
-                string.Empty,
-                "iteration 3 of 4:",
-                "c",
-                string.Empty,
-                "iteration 4 of 4:",
-                "d"),
-            told);
-    }
-
-    /// <summary>
     /// What the engine sent the agent while it worked - a plan update told, a repair - stands in its place, after the
     /// message it followed and before the next: the agent read it there, and the record is word for word.
     /// </summary>
@@ -428,7 +404,7 @@ public sealed class AgentContinuationTests : IDisposable
             new MessageSent("fix the output", AgentMessageKind.Repair),
         };
 
-        var told = AgentContinuation.Iterations(stream, new AgentContinuationBounds(), _temp.Combine("copies"));
+        var told = AgentContinuation.WordForWord(stream, int.MaxValue);
 
         // The first prompt is the task, and what the engine said before the agent wrote anything is no iteration's.
         Assert.Equal(
@@ -462,7 +438,7 @@ public sealed class AgentContinuationTests : IDisposable
             new AssistantMessage("alone", []),
         };
 
-        var told = AgentContinuation.Iterations(stream, new AgentContinuationBounds(), _temp.Combine("copies"));
+        var told = AgentContinuation.WordForWord(stream, int.MaxValue);
 
         Assert.Contains(
             $"iteration 7 of 7:{Environment.NewLine}[thinking]{Environment.NewLine}where it is{Environment.NewLine}[/thinking]{Environment.NewLine}look{Environment.NewLine}{Environment.NewLine}call c-1 (view_file):{Environment.NewLine}  input: {{\"path\":\"a.txt\"}}{Environment.NewLine}  result: alpha{Environment.NewLine}  [the whole result is 'C:\\run\\tool-results\\c-1.txt']",
@@ -472,14 +448,14 @@ public sealed class AgentContinuationTests : IDisposable
 
     /// <summary>The copies the record names are put in the agent's work directory: each step's notes and output, the stream of the newest attempt, and the results the stream names.</summary>
     [Fact]
-    public void TheCopies_ArePutInTheAgentsWorkDirectory()
+    public async Task TheCopies_ArePutInTheAgentsWorkDirectory()
     {
         var (work, workDirectory) = Work();
         var results = Path.Combine(work.StepDirectory, AgentCallRecords.ToolResultsDirectoryName);
         Directory.CreateDirectory(results);
         File.WriteAllText(Path.Combine(results, "c-9.txt"), "alpha");
 
-        Render(work, workDirectory);
+        await RenderAsync(work, workDirectory);
 
         var copies = Path.Combine(workDirectory, AgentContinuation.CopiesFolder);
 
@@ -580,18 +556,6 @@ public sealed class AgentContinuationTests : IDisposable
         Assert.Equal($"<run-context>{Environment.NewLine}run facts{Environment.NewLine}</run-context>{Environment.NewLine}{Environment.NewLine}<task>{Environment.NewLine}do the *** thing{Environment.NewLine}</task>", File.ReadAllText(userMd));
     }
 
-    /// <summary>The bounds read from the configuration, each at its default where it says none, and one that is not a positive number refuses the file.</summary>
-    [Fact]
-    public void TheBounds_ReadFromTheConfiguration_EachAtItsDefault()
-    {
-        Assert.Equal(new AgentContinuationBounds(), AgentContinuationBounds.Of(null));
-        Assert.Equal(new AgentContinuationBounds(1, 2, 3, 4, 5), AgentContinuationBounds.Of(new AgentContinuationConfig { RecordChars = 1, StepChars = 2, Paths = 3, LastIterations = 4, IterationChars = 5 }));
-        Assert.Equal(new AgentContinuationBounds(9, 16_000, 300, 3, 120_000), AgentContinuationBounds.Of(new AgentContinuationConfig { RecordChars = 9 }));
-        Assert.Equal(
-            "'agentContext.continuation.paths' is 0, and a bound of the continuation record is a positive number",
-            Assert.Single(new AgentContinuationConfig { Paths = 0 }.Problems()));
-    }
-
     /// <summary>The work the record holds, with its steps' records on the disk and the newest attempt's stream written.</summary>
     private (AgentContinuationWork Work, string WorkDirectory) Work()
     {
@@ -632,12 +596,12 @@ public sealed class AgentContinuationTests : IDisposable
             workDirectory);
     }
 
-    /// <summary>Renders <paramref name="work"/> through the builder on the real file system.</summary>
-    private string Render(AgentContinuationWork work, string workDirectory, Func<AgentContinuationBounds, AgentContinuationBounds>? bounds = null)
+    /// <summary>Renders <paramref name="work"/> through the builder on the real file system, its record kept among the results of the step <c>new-step</c>.</summary>
+    private Task<string> RenderAsync(AgentContinuationWork work, string workDirectory)
     {
         var builder = new AgentContinuation(new PhysicalFileSystem(FilePermissionsFactory.Create()), _harness.Output);
 
-        return builder.Render(work, workDirectory, bounds is null ? new AgentContinuationBounds() : bounds(new AgentContinuationBounds()));
+        return builder.RenderAsync(work, workDirectory, _temp.Combine("new-step"), Token);
     }
 
     /// <summary>A client that answers at once, remembering the run it was given.</summary>

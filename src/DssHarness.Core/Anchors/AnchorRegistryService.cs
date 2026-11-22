@@ -70,8 +70,6 @@ public sealed class AnchorRegistryService(
     IAnchorRegistryLock registryLock,
     IFileSystem fileSystem) : IAnchorRegistryService
 {
-    private const int NamespaceHintLimit = 8;
-
     private readonly IHarnessContextLoader _contextLoader = contextLoader;
     private readonly IAnchorRegistryLocator _locator = locator;
     private readonly IAnchorRegistryLock _registryLock = registryLock;
@@ -98,7 +96,7 @@ public sealed class AnchorRegistryService(
         var door = DoorFor(context, []);
         var registries = await _locator.LocateAsync(context, cancellationToken).ConfigureAwait(false);
 
-        return _registryLock.RunExclusive(registries, () =>
+        return await _registryLock.RunExclusiveAsync(registries, () =>
         {
             var (pending, done) = (Load(registries.Pending, rules), Load(registries.Done, rules));
             var existing = Matches(request.Id, (pending, registries.Pending), (done, registries.Done));
@@ -122,7 +120,7 @@ public sealed class AnchorRegistryService(
             }
 
             return placement.Change;
-        });
+        }, cancellationToken).ConfigureAwait(false);
     }
 
     public async Task<AnchorChange> SetAsync(
@@ -142,7 +140,7 @@ public sealed class AnchorRegistryService(
         var door = DoorFor(context, []);
         var registries = await _locator.LocateAsync(context, cancellationToken).ConfigureAwait(false);
 
-        return _registryLock.RunExclusive(registries, () =>
+        return await _registryLock.RunExclusiveAsync(registries, () =>
         {
             var (pending, done) = (Load(registries.Pending, rules), Load(registries.Done, rules));
             var found = Find(request, registries, pending, done);
@@ -158,7 +156,7 @@ public sealed class AnchorRegistryService(
             }
 
             return placement.Change;
-        });
+        }, cancellationToken).ConfigureAwait(false);
     }
 
     public async Task<AnchorBatch> ApplyAsync(
@@ -192,7 +190,7 @@ public sealed class AnchorRegistryService(
         var over = request.AcceptOver.ToHashSet();
         var written = mode == AnchorBatchMode.Apply;
 
-        return _registryLock.RunExclusive(registries, () =>
+        return await _registryLock.RunExclusiveAsync(registries, () =>
         {
             // Each row is planned against the registries as the rows before it left them, exactly as one write-anchor or
             // set-anchor after another would find them, and written in the same order: a row that moves between the two
@@ -449,7 +447,7 @@ public sealed class AnchorRegistryService(
             return wrong.Count > 0
                 ? Restored(outcomes, snapshot, $"the rows did not read back as declared: {string.Join("; ", wrong)}")
                 : new AnchorBatch(outcomes, []);
-        });
+        }, cancellationToken).ConfigureAwait(false);
     }
 
     public async Task<AnchorLookup> ReadAsync(
@@ -518,7 +516,7 @@ public sealed class AnchorRegistryService(
         var documents = new List<(AnchorRegistryDocument Document, AnchorRegistry Registry)>();
 
         // Both read as one moment: a row a change was moving between them would otherwise read as a duplicate.
-        foreach (var (registry, text) in _registryLock.ReadTogether(registries, _fileSystem))
+        foreach (var (registry, text) in await _registryLock.ReadTogetherAsync(registries, _fileSystem, cancellationToken).ConfigureAwait(false))
         {
             if (text is null)
             {
@@ -557,7 +555,7 @@ public sealed class AnchorRegistryService(
 
         if (!rules.IsBareBacktickedId(row.AnchorCell))
         {
-            yield return Finding($"the Anchor cell is not one id in backticks: {AnchorCells.Excerpt(row.AnchorCell, 70)}");
+            yield return Finding($"the Anchor cell is not one id in backticks: {AnchorCells.Collapse(row.AnchorCell)}");
         }
 
         if (!AnchorPriority.IsBand(row.Priority))
@@ -600,7 +598,7 @@ public sealed class AnchorRegistryService(
         var registries = await _locator.LocateAsync(context, cancellationToken).ConfigureAwait(false);
 
         // Both read as one moment, so a row a change was moving between them is never read in neither or both.
-        return [.. _registryLock.ReadTogether(registries, _fileSystem).Select(read => (Load(read.Registry, read.Text, rules), read.Registry))];
+        return [.. (await _registryLock.ReadTogetherAsync(registries, _fileSystem, cancellationToken).ConfigureAwait(false)).Select(read => (Load(read.Registry, read.Text, rules), read.Registry))];
     }
 
     /// <summary>Reads a registry from its file, as <see cref="Load(AnchorRegistry, string?, AnchorIdRules)"/> reads its text.</summary>
@@ -658,8 +656,7 @@ public sealed class AnchorRegistryService(
             .Select(entry => entry.Row.Id)
             .Where(candidate => candidate == prefix || candidate.StartsWith(prefix + "-", StringComparison.Ordinal))
             .Distinct(StringComparer.Ordinal)
-            .Order(StringComparer.Ordinal)
-            .Take(NamespaceHintLimit)];
+            .Order(StringComparer.Ordinal)];
     }
 
     private static bool InScope(AnchorRegistry registry, AnchorScope scope) => scope switch
@@ -1121,8 +1118,7 @@ public sealed class AnchorRegistryService(
                     continue;
                 }
 
-                // The registry lock's work is synchronous and must stay on the thread that took it (IAnchorRegistryLock),
-                // so the write is waited on here.
+                // The registry lock's work is synchronous (IAnchorRegistryLock), so the write is waited on here.
                 _fileSystem.WriteAllBytesAtomicAsync(registry.FullPath, bytes).GetAwaiter().GetResult();
                 (_fileSystem.ReadAllBytes(registry.FullPath).AsSpan().SequenceEqual(bytes) ? restored : failed).Add(registry.RelativePath);
             }

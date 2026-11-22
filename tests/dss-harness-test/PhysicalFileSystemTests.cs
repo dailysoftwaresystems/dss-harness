@@ -5,8 +5,10 @@ using System.Runtime.Versioning;
 using System.Security.AccessControl;
 using System.Security.Principal;
 using System.Text;
+using DssHarness.Core.Execution;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Platform;
+using DssHarness.Core.Waiting;
 using Microsoft.Win32.SafeHandles;
 
 namespace DssHarness.Tests;
@@ -521,79 +523,107 @@ public sealed class PhysicalFileSystemTests
     }
 
     /// <summary>
-    /// A rename refused while a file is held - the one at the destination, or the one just written where nothing stands
-    /// there yet - is tried again after a wait each time ten milliseconds longer, until it lands: synchronously and
-    /// awaited alike, the rename called once per attempt and nothing else waited.
+    /// On Windows, a rename refused by a holder - a sharing violation, which Windows reports while another program holds
+    /// the file there or the one just written - is tried again for as long as the holder holds, past any count of tries:
+    /// forty refusals and then a rename that lands. Each wait is told as it begins, naming the file held and the system's
+    /// words, how long the rename has waited, and when it tries again - the waits doubling from ten milliseconds to five
+    /// minutes.
     /// </summary>
-    [Theory]
-    [InlineData(true, false)]
-    [InlineData(false, false)]
-    [InlineData(true, true)]
-    [InlineData(false, true)]
-    public async Task ARenameRefusedWhileAFileIsHeld_IsTriedAgain_UntilItLands(bool fileAtTheDestination, bool awaited)
+    [Fact]
+    public async Task AHeldRename_IsRetriedWhileHeld_Naming()
     {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "Only Windows refuses a rename for another program's hold.");
+
         using var temp = new TempDirectory();
         var destination = temp.Combine("record.json");
-
-        if (fileAtTheDestination)
-        {
-            File.WriteAllText(destination, "old");
-        }
-
+        File.WriteAllText(destination, "old");
+        const string Held = "The process cannot access the file because it is being used by another process.";
         var calls = 0;
-        var (refused, waits) = await RenamedAsync(temp.Combine("new.json"), destination, awaited, () =>
+
+        var (refused, told) = await RenamedAsync(temp.Combine("new.json"), destination, (_, _) =>
         {
-            if (++calls <= 3)
+            if (++calls <= 40)
             {
-                throw new IOException("The process cannot access the file because it is being used by another process.", SharingViolation);
+                throw new IOException(Held, unchecked((int)0x80070020));
             }
         });
 
         Assert.Null(refused);
-        Assert.Equal(4, calls);
-        Assert.Equal([TimeSpan.FromMilliseconds(10), TimeSpan.FromMilliseconds(20), TimeSpan.FromMilliseconds(30)], waits);
+        Assert.Equal(41, calls);
+        Assert.Equal(
+            [
+                .. Enumerable.Range(0, 40).Select(wait =>
+                {
+                    var waited = LedgerReport.FormatDuration(Waits.SaidEvery * wait);
+                    var next = LedgerReport.FormatDuration(wait < 15 ? TimeSpan.FromMilliseconds(10 << wait) : Waits.SaidEvery);
+
+                    return $"{(waited.Length == 0 ? "waits for" : $"has waited {waited} for")} the rename over '{destination}': "
+                        + $"another program holds '{destination}' ({Held.TrimEnd('.')}); {(next is "" or "0s" ? "tries again now" : $"tries again in {next}")}";
+                }),
+            ],
+            told);
     }
 
     /// <summary>
-    /// A rename refused by a holder that stays is tried the bound's number of times, waiting between each, and then its
-    /// last refusal is raised as it was: a holder this machine's queue keeps past the bound is reported, not outwaited.
+    /// A rename refused the same way on the same state - the same words, the files as they were - is tried once more, after
+    /// the first wait, and then its refusal is raised as it was: no wait changes an answer that came twice alike.
     /// </summary>
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task ARenameRefusedByAHolderThatStays_IsTriedTheBoundsNumberOfTimes_ThenRefused(bool awaited)
+    [Fact]
+    public async Task ARenameRefusedTheSameWayTwice_IsRaisedAsItWas()
     {
         using var temp = new TempDirectory();
         var destination = temp.Combine("record.json");
         File.WriteAllText(destination, "old");
         var calls = 0;
 
-        var (refused, waits) = await RenamedAsync(temp.Combine("new.json"), destination, awaited, () =>
+        var (refused, told) = await RenamedAsync(temp.Combine("new.json"), destination, (_, _) =>
         {
             calls++;
             throw new UnauthorizedAccessException($"Access to the path '{destination}' is denied.");
         });
 
         Assert.Equal($"Access to the path '{destination}' is denied.", Assert.IsType<UnauthorizedAccessException>(refused).Message);
-        Assert.Equal(PhysicalFileSystem.ReplaceAttempts, calls);
-        Assert.Equal([.. Enumerable.Range(1, PhysicalFileSystem.ReplaceAttempts - 1).Select(PhysicalFileSystem.ReplaceWait)], waits);
+        Assert.Equal(2, calls);
+        Assert.Equal([$"waits for the rename over '{destination}': Access to the path '{destination}' is denied.; tries again now"], told);
     }
 
     /// <summary>
-    /// A rename refused where a directory stands at the destination is refused at once, synchronously and awaited alike:
-    /// no wait moves a directory, so the refusal is the caller's own, and the rename is called once.
+    /// A rename refused in a new way each time is tried again each time, the waits doubling, until it lands: an answer
+    /// that changes is one a further try may change again.
     /// </summary>
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task ARenameRefusedWhereADirectoryStandsAtTheDestination_IsRefusedAtOnce(bool awaited)
+    [Fact]
+    public async Task ARenameRefusedInANewWayEachTime_IsTriedAgain_UntilItLands()
+    {
+        using var temp = new TempDirectory();
+        var destination = temp.Combine("record.json");
+        var calls = 0;
+
+        var (refused, told) = await RenamedAsync(temp.Combine("new.json"), destination, (_, _) =>
+        {
+            if (++calls <= 4)
+            {
+                throw new IOException($"the volume answered {calls}");
+            }
+        });
+
+        Assert.Null(refused);
+        Assert.Equal(5, calls);
+        Assert.Equal(4, told.Count);
+    }
+
+    /// <summary>
+    /// A rename refused where a directory stands at the destination is refused at once: no wait moves a directory, so the
+    /// refusal is the caller's own, the rename is called once, and nothing is told.
+    /// </summary>
+    [Fact]
+    public async Task ARenameRefusedWhereADirectoryStandsAtTheDestination_IsRefusedAtOnce()
     {
         using var temp = new TempDirectory();
         var destination = temp.Combine("record.json");
         Directory.CreateDirectory(destination);
         var calls = 0;
 
-        var (refused, waits) = await RenamedAsync(temp.Combine("new.json"), destination, awaited, () =>
+        var (refused, told) = await RenamedAsync(temp.Combine("new.json"), destination, (_, _) =>
         {
             calls++;
             throw new UnauthorizedAccessException($"Access to the path '{destination}' is denied.");
@@ -601,16 +631,17 @@ public sealed class PhysicalFileSystemTests
 
         Assert.IsType<UnauthorizedAccessException>(refused);
         Assert.Equal(1, calls);
-        Assert.Empty(waits);
+        Assert.Empty(told);
     }
 
     /// <summary>
     /// On Windows, a write renamed over a file a holder shares no deletion with waits the holder out and lands - the real
-    /// rename refused while the holder stands, tried again once it lets go - and the reader that came after reads the new.
+    /// rename refused while the holder stands, each wait naming the file it holds, tried again once it lets go - and the
+    /// reader that came after reads the new.
     /// </summary>
     [Fact]
     [SupportedOSPlatform("windows")]
-    public void AReplaceOverAFileAHolderSharesNoDeletionWith_WaitsItOut_AndLands()
+    public async Task AReplaceOverAFileAHolderSharesNoDeletionWith_WaitsItOut_AndLands()
     {
         Assert.SkipUnless(OperatingSystem.IsWindows(), "Only Windows refuses to rename over a file held without its deletion shared.");
 
@@ -620,16 +651,14 @@ public sealed class PhysicalFileSystemTests
         File.WriteAllText(source, "new");
         File.WriteAllText(destination, "old");
         var holder = new FileStream(destination, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-        var waits = new List<TimeSpan>();
+        (Exception? Refused, List<string> Told) renamed;
 
         try
         {
-            // The holder lets go at the second wait: the rename was refused twice while it stood.
-            PhysicalFileSystem.ReplaceWith(source, destination, PhysicalFileSystem.Replace, wait =>
+            // The holder lets go as the second wait is told: the rename was refused twice while it stood.
+            renamed = await RenamedAsync(source, destination, PhysicalFileSystem.Replace, told =>
             {
-                waits.Add(wait);
-
-                if (waits.Count == 2)
+                if (told.Count == 2)
                 {
                     holder.Dispose();
                 }
@@ -640,45 +669,131 @@ public sealed class PhysicalFileSystemTests
             holder.Dispose();
         }
 
-        Assert.Equal([TimeSpan.FromMilliseconds(10), TimeSpan.FromMilliseconds(20)], waits);
+        Assert.Null(renamed.Refused);
+        Assert.Equal(2, renamed.Told.Count);
+        Assert.All(renamed.Told, line => Assert.Contains($"the rename over '{destination}': another program holds '{destination}' (", line, StringComparison.Ordinal));
         Assert.False(File.Exists(source));
         Assert.Equal("new", File.ReadAllText(destination));
     }
 
     /// <summary>
-    /// Renames through <paramref name="rename"/> as a replace does - synchronously, or awaited - every wait recorded and
-    /// none taken: what was refused at last, if anything was, and the waits asked for between the attempts.
+    /// Renames through <paramref name="replace"/> as a replace does, on a clock the test moves by five minutes each time the
+    /// rename waits, every wait told kept: what was refused at last, if anything was, and the lines told.
     /// </summary>
-    private static async Task<(Exception? Refused, List<TimeSpan> Waits)> RenamedAsync(string source, string destination, bool awaited, Action rename)
+    /// <param name="source">The file to put in place.</param>
+    /// <param name="destination">Where to put it.</param>
+    /// <param name="replace">Stands in for the rename itself.</param>
+    /// <param name="onTold">Given the lines told so far, each time one is told.</param>
+    private static async Task<(Exception? Refused, List<string> Told)> RenamedAsync(
+        string source,
+        string destination,
+        Action<string, string> replace,
+        Action<List<string>>? onTold = null)
     {
-        var waits = new List<TimeSpan>();
+        var clock = new TimerClock();
+        var told = new List<string>();
+        var cancellationToken = TestContext.Current.CancellationToken;
+
+        async Task<bool> Renamed()
+        {
+            await PhysicalFileSystem.ReplaceWithAsync(
+                source,
+                destination,
+                replace,
+                wait =>
+                {
+                    told.Add(wait.Line());
+                    onTold?.Invoke(told);
+                },
+                clock,
+                cancellationToken);
+
+            return true;
+        }
 
         try
         {
-            if (awaited)
-            {
-                await PhysicalFileSystem.ReplaceWithAsync(
-                    source,
-                    destination,
-                    (_, _) => rename(),
-                    (wait, _) =>
-                    {
-                        waits.Add(wait);
-                        return Task.CompletedTask;
-                    },
-                    TestContext.Current.CancellationToken);
-            }
-            else
-            {
-                PhysicalFileSystem.ReplaceWith(source, destination, (_, _) => rename(), waits.Add);
-            }
+            await ClockDrive.UntilEndedAsync(clock, Renamed(), Waits.SaidEvery, mostSteps: 100, cancellationToken);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            return (ex, waits);
+            return (ex, told);
         }
 
-        return (null, waits);
+        return (null, told);
+    }
+
+    /// <summary>How deep the deep tree a removal is tried on nests: one directory in the next, a file at the bottom.</summary>
+    private const int DeepTree = 10_000;
+
+    /// <summary>How many links the long chain a measure of room follows is made of: more than any system follows itself.</summary>
+    private const int LongChain = 70;
+
+    /// <summary>
+    /// A tree ten thousand directories deep is removed whole from the directory it is in, holding the directories of two
+    /// levels at most while it goes - the one being emptied, and the next one down or back up - however deep it is: three
+    /// handles with the anchor's. Made and removed in a child on a small stack, so a removal that recursed once a level
+    /// would end that child, never this run.
+    /// </summary>
+    [Fact]
+    public async Task ATenThousandDeepTree_IsDeletedOneHandleAtATime()
+    {
+        var answer = await ChildRun.MethodAsync(typeof(PhysicalFileSystemTests), nameof(DeleteDeepTree), TestContext.Current.CancellationToken);
+
+        Assert.Equal(new ChildRunAnswer(0, "removed: True; the most directories held at once: 3\n", string.Empty), answer);
+    }
+
+    /// <summary>
+    /// <see cref="ATenThousandDeepTree_IsDeletedOneHandleAtATime"/>'s child: the tree made one directory at a time below a
+    /// held anchor, then removed, every directory handle the removal holds counted.
+    /// </summary>
+    private static string DeleteDeepTree() => SmallStack.Run(() =>
+    {
+        using var temp = new TempDirectory();
+        var native = new CountingHandles(HeldDirectory.SystemNative);
+        using var anchor = HeldDirectory.Hold(native, temp.Path, temp.Path, make: false);
+        var level = anchor.Below("tree", make: true);
+
+        for (var depth = 1; depth < DeepTree; depth++)
+        {
+            var below = level.Below("d", make: true);
+            level.Dispose();
+            level = below;
+        }
+
+        level.Write("bottom.txt", stream => stream.WriteByte(1));
+        level.Dispose();
+        native.Most = 0;
+
+        anchor.DeleteDirectory("tree");
+
+        return $"removed: {anchor.KindOf("tree") == PathKind.None}; the most directories held at once: {native.Most}\n";
+    });
+
+    /// <summary>
+    /// What a measure of room is taken at is where the path leads, every link along it followed by the one walk of links
+    /// (<see cref="LinkPaths"/>) - a chain of seventy, longer than the system follows itself on Linux, macOS and Windows -
+    /// and then the nearest directory there that exists; and the room there is measured, never refused for the chain.
+    /// </summary>
+    [Fact]
+    public void PhysicalFileSystem_FollowsLinksThroughLinkPaths()
+    {
+        using var temp = new TempDirectory();
+        var real = LinkPaths.Resolve(temp.Path);
+        Directory.CreateDirectory(temp.Combine("target"));
+
+        // Made from the chain's head down, each to one not made yet: a junction made to one already made answers with
+        // the chain it leads to resolved whole, and the system resolves a chain of links no further than its own budget -
+        // made to one not there yet, the chain closes only when its last link is made, and the walk of it is the
+        // harness's own.
+        for (var index = 0; index < LongChain; index++)
+        {
+            TestLinks.DirectoryLink(temp.Combine($"link{index}"), index == LongChain - 1 ? temp.Combine("target") : temp.Combine($"link{index + 1}"));
+        }
+
+        Assert.Equal(Path.Combine(real, "target"), PhysicalFileSystem.MeasuredAt(temp.Combine("link0")));
+        Assert.Equal(Path.Combine(real, "target"), PhysicalFileSystem.MeasuredAt(temp.Combine("link0", "build", "not-made")));
+        Assert.True(Create().SpaceAt(temp.Combine("link0", "build")).TotalBytes > 0);
     }
 
     /// <summary>On Windows, an interruption stops the looking between one entry and the next, rather than after the walk.</summary>
@@ -1717,6 +1832,72 @@ public sealed class PhysicalFileSystemTests
 
         public bool IsMountedOn(SafeFileHandle parent, SafeFileHandle child, string path)
             => string.Equals(path, mounted, StringComparison.Ordinal) || system.IsMountedOn(parent, child, path);
+
+        public byte[]? IdentityOf(SafeFileHandle directory, string path) => system.IdentityOf(directory, path);
+
+        public SafeFileHandle OpenAbove(SafeFileHandle child, byte[] identity, string path) => system.OpenAbove(child, identity, path);
+    }
+
+    /// <summary>
+    /// This system's way of acting on held directories, counting the directory handles it gives that are open at once: the
+    /// most seen, each time it gives one.
+    /// </summary>
+    private sealed class CountingHandles(IHeldNative system) : IHeldNative
+    {
+        private readonly List<SafeFileHandle> _given = [];
+
+        /// <summary>The most directory handles open at once, as each was given.</summary>
+        public int Most { get; set; }
+
+        public SafeFileHandle OpenAnchor(string path) => Counted(system.OpenAnchor(path));
+
+        public HeldOpen OpenDirectory(SafeFileHandle parent, string name, string path)
+        {
+            var opened = system.OpenDirectory(parent, name, path);
+
+            if (opened.Handle is { } handle)
+            {
+                Counted(handle);
+            }
+
+            return opened;
+        }
+
+        public SafeFileHandle MakeDirectory(SafeFileHandle parent, string name, string path) => Counted(system.MakeDirectory(parent, name, path));
+
+        public PathKind KindOf(SafeFileHandle parent, string name, string path) => system.KindOf(parent, name, path);
+
+        public IReadOnlyList<HeldName> Entries(SafeFileHandle directory, string path) => system.Entries(directory, path);
+
+        public SafeFileHandle OpenFile(SafeFileHandle parent, string name, string path) => system.OpenFile(parent, name, path);
+
+        public SafeFileHandle CreateFile(SafeFileHandle parent, string name, string path) => system.CreateFile(parent, name, path);
+
+        public void KeepMode(SafeFileHandle parent, string name, SafeFileHandle written) => system.KeepMode(parent, name, written);
+
+        public void Replace(SafeFileHandle parent, string temporary, SafeFileHandle written, string name, string path)
+            => system.Replace(parent, temporary, written, name, path);
+
+        public void Rename(SafeFileHandle fromParent, string fromName, SafeFileHandle toParent, string toName, bool replace, string from, string to)
+            => system.Rename(fromParent, fromName, toParent, toName, replace, from, to);
+
+        public void Remove(SafeFileHandle parent, string name, bool directory, string path) => system.Remove(parent, name, directory, path);
+
+        public bool IsMountedOn(SafeFileHandle parent, SafeFileHandle child, string path) => system.IsMountedOn(parent, child, path);
+
+        public byte[]? IdentityOf(SafeFileHandle directory, string path) => system.IdentityOf(directory, path);
+
+        public SafeFileHandle OpenAbove(SafeFileHandle child, byte[] identity, string path) => Counted(system.OpenAbove(child, identity, path));
+
+        /// <summary><paramref name="handle"/>, counted among those open, with the most open at once taken again.</summary>
+        private SafeFileHandle Counted(SafeFileHandle handle)
+        {
+            _given.RemoveAll(given => given.IsClosed);
+            _given.Add(handle);
+            Most = Math.Max(Most, _given.Count);
+
+            return handle;
+        }
     }
 
     /// <summary>

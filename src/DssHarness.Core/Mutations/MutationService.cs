@@ -218,7 +218,7 @@ public sealed class MutationService(
             new WorkerSite(_fileSystem, _clock),
             new ArmBuilder(_buildService, _processRunner, _buildDirectoryGuard, _fileSystem),
             new ArmTestRunner(_phaseRunner, _fileSystem, _clock),
-            new CtestDescription(_processRunner, _fileSystem, _platform),
+            new CtestDescription(_processRunner, _fileSystem, _platform, _output, _clock),
             _pathBudget,
             _fileSystem,
             _output,
@@ -316,7 +316,7 @@ public sealed class MutationService(
         {
             try
             {
-                return JsonSerializer.Deserialize<T>(text, JsonStateFile.LineOptions);
+                return JsonSerializer.Deserialize<T>(text, ArmVerdictRecord.LineReading);
             }
             catch (JsonException)
             {
@@ -406,7 +406,7 @@ public sealed class MutationService(
         {
             if (leg.RecordUnread is { } unread)
             {
-                _output.Warn(CommandName, unread.Warning(new ArmVerdictRecord(_fileSystem, context.Layout).FileOf(leg.Leg), leg.Leg, sweep: false));
+                _output.Warn(CommandName, unread.Warning(new ArmVerdictRecord(_fileSystem, context.Layout).ReadFrom(leg.Leg), leg.Leg, sweep: false));
             }
         }
 
@@ -609,7 +609,7 @@ public sealed class MutationService(
     private async Task<LegEntry> SelfTestAsync(MutationLegRunner runner, LegWork work, SweepArms arms, bool force, CancellationToken cancellationToken)
     {
         var directory = _fixtures.Directory;
-        var subject = SelfTestSubject(work, arms, force, directory);
+        var subject = SelfTestSubject(work, arms, force, directory, _fileSystem);
 
         await RefuseUnignoredAsync(subject.Workers, cancellationToken).ConfigureAwait(false);
 
@@ -622,7 +622,8 @@ public sealed class MutationService(
     /// <summary>
     /// What a self-test of <paramref name="work"/>'s leg sweeps: the fixture kept in <paramref name="directory"/>, built as
     /// the leg's variant builds, its binary run in its worker with what the leg's host gives it, each worker's paths
-    /// reckoned by the fixture's own build, each arm held to the verdict it is designed to reach, and what each arm is
+    /// reckoned by the deepest path a build of the fixture made in them where one is there to measure, each arm held to
+    /// the verdict it is designed to reach, and what each arm is
     /// judged on read by every worker and compared. Nothing says what a build of it comes to: a few megabytes, which the
     /// copy's own size is planned with.
     /// </summary>
@@ -635,17 +636,19 @@ public sealed class MutationService(
     /// files staged: so the files git tracks there, which a worker's build watches, are the fixture's, and never what the
     /// tree around it tracks.
     /// </remarks>
-    internal static MutationSubject SelfTestSubject(LegWork work, SweepArms arms, bool force, string directory)
+    internal static MutationSubject SelfTestSubject(LegWork work, SweepArms arms, bool force, string directory, IFileSystem fileSystem)
     {
         ArgumentNullException.ThrowIfNull(work);
         ArgumentNullException.ThrowIfNull(arms);
+        ArgumentNullException.ThrowIfNull(fileSystem);
 
         var settings = MutationFixture.SettingsFor(work.Context.Config.Mutations);
+        var workers = MutationWorkers.Of(work.Leg.HostTreeRoot, work.Leg.Variant, selfTest: true);
 
         return new MutationSubject
         {
             TreeRoot = directory,
-            Workers = MutationWorkers.Of(work.Leg.HostTreeRoot, work.Leg.Variant, selfTest: true),
+            Workers = workers,
             Project = MutationFixture.Project,
             Arms = ArmSelection.For(work.Leg.Name, arms.Registry, arms.Selected, arms.Scopes),
             Settings = settings,
@@ -658,7 +661,7 @@ public sealed class MutationService(
                 settings,
                 work.Leg.HostSettings.Env),
             ComparesKeys = true,
-            PathReserve = MutationFixture.LongestBuildPath,
+            PathReserve = MutationFixture.LongestBuildPath(fileSystem, workers, settings.Workers),
             Hold = MutationFixture.Hold,
             Force = force,
         };

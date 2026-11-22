@@ -31,25 +31,32 @@ public sealed record NinjaDeadOutputs(IReadOnlyList<string> Paths, bool Answered
 /// </remarks>
 /// <param name="processRunner">Runs ninja.</param>
 /// <param name="fileSystem">Tells a ninja build directory.</param>
-public sealed class NinjaDeadOutputCheck(IProcessRunner processRunner, IFileSystem fileSystem)
+/// <param name="clock">Times the wait for ninja's answer; the system's where none is given.</param>
+public sealed class NinjaDeadOutputCheck(IProcessRunner processRunner, IFileSystem fileSystem, TimeProvider? clock = null)
 {
     /// <summary>What the dry run prints before each output it would remove.</summary>
     private const string RemovePrefix = "Remove ";
 
     private readonly IProcessRunner _processRunner = processRunner;
     private readonly IFileSystem _fileSystem = fileSystem;
+    private readonly TimeProvider _clock = clock ?? TimeProvider.System;
 
     /// <summary>Asks ninja about one build directory.</summary>
     /// <param name="buildDirectory">The directory to ask about.</param>
     /// <param name="programDirectories">The directories the build put around its PATH, which ninja is looked up on too.</param>
     /// <param name="program">The ninja the build ran, as its configuration recorded it, or <see langword="null"/> to look one up.</param>
     /// <param name="environment">The environment the build's phases ran in.</param>
+    /// <param name="told">
+    /// Told where the wait for ninja stands, every <see cref="Waiting.Waits.SaidEvery"/> it lasts: ninja is waited for to its
+    /// end, however long it takes. Nothing is told where null.
+    /// </param>
     /// <param name="cancellationToken">Stops the question.</param>
     public async Task<NinjaDeadOutputs> CheckAsync(
         string buildDirectory,
         ProgramDirectories programDirectories,
         string? program = null,
         IReadOnlyDictionary<string, string?>? environment = null,
+        Action<Waiting.WaitTold>? told = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(buildDirectory);
@@ -64,10 +71,14 @@ public sealed class NinjaDeadOutputCheck(IProcessRunner processRunner, IFileSyst
 
         try
         {
-            result = await _processRunner
-                .RunAsync(
+            result = await BuildProbes.RunAsync(
+                    _processRunner,
+
                     // -n: named, never removed. The harness removes nothing of a build directory it keeps.
                     NinjaDependencyCheck.Request(buildDirectory, ["-C", buildDirectory, "-n", "-t", "cleandead"], programDirectories, program, environment),
+                    $"'ninja -t cleandead' to name the dead outputs of '{buildDirectory}'",
+                    told,
+                    _clock,
                     cancellationToken)
                 .ConfigureAwait(false);
         }

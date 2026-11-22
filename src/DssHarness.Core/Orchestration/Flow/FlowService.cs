@@ -6,6 +6,7 @@ using DssHarness.Core.Output;
 using DssHarness.Core.Platform;
 using DssHarness.Core.Repository;
 using DssHarness.Core.Results;
+using DssHarness.Core.Waiting;
 using DssHarness.Core.Worktrees;
 
 namespace DssHarness.Core.Orchestration.Flow;
@@ -103,10 +104,13 @@ public interface IFlowService : IUseCase
 /// <summary>How often the commands of a run look at what another process asked or recorded.</summary>
 /// <param name="PollEvery">How often a running engine reads what another process asked of it: <c>stop.json</c> and <c>inbox.json</c>.</param>
 /// <param name="WatchEvery">How often <c>pause-orchestrator</c> and <c>stop-orchestrator</c> look again at what the engine has recorded.</param>
-/// <param name="StopWait">How long <c>stop-orchestrator</c> waits for the engine to end before <c>--now</c> is the way, and how long <c>--now</c> waits for the process it ended.</param>
+/// <param name="StopWait">
+/// How long <c>stop-orchestrator --now</c> waits for the process it ended to be gone. A stop without it waits while the
+/// engine lives, for as long as that is, and never by this.
+/// </param>
 public sealed record FlowTimings(TimeSpan PollEvery, TimeSpan WatchEvery, TimeSpan StopWait)
 {
-    /// <summary>The tool's own: a poll and a look at every command's cadence (<see cref="StopCadence"/>), a stop waited for 30 s.</summary>
+    /// <summary>The tool's own: a poll and a look at every command's cadence (<see cref="StopCadence"/>), the process <c>--now</c> ended waited for 30 s.</summary>
     public static FlowTimings Default { get; } = new(StopCadence.PollEvery, StopCadence.WatchEvery, TimeSpan.FromSeconds(30));
 }
 
@@ -194,9 +198,6 @@ public sealed class FlowService(
     private readonly TimeProvider _clock = clock ?? TimeProvider.System;
     private readonly FlowTimings _timings = timings ?? FlowTimings.Default;
     private readonly FlowRunOwner _owner = new(store, identity, clock);
-
-    /// <summary>How long an answer handed to a running engine waits between looks at what became of it.</summary>
-    private static readonly TimeSpan HandOverSlice = TimeSpan.FromMilliseconds(50);
 
     /// <inheritdoc/>
     public async Task<CommandOutcome> RunAsync(
@@ -290,6 +291,7 @@ public sealed class FlowService(
         // two cannot take one name.
         OrchestratorLayout layout;
         FlowRunContext runContext;
+        IReadOnlyDictionary<string, IReadOnlyList<string>>? named = null;
 
         try
         {
@@ -300,13 +302,23 @@ public sealed class FlowService(
                 given,
                 checkout.Head,
                 checkout.Branch,
-                refusal: name => StartRefusal(checkout, workflow, resolved, name)
-                    ?? FlowRunPaths.RefusalAtStart(_pathBudget, context, name, workflow, _platform.PlatformKey, files),
+                refusal: name =>
+                {
+                    var (refused, lists) = Start(checkout, workflow, resolved, name);
+                    named = lists;
+                    return refused ?? FlowRunPaths.RefusalAtStart(_pathBudget, context, name, workflow, _platform.PlatformKey, files);
+                },
                 cancellationToken).ConfigureAwait(false);
         }
         catch (HarnessException ex)
         {
-            return new CommandOutcome(ex.ExitCode, ex.Message);
+            // A refusal whose line names part of a list - the staged paths - answers --json with the run's document, the
+            // whole list in its named: what the line could not name is never lost to its length.
+            var refused = new CommandOutcome(ex.ExitCode, ex.Message);
+
+            return json && named is { Count: > 0 } lists
+                ? refused with { Data = [FlowReports.Document(FlowRunResult.Empty(ex.ExitCode, ex.Message) with { Named = lists })], Quiet = true }
+                : refused;
         }
 
         // A base that cannot be told held the checkout's branch to nothing: the start says so, never silently. The remote
@@ -647,9 +659,9 @@ public sealed class FlowService(
 
     /// <summary>
     /// Waits on an answer handed to the engine running the run, under the inbox entry it was written under - on the
-    /// service's clock, at most two of the engine's polls - until the run's questions say what became of that entry, or
-    /// the engine's owner is gone: the engine it was handed to, or a session that claimed the run since, which takes the
-    /// inbox as it begins - the entry is never handed over twice. An engine writes what it made of an entry before it
+    /// service's clock, for as long as the engine lives, told every five minutes - until the run's questions say what
+    /// became of that entry, or the engine's owner is gone: the engine it was handed to, or a session that claimed the run
+    /// since, which takes the inbox as it begins - the entry is never handed over twice. An engine writes what it made of an entry before it
     /// lets its owner go, so where the owner is seen gone the entry is weighed once more, and that weighing answers: a
     /// read made before the look at the owner may have missed what the engine wrote as it left. Weighed, the command
     /// answers what the run made of it (<see cref="AnswerOfWeighed"/>); not, with the engine still running, it answers
@@ -662,17 +674,16 @@ public sealed class FlowService(
         var records = new[] { new FlowRecordPath("inbox", layout.InboxFile) };
         (FlowQuestionEntry? Took, FlowRefusedAnswer? Refused) Weighed() => Weigh(layout, entry);
 
+        // Waited for while the entry is unweighed and the engine it was handed to lives, for as long as that is: an engine
+        // reads its inbox at every poll, and one busy past it is waited for, never answered for.
+        var waited = await Waits.WhileHeldAsync(
+            _ => Task.FromResult(Weighed() is (null, null) ? _owner.Holder(layout) : null),
+            _owner.Liveness(layout),
+            new WaitWatch($"the engine running '{run}' to take '{answer}' for question '{asked.Id}'", told => _output.Info(AnswerCommand, told.Line()), Bound: null, _clock),
+            cancellationToken).ConfigureAwait(false);
         var weighed = Weighed();
 
-        try
-        {
-            for (var waited = TimeSpan.Zero; weighed is (null, null) && waited < _timings.PollEvery + _timings.PollEvery && _owner.Live(layout) is not null; waited += HandOverSlice)
-            {
-                await Task.Delay(HandOverSlice, _clock, cancellationToken).ConfigureAwait(false);
-                weighed = Weighed();
-            }
-        }
-        catch (OperationCanceledException)
+        if (waited.Kind == WaitEndKind.Cancelled)
         {
             var cancelled = CommandOutcome.Failed(
                 HarnessExit.Cancelled,
@@ -910,35 +921,26 @@ public sealed class FlowService(
 
         _store.WriteStopFile(layout, new FlowStopFile(1, Stop: new FlowStopStop(_clock.GetUtcNow())));
 
-        var until = _clock.GetUtcNow() + _timings.StopWait;
+        // Waited for while the engine lives, for as long as it takes to stop where it stands - told every five minutes,
+        // naming it - and never refused for how long that is: --now is the person's hard stop, and the command's own
+        // cancellation leaves the stop asked.
+        var waited = await Waits.WhileHeldAsync(
+            _ => Task.FromResult(_owner.Holder(layout)),
+            _owner.Liveness(layout),
+            new WaitWatch($"run '{run}' to stop", told => _output.Info(StopCommand, told.Line()), Bound: null, _clock),
+            cancellationToken).ConfigureAwait(false);
 
-        while (_clock.GetUtcNow() < until)
+        if (waited.Kind == WaitEndKind.Cancelled)
         {
-            if (_owner.Live(layout) is null)
-            {
-                return EngineLeft(layout, StopCommand, "stop", json);
-            }
+            var cancelled = CommandOutcome.Failed(
+                HarnessExit.Cancelled,
+                $"waiting for run '{run}' to stop was cancelled; the stop stays asked, and the engine takes it at its poll",
+                [$"{StopCommand} {run} --now ends its process where it stands", $"stop: {layout.StopFile}"]);
 
-            try
-            {
-                await Task.Delay(_timings.WatchEvery, _clock, cancellationToken).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException)
-            {
-                var cancelled = CommandOutcome.Failed(
-                    HarnessExit.Cancelled,
-                    $"waiting for run '{run}' to stop was cancelled; the stop stays asked, and the engine takes it at its poll",
-                    [$"stop: {layout.StopFile}"]);
-
-                return Ended(layout, StopCommand, cancelled, ResultOf(layout, cancelled) with { Records = [new FlowRecordPath("stop", layout.StopFile)] }, json);
-            }
+            return Ended(layout, StopCommand, cancelled, ResultOf(layout, cancelled) with { Records = [new FlowRecordPath("stop", layout.StopFile)] }, json);
         }
 
-        var late = CommandOutcome.Refused(
-            $"the engine running '{run}' did not stop within {_timings.StopWait.TotalSeconds.ToString(CultureInfo.InvariantCulture)} s; the stop stays asked",
-            [$"{StopCommand} {run} --now ends its process where it stands", $"stop: {layout.StopFile}"]);
-
-        return Ended(layout, StopCommand, late, ResultOf(layout, late) with { Records = [new FlowRecordPath("stop", layout.StopFile)] }, json);
+        return EngineLeft(layout, StopCommand, "stop", json);
     }
 
     /// <inheritdoc/>
@@ -1205,13 +1207,24 @@ public sealed class FlowService(
     /// read against that base, else the remote's default branch); null where it can.
     /// </summary>
     internal static string? StartRefusal(FlowCheckout checkout, WorkflowDefinition workflow, IReadOnlyDictionary<string, string> inputs, string run)
+        => Start(checkout, workflow, inputs, run).Refusal;
+
+    /// <summary>
+    /// <see cref="StartRefusal"/>, with the lists its line names part of, each whole (<see cref="FlowCheckout.StartNamed"/>):
+    /// none where the base cannot be filled, or where the start is not refused.
+    /// </summary>
+    private static (string? Refusal, IReadOnlyDictionary<string, IReadOnlyList<string>>? Named) Start(FlowCheckout checkout, WorkflowDefinition workflow, IReadOnlyDictionary<string, string> inputs, string run)
     {
         var filled = FlowTemplate.PullRequestBase(workflow, inputs, run, out var problem);
-        var refusal = problem is not null
-            ? $"its pull request's base cannot be filled: {problem}"
-            : checkout.StartRefusal(filled);
 
-        return refusal is null ? null : $"run '{run}' of '{workflow.Name}' cannot start: {refusal}. Nothing was made.";
+        if (problem is not null)
+        {
+            return ($"run '{run}' of '{workflow.Name}' cannot start: its pull request's base cannot be filled: {problem}. Nothing was made.", null);
+        }
+
+        return checkout.StartRefusal(filled) is { } refusal
+            ? ($"run '{run}' of '{workflow.Name}' cannot start: {refusal}. Nothing was made.", checkout.StartNamed(filled))
+            : (null, null);
     }
 
     /// <summary>
@@ -1507,6 +1520,8 @@ public sealed class FlowService(
 
             var flow = _store.ReadFlow(layout)
                 ?? throw new HarnessException(HarnessExit.Refused, $"'{layout.FlowFile}' is not there after the session of run '{layout.Name}', which writes it at every change");
+
+            FlowStepGraph.PutAwayRunPages(_fileSystem, _output, layout, flow);
             var questions = _store.ReadFlowQuestions(layout);
             var exit = ExitOf(end, flow);
             var left = FlowReports.Write(_fileSystem, layout, flow, questions, end.Summary, exit, _clock.GetUtcNow(), _store.ReadFlowUpdates(layout));
@@ -1852,10 +1867,12 @@ public sealed class FlowService(
         {
             var amendments = ids.Count(Amendments.Contains);
 
-            return ReportText.Listed([
-                .. ids.Count - amendments > 0 ? [ReportText.Counted(ids.Count - amendments, "answer")] : Array.Empty<string>(),
-                .. amendments > 0 ? [ReportText.Counted(amendments, "amendment")] : Array.Empty<string>(),
-            ]);
+            return Names.Line(
+                [
+                    .. ids.Count - amendments > 0 ? [ReportText.Counted(ids.Count - amendments, "answer")] : Array.Empty<string>(),
+                    .. amendments > 0 ? [ReportText.Counted(amendments, "amendment")] : Array.Empty<string>(),
+                ],
+                $"the run's {OrchestratorLayout.InboxFileName}");
         }
     }
 

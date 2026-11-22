@@ -79,6 +79,71 @@ public sealed class StoredStream : IAgentEventSink, IDisposable
     /// <summary>Closes the stream. Its last line is whole, and the next open begins after it.</summary>
     public void Dispose() => _log.Dispose();
 
+    /// <summary>What the id of a message of the stream begins with (<see cref="MessageId"/>).</summary>
+    public const string MessagePrefix = "message-";
+
+    /// <summary>
+    /// The id of a message of the agent's the stream holds, as a record that gives it by reference names it and
+    /// <c>read_result</c> reads it by: <see cref="MessagePrefix"/> and the full digest of its text, so the id names the
+    /// message whatever window of the stream its record was made from, and two messages are one id only where they are one
+    /// text.
+    /// </summary>
+    /// <param name="text">The message's text, as the agent wrote it.</param>
+    public static string MessageId(string text)
+    {
+        ArgumentNullException.ThrowIfNull(text);
+
+        return MessagePrefix + Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(text)));
+    }
+
+    /// <summary>Whether <paramref name="id"/> is spelt as the id of a message of the stream (<see cref="MessageId"/>).</summary>
+    /// <param name="id">An id.</param>
+    public static bool NamesAMessage(string id)
+    {
+        ArgumentNullException.ThrowIfNull(id);
+
+        return id.Length == MessagePrefix.Length + 64
+            && id.StartsWith(MessagePrefix, StringComparison.Ordinal)
+            && id.AsSpan(MessagePrefix.Length).ContainsAnyExcept("0123456789abcdef") is false;
+    }
+
+    /// <summary>
+    /// The text of the message of the agent's in <paramref name="stream"/> that <paramref name="id"/> names
+    /// (<see cref="MessageId"/>), whole as the agent wrote it; null where the stream holds no such message.
+    /// </summary>
+    /// <param name="stream">The step's stored stream, every attempt's events in order.</param>
+    /// <param name="id">The message's id.</param>
+    public static string? MessageText(IReadOnlyList<AgentEvent> stream, string id)
+    {
+        ArgumentNullException.ThrowIfNull(stream);
+        ArgumentNullException.ThrowIfNull(id);
+
+        return NamesAMessage(id)
+            ? stream.OfType<AssistantMessage>().FirstOrDefault(message => string.Equals(MessageId(message.Text), id, StringComparison.Ordinal))?.Text
+            : null;
+    }
+
+    /// <summary>
+    /// The events of the stored stream in <paramref name="stepDirectory"/>, every attempt's in order - a torn last line a
+    /// killed writer left set aside - or none where it keeps none.
+    /// </summary>
+    /// <param name="fileSystem">The file system the step's records are kept on.</param>
+    /// <param name="stepDirectory">The step's own directory.</param>
+    /// <exception cref="InvalidDataException">A whole line does not read as an event, named by its number.</exception>
+    public static IReadOnlyList<AgentEvent> Read(IFileSystem fileSystem, string stepDirectory)
+    {
+        ArgumentNullException.ThrowIfNull(fileSystem);
+        ArgumentException.ThrowIfNullOrWhiteSpace(stepDirectory);
+
+        var path = Path.Combine(stepDirectory, FileName);
+
+        return JsonStateFile.ReadLog<AgentEvent>(
+            fileSystem,
+            path,
+            (_, _) => null,
+            (line, why) => new InvalidDataException($"'{path}' line {line.ToString(System.Globalization.CultureInfo.InvariantCulture)} is no event: {why}")).Records;
+    }
+
     /// <summary>
     /// <paramref name="node"/> with every string in it masked, all the way down: a string where it stands, and each member
     /// of an object and each item of a list the same, whatever holds which. A line of the stream is a record, and a record
@@ -154,14 +219,11 @@ public sealed class StoredConversation : IDisposable
     /// <summary>The tools as first sent.</summary>
     public const string ToolsFileName = "tools.json";
 
-    /// <summary>Where the conversation's provider began sending it shortened, where it began: <c>{"before": n}</c>.</summary>
-    public const string ShortenedFileName = "shortened.json";
-
     private readonly AppendLog _log;
     private readonly List<string> _messages;
     private readonly IFileSystem _fileSystem;
 
-    private StoredConversation(IFileSystem fileSystem, AppendLog log, string directory, string systemPrompt, string tools, List<string> messages, int? shortenedBefore)
+    private StoredConversation(IFileSystem fileSystem, AppendLog log, string directory, string systemPrompt, string tools, List<string> messages)
     {
         _fileSystem = fileSystem;
         _log = log;
@@ -169,7 +231,6 @@ public sealed class StoredConversation : IDisposable
         SystemPrompt = systemPrompt;
         Tools = tools;
         _messages = messages;
-        ShortenedBefore = shortenedBefore;
     }
 
     /// <summary>
@@ -187,8 +248,7 @@ public sealed class StoredConversation : IDisposable
     /// <param name="tools">The tools as first sent, as JSON text, written where they are new.</param>
     /// <returns>The conversation, at the end of its last whole turn.</returns>
     /// <exception cref="InvalidDataException">
-    /// A line of the conversation is no JSON array of messages, or its <see cref="ShortenedFileName"/> no point among them:
-    /// it was written by no writer of this tool's.
+    /// A line of the conversation is no JSON array of messages: it was written by no writer of this tool's.
     /// </exception>
     public static StoredConversation Open(IFileSystem fileSystem, string directory, string systemPrompt, string tools)
     {
@@ -218,7 +278,7 @@ public sealed class StoredConversation : IDisposable
         {
             var messages = Messages(log);
 
-            return new StoredConversation(log: log, fileSystem: fileSystem, directory: directory, systemPrompt: fileSystem.ReadAllText(system), tools: fileSystem.ReadAllText(given), messages: messages, shortenedBefore: Shortening(fileSystem, directory, messages.Count));
+            return new StoredConversation(log: log, fileSystem: fileSystem, directory: directory, systemPrompt: fileSystem.ReadAllText(system), tools: fileSystem.ReadAllText(given), messages: messages);
         }
         catch
         {
@@ -238,35 +298,6 @@ public sealed class StoredConversation : IDisposable
 
     /// <summary>Every message the conversation holds, in order, each as its provider made it.</summary>
     public IReadOnlyList<string> Messages() => [.. _messages];
-
-    /// <summary>
-    /// Where the conversation's provider began sending it shortened (<see cref="Loop.ChatPart.Shortened"/>): the messages
-    /// before this one go out in its short form with every request of it; null where it never began.
-    /// </summary>
-    public int? ShortenedBefore { get; private set; }
-
-    /// <summary>
-    /// Records that the provider sends the messages before <paramref name="before"/> shortened from now on, written in
-    /// one step before the request that first sends them so: a later request, a later step's among them, sends what it
-    /// did. The first point holds: the provider begins once.
-    /// </summary>
-    /// <param name="before">The first message sent whole, by its place in the conversation.</param>
-    /// <returns>Whether the point was recorded: false where the conversation is sent shortened already, whatever point is given.</returns>
-    /// <exception cref="ArgumentOutOfRangeException">The conversation is sent whole, and the point is past the messages stored, or none is before it.</exception>
-    public bool Shorten(int before)
-    {
-        if (ShortenedBefore is not null)
-        {
-            return false;
-        }
-
-        ArgumentOutOfRangeException.ThrowIfLessThan(before, 1);
-        ArgumentOutOfRangeException.ThrowIfGreaterThan(before, _messages.Count);
-
-        _fileSystem.WriteAllTextAtomic(Path.Combine(SessionDirectory, ShortenedFileName), $"{{\"before\":{before.ToString(System.Globalization.CultureInfo.InvariantCulture)}}}");
-        ShortenedBefore = before;
-        return true;
-    }
 
     /// <summary>
     /// Appends <paramref name="messages"/> as one line - the point where the history is whole again - each kept as it is,
@@ -298,34 +329,6 @@ public sealed class StoredConversation : IDisposable
 
     /// <summary>Closes the conversation. Its last line is whole, and the next open begins after it.</summary>
     public void Dispose() => _log.Dispose();
-
-    /// <summary>
-    /// Where the provider began sending the conversation in <paramref name="directory"/> shortened; null where it never
-    /// began. The point was recorded among the messages then stored, and none is ever taken back.
-    /// </summary>
-    /// <exception cref="InvalidDataException">The record is no point among the <paramref name="held"/> messages: no writer of this tool's wrote it.</exception>
-    private static int? Shortening(IFileSystem fileSystem, string directory, int held)
-    {
-        var file = Path.Combine(directory, ShortenedFileName);
-
-        if (!fileSystem.FileExists(file))
-        {
-            return null;
-        }
-
-        try
-        {
-            using var document = JsonDocument.Parse(fileSystem.ReadAllText(file));
-
-            return document.RootElement.ValueKind == JsonValueKind.Object && document.RootElement.TryGetProperty("before", out var before) && before.ValueKind == JsonValueKind.Number && before.TryGetInt32(out var at) && at > 0 && at <= held
-                ? at
-                : throw new InvalidDataException($"The conversation's {ShortenedFileName} names no message among the {held.ToString(System.Globalization.CultureInfo.InvariantCulture)} it holds that the provider began sending it shortened before.");
-        }
-        catch (JsonException ex)
-        {
-            throw new InvalidDataException($"The conversation's {ShortenedFileName} does not read as JSON: {ex.Message}", ex);
-        }
-    }
 
     /// <summary>Every message the log holds, line by line, each as it was written.</summary>
     private static List<string> Messages(AppendLog log)
@@ -359,7 +362,7 @@ public sealed class StoredConversation : IDisposable
     {
         try
         {
-            using var document = JsonDocument.Parse(line);
+            using var document = Json.JsonDepth.ParseDocument(line);
 
             if (document.RootElement.ValueKind != JsonValueKind.Array)
             {

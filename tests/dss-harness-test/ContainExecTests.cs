@@ -18,6 +18,14 @@ public sealed class ContainExecTests
     private static readonly TimeSpan LongBound = TimeSpan.FromMinutes(2);
 
     /// <summary>
+    /// How long a test here waits for a chain of processes to say it is ready: the five processes such a chain
+    /// starts have taken close to two minutes to come up where the suite's own shards ran beside it, so this is a
+    /// guard against a hang far above that - the suite's own notices name a test still running every two minutes,
+    /// and a hang is named long before this ends it.
+    /// </summary>
+    private static readonly TimeSpan ReadyBound = TimeSpan.FromMinutes(5);
+
+    /// <summary>
     /// A contained child on Linux and macOS is a session and group of its own: the terminal's
     /// signals go to a foreground group of the session the terminal belongs to, and a session of
     /// one's own is not it - which is what keeps a contained agent alive to be asked for its
@@ -212,13 +220,13 @@ public sealed class ContainExecTests
     }
 
     /// <summary>
-    /// What a bound child leaves running that holds its output holds the run no longer than the bound, on every system,
-    /// and lives on: it outlives the child by design - a server its build started, kept for the next phase - and the run,
-    /// reading to the end the leftover held off, waited for as long as it lived, the run's time limit and its caller's stop
-    /// reaching nothing once the child had gone.
+    /// What a bound child leaves running that holds its output holds the run no longer than it takes to read every
+    /// character the child wrote, on every system, and lives on: it outlives the child by design - a server its build
+    /// started, kept for the next phase - and the run says that what it writes from then on is its own, never waiting on
+    /// it for as long as it lives.
     /// </summary>
     [Fact]
-    public async Task ABoundChildsLeftoverHoldingItsOutput_HoldsTheRunNoLongerThanTheBound()
+    public async Task ABoundChildsLeftoverHoldingItsOutput_HoldsTheRunOnlyUntilTheChildsOutputIsRead()
     {
         var holder = LearnedProcess.None;
 
@@ -230,10 +238,11 @@ public sealed class ContainExecTests
                     Bound = true,
                     OnOutputLine = line => holder = LearnedProcess.In(line, "holder=") ?? holder,
                 },
-                TestContext.Current.CancellationToken).WaitAsync(ProcessRunner.DrainBound + TimeSpan.FromMinutes(1), TestContext.Current.CancellationToken);
+                TestContext.Current.CancellationToken).WaitAsync(LongBound, TestContext.Current.CancellationToken);
 
             Assert.Equal((0, false), (result.ExitCode, result.TimedOut));
             Assert.Equal($"holder={holder}\n", result.StandardOutput);
+            Assert.NotNull(result.OutputHeld);
             Assert.True(holder.Running, $"the leftover {holder} was ended by its bound parent's end");
         }
         finally
@@ -266,7 +275,7 @@ public sealed class ContainExecTests
                         }
                     },
                 },
-                TestContext.Current.CancellationToken).WaitAsync(ProcessRunner.DrainBound + TimeSpan.FromMinutes(1), TestContext.Current.CancellationToken);
+                TestContext.Current.CancellationToken).WaitAsync(LongBound, TestContext.Current.CancellationToken);
 
             holder = LearnedProcess.In(result.StandardOutput, "holder=") ?? holder;
 
@@ -299,7 +308,7 @@ public sealed class ContainExecTests
                 line => string.Equals(line, "orphaned", StringComparison.Ordinal));
 
             Assert.IsType<ProcessStoppedException>(raised);
-            Assert.True(since < ProcessRunner.DrainBound + TimeSpan.FromMinutes(1), $"the stopped run waited {since} for the leftover's end");
+            Assert.True(since < TimeSpan.FromMinutes(1), $"the stopped run waited {since} for the leftover's end");
             Assert.True(holder.Running, $"the leftover {holder} outside the stopped child's tree was ended by the stop");
         }
         finally
@@ -696,7 +705,7 @@ public sealed class ContainExecTests
             Assert.Equal(0, result.ExitCode);
             Assert.NotEqual(0, holder.Id);
             Assert.True(holder.AwaitGone(), $"the holder {holder} outlived the contained child that left it");
-            Assert.True(since.Elapsed < ProcessRunner.DrainBound, $"the run waited {since.Elapsed} for the leftover's end");
+            Assert.True(since.Elapsed < TimeSpan.FromMinutes(1), $"the run waited {since.Elapsed} for the leftover's end");
         }
         finally
         {
@@ -728,7 +737,7 @@ public sealed class ContainExecTests
             Assert.IsType<ProcessStoppedException>(raised);
             Assert.NotEqual(0, holder.Id);
             Assert.True(holder.AwaitGone(), $"the holder {holder} outlived the stopped child's container");
-            Assert.True(since < ProcessRunner.DrainBound, $"the stopped run waited {since} for the holder's end");
+            Assert.True(since < TimeSpan.FromMinutes(1), $"the stopped run waited {since} for the holder's end");
         }
         finally
         {
@@ -785,7 +794,7 @@ public sealed class ContainExecTests
 
             Assert.IsType<ProcessStoppedException>(raised);
             Assert.True(holder.AwaitGone(), $"the descendant {holder} in a group of its own outlived the stop");
-            Assert.True(since < ProcessRunner.DrainBound, $"the stopped run waited {since} for the descendant's end");
+            Assert.True(since < TimeSpan.FromMinutes(1), $"the stopped run waited {since} for the descendant's end");
         }
         finally
         {
@@ -814,40 +823,110 @@ public sealed class ContainExecTests
     }
 
     /// <summary>
-    /// What a contained child left that refuses to be asked is killed once the grace is spent, on
-    /// Linux and macOS: the asking signal is a request, and the run's stop is not.
+    /// What a contained child left that refuses to be asked to end is waited for, told every five minutes, until the run's
+    /// own bound - its time limit, an hour here - and killed there, on Linux and macOS: never at five seconds of the code's
+    /// own, as once, and never left running. The clock the wait is measured by stands in for the hour.
     /// </summary>
     [Fact]
-    public async Task AContainedChildsLeftoverThatRefusesToBeAsked_IsKilledOnceTheGraceIsSpent()
+    public async Task AChildIgnoringSigterm_IsWaitedAndToldUntilTheRunsBound()
     {
         Assert.SkipWhen(OperatingSystem.IsWindows(), "the signal that asks is the C library's; Windows ends a job's members at once.");
 
+        var cancellationToken = TestContext.Current.CancellationToken;
         using var temp = new TempDirectory();
         var ready = temp.Combine("ready.txt");
         var orphan = LearnedProcess.None;
-        using var stop = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        var clock = new TimerClock();
+        var told = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        using var stop = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        Task<ProcessResult> run;
 
-        try
+        using (DssHarness.Core.Waiting.Waits.TellingTo(wait => told.Enqueue(wait.Line())))
         {
-            var run = ContainingRunner().RunAsync(
+            run = new ProcessRunner(new HostPlatform(), FilePermissionsFactory.Create(), CliRunner.CliProgram) { Clock = clock }.RunAsync(
                 Child("spawn-orphan-and-sleep", "300000", "300000", "ignore-term-and-sleep", ready) with
                 {
                     Contained = true,
-                    Timeout = LongBound,
+                    Timeout = TimeSpan.FromHours(1),
                     OnOutputLine = line => orphan = LearnedProcess.In(line, "orphan=") ?? orphan,
                 },
                 stop.Token);
+        }
 
-            // Stopped once the leftover refuses the asking, which it says by the file.
+        try
+        {
             Assert.True(Until(() => orphan.Id != 0 && File.Exists(ready)), "the leftover never said it refuses to be asked");
             await stop.CancelAsync();
 
-            Assert.IsType<ProcessStoppedException>(await Record.ExceptionAsync(() => run.WaitAsync(LongBound, TestContext.Current.CancellationToken)));
-            Assert.True(orphan.AwaitGone(), $"the leftover {orphan}, refusing to be asked, outlived the grace");
+            // Asked, and waited for: past the five seconds it was once given, and told at five minutes. The clock serves
+            // every wait the run makes - the drain of the output the leftover holds among them - so the telling of the
+            // session's own wait is waited for, not assumed to be whatever wait the clock's first moves reached: on a
+            // busy runner the session's wait can arm its timer only after them, its five minutes unpassed by the moves
+            // that came before it armed.
+            var toldAt = DateTime.UtcNow.AddSeconds(30);
+
+            while (!told.Any(line => line.StartsWith("has waited 5m00s for the contained child's session", StringComparison.Ordinal)))
+            {
+                Assert.True(DateTime.UtcNow < toldAt, "the wait for the contained child's session was never told");
+                await clock.WaitingAsync().WaitAsync(ClockDrive.Within, cancellationToken);
+                clock.Advance(DssHarness.Core.Waiting.Waits.SaidEvery);
+            }
+
+            await Task.Delay(TimeSpan.FromSeconds(6), cancellationToken);
+
+            Assert.False(run.IsCompleted, "the stop gave up on the leftover before the run's bound");
+            Assert.True(orphan.Running, $"the leftover {orphan} was killed before the run's bound");
+
+            // The run's bound reached: made to end.
+            clock.Advance(TimeSpan.FromHours(1));
+
+            Assert.IsType<ProcessStoppedException>(await Record.ExceptionAsync(() => run.WaitAsync(LongBound, cancellationToken)));
+            Assert.True(orphan.AwaitGone(), $"the leftover {orphan}, refusing to be asked, outlived the run's bound");
         }
         finally
         {
             orphan.TryEnding();
+        }
+    }
+
+    /// <summary>
+    /// What a bound child wrote just before it ended is read to its last character however long the reading takes - here
+    /// a line handler slow enough that reading what the pipe held at the child's end takes ten seconds, past the five the
+    /// run once read for before it let go of the rest - while what it left running holds the output open.
+    /// </summary>
+    [Fact]
+    public async Task OutputAfterTheChildEnds_IsReadToEof()
+    {
+        var holder = LearnedProcess.None;
+        var lines = new List<string>();
+
+        try
+        {
+            var result = await ContainingRunner().RunAsync(
+                Child("spawn-holder", "flood", "200", "sleep", "300000") with
+                {
+                    Bound = true,
+                    OnOutputLine = line =>
+                    {
+                        holder = LearnedProcess.In(line, "holder=") ?? holder;
+                        Thread.Sleep(TimeSpan.FromMilliseconds(50));
+
+                        lock (lines)
+                        {
+                            lines.Add(line);
+                        }
+                    },
+                },
+                TestContext.Current.CancellationToken).WaitAsync(LongBound, TestContext.Current.CancellationToken);
+
+            Assert.Equal(0, result.ExitCode);
+            Assert.Equal(201, lines.Count);
+            Assert.Equal(TestChild.FloodLine(199, 100), lines[^1]);
+            Assert.NotNull(result.OutputHeld);
+        }
+        finally
+        {
+            holder.TryEnding();
         }
     }
 
@@ -881,7 +960,7 @@ public sealed class ContainExecTests
             await stop.CancelAsync();
 
             Assert.IsType<ProcessStoppedException>(await Record.ExceptionAsync(() => run.WaitAsync(LongBound, TestContext.Current.CancellationToken)));
-            Assert.True(since.Elapsed < ProcessRunner.SessionGrace, $"stopping a child apart from the terminal took {since.Elapsed}");
+            Assert.True(since.Elapsed < TimeSpan.FromSeconds(5), $"stopping a child apart from the terminal took {since.Elapsed}");
             Assert.True(child.AwaitGone(), $"the child {child} outlived its stop");
         }
         finally
@@ -1040,10 +1119,10 @@ public sealed class ContainExecTests
     /// <summary>
     /// What left both a contained child's session and its tree - a daemon that made a session of
     /// its own and whose parent has gone - is reached by nothing, and holds the run's output no
-    /// longer than the bound: the run ends once the bound is spent, with the output read so far.
+    /// longer than it takes to read every character the child wrote: the run ends then, saying so.
     /// </summary>
     [Fact]
-    public async Task WhatLeftAContainedChildsSessionAndTree_HoldsItsOutputNoLongerThanTheBound()
+    public async Task WhatLeftAContainedChildsSessionAndTree_HoldsItsOutputOnlyUntilTheChildsOutputIsRead()
     {
         Assert.SkipWhen(OperatingSystem.IsWindows(), "sessions are the C library's; on Windows nothing born in the job leaves it.");
 
@@ -1057,10 +1136,11 @@ public sealed class ContainExecTests
                     Contained = true,
                     OnOutputLine = line => holder = LearnedProcess.In(line, "holder=") ?? holder,
                 },
-                TestContext.Current.CancellationToken).WaitAsync(ProcessRunner.DrainBound + TimeSpan.FromMinutes(1), TestContext.Current.CancellationToken);
+                TestContext.Current.CancellationToken).WaitAsync(LongBound, TestContext.Current.CancellationToken);
 
             Assert.Equal(0, result.ExitCode);
             Assert.Equal($"holder={holder}\n", result.StandardOutput);
+            Assert.NotNull(result.OutputHeld);
             Assert.True(holder.Running, $"the daemon {holder} was reached by what reaches nothing outside the session and the tree");
         }
         finally
@@ -1075,30 +1155,46 @@ public sealed class ContainExecTests
     /// always were, and a SIGINT to the parent's group - what a terminal sends at Ctrl+C - ends the
     /// parent and the child in its group, and leaves the contained one running.
     /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The signal must reach the parent as a terminal's would, so the interruption is taken back for this process's
+    /// children first: a shard run of the suite is a script's background job, started with the interruption ignored,
+    /// and a chain that inherits it ignored is ended by no SIGINT at all.
+    /// </para>
+    /// <para>
+    /// The chain this waits to say its ids - the parent, the container and both children, five processes, each
+    /// waiting on the last - has taken close to two minutes to come up where the suite's own shards ran beside it, so
+    /// the child is asked for within <see cref="ReadyBound"/> and given no time limit of its own: a limit as long as
+    /// the wait would stop the child, by its whole tree, while the test still believed in it, and end the contained
+    /// child the test asks about. The child ends itself where the test never learns its ids, and the
+    /// <c>finally</c> ends it where the test lets go of a run still going.
+    /// </para>
+    /// </remarks>
     [Fact]
     public async Task ASignalToTheParentsGroup_DoesNotReachItsContainedChild_OnLinuxAndMacOS()
     {
         Assert.SkipWhen(OperatingSystem.IsWindows(), "groups and their signals are the C library's; AContainedChild_OnWindows_IsInAGroupOfItsOwn_ThatTheConsolesInterruptDoesNotReach holds Windows.");
 
+        TestHost.InterruptionTakenBack();
+
         var ids = new TaskCompletionSource<(int Parent, LearnedProcess Contained, LearnedProcess Ordinary)>(TaskCreationOptions.RunContinuationsAsynchronously);
         (int Parent, LearnedProcess Contained, LearnedProcess Ordinary) said = default;
+        using var stop = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        var run = ContainingRunner().RunAsync(
+            Child("contain-and-wait", CliRunner.CliProgram, "300000") with
+            {
+                ApartFromTerminal = true,
+                OnOutputLine = line =>
+                {
+                    var words = line.Split(' ').Select(word => word.Split('=')).ToDictionary(pair => pair[0], pair => int.Parse(pair[1], CultureInfo.InvariantCulture));
+                    ids.TrySetResult((words["parent"], LearnedProcess.Of(words["contained"]), LearnedProcess.Of(words["ordinary"])));
+                },
+            },
+            stop.Token);
 
         try
         {
-            var run = ContainingRunner().RunAsync(
-                Child("contain-and-wait", CliRunner.CliProgram, "300000") with
-                {
-                    ApartFromTerminal = true,
-                    Timeout = LongBound,
-                    OnOutputLine = line =>
-                    {
-                        var words = line.Split(' ').Select(word => word.Split('=')).ToDictionary(pair => pair[0], pair => int.Parse(pair[1], CultureInfo.InvariantCulture));
-                        ids.TrySetResult((words["parent"], LearnedProcess.Of(words["contained"]), LearnedProcess.Of(words["ordinary"])));
-                    },
-                },
-                TestContext.Current.CancellationToken);
-
-            said = await ids.Task.WaitAsync(LongBound, TestContext.Current.CancellationToken);
+            said = await ids.Task.WaitAsync(ReadyBound, TestContext.Current.CancellationToken);
 
             Assert.Equal(0, kill(-said.Parent, Interrupt));
 
@@ -1109,6 +1205,20 @@ public sealed class ContainExecTests
         }
         finally
         {
+            // The chain ends with the test however it ends: the child stopped by its tree, as a stop stops it, and what
+            // it started ended by its id. The run is waited for, for where the test never came to: a run stopped here
+            // answers the stop by raising, and the raising is the finally's own to take.
+            await stop.CancelAsync();
+
+            try
+            {
+                await run;
+            }
+            catch (Exception ex) when (ex is ProcessStoppedException or OperationCanceledException)
+            {
+                // The stop above ended it, not the child anything went wrong with.
+            }
+
             said.Contained.TryEnding();
             said.Ordinary.TryEnding();
         }
@@ -1174,8 +1284,8 @@ public sealed class ContainExecTests
 
     /// <summary>
     /// The step itself refuses a command line it cannot run, each refusal said whole on its error
-    /// stream: no program after '--' is a usage error, and both levels at once, a job with no name
-    /// or no channel to say the start on end with the step's own code. The root help does not list
+    /// stream: no program after '--' is a usage error, and both levels at once, a job with no name,
+    /// no channel to say the start on or no starter that listens on it end with the step's own code. The root help does not list
     /// it - nobody types it.
     /// </summary>
     [Fact]
@@ -1216,6 +1326,15 @@ public sealed class ContainExecTests
             (ContainExec.Failed, "contain-exec was given 'dotnet', which is no whole path; the process runner names every program by its whole path."
                 + Environment.NewLine),
             (named.ExitCode, named.StandardError));
+
+        var unstarted = await CliRunner.RunAsync(
+            [ContainExec.CommandName, ContainExec.GroupOption, ContainExec.StatusOption, "a-channel", ContainExec.Separator, Environment.ProcessPath!, "--version"],
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(
+            (ContainExec.Failed, $"contain-exec was given no '--starter'; it takes the id of the process runner that started it.{Environment.NewLine}"),
+            (unstarted.ExitCode, unstarted.StandardError));
+        Assert.Equal(string.Empty, unstarted.StandardOutput);
 
         var help = await CliRunner.RunAsync(["--help"], TestContext.Current.CancellationToken);
 
@@ -1303,29 +1422,128 @@ public sealed class ContainExecTests
     }
 
     /// <summary>
-    /// The step waits for its channel no longer than its bound: a channel it cannot reach - nobody listens on it - ends
-    /// the step with its own code, saying so on its error stream, once the bound is spent. The step's own bound is thirty
-    /// seconds; a shorter one stands in for it here.
+    /// The step gives up a channel it cannot reach once the process that started it - which listens on it - has ended:
+    /// nobody can listen on it any more, and the step ends with its own code, saying so on its error stream, at the first
+    /// look after, never at a number of seconds of its own.
     /// </summary>
     [Fact]
-    public void TheStep_GivesUpAChannelItCannotReach_OnceItsBoundIsSpent()
+    public void TheStep_GivesUpAChannelItCannotReach_OnceItsStarterHasEnded()
     {
         var channel = ProcessRunner.StatusName(OperatingSystem.IsWindows());
-        var bound = TimeSpan.FromMilliseconds(300);
         using var error = new StringWriter();
-        var waited = Stopwatch.StartNew();
 
-        var code = ContainExec.Run(job: null, group: true, scope: false, channel, CliRunner.CliProgram, ["--version"], error, bound);
+        // No process carries this id, on any system: past Linux's and macOS's highest, and no multiple of four on Windows.
+        var code = ContainExec.Run(job: null, group: true, scope: false, channel, starter: int.MaxValue, CliRunner.CliProgram, ["--version"], error);
 
-        waited.Stop();
+        Assert.Equal((ContainExec.Failed, ContainExec.StarterEndedLine(channel, int.MaxValue) + Environment.NewLine), (code, error.ToString()));
+    }
 
+    /// <summary>
+    /// The step waits to reach its channel for as long as its starter lives - here past the thirty seconds once given
+    /// before it gave up, a machine too busy to let the step through standing in for the moment the channel is listened
+    /// on - looking again every second and told every five minutes, and reaches it once it is listened on.
+    /// </summary>
+    [Fact]
+    public async Task TheStatusChannel_IsWaitedAndTold()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var channel = ProcessRunner.StatusName(OperatingSystem.IsWindows());
+        var clock = new TimerClock();
+        var told = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        var reaching = Task.Run(() => ContainExec.StartStatus.Reach(channel, () => true, wait => told.Enqueue(wait.Line()), clock), cancellationToken);
+
+        for (var tellings = 0; tellings < 2; tellings++)
+        {
+            await clock.WaitingAsync().WaitAsync(ClockDrive.Within, cancellationToken);
+            clock.Advance(DssHarness.Core.Waiting.Waits.SaidEvery);
+        }
+
+        await clock.WaitingAsync().WaitAsync(ClockDrive.Within, cancellationToken);
+        await Task.Delay(TimeSpan.FromSeconds(31), cancellationToken);
+        Assert.False(reaching.IsCompleted, "the step stopped waiting for a channel its starter still lives to listen on");
+
+        using var listening = Listening(channel);
+
+        await listening.WaitForConnectionAsync(cancellationToken).WaitAsync(LongBound, cancellationToken);
+        await TakenAsync(listening, cancellationToken);
+        using var reached = await reaching.WaitAsync(LongBound, cancellationToken);
+
+        Assert.NotNull(reached);
         Assert.Equal(
-            (ContainExec.Failed, $"contain-exec could not reach the channel '{channel}' it says the start on: The operation has timed out.{Environment.NewLine}"),
-            (code, error.ToString()));
+            [$"has waited 5m00s for the channel '{channel}' it says the start on", $"has waited 10m00s for the channel '{channel}' it says the start on"],
+            told);
+    }
 
-        // Waited for as long as the bound, and given up then: never for the step's own thirty seconds. The wait counts the
-        // bound by the system's tick, which can end it a few milliseconds before a stopwatch says the bound is spent.
-        Assert.InRange(waited.Elapsed, bound - TimeSpan.FromMilliseconds(50), bound + TimeSpan.FromSeconds(10));
+    /// <summary>
+    /// The step says nothing on its channel until it hears its connection taken: what makes a step seen to end with its
+    /// connection not taken one that said nothing, so the process runner allows no time for a connection to come. Gone
+    /// on as soon as it connected, a step that said its start and ended at once was heard only where the system handed
+    /// its connection over within the second once allowed.
+    /// </summary>
+    [Fact]
+    public async Task TheStep_SaysNothingOnItsChannel_UntilItHearsItsConnectionTaken()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var channel = ProcessRunner.StatusName(OperatingSystem.IsWindows());
+        using var listening = Listening(channel);
+        var connected = listening.WaitForConnectionAsync(cancellationToken);
+        var reaching = Task.Run(() => ContainExec.StartStatus.Reach(channel, () => true, _ => { }, TimeProvider.System), cancellationToken);
+
+        await connected.WaitAsync(LongBound, cancellationToken);
+        await Task.Delay(TimeSpan.FromMilliseconds(500), cancellationToken);
+        Assert.False(reaching.IsCompleted, "the step went on before it heard its connection taken");
+
+        await TakenAsync(listening, cancellationToken);
+
+        // The read is posted from the moment the connection was said taken, as the process runner posts
+        // it: a pipe holds nothing for a writer whose reader has not posted, so a step asked to speak
+        // before that would wait for its write, and the read that follows for the step's end.
+        using var reader = new StreamReader(listening);
+        var heard = reader.ReadToEndAsync(cancellationToken);
+
+        var reached = await reaching.WaitAsync(LongBound, cancellationToken);
+
+        Assert.NotNull(reached);
+        reached.Placed();
+        reached.Dispose();
+
+        Assert.Equal("placed\n", await heard.WaitAsync(LongBound, cancellationToken));
+    }
+
+    /// <summary>
+    /// A step seen to end with its connection to its channel not taken is given up at once - it said nothing, never having
+    /// heard its connection taken - with no second allowed for a connection to come, as once was.
+    /// </summary>
+    [Fact]
+    public async Task AStepSeenToEndWithItsConnectionNotTaken_IsGivenUpAtOnce()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        using var listening = Listening(ProcessRunner.StatusName(OperatingSystem.IsWindows()));
+        using var reaching = new CancellationTokenSource();
+        var reached = listening.WaitForConnectionAsync(reaching.Token);
+
+        // Under the second once allowed: a wait for a connection is given up in a moment.
+        var heard = await ProcessRunner.HeardAsync(listening, reached, reaching, Task.CompletedTask, cancellationToken)
+            .WaitAsync(TimeSpan.FromMilliseconds(900), cancellationToken);
+
+        Assert.Null(heard);
+        Assert.True(reached.IsCanceled, "the wait for a connection was not given up");
+    }
+
+    /// <summary>A channel listened on as the process runner listens on one.</summary>
+    private static System.IO.Pipes.NamedPipeServerStream Listening(string channel)
+        => new(
+            channel,
+            System.IO.Pipes.PipeDirection.InOut,
+            1,
+            System.IO.Pipes.PipeTransmissionMode.Byte,
+            System.IO.Pipes.PipeOptions.Asynchronous | System.IO.Pipes.PipeOptions.CurrentUserOnly);
+
+    /// <summary>Says the step's connection was taken, as the process runner says it.</summary>
+    private static async Task TakenAsync(System.IO.Pipes.NamedPipeServerStream listening, CancellationToken cancellationToken)
+    {
+        await listening.WriteAsync(new[] { ContainExec.Taken }, cancellationToken);
+        await listening.FlushAsync(cancellationToken);
     }
 
     /// <summary>

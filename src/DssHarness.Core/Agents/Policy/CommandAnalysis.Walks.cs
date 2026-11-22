@@ -115,10 +115,11 @@ public static partial class CommandAnalysis
         }
 
         var program = Name(words[start]);
-        IReadOnlyList<string> command = [.. words.Skip(start)];
 
-        return Is(program, "find") ? FindWalk(command)
-            : Is(program, "fd", "fdfind") ? FdWalk(command)
+        // The walk is asked of the program's own words alone: a program that runs its words is asked at each of them, and
+        // the tail is never copied where the program there makes no walk.
+        return Is(program, "find") ? FindWalk([.. words.Skip(start)])
+            : Is(program, "fd", "fdfind") ? FdWalk([.. words.Skip(start)])
             : null;
     }
 
@@ -251,7 +252,9 @@ public static partial class CommandAnalysis
     /// <summary>
     /// A find's expression read as GNU find parses one: <c>,</c> loosest, then <c>-o</c>, then <c>-a</c> and two side by
     /// side, then <c>!</c>, a parenthesis grouping - each test, action and option with the values it takes, the depth
-    /// options kept as the walk's own.
+    /// options kept as the walk's own. Read in one pass over the tokens, the operators waiting on a stack of its own and
+    /// the operands on another, so an expression of any length and any nesting is read whole: never a recursion, whose
+    /// depth an expression's own terms would set.
     /// </summary>
     private sealed class FindReader(IReadOnlyList<string> tokens)
     {
@@ -291,89 +294,138 @@ public static partial class CommandAnalysis
                 return new WalkNode.Act(WalkAction.None, Holds: true);
             }
 
-            var expression = List();
+            // What waits for its operands: a '!' for the one after it, a '(' for its ')', and each binary operator - ','
+            // the loosest, then '-o', then '-a' and two side by side - for its right, each joined to its left as soon as
+            // an operator as loose or looser follows it, as find joins them, from the left.
+            var waiting = new Stack<Waiting>();
+            var operands = new Stack<WalkNode>();
 
-            return _at < tokens.Count
-                ? throw new NotSupportedException($"find's expression holds '{tokens[_at]}' where none of its operators stands, which this does not read")
-                : expression;
-        }
-
-        private WalkNode List()
-        {
-            var left = Either();
-
-            while (_at < tokens.Count && tokens[_at] == ",")
+            // Joins every binary operator waiting above the nearest '(' that binds at least as tightly as one of
+            // 'tightness' does, each to its two operands.
+            void Join(int tightness)
             {
-                _at++;
-                left = new WalkNode.Both(left, Either());
+                while (waiting.TryPeek(out var top) && top.Kind is WaitingKind.Binary && top.Tightness >= tightness)
+                {
+                    waiting.Pop();
+                    var right = operands.Pop();
+                    var left = operands.Pop();
+
+                    operands.Push(top.Tightness switch
+                    {
+                        ListTightness => new WalkNode.Both(left, right),
+                        EitherTightness => new WalkNode.Or(left, right),
+                        _ => new WalkNode.And(left, right),
+                    });
+                }
             }
 
-            return left;
-        }
-
-        private WalkNode Either()
-        {
-            var left = All();
-
-            while (_at < tokens.Count && tokens[_at] is "-o" or "-or")
+            // An operand read whole: each '!' waiting right before it negates it.
+            void Took(WalkNode operand)
             {
-                _at++;
-                left = new WalkNode.Or(left, All());
+                while (waiting.TryPeek(out var top) && top.Kind is WaitingKind.Not)
+                {
+                    waiting.Pop();
+                    operand = new WalkNode.Not(operand);
+                }
+
+                operands.Push(operand);
             }
 
-            return left;
-        }
+            var wanted = true;
 
-        private WalkNode All()
-        {
-            var left = Negated();
-
-            while (_at < tokens.Count && tokens[_at] is not ("-o" or "-or" or "," or ")"))
+            while (true)
             {
-                if (tokens[_at] is "-a" or "-and")
+                if (wanted)
+                {
+                    // A test, an action, an option, a '!' or a '(' - anything else is no test of find's.
+                    if (_at >= tokens.Count)
+                    {
+                        throw new NotSupportedException("find's expression ends where a test or an action is wanted, which this does not read");
+                    }
+
+                    var token = tokens[_at];
+
+                    if (token is "!" or "-not" or "(")
+                    {
+                        _at++;
+                        waiting.Push(new Waiting(token == "(" ? WaitingKind.Open : WaitingKind.Not, 0));
+                        continue;
+                    }
+
+                    _at++;
+                    Took(Primary(token));
+                    wanted = false;
+                    continue;
+                }
+
+                if (_at >= tokens.Count)
+                {
+                    Join(ListTightness);
+
+                    return waiting.Count > 0
+                        ? throw new NotSupportedException("a parenthesis of find's expression does not close, which this does not read")
+                        : operands.Pop();
+                }
+
+                var next = tokens[_at];
+
+                if (next == ")")
+                {
+                    Join(ListTightness);
+
+                    // Only a '(' waits here: every '!' took its operand, and every binary operator above it is joined.
+                    if (!waiting.TryPop(out _))
+                    {
+                        throw new NotSupportedException($"find's expression holds '{next}' where none of its operators stands, which this does not read");
+                    }
+
+                    _at++;
+                    Took(operands.Pop());
+                    continue;
+                }
+
+                // ',' and '-o' are read; '-a' too, and any other word is the next operand of an '-a' that is not written.
+                var tightness = next == "," ? ListTightness : next is "-o" or "-or" ? EitherTightness : AllTightness;
+
+                if (tightness != AllTightness || next is "-a" or "-and")
                 {
                     _at++;
                 }
 
-                left = new WalkNode.And(left, Negated());
+                Join(tightness);
+                waiting.Push(new Waiting(WaitingKind.Binary, tightness));
+                wanted = true;
             }
-
-            return left;
         }
 
-        private WalkNode Negated()
-        {
-            if (_at < tokens.Count && tokens[_at] is "!" or "-not")
-            {
-                _at++;
-                return new WalkNode.Not(Negated());
-            }
+        /// <summary>How tightly find's <c>,</c> joins: the loosest.</summary>
+        private const int ListTightness = 1;
 
-            return Primary();
+        /// <summary>How tightly find's <c>-o</c> joins.</summary>
+        private const int EitherTightness = 2;
+
+        /// <summary>How tightly find's <c>-a</c> joins, and two terms side by side: the tightest of the binary operators.</summary>
+        private const int AllTightness = 3;
+
+        /// <summary>What waits on the reader's stack for its operands.</summary>
+        private enum WaitingKind
+        {
+            /// <summary>A <c>!</c>, for the operand after it.</summary>
+            Not,
+
+            /// <summary>A <c>(</c>, for its <c>)</c>.</summary>
+            Open,
+
+            /// <summary>A binary operator, for its right.</summary>
+            Binary,
         }
 
-        private WalkNode Primary()
+        /// <summary>One thing waiting on the reader's stack: what it is, and how tightly a binary operator joins.</summary>
+        private readonly record struct Waiting(WaitingKind Kind, int Tightness);
+
+        /// <summary>The test, action or option <paramref name="token"/> opens, with the values it takes; never an operator or a parenthesis.</summary>
+        private WalkNode Primary(string token)
         {
-            if (_at >= tokens.Count)
-            {
-                throw new NotSupportedException("find's expression ends where a test or an action is wanted, which this does not read");
-            }
-
-            var token = tokens[_at++];
-
-            if (token == "(")
-            {
-                var inner = List();
-
-                if (_at >= tokens.Count || tokens[_at] != ")")
-                {
-                    throw new NotSupportedException("a parenthesis of find's expression does not close, which this does not read");
-                }
-
-                _at++;
-                return inner;
-            }
-
             switch (token)
             {
                 case "-name" or "-iname":

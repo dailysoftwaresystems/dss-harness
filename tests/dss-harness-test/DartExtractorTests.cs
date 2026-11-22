@@ -1,3 +1,4 @@
+using System.Globalization;
 using DssHarness.Core.Codebase;
 using DssHarness.Core.Codebase.Languages;
 
@@ -171,9 +172,49 @@ public sealed class DartExtractorTests : CodeGraphExtractorContractTests<DartExt
         }
         """;
 
+    private const string Reads = """
+        const String greeting = 'hello world';
+
+        enum Kind { one, two }
+
+        class Reader {
+            int own = 0;
+
+            int take() {
+                const local = 4;
+                own += local;
+                final Kind which = Kind.one;
+                return '$greeting padding ${which.name} part'.length + switch (which) { Kind.two => 2, _ => 0 };
+            }
+        }
+        """;
+
     /// <inheritdoc/>
     public override IReadOnlyList<CodeGraphFixture> Fixtures { get; } =
     [
+        new("src/reads.dart", Reads)
+        {
+            Nodes =
+            [
+                new("dart:src/reads.dart.greeting", CodeNodeKinds.Member, (1, 1)),
+                new("dart:src/reads.dart.Kind", CodeNodeKinds.Type, (3, 3)),
+                new("dart:src/reads.dart.Kind.one", CodeNodeKinds.Member, (3, 3)),
+                new("dart:src/reads.dart.Kind.two", CodeNodeKinds.Member, (3, 3)),
+                new("dart:src/reads.dart.Reader", CodeNodeKinds.Type, (5, 14)),
+                new("dart:src/reads.dart.Reader.own", CodeNodeKinds.Member, (6, 6)),
+                new("dart:src/reads.dart.Reader.take", CodeNodeKinds.Member, (8, 13)),
+            ],
+            Edges =
+            [
+                // A field read bare, a local's type a reference, an enum value read through its enum, a constant read
+                // inside a string's $ hole, and an enum value a switch expression's arm matches by.
+                new("dart:src/reads.dart.Reader.take", "dart:src/reads.dart.Reader.own", CodeEdgeKinds.Uses, 10, CodeConfidences.Exact),
+                new("dart:src/reads.dart.Reader.take", "dart:src/reads.dart.Kind", CodeEdgeKinds.References, 11, CodeConfidences.Exact),
+                new("dart:src/reads.dart.Reader.take", "dart:src/reads.dart.Kind.one", CodeEdgeKinds.Uses, 11, CodeConfidences.Exact),
+                new("dart:src/reads.dart.Reader.take", "dart:src/reads.dart.greeting", CodeEdgeKinds.Uses, 12, CodeConfidences.Exact),
+                new("dart:src/reads.dart.Reader.take", "dart:src/reads.dart.Kind.two", CodeEdgeKinds.Uses, 12, CodeConfidences.Exact),
+            ],
+        },
         new("lib/shapes.dart", Shapes)
         {
             Nodes =
@@ -336,9 +377,9 @@ public sealed class DartExtractorTests : CodeGraphExtractorContractTests<DartExt
             ],
             extract.Nodes.Select(node => (node.Name, node.SubKind!, string.Join(' ', node.Modifiers))));
         Assert.Equal("dart:lib/k.dart.Box.operator[]=", Assert.Single(extract.Nodes, node => node.Name == "operator[]=").Id);
-        Assert.Equal("lib/k.dart", Assert.Single(extract.Nodes, node => node.Name == "extension").SeenIn);
+        Assert.Equal("lib/k.dart", Assert.Single(extract.Nodes, node => node.Name == "extension").SeenIn?.Whole());
         Assert.Equal("String", Assert.Single(extract.Nodes, node => node.Name == "twice").Extends);
-        Assert.Equal("lib/k.dart", Assert.Single(extract.Nodes, node => node.Name == "twice").SeenIn);
+        Assert.Equal("lib/k.dart", Assert.Single(extract.Nodes, node => node.Name == "twice").SeenIn?.Whole());
         Assert.Equal(["A"], extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Inherits).Select(reference => reference.Name));
         Assert.True(Assert.Single(extract.Nodes, node => node.Name == "native").Prototype);
     }
@@ -405,7 +446,7 @@ public sealed class DartExtractorTests : CodeGraphExtractorContractTests<DartExt
                 ("five", "type", "Shape"), ("filled", "named", "List"), ("Shape", null, null), ("six", "type", "Shape"), ("seven", "value", "widget.controller"),
                 ("Paint", null, null), ("eight", "type", "Paint"), ("nine", "type", "Paint"), ("ten", "type", "Shape"), ("eleven", "type", "Shape"),
             ],
-            extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Calls).Select(reference => (reference.Name, reference.Qualifier?.Kind, reference.Qualifier?.Name)));
+            extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Calls).Select(reference => (reference.Name, reference.Qualifier?.Kind, extract.Written(reference.Qualifier))));
     }
 
     /// <summary>A constructor named after a type's arguments makes that type: a local given what it makes, and a call on its result, are of it.</summary>
@@ -422,7 +463,7 @@ public sealed class DartExtractorTests : CodeGraphExtractorContractTests<DartExt
 
         Assert.Equal(
             [("create", "named", "Cache"), ("get", "type", "Cache"), ("create", "named", "Cache"), ("put", "type", "Cache")],
-            extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Calls).Select(reference => (reference.Name, reference.Qualifier?.Kind, reference.Qualifier?.Name)));
+            extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Calls).Select(reference => (reference.Name, reference.Qualifier?.Kind, extract.Written(reference.Qualifier))));
     }
 
     /// <summary>
@@ -452,7 +493,7 @@ public sealed class DartExtractorTests : CodeGraphExtractorContractTests<DartExt
                 (CodeEdgeKinds.Instantiates, "Square", null, null), (CodeEdgeKinds.Instantiates, "Square", null, null), (CodeEdgeKinds.Calls, "unit", "named", "Square"),
                 (CodeEdgeKinds.Instantiates, "Square", "prefix", "p"), (CodeEdgeKinds.Calls, "unit", "named", "p.Square"), (CodeEdgeKinds.Calls, "unit", "named", "Square"),
             ],
-            extract.References.Select(reference => (reference.Kind, reference.Name, reference.Qualifier?.Kind, reference.Qualifier?.Name)));
+            extract.References.Select(reference => (reference.Kind, reference.Name, reference.Qualifier?.Kind, extract.Written(reference.Qualifier))));
     }
 
     /// <summary>
@@ -507,8 +548,8 @@ public sealed class DartExtractorTests : CodeGraphExtractorContractTests<DartExt
         var byName = Read("lib/c_part.dart", "part of shapes.c;\nvoid shown() {}\n");
         var library = Read("lib/c.dart", "library shapes.c;\npart 'c_part.dart';\nvoid go() {}\n");
 
-        Assert.Equal(["dart:lib/a.dart._hidden", "dart:lib/a.dart.shown"], byUri.Nodes.Select(node => node.Id));
-        Assert.Equal(["lib/a.dart", null], byUri.Nodes.Select(node => node.SeenIn));
+        Assert.Equal(["dart:lib/a.dart._hidden", "dart:lib/a.dart.shown"], byUri.Nodes.Select(node => node.Id.Whole()));
+        Assert.Equal(["lib/a.dart", null], byUri.Nodes.Select(node => node.SeenIn?.Whole()));
         Assert.Equal(new ExtractImport(CodeImportForms.Relative, "../a.dart", 1) { Shares = true }, Assert.Single(byUri.Imports));
         Assert.Equal("dart:packages/shapes/lib/src/b.dart.shown", Assert.Single(byPackage.Nodes).Id);
         Assert.Equal(CodeImportForms.Address, Assert.Single(byPackage.Imports).Form);
@@ -618,8 +659,10 @@ public sealed class DartExtractorTests : CodeGraphExtractorContractTests<DartExt
     }
 
     /// <summary>
-    /// A pattern names types, which it references, and binds locals: a case's object patterns, an arm of a switch
-    /// expression, a declaration's destructuring; a constant pattern's constructor instantiates; what follows is code.
+    /// A pattern names types, which it references, reads the getters its object patterns' fields name - written out or
+    /// short - as uses of the type it tests, and binds locals: a case's object patterns, an arm of a switch expression, a
+    /// declaration's destructuring; a typed variable's type is a reference too, a constant pattern's constructor
+    /// instantiates; what follows is code.
     /// </summary>
     [Fact]
     public void APatternsTypes_AreReferenced_AndWhatFollowsItIsCode()
@@ -646,12 +689,12 @@ public sealed class DartExtractorTests : CodeGraphExtractorContractTests<DartExt
 
         Assert.Equal(
             [
-                (CodeEdgeKinds.References, "Circle"), (CodeEdgeKinds.Calls, "area"), (CodeEdgeKinds.Instantiates, "Square"), (CodeEdgeKinds.References, "Point"),
-                (CodeEdgeKinds.Calls, "origin"), (CodeEdgeKinds.References, "Line"), (CodeEdgeKinds.Calls, "move"), (CodeEdgeKinds.References, "Circle"),
-                (CodeEdgeKinds.Calls, "round"), (CodeEdgeKinds.References, "Triangle"),
+                (CodeEdgeKinds.References, "Circle", ""), (CodeEdgeKinds.Uses, "radius", "type Circle"), (CodeEdgeKinds.Calls, "area", ""), (CodeEdgeKinds.Instantiates, "Square", ""),
+                (CodeEdgeKinds.References, "Point", ""), (CodeEdgeKinds.Uses, "x", "type Point"), (CodeEdgeKinds.Uses, "y", "type Point"), (CodeEdgeKinds.Calls, "origin", ""),
+                (CodeEdgeKinds.References, "Line", ""), (CodeEdgeKinds.Uses, "start", "type Line"), (CodeEdgeKinds.References, "Point", ""), (CodeEdgeKinds.Calls, "move", "type Point"),
+                (CodeEdgeKinds.References, "Circle", ""), (CodeEdgeKinds.Uses, "radius", "type Circle"), (CodeEdgeKinds.Calls, "round", ""), (CodeEdgeKinds.References, "Triangle", ""),
             ],
-            extract.References.Select(reference => (reference.Kind, reference.Name)));
-        Assert.Equal(new ExtractQualifier(CodeQualifierKinds.Type, "Point"), Assert.Single(extract.References, reference => reference.Name == "move").Qualifier);
+            extract.References.Select(reference => (reference.Kind, reference.Name, $"{reference.Qualifier?.Kind} {extract.Written(reference.Qualifier)}".Trim())));
     }
 
     /// <summary>A local function is no node and no call of another's name: what it calls is its holder's, and a call of it is none.</summary>
@@ -731,25 +774,69 @@ public sealed class DartExtractorTests : CodeGraphExtractorContractTests<DartExt
     }
 
     /// <summary>
-    /// Declarations, interpolations and test groups nested past the reader's stack are read no deeper, never overflow it,
-    /// and are marked dynamic where they stop being read.
+    /// Types nested five thousand deep are read whole - each a node, the innermost's method's body read, the function after
+    /// them read, nothing marked - in a child given a small stack: a reading of a type's members that recursed a frame a type
+    /// would overflow it, and end the child.
     /// </summary>
     [Fact]
-    public void NestingPastTheReadersStack_IsReadNoDeeper_AndMarked()
-    {
-        var depth = 400;
-        var interpolated = Read("lib/a.dart", "void go() { print(" + string.Concat(Enumerable.Repeat("'${f(", depth)) + string.Concat(Enumerable.Repeat(")}'", depth)) + "); }");
-        var grouped = Read("test/a_test.dart", "void main() { " + string.Concat(Enumerable.Repeat("group('g', () { ", depth)) + "test('t', () {});" + string.Concat(Enumerable.Repeat("}); ", depth)) + "}");
-        var declared = Read("lib/b.dart", string.Concat(Enumerable.Repeat("class A { ", depth)) + new string('}', depth) + "\nvoid after() {}\n");
+    public async Task ABlockFiveThousandDeep_IsReadWhole()
+        => Assert.Equal(new ChildRunAnswer(0, "5000 work 0 True", ""), await ChildRun.MethodAsync(typeof(DartExtractorTests), nameof(TypesFiveThousandDeep), TestContext.Current.CancellationToken));
 
-        Assert.InRange(interpolated.References.Count, 2, ScanDepth + 2);
-        Assert.Equal("code nested more than 64 interpolations and test groups deep, which is not read", Assert.Single(interpolated.Dynamic).Why);
-        Assert.InRange(grouped.Nodes.Count(node => node.Test), 1, ScanDepth + 1);
-        Assert.Equal("code nested more than 64 interpolations and test groups deep, which is not read", Assert.Single(grouped.Dynamic).Why);
-        Assert.InRange(declared.Nodes.Count(node => node.Name == "A"), 1, ScanDepth + 1);
-        Assert.Equal("declarations nested more than 64 blocks deep, which are not read", Assert.Single(declared.Dynamic).Why);
-        Assert.Single(declared.Nodes, node => node.Id == "dart:lib/b.dart.after");
-    }
+    /// <summary>
+    /// The child of <see cref="ABlockFiveThousandDeep_IsReadWhole"/>: how many types it reads, what the innermost's method
+    /// calls, how many places it marks dynamic, and whether it reads the function after them.
+    /// </summary>
+    internal static string TypesFiveThousandDeep() => SmallStack.Run(() =>
+    {
+        var extract = Read("lib/b.dart", string.Concat(Enumerable.Repeat("class A { ", Deep)) + "void go() { work(); } " + new string('}', Deep) + "\nvoid after() {}\n");
+        var go = Assert.Single(extract.Nodes, node => node.Name == "go").Id;
+
+        return string.Create(CultureInfo.InvariantCulture, $"{extract.Nodes.Count(node => node.Name == "A")} {string.Join(',', Calls(extract, go.Whole()))} {extract.Dynamic.Count} {extract.Nodes.Any(node => node.Id == "dart:lib/b.dart.after")}");
+    });
+
+    /// <summary>
+    /// Interpolations nested five thousand deep - each a call whose argument is a string of the next - are read whole, each
+    /// a run of code read in its turn, nothing marked, in a child given a small stack: a reading that recursed a frame an
+    /// interpolation would overflow it.
+    /// </summary>
+    [Fact]
+    public async Task AnInterpolationFiveThousandDeep_IsReadWhole()
+        => Assert.Equal(new ChildRunAnswer(0, "5001 print 5000 0", ""), await ChildRun.MethodAsync(typeof(DartExtractorTests), nameof(InterpolationsFiveThousandDeep), TestContext.Current.CancellationToken));
+
+    /// <summary>
+    /// The child of <see cref="AnInterpolationFiveThousandDeep_IsReadWhole"/>: how many calls the function makes, its first,
+    /// how many of them are of f, and how many places it marks dynamic.
+    /// </summary>
+    internal static string InterpolationsFiveThousandDeep() => SmallStack.Run(() =>
+    {
+        var extract = Read("lib/a.dart", "void go() { print(" + string.Concat(Enumerable.Repeat("'${f(", Deep)) + string.Concat(Enumerable.Repeat(")}'", Deep)) + "); }");
+        var calls = Calls(extract, "dart:lib/a.dart.go").ToList();
+
+        return string.Create(CultureInfo.InvariantCulture, $"{calls.Count} {calls[0]} {calls.Count(call => call == "f")} {extract.Dynamic.Count}");
+    });
+
+    /// <summary>
+    /// Test groups nested five thousand deep are read whole - each a node held by the one it is in, the innermost test's
+    /// calls its own, nothing marked - in a child given a small stack: a reading that recursed a frame a group would
+    /// overflow it.
+    /// </summary>
+    [Fact]
+    public async Task ATestGroupFiveThousandDeep_IsReadWhole()
+        => Assert.Equal(new ChildRunAnswer(0, "5000 True work 0", ""), await ChildRun.MethodAsync(typeof(DartExtractorTests), nameof(TestGroupsFiveThousandDeep), TestContext.Current.CancellationToken));
+
+    /// <summary>
+    /// The child of <see cref="ATestGroupFiveThousandDeep_IsReadWhole"/>: how many groups it reads, whether each but the
+    /// first is held by the group before it, what the innermost test calls, and how many places it marks dynamic.
+    /// </summary>
+    internal static string TestGroupsFiveThousandDeep() => SmallStack.Run(() =>
+    {
+        var extract = Read("test/a_test.dart", "void main() { " + string.Concat(Enumerable.Repeat("group('g', () { ", Deep)) + "test('t', () { work(); });" + string.Concat(Enumerable.Repeat("}); ", Deep)) + "}");
+        var groups = extract.Nodes.Where(node => node.SubKind == "testGroup").ToList();
+        var test = Assert.Single(extract.Nodes, node => node.SubKind == "test");
+        var held = groups.Skip(1).Select((group, at) => group.Parent == groups[at].Id).All(holds => holds) && test.Parent == groups[^1].Id;
+
+        return string.Create(CultureInfo.InvariantCulture, $"{groups.Count} {held} {string.Join(',', Calls(extract, test.Id.Whole()))} {extract.Dynamic.Count}");
+    });
 
     /// <summary>
     /// Any name but a reserved word's names a function, a method or a local - of, show, get, on among them - and a
@@ -786,7 +873,7 @@ public sealed class DartExtractorTests : CodeGraphExtractorContractTests<DartExt
         Assert.Equal(["render"], Calls(extract, "dart:lib/t.dart.Theme2.show"));
         Assert.Equal(
             [("Theme2", null, null), ("on", "type", "Theme2"), ("when", "type", "AsyncValue"), ("new", "named", "Theme2")],
-            extract.References.Where(reference => reference is { From: "dart:lib/t.dart.Theme2.go", Kind: CodeEdgeKinds.Calls }).Select(reference => (reference.Name, reference.Qualifier?.Kind, reference.Qualifier?.Name)));
+            extract.References.Where(reference => reference is { Kind: CodeEdgeKinds.Calls } && reference.From.Is("dart:lib/t.dart.Theme2.go")).Select(reference => (reference.Name, reference.Qualifier?.Kind, extract.Written(reference.Qualifier))));
         Assert.DoesNotContain(extract.References, reference => reference.Name == "hidden");
     }
 
@@ -819,8 +906,8 @@ public sealed class DartExtractorTests : CodeGraphExtractorContractTests<DartExt
 
         Assert.Equal(
             [("add", 2), ("fromJson", 1), ("add", 2), ("add", 2), ("add", 2), ("add", 2), ("add", 2), ("add", 2)],
-            extract.References.Where(reference => reference is { From: "dart:lib/a.dart.main", Kind: CodeEdgeKinds.Calls }).Select(reference => (reference.Name, reference.Arity ?? -1)));
-        Assert.Equal([2, 2], extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Calls && reference.From.StartsWith("dart:lib/a.dart.Size.", StringComparison.Ordinal)).Select(reference => reference.Arity ?? -1));
+            extract.References.Where(reference => reference is { Kind: CodeEdgeKinds.Calls } && reference.From.Is("dart:lib/a.dart.main")).Select(reference => (reference.Name, reference.Arity ?? -1)));
+        Assert.Equal([2, 2], extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Calls && reference.From.Whole().StartsWith("dart:lib/a.dart.Size.", StringComparison.Ordinal)).Select(reference => reference.Arity ?? -1));
         Assert.Equal(7, Link(("lib/a.dart", text)).Edges.Count(edge => edge is { From: "dart:lib/a.dart.main", To: "dart:lib/a.dart.add", Kind: CodeEdgeKinds.Calls }));
     }
 
@@ -869,7 +956,8 @@ public sealed class DartExtractorTests : CodeGraphExtractorContractTests<DartExt
         Assert.DoesNotContain(noStub.Edges, edge => edge is { From: "dart:lib/main.dart.main", To: "dart:lib/src/types.dart.Hidden" });
     }
 
-    private const int ScanDepth = 64;
+    /// <summary>How deep the depth tests nest what they read.</summary>
+    private const int Deep = 5_000;
 
     /// <summary>A script tag on the first line is kept apart, so the declaration below it is read, and is no summary of it.</summary>
     [Fact]
@@ -878,6 +966,251 @@ public sealed class DartExtractorTests : CodeGraphExtractorContractTests<DartExt
         var main = Assert.Single(Read("bin/tool.dart", "#!/usr/bin/env dart\nvoid main() { run(); }").Nodes);
 
         Assert.Equal(("main", null), (main.Name, main.Summary));
+    }
+
+    /// <summary>
+    /// A string's value is what Dart reads of it: a raw one's as written, a triple-quoted one's past a first line of white
+    /// space alone and from the line after it, its escapes decoded - a quote, a <c>\u{...}</c>, a <c>\x</c>, a <c>\u</c> -
+    /// and an interpolated one's constant parts each a literal of its own, its holes none of them.
+    /// </summary>
+    [Fact]
+    public void AStringsValue_IsWhatDartReadsOfIt_RawTripleAndEscapedOnesAmongThem()
+    {
+        var extract = Read("lib/t.dart", """
+            const re = r'^\d+$';
+            const query = '''
+            SELECT * FROM t''';
+            const done = 'It\'s done';
+            const codes = '\u{1F600} and \x41B';
+            String show(String prefix, int id) => 'item $prefix: ${id + 1} left\nnow';
+            """);
+
+        Assert.Equal(
+            [
+                new LiteralRow("^\\d+$", 1, "dart:lib/t.dart.re"),
+                new LiteralRow("SELECT * FROM t", 3, "dart:lib/t.dart.query"),
+                new LiteralRow("It's done", 4, "dart:lib/t.dart.done"),
+                new LiteralRow("\U0001F600 and AB", 5, "dart:lib/t.dart.codes"),
+                new LiteralRow("item ", 6, "dart:lib/t.dart.show"),
+                new LiteralRow(": ", 6, "dart:lib/t.dart.show"),
+                new LiteralRow(" left\nnow", 6, "dart:lib/t.dart.show"),
+            ],
+            LiteralRow.Of(extract));
+        Assert.Empty(extract.References);
+    }
+
+    /// <summary>
+    /// A use is of a value the code reads: each bare hole of a string - <c>'$a$b'</c> two - a map's key, a nested one's
+    /// among them, a named argument's value and not its name - one after a nullable cast's <c>?</c> among them - a
+    /// receiver's first name where it is a value - an import's prefix and a type's name not - and each branch of a
+    /// conditional; and an annotation's arguments - a type's, a field's, a constructor's, a method's, an enum value's - and
+    /// a parameter's default, a constructor's or a method's, are the code of what they are written on.
+    /// </summary>
+    [Fact]
+    public void AUseIsOfAValueTheCodeReads_AnnotationsAndDefaultsTheirDeclarations()
+    {
+        var extract = Read("lib/user.dart", """
+            import 'shapes.dart' as p;
+
+            const kRed = 1;
+
+            @Entity('users_table')
+            class User {
+              @JsonKey(name: 'user_id')
+              final int id;
+              @Since('since_v2') User({this.id = 0, String label = 'parameter default'});
+
+              @Deprecated('old_show')
+              String show(bool isDark, [String tone = 'method default']) {
+                final both = '$prefix$id';
+                final colors = {kRed: 1};
+                final nested = [{kBlue: 2}];
+                format(size: width as int?, name: darkColor);
+                config.verbose = true;
+                p.helper();
+                Square.unit();
+                return isDark ? darkColor : lightColor;
+              }
+            }
+
+            enum Tone { @Named('warm_tone') warm, cold }
+            """);
+
+        const string Show = "dart:lib/user.dart.User.show";
+
+        Assert.Equal(
+            [
+                new LiteralRow("users_table", 5, "dart:lib/user.dart.User"),
+                new LiteralRow("user_id", 7, "dart:lib/user.dart.User.id"),
+                new LiteralRow("since_v2", 9, "dart:lib/user.dart.User.new"),
+                new LiteralRow("parameter default", 9, "dart:lib/user.dart.User.new"),
+                new LiteralRow("old_show", 11, Show),
+                new LiteralRow("method default", 12, Show),
+                new LiteralRow("warm_tone", 24, "dart:lib/user.dart.Tone.warm"),
+            ],
+            LiteralRow.Of(extract));
+        Assert.Equal(
+            [
+                (Show, "prefix", 13, ""), (Show, "id", 13, ""), (Show, "kRed", 14, ""), (Show, "kBlue", 15, ""), (Show, "width", 16, ""), (Show, "darkColor", 16, ""), (Show, "config", 17, ""),
+                (Show, "verbose", 17, "value config"), (Show, "darkColor", 20, ""), (Show, "lightColor", 20, ""),
+            ],
+            extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Uses).Select(reference => (reference.From.Whole(), reference.Name, reference.Line, $"{reference.Qualifier?.Kind} {extract.Written(reference.Qualifier)}".Trim())));
+    }
+
+    /// <summary>
+    /// A call's receiver of any number of names is read by them all, and one that begins at a local declared
+    /// <c>dynamic</c> is a value of no name, its call marked dynamic, however many names follow it; and an import whose
+    /// string its line leaves open names nothing.
+    /// </summary>
+    [Fact]
+    public void AReceiverOfAnyNames_IsReadByThemAll_AndAnImportLeftOpenNamesNothing()
+    {
+        var extract = Read("lib/run.dart", """
+            import 'open.dart
+            import 'closed.dart';
+
+            void run(dynamic d) {
+              a.b.c.d.e.f.g.h.go();
+              a.b.c.d.e.f.g.h.i.go();
+              d.x.y.go();
+            }
+            """);
+
+        Assert.Equal(
+            [(5, "value a.b.c.d.e.f.g.h"), (6, "value a.b.c.d.e.f.g.h.i"), (7, "value")],
+            extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Calls).Select(reference => (reference.Line, $"{reference.Qualifier?.Kind} {extract.Written(reference.Qualifier)}".Trim())));
+        Assert.Equal([(7, "a call on the dynamic value d")], extract.Dynamic.Select(dynamic => (dynamic.Line, dynamic.Why)));
+        Assert.Equal([("closed.dart", 2)], extract.Imports.Select(import => (import.Target, import.Line)));
+    }
+
+    /// <summary>
+    /// A receiver of sixty names is written as links: the use of its second name names its first, and the use of each name
+    /// from the third on and the call each link to the use of the name before - each read once, from the use before it -
+    /// and its sixty names are read back whole.
+    /// </summary>
+    [Fact]
+    public void ASixtyNameChain_IsWrittenAsLinks()
+    {
+        var names = Enumerable.Range(1, 60).Select(at => string.Create(CultureInfo.InvariantCulture, $"n{at}")).ToList();
+        var text = $"void run() {{ {string.Join('.', names)}.go(); }}\n";
+        var extract = Read("lib/chain.dart", text);
+
+        Assert.Equal([.. names, "go"], extract.References.Select(reference => reference.Name));
+        Assert.Null(extract.References[0].Qualifier);
+        Assert.Equal(new ExtractQualifier(CodeQualifierKinds.Value, "n1"), extract.References[1].Qualifier);
+        Assert.Equal(
+            Enumerable.Range(1, 59).Select(link => new ExtractQualifier(CodeQualifierKinds.Value) { Link = link }),
+            extract.References.Skip(2).Select(reference => reference.Qualifier));
+        Assert.Equal(string.Join('.', names), extract.Written(extract.References[^1].Qualifier));
+        Assert.Null(extract.Problem("dart", CodeFileText.Lines(text).Count));
+    }
+
+    /// <summary>
+    /// Every declarator of a declaration declares a local - <c>final a = 1, b = 2</c>, a typed one's and a <c>for</c>'s
+    /// among them - and none is a use, nor is a type argument's name a declarator's; what their values read is a use.
+    /// </summary>
+    [Fact]
+    public void EachDeclaratorOfADeclaration_IsALocal_AndNoUse()
+    {
+        var extract = Read("lib/sum.dart", """
+            int sum() {
+              final a = 1, b = total;
+              int c = 0, d = 2;
+              var m = <String, int>{}, n = first;
+              for (var i = 0, j = limit; i < j; i++) {}
+              return a + b + c + d + m.length + n;
+            }
+            """);
+
+        Assert.Equal(
+            [("total", 2), ("first", 4), ("limit", 5), ("length", 6)],
+            extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Uses).Select(reference => (reference.Name, reference.Line)));
+    }
+
+    /// <summary>
+    /// A type a body writes is a reference and no use - a typed local's, plain, nullable or with arguments, a record's, a
+    /// closure's parameter's, a local function's return type and parameter's, one of <c>void</c> among them, a cast's, a
+    /// test's, a call's and a collection literal's type arguments - while what the code reads around them is a use.
+    /// </summary>
+    [Fact]
+    public void ATypeABodyWrites_IsAReference_AndNoUse()
+    {
+        var extract = Read("lib/t.dart", """
+            void go(List<Object> xs, Object o) {
+              PlainModel p = make();
+              NullModel? a = null;
+              Map<String, MapModel> m = {};
+              final (RecordModel, int) pair = (p, 1);
+              xs.map((ItemModel item) => item).toList();
+              final l = <ListModel>[];
+              final g = generic<GenModel>(o);
+              final c = o as CastModel;
+              final t = o is TestModel || o is! OtherModel;
+              void local(LocalModel m) {}
+              ReturnModel helper([ParameterModel? given = fallback]) => given!;
+            }
+            """);
+
+        Assert.Equal(
+            [
+                (CodeEdgeKinds.References, "PlainModel", 2), (CodeEdgeKinds.Calls, "make", 2), (CodeEdgeKinds.References, "NullModel", 3), (CodeEdgeKinds.References, "MapModel", 4),
+                (CodeEdgeKinds.References, "RecordModel", 5), (CodeEdgeKinds.Calls, "map", 6), (CodeEdgeKinds.References, "ItemModel", 6), (CodeEdgeKinds.Calls, "toList", 6),
+                (CodeEdgeKinds.References, "ListModel", 7), (CodeEdgeKinds.Calls, "generic", 8), (CodeEdgeKinds.References, "GenModel", 8), (CodeEdgeKinds.References, "CastModel", 9),
+                (CodeEdgeKinds.References, "TestModel", 10), (CodeEdgeKinds.References, "OtherModel", 10), (CodeEdgeKinds.References, "LocalModel", 11),
+                (CodeEdgeKinds.References, "ReturnModel", 12), (CodeEdgeKinds.References, "ParameterModel", 12), (CodeEdgeKinds.Uses, "fallback", 12),
+            ],
+            extract.References.Select(reference => (reference.Kind, reference.Name, reference.Line)));
+    }
+
+    /// <summary>
+    /// A constant a case matches by is a value read - an enum's value by its enum, a constant alone, an if's case's, a
+    /// switch expression's arm's - its strings literals, while a variable a pattern declares is none: a typed one a guard
+    /// and an arm read, a declaration's destructured names wherever they are read.
+    /// </summary>
+    [Fact]
+    public void ACaseConstant_IsAUse_AndAPatternsVariableNone()
+    {
+        var extract = Read("lib/p.dart", """
+            String go(Color c, Object o, int x, (int, int) pair, List<int> xs) {
+              switch (c) {
+                case Color.red:
+                  return 'red';
+              }
+              switch (x) { case kOne: return 'one'; case 'admin role': return 'admin'; }
+              if (x case kTwo) return 'two';
+              final s = switch (o) { int? n when n > 0 => n, Color.green => 1, _ => 0 };
+              var (first, second) = pair;
+              final [head, ...] = xs;
+              for (final (key, value) in pairs) { use(key, value); }
+              return '$first $second $head $s';
+            }
+            """);
+
+        Assert.Equal(
+            [
+                ("red", "named Color", 3), ("kOne", "", 6), ("kTwo", "", 7), ("green", "named Color", 8), ("pairs", "", 11),
+            ],
+            extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Uses).Select(reference => (reference.Name, $"{reference.Qualifier?.Kind} {extract.Written(reference.Qualifier)}".Trim(), reference.Line)));
+        Assert.Equal(["red", "one", "admin role", "admin", "two", " ", " ", " "], LiteralRow.Of(extract).Select(literal => literal.Value));
+    }
+
+    /// <summary>A label a <c>break</c> or a <c>continue</c> names is a jump's target and no use, while what the loop reads is one.</summary>
+    [Fact]
+    public void ALabelABreakOrAContinueNames_IsNoUse()
+    {
+        var extract = Read("lib/l.dart", """
+            void go(List<int> xs) {
+              outer:
+              for (final x in xs) {
+                if (x > limit) continue outer;
+                break outer;
+              }
+            }
+            """);
+
+        Assert.Equal(
+            [("limit", 4)],
+            extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Uses).Select(reference => (reference.Name, reference.Line)));
     }
 
     private static FileExtract Read(string path, string text) => new DartExtractor().Extract(new CodeFileInput(path, text));

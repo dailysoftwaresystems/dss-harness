@@ -16,6 +16,35 @@ namespace DssHarness.Tests;
 /// </summary>
 public sealed class DeveloperEnvironmentProbeTests
 {
+    /// <summary>
+    /// A vswhere that takes four minutes to list the instances is waited for and told: held to a minute of the code's own,
+    /// a machine whose disk was cold was said to have no Visual Studio it could read.
+    /// </summary>
+    [Fact]
+    public async Task AFourMinuteVswhere_IsWaitedAndTold()
+    {
+        var clock = new TimerClock();
+        var output = Substitute.For<DssHarness.Core.Output.IHarnessOutput>();
+        var processes = Substitute.For<IProcessRunner>();
+        var ends = new TaskCompletionSource<ProcessResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var requests = new List<ProcessRequest>();
+
+        processes.RunAsync(Arg.Do<ProcessRequest>(requests.Add), Arg.Any<CancellationToken>()).Returns(_ => ends.Task);
+
+        var check = await FourMinutes.WaitedAndToldAsync(
+            clock,
+            new DeveloperEnvironmentProbe(HostDoubles.Platform(PlatformId.Windows), processes, Substitute.For<IFileSystem>(), output, clock)
+                .CheckAsync(new DeveloperEnvironmentConfig { Kind = DeveloperEnvironmentKinds.VisualStudio, RequiresComponent = "X" }, TestContext.Current.CancellationToken),
+            () => ends.SetResult(new ProcessResult(0, "[]", string.Empty, TimeSpan.FromMinutes(4), TimedOut: false)),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(DeveloperEnvironmentFound.Nowhere, check.Found);
+        Assert.Null(Assert.Single(requests).Timeout);
+        output.Received().Info(
+            DeveloperEnvironmentProvider.CommandName,
+            Arg.Is<string>(line => line.StartsWith("has waited 5m00s for ", StringComparison.Ordinal) && line.EndsWith(" to list the Visual Studio instances", StringComparison.Ordinal)));
+    }
+
     private static readonly DeveloperEnvironmentConfig VisualStudio = new() { Kind = DeveloperEnvironmentKinds.VisualStudio };
 
     /// <summary>

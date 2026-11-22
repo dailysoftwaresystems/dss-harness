@@ -3,8 +3,10 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using DssHarness.Core.Execution;
+using DssHarness.Core.FileSystem;
 using DssHarness.Core.Git;
 using DssHarness.Core.Hosts;
+using DssHarness.Core.Json;
 using DssHarness.Core.Output;
 using DssHarness.Core.Results;
 
@@ -161,12 +163,31 @@ public static class SyncServe
     /// <summary>How many bytes of a pack a piece starts after, as a <see cref="HistoryPiece"/> request carries it.</summary>
     /// <param name="text">The number, in digits.</param>
     /// <exception cref="HarnessException">It is no such number: the two ends are different builds.</exception>
-    public static long OffsetIn(string text)
-        => long.TryParse(text, NumberStyles.None, CultureInfo.InvariantCulture, out var offset)
-            ? offset
-            : throw new HarnessException(
-                HarnessExit.UsageError,
-                $"'{text}' is not how many bytes of a pack came before a piece of it. The two ends are different builds.");
+    public static long OffsetIn(string text) => BytesIn(text, "how many bytes of a pack came before a piece of it");
+
+    /// <summary>A count of bytes a request carries in digits - where a piece starts, how long a file is - as what it counts.</summary>
+    /// <param name="text">The number, in digits.</param>
+    /// <param name="what">What it counts, as the refusal names it.</param>
+    /// <exception cref="HarnessException">It is no such number: the two ends are different builds.</exception>
+    public static long BytesIn(string text, string what)
+    {
+        ArgumentNullException.ThrowIfNull(text);
+
+        return long.TryParse(text, NumberStyles.None, CultureInfo.InvariantCulture, out var bytes)
+            ? bytes
+            : throw new HarnessException(HarnessExit.UsageError, $"'{text}' is not {what}. The two ends are different builds.");
+    }
+
+    /// <summary>How many bytes at most a <see cref="Read"/> or <see cref="Pull"/> request asks a piece to hold.</summary>
+    /// <param name="text">The number, in digits.</param>
+    /// <exception cref="HarnessException">It is no such number, or more than one piece can hold: the two ends are different builds.</exception>
+    public static int PieceBytesIn(string text)
+        => BytesIn(text, PieceBytesAre) is var bytes and <= int.MaxValue
+            ? (int)bytes
+            : throw new HarnessException(HarnessExit.UsageError, $"'{text}' is not {PieceBytesAre}. The two ends are different builds.");
+
+    /// <summary>What the count a read asks a piece to hold is, as a refusal of one names it.</summary>
+    private const string PieceBytesAre = "how many bytes a piece of a file holds";
 
     /// <summary>What mark a <see cref="Create"/> request asks for, spelled as the enum's own name.</summary>
     /// <param name="arguments">The request's arguments, the copy's root first.</param>
@@ -282,15 +303,16 @@ public static class SyncServe
     public const string WriteMany = "write-many";
 
     /// <summary>
-    /// The most content one batched write carries, in bytes, counted before encoding.
+    /// The most content one batched write carries, in bytes, counted before encoding - and the most one piece of a file
+    /// larger than that carries, whichever way it crosses.
     /// </summary>
     /// <remarks>
-    /// Both ends hold a batch whole - encoded here, decoded there - so this bounds the memory a sync
-    /// spends at once, where <see cref="LargestFile"/> bounds only what one file may be. It is a budget
-    /// somebody chose, not a limit of the format: large enough that a tree of ordinary source files
-    /// crosses in tens of requests rather than thousands, and small enough to be unremarkable on the
-    /// smallest machine a leg runs on. A file larger than this crosses in a batch of its own, since a
-    /// batch always carries at least one file.
+    /// Both ends hold a batch or a piece whole - encoded here, decoded there - so this bounds the memory a sync spends
+    /// at once and the line a request is read as, and never what a file may be. It is a budget somebody chose, not a
+    /// limit of the format: large enough that a tree of ordinary source files crosses in tens of requests rather than
+    /// thousands, and small enough to be unremarkable on the smallest machine a leg runs on. A file larger than this
+    /// crosses on its own, a piece to a request (<see cref="WritePiece"/>, <see cref="Read"/>), however large it is: held
+    /// whole inside one request, the largest that could cross was one whose base64 a single string holds, about 767 MiB.
     /// </remarks>
     public const long LargestBatch = 8L * 1024 * 1024;
 
@@ -309,31 +331,43 @@ public static class SyncServe
     /// <summary>Removes directories of the copy that a deletion left empty.</summary>
     public const string Prune = "prune";
 
-    /// <summary>Reads one file out of the copy, through no link the copy holds.</summary>
+    /// <summary>
+    /// Reads one piece of a file out of the copy, through no link the copy holds:
+    /// <c>read &lt;root&gt; &lt;path&gt; &lt;bytes before it&gt; &lt;most bytes&gt;</c>. Answered with the file's length, its
+    /// hash where the piece starts it, and the piece's own hash (<see cref="SyncFileAnswer"/>), the piece's bytes following.
+    /// </summary>
     public const string Read = "read";
 
     /// <summary>
-    /// Reads one file a pull brings back out of the copy: the links along its path followed as it is spelt, never into a
-    /// place the isolation hides on the host (<see cref="ISyncTransport.PullFileAsync"/>).
+    /// Reads one piece of a file a pull brings back out of the copy, as <see cref="Read"/> does: the links along its path
+    /// followed as it is spelt, never into a place the isolation hides on the host (<see cref="ISyncTransport.PullFileAsync"/>).
     /// </summary>
     public const string Pull = "pull";
+
+    /// <summary>
+    /// Keeps one piece of a file aside in the copy until the whole of it has arrived and is put in place
+    /// (<see cref="PlacePieces"/>): <c>write-piece &lt;root&gt; &lt;path&gt; &lt;bytes before it&gt; &lt;its hash&gt;
+    /// &lt;content&gt;</c>. A piece at the start begins the file again; any other follows what arrived before it.
+    /// </summary>
+    public const string WritePiece = "write-piece";
+
+    /// <summary>
+    /// Puts a file whose pieces have all arrived in place, once what they hold together is what the file is said to hold:
+    /// <c>place-pieces &lt;root&gt; &lt;path&gt; &lt;length&gt; &lt;hash&gt;</c>.
+    /// </summary>
+    public const string PlacePieces = "place-pieces";
+
+    /// <summary>
+    /// Removes the pieces of a file kept aside, where carrying it stopped before it was put in place:
+    /// <c>drop-pieces &lt;root&gt; &lt;path&gt;</c>.
+    /// </summary>
+    public const string DropPieces = "drop-pieces";
 
     /// <summary>
     /// Lists the files below one directory of the copy, each with its size, for a pull that names the directory: the links
     /// along its path followed as it is spelt, never into a place the isolation hides on the host.
     /// </summary>
     public const string List = "list";
-
-    /// <summary>The most files a pull brings back from one directory it names.</summary>
-    /// <remarks>
-    /// A file read back crosses in a request of its own, and a request is a session on a host reached over ssh: a
-    /// directory named is a step's kept outputs, tens of files, never a build tree. A budget somebody chose, as
-    /// <see cref="LargestBatch"/> is, checked on the side that holds the directory, before a file of it is read.
-    /// </remarks>
-    public const int MostFilesPulledFromADirectory = 256;
-
-    /// <summary>The most bytes the files of one directory a pull names hold together, checked as their number is.</summary>
-    public const long LargestDirectoryPulled = 1024L * 1024 * 1024;
 
     /// <summary>Removes a whole copy the harness made, as deleting the worktree it holds asks.</summary>
     public const string RemoveCopy = "remove-copy";
@@ -384,67 +418,85 @@ public static class SyncServe
                 $"sync operation '{operation}' takes '{MeasureOnly}' after its root, or nothing; it was given '{arguments[1]}'.");
     }
 
-    /// <summary>The most characters one string holds, however much memory is free: 1,073,741,791.</summary>
-    public const int LongestString = 0x3FFFFFDF;
-
     /// <summary>
-    /// The room a request's line keeps beside the largest file it carries, in characters: for the file's path, the copy's
-    /// root and the rest of the request.
+    /// The piece of a file a <see cref="WritePiece"/> request carries, checked against the hash its sender took of it: after
+    /// the copy's root, the file's path, how many bytes of it come before the piece, the piece's hash, and its content's
+    /// base64.
     /// </summary>
-    private const int AroundAFile = 1024 * 1024;
-
-    /// <summary>
-    /// The largest file one request can carry, in bytes.
-    /// </summary>
-    /// <remarks>
-    /// A file crosses to a host whole, inside one request, encoded as base64 - which is a third longer again - and the
-    /// far side reads that request as one line of text: one string, which holds at most <see cref="LongestString"/>
-    /// characters, the rest of the line among them. That is where this number comes from; it is not a policy anybody
-    /// chose, and no configuration moves it. Reckoned from <see cref="int.MaxValue"/>, it was twice what a line holds,
-    /// and a file between the two was turned away only by this machine running out of memory encoding it, in words naming
-    /// a limit it was under. A file read back crosses a piece to a line (<see cref="ContentLines"/>), and is held to the
-    /// same size: whichever way it goes, the same file crosses, or is refused by name.
-    /// </remarks>
-    public const long LargestFile = (LongestString - AroundAFile) / 4 * 3L;
-
-    /// <summary>
-    /// Refuses a file too large to cross whole, by name and with its size, rather than leaving it
-    /// to run out of memory.
-    /// </summary>
-    /// <param name="length">The file's size in bytes.</param>
-    /// <param name="relativePath">The file, relative to the tree root.</param>
-    /// <param name="host">The host it was going to or coming from.</param>
-    /// <exception cref="HarnessException">It is larger than <see cref="LargestFile"/>.</exception>
-    /// <remarks>
-    /// Left to throw, this is an <see cref="OutOfMemoryException"/>, which every command reports as
-    /// a defect in the tool. A build output of that size is ordinary, and "the harness has a bug"
-    /// is the one reading of it that sends somebody nowhere useful.
-    /// </remarks>
-    public static void RefuseAFileTooLargeToCarry(long length, string relativePath, string host)
+    /// <param name="arguments">The request's arguments, the copy's root first.</param>
+    /// <exception cref="HarnessException">
+    /// It arrived in another shape, or its content is not base64 - the two ends are different builds - or it arrived
+    /// otherwise than it was sent, said naming the piece (<see cref="RefuseAPieceChanged"/>).
+    /// </exception>
+    public static SyncPieceWrite PieceIn(IReadOnlyList<string> arguments)
     {
-        if (length <= LargestFile)
+        ArgumentNullException.ThrowIfNull(arguments);
+
+        if (arguments.Count != 5)
+        {
+            throw new HarnessException(
+                HarnessExit.UsageError,
+                $"The piece of a file to write arrived in a shape this build cannot read: {ReportText.Counted(arguments.Count - 1, "argument")} "
+                + "after the copy's root, where a piece is its file's path, the bytes before it, its hash and its content. The two "
+                + "ends are different builds.");
+        }
+
+        var offset = BytesIn(arguments[2], PieceStartsAt);
+        var bytes = new SyncFileWrite(arguments[1], arguments[4]).Bytes();
+
+        RefuseAPieceChanged(arguments[1], offset, bytes, arguments[3], "the machine that sent it and this host");
+
+        return new SyncPieceWrite(arguments[1], offset, bytes);
+    }
+
+    /// <summary>What where a piece of a file starts is, as a refusal of one names it.</summary>
+    public const string PieceStartsAt = "how many bytes of a file came before a piece of it";
+
+    /// <summary>
+    /// The file a <see cref="PlacePieces"/> request puts in place, and what it is said to hold: after the copy's root, its
+    /// path, how many bytes it holds and their hash.
+    /// </summary>
+    /// <param name="arguments">The request's arguments, the copy's root first.</param>
+    /// <exception cref="HarnessException">It arrived in another shape: the two ends are different builds.</exception>
+    public static (string Path, FileContent Whole) PlacedIn(IReadOnlyList<string> arguments)
+    {
+        ArgumentNullException.ThrowIfNull(arguments);
+
+        if (arguments.Count != 4)
+        {
+            throw new HarnessException(
+                HarnessExit.UsageError,
+                $"The file to put in place arrived in a shape this build cannot read: {ReportText.Counted(arguments.Count - 1, "argument")} "
+                + "after the copy's root, where it is its path, how many bytes it holds and their hash. The two ends are different builds.");
+        }
+
+        return (arguments[1], new FileContent(BytesIn(arguments[2], "how many bytes a file holds"), arguments[3]));
+    }
+
+    /// <summary>
+    /// Refuses a piece of a file whose bytes hash otherwise than the side that read them said they do, naming the piece:
+    /// the journey between the two changed it, and nothing of it is kept. Each piece of a file is checked so as it arrives,
+    /// whichever way it crosses, before anything is done with it.
+    /// </summary>
+    /// <param name="relativePath">The file, relative to the copy's root.</param>
+    /// <param name="offset">How many bytes of the file come before the piece.</param>
+    /// <param name="bytes">The piece, as it arrived.</param>
+    /// <param name="sent">The hash the side that read it took of it, before it was encoded and sent.</param>
+    /// <param name="between">The two ends it crossed between, as the refusal names them: "ssh vps and here".</param>
+    /// <exception cref="HarnessException">It hashes otherwise (<see cref="HarnessExit.CommandFailed"/>).</exception>
+    public static void RefuseAPieceChanged(string relativePath, long offset, ReadOnlySpan<byte> bytes, string sent, string between)
+    {
+        var arrived = FileContentHash.Of(bytes);
+
+        if (string.Equals(arrived, sent, StringComparison.Ordinal))
         {
             return;
         }
 
-        throw new HarnessException(HarnessExit.CommandFailed, TooLargeToCarry(length, relativePath, host));
-    }
-
-    /// <summary>Why one file could not cross.</summary>
-    /// <param name="length">The file's size in bytes, or -1 when it is not known.</param>
-    /// <param name="relativePath">The file, relative to the tree root.</param>
-    /// <param name="host">The host it was going to or coming from.</param>
-    public static string TooLargeToCarry(long length, string relativePath, string host)
-    {
-        var size = length < 0
-            ? "is too large"
-            : $"is {length.ToString(CultureInfo.InvariantCulture)} bytes, past the "
-                + $"{LargestFile.ToString(CultureInfo.InvariantCulture)} one request can hold";
-
-        return $"'{relativePath}' {size}: a file crosses to and from {host} whole, inside one "
-            + "request. Keep the smaller thing a later step actually reads - a packaged build "
-            + "rather than a build tree - or put what has to cross somewhere both machines already "
-            + "reach.";
+        throw new HarnessException(
+            HarnessExit.CommandFailed,
+            $"'{relativePath}' changed between {between}: its piece of {ReportText.Counted(bytes.Length, "byte")} at byte "
+            + $"{offset.ToString(CultureInfo.InvariantCulture)} was read as {sent} and arrived as {arrived}. Nothing of it was kept.");
     }
 
     /// <summary>How an answer is written, and read back, so both ends agree without guessing.</summary>
@@ -464,6 +516,9 @@ public static class SyncServe
         // A shape one end does not recognise is a hard failure rather than silent data loss, as it
         // is everywhere else this tool reads JSON.
         UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
+
+        // At any depth (JsonDepth): an answer is refused for what its shape cannot hold, never for how deep it nests.
+        MaxDepth = JsonDepth.Unbounded,
     };
 
     /// <summary>
@@ -567,7 +622,7 @@ public static class SyncServe
     /// <param name="destination">Where the rest of the file goes.</param>
     /// <param name="relativePath">The file, as the request named it.</param>
     /// <exception cref="HarnessException">
-    /// The line is not base64, or carries more than the answer said the file holds: the two ends are different builds, or
+    /// The line is not base64, or carries more than the answer said would follow it: the two ends are different builds, or
     /// the file did not survive the journey.
     /// </exception>
     public static int ReadContentLine(string line, Span<byte> destination, string relativePath)
@@ -583,8 +638,8 @@ public static class SyncServe
             ? written
             : throw new HarnessException(
                 HarnessExit.CommandFailed,
-                $"'{relativePath}' arrived in a shape this build cannot read: a piece of it is not base64, or carries more than "
-                + "the file was said to hold.");
+                $"'{relativePath}' arrived in a shape this build cannot read: a line of it is not base64, or carries more than "
+                + "its answer said would follow.");
     }
 
     /// <summary>Reads an answer the other end wrote, or null when the line is not one.</summary>
@@ -915,16 +970,25 @@ public enum CopyMark
 }
 
 /// <summary>
-/// One file read on the far side, whose bytes follow its answer as <see cref="SyncServe.ContentLines"/>, base64 encoded so
-/// they survive a line of text intact.
+/// One piece of a file read on the far side, whose bytes follow its answer as <see cref="SyncServe.ContentLines"/>, base64
+/// encoded so they survive a line of text intact: as many as the file holds from where the piece starts, and at most as many
+/// as were asked for.
 /// </summary>
-/// <param name="Length">How many bytes the file holds.</param>
+/// <param name="Length">How many bytes the whole file holds, as it stood when the piece was read.</param>
 /// <param name="ContentHash">
-/// The SHA-256 the far side computed of those bytes, before they were encoded and sent. Carried so
-/// the machine that asked can check what arrived against what was read, rather than against itself:
-/// a hash taken here of the bytes that arrived agrees with them whatever happened on the way.
+/// The SHA-256 the far side computed of the whole file, where the piece starts it; <see langword="null"/> for a later piece,
+/// which the machine asking holds to the first piece's. Carried so the machine that asked can check what arrived against
+/// what was read, rather than against itself: a hash taken here of the bytes that arrived agrees with them whatever happened
+/// on the way.
 /// </param>
-public sealed record SyncFileAnswer(long Length, string ContentHash);
+/// <param name="PieceHash">The SHA-256 the far side computed of the piece's own bytes, before they were encoded and sent.</param>
+public sealed record SyncFileAnswer(long Length, string? ContentHash, string PieceHash);
+
+/// <summary>One piece of a file a <see cref="SyncServe.WritePiece"/> request carries, as the far side reads it.</summary>
+/// <param name="Path">The file, relative to the copy's root.</param>
+/// <param name="Offset">How many bytes of the file come before the piece.</param>
+/// <param name="Bytes">The piece, decoded and checked against the hash its sender took of it.</param>
+public sealed record SyncPieceWrite(string Path, long Offset, byte[] Bytes);
 
 /// <summary>What one directory of a copy holds, as a pull that names it brings it back.</summary>
 /// <param name="Files">Every file below it, by path relative to the copy's root, in the order of their paths.</param>
@@ -980,8 +1044,7 @@ public sealed record SyncFileWrite(string Path, string Content)
     /// <exception cref="HarnessException">The content is not base64, so the two ends are different builds.</exception>
     /// <remarks>
     /// Decoded here rather than where the batch is served, so that a file which did not survive the journey
-    /// is named and said as a transfer this build cannot read - the reasoning
-    /// <see cref="SyncServe.TooLargeToCarry"/> already applies to a file too large. Left to the runtime it
+    /// is named and said as a transfer this build cannot read. Left to the runtime it
     /// is a FormatException, which every command reports as a defect in this tool, naming neither the file
     /// nor the host, and one bad entry in a batch of hundreds would identify none of them.
     /// </remarks>

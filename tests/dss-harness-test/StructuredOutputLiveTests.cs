@@ -55,7 +55,7 @@ public sealed class StructuredOutputLiveTests
             {
                 var name = $"{Path.GetFileNameWithoutExtension(Path.GetFileNameWithoutExtension(file))}{(rounds is null ? string.Empty : "-asking")}";
                 using var connection = new ApiConnection(TimeProvider.System, new WireRecording(ApiConnection.Connecting(), Path.Combine(wire, name)));
-                var provider = new ClaudeApiProvider(connection, anthropic.Api, ClaudeApiSettings.Of(null));
+                var provider = new ClaudeApiProvider(connection, anthropic.Api, ClaudeApiSettings.Of(null), records: null);
                 var request = new ChatRequest(
                     Haiku,
                     null,

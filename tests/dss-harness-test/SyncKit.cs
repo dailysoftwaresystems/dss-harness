@@ -133,13 +133,15 @@ internal static class SyncKit
 
     /// <summary>
     /// The transport to a host on this machine whose agent is this build's own DssHarness, reached as any host is: each
-    /// request one line of JSON on its standard input, its command parsed there, its answer read from its output.
+    /// request one line of JSON on its standard input, its command parsed there, its answer read from its output. A file
+    /// larger than <paramref name="pieceBytes"/>, where it is given, crosses in pieces of that many bytes.
     /// </summary>
-    public static RemoteSyncTransport AgentHere(HarnessFactory harness) => new(
+    public static RemoteSyncTransport AgentHere(HarnessFactory harness, int? pieceBytes = null) => new(
         HostId.Ssh("vps"),
         new HostSession(new HostConnection { Host = HostId.Local }, CliRunner.CliProgram),
         new HostCommandRunner(harness.ProcessRunner),
-        harness.Output);
+        harness.Output,
+        pieceBytes: pieceBytes);
 
     /// <summary>
     /// A sync service over this machine's side, read through <paramref name="fileSystem"/> or the real one: its

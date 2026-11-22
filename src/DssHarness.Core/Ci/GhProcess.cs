@@ -1,7 +1,11 @@
+using System.Globalization;
+using System.Text.RegularExpressions;
 using DssHarness.Core.Git;
 using DssHarness.Core.Output;
 using DssHarness.Core.Processes;
 using DssHarness.Core.Results;
+using DssHarness.Core.Text;
+using DssHarness.Core.Waiting;
 
 namespace DssHarness.Core.Ci;
 
@@ -91,6 +95,53 @@ public sealed class GhProcess(IProcessRunner processRunner, GitLocalVariables? l
         return failed.ExitCode == HarnessExit.Incomplete
             || (failed.ExitCode == HarnessExit.CommandFailed && UnreachedWords.Any(words => failed.Message.Contains(words, StringComparison.OrdinalIgnoreCase)));
     }
+
+    /// <summary>
+    /// The HTTP status the forge answered a call with, as gh says it - <c>(HTTP 404)</c>, <c>HTTP 502:</c> - where
+    /// <paramref name="failed"/>, which a call of this class's raised, is a failure gh said one for; null where it is not.
+    /// </summary>
+    /// <param name="failed">What a call raised.</param>
+    public static int? HttpStatus(HarnessException failed)
+    {
+        ArgumentNullException.ThrowIfNull(failed);
+
+        return failed.ExitCode == HarnessExit.CommandFailed && StatusWords.Match(failed.Message) is { Success: true } said
+            ? int.Parse(said.Groups["status"].Value, CultureInfo.InvariantCulture)
+            : null;
+    }
+
+    /// <summary>
+    /// What a call of this class's that raised <paramref name="failed"/> comes to as one try of a run of them
+    /// (<see cref="Retrying"/>), by whether another call can change it: the forge not reached - no answer within the
+    /// call's limit, the network's own words (<see cref="Unreached"/>) - a server error (5xx), and a rate limit (429, or
+    /// a 403 that says it is one) pass by nature, and are tried again for as long as they last; a refused credential
+    /// (401), a thing not there (404) and any other answer of the forge's that refused what was asked (4xx) are final, for
+    /// asking again asks the same; any other failure is tried again while it is new, its own words its digest.
+    /// </summary>
+    /// <typeparam name="T">What a try answers.</typeparam>
+    /// <param name="failed">What the call raised.</param>
+    public static RetryTry<T> Try<T>(HarnessException failed)
+    {
+        ArgumentNullException.ThrowIfNull(failed);
+
+        var said = failed.Message.TrimEnd('.');
+
+        if (Unreached(failed))
+        {
+            return new RetryTry<T>.Passing(said, null);
+        }
+
+        return HttpStatus(failed) switch
+        {
+            429 or (>= 500 and <= 599) => new RetryTry<T>.Passing(said, null),
+            403 when failed.Message.Contains("rate limit", StringComparison.OrdinalIgnoreCase) => new RetryTry<T>.Passing(said, null),
+            >= 400 and <= 499 => new RetryTry<T>.Final(said),
+            _ => new RetryTry<T>.Failed(said, said),
+        };
+    }
+
+    /// <summary>How gh says the HTTP status the forge answered with: <c>(HTTP 404)</c> after its message, or <c>HTTP 502:</c> before it.</summary>
+    private static readonly Regex StatusWords = LinearRegex.Compile(@"\bHTTP (?<status>[1-5][0-9][0-9])\b");
 
     /// <summary>
     /// The environment a <c>gh</c> call to <paramref name="host"/> is given beyond the machine's own: <see cref="HostVariable"/>

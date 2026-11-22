@@ -278,9 +278,10 @@ public static class ArmJudge
     /// diagnostic is looked for (<see cref="DiagWindow"/>) - or changes what an arm's key is made of. A test holds it to a
     /// digest of the two judges' verdicts over a fixed table of observations, so a rule of theirs cannot change with the
     /// number left as it was; a change in how the sweep observes is caught by review alone. Raised to 2 when the key
-    /// gained what a test binary reads at run time (<c>mutations.runReads</c>).
+    /// gained what a test binary reads at run time (<c>mutations.runReads</c>); raised to 3 when the no-limits work
+    /// changed what the judges reach over the same table.
     /// </remarks>
-    public const int Revision = 2;
+    public const int Revision = 3;
 
     /// <summary>
     /// The verdict <paramref name="observation"/> reaches for <paramref name="arm"/>, or <see langword="null"/> where it

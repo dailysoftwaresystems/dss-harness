@@ -58,6 +58,12 @@ public sealed class FlowWorkingSetsTests
         Assert.Empty(WorkedFrom(runner, "think"));
         Assert.Empty(WorkedFrom(runner, "after"));
         Assert.Equal([new FlowWorkedFrom("think", "a1")], WorkedFrom(runner, "review"));
+
+        // Its conversation goes on with the step it resumes alone: the reviewer it depends on seeds its pack, and the
+        // reviewer, which resumes nothing, goes on with nothing.
+        Assert.Equal([new FlowWorkedFrom("think", "a1")], GoesOnWith(runner, "again"));
+        Assert.Empty(GoesOnWith(runner, "review"));
+        Assert.Empty(GoesOnWith(runner, "think"));
     }
 
     /// <summary>
@@ -121,6 +127,14 @@ public sealed class FlowWorkingSetsTests
             [new FlowWorkedFrom("implement", "a1"), new FlowWorkedFrom("fix#1.review.correctness", "a2"), new FlowWorkedFrom("fix#1.review.errors", "a3")],
             WorkedFrom(runner, "fix#1.revise.rework"));
         Assert.Equal([new FlowWorkedFrom("implement", "a1"), new FlowWorkedFrom("fix#1.review.correctness", "a2")], WorkedFrom(runner, "fix#2.review.correctness"));
+
+        // The rework's conversation goes on with the work it resumes, then each round's rework in the order they went, the
+        // newest last; never with the reviewers, and a reviewer's with nothing.
+        Assert.Equal(
+            [new FlowWorkedFrom("implement", "a1"), new FlowWorkedFrom("fix#1.revise.rework", "a1"), new FlowWorkedFrom("fix#2.revise.rework", "a1")],
+            GoesOnWith(runner, "fix#3.revise.rework"));
+        Assert.Equal([new FlowWorkedFrom("implement", "a1")], GoesOnWith(runner, "fix#1.revise.rework"));
+        Assert.Empty(GoesOnWith(runner, "fix#2.review.correctness"));
     }
 
     /// <summary>A step that goes on with its own work is seeded from its earlier visits, never from itself.</summary>
@@ -149,6 +163,45 @@ public sealed class FlowWorkingSetsTests
 
         Assert.Empty(WorkedFrom(runner, "loop#1.think"));
         Assert.Equal(["loop#1.think"], WorkedFrom(runner, "loop#2.think").Select(source => source.Instance));
+    }
+
+    /// <summary>
+    /// A step that goes on with its own work goes on with its earlier visits in the order they went, the newest last - its
+    /// pack seeded from them newest first, and from the step it depends on - and its first visit goes on with nothing,
+    /// whatever it depends on.
+    /// </summary>
+    [Fact]
+    public async Task AStepThatGoesOnWithItsOwnWork_GoesOnWithItsVisitsInTheOrderTheyWent_AndItsFirstWithNothing()
+    {
+        var rounds = 0;
+        var runner = await RunAsync(
+            """
+            name: flow
+            steps:
+              - name: plan
+                type: reason
+                prompt: plan.md
+                outputs: plan.json
+              - name: loop
+                dependsOn: [plan]
+                repeat:
+                  until: think.done
+                  maxIterations: 3
+                steps:
+                  - name: think
+                    type: reason
+                    agent: agents/thinker.md
+                    prompt: think.md
+                    resumePrompt: again.md
+                    outputs: think.json
+                    resume: think
+            """,
+            ("think", _ => FlowStepResult.Ended(passed: true, HarnessExit.Success, output: new JsonObject { ["done"] = ++rounds == 3 })));
+
+        Assert.Equal(["plan"], WorkedFrom(runner, "loop#1.think").Select(source => source.Instance));
+        Assert.Empty(GoesOnWith(runner, "loop#1.think"));
+        Assert.Equal(["plan", "loop#2.think", "loop#1.think"], WorkedFrom(runner, "loop#3.think").Select(source => source.Instance));
+        Assert.Equal(["loop#1.think", "loop#2.think"], GoesOnWith(runner, "loop#3.think").Select(source => source.Instance));
     }
 
     /// <summary>A step raised on another's outcome is seeded from that step, as from one it depends on.</summary>
@@ -223,6 +276,9 @@ public sealed class FlowWorkingSetsTests
 
     private static IReadOnlyList<FlowWorkedFrom> WorkedFrom(Runner runner, string instance)
         => runner.Runs.Single(run => run.Instance == instance).WorkedFrom!;
+
+    private static IReadOnlyList<FlowWorkedFrom> GoesOnWith(Runner runner, string instance)
+        => runner.Runs.Single(run => run.Instance == instance).GoesOnWith;
 
     private static async Task<Runner> RunAsync(string text, params (string Step, Func<FlowStepRun, FlowStepResult> Script)[] scripts)
     {

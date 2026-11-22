@@ -15,7 +15,7 @@ public sealed class NpmClientTests
         temp.WriteFile("path/npm.exe", "a program");
         var (client, runner) = Client(temp, ["path"]);
 
-        var found = await client.FindAsync(Token);
+        var found = await client.FindAsync(cancellationToken: Token);
 
         Assert.Equal(Path.Combine(temp.Path, "path", "npm.exe"), found.Npm!.Program);
         Assert.Empty(found.Npm.Leading);
@@ -30,7 +30,7 @@ public sealed class NpmClientTests
         var dance = new Dance(temp);
         var (client, runner) = Client(temp, ["path"]);
 
-        var found = await client.FindAsync(Token);
+        var found = await client.FindAsync(cancellationToken: Token);
 
         // The node beside npm.cmd, starting the npm-cli.js of the prefix npm names - the npm a person installed over
         // the one Node.js brought - never the batch file itself.
@@ -53,7 +53,7 @@ public sealed class NpmClientTests
         var node = Path.Combine(temp.Path, "other", "node.exe");
         var (client, runner) = Client(temp, ["path", "other"]);
 
-        var found = await client.FindAsync(Token);
+        var found = await client.FindAsync(cancellationToken: Token);
 
         Assert.Equal(node, found.Npm!.Program);
         Assert.Equal([dance.InstalledCli], found.Npm.Leading);
@@ -67,7 +67,7 @@ public sealed class NpmClientTests
         new Dance(temp, ownNpm: false);
         var (client, _) = Client(temp, ["path"]);
 
-        var found = await client.FindAsync(Token);
+        var found = await client.FindAsync(cancellationToken: Token);
 
         Assert.Equal([Path.Combine(temp.Path, "path", "node_modules", "npm", "bin", "npm-cli.js")], found.Npm!.Leading);
     }
@@ -81,7 +81,7 @@ public sealed class NpmClientTests
         temp.WriteFile("second/npm.cmd", "@echo off\n");
         var (client, _) = Client(temp, ["first", "second"]);
 
-        var found = await client.FindAsync(Token);
+        var found = await client.FindAsync(cancellationToken: Token);
 
         Assert.Equal(exe, found.Npm!.Program);
     }
@@ -96,7 +96,7 @@ public sealed class NpmClientTests
         var exe = Path.Combine(temp.Path, "path", "npm.exe");
         var (client, runner) = Client(temp, ["path"]);
 
-        var found = await client.FindAsync(Token);
+        var found = await client.FindAsync(cancellationToken: Token);
 
         Assert.Equal(exe, found.Npm!.Program);
         Assert.Empty(runner.Ran);
@@ -108,7 +108,7 @@ public sealed class NpmClientTests
         using var temp = new TempDirectory();
         var (client, _) = Client(temp, ["empty"]);
 
-        var found = await client.FindAsync(Token);
+        var found = await client.FindAsync(cancellationToken: Token);
 
         Assert.Null(found.Npm);
         Assert.Equal("no npm is on the PATH. Looked for: npm.exe and npm.cmd, and the node.exe and npm-cli.js npm.cmd starts", found.Missing);
@@ -123,7 +123,7 @@ public sealed class NpmClientTests
         File.Delete(dance.Node);
         var (client, runner) = Client(temp, ["path"]);
 
-        var found = await client.FindAsync(Token);
+        var found = await client.FindAsync(cancellationToken: Token);
 
         Assert.Null(found.Npm);
         Assert.Equal(
@@ -142,7 +142,7 @@ public sealed class NpmClientTests
         var (client, _) = Client(temp, ["path"]);
         File.Delete(Path.Combine(temp.Path, "path", "node_modules", "npm", "bin", "npm-cli.js"));
 
-        var found = await client.FindAsync(Token);
+        var found = await client.FindAsync(cancellationToken: Token);
 
         Assert.Null(found.Npm);
         Assert.Equal(
@@ -168,8 +168,8 @@ public sealed class NpmClientTests
         var (found, _) = Client(temp, ["cmds", "bin"], system);
         var (none, runner) = Client(temp, ["cmds"], system);
 
-        var program = await found.FindAsync(Token);
-        var missing = await none.FindAsync(Token);
+        var program = await found.FindAsync(cancellationToken: Token);
+        var missing = await none.FindAsync(cancellationToken: Token);
 
         Assert.Equal(npm, program.Npm!.Program);
         Assert.Empty(program.Npm.Leading);

@@ -47,9 +47,10 @@ public static class WorkflowKeys
         new("include", "patterns: only the paths one of them matches are graphed; absent, every file the tree lists"),
         new("exclude", "patterns: the paths one of them matches are not graphed; absent, none"),
         new("languages", "the implementations used, by name - 'help codebase-graph' lists them; a file whose claimant is left out is only listed; absent, every one"),
-        new("maxFileBytes", string.Create(System.Globalization.CultureInfo.InvariantCulture, $"the largest file read, from {Codebase.CodebaseGraphShape.LeastMaxFileBytes:N0} to {Codebase.CodebaseGraphShape.MostMaxFileBytes:N0}; a larger one is listed tooLarge; absent, {Codebase.CodebaseGraphShape.DefaultMaxFileBytes:N0}")),
         new("generated", $"what becomes of generated code: {Codebase.CodebaseGraphShape.GeneratedLow} (the default), its declarations kept, its file's entry naming why it is generated, or {Codebase.CodebaseGraphShape.GeneratedExclude}, the file listed and its declarations left out"),
         new("mapTokens", string.Create(System.Globalization.CultureInfo.InvariantCulture, $"the cap of each of the run's repository maps - {FlowStepGraph.MapsKept} under the run's graph, and read as it is by every step of that ground after - from 0 to {Codebase.CodebaseGraphShape.MostMapTokens:N0} tokens; 0 asks for no map; absent, {Codebase.CodebaseGraphShape.DefaultMapTokens:N0}")),
+        new("keyNaming", $"the naming policies a configuration key's last segment is joined to the name of a field or a property by - a camelCase key a PascalCase property reads, a snake_case one, a kebab-case one, or the name as it is: {string.Join(", ", Codebase.CodebaseGraphShape.NamingValues)}; one at least where it is given; absent, {string.Join(" and ", Codebase.CodebaseGraphShape.DefaultKeyNaming)}"),
+        new("claims", "the file name endings, each with its dot, mapped to the implementation that reads them - json: [.lang.json], say: claimed after an exact name the registry holds and before an extension; one mapped to an implementation codebaseGraph.languages leaves out is refused; absent, none the repository maps"),
     ];
 
     /// <summary>What the <c>recover</c> section takes.</summary>

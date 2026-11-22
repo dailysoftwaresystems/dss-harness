@@ -4747,25 +4747,33 @@ public sealed class FlowCoordinator
     /// <summary>
     /// Takes a NotRun place-holder back out of its scope, so the schedule draws its declaration again under the same id:
     /// it never ran, holds nothing and wrote nothing, and its record is written over by the instance drawn in its place.
-    /// The place-holders it left its handlers go with it.
+    /// The place-holders it left its handlers go with it, and theirs with them, along the whole chain of <c>on</c>: walked
+    /// once on a stack of the walk's own (<see cref="Core.Walks.Walk.Visit"/>), each place-holder taken out once, however long the
+    /// chain of handlers of handlers runs.
     /// </summary>
     private void Redraw(FlowInstance notRun)
     {
         var scope = notRun.DeclaredScope!;
 
-        _ = scope.Members.Remove(notRun.Step.Name);
-        _ = scope.Instantiated.Remove(notRun.Step.Name);
-        scope.Visits[notRun.Step.Name] = notRun.Visit - 1;
-        _ = _instances.Remove(notRun.Id);
-        _ = _created.Remove(notRun);
+        // Who handles a step's ending, by the step's name: one look over the scope's declarations, never one a link.
+        var handlers = DeclarationsOf(scope)
+            .Where(declaration => declaration.On is not null)
+            .ToLookup(declaration => declaration.On!.Step, StringComparer.Ordinal);
 
-        foreach (var follower in DeclarationsOf(scope)
-            .Where(declaration => declaration.On?.Step == notRun.Step.Name)
-            .Select(declaration => scope.Members.GetValueOrDefault(declaration.Name))
-            .Where(follower => follower is { State: FlowInstanceState.NotRun, RaisedBy: null, RaisedByRecord: null })
-            .ToList())
+        // Each place-holder's handlers are read before it is taken out of its scope, as the walk reaches it.
+        IEnumerable<FlowInstance> FollowersOf(FlowInstance source)
+            => [.. handlers[source.Step.Name]
+                .Select(declaration => scope.Members.GetValueOrDefault(declaration.Name))
+                .Where(follower => follower is { State: FlowInstanceState.NotRun, RaisedBy: null, RaisedByRecord: null })
+                .Select(follower => follower!)];
+
+        foreach (var drawn in Core.Walks.Walk.Visit([notRun], instance => instance.Id, FollowersOf).ToList())
         {
-            Redraw(follower!);
+            _ = scope.Members.Remove(drawn.Step.Name);
+            _ = scope.Instantiated.Remove(drawn.Step.Name);
+            scope.Visits[drawn.Step.Name] = drawn.Visit - 1;
+            _ = _instances.Remove(drawn.Id);
+            _ = _created.Remove(drawn);
         }
     }
 
@@ -4930,9 +4938,9 @@ public sealed class FlowCoordinator
 
             scope.Instantiated.Add(declaration.Name);
 
-            if (scope.Visits.GetValueOrDefault(declaration.Name) >= 99)
+            if (scope.Visits.GetValueOrDefault(declaration.Name) >= FlowRecover.MostVisits)
             {
-                // A step the run was sent back to a hundredth time in one scope fails, saying so.
+                // A step the run was sent back to once past the engine's bound in one scope fails, saying so.
                 _ = NewVisit(scope, declaration, FlowInstanceState.NotStarted);
                 changed = true;
                 continue;
@@ -5069,9 +5077,9 @@ public sealed class FlowCoordinator
             return false;
         }
 
-        if (scope.Visits.GetValueOrDefault(three.Add.Name) >= 99)
+        if (scope.Visits.GetValueOrDefault(three.Add.Name) >= FlowRecover.MostVisits)
         {
-            // The place was visited ninety-nine times in this scope: the hundredth fails, as any step's does.
+            // The place was visited as often as the engine's bound allows in this scope: the next visit fails, as any step's does.
             _ = NewVisit(scope, three.Add, FlowInstanceState.NotStarted);
             return true;
         }
@@ -7658,7 +7666,7 @@ public sealed class FlowCoordinator
 
     /// <summary>
     /// The issue a triage instance answered <c>list</c> for, as the run's file would hold it next: its quote or its
-    /// output cut by the one owner of the cut, the cut said.
+    /// output whole, as the triage gave it - a proof is never cut to a length.
     /// </summary>
     private PreExistingIssue IssueOf(FlowInstance instance)
     {
@@ -7675,9 +7683,9 @@ public sealed class FlowCoordinator
                 TextOf(proof?["at"]) ?? string.Empty,
                 TextOf(proof?["file"]),
                 TextOf(proof?["lines"]),
-                TextOf(proof?["quote"]) is { } quote ? PreExistingIssuesWriter.Cut(quote) : null,
+                TextOf(proof?["quote"]),
                 TextOf(proof?["command"]),
-                TextOf(proof?["output"]) is { } output ? PreExistingIssuesWriter.Cut(output) : null),
+                TextOf(proof?["output"])),
             TextOf(instance.Output?["why"]) ?? "none of the three: not related to the work, not critical, and in no step's way",
             instance.RaisedBy?.Id ?? instance.Id,
             instance.FinishedAt ?? _clock.GetUtcNow());
@@ -8647,16 +8655,21 @@ public sealed class FlowCoordinator
         End(visit, FlowInstanceState.Skipped, visit.Exit, visit.Error);
     }
 
-    /// <summary>Makes a new visit of <paramref name="declaration"/> in <paramref name="scope"/>, and fails it where the run would visit a step more than 99 times in one scope.</summary>
+    /// <summary>
+    /// Makes a new visit of <paramref name="declaration"/> in <paramref name="scope"/>, and fails it where the run would
+    /// visit a step more often in one scope than the engine's bound of visits allows (<see cref="FlowRecover.MostVisits"/>,
+    /// the one owner of that bound, which the recovery's maxVisits is held to as well).
+    /// </summary>
     private FlowInstance NewVisit(Scope scope, WorkflowStep declaration, FlowInstanceState state, Action<FlowInstance>? made = null)
     {
-        if (scope.Visits.GetValueOrDefault(declaration.Name) + 1 > 99)
+        if (scope.Visits.GetValueOrDefault(declaration.Name) + 1 > FlowRecover.MostVisits)
         {
+            var most = FlowRecover.MostVisits.ToString(System.Globalization.CultureInfo.InvariantCulture);
             var bound = Create(scope, declaration, FlowInstanceState.Failed, made: bound =>
             {
                 made?.Invoke(bound);
                 bound.Exit = HarnessExit.Refused;
-                bound.Error = $"'{declaration.Name}' was visited 99 times in its scope; at most 99 visits of one step in one scope are allowed";
+                bound.Error = $"'{declaration.Name}' was visited {most} times in its scope; at most {most} visits of one step in one scope are allowed";
             });
             End(bound, FlowInstanceState.Failed, bound.Exit, bound.Error);
             HandleFailure(bound);
@@ -12717,7 +12730,10 @@ public sealed class FlowCoordinator
             instance.Telling is { } telling && telling.For(attempt) ? telling : null,
             PlanToldOf(instance),
             BudgetLeftUsd: BudgetLeftUsd(),
-            Path: instance.Path);
+            Path: instance.Path)
+        {
+            GoesOnWith = GoesOnWithOf(instance),
+        };
 
     /// <summary>
     /// The handoff the engine writes for <paramref name="instance"/>: its first line says <paramref name="why"/>, and
@@ -12745,8 +12761,7 @@ public sealed class FlowCoordinator
 
         var sources = new List<FlowInstance>();
 
-        // A step that goes on with its own work finds itself here, and is left out below: its earlier visits are its sources.
-        if (instance.Step.Resume is { } resumed && DeclaredOf(instance, resumed, "reason") is { } goesOnWith)
+        if (ResumedOf(instance) is { } goesOnWith)
         {
             sources.Add(goesOnWith);
         }
@@ -12767,16 +12782,59 @@ public sealed class FlowCoordinator
             }
         }
 
-        sources.AddRange(_created
-            .TakeWhile(other => !ReferenceEquals(other, instance))
-            .Where(other => FlowInstanceId.SameStep(other.Id, instance.Id))
-            .Reverse());
+        sources.AddRange(EarlierVisitsOf(instance).Reverse());
 
-        return [.. sources
+        return WorkedFromOf(instance, sources);
+    }
+
+    /// <summary>
+    /// The instances whose conversation a reason step's goes on with (<see cref="FlowStepRun.GoesOnWith"/>), in the order
+    /// that work went, oldest first: the step its resume names, then its own earlier visits of the same work item - each
+    /// went on with the one before it, so the newest, whose last iterations its continuation record carries word for word,
+    /// is last - each a reason step that began, once. None for a step that resumes nothing, whose conversation begins its
+    /// own work however many steps it depends on, and for every other step.
+    /// </summary>
+    private IReadOnlyList<FlowWorkedFrom> GoesOnWithOf(FlowInstance instance)
+    {
+        if (instance.Step.Type != "reason" || instance.Step.Resume is null)
+        {
+            return [];
+        }
+
+        var sources = new List<FlowInstance>();
+
+        if (ResumedOf(instance) is { } resumed)
+        {
+            sources.Add(resumed);
+        }
+
+        sources.AddRange(EarlierVisitsOf(instance));
+        return WorkedFromOf(instance, sources);
+    }
+
+    /// <summary>
+    /// The instance <paramref name="instance"/>'s resume names, as the run holds it now: the reason step the engine finds the
+    /// name at; null where it names none, or none is found. A step that goes on with its own work finds itself here, which
+    /// <see cref="WorkedFromOf(FlowInstance, IReadOnlyList{FlowInstance})"/> leaves out: its earlier visits are its sources.
+    /// </summary>
+    private FlowInstance? ResumedOf(FlowInstance instance)
+        => instance.Step.Resume is { } resumed ? DeclaredOf(instance, resumed, "reason") : null;
+
+    /// <summary>The earlier visits of <paramref name="instance"/>'s step of the same work item, oldest first, as the run made them.</summary>
+    private IEnumerable<FlowInstance> EarlierVisitsOf(FlowInstance instance)
+        => _created
+            .TakeWhile(other => !ReferenceEquals(other, instance))
+            .Where(other => FlowInstanceId.SameStep(other.Id, instance.Id));
+
+    /// <summary>
+    /// <paramref name="sources"/> as a run names them to its step, in their order: each a reason step that began, other than
+    /// <paramref name="instance"/> itself, once - by its id and the agent it works in.
+    /// </summary>
+    private IReadOnlyList<FlowWorkedFrom> WorkedFromOf(FlowInstance instance, IReadOnlyList<FlowInstance> sources)
+        => [.. sources
             .Where(source => !ReferenceEquals(source, instance) && source.Step.Type == "reason" && source.StartedAt is not null)
             .Distinct<FlowInstance>(ReferenceEqualityComparer.Instance)
             .Select(source => new FlowWorkedFrom(source.Id, WorksInOf(source)))];
-    }
 
     /// <summary>The steps <paramref name="instance"/> is or holds: itself, or each member of a group, at every level, as the run holds them now - in each scope the definition's order.</summary>
     private IEnumerable<FlowInstance> ReasonStepsOf(FlowInstance instance)

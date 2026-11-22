@@ -1,4 +1,3 @@
-using System.Text.RegularExpressions;
 using DssHarness.Core.Hosts;
 using DssHarness.Core.Results;
 
@@ -11,7 +10,7 @@ namespace DssHarness.Core.Anchors;
 /// read from the wrong place; a line break wraps the row, and its id disappears from every search.
 /// Values therefore go through <see cref="Format"/>, which makes neither expressible.
 /// </remarks>
-public static partial class AnchorCells
+public static class AnchorCells
 {
     /// <summary>
     /// Splits a table line on its unescaped pipes. Element 0 is whatever precedes the first pipe, so
@@ -21,7 +20,19 @@ public static partial class AnchorCells
     {
         ArgumentNullException.ThrowIfNull(line);
 
-        return [.. UnescapedPipe().Split(line).Select(piece => piece.Replace(@"\|", "|", StringComparison.Ordinal))];
+        var pipes = UnescapedPipes(line);
+        var pieces = new List<string>(pipes.Count + 1);
+        var start = 0;
+
+        foreach (var pipe in pipes)
+        {
+            pieces.Add(line[start..pipe]);
+            start = pipe + 1;
+        }
+
+        pieces.Add(line[start..]);
+
+        return [.. pieces.Select(piece => piece.Replace(@"\|", "|", StringComparison.Ordinal))];
     }
 
     /// <summary>
@@ -32,12 +43,12 @@ public static partial class AnchorCells
     {
         ArgumentNullException.ThrowIfNull(line);
 
-        var pipes = UnescapedPipe().Matches(line);
+        var pipes = UnescapedPipes(line);
         var cells = new List<string>(Math.Max(0, pipes.Count - 1));
 
         for (var index = 0; index + 1 < pipes.Count; index++)
         {
-            cells.Add(line[(pipes[index].Index + 1)..pipes[index + 1].Index]);
+            cells.Add(line[(pipes[index] + 1)..pipes[index + 1]]);
         }
 
         return cells;
@@ -61,9 +72,6 @@ public static partial class AnchorCells
 
         if (escaped >= 0)
         {
-            var from = Math.Max(0, escaped - 40);
-            var to = Math.Min(flat.Length, escaped + 40);
-
             throw new HarnessException(
                 HarnessExit.UsageError,
                 $"The {field} value contains a backslash immediately before a pipe. Pipes are escaped "
@@ -71,7 +79,7 @@ public static partial class AnchorCells
                 + "stray one to every reader. If you escaped it yourself, write the plain pipe. If you "
                 + $"copied the text from the raw table line, take it from '{ToolPackage.Command} read-anchor "
                 + "--json' instead, whose fields come back unescaped. To show a backslash before a pipe "
-                + $"on purpose, write the pipe as [|]. At character {escaped}: ...{flat[from..to]}...");
+                + $"on purpose, write the pipe as [|]. At character {escaped} of the value: {flat}");
         }
 
         return flat.Length == 0 ? " " : " " + flat.Replace("|", @"\|", StringComparison.Ordinal) + " ";
@@ -145,13 +153,22 @@ public static partial class AnchorCells
     /// <remarks>For reading a cell and quoting one: never for writing one, which keeps its runs.</remarks>
     public static string Collapse(string text) => string.Join(' ', Words(text));
 
-    /// <summary>Shortens <paramref name="text"/> for a report, collapsed to one line.</summary>
-    public static string Excerpt(string text, int length)
+    /// <summary>
+    /// Where <paramref name="line"/>'s unescaped pipes are: each <c>|</c> no backslash stands just before, in order, found
+    /// in one pass.
+    /// </summary>
+    private static List<int> UnescapedPipes(string line)
     {
-        var flat = Collapse(text);
-        return flat.Length <= length ? flat : flat[..length];
-    }
+        var pipes = new List<int>();
 
-    [GeneratedRegex(@"(?<!\\)\|", RegexOptions.CultureInvariant)]
-    private static partial Regex UnescapedPipe();
+        for (var index = line.IndexOf('|'); index >= 0; index = line.IndexOf('|', index + 1))
+        {
+            if (index == 0 || line[index - 1] != '\\')
+            {
+                pipes.Add(index);
+            }
+        }
+
+        return pipes;
+    }
 }

@@ -111,7 +111,7 @@ public sealed class CommitStepRunner(
             return FlowStepResult.Ended(
                 passed: false,
                 HarnessExit.Refused,
-                $"'{run.Instance}' commits only what the run's folds wrote, and the index holds {ReportText.Listed([.. held.Select(entry => entry.Line)])}: commit or unstage it, then resume. Nothing was staged.");
+                $"'{run.Instance}' commits only what the run's folds wrote, and the index holds {Names.Line([.. held.Select(entry => entry.Line)], "git status")}: commit or unstage it, then resume. Nothing was staged.");
         }
 
         // A path git ignores no commit takes, whatever it holds: it is marked so, and left out - asked again each time, as
@@ -161,7 +161,7 @@ public sealed class CommitStepRunner(
             return FlowStepResult.Ended(
                 passed: false,
                 HarnessExit.Refused,
-                $"{ReportText.Listed([.. changed.Select(path => $"'{path.Path}' (folded by '{path.LeftBy}')")])} {(changed.Count == 1 ? "has" : "have")} changed since; "
+                $"{Names.Line([.. changed.Select(path => $"'{path.Path}' (folded by '{path.LeftBy}')")], $"git status, against the run's {OrchestratorLayout.FoldsFileName}")} {(changed.Count == 1 ? "has" : "have")} changed since; "
                 + $"commit or restore {(changed.Count == 1 ? "it" : "them")}, then resume. Nothing was staged.");
         }
 
@@ -172,7 +172,7 @@ public sealed class CommitStepRunner(
             return FlowStepResult.Ended(
                 passed: false,
                 HarnessExit.Refused,
-                $"'{run.Instance}' commits what its folds left at {ReportText.Listed(marked)}, which git add would not stage: clear each mark with git update-index "
+                $"'{run.Instance}' commits what its folds left at {Names.Line(marked, "git ls-files -v")}, which git add would not stage: clear each mark with git update-index "
                 + "--no-assume-unchanged -- <path>, or --no-skip-worktree, then resume. Nothing was staged.");
         }
 
@@ -271,8 +271,8 @@ public sealed class CommitStepRunner(
                 $"'{run.Instance}' made {ReportText.Commit(sha)}, and it is not what its folds left alone: "
                 + string.Join(", and ", [
                     .. standsElsewhere ? [$"it stands on {Standing(parents)}, not on {(head is null ? "nothing" : ReportText.Commit(head))} alone, the commit the branch named before it"] : Array.Empty<string>(),
-                    .. besides.Count > 0 ? [$"it took {Quoted(besides)} besides"] : Array.Empty<string>(),
-                    .. without.Count > 0 ? [$"it left {Quoted(without)} out"] : Array.Empty<string>()])
+                    .. besides.Count > 0 ? [$"it took {Quoted(besides, "git show --name-only")} besides"] : Array.Empty<string>(),
+                    .. without.Count > 0 ? [$"it left {Quoted(without, $"the run's {OrchestratorLayout.FoldsFileName}")} out"] : Array.Empty<string>()])
                 + $" - a hook, or git, made it so. The commit is left as it is: keep it, or undo it with {(head is null ? "git update-ref -d HEAD" : $"git reset --soft {head}")}, then resume, which settles it.",
                 Isolated(hooks));
         }
@@ -366,9 +366,9 @@ public sealed class CommitStepRunner(
         return [.. names.Select(name => name.IsUtf8 ? name.Text : name.Quoted).Distinct(StringComparer.Ordinal)];
     }
 
-    /// <summary>What a commit stands on, as a refusal says it: its parents' short ids, or nothing.</summary>
+    /// <summary>What a commit stands on, as a refusal says it: its parents' short ids, every one the line has room for, or nothing.</summary>
     private static string Standing(IReadOnlyList<string> parents)
-        => parents.Count == 0 ? "nothing" : ReportText.Listed([.. parents.Select(ReportText.Commit)]);
+        => parents.Count == 0 ? "nothing" : Names.Line([.. parents.Select(ReportText.Commit)], "git log -1 --format=%P");
 
     /// <summary>
     /// The step done with nothing left to commit: with the commit an attempt of it made before - its ending cut off before
@@ -393,8 +393,10 @@ public sealed class CommitStepRunner(
     private static IReadOnlyList<string> FoldsOf(IEnumerable<(FoldOwedPath Path, string? Holds)> paths)
         => [.. paths.SelectMany(path => path.Path.Folds).Distinct(StringComparer.Ordinal)];
 
-    /// <summary>Paths as a refusal names them: each in single quotes, as many as a line names.</summary>
-    private static string Quoted(IReadOnlyList<string> paths) => ReportText.Listed([.. paths.Select(path => $"'{path}'")]);
+    /// <summary>Paths as a refusal names them: each in single quotes, every one the line has room for, and where the whole list is (<see cref="Names.Line"/>).</summary>
+    /// <param name="paths">The paths.</param>
+    /// <param name="whole">Where every one of them is read.</param>
+    private static string Quoted(IReadOnlyList<string> paths, string whole) => Names.Line([.. paths.Select(path => $"'{path}'")], whole);
 
     /// <summary>
     /// The step done: whether it committed, the commit, the paths it took, those its folds changed that git ignores,

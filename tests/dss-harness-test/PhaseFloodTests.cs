@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text;
 using DssHarness.Core.Execution;
+using DssHarness.Core.Output;
 using DssHarness.Core.Processes;
 
 namespace DssHarness.Tests;
@@ -67,8 +68,10 @@ public sealed class PhaseFloodTests
 
         Assert.Equal(0, result.ExitCode);
         Assert.True(result.Witnessed, "the last line the child printed was never read");
+        // The last lines that fit a page's room, each costing its characters and its ending.
+        var fit = PhaseResult.TailRoom / (LineLength + 1);
         Assert.Equal(
-            [.. Enumerable.Range((int)FloodLines - PhaseResult.TailLines, PhaseResult.TailLines).Select(index => TestChild.FloodLine(index, LineLength))],
+            [.. Enumerable.Range((int)FloodLines - fit, fit).Select(index => TestChild.FloodLine(index, LineLength))],
             result.LastLines);
 
         AssertLogHolds(log, FloodLines, LineLength);
@@ -97,10 +100,17 @@ public sealed class PhaseFloodTests
     /// characters - has it kept, every character in order, as lines of at most the longest the runner hands on, and the
     /// heap no larger than the bound: the runner that held a line until it ended held this one whole, several times over.
     /// </summary>
+    /// <remarks>
+    /// The runner's own hand-on is the longest string .NET makes, which this line never reaches, so the test sets what
+    /// the runner hands on (<see cref="ProcessRunner.LinesHandedOnIn"/>), as a test may: handed on whole, the line alone
+    /// would hold the heap at hundreds of megabytes past any bound, whatever became of it after.
+    /// </remarks>
     [Fact]
     public async Task AChildPrintingOneLineThatNeverEnds_HasItKeptWhole_InPieces_WithinABoundedHeap()
     {
         const long Giant = 200L * 1024 * 1024;
+        const int Piece = 32 * 1024;
+        using var cut = ProcessRunner.LinesHandedOnIn(Piece);
 
         using var temp = new TempDirectory();
         var factory = new HarnessFactory();
@@ -132,7 +142,7 @@ public sealed class PhaseFloodTests
 
         while (lines.MoveNext())
         {
-            Assert.InRange(lines.Current.Length, 1, ProcessRunner.LongestLine);
+            Assert.InRange(lines.Current.Length, 1, Piece);
 
             if (lines.Current.AsSpan().ContainsAnyExcept('g'))
             {
@@ -143,7 +153,10 @@ public sealed class PhaseFloodTests
         }
 
         Assert.Equal(Giant, kept);
-        Assert.All(result.LastLines, line => Assert.Equal(TestChild.GiantLine(line.Length), line));
+
+        // A piece wider than a page's room is shown by its end, marked where it went on before it, within the room.
+        var last = Assert.Single(result.LastLines);
+        Assert.Equal(TextCut.Ellipsis + TestChild.GiantLine(PhaseResult.TailRoom - 2), last);
     }
 
     /// <summary>That what <paramref name="heap"/> watched grew the heap by no more than <see cref="HeapBound"/>.</summary>

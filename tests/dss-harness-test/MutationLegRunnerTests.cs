@@ -14,6 +14,7 @@ using DssHarness.Core.Results;
 using DssHarness.Core.Runs;
 using DssHarness.Core.Sync;
 using DssHarness.Core.Testing;
+using DssHarness.Core.Waiting;
 using DssHarness.Core.Worktrees;
 
 namespace DssHarness.Tests;
@@ -209,7 +210,8 @@ public sealed class MutationLegRunnerTests
         Assert.Equal(2, sweep.Tests.Runs.Count);
         Assert.Equal((null, null), (control.Bound, control.Diagnostic));
         Assert.Equal(Path.Combine(sweep.RunDirectory, LegName, MutationRecords.ControlsDirectory, "fixture_tests"), control.RecordDirectory);
-        Assert.Equal(PristineJudge.Bound(Tests.Took, 10), mutated.Bound);
+        // The fixture's report gives its cases no time, so the whole unmutated run is its start and exit.
+        Assert.Equal(PristineJudge.Bound(Tests.Took, Tests.Took, 10), mutated.Bound);
         Assert.Equal("charge exceeded", mutated.Diagnostic);
         Assert.Equal(sweep.Records("charge-bound"), mutated.RecordDirectory);
         Assert.Equal(Path.Combine(sweep.WorkerBuild(charge.Worker!.Value), Program), mutated.Program);
@@ -2328,7 +2330,7 @@ public sealed class MutationLegRunnerTests
             StringComparison.Ordinal);
     }
 
-    /// <summary>A self-test of one worker - as a WSL distribution runs - had no other worker's keys to compare with, and its line says so.</summary>
+    /// <summary>A self-test of one worker had no other worker's keys to compare with, and its line says so.</summary>
     [Fact]
     public async Task ASelfTestWithOneWorker_SaysItHadNothingToCompare()
     {
@@ -3215,17 +3217,17 @@ public sealed class MutationLegRunnerTests
     }
 
     /// <summary>
-    /// A sweep in a WSL distribution runs one worker, whatever <c>mutations.workers</c> says: it is admitted whole, as one
-    /// heavy leg. Told by the host the machine that dispatched the leg names - in the distribution, where the sweep runs,
-    /// the host the leg runs on is this one, as it is on any host sent a leg - so a leg sent to an ssh host, or run where
-    /// it was asked for, runs as many workers as it has arms and <c>mutations.workers</c> allows.
+    /// A sweep in a WSL distribution runs as many workers as a sweep anywhere: as many as it has arms and
+    /// <c>mutations.workers</c> allows, where its room holds them - its own room measured, never one worker of the code's
+    /// own - whether the host is told by the machine that dispatched the leg or seen where the sweep runs, as on an ssh
+    /// host or where it was asked for.
     /// </summary>
     [Theory]
-    [InlineData("wsl", true, 1)]
-    [InlineData("wsl", false, 1)]
+    [InlineData("wsl", true, 3)]
+    [InlineData("wsl", false, 3)]
     [InlineData("ssh", true, 3)]
     [InlineData("local", true, 3)]
-    public async Task ASweepInAWslDistribution_RunsOneWorker(string dispatchedTo, bool seenWhereItRuns, int workers)
+    public async Task ASweepInAWslDistribution_RunsAsManyWorkersAsAnywhere(string dispatchedTo, bool seenWhereItRuns, int workers)
     {
         var named = dispatchedTo switch
         {
@@ -3520,7 +3522,7 @@ public sealed class MutationLegRunnerTests
 
     /// <summary>
     /// A site put back is dated forward as its mutation was: past the clock as the build of its mutation started, by the
-    /// margin a coarse date needs, so the next build in that worker sees it changed and rebuilds what the mutation built -
+    /// granularity its file system dates files at, so the next build in that worker sees it changed and rebuilds what the mutation built -
     /// never left dated as the write itself dated it, which a clock that stepped back puts before the mutated object.
     /// </summary>
     [Fact]
@@ -3548,8 +3550,8 @@ public sealed class MutationLegRunnerTests
         Assert.Equal([false, true, false, true], dated.Select(write => write.Text == TreeFiles["src/fixture.cpp"]));
         Assert.True(dated[1].Stamp > dated[0].Stamp, $"{dated[1].Stamp:O} is not past {dated[0].Stamp:O}");
         Assert.True(dated[3].Stamp > dated[2].Stamp, $"{dated[3].Stamp:O} is not past {dated[2].Stamp:O}");
-        Assert.True(dated[1].Stamp >= started["native/arms/charge-bound"] + WorkerSite.Margin, "the first arm's site was put back dated behind its build");
-        Assert.True(dated[3].Stamp >= started["native/arms/charge-floor"] + WorkerSite.Margin, "the second arm's site was put back dated behind its build");
+        Assert.True(dated[1].Stamp > started["native/arms/charge-bound"], "the first arm's site was put back dated behind its build");
+        Assert.True(dated[3].Stamp > started["native/arms/charge-floor"], "the second arm's site was put back dated behind its build");
     }
 
     /// <summary>
@@ -4595,7 +4597,7 @@ public sealed class MutationLegRunnerTests
         public virtual Task WriteAsync(string worker, string path, byte[] contents, DateTime stamp, CancellationToken cancellationToken)
             => inner.WriteAsync(worker, path, contents, stamp, cancellationToken);
 
-        public virtual Task UntilPastAsync(DateTime stamp, CancellationToken cancellationToken) => inner.UntilPastAsync(stamp, cancellationToken);
+        public virtual Task UntilPastAsync(DateTime stamp, Action<WaitTold> told, CancellationToken cancellationToken) => inner.UntilPastAsync(stamp, told, cancellationToken);
     }
 
     /// <summary>

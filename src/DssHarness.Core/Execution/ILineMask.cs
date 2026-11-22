@@ -1,5 +1,8 @@
+using System.Runtime.InteropServices;
 using System.Text;
 using AngleSharp.Html;
+using DssHarness.Core.FileSystem;
+using DssHarness.Core.Walks;
 
 namespace DssHarness.Core.Execution;
 
@@ -44,9 +47,6 @@ public static class LineMasks
         return !string.Equals(mask.Redact(text), text, StringComparison.Ordinal);
     }
 
-    /// <summary>How many times a text's escapes are undone at most (<see cref="HoldsUnescaped"/>), so no text costs more passes.</summary>
-    public const int DeepestReading = 8;
-
     /// <summary>The most characters a character reference holds between its <c>&amp;</c> and its <c>;</c>: <c>&amp;CounterClockwiseContourIntegral;</c>'s.</summary>
     private const int MostReference = 32;
 
@@ -58,10 +58,10 @@ public static class LineMasks
 
     /// <summary>
     /// Whether <paramref name="text"/> holds a secret <paramref name="mask"/> masks as written or in any reading of it with
-    /// its escapes undone - percent-escapes, then HTML's character references - once more each time, at most
-    /// <see cref="DeepestReading"/> times: an address carried in another's parameter is escaped once more for each address
-    /// that carries it, and a page writes a '+' as <c>&amp;#x2B;</c>, past which a secret no longer reads as itself. What
-    /// an address a tool of the web would ask is held to.
+    /// its escapes undone - percent-escapes, then HTML's character references - once more each time, until a reading
+    /// undoes none: an address carried in another's parameter is escaped once more for each address that carries it,
+    /// however many carry it, and a page writes a '+' as <c>&amp;#x2B;</c>, past which a secret no longer reads as itself.
+    /// What an address a tool of the web would ask is held to.
     /// </summary>
     /// <param name="mask">The mask.</param>
     /// <param name="text">The text, an address most often.</param>
@@ -143,34 +143,36 @@ public static class LineMasks
 
     /// <summary>
     /// <paramref name="text"/>, then each reading of it with its escapes undone once more - percent-escapes, then HTML's
-    /// character references as a page's reader undoes them (<see cref="HtmlDecoded"/>) - until one undoes none or
-    /// <see cref="DeepestReading"/> have; where it is <paramref name="finished"/>, an escape its end leaves unfinished
-    /// dropped before each kind of escape is undone (<see cref="Finished"/>) - half of an HTML reference a percent-escape
-    /// wrote among them.
+    /// character references as a page's reader undoes them (<see cref="HtmlDecoded"/>) - until a reading stops changing,
+    /// or comes back to one met before (<see cref="Fixpoint"/>); where it is <paramref name="finished"/>, an escape its end
+    /// leaves unfinished dropped before each kind of escape is undone (<see cref="Finished"/>) - half of an HTML reference
+    /// a percent-escape wrote among them.
     /// </summary>
+    /// <remarks>
+    /// No count of readings ends it: a secret escaped fifty times over is read fifty times, and masked. Each escape undone
+    /// shortens the reading, so the readings end of themselves; every reading's digest is kept besides, so a reading that
+    /// came back to one before it would end there too, at its first repeat. Yielded one at a time, so a caller that finds a
+    /// secret in an early reading undoes no more.
+    /// </remarks>
     private static IEnumerable<string> Readings(string text, bool finished = false)
     {
         // Each escape undone at a time - percent's, then HTML's - with what its end leaves unfinished dropped before HTML's,
         // which would read half of one as another character; the next reading's turn drops what HTML's leaves.
         string Read(string read) => finished ? Finished(read) : read;
 
-        var reading = Read(text);
+        var loop = new FixpointLoop<string>(Read(text), Digest);
 
-        for (var depth = 0; ; depth++)
+        yield return loop.State;
+
+        // A step that left the reading as it was, or came back to one met before, ends the loop: nothing it would read
+        // next is new.
+        while (loop.Take(new FixpointStep<string>(HtmlDecoded(Read(Uri.UnescapeDataString(loop.State))), Done: false)) is null)
         {
-            yield return reading;
-
-            // Each escape undone shortens the reading, so the readings end - and past the deepest no text is read further,
-            // so a text that unescapes into itself a thousand times costs no thousand passes.
-            var unescaped = depth == DeepestReading ? reading : HtmlDecoded(Read(Uri.UnescapeDataString(reading)));
-
-            if (string.Equals(unescaped, reading, StringComparison.Ordinal))
-            {
-                yield break;
-            }
-
-            reading = unescaped;
+            yield return loop.State;
         }
+
+        // A reading's digest over its characters exactly as they are, a lone surrogate's among them.
+        static string Digest(string reading) => FileContentHash.Of(MemoryMarshal.AsBytes(reading.AsSpan()));
     }
 
     /// <summary>

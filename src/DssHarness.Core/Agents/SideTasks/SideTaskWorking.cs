@@ -4,6 +4,7 @@ using DssHarness.Core.FileSystem;
 using DssHarness.Core.Orchestration;
 using DssHarness.Core.Output;
 using DssHarness.Core.Results;
+using DssHarness.Core.Waiting;
 
 using DssHarness.Core.Execution;
 
@@ -128,12 +129,11 @@ internal sealed class Working
     public async Task<CommandOutcome> OneShotAsync(string prompt, bool json, CancellationToken cancellationToken)
     {
         using var front = new TurnFront(_layout, _fileSystem, _clock, say: null);
-        var began = _clock.GetUtcNow();
-        AgentRunResult result;
+        Tried tried;
 
         try
         {
-            result = await TurnAsync(prompt, front, cancellationToken).ConfigureAwait(false);
+            tried = await TriedAsync(prompt, front, line => _output.Info(SideTaskService.RunCommand, line), cancellationToken).ConfigureAwait(false);
         }
         catch (HarnessException ex)
         {
@@ -145,21 +145,19 @@ internal sealed class Working
             return json ? refused with { Data = [SideTaskReports.Stopped(ex.ExitCode, ex.Message, _layout.Name, _layout.Directory)] } : refused;
         }
 
+        var result = tried.Result;
         var seen = front.Seen.Take();
-        var turn = TurnOf(result, began);
-        _turns.Add(turn);
-        _inAll = AgentUsageReport.Sum(_inAll, result.Usage);
         Kept(SideTaskStatus.Ended);
 
         var exit = result.ToOutcome().ExitCode;
         var line = result.Status == AgentRunStatus.Completed
             ? $"side-task '{_layout.Name}' answered on {(result.Served is [_, ..] served ? served[0].Model : Serving.Model)}"
-            : $"side-task '{_layout.Name}' ended {result.Status}{(result.Error is null ? string.Empty : ": " + result.Error)}";
+            : $"side-task '{_layout.Name}' ended {result.Status}{(result.Error is null ? string.Empty : ": " + result.Error)}{(tried.Repeated ? $", {FailedTheSameWay}" : string.Empty)}";
         var outcome = new CommandOutcome(exit, line, [.. Missing, $"Records: {_layout.Directory}"]);
 
         if (json)
         {
-            return outcome with { Data = [SideTaskReports.One(exit, line, _layout.Name, _layout.Directory, result, seen.Denials, turn)] };
+            return outcome with { Data = [SideTaskReports.One(exit, line, _layout.Name, _layout.Directory, result, seen.Denials, tried.Turn ?? TurnOf(result, _clock.GetUtcNow()))] };
         }
 
         return result.Status == AgentRunStatus.Completed && result.FinalText is { Length: > 0 } text
@@ -344,12 +342,11 @@ internal sealed class Working
     /// <summary>One message of a chat whose client stores its conversations: its turn, its record, and what its ending asks of the chat.</summary>
     private async Task ChatTurnAsync(string line, TurnFront front, SideTaskChat chat, CancellationToken cancellationToken)
     {
-        var began = _clock.GetUtcNow();
-        AgentRunResult result;
+        Tried tried;
 
         try
         {
-            result = await TurnAsync(line, front, cancellationToken).ConfigureAwait(false);
+            tried = await TriedAsync(line, front, chat.Say, cancellationToken).ConfigureAwait(false);
         }
         catch (HarnessException refused)
         {
@@ -358,9 +355,7 @@ internal sealed class Working
             return;
         }
 
-        _turns.Add(TurnOf(result, began));
-        _inAll = AgentUsageReport.Sum(_inAll, result.Usage);
-        Kept(SideTaskStatus.Open);
+        var result = tried.Result;
 
         // A turn that outgrew its model's context is said as its ending alone: the compaction the next message begins
         // from is said once, as it is given (the Compacted event).
@@ -370,12 +365,116 @@ internal sealed class Working
         }
         else if (result.Status is not (AgentRunStatus.Completed or AgentRunStatus.Cancelled))
         {
-            chat.Say($"the turn ended {result.Status}{(result.Error is null ? string.Empty : ": " + result.Error)}; "
+            chat.Say($"the turn ended {result.Status}{(result.Error is null ? string.Empty : ": " + result.Error)}"
+                + (tried.Repeated ? $", {FailedTheSameWay}" : string.Empty)
+                + "; "
                 + (result.Status == AgentRunStatus.ContextExhausted
                     ? "the next message begins a new conversation, going on from the conversation so far"
                     : KeptWhole));
         }
     }
+
+    /// <summary>What a turn whose agent failed as an earlier try of it did is said with: another try would only meet it again.</summary>
+    internal const string FailedTheSameWay = "as an earlier try did, on the same model, so it is not tried again";
+
+    /// <summary>How a message's turn ended: its last try's result and record, and whether that try failed as the one before it did.</summary>
+    /// <param name="Result">The last try's result.</param>
+    /// <param name="Turn">The last try's record; null where the side-task was stopped before its first try.</param>
+    /// <param name="Repeated">Whether the last try failed as the one before it did, which ended the turn.</param>
+    private sealed record Tried(AgentRunResult Result, SideTaskTurn? Turn, bool Repeated);
+
+    /// <summary>
+    /// One message's turn, tried again where its agent failed, by the one retry owner (<see cref="Retrying"/>): each try is a
+    /// turn of the side-task's own, recorded as it ends. A try whose agent failed in a way the turn has not met yet
+    /// (<see cref="Failing"/>) is tried again - after a wait of <see cref="SideTaskService.RetryFirstWait"/>, doubled each
+    /// time up to the cadence every wait is told at, each wait told through <paramref name="say"/> - for as long as it fails
+    /// in a new way; one that fails as an earlier try did, on the same model, ends the turn, for a try again would only meet
+    /// it once more. A side-task has no limit of a run's, so no count of tries ends it: only a failure met twice, an ending
+    /// of any other kind, or the person. A wait before a try is the turn's still, so the person's interrupt ends it as it
+    /// cuts a try under way, and a try the person interrupted is never tried again: the turn ends interrupted, its next
+    /// launch never begun (<see cref="AgentRunner.CutBeforeItBegan"/>).
+    /// </summary>
+    /// <param name="message">The person's message.</param>
+    /// <param name="front">The turn's front.</param>
+    /// <param name="say">Tells the person each wait before a try again.</param>
+    /// <param name="cancellationToken">The side-task's stop, which ends a wait as it ends a turn.</param>
+    private async Task<Tried> TriedAsync(string message, TurnFront front, Action<string> say, CancellationToken cancellationToken)
+    {
+        AgentRunResult? last = null;
+        SideTaskTurn? recorded = null;
+        var interrupted = false;
+        using var retry = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        RetryEnd<AgentRunResult> ended;
+
+        try
+        {
+            ended = await Retrying.RunAsync<AgentRunResult>(
+                async (tries, token) =>
+                {
+                    var pressed = Interrupts.Presses;
+                    var began = _clock.GetUtcNow();
+                    var result = await TurnAsync(message, front, token).ConfigureAwait(false);
+
+                    // Each try is a turn of the record, written as it ends: what it used, cost and answered is its own.
+                    recorded = TurnOf(result, began);
+                    _turns.Add(recorded);
+                    _inAll = AgentUsageReport.Sum(_inAll, result.Usage);
+                    Kept(SideTaskStatus.Open);
+                    last = result;
+
+                    if (Interrupts.Presses > pressed)
+                    {
+                        interrupted = true;
+                        return new RetryTry<AgentRunResult>.Done(result);
+                    }
+
+                    if (Failing(result) is not { } failing)
+                    {
+                        return new RetryTry<AgentRunResult>.Done(result);
+                    }
+
+                    // The wait before the next try is the turn's: a press while it lasts ends it, as one cuts a turn.
+                    Interrupts.WhileTurning(count =>
+                    {
+                        interrupted = true;
+                        _ = retry.CancelAsync();
+                        return true;
+                    });
+
+                    return new RetryTry<AgentRunResult>.Failed(failing.Failure, failing.Digest);
+                },
+                new RetryWatch($"the turn of side-task '{_layout.Name}'", told => say(told.Line()), SideTaskService.RetryFirstWait, Bound: null, _clock),
+                retry.Token).ConfigureAwait(false);
+        }
+        finally
+        {
+            Interrupts.WhileTurning(null);
+        }
+
+        // A turn the person interrupted as it failed, or as it waited to be tried again, ends interrupted, its next launch
+        // never begun; a stop between two tries ends it with the try that last ended, as it was recorded, and one before
+        // the first try with none run.
+        var result = interrupted && last is { } cut && Failing(cut) is not null
+            ? new AgentRunResult(AgentRunStatus.Cancelled, Model: cut.Model, Error: AgentRunner.CutBeforeItBegan)
+            : ended.Value ?? last ?? new AgentRunResult(AgentRunStatus.Cancelled, Model: Serving.Model, Error: "the command was stopped");
+
+        return new Tried(result, recorded, ended.Kind == RetryEndKind.Repeated);
+    }
+
+    /// <summary>
+    /// What a try's ending is where its agent failed in a way another try may mend - it ended failed, with an answer that
+    /// did not read, on a model it was not asked for, stalled or past its time, as the walk of an order reads a failed
+    /// agent - said as the person reads it, with the digest a repeat is told by: the model it ended on, how and why. Null
+    /// for every other ending, and for a failure no try of the turn's mends: the provider's service failing past its client's
+    /// own tries, which every model of the order is reached through, and a key the provider refused.
+    /// </summary>
+    /// <param name="result">The try's result.</param>
+    private static (string Failure, string Digest)? Failing(AgentRunResult result)
+        => result.Status is AgentRunStatus.Failed or AgentRunStatus.InvalidOutput or AgentRunStatus.WrongModel or AgentRunStatus.Stalled or AgentRunStatus.TimedOut
+            && !result.ServiceFailed
+            && result.KeysRefused.Count == 0
+                ? ($"the turn ended {result.Status}{(result.Error is null ? string.Empty : ": " + result.Error)}", $"{result.Model}\n{result.Status}\n{result.Error}")
+                : null;
 
     /// <summary>
     /// Begins a launch held open for the chat, with the first of <paramref name="lines"/> as its prompt and the rest
@@ -626,11 +725,13 @@ internal sealed class Working
             Order = _now.Order,
             WebSearch = _common.Search,
             Spend = _spend,
-            // A launch held open for a chat is never tried again by the runner: a try begins again from its first message,
-            // losing every turn after it and every line it had taken. It ends instead, and the chat goes on from the
-            // conversation so far with the lines no turn answered (GoneOnAsync).
-            Retries = messages is null ? SideTaskService.DefaultRetries : 0,
-            BackoffSeconds = SideTaskService.DefaultBackoffSeconds,
+            // No turn of a side-task is tried again by the runner, whose count of tries is a workflow step's: its walk moves
+            // a failed agent to the order's next model at once, and a turn every model of it failed is tried again by the
+            // side-task itself for as long as it fails in a new way (TriedAsync). A launch held open for a chat is never
+            // tried again at all - a try would begin again from its first message, losing every turn after it and every
+            // line it had taken - and the chat goes on from the conversation so far with the lines no turn answered
+            // (GoneOnAsync).
+            Retries = 0,
             RecordDirectory = _layout.Directory,
             SessionsDirectory = _layout.SessionsDirectory,
             Continuation = continuation,
@@ -794,7 +895,6 @@ internal sealed class Working
             ? null
             : AgentCompaction.Reduce(
                 stream,
-                AgentContinuationBounds.Of(_common.Context.Config.AgentContext?.Continuation),
                 AgentCompactionBounds.Of(_common.Context.Config.AgentContext?.Compaction));
     }
 

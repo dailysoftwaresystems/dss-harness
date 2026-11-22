@@ -809,8 +809,10 @@ public sealed class LegRunService(
             .Distinct(comparer)
             .ToList();
 
-        // Said, because a large tree takes a while to read, and nothing else is said until it is.
-        _output.Info(commandName, $"reading {ReportText.Listed([.. trees.Select(tree => $"'{tree}'")])} for {(trees.Count == 1 ? "its" : "their")} copies");
+        // Said, because a large tree takes a while to read, and nothing else is said until it is: each tree that fits the
+        // line, and every one said again below, on a line of its own, as it is read - or in its copies' syncs, where it
+        // could not be.
+        _output.Info(commandName, $"reading {Names.Line([.. trees.Select(tree => $"'{tree}'")], "the lines below")} for {(trees.Count == 1 ? "its" : "their")} copies");
 
         var sources = trees.ToDictionary(
             tree => tree,

@@ -19,8 +19,9 @@ namespace DssHarness.Core.Agents.SideTasks;
 /// <param name="fileSystem">Makes the side-task's directory.</param>
 /// <param name="store">Reads and writes the owner file, strictly.</param>
 /// <param name="identity">This process, and how another's liveness is told.</param>
+/// <param name="paths">This machine's limit on a path's length, which a new side-task's records are held to.</param>
 /// <param name="clock">When the side-task was taken.</param>
-public sealed class SideTaskOwner(IFileSystem fileSystem, OrchestrationStore store, IProcessIdentity identity, TimeProvider? clock = null)
+public sealed class SideTaskOwner(IFileSystem fileSystem, OrchestrationStore store, IProcessIdentity identity, IPathBudget paths, TimeProvider? clock = null)
 {
     /// <summary>What a side-task's owner file is, as a refusal names it.</summary>
     public const string OwnerKind = "a side-task's owner";
@@ -31,10 +32,8 @@ public sealed class SideTaskOwner(IFileSystem fileSystem, OrchestrationStore sto
     /// </summary>
     public const string ClaimsLockName = ".claims.lock";
 
-    /// <summary>The most names a new side-task's own is tried with a suffix (<c>-2</c>, <c>-3</c>, ...) before it is refused.</summary>
-    public const int MostSuffixes = 999;
-
     private readonly IFileSystem _fileSystem = fileSystem ?? throw new ArgumentNullException(nameof(fileSystem));
+    private readonly IPathBudget _paths = paths ?? throw new ArgumentNullException(nameof(paths));
     private readonly SideTaskStore _records = new(fileSystem);
     private readonly ProcessOwner _owner = new(store, identity, clock);
 
@@ -71,14 +70,17 @@ public sealed class SideTaskOwner(IFileSystem fileSystem, OrchestrationStore sto
     /// <summary>
     /// Claims a new side-task and writes its first record inside the claim, so no side-task is ever left without one: the
     /// name the person gave, refused (13) where a side-task holds it; or the name derived from when it began, given the
-    /// first free suffix (<c>-2</c>, <c>-3</c>, ...) where another side-task began in the same second.
+    /// smallest free suffix (<c>-2</c>, <c>-3</c>, ...) where others began in the same second, however many did. A name
+    /// whose records this machine's paths cannot hold - its owner file or its record past the machine's limit on a path's
+    /// length (<see cref="IPathBudget"/>), or a name the file system refuses as one - is refused (13) saying so, nothing
+    /// written.
     /// </summary>
     /// <param name="root">The repository's <c>.side-tasks/</c> directory.</param>
     /// <param name="name">The name asked for.</param>
     /// <param name="derived">Whether the name was derived rather than given, so a suffix may free it.</param>
     /// <param name="record">The side-task's first record, from the name it takes.</param>
     /// <returns>The side-task's layout and first record, and what is said of a dead owner's record reclaimed; null where none was recorded.</returns>
-    /// <exception cref="HarnessException">The name is taken, or no suffix frees it (<see cref="HarnessExit.Refused"/>).</exception>
+    /// <exception cref="HarnessException">The name is taken, or its records do not fit this machine's paths (<see cref="HarnessExit.Refused"/>).</exception>
     public (SideTaskLayout Layout, SideTaskRecord Record, string? Reclaimed) ClaimNew(string root, string name, bool derived, Func<string, SideTaskRecord> record)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(root);
@@ -96,7 +98,24 @@ public sealed class SideTaskOwner(IFileSystem fileSystem, OrchestrationStore sto
                 throw new HarnessException(HarnessExit.Refused, $"side-task '{name}' is taken: --resume {name} opens it again, or --name gives a new one another name. Nothing was changed.");
             }
 
-            var reclaimed = Claim(layout);
+            if (Unfit(layout) is { } unfit)
+            {
+                throw new HarnessException(HarnessExit.Refused, $"side-task '{layout.Name}' cannot keep its records on this machine: {unfit} --name gives it a shorter name. Nothing was changed.");
+            }
+
+            string? reclaimed;
+
+            try
+            {
+                reclaimed = Claim(layout);
+            }
+            catch (IOException ex)
+            {
+                // The file system's own limit on a name - its length among them - is its own to say: the owner file, the
+                // longest name the side-task's records take, is the first it refuses, and nothing was written before it.
+                throw new HarnessException(HarnessExit.Refused, $"side-task '{layout.Name}' cannot keep its records on this machine: its owner file '{layout.OwnerFile}' could not be written ({ex.Message.TrimEnd('.')}); --name gives it another name. Nothing was changed.", ex);
+            }
+
             var first = record(layout.Name);
 
             _fileSystem.CreateDirectory(layout.Directory);
@@ -164,19 +183,54 @@ public sealed class SideTaskOwner(IFileSystem fileSystem, OrchestrationStore sto
             $"side-task '{layout.Name}'",
             held => $"side-task '{layout.Name}' is open in another process ({held}); end its chat there, or wait for it to leave. Nothing was changed.");
 
-    /// <summary>The first of <paramref name="name"/>, <c>name-2</c>, <c>name-3</c>, ... no side-task holds in any way - no directory, no owner.</summary>
+    /// <summary>
+    /// The first of <paramref name="name"/>, <c>name-2</c>, <c>name-3</c>, ... no entry of <paramref name="root"/> holds in
+    /// any way - no directory, file or link of that name, no owner file beside it - found from one listing of the
+    /// directory: the names it holds are a set, and the first name past them is free, however many there are. Names are
+    /// told apart in any case, so on a file system that folds case a new side-task is never given the directory of one
+    /// named in another.
+    /// </summary>
     private SideTaskLayout Free(string root, string name)
     {
-        for (var suffix = 1; suffix <= MostSuffixes; suffix++)
-        {
-            var layout = new SideTaskLayout(root, suffix == 1 ? name : $"{name}-{suffix.ToString(CultureInfo.InvariantCulture)}");
+        var taken = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-            if (_fileSystem.KindOf(layout.Directory) == PathKind.None && _fileSystem.KindOf(layout.OwnerFile) == PathKind.None)
+        foreach (var entry in _fileSystem.EnumerateDirectories(root).Concat(_fileSystem.EnumerateFiles(root, recursive: false)))
+        {
+            var held = Path.GetFileName(entry);
+            taken.Add(held);
+
+            if (held.EndsWith(SideTaskLayout.OwnerSuffix, StringComparison.OrdinalIgnoreCase))
             {
-                return layout;
+                taken.Add(held[..^SideTaskLayout.OwnerSuffix.Length]);
             }
         }
 
-        throw new HarnessException(HarnessExit.Refused, $"side-task '{name}' and each of its {MostSuffixes - 1} suffixes are taken: --name gives a new one a name of its own. Nothing was changed.");
+        for (var suffix = 1L; ; suffix++)
+        {
+            var candidate = suffix == 1 ? name : $"{name}-{suffix.ToString(CultureInfo.InvariantCulture)}";
+
+            if (!taken.Contains(candidate))
+            {
+                return new SideTaskLayout(root, candidate);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Why this machine's paths cannot hold <paramref name="layout"/>'s records, as its limit on a path's length says it
+    /// (<see cref="PathBudgetResult.Describe"/>): the owner file beside the side-task's directory, and the record inside it,
+    /// are what the claim writes; null where both fit, or the machine sets no limit.
+    /// </summary>
+    private string? Unfit(SideTaskLayout layout)
+    {
+        foreach (var (path, reserve) in new[] { (layout.OwnerFile, 0), (layout.Directory, SideTaskLayout.TaskFileName.Length) })
+        {
+            if (_paths.Check(path, reserve, margin: 0) is { IsWithinBudget: false } exceeded)
+            {
+                return exceeded.Describe(path);
+            }
+        }
+
+        return null;
     }
 }

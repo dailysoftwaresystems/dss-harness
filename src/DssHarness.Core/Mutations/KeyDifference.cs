@@ -94,19 +94,26 @@ public sealed class PendingReason
     public static PendingReason RowsChanged(IReadOnlyList<string> kinds)
         => new("rows-changed", $"its {string.Join(", ", kinds)} rows changed") { Counted = "whose rows changed" };
 
+    /// <summary>
+    /// Where a reason that names paths keeps them all, as its line says after <c>all in</c>: the reason's own paths
+    /// (<see cref="Paths"/>), which every document holding a reason carries beside what it says - a listing's
+    /// <c>--json</c>, and a sweep's ledger for the reason it swept an arm.
+    /// </summary>
+    public const string PathsWhole = "the reason's paths in --json";
+
     /// <summary>A text the arm cites holds something else, or is gone.</summary>
     public static PendingReason TextMoved(IReadOnlyList<string> paths)
-        => new("text-moved", $"a text it cites moved: {ReportText.Listed(paths)}") { Counted = "whose texts moved", Paths = paths };
+        => new("text-moved", $"a text it cites moved: {Names.Line(paths, PathsWhole)}") { Counted = "whose texts moved", Paths = paths };
 
     /// <summary>A site of the arm holds something else, or is gone.</summary>
     public static PendingReason SiteMoved(IReadOnlyList<string> paths)
-        => new("site-moved", $"its site moved: {ReportText.Listed(paths)}") { Counted = "whose sites moved", Paths = paths };
+        => new("site-moved", $"its site moved: {Names.Line(paths, PathsWhole)}") { Counted = "whose sites moved", Paths = paths };
 
     /// <summary>Files of the tree a target is built from hold something else, or - where <paramref name="gone"/> names them - are gone from the tree.</summary>
     public static PendingReason FilesMoved(string target, IReadOnlyList<string> paths, IReadOnlyCollection<string>? gone = null)
         => new(
             "files-moved",
-            $"what '{target}' is built from moved: {ReportText.Listed([.. paths.Select(path => gone?.Contains(path) == true ? $"{path} (gone)" : path)])}")
+            $"what '{target}' is built from moved: {Names.Line([.. paths.Select(path => gone?.Contains(path) == true ? $"{path} (gone)" : path)], PathsWhole)}")
         {
             Counted = "whose files moved",
             Target = target,
@@ -115,7 +122,7 @@ public sealed class PendingReason
 
     /// <summary>A file the arm's runner reads at run time holds something else, joined or left what it reads, or is gone.</summary>
     public static PendingReason RunReadsMoved(IReadOnlyList<string> paths)
-        => new("run-reads-moved", $"what its runner reads at run time moved: {ReportText.Listed(paths)}") { Counted = "whose run-time reads moved", Paths = paths };
+        => new("run-reads-moved", $"what its runner reads at run time moved: {Names.Line(paths, PathsWhole)}") { Counted = "whose run-time reads moved", Paths = paths };
 
     /// <summary>The environment the build is given changed.</summary>
     public static PendingReason BuildEnvironmentChanged { get; } = new("build-environment-changed", "the environment its build is given changed")

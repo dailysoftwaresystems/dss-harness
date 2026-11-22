@@ -395,7 +395,7 @@ public static class FlowQuestions
         ArgumentNullException.ThrowIfNull(question);
 
         var step = $"'{instance}'{(dry.Target is { } target ? $" (target '{target}')" : string.Empty)}";
-        var named = ReportText.Listed([.. question.Named.Select(name => $"'{name}'")]);
+        var named = Names.Line([.. question.Named.Select(name => $"'{name}'")], $"the dry run in the step record of '{instance}'");
 
         return question.Kind switch
         {

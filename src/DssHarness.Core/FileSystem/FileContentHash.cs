@@ -44,15 +44,33 @@ public static class FileContentHash
     {
         ArgumentNullException.ThrowIfNull(fileSystem);
 
-        await using var stream = fileSystem.OpenRead(path);
-        var hash = await SHA256.HashDataAsync(stream, cancellationToken).ConfigureAwait(false);
+        var stream = fileSystem.OpenRead(path);
 
-        return new FileContent(stream.Length, Convert.ToHexStringLower(hash));
+        await using (stream.ConfigureAwait(false))
+        {
+            var content = await OfStreamAsync(stream, cancellationToken).ConfigureAwait(false);
+
+            return new FileContent(stream.Length, content);
+        }
     }
 
     /// <summary>The same hash, of bytes already in hand.</summary>
     /// <param name="contents">The bytes.</param>
     public static string Of(ReadOnlySpan<byte> contents) => Convert.ToHexStringLower(SHA256.HashData(contents));
+
+    /// <summary>
+    /// The same hash, of what <paramref name="stream"/> holds from where it stands to its end: read a block at a time and
+    /// taken into the hash as it is read, never held whole, so a stream of any length is hashed in the memory of one block.
+    /// </summary>
+    /// <param name="stream">The bytes. It is read to its end and left there, open: its caller owns it.</param>
+    /// <param name="cancellationToken">Stops the read.</param>
+    /// <returns>Lowercase hex SHA-256, as <see cref="Of(ReadOnlySpan{byte})"/> gives of the same bytes.</returns>
+    public static async Task<string> OfStreamAsync(Stream stream, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(stream);
+
+        return Convert.ToHexStringLower(await SHA256.HashDataAsync(stream, cancellationToken).ConfigureAwait(false));
+    }
 
     /// <summary>
     /// The same hash, of the bytes <paramref name="write"/> writes, taken a little at a time as they are written: a record
@@ -63,17 +81,23 @@ public static class FileContentHash
     {
         ArgumentNullException.ThrowIfNull(write);
 
-        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        using var hash = Running();
         using (var sink = new Hashing(hash))
         {
             write(sink);
         }
 
-        return Convert.ToHexStringLower(hash.GetHashAndReset());
+        return hash.Content();
     }
 
+    /// <summary>
+    /// The same hash, taken of bytes as they come, a piece at a time - a file that crosses to another machine in pieces,
+    /// never held whole - until <see cref="RunningHash.Content"/> says what they hash to together.
+    /// </summary>
+    public static RunningHash Running() => new();
+
     /// <summary>A stream that only takes bytes, each into the hash.</summary>
-    private sealed class Hashing(IncrementalHash hash) : Stream
+    private sealed class Hashing(RunningHash hash) : Stream
     {
         public override bool CanRead => false;
 
@@ -85,9 +109,9 @@ public static class FileContentHash
 
         public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
 
-        public override void Write(byte[] buffer, int offset, int count) => hash.AppendData(buffer, offset, count);
+        public override void Write(byte[] buffer, int offset, int count) => hash.Append(buffer.AsSpan(offset, count));
 
-        public override void Write(ReadOnlySpan<byte> buffer) => hash.AppendData(buffer);
+        public override void Write(ReadOnlySpan<byte> buffer) => hash.Append(buffer);
 
         public override void Flush()
         {
@@ -119,4 +143,23 @@ public static class FileContentHash
             _ => null,
         };
     }
+}
+
+/// <summary>
+/// <see cref="FileContentHash"/>'s hash, taken of bytes appended a piece at a time: what they hash to together is what
+/// <see cref="FileContentHash.Of(ReadOnlySpan{byte})"/> gives of the same bytes held whole.
+/// </summary>
+public sealed class RunningHash : IDisposable
+{
+    private readonly IncrementalHash _hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+
+    /// <summary>Takes <paramref name="bytes"/> into the hash, after every piece taken before them.</summary>
+    /// <param name="bytes">The next bytes.</param>
+    public void Append(ReadOnlySpan<byte> bytes) => _hash.AppendData(bytes);
+
+    /// <summary>What every piece taken hashes to together, lowercase hex; the hash then starts again, holding none.</summary>
+    public string Content() => Convert.ToHexStringLower(_hash.GetHashAndReset());
+
+    /// <inheritdoc/>
+    public void Dispose() => _hash.Dispose();
 }

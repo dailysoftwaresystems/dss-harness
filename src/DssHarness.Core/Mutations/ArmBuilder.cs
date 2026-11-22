@@ -138,7 +138,7 @@ internal sealed class ArmBuilder(
         var environment = BuildAdapters.EnvironmentFor(request.Variant.Overlay(config, request.Project), request);
         var program = _buildDirectoryGuard.Read(buildDirectory)?.MakeProgram;
         var records = await NinjaRebuildGraph
-            .ReadRecordsAsync(_processRunner, buildDirectory, request.ProgramDirectories, program, environment, cancellationToken)
+            .ReadRecordsAsync(_processRunner, buildDirectory, request.ProgramDirectories, program, environment, told: null, TimeProvider.System, cancellationToken)
             .ConfigureAwait(false);
         var manifest = NinjaManifest.Read(_fileSystem, buildDirectory);
 

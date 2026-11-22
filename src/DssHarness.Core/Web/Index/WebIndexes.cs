@@ -42,7 +42,7 @@ public sealed class WebIndexes : IDisposable
     /// <param name="directory">The index's directory.</param>
     /// <param name="settings">What it reads.</param>
     /// <param name="query">The query.</param>
-    /// <param name="limit">The most hits.</param>
+    /// <param name="page">Which page of its hits: its number from 1, and how many a page holds.</param>
     /// <param name="runGate">
     /// The run's gate, never one step's: a fill begun now asks under it, in the turns it gives, until it ends - long after
     /// this search - and a later search's gate is not asked.
@@ -52,7 +52,7 @@ public sealed class WebIndexes : IDisposable
     /// A fill is due and could not be claimed for a failure of this machine's - a read-only file system, a disk's - which
     /// is raised as what it is, never answered as a fill another run holds.
     /// </exception>
-    public WebIndexAnswer Search(string directory, SitemapSettings settings, string query, int limit, WebFetchGate runGate)
+    public WebIndexAnswer Search(string directory, SitemapSettings settings, string query, Search.WebSearchPage page, WebFetchGate runGate)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(directory);
         ArgumentNullException.ThrowIfNull(settings);
@@ -83,9 +83,12 @@ public sealed class WebIndexes : IDisposable
         // A count of other settings is no count of these: none is said until a listing is read under them.
         var known = string.Equals(state.KnownUnder, settings.Fingerprint, StringComparison.Ordinal) ? state.Known : null;
 
-        return new WebIndexAnswer(settings.Site, index.Search(query, limit, settings.ReadsPage), index.HeldOf(settings.ReadsPage), known, filling, state.Problem, state.PausedUntil)
+        var found = index.Search(query, page, settings.ReadsPage);
+
+        return new WebIndexAnswer(settings.Site, found.Hits, index.HeldOf(settings.ReadsPage), known, filling, state.Problem, state.PausedUntil)
         {
             PausedFor = state.PausedFor,
+            Total = found.Total,
         };
     }
 
@@ -178,10 +181,11 @@ public sealed class WebIndexes : IDisposable
         }
         catch (Exception ex)
         {
-            // Nothing awaits a fill in the background: what ended it is said where every search of the index reads it.
+            // Nothing awaits a fill in the background: what ended it is said where every search of the index reads it, and
+            // the next search begins it again.
             var state = WebIndexState.Read(_fileSystem, index.Directory, settings.Site);
 
-            state.Stopped($"its fill failed: {ex.Message}", _clock.GetUtcNow() + WebIndexState.AfterProblem, settings.All).Write(_fileSystem, index.Directory);
+            state.Stopped($"its fill failed: {ex.Message}", null, settings.All).Write(_fileSystem, index.Directory);
         }
     }
 }

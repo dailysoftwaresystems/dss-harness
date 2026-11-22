@@ -112,27 +112,13 @@ public sealed class CodeFileTextTests
         var index = CodeFileText.LineIndex(text);
 
         Assert.Equal(CodeFileText.Lines(text).Count, index.Starts.Count);
-        Assert.Equal([1, 1, 1, 2, 2, 3, 3, 4, 4, 4, 4, 4, 4], Enumerable.Range(0, text.Length + 1).Select(index.LineAt));
+        Assert.Equal([1, 1, 1, 2, 2, 3, 3, 4, 4, 4, 4, 4, 4], Enumerable.Range(0, text.Length + 1).Select(at => index.LineAt(at)));
         Assert.Equal(1, CodeFileText.LineIndex(string.Empty).LineAt(0));
-    }
-
-    /// <summary>A probe is a decoded text's first characters, never cut inside a surrogate pair.</summary>
-    [Fact]
-    public void AProbe_IsTheTextsFirstCharacters_NeverInsideASurrogatePair()
-    {
-        Assert.Equal("short", CodeFileText.Probe("short"));
-        Assert.Equal(CodeFileText.ProbeCharacters, CodeFileText.Probe(new string('a', CodeFileText.ProbeCharacters * 2)).Length);
-
-        var split = new string('a', CodeFileText.ProbeCharacters - 1) + "😀" + "tail";
-        var probe = CodeFileText.Probe(split);
-
-        Assert.Equal(CodeFileText.ProbeCharacters - 1, probe.Length);
-        Assert.False(char.IsHighSurrogate(probe[^1]));
     }
 
     private static (string? Text, string? State) Read(byte[] bytes)
     {
-        var decoded = CodeFileText.Decode(bytes);
-        return (decoded.Text, decoded.State);
+        using var decoded = CodeFileText.Decode(bytes);
+        return (decoded.Text?.Slice(0, decoded.Text.Length), decoded.State);
     }
 }

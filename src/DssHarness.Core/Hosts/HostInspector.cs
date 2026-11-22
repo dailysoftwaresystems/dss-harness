@@ -2,6 +2,8 @@ using System.Diagnostics.CodeAnalysis;
 using System.Text.Json;
 using DssHarness.Core.Configuration;
 using DssHarness.Core.FileSystem;
+using DssHarness.Core.Json;
+using DssHarness.Core.Output;
 using DssHarness.Core.Platform;
 using DssHarness.Core.Processes;
 using DssHarness.Core.Repository;
@@ -238,13 +240,12 @@ public sealed class HostInspector(
     HostAgentService agent,
     HoldAwakeRegistry holds,
     IWslDiskImages wslDiskImages,
-    IFileSystem fileSystem) : IHostInspector
+    IFileSystem fileSystem,
+    IHarnessOutput? output = null,
+    TimeProvider? clock = null) : IHostInspector
 {
     /// <summary>The program every host needs before DssHarness can be installed or run there.</summary>
     public const string DotnetProgram = "dotnet";
-
-    /// <summary>Longest a probe of a connected host may take.</summary>
-    private static readonly TimeSpan ProbeBudget = TimeSpan.FromMinutes(2);
 
     private readonly IHostCommandRunner _hostCommands = hostCommands;
     private readonly IHostConnector _connector = connector;
@@ -253,6 +254,8 @@ public sealed class HostInspector(
     private readonly HoldAwakeRegistry _holds = holds;
     private readonly IWslDiskImages _wslDiskImages = wslDiskImages;
     private readonly IFileSystem _fileSystem = fileSystem;
+    private readonly IHarnessOutput? _output = output;
+    private readonly TimeProvider? _clock = clock;
 
     public Task<HostReport> InspectAsync(
         HarnessContext context,
@@ -392,7 +395,7 @@ public sealed class HostInspector(
         var dotnet = connection.Located(DotnetProgram);
 
         var sdks = dotnet is { Present: true }
-            ? await RunAsync(connection, connection.Spell(DotnetProgram), ["--list-sdks"], ProbeBudget, cancellationToken).ConfigureAwait(false)
+            ? await RunAsync(connection, connection.Spell(DotnetProgram), ["--list-sdks"], cancellationToken).ConfigureAwait(false)
             : null;
 
         if (sdks is null || !sdks.Succeeded)
@@ -407,7 +410,7 @@ public sealed class HostInspector(
         {
             return found with
             {
-                Reason = $"dotnet --list-sdks printed nothing this build can read as an SDK: {HostProbes.Excerpt(HostProbes.AsConfigured(sdks.StandardOutput, connection))}",
+                Reason = $"dotnet --list-sdks printed nothing this build can read as an SDK: {HostProbes.Quoted(HostProbes.AsConfigured(sdks.StandardOutput, connection))}",
             };
         }
 
@@ -449,7 +452,6 @@ public sealed class HostInspector(
             connection,
             connection.Spell(DotnetProgram),
             ToolPackage.ListArguments(),
-            ProbeBudget,
             cancellationToken).ConfigureAwait(false);
 
         if (!tools.Succeeded || !HostProbes.TryReadToolVersion(tools.StandardOutput, ToolPackage.Id, out var installed))
@@ -505,7 +507,6 @@ public sealed class HostInspector(
             connection,
             connection.Spell(DotnetProgram),
             ToolPackage.ChangeArguments(verb, version),
-            ToolPackage.ChangeBudget,
             cancellationToken);
 
     /// <summary>Asks DssHarness on the host which build it is and what the host is, and checks the build is this machine's.</summary>
@@ -569,19 +570,14 @@ public sealed class HostInspector(
             Builds = [.. questions.Room.Builds],
         };
 
-        var budget = ProbeBudget
-            + (EmulatorProbe.WitnessBudget * emulators.Count)
-            + (DeveloperEnvironmentProbe.ProbeBudget * questions.DeveloperEnvironments.Count)
-            + ((DeveloperEnvironmentProvider.CaptureBudget + ProgramFloors.Allowance(questions.Floors.Count)) * questions.Looks.Count)
-            + ProgramFloors.Allowance(questions.Floors.Count);
-
-        // One line, held open until the host has answered: a budget that runs out stops ssh or wsl.exe here,
-        // which ends the input there and stops any witness still running.
+        // One line, held open until the host has answered, however long its witnesses, developer environments and floors
+        // take there - each waited for to its own end on the host, and the whole told here while it lasts. The person's
+        // stop ends ssh or wsl.exe here, which ends the input there and stops any witness still running.
         ProcessResult answer;
 
         try
         {
-            answer = await RunAsync(connection, toolPath, [HostAgentProtocol.CommandName], budget, cancellationToken, HostAgentProtocol.Input(request), holdOpen: true)
+            answer = await RunAsync(connection, toolPath, [HostAgentProtocol.CommandName], cancellationToken, HostAgentProtocol.Input(request), holdOpen: true)
                 .ConfigureAwait(false);
         }
         catch (HarnessException ex) when (HostConnector.Unreached(ex) is { } unreached)
@@ -608,7 +604,7 @@ public sealed class HostInspector(
 
         if (start < 0)
         {
-            return Stopped(unread, $"{ToolPackage.Id} at {shownTool} answered with no document: {HostProbes.Excerpt(HostProbes.AsConfigured(answer.StandardOutput, connection))}");
+            return Stopped(unread, $"{ToolPackage.Id} at {shownTool} answered with no document: {HostProbes.Quoted(HostProbes.AsConfigured(answer.StandardOutput, connection))}");
         }
 
         var document = answer.StandardOutput[start..];
@@ -729,8 +725,8 @@ public sealed class HostInspector(
     private async Task<(string? Reason, bool Running)> WhyBusyAsync(HostConnection connection, bool windowsHost, CancellationToken cancellationToken)
     {
         var listing = windowsHost
-            ? await RunAsync(connection, "tasklist", ["/FO", "CSV", "/NH"], ProbeBudget, cancellationToken).ConfigureAwait(false)
-            : await RunAsync(connection, "ps", ["-A", "-o", "comm="], ProbeBudget, cancellationToken).ConfigureAwait(false);
+            ? await RunAsync(connection, "tasklist", ["/FO", "CSV", "/NH"], cancellationToken).ConfigureAwait(false)
+            : await RunAsync(connection, "ps", ["-A", "-o", "comm="], cancellationToken).ConfigureAwait(false);
 
         if (!listing.Succeeded)
         {
@@ -784,24 +780,32 @@ public sealed class HostInspector(
         return sdks is null ? where : HostProbes.Failure(where, sdks, connection);
     }
 
+    /// <summary>
+    /// Runs <paramref name="program"/> on the host, waited for to its end (<see cref="ProgramWait"/>): an install of the
+    /// tool on a slow link, or a host whose witnesses take minutes, is waited for and told every few minutes, and only the
+    /// person's stop - or ssh's own bounds, which the host's settings give - ends it.
+    /// </summary>
     private Task<ProcessResult> RunAsync(
         HostConnection connection,
         string program,
         IReadOnlyList<string> arguments,
-        TimeSpan budget,
         CancellationToken cancellationToken,
         ChildInput? input = null,
         bool holdOpen = false)
-        => _hostCommands.RunAsync(
-            connection,
-            new HostCommand
-            {
-                Program = program,
-                Arguments = arguments,
-                Timeout = budget,
-                StandardInput = input ?? string.Empty,
-                HoldStandardInputOpen = holdOpen,
-            },
+        => ProgramWait.ToItsEndAsync(
+            token => _hostCommands.RunAsync(
+                connection,
+                new HostCommand
+                {
+                    Program = program,
+                    Arguments = arguments,
+                    StandardInput = input ?? string.Empty,
+                    HoldStandardInputOpen = holdOpen,
+                },
+                token),
+            $"'{program}' on {connection.Host} to answer",
+            ProgramWait.Told(_output, ToolPackage.Command),
+            _clock,
             cancellationToken);
 
     /// <summary><paramref name="text"/>, which the host said, under the name the configuration declares; nothing where it said nothing.</summary>
@@ -852,7 +856,7 @@ public sealed class HostInspector(
 
         try
         {
-            using var parsed = JsonDocument.Parse(document);
+            using var parsed = JsonDocument.Parse(document, JsonDepth.Document);
             var answer = parsed.RootElement;
 
             if (answer.ValueKind == JsonValueKind.Object

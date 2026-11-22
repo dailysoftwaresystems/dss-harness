@@ -21,7 +21,7 @@ namespace DssHarness.Tests;
 /// <summary>
 /// The harness's own tools, run for one agent's run on real trees: each call decided before it runs - its tool among
 /// those given, its input held to the schema, each path held to the roots and asked of the policy - then run, its answer
-/// masked and cut, and recorded.
+/// masked and paged, and recorded.
 /// </summary>
 public sealed class AgentToolRuntimeTests : IDisposable
 {
@@ -75,17 +75,17 @@ public sealed class AgentToolRuntimeTests : IDisposable
         _temp.Dispose();
     }
 
-    /// <summary>A step is offered the tools of its capabilities, by name; the run's reporter the three that read and no other.</summary>
+    /// <summary>A step is offered the tools of its capabilities, by name; the run's reporter the four that read and no other.</summary>
     [Fact]
     public void TheToolsOffered_AreThoseOfTheStepsCapabilities()
     {
         Assert.Equal(
             [AgentTools.CreateDirectory, AgentTools.CreateFile, AgentTools.DeleteDirectory, AgentTools.DeleteFile, AgentTools.FindFiles, AgentTools.InsertInFile,
-             AgentTools.MovePath, AgentTools.ReplaceInFile, AgentTools.RunCommand, AgentTools.SearchFiles, AgentTools.ViewFile, AgentTools.WebFetch],
+             AgentTools.MovePath, AgentTools.ReadResult, AgentTools.ReplaceInFile, AgentTools.RunCommand, AgentTools.SearchFiles, AgentTools.ViewFile, AgentTools.WebFetch],
             Names(Open()));
-        Assert.Equal([AgentTools.FindFiles, AgentTools.SearchFiles, AgentTools.ViewFile], Names(Open(capabilities: [AgentCapability.Read])));
-        Assert.Equal([AgentTools.FindFiles, AgentTools.SearchFiles, AgentTools.ViewFile, AgentTools.WebFetch], Names(Open(capabilities: [AgentCapability.Read, AgentCapability.Web])));
-        Assert.Equal([AgentTools.FindFiles, AgentTools.SearchFiles, AgentTools.ViewFile], Names(Open(reporterRoot: _worktree)));
+        Assert.Equal([AgentTools.FindFiles, AgentTools.ReadResult, AgentTools.SearchFiles, AgentTools.ViewFile], Names(Open(capabilities: [AgentCapability.Read])));
+        Assert.Equal([AgentTools.FindFiles, AgentTools.ReadResult, AgentTools.SearchFiles, AgentTools.ViewFile, AgentTools.WebFetch], Names(Open(capabilities: [AgentCapability.Read, AgentCapability.Web])));
+        Assert.Equal([AgentTools.FindFiles, AgentTools.ReadResult, AgentTools.SearchFiles, AgentTools.ViewFile], Names(Open(reporterRoot: _worktree)));
 
         static IEnumerable<string> Names(AgentToolRuntime runtime) => runtime.Tools.Select(tool => tool.Name);
     }
@@ -125,7 +125,7 @@ public sealed class AgentToolRuntimeTests : IDisposable
         Assert.True(runtime.Locks(new AgentToolCallRequest("call_3", AgentMeasureSupport.ToolName, """{"leg":"windows","variant":"debug","filter":"","cell":"x"}""")));
 
         var passed = await Call(runtime, AgentMeasureSupport.ToolName, "toolu_01:A", ("leg", "windows"), ("variant", "debug"), ("filter", "Shape"), ("cell", "the good cell"));
-        var records = Path.Combine(_step, AgentMeasureSupport.RecordsDirectoryName, "toolu_01_A");
+        var records = Path.Combine(_step, AgentMeasureSupport.RecordsDirectoryName, AgentCallRecords.NameOf("toolu_01:A"));
 
         Assert.True(passed.Ok, passed.Text);
         Assert.Equal(new AgentMeasureCall("toolu_01:A", "windows", "debug", "Shape", "the good cell", records), asked);
@@ -185,7 +185,7 @@ public sealed class AgentToolRuntimeTests : IDisposable
         var result = await Call(runtime, AgentTools.RunCommand, ("program", "git"));
 
         Assert.False(result.Ok);
-        Assert.Equal("'run_command' is no tool this step is given: it is given find_files, search_files, view_file", result.Text);
+        Assert.Equal("'run_command' is no tool this step is given: it is given find_files, read_result, search_files, view_file", result.Text);
 
         var denied = Assert.Single(_events.All.OfType<PermissionDenied>());
         Assert.Equal((AgentTools.RunCommand, AgentTools.RunCommand, AgentToolRuntime.ToolsRule), (denied.Tool, denied.Subject, denied.Rule));
@@ -205,7 +205,7 @@ public sealed class AgentToolRuntimeTests : IDisposable
     public async Task AnInputThatDoesNotHold_Fails_AndSaysHowTheToolIsCalled()
     {
         var runtime = Open();
-        const string Usage = "view_file takes path (string), start_line? (integer), end_line? (integer)";
+        const string Usage = "view_file takes path (string), page? (integer), start_line? (integer), end_line? (integer)";
 
         var missing = await runtime.RunAsync(new AgentToolCallRequest("a", AgentTools.ViewFile, "{}"), Token);
         Assert.False(missing.Ok);
@@ -230,12 +230,15 @@ public sealed class AgentToolRuntimeTests : IDisposable
         Assert.Equal(0, runtime.Tally.Denials);
     }
 
-    /// <summary>A file is viewed numbered, from a line to a line; a long one says how to ask for the rest; a directory is listed.</summary>
+    /// <summary>
+    /// A file is viewed numbered, a page at a time - each page saying which of how many it is and how to ask for the next -
+    /// or from a line to a line within the page that holds the first, saying how to ask for the rest; a directory is listed.
+    /// </summary>
     [Fact]
     public async Task AView_NumbersItsLines_AndListsADirectory()
     {
         Write("a.txt", "one\ntwo\nthree\n");
-        Write("long.txt", string.Concat(Enumerable.Range(1, 2500).Select(line => $"l{line}\n")));
+        Write("long.txt", string.Concat(Enumerable.Range(1, 5000).Select(line => $"l{line}\n")));
         Write("empty.txt", string.Empty);
         Directory.CreateDirectory(Path.Combine(_worktree, "src"));
         File.WriteAllBytes(Path.Combine(_worktree, "bin.dat"), [0x61, 0x00, 0x62]);
@@ -247,15 +250,33 @@ public sealed class AgentToolRuntimeTests : IDisposable
         Assert.Equal("'a.txt' has 3 line(s): start_line 4 is past its end", (await Call(runtime, AgentTools.ViewFile, ("path", "a.txt"), ("start_line", 4))).Text);
         Assert.Equal("end_line 1 is before start_line 2", (await Call(runtime, AgentTools.ViewFile, ("path", "a.txt"), ("start_line", 2), ("end_line", 1))).Text);
 
-        // A number past what a double holds is past the bound, never a fault.
+        // A number past what a double holds is past the file's end, never a fault.
         var huge = await runtime.RunAsync(new AgentToolCallRequest("h", AgentTools.ViewFile, """{"path":"a.txt","start_line":1e400}"""), Token);
-        Assert.Equal("'a.txt' has 3 line(s): start_line 2147483647 is past its end", huge.Text);
+        Assert.Equal($"'a.txt' has 3 line(s): start_line {long.MaxValue} is past its end", huge.Text);
 
         var first = (await View(runtime, "long.txt")).Text;
-        Assert.StartsWith("1\tl1\n", first, StringComparison.Ordinal);
-        Assert.EndsWith("2000\tl2000\n[lines 1-2000 of 2500; ask again with start_line 2001]", first, StringComparison.Ordinal);
-        Assert.EndsWith("2500\tl2500", (await Call(runtime, AgentTools.ViewFile, ("path", "long.txt"), ("start_line", 2001))).Text, StringComparison.Ordinal);
-        Assert.EndsWith("2000\tl2000\n[lines 1-2000 of 2500; ask again with start_line 2001]", (await Call(runtime, AgentTools.ViewFile, ("path", "long.txt"), ("end_line", 2500))).Text, StringComparison.Ordinal);
+        Assert.StartsWith("page 1 of 2 · 5000 results · ask again with page: 2 for the next\n1\tl1\n", first, StringComparison.Ordinal);
+        var lastOfFirst = int.Parse(first.Split('\n')[^1].Split('\t')[0], System.Globalization.CultureInfo.InvariantCulture);
+        Assert.Equal($"{lastOfFirst}\tl{lastOfFirst}", first.Split('\n')[^1]);
+
+        var second = await Call(runtime, AgentTools.ViewFile, ("path", "long.txt"), ("page", 2));
+        Assert.Null(second.File);
+        Assert.StartsWith($"page 2 of 2 · the last\n{lastOfFirst + 1}\tl{lastOfFirst + 1}\n", second.Text, StringComparison.Ordinal);
+        Assert.EndsWith("\n5000\tl5000", second.Text, StringComparison.Ordinal);
+        Assert.Equal("page 3 of 'view_file long.txt': it has 2 pages (1 to 2)", (await Call(runtime, AgentTools.ViewFile, ("path", "long.txt"), ("page", 3))).Text);
+        Assert.Equal("page is 0: pages start at 1", (await Call(runtime, AgentTools.ViewFile, ("path", "long.txt"), ("page", 0))).Text);
+        Assert.Equal(
+            "page and start_line or end_line are two ways to ask for a part of a file: give page alone, or a range",
+            (await Call(runtime, AgentTools.ViewFile, ("path", "long.txt"), ("page", 1), ("start_line", 2))).Text);
+
+        Assert.EndsWith(
+            $"{lastOfFirst}\tl{lastOfFirst}\n[lines 1-{lastOfFirst} of 5000; ask again with start_line {lastOfFirst + 1}]",
+            (await Call(runtime, AgentTools.ViewFile, ("path", "long.txt"), ("end_line", 5000))).Text,
+            StringComparison.Ordinal);
+        var rest = (await Call(runtime, AgentTools.ViewFile, ("path", "long.txt"), ("start_line", lastOfFirst + 1))).Text;
+        Assert.StartsWith($"{lastOfFirst + 1}\tl{lastOfFirst + 1}\n", rest, StringComparison.Ordinal);
+        Assert.EndsWith("\n5000\tl5000", rest, StringComparison.Ordinal);
+        Assert.Equal("4999\tl4999\n5000\tl5000", (await Call(runtime, AgentTools.ViewFile, ("path", "long.txt"), ("start_line", 4999), ("end_line", 5000))).Text);
 
         Assert.Equal("'empty.txt' is empty", (await View(runtime, "empty.txt")).Text);
         Assert.Equal($"'bin.dat' is binary: {EncodedText.BinaryWhy}", (await View(runtime, "bin.dat")).Text);
@@ -265,40 +286,65 @@ public sealed class AgentToolRuntimeTests : IDisposable
     }
 
     /// <summary>
-    /// A view is held under the cap of a call's answer, so it is never cut: it stops at the last whole line the bound holds
-    /// and says how to ask for the rest, and a line longer than the bound is given as far as it reaches, and said so.
+    /// A line of 30 MB - a minified bundle's - is reachable page by page: page 1 gives its first piece numbered and marked
+    /// where it goes on, each page after it the next piece, marked where it went on and goes on, and the pieces, read
+    /// one after another, are the line whole; a range that starts at it says on which page it goes on.
     /// </summary>
     [Fact]
-    public async Task AView_IsHeldUnderTheCap_AndALongLineIsGivenAsFarAsItReaches()
+    public async Task AThirtyMegabyteLine_IsReachablePageByPage()
     {
-        var line = new string('x', 99);
-        Write("wide.txt", string.Concat(Enumerable.Repeat(line + "\n", 400)));
+        var line = string.Concat(Enumerable.Range(0, 30 * 1024 * 1024 / 8).Select(at => (at % 100_000_000).ToString("D8", System.Globalization.CultureInfo.InvariantCulture)));
+        Write("bundle.min.js", line + "\nafter\n");
         var runtime = Open();
 
-        var shown = 0;
-        var length = 0;
+        var first = await View(runtime, "bundle.min.js");
+        var header = first.Text.Split('\n')[0];
+        var pages = int.Parse(header.Split(' ')[3], System.Globalization.CultureInfo.InvariantCulture);
+        Assert.Equal($"page 1 of {pages} · 2 results · ask again with page: 2 for the next", header);
+        Assert.True(pages > 1000, $"a 30 MB line is {pages} pages");
+        Assert.Null(first.File);
 
-        while ($"{shown + 1}\t{line}\n".Length + length <= AgentTools.MostViewedCharacters)
+        var given = new StringBuilder();
+        var piece = first.Text.Split('\n')[1];
+        Assert.StartsWith("1\t", piece, StringComparison.Ordinal);
+        Assert.EndsWith("…", piece, StringComparison.Ordinal);
+        given.Append(piece[2..^1]);
+
+        for (var page = 2; page <= pages; page++)
         {
-            length += $"{shown + 1}\t{line}\n".Length;
-            shown++;
+            var text = (await Call(runtime, AgentTools.ViewFile, $"page_{page}", ("path", "bundle.min.js"), ("page", page))).Text;
+            Assert.True(text.Length <= DssHarness.Core.Pages.PageRoom.ModelAnswer, $"page {page} is {text.Length} characters");
+            var body = text.Split('\n')[1];
+
+            // Each page goes on with the line's next piece, until a page begins with the line after it.
+            if (body.StartsWith('…'))
+            {
+                given.Append(body.EndsWith('…') ? body[1..^1] : body[1..]);
+            }
+            else
+            {
+                Assert.Equal(("2\tafter", pages), (body, page));
+            }
+
+            if (page == pages)
+            {
+                Assert.EndsWith("\n2\tafter", text, StringComparison.Ordinal);
+            }
         }
 
-        var wide = await View(runtime, "wide.txt");
-        Assert.Null(wide.File);
+        Assert.Equal(line, given.ToString());
         Assert.Equal(
-            string.Concat(Enumerable.Range(1, shown).Select(at => $"{at}\t{line}\n")) + $"[lines 1-{shown} of 400; ask again with start_line {shown + 1}]",
-            wide.Text);
+            $"1\t{piece[2..]}\n[line 1 goes on: ask again with page: 2]",
+            (await Call(runtime, AgentTools.ViewFile, ("path", "bundle.min.js"), ("start_line", 1), ("end_line", 1))).Text);
+    }
 
-        var longest = new string('y', 40_000);
-        Write("long.txt", longest);
-        var cut = await View(runtime, "long.txt");
-        Assert.Null(cut.File);
-        Assert.Equal(
-            $"1\t{longest[..(AgentTools.MostViewedCharacters - 2)]}\n[line 1 is 40000 characters: the first {AgentTools.MostViewedCharacters - 2} are given]",
-            cut.Text);
-
-        // A directory's entries are held under the cap as a file's lines are, and paged by the same start.
+    /// <summary>
+    /// A directory's entries are given whole, every one, from a start to an end where they are given: a listing longer
+    /// than a page is the call's answer kept whole and given as its first page, every page of it by read_result.
+    /// </summary>
+    [Fact]
+    public async Task ADirectoryOfManyEntries_IsGivenWhole_APageAtATime()
+    {
         var names = Enumerable.Range(0, 400).Select(at => $"{at:D4}{new string('n', 116)}").ToList();
 
         foreach (var name in names)
@@ -306,35 +352,20 @@ public sealed class AgentToolRuntimeTests : IDisposable
             Write(Path.Combine("many", name), string.Empty);
         }
 
-        var heading = "many/ holds 400 entry(ies):\n";
-        var listed = 0;
+        var runtime = Open();
+        var heading = "many/ holds 400 entry(ies):";
 
-        while (heading.Length + names.Take(listed + 1).Sum(name => name.Length + 1) <= AgentTools.MostViewedCharacters)
-        {
-            listed++;
-        }
+        var listed = await Call(runtime, AgentTools.ViewFile, "listing", ("path", "many"));
+        Assert.Equal(AgentCallRecords.ResultFile(_step, "listing"), listed.File);
+        Assert.Equal($"{heading}\n{string.Join('\n', names)}", File.ReadAllText(listed.File!));
+        Assert.StartsWith("page 1 of 2 · 401 results · ask read_result with id: 'listing', page: 2 for the next", listed.Text, StringComparison.Ordinal);
 
-        var page = await View(runtime, "many");
-        Assert.Null(page.File);
-        Assert.Equal($"{heading}{string.Join('\n', names.Take(listed))}\n[entries 1-{listed} of 400; ask again with start_line {listed + 1}]", page.Text);
-
-        var next = await Call(runtime, AgentTools.ViewFile, ("path", "many"), ("start_line", listed + 1), ("end_line", listed + 2));
-        Assert.Equal($"{heading}{string.Join('\n', names.Skip(listed).Take(2))}", next.Text);
+        var next = await Call(runtime, AgentTools.ViewFile, ("path", "many"), ("start_line", 399), ("end_line", 400));
+        Assert.Equal($"{heading}\n{string.Join('\n', names.Skip(398))}", next.Text);
         Assert.Equal("many/ holds 400 entry(ies): start_line 401 is past its end", (await Call(runtime, AgentTools.ViewFile, ("path", "many"), ("start_line", 401))).Text);
-
-        // The room left for the notes holds them at their widest: every number at the most a count or a length can be.
-        var widest = $"\n[line {int.MaxValue} is {int.MaxValue} characters: the first {int.MaxValue} are given]\n".Length
-            + $"[entries {int.MaxValue}-{int.MaxValue} of {int.MaxValue}; ask again with start_line {int.MaxValue + 1L}]".Length;
-        Assert.Equal(AgentCallRecords.ResultCap - widest, AgentTools.MostViewedCharacters);
-
-        // Far into a file both notes are as wide as their numbers, and the view still fits under the cap whole.
-        Write("far.txt", string.Concat(Enumerable.Repeat("a\n", 9_999)) + longest + "\nb");
-        var far = await Call(runtime, AgentTools.ViewFile, ("path", "far.txt"), ("start_line", 10_000));
-        Assert.Null(far.File);
         Assert.Equal(
-            $"10000\t{longest[..(AgentTools.MostViewedCharacters - 6)]}\n[line 10000 is 40000 characters: the first {AgentTools.MostViewedCharacters - 6} are given]\n"
-                + "[lines 10000-10000 of 10001; ask again with start_line 10001]",
-            far.Text);
+            "'many/' is a directory, and page is a file's: its entries are given whole, from start_line to end_line where they are given, a page at a time by read_result where they pass one",
+            (await Call(runtime, AgentTools.ViewFile, ("path", "many"), ("page", 2))).Text);
     }
 
     /// <summary>A path outside the agent's roots is refused by them; one inside a read-only root is read, and said whole.</summary>
@@ -384,34 +415,6 @@ public sealed class AgentToolRuntimeTests : IDisposable
         Assert.True((await Call(runtime, AgentTools.InsertInFile, ("path", "a.txt"), ("line", 3), ("text", "end"))).Ok);
         Assert.Equal("zero\nchanged\nend\n", Read("a.txt"));
         Assert.Equal("line is 9, and the file has 3 line(s): give 1 to 4, one past the last to append", (await Call(runtime, AgentTools.InsertInFile, ("path", "a.txt"), ("line", 9), ("text", "x"))).Text);
-
-        // A file past the bound is held whole by neither: refused before it is read, a view of it and an edit of one grown past it.
-        var past = new string('x', (int)AgentTools.MostViewedBytes + 1);
-        var refused = $"'a.txt' holds {DiskSpace.Size(AgentTools.MostViewedBytes + 1)}, past the 16 MiB a view or an edit holds whole: read or search it with a command";
-        await View(runtime, "a.txt");
-        Write("a.txt", past);
-        Assert.Equal(refused, (await Replace(runtime, "a.txt", "x", "y")).Text);
-        Assert.Equal(refused, (await View(runtime, "a.txt")).Text);
-        Assert.Equal(past.Length, new FileInfo(Path.Combine(_worktree, "a.txt")).Length);
-    }
-
-    /// <summary>
-    /// A file grown past the bound since the look that measured it - by a command still running, in the instant between
-    /// the look and the read - is refused with nothing of it read, never read past the bound the read was given.
-    /// </summary>
-    [Fact]
-    public async Task AFileGrownPastTheBoundSinceItWasMeasured_IsRefusedWithNothingOfItRead()
-    {
-        Write("a.txt", new string('x', (int)AgentTools.MostViewedBytes + 1));
-        var full = Path.Combine(_worktree, "a.txt");
-        var runtime = Open(fileSystem: new Understated(_harness.FileSystem, full));
-
-        var viewed = await View(runtime, "a.txt");
-
-        Assert.Equal(
-            (false, $"view_file failed: '{full}' holds more than {DiskSpace.Size(AgentTools.MostViewedBytes)} now, past what it held when it was measured, and nothing of it was read"),
-            (viewed.Ok, viewed.Text));
-        Assert.Equal((int)AgentTools.MostViewedBytes + 1, new FileInfo(full).Length);
     }
 
     /// <summary>
@@ -934,20 +937,29 @@ public sealed class AgentToolRuntimeTests : IDisposable
         Assert.Equal("src/a.cs\nsrc/deep/b.cs\n[1 file(s) you may not read were left out]", (await Call(runtime, AgentTools.FindFiles, ("pattern", "*.cs"))).Text);
     }
 
-    /// <summary>A listing gives at most its bound of files, and says how many more there were.</summary>
+    /// <summary>
+    /// A listing gives every file it matches - none left out past a count - its answer kept whole in the call's file and
+    /// given a page at a time where it passes one, each page by read_result with the call's id.
+    /// </summary>
     [Fact]
-    public async Task FindFiles_GivesAtMostItsBound()
+    public async Task FindFiles_GivesEveryMatch_APageAtATime()
     {
-        foreach (var at in Enumerable.Range(0, AgentTools.MostFound + 1))
+        foreach (var at in Enumerable.Range(0, 3000))
         {
-            Write($"many/f{at:D3}.txt", string.Empty);
+            Write($"many/f{at:D4}.txt", string.Empty);
         }
 
-        var found = await Call(Open(), AgentTools.FindFiles, ("pattern", "*.txt"), ("path", "many"));
+        var runtime = Open();
+        var found = await Call(runtime, AgentTools.FindFiles, "find", ("pattern", "*.txt"), ("path", "many"));
+        var expected = Enumerable.Range(0, 3000).Select(at => $"many/f{at:D4}.txt").ToList();
 
-        Assert.Equal(
-            string.Join('\n', Enumerable.Range(0, AgentTools.MostFound).Select(at => $"many/f{at:D3}.txt")) + "\n[1 more file(s) not shown: narrow the pattern or the directory]",
-            found.Text);
+        Assert.True(found.Ok);
+        Assert.Equal(AgentCallRecords.ResultFile(_step, "find"), found.File);
+        Assert.Equal(string.Join('\n', expected), File.ReadAllText(found.File!));
+        Assert.StartsWith($"page 1 of 2 · 3000 results · ask read_result with id: 'find', page: 2 for the next · the whole is '{found.File}'\nmany/f0000.txt\n", found.Text, StringComparison.Ordinal);
+
+        var second = await Call(runtime, AgentTools.ReadResult, ("id", "find"), ("page", 2));
+        Assert.Equal(expected, [.. found.Text.Split('\n').Skip(1), .. second.Text.Split('\n').Skip(1)]);
     }
 
     /// <summary>Text is searched a line at a time: each hit with its context, bounded, the rest counted, binary files passed over.</summary>
@@ -961,49 +973,137 @@ public sealed class AgentToolRuntimeTests : IDisposable
         var runtime = Open(restrictions: [Restriction("Read(src/secret.cs)")]);
 
         Assert.Equal(
-            "src/a.cs:2: beta\nsrc/b.cs:1: beta two\n[1 file(s) you may not read were left out]\n[1 file(s) passed over: binary, over 2 MiB, or no text this tool reads]",
+            "src/a.cs:2: beta\nsrc/b.cs:1: beta two\n[1 file(s) you may not read were left out]\n[1 file(s) passed over: binary, or no text this tool reads]",
             (await Call(runtime, AgentTools.SearchFiles, ("pattern", "beta"))).Text);
         Assert.Equal(
             "src/a.cs-1- alpha\nsrc/a.cs:2: beta\nsrc/a.cs-3- gamma\n--\nsrc/b.cs:1: beta two\n[1 file(s) you may not read were left out]",
             (await Call(runtime, AgentTools.SearchFiles, ("pattern", "beta"), ("glob", "*.cs"), ("context", 1))).Text);
-        Assert.Equal(
-            "src/a.cs:2: beta\n[1 more matching line(s) not shown: narrow the search, or raise max_results]\n[1 file(s) you may not read were left out]",
-            (await Call(runtime, AgentTools.SearchFiles, ("pattern", "beta"), ("glob", "*.cs"), ("max_results", 1))).Text);
         Assert.Equal("src/a.cs:2: beta", (await Call(runtime, AgentTools.SearchFiles, ("pattern", "^BETA$"), ("case_insensitive", true), ("path", "src"), ("glob", "a.cs"))).Text);
         Assert.Equal("no line matches, in 2 file(s) read\n[1 file(s) you may not read were left out]", (await Call(runtime, AgentTools.SearchFiles, ("pattern", "zeta"), ("glob", "*.cs"))).Text);
 
-        Assert.StartsWith("pattern '(' is no .NET regular expression: ", (await Call(runtime, AgentTools.SearchFiles, ("pattern", "("))).Text, StringComparison.Ordinal);
-        Assert.Equal("context is 11, and is 0 to 10", (await Call(runtime, AgentTools.SearchFiles, ("pattern", "a"), ("context", 11))).Text);
-        Assert.Equal("max_results is 0, and is 1 to 500", (await Call(runtime, AgentTools.SearchFiles, ("pattern", "a"), ("max_results", 0))).Text);
+        Assert.Contains("'('", (await Call(runtime, AgentTools.SearchFiles, ("pattern", "("))).Text, StringComparison.Ordinal);
+        Assert.Equal("context is -1, and is 0 or more", (await Call(runtime, AgentTools.SearchFiles, ("pattern", "a"), ("context", -1))).Text);
     }
 
-    /// <summary>A search passes over a file past its bound, and refuses a pattern that takes past its time on a file's text.</summary>
+    /// <summary>
+    /// max_results is refused before anything is searched, naming page and read_result - every matching line is given, a
+    /// page at a time - however it is given; the call ran nothing.
+    /// </summary>
     [Fact]
-    public async Task SearchFiles_PassesOverAFilePastItsBound_AndRefusesAPatternPastItsTime()
+    public async Task MaxResults_IsRefusedNamingPage()
     {
-        Write("big/huge.txt", new string('a', (int)AgentFiles.MostSearchedBytes) + "\n");
-        Write("big/small.txt", "small\n");
-        Write("slow/a.txt", new string('a', 40) + "!\n");
+        Write("src/a.cs", "beta\n");
         var runtime = Open();
 
-        Assert.Equal(
-            "no line matches, in 1 file(s) read\n[1 file(s) passed over: binary, over 2 MiB, or no text this tool reads]",
-            (await Call(runtime, AgentTools.SearchFiles, ("pattern", "zz"), ("path", "big"))).Text);
-        Assert.Equal(
-            "pattern '(a+)+$' took longer than 2 s on a file's text: make it simpler",
-            (await Call(runtime, AgentTools.SearchFiles, ("pattern", "(a+)+$"), ("path", "slow"))).Text);
+        foreach (var most in new object[] { 1, 500, 0 })
+        {
+            var refused = await Call(runtime, AgentTools.SearchFiles, ("pattern", "beta"), ("max_results", most));
+
+            Assert.Equal((false, false), (refused.Ok, refused.Ran));
+            Assert.StartsWith(AgentToolRuntime.MaxResultsRetired + "; search_files takes ", refused.Text, StringComparison.Ordinal);
+            Assert.Contains("page", refused.Text, StringComparison.Ordinal);
+            Assert.Contains(AgentTools.ReadResult, refused.Text, StringComparison.Ordinal);
+        }
+
+        var schema = JsonNode.Parse(AgentTools.All(AgentCommandSettings.Default).Single(tool => tool.Name == AgentTools.SearchFiles).Schema)!;
+        Assert.Null(schema["properties"]!["max_results"]);
     }
 
-    /// <summary>A pattern's time is a file's, its lines together: past the bound across them the search is refused, though no one line is.</summary>
+    /// <summary>A hit is given with as many lines around it as context asks - fifty, past the ten it was once held to - each numbered.</summary>
     [Fact]
-    public async Task SearchFiles_HoldsAPatternToItsTimeOnAFileWhole()
+    public async Task AContextOfFiftyLines_IsGiven()
     {
-        Write("lines/a.txt", "a\nb\nc\nd\ne\n");
-        var runtime = Open(clock: new TickingClock());
+        Write("long.txt", string.Join('\n', Enumerable.Range(1, 200).Select(at => at == 100 ? "the hit" : $"line {at}")) + "\n");
+        var runtime = Open();
+
+        var hit = await Call(runtime, AgentTools.SearchFiles, ("pattern", "^the hit$"), ("context", 50));
 
         Assert.Equal(
-            "pattern 'z' took longer than 2 s on a file's text: make it simpler",
-            (await Call(runtime, AgentTools.SearchFiles, ("pattern", "z"), ("path", "lines"))).Text);
+            string.Join('\n', [.. Enumerable.Range(50, 50).Select(at => $"long.txt-{at}- line {at}"), "long.txt:100: the hit", .. Enumerable.Range(101, 50).Select(at => $"long.txt-{at}- line {at}")]),
+            hit.Text);
+    }
+
+    /// <summary>
+    /// A thousand matching lines - twice the 500 a search once gave at most - are every one given: the answer kept whole in
+    /// the call's file and its first page given, every page after it by read_result, every hit once and in order.
+    /// </summary>
+    [Fact]
+    public async Task AThousandMatches_AreReachableByPage()
+    {
+        Write("hits.txt", string.Concat(Enumerable.Range(1, 1000).Select(at => $"match {at:D4} {new string('m', 60)}\n")));
+        var runtime = Open();
+
+        var found = await Call(runtime, AgentTools.SearchFiles, "hits", ("pattern", "^match"));
+        var expected = Enumerable.Range(1, 1000).Select(at => $"hits.txt:{at}: match {at:D4} {new string('m', 60)}").ToList();
+
+        Assert.Equal(AgentCallRecords.ResultFile(_step, "hits"), found.File);
+        Assert.Equal(string.Join('\n', expected), File.ReadAllText(found.File!));
+
+        var header = found.Text.Split('\n')[0];
+        var pages = int.Parse(header.Split(' ')[3], System.Globalization.CultureInfo.InvariantCulture);
+        Assert.Equal($"page 1 of {pages} · 1000 results · ask read_result with id: 'hits', page: 2 for the next · the whole is '{found.File}'", header);
+
+        var given = found.Text.Split('\n').Skip(1).ToList();
+
+        for (var page = 2; page <= pages; page++)
+        {
+            given.AddRange((await Call(runtime, AgentTools.ReadResult, $"read_{page}", ("id", "hits"), ("page", page))).Text.Split('\n').Skip(1));
+        }
+
+        Assert.Equal(expected, given);
+    }
+
+    /// <summary>
+    /// A file of 50 MB - past the 2 MiB a search once passed over - is searched whole, a line at a time: the hit on its
+    /// last line is found.
+    /// </summary>
+    [Fact]
+    public async Task AFiftyMegabyteFile_IsSearched()
+    {
+        var full = Path.Combine(_worktree, "big", "dump.sql");
+        Directory.CreateDirectory(Path.GetDirectoryName(full)!);
+
+        using (var writer = new StreamWriter(full, append: false, new UTF8Encoding(false)))
+        {
+            var row = "INSERT INTO t VALUES (" + new string('1', 77) + ");";
+
+            for (var at = 0; at < 50 * 1024 * 1024 / (row.Length + 1); at++)
+            {
+                writer.Write(row);
+                writer.Write('\n');
+            }
+
+            writer.Write("-- the needle\n");
+        }
+
+        Assert.True(new FileInfo(full).Length > 50L * 1000 * 1000);
+
+        var found = await Call(Open(), AgentTools.SearchFiles, ("pattern", "needle"), ("path", "big"));
+
+        Assert.True(found.Ok, found.Text);
+        Assert.Matches(@"^big/dump\.sql:\d+: -- the needle$", found.Text);
+    }
+
+    /// <summary>
+    /// A search's pattern is matched in time linear in the text it reads, with no time bound: a pattern that would
+    /// backtrack without end, on a long line, ends at once; one that needs backtracking is refused, naming what it holds.
+    /// </summary>
+    [Fact]
+    public async Task SearchPatterns_AreLinear()
+    {
+        Write("slow/a.txt", new string('a', 1_000_000) + "!\n");
+        var runtime = Open();
+
+        var started = System.Diagnostics.Stopwatch.StartNew();
+        var none = await Call(runtime, AgentTools.SearchFiles, ("pattern", "(a+)+b"), ("path", "slow"));
+
+        Assert.Equal((true, "no line matches, in 1 file(s) read"), (none.Ok, none.Text));
+        Assert.True(started.Elapsed < TimeSpan.FromSeconds(30), $"a linear match took {started.Elapsed}");
+
+        var back = await Call(runtime, AgentTools.SearchFiles, ("pattern", "(a)\\1"), ("path", "slow"));
+        Assert.Equal((false, false), (back.Ok, back.Ran));
+        Assert.Contains("'(a)\\1'", back.Text, StringComparison.Ordinal);
+        Assert.EndsWith(": write it without that", back.Text, StringComparison.Ordinal);
     }
 
     /// <summary>A search stops between any two lines of a file when it is stopped, not only between files.</summary>
@@ -1012,10 +1112,28 @@ public sealed class AgentToolRuntimeTests : IDisposable
     {
         Write("lines/a.txt", "a\nb\nc\nd\ne\n");
         using var stop = new CancellationTokenSource();
-        var files = new AgentFiles(_harness.GitClient, _harness.FileSystem, new StoppingClock(stop));
+        var files = new AgentFiles(_harness.GitClient, _harness.FileSystem);
+        var seen = 0;
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => files.SearchAsync(
-            Path.Combine(_worktree, "lines"), new Regex("z"), null, StringComparison.Ordinal, 0, 10, _ => true, stop.Token));
+            Path.Combine(_worktree, "lines"),
+            new Regex("[a-e]"),
+            null,
+            StringComparison.Ordinal,
+            0,
+            _ => true,
+            (_, _) =>
+            {
+                if (++seen == 2)
+                {
+                    stop.Cancel();
+                }
+
+                return ValueTask.CompletedTask;
+            },
+            stop.Token));
+
+        Assert.Equal(2, seen);
     }
 
     /// <summary>
@@ -1098,7 +1216,7 @@ public sealed class AgentToolRuntimeTests : IDisposable
 
         using (var atFirst = CancellationTokenSource.CreateLinkedTokenSource(Token))
         {
-            var files = new AgentFiles(_harness.GitClient, new StoppingAtKinds(_harness.FileSystem, atFirst, 1), TimeProvider.System);
+            var files = new AgentFiles(_harness.GitClient, new StoppingAtKinds(_harness.FileSystem, atFirst, 1));
 
             await Assert.ThrowsAnyAsync<OperationCanceledException>(() => files.ListAsync(directory, atFirst.Token));
         }
@@ -1206,7 +1324,9 @@ public sealed class AgentToolRuntimeTests : IDisposable
     [Fact]
     public async Task ATurnsReads_RunAtMostTheBoundAtOnce()
     {
-        foreach (var at in Enumerable.Range(0, 6))
+        var count = (AgentToolRuntime.MostTogether * 2) + 2;
+
+        foreach (var at in Enumerable.Range(0, count))
         {
             Write($"f{at}.txt", $"{at}");
         }
@@ -1214,10 +1334,20 @@ public sealed class AgentToolRuntimeTests : IDisposable
         var reads = new SlowReads(_harness.FileSystem, _worktree);
         var runtime = Open(fileSystem: reads);
 
-        var results = await runtime.RunTurnAsync([.. Enumerable.Range(0, 6).Select(at => Request($"{at}", AgentTools.ViewFile, ("path", $"f{at}.txt")))], Token);
+        var results = await runtime.RunTurnAsync([.. Enumerable.Range(0, count).Select(at => Request($"{at}", AgentTools.ViewFile, ("path", $"f{at}.txt")))], Token);
 
-        Assert.Equal(Enumerable.Range(0, 6).Select(at => $"1\t{at}"), results.Select(result => result.Text));
+        Assert.Equal(Enumerable.Range(0, count).Select(at => $"1\t{at}"), results.Select(result => result.Text));
         Assert.Equal(AgentToolRuntime.MostTogether, reads.Most);
+    }
+
+    /// <summary>
+    /// The share of a turn's reads that run at once is the one owner's - the graph's share of the machine's processors
+    /// beside a build - never a number of the runtime's own: one at the least.
+    /// </summary>
+    [Fact]
+    public void TheReadShare_ComesFromItsOwner()
+    {
+        Assert.Equal(Math.Max(1, Environment.ProcessorCount / CodebaseGraphService.ReadShare), AgentToolRuntime.MostTogether);
     }
 
     /// <summary>A command runs where it is asked to start, given its input, and answers how it ended and what it printed, its log kept whole.</summary>
@@ -1413,6 +1543,33 @@ public sealed class AgentToolRuntimeTests : IDisposable
         Assert.Single(_events.All.OfType<PermissionDenied>());
     }
 
+    /// <summary>
+    /// A command whose call names no time, where the configuration names none, runs until it ends: past the two minutes a
+    /// command was once stopped at, by the clock it is timed by, it is still running, and it ends as it ends.
+    /// </summary>
+    [Fact]
+    public async Task ACommandRunsPastTwoMinutes_WhenNoTimeIsNamed()
+    {
+        var clock = new ManualClock(DateTimeOffset.Parse("2026-11-19T10:00:00Z", System.Globalization.CultureInfo.InvariantCulture));
+        var processes = new ClockedCommand(clock, TimeSpan.FromHours(3));
+        var runtime = Open(processes: processes, clock: clock);
+        var (program, arguments) = Shell("echo built", "echo built");
+
+        var built = await Call(runtime, AgentTools.RunCommand, "build", ("program", program), ("args", arguments));
+
+        Assert.True(built.Ok, built.Text);
+        Assert.Null(processes.Timeout);
+        Assert.StartsWith("exit 0, after ", built.Text, StringComparison.Ordinal);
+        Assert.Contains("after 10800.0 s", built.Text, StringComparison.Ordinal);
+
+        var configured = Open(processes: processes, clock: clock, commands: AgentCommandSettings.Default with { CommandTimeoutSeconds = 600 });
+        await Call(configured, AgentTools.RunCommand, "timed", ("program", program), ("args", arguments));
+        Assert.Equal(TimeSpan.FromSeconds(600), processes.Timeout);
+
+        await Call(configured, AgentTools.RunCommand, "asked", ("program", program), ("args", arguments), ("timeout_seconds", 7200));
+        Assert.Equal(TimeSpan.FromSeconds(7200), processes.Timeout);
+    }
+
     /// <summary>A command that runs past its time is ended whole, and says so.</summary>
     [Fact]
     public async Task RunCommand_EndsACommandPastItsTime()
@@ -1435,8 +1592,8 @@ public sealed class AgentToolRuntimeTests : IDisposable
     {
         var runtime = Open(mask: new Masking("s3cr3t"), restrictions: [Restriction("Run(npm publish *)")]);
 
-        Assert.Equal("timeout_seconds is 0, and is 1 to 3600", (await Call(runtime, AgentTools.RunCommand, ("program", "git"), ("timeout_seconds", 0))).Text);
-        Assert.Equal("timeout_seconds is 3601, and is 1 to 3600", (await Call(runtime, AgentTools.RunCommand, ("program", "git"), ("timeout_seconds", 3601))).Text);
+        Assert.Equal("timeout_seconds is 0, and is 1 to 2147483, what a command's timer holds; leave it out to run the command until it ends", (await Call(runtime, AgentTools.RunCommand, ("program", "git"), ("timeout_seconds", 0))).Text);
+        Assert.Equal("timeout_seconds is 2147484, and is 1 to 2147483, what a command's timer holds; leave it out to run the command until it ends", (await Call(runtime, AgentTools.RunCommand, ("program", "git"), ("timeout_seconds", 2147484L))).Text);
         Assert.Equal("program is empty: name the program to run", (await Call(runtime, AgentTools.RunCommand, ("program", string.Empty))).Text);
 
         var secret = await Call(runtime, AgentTools.RunCommand, ("program", "curl"), ("args", new[] { "-H", "token: s3cr3t" }));
@@ -1619,8 +1776,12 @@ public sealed class AgentToolRuntimeTests : IDisposable
 
         Assert.Equal(["alpha", "beta"], schema["properties"]!["sources"]!["items"]!["enum"]!.AsArray().Select(name => name!.GetValue<string>()));
         Assert.Equal(["query"], schema["required"]!.AsArray().Select(name => name!.GetValue<string>()));
+
+        // The page is an integer; that it is 1 and more is the runtime's own rule, said in its refusal, never the schema's.
+        Assert.Equal("integer", schema["properties"]!["page"]!["type"]!.GetValue<string>());
+        Assert.Null(schema["properties"]!["page"]!["minimum"]);
         Assert.EndsWith(
-            $" Each source gives at most {DssHarness.Core.Web.Search.WebSearchSources.DefaultResultsPerSource} results; name some in sources to ask them alone, else every one is asked. This step's sources:\n- alpha: Alpha's answers\n- beta: Beta's packages",
+            " Each source gives every result of one page of its answer; ask its next page with page, each page one more request of each source asked; name some in sources to ask them alone, else every one is asked. This step's sources:\n- alpha: Alpha's answers\n- beta: Beta's packages",
             tool.Description,
             StringComparison.Ordinal);
 
@@ -1655,7 +1816,7 @@ public sealed class AgentToolRuntimeTests : IDisposable
             result.Text);
         Assert.Equal(2, runtime.Tally.WebRequests);
         Assert.Equal(
-            [$"web-search source 'beta' answered what its kind 'json-api' (version 1) could not read: {changed}"],
+            [$"web-search source 'beta' answered what its kind 'json-api' (version 2) could not read: {changed}"],
             _events.All.OfType<Notice>().Select(notice => notice.Text));
 
         var only = await Call(runtime, AgentTools.WebSearch, ("query", "other"), ("sources", new[] { "alpha" }));
@@ -1691,7 +1852,7 @@ public sealed class AgentToolRuntimeTests : IDisposable
             native: (query, _) =>
             {
                 asked.Add(query);
-                return Task.FromResult(NoWire.FailedPart(query, "the lane of WORK_KEY is held"));
+                return Task.FromResult(new AgentNativeAnswer(NoWire.FailedPart(query, "the lane of WORK_KEY is held"), 0));
             });
 
         var answered = await Call(failing, AgentTools.WebSearch, ("query", "group by"), ("sources", new[] { "alpha" }));
@@ -1721,6 +1882,48 @@ public sealed class AgentToolRuntimeTests : IDisposable
     }
 
     /// <summary>
+    /// Each search the provider ran of one ask is a request of the step's search, spent as the ask says how many it ran:
+    /// an ask that ran two of a step with three requests spends them all with its source's own one, and the next search's
+    /// source and native ask are both refused unasked, the bound spent by the searches that were made.
+    /// </summary>
+    [Fact]
+    public async Task WebSearch_EachSearchTheNativeAskRan_IsARequestOfTheStep_SpentAsItRan()
+    {
+        var endpoint = new WebEndpoint(_ => SearchAnswer("""{ "items": [ { "title": "One", "link": "https://one.example.test/" } ] }"""));
+        var asked = 0;
+        using var runtime = Open(
+            capabilities: [AgentCapability.Read, AgentCapability.Web],
+            endpoint: endpoint,
+            webSearch: TwoSources(3),
+            native: (query, _) => Task.FromResult(new AgentNativeAnswer(NoWire.FailedPart(query, "it ran its searches and failed"), ++asked is 1 ? 2 : 0)));
+
+        var first = await Call(runtime, AgentTools.WebSearch, ("query", "group by"), ("sources", new[] { "alpha" }));
+
+        // A query the run asked before is answered from what it holds, no request made: the bound is asked of a new one.
+        var second = await Call(runtime, AgentTools.WebSearch, ("query", "group by, again"), ("sources", new[] { "alpha" }));
+
+        Assert.True(first.Ok);
+        Assert.Equal(1, asked);
+
+        // The first search spent the step's three: alpha's request, the ask's own, and the second search it ran.
+        Assert.False(second.Ok);
+        Assert.Equal(2, Counted(second.Text, "this step's 3 requests of the web search's sources are spent (agentWebSearch.maxPerStep)"));
+    }
+
+    /// <summary>How many times <paramref name="text"/> holds <paramref name="part"/>.</summary>
+    private static int Counted(string text, string part)
+    {
+        var count = 0;
+
+        for (var at = text.IndexOf(part, StringComparison.Ordinal); at >= 0; at = text.IndexOf(part, at + part.Length, StringComparison.Ordinal))
+        {
+            count++;
+        }
+
+        return count;
+    }
+
+    /// <summary>
     /// A runtime opened for a run that carries a native search is given what asks it, and one given an asker carries a
     /// native search: neither is left without the other.
     /// </summary>
@@ -1735,7 +1938,7 @@ public sealed class AgentToolRuntimeTests : IDisposable
             Assert.Throws<ArgumentException>(() => host.Open(run with { NativeSearch = new NoWire() }, _events)).Message);
         Assert.Equal(
             "the run carries no native search, and the runtime was given one to ask (Parameter 'native')",
-            Assert.Throws<ArgumentException>(() => host.Open(run, _events, (query, _) => Task.FromResult(NoWire.FailedPart(query, "never")))).Message);
+            Assert.Throws<ArgumentException>(() => host.Open(run, _events, (query, _) => Task.FromResult(new AgentNativeAnswer(NoWire.FailedPart(query, "never"), 0)))).Message);
     }
 
     /// <summary>A provider's own search the runtime never asks itself: the loop asks it, as the run stands.</summary>
@@ -1852,9 +2055,12 @@ public sealed class AgentToolRuntimeTests : IDisposable
         Assert.Equal("failed", JsonNode.Parse(File.ReadAllLines(Path.Combine(_step, AgentCallRecords.WebFileName))[^1])!["line"]!.GetValue<string>());
     }
 
-    /// <summary>An answer is masked, and one past the cap is cut, the whole kept in the step's tool-results.</summary>
+    /// <summary>
+    /// An answer is masked, and one longer than a page is kept whole in the step's tool-results and given as its first
+    /// page - the event carrying what the model was given, and the file.
+    /// </summary>
     [Fact]
-    public async Task AnAnswer_IsMasked_AndCutPastTheCap()
+    public async Task AnAnswer_IsMasked_AndPagedPastAPage()
     {
         Write("secret.txt", "token=s3cr3t\n");
         Write("big.txt", string.Concat(Enumerable.Range(0, 400).Select(line => new string('x', 99) + "\n")));
@@ -1862,11 +2068,68 @@ public sealed class AgentToolRuntimeTests : IDisposable
 
         Assert.Equal("1\ttoken=***", (await View(runtime, "secret.txt")).Text);
 
-        var big = await Call(runtime, AgentTools.SearchFiles, "big", ("pattern", "x"), ("glob", "big.txt"), ("max_results", AgentTools.MostSearchResults));
+        var big = await Call(runtime, AgentTools.SearchFiles, "big", ("pattern", "x"), ("glob", "big.txt"));
         Assert.Equal(AgentCallRecords.ResultFile(_step, "big"), big.File);
-        Assert.Equal(AgentCallRecords.Cut(File.ReadAllText(big.File!), big.File!), big.Text);
+        Assert.StartsWith($"page 1 of 2 · 400 results · ask read_result with id: 'big', page: 2 for the next · the whole is '{big.File}'\nbig.txt:1: ", big.Text, StringComparison.Ordinal);
         Assert.EndsWith("big.txt:400: " + new string('x', 99), File.ReadAllText(big.File!), StringComparison.Ordinal);
         Assert.Equal((big.File, big.Text), (_events.All.OfType<ToolCallFinished>().Last().ResultFile, _events.All.OfType<ToolCallFinished>().Last().Result));
+    }
+
+    /// <summary>
+    /// read_result gives a call's whole result by the call's id, a page at a time: page 1 where none is asked, and the page
+    /// asked - whole lines of the answer kept past the cap, as many as a page's room holds, each page saying which of how
+    /// many it is and how to ask for the next - and a page past the last refused with the result's range.
+    /// </summary>
+    [Fact]
+    public async Task ReadResult_GivesPageTwoOfAKeptCallResult()
+    {
+        Write("big.txt", string.Concat(Enumerable.Range(0, 400).Select(_ => new string('x', 99) + "\n")));
+        var runtime = Open();
+
+        var big = await Call(runtime, AgentTools.SearchFiles, "big", ("pattern", "x"), ("glob", "big.txt"));
+        var lines = DssHarness.Core.Codebase.CodeFileText.Lines(File.ReadAllText(big.File!));
+
+        // Whole lines while a page's room lasts, each costing its characters and its line's end.
+        var pages = new List<List<string>> { new() };
+        var left = KeptResults.Room;
+
+        foreach (var line in lines)
+        {
+            if (line.Length + 1 > left)
+            {
+                pages.Add([]);
+                left = KeptResults.Room;
+            }
+
+            pages[^1].Add(line);
+            left -= line.Length + 1;
+        }
+
+        Assert.Equal(2, pages.Count);
+
+        var first = await Call(runtime, AgentTools.ReadResult, "read_1", ("id", "big"));
+        var second = await Call(runtime, AgentTools.ReadResult, "read_2", ("id", "big"), ("page", 2));
+        var past = await Call(runtime, AgentTools.ReadResult, "read_3", ("id", "big"), ("page", 3));
+
+        Assert.Equal((true, $"page 1 of 2 · {lines.Count} results · ask again with page: 2 for the next\n{string.Join('\n', pages[0])}"), (first.Ok, first.Text));
+        Assert.Equal((true, $"page 2 of 2 · the last\n{string.Join('\n', pages[1])}"), (second.Ok, second.Text));
+        Assert.Equal((false, "page 3 of 'read_result big': it has 2 pages (1 to 2)"), (past.Ok, past.Text));
+    }
+
+    /// <summary>
+    /// read_result refuses an id no result is kept for in this conversation, naming the id, and a page below the first as
+    /// every paged answer refuses it.
+    /// </summary>
+    [Fact]
+    public async Task ReadResult_RefusesAnUnknownId_NamingIt()
+    {
+        var runtime = Open();
+
+        var unknown = await Call(runtime, AgentTools.ReadResult, ("id", "toolu_none"));
+        var below = await Call(runtime, AgentTools.ReadResult, ("id", "toolu_none"), ("page", 0));
+
+        Assert.Equal((false, "no result is kept for 'toolu_none' in this conversation"), (unknown.Ok, unknown.Text));
+        Assert.Equal((false, "page is 0: pages start at 1"), (below.Ok, below.Text));
     }
 
     /// <summary>An edit keeps the file's mode: a script stays one the system runs.</summary>
@@ -2320,34 +2583,36 @@ public sealed class AgentToolRuntimeTests : IDisposable
     }
 
     /// <summary>
-    /// The narrowing a client's own whole read is asked under reads nothing it cannot narrow: a run that narrows nothing
-    /// reads not a byte of the file, and in one that narrows, a file not there, one the view does not parse and one that
-    /// cannot be read pass - null, left to the client's own tool - while a parsed file over its lines is denied as a whole
-    /// view of it is.
+    /// A page of a graph body is a view of the files whose lines it served, as they were read, and of no other: after page
+    /// 1, a file whose lines only a later page holds is no view an edit may follow; after page 2 - read from what page 1
+    /// kept, the file changed on disk since - it is the view of the file as its lines were read, so the edit meets the
+    /// change and is refused, never made over lines the agent did not see.
     /// </summary>
     [Fact]
-    public async Task TheNarrowingOfAClientsOwnWholeRead_ReadsNothingItCannotNarrow()
+    public async Task APageOfAGraphBody_IsAViewOfTheFilesItServed_AsTheyWereRead()
     {
-        Write("a.txt", "alpha\n");
-        var plain = Open(fileSystem: new Held(_harness.FileSystem, Path.Combine(_worktree, "a.txt")));
+        var big = "namespace Demo;\n\npublic static class Big\n{\n" + string.Concat(Enumerable.Range(0, 700).Select(at => $"    // line {at}\n")) + "}\n";
+        using var tree = await CodebaseGraphToolTests.TreeAsync(("src/Big.cs", big));
+        using var pages = new TempDirectory();
+        var store = new DssHarness.Core.Codebase.GraphPageStore(pages.Combine("graph-pages"), tree.Harness.FileSystem);
+        var runtime = Narrowing(tree, CodebaseGraphToolTests.Tool(tree, await CodebaseGraphToolTests.QueriesAsync(tree), sync: false, pages: store), []);
+        var geometry = Path.Combine(tree.Tree, "src", "Geometry.cs");
 
-        Assert.Null(await plain.NarrowedReadAsync("a.txt", Token));
+        var first = await Call(runtime, AgentGraphSupport.ToolName, ("op", "body"), ("symbols", new[] { "Demo.Big", "Twice" }), ("full", true));
+        var unseen = await Replace(runtime, "src/Geometry.cs", "return Total([shape, shape]);", "return 0;");
 
-        using var tree = await CodebaseGraphToolTests.TreeAsync(("src/Big.cs", BigFile), ("src/Held.cs", BigFile.Replace("big file", "held file", StringComparison.Ordinal)));
-        var lines = new List<GraphStepLine>();
-        var runtime = Narrowing(tree, CodebaseGraphToolTests.Tool(tree, await CodebaseGraphToolTests.QueriesAsync(tree)), lines, new Held(tree.Harness.FileSystem, Path.Combine(tree.Tree, "src", "Held.cs")));
+        Assert.True(first.Ok, first.Text);
+        Assert.Equal((false, AgentToolRuntime.NeverViewed), (unseen.Ok, unseen.Text));
 
-        Assert.Null(await runtime.NarrowedReadAsync("src/Missing.cs", Token));
-        Assert.Null(await runtime.NarrowedReadAsync("docs/zoo.txt", Token));
-        Assert.Null(await runtime.NarrowedReadAsync("src/Held.cs", Token));
-        Assert.Empty(lines);
+        File.WriteAllText(geometry, "// formatted\n" + File.ReadAllText(geometry));
+        var second = await Call(runtime, AgentGraphSupport.ToolName, ("op", "body"), ("symbols", new[] { "Demo.Big", "Twice" }), ("full", true), ("page", 2));
+        var stale = await Replace(runtime, "src/Geometry.cs", "return Total([shape, shape]);", "return 0;");
 
-        var denied = await runtime.NarrowedReadAsync("src/Big.cs", Token);
-
-        Assert.Equal(
-            ("graphReads: narrow", "'src/Big.cs' is 222 lines and in the codebase graph: ask graph for its outline and the bodies you need, read a range of it, or, if you need it whole, say why with graph's wholeFile"),
-            (denied?.Rule, denied?.Reason));
-        Assert.Equal(("src/Big.cs", 222), (Assert.IsType<GraphDeniedLine>(Assert.Single(lines)).Path, ((GraphDeniedLine)lines[0]).Lines));
+        Assert.True(second.Ok, second.Text);
+        Assert.StartsWith("page 2 of 2 · the last\n", second.Text, StringComparison.Ordinal);
+        Assert.Equal((false, AgentToolRuntime.ChangedSinceViewed), (stale.Ok, stale.Text));
+        Assert.StartsWith("// formatted\n", File.ReadAllText(geometry), StringComparison.Ordinal);
+        Assert.Contains("return Total([shape, shape]);", File.ReadAllText(geometry), StringComparison.Ordinal);
     }
 
     /// <summary>A C# file of 222 lines, past the narrowing's bound.</summary>
@@ -2460,7 +2725,7 @@ public sealed class AgentToolRuntimeTests : IDisposable
     {
         var files = new PhysicalFileSystem(DssHarness.Core.Platform.FilePermissionsFactory.Create());
         var indexes = new DssHarness.Core.Web.Index.WebIndexes(files, new DssHarness.Core.Web.Index.SitemapFill(files, fetch, clock, (_, _) => Task.CompletedTask), clock);
-        var pace = new DssHarness.Core.Web.Search.WebSearchPace(files, () => Path.Combine(_step, "..", "pace.json"), clock, (_, _) => Task.CompletedTask);
+        var pace = new DssHarness.Core.Web.Search.WebSearchPace(files, () => Path.Combine(_step, "..", "pace.json"), clock, (_, _) => Task.CompletedTask, new DssHarness.Core.Execution.ProcessIdentity(new DssHarness.Core.Platform.HostPlatform()));
         var search = new DssHarness.Core.Web.Search.HarnessWebSearch(DssHarness.Core.Web.Search.WebSearchKinds.OfThisBuild, fetch, indexes, pace, files, clock);
 
         _opened.Add(search);
@@ -2477,37 +2742,29 @@ public sealed class AgentToolRuntimeTests : IDisposable
                 WebSearchFixtures.Source("alpha", """{ "kind": "json-api", "description": "Alpha's answers", "url": "https://alpha.example.test/?q={query}", "items": "$.items", "title": "{@.title}", "link": "{@.link}" }"""),
                 WebSearchFixtures.Source("beta", """{ "kind": "json-api", "description": "Beta's packages", "url": "https://beta.example.test/?q={query}", "items": "$.items", "title": "{@.title}", "link": "{@.link}" }"""),
             ],
-            DssHarness.Core.Web.Search.WebSearchSources.DefaultResultsPerSource,
             maxPerStep,
             new Dictionary<string, DssHarness.Core.Web.Search.WebSearchKey>());
 
     private static HttpResponseMessage SearchAnswer(string body, HttpStatusCode status = HttpStatusCode.OK)
         => new(status) { Content = new StringContent(body, System.Text.Encoding.UTF8, "application/json") };
 
-    /// <summary>A clock that never moves, and stops <paramref name="stop"/> at its second reading: once a search has read a line of a file.</summary>
-    private sealed class StoppingClock(CancellationTokenSource stop) : TimeProvider
+    /// <summary>
+    /// A command that takes <paramref name="takes"/> by <paramref name="clock"/> - moved on by as much as it runs - and
+    /// ends well, keeping the time it was given.
+    /// </summary>
+    private sealed class ClockedCommand(ManualClock clock, TimeSpan takes) : IProcessRunner
     {
-        private int _readings;
+        public TimeSpan? Timeout { get; private set; }
 
-        public override long GetTimestamp()
+        public Task<ProcessResult> RunAsync(ProcessRequest request, CancellationToken cancellationToken = default)
         {
-            if (Interlocked.Increment(ref _readings) == 2)
-            {
-                stop.Cancel();
-            }
+            Timeout = request.Timeout;
+            clock.Advance(takes);
 
-            return 0;
+            return Task.FromResult(new ProcessResult(0, string.Empty, string.Empty, takes, TimedOut: false));
         }
-    }
 
-    /// <summary>A clock whose every reading is a second past the last: each line a search reads takes it a second.</summary>
-    private sealed class TickingClock : TimeProvider
-    {
-        private long _ticks;
-
-        public override long TimestampFrequency => 1;
-
-        public override long GetTimestamp() => Interlocked.Increment(ref _ticks);
+        public string? FindExecutable(string command) => command;
     }
 
     /// <summary>A command that finds, as it runs, whether the lock <paramref name="name"/> is held - <c>held</c> or <c>free</c> - and ends at once.</summary>
@@ -2606,13 +2863,6 @@ public sealed class AgentToolRuntimeTests : IDisposable
 
         public override Stream OpenRead(string path)
             => unread.Contains(Path.GetFileName(path)) ? throw new IOException("it is held by another process.") : base.OpenRead(path);
-    }
-
-    /// <summary>A file system whose standing of one file understates its length, as one grown past the bound since it was measured.</summary>
-    private sealed class Understated(IFileSystem inner, string file) : PassThroughFileSystem(inner)
-    {
-        public override FileStanding? StandingOf(string path)
-            => Path.GetFullPath(path) == Path.GetFullPath(file) && base.StandingOf(path) is { } standing ? standing with { Length = 1 } : base.StandingOf(path);
     }
 
     /// <summary>

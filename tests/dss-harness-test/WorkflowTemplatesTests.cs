@@ -621,6 +621,42 @@ public sealed class WorkflowTemplatesTests
     }
 
     /// <summary>
+    /// A plan holds as many work items as its work needs, and no shipped file sets a count of them: the plan's prompt, the
+    /// planner's instructions, the self-audit's and the schemas the items are asked under say each item is one builder's
+    /// cycle, and none says a plan or a round holds at most so many - a round runs its items in waves of the run's open
+    /// agents, and the plan check refuses no count.
+    /// </summary>
+    [Fact]
+    public void TheShippedPrompts_SetNoCountOfWorkItems()
+    {
+        var assembly = typeof(WorkflowTemplates).Assembly;
+        var shipped = assembly.GetManifestResourceNames()
+            .Where(resource => resource.Replace('\\', '/').Contains(".WorkflowTemplates/", StringComparison.Ordinal))
+            .ToList();
+
+        Assert.Equal(WorkflowTemplates.Files.Count, shipped.Count);
+        Assert.DoesNotContain(shipped, resource =>
+        {
+            using var reader = new StreamReader(assembly.GetManifestResourceStream(resource)!);
+            var text = reader.ReadToEnd();
+
+            return text.Contains("at most 8", StringComparison.OrdinalIgnoreCase) || text.Contains("8 items", StringComparison.OrdinalIgnoreCase);
+        });
+
+        Assert.Contains("split it into items by sets of files, as many as it needs,", Read("prompts/plan.md"), StringComparison.Ordinal);
+        Assert.Contains("A plan holds as many items as\n   the work needs", Read("agents/planner.md").ReplaceLineEndings("\n"), StringComparison.Ordinal);
+        Assert.Contains("shaped as the plan's items are, as many as the findings need:", Read("prompts/self-audit.md"), StringComparison.Ordinal);
+        Assert.StartsWith(
+            "The work items, as many as the work needs. Each is sized to one builder's cycle",
+            JsonDocument.Parse(Read("schemas/plan.schema.json")).RootElement.GetProperty("properties").GetProperty("items").GetProperty("description").GetString(),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "As many as the findings need, shaped as a plan's",
+            JsonDocument.Parse(Read("schemas/self-audit.schema.json")).RootElement.GetProperty("properties").GetProperty("items").GetProperty("description").GetString(),
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// Every repair of the item pipeline that goes on with the implementation - and so may change its code - goes back
     /// through the item's tests before anything is folded: one the item's own steps raise goes on to the item's block,
     /// whose verify runs again (a blocked answer asked first), and one the review loop's revise raises goes on to reverify.

@@ -1,6 +1,7 @@
 using System.Reflection;
 using System.Text.Json;
 using DssHarness.Core.Codebase;
+using DssHarness.Core.Codebase.Languages;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Orchestration;
 using DssHarness.Core.Repository;
@@ -60,6 +61,7 @@ public sealed class CodebaseGraphRecordsTests
         Assert.Null(sound.Problem("toy", 3));
         Assert.Null((sound with { Nodes = [Node with { Summary = "An \U0001F600 A." }] }).Problem("toy", 3));
         Assert.Null((sound with { Nodes = [Node with { Exports = ["default"] }], AddressRoots = [new ExtractAddressRoot("pkg", "src/index.ts") { Whole = true }] }).Problem("toy", 3));
+        Assert.Null((sound with { Literals = LiteralRow.Table(new LiteralRow("held by a node", 2, "toy:A.b"), new LiteralRow("held by the file", 3)) }).Problem("toy", 3));
 
         var wrong = new (FileExtract Extract, string Problem)[]
         {
@@ -68,11 +70,12 @@ public sealed class CodebaseGraphRecordsTests
             (sound with { Nodes = [Node with { Id = "other:A" }] }, "its id does not begin 'toy:'"),
             (sound with { Nodes = [Node with { Kind = CodeNodeKinds.File }] }, "its kind is 'file'"),
             (sound with { Nodes = [Node with { Name = " " }] }, "it has no name"),
+            (sound with { Nodes = [Node with { Name = "Sure?\nIt cannot be undone." }] }, "its name is not one line"),
+            (sound with { Nodes = [Node with { Qualified = "messages.Sure?\rIt cannot be undone." }] }, "its name is not one line"),
             (sound with { Nodes = [Node with { End = 4 }] }, "its lines 1-4 are not lines of the file's 3"),
             (sound with { Nodes = [Node with { Start = 0 }] }, "its lines 0-3 are not lines"),
             (sound with { Nodes = [Node with { Start = 3, End = 2 }] }, "its lines 3-2 are not lines"),
             (sound with { Nodes = [Node with { BodyStart = 4 }] }, "its body begins on line 4"),
-            (sound with { Nodes = [Node with { Signature = new string('x', FileExtract.MostSignature + 1) }] }, "its signature is not one line"),
             (sound with { Nodes = [Node with { Signature = "class\nA" }] }, "its signature is not one line"),
             (sound with { Nodes = [Node with { Summary = "one\rtwo" }] }, "its summary is not one line"),
             (sound with { Nodes = [Node with { MinArity = -1 }] }, "its arity is no range"),
@@ -125,9 +128,30 @@ public sealed class CodebaseGraphRecordsTests
             (sound with { Generated = " " }, "it says it is generated and not why"),
             (sound with { Dynamic = [new ExtractDynamic(1, "")] }, "it marks a line dynamic and not why"),
             (sound with { Dynamic = [new ExtractDynamic(9, "macro")] }, "it marks line 9 dynamic, outside its 3 lines"),
+            (sound with { Literals = LiteralRow.Table(new LiteralRow("value", 2, "toy:Z")) }, "its literal 'value' is held by 'toy:Z', which it holds no node of"),
         };
 
         Assert.All(wrong, pair => Assert.Contains(pair.Problem, pair.Extract.Problem("toy", 3), StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// An extract whose nodes nest a hundred thousand deep is checked in time to its nodes: each node's holders are walked
+    /// up once, a node found to end at the root never walked up again.
+    /// </summary>
+    [Fact]
+    public void AnExtractNestedAHundredThousandDeep_IsCheckedInTimeToItsNodes()
+    {
+        const int Depth = 100_000;
+        var nodes = Enumerable.Range(0, Depth).Select(at => new ExtractNode($"toy:N{at}", CodeNodeKinds.Section, $"N{at}", $"N{at}", 1, 1, $"N{at}") { Parent = at == 0 ? null : QualifiedName.Of($"toy:N{at - 1}") }).ToList();
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+
+        Assert.Null(new FileExtract(nodes).Problem("toy", 1));
+        Assert.True(watch.Elapsed < TimeSpan.FromSeconds(5), $"the check took {watch.Elapsed}");
+
+        // One that comes round to itself through its holders is still refused.
+        nodes[0] = nodes[0] with { Parent = $"toy:N{Depth - 1}" };
+
+        Assert.Equal("its node 'toy:N0' is declared inside itself, through 'toy:N0'", new FileExtract(nodes).Problem("toy", 1));
     }
 
     /// <summary>
@@ -147,17 +171,19 @@ public sealed class CodebaseGraphRecordsTests
     [Fact]
     public void TheCoresDigests_AreEachNodesLines_AndNoneWhereItsLinesAreNotTheFiles()
     {
-        var lines = CodeFileText.Lines("class A\r\n  go\r\nend\r\n");
-        var digested = new FileExtract([Node, Node with { Id = "toy:B", End = 9 }]).WithDigests(lines);
+        const string Text = "class A\r\n  go\r\nend\r\n";
+        var lines = CodeFileText.Lines(Text);
+        var digested = new FileExtract([Node, Node with { Id = "toy:B", End = 9 }]).WithDigests(Text);
 
         Assert.Equal(CodeGraphIds.Sha256("class A\n  go\nend"), digested.Nodes[0].Digest);
 
         Assert.Equal(CodeGraphIds.Digest(CodeFileText.Lines("class A\n  go\nend"), 1, 3), digested.Nodes[0].Digest);
+        Assert.Equal(CodeGraphIds.Digest(lines, 2, 3), CodeGraphIds.Digest(CodeText.Of(Text), 2, 3));
         Assert.Null(digested.Nodes[1].Digest);
         Assert.Throws<ArgumentOutOfRangeException>(() => CodeGraphIds.Digest(lines, 2, 4));
 
         // A digest the implementation set is never kept: the core's replaces it, and none is left where the lines are not the file's.
-        var set = new FileExtract([Node with { Digest = new string('0', 64) }, Node with { Id = "toy:B", End = 9, Digest = new string('0', 64) }]).WithDigests(lines);
+        var set = new FileExtract([Node with { Digest = new string('0', 64) }, Node with { Id = "toy:B", End = 9, Digest = new string('0', 64) }]).WithDigests(Text);
 
         Assert.Equal(digested.Nodes[0].Digest, set.Nodes[0].Digest);
         Assert.Null(set.Nodes[1].Digest);
@@ -204,7 +230,8 @@ public sealed class CodebaseGraphRecordsTests
     {
         using var directory = new TempDirectory();
         var (store, layout) = Store(directory);
-        var lines = CodeFileText.Lines("class A\n  go\nend\n");
+        const string Text = "class A\n  go\nend\n";
+        var lines = CodeFileText.Lines(Text);
         var extract = new FileExtract([Node with { SubKind = "class", Scope = "app", Modifiers = ["public", "static"], Prototype = true, Test = true, Summary = "An \U0001F600 A." }, Node with { Id = "toy:A.b", Kind = CodeNodeKinds.Member, Name = "b", Qualified = "A.b", Start = 2, End = 3, Parent = "toy:A", BodyStart = null, MinArity = null, MaxArity = null, ValueType = "Repo", Extends = "A" }])
         {
             Scopes = [new ExtractScope("app", Open: true) { Parent = "root" }, new ExtractScope("root", Open: false)],
@@ -217,7 +244,7 @@ public sealed class CodebaseGraphRecordsTests
             ],
             Generated = "a generator wrote it",
             Dynamic = [new ExtractDynamic(3, "a call through a pointer")],
-        }.WithDigests(lines);
+        }.WithDigests(Text);
         var stored = new CodeGraphStoredExtract(CodeGraphManifest.CurrentSchema, "toy", 1, Blob, "src/a.toy", lines.Count, extract);
         var file = layout.GraphExtractFile(CodeGraphIds.ExtractName(Blob, "src/a.toy", "toy", 1));
 
@@ -244,8 +271,7 @@ public sealed class CodebaseGraphRecordsTests
             CodeGraphLinker.Revision,
             [new("file:src/a.toy", "abcdef", CodeNodeKinds.File, ["src/a.toy"]), new("toy:A", "123456", CodeNodeKinds.Type, ["src/a.toy"])],
             [new CodeEdge("file:src/a.toy", "toy:A", CodeEdgeKinds.Contains, 1, CodeConfidences.Exact)],
-            new Dictionary<string, int> { ["toy:A"] = 1 },
-            new Dictionary<string, int> { ["toy:A"] = 2 });
+            new Dictionary<string, int> { ["toy:A"] = 1 });
 
         store.WriteGraphSymbols(layout, symbols);
         Assert.Equal(Json(symbols), Json(store.ReadGraphSymbols(layout)!));
@@ -338,6 +364,17 @@ public sealed class CodebaseGraphRecordsTests
             (manifest with { Files = new Dictionary<string, CodeGraphFileEntry> { ["src/a.toy"] = files["src/a.toy"] with { Extract = "aa/x.json" } } }).Problem());
         Assert.Equal("its digest is not the digest of what it says", (manifest with { Digest = "0" }).Problem());
 
+        // Its key naming is held to the shape's one rule of a sound keyNaming - the one the definition's check words for its
+        // block - a policy named twice among it.
+        Assert.Equal("its keyNaming names no policy", (manifest with { KeyNaming = [] }).Problem());
+        Assert.Equal("its keyNaming names 'camelCase' more than once", (manifest with { KeyNaming = ["camelCase", "PascalCase", "camelCase"] }).Problem());
+        Assert.Equal("its keyNaming names 'PascalCase', which is none of 'camelCase', 'snake_case', 'kebab-case', 'exact'", (manifest with { KeyNaming = ["PascalCase"] }).Problem());
+        Assert.Null((manifest with { KeyNaming = ["snake_case", "exact"] }).Problem());
+        Assert.Equal(
+            [(KeyNamingFault.Twice, "camelCase"), (KeyNamingFault.Twice, "PascalCase"), (KeyNamingFault.Unknown, "PascalCase")],
+            CodebaseGraphShape.NamingProblems(["camelCase", "PascalCase", "camelCase", "PascalCase"]));
+        Assert.Throws<ArgumentException>(() => CodebaseGraphShape.NamingOf(["exact", "exact"]));
+
         // When it was synced and the tool that synced it are not what the link result is made from.
         Assert.Equal(manifest.Digest, CodeGraphManifest.DigestOf(extractors, new Dictionary<string, CodeGraphFileEntry>(files)));
         Assert.Null((manifest with { Tool = "2.0.0", SyncedAt = DateTimeOffset.UtcNow }).Problem());
@@ -347,7 +384,7 @@ public sealed class CodebaseGraphRecordsTests
     [Fact]
     public void AStoredExtract_IsRefusedForEachThingItGetsWrong()
     {
-        var extract = new FileExtract([Node]).WithDigests(["class A", "go", "end"]);
+        var extract = new FileExtract([Node]).WithDigests("class A\ngo\nend");
         var stored = new CodeGraphStoredExtract(CodeGraphManifest.CurrentSchema, "toy", 1, Blob, "src/a.toy", 3, extract);
 
         Assert.Null(stored.Problem());
@@ -394,7 +431,6 @@ public sealed class CodebaseGraphRecordsTests
             CodeGraphLinker.Revision,
             [new("file:a.toy", "abcdef", CodeNodeKinds.File, ["a.toy"]), new("toy:A", "123456", CodeNodeKinds.Type, ["a.toy"])],
             [new CodeEdge("file:a.toy", "toy:A", CodeEdgeKinds.Contains, 1, CodeConfidences.Exact)],
-            new Dictionary<string, int>(),
             new Dictionary<string, int>());
 
         Assert.Null(symbols.Problem());
@@ -415,15 +451,16 @@ public sealed class CodebaseGraphRecordsTests
             "it counts 1 of what the references of 'toy:Z' named outside the repository, and that is no count of one of its nodes",
             (symbols with { External = new Dictionary<string, int> { ["toy:Z"] = 1 } }).Problem());
         Assert.Equal(
-            "it counts -1 of what the references of 'toy:A' named ambiguously, and that is no count of one of its nodes",
-            (symbols with { Unresolved = new Dictionary<string, int> { ["toy:A"] = -1 } }).Problem());
-        Assert.Null((symbols with { External = new Dictionary<string, int> { ["toy:A"] = 0 }, Unresolved = new Dictionary<string, int> { ["file:a.toy"] = 2 } }).Problem());
+            "it counts -1 of what the references of 'toy:A' named outside the repository, and that is no count of one of its nodes",
+            (symbols with { External = new Dictionary<string, int> { ["toy:A"] = -1 } }).Problem());
+        Assert.Null((symbols with { External = new Dictionary<string, int> { ["toy:A"] = 0, ["file:a.toy"] = 2 } }).Problem());
     }
 
     /// <summary>
-    /// A link result is kept as lines: its head, counting what follows, then each node, each edge, each count of what a
-    /// node's references named outside the repository and each of what they named ambiguously, on a line of its own - and
-    /// reads back as it was written.
+    /// A link result is kept as lines: its head, counting what follows, then each node, each edge and each count of what a
+    /// node's references named outside the repository, on a line of its own - a node's id written against the shorter id of
+    /// the node that contains it where that is shorter, an edge and a count naming each node by its place - and reads back
+    /// as it was written, each id the whole of it.
     /// </summary>
     [Fact]
     public void ALinkResult_IsKeptAsLines_ItsHeadCountingWhatFollows()
@@ -436,22 +473,41 @@ public sealed class CodebaseGraphRecordsTests
 
         Assert.Equal(
             [
-                Json(new CodeGraphSymbolsHead(CodeGraphManifest.CurrentSchema, "digest", CodeGraphLinker.Revision, 2, 1, 1, 1)),
-                Json(symbols.Nodes[0]),
-                Json(symbols.Nodes[1]),
-                Json(symbols.Edges[0]),
-                Json(new CodeGraphCount("toy:A", 1)),
-                Json(new CodeGraphCount("file:a.toy", 2)),
+                Json(new CodeGraphSymbolsHead(CodeGraphManifest.CurrentSchema, "digest", CodeGraphLinker.Revision, 2, 1, 1)),
+                Json(new CodeGraphSymbolLine(new StoredName("file:a.toy"), "abcdef", CodeNodeKinds.File, ["a.toy"])),
+                Json(new CodeGraphSymbolLine(new StoredName("toy:A"), "123456", CodeNodeKinds.Type, ["a.toy"])),
+                Json(new CodeGraphEdgeLine(0, 1, CodeEdgeKinds.Contains, 1, CodeConfidences.Exact)),
+                Json(new CodeGraphCountLine(1, 1)),
                 "",
             ],
             File.ReadAllText(layout.GraphSymbolsFile).Split('\n'));
         Assert.Equal(Json(symbols), Json(store.ReadGraphSymbols(layout)!));
+
+        // A node whose id goes on from its container's is written as what it keeps of that one and the rest - where that
+        // is shorter than the id whole, which it is not for a container's id of five characters.
+        var nested = symbols with
+        {
+            Nodes = [.. symbols.Nodes, new("toy:A.Inner", "654321", CodeNodeKinds.Type, ["a.toy"]), new("toy:A.Inner.Deepest", "fedcba", CodeNodeKinds.Type, ["a.toy"])],
+            Edges =
+            [
+                .. symbols.Edges,
+                new CodeEdge("toy:A", "toy:A.Inner", CodeEdgeKinds.Contains, 2, CodeConfidences.Exact),
+                new CodeEdge("toy:A.Inner", "toy:A.Inner.Deepest", CodeEdgeKinds.Contains, 3, CodeConfidences.Exact),
+            ],
+        };
+
+        store.WriteGraphSymbols(layout, nested);
+
+        var written = File.ReadAllLines(layout.GraphSymbolsFile);
+        Assert.Equal(Json(new CodeGraphSymbolLine(new StoredName("toy:A.Inner"), "654321", CodeNodeKinds.Type, ["a.toy"])), written[3]);
+        Assert.Equal(Json(new CodeGraphSymbolLine(new StoredName(".Deepest", Kept: 11, At: 2), "fedcba", CodeNodeKinds.Type, ["a.toy"])), written[4]);
+        Assert.Equal(Json(nested), Json(store.ReadGraphSymbols(layout)!));
     }
 
     /// <summary>
     /// A link result's file of fewer or more lines than its head counts, a line that does not read as what it is there, a
-    /// head that counts fewer than none of a kind and a node counted twice are each refused, naming the line where there is
-    /// one.
+    /// head that counts fewer than none of a kind, a node counted twice, an edge naming a node by no place of one and ids
+    /// written against each other or against no node are each refused, naming the line where there is one.
     /// </summary>
     [Fact]
     public void ALinkResultsFile_OfOtherLinesThanItsHeadCounts_IsRefused_NamingTheLine()
@@ -460,7 +516,7 @@ public sealed class CodebaseGraphRecordsTests
         var (store, layout) = Store(directory);
         store.WriteGraphSymbols(layout, Symbols());
         var lines = File.ReadAllLines(layout.GraphSymbolsFile);
-        var head = new CodeGraphSymbolsHead(CodeGraphManifest.CurrentSchema, "digest", CodeGraphLinker.Revision, 2, 1, 1, 1);
+        var head = new CodeGraphSymbolsHead(CodeGraphManifest.CurrentSchema, "digest", CodeGraphLinker.Revision, 2, 1, 1);
 
         string Refused(params string[] written)
         {
@@ -469,12 +525,171 @@ public sealed class CodebaseGraphRecordsTests
         }
 
         Assert.Equal(Json(head), lines[0]);
-        Assert.Contains("it ends after line 5, where a count of what a node's references named ambiguously was to be", Refused(lines[..^1]), StringComparison.Ordinal);
-        Assert.Contains("it goes on past line 6, where it was to end", Refused([.. lines, lines[^1]]), StringComparison.Ordinal);
+        Assert.Contains("it ends after line 4, where a count of what a node's references named outside the repository was to be", Refused(lines[..^1]), StringComparison.Ordinal);
+        Assert.Contains("it goes on past line 5, where it was to end", Refused([.. lines, lines[^1]]), StringComparison.Ordinal);
         Assert.Contains("line 4, an edge, does not read: it holds null", Refused([.. lines[..3], "null", .. lines[4..]]), StringComparison.Ordinal);
         Assert.Contains("line 2, a node, does not read: ", Refused([lines[0], "{\"id\":\"toy:B\"}", .. lines[2..]]), StringComparison.Ordinal);
         Assert.Contains("its head counts fewer than no lines of a kind", Refused([Json(head with { Edges = -1 }), .. lines[1..]]), StringComparison.Ordinal);
-        Assert.Contains("it counts the node 'toy:A' twice", Refused([Json(head with { External = 2, Unresolved = 0 }), .. lines[1..^1], lines[^2]]), StringComparison.Ordinal);
+        Assert.Contains("it counts the node 'toy:A' twice", Refused([Json(head with { External = 2 }), .. lines[1..], lines[^1]]), StringComparison.Ordinal);
+        Assert.Contains(
+            "an edge names node 7, and it holds 2",
+            Refused([.. lines[..3], Json(new CodeGraphEdgeLine(0, 7, CodeEdgeKinds.Contains, 1, CodeConfidences.Exact)), .. lines[4..]]),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "node 0 is written, through what it is written against, against itself",
+            Refused(
+                lines[0],
+                Json(new CodeGraphSymbolLine(new StoredName("ile:a.toy", Kept: 1, At: 1), "abcdef", CodeNodeKinds.File, ["a.toy"])),
+                Json(new CodeGraphSymbolLine(new StoredName("oy:A", Kept: 1, At: 0), "123456", CodeNodeKinds.Type, ["a.toy"])),
+                lines[3],
+                lines[4]),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "node 1 is written against node 9, and there are 2",
+            Refused(lines[0], lines[1], Json(new CodeGraphSymbolLine(new StoredName("oy:A", Kept: 1, At: 9), "123456", CodeNodeKinds.Type, ["a.toy"])), lines[3], lines[4]),
+            StringComparison.Ordinal);
+
+        // One an older linker wrote - its head counting what references named ambiguously, and those counts after the
+        // others - is no link result this build reads, and is refused: the next sync links the graph again.
+        var older = Json(head).Replace("\"external\":1", "\"external\":1,\"unresolved\":1", StringComparison.Ordinal);
+        Assert.NotEqual(Json(head), older);
+        Assert.Contains("unresolved", Refused([older, .. lines[1..], Json(new CodeGraphCountLine(0, 2))]), StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// An extract's names are written against its nodes' parents' where that is shorter - an id and a qualified name as
+    /// what they keep of the parent's and the rest, a name that would keep too little whole - and a scope's against its
+    /// parent's where the two can never be written against each other, so scopes that are each other's parents - a Dart
+    /// library and its part - are kept by name; never between the two halves of a surrogate pair, and read back as they
+    /// were. One that keeps more than its base holds, or keeps some of a parent its node has none of, and nodes declared
+    /// inside each other, are refused.
+    /// </summary>
+    [Fact]
+    public void AnExtractsNames_AreWrittenAgainstTheirParents_AndOnesThatDoNotRead_AreRefused()
+    {
+        var extract = new FileExtract(
+        [
+            new ExtractNode("toy:Alpha", CodeNodeKinds.Type, "Alpha", "Alpha", 1, 3, "class Alpha"),
+            new ExtractNode("toy:Alpha.beta", CodeNodeKinds.Member, "beta", "Alpha.beta", 2, 2, "Alpha.beta") { Parent = "toy:Alpha" },
+        ])
+        {
+            Scopes =
+            [
+                new ExtractScope("Alpha", Open: true),
+                new ExtractScope("Alpha.Inner", Open: true) { Parent = "Alpha" },
+                new ExtractScope("lib/shapes.dart", Open: true) { Parent = "shapes" },
+                new ExtractScope("shapes", Open: true) { Parent = "lib/shapes.dart" },
+            ],
+        };
+        var text = Json(extract);
+
+        Assert.Contains("\"id\":[9,\".beta\"]", text, StringComparison.Ordinal);
+        Assert.Contains("\"qualified\":[5,\".beta\"]", text, StringComparison.Ordinal);
+        Assert.Contains("\"signature\":\"Alpha.beta\"", text, StringComparison.Ordinal);
+        Assert.Contains("{\"name\":[5,\".Inner\"],\"open\":true,\"parentAt\":0}", text, StringComparison.Ordinal);
+        Assert.Contains("{\"name\":\"lib/shapes.dart\",\"open\":true,\"parentAt\":3}", text, StringComparison.Ordinal);
+        Assert.Contains("{\"name\":\"shapes\",\"open\":true,\"parent\":\"lib/shapes.dart\"}", text, StringComparison.Ordinal);
+        Assert.Equal(
+            [("Alpha", null), ("Alpha.Inner", "Alpha"), ("lib/shapes.dart", "shapes"), ("shapes", "lib/shapes.dart")],
+            JsonSerializer.Deserialize<FileExtract>(text, JsonStateFile.LineOptions)!.Scopes.Select(scope => (scope.Name.Whole(), scope.Parent?.Whole())));
+        Assert.Equal(text, Json(JsonSerializer.Deserialize<FileExtract>(text, JsonStateFile.LineOptions)));
+
+        static string Refused(string written) => Assert.Throws<JsonException>(() => JsonSerializer.Deserialize<FileExtract>(written, JsonStateFile.LineOptions)).Message;
+
+        Assert.Contains("a name keeps 99 characters of a name of 9", Refused(text.Replace("[9,\".beta\"]", "[99,\".beta\"]", StringComparison.Ordinal)), StringComparison.Ordinal);
+        Assert.Contains("node 0's id keeps characters of a parent it has none of", Refused(text.Replace("\"id\":\"toy:Alpha\"", "\"id\":[3,\":Alpha\"]", StringComparison.Ordinal)), StringComparison.Ordinal);
+        Assert.Contains(
+            "node 0 is written, through what it is written against, against itself",
+            Refused(text.Replace("\"signature\":\"class Alpha\"", "\"signature\":\"class Alpha\",\"parent\":1", StringComparison.Ordinal)),
+            StringComparison.Ordinal);
+
+        var kept = new string('p', 20);
+        Assert.Equal(new StoredName("\U0001F600x", 20), StoredName.Against($"{kept}\U0001F600x", [("id", $"{kept}\U0001F601")]));
+    }
+
+    /// <summary>
+    /// A file nested thousands deep - each node's id and qualified name its whole path - is kept in an extract and a link
+    /// result that grow with its depth and not with the square of it, each name written against its parent's and each id
+    /// against its container's: twice as deep is about twice the bytes, a few hundred a level; and each reads back to the
+    /// very ids, names and handles the reader and the link gave. Names written whole come to four times the bytes for twice
+    /// the depth, and thousands a level.
+    /// </summary>
+    [Fact]
+    public void ADeepFilesExtractAndLinkResult_GrowWithItsDepth_AndReadBackTheSameIds()
+    {
+        using var directory = new TempDirectory();
+        var (store, layout) = Store(directory);
+
+        (long Extract, long Symbols) Kept(int depth)
+        {
+            var text = string.Concat(Enumerable.Repeat("{\"a\":", depth)) + "1" + new string('}', depth);
+            var lines = CodeFileText.Lines(text);
+            var extract = new JsonExtractor().Extract(new CodeFileInput("deep.json", text)).WithDigests(text);
+            var file = layout.GraphExtractFile(CodeGraphIds.ExtractName(Blob, "deep.json", "json", 1));
+
+            store.WriteGraphExtract(file, new CodeGraphStoredExtract(CodeGraphManifest.CurrentSchema, "json", 1, Blob, "deep.json", lines.Count, extract));
+            var read = store.ReadGraphExtract(file)!.Extract;
+
+            Assert.Equal(depth, read.Nodes.Count);
+            Assert.Equal(
+                extract.Nodes.Select(node => (node.Id, node.Qualified, node.Signature, node.Scope, node.Parent)),
+                read.Nodes.Select(node => (node.Id, node.Qualified, node.Signature, node.Scope, node.Parent)));
+
+            var linked = CodeGraphLinker.Link([new CodeGraphFile("deep.json", "json", extract)]);
+            var handles = CodeGraphIds.Handles(linked.Symbols.Select(symbol => symbol.Id));
+            var symbols = new CodeGraphSymbolsFile(
+                CodeGraphManifest.CurrentSchema,
+                "digest",
+                CodeGraphLinker.Revision,
+                [.. linked.Symbols.Select(symbol => new CodeGraphSymbolEntry(symbol.Id, handles[symbol.Id], symbol.Kind, symbol.Paths))],
+                linked.Edges,
+                linked.External);
+
+            store.WriteGraphSymbols(layout, symbols);
+            var back = store.ReadGraphSymbols(layout)!;
+
+            Assert.Equal(symbols.Nodes.Select(node => (node.Id, node.Handle)), back.Nodes.Select(node => (node.Id, node.Handle)));
+            Assert.Equal(symbols.Edges, back.Edges);
+            return (new FileInfo(file).Length, new FileInfo(layout.GraphSymbolsFile).Length);
+        }
+
+        var half = Kept(2_500);
+        var whole = Kept(5_000);
+
+        Assert.InRange((double)whole.Extract / half.Extract, 1.8, 2.3);
+        Assert.InRange((double)whole.Symbols / half.Symbols, 1.8, 2.3);
+        Assert.InRange(whole.Extract, 1, 5_000L * 600);
+        Assert.InRange(whole.Symbols, 1, 5_000L * 300);
+    }
+
+    /// <summary>
+    /// A file nested thousands deep, read by its reader and linked again, holds link keys that grow with its depth and
+    /// not with the square of it: each node's id the name before it and its own part, as its extract holds it, and what
+    /// the link keeps of the keys it may read again - each node's id, each scope's name - counts each name's own part
+    /// alone. Twice the depth is about twice the characters; a link whose keys were each name written out whole holds
+    /// every node's whole path, which for twice the depth is four times the characters.
+    /// </summary>
+    [Fact]
+    public void ADeepFilesLinkKeys_GrowWithItsDepth_NotWithTheSquareOfIt()
+    {
+        long Kept(int depth)
+        {
+            var text = string.Concat(Enumerable.Repeat("{\"a\":", depth)) + "1" + new string('}', depth);
+            var extract = new JsonExtractor().Extract(new CodeFileInput("deep.json", text)).WithDigests(text);
+            var linked = CodeGraphLinker.Link([new CodeGraphFile("deep.json", "json", extract)]);
+            var relinked = CodeGraphLinker.Relink(linked, [new CodeGraphFile("deep.json", "json", extract)]);
+
+            Assert.Equal([.. linked.Symbols.Select(symbol => symbol.Id)], [.. relinked.Symbols.Select(symbol => symbol.Id)]);
+            Assert.Equal(linked.Edges, relinked.Edges);
+            Assert.True(relinked.Memory!.Keys.Characters > 0, "the link kept no key of the file");
+            return relinked.Memory.Keys.Characters;
+        }
+
+        var half = Kept(2_500);
+        var whole = Kept(5_000);
+
+        Assert.InRange((double)whole / Math.Max(half, 1), 1.8, 2.3);
+        Assert.True(whole < 5_000L * 100, $"linking a file 5,000 deep kept {whole} key characters");
     }
 
     /// <summary>
@@ -505,13 +720,17 @@ public sealed class CodebaseGraphRecordsTests
         Assert.InRange(disk.LargestRead, 1, 64 << 10);
     }
 
-    /// <summary>An extract's name holds its blob, a digest of its path, its implementation and version: a renamed file is read again, a raised version too.</summary>
+    /// <summary>
+    /// An extract's name holds its blob, the whole digest of its path, its implementation and version: a renamed file is
+    /// read again, a raised version too; the name an earlier build gave it held eight characters of the digest alone.
+    /// </summary>
     [Fact]
     public void AnExtractsName_HoldsItsBlobPathImplementationAndVersion()
     {
         var name = CodeGraphIds.ExtractName(Blob, "src/a.toy", "toy", 2);
 
-        Assert.Equal($"aa/{Blob}-{CodeGraphIds.Sha256("src/a.toy")[..8]}.toy-2.json", name);
+        Assert.Equal($"aa/{Blob}-{CodeGraphIds.Sha256("src/a.toy")}.toy-2.json", name);
+        Assert.Equal($"aa/{Blob}-{CodeGraphIds.Sha256("src/a.toy")[..8]}.toy-2.json", CodeGraphIds.EarlierExtractName(Blob, "src/a.toy", "toy", 2));
         Assert.NotEqual(name, CodeGraphIds.ExtractName(Blob, "src/b.toy", "toy", 2));
         Assert.NotEqual(name, CodeGraphIds.ExtractName(Blob, "src/a.toy", "toy", 3));
     }
@@ -526,15 +745,14 @@ public sealed class CodebaseGraphRecordsTests
     /// <summary>A record as the store writes it, on one line.</summary>
     private static string Json<T>(T record) => JsonSerializer.Serialize(record, JsonStateFile.LineOptions);
 
-    /// <summary>A link result of two nodes, an edge between them and a count of each kind.</summary>
+    /// <summary>A link result of two nodes, an edge between them and a count of what one's references named outside the repository.</summary>
     private static CodeGraphSymbolsFile Symbols() => new(
         CodeGraphManifest.CurrentSchema,
         "digest",
         CodeGraphLinker.Revision,
         [new("file:a.toy", "abcdef", CodeNodeKinds.File, ["a.toy"]), new("toy:A", "123456", CodeNodeKinds.Type, ["a.toy"])],
         [new CodeEdge("file:a.toy", "toy:A", CodeEdgeKinds.Contains, 1, CodeConfidences.Exact)],
-        new Dictionary<string, int> { ["toy:A"] = 1 },
-        new Dictionary<string, int> { ["file:a.toy"] = 2 });
+        new Dictionary<string, int> { ["toy:A"] = 1 });
 
     /// <summary>The real file system, noting the most bytes any one read of a file asked for, and any one write of one gave.</summary>
     private sealed class Transfers(IFileSystem inner) : PassThroughFileSystem(inner)

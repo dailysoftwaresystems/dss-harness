@@ -1,4 +1,7 @@
+using System.Globalization;
 using System.Text.Json;
+using DssHarness.Core.Json;
+using DssHarness.Core.Pages;
 
 namespace DssHarness.Core.Agents.Policy;
 
@@ -11,13 +14,12 @@ namespace DssHarness.Core.Agents.Policy;
 /// <para>
 /// An ask rule for every tool the launch has, so no call is allowed by a rule or a mode before the
 /// engine has seen it; the restriction rules as Claude Code's own deny rules, and a read of every
-/// credential slot, Claude Code directory and place the user keeps credentials in of the run's beside them - which Claude Code applies to
-/// its searches too - a second layer behind the engine's answers, never the one relied on; <c>"fallbackModel": []</c> and
+/// credential slot, Claude Code directory and place the user keeps credentials in of the run's beside them - a second
+/// layer behind the engine's answers, never the one relied on; <c>"fallbackModel": []</c> and
 /// <c>"switchModelsOnFlag": false</c>, for the engine's fallback is the only one; Claude Code's own
 /// output style, because its prompt is kept; an <c>env</c> holding every name the engine controls,
-/// so the user's own <c>env</c> cannot turn one back; the user's hooks off in every launch; and, where the launch's shell
-/// commands run inside this tool's isolation, the variables that hand each to it and Claude Code's own sandbox off, for no
-/// sandbox nests in this one. No key is ever in it.
+/// so the user's own <c>env</c> cannot turn one back; the user's hooks off in every launch; and, where the launch runs
+/// whole inside this tool's isolation, Claude Code's own sandbox off, for no sandbox nests in this one. No key is ever in it.
 /// </para>
 /// <para>
 /// Every path in a deny rule is written as an absolute path, once for each root the launch has, so
@@ -32,77 +34,57 @@ namespace DssHarness.Core.Agents.Policy;
 /// </remarks>
 public static class ClaudeSettings
 {
+    /// <summary>The variable Claude Code reads for the most tokens it takes into the conversation of one answer of an MCP tool.</summary>
+    public const string McpOutputVariable = "MAX_MCP_OUTPUT_TOKENS";
+
     /// <summary>
-    /// The names the engine controls in every launch, with their values, in the order they are written: compaction off,
-    /// for the engine compacts; the auto-updater off, for only this tool moves the installation; the key a launch signs
-    /// in with kept from the commands it runs; the retry watchdog off, which would retry a limit without end; and every
-    /// shell command started in the launch's own directory, never where a <c>cd</c> of an earlier one left it, for the
-    /// policy reads a command's relative paths against that directory and the places the command itself moves to. Set
-    /// in the settings' <c>env</c>, which outranks the user's own, and in the child's environment, which a host session's
-    /// would otherwise outrank.
+    /// The tokens one answer of the engine's tool server may take, as <see cref="McpOutputVariable"/> says: three times
+    /// the characters of one page of a tool's answer to a model (<see cref="PageRoom.ModelAnswer"/>). Every tool the
+    /// server serves answers a page at most, and the rest by asking the next page; a page reaches Claude Code as the
+    /// text of a JSON-RPC answer - each quote, backslash and control character escaped, a character outside ASCII as six
+    /// at most, inside the answer's envelope - and a token is never less than one character, so three times the page
+    /// holds the whole of one answer however it is spelt, and Claude Code never cuts an answer the engine paged. Left to
+    /// itself, Claude Code cuts an answer at a number of its own, which a page of text that tokenizes densely passes.
     /// </summary>
-    public static IReadOnlyList<KeyValuePair<string, string>> Controlled { get; } =
+    public static int McpOutputTokens { get; } = 3 * PageRoom.ModelAnswer;
+
+    /// <summary>
+    /// The names the engine sets in every launch, with their values, in the order they are written: compaction off,
+    /// for the engine compacts; the auto-updater off, for only this tool moves the installation; the key a launch signs
+    /// in with kept from the commands Claude Code runs itself; the retry watchdog off, which would retry a limit without
+    /// end; and the tokens one answer of the engine's tool server may take, a page whole (<see cref="McpOutputTokens"/>).
+    /// Set in the settings' <c>env</c>, which outranks the user's own, and in the child's environment, which a host
+    /// session's would otherwise outrank.
+    /// </summary>
+    public static IReadOnlyList<KeyValuePair<string, string>> Launched { get; } =
     [
         new("DISABLE_COMPACT", "1"),
         .. ClaudeCode.ClaudeCodeInstall.EveryStart.Select(start => new KeyValuePair<string, string>(start.Key, start.Value!)),
         new("CLAUDE_CODE_SUBPROCESS_ENV_SCRUB", "1"),
         new("CLAUDE_CODE_RETRY_WATCHDOG", "0"),
-        new("CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR", "1"),
+        new(McpOutputVariable, McpOutputTokens.ToString(CultureInfo.InvariantCulture)),
     ];
-
-    /// <summary>The variable Claude Code reads for how long a shell command runs where its call names no time, in milliseconds.</summary>
-    public const string BashTimeoutVariable = "BASH_DEFAULT_TIMEOUT_MS";
-
-    /// <summary>The variable Claude Code reads for the most time a call of a shell command may name, in milliseconds.</summary>
-    public const string BashMaxTimeoutVariable = "BASH_MAX_TIMEOUT_MS";
-
-    /// <summary>
-    /// The names the engine sets in a launch whose commands run under <paramref name="commands"/>, in the order they are
-    /// written: <see cref="Controlled"/>, then Claude Code's own bounds of a shell command from
-    /// <c>agentPolicy.commandTimeoutSeconds</c> and <c>maxCommandTimeoutSeconds</c> - so a command an agent runs is held to
-    /// them on this client as on every other.
-    /// </summary>
-    /// <param name="commands">What the configuration says of an agent's commands.</param>
-    public static IReadOnlyList<KeyValuePair<string, string>> Launched(AgentCommandSettings commands)
-    {
-        ArgumentNullException.ThrowIfNull(commands);
-
-        return
-        [
-            .. Controlled,
-            new(BashTimeoutVariable, (commands.TimeoutSeconds * 1000L).ToString(System.Globalization.CultureInfo.InvariantCulture)),
-            new(BashMaxTimeoutVariable, (commands.MaxTimeoutSeconds * 1000L).ToString(System.Globalization.CultureInfo.InvariantCulture)),
-        ];
-    }
 
     /// <summary>
     /// Renders the settings file of one launch.
     /// </summary>
-    /// <param name="tools">Every tool the launch has, by Claude Code's own names, as <c>--tools</c> names them.</param>
+    /// <param name="tools">Every tool the launch has, by Claude Code's own names: the engine's tool server's, and a side-task's own web tools.</param>
     /// <param name="ground">The launch's ground: its restrictions and the roots it reads and writes.</param>
-    /// <param name="commands">What the configuration says of an agent's commands, whose times the settings' <c>env</c> holds.</param>
     /// <param name="comparison">How a name in a pattern and a name in a path compare: the case rule of the tree the path is in.</param>
     /// <param name="isolated">
-    /// Whether the launch's commands run inside the operating system's isolation of this tool's - handed over one by one, or
-    /// the launch whole inside it: Claude Code's own sandbox is then turned off (<c>"sandbox": {"enabled": false}</c>), over
-    /// any the user's settings ask for - no mechanism of this tool's starts another inside it (macOS no sandbox inside a
-    /// sandbox, bubblewrap no namespace inside its own), so a sandbox of Claude Code's would fail each command; on Windows
-    /// Claude Code has none of its own.
+    /// Whether the launch runs whole inside the operating system's isolation of this tool's: Claude Code's own sandbox is
+    /// then turned off (<c>"sandbox": {"enabled": false}</c>), over any the user's settings ask for - no mechanism of this
+    /// tool's starts another inside it (macOS no sandbox inside a sandbox, bubblewrap no namespace inside its own), so a
+    /// sandbox of Claude Code's would fail what it starts; on Windows Claude Code has none of its own.
     /// </param>
-    /// <param name="isolatedShell">
-    /// Where the launch's shell commands are handed to the isolation one by one, the variables that hand each over
-    /// (<see cref="ClaudeCode.ClaudeShell.Variables"/>), written in the settings' <c>env</c> after the engine's own so the
-    /// user's settings cannot turn them back; none where they are not handed over.
-    /// </param>
-    public static string Render(IReadOnlyList<string> tools, AgentPolicyGround ground, AgentCommandSettings commands, StringComparison comparison, bool isolated = false, IReadOnlyList<KeyValuePair<string, string>>? isolatedShell = null)
+    public static string Render(IReadOnlyList<string> tools, AgentPolicyGround ground, StringComparison comparison, bool isolated = false)
     {
         ArgumentNullException.ThrowIfNull(tools);
         ArgumentNullException.ThrowIfNull(ground);
-        ArgumentNullException.ThrowIfNull(commands);
 
         using var stream = new MemoryStream();
 
-        using (var writer = new Utf8JsonWriter(stream, new JsonWriterOptions { Indented = true }))
+        using (var writer = new Utf8JsonWriter(stream, JsonDepth.Writer with { Indented = true }))
         {
             writer.WriteStartObject();
 
@@ -121,7 +103,7 @@ public static class ClaudeSettings
 
             writer.WriteStartObject("env");
 
-            foreach (var (name, value) in Launched(commands).Concat(isolatedShell ?? []))
+            foreach (var (name, value) in Launched)
             {
                 writer.WriteString(name, value);
             }

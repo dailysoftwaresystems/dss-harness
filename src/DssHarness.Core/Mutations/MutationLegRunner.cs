@@ -571,7 +571,7 @@ internal sealed class MutationLegRunner(
 
         /// <summary><paramref name="entry"/>, <paramref name="arm"/>'s line, saying why <c>--pending</c> swept it where it did.</summary>
         private ArmEntry Swept(MutationArm arm, ArmEntry entry)
-            => _why.TryGetValue(arm.Id, out var why) ? entry with { Pending = new ArmPending(why.Code, why.Said) } : entry;
+            => _why.TryGetValue(arm.Id, out var why) ? entry with { Pending = new ArmPending(why.Code, why.Said) { Paths = why.Paths.Count > 0 ? why.Paths : null } } : entry;
 
         /// <summary>What the sweep's clock says now, to the second, as a verdict kept says when.</summary>
         private DateTimeOffset Now()
@@ -735,9 +735,9 @@ internal sealed class MutationLegRunner(
                         },
                         [.. ArmJudge.Builds(arm).Select(target => tables[target])],
                         lacking.Count > 0
-                            ? $"the tree's reading holds no {ReportText.Listed(lacking)}, which it cites"
+                            ? $"the tree's reading holds no {Names.All(lacking)}, which it cites"
                             : reads.Uncovered.Count > 0
-                                ? $"runReads names {ReportText.Listed(reads.Uncovered)}, which covers no file of the tree"
+                                ? $"runReads names {Names.All(reads.Uncovered)}, which covers no file of the tree"
                                 : compilersUnread,
                         causes);
                 },
@@ -812,7 +812,7 @@ internal sealed class MutationLegRunner(
                 {
                     unlinked.Add(
                         $"the sources of '{source.Name}' the leg's build fetched hold {ReportText.Counted(read.Files.Links.Count, "link")}, which no worker is given: "
-                        + ReportText.Listed(read.Files.Links));
+                        + Names.All(read.Files.Links));
                 }
             }
 
@@ -834,7 +834,7 @@ internal sealed class MutationLegRunner(
         /// </summary>
         private async Task RemoveBeyondCapAsync(CancellationToken cancellationToken)
         {
-            var cap = WorkerRoom.Wanted(_subject.Settings.Workers, int.MaxValue, _leg.Named.Kind == HostKind.Wsl);
+            var cap = WorkerRoom.Wanted(_subject.Settings.Workers, int.MaxValue);
 
             foreach (var beyond in (await _runner._copies.ListAsync(_subject.Workers, cancellationToken).ConfigureAwait(false))
                 .Where(copy => copy.Number > cap))
@@ -849,7 +849,7 @@ internal sealed class MutationLegRunner(
         /// </summary>
         private async Task<(WorkerPlan Plan, IReadOnlyList<long> Needs)> PlanAsync(int arms, CancellationToken cancellationToken)
         {
-            var wanted = WorkerRoom.Wanted(_subject.Settings.Workers, arms, _leg.Named.Kind == HostKind.Wsl);
+            var wanted = WorkerRoom.Wanted(_subject.Settings.Workers, arms);
 
             // Within this machine's path limit, as a worktree is kept: a worker whose build passes it fails as compile errors
             // in files nobody touched. A worker's path grows only with its number, so the workers that fit come first.
@@ -1771,7 +1771,7 @@ internal sealed class MutationLegRunner(
                 await _runner._site.WriteAsync(state.Worker, state.Path, bytes, stamp, cancellationToken).ConfigureAwait(false);
             }
 
-            await _runner._site.UntilPastAsync(stamp, cancellationToken).ConfigureAwait(false);
+            await _runner._site.UntilPastAsync(stamp, told => _work.Progress(told.Line()), cancellationToken).ConfigureAwait(false);
         }
 
         /// <summary>
@@ -1882,6 +1882,7 @@ internal sealed class MutationLegRunner(
                 ClockStepToleranceMilliseconds = _config.Defaults.ClockStepToleranceMilliseconds,
                 Bound = bound,
                 Diagnostic = diagnostic,
+                Told = told => _work.Progress($"{named}: {told.Line()}"),
             };
         }
 
@@ -2007,6 +2008,8 @@ internal sealed class MutationLegRunner(
             // Beside the verdict and never in it, as a build's and a test's are; in one order, whichever worker met each.
             return _leg.Entry(verdict, string.Join("; ", detail)) with
             {
+                // Every item the leg's own verdicts' details stand for, whole, in their order (ReachedVerdict.Named).
+                Named = [.. own.SelectMany(reached => reached.Named)],
                 Arms = ordered,
                 TimingNotes = [.. _timing.Order(StringComparer.Ordinal)],
                 PendingSweep = pending,

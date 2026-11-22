@@ -1,3 +1,4 @@
+using DssHarness.Core.FileSystem;
 using DssHarness.Core.Git;
 using DssHarness.Core.Hosts;
 using DssHarness.Core.Processes;
@@ -18,6 +19,13 @@ public interface ISyncTransport
 {
     /// <summary>The host this transport reaches, as reports name it.</summary>
     HostId Host { get; }
+
+    /// <summary>
+    /// The most bytes of one file a request to the copy carries, either way: a file larger crosses a piece at a time, each
+    /// a request of its own (<see cref="ReadFileAsync"/>, <see cref="WritePieceAsync"/>), and a file crossing is never held
+    /// in memory past one piece, however large it is. Never below one.
+    /// </summary>
+    int PieceBytes { get; }
 
     /// <summary>Whether the copy's root directory exists.</summary>
     /// <param name="root">The copy's root, as the far side spells it.</param>
@@ -151,7 +159,11 @@ public interface ISyncTransport
         IReadOnlyList<string> withheld,
         CancellationToken cancellationToken = default);
 
-    /// <summary>Writes one file into the copy, creating any missing directory above it.</summary>
+    /// <summary>
+    /// Writes one file whose bytes are in hand into the copy, creating any missing directory above it: one larger than
+    /// <see cref="PieceBytes"/> crosses a piece at a time, as <see cref="WritePieceAsync"/> carries it, and is put in place
+    /// once all of it has arrived.
+    /// </summary>
     /// <param name="root">The copy's root.</param>
     /// <param name="relativePath">Where the file goes, relative to the root.</param>
     /// <param name="contents">Its bytes.</param>
@@ -162,19 +174,73 @@ public interface ISyncTransport
         byte[] contents,
         CancellationToken cancellationToken = default);
 
-    /// <summary>Writes several files into the copy, as one exchange with the far side.</summary>
+    /// <summary>Writes several files whose bytes are in hand into the copy, as one exchange with the far side.</summary>
     /// <param name="root">The copy's root, as the far side spells it.</param>
     /// <param name="files">The files, each with its path relative to the root and its bytes.</param>
     /// <param name="cancellationToken">Stops the write.</param>
     /// <remarks>
     /// Over a connection, one exchange is one session, and a session costs far more than the bytes it
     /// carries. The files are written in the order given, so a failure leaves the copy in a state the
-    /// caller can reason about: everything before the file named is there, and nothing after it is.
+    /// caller can reason about: everything before the file named is there, and nothing after it is. A file
+    /// larger than <see cref="PieceBytes"/> crosses on its own, in its place among them, as <see cref="WriteFileAsync"/>
+    /// carries one.
     /// </remarks>
     Task WriteFilesAsync(
         string root,
         IReadOnlyList<SyncFileContent> files,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Keeps one piece of a file on its way into the copy aside - in the copy's own harness directory, which no sync carries
+    /// or deletes - until <see cref="PlacePiecesAsync"/> puts the whole of it in place: the file at its path is left as it
+    /// is until then.
+    /// </summary>
+    /// <param name="root">The copy's root.</param>
+    /// <param name="relativePath">Where the file goes, relative to the root.</param>
+    /// <param name="offset">
+    /// How many bytes of the file come before this piece: a piece at the start begins the file again, clearing what an
+    /// earlier carrying of it left aside, and any other follows exactly what arrived before it.
+    /// </param>
+    /// <param name="piece">The bytes: at most <see cref="PieceBytes"/> of them.</param>
+    /// <param name="cancellationToken">Stops the write.</param>
+    /// <exception cref="HarnessException">
+    /// It does not follow what arrived (<see cref="HarnessExit.CommandFailed"/>), nothing of it kept; it could not be kept;
+    /// or the path leaves the copy, refused.
+    /// </exception>
+    Task WritePieceAsync(
+        string root,
+        string relativePath,
+        long offset,
+        ReadOnlyMemory<byte> piece,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Puts the file whose pieces <see cref="WritePieceAsync"/> kept aside in place, whole and at once, once what it holds
+    /// as it lands is <paramref name="whole"/> - read back, before it replaces what was at its path - and removes the pieces.
+    /// </summary>
+    /// <param name="root">The copy's root.</param>
+    /// <param name="relativePath">Where the file goes, relative to the root.</param>
+    /// <param name="whole">What the file holds where it was read: its length, and the hash of its bytes.</param>
+    /// <param name="cancellationToken">Stops the write before it begins.</param>
+    /// <exception cref="HarnessException">
+    /// Its pieces did not all arrive, or what they hold together is not <paramref name="whole"/>
+    /// (<see cref="HarnessExit.CommandFailed"/>): the file at its path is left as it was, and the pieces stay aside until
+    /// <see cref="DropPiecesAsync"/> removes them or a first piece begins the file again.
+    /// </exception>
+    Task PlacePiecesAsync(
+        string root,
+        string relativePath,
+        FileContent whole,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Removes the pieces of a file <see cref="WritePieceAsync"/> kept aside, where carrying it stopped before it was put in
+    /// place; nothing where none are kept. The file at its path is left as it is.
+    /// </summary>
+    /// <param name="root">The copy's root.</param>
+    /// <param name="relativePath">Where the file was going, relative to the root.</param>
+    /// <param name="cancellationToken">Stops the removal before it begins.</param>
+    Task DropPiecesAsync(string root, string relativePath, CancellationToken cancellationToken = default);
 
     /// <summary>Deletes one file from the copy.</summary>
     /// <param name="root">The copy's root.</param>
@@ -269,39 +335,47 @@ public interface ISyncTransport
     Task<WorkersRemoval> RemoveFormerWorkersBesideCopiesAsync(string repositoryPath, bool measureOnly = false, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Reads one file out of the copy: one a sync or a carry sends on, one it checks after writing, or a
-    /// leg's output brought home.
+    /// Reads one piece of a file out of the copy - of one a sync or a carry sends on, one it checks after writing, or a
+    /// leg's output brought home - through no link the copy holds: a file of any size is read so, a piece at a time, and
+    /// never held whole.
     /// </summary>
     /// <param name="root">The copy's root.</param>
     /// <param name="relativePath">The file to read, relative to the root.</param>
+    /// <param name="offset">How many bytes of the file come before the piece.</param>
+    /// <param name="count">
+    /// The most bytes the piece holds, at most <see cref="PieceBytes"/>: it holds as many as the file has from
+    /// <paramref name="offset"/>, up to these. None reads only what the file holds, by its length and hash.
+    /// </param>
     /// <param name="cancellationToken">Stops the read.</param>
+    /// <returns>The piece, with the length of the whole file, and its hash where the piece starts it.</returns>
     /// <exception cref="HarnessException">
     /// No file is at the path - nothing at it, nothing along it, or a directory - said by name as a transfer
-    /// that failed, <see cref="HarnessExit.CommandFailed"/>; or the path leaves the copy, refused.
+    /// that failed, <see cref="HarnessExit.CommandFailed"/>; a piece arrived otherwise than it was read, said naming it;
+    /// or the path leaves the copy, refused.
     /// </exception>
-    Task<byte[]> ReadFileAsync(string root, string relativePath, CancellationToken cancellationToken = default);
+    Task<SyncFilePiece> ReadFileAsync(string root, string relativePath, long offset, int count, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Reads one file a pull brings back out of the copy (<see cref="ReadFileAsync"/>), following a link along its path as
-    /// it is spelt - a build directory pointed at another volume is ordinary - but never into a place
+    /// Reads one piece of a file a pull brings back out of the copy (<see cref="ReadFileAsync"/>), following a link along its
+    /// path as it is spelt - a build directory pointed at another volume is ordinary - but never into a place
     /// <paramref name="hidden"/> names: decided by where the file opened stands, as the system names it by its handle.
     /// </summary>
     /// <param name="root">The copy's root.</param>
     /// <param name="relativePath">The file to read, relative to the root.</param>
+    /// <param name="offset">How many bytes of the file come before the piece.</param>
+    /// <param name="count">The most bytes the piece holds, as <see cref="ReadFileAsync"/> takes it.</param>
     /// <param name="hidden">The places the isolation hides on this machine (<see cref="Agents.Isolation.IAgentIsolation.Hidden"/>), which no read of a pull reaches.</param>
     /// <param name="cancellationToken">Stops the read.</param>
     /// <exception cref="HarnessException">
     /// As <see cref="ReadFileAsync"/>; or the file opened stands in a hidden place, nothing read
     /// (<see cref="HarnessExit.CommandFailed"/>).
     /// </exception>
-    Task<byte[]> PullFileAsync(string root, string relativePath, IReadOnlyList<IsolatedPath> hidden, CancellationToken cancellationToken = default);
+    Task<SyncFilePiece> PullFileAsync(string root, string relativePath, long offset, int count, IReadOnlyList<IsolatedPath> hidden, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// What one directory of the copy holds, for a pull that names it: every file below it with its size, and every link
-    /// below it, which is neither followed nor read. Bounded where the directory is, before any file of it is read: no
-    /// more than <see cref="SyncServe.MostFilesPulledFromADirectory"/> files, no more than
-    /// <see cref="SyncServe.LargestDirectoryPulled"/> bytes together, and no file past <see cref="SyncServe.LargestFile"/>.
-    /// The directory named is reached as its path is spelt, a link along it followed, where <paramref name="hidden"/> is
+    /// below it, which is neither followed nor read: every one, however many, however large and however much they hold
+    /// together. The directory named is reached as its path is spelt, a link along it followed, where <paramref name="hidden"/> is
     /// given - never into a place it names - and through no link where it is null.
     /// </summary>
     /// <param name="root">The copy's root.</param>
@@ -323,3 +397,21 @@ public interface ISyncTransport
 /// <param name="Path">Where it goes, relative to the copy's root.</param>
 /// <param name="Contents">Its bytes.</param>
 public sealed record SyncFileContent(string Path, byte[] Contents);
+
+/// <summary>One piece of a file read out of a copy (<see cref="ISyncTransport.ReadFileAsync"/>).</summary>
+/// <param name="Length">How many bytes the whole file holds, as it stood when the piece was read.</param>
+/// <param name="Content">
+/// The hash of the whole file, where the piece starts it; <see langword="null"/> for a later piece, which a reader holds to
+/// the first piece's.
+/// </param>
+/// <param name="Bytes">The piece's bytes: as many as the file holds from where it starts, up to as many as were asked for.</param>
+public sealed record SyncFilePiece(long Length, string? Content, byte[] Bytes)
+{
+    /// <summary>
+    /// What the whole file holds, where this piece starts it; <see langword="null"/> for a later piece.
+    /// </summary>
+    public FileContent? Whole => Content is null ? null : new FileContent(Length, Content);
+
+    /// <summary>Whether this piece is the whole file: one that starts it and holds every byte of it.</summary>
+    public bool IsWholeFile => Content is not null && Bytes.LongLength == Length;
+}

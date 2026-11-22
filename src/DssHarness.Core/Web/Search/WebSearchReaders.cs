@@ -166,7 +166,7 @@ public sealed record JsonSearchItems(JsonPath Items, WebItemTemplate Title, IRea
             var results = new List<WebSearchResult>();
             var leftOut = 0;
 
-            foreach (var item in array.EnumerateArray().Take(WebSearchAnswer.MostResults))
+            foreach (var item in array.EnumerateArray())
             {
                 var title = Title.Fill(item, root);
                 var snippet = Snippet?.Fill(item, root);
@@ -203,7 +203,7 @@ public sealed record JsonSearchItems(JsonPath Items, WebItemTemplate Title, IRea
         => total?.Select(root) is [{ ValueKind: JsonValueKind.Number } number] && number.TryGetInt64(out var count) && count >= 0 ? count : null;
 
     /// <summary>
-    /// A source's JSON <paramref name="body"/>, read whole: one that spells half a character (<see cref="Json.JsonHalfCharacter"/>)
+    /// A source's JSON <paramref name="body"/>, read whole, at any depth (<see cref="Json.JsonDepth"/>): one that spells half a character (<see cref="Json.JsonHalfCharacter"/>)
     /// is no JSON a reader can use, refused here, before any of its texts is read.
     /// </summary>
     /// <exception cref="JsonException">It is no JSON, or one of its texts spells half a character.</exception>
@@ -211,10 +211,10 @@ public sealed record JsonSearchItems(JsonPath Items, WebItemTemplate Title, IRea
     {
         if (Json.JsonHalfCharacter.Find(body) is var (line, spelt))
         {
-            throw new JsonException($"line {line}: '{Output.TextCut.Head(spelt, 80)}' spells half a character, an escape of a lone surrogate that no text can hold");
+            throw new JsonException($"line {line}: '{spelt}' spells half a character, an escape of a lone surrogate that no text can hold");
         }
 
-        return JsonDocument.Parse(body);
+        return Json.JsonDepth.ParseDocument(body);
     }
 
     /// <summary>When a body's <paramref name="backoff"/> - a number of seconds - lets the source be asked again; <see langword="null"/> where it asks no pause.</summary>
@@ -285,7 +285,7 @@ internal static class FeedItems
         var results = new List<WebSearchResult>();
         var leftOut = 0;
 
-        foreach (var item in read.Items.Take(WebSearchAnswer.MostResults))
+        foreach (var item in read.Items)
         {
             var (title, link, summary) = read.Read(item);
 
@@ -304,22 +304,22 @@ internal static class FeedItems
             return WebSearchAnswer.Changed($"none of its {leftOut} items gave a title and an address") with { Until = pause };
         }
 
-        var total = long.TryParse(read.Total?.Value.Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out var count) ? count : (long?)null;
+        var total = long.TryParse(WebXml.TextOf(read.Total)?.Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out var count) ? count : (long?)null;
 
         return WebSearchAnswer.Read(results) with { Total = total, Until = pause, LeftOut = leftOut };
     }
 
     private static (string?, string?, string?) RssItem(XElement item)
     {
-        var link = item.Element("link")?.Value;
+        var link = WebXml.TextOf(item.Element("link"));
 
         // A guid is its item's address unless it says it is not one.
         if (string.IsNullOrWhiteSpace(link) && item.Element("guid") is { } guid && !string.Equals(guid.Attribute("isPermaLink")?.Value, "false", StringComparison.OrdinalIgnoreCase))
         {
-            link = guid.Value;
+            link = WebXml.Text(guid);
         }
 
-        return (Markup(item.Element("title")?.Value), link, Markup(item.Element("description")?.Value ?? item.Element(Content + "encoded")?.Value));
+        return (Markup(WebXml.TextOf(item.Element("title"))), link, Markup(WebXml.TextOf(item.Element("description") ?? item.Element(Content + "encoded"))));
     }
 
     private static (string?, string?, string?) AtomEntry(XElement entry)
@@ -332,7 +332,7 @@ internal static class FeedItems
     }
 
     private static (string?, string?, string?) Rss1Item(XElement item)
-        => (Markup(item.Element(Rss1 + "title")?.Value), item.Element(Rss1 + "link")?.Value, Markup(item.Element(Rss1 + "description")?.Value));
+        => (Markup(WebXml.TextOf(item.Element(Rss1 + "title"))), WebXml.TextOf(item.Element(Rss1 + "link")), Markup(WebXml.TextOf(item.Element(Rss1 + "description"))));
 
     /// <summary>
     /// The text of an Atom text construct (RFC 4287, 3.1) or of an entry's content (4.1.3.3), as its type says:
@@ -353,29 +353,26 @@ internal static class FeedItems
 
         return type switch
         {
-            "text" => element.Value,
-            "html" or "text/html" => Markup(element.Value),
+            "text" => WebXml.Text(element),
+            "html" or "text/html" => Markup(WebXml.Text(element)),
             "xhtml" => Markup(Inner(element)),
             _ when type.EndsWith("+xml", StringComparison.Ordinal) || type.EndsWith("/xml", StringComparison.Ordinal) => Markup(Inner(element)),
-            _ when type.StartsWith("text/", StringComparison.Ordinal) => element.Value,
+            _ when type.StartsWith("text/", StringComparison.Ordinal) => WebXml.Text(element),
             _ => null,
         };
     }
 
     /// <summary>
     /// The markup of the feed's own elements inside <paramref name="element"/>, as they stand: no blank added between two
-    /// (as an indented writing of them adds one), and a CDATA section's text written as text, which HTML has no CDATA for.
+    /// (as an indented writing of them adds one), and a CDATA section's text written as text, which HTML has no CDATA for -
+    /// each one replaced where it stands in the answer's own tree, read once and never again, so no copy of it is made
+    /// node by node; and every node written by the writer's own walk, which goes down a nesting of any depth.
     /// </summary>
     private static string Inner(XElement element)
     {
-        if (element.DescendantNodes().Any(node => node is XCData))
+        foreach (var data in element.DescendantNodes().OfType<XCData>().ToList())
         {
-            element = new XElement(element);
-
-            foreach (var data in element.DescendantNodes().OfType<XCData>().ToList())
-            {
-                data.ReplaceWith(new XText(data.Value));
-            }
+            data.ReplaceWith(new XText(data.Value));
         }
 
         return string.Concat(element.Nodes().Select(node => node.ToString(SaveOptions.DisableFormatting)));

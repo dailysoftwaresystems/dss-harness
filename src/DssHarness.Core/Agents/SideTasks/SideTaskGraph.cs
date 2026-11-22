@@ -15,7 +15,8 @@ namespace DssHarness.Core.Agents.SideTasks;
 /// the newest graph of the repository's runs or side-tasks at its opening, then incremental, synced again after each of
 /// its agent's writes and commands on either client (<see cref="AfterWrites"/>). Its agent is given the <c>graph</c> tool
 /// with every operation its client serves and no narrowing, held to the side-task's own policy, the repository map with
-/// its first message, and a context pack made from each message the person types.
+/// its first message, and a context pack made from each message the person types - its page 1 with the message, and its
+/// later pages by the tool's <c>pack</c>.
 /// </summary>
 public sealed class SideTaskGraph
 {
@@ -29,6 +30,7 @@ public sealed class SideTaskGraph
     private readonly SideTaskLayout layout;
     private readonly string map;
     private readonly string mapMeta;
+    private readonly Execution.ILineMask? mask;
     private CodebaseGraphQueries? queries;
 
     /// <summary>The side-task's graph over its records, not yet opened.</summary>
@@ -41,6 +43,7 @@ public sealed class SideTaskGraph
     /// <param name="repository">The repository whose main checkout is the graph's base.</param>
     /// <param name="layout">The side-task's own layout.</param>
     /// <param name="worktreesRoot">The configured worktrees root, which the tool's state paths name.</param>
+    /// <param name="mask">The secrets the side-task holds, as its records and answers are masked by: what its graph tool keeps of an answer holds none.</param>
     public SideTaskGraph(
         ICodebaseGraphService graph,
         IFileSystem files,
@@ -50,7 +53,8 @@ public sealed class SideTaskGraph
         TimeProvider clock,
         HarnessLayout repository,
         SideTaskLayout layout,
-        string worktreesRoot)
+        string worktreesRoot,
+        Execution.ILineMask? mask = null)
     {
         this.graph = graph;
         this.files = files;
@@ -59,6 +63,7 @@ public sealed class SideTaskGraph
         this.store = store;
         this.clock = clock;
         this.layout = layout;
+        this.mask = mask;
         map = layout.MapFile;
         mapMeta = layout.MapMetaFile;
         request = new CodebaseGraphSync(repository, layout.AsGraph, CodebaseGraphShape.Default, worktreesRoot, Rebuild: false, $"the side-task '{layout.Name}' opened");
@@ -101,18 +106,22 @@ public sealed class SideTaskGraph
             return null;
         }
 
-        var tool = Tool(queries, new AgentPolicy(files, platform, ground));
+        var tool = Tool(queries, new AgentPolicy(files, platform, ground), Orchestration.Flow.FlowStepGraph.ReadsOf(ground));
 
+        // Every operation its client serves, pack among them: each message's pack goes on in pages, the tool held for the
+        // whole chat paging the last message's.
         return new AgentGraphSupport(
             tool,
             line => store.AppendGraphStepLine(layout.Directory, line),
-            (written, cancellationToken) => AfterWriteAsync(tool, written, cancellationToken));
+            (written, cancellationToken) => AfterWriteAsync(tool, written, cancellationToken),
+            CodebaseGraphTool.Operations(write: true, narrow: false, pack: true));
     }
 
     /// <summary>
     /// The person's message as the side-task's agent is given it: the repository map at its head where it is the first,
-    /// the context pack made from the message at the head of each - each part written as every first message's parts are
-    /// (<see cref="AgentPromptParts.Part"/>) - and the pack's nearness kept for the tool's <c>find</c>, whose ties it breaks.
+    /// the context pack made from the message at the head of each, its page 1 - each part written as every first message's
+    /// parts are (<see cref="AgentPromptParts.Part"/>) - and the pack kept, its nearness for the tool's <c>find</c>, whose
+    /// ties it breaks, and its later pages for the tool's <c>pack</c>.
     /// </summary>
     /// <param name="message">The person's message, whole.</param>
     /// <param name="first">Whether it is the side-task's first.</param>
@@ -127,17 +136,21 @@ public sealed class SideTaskGraph
 
         if (queries is { } view)
         {
-            var pack = CodebaseContextPack.Make(view, new ContextPackRequest(message, _ => true));
-            near = pack.Near;
+            var made = CodebaseContextPack.Make(view, new ContextPackRequest(message, _ => true));
+            near = made.Near;
+            pack = made;
 
-            if (pack.Text.Length > 0)
+            if (made.Text.Length > 0)
             {
-                front += AgentPromptParts.Part(AgentPromptParts.CodebaseTag, pack.Text);
+                front += AgentPromptParts.Part(AgentPromptParts.CodebaseTag, made.Text);
             }
         }
 
         return front + message;
     }
+
+    /// <summary>The context pack of the person's last message, whose later pages the tool's <c>pack</c> gives; null before any.</summary>
+    private ContextPack? pack;
 
     /// <summary>
     /// How near each node is to the work of the person's last message, as its pack said it, read by the tool at each
@@ -173,21 +186,25 @@ public sealed class SideTaskGraph
     /// <summary>
     /// The tool over <paramref name="view"/>: every operation, no narrowing, a file re-extracted where an edit moved it -
     /// what it reads and what an edit writes asked of <paramref name="policy"/>, the side-task's own, as the run's graph tool
-    /// asks its step's, and never what no graph lists.
+    /// asks its step's, and never what no graph lists - its answers' pages kept in the side-task's own
+    /// <c>graph-pages</c> for the whole chat, read back under the read rules <paramref name="reads"/> names alone.
     /// </summary>
-    private CodebaseGraphTool Tool(CodebaseGraphQueries view, AgentPolicy policy)
+    private CodebaseGraphTool Tool(CodebaseGraphQueries view, AgentPolicy policy, string? reads)
     {
         var never = CodebaseGraphService.NeverListed(request.WorktreesRoot);
         string Full(string path) => Path.Combine(view.Tree, path.Replace('/', Path.DirectorySeparatorChar));
 
         return new CodebaseGraphTool(
             view,
-            new AgentFiles(git, files, clock),
+            new AgentFiles(git, files),
             files,
             ConfinedPaths.Within(files, platform, view.Tree),
             path => policy.Read(Full(path)).Refusal() is null && !PathPatterns.Matches(never, path, platform.PathComparison),
             path => policy.Write(Full(path)),
             async (path, cancellationToken) => new CodebaseGraphQueries((await graph.CheckAsync(request, [path], cancellationToken).ConfigureAwait(false)).Read),
-            () => near);
+            () => near,
+            pages: new GraphPageStore(Path.Combine(layout.Directory, OrchestratorLayout.StepPagesDirectoryName), files, reads),
+            mask: mask,
+            pack: () => pack?.Paged);
     }
 }

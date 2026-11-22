@@ -283,6 +283,9 @@ public sealed class AgentRule
             || host.EndsWith("." + Pattern, StringComparison.OrdinalIgnoreCase);
     }
 
+    /// <summary>The pattern of a <see cref="AgentRuleVerb.Write"/> or <see cref="AgentRuleVerb.Read"/> rule as <see cref="Matches"/> reads it; null for a rule of another verb.</summary>
+    internal GlobPattern? PathPattern => _pattern;
+
     /// <summary>
     /// Whether the path <paramref name="relativePath"/> is refused by this <see cref="AgentRuleVerb.Write"/>
     /// or <see cref="AgentRuleVerb.Read"/> rule: the path as it stands relative to one of the agent's

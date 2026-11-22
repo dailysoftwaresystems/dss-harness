@@ -219,6 +219,13 @@ public sealed record AgentPolicyGround(
     /// </summary>
     public IReadOnlyList<string>? Trees { get; init; }
 
+    /// <summary>
+    /// The run's directory the launch works for, whose temp (<c>.orchestrators/&lt;run&gt;/temp/</c>, named by
+    /// <see cref="Repository.HarnessLayout.OrchestratorTempDirectoryName"/>) keeps every temporary directory the run's
+    /// launches and their children use, held for the run's life: null for a side-task's ground, which belongs to no run.
+    /// </summary>
+    public string? RunDirectory { get; init; }
+
     /// <summary>Every capability, in the order a definition names them.</summary>
     public static IReadOnlyList<AgentCapability> EveryCapability { get; } = [AgentCapability.Read, AgentCapability.Write, AgentCapability.Run, AgentCapability.Web];
 

@@ -38,9 +38,6 @@ namespace DssHarness.Core.Codebase.Languages;
 /// </remarks>
 internal sealed class JsReading
 {
-    /// <summary>What the reader reads code nested in no deeper than <see cref="ScanFrame.MostDepth"/> of, as its dynamic mark says it.</summary>
-    private const string Nesting = "templates, elements and test groups";
-
     /// <summary>JavaScript's reserved words, and the few TypeScript reserves beside them.</summary>
     private static readonly HashSet<string> Reserved = new(StringComparer.Ordinal)
     {
@@ -150,6 +147,12 @@ internal sealed class JsReading
         ".woff", ".woff2", ".ttf", ".otf", ".eot", ".mp3", ".mp4", ".webm", ".wav", ".csv",
     };
 
+    /// <summary>The extensions among those of what is no script whose file is a single-file component, exported by default as the component it is.</summary>
+    private static readonly HashSet<string> ComponentExtensions = new(StringComparer.OrdinalIgnoreCase) { ".vue", ".svelte", ".astro" };
+
+    /// <summary>The extensions among those of what is no script whose file is a style sheet.</summary>
+    private static readonly HashSet<string> StyleExtensions = new(StringComparer.OrdinalIgnoreCase) { ".css", ".scss", ".sass", ".less", ".styl" };
+
     private readonly InterpolatedText _text;
     private readonly ScannedText _scan;
     private readonly string _prefix;
@@ -163,11 +166,26 @@ internal sealed class JsReading
     private readonly ScanCallRules _memberCalls;
     private readonly ScanExtract _extract = new();
 
+    /// <summary>
+    /// The walks of the file's declarations - its top's, each namespace's and each type's body's - on a stack of their
+    /// own, so a namespace nested any depth is read whole in the order the file writes it.
+    /// </summary>
+    private readonly ScanStack _walks = new();
+
+    /// <summary>
+    /// Each use of a member a body reads - <c>b</c> of <c>a.b</c> - by the text and the token it is written at: the
+    /// reference made for it and what qualifies it, the name before the next dot of a chain (<see cref="Receiver"/>).
+    /// </summary>
+    private readonly Dictionary<(ScannedText Scan, int At), ChainLink> _chains = [];
+
+    /// <summary>For each text a body is read in, where the expression each of its tokens stands in ends (<see cref="ExpressionEnd"/>): found once a scope needs it.</summary>
+    private readonly Dictionary<ScannedText, int[]> _ends = [];
+
     /// <summary>Each name an import binds, by that name.</summary>
     private readonly Dictionary<string, Binding> _bindings = new(StringComparer.Ordinal);
 
     /// <summary>The keys of the declarations at the file's top, by their names: what an export list names.</summary>
-    private readonly Dictionary<string, List<string>> _topKeys = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, List<QualifiedName>> _topKeys = new(StringComparer.Ordinal);
 
     /// <summary>What the file exports by a list or an assignment rather than where it declares it: each local name, the name it is exported by, and the line.</summary>
     private readonly List<(string Local, string Exported, int Line)> _exported = [];
@@ -190,25 +208,47 @@ internal sealed class JsReading
     /// <summary>Whether the file is a module, whose declarations are its own but what it exports.</summary>
     private bool _module;
 
+    /// <summary>Whether the text is a module as the markup that embeds it says; <see langword="null"/> where what it holds says.</summary>
+    private readonly bool? _moduleSaid;
+
     /// <summary>The scope the file's top-level declarations are put in: its path in a module, none in a script.</summary>
-    private string? _scope;
+    private QualifiedName? _scope;
 
     /// <summary>The key of the node what the file's top does outside its declarations is the calls of, once made.</summary>
-    private string? _moduleKey;
+    private QualifiedName? _moduleKey;
+
+    /// <summary>The first and the last line the code at the file's top outside its declarations is written on, once some is read.</summary>
+    private (int First, int Last)? _topLines;
+
+    /// <summary>Whether the text is a single-file component's script, whose default export's options declare the component's members.</summary>
+    private readonly bool _component;
+
+    /// <summary>The body of each interface and object type alias the file's top declares, by its name: the props a component's <c>defineProps</c> names.</summary>
+    private readonly Dictionary<string, (int Open, int Inner)> _typeBodies = new(StringComparer.Ordinal);
 
     /// <summary>Reads <paramref name="text"/>, the file <paramref name="path"/>.</summary>
     /// <param name="language">The implementation's name, which prefixes every id.</param>
     /// <param name="path">The file's path.</param>
     /// <param name="text">Its text.</param>
     /// <param name="typescript">Whether it is TypeScript, whose types the reader takes.</param>
-    public JsReading(string language, string path, string text, bool typescript)
+    /// <param name="markup">Whether the text may hold JSX - an embedded script's, as its block's language says, a Vue
+    /// component's <c>lang="tsx"</c> - however the file is named; null where its name says, as a file of its own does.</param>
+    /// <param name="module">Whether the text is a module - an embedded script's, as the markup that holds it says, a Vue
+    /// component's always and a page's where its type is <c>module</c> - whatever it holds; null where what it holds
+    /// says, as a file of its own does.</param>
+    /// <param name="component">Whether the text is a Vue single-file component's script, whose default export - an object
+    /// of the component's options, or one a call such as <c>defineComponent</c> is given - declares the component's
+    /// members (<see cref="Options"/>).</param>
+    public JsReading(string language, string path, CodeText text, bool typescript, bool? markup = null, bool? module = null, bool component = false)
     {
         var name = CodeGraphIds.FileName(path);
 
         _typescript = typescript;
+        _moduleSaid = module;
+        _component = component;
 
         // JavaScript writes no type that a < could open, so every file of it may hold markup; TypeScript's .tsx alone does.
-        _markup = !typescript || name.EndsWith(".tsx", StringComparison.OrdinalIgnoreCase);
+        _markup = markup ?? (!typescript || name.EndsWith(".tsx", StringComparison.OrdinalIgnoreCase));
         _text = JsLexer.Scan(text, _markup);
         _scan = _text.Scan;
         _prefix = $"{language}:";
@@ -223,8 +263,8 @@ internal sealed class JsReading
     /// <summary>The file's extract.</summary>
     public FileExtract Read()
     {
-        _module = IsModule();
-        _scope = _module ? _path : null;
+        _module = _moduleSaid ?? IsModule();
+        _scope = _module ? QualifiedName.Of(_path) : null;
 
         if (_module)
         {
@@ -238,7 +278,7 @@ internal sealed class JsReading
 
         try
         {
-            ScanFrame.Walk(0, _scan.Count, at => Statement(at, _scan.Count, top, _module ? _path : null));
+            _walks.Walk(0, _scan.Count, at => Statement(at, _scan.Count, top, _module ? QualifiedName.Of(_path) : null));
 
             // Read once every declaration of the file is: a body sees what the file declares after it.
             for (var at = 0; at < _bodies.Count; at++)
@@ -253,7 +293,29 @@ internal sealed class JsReading
 
         Exported();
         _extract.Generated = Generated();
+
+        if (_moduleSaid is not null && _moduleKey is not null && _topLines is var (first, last))
+        {
+            _extract.Change(_moduleKey, node => node with { Start = first, End = last });
+        }
+
         return _extract.Build();
+    }
+
+    /// <summary>
+    /// Notes that the tokens of <paramref name="scan"/> from <paramref name="from"/> to <paramref name="to"/> are code the
+    /// file's top does outside its declarations: the lines the node of it is over in code a markup file embeds.
+    /// </summary>
+    private void TopCode(ScannedText scan, int from, int to)
+    {
+        var last = Math.Min(to, scan.Count) - 1;
+
+        if (from <= last && from >= 0)
+        {
+            _topLines = _topLines is var (first, end)
+                ? (Math.Min(first, scan[from].Line), Math.Max(end, scan[last].EndLine))
+                : (scan[from].Line, scan[last].EndLine);
+        }
     }
 
     /// <summary>Whether <paramref name="path"/> is a test file's: under a directory of tests, or named as a test is.</summary>
@@ -333,8 +395,12 @@ internal sealed class JsReading
 
     // ---- Imports, and exports from other files ----
 
-    /// <summary>A name an import binds: the specifier of the file it is imported from, the name that file exports it by - none for the file's namespace - and whether it is reached by a prefix of its own.</summary>
-    private sealed record Binding(string Specifier, string? Export, bool Prefixed);
+    /// <summary>
+    /// A name an import binds: the specifier of the file it is imported from, the name that file exports it by - none for
+    /// the file's namespace - whether it is reached by a prefix of its own, and whether TypeScript imports it as a type
+    /// alone (<c>import type</c>, <c>{ type X }</c>), no value of it.
+    /// </summary>
+    private sealed record Binding(string Specifier, string? Export, bool Prefixed, bool Type = false);
 
     /// <summary>
     /// Each import at the file's top: an <c>import</c> statement, TypeScript's <c>import x = require(...)</c>, an
@@ -378,10 +444,13 @@ internal sealed class JsReading
         }
 
         // import type ...: the word is the clause's where a binding follows it, and a default import's name otherwise.
+        var typeOnly = false;
+
         if (_typescript && _scan.Is(next, "type") && _scan.Next(next) is var after
             && ((_scan.IsName(after) && !_scan.Is(after, "from")) || _scan.Is(after, "{") || _scan.Is(after, "*")))
         {
             next = after;
+            typeOnly = true;
         }
 
         // TypeScript's import x = require('y') and import x = A.B.
@@ -428,7 +497,7 @@ internal sealed class JsReading
             else if (_scan.Is(clause, "*") && _scan.Is(_scan.Next(clause), "as") && _scan.IsName(_scan.Next(_scan.Next(clause))))
             {
                 var local = _scan.Next(_scan.Next(clause));
-                Bind(_scan.Text(local), specifier, null, line);
+                Bind(_scan.Text(local), specifier, null, line, typeOnly);
                 clause = _scan.Next(local);
             }
             else if (_scan.Is(clause, "{"))
@@ -437,7 +506,7 @@ internal sealed class JsReading
 
                 foreach (var (pieceStart, pieceEnd) in ScanCalls.Split(_scan, clause + 1, inner, null))
                 {
-                    if (Specified(pieceStart, pieceEnd) is not var (imported, local))
+                    if (Specified(pieceStart, pieceEnd) is not var (imported, local, typed))
                     {
                         continue;
                     }
@@ -445,11 +514,11 @@ internal sealed class JsReading
                     if (imported == local && imported != "default")
                     {
                         named.Add(imported);
-                        _bindings[local] = new Binding(specifier, imported, Prefixed: false);
+                        _bindings[local] = new Binding(specifier, imported, Prefixed: false, Type: typeOnly || typed);
                     }
                     else
                     {
-                        Bind(local, specifier, imported, line);
+                        Bind(local, specifier, imported, line, typeOnly || typed);
                     }
                 }
 
@@ -457,7 +526,27 @@ internal sealed class JsReading
             }
             else if (_scan.IsName(clause))
             {
-                Bind(_scan.Text(clause), specifier, "default", line);
+                // A default import binds what the file exports by default - a single-file component's is the component
+                // it is. A CSS module's is the object of the names it exports, and a file of no script kind besides - an
+                // image, data - exports nothing by a name: either's binding is the import's prefix alone, so a member of
+                // what it binds is looked for in what the file itself declares and exports. Any other style sheet's is
+                // nothing, so nothing is bound through it.
+                var local = _scan.Text(clause);
+
+                if (!ExportsNothing(specifier))
+                {
+                    Bind(local, specifier, "default", line, typeOnly);
+                }
+                else if (IsStyleSheet(specifier) && !CssExtractor.IsModule(specifier))
+                {
+                    _bindings[local] = new Binding(specifier, null, Prefixed: true);
+                    Run(specifier, line, local, [], export: false);
+                }
+                else
+                {
+                    Bind(local, specifier, null, line);
+                }
+
                 clause = _scan.Next(clause);
             }
             else
@@ -474,18 +563,21 @@ internal sealed class JsReading
 
     /// <summary>
     /// One specifier of an import's or an export's braces from <paramref name="start"/> to <paramref name="end"/> - past a
-    /// <c>type</c> - the name the other file has and the name this one gives it; <see langword="null"/> where it is none.
+    /// <c>type</c> - the name the other file has, the name this one gives it, and whether the <c>type</c> says it is a type
+    /// alone; <see langword="null"/> where it is none.
     /// </summary>
-    private (string Imported, string Local)? Specified(int start, int end)
+    private (string Imported, string Local, bool Type)? Specified(int start, int end)
     {
         var at = start;
+        var type = false;
 
         if (_scan.Is(at, "type") && _scan.Next(at) < end && !_scan.Is(_scan.Next(at), "as"))
         {
             at = _scan.Next(at);
+            type = true;
         }
 
-        var imported = _scan.IsName(at) ? _scan.Text(at) : IsText(at) ? Unquoted(_scan.Text(at)) : null;
+        var imported = _scan.IsName(at) ? _scan.Text(at) : IsText(at) ? _scan.Value(at) : null;
 
         if (imported is not { Length: > 0 })
         {
@@ -494,16 +586,17 @@ internal sealed class JsReading
 
         var next = _scan.Next(at);
         var local = _scan.Is(next, "as") && _scan.Next(next) < end && _scan.IsName(_scan.Next(next)) ? _scan.Text(_scan.Next(next)) : imported;
-        return (imported, local);
+        return (imported, local, type);
     }
 
     /// <summary>
     /// A binding of <paramref name="local"/> to what the file <paramref name="specifier"/> names exports by
-    /// <paramref name="export"/> - its namespace where that is none - reached by a prefix of its own: an import by it.
+    /// <paramref name="export"/> - its namespace where that is none - reached by a prefix of its own, a type alone where
+    /// <paramref name="type"/>: an import by it.
     /// </summary>
-    private void Bind(string local, string specifier, string? export, int line)
+    private void Bind(string local, string specifier, string? export, int line, bool type = false)
     {
-        _bindings[local] = new Binding(specifier, export, Prefixed: true);
+        _bindings[local] = new Binding(specifier, export, Prefixed: true, type);
         Run(specifier, line, local, export is null ? null : [export], export: false);
     }
 
@@ -560,7 +653,7 @@ internal sealed class JsReading
 
         var shown = ScanCalls.Split(_scan, next + 1, _scan.Bounds(next, after).Inner, null)
             .Select(piece => Specified(piece.Start, piece.End))
-            .OfType<(string Imported, string Local)>()
+            .OfType<(string Imported, string Local, bool Type)>()
             .Select(specified => specified.Imported)
             .Distinct(StringComparer.Ordinal)
             .ToList();
@@ -787,12 +880,25 @@ internal sealed class JsReading
         }
     }
 
+    /// <summary>
+    /// Whether the file <paramref name="specifier"/> names exports nothing by a name: one of no script kind that is no
+    /// single-file component - a style sheet, an image, data - as a bundler imports it.
+    /// </summary>
+    private static bool ExportsNothing(string specifier)
+        => AssetExtensions.Contains(ExtensionOf(specifier)) && !ComponentExtensions.Contains(ExtensionOf(specifier));
+
+    /// <summary>Whether the file <paramref name="specifier"/> names is a style sheet, as a bundler imports one.</summary>
+    private static bool IsStyleSheet(string specifier) => StyleExtensions.Contains(ExtensionOf(specifier));
+
+    /// <summary>The extension of the file <paramref name="specifier"/> names, with its dot; empty where it has none.</summary>
+    private static string ExtensionOf(string specifier)
+    {
+        var name = specifier[(specifier.LastIndexOf('/') + 1)..];
+        return name.LastIndexOf('.') is var dot and > 0 ? name[dot..] : string.Empty;
+    }
+
     /// <summary>The specifier the text at <paramref name="at"/> holds; <see langword="null"/> where it is none - empty, interpolated, or left open.</summary>
     private string? Specifier(int at) => SpecifierOf(_scan, at);
-
-    /// <summary><paramref name="text"/>, a string, without its quotes; <see langword="null"/> where it is left open or holds an escape.</summary>
-    private static string? Unquoted(string text)
-        => text.Length >= 2 && text[0] is '\'' or '"' or '`' && text[^1] == text[0] && !text.Contains('\\', StringComparison.Ordinal) ? text[1..^1] : null;
 
     // ---- Statements: what stands at a module's top and in a namespace ----
 
@@ -801,7 +907,7 @@ internal sealed class JsReading
     /// code - what a declaration not exported is seen in being <paramref name="hidden"/>, none where every declaration of
     /// the frame is seen from everywhere. Answers where the next begins.
     /// </summary>
-    private int Statement(int at, int end, ScanFrame frame, string? hidden)
+    private int Statement(int at, int end, ScanFrame frame, QualifiedName? hidden)
     {
         var start = at;
         var marks = new List<string>();
@@ -972,43 +1078,58 @@ internal sealed class JsReading
 
         // Code: what it calls is the module's - but the CommonJS exports its blocks hold, read as the top's are.
         var stop = StatementEnd(at, end);
-
-        foreach (var (codeFrom, codeTo) in NestedCommonJs(at, stop, frame))
-        {
-            Defer(() => Calls(_text, codeFrom, codeTo, null, new Locals(), null, depth: 0));
-        }
-
+        NestedCommonJs(at, stop, frame);
         return stop;
     }
 
     /// <summary>
     /// The CommonJS exports a statement of code at a module's top, from <paramref name="from"/> to <paramref name="to"/>,
     /// holds where a statement begins in its blocks - <c>if (typeof module !== 'undefined') { module.exports = ... }</c> -
-    /// each read as one at the top is (<see cref="CommonJs"/>); answers the spans of the rest, whose calls are the module's.
+    /// each read as one at the top is (<see cref="CommonJs"/>), on a walk of the file's, so what each declares is read
+    /// before the next; once they are, the rest - whose calls are the module's - read as code, in order.
     /// </summary>
-    private List<(int From, int To)> NestedCommonJs(int from, int to, ScanFrame frame)
+    private void NestedCommonJs(int from, int to, ScanFrame frame)
     {
         var rest = new List<(int From, int To)>();
         var begins = from;
 
-        for (var at = from; at < to && _module && frame.Parent is null; at++)
+        void Rest()
         {
-            if (at == from || !(_scan.Is(at, "module") || _scan.Is(at, "exports")) || IsMember(_scan, _scan.Previous(at))
-                || !(_scan.Is(_scan.Previous(at), "{") || _scan.Is(_scan.Previous(at), ";") || _scan.Is(_scan.Previous(at), "}") || _scan.Is(_scan.Previous(at), ")")))
-            {
-                continue;
-            }
+            rest.Add((begins, to));
 
-            if (CommonJs(at, at, to, frame) is var past and > 0)
+            foreach (var (codeFrom, codeTo) in rest.Where(span => span.To > span.From))
             {
-                rest.Add((begins, at));
-                begins = past;
-                at = past - 1;
+                Defer(() => Calls(_text, codeFrom, codeTo, null, new Locals(), null));
             }
         }
 
-        rest.Add((begins, to));
-        return [.. rest.Where(span => span.To > span.From)];
+        if (!_module || frame.Parent is not null)
+        {
+            Rest();
+            return;
+        }
+
+        _walks.Walk(
+            from,
+            to,
+            at =>
+            {
+                if (at == from || !(_scan.Is(at, "module") || _scan.Is(at, "exports")) || IsMember(_scan, _scan.Previous(at))
+                    || !(_scan.Is(_scan.Previous(at), "{") || _scan.Is(_scan.Previous(at), ";") || _scan.Is(_scan.Previous(at), "}") || _scan.Is(_scan.Previous(at), ")")))
+                {
+                    return at + 1;
+                }
+
+                if (CommonJs(at, at, to, frame) is var past and > 0)
+                {
+                    rest.Add((begins, at));
+                    begins = past;
+                    return past;
+                }
+
+                return at + 1;
+            },
+            end: Rest);
     }
 
     /// <summary>Whether the token at <paramref name="at"/> begins a declaration after <c>export default</c>: <c>class</c>, <c>function</c>, <c>async function</c>, <c>abstract class</c>, <c>interface</c>.</summary>
@@ -1027,7 +1148,7 @@ internal sealed class JsReading
 
         foreach (var (pieceStart, pieceEnd) in ScanCalls.Split(_scan, open + 1, inner, null))
         {
-            if (Specified(pieceStart, pieceEnd) is var (local, exported))
+            if (Specified(pieceStart, pieceEnd) is var (local, exported, _))
             {
                 _exported.Add((local, exported, _scan[pieceStart].Line));
             }
@@ -1059,8 +1180,340 @@ internal sealed class JsReading
         });
 
         Registered(key, frame, "default");
-        Defer(() => Calls(_text, at, boundary, key, new Locals(), null, depth: 0));
+
+        if (_component && OptionsAt(at, boundary) is var open and >= 0)
+        {
+            Options(at, open, boundary, key, frame);
+            return stop;
+        }
+
+        Defer(() => Calls(_text, at, boundary, key, new Locals(), null));
         return stop;
+    }
+
+    // ---- A component's options ----
+
+    /// <summary>
+    /// Where the options object a component's default export from <paramref name="at"/> writes begins: the object itself,
+    /// or the first argument of the call it is given to - <c>defineComponent({...})</c>, <c>Vue.extend({...})</c>; -1
+    /// where it writes neither.
+    /// </summary>
+    private int OptionsAt(int at, int end)
+    {
+        if (_scan.Is(at, "{"))
+        {
+            return at;
+        }
+
+        if (!_scan.IsName(at))
+        {
+            return -1;
+        }
+
+        var past = ChainAt(_scan, at, end).Past;
+
+        if (_typescript && _scan.Is(past, "<"))
+        {
+            past = Angle(_scan, past, end);
+        }
+
+        return _scan.Is(past, "(") && _scan.Next(past) is var first && first < end && _scan.Is(first, "{") ? first : -1;
+    }
+
+    /// <summary>
+    /// A component's options object at <paramref name="open"/>, its default export's node <paramref name="key"/>, read as
+    /// Vue reads one: each key of its <c>methods</c> and its <c>computed</c>, each prop and each injection its
+    /// <c>props</c> and its <c>inject</c> name - an array's strings or an object's keys - and each function it holds,
+    /// <c>data</c>, <c>setup</c> and a lifecycle hook among them, a member of the component, on its own lines, with the
+    /// code it holds; each property <c>data()</c> and <c>setup()</c> return a member too; each key of its <c>watch</c> a
+    /// use of the member it watches, a handler a string names a call of that method and every handler's code the
+    /// component's; and everything else it holds - its name, its components, the call it is given to - the component's
+    /// code.
+    /// </summary>
+    private void Options(int at, int open, int end, QualifiedName key, ScanFrame frame)
+    {
+        var close = Math.Min(_scan.Bounds(open, end).Inner, end);
+        var members = frame.Inside(frame.Prefix, frame.Scope, key, frame.Owner);
+        var seenIn = _module ? QualifiedName.Of(_path) : null;
+
+        Code(at, open, key);
+        Code(Math.Min(close + 1, end), end, key);
+
+        foreach (var (pieceStart, pieceEnd) in ScanCalls.Split(_scan, open + 1, close, null))
+        {
+            var option = _scan.IsName(pieceStart) ? _scan.Text(pieceStart) : null;
+            var valueAt = option is not null && _scan.Is(_scan.Next(pieceStart), ":") ? _scan.Next(_scan.Next(pieceStart)) : -1;
+            var opens = valueAt >= 0 && valueAt < pieceEnd ? _scan.Text(valueAt) : null;
+
+            switch (option, opens)
+            {
+                case ("methods" or "computed", "{"):
+                    OptionMembers(valueAt, pieceEnd, key, members, option == "methods" ? "method" : "computed", seenIn);
+                    continue;
+
+                case ("props" or "inject", "{"):
+                    OptionMembers(valueAt, pieceEnd, key, members, "property", seenIn);
+                    continue;
+
+                case ("props" or "inject", "["):
+                    foreach (var (itemStart, itemEnd) in ScanCalls.Split(_scan, valueAt + 1, Math.Min(_scan.Bounds(valueAt, pieceEnd).Inner, pieceEnd), null))
+                    {
+                        if (_scan.Next(itemStart) >= itemEnd && MemberName(itemStart) is { } listed)
+                        {
+                            OptionMember(itemStart, itemEnd, listed, members, "property", seenIn);
+                        }
+                    }
+
+                    Code(pieceStart, pieceEnd, key);
+                    continue;
+
+                case ("watch", "{"):
+                    Watched(valueAt, pieceEnd, key);
+                    continue;
+            }
+
+            if (OptionFunction(pieceStart, pieceEnd) is var (nameAt, function))
+            {
+                var name = _scan.Text(nameAt);
+                Callable(pieceStart, pieceStart, nameAt, name, function, members, [], [], [], "method", seenIn, exports: null);
+
+                if (name is "data" or "setup")
+                {
+                    Returned(function, members, seenIn);
+                }
+
+                continue;
+            }
+
+            Code(pieceStart, pieceEnd, key);
+        }
+    }
+
+    /// <summary>
+    /// The keys of an option's object at <paramref name="open"/> - a <c>methods</c>', a <c>computed</c>'s, a
+    /// <c>props</c>' - each a member of the component of <paramref name="subKind"/> over its piece: a function its
+    /// function, a value a member whose code is what the value holds; a key written alone names the script's own
+    /// declaration, already the component's, and is its code.
+    /// </summary>
+    private void OptionMembers(int open, int end, QualifiedName key, ScanFrame members, string subKind, QualifiedName? seenIn)
+    {
+        foreach (var (pieceStart, pieceEnd) in ScanCalls.Split(_scan, open + 1, Math.Min(_scan.Bounds(open, end).Inner, end), null))
+        {
+            var name = MemberName(pieceStart);
+            var next = _scan.Next(pieceStart);
+
+            if (MethodNameAt(pieceStart, pieceEnd) is var methodAt and >= 0 && FunctionAt(methodAt, pieceEnd, methodName: true) is { } method)
+            {
+                Callable(pieceStart, pieceStart, methodAt, _scan.Text(methodAt), method, members, [], [], [], subKind, seenIn, exports: null);
+            }
+            else if (name is not null && _scan.Is(next, ":") && FunctionAt(_scan.Next(next), pieceEnd) is { } function)
+            {
+                Callable(pieceStart, pieceStart, _scan.Next(next), name, function, members, [], [], [], subKind, seenIn, exports: null);
+            }
+            else if (name is not null && _scan.Is(next, ":"))
+            {
+                var member = OptionMember(pieceStart, pieceEnd, name, members, subKind, seenIn);
+                var valueAt = _scan.Next(next);
+                Defer(() => Calls(_text, valueAt, pieceEnd, member, new Locals(), null));
+            }
+            else
+            {
+                Code(pieceStart, pieceEnd, key);
+            }
+        }
+    }
+
+    /// <summary>A member of the component named <paramref name="name"/> over the piece from <paramref name="start"/> to <paramref name="end"/>; answers its key.</summary>
+    private QualifiedName OptionMember(int start, int end, string name, ScanFrame members, string subKind, QualifiedName? seenIn)
+        => _extract.Add(new ExtractNode(Id(members.Qualify(name)), CodeNodeKinds.Member, name, members.Qualify(name), _scan[start].Line, _scan[_scan.LastOf(end)].EndLine, ExtractText.Signature(name))
+        {
+            SubKind = subKind,
+            Scope = members.Scope,
+            Parent = members.Parent,
+            SeenIn = seenIn,
+        });
+
+    /// <summary>
+    /// The function an option's piece from <paramref name="start"/> writes - <c>data() { }</c>, <c>mounted: function () { }</c>,
+    /// <c>setup: () =&gt; ...</c> - with where its name stands; <see langword="null"/> where it writes none.
+    /// </summary>
+    private (int NameAt, FunctionShape Function)? OptionFunction(int start, int end)
+    {
+        if (MethodNameAt(start, end) is var methodAt and >= 0 && FunctionAt(methodAt, end, methodName: true) is { } method)
+        {
+            return (methodAt, method);
+        }
+
+        return _scan.IsName(start) && _scan.Is(_scan.Next(start), ":") && FunctionAt(_scan.Next(_scan.Next(start)), end) is { } function ? (start, function) : null;
+    }
+
+    /// <summary>
+    /// Each property the object <paramref name="function"/> - <c>data</c>, <c>setup</c> - returns at its body's own level
+    /// names, or its arrow's body is: a member of the component over its piece, its code the function's.
+    /// </summary>
+    private void Returned(FunctionShape function, ScanFrame members, QualifiedName? seenIn)
+    {
+        var objects = new List<int>();
+
+        if (function.Arrow)
+        {
+            var body = _scan.Next(function.Body);
+
+            if (_scan.Is(body, "(") && _scan.Is(_scan.Next(body), "{"))
+            {
+                objects.Add(_scan.Next(body));
+            }
+        }
+        else if (function.Body >= 0)
+        {
+            for (var at = function.Body + 1; at < function.Last && at < _scan.Count; at = _scan.Opens(at) ? Math.Max(_scan.Past(at), at + 1) : at + 1)
+            {
+                if (_scan.Is(at, "return") && _scan.Is(_scan.Next(at), "{"))
+                {
+                    objects.Add(_scan.Next(at));
+                }
+            }
+        }
+
+        foreach (var open in objects)
+        {
+            var end = Math.Min(_scan.Past(open), function.Last + 1);
+
+            foreach (var (pieceStart, pieceEnd) in ScanCalls.Split(_scan, open + 1, Math.Min(_scan.Bounds(open, end).Inner, end), null))
+            {
+                if ((MethodNameAt(pieceStart, pieceEnd) is var methodAt and >= 0 ? _scan.Text(methodAt) : MemberName(pieceStart)) is { } name)
+                {
+                    OptionMember(pieceStart, pieceEnd, name, members, "field", seenIn);
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// A component's <c>watch</c> option at <paramref name="open"/>: each key a use of the member it watches - the first
+    /// name of a path - a handler a string names a call of that method, and every handler's code the component's.
+    /// </summary>
+    private void Watched(int open, int end, QualifiedName key)
+    {
+        foreach (var (pieceStart, pieceEnd) in ScanCalls.Split(_scan, open + 1, Math.Min(_scan.Bounds(open, end).Inner, end), null))
+        {
+            if (MemberName(pieceStart, path: true) is { } watched)
+            {
+                _extract.Reference(key, CodeEdgeKinds.Uses, watched, _scan[pieceStart].Line, qualifier: new ExtractQualifier(CodeQualifierKinds.This));
+            }
+
+            var next = _scan.Next(pieceStart);
+
+            if (_scan.Is(next, ":") && _scan.Next(next) is var valueAt && valueAt < pieceEnd && _scan.Next(valueAt) >= pieceEnd && MemberName(valueAt) is { } method && IsText(valueAt))
+            {
+                _extract.Reference(key, CodeEdgeKinds.Calls, method, _scan[valueAt].Line, qualifier: new ExtractQualifier(CodeQualifierKinds.This));
+            }
+
+            Code(pieceStart, pieceEnd, key);
+        }
+    }
+
+    /// <summary>
+    /// The name the token at <paramref name="at"/> gives a member: a name, or a string's value that is one - the first
+    /// name of a path where <paramref name="path"/>, as a <c>watch</c> key writes one; <see langword="null"/> otherwise.
+    /// </summary>
+    private string? MemberName(int at, bool path = false)
+    {
+        var written = _scan.IsName(at) ? _scan.Text(at) : IsText(at) ? _scan.Value(at) : null;
+
+        if (written is null)
+        {
+            return null;
+        }
+
+        var name = path ? written.Split('.')[0] : written;
+        return name.Length > 0 && (char.IsLetter(name[0]) || name[0] is '_' or '$') && name.All(character => char.IsLetterOrDigit(character) || character is '_' or '$') ? name : null;
+    }
+
+    /// <summary>
+    /// The props a <c>&lt;script setup&gt;</c>'s <c>defineProps</c> at <paramref name="at"/> - past its name - declares,
+    /// each a member of the component at the script's top, as Vue gives its template them: an array's strings, an object's
+    /// keys, the keys of the type it is given - one written there, or an interface or a type alias of an object type the
+    /// script declares at its top.
+    /// </summary>
+    private void DefinedProps(int at, int end)
+    {
+        var top = new ScanFrame(_scope, _scope, null, null);
+        var seenIn = _module ? QualifiedName.Of(_path) : null;
+        var keys = new List<int>();
+
+        if (_typescript && _scan.Is(at, "<"))
+        {
+            var type = _scan.Next(at);
+
+            if (_scan.Is(type, "{"))
+            {
+                keys.AddRange(TypeKeys(type, Math.Min(_scan.Bounds(type, end).Inner, end)));
+            }
+            else if (_scan.IsName(type) && _typeBodies.TryGetValue(_scan.Text(type), out var body))
+            {
+                keys.AddRange(TypeKeys(body.Open, body.Inner));
+            }
+
+            at = Angle(_scan, at, end);
+        }
+
+        if (_scan.Is(at, "(") && _scan.Next(at) is var argument && argument < end && (_scan.Is(argument, "[") || _scan.Is(argument, "{")))
+        {
+            foreach (var (pieceStart, pieceEnd) in ScanCalls.Split(_scan, argument + 1, Math.Min(_scan.Bounds(argument, end).Inner, end), null))
+            {
+                if (_scan.Is(argument, "[") ? _scan.Next(pieceStart) >= pieceEnd && IsText(pieceStart) : _scan.IsName(pieceStart) || IsText(pieceStart))
+                {
+                    keys.Add(pieceStart);
+                }
+            }
+        }
+
+        foreach (var key in keys)
+        {
+            if (MemberName(key) is { } name)
+            {
+                OptionMember(key, key + 1, name, top, "property", seenIn);
+            }
+        }
+    }
+
+    /// <summary>The tokens that name the members of the object type at <paramref name="open"/>: each first in its member, its type passed over.</summary>
+    private IEnumerable<int> TypeKeys(int open, int inner)
+    {
+        var first = true;
+
+        for (var at = open + 1; at < inner && at < _scan.Count; at = _scan.Opens(at) ? Math.Max(_scan.Past(at), at + 1) : at + 1)
+        {
+            if (_scan.Is(at, ";") || _scan.Is(at, ","))
+            {
+                first = true;
+                continue;
+            }
+
+            first |= _scan[at].Line > _scan[_scan.Previous(at)].EndLine && at > open + 1;
+
+            if (first && _scan.Is(at, "readonly") && _scan.IsName(_scan.Next(at)))
+            {
+                continue;
+            }
+
+            if (first && (_scan.IsName(at) || IsText(at)) && (_scan.Is(_scan.Next(at), ":") || _scan.Is(_scan.Next(at), "?") || _scan.Is(_scan.Next(at), "(")))
+            {
+                yield return at;
+            }
+
+            first = false;
+        }
+    }
+
+    /// <summary>Reads the tokens from <paramref name="from"/> to <paramref name="to"/> as code of the node of <paramref name="key"/>, once the file's declarations are read.</summary>
+    private void Code(int from, int to, QualifiedName key)
+    {
+        if (from < to)
+        {
+            Defer(() => Calls(_text, from, to, key, new Locals(), null));
+        }
     }
 
     /// <summary>
@@ -1151,7 +1604,7 @@ internal sealed class JsReading
             });
 
             Registered(key, frame, exported);
-            Defer(() => Calls(_text, value, boundary, key, new Locals(), null, depth: 0));
+            Defer(() => Calls(_text, value, boundary, key, new Locals(), null));
         }
 
         return stop;
@@ -1206,7 +1659,7 @@ internal sealed class JsReading
                 // Any other value - a call's result, a spread of a name: what it calls is the module's.
                 var from = key is not null && _scan.Is(next, ":") ? _scan.Next(next) : pieceStart;
                 var to = pieceEnd;
-                Defer(() => Calls(_text, from, to, null, new Locals(), null, depth: 0));
+                Defer(() => Calls(_text, from, to, null, new Locals(), null));
             }
         }
     }
@@ -1256,7 +1709,7 @@ internal sealed class JsReading
     }
 
     /// <summary>What each decorator of <paramref name="decorators"/> calls, from the node of <paramref name="key"/>: one written with its arguments a call, one written alone a call of what it names.</summary>
-    private void DecoratorCalls(string key, List<(int Start, int End)> decorators, string? owner)
+    private void DecoratorCalls(QualifiedName key, List<(int Start, int End)> decorators, string? owner)
     {
         foreach (var (start, end) in decorators)
         {
@@ -1264,7 +1717,7 @@ internal sealed class JsReading
 
             if (past < end)
             {
-                Calls(_text, start + 1, end, key, new Locals(), owner, depth: 0);
+                Calls(_text, start + 1, end, key, new Locals(), owner);
                 continue;
             }
 
@@ -1282,7 +1735,7 @@ internal sealed class JsReading
     /// members read in its own scope; <paramref name="nameIsDefault"/> where it is a module's default export, and
     /// <paramref name="bindingNames"/> where the binding's name is its name whatever its own.
     /// </summary>
-    private int Class(int start, int head, int at, int end, ScanFrame frame, List<string> modifiers, List<string> marks, List<(int Start, int End)> decorators, string? seenIn, string? named, bool nameIsDefault, bool ambient, bool bindingNames = false)
+    private int Class(int start, int head, int at, int end, ScanFrame frame, List<string> modifiers, List<string> marks, List<(int Start, int End)> decorators, QualifiedName? seenIn, string? named, bool nameIsDefault, bool ambient, bool bindingNames = false)
     {
         var cursor = _scan.Next(at);
         string name;
@@ -1323,24 +1776,31 @@ internal sealed class JsReading
         }
 
         var key = DeclareType(start, head, Math.Min(inner, _scan.Count - 1), frame, name, "class", modifiers, marks, signatureEnd: open, seenIn);
-        var added = typeParameters.Where(_typeParameters.Add).ToList();
 
-        try
+        // Its type parameters are its clauses' and its members', which are read once this reading is done.
+        using (HoldingTypeParameters(typeParameters))
         {
             Clauses(key, cursor, open);
             DecoratorCalls(key, decorators, frame.Owner);
             Members(open, inner, frame.Inside(frame.Qualify(name), frame.Qualify(name), key, name), MemberPlace.Class, ambient);
         }
-        finally
-        {
-            _typeParameters.ExceptWith(added);
-        }
 
         return close;
     }
 
+    /// <summary>
+    /// Holds <paramref name="typeParameters"/> - those not already in force - as type parameters in force for what the
+    /// reading under way reads and every walk it begins (<see cref="ScanStack.Holding"/>): no type the repository declares.
+    /// </summary>
+    private IDisposable HoldingTypeParameters(IEnumerable<string> typeParameters)
+    {
+        var added = typeParameters.Where(parameter => !_typeParameters.Contains(parameter)).Distinct(StringComparer.Ordinal).ToList();
+
+        return _walks.Holding(() => _typeParameters.UnionWith(added), () => _typeParameters.ExceptWith(added));
+    }
+
     /// <summary>An interface named at <paramref name="nameAt"/>: a type node - its parts in the file one - its <c>extends</c> an <c>inherits</c> edge each, and its members, each without a body.</summary>
-    private int Interface(int start, int head, int nameAt, int end, ScanFrame frame, List<string> modifiers, List<string> marks, string? seenIn)
+    private int Interface(int start, int head, int nameAt, int end, ScanFrame frame, List<string> modifiers, List<string> marks, QualifiedName? seenIn)
     {
         var name = _scan.Text(nameAt);
         var cursor = _scan.Next(nameAt);
@@ -1361,23 +1821,26 @@ internal sealed class JsReading
         var (inner, close) = _scan.Bounds(open, end);
         var key = _extract.Part(TypeNode(start, head, Math.Min(inner, _scan.Count - 1), frame, name, "interface", modifiers, marks, open, seenIn));
         Registered(key, frame, name);
-        var added = typeParameters.Where(_typeParameters.Add).ToList();
 
-        try
+        if (frame.Parent is null)
+        {
+            _typeBodies.TryAdd(name, (open, inner));
+        }
+
+        using (HoldingTypeParameters(typeParameters))
         {
             Clauses(key, cursor, open);
             Members(open, inner, frame.Inside(frame.Qualify(name), frame.Qualify(name), key, name), MemberPlace.Interface, ambient: true);
-        }
-        finally
-        {
-            _typeParameters.ExceptWith(added);
         }
 
         return close;
     }
 
-    /// <summary>An enum named at <paramref name="nameAt"/>: a type node, each of its members a constant of its type.</summary>
-    private int Enum(int start, int head, int nameAt, int end, ScanFrame frame, List<string> modifiers, List<string> marks, string? seenIn)
+    /// <summary>
+    /// An enum named at <paramref name="nameAt"/>: a type node, each of its members a constant of its type, the value it
+    /// is given - <c>Active = 'active'</c>, <c>All = Read | Write</c> - code read from the member's node.
+    /// </summary>
+    private int Enum(int start, int head, int nameAt, int end, ScanFrame frame, List<string> modifiers, List<string> marks, QualifiedName? seenIn)
     {
         var name = _scan.Text(nameAt);
         var open = BodyOpen(_scan.Next(nameAt), end);
@@ -1393,14 +1856,14 @@ internal sealed class JsReading
 
         foreach (var (pieceStart, pieceEnd) in ScanCalls.Split(_scan, open + 1, inner, _types))
         {
-            var member = _scan.IsName(pieceStart) ? _scan.Text(pieceStart) : IsText(pieceStart) ? Unquoted(_scan.Text(pieceStart)) : null;
+            var member = _scan.IsName(pieceStart) ? _scan.Text(pieceStart) : IsText(pieceStart) ? _scan.Value(pieceStart) : null;
 
             if (member is not { Length: > 0 })
             {
                 continue;
             }
 
-            _extract.Add(new ExtractNode(Id(inside.Qualify(member)), CodeNodeKinds.Member, member, inside.Qualify(member), _scan[pieceStart].Line, _scan[_scan.LastOf(pieceEnd)].EndLine, _scan.Signature(pieceStart, pieceEnd))
+            var memberKey = _extract.Add(new ExtractNode(Id(inside.Qualify(member)), CodeNodeKinds.Member, member, inside.Qualify(member), _scan[pieceStart].Line, _scan[_scan.LastOf(pieceEnd)].EndLine, _scan.Signature(pieceStart, pieceEnd))
             {
                 SubKind = "constant",
                 Scope = inside.Scope,
@@ -1408,13 +1871,19 @@ internal sealed class JsReading
                 Summary = ScanComments.Summary(_scan, pieceStart),
                 ValueType = name,
             });
+
+            if (ScanCalls.TopLevel(_scan, pieceStart, pieceEnd, "=", _types) is var assign && assign < pieceEnd)
+            {
+                var (valueAt, to) = (_scan.Next(assign), pieceEnd);
+                Defer(() => Calls(_text, valueAt, to, memberKey, new Locals(), null));
+            }
         }
 
         return close;
     }
 
     /// <summary>A type alias named at <paramref name="nameAt"/>: a type node over its statement, referencing what it names.</summary>
-    private int TypeAlias(int start, int head, int nameAt, int end, ScanFrame frame, List<string> modifiers, List<string> marks, string? seenIn)
+    private int TypeAlias(int start, int head, int nameAt, int end, ScanFrame frame, List<string> modifiers, List<string> marks, QualifiedName? seenIn)
     {
         var stop = StatementEnd(nameAt, end);
         var last = _scan.LastOf(stop);
@@ -1430,6 +1899,11 @@ internal sealed class JsReading
         var aliasEnd = _scan.Is(last, ";") ? last : stop;
         var key = DeclareType(start, head, last, frame, name, "type", modifiers, marks, signatureEnd: _scan.Is(cursor, "=") ? cursor : aliasEnd, seenIn);
         var added = typeParameters.Where(_typeParameters.Add).ToList();
+
+        if (frame.Parent is null && _scan.Is(cursor, "=") && _scan.Next(cursor) is var literal && _scan.Is(literal, "{"))
+        {
+            _typeBodies.TryAdd(name, (literal, _scan.Bounds(literal, aliasEnd).Inner));
+        }
 
         try
         {
@@ -1451,7 +1925,7 @@ internal sealed class JsReading
     /// named by - an open scope of its name, nested a node for each name of it, its parts in the file one: its statements
     /// read in it, those it does not export seen in it alone but in an ambient one, where all are.
     /// </summary>
-    private int Namespace(int start, int head, int nameAt, int end, ScanFrame frame, List<string> modifiers, List<string> marks, string? seenIn, bool ambient)
+    private int Namespace(int start, int head, int nameAt, int end, ScanFrame frame, List<string> modifiers, List<string> marks, QualifiedName? seenIn, bool ambient)
     {
         List<string> names;
         int cursor;
@@ -1501,14 +1975,9 @@ internal sealed class JsReading
             outermost = false;
         }
 
-        if (inside.TooDeep)
-        {
-            _extract.Dynamic(_scan[cursor].Line, ScanFrame.TooDeepWhy);
-            return close;
-        }
-
+        // Its statements are a walk of the file's, read once this one is: a namespace nested any depth is read whole.
         var hidden = ambient ? null : inside.Scope;
-        ScanFrame.Walk(cursor + 1, inner, at => Statement(at, inner, inside, hidden));
+        _walks.Walk(cursor + 1, inner, at => Statement(at, inner, inside, hidden));
         return close;
     }
 
@@ -1518,25 +1987,19 @@ internal sealed class JsReading
         var (inner, close) = _scan.Bounds(open, end);
         var global = frame.Inside(null, null, null, null);
 
-        if (global.TooDeep)
-        {
-            _extract.Dynamic(_scan[open].Line, ScanFrame.TooDeepWhy);
-            return close;
-        }
-
-        ScanFrame.Walk(open + 1, inner, at => Statement(at, inner, global, null));
+        _walks.Walk(open + 1, inner, at => Statement(at, inner, global, null));
         return close;
     }
 
     /// <summary>A type node over the tokens from <paramref name="start"/> to <paramref name="last"/>, its signature from <paramref name="head"/> before <paramref name="signatureEnd"/>; answers its key.</summary>
-    private string DeclareType(int start, int head, int last, ScanFrame frame, string name, string subKind, List<string> modifiers, List<string> marks, int signatureEnd, string? seenIn)
+    private QualifiedName DeclareType(int start, int head, int last, ScanFrame frame, string name, string subKind, List<string> modifiers, List<string> marks, int signatureEnd, QualifiedName? seenIn)
     {
         var key = _extract.Add(TypeNode(start, head, last, frame, name, subKind, modifiers, marks, signatureEnd, seenIn));
         Registered(key, frame, name);
         return key;
     }
 
-    private ExtractNode TypeNode(int start, int head, int last, ScanFrame frame, string name, string subKind, List<string> modifiers, List<string> marks, int signatureEnd, string? seenIn)
+    private ExtractNode TypeNode(int start, int head, int last, ScanFrame frame, string name, string subKind, List<string> modifiers, List<string> marks, int signatureEnd, QualifiedName? seenIn)
         => new(Id(frame.Qualify(name)), CodeNodeKinds.Type, name, frame.Qualify(name), _scan[start].Line, _scan[Math.Clamp(last, start, _scan.Count - 1)].EndLine, _scan.Signature(head, signatureEnd))
         {
             SubKind = subKind,
@@ -1549,7 +2012,7 @@ internal sealed class JsReading
         };
 
     /// <summary>Notes that the node of <paramref name="key"/>, named <paramref name="name"/>, stands at the file's top where <paramref name="frame"/> is the top's: what an export list names.</summary>
-    private void Registered(string key, ScanFrame frame, string name)
+    private void Registered(QualifiedName key, ScanFrame frame, string name)
     {
         if (frame.Parent is null)
         {
@@ -1562,7 +2025,7 @@ internal sealed class JsReading
     /// each type it names - a call it writes instead, a mixin's, read as calls - and <c>implements</c> an
     /// <c>implements</c> edge each, each type's arguments referenced.
     /// </summary>
-    private void Clauses(string key, int at, int end)
+    private void Clauses(QualifiedName key, int at, int end)
     {
         string? kind = null;
 
@@ -1584,7 +2047,7 @@ internal sealed class JsReading
                 {
                     var call = Math.Min(_scan.Past(past), end);
                     var from = at;
-                    Defer(() => Calls(_text, from, call, key, new Locals(), null, depth: 0));
+                    Defer(() => Calls(_text, from, call, key, new Locals(), null));
                     at = call;
                     continue;
                 }
@@ -1619,31 +2082,33 @@ internal sealed class JsReading
         Interface,
     }
 
-    /// <summary>The members of the body <paramref name="open"/> opens, read in <paramref name="frame"/>, their bodies read once every member is declared.</summary>
+    /// <summary>
+    /// The members of the body <paramref name="open"/> opens, read in <paramref name="frame"/> on a walk of the file's -
+    /// once the reading under way is done, before the walk it is read in goes on - their bodies read once every member is
+    /// declared, each body a later one adds among them.
+    /// </summary>
     private void Members(int open, int inner, ScanFrame frame, MemberPlace place, bool ambient)
     {
-        if (frame.TooDeep)
-        {
-            _extract.Dynamic(_scan[open].Line, ScanFrame.TooDeepWhy);
-            return;
-        }
+        List<Action>? outer = null;
 
-        var outer = _bodies;
-        _bodies = [];
-
-        try
-        {
-            ScanFrame.Walk(open + 1, inner, at => Member(at, inner, frame, place, ambient));
-
-            for (var at = 0; at < _bodies.Count; at++)
+        _walks.Walk(
+            open + 1,
+            inner,
+            at => Member(at, inner, frame, place, ambient),
+            begin: () =>
             {
-                _bodies[at]();
-            }
-        }
-        finally
-        {
-            _bodies = outer;
-        }
+                outer = _bodies;
+                _bodies = [];
+            },
+            end: () =>
+            {
+                for (var at = 0; at < _bodies!.Count; at++)
+                {
+                    _bodies[at]();
+                }
+
+                _bodies = outer;
+            });
     }
 
     // ---- Members ----
@@ -1685,7 +2150,7 @@ internal sealed class JsReading
             var (inner, close) = _scan.Bounds(at, end);
             var block = at;
             var holder = frame.Parent!;
-            Defer(() => Calls(_text, block + 1, inner, holder, new Locals(), frame.Owner, depth: 0));
+            Defer(() => Calls(_text, block + 1, inner, holder, new Locals(), frame.Owner));
             return close;
         }
 
@@ -1710,7 +2175,7 @@ internal sealed class JsReading
         }
 
         var name = _scan.IsName(at) ? _scan.Text(at)
-            : IsText(at) ? Unquoted(_scan.Text(at))
+            : IsText(at) ? _scan.Value(at)
             : _scan[at].Kind == ScanTokenKind.Number ? _scan.Text(at)
             : null;
 
@@ -1778,7 +2243,7 @@ internal sealed class JsReading
         {
             var holder = frame.Parent!;
             var locals = new Locals(function.Parameters);
-            Defer(() => Calls(_text, function.Body + 1, function.Last + (function.Arrow ? 1 : 0), holder, locals, frame.Owner, depth: 0));
+            Defer(() => Calls(_text, function.Body + 1, function.Last + (function.Arrow ? 1 : 0), holder, locals, frame.Owner));
             return function.Last + 1;
         }
 
@@ -1790,7 +2255,7 @@ internal sealed class JsReading
     /// <paramref name="at"/>: a member node of the type it is declared with or its value makes, what its value calls - a
     /// method where an arrow or a function is its value.
     /// </summary>
-    private int Field(int start, int head, int nameAt, string name, int at, int end, ScanFrame frame, List<string> marks, List<(int Start, int End)> decorators, List<string> modifiers, MemberPlace place, bool ambient, string? seenIn)
+    private int Field(int start, int head, int nameAt, string name, int at, int end, ScanFrame frame, List<string> marks, List<(int Start, int End)> decorators, List<string> modifiers, MemberPlace place, bool ambient, QualifiedName? seenIn)
     {
         var stop = StatementEnd(nameAt, end, commas: place == MemberPlace.Interface, typed: place == MemberPlace.Interface || (_typescript && _scan.Is(at, ":")));
         var last = _scan.LastOf(stop);
@@ -1833,7 +2298,7 @@ internal sealed class JsReading
         if (assign < boundary && !ambient)
         {
             var value = _scan.Next(assign);
-            Defer(() => Calls(_text, value, boundary, key, new Locals(), frame.Owner, depth: 0));
+            Defer(() => Calls(_text, value, boundary, key, new Locals(), frame.Owner));
         }
 
         return stop;
@@ -1883,7 +2348,7 @@ internal sealed class JsReading
     /// An <c>overrides</c> edge from the member of <paramref name="key"/>, named at <paramref name="nameAt"/>, to the one of
     /// its name its bases declare, where TypeScript's <c>override</c> marks it.
     /// </summary>
-    private void Overriding(string key, string name, int nameAt, List<string> modifiers)
+    private void Overriding(QualifiedName key, string name, int nameAt, List<string> modifiers)
     {
         if (modifiers.Contains("override", StringComparer.Ordinal))
         {
@@ -2029,7 +2494,7 @@ internal sealed class JsReading
     }
 
     /// <summary>A <c>function</c> declaration at <paramref name="at"/>: a member node of its name - <c>default</c> where a default export's has none.</summary>
-    private int Function(int start, int head, int at, int end, ScanFrame frame, List<string> modifiers, List<string> marks, List<(int Start, int End)> decorators, string? seenIn, bool isDefault, bool ambient)
+    private int Function(int start, int head, int at, int end, ScanFrame frame, List<string> modifiers, List<string> marks, List<(int Start, int End)> decorators, QualifiedName? seenIn, bool isDefault, bool ambient)
     {
         var (next, generator) = FunctionName(_scan, at);
 
@@ -2074,16 +2539,20 @@ internal sealed class JsReading
     /// function or an arrow is its value, a class where a class is, and a member node of the type it is declared with or its
     /// value makes otherwise, what its value calls; one a <c>require</c> binds is an import, and no node.
     /// </summary>
-    private int Variables(int start, int head, int at, int end, ScanFrame frame, List<string> modifiers, List<string> marks, List<(int Start, int End)> decorators, string? seenIn, bool ambient)
+    private int Variables(int start, int head, int at, int end, ScanFrame frame, List<string> modifiers, List<string> marks, List<(int Start, int End)> decorators, QualifiedName? seenIn, bool ambient)
     {
         var word = _scan.Text(at);
         var stop = StatementEnd(head, end);
         var last = _scan.LastOf(stop);
         var boundary = _scan.Is(last, ";") ? last : stop;
         var named = new List<string>(modifiers) { word };
+        var pieces = Declarators(_scan.Next(at), boundary);
 
-        foreach (var (pieceStart, pieceEnd) in Declarators(_scan.Next(at), boundary))
+        // Each declarator a step of a walk of the file's, so what a class one declares holds is read before the next.
+        int Declarator(int index)
         {
+            var (pieceStart, pieceEnd) = pieces[index];
+
             // A declarator after the first begins where it is written, its header its own: const a = 1, b = () => 2.
             var (begins, header) = pieceStart == _scan.Next(at) ? (start, head) : (pieceStart, pieceStart);
 
@@ -2096,10 +2565,10 @@ internal sealed class JsReading
                 {
                     var from = _scan.Next(value);
                     var to = pieceEnd;
-                    Defer(() => Calls(_text, from, to, null, new Locals(), null, depth: 0));
+                    Defer(() => Calls(_text, from, to, null, new Locals(), null));
                 }
 
-                continue;
+                return index + 1;
             }
 
             var nameAt = pieceStart;
@@ -2118,19 +2587,19 @@ internal sealed class JsReading
 
             if (RequireDeclared(pieceStart, pieceEnd) is not null)
             {
-                continue;
+                return index + 1;
             }
 
             if (valueAt >= 0 && FunctionAt(valueAt, pieceEnd) is { } function)
             {
                 Bound(begins, header, nameAt, name, function, frame, marks, decorators, named, "function", seenIn, exports: null);
-                continue;
+                return index + 1;
             }
 
             if (valueAt >= 0 && _scan.Is(valueAt, "class"))
             {
                 Class(begins, header, valueAt, pieceEnd, frame, named, marks, decorators, seenIn, name, nameIsDefault: false, ambient, bindingNames: true);
-                continue;
+                return index + 1;
             }
 
             var key = _extract.Add(new ExtractNode(Id(frame.Qualify(name)), CodeNodeKinds.Member, name, frame.Qualify(name), _scan[begins].Line, _scan[_scan.LastOf(pieceEnd)].EndLine, ExtractText.Signature(ExtractText.Flat($"{_scan.Spelled(head, _scan.Next(at))} {_scan.Spelled(nameAt, assign)}")))
@@ -2160,10 +2629,13 @@ internal sealed class JsReading
             if (valueAt >= 0 && !ambient)
             {
                 var to = pieceEnd;
-                Defer(() => Calls(_text, valueAt, to, key, new Locals(), null, depth: 0));
+                Defer(() => Calls(_text, valueAt, to, key, new Locals(), null));
             }
+
+            return index + 1;
         }
 
+        _walks.Walk(0, pieces.Count, Declarator);
         return stop;
     }
 
@@ -2222,14 +2694,14 @@ internal sealed class JsReading
     /// signature names, the member it overrides, its decorators' calls and what its body calls. Answers where the next
     /// declaration begins.
     /// </summary>
-    private int Bound(int start, int head, int nameAt, string name, FunctionShape function, ScanFrame frame, List<string> marks, List<(int Start, int End)> decorators, List<string> modifiers, string subKind, string? seenIn, IReadOnlyList<string>? exports)
+    private int Bound(int start, int head, int nameAt, string name, FunctionShape function, ScanFrame frame, List<string> marks, List<(int Start, int End)> decorators, List<string> modifiers, string subKind, QualifiedName? seenIn, IReadOnlyList<string>? exports)
     {
         Callable(start, head, nameAt, name, function, frame, marks, decorators, modifiers, subKind, seenIn, exports);
         return function.Last + 1;
     }
 
     /// <summary>The member node <see cref="Bound"/> makes; answers its key.</summary>
-    private string Callable(int start, int head, int nameAt, string name, FunctionShape function, ScanFrame frame, List<string> marks, List<(int Start, int End)> decorators, List<string> modifiers, string subKind, string? seenIn, IReadOnlyList<string>? exports)
+    private QualifiedName Callable(int start, int head, int nameAt, string name, FunctionShape function, ScanFrame frame, List<string> marks, List<(int Start, int End)> decorators, List<string> modifiers, string subKind, QualifiedName? seenIn, IReadOnlyList<string>? exports)
     {
         var qualified = frame.Qualify(name);
         var getter = subKind == "getter";
@@ -2275,6 +2747,14 @@ internal sealed class JsReading
         Overriding(key, name, nameAt, modifiers);
         DecoratorCalls(key, decorators, frame.Owner);
 
+        // What its parameters' decorators call, and what their defaults read and hold.
+        DecoratorCalls(key, [.. parameters.Decorators], frame.Owner);
+
+        foreach (var (defaultStart, defaultEnd) in parameters.Defaults)
+        {
+            Calls(_text, defaultStart, defaultEnd, key, new Locals(), frame.Owner);
+        }
+
         if (function.Body >= 0)
         {
             var typeParameters = _typeParameters.Concat(function.Own).ToList();
@@ -2291,10 +2771,10 @@ internal sealed class JsReading
 
                     if (function.Name >= 0 && _scan.Text(function.Name) != name)
                     {
-                        locals.LocalFunctions.Add(_scan.Text(function.Name));
+                        locals.LocalFunction(_scan.Text(function.Name));
                     }
 
-                    Calls(_text, function.Body + 1, function.Last + (function.Arrow ? 1 : 0), key, locals, owner, depth: 0);
+                    Calls(_text, function.Body + 1, function.Last + (function.Arrow ? 1 : 0), key, locals, owner);
                 }
                 finally
                 {
@@ -2348,14 +2828,17 @@ internal sealed class JsReading
     }
 
     /// <summary>The names of the type parameters the list at <paramref name="less"/> declares.</summary>
-    private List<string> TypeParameters(int less, int end)
-    {
-        var past = Angle(_scan, less, end);
+    private List<string> TypeParameters(int less, int end) => TypeParameters(_scan, less, end);
 
-        return [.. ScanCalls.Split(_scan, less + 1, past - 1, _types)
-            .Select(piece => _scan.Code(piece.Start, piece.End).FirstOrDefault(index => _scan.IsName(index) && !(_scan.Text(index) is "const" or "in" or "out"), -1))
+    /// <summary>The names of the type parameters the list at <paramref name="less"/> of <paramref name="scan"/> declares.</summary>
+    private List<string> TypeParameters(ScannedText scan, int less, int end)
+    {
+        var past = Angle(scan, less, end);
+
+        return [.. ScanCalls.Split(scan, less + 1, past - 1, _types)
+            .Select(piece => scan.Code(piece.Start, piece.End).FirstOrDefault(index => scan.IsName(index) && !(scan.Text(index) is "const" or "in" or "out"), -1))
             .Where(index => index >= 0)
-            .Select(index => _scan.Text(index))];
+            .Select(index => scan.Text(index))];
     }
 
     // ---- Statements' ends ----
@@ -2618,9 +3101,17 @@ internal sealed class JsReading
     /// <summary>
     /// A callable's parameters: how many a call gives - in TypeScript its required ones the fewest and all of them the
     /// most, none where a rest one takes any; in JavaScript any number - the spans of their types, the names each binds
-    /// with the type it is declared with, those of a function type, and the parameter properties a constructor declares.
+    /// with the type it is declared with, those of a function type, the parameter properties a constructor declares, and
+    /// each parameter's decorators and default, whose code is the callable's.
     /// </summary>
-    private sealed record Parameters(int? Least, int? Most, IReadOnlyList<(int Start, int End)> TypeSpans, IReadOnlyDictionary<string, string?> Locals, IReadOnlySet<string> Functions, IReadOnlyList<ParameterProperty> Properties);
+    private sealed record Parameters(int? Least, int? Most, IReadOnlyList<(int Start, int End)> TypeSpans, IReadOnlyDictionary<string, string?> Locals, IReadOnlySet<string> Functions, IReadOnlyList<ParameterProperty> Properties)
+    {
+        /// <summary>Each parameter's decorators, each from its <c>@</c> to past it.</summary>
+        public IReadOnlyList<(int Start, int End)> Decorators { get; init; } = [];
+
+        /// <summary>Each parameter's default, from past its <c>=</c> to its end.</summary>
+        public IReadOnlyList<(int Start, int End)> Defaults { get; init; } = [];
+    }
 
     /// <summary>The parameters between the parentheses at <paramref name="open"/> and <paramref name="close"/>.</summary>
     private Parameters ParametersOf(ScannedText scan, int open, int close)
@@ -2632,10 +3123,12 @@ internal sealed class JsReading
         var locals = new Dictionary<string, string?>(StringComparer.Ordinal);
         var functions = new HashSet<string>(StringComparer.Ordinal);
         var properties = new List<ParameterProperty>();
+        var decorators = new List<(int Start, int End)>();
+        var defaults = new List<(int Start, int End)>();
 
         foreach (var (start, end) in ScanCalls.Split(scan, open + 1, close, _types))
         {
-            var at = SkipDecorators(scan, start, end);
+            var at = SkipDecorators(scan, start, end, decorators);
             var modifiers = new List<string>();
 
             while (scan.IsName(at) && ParameterModifiers.Contains(scan.Text(at)) && scan.Next(at) < end && (scan.IsName(scan.Next(at)) || scan.Opens(scan.Next(at))))
@@ -2644,9 +3137,10 @@ internal sealed class JsReading
                 at = scan.Next(at);
             }
 
-            // TypeScript's this parameter says what the function is called on, and takes no argument.
+            // TypeScript's this parameter says what the function is called on, its type's, and takes no argument.
             if (scan.Is(at, "this") && scan.Is(scan.Next(at), ":"))
             {
+                spans.Add((scan.Next(scan.Next(at)), end));
                 continue;
             }
 
@@ -2661,10 +3155,14 @@ internal sealed class JsReading
 
             if (nameAt < 0 && scan.Opens(at))
             {
-                foreach (var bound in PatternNames(scan, at))
+                var (bound, given) = Pattern(scan, at);
+
+                foreach (var name in bound)
                 {
-                    locals[bound] = null;
+                    locals[name] = null;
                 }
+
+                defaults.AddRange(given);
             }
 
             var optional = false;
@@ -2679,6 +3177,11 @@ internal sealed class JsReading
             var assign = ScanCalls.TopLevel(scan, typeStart >= 0 ? typeStart : next, end, "=", _types);
             var typeEnd = typeStart >= 0 ? assign : -1;
             optional |= assign < end;
+
+            if (assign < end)
+            {
+                defaults.Add((assign + 1, end));
+            }
 
             if (typeStart >= 0)
             {
@@ -2708,32 +3211,69 @@ internal sealed class JsReading
             }
         }
 
-        return _typescript
+        return (_typescript
             ? new Parameters(least, rest ? null : most, spans, locals, functions, properties)
-            : new Parameters(0, null, spans, locals, functions, properties);
+            : new Parameters(0, null, spans, locals, functions, properties)) with { Decorators = decorators, Defaults = defaults };
     }
 
-    /// <summary>Past the decorators of a parameter at <paramref name="at"/>, within <paramref name="end"/>.</summary>
-    private static int SkipDecorators(ScannedText scan, int at, int end)
+    /// <summary>Past the decorators of a parameter at <paramref name="at"/>, within <paramref name="end"/>, each from its <c>@</c> to past it among <paramref name="decorators"/>.</summary>
+    private static int SkipDecorators(ScannedText scan, int at, int end, List<(int Start, int End)> decorators)
     {
         while (at < end && scan.Is(at, "@") && scan.IsName(scan.Next(at)))
         {
             var (_, past) = ChainAt(scan, scan.Next(at), end);
+            var decorator = at;
             at = scan.Is(past, "(") ? Math.Min(scan.Past(past), end) : past;
+            decorators.Add((decorator, at));
         }
 
         return at;
     }
 
     /// <summary>The names the pattern the bracket at <paramref name="open"/> opens binds: each name a comma, a closer or a default follows, and no key's.</summary>
-    private static List<string> PatternNames(ScannedText scan, int open)
+    private static List<string> PatternNames(ScannedText scan, int open) => Pattern(scan, open).Names;
+
+    /// <summary>
+    /// The names a list of patterns binds as JavaScript binds a function's parameters - <c>item, index</c>,
+    /// <c>{ row: line }</c> <c>line</c> alone, <c>[first, ...rest]</c> both, a default's value none: what a markup's loop
+    /// or slot declares for what it holds, as the code of its framework's compiled template binds it.
+    /// </summary>
+    /// <param name="patterns">The patterns, written as a parameter list's are, without its parentheses.</param>
+    internal static List<string> Binds(string patterns)
+    {
+        var scan = JsLexer.Scan($"[{patterns}]", markup: false).Scan;
+        return scan.Count > 0 ? PatternNames(scan, 0) : [];
+    }
+
+    /// <summary>
+    /// What the pattern the bracket at <paramref name="open"/> opens binds - each name a comma, a closer or a default
+    /// follows, and no key's - and the spans of the default values it gives them: code, which binds no name of its own -
+    /// <c>{ size = fallback }</c> binds <c>size</c> and reads <c>fallback</c>.
+    /// </summary>
+    private static (List<string> Names, List<(int Start, int End)> Defaults) Pattern(ScannedText scan, int open)
     {
         var names = new List<string>();
+        var defaults = new List<(int Start, int End)>();
         var close = scan.Match(open) is var matched and > 0 ? matched : open;
 
         for (var at = open + 1; at < close; at++)
         {
             var next = scan.Next(at);
+
+            if (scan.Is(at, "="))
+            {
+                // A default runs to the comma or the closer that ends it, a bracket it holds passed over.
+                var end = next;
+
+                while (end < close && !(scan.Is(end, ",") || scan.Is(end, "}") || scan.Is(end, "]") || scan.Is(end, ")")))
+                {
+                    end = scan.Opens(end) ? Math.Max(Math.Min(scan.Past(end), close), end + 1) : end + 1;
+                }
+
+                defaults.Add((next, end));
+                at = end - 1;
+                continue;
+            }
 
             if (scan.IsName(at) && !IsMember(scan, scan.Previous(at)) && (scan.Is(next, ",") || scan.Is(next, "}") || scan.Is(next, "]") || scan.Is(next, "=")))
             {
@@ -2741,36 +3281,212 @@ internal sealed class JsReading
             }
         }
 
-        return names;
+        return (names, defaults);
     }
 
     // ---- What a body calls ----
 
-    /// <summary>The names a body binds: each local's and parameter's type where the code says one, those of a function type, and its local functions.</summary>
+    /// <summary>
+    /// The names a body binds, scope by scope as JavaScript scopes them: each local's and parameter's type where the code
+    /// says one, those of a function type, and its local functions. What a block declares by <c>let</c>, <c>const</c>,
+    /// <c>class</c> and <c>function</c> is the block's, a <c>var</c> and a parameter the function's: a name a scope binds
+    /// hides the same name an outer scope binds, or the file's or an import's, until that scope ends - and no further.
+    /// </summary>
+    /// <remarks>
+    /// The scopes are a stack the reading opens and closes as it reaches them, each name's bindings one of its own, the
+    /// innermost last: a name is looked up at once, and a scope closed takes back what it bound - so code nested any depth
+    /// costs what it writes, and memory alone bounds the nesting.
+    /// </remarks>
     private sealed class Locals
     {
+        /// <summary>The scopes open, the body's own first: a function's, which no text's end closes.</summary>
+        private readonly List<LocalScope> _scopes = [new LocalScope(null, int.MaxValue, Function: true)];
+
+        /// <summary>Where in <see cref="_scopes"/> each function's scope stands, the innermost last: where a <c>var</c> is bound.</summary>
+        private readonly List<int> _functions = [0];
+
+        /// <summary>Each name's bindings, by the scope each is of, the outermost first.</summary>
+        private readonly Dictionary<string, List<(int Scope, LocalName Name)>> _names = new(StringComparer.Ordinal);
+
         public Locals()
         {
         }
 
-        public Locals(Parameters parameters) => Add(parameters);
+        public Locals(Parameters parameters) => Bind(parameters);
 
-        public Dictionary<string, string?> Types { get; } = new(StringComparer.Ordinal);
+        /// <summary>
+        /// The types the body writes - a declarator's annotation, a parameter's, a return type, a call's type arguments -
+        /// each by where its first token begins in the source, with the text it is read in and the index past it: names
+        /// a type's, which the code read references and goes on past.
+        /// </summary>
+        public Dictionary<long, (ScannedText Scan, int End)> Typed { get; } = [];
 
-        public HashSet<string> Functions { get; } = new(StringComparer.Ordinal);
+        /// <summary>The type parameters of the generic functions the body writes: no type the repository declares.</summary>
+        public HashSet<string> TypeParameters { get; } = new(StringComparer.Ordinal);
 
-        public HashSet<string> LocalFunctions { get; } = new(StringComparer.Ordinal);
+        /// <summary>Notes the type of <paramref name="scan"/> from <paramref name="start"/> to <paramref name="end"/> among those the body writes (<see cref="Typed"/>).</summary>
+        public void Type(ScannedText scan, int start, int end)
+        {
+            if (start >= 0 && start < end && start < scan.Count)
+            {
+                Typed[scan[start].Start] = (scan, end);
+            }
+        }
 
-        public void Add(Parameters parameters)
+        /// <summary>How many scopes are open: what a run of code of its own closes back to once it is read (<see cref="CloseTo"/>).</summary>
+        public int Depth => _scopes.Count;
+
+        /// <summary>
+        /// Opens a scope of <paramref name="scan"/> that ends at the token <paramref name="end"/>: a block's, or a
+        /// function's - which binds its <c>var</c>s and its parameters too - where <paramref name="function"/>.
+        /// </summary>
+        public void Open(ScannedText scan, int end, bool function)
+        {
+            if (function)
+            {
+                _functions.Add(_scopes.Count);
+            }
+
+            _scopes.Add(new LocalScope(scan, end, function));
+        }
+
+        /// <summary>Closes each scope of <paramref name="scan"/> the reading has come to the end of at <paramref name="at"/>, the innermost first.</summary>
+        public void Reach(ScannedText scan, int at)
+        {
+            while (_scopes.Count > 1 && _scopes[^1].Scan == scan && _scopes[^1].End <= at)
+            {
+                Close();
+            }
+        }
+
+        /// <summary>Closes the scopes opened past the first <paramref name="depth"/> (<see cref="Depth"/>).</summary>
+        public void CloseTo(int depth)
+        {
+            while (_scopes.Count > Math.Max(depth, 1))
+            {
+                Close();
+            }
+        }
+
+        /// <summary>Whether a scope open binds <paramref name="name"/> at all.</summary>
+        public bool Binds(string name) => _names.ContainsKey(name);
+
+        /// <summary>Whether the innermost scope that binds <paramref name="name"/> binds it a value: a local, a parameter.</summary>
+        public bool HoldsValue(string name) => Innermost(name) is { Value: true };
+
+        /// <summary>The type of the value <paramref name="name"/> is where it is one (<see cref="HoldsValue"/>) - none where the code says none - and whether it is.</summary>
+        public bool TryGetType(string name, out string? type)
+        {
+            if (Innermost(name) is { Value: true } bound)
+            {
+                type = bound.Type;
+                return true;
+            }
+
+            type = null;
+            return false;
+        }
+
+        /// <summary>Whether the innermost scope that binds <paramref name="name"/> binds it a value of a function type.</summary>
+        public bool IsFunctionValue(string name) => Innermost(name) is { FunctionValue: true };
+
+        /// <summary>Whether the innermost scope that binds <paramref name="name"/> binds it a function the body declares.</summary>
+        public bool IsLocalFunction(string name) => Innermost(name) is { LocalFunction: true };
+
+        /// <summary>Binds <paramref name="name"/> a value of <paramref name="type"/>, in the innermost scope - its function's where <paramref name="ofFunction"/>, as a <c>var</c> is.</summary>
+        public void Value(string name, string? type, bool ofFunction = false) => Declare(name, ofFunction, bound => bound with { Value = true, Type = type });
+
+        /// <summary>Binds <paramref name="name"/> a value of a function type (<see cref="Value"/>).</summary>
+        public void FunctionValue(string name, bool ofFunction = false) => Declare(name, ofFunction, bound => bound with { FunctionValue = true });
+
+        /// <summary>Binds <paramref name="name"/> a function the body declares, whose calls are the body's own (<see cref="Value"/>).</summary>
+        public void LocalFunction(string name, bool ofFunction = false) => Declare(name, ofFunction, bound => bound with { LocalFunction = true });
+
+        /// <summary>Binds the names <paramref name="parameters"/> bind in the innermost function's scope.</summary>
+        public void Bind(Parameters parameters)
         {
             foreach (var (name, type) in parameters.Locals)
             {
-                Types[name] = type;
+                Value(name, type, ofFunction: true);
             }
 
-            Functions.UnionWith(parameters.Functions);
+            foreach (var name in parameters.Functions)
+            {
+                FunctionValue(name, ofFunction: true);
+            }
+        }
+
+        /// <summary>What the innermost scope that binds <paramref name="name"/> binds it; none where no scope open does.</summary>
+        private LocalName? Innermost(string name) => _names.TryGetValue(name, out var bindings) ? bindings[^1].Name : null;
+
+        /// <summary>
+        /// Binds <paramref name="name"/> as <paramref name="bind"/> says in the innermost scope, or the innermost function's
+        /// where <paramref name="ofFunction"/>: beside what that scope binds it already, under what scopes within bind it.
+        /// </summary>
+        private void Declare(string name, bool ofFunction, Func<LocalName, LocalName> bind)
+        {
+            var scope = ofFunction ? _functions[^1] : _scopes.Count - 1;
+
+            if (!_names.TryGetValue(name, out var bindings))
+            {
+                _names[name] = bindings = [];
+            }
+
+            var at = bindings.Count;
+
+            while (at > 0 && bindings[at - 1].Scope > scope)
+            {
+                at--;
+            }
+
+            if (at > 0 && bindings[at - 1].Scope == scope)
+            {
+                bindings[at - 1] = (scope, bind(bindings[at - 1].Name));
+                return;
+            }
+
+            bindings.Insert(at, (scope, bind(default)));
+            _scopes[scope].Bound.Add(name);
+        }
+
+        /// <summary>Closes the innermost scope: each name it bound bound as the scope around binds it, or not at all.</summary>
+        private void Close()
+        {
+            var index = _scopes.Count - 1;
+
+            // The scopes within it are closed: each name's binding of it is the innermost.
+            foreach (var name in _scopes[index].Bound)
+            {
+                var bindings = _names[name];
+                bindings.RemoveAt(bindings.Count - 1);
+
+                if (bindings.Count == 0)
+                {
+                    _names.Remove(name);
+                }
+            }
+
+            if (_functions[^1] == index)
+            {
+                _functions.RemoveAt(_functions.Count - 1);
+            }
+
+            _scopes.RemoveAt(index);
         }
     }
+
+    /// <summary>
+    /// One scope <see cref="Locals"/> holds: the text it is of and the token it ends at - none for a body's own, which no
+    /// token ends - whether it is a function's, and the names it binds.
+    /// </summary>
+    private sealed record LocalScope(ScannedText? Scan, int End, bool Function)
+    {
+        /// <summary>The names it binds, each once, in the order bound.</summary>
+        public List<string> Bound { get; } = [];
+    }
+
+    /// <summary>What one scope binds a name: a value - of a type where the code says one - a value of a function type, a function the body declares; any of them together.</summary>
+    private readonly record struct LocalName(bool Value, string? Type, bool FunctionValue, bool LocalFunction);
 
     /// <summary>
     /// Each call the tokens of <paramref name="text"/> from <paramref name="from"/> to <paramref name="to"/> make, from the
@@ -2780,55 +3496,165 @@ internal sealed class JsReading
     /// marked dynamic. A template's and an element's code are read as text of their own, an import a call makes an import,
     /// and a test file's test calls nodes of their own. <paramref name="owner"/> is the type whose members the body sees.
     /// </summary>
-    private void Calls(InterpolatedText text, int from, int to, string? key, Locals locals, string? owner, int depth)
+    /// <remarks>
+    /// What a template's holes and an element's expressions hold, and what a test group's arguments hold, is a run of
+    /// code of its own, read on a stack of runs - never a call into this - before the run it stands in goes on; so code
+    /// nested any depth is read whole, and memory alone bounds the nesting.
+    /// </remarks>
+    private void Calls(InterpolatedText text, int from, int to, QualifiedName? key, Locals locals, string? owner)
     {
-        var scan = text.Scan;
-        string From() => key ?? ModuleKey();
+        var runs = new Stack<CallsRun>();
+        runs.Push(new CallsRun(text, from, to, key, Outermost: true));
 
-        // A function a body declares is its own from the body's first line: JavaScript hoists it.
-        if (key is not null)
+        while (runs.TryPeek(out var run))
         {
-            Hoisted(scan, from, to, locals);
+            if (!run.Begun)
+            {
+                run.Begun = true;
+                run.Depth = locals.Depth;
+
+                // A function a body declares is its own from the body's first line: JavaScript hoists it.
+                if (run.Key is not null)
+                {
+                    Hoisted(run.Text.Scan, run.At, run.To, locals);
+                }
+                else if (run.Outermost)
+                {
+                    TopCode(run.Text.Scan, run.At, run.To);
+                }
+            }
+
+            // What the run goes on with once the runs it began are read: an element's components after its expressions.
+            if (run.After is { } after)
+            {
+                run.After = null;
+                after();
+            }
+
+            // A run read to its end closes the scopes it opened: the code around it goes on in its own.
+            if (!CallsOf(run, runs, locals, owner))
+            {
+                locals.CloseTo(run.Depth);
+                runs.Pop();
+            }
         }
+    }
 
-        // Where the test calls read are no longer too deep to be: past the first that was.
-        var shallowFrom = -1;
+    /// <summary>
+    /// One run of code <see cref="Calls"/> reads: its text, where it stands and ends, the node of what it calls, whether it
+    /// is the run its caller asked for - the code itself, not a hole's or a group's - and what it goes on with once the runs
+    /// it began are read.
+    /// </summary>
+    private sealed record CallsRun(InterpolatedText Text, int From, int To, QualifiedName? Key, bool Outermost)
+    {
+        /// <summary>Where the run goes on.</summary>
+        public int At { get; set; } = From;
 
-        for (var at = from; at < to && at < scan.Count; at++)
+        /// <summary>Whether its first token was reached, and what it hoists read.</summary>
+        public bool Begun { get; set; }
+
+        /// <summary>What it goes on with first, once the runs it began are read; none where nothing is.</summary>
+        public Action? After { get; set; }
+
+        /// <summary>How many scopes were open as it was reached: what it closes back to once it is read (<see cref="Locals.Depth"/>).</summary>
+        public int Depth { get; set; }
+    }
+
+    /// <summary>
+    /// Reads <paramref name="run"/> on from where it stands (<see cref="Calls"/>): answers <see langword="true"/> where it
+    /// stopped at code of a run of its own - each pushed on <paramref name="runs"/>, the first on top, the run itself to
+    /// go on past it once they are read - and <see langword="false"/> where it read to its end.
+    /// </summary>
+    private bool CallsOf(CallsRun run, Stack<CallsRun> runs, Locals locals, string? owner)
+    {
+        var text = run.Text;
+        var scan = text.Scan;
+        var key = run.Key;
+        var to = run.To;
+        QualifiedName From() => key ?? ModuleKey();
+
+        for (var at = run.At; at < to && at < scan.Count; at++)
         {
             var token = scan[at];
+            locals.Reach(scan, at);
+
+            // A type the body writes - an annotation, a return type, a call's type arguments - names types, no value the
+            // code reads: its references, and the reading goes on past it.
+            if (locals.Typed.TryGetValue(token.Start, out var written) && written.Scan == scan)
+            {
+                locals.Typed.Remove(token.Start);
+
+                if (scan == _scan)
+                {
+                    TypeReferences(From(), at, Math.Min(written.End, to), locals.TypeParameters);
+                }
+
+                at = Math.Max(at, Math.Min(written.End, to) - 1);
+                continue;
+            }
 
             if (token.Kind == ScanTokenKind.Text)
             {
-                if (text.Interpolations.TryGetValue(token.Start, out var spans) && ScanFrame.ReadsDeeper(_extract, depth, token.Line, Nesting))
+                // The literal's constant parts - a template's holes are code, read as code - are its data; markup holds
+                // none but its attributes' strings.
+                foreach (var (value, part) in scan.LiteralParts(token))
                 {
-                    foreach (var (spanStart, spanEnd) in spans)
+                    _extract.Literal(value, part, key);
+                }
+
+                var tags = text.Elements is { } elements && elements.TryGetValue(token.Start, out var named) ? named : null;
+
+                void Components()
+                {
+                    foreach (var (tagStart, tagEnd) in tags ?? [])
                     {
-                        var inner = JsLexer.Scan(scan.Source, spanStart, spanEnd, text.Lines, _markup);
-                        Calls(inner, 0, inner.Scan.Count, key, locals, owner, depth + 1);
+                        Component(scan.Source.Slice(tagStart, tagEnd), text.Lines.LineAt(tagStart), From, locals);
                     }
                 }
 
-                if (text.Elements is { } elements && elements.TryGetValue(token.Start, out var tags))
+                // Each hole's code a run of its own, read first; the element's components once they are, then the rest.
+                if (text.Interpolations.TryGetValue(token.Start, out var spans) && spans.Count > 0)
                 {
-                    foreach (var (tagStart, tagEnd) in tags)
+                    var holes = spans.Select(span => JsLexer.Scan(scan.Source, span.Start, span.End, text.Lines, _markup, text.Closes)).ToList();
+
+                    for (var hole = holes.Count - 1; hole >= 0; hole--)
                     {
-                        Component(scan.Source[tagStart..tagEnd], text.Lines.LineAt(tagStart), From, locals);
+                        runs.Push(new CallsRun(holes[hole], 0, holes[hole].Scan.Count, key, Outermost: false));
                     }
+
+                    run.At = at + 1;
+                    run.After = tags is null ? null : Components;
+                    return true;
                 }
 
+                Components();
                 continue;
             }
 
             if (token.Kind != ScanTokenKind.Name)
             {
-                if (scan.Is(at, "(") && scan.Match(at) is var close and > 0 && IsArrowParameters(scan, close))
+                if (scan.Is(at, "{") && scan.Match(at) is var brace and > 0 && brace > at)
                 {
-                    locals.Add(ParametersOf(scan, at, close));
+                    // A block is a scope: what it declares by let, const, class and function is its own, a function from its first line.
+                    locals.Open(scan, brace, function: false);
+                    Hoisted(scan, at + 1, brace, locals);
+                }
+                else if (scan.Is(at, "(") && scan.Match(at) is var close and > 0 && IsArrowParameters(scan, close))
+                {
+                    Signature(scan, at, close, locals);
+                }
+                else if (_typescript && scan.Is(at, "<") && TypeWritten(scan, at, to, From, locals) is var typedPast and > 0)
+                {
+                    at = typedPast - 1;
                 }
                 else if (scan.Is(at, "[") && scan.Match(at) is var closing and > 0 && scan.Is(scan.Next(closing), "(") && EndsOperand(scan, scan.Previous(at)))
                 {
                     _extract.Dynamic(token.Line, "a call through a computed member");
+                }
+                else if (scan.Is(at, "[") && scan.Match(at) is var shut and > 0 && EndsOperand(scan, scan.Previous(at)) && StringMember(text, at, shut) is { } named)
+                {
+                    // styles['btn-big'] reads the member a string names as styles.btn reads its own: qualified by its receiver alike.
+                    _extract.Reference(From(), CodeEdgeKinds.Uses, named, token.Line, qualifier: Receiver(scan, at, locals, out _, out _));
                 }
 
                 continue;
@@ -2840,25 +3666,48 @@ internal sealed class JsReading
             var previous = scan.Previous(at);
             var member = IsMember(scan, previous);
 
+            // A component's defineProps declares the props its template reads as members; the call is read as any is.
+            if (!member && _component && word == "defineProps" && scan == _scan)
+            {
+                DefinedProps(next, to);
+            }
+
             if (!member)
             {
                 switch (word)
                 {
                     case "function":
-                        if (FunctionLocals(scan, at, locals) is var past and > 0)
+                        if (FunctionLocals(scan, at, locals, From) is var past and > 0)
                         {
                             at = past - 1;
                         }
 
                         continue;
 
+                    // What a catch binds is its block's, and what a loop's head declares the loop's: its head's and its body's.
                     case "catch" when scan.Is(next, "(") && scan.Match(next) is var caught and > 0:
+                        locals.Open(scan, BodyEnd(scan, scan.Next(caught), statement: true), function: false);
+
                         foreach (var bound in scan.Code(next + 1, caught).Where(index => scan.IsName(index) && !scan.Is(scan.Previous(index), ":")).Take(1))
                         {
-                            locals.Types[scan.Text(bound)] = null;
+                            locals.Value(scan.Text(bound), null);
                         }
 
                         at = caught;
+                        continue;
+
+                    case "for":
+                        var head = scan.Is(next, "await") ? scan.Next(next) : next;
+
+                        if (scan.Is(head, "(") && scan.Match(head) is var headEnd and > 0)
+                        {
+                            locals.Open(scan, BodyEnd(scan, scan.Next(headEnd), statement: true), function: false);
+                        }
+
+                        continue;
+
+                    case "class":
+                        LocalClass(scan, at, locals);
                         continue;
 
                     case "new":
@@ -2874,7 +3723,7 @@ internal sealed class JsReading
                         continue;
 
                     // import('./x'), require('./x'): the file imported, no name of it bound; one the code computes, marked dynamic.
-                    case "import" or "require" when scan.Is(next, "(") && !locals.Types.ContainsKey(word) && !_bindings.ContainsKey(word):
+                    case "import" or "require" when scan.Is(next, "(") && !locals.HoldsValue(word) && !_bindings.ContainsKey(word):
                         if (WholeSpecifier(scan, next) is not { } specifier)
                         {
                             _extract.Dynamic(line, $"an {(word == "import" ? "import" : "import by require")} of a module the code computes");
@@ -2902,37 +3751,27 @@ internal sealed class JsReading
                         continue;
 
                     case "const" or "let" or "var" when scan.Opens(next):
-                        foreach (var bound in PatternNames(scan, next))
-                        {
-                            locals.Types[bound] = null;
-                        }
-
+                        Local(scan, next, to, locals);
                         continue;
                 }
 
                 Local(scan, at, to, locals);
 
+                // An arrow's one parameter is its own: its scope ends where the arrow's body does.
                 if (scan.Is(next, "=>"))
                 {
-                    locals.Types[word] = null;
+                    locals.Open(scan, BodyEnd(scan, scan.Next(next)), function: true);
+                    locals.Value(word, null, ofFunction: true);
                     continue;
                 }
 
-                // A test call nested too deep is marked once, those it holds read as its holder's calls.
-                if (_testFile && (TestGroups.Contains(word) || TestCases.Contains(word)) && at > shallowFrom && !locals.Types.ContainsKey(word))
+                // A test call is a node of its own, what its arguments hold a run of code of that node's, read first.
+                if (_testFile && (TestGroups.Contains(word) || TestCases.Contains(word)) && !locals.HoldsValue(word)
+                    && TestCall(scan, at) is { } test && Test(scan, at, test, key) is { } tested)
                 {
-                    if (TestCall(scan, at) is { } test)
-                    {
-                        if (!ScanFrame.ReadsDeeper(_extract, depth, line, Nesting))
-                        {
-                            shallowFrom = test.Close;
-                        }
-                        else if (Test(text, at, test, key, locals, owner, depth) is var tested and > 0)
-                        {
-                            at = tested;
-                            continue;
-                        }
-                    }
+                    runs.Push(new CallsRun(text, tested.From, test.Close, tested.Key, Outermost: false));
+                    run.At = test.Close + 1;
+                    return true;
                 }
             }
 
@@ -2943,7 +3782,7 @@ internal sealed class JsReading
                 {
                     MemberCall(scan, previous, null, From(), locals, word, line, owner);
                 }
-                else if (!locals.Types.ContainsKey(word) && !locals.LocalFunctions.Contains(word))
+                else if (!locals.HoldsValue(word) && !locals.IsLocalFunction(word))
                 {
                     var (tagged, qualifier) = Callee(word);
                     _extract.Reference(From(), CodeEdgeKinds.Calls, tagged, line, qualifier: qualifier);
@@ -2954,14 +3793,21 @@ internal sealed class JsReading
 
             if ((ScanCalls.At(scan, at, member ? _memberCalls : _calls) ?? Optional(scan, at)) is not { } call)
             {
+                Used(scan, at, member, From, locals, word, line);
                 continue;
             }
 
-            // A method's definition - an object's, a class expression's - is no call: its parameters are locals.
+            // A method's definition - an object's, a class expression's - is no call: its parameters are locals, their
+            // defaults code.
             if (IsDefinition(scan, call))
             {
-                locals.Add(ParametersOf(scan, call.Open, call.Close));
-                at = call.Close;
+                if (_typescript && scan.Is(next, "<"))
+                {
+                    Generic(scan, next, call.Open, From, locals);
+                }
+
+                Signature(scan, call.Open, call.Close, locals);
+                at = call.Open;
                 continue;
             }
 
@@ -2971,12 +3817,12 @@ internal sealed class JsReading
                 continue;
             }
 
-            if (locals.LocalFunctions.Contains(word))
+            if (locals.IsLocalFunction(word))
             {
                 continue;
             }
 
-            if (locals.Types.ContainsKey(word) || locals.Functions.Contains(word) || _values.Contains(word))
+            if (locals.Binds(word) || _values.Contains(word))
             {
                 _extract.Dynamic(line, $"a call through the function value {word}");
                 continue;
@@ -2985,6 +3831,8 @@ internal sealed class JsReading
             var (name, qualified) = Callee(word);
             _extract.Reference(From(), CodeEdgeKinds.Calls, name, line, call.Arity, qualified);
         }
+
+        return false;
     }
 
     /// <summary>
@@ -2997,48 +3845,77 @@ internal sealed class JsReading
         return scan.Is(next, "*") ? (scan.Next(next), true) : (next, false);
     }
 
-    /// <summary>The names of the functions the tokens from <paramref name="from"/> to <paramref name="to"/> declare - a <c>function</c> where a statement begins - each a local function of <paramref name="locals"/>.</summary>
+    /// <summary>
+    /// The names of the functions the tokens from <paramref name="from"/> to <paramref name="to"/> declare outside every
+    /// group they hold - a <c>function</c> where a statement begins (<see cref="Declares"/>) - each a local function of the
+    /// innermost scope of <paramref name="locals"/>: a group's own are bound as its scope opens.
+    /// </summary>
     private static void Hoisted(ScannedText scan, int from, int to, Locals locals)
     {
         for (var at = from; at < to && at < scan.Count; at++)
         {
-            if (!scan.Is(at, "function"))
+            if (scan.Opens(at) && scan.Match(at) is var close and > 0 && close > at)
             {
+                at = close;
                 continue;
             }
 
-            var before = scan.Previous(at);
-
-            if (before >= from && !(scan.Is(before, "{") || scan.Is(before, "}") || scan.Is(before, ";") || scan.Is(before, "async") || scan.Is(before, ")")))
+            if (scan.Is(at, "function") && Declares(scan, at, from) && FunctionName(scan, at).Name is var name && scan.IsName(name))
             {
-                continue;
-            }
-
-            if (FunctionName(scan, at).Name is var name && scan.IsName(name))
-            {
-                locals.LocalFunctions.Add(scan.Text(name));
+                locals.LocalFunction(scan.Text(name));
             }
         }
     }
 
     /// <summary>
-    /// A <c>function</c> expression or declaration at <paramref name="at"/> in a body: its parameters its body's locals,
-    /// its name a local function, whose calls are what the body around it calls; answers the index of its parameters, or
-    /// 0 where none follow.
+    /// Whether the <c>function</c> or <c>class</c> at <paramref name="at"/>, past a modifier before it, stands where a
+    /// statement begins - first of the code from <paramref name="from"/>, or after a block, a statement's end or a
+    /// condition's parenthesis - and so declares its name in the scope it stands in, where one an expression writes names
+    /// its own body alone.
     /// </summary>
-    private int FunctionLocals(ScannedText scan, int at, Locals locals)
+    private static bool Declares(ScannedText scan, int at, int from)
+    {
+        var before = scan.Previous(at);
+
+        if (scan.Is(before, "async") || scan.Is(before, "abstract") || scan.Is(before, "declare"))
+        {
+            before = scan.Previous(before);
+        }
+
+        return before < from || scan.Is(before, "{") || scan.Is(before, "}") || scan.Is(before, ";") || scan.Is(before, ")");
+    }
+
+    /// <summary>
+    /// A <c>function</c> expression or declaration at <paramref name="at"/> in a body: its parameters its body's locals
+    /// and their types and its return type written types (<see cref="Signature"/>), its type parameters none the
+    /// repository declares, its name a local function, whose calls are what the body around it calls - the scope's it is
+    /// declared in, or an expression's own body's; answers the index of its parameters' parenthesis, from which the code
+    /// read goes on - a default is code - or 0 where none follow.
+    /// </summary>
+    private int FunctionLocals(ScannedText scan, int at, Locals locals, Func<QualifiedName> from)
     {
         var next = FunctionName(scan, at).Name;
+        string? own = null;
 
         if (scan.IsName(next))
         {
-            locals.LocalFunctions.Add(scan.Text(next));
+            if (Declares(scan, at, 0))
+            {
+                locals.LocalFunction(scan.Text(next));
+            }
+            else
+            {
+                own = scan.Text(next);
+            }
+
             next = scan.Next(next);
         }
 
         if (_typescript && scan.Is(next, "<"))
         {
-            next = Angle(scan, next, scan.Count);
+            var less = next;
+            next = Angle(scan, less, scan.Count);
+            Generic(scan, less, next, from, locals);
         }
 
         if (!scan.Is(next, "(") || scan.Match(next) is not (var close and > 0))
@@ -3046,8 +3923,133 @@ internal sealed class JsReading
             return 0;
         }
 
-        locals.Add(ParametersOf(scan, next, close));
-        return close + 1;
+        Signature(scan, next, close, locals);
+
+        // A function expression's own name is its body's to call itself by: const f = function g() { g(); }.
+        if (own is not null)
+        {
+            locals.LocalFunction(own);
+        }
+
+        return next;
+    }
+
+    /// <summary>
+    /// A class the code writes at <paramref name="at"/>, by a name: one a statement declares its scope's, made and called
+    /// as a function the scope declares is; one an expression names, the name its own body's alone.
+    /// </summary>
+    private static void LocalClass(ScannedText scan, int at, Locals locals)
+    {
+        var name = scan.Next(at);
+
+        if (!scan.IsName(name) || scan.Is(name, "extends") || scan.Is(name, "implements"))
+        {
+            return;
+        }
+
+        if (Declares(scan, at, 0))
+        {
+            locals.LocalFunction(scan.Text(name));
+            return;
+        }
+
+        // Its body, past what it extends and implements - a call among them.
+        for (var past = scan.Next(name); past < scan.Count && !scan.Is(past, ";"); past = scan.Opens(past) ? scan.Past(past) : scan.Next(past))
+        {
+            if (scan.Is(past, "{"))
+            {
+                if (scan.Match(past) is var close and > 0 && close > past)
+                {
+                    locals.Open(scan, close, function: false);
+                    locals.LocalFunction(scan.Text(name));
+                }
+
+                return;
+            }
+        }
+    }
+
+    /// <summary>
+    /// The parameters of a function the body writes - an arrow's, a function expression's, a method's an object defines -
+    /// between the parentheses at <paramref name="open"/> and <paramref name="close"/>: the names they bind its locals, in
+    /// a scope of its own that ends where its body does (<see cref="FunctionEnd"/>), and their types and the return type
+    /// after them types the body writes (<see cref="Locals.Typed"/>), no values it reads.
+    /// </summary>
+    private void Signature(ScannedText scan, int open, int close, Locals locals)
+    {
+        var parameters = ParametersOf(scan, open, close);
+        locals.Open(scan, FunctionEnd(scan, close), function: true);
+        locals.Bind(parameters);
+
+        foreach (var (start, end) in parameters.TypeSpans)
+        {
+            locals.Type(scan, start, end);
+        }
+
+        if (_typescript && scan.Next(close) is var colon && scan.Is(colon, ":"))
+        {
+            var start = scan.Next(colon);
+            locals.Type(scan, start, TypeEnd(scan, start, scan.Count));
+        }
+    }
+
+    /// <summary>
+    /// The type parameters of a generic function the body writes, from the <c>&lt;</c> at <paramref name="less"/> to
+    /// <paramref name="past"/>: their names none the repository declares (<see cref="Locals.TypeParameters"/>), the types
+    /// their constraints and defaults name referenced from <paramref name="from"/>'s node.
+    /// </summary>
+    private void Generic(ScannedText scan, int less, int past, Func<QualifiedName> from, Locals locals)
+    {
+        locals.TypeParameters.UnionWith(TypeParameters(scan, less, past));
+
+        if (scan == _scan)
+        {
+            TypeReferences(from(), less, past, locals.TypeParameters);
+        }
+    }
+
+    /// <summary>
+    /// What the <c>&lt;</c> at <paramref name="less"/> opens in TypeScript code, where it is no comparison: a generic arrow's
+    /// type parameters (<see cref="Generic"/>), a call's type arguments - <c>useState&lt;User | null&gt;(null)</c> - or an
+    /// assertion's type, <c>&lt;Shape&gt;value</c>, which no operand stands before, each type it names referenced from
+    /// <paramref name="from"/>'s node; answers the index past its <c>&gt;</c>, or 0 where it is a comparison's.
+    /// </summary>
+    private int TypeWritten(ScannedText scan, int less, int to, Func<QualifiedName> from, Locals locals)
+    {
+        if (ScanCalls.TypeArgumentsAt(scan, less, _types!) is var listed and > 0)
+        {
+            if (scan == _scan)
+            {
+                TypeReferences(from(), less + 1, Math.Min(listed, to) - 1, locals.TypeParameters);
+            }
+
+            return Math.Min(listed, to);
+        }
+
+        if (EndsOperand(scan, scan.Previous(less)))
+        {
+            return 0;
+        }
+
+        var past = Angle(scan, less, to);
+
+        if (past >= to || !scan.Is(past - 1, ">"))
+        {
+            return 0;
+        }
+
+        if (scan.Is(past, "(") && scan.Match(past) is var close and > 0 && IsArrowParameters(scan, close))
+        {
+            Generic(scan, less, past, from, locals);
+            return past;
+        }
+
+        if (scan == _scan)
+        {
+            TypeReferences(from(), less + 1, past - 1, locals.TypeParameters);
+        }
+
+        return past;
     }
 
     /// <summary>An optional call of the name at <paramref name="at"/> - <c>a?.(...)</c> - where one is written; <see langword="null"/> otherwise.</summary>
@@ -3096,6 +4098,122 @@ internal sealed class JsReading
         return scan.Is(after, "=>");
     }
 
+    /// <summary>
+    /// The token the scope of the function whose parameters close at <paramref name="close"/> ends at: its body's, past a
+    /// return type and an arrow (<see cref="BodyEnd"/>); the token past its parameters where it has no body.
+    /// </summary>
+    private int FunctionEnd(ScannedText scan, int close)
+    {
+        var after = scan.Next(close);
+
+        if (_typescript && scan.Is(after, ":"))
+        {
+            after = TypeEnd(scan, scan.Next(after), scan.Count);
+        }
+
+        return scan.Is(after, "=>") ? BodyEnd(scan, scan.Next(after)) : scan.Is(after, "{") ? BodyEnd(scan, after) : close + 1;
+    }
+
+    /// <summary>
+    /// The token a body that begins at <paramref name="at"/> ends at: the brace that closes a block; where an expression
+    /// ends (<see cref="ExpressionEnd"/>) - a statement where <paramref name="statement"/>, which a comma goes on.
+    /// </summary>
+    private int BodyEnd(ScannedText scan, int at, bool statement = false)
+    {
+        if (scan.Is(at, "{") && scan.Match(at) is var close and > 0 && close > at)
+        {
+            return close;
+        }
+
+        var end = ExpressionEnd(scan, at);
+
+        while (statement && scan.Is(end, ","))
+        {
+            end = ExpressionEnd(scan, scan.Next(end));
+        }
+
+        return end;
+    }
+
+    /// <summary>
+    /// The token the expression <paramref name="at"/> stands in ends at: the first <c>,</c> or <c>;</c> after it among the
+    /// tokens of its own group, or the bracket that closes the group - <paramref name="at"/> itself where it is a closer;
+    /// the text's end where neither stands. The ends of each text are found once, for all its tokens (<see cref="ExpressionEnds"/>).
+    /// </summary>
+    private int ExpressionEnd(ScannedText scan, int at)
+    {
+        if (at < 0 || at >= scan.Count)
+        {
+            return scan.Count;
+        }
+
+        if (scan.Match(at) is var open and >= 0 && open < at)
+        {
+            return at;
+        }
+
+        if (!_ends.TryGetValue(scan, out var ends))
+        {
+            _ends[scan] = ends = ExpressionEnds(scan);
+        }
+
+        return ends[at];
+    }
+
+    /// <summary>
+    /// For each token of <paramref name="scan"/>, where the expression it stands in ends (<see cref="ExpressionEnd"/>):
+    /// read from the text's end back, a closer the end of what its group holds, its opener where the group around goes on.
+    /// </summary>
+    private static int[] ExpressionEnds(ScannedText scan)
+    {
+        var ends = new int[scan.Count];
+        var around = new Stack<int>();
+        var end = scan.Count;
+
+        for (var at = scan.Count - 1; at >= 0; at--)
+        {
+            var match = scan.Match(at);
+
+            if (match >= 0 && match < at)
+            {
+                ends[at] = end;
+                around.Push(end);
+                end = at;
+                continue;
+            }
+
+            if (match > at)
+            {
+                end = around.Count > 0 ? around.Pop() : scan.Count;
+            }
+
+            ends[at] = end;
+
+            if (scan.Is(at, ",") || scan.Is(at, ";"))
+            {
+                end = at;
+            }
+        }
+
+        return ends;
+    }
+
+    /// <summary>
+    /// The member the brackets at <paramref name="open"/> and <paramref name="close"/> name by a string - <c>['btn-big']</c>,
+    /// a template of no hole - where they hold that string alone; <see langword="null"/> where they hold anything else, or
+    /// one of no character.
+    /// </summary>
+    private static string? StringMember(InterpolatedText text, int open, int close)
+    {
+        var scan = text.Scan;
+        var inside = scan.Next(open);
+
+        return inside < close && IsText(scan, inside) && scan.Next(inside) == close && !text.Interpolations.ContainsKey(scan[inside].Start)
+            && scan.Value(inside) is { Length: > 0 } value
+                ? value
+                : null;
+    }
+
     /// <summary>Whether an operand ends at <paramref name="at"/>, so a <c>[</c> after it is a member's: a name but a keyword an expression begins after, a literal, a group's closer.</summary>
     private static bool EndsOperand(ScannedText scan, int at)
         => at >= 0 && at < scan.Count
@@ -3105,8 +4223,7 @@ internal sealed class JsReading
 
     /// <summary>
     /// A local the body declares at <paramref name="at"/>, where it declares one after <c>const</c>, <c>let</c> or
-    /// <c>var</c>: of the type its annotation names, or its value makes; a local function where a function or an arrow is
-    /// its value.
+    /// <c>var</c>, and each later declarator of its declaration - <c>const a = 1, b = 2</c>, a pattern among them.
     /// </summary>
     private void Local(ScannedText scan, int at, int to, Locals locals)
     {
@@ -3117,17 +4234,61 @@ internal sealed class JsReading
             return;
         }
 
+        // A var is its function's, a let and a const their block's.
+        var ofFunction = scan.Is(previous, "var");
+
+        if (scan.IsName(at))
+        {
+            Declared(scan, at, to, locals, ofFunction);
+        }
+        else
+        {
+            foreach (var bound in PatternNames(scan, at))
+            {
+                locals.Value(bound, null, ofFunction);
+            }
+        }
+
+        foreach (var later in ScanCalls.LaterDeclarators(scan, at, Math.Min(to, scan.Count), lineEnds: true))
+        {
+            var after = scan.Next(later);
+
+            if (scan.Opens(later))
+            {
+                foreach (var bound in PatternNames(scan, later))
+                {
+                    locals.Value(bound, null, ofFunction);
+                }
+            }
+            else if (scan.IsName(later) && !Reserved.Contains(scan.Text(later))
+                && (scan.Is(after, "=") || scan.Is(after, ",") || scan.Is(after, ":") || scan.EndsStatement(after) || after >= Math.Min(to, scan.Count) || scan[after].Line > scan[later].EndLine
+                    || scan.Is(after, ")") || scan.Is(after, "}")))
+            {
+                Declared(scan, later, to, locals, ofFunction);
+            }
+        }
+    }
+
+    /// <summary>
+    /// The local a declarator declares at <paramref name="at"/> - its function's where <paramref name="ofFunction"/>, as a
+    /// <c>var</c> is, its block's otherwise: of the type its annotation names - the annotation a type the body writes
+    /// (<see cref="Locals.Typed"/>), which the code read skips - or its value makes; a local function where a function or
+    /// an arrow is its value.
+    /// </summary>
+    private void Declared(ScannedText scan, int at, int to, Locals locals, bool ofFunction)
+    {
         var word = scan.Text(at);
         var next = scan.Next(at);
 
         if (_typescript && scan.Is(next, ":"))
         {
             var typeEnd = TypeEnd(scan, scan.Next(next), to);
-            locals.Types[word] = TypeKey(scan, scan.Next(next), typeEnd);
+            locals.Value(word, TypeKey(scan, scan.Next(next), typeEnd), ofFunction);
+            locals.Type(scan, scan.Next(next), typeEnd);
 
             if (IsFunctionType(scan, scan.Next(next), typeEnd))
             {
-                locals.Functions.Add(word);
+                locals.FunctionValue(word, ofFunction);
             }
 
             return;
@@ -3139,15 +4300,82 @@ internal sealed class JsReading
 
             if (scan == _scan && FunctionAt(value, Math.Min(to, scan.Count)) is not null)
             {
-                locals.LocalFunctions.Add(word);
+                locals.LocalFunction(word, ofFunction);
                 return;
             }
 
-            locals.Types[word] = Made(scan, value, Math.Min(to, scan.Count));
+            locals.Value(word, Made(scan, value, Math.Min(to, scan.Count)), ofFunction);
             return;
         }
 
-        locals.Types[word] = null;
+        locals.Value(word, null, ofFunction);
+    }
+
+    /// <summary>The words TypeScript writes as types of their own where they stand bare: not names a member reads.</summary>
+    private static readonly HashSet<string> BareTypeWords = new(StringComparer.Ordinal)
+    {
+        "string", "number", "boolean", "any", "unknown", "never", "void", "object", "symbol", "bigint", "readonly", "keyof",
+    };
+
+    /// <summary>
+    /// A member read or written without a call of it - <c>x.y</c>, <c>x?.y</c> - or a bare name the code reads, the first
+    /// of a receiver's chain among them: a use of the member by its name, qualified by what its receiver is where the file
+    /// says. A local, a parameter, a function value and a word of the language are its own or none, and no use, and so is
+    /// a name a member or an element is reached through that is no value (<see cref="IsValue"/>), and a label a
+    /// <c>break</c> or a <c>continue</c> names; a name an object literal, a label or an annotation writes before a colon
+    /// is a key, not a read, where one a case or a conditional writes there is.
+    /// </summary>
+    private void Used(ScannedText scan, int at, bool member, Func<QualifiedName> key, Locals locals, string word, int line)
+    {
+        var previous = scan.Previous(at);
+        var next = scan.Next(at);
+
+        if (member)
+        {
+            // Kept for the member after it, whose chain goes on from this one's (Receiver).
+            var qualifier = Receiver(scan, previous, locals, out _, out var anyLocal);
+            _chains[(scan, at)] = new ChainLink(_extract.Reference(key(), CodeEdgeKinds.Uses, word, line, qualifier: qualifier), qualifier, anyLocal);
+            return;
+        }
+
+        if ((scan.Is(next, ":") && !scan.Is(previous, "case") && !ScanCalls.IsConditionalColon(scan, next))
+            || ((IsMember(scan, next) || scan.Is(next, "[")) && !IsValue(word))
+            || ScanCalls.NamesLabel(scan, at)
+            || BareTypeWords.Contains(word)
+            || locals.Binds(word) || NoCalls.Contains(word))
+        {
+            return;
+        }
+
+        var (name, qualified) = Callee(word);
+        _extract.Reference(key(), CodeEdgeKinds.Uses, name, line, qualifier: qualified);
+    }
+
+    /// <summary>
+    /// Whether the name <paramref name="name"/>, written where a member or an element is reached through it, is a value the
+    /// code reads, by what the file says of it whatever its case: a variable or a constant its top declares, a function it
+    /// declares, a name an import binds - but a namespace's, and one a type-only import binds; no type, enum or namespace
+    /// the file declares, and none the language builds in. A name the file says nothing of is a value where it is not
+    /// written as a type's name is, capitalized.
+    /// </summary>
+    private bool IsValue(string name)
+    {
+        if (_values.Contains(name))
+        {
+            return true;
+        }
+
+        if (_bindings.TryGetValue(name, out var binding))
+        {
+            return !binding.Type && binding is not { Prefixed: true, Export: null };
+        }
+
+        if (_topKeys.TryGetValue(name, out var keys))
+        {
+            return keys.All(key => _extract.Node(key).Kind == CodeNodeKinds.Member);
+        }
+
+        return !Builtins.Contains(name) && !IsTypeName(name);
     }
 
     /// <summary>
@@ -3156,7 +4384,7 @@ internal sealed class JsReading
     /// through a function value's <c>call</c> or <c>apply</c>, <c>Reflect</c>'s, or a field of a function type marked
     /// dynamic, and not linked.
     /// </summary>
-    private void MemberCall(ScannedText scan, int dot, ScannedCall? call, string key, Locals locals, string word, int line, string? owner)
+    private void MemberCall(ScannedText scan, int dot, ScannedCall? call, QualifiedName key, Locals locals, string word, int line, string? owner)
     {
         var before = scan.Previous(dot);
 
@@ -3166,7 +4394,7 @@ internal sealed class JsReading
             return;
         }
 
-        var receiver = Receiver(scan, dot, locals, out var anyValue);
+        var receiver = Receiver(scan, dot, locals, out var anyValue, out _);
 
         // A function value's call or apply - f.call(this, x) - and not a method of that name a type the file says has.
         if (word is "call" or "apply" && receiver.Kind is CodeQualifierKinds.Value && anyValue is null)
@@ -3192,9 +4420,56 @@ internal sealed class JsReading
     /// <summary>
     /// What a call on the receiver before the token at <paramref name="dot"/> is qualified by: <c>this</c>, <c>super</c>, the
     /// type a local is declared with or made of, an import's prefix, a type's name, a value by its name, or a type a
-    /// <c>new</c> makes - <paramref name="anyValue"/> the local's name where it is typed <c>any</c>.
+    /// <c>new</c> makes - <paramref name="anyValue"/> the local's name where it is typed <c>any</c>, and
+    /// <paramref name="anyLocal"/> that name where the chain begins at that local, which every later member of the chain is
+    /// on too. A chain of two names or more is written as links (<see cref="ExtractQualifier.Link"/>): where the name before
+    /// the dot is a member whose use was made, the qualifier follows from that use's, the link to it - one step, whatever
+    /// the chain's length - and its names are the chain's as <see cref="FileExtract.Written"/> reads them.
     /// </summary>
-    private ExtractQualifier Receiver(ScannedText scan, int dot, Locals locals, out string? anyValue)
+    private ExtractQualifier Receiver(ScannedText scan, int dot, Locals locals, out string? anyValue, out string? anyLocal)
+    {
+        var last = Unasserted(scan, scan.Previous(dot));
+
+        if (scan.IsName(last) && IsMember(scan, scan.Previous(last)) && _chains.TryGetValue((scan, last), out var link))
+        {
+            anyValue = anyLocal = link.AnyLocal;
+            return Continued(link, scan.Text(last));
+        }
+
+        anyLocal = null;
+        var qualifier = Walked(scan, dot, locals, out anyValue);
+
+        // A chain that begins at a local typed any is a call on that local, however far it goes on.
+        if (anyValue is not null && qualifier.Kind == CodeQualifierKinds.Value && scan.IsName(last))
+        {
+            anyLocal = anyValue;
+        }
+
+        return qualifier;
+    }
+
+    /// <summary>
+    /// What the member after the name <paramref name="name"/> - itself a member, read through <paramref name="link"/> - is
+    /// qualified by: what <see cref="ChainQualifier"/> makes of the chain one name longer, from what qualified that name.
+    /// A member of <c>this</c> is a value by its name; a chain of names - a value's, a type's, an import prefix's - goes on
+    /// as a link to that name's use; one of no name the file says - <c>super</c>'s, a local's, a call's result's - stays one.
+    /// </summary>
+    private static ExtractQualifier Continued(ChainLink link, string name)
+        => link.Qualifier switch
+        {
+            { Kind: CodeQualifierKinds.This } => new ExtractQualifier(CodeQualifierKinds.Value, name),
+            { Kind: CodeQualifierKinds.Prefix } => new ExtractQualifier(CodeQualifierKinds.Named) { Link = link.Reference },
+            { Kind: CodeQualifierKinds.Named or CodeQualifierKinds.Value } named when named.Name is not null || named.Link is not null
+                => new ExtractQualifier(named.Kind) { Link = link.Reference },
+            _ => new ExtractQualifier(CodeQualifierKinds.Value),
+        };
+
+    /// <summary>
+    /// What the receiver before <paramref name="dot"/> is qualified by, read from its names back to its first: where no
+    /// use of the name before the dot was made to follow (<see cref="Receiver"/>) - a receiver's first name, a member read
+    /// in no run of code.
+    /// </summary>
+    private ExtractQualifier Walked(ScannedText scan, int dot, Locals locals, out string? anyValue)
     {
         anyValue = null;
         var names = new List<string>();
@@ -3242,6 +4517,15 @@ internal sealed class JsReading
         return ChainQualifier(names, locals, out anyValue);
     }
 
+    /// <summary>
+    /// A member's use a body made, kept for the member after it (<see cref="Receiver"/>): the reference's place among the
+    /// file's, its qualifier, and the local typed <c>any</c> the chain begins at, where one does.
+    /// </summary>
+    /// <param name="Reference">The use's place among the file's references, which the next member's qualifier links to.</param>
+    /// <param name="Qualifier">What qualifies the use.</param>
+    /// <param name="AnyLocal">The local typed <c>any</c> the chain begins at; none where it begins at no such local.</param>
+    private readonly record struct ChainLink(int Reference, ExtractQualifier Qualifier, string? AnyLocal);
+
     /// <summary>Whether the parentheses at <paramref name="open"/> and <paramref name="close"/> cast what they hold to <c>any</c>: <c>(x as any)</c>, <c>(&lt;any&gt;x)</c>.</summary>
     private static bool CastToAny(ScannedText scan, int open, int close)
         => (scan.Is(scan.Previous(close), "any") && scan.Is(scan.Previous(scan.Previous(close)), "as"))
@@ -3262,7 +4546,7 @@ internal sealed class JsReading
             return names.Count == 1 ? new ExtractQualifier(CodeQualifierKinds.Base) : new ExtractQualifier(CodeQualifierKinds.Value);
         }
 
-        if (locals is not null && locals.Types.TryGetValue(names[0], out var declared))
+        if (locals is not null && locals.TryGetType(names[0], out var declared))
         {
             if (declared == "any")
             {
@@ -3301,7 +4585,7 @@ internal sealed class JsReading
     /// member's chain - a call of it from <paramref name="from"/>'s node; one a local holds marked dynamic; an element of
     /// markup's own, none.
     /// </summary>
-    private void Component(string tag, int line, Func<string> from, Locals locals)
+    private void Component(string tag, int line, Func<QualifiedName> from, Locals locals)
     {
         var names = tag.Split('.');
 
@@ -3310,12 +4594,12 @@ internal sealed class JsReading
             return;
         }
 
-        if (names.Length == 1 && locals.LocalFunctions.Contains(names[0]))
+        if (names.Length == 1 && locals.IsLocalFunction(names[0]))
         {
             return;
         }
 
-        if (locals.Types.ContainsKey(names[0]) || locals.Functions.Contains(names[0]))
+        if (locals.HoldsValue(names[0]) || locals.IsFunctionValue(names[0]))
         {
             _extract.Dynamic(line, $"a component held by the value {names[0]}");
             return;
@@ -3335,7 +4619,7 @@ internal sealed class JsReading
     /// A <c>new</c> at <paramref name="at"/> before a type's name: an <c>instantiates</c> reference to it - <c>new Function</c>
     /// marked dynamic; answers where the reading goes on - at its arguments - or 0 where what follows is no name.
     /// </summary>
-    private int Instantiated(ScannedText scan, int at, Func<string> from, Locals locals)
+    private int Instantiated(ScannedText scan, int at, Func<QualifiedName> from, Locals locals)
     {
         var (names, past) = ChainAt(scan, scan.Next(at), scan.Count);
 
@@ -3347,7 +4631,7 @@ internal sealed class JsReading
         var written = names.Select(index => scan.Text(index)).ToList();
 
         // new this.X(), and a function the body declares: none of the repository's.
-        if (written[0] == "this" || (written.Count == 1 && locals.LocalFunctions.Contains(written[0])))
+        if (written[0] == "this" || (written.Count == 1 && locals.IsLocalFunction(written[0])))
         {
             return past;
         }
@@ -3485,20 +4769,20 @@ internal sealed class JsReading
 
     /// <summary>
     /// A test framework's call at <paramref name="at"/> as a node of its own, named by its description and held by the node
-    /// of <paramref name="parent"/> - none at a module's top - what its arguments call its own; answers the index of its
-    /// closing parenthesis, or 0 where it gives no description.
+    /// of <paramref name="parent"/> - none at a module's top - what its arguments call its own: answers its key and where
+    /// the code its arguments hold begins, read as that node's (<see cref="Calls"/>); <see langword="null"/> where it gives
+    /// no description.
     /// </summary>
-    private int Test(InterpolatedText text, int at, TestShape test, string? parent, Locals locals, string? owner, int depth)
+    private (QualifiedName Key, int From)? Test(ScannedText scan, int at, TestShape test, QualifiedName? parent)
     {
-        var scan = text.Scan;
         var pieces = ScanCalls.Split(scan, test.Open + 1, test.Close, _types);
 
         if (pieces.Count == 0 || test.Close >= scan.Count || ExtractText.Flat(scan.Spelled(pieces[0].Start, pieces[0].End)) is not { Length: > 0 } name)
         {
-            return 0;
+            return null;
         }
 
-        var qualified = parent is null ? ExtractText.Qualify(_scope, name) : $"{_extract.Node(parent).Qualified}.{name}";
+        var qualified = parent is null ? ExtractText.Qualify(_scope, name) : _extract.Node(parent).Qualified.Under(name);
         var key = _extract.Add(new ExtractNode(Id(qualified), CodeNodeKinds.Member, name, qualified, scan[at].Line, scan[test.Close].EndLine, ExtractText.Signature($"{test.Written}({name})"))
         {
             SubKind = test.Group ? "testGroup" : "test",
@@ -3506,29 +4790,35 @@ internal sealed class JsReading
             Parent = parent,
             Summary = scan == _scan ? ScanComments.Summary(scan, at) : null,
             Test = true,
-            SeenIn = _module ? _path : null,
+            SeenIn = _module ? QualifiedName.Of(_path) : null,
         });
 
-        Calls(text, pieces[0].Start, test.Close, key, locals, owner, depth + 1);
-        return test.Close;
+        return (key, pieces[0].Start);
     }
 
-    /// <summary>The key of the node what the file's top does outside its declarations is the calls of: made the first time it is needed.</summary>
-    private string ModuleKey()
+    /// <summary>
+    /// The key of the node what the file's top does outside its declarations is the calls of: made the first time it is
+    /// needed, over the file's lines - but for code a markup file embeds, whose other lines are the markup's: there it is
+    /// over the lines that code is written on, from the first to the last (<see cref="TopCode"/>), once the file is read.
+    /// </summary>
+    private QualifiedName ModuleKey()
     {
         if (_moduleKey is not null)
         {
             return _moduleKey;
         }
 
-        var qualified = $"{_path}.(module)";
+        var qualified = QualifiedName.Of(_path).Under("(module)");
 
-        return _moduleKey = _extract.Add(new ExtractNode(Id(qualified), CodeNodeKinds.Member, "(module)", qualified, 1, Math.Max(1, _text.Lines.Starts.Count), "(module)")
+        _moduleKey = _extract.Add(new ExtractNode(Id(qualified), CodeNodeKinds.Member, "(module)", qualified, 1, Math.Max(1, _text.Lines.Starts.Count), "(module)")
         {
             SubKind = "module",
             Scope = _scope,
-            SeenIn = _module ? _path : null,
+            SeenIn = _module ? QualifiedName.Of(_path) : null,
         });
+
+        _extract.Top(_moduleKey);
+        return _moduleKey;
     }
 
     // ---- Exports a list or an assignment names ----
@@ -3607,7 +4897,7 @@ internal sealed class JsReading
     /// names before it - an import's prefix where one is them, a type's otherwise - a default or renamed import's name
     /// written as the export it binds.
     /// </summary>
-    private void Mention(string key, string kind, string chain, int line)
+    private void Mention(QualifiedName key, string kind, string chain, int line)
     {
         var names = Expanded(chain.Split('.'));
 
@@ -3627,12 +4917,13 @@ internal sealed class JsReading
     /// <summary>
     /// A <c>references</c> edge from the node of <paramref name="key"/> to each type the tokens from <paramref name="start"/>
     /// to <paramref name="end"/> name that the language does not declare, that no type parameter in force is - a generic
-    /// function type's own (<c>&lt;T&gt;(item: T) =&gt; T</c>) among them - and that is no member's or parameter's name of an
-    /// object or a function type, nor a value <c>typeof</c> takes.
+    /// function type's own (<c>&lt;T&gt;(item: T) =&gt; T</c>) and a body's generic function's (<paramref name="scoped"/>)
+    /// among them - and that is no member's or parameter's name of an object or a function type, nor a value <c>typeof</c>
+    /// takes.
     /// </summary>
-    private void TypeReferences(string key, int start, int end)
+    private void TypeReferences(QualifiedName key, int start, int end, IReadOnlySet<string>? scoped = null)
     {
-        var own = new HashSet<string>(StringComparer.Ordinal);
+        var own = new HashSet<string>(scoped ?? new HashSet<string>(), StringComparer.Ordinal);
 
         for (var at = start; at < end && at < _scan.Count; at = _scan.Next(at))
         {
@@ -3640,6 +4931,12 @@ internal sealed class JsReading
             if (_scan.Is(at, "<") && _scan.Is(Angle(_scan, at, end), "("))
             {
                 own.UnionWith(TypeParameters(at, end));
+            }
+
+            // A type a conditional type infers - T extends Promise<infer U> ? U : T - is its own, as a parameter is.
+            if (_scan.Is(at, "infer") && _scan.IsName(_scan.Next(at)))
+            {
+                own.Add(_scan.Text(_scan.Next(at)));
             }
         }
 
@@ -3654,8 +4951,9 @@ internal sealed class JsReading
             var next = _scan.Next(at);
             var previous = _scan.Previous(at);
 
-            // { a: T }, { a?: T }, (x: T) => U, [K in keyof T], x is T, infer U, typeof x: no type's name.
-            if (_scan.Is(next, ":") || (_scan.Is(next, "?") && _scan.Is(_scan.Next(next), ":")) || _scan.Is(next, "in") || _scan.Is(next, "is")
+            // { a: T }, { a?: T }, (x: T) => U, [K in keyof T], x is T, infer U, typeof x: no type's name - but a conditional
+            // type's first branch, T extends E ? Failure : Success, is one.
+            if ((_scan.Is(next, ":") && !ScanCalls.IsConditionalColon(_scan, next)) || (_scan.Is(next, "?") && _scan.Is(_scan.Next(next), ":")) || _scan.Is(next, "in") || _scan.Is(next, "is")
                 || _scan.Is(previous, "infer") || _scan.Is(previous, "typeof") || _scan.Is(previous, "..."))
             {
                 at = _scan.Is(previous, "typeof") ? Math.Max(at, _scan.Previous(ChainAt(_scan, at, end).Past)) : at;
@@ -3733,16 +5031,7 @@ internal sealed class JsReading
     private bool IsText(int at) => IsText(_scan, at);
 
     /// <summary>The specifier the text at <paramref name="at"/> of <paramref name="scan"/> holds (<see cref="Specifier(int)"/>).</summary>
-    private static string? SpecifierOf(ScannedText scan, int at)
-    {
-        if (!IsText(scan, at))
-        {
-            return null;
-        }
-
-        var text = scan.Text(at);
-        return text.StartsWith('`') && text.Contains("${", StringComparison.Ordinal) ? null : Unquoted(text) is { Length: > 0 } unquoted ? unquoted : null;
-    }
+    private static string? SpecifierOf(ScannedText scan, int at) => scan.Value(at) is { Length: > 0 } value ? value : null;
 
     /// <summary>
     /// The specifier the call whose parenthesis is at <paramref name="open"/> is given as its whole first argument - one
@@ -3760,6 +5049,6 @@ internal sealed class JsReading
     private static bool IsTypeName(string name) => name.TrimStart('_', '$') is { Length: > 0 } trimmed && char.IsUpper(trimmed[0]);
 
     /// <summary>The id of a declaration of the qualified name <paramref name="qualified"/>.</summary>
-    private string Id(string qualified) => _prefix + qualified;
+    private QualifiedName Id(QualifiedName qualified) => qualified.Prepend(_prefix);
 
 }

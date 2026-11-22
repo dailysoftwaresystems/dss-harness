@@ -1,24 +1,29 @@
+using System.Globalization;
 using System.IO.Enumeration;
+using System.Runtime.ExceptionServices;
 using System.Runtime.Versioning;
 using DssHarness.Core.Platform;
+using DssHarness.Core.Waiting;
 
 namespace DssHarness.Core.FileSystem;
 
 /// <inheritdoc cref="IFileSystem"/>
-public sealed class PhysicalFileSystem(IFilePermissions filePermissions) : IFileSystem
+/// <param name="filePermissions">How this platform expresses a file's permissions.</param>
+/// <param name="told">
+/// Told each wait a rename makes while another program holds a file it needs, as it begins and while it lasts; nothing
+/// is told where none is given.
+/// </param>
+public sealed class PhysicalFileSystem(IFilePermissions filePermissions, Action<WaitTold>? told = null) : IFileSystem
 {
     /// <summary>
-    /// Attempts at the final rename before a transient refusal is reported. A virus scanner on a busy machine held a
-    /// just-written file past the half second ten attempts once gave, past the three seconds twenty-five gave under a
-    /// full test suite, and past the five and a half seconds thirty-five gave under the suite the tree has grown to - so
-    /// a bound of about thirty seconds was tried, and the scanner's hold outlasted that too, while the wait starved the
-    /// very pool whose load had queued the scanner: more tests stalled longer, not fewer. A holder past five and a half
-    /// seconds is a queue this machine is feeding faster than it drains, and no bound this process picks empties it; the
-    /// refusal is reported rather than outwaited at the cost of everything that waits on the write.
+    /// The first wait before a refused rename is tried again, doubled each wait after it up to
+    /// <see cref="Waits.SaidEvery"/>: a holder of a file just written - a virus scanner, an indexer - mostly lets go in
+    /// moments, and one that holds longer is waited for as long as it holds.
     /// </summary>
-    internal const int ReplaceAttempts = 35;
+    internal static readonly TimeSpan FirstReplaceWait = TimeSpan.FromMilliseconds(10);
 
     private readonly IFilePermissions _filePermissions = filePermissions;
+    private readonly Action<WaitTold> _told = told ?? (static _ => { });
 
     public bool FileExists(string path) => File.Exists(path);
 
@@ -166,19 +171,7 @@ public sealed class PhysicalFileSystem(IFilePermissions filePermissions) : IFile
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
 
-        // A directory not made yet will be made on the filesystem of the nearest one above it that exists,
-        // which is the room it has: a copy a first sync has still to create, the build directory of a leg
-        // that never built.
-        var existing = Path.GetFullPath(path);
-
-        while (!Directory.Exists(existing) && Path.GetDirectoryName(existing) is { } parent)
-        {
-            existing = parent;
-        }
-
-        // Where it leads, through every link along it: a build directory linked onto another disk is on that
-        // disk, and measured through the path as written it was the room of the disk the link sits on.
-        existing = Followed(existing);
+        var existing = MeasuredAt(path);
 
         try
         {
@@ -195,54 +188,38 @@ public sealed class PhysicalFileSystem(IFilePermissions filePermissions) : IFile
     }
 
     /// <summary>
-    /// <paramref name="path"/>, with each directory link along it - a symbolic link, or a junction on Windows -
-    /// replaced by where it finally leads; the path as it is where a link cannot be followed.
+    /// The directory whose filesystem <see cref="SpaceAt"/> measures <paramref name="path"/> by: where the path leads,
+    /// through every link along it, then the nearest directory there that exists.
     /// </summary>
-    private static string Followed(string path)
+    /// <remarks>
+    /// Followed through <see cref="LinkPaths.Resolve"/>, the one walk of links, before any directory along it is asked
+    /// whether it exists, so a chain of links however long is followed by that walk and never by the system's, whose bound
+    /// on a chain would leave the path as written. A build directory linked onto another disk is on that disk, and
+    /// measured through the path as written it was the room of the disk the link sits on. A directory not made yet will be
+    /// made on the filesystem of the nearest one above it that exists, which is the room it has: a copy a first sync has
+    /// still to create, the build directory of a leg that never built. A link nobody may read, or links that lead back to
+    /// themselves, leave the path measured where it is written: it is still somewhere.
+    /// </remarks>
+    /// <param name="path">The path asked about.</param>
+    internal static string MeasuredAt(string path)
     {
-        var current = path;
+        var existing = Path.GetFullPath(path);
 
         try
         {
-            // Bounded, as the system bounds a chain of links: one that loops is left as it is.
-            for (var hops = 0; hops < 40 && LinkAlong(current) is var (link, rest); hops++)
-            {
-                if (new DirectoryInfo(link).ResolveLinkTarget(returnFinalTarget: true) is not { } target)
-                {
-                    break;
-                }
-
-                current = rest.Length == 0 ? target.FullName : Path.Join(target.FullName, rest);
-            }
+            existing = LinkPaths.Resolve(existing);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            // Measured where it is written: a link nobody may read is still somewhere.
+            // Measured where it is written.
         }
 
-        return current;
-    }
-
-    /// <summary>The first directory link along <paramref name="path"/>, and what follows it; none where there is none.</summary>
-    private static (string Link, string After)? LinkAlong(string path)
-    {
-        var root = Path.GetPathRoot(path) ?? string.Empty;
-        var parts = path[root.Length..].Split(
-            [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
-            StringSplitOptions.RemoveEmptyEntries);
-        var prefix = root;
-
-        for (var index = 0; index < parts.Length; index++)
+        while (!Directory.Exists(existing) && Path.GetDirectoryName(existing) is { } parent)
         {
-            prefix = Path.Join(prefix, parts[index]);
-
-            if (new DirectoryInfo(prefix).LinkTarget is not null)
-            {
-                return (prefix, string.Join(Path.DirectorySeparatorChar, parts[(index + 1)..]));
-            }
+            existing = parent;
         }
 
-        return null;
+        return existing;
     }
 
     /// <summary>
@@ -654,98 +631,129 @@ public sealed class PhysicalFileSystem(IFilePermissions filePermissions) : IFile
     /// Checking whether the destination exists and then choosing between a replace and
     /// a move races: two writers can both see it absent, and the second move throws.
     /// One overwriting rename has no such window. Windows can still refuse the rename
-    /// for a moment while another process holds the destination or the file just written,
-    /// such as a concurrent writer or a virus scanner, so a refusal is retried a bounded
-    /// number of times before it is reported (<see cref="WaitedOut"/>): the one wait every
-    /// replace takes, which the rename itself never adds to.
+    /// while another program holds the destination or the file just written - a concurrent
+    /// writer, a virus scanner, an indexer - so a refusal is tried again while it can change
+    /// (<see cref="ReplaceWithAsync(string, string, Action{string, string}, Action{WaitTold}, TimeProvider, CancellationToken)"/>):
+    /// the one wait every replace takes, which the rename itself never adds to.
     /// </remarks>
-    private static void ReplaceWith(string source, string destination)
-        => ReplaceWith(source, destination, Replace, Thread.Sleep);
+    private void ReplaceWith(string source, string destination)
+        => ReplaceWithAsync(source, destination, Replace, _told, TimeProvider.System, CancellationToken.None).GetAwaiter().GetResult();
 
     /// <summary>
-    /// <see cref="ReplaceWith(string, string)"/>, renaming through <paramref name="replace"/> and waiting between attempts
-    /// through <paramref name="wait"/> - a test's where they stand in for the rename and the clock.
-    /// </summary>
-    /// <param name="source">The file to put in place.</param>
-    /// <param name="destination">Where to put it.</param>
-    /// <param name="replace">Renames the one over the other once (<see cref="Replace"/>).</param>
-    /// <param name="wait">Waits the time it is given before the next attempt.</param>
-    internal static void ReplaceWith(string source, string destination, Action<string, string> replace, Action<TimeSpan> wait)
-    {
-        ArgumentNullException.ThrowIfNull(replace);
-        ArgumentNullException.ThrowIfNull(wait);
-
-        for (var attempt = 1; ; attempt++)
-        {
-            try
-            {
-                replace(source, destination);
-                return;
-            }
-            catch (Exception refused) when (WaitedOut(refused, destination, attempt))
-            {
-                wait(ReplaceWait(attempt));
-            }
-        }
-    }
-
-    /// <summary>
-    /// <see cref="ReplaceWith(string, string)"/> without blocking the thread between attempts, and stopping when
-    /// the caller does.
+    /// <see cref="ReplaceWith(string, string)"/> without blocking the thread between tries, and stopping when the caller
+    /// does.
     /// </summary>
     /// <remarks>
-    /// The synchronous form blocks a thread-pool thread for the rename's whole bound (<see cref="ReplaceAttempts"/>)
-    /// while it waits. A tree sync writes thousands of files, and the parallel legs above it are sharing that pool:
-    /// sleeping in it makes a transient lock on one file look like a stall in every other leg.
+    /// The synchronous form blocks its thread for as long as a holder holds the file. A tree sync writes thousands of
+    /// files, and the parallel legs above it are sharing the thread pool: blocking in it makes a hold on one file look like
+    /// a stall in every other leg.
     /// </remarks>
-    private static Task ReplaceWithAsync(string source, string destination, CancellationToken cancellationToken)
-        => ReplaceWithAsync(source, destination, Replace, Task.Delay, cancellationToken);
+    private Task ReplaceWithAsync(string source, string destination, CancellationToken cancellationToken)
+        => ReplaceWithAsync(source, destination, Replace, _told, TimeProvider.System, cancellationToken);
 
     /// <summary>
-    /// <see cref="ReplaceWithAsync(string, string, CancellationToken)"/>, renaming through <paramref name="replace"/> and
-    /// waiting between attempts through <paramref name="wait"/> - a test's where they stand in for the rename and the clock.
+    /// Renames <paramref name="source"/> over <paramref name="destination"/> through <paramref name="replace"/>, trying
+    /// again while the refusal can change (<see cref="Retrying"/>): for as long as another program holds the file there or
+    /// the file just written - a holder Windows reports by a sharing or a lock violation, or one a look at either file
+    /// finds - each wait told, the held file named; and once more after any other refusal, which is raised where it meets
+    /// the same state again. A directory standing at the destination is refused at once: no wait moves it. No count of
+    /// tries ends it - an indexer holding a file for two minutes is waited out - and the last refusal is raised as it was
+    /// raised where the tries end.
     /// </summary>
     /// <param name="source">The file to put in place.</param>
     /// <param name="destination">Where to put it.</param>
-    /// <param name="replace">Renames the one over the other once (<see cref="Replace"/>).</param>
-    /// <param name="wait">Waits the time it is given before the next attempt, stopping when the token does.</param>
-    /// <param name="cancellationToken">Stops it between attempts.</param>
+    /// <param name="replace">Renames the one over the other once (<see cref="Replace"/>): a test's where it stands in for the rename.</param>
+    /// <param name="told">Told each wait, as it begins and while it lasts.</param>
+    /// <param name="clock">Times the waits: a test's where it stands in for the clock.</param>
+    /// <param name="cancellationToken">Stops it, in a wait.</param>
+    /// <exception cref="OperationCanceledException"><paramref name="cancellationToken"/> stopped it.</exception>
     internal static async Task ReplaceWithAsync(
         string source,
         string destination,
         Action<string, string> replace,
-        Func<TimeSpan, CancellationToken, Task> wait,
+        Action<WaitTold> told,
+        TimeProvider clock,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(replace);
-        ArgumentNullException.ThrowIfNull(wait);
+        ArgumentNullException.ThrowIfNull(told);
+        ArgumentNullException.ThrowIfNull(clock);
 
-        for (var attempt = 1; ; attempt++)
+        Exception? refusal = null;
+        var end = await Retrying.RunAsync(
+            (_, _) => Task.FromResult(Tried()),
+            new RetryWatch($"the rename over '{destination}'", told, FirstReplaceWait, Bound: null, clock),
+            cancellationToken).ConfigureAwait(false);
+
+        if (end.Kind == RetryEndKind.Done)
         {
-            cancellationToken.ThrowIfCancellationRequested();
+            return;
+        }
 
+        cancellationToken.ThrowIfCancellationRequested();
+        ExceptionDispatchInfo.Throw(refusal ?? throw new InvalidOperationException($"the rename over '{destination}' ended {end.Kind} without a refusal"));
+
+        RetryTry<bool> Tried()
+        {
             try
             {
                 replace(source, destination);
-                return;
+                return new RetryTry<bool>.Done(true);
             }
-            catch (Exception refused) when (WaitedOut(refused, destination, attempt))
+            catch (Exception refused) when (refused is IOException or UnauthorizedAccessException)
             {
-                await wait(ReplaceWait(attempt), cancellationToken).ConfigureAwait(false);
+                refusal = refused;
+
+                if (Directory.Exists(destination))
+                {
+                    return new RetryTry<bool>.Final(refused.Message);
+                }
+
+                return HolderOf(refused, source, destination) is { } held
+                    ? new RetryTry<bool>.Passing($"another program holds '{held.Path}' ({held.Reason.TrimEnd('.')})", After: null)
+                    : new RetryTry<bool>.Failed(refused.Message, $"{refused.GetType().Name} {refused.HResult}: {refused.Message} - {StateOf(source)} - {StateOf(destination)}");
             }
         }
     }
 
     /// <summary>
-    /// Whether a refused rename is tried again: an I/O refusal or an access denied - a holder of the file there or of the
-    /// file just written, gone in moments - before the bound, <see cref="ReplaceAttempts"/>; never where a directory stands
-    /// at the destination, which no wait moves, so the refusal is the caller's own at once.
+    /// The file another program holds that <paramref name="refused"/> - a refused rename of <paramref name="source"/> over
+    /// <paramref name="destination"/> - was refused for, where one is: on Windows, the one a look finds held, or, where
+    /// Windows said a sharing or a lock violation and the holder let go before the look, the destination in Windows' own
+    /// words. None elsewhere, where a rename is never refused for another program's hold.
     /// </summary>
-    private static bool WaitedOut(Exception refused, string destination, int attempt)
-        => attempt < ReplaceAttempts && refused is IOException or UnauthorizedAccessException && !Directory.Exists(destination);
+    private static HeldEntry? HolderOf(Exception refused, string source, string destination)
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return null;
+        }
 
-    /// <summary>The wait before the rename's next attempt: ten milliseconds more each time, a quarter second at most.</summary>
-    internal static TimeSpan ReplaceWait(int attempt) => TimeSpan.FromMilliseconds(Math.Min(10 * attempt, 250));
+        var full = (Source: Path.GetFullPath(source), Destination: Path.GetFullPath(destination));
+        var found = WindowsHolds.Held(full.Source, isDirectory: false) ?? WindowsHolds.Held(full.Destination, isDirectory: false);
+
+        return found ?? (refused is IOException io && WindowsHolds.HeldBy(io) ? new HeldEntry(full.Destination, refused.Message) : null);
+    }
+
+    /// <summary>
+    /// What a refused rename met at <paramref name="path"/>, which tells one refusal's state from another's: its length and
+    /// its last write where a file stands there, else that none does.
+    /// </summary>
+    private static string StateOf(string path)
+    {
+        try
+        {
+            var file = new FileInfo(path);
+
+            return file.Exists
+                ? $"{file.Length.ToString(CultureInfo.InvariantCulture)} bytes written at {file.LastWriteTimeUtc.Ticks.ToString(CultureInfo.InvariantCulture)}"
+                : "no file";
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return $"unread ({ex.Message})";
+        }
+    }
 
     /// <summary>
     /// Renames <paramref name="source"/> over <paramref name="destination"/> once: on Windows as POSIX does, so a file a

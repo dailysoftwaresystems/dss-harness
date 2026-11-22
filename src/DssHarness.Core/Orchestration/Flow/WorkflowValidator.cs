@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using DssHarness.Core.Anchors;
+using DssHarness.Core.Json;
 using DssHarness.Core.Repository;
 using DssHarness.Core.Schemas;
 
@@ -114,9 +115,6 @@ public static class WorkflowValidator
         ["checksPending"] = (step, _) => step.Type == "ci-wait",
         ["checksUnsettled"] = (step, _) => step.Type == "ci-wait",
     };
-
-    /// <summary>V26: the most steps one workflow may declare, the recovery's among them, for they run. How deep a flow nests is <see cref="WorkflowFileParser.MaxDepth"/>'s own bound.</summary>
-    internal const int MostSteps = 200;
 
     /// <summary>Returns every problem found, in the order the definition declares what they concern.</summary>
     /// <param name="definition">A workflow's parsed definition.</param>
@@ -323,7 +321,6 @@ public static class WorkflowValidator
             Index(definition.Steps, parent: null);
             IndexRecover();
             Shadowing();
-            Size();
             Cycle();
             WorkflowAnswers();
             Steps();
@@ -633,22 +630,6 @@ public static class WorkflowValidator
             foreach (var (kind, answer) in _definition.Answers)
             {
                 AnswerRules(kind, answer, "the workflow", owner: null);
-            }
-        }
-
-        /// <summary>
-        /// V26, the flow's size a reader cannot see: a workflow declares at most 200 steps, the recovery's among
-        /// them, for they run. How deep a flow may nest is the reader's own bound, refused with its line and
-        /// column where the file is read (<see cref="WorkflowFileParser.MaxDepth"/>), and no definition that deep
-        /// reaches this check.
-        /// </summary>
-        private void Size()
-        {
-            var declared = _entries.Count(entry => !ReferenceEquals(entry, _recover) && !_useRecoveries.Any(place => ReferenceEquals(entry, place)));
-
-            if (declared > MostSteps)
-            {
-                _problems.Add($"the workflow declares {declared} steps; at most {MostSteps}");
             }
         }
 
@@ -2987,19 +2968,73 @@ public static class WorkflowValidator
                 }
             }
 
-            Within(graph.MaxFileBytes, Codebase.CodebaseGraphShape.LeastMaxFileBytes, Codebase.CodebaseGraphShape.MostMaxFileBytes, $"{lead}codebaseGraph.maxFileBytes");
             Within(graph.MapTokens, 0, Codebase.CodebaseGraphShape.MostMapTokens, $"{lead}codebaseGraph.mapTokens");
 
             if (graph.Generated is { } generated && !Codebase.CodebaseGraphShape.GeneratedValues.Contains(generated, StringComparer.Ordinal))
             {
                 _problems.Add($"{lead}codebaseGraph.generated is '{generated}', which is none of {string.Join(", ", Codebase.CodebaseGraphShape.GeneratedValues.Select(value => $"'{value}'"))}: generated code's declarations are kept, its file's entry naming why it is generated, or left out with the file listed");
             }
+
+            // The shape owns what a sound keyNaming is; the block's refusal words each fault for the one who wrote it.
+            foreach (var (fault, naming) in graph.KeyNaming is { } keyNaming ? Codebase.CodebaseGraphShape.NamingProblems(keyNaming) : [])
+            {
+                _problems.Add(fault switch
+                {
+                    Codebase.KeyNamingFault.None => $"{lead}codebaseGraph.keyNaming is given empty, which is never read as no key joined: name its policies, or leave the key out for {string.Join(" and ", Codebase.CodebaseGraphShape.DefaultKeyNaming)}",
+                    Codebase.KeyNamingFault.Twice => $"{lead}codebaseGraph.keyNaming names '{naming}' more than once",
+                    _ => $"{lead}codebaseGraph.keyNaming names '{naming}', which is none of {Codebase.CodebaseGraphShape.NamingList}: how a configuration key's last segment is written in the code that reads it",
+                });
+            }
+
+            if (graph.Claims is { } claims)
+            {
+                if (claims.Count == 0)
+                {
+                    _problems.Add($"{lead}codebaseGraph.claims is given empty, which is never read as no ending claimed: name the endings, or leave the key out");
+                }
+
+                foreach (var (language, endings) in claims)
+                {
+                    if (string.IsNullOrWhiteSpace(language))
+                    {
+                        _problems.Add($"{lead}codebaseGraph.claims holds a key that is no implementation's name");
+                    }
+
+                    if (_languages is { } extractors && !extractors.Contains(language, StringComparer.Ordinal))
+                    {
+                        _problems.Add($"{lead}codebaseGraph.claims maps endings to '{language}', which this tool has no extractor for; it extracts: {string.Join(", ", extractors)}");
+                    }
+                    else if (graph.Languages is { Count: > 0 } used && !string.IsNullOrWhiteSpace(language) && !used.Contains(language, StringComparer.Ordinal))
+                    {
+                        _problems.Add($"{lead}codebaseGraph.claims maps endings to '{language}', which codebaseGraph.languages leaves out, so the fallback would read every file it claims: name '{language}' in languages, or leave its claims out");
+                    }
+
+                    if (endings.Count == 0)
+                    {
+                        _problems.Add($"{lead}codebaseGraph.claims.{language} is given empty, which is never read as none claimed: name its endings, or leave the implementation out");
+                    }
+
+                    foreach (var ending in endings)
+                    {
+                        if (ending is not { Length: > 1 } || !ending.StartsWith('.') || ending.EndsWith('.') || ending.IndexOfAny(['/', '\\']) >= 0 || ending.Any(char.IsWhiteSpace))
+                        {
+                            _problems.Add($"{lead}codebaseGraph.claims.{language} names the ending '{ending}', which is not a file name's ending: a dot, what follows it, and no separator");
+                        }
+                    }
+                }
+
+                foreach (var twice in claims.SelectMany(pair => pair.Value.Select(ending => (pair.Key, ending))).GroupBy(mapped => mapped.ending, StringComparer.OrdinalIgnoreCase).Where(group => group.Count() > 1))
+                {
+                    _problems.Add($"{lead}codebaseGraph.claims maps the ending '{twice.Key}' to {string.Join(" and ", twice.Select(mapped => $"'{mapped.Key}'"))}, and a file is never given to one by order");
+                }
+            }
         }
 
         /// <summary>
-        /// Whether two <c>codebaseGraph</c> blocks give the run's graph one shape, as <see cref="FlowCodebaseGraph.Shape"/>
-        /// reads them - every default held where a block says nothing. A block whose patterns are no patterns is refused
-        /// for them, and is weighed as it is written.
+        /// Whether two <c>codebaseGraph</c> blocks give the run's graph one shape, as the shape itself says
+        /// (<see cref="Codebase.CodebaseGraphShape.SameAs"/>) - every default held where a block says nothing, a list of one
+        /// set alike in any order. A block whose patterns are no patterns is refused for them, and its patterns are weighed
+        /// as they are written.
         /// </summary>
         private static bool SameShape(FlowCodebaseGraph one, FlowCodebaseGraph other)
         {
@@ -3011,18 +3046,11 @@ public static class WorkflowValidator
 
             if (!Readable(one) || !Readable(other))
             {
-                return Same(one.Include, other.Include) && Same(one.Exclude, other.Exclude) && Same(one.Languages, other.Languages)
-                    && one.MaxFileBytes == other.MaxFileBytes && one.Generated == other.Generated && one.MapTokens == other.MapTokens;
+                return Same(one.Include, other.Include) && Same(one.Exclude, other.Exclude)
+                    && (one with { Include = null, Exclude = null }).Shape.SameAs((other with { Include = null, Exclude = null }).Shape);
             }
 
-            var (first, second) = (one.Shape, other.Shape);
-
-            return first.Include.Select(pattern => pattern.ToString()).SequenceEqual(second.Include.Select(pattern => pattern.ToString()), StringComparer.Ordinal)
-                && first.Exclude.Select(pattern => pattern.ToString()).SequenceEqual(second.Exclude.Select(pattern => pattern.ToString()), StringComparer.Ordinal)
-                && Same(first.Languages, second.Languages)
-                && first.MaxFileBytes == second.MaxFileBytes
-                && first.ExcludeGenerated == second.ExcludeGenerated
-                && first.MapTokens == second.MapTokens;
+            return one.Shape.SameAs(other.Shape);
         }
 
         /// <summary>Refuses <paramref name="value"/> outside <paramref name="least"/> to <paramref name="most"/>; whether it holds, absent among them.</summary>
@@ -4175,7 +4203,7 @@ public static class WorkflowValidator
         private static readonly Lazy<IReadOnlyDictionary<string, JsonSchemaSubset.Reading>> BuiltIn = new(() =>
             WorkflowStepTypes.All
                 .Where(type => type.Output is not null)
-                .ToDictionary(type => type.Type, type => JsonSchemaSubset.Read(JsonNode.Parse(type.Output!)!), StringComparer.Ordinal));
+                .ToDictionary(type => type.Type, type => JsonSchemaSubset.Read(JsonDepth.ParseNode(type.Output!)!), StringComparer.Ordinal));
 
         /// <summary>
         /// What each key that holds an expression must yield, and why, where it must be one kind (V16-V19, and the keys

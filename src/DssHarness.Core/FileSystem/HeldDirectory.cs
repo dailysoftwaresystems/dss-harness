@@ -14,9 +14,10 @@ namespace DssHarness.Core.FileSystem;
 /// <remarks>
 /// The anchor is the one place taken as it is, its links followed: a writable root of the isolation, or a place above every
 /// one, which no process inside moves. Below it a link is never entered, and an entry that is one is removed, renamed or
-/// replaced as itself. What a directory holds is named by its handle on Windows and by its descriptor's own link under
-/// <c>/proc</c> on Linux; on macOS by the path the system keeps for its descriptor, each name then acted on within the
-/// directory held alone, so a listing raced there names other entries, never reaches another place.
+/// replaced as itself. What a directory holds is named by its handle on Windows, by its descriptor's own link under
+/// <c>/proc</c> on Linux, and on macOS by a descriptor of its own opened from the one held - never by a path, which on
+/// macOS a deep directory's outgrows. A tree is removed holding one directory below the one asked at a time, however deep
+/// it is, each held again as itself on the way back up (<see cref="IHeldNative.OpenAbove"/>).
 /// </remarks>
 public sealed class HeldDirectory : IDisposable
 {
@@ -229,9 +230,10 @@ public sealed class HeldDirectory : IDisposable
     public void DeleteFile(string name) => _native.Remove(_handle, Checked(name), directory: false, Child(name));
 
     /// <summary>
-    /// Removes the directory <paramref name="name"/> of this directory and everything in it, each entry relative to the
-    /// directory it is in: a link anywhere among them removed itself, never entered; nothing where nothing is there. A link
-    /// at <paramref name="name"/> itself is removed as a link.
+    /// Removes the directory <paramref name="name"/> of this directory and everything in it, at any depth, each entry
+    /// relative to the directory it is in: a link anywhere among them removed itself, never entered; nothing where nothing
+    /// is there. A link at <paramref name="name"/> itself is removed as a link. One directory below this one is held at a
+    /// time, however deep the tree (<see cref="Emptied"/>).
     /// </summary>
     /// <param name="name">One name.</param>
     /// <exception cref="IOException">An entry could not be removed; what was removed before it stays removed.</exception>
@@ -252,7 +254,7 @@ public sealed class HeldDirectory : IDisposable
             case PathKind.None:
                 return;
             case PathKind.Link or PathKind.File:
-                RemoveEntry(name);
+                RemoveEntry(name, cancellationToken);
                 return;
         }
 
@@ -265,17 +267,142 @@ public sealed class HeldDirectory : IDisposable
         catch (Exception ex) when (ex is LinkOnTheWayException or DirectoryNotFoundException)
         {
             // Put in its place since it was looked at: a link or a file there is removed as itself.
-            RemoveEntry(name);
+            RemoveEntry(name, cancellationToken);
             return;
         }
 
-        using (below)
+        try
         {
             RefuseAMount(below);
-            below.Empty([], cancellationToken);
+        }
+        catch
+        {
+            below.Dispose();
+            throw;
         }
 
+        Emptied(below, cancellationToken);
         _native.Remove(_handle, Checked(name), directory: true, Child(name));
+    }
+
+    /// <summary>
+    /// Empties <paramref name="top"/> and every directory below it, at any depth, and lets it go: worked on a stack of its
+    /// own, never a recursion, holding one directory at a time - the one being emptied. A directory below is entered by its
+    /// name in the one held, a volume mounted on it refused (<see cref="RefuseAMount"/>), and the one it is in let go, kept
+    /// only as what tells it from every other directory; once emptied it is left for the one it is in, held again as
+    /// itself (<see cref="IHeldNative.OpenAbove"/>), which removes it by its name. So a tree however deep is removed with
+    /// the handles of two directories open at most, and never by a path looked up again.
+    /// </summary>
+    /// <param name="top">The directory to empty, which this takes over: let go once it is empty, or where the removal ends early.</param>
+    /// <param name="cancellationToken">Stops the removal between entries.</param>
+    /// <exception cref="IOException">
+    /// An entry could not be removed, or a directory being emptied is no longer in the one it was entered from; what was
+    /// removed before stays removed.
+    /// </exception>
+    /// <exception cref="OperationCanceledException">It was stopped; what was removed before stays removed.</exception>
+    private static void Emptied(HeldDirectory top, CancellationToken cancellationToken)
+    {
+        var current = top;
+        var levels = new Stack<EmptiedLevel>();
+
+        try
+        {
+            levels.Push(new EmptiedLevel(Name: null, top.Path, new Queue<HeldName>(top.Entries())));
+
+            while (true)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var level = levels.Peek();
+
+                if (level.Pending.TryDequeue(out var entry))
+                {
+                    if (entry.Kind != PathKind.Directory)
+                    {
+                        current.RemoveEntry(entry.Name, cancellationToken);
+                        continue;
+                    }
+
+                    HeldDirectory child;
+
+                    try
+                    {
+                        child = current.Below(entry.Name, make: false);
+                    }
+                    catch (Exception ex) when (ex is LinkOnTheWayException or DirectoryNotFoundException)
+                    {
+                        current.RemoveEntry(entry.Name, cancellationToken);
+                        continue;
+                    }
+
+                    Queue<HeldName> pending;
+
+                    try
+                    {
+                        current.RefuseAMount(child);
+                        level.Identity = current._native.IdentityOf(current._handle, current.Path);
+                        pending = new Queue<HeldName>(child.Entries());
+                    }
+                    catch
+                    {
+                        child.Dispose();
+                        throw;
+                    }
+
+                    // Let go while what is below it is removed, where it can be held again as itself; kept where it cannot.
+                    if (level.Identity is null)
+                    {
+                        level.Kept = current;
+                    }
+                    else
+                    {
+                        current.Dispose();
+                    }
+
+                    levels.Push(new EmptiedLevel(entry.Name, child.Path, pending));
+                    current = child;
+                    continue;
+                }
+
+                _ = levels.Pop();
+
+                if (!levels.TryPeek(out var above))
+                {
+                    return;
+                }
+
+                var held = above.Kept ?? new HeldDirectory(current._native, current._native.OpenAbove(current._handle, above.Identity!, above.Path), above.Path);
+                above.Kept = null;
+                current.Dispose();
+                current = held;
+                current._native.Remove(current._handle, Checked(level.Name!), directory: true, current.Child(level.Name!));
+            }
+        }
+        finally
+        {
+            current.Dispose();
+
+            foreach (var level in levels)
+            {
+                level.Kept?.Dispose();
+            }
+        }
+    }
+
+    /// <summary>
+    /// One directory a removal is emptying (<see cref="Emptied"/>): its name in the one it is in, its path, and what is left
+    /// in it to remove - and, once a directory below it is entered, what tells it from every other, or its handle kept where
+    /// nothing can.
+    /// </summary>
+    /// <param name="Name">Its name in the directory it is in; null for the directory the removal began at.</param>
+    /// <param name="Path">Its path, as a fault names it.</param>
+    /// <param name="Pending">The entries of it not yet removed, as its listing named them.</param>
+    private sealed record EmptiedLevel(string? Name, string Path, Queue<HeldName> Pending)
+    {
+        /// <summary>What tells it from every other directory, read as a directory below it was entered (<see cref="IHeldNative.IdentityOf"/>).</summary>
+        public byte[]? Identity { get; set; }
+
+        /// <summary>It, held, where nothing tells it apart and so it could not be let go while a directory below it was emptied.</summary>
+        public HeldDirectory? Kept { get; set; }
     }
 
     /// <summary>
@@ -342,7 +469,7 @@ public sealed class HeldDirectory : IDisposable
             }
             else
             {
-                RemoveEntry(entry.Name);
+                RemoveEntry(entry.Name, cancellationToken);
             }
         }
     }
@@ -424,7 +551,7 @@ public sealed class HeldDirectory : IDisposable
     }
 
     /// <summary>Removes an entry that is no directory as itself, or a directory put in its place since, whole.</summary>
-    private void RemoveEntry(string name)
+    private void RemoveEntry(string name, CancellationToken cancellationToken)
     {
         try
         {
@@ -432,7 +559,7 @@ public sealed class HeldDirectory : IDisposable
         }
         catch (HeldIsADirectoryException)
         {
-            DeleteDirectory(name);
+            DeleteDirectory(name, cancellationToken);
         }
         catch (FileNotFoundException)
         {
@@ -550,4 +677,18 @@ internal interface IHeldNative
 
     /// <summary>Whether a volume is mounted on <paramref name="child"/>, a directory held in <paramref name="parent"/> (<see cref="HeldDirectory.IsMountedOn"/>).</summary>
     bool IsMountedOn(SafeFileHandle parent, SafeFileHandle child, string path);
+
+    /// <summary>
+    /// What tells the directory <paramref name="directory"/> holds from every other on this machine, read by its handle, so
+    /// it can be held again as itself once its handle is let go (<see cref="OpenAbove"/>); null where this system cannot
+    /// tell it, and its handle is then kept.
+    /// </summary>
+    byte[]? IdentityOf(SafeFileHandle directory, string path);
+
+    /// <summary>
+    /// Holds again the directory <paramref name="child"/> was opened in, which <paramref name="identity"/> tells: refused
+    /// where the directory reached is another - moved, or put in its place, while it was let go.
+    /// </summary>
+    /// <exception cref="IOException">The directory reached is not the one <paramref name="identity"/> tells, or none could be.</exception>
+    SafeFileHandle OpenAbove(SafeFileHandle child, byte[] identity, string path);
 }

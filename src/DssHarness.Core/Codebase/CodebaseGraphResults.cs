@@ -78,7 +78,14 @@ public sealed record GraphMatches(IReadOnlyList<GraphCard> Cards, int Total);
 /// <summary>One edge of a node, as a group of the <c>node</c> operation gives it: the node at its other end, and how sure the edge is.</summary>
 /// <param name="Card">The node at the edge's other end.</param>
 /// <param name="Confidence">How sure the surest edge to it is (<see cref="CodeConfidences"/>).</param>
-public sealed record GraphEdge(GraphCard Card, string Confidence);
+public sealed record GraphEdge(GraphCard Card, string Confidence)
+{
+    /// <summary>
+    /// Whether the edge is recall, never a doubt (<see cref="CodeEdgeKinds.Recall"/>): neither how sure it is nor the node
+    /// it reaches says how sure an answer that gives it is.
+    /// </summary>
+    public bool Recall { get; init; }
+}
 
 /// <summary>A node's edges, grouped by kind as the <c>node</c> operation gives them.</summary>
 /// <param name="Callers">The members that call it.</param>
@@ -88,8 +95,11 @@ public sealed record GraphEdge(GraphCard Card, string Confidence);
 /// <param name="Implementations">The types that implement it, and the members that answer it for a type.</param>
 /// <param name="Overrides">The members it overrides, and those that override it.</param>
 /// <param name="References">The types it names or makes, and what names or makes it.</param>
+/// <param name="Users">The members that read or write it without calling it.</param>
+/// <param name="Uses">The members it reads or writes without calling them.</param>
 /// <param name="Tests">The tests that exercise it.</param>
 /// <param name="Includes">What it imports or names as a project, and what imports or names it.</param>
+/// <param name="Parts">The other parts of its declaration: a view and the type its <c>x:Class</c> names, a component and its code-behind.</param>
 public sealed record GraphEdges(
     IReadOnlyList<GraphEdge> Callers,
     IReadOnlyList<GraphEdge> Callees,
@@ -98,10 +108,16 @@ public sealed record GraphEdges(
     IReadOnlyList<GraphEdge> Implementations,
     IReadOnlyList<GraphEdge> Overrides,
     IReadOnlyList<GraphEdge> References,
+    IReadOnlyList<GraphEdge> Users,
+    IReadOnlyList<GraphEdge> Uses,
     IReadOnlyList<GraphEdge> Tests,
-    IReadOnlyList<GraphEdge> Includes)
+    IReadOnlyList<GraphEdge> Includes,
+    IReadOnlyList<GraphEdge> Parts)
 {
-    /// <summary>Each group with the name the <c>node</c> operation prints it under, in that order.</summary>
+    /// <summary>
+    /// Each group with the name the <c>node</c> operation prints it under, in that order. Whether an edge of it is a doubt
+    /// is the edge's own (<see cref="GraphEdge.Recall"/>, read by <see cref="CodebaseGraphQueries.Doubts(GraphEdge)"/>).
+    /// </summary>
     public IReadOnlyList<(string Name, IReadOnlyList<GraphEdge> Edges)> Groups =>
     [
         ("callers", Callers),
@@ -111,8 +127,11 @@ public sealed record GraphEdges(
         ("implementations", Implementations),
         ("overrides", Overrides),
         ("references", References),
+        ("users", Users),
+        ("uses", Uses),
         ("tests", Tests),
         ("includes", Includes),
+        ("parts", Parts),
     ];
 }
 
@@ -121,14 +140,14 @@ public sealed record GraphEdges(
 /// <param name="Distance">How many hops from the node asked about, from 1.</param>
 public sealed record GraphReached(GraphCard Card, int Distance)
 {
-    /// <summary>
-    /// How many edges of the kind walked the node has, where it has more than the view's 99th percentile (and at least
-    /// <see cref="CodebaseGraphQueries.CrowdFloor"/>): it is given and not gone through. Null where it was gone through.
-    /// </summary>
-    public int? Crowded { get; init; }
-
-    /// <summary>Whether an edge it was reached by is of <c>candidates</c>: the walk is not sure it goes there.</summary>
+    /// <summary>Whether an edge it was reached by is of <c>candidates</c>, and no use: the walk is not sure it goes there.</summary>
     public bool Candidates { get; init; }
+
+    /// <summary>
+    /// Whether every edge it was reached by is recall, never a doubt (<see cref="CodeEdgeKinds.Recall"/>): neither how sure
+    /// they are nor the node itself says how sure the walk's answer is.
+    /// </summary>
+    public bool Recall { get; init; }
 }
 
 /// <summary>The repository at a glance: its projects, its top directories with their files, its namespaces with what they declare.</summary>
@@ -174,8 +193,14 @@ public static class GraphRelations
     /// <summary>What imports the node: a file that imports it, or a project that names it.</summary>
     public const string IncludedBy = "includedBy";
 
+    /// <summary>The rules that style the node: the classes and ids it is told by, as a style sheet declares them - its uses of a rule, and of nothing else.</summary>
+    public const string StyledBy = "styledBy";
+
+    /// <summary>The elements and components a rule reaches: what is styled by it - the uses of the node where it is a rule, and nothing of any other node.</summary>
+    public const string Styles = "styles";
+
     /// <summary>Every relation a <c>related</c> walk may follow.</summary>
-    public static IReadOnlyList<string> All { get; } = [Callers, Callees, Derived, Implementations, References, Tests, IncludedBy];
+    public static IReadOnlyList<string> All { get; } = [Callers, Callees, Derived, Implementations, References, Tests, IncludedBy, StyledBy, Styles];
 
     /// <summary>The edges <paramref name="relation"/> follows: each kind, and which way from the node.</summary>
     /// <param name="relation">One of <see cref="All"/>.</param>
@@ -189,8 +214,19 @@ public static class GraphRelations
         References => [(GraphSide.In, CodeEdgeKinds.References), (GraphSide.In, CodeEdgeKinds.Instantiates)],
         Tests => [(GraphSide.In, CodeEdgeKinds.Tests)],
         IncludedBy => [(GraphSide.In, CodeEdgeKinds.Imports), (GraphSide.In, CodeEdgeKinds.ProjectReference)],
+        StyledBy => [(GraphSide.Out, CodeEdgeKinds.Uses)],
+        Styles => [(GraphSide.In, CodeEdgeKinds.Uses)],
         _ => throw new ArgumentOutOfRangeException(nameof(relation), relation, "Not a relation a related walk follows."),
     };
+
+    /// <summary>
+    /// The kind within a kind (<see cref="CodeSubKinds"/>) the node an edge <paramref name="relation"/> follows enters
+    /// must be, whichever way the edge is followed: a rule for <see cref="StyledBy"/> and <see cref="Styles"/>, whose
+    /// uses are those of a style rule alone - a selector the one reference that reaches one - and not a member's reads, a
+    /// binding of markup or the keys' join; <see langword="null"/> where any node is.
+    /// </summary>
+    /// <param name="relation">One of <see cref="All"/>.</param>
+    public static string? Into(string relation) => relation is StyledBy or Styles ? CodeSubKinds.Rule : null;
 }
 
 /// <summary>One edge a walk follows from a node: the node it reaches, which way and by what kind, and how sure the surest such edge is.</summary>
@@ -262,21 +298,23 @@ public static partial class GraphLines
     /// <summary>
     /// The one line a node is named by in every answer and in the context pack: its handle, kind and signature (its
     /// qualified name where it has none), <c>path:start-end #hash</c>, its summary, and its callers and callees and
-    /// whether its file is generated or dynamic where they say anything.
+    /// whether its file is generated or dynamic where they say anything - each text of the node's own and its path
+    /// printable (<see cref="ReportText.Printable"/>), so the line is one line whatever a file's name holds.
     /// </summary>
     /// <param name="card">The node.</param>
     public static string Of(GraphCard card)
     {
         ArgumentNullException.ThrowIfNull(card);
 
+        var path = ReportText.Printable(card.Path);
         var where = card.Hash is { } hash
-            ? $"{card.Path}:{card.Start.ToString(CultureInfo.InvariantCulture)}-{card.End.ToString(CultureInfo.InvariantCulture)} #{hash}"
-            : $"{card.Path}:{card.Start.ToString(CultureInfo.InvariantCulture)}-{card.End.ToString(CultureInfo.InvariantCulture)}";
-        var line = $"{card.Handle} {card.Kind} {(card.Signature.Length > 0 ? card.Signature : card.Qualified)} | {where}";
+            ? $"{path}:{card.Start.ToString(CultureInfo.InvariantCulture)}-{card.End.ToString(CultureInfo.InvariantCulture)} #{hash}"
+            : $"{path}:{card.Start.ToString(CultureInfo.InvariantCulture)}-{card.End.ToString(CultureInfo.InvariantCulture)}";
+        var line = $"{card.Handle} {card.Kind} {ReportText.Printable(card.Signature.Length > 0 ? card.Signature : card.Qualified)} | {where}";
 
         if (card.Summary is { } summary)
         {
-            line += $" | {summary}";
+            line += $" | {ReportText.Printable(summary)}";
         }
 
         var marks = new List<string>();
@@ -305,7 +343,8 @@ public static partial class GraphLines
     /// <summary>
     /// Where a node line - one <see cref="Of"/> writes, with or without what a pack says after it - says its node stands:
     /// its handle, the line's first word, and the first part after its first that reads as a place, <c>path:start-end</c>
-    /// with <c>#hash</c> where it has one. A signature that holds the separator itself (a default of <c>A | B</c>) is
+    /// with <c>#hash</c> where it has one, its path read back from the printable form <see cref="Of"/> wrote it in
+    /// (<see cref="ReportText.Unprinted"/>). A signature that holds the separator itself (a default of <c>A | B</c>) is
     /// passed over to the place after it, and a place-like text a summary says is never reached, for the place comes
     /// first. Null where the line is no node's: a pack's first or last line, a declaration it says was taken out, a count.
     /// </summary>
@@ -327,7 +366,7 @@ public static partial class GraphLines
             {
                 return new GraphPlace(
                     handle,
-                    place.Groups["path"].Value,
+                    ReportText.Unprinted(place.Groups["path"].Value),
                     int.Parse(place.Groups["start"].Value, CultureInfo.InvariantCulture),
                     int.Parse(place.Groups["end"].Value, CultureInfo.InvariantCulture),
                     place.Groups["hash"].Success ? place.Groups["hash"].Value : null);
@@ -337,9 +376,10 @@ public static partial class GraphLines
         return null;
     }
 
-    /// <summary>A place as <see cref="Of"/> writes one: <c>path:start-end</c>, then <c>#hash</c> where the node has one.</summary>
-    [System.Text.RegularExpressions.GeneratedRegex(@"^(?<path>[^ ].*):(?<start>\d+)-(?<end>\d+)(?: #(?<hash>[0-9a-fA-F]+))?$", System.Text.RegularExpressions.RegexOptions.CultureInvariant)]
-    private static partial System.Text.RegularExpressions.Regex PlaceForm();
+    /// <summary>A place as <see cref="Of"/> writes one: <c>path:start-end</c>, then <c>#hash</c> where the node has one - matched by the one linear engine.</summary>
+    private static System.Text.RegularExpressions.Regex PlaceForm() => Place.Value;
+
+    private static readonly Lazy<System.Text.RegularExpressions.Regex> Place = new(() => Text.LinearRegex.Compile(@"^(?<path>[^ ].*):(?<start>\d+)-(?<end>\d+)(?: #(?<hash>[0-9a-fA-F]+))?$"));
 }
 
 /// <summary>Where a node line says its node stands (<see cref="GraphLines.Placed"/>).</summary>

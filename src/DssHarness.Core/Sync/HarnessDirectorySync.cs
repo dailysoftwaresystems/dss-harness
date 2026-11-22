@@ -49,6 +49,8 @@ public static class HarnessDirectorySync
 
     private const string DependencySources = HarnessLayout.DependencySourcesDirectoryRelative;
 
+    private const string SyncPieces = HarnessLayout.SyncPiecesDirectoryRelative;
+
     /// <summary>
     /// Whether <paramref name="relativePath"/> is inside the harness's own directory and is never
     /// carried by an ordinary sync, nor deleted by one.
@@ -81,7 +83,7 @@ public static class HarnessDirectorySync
     /// <summary>
     /// Whether <paramref name="relativePath"/> is, or is inside, what the harness writes into its own directory as it
     /// works: each run's records, the record of the copies hosts keep, the record of each leg's mutation verdicts, the
-    /// dependency sources a mutation worker is given, and each action's own <c>build</c> and <c>artifacts</c>, at whatever
+    /// dependency sources a mutation worker is given, the pieces of a file a sync is bringing in, and each action's own <c>build</c> and <c>artifacts</c>, at whatever
     /// depth the action is grouped. The run state of whichever machine made it, which no sync carries, and which no one
     /// edits by hand.
     /// </summary>
@@ -94,6 +96,7 @@ public static class HarnessDirectorySync
             || IsAt(relativePath, HostCopies)
             || IsAt(relativePath, MutationRecord)
             || IsAt(relativePath, DependencySources)
+            || IsAt(relativePath, SyncPieces)
             || InAnActionsRunState(relativePath);
     }
 

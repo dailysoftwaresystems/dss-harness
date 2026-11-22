@@ -51,7 +51,7 @@ public sealed record FlowCheckout(
     public string? NotARemote(string remote)
         => Remotes.Contains(remote, StringComparer.Ordinal)
             ? null
-            : $"'{remote}', which is not a remote of this repository ({(HasRemote ? ReportText.Listed(Remotes) : "it has none")})";
+            : $"'{remote}', which is not a remote of this repository ({(HasRemote ? Names.Line(Remotes, "git remote") : "it has none")})";
 
     /// <summary>
     /// The branch the run's pull request is opened against (<c>orient.baseBranch</c>): the flow's <c>pull-request</c>
@@ -60,20 +60,43 @@ public sealed record FlowCheckout(
     /// <param name="pullRequestBase">The pull-request step's base, filled (<see cref="FlowTemplate.PullRequestBase"/>); null where none is named.</param>
     public string? BaseBranch(string? pullRequestBase) => pullRequestBase ?? RemoteDefault;
 
+    /// <summary>The list of <c>named</c>, in a run's command's <c>--json</c> document, that holds every path a start is refused over as staged.</summary>
+    public const string StagedList = "staged";
+
     /// <summary>
     /// Why a run cannot start from this checkout, worded once for the run's start: HEAD detached, the branch its pull
-    /// request is opened against (<see cref="BaseBranch"/>) checked out, a merge under way, changes staged. Null where it can.
+    /// request is opened against (<see cref="BaseBranch"/>) checked out, a merge under way, changes staged - the staged
+    /// paths named as the line has room for them, and the whole list in <see cref="StartNamed"/>. Null where it can.
     /// </summary>
     /// <param name="pullRequestBase">The pull-request step's base, filled (<see cref="FlowTemplate.PullRequestBase"/>); null where none is named.</param>
-    public string? StartRefusal(string? pullRequestBase)
+    public string? StartRefusal(string? pullRequestBase) => Start(pullRequestBase)?.Said;
+
+    /// <summary>
+    /// The lists <see cref="StartRefusal"/> names part of, each whole by its name in the document's <c>named</c>: every
+    /// staged path (<see cref="StagedList"/>) where the start is refused over them, and none where it is refused over
+    /// anything else or not refused.
+    /// </summary>
+    /// <param name="pullRequestBase">The pull-request step's base, filled (<see cref="FlowTemplate.PullRequestBase"/>); null where none is named.</param>
+    public IReadOnlyDictionary<string, IReadOnlyList<string>> StartNamed(string? pullRequestBase)
+        => Start(pullRequestBase) is { OverStaged: true }
+            ? new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal) { [StagedList] = Staged }
+            : new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal);
+
+    /// <summary>
+    /// The one reading of why a run cannot start from this checkout, in the order its refusals are weighed, with whether
+    /// it is the staged paths' - which <see cref="StartRefusal"/> and <see cref="StartNamed"/> both read, so the line and
+    /// the lists it names cannot part. Null where it can start.
+    /// </summary>
+    /// <param name="pullRequestBase">The pull-request step's base, filled; null where none is named.</param>
+    private (string Said, bool OverStaged)? Start(string? pullRequestBase)
         => Branch is null
-            ? "the main checkout's HEAD is detached, and a run commits its work on a branch: check out a branch of its own for it"
+            ? ("the main checkout's HEAD is detached, and a run commits its work on a branch: check out a branch of its own for it", false)
             : BaseBranch(pullRequestBase) is { } baseBranch && string.Equals(Branch, baseBranch, StringComparison.Ordinal)
-                ? $"the main checkout is on '{Branch}', the branch the run's pull request is opened against, and a run commits its work on a branch of its own: create one for it and check it out"
+                ? ($"the main checkout is on '{Branch}', the branch the run's pull request is opened against, and a run commits its work on a branch of its own: create one for it and check it out", false)
                 : MergeInProgress
-                    ? "a merge is under way in the main checkout, and a run folds its work into the tree the merge is writing: finish the merge, or abort it"
+                    ? ("a merge is under way in the main checkout, and a run folds its work into the tree the merge is writing: finish the merge, or abort it", false)
                     : Staged.Count > 0
-                        ? $"the main checkout has staged changes ({ReportText.Counted(Staged.Count, "path")}: {string.Join(", ", Staged.Take(5))}{(Staged.Count > 5 ? ", ..." : string.Empty)}), and a run's commit stages what it folded alone: commit them, or unstage them"
+                        ? ($"the main checkout has staged changes ({ReportText.Counted(Staged.Count, "path")}: {Names.Line(Staged, FlowRunResult.WholeIn(StagedList))}), and a run's commit stages what it folded alone: commit them, or unstage them", true)
                         : null;
 
     /// <summary>

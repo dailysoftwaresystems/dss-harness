@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using DssHarness.Core.Text;
 
 namespace DssHarness.Core.Agents.Policy;
 
@@ -30,7 +31,7 @@ public static partial class WindowsNames
             return path;
         }
 
-        var segments = Regex.Split(path, @"([/\\]+)");
+        var segments = Separators.Split(path);
 
         for (var at = 0; at < segments.Length; at += 2)
         {
@@ -100,47 +101,49 @@ public static partial class WindowsNames
 
     /// <summary>
     /// <paramref name="path"/>, and the path with each of its segments spelled as a short name read as each of
-    /// <paramref name="names"/> it may shorten (<see cref="MayShorten"/>), in every combination.
+    /// <paramref name="names"/> it may shorten (<see cref="MayShorten"/>), in every combination, however many: the path as
+    /// a pattern (<see cref="WordPattern"/>), each such segment a choice of itself and its names, spelled one reading at a
+    /// time - the path itself first - and never held all at once.
     /// </summary>
     /// <param name="path">A whole path, after the system has given each short name it knows as its long one.</param>
     /// <param name="names">The names a short name is read as where it may shorten one.</param>
-    /// <param name="most">The most readings followed; past them the path is not decided.</param>
-    /// <exception cref="NotSupportedException">The path spells more readings than <paramref name="most"/>.</exception>
-    public static IReadOnlyList<string> Lengthened(string path, IReadOnlyCollection<string> names, int most)
+    public static IEnumerable<string> Lengthened(string path, IReadOnlyCollection<string> names)
+    {
+        var parts = Lengthenings(path, names);
+
+        return parts.Any(part => part.Count > 1)
+            ? new WordPattern([.. parts.Select(part => part.Count == 1
+                ? new WordPart.Text(part[0], string.Empty)
+                : (WordPart)new WordPart.Choice(new WordChoice([.. part.Select(name => WordPattern.Of(name, string.Empty))])))]).Spellings().Select(spelled => spelled.Word)
+            : [path];
+    }
+
+    /// <summary>
+    /// <paramref name="path"/> as the parts its readings (<see cref="Lengthened"/>) are made of, in order: each run of
+    /// separators a part of its own, spelled as it is; each segment a part of the names it may be read as - itself first,
+    /// then, where it is spelled as a short name, each of <paramref name="names"/> it may shorten (<see cref="MayShorten"/>),
+    /// each once in any case. The pattern of the readings, held at the size of the path and its names: a reader that
+    /// decides the readings one segment at a time, keeping one of each way they may stand, reads them all without
+    /// spelling them out (the agents' policy, <c>AgentPolicy.Readings</c>).
+    /// </summary>
+    /// <param name="path">A whole path, after the system has given each short name it knows as its long one.</param>
+    /// <param name="names">The names a short name is read as where it may shorten one.</param>
+    public static IReadOnlyList<IReadOnlyList<string>> Lengthenings(string path, IReadOnlyCollection<string> names)
     {
         ArgumentNullException.ThrowIfNull(path);
         ArgumentNullException.ThrowIfNull(names);
 
         if (!path.Contains('~', StringComparison.Ordinal))
         {
-            return [path];
+            return [[path]];
         }
 
-        var segments = Regex.Split(path, @"([/\\]+)");
-        var choices = segments.Select((segment, at) => at % 2 == 0 && IsShortName(segment)
-                ? [segment, .. names.Where(name => MayShorten(segment, name)).Distinct(StringComparer.OrdinalIgnoreCase)]
-                : new[] { segment })
-            .ToList();
-        var count = choices.Aggregate(1L, (product, choice) => product * choice.Length);
-
-        if (count == 1)
-        {
-            return [path];
-        }
-
-        if (count > most)
-        {
-            throw new NotSupportedException($"'{path}' may name more than {most} places by its short names, which this does not follow");
-        }
-
-        IEnumerable<IEnumerable<string>> combinations = [[]];
-
-        foreach (var choice in choices)
-        {
-            combinations = [.. combinations.SelectMany(combination => choice.Select(name => combination.Append(name)))];
-        }
-
-        return [.. combinations.Select(combination => string.Concat(combination))];
+        return [.. Separators.Split(path)
+            .Select((segment, at) => at % 2 == 0 && IsShortName(segment)
+                    && names.Where(name => MayShorten(segment, name)).Distinct(StringComparer.OrdinalIgnoreCase).ToList() is { Count: > 0 } longer
+                ? (IReadOnlyList<string>)[segment, .. longer]
+                : [segment])
+            .Where(part => part[0].Length > 0 || part.Count > 1)];
     }
 
     /// <summary>
@@ -158,6 +161,9 @@ public static partial class WindowsNames
             ? (plain, string.Empty)
             : (plain[..dot].Replace(".", string.Empty, StringComparison.Ordinal), plain[(dot + 1)..] is var extension && extension.Length > 3 ? extension[..3] : extension);
     }
+
+    /// <summary>A run of separators of either kind, kept by a split as the text between a path's segments.</summary>
+    private static readonly Regex Separators = LinearRegex.Compile(@"([/\\]+)");
 
     /// <summary>A short name as Windows spells one: a stem of one to six characters, a <c>~</c> and its number, and an extension of up to three.</summary>
     [GeneratedRegex(@"^(?<stem>[^~.\s/\\:*?""<>|]{1,6})~[0-9]{1,6}(\.(?<extension>[^.\s/\\:*?""<>|]{1,3}))?$")]

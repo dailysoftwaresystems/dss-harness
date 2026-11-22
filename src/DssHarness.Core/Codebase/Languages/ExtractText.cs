@@ -1,32 +1,71 @@
-using System.Text.RegularExpressions;
+using System.Text;
 
 namespace DssHarness.Core.Codebase.Languages;
 
 /// <summary>
-/// How every implementation fits the text it gives a node into the model's bounds: a signature within
-/// <see cref="FileExtract.MostSignature"/> characters, and a summary - the first sentence of what the code says of itself
-/// - within <see cref="FileExtract.MostSummary"/>. One place, so every language cuts alike.
+/// How every implementation gives a node its text: a signature on one line, whole however long the header runs, a
+/// summary - the first sentence of what the code says of itself, whole, which its meaning alone bounds - and a data key's
+/// value, whole on one line. One place, so every language says them alike; what serves them gives one wider than a page
+/// in pieces.
 /// </summary>
-internal static partial class ExtractText
+internal static class ExtractText
 {
     /// <summary><paramref name="text"/> on one line: each run of white space, line breaks among it, one space.</summary>
     /// <param name="text">Text written over one line or more.</param>
-    public static string Flat(string text) => Spaces().Replace(text, " ").Trim();
+    public static string Flat(string text)
+    {
+        var flat = new StringBuilder(text.Length);
+        var space = false;
 
-    /// <summary><paramref name="header"/>, a declaration's header on one line, cut to fit a node's signature.</summary>
+        foreach (var character in text)
+        {
+            if (char.IsWhiteSpace(character))
+            {
+                space = flat.Length > 0;
+                continue;
+            }
+
+            if (space)
+            {
+                flat.Append(' ');
+                space = false;
+            }
+
+            flat.Append(character);
+        }
+
+        return flat.ToString();
+    }
+
+    /// <summary><paramref name="header"/>, a declaration's header on one line, as a node's signature: whole.</summary>
     /// <param name="header">The header.</param>
-    public static string Signature(string header) => Output.TextCut.AtWord(Whole(header), FileExtract.MostSignature);
+    public static string Signature(string header) => Whole(header);
 
     /// <summary>
-    /// The first sentence of <paramref name="text"/>, one line of what the code says of itself - up to the first <c>.</c>,
-    /// <c>!</c> or <c>?</c> that a space or the end follows - cut to fit a node's summary.
+    /// The first sentence of <paramref name="text"/>, what the code says of itself on one line - up to the first <c>.</c>,
+    /// <c>!</c> or <c>?</c> that a space or the end follows, the whole text where none does - as a node's summary: whole,
+    /// however many lines it ran over.
     /// </summary>
-    /// <param name="text">The line.</param>
+    /// <param name="text">What the code says, on one line.</param>
     public static string Summary(string text)
     {
-        var stop = Sentence().Match(text);
-        return Output.TextCut.AtWord(Whole(stop.Success ? text[..(stop.Index + 1)] : text), FileExtract.MostSummary);
+        for (var at = 0; at < text.Length; at++)
+        {
+            if (text[at] is '.' or '!' or '?' && (at + 1 == text.Length || char.IsWhiteSpace(text[at + 1])))
+            {
+                return Whole(text[..(at + 1)]);
+            }
+        }
+
+        return Whole(text);
     }
+
+    /// <summary>
+    /// <paramref name="value"/>, what a data file holds at a key, as the key's summary: on one line, whole - a value is no
+    /// prose, so no sentence of it ends it; <see langword="null"/> where nothing is left of it.
+    /// </summary>
+    /// <param name="value">The value, as the file holds it.</param>
+    public static string? Value(string value) => Flat(value) is { Length: > 0 } flat ? Whole(flat) : null;
 
     /// <summary>
     /// <paramref name="text"/> as whole UTF-16, as a record holds it: each surrogate apart from its pair - a file cut inside
@@ -55,11 +94,5 @@ internal static partial class ExtractText
     /// <summary><paramref name="name"/> joined to <paramref name="scope"/>, the qualified name it is declared in, by the model's separator, a dot; itself at the top.</summary>
     /// <param name="scope">The qualified name of the scope it is declared in; <see langword="null"/> at the top.</param>
     /// <param name="name">Its name.</param>
-    public static string Qualify(string? scope, string name) => scope is null ? name : $"{scope}.{name}";
-
-    [GeneratedRegex(@"\s+", RegexOptions.CultureInvariant)]
-    private static partial Regex Spaces();
-
-    [GeneratedRegex(@"[.!?](?=\s|$)", RegexOptions.CultureInvariant)]
-    private static partial Regex Sentence();
+    public static QualifiedName Qualify(QualifiedName? scope, string name) => scope is null ? QualifiedName.Of(name) : scope.Under(name);
 }

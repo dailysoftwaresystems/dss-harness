@@ -219,6 +219,17 @@ public sealed record HostCommand
 
     /// <summary>How much of standard error the result keeps, as <see cref="OutputKept"/> says of standard output.</summary>
     public StreamKept ErrorKept { get; init; }
+
+    /// <summary>
+    /// Where standard output is written whole as it arrives, so the result's tail is quoted by reference to it; see
+    /// <see cref="ProcessRequest.OutputLog"/>. Over ssh and WSL it is what the local process that reaches the host relays,
+    /// a host's startup output before the mark among it; <see langword="null"/> where the caller keeps or shows each line
+    /// itself.
+    /// </summary>
+    public string? OutputLog { get; init; }
+
+    /// <summary>Where standard error is written whole as it arrives, as <see cref="OutputLog"/> says of standard output.</summary>
+    public string? ErrorLog { get; init; }
 }
 
 /// <summary>
@@ -234,28 +245,28 @@ public interface IHostCommandRunner
 
     /// <summary>Runs <see cref="RemoteCommandLine.ShellProbe"/> on an ssh host, to learn which kind of shell it has.</summary>
     /// <exception cref="HarnessException">ssh would not start, so the host could not be reached.</exception>
-    Task<ProcessResult> ProbeShellAsync(HostConnection connection, TimeSpan timeout, CancellationToken cancellationToken = default);
+    Task<ProcessResult> ProbeShellAsync(HostConnection connection, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Asks ssh what it would do to reach an ssh host over <paramref name="connection"/>, with <c>ssh -G</c>,
     /// which reads its configuration and prints the settings it would connect with, and connects to nothing.
     /// </summary>
     /// <exception cref="HarnessException">ssh would not start, so the host could not be reached.</exception>
-    Task<ProcessResult> ReadSshSettingsAsync(HostConnection connection, TimeSpan timeout, CancellationToken cancellationToken = default);
+    Task<ProcessResult> ReadSshSettingsAsync(HostConnection connection, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Asks WSL which distribution is its default, by running <c>printenv WSL_DISTRO_NAME</c> in it: the
     /// distribution answers with its own name.
     /// </summary>
     /// <exception cref="HarnessException">wsl.exe would not start, so WSL could not be reached.</exception>
-    Task<ProcessResult> ProbeDefaultWslDistributionAsync(TimeSpan timeout, CancellationToken cancellationToken = default);
+    Task<ProcessResult> ProbeDefaultWslDistributionAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Asks WSL which of its distributions are running, with <c>wsl --list --running --quiet</c>: each one's name on a line
     /// of its own, and nothing where none is.
     /// </summary>
     /// <exception cref="HarnessException">wsl.exe would not start, so WSL could not be reached.</exception>
-    Task<ProcessResult> ListRunningWslDistributionsAsync(TimeSpan timeout, CancellationToken cancellationToken = default);
+    Task<ProcessResult> ListRunningWslDistributionsAsync(CancellationToken cancellationToken = default);
 }
 
 /// <inheritdoc cref="IHostCommandRunner"/>
@@ -413,7 +424,6 @@ public sealed class HostCommandRunner(IProcessRunner processRunner) : IHostComma
 
     public Task<ProcessResult> ProbeShellAsync(
         HostConnection connection,
-        TimeSpan timeout,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(connection);
@@ -426,13 +436,12 @@ public sealed class HostCommandRunner(IProcessRunner processRunner) : IHostComma
         // Unmarked: which shell is there is what this asks, and how a mark is written is what the answer says.
         return OverSshAsync(
             connection,
-            pin => new SshCall(SshRequest(connection, pin, RemoteCommandLine.ShellProbe) with { Timeout = timeout, StandardInput = string.Empty }),
+            pin => new SshCall(SshRequest(connection, pin, RemoteCommandLine.ShellProbe) with { StandardInput = string.Empty }),
             cancellationToken);
     }
 
     public Task<ProcessResult> ReadSshSettingsAsync(
         HostConnection connection,
-        TimeSpan timeout,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(connection);
@@ -444,7 +453,7 @@ public sealed class HostCommandRunner(IProcessRunner processRunner) : IHostComma
 
         return ThroughTransportAsync(
             connection.Host.ToString(),
-            SshSettingsRequest(connection) with { Timeout = timeout, StandardInput = string.Empty },
+            SshSettingsRequest(connection) with { StandardInput = string.Empty },
             cancellationToken);
     }
 
@@ -464,37 +473,35 @@ public sealed class HostCommandRunner(IProcessRunner processRunner) : IHostComma
         };
     }
 
-    public Task<ProcessResult> ProbeDefaultWslDistributionAsync(TimeSpan timeout, CancellationToken cancellationToken = default)
-        => ThroughTransportAsync("WSL", DefaultWslDistributionRequest(timeout), cancellationToken);
+    public Task<ProcessResult> ProbeDefaultWslDistributionAsync(CancellationToken cancellationToken = default)
+        => ThroughTransportAsync("WSL", DefaultWslDistributionRequest(), cancellationToken);
 
     /// <summary>
     /// The process that asks WSL for its default distribution. The name is read from inside that
     /// distribution rather than from wsl.exe's own listing, whose words are translated into the
     /// machine's language.
     /// </summary>
-    public static ProcessRequest DefaultWslDistributionRequest(TimeSpan timeout) => new()
+    public static ProcessRequest DefaultWslDistributionRequest() => new()
     {
         FileName = WslProgram,
         Arguments = ["--exec", "printenv", "WSL_DISTRO_NAME"],
         Environment = WslEnvironment,
         StandardInput = string.Empty,
-        Timeout = timeout,
     };
 
-    public Task<ProcessResult> ListRunningWslDistributionsAsync(TimeSpan timeout, CancellationToken cancellationToken = default)
-        => ThroughTransportAsync("WSL", RunningWslDistributionsRequest(timeout), cancellationToken);
+    public Task<ProcessResult> ListRunningWslDistributionsAsync(CancellationToken cancellationToken = default)
+        => ThroughTransportAsync("WSL", RunningWslDistributionsRequest(), cancellationToken);
 
     /// <summary>
     /// The process that asks WSL which of its distributions are running: by name alone, which no language translates, where
     /// the listing's other words are translated into the machine's language.
     /// </summary>
-    public static ProcessRequest RunningWslDistributionsRequest(TimeSpan timeout) => new()
+    public static ProcessRequest RunningWslDistributionsRequest() => new()
     {
         FileName = WslProgram,
         Arguments = ["--list", "--running", "--quiet"],
         Environment = WslEnvironment,
         StandardInput = string.Empty,
-        Timeout = timeout,
     };
 
     /// <summary>The process that runs <paramref name="command"/> on the host <paramref name="connection"/> reaches.</summary>
@@ -559,6 +566,8 @@ public sealed class HostCommandRunner(IProcessRunner processRunner) : IHostComma
             OnErrorLine = command.OnErrorLine,
             OutputKept = command.OutputKept,
             ErrorKept = command.ErrorKept,
+            OutputLog = command.OutputLog,
+            ErrorLog = command.ErrorLog,
         };
 
         string Marked(string line) => mark is null ? line : RemoteCommandLine.Marked(line, mark, connection.Shell);

@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
-using DssHarness.Core.Execution;
+using DssHarness.Core.Output;
 using DssHarness.Core.Processes;
+using DssHarness.Core.Waiting;
 
 namespace DssHarness.Core.Hosts;
 
@@ -12,10 +13,11 @@ namespace DssHarness.Core.Hosts;
 /// A personal Mac reached by its mDNS name falls back asleep between commands, and answers again moments
 /// later: a consumer saw a run skip it seconds after a check had reached it, three times in fifteen minutes,
 /// and a retry about 20 seconds later always found it. Three quick lookups miss that; a window catches it.
-/// Only what a waking host explains is asked again: a name that does not resolve yet, a connection nothing
-/// took or that timed out. A key refused, or one the name is not known by, is the host answering, and is
-/// never retried. Whatever ran out is kept for the half minute a name's answer is, so the other legs a
-/// command places there do not each wait the whole window again.
+/// Only what a waking host explains is asked again: a name no answer came for yet, a connection nothing
+/// took or that timed out. A key refused, a name its DNS server says does not exist, or one the host is not known by,
+/// is an answer, and is never retried. Whatever ran out is kept for as long as the window it ran out of, so the other
+/// legs a command places there in that time do not each wait the whole window again, and one placed later waits a
+/// window of its own.
 /// </remarks>
 /// <param name="lookup">How a name is looked up, asked afresh each time: an answer kept would miss the wake.</param>
 /// <param name="clock">What measures the window: its timestamps, which only move forward, never its time of day.</param>
@@ -23,7 +25,8 @@ namespace DssHarness.Core.Hosts;
 /// How long to wait between tries. Passed in rather than fixed so that a test measures the trying and not
 /// the waiting; production uses <see cref="DefaultPollDelay"/>.
 /// </param>
-public sealed class SshWakeWindow(INameLookup lookup, TimeProvider clock, TimeSpan pollDelay)
+/// <param name="output">Where the lookups of a waking host are told while they last; nowhere where none is given.</param>
+public sealed class SshWakeWindow(INameLookup lookup, TimeProvider clock, TimeSpan pollDelay, IHarnessOutput? output = null)
 {
     /// <summary>
     /// The wait between tries: a few within the 20-30 seconds a consumer measured a dark-waking Mac taking to
@@ -31,11 +34,12 @@ public sealed class SshWakeWindow(INameLookup lookup, TimeProvider clock, TimeSp
     /// </summary>
     public static readonly TimeSpan DefaultPollDelay = TimeSpan.FromSeconds(5);
 
-    private readonly ConcurrentDictionary<HostId, (string Refusal, long Kept)> _ranOut = new();
+    private readonly ConcurrentDictionary<HostId, (string Refusal, long Kept, TimeSpan Window)> _ranOut = new();
 
     private readonly INameLookup _lookup = lookup;
     private readonly TimeProvider _clock = clock;
     private readonly TimeSpan _pollDelay = pollDelay;
+    private readonly IHarnessOutput? _output = output;
 
     /// <summary>
     /// Now, on the clock a window is measured by: one that only moves forward, at the pace time passes. Never the
@@ -48,44 +52,78 @@ public sealed class SshWakeWindow(INameLookup lookup, TimeProvider clock, TimeSp
     /// <param name="then">When it was.</param>
     public TimeSpan Since(long then) => _clock.GetElapsedTime(then);
 
-    /// <summary>Why <paramref name="host"/>'s window ran out a moment ago, or <see langword="null"/>.</summary>
+    /// <summary>
+    /// Why <paramref name="host"/>'s window ran out, where it did less than that window's own length ago; otherwise
+    /// <see langword="null"/>, and the host is given a window of its own again.
+    /// </summary>
     /// <param name="host">The host.</param>
     public string? RanOut(HostId host)
-        => _ranOut.TryGetValue(host, out var kept) && Since(kept.Kept) < HostAddressResolver.CacheLifetime ? kept.Refusal : null;
-
-    /// <summary>Keeps <paramref name="refusal"/> as why <paramref name="host"/>'s window ran out, for as long as a name's answer is kept.</summary>
-    /// <param name="host">The host.</param>
-    /// <param name="refusal">Why it could not be reached, window and all.</param>
-    public void Remember(HostId host, string refusal) => _ranOut[host] = (refusal, Now);
+        => _ranOut.TryGetValue(host, out var kept) && Since(kept.Kept) < kept.Window ? kept.Refusal : null;
 
     /// <summary>
-    /// Looks the name <paramref name="missed"/> missed up again, until it resolves or the window ends, and says
-    /// how many lookups it took in all.
+    /// Keeps <paramref name="refusal"/> as why <paramref name="host"/>'s window ran out, for as long as that window,
+    /// <paramref name="window"/>, lasts.
     /// </summary>
-    /// <param name="missed">The resolution that found nothing, with the lookups it made.</param>
+    /// <param name="host">The host.</param>
+    /// <param name="refusal">Why it could not be reached, window and all.</param>
+    /// <param name="window">The window it ran out of.</param>
+    public void Remember(HostId host, string refusal, TimeSpan window) => _ranOut[host] = (refusal, Now, window);
+
+    /// <summary>
+    /// Looks the name <paramref name="missed"/> got no answer for up again, until it resolves, its DNS server says it
+    /// does not exist, or the window ends, and says how many lookups it took in all.
+    /// </summary>
+    /// <param name="missed">The resolution no answer came to, with the lookups it made.</param>
     /// <param name="started">When the window began, a <see cref="Now"/>.</param>
     /// <param name="window">How long it lasts.</param>
     /// <param name="cancellationToken">Stops the looking.</param>
+    /// <remarks>
+    /// Through <see cref="Retrying"/>: no answer from a host that is waking passes by nature, and is asked again every
+    /// <see cref="DefaultPollDelay"/> for as long as the window lasts, told while it does; a name that does not exist is
+    /// an answer, and ends the lookups at once. A name its DNS server already said does not exist is not asked again.
+    /// </remarks>
     public async Task<AddressResolution> KeepResolvingAsync(AddressResolution missed, long started, TimeSpan window, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(missed);
 
-        var attempts = missed.Attempts;
-
-        // Asked at once, then after each wait: a miss kept from earlier in this command is no lookup of now.
-        while (Since(started) < window)
+        if (missed.NoSuchName is not null || Since(started) >= window)
         {
-            attempts++;
-
-            if (await _lookup.LookupAsync(missed.Address, cancellationToken).ConfigureAwait(false) is { Count: > 0 } found)
-            {
-                return new AddressResolution(missed.Address, attempts, found);
-            }
-
-            await WaitAsync(started, window, cancellationToken).ConfigureAwait(false);
+            return missed;
         }
 
-        return missed with { Attempts = attempts };
+        var looked = await Retrying
+            .RunAsync<IReadOnlyList<string>>(
+                async (_, token) =>
+                {
+                    try
+                    {
+                        return await _lookup.LookupAsync(missed.Address, token).ConfigureAwait(false) is { Count: > 0 } found
+                            ? new RetryTry<IReadOnlyList<string>>.Done(found)
+                            : new RetryTry<IReadOnlyList<string>>.Passing("no answer came, as from a host that is waking", _pollDelay);
+                    }
+                    catch (NoSuchNameException ex)
+                    {
+                        return new RetryTry<IReadOnlyList<string>>.Final(ex.Said);
+                    }
+                },
+                new RetryWatch(
+                    $"'{missed.Address}' to resolve as its host wakes",
+                    ProgramWait.Told(_output, ToolPackage.Command),
+                    Waits.LooksAgainEvery,
+                    window - Since(started),
+                    _clock),
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        var attempts = missed.Attempts + looked.Tries;
+
+        return looked.Kind switch
+        {
+            RetryEndKind.Done => new AddressResolution(missed.Address, attempts, looked.Value!),
+            RetryEndKind.Final => missed with { Attempts = attempts, NoSuchName = looked.Failure },
+            RetryEndKind.Cancelled => throw new OperationCanceledException(cancellationToken),
+            _ => missed with { Attempts = attempts },
+        };
     }
 
     /// <summary>

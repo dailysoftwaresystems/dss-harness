@@ -205,7 +205,7 @@ internal sealed class ScriptedHostCommands(Func<HostConnection, HostCommand, Pro
         command.OnErrorLine?.Invoke(started);
     }
 
-    public Task<ProcessResult> ProbeShellAsync(HostConnection connection, TimeSpan timeout, CancellationToken cancellationToken = default)
+    public Task<ProcessResult> ProbeShellAsync(HostConnection connection, CancellationToken cancellationToken = default)
     {
         lock (_calls)
         {
@@ -217,13 +217,13 @@ internal sealed class ScriptedHostCommands(Func<HostConnection, HostCommand, Pro
             : Task.FromResult(ShellProbesFirst.TryDequeue(out var first) ? first : ShellProbe);
     }
 
-    public Task<ProcessResult> ProbeDefaultWslDistributionAsync(TimeSpan timeout, CancellationToken cancellationToken = default)
+    public Task<ProcessResult> ProbeDefaultWslDistributionAsync(CancellationToken cancellationToken = default)
         => Task.FromResult(DefaultWslDistribution());
 
-    public Task<ProcessResult> ListRunningWslDistributionsAsync(TimeSpan timeout, CancellationToken cancellationToken = default)
+    public Task<ProcessResult> ListRunningWslDistributionsAsync(CancellationToken cancellationToken = default)
         => Task.FromResult(RunningWslDistributions());
 
-    public Task<ProcessResult> ReadSshSettingsAsync(HostConnection connection, TimeSpan timeout, CancellationToken cancellationToken = default)
+    public Task<ProcessResult> ReadSshSettingsAsync(HostConnection connection, CancellationToken cancellationToken = default)
     {
         lock (_calls)
         {
@@ -442,6 +442,17 @@ internal sealed class RecordingLastResort : IHostAgentLastResort
 
     /// <summary>The code the agent asked to end with, once it has asked.</summary>
     public Task<int> Ended => _ended.Task;
+
+    /// <summary>How many of the agent's looks find something it started still running, before none does.</summary>
+    public int RunningLooks { get; init; }
+
+    /// <summary>How many times the agent looked for what it started still running.</summary>
+    public int Looks => Volatile.Read(ref _looks);
+
+    private int _looks;
+
+    public Task<bool> AnyStartedRunsAsync(CancellationToken cancellationToken)
+        => Task.FromResult(Interlocked.Increment(ref _looks) <= RunningLooks);
 
     public Task<string> EndStartedAsync()
     {

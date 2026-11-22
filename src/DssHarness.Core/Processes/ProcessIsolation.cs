@@ -48,9 +48,9 @@ public sealed record IsolationProfile(IReadOnlyList<IsolatedPath> Hidden, IReadO
     public IReadOnlyList<KeyValuePair<string, string>> Environment { get; init; } = [];
 
     /// <summary>
-    /// Whether the child is a program's outer layer, which starts the mechanism again inside it for each command it hands
-    /// over (<see cref="IIsolationMechanism.Unnested"/>): bubblewrap leaves it a user namespace to make each command's own
-    /// layer in, where every command's own layer allows none inside it. False for every other child.
+    /// Whether the child is a program's outer layer, which holds the program alone: nothing is started inside it, for the
+    /// program it holds runs no command of the agent's, and each command runs in a layer of its own started outside it -
+    /// so it allows no further namespace as every layer does. False for every other child.
     /// </summary>
     public bool Outer { get; init; }
 
@@ -203,18 +203,17 @@ public interface IIsolationMechanism
     bool OwnTemp { get; }
 
     /// <summary>
-    /// Whether a program may hand each shell command it runs to the mechanism through this tool's isolated shell
-    /// (<see cref="IsolatedShell"/>), which becomes the mechanism in the command's place - so Claude Code's own process, its
-    /// login and the key it is handed stay apart from every command it runs. Where false, a launch of Claude Code runs whole
-    /// inside.
+    /// Whether a program's shell commands are handed to the mechanism one by one, as this tool starts them itself
+    /// (bubblewrap, macOS's sandbox), rather than the whole program running inside one placement of it (MXC's
+    /// container) - so a launch of Claude Code, whose every command the tool runtime starts, runs in an outer layer
+    /// where it does, and whole inside where it does not.
     /// </summary>
     bool TakesHandedCommands { get; }
 
     /// <summary>
-    /// Why a program inside the mechanism cannot start it again, tighter, for each command it hands over - so a program that
-    /// hands its commands over (a Claude Code launch) runs outside every layer, where a command it ran without handing it
-    /// over would run with the user's rights; null where it can, and the program runs inside an outer layer of its own
-    /// (<see cref="IsolationProfile.Outer"/>), so even such a command stays inside that one.
+    /// Why a program inside the mechanism cannot be held inside it as an outer layer of its own, tighter over it - macOS's
+    /// sandbox starts none inside another - so a program that runs in an outer layer where the mechanism holds one (a
+    /// Claude Code launch) runs outside every layer instead, with the user's rights; null where it can.
     /// </summary>
     string? Unnested { get; }
 

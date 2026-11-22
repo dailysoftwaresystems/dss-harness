@@ -47,10 +47,10 @@ public sealed record DataWritten(string Text) : RunEvent
 public sealed record RecordWritten(string Kind, string Path) : RunEvent;
 
 /// <summary>
-/// Events a queued sink was not given, said to it where they fell: after the last event it was given before them and
-/// before the first after them - or last, where none came after - stamped with the operation and with the sequence and
-/// time of the last of them. Where its queue was full an event was dropped and counted, so a front end knows it missed
-/// some and reads what it needs from the run's files, which hold it whole.
+/// Events a lagging sink could not be given: set down in the operation's event file to wait for it
+/// (<see cref="EventSpill"/>), and not read back - said to it where they fell, with why, so a front end knows what it
+/// missed and reads it from the run's own records. Nothing else ever keeps an event from a sink.
 /// </summary>
-/// <param name="Count">How many events were dropped.</param>
-public sealed record EventsDropped(int Count) : RunEvent;
+/// <param name="Count">How many events were lost to the file.</param>
+/// <param name="Why">Why the file could not be read back, in the system's words.</param>
+public sealed record EventsUnread(long Count, string Why) : RunEvent;

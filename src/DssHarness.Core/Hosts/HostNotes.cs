@@ -25,8 +25,9 @@ public sealed class HostNotes(CommandOrigin origin, IHarnessOutput output)
     /// <summary>
     /// Writes a note of <paramref name="kind"/> carrying <paramref name="text"/> to the machine that asked for this command,
     /// as it runs; nothing where no machine asked. The text crosses as the base64 of pieces of at most
-    /// <see cref="HostAgentProtocol.NotePiece"/> bytes - each small enough that its whole line fits what the reader hands
-    /// lines on in, so no piece is cut in two on the way - each piece one line.
+    /// <see cref="HostAgentProtocol.NotePiece"/> bytes - each small enough that its whole line fits what every reader hands
+    /// lines on in (<see cref="HostAgentProtocol.NoteLineLength"/>), so no piece is cut in two on the way - each piece one
+    /// line.
     /// </summary>
     /// <param name="kind">The note's kind, which says what its text holds.</param>
     /// <param name="text">The note's text.</param>

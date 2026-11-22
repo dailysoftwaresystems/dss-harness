@@ -1621,16 +1621,70 @@ public sealed class AgentPolicyTests
         Assert.Equal("the root actions", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run((IReadOnlyList<string>)["powershell", "-enc", Convert.ToBase64String(System.Text.Encoding.Unicode.GetBytes("sudo x"))])).Rule);
     }
 
+    /// <summary>
+    /// A command nested twenty thousand subshells deep is read whole and decided, never a crash: the root action at its
+    /// heart is refused as one. Red with <c>Nesting</c> 32, which denied it as undecided.
+    /// </summary>
     [Fact]
-    public void ACommandNestedPastAnyBound_IsDenied_NeverACrash()
+    public void ACommandNestedTwentyThousandDeep_IsDecided_NeverACrash()
     {
         using var ground = Ground();
         var command = string.Concat(Enumerable.Repeat("( ", 20000)) + "sudo x" + string.Concat(Enumerable.Repeat(")", 20000));
 
-        var denied = Assert.IsType<AgentPolicyAnswer.Denied>(ground.Policy().Run(command));
+        Assert.Equal("the root actions", Assert.IsType<AgentPolicyAnswer.Denied>(ground.Policy().Run(command)).Rule);
+    }
 
-        Assert.Equal("undecided", denied.Rule);
-        Assert.Contains("nest past 32 levels", denied.Reason, StringComparison.Ordinal);
+    /// <summary>
+    /// A command whose moves reach a hundred and twenty places is decided at every one of them: a chain of cd's 120 deep,
+    /// then a move to the slot's directory and a read of the slot there, is refused for the slot; the same chain making
+    /// something is allowed. Red with <c>MaxPlaces</c> 64, which denied every such command as undecided.
+    /// </summary>
+    [Fact]
+    public void AHundredAndTwentyMoves_AreDecided()
+    {
+        using var ground = Ground();
+        var policy = ground.Policy();
+        var moves = string.Join(" && ", Enumerable.Range(0, 120).Select(at => $"cd d{at}"));
+        var workflows = Path.Combine(ground.Main, ".harness-config", "workflows").Replace('\\', '/');
+
+        Assert.Equal(AgentPolicyAnswer.Allow, policy.Run($"{moves} && make"));
+        Assert.Equal("the credential slots", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run($"{moves} && cd {workflows} && cat .env/keys.env")).Rule);
+    }
+
+    /// <summary>
+    /// Every value a variable may hold is read, however many: a loop over seventeen values whose last is a path into the
+    /// slot reads the slot, and is refused for it. Red with the readings' <c>Take(16)</c>, which forgot the seventeenth
+    /// value and allowed the command.
+    /// </summary>
+    [Fact]
+    public void AVariablesSeventeenthValue_IsDeniedWhereItIsARefusedPath()
+    {
+        using var ground = Ground();
+        var policy = ground.Policy();
+        var values = string.Join(' ', Enumerable.Range(1, 16).Select(at => $"a{at}"));
+        var slot = ground.Slot.Replace('\\', '/');
+
+        Assert.Equal(AgentPolicyAnswer.Allow, policy.Run($"for p in {values}; do cat \"$p\"; done"));
+        Assert.Equal("the credential slots", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run($"for p in {values} {slot}/keys.env; do cat \"$p\"; done")).Rule);
+    }
+
+    /// <summary>
+    /// Twenty variables of three values each, all taken from one loop's, are read as the pattern they are - one choice made
+    /// once for all twenty, three readings of the command - never 3^20 words multiplied apart: a command naming all twenty
+    /// is decided, allowed where no value is refused and refused where one names the slot. Red with the per-word readings
+    /// and their bound, which multiplied each word's values apart and denied the command as more readings than it follows.
+    /// </summary>
+    [Fact]
+    public void TwentyVariablesOfThreeValues_AreDecidedAsAPattern()
+    {
+        using var ground = Ground();
+        var policy = ground.Policy();
+        var assigned = string.Concat(Enumerable.Range(1, 20).Select(at => $"x{at}=\"$v\"; "));
+        var read = string.Join(' ', Enumerable.Range(1, 20).Select(at => $"\"$x{at}/keys.env\""));
+        var slot = ground.Slot.Replace('\\', '/');
+
+        Assert.Equal(AgentPolicyAnswer.Allow, policy.Run($"for v in a b c; do {assigned}cat {read}; done"));
+        Assert.Equal("the credential slots", Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run($"for v in a b {slot}; do {assigned}cat {read}; done")).Rule);
     }
 
     [Fact]
@@ -1854,12 +1908,11 @@ public sealed class AgentPolicyTests
     /// <summary>
     /// A cd is followed from every place the command reached before it: a relative cd after a subshell's is tried where
     /// the subshell left it and where the string stands, for the subshell's ended with it. A command after a <c>&amp;&amp;</c>
-    /// stands only where the one before it held, so a chain of moves reaches one place a hop; a command whose moves reach
-    /// more distinct places than are followed - each move after a <c>;</c> from where the one before held and failed alike
-    /// - is not decided, and so denied.
+    /// stands only where the one before it held, so a chain of moves reaches one place a hop; each move after a <c>;</c>
+    /// is followed from where the one before held and failed alike, every place it reaches decided.
     /// </summary>
     [Fact]
-    public void ACdIsFollowedFromEveryPlaceReached_AndOneMovingPastTheBound_IsDenied()
+    public void ACdIsFollowedFromEveryPlaceReached()
     {
         using var ground = Ground();
         var policy = ground.Policy();
@@ -1870,10 +1923,7 @@ public sealed class AgentPolicyTests
             "the credential slots",
             Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run($"cd {parent} && (cd /) ; cd {name}/.harness-config/workflows; cat .env/keys.env")).Rule);
 
-        var bounded = Assert.IsType<AgentPolicyAnswer.Denied>(policy.Run(string.Join("; ", Enumerable.Range(0, 8).Select(at => $"cd d{at}"))));
-
-        Assert.Equal("undecided", bounded.Rule);
-        Assert.Contains($"its moves reach more than {AgentPolicy.MaxPlaces} places, which this does not follow", bounded.Reason, StringComparison.Ordinal);
+        Assert.Equal(AgentPolicyAnswer.Allow, policy.Run(string.Join("; ", Enumerable.Range(0, 8).Select(at => $"cd d{at}"))));
         Assert.Equal(AgentPolicyAnswer.Allow, policy.Run("cd a && cd b && cd ../c && make"));
         Assert.Equal(AgentPolicyAnswer.Allow, policy.Run(string.Join(" && ", Enumerable.Range(0, 8).Select(at => $"cd d{at}"))));
         Assert.Equal(AgentPolicyAnswer.Allow, policy.Run(string.Join(" && ", "abcdef".Select(letter => $"cd {letter} && make && cd .."))));

@@ -2,10 +2,14 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using DssHarness.Core.Execution;
 using DssHarness.Core.FileSystem;
+using DssHarness.Core.Git;
 using DssHarness.Core.Hosts;
+using DssHarness.Core.Json;
 using DssHarness.Core.Output;
 using DssHarness.Core.Platform;
+using DssHarness.Core.Processes;
 using DssHarness.Core.Results;
+using DssHarness.Core.Waiting;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace DssHarness.Core.Application;
@@ -130,6 +134,11 @@ public sealed class CommandSession : IAsyncDisposable
                 else
                 {
                     var scope = new CommandScope(_services, resolved.Directory!, Run);
+
+                    // A commit a line names is shown as git abbreviates it in the repository the operation works in, and a
+                    // wait deep below the body - a machine-wide file's update, a child's end - is said as the body's lines are.
+                    using var commits = CommitIds.Use(Commits(resolved.Directory!));
+                    using var telling = Waits.TellingTo(told => _output.Info(_options.Command, told.Line()));
                     var outcome = await body(scope, cancellationToken).ConfigureAwait(false);
 
                     if (await EndedDefectiveAsync().ConfigureAwait(false))
@@ -202,12 +211,46 @@ public sealed class CommandSession : IAsyncDisposable
             Data = [.. outcome.Data.Select(Recoded)],
         };
 
+    /// <summary>
+    /// The ids this operation shows commits at: git's own abbreviation in the repository <paramref name="directory"/> is
+    /// in, asked once, the first time a commit is shown; whole where the operation's services hold no git, or git cannot
+    /// say.
+    /// </summary>
+    /// <param name="directory">The directory the operation works in.</param>
+    private CommitIds Commits(string directory)
+    {
+        var git = _services.GetService<IGitClient>();
+
+        return new CommitIds(() => git is null ? null : Abbreviation(git, directory));
+    }
+
+    /// <summary>
+    /// How many characters git's own abbreviation of HEAD takes in the repository <paramref name="directory"/> is in, or
+    /// <see langword="null"/> where there is none, HEAD names no commit yet, or git could not be asked: a commit is then
+    /// shown whole, and nothing the operation does waits on why.
+    /// </summary>
+    private static int? Abbreviation(IGitClient git, string directory)
+    {
+        try
+        {
+            var asked = git.RunAsync(directory, ["rev-parse", "--short", "--verify", "--quiet", "--end-of-options", "HEAD^{commit}"])
+                .GetAwaiter()
+                .GetResult();
+
+            return asked.Succeeded && asked.StandardOutput.Trim() is { Length: > 0 } shown ? shown.Length : null;
+        }
+        catch (Exception ex) when (ex is ProgramStartException or HarnessException or IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
+
     /// <summary>A document whose root says an <c>exitCode</c>, saying the code a defect has; any other, as it was.</summary>
     private static string Recoded(string document)
     {
         try
         {
-            if (JsonNode.Parse(document) is JsonObject root && root.ContainsKey("exitCode"))
+            if (JsonDepth.ParseNode(document) is JsonObject root && root.ContainsKey("exitCode"))
             {
                 root["exitCode"] = HarnessExit.InternalError;
                 return root.ToJsonString(ReportJson.Options);
@@ -488,7 +531,7 @@ public sealed class CommandSession : IAsyncDisposable
 
         try
         {
-            if (JsonNode.Parse(document) is not JsonObject parsed)
+            if (JsonDepth.ParseNode(document) is not JsonObject parsed)
             {
                 return document;
             }

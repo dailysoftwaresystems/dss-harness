@@ -8,6 +8,7 @@ using DssHarness.Core.FileSystem;
 using DssHarness.Core.Git;
 using DssHarness.Core.Orchestration;
 using DssHarness.Core.Output;
+using DssHarness.Core.Pages;
 using DssHarness.Core.Platform;
 using DssHarness.Core.Repository;
 using DssHarness.Core.Results;
@@ -63,6 +64,7 @@ public sealed class FlowStepGraph
     private CodebaseGraphQueries? view;
     private string section = string.Empty;
     private string? changes;
+    private GraphTextPages? told;
     private AgentCodebaseGiven? given;
 
     private FlowStepGraph(string mode, string from, string viewName, int tokens, string? map, ContextPack? made, string? missing, string? noPack, OrchestrationStore store, IHarnessOutput output, string lines, string instance)
@@ -109,6 +111,7 @@ public sealed class FlowStepGraph
     /// <param name="record">The agent's record, whose worktree names its view.</param>
     /// <param name="ground">The step's ground, whose capabilities name what the tool may do and whose rules every answer, the map's included, is held to.</param>
     /// <param name="prompt">The step's filled prompt, the task text the pack is seeded from.</param>
+    /// <param name="mask">The secrets the run holds, as the step's records and answers are masked by: what the step's graph tool keeps of an answer holds none.</param>
     /// <param name="cancellationToken">Stops the reading of the view.</param>
     public static async Task<FlowStepGraph?> OfAsync(
         ICodebaseGraphService graph,
@@ -127,6 +130,7 @@ public sealed class FlowStepGraph
         AgentRecord record,
         AgentPolicyGround ground,
         string prompt,
+        Execution.ILineMask? mask,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(graph);
@@ -149,7 +153,7 @@ public sealed class FlowStepGraph
 
             return mode == "off"
                 ? null
-                : await ServedAsync(graph, store, fileSystem, platform, git, clock, output, run, place, context, layout, mode, root, agent, record, ground, prompt, cancellationToken).ConfigureAwait(false);
+                : await ServedAsync(graph, store, fileSystem, platform, git, clock, output, run, place, context, layout, mode, root, agent, record, ground, prompt, mask, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -179,6 +183,7 @@ public sealed class FlowStepGraph
         AgentRecord record,
         AgentPolicyGround ground,
         string prompt,
+        Execution.ILineMask? mask,
         CancellationToken cancellationToken)
     {
         // The view the step is served: the agent's where it has a worktree, the base where it reads. The engine syncs it
@@ -257,6 +262,7 @@ public sealed class FlowStepGraph
                 {
                     From = from == WorkflowStep.GraphFromChanges ? ContextPackFrom.Changes : ContextPackFrom.Task,
                     Tokens = tokens,
+                    Asks = mode == "tools" && git is not null,
                     Writes = policy.StepWrites,
                     Worked = worked,
                     Closure = ClosureOf(run),
@@ -273,17 +279,22 @@ public sealed class FlowStepGraph
 
         if (mode == "tools" && git is not null)
         {
-            var operations = CodebaseGraphTool.Operations(ground.Capabilities.Contains(AgentCapability.Write), narrowed);
+            // pack where the step's pack goes on past its first message's page; changes once the step is told changes that go on past its message's (ChangesSince).
+            var operations = CodebaseGraphTool.Operations(ground.Capabilities.Contains(AgentCapability.Write), narrowed, pack: served.Pack is { More: true });
             var never = CodebaseGraphService.NeverListed(request.WorktreesRoot);
             var tool = new CodebaseGraphTool(
                 queries,
-                new AgentFiles(git, fileSystem, clock),
+                new AgentFiles(git, fileSystem),
                 fileSystem,
                 ConfinedPaths.Within(fileSystem, platform, tree),
                 path => Readable(path) && !PathPatterns.Matches(never, path, platform.PathComparison),
                 path => policy.Write(Path.Combine(tree, path.Replace('/', Path.DirectorySeparatorChar))),
                 async (path, token) => new CodebaseGraphQueries((await graph.CheckAsync(request, [path], token).ConfigureAwait(false)).Read),
-                near: () => served.made?.Near);
+                near: () => served.made?.Near,
+                pages: PagesOf(fileSystem, layout, run, directory, ground),
+                mask: mask,
+                pack: () => served.Pack?.Paged,
+                changes: () => served.told);
 
             served.support = new AgentGraphSupport(
                 tool,
@@ -294,6 +305,71 @@ public sealed class FlowStepGraph
         }
 
         return served;
+    }
+
+    /// <summary>
+    /// Where the step's graph tool keeps the results its answers' pages read from: its own directory's
+    /// <c>graph-pages</c> (<see cref="OrchestratorLayout.StepPagesDirectoryName"/>), which every attempt of the step and a
+    /// resumed conversation read; and, where its own holds nothing for an ask under the graph's digest, those of the work
+    /// its conversation goes on with (<see cref="FlowStepRun.GoesOnWith"/>) and no other - not a step it only depends on,
+    /// whose conversation it never held - the newest first, the order that work went read back: a continuation record
+    /// carries the newest's last iterations word for word, its pages among them. Each is read under the step's own read
+    /// rules alone (<see cref="ReadsOf"/>), so no page gives a line of a file this step may not read.
+    /// </summary>
+    private static GraphPageStore PagesOf(IFileSystem fileSystem, OrchestratorLayout layout, FlowStepRun run, string directory, AgentPolicyGround ground)
+        => new(
+            Path.Combine(directory, OrchestratorLayout.StepPagesDirectoryName),
+            fileSystem,
+            ReadsOf(ground),
+            [.. run.GoesOnWith.Reverse().Select(source => Path.Combine(layout.InstanceDirectory(source.Instance, source.Agent), OrchestratorLayout.StepPagesDirectoryName))]);
+
+    /// <summary>
+    /// Puts away the answers the conversation of the step whose records are in <paramref name="directory"/> kept - the pages
+    /// its graph answers read from, and the pages of its calls' whole results (<see cref="Agents.Runtime.KeptResults"/>) -
+    /// its directory whole (<see cref="KeptAnswers.PutAway"/>): what a step leaves once it is
+    /// done and no later step's conversation goes on with
+    /// its work (<see cref="ResumeChain.GoneOnWith"/>), so no page of them is asked again. One that cannot be removed is
+    /// said, and the step's ending stands.
+    /// </summary>
+    /// <param name="fileSystem">The file system the pages are removed through.</param>
+    /// <param name="output">Hears pages that could not be put away.</param>
+    /// <param name="directory">The step instance's own directory.</param>
+    /// <param name="instance">The step instance, as the warning names it.</param>
+    public static void PutAwayPages(IFileSystem fileSystem, IHarnessOutput output, string directory, string instance)
+    {
+        ArgumentNullException.ThrowIfNull(fileSystem);
+        ArgumentNullException.ThrowIfNull(output);
+        ArgumentException.ThrowIfNullOrWhiteSpace(directory);
+
+        if (KeptAnswers.PutAway(Path.Combine(directory, OrchestratorLayout.StepPagesDirectoryName), fileSystem) is { } why)
+        {
+            output.Warn("reason", $"the pages '{instance}' kept were not put away: {why}. The step's ending stands, and they stay in its records.");
+        }
+    }
+
+    /// <summary>
+    /// Puts away the pages every step of the run <paramref name="flow"/> records kept, where the run is done: no step's
+    /// conversation goes on any more, so the last of them - those a step that is done kept for a later step to go on from -
+    /// are asked again by none. A run that is not done - paused, failed, stopped - keeps them, for a step of it may go on.
+    /// </summary>
+    /// <param name="fileSystem">The file system the pages are removed through.</param>
+    /// <param name="output">Hears pages that could not be put away.</param>
+    /// <param name="layout">The run's own paths.</param>
+    /// <param name="flow">The run's record as its session left it.</param>
+    public static void PutAwayRunPages(IFileSystem fileSystem, IHarnessOutput output, OrchestratorLayout layout, FlowFile flow)
+    {
+        ArgumentNullException.ThrowIfNull(layout);
+        ArgumentNullException.ThrowIfNull(flow);
+
+        if (!string.Equals(flow.Status, nameof(FlowRunStatus.Done), StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        foreach (var step in flow.Steps)
+        {
+            PutAwayPages(fileSystem, output, layout.InstanceDirectory(step.Instance, step.Agent), step.Instance);
+        }
     }
 
     /// <summary>The step's use of the graph, its default resolved: <c>off</c>, <c>map</c> or <c>tools</c>.</summary>
@@ -341,7 +417,8 @@ public sealed class FlowStepGraph
     /// <summary>
     /// The changes the conversation the step goes on with is told of the codebase: the declarations its view changed
     /// since what that conversation was told of them - its pack and every delta after it - and the nodes of its own pack
-    /// the conversation was not given - in the one new user message, never a map or a pack again whole. Made against the pack
+    /// the conversation was not given - in the one new user message, never a map or a pack again whole: their page 1, every
+    /// one told, page by page, the graph tool's <c>changes</c> given where they go on past it. Made against the pack
     /// as it was made, so a pack that held nothing still tells the conversation what moved of what it was told; null only
     /// where the step asked for no pack or its view was not read. Kept, so the line of the launch told them says what
     /// they cost.
@@ -349,7 +426,17 @@ public sealed class FlowStepGraph
     /// <param name="told">The codebase parts the conversation holds, in the order it was given them: its pack, then each delta after it.</param>
     public string? ChangesSince(IReadOnlyList<string> told)
     {
-        changes = view is null || made is null ? null : CodebaseConversationChanges.Make(view, made, told, Tokens);
+        var asks = support?.Tool is not null;
+        var pages = view is null || made is null ? null : CodebaseConversationChanges.Pages(view, made, told, Tokens, asks);
+
+        changes = pages?.Page(1)!.Text;
+        this.told = pages?.Page(1) is { Last: false } ? pages : null;
+
+        if (this.told is not null && support is { Tool: not null, Operations: { } operations })
+        {
+            support = support with { Operations = new HashSet<GraphOp>(operations) { GraphOp.Changes } };
+        }
+
         return changes;
     }
 
@@ -394,7 +481,8 @@ public sealed class FlowStepGraph
 
         if (given.Codebase && Pack is { } pack)
         {
-            return new GraphPromptLine(mapTokens, pack.Seeds.Count, pack.Nodes.Count, pack.Tokens, pack.LeftOut);
+            // Nothing of the pack is left out: what page 1 does not hold is on the pages after it.
+            return new GraphPromptLine(mapTokens, pack.Seeds.Count, pack.Nodes.Count, pack.Tokens, 0);
         }
 
         return new GraphPromptLine(mapTokens, 0, 0, 0, 0, Missing ?? noPack ?? NoPackCompacted);
@@ -639,9 +727,12 @@ public sealed class FlowStepGraph
     /// <summary>
     /// What a step's reads are decided by beyond what every step of the run shares - the read rules of its ground, from the
     /// configuration, its definition and its step - named by a digest of them, sorted and once each: steps whose read rules
-    /// are the same share one map; null where no read rule narrows the step's reads.
+    /// are the same share one map, and read the pages one another's graph tool kept; null where no read rule narrows the
+    /// step's reads. A side-task's ground is named by it too. The whole digest, never a part of it: two sets of rules
+    /// whose digests begin alike are two keys, so no step reads a map or a page made under another's reads.
     /// </summary>
-    private static string? ReadsOf(AgentPolicyGround ground)
+    /// <param name="ground">The step's ground, or a side-task's.</param>
+    internal static string? ReadsOf(AgentPolicyGround ground)
     {
         var rules = ground.Restrictions
             .Select(restriction => restriction.Text)
@@ -650,7 +741,7 @@ public sealed class FlowStepGraph
             .Order(StringComparer.Ordinal)
             .ToList();
 
-        return rules.Count == 0 ? null : FileContentHash.Of(Encoding.UTF8.GetBytes(string.Join('\n', rules)))[..16];
+        return rules.Count == 0 ? null : FileContentHash.Of(Encoding.UTF8.GetBytes(string.Join('\n', rules)));
     }
 
     /// <summary>

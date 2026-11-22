@@ -9,21 +9,21 @@ namespace DssHarness.Tests;
 /// </summary>
 public sealed class WatchKindsTests
 {
-    /// <summary>On Windows and macOS, .NET's watcher watches, with its bound, and inotify is never asked after.</summary>
+    /// <summary>On Windows and macOS, .NET's watcher watches, a tree through one watch of its root, and inotify is never asked after.</summary>
     [Theory]
     [InlineData(PlatformId.Windows)]
     [InlineData(PlatformId.MacOs)]
-    public void OnWindowsAndMacOs_DotNetsWatcherWatches_WithItsBound(PlatformId platform)
+    public void OnWindowsAndMacOs_DotNetsWatcherWatches_ATreeThroughOneWatchOfItsRoot(PlatformId platform)
     {
         var factory = new HarnessFactory();
 
         var kind = WatchKinds.For(platform, factory.Output, () => throw new InvalidOperationException("inotify asked after"), new SaidOnce());
 
         Assert.IsType<FileSystemWatcherKind>(kind);
-        Assert.Equal(FileSystemWatcherKind.MostDirectoriesWatched, kind.MostDirectories);
+        Assert.True(kind.WatchesTheRootWhole);
     }
 
-    /// <summary>On Linux, where inotify's calls bind, the hub watches, with no bound, and nothing is said.</summary>
+    /// <summary>On Linux, where inotify's calls bind, the hub watches, a watch a directory, and nothing is said.</summary>
     [Fact]
     public void OnLinux_WhereInotifyBinds_TheHubWatches_WithNoBound()
     {
@@ -34,7 +34,7 @@ public sealed class WatchKindsTests
         var kind = WatchKinds.For(PlatformId.Linux, factory.Output, () => (hub, null), new SaidOnce());
 
         Assert.IsType<InotifyWatchKind>(kind);
-        Assert.Null(kind.MostDirectories);
+        Assert.False(kind.WatchesTheRootWhole);
         Assert.Empty(factory.StandardError.ToString());
     }
 
@@ -53,7 +53,7 @@ public sealed class WatchKindsTests
         var first = WatchKinds.For(PlatformId.Linux, factory.Output, () => (null, why), said);
         var second = WatchKinds.For(PlatformId.Linux, factory.Output, () => (null, why), said);
 
-        Assert.Equal(FileSystemWatcherKind.MostDirectoriesWatched, first.MostDirectories);
+        Assert.True(first.WatchesTheRootWhole);
         Assert.Empty(factory.StandardError.ToString());
 
         foreach (var kind in new[] { first, second, first })
@@ -62,8 +62,8 @@ public sealed class WatchKindsTests
         }
 
         Assert.Equal(
-            $"watch: WARN - inotify could not be called directly on this machine ({why}), so each watched directory takes "
-            + "an inotify instance of its own, as .NET's watcher does." + Environment.NewLine,
+            $"watch: WARN - inotify could not be called directly on this machine ({why}), so the tree is watched through .NET's "
+            + "watcher, one watch of its root all the way down, each directory below it taking an inotify watch." + Environment.NewLine,
             factory.StandardError.ToString());
     }
 

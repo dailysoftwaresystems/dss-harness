@@ -1,53 +1,11 @@
 using System.Globalization;
 using System.Text;
+using DssHarness.Core.Agents.Runtime;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Orchestration;
-using DssHarness.Core.Output;
+using DssHarness.Core.Pages;
 
 namespace DssHarness.Core.Agents;
-
-/// <summary>
-/// The bounds of the continuation record, each with its default (<c>agentContext.continuation</c>): how much of
-/// earlier work an agent needs is not the same for every repository, so each is a key and not a constant; the rule
-/// that nothing is cut in the middle and that whatever is cut is named is not.
-/// </summary>
-/// <param name="RecordChars">The most characters of the record's own parts, all but the last iterations.</param>
-/// <param name="StepChars">The most characters of one step's notes and of its output, each its own bound.</param>
-/// <param name="Paths">The most changed paths listed, the count of the rest said.</param>
-/// <param name="LastIterations">How many of the last iterations are kept whole, whatever their size.</param>
-/// <param name="IterationChars">The most characters of the earlier iterations kept, none cut in the middle of one.</param>
-public sealed record AgentContinuationBounds(
-    int RecordChars = AgentContinuationBounds.DefaultRecordChars,
-    int StepChars = AgentContinuationBounds.DefaultStepChars,
-    int Paths = AgentContinuationBounds.DefaultPaths,
-    int LastIterations = AgentContinuationBounds.DefaultLastIterations,
-    int IterationChars = AgentContinuationBounds.DefaultIterationChars)
-{
-    /// <summary>The most characters of the record's own parts where <c>recordChars</c> says none.</summary>
-    public const int DefaultRecordChars = 60_000;
-
-    /// <summary>The most characters of one step's notes and of its output where <c>stepChars</c> says none.</summary>
-    public const int DefaultStepChars = 16_000;
-
-    /// <summary>The most changed paths listed where <c>paths</c> says none.</summary>
-    public const int DefaultPaths = 300;
-
-    /// <summary>How many of the last iterations are kept whole where <c>lastIterations</c> says none.</summary>
-    public const int DefaultLastIterations = 3;
-
-    /// <summary>The most characters of the earlier iterations kept where <c>iterationChars</c> says none.</summary>
-    public const int DefaultIterationChars = 120_000;
-
-    /// <summary>The bounds the configuration gives, each at its default where it says none.</summary>
-    /// <param name="config">The <c>agentContext.continuation</c> entry; null where the configuration declares none.</param>
-    public static AgentContinuationBounds Of(Configuration.AgentContinuationConfig? config)
-        => new(
-            config?.RecordChars ?? DefaultRecordChars,
-            config?.StepChars ?? DefaultStepChars,
-            config?.Paths ?? DefaultPaths,
-            config?.LastIterations ?? DefaultLastIterations,
-            config?.IterationChars ?? DefaultIterationChars);
-}
 
 /// <summary>One step of the chain a continuation record holds: what it was, how it ended, and where its records are.</summary>
 /// <param name="Instance">The step instance's name, as the run names it.</param>
@@ -84,13 +42,16 @@ public sealed record AgentContinuationWork(
 }
 
 /// <summary>
-/// The continuation record: text the engine puts together each time from the
-/// step directories of the agent - what it is, the steps so far, the files changed, the last red build or test, the
-/// handoff, and the last iterations word for word from the stored stream of the newest attempt - nothing in it written
-/// or shortened by a model, whatever is cut named with a file that holds it whole, the copies put in <c>continuation/</c>
-/// of what the step's agent is handed (<see cref="Orchestration.OrchestratorLayout.HandedDirectory"/>): a place the agent
-/// reads and no command of its writes, so the record never points into the rest of the run's records and nothing the
-/// agent planted leads the copies elsewhere.
+/// The continuation record: text the engine puts together each time from the step directories of the agent - what it
+/// is, then the last iterations of the newest attempt word for word from its stored stream, the newest first and every
+/// one of them, the handoff, the last red build or test, the steps so far, the newest first, each with its notes and its
+/// output whole, and every file changed - nothing in it written or shortened by a model, and nothing of it cut. It is
+/// kept whole among the results of the conversation it begins (<see cref="KeptResults.ContinuationId"/>), and laid in
+/// pages at the room of a tool's answer: the step's first message holds its first page, an index of what each page holds,
+/// and how <c>read_result</c> gives every page of it. The copies of what it reads are put in <c>continuation/</c> of what
+/// the step's agent is handed (<see cref="Orchestration.OrchestratorLayout.HandedDirectory"/>): a place the agent reads and
+/// no command of its writes, so the record never points into the rest of the run's records and nothing the agent planted
+/// leads the copies elsewhere.
 /// </summary>
 public sealed class AgentContinuation(IFileSystem fileSystem, Output.IHarnessOutput output)
 {
@@ -111,134 +72,117 @@ public sealed class AgentContinuation(IFileSystem fileSystem, Output.IHarnessOut
     private readonly OrchestrationStore _store = new(fileSystem ?? throw new ArgumentNullException(nameof(fileSystem)), output ?? throw new ArgumentNullException(nameof(output)));
 
     /// <summary>
-    /// The continuation record of <paramref name="work"/>: its parts in their order, the last iterations of the newest
-    /// attempt read from the going-on step's stored stream, every part that was cut named with the copy of it put in
+    /// The continuation record of <paramref name="work"/>, written whole among the results of the conversation it begins -
+    /// the file <c>read_result</c> reads by <see cref="KeptResults.ContinuationId"/> in <paramref name="stepDirectory"/> -
+    /// and what the step's first message holds of it: the record whole where it is one page; else what it is, its pages and
+    /// what each holds, how <c>read_result</c> gives each, and its first page. The copies of what it reads are put in
     /// <paramref name="handed"/>'s <c>continuation/</c> - each step's notes and output, the stream of the newest attempt,
     /// and the results the iterations name - each written relative to <paramref name="handed"/>, held, never through a link.
     /// </summary>
     /// <param name="work">The work, as the engine resolved it.</param>
     /// <param name="handed">Where the step's agent is handed what it reads, its copies put under it.</param>
-    /// <param name="bounds">The record's bounds.</param>
-    /// <returns>The record, whole.</returns>
-    public string Render(AgentContinuationWork work, string handed, AgentContinuationBounds bounds)
+    /// <param name="stepDirectory">The directory of the step whose conversation the record begins, its results kept there.</param>
+    /// <param name="cancellationToken">Stops the laying of its pages.</param>
+    /// <returns>What the step's first message holds of the record.</returns>
+    public async Task<string> RenderAsync(AgentContinuationWork work, string handed, string stepDirectory, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(work);
         ArgumentException.ThrowIfNullOrWhiteSpace(handed);
-        ArgumentNullException.ThrowIfNull(bounds);
+        ArgumentException.ThrowIfNullOrWhiteSpace(stepDirectory);
 
         var copies = Path.Combine(handed, CopiesFolder);
         _fileSystem.CreateDirectory(handed);
         Copy(work, handed, copies);
 
-        // Part 1: what it is.
-        var part1 = $"You are going on with work begun by step '{work.GoingOn}'. This is a new conversation. What follows is the engine's record of that work, ending with its last iterations word for word; the files are as that work left them.";
+        var record = new Record();
+        var whatItIs = $"You are going on with work begun by step '{work.GoingOn}'. This is a new conversation. What follows is the engine's record of that work, its last iterations first, word for word; the files are as that work left them.";
+        record.Part(null, whatItIs);
 
-        // Parts 2 to 4, 6 and 7: the steps so far, the files changed, the last red build or test, the handoff (never
-        // cut) and, after an attempt that was cut off, the continuation message - the record's own parts, held to
-        // their bound so the last iterations are never crowded out.
-        var files = Files(work.ChangedPaths, bounds);
-        var handoff = Read(Path.Combine(work.StepDirectory, OrchestratorLayout.HandoffFileName))?.TrimEnd();
-        var fixedCost = part1.Length + files.Length + work.RedLegs.Sum(leg => leg.Leg.Length + leg.Phase.Length + leg.LedgerLine.Length + leg.Where.Length + 96)
-            + (handoff?.Length ?? 0) + (work.CutOff ? CutOffMessage.Length : 0) + 512;
-        var steps = Steps(work, copies, bounds, Math.Max(0, bounds.RecordChars - fixedCost));
+        // The last iterations, the newest first, every one of them, word for word.
+        var iterations = IterationsOf(AgentAttempt.Newest(Stream(work)), copies);
 
-        var written = new StringBuilder();
-        written.AppendLine(part1);
-        written.AppendLine();
-        written.AppendLine("The steps so far, oldest first:");
-        written.AppendLine();
-        written.Append(steps);
-        written.AppendLine();
-        written.AppendLine(work.ChangedPaths.Count == 0
-            ? "The files: this agent has changed none."
-            : $"The files changed so far, by name:{Environment.NewLine}{files}");
-        written.AppendLine();
-
-        if (work.RedLegs.Count > 0)
+        if (iterations.Count == 0)
         {
-            written.AppendLine("The last build or test in this worktree was red:");
-            written.AppendLine();
+            record.Part("the last iterations", "The last iterations: the attempt wrote none.");
+        }
+        else
+        {
+            var lastTurn = iterations[^1].Turn;
+            record.Part(Invariant($"the last iterations, the newest first (iterations {lastTurn} to {iterations[0].Turn})"), "The last iterations, the newest first:");
 
-            foreach (var leg in work.RedLegs)
+            foreach (var (turn, text) in Enumerable.Reverse(iterations))
             {
-                written.AppendLine(Invariant($"- leg '{leg.Leg}', phase '{leg.Phase}': {leg.LedgerLine} (the ledger and its logs: {leg.Where})"));
+                record.Part(null, Invariant($"iteration {turn} of {lastTurn}:{NL}{text.TrimEnd()}"));
             }
-
-            written.AppendLine();
         }
 
-        if (handoff is { Length: > 0 })
+        if (Read(Path.Combine(work.StepDirectory, OrchestratorLayout.HandoffFileName))?.TrimEnd() is { Length: > 0 } handoff)
         {
-            written.AppendLine($"{HandoffHeading}:");
-            written.AppendLine();
-            written.AppendLine(handoff);
-            written.AppendLine();
+            record.Part("the handoff", $"{HandoffHeading}:{NL}{NL}{handoff}");
         }
 
         if (work.CutOff)
         {
-            written.AppendLine(CutOffMessage);
-            written.AppendLine();
+            record.Part("what the interruption left", CutOffMessage);
         }
 
-        // Part 5: the last iterations, word for word, last of all.
-        return written.ToString().TrimEnd() + Environment.NewLine + Environment.NewLine
-            + Iterations(AgentAttempt.Newest(Stream(work)), bounds, copies);
-    }
+        if (work.RedLegs.Count > 0)
+        {
+            record.Part(
+                "the last red build or test",
+                "The last build or test in this worktree was red:" + NL + NL
+                    + string.Join(NL, work.RedLegs.Select(leg => $"- leg '{leg.Leg}', phase '{leg.Phase}': {leg.LedgerLine} (the ledger and its logs: {leg.Where})")));
+        }
 
-    /// <summary>The steps so far as the record holds them, oldest first: the newest whole whatever it costs, older steps while there is room, the oldest dropped to their copies' names.</summary>
-    private string Steps(AgentContinuationWork work, string copies, AgentContinuationBounds bounds, int budget)
-    {
-        var rendered = new List<(AgentContinuedStep Step, string Text)>();
+        // The steps so far, the newest first, each with its notes and its output whole.
+        record.Part(Invariant($"the steps so far, the newest first ({work.Steps.Count} of them)"), work.Steps.Count == 0 ? "The steps so far: none." : "The steps so far, the newest first:");
 
-        foreach (var step in work.Steps)
+        foreach (var step in Enumerable.Reverse(work.Steps))
         {
             var notes = Read(Path.Combine(step.Directory, OrchestratorLayout.StepNotesFileName));
             var output = Read(Path.Combine(step.Directory, "output.json"));
 
-            var text = $"step '{step.Instance}' ended {step.Ended}."
-                + (notes is null ? string.Empty : $"{NL}  Notes: {Within(notes, bounds.StepChars, Copy(copies, step, "notes.md"))}")
-                + (output is null ? string.Empty : $"{NL}  Output: {Within(output, bounds.StepChars, Copy(copies, step, "output.json"))}");
-
-            rendered.Add((step, text));
+            record.Part(
+                null,
+                $"- step '{step.Instance}' ended {step.Ended}."
+                    + (notes is null ? string.Empty : $"{NL}  Notes: {notes.TrimEnd()}")
+                    + (output is null ? string.Empty : $"{NL}  Output: {output.TrimEnd()}"));
         }
 
-        // What is over the bound is given up by the oldest steps; the newest step's notes and output go in whole up to
-        // their own bound, so it is never dropped, only cut.
-        while (rendered.Count > 1 && rendered.Sum(each => each.Text.Length) + rendered.Count * 4 > budget)
+        record.Part(
+            Invariant($"the files changed ({work.ChangedPaths.Count} of them)"),
+            work.ChangedPaths.Count == 0
+                ? "The files: this agent has changed none."
+                : $"The files changed so far, by name:{NL}{string.Join(NL, work.ChangedPaths)}");
+
+        // Kept whole among the results of the conversation it begins, and laid in pages as every result is: its first page
+        // is the one read_result gives first, so the page it gives next goes on where this one ends.
+        var whole = record.Text;
+        var file = AgentCallRecords.ResultFile(stepDirectory, KeptResults.ContinuationId);
+        var bytes = Encoding.UTF8.GetBytes(whole);
+
+        _fileSystem.CreateDirectory(Path.GetDirectoryName(file)!);
+        _fileSystem.WriteAtomic(file, stream => stream.Write(bytes));
+
+        if (KeptResults.OnePage(whole))
         {
-            rendered.RemoveAt(0);
+            return whole;
         }
 
-        var written = new StringBuilder();
+        var results = KeptResults.Of(_fileSystem, stepDirectory);
+        var (kept, _) = await results.LaidAsync(file, PageKey.OfCall(KeptResults.ContinuationId), $"{AgentTools.ReadResult} {KeptResults.ContinuationId}", numbered: false, _fileSystem.OpenRead, cancellationToken).ConfigureAwait(false);
 
-        if (rendered.Count < work.Steps.Count)
+        if (kept.Marks.Count == 1)
         {
-            var leftOut = work.Steps.Count - rendered.Count;
-
-            written.AppendLine(Invariant($"{leftOut} older step{(leftOut == 1 ? string.Empty : "s")} left out here; each one's notes and output are in '{copies}'"));
+            return whole;
         }
 
-        foreach (var (_, text) in rendered)
-        {
-            written.AppendLine($"- {text}");
-        }
+        var first = await results.FirstPageAsync(KeptResults.ContinuationId, cancellationToken).ConfigureAwait(false);
 
-        return written.ToString();
-    }
-
-    /// <summary>The files changed, listed, cut at the bound of paths with the count of the rest said; empty where there are none.</summary>
-    private static string Files(IReadOnlyList<string> paths, AgentContinuationBounds bounds)
-    {
-        if (paths.Count == 0)
-        {
-            return string.Empty;
-        }
-
-        var listed = paths.Take(bounds.Paths).ToList();
-
-        return string.Join(NL, listed)
-            + (paths.Count > bounds.Paths ? $"{NL}... and {Invariant(paths.Count - bounds.Paths)} more, not listed" : string.Empty);
+        return whatItIs + NL + NL
+            + Invariant($"The record is {kept.Marks.Count} pages, every one of it whole: its first page follows, and read_result with id '{KeptResults.ContinuationId}' and page gives each of the rest. What each page holds:") + NL
+            + string.Join(NL, record.Index(kept).Select(line => $"- {line}")) + NL + NL
+            + first;
     }
 
     /// <summary>Puts the copies the record names into <paramref name="copies"/>, under <paramref name="handed"/>: each step's notes and output, the stream of the newest attempt, and the results the stream names - replaced by the next record, never pointing into the run's records.</summary>
@@ -285,34 +229,6 @@ public sealed class AgentContinuation(IFileSystem fileSystem, Output.IHarnessOut
     private string? Read(string file)
         => _fileSystem.FileExists(file) ? _fileSystem.ReadAllText(file) : null;
 
-    /// <summary>A text as the record holds it: whole where it is within <paramref name="most"/>, else cut at its last whole line and named with the copy that holds it whole.</summary>
-    private static string Within(string text, int most, string copy)
-    {
-        if (text.Length <= most)
-        {
-            return text;
-        }
-
-        var lines = Lines(text, most);
-
-        return $"{lines}{NL}  [... {Invariant(text.Length - lines.Length)} characters left out: the whole is '{copy}']";
-    }
-
-    /// <summary>A text's leading whole lines within <paramref name="most"/> characters.</summary>
-    private static string Lines(string text, int most)
-    {
-        var head = TextCut.Head(text, most);
-        var cut = head.LastIndexOf('\n');
-
-        if (cut <= 0)
-        {
-            return head;
-        }
-
-        // A line ends at its newline, and on Windows before it a carriage return ends it too.
-        return head[..(head[cut - 1] == '\r' ? cut - 1 : cut)];
-    }
-
     /// <summary>The name of a step's copy in <c>continuation/</c>: its instance, made one a file name holds, and the file's own name.</summary>
     private static string Copy(string copies, AgentContinuedStep step, string file)
         => Path.Combine(copies, $"{step.Instance.Replace(Path.DirectorySeparatorChar, '_').Replace(Path.AltDirectorySeparatorChar, '_')}-{file}");
@@ -321,47 +237,50 @@ public sealed class AgentContinuation(IFileSystem fileSystem, Output.IHarnessOut
     private IReadOnlyList<AgentEvent> Stream(AgentContinuationWork work)
         => work.StepDirectory.Length == 0 ? [] : _store.ReadStepStream(work.StepDirectory);
 
-    /// <summary>A number as the record says it.</summary>
-    private static string Invariant(int count) => count.ToString(CultureInfo.InvariantCulture);
-
     private static string Invariant(FormattableString text) => text.ToString(CultureInfo.InvariantCulture);
 
     private static string NL => Environment.NewLine;
 
     /// <summary>
-    /// The last iterations of an attempt, word for word: the last <see cref="AgentContinuationBounds.LastIterations"/>
-    /// whole whatever their size, then as many earlier ones as fit in <see cref="AgentContinuationBounds.IterationChars"/>,
-    /// counted backwards and never cut in the middle of one - the first that does not fit ends them, so what is kept is
-    /// one run with nothing missing from it - each the agent's message as it wrote it, its thinking as far as the
-    /// provider showed it, each call it made with the tool, its input and its result as the stream holds them, and every
-    /// message the engine sent the agent after it, in place, oldest first, each marked with its turn of the attempt, and
-    /// the copy of the stream named where earlier ones were left out.
+    /// The last <paramref name="last"/> iterations of an attempt word for word, oldest first - what a compaction keeps of
+    /// them (<see cref="AgentCompaction"/>): each the agent's message as it wrote it, its thinking as far as the provider
+    /// showed it, each call it made with the tool, its input and its result as the stream holds them, and every message
+    /// the engine sent the agent after it, in place, each marked with its turn of the attempt.
     /// </summary>
     /// <param name="attempt">The attempt's events (<see cref="AgentAttempt.Of"/>): every run of it, its turns numbered across them.</param>
-    /// <param name="bounds">The record's bounds.</param>
-    /// <param name="copies">The directory the copy the left-out iterations are named by.</param>
-    public static string Iterations(IReadOnlyList<AgentEvent> attempt, AgentContinuationBounds bounds, string copies)
+    /// <param name="last">How many of the last iterations are given.</param>
+    internal static string WordForWord(IReadOnlyList<AgentEvent> attempt, int last)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(copies);
+        ArgumentNullException.ThrowIfNull(attempt);
+        ArgumentOutOfRangeException.ThrowIfNegative(last);
 
-        return WordForWord(attempt, bounds, copies);
+        var iterations = IterationsOf(attempt, copies: null);
+
+        if (iterations.Count == 0)
+        {
+            return "The last iterations: the attempt wrote none.";
+        }
+
+        var lastTurn = iterations[^1].Turn;
+        var told = new StringBuilder();
+
+        foreach (var (turn, text) in iterations.TakeLast(last))
+        {
+            told.Append(Invariant($"iteration {turn} of {lastTurn}:")).Append(NL);
+            told.Append(text.TrimEnd()).Append(NL).Append(NL);
+        }
+
+        return told.ToString().TrimEnd();
     }
 
     /// <summary>
-    /// The last iterations of an attempt word for word, as <see cref="Iterations(IReadOnlyList{AgentEvent}, AgentContinuationBounds, string)"/>
-    /// gives them - with the line naming the copy of the left-out ones only where <paramref name="copies"/> names one: a
-    /// compaction holds them reduced above, and says so in its own words.
+    /// Every iteration of an attempt, oldest first, word for word: one per message of the agent's - its text, its
+    /// thinking, each call it made answered by the stream - and what the engine said after it, for the agent read that
+    /// before its next message, so it belongs where it sits. A call's whole result is named by its copy in
+    /// <paramref name="copies"/> where one is given, else by its file.
     /// </summary>
-    /// <param name="attempt">The attempt's events.</param>
-    /// <param name="bounds">The record's bounds.</param>
-    /// <param name="copies">The directory the copy the left-out iterations are named by; null where none is named.</param>
-    internal static string WordForWord(IReadOnlyList<AgentEvent> attempt, AgentContinuationBounds bounds, string? copies)
+    private static List<(int Turn, string Text)> IterationsOf(IReadOnlyList<AgentEvent> attempt, string? copies)
     {
-        ArgumentNullException.ThrowIfNull(attempt);
-        ArgumentNullException.ThrowIfNull(bounds);
-
-        // One iteration per message of the agent's: its text, its thinking, each call it made answered by the stream,
-        // and what the engine said after it - the agent read that before its next message, so it belongs where it sits.
         var read = AgentAttempt.Items(attempt);
         var iterations = new List<(int Turn, StringBuilder Text)>();
 
@@ -394,10 +313,14 @@ public sealed class AgentContinuation(IFileSystem fileSystem, Output.IHarnessOut
 
                 if (read.Answers.TryGetValue(call.Id, out var answered))
                 {
+                    var whole = answered.ResultFile is not { } file ? null
+                        : copies is null || Path.GetFileName(file) is not { Length: > 0 } name ? file
+                        : Path.Combine(copies, AgentCallRecords.ToolResultsDirectoryName, name);
+
                     one.Append(answered.Ok ? string.Empty : " failed")
                         .Append(NL).Append("  input: ").Append(answered.Input)
                         .Append(NL).Append("  result: ").Append(answered.Result)
-                        .Append(answered.ResultFile is { } file ? $"{NL}  [the whole result is '{file}']" : string.Empty);
+                        .Append(whole is null ? string.Empty : $"{NL}  [the whole result is '{whole}']");
                 }
                 else
                 {
@@ -408,52 +331,59 @@ public sealed class AgentContinuation(IFileSystem fileSystem, Output.IHarnessOut
             iterations.Add((item.Turn, one));
         }
 
-        if (iterations.Count == 0)
+        return [.. iterations.Select(iteration => (iteration.Turn, iteration.Text.ToString()))];
+    }
+
+    /// <summary>
+    /// The record as it is put together: its parts in their order, each a block of lines apart from the next, and where
+    /// each named part begins - the line it starts at - so the index can say which pages hold it.
+    /// </summary>
+    private sealed class Record
+    {
+        private readonly StringBuilder _text = new();
+        private readonly List<(string Name, long Line)> _named = [];
+        private long _lines;
+
+        /// <summary>The record whole.</summary>
+        public string Text => _text.ToString();
+
+        /// <summary>Adds a part, a blank line before it where one came before, named in the index where it has a name.</summary>
+        public void Part(string? name, string text)
         {
-            return "The last iterations: the attempt wrote none.";
-        }
-
-        // The last ones whole, then as many earlier ones as fit, counted backwards, never cut in the middle of one: the
-        // first that does not fit ends them, for one kept past it would leave a hole the count below could not name.
-        var whole = Math.Min(bounds.LastIterations, iterations.Count);
-        var included = new List<(int Turn, string Text)>();
-        var budget = bounds.IterationChars;
-
-        for (var from = iterations.Count - 1; from >= 0; from--)
-        {
-            var text = iterations[from].Text.ToString();
-            var lastOne = iterations.Count - from <= whole;
-
-            if (!lastOne && (budget == 0 || text.Length > budget))
+            if (_lines > 0)
             {
-                break;
+                _text.Append(NL).Append(NL);
+                _lines++;
             }
 
-            included.Insert(0, (iterations[from].Turn, text));
-
-            if (!lastOne)
+            if (name is not null)
             {
-                budget -= text.Length;
+                _named.Add((name, _lines + 1));
+            }
+
+            _text.Append(text);
+            _lines += DssHarness.Core.Text.LineEnds.Spans(text, (_, _, _) => 0).Count;
+        }
+
+        /// <summary>What each named part's pages are, in the record's order: the first page that holds its first line to the page that holds its last.</summary>
+        public IEnumerable<string> Index(TextPagesKept kept)
+        {
+            for (var at = 0; at < _named.Count; at++)
+            {
+                var (name, line) = _named[at];
+                var end = at + 1 < _named.Count ? _named[at + 1].Line - 2 : kept.Lines;
+                var from = TextPages.PageOfLine(kept, Math.Min(line, kept.Lines));
+                var to = TextPages.PageOfLine(kept, Math.Clamp(end, line, kept.Lines));
+
+                // A part's last line may go on into the pages after the one it begins on, where it is wider than a page.
+                while (to < kept.Marks.Count && kept.Marks[to].FirstLine <= end && kept.Marks[to].FirstColumn > 0)
+                {
+                    to++;
+                }
+
+                yield return from == to ? Invariant($"{name}: page {from}") : Invariant($"{name}: pages {from} to {to}");
             }
         }
-
-        var told = new StringBuilder();
-        var leftOut = iterations.Count - included.Count;
-
-        if (leftOut > 0 && copies is not null)
-        {
-            told.Append(Invariant($"[{leftOut} earlier iteration{(leftOut == 1 ? string.Empty : "s")} left out: the stream of the attempt is in '{Path.Combine(copies, StoredStream.FileName)}']")).Append(NL).Append(NL);
-        }
-
-        var lastTurn = iterations[^1].Turn;
-
-        foreach (var iteration in included)
-        {
-            told.Append(Invariant($"iteration {iteration.Turn} of {lastTurn}:")).Append(NL);
-            told.Append(iteration.Text.TrimEnd()).Append(NL).Append(NL);
-        }
-
-        return told.ToString().TrimEnd();
     }
 }
 

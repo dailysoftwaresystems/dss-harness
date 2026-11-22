@@ -134,12 +134,12 @@ public sealed class HostCommandRunnerTests
     [Fact]
     public void Wsl_RunningDistributions_AreListedByNameAlone()
     {
-        var request = HostCommandRunner.RunningWslDistributionsRequest(TimeSpan.FromSeconds(7));
+        var request = HostCommandRunner.RunningWslDistributionsRequest();
 
         Assert.Equal(HostCommandRunner.WslProgram, request.FileName);
         Assert.Equal(["--list", "--running", "--quiet"], request.Arguments);
         Assert.Equal("1", request.Environment["WSL_UTF8"]);
-        Assert.Equal(TimeSpan.FromSeconds(7), request.Timeout);
+        Assert.Null(request.Timeout);
         Assert.Equal(string.Empty, request.StandardInput);
     }
 
@@ -155,14 +155,14 @@ public sealed class HostCommandRunnerTests
     [Fact]
     public void Wsl_DefaultDistribution_IsNamedByTheDistributionItself()
     {
-        var request = HostCommandRunner.DefaultWslDistributionRequest(TimeSpan.FromSeconds(7));
+        var request = HostCommandRunner.DefaultWslDistributionRequest();
 
         // wsl.exe's own listing is translated into the machine's language; a distribution names itself
         // the same way everywhere.
         Assert.Equal(HostCommandRunner.WslProgram, request.FileName);
         Assert.Equal(["--exec", "printenv", "WSL_DISTRO_NAME"], request.Arguments);
         Assert.Equal("1", request.Environment["WSL_UTF8"]);
-        Assert.Equal(TimeSpan.FromSeconds(7), request.Timeout);
+        Assert.Null(request.Timeout);
         Assert.Equal(string.Empty, request.StandardInput);
     }
 
@@ -377,7 +377,7 @@ public sealed class HostCommandRunnerTests
 
         await hosts.RunAsync(Ssh(), ListSdks, TestContext.Current.CancellationToken);
         await hosts.RunAsync(Ssh(), ListSdks, TestContext.Current.CancellationToken);
-        await hosts.ProbeShellAsync(Ssh(), TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        await hosts.ProbeShellAsync(Ssh(), TestContext.Current.CancellationToken);
 
         var marks = lines.Take(2).Select(line => Regex.Match(line, @"^sh -c 'echo (dssharness-[0-9a-f]{32}); echo \1 1>&2'; ").Groups[1].Value).ToList();
 
@@ -399,7 +399,7 @@ public sealed class HostCommandRunnerTests
         var hosts = new HostCommandRunner(processRunner);
         var pin = new SshPin("192.0.2.10", "[host.invalid]:2222");
 
-        await hosts.ProbeShellAsync(Ssh() with { Pin = pin }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        await hosts.ProbeShellAsync(Ssh() with { Pin = pin }, TestContext.Current.CancellationToken);
 
         Assert.False(pin.Holds);
         _ = processRunner.Received(2).RunAsync(Arg.Any<ProcessRequest>(), Arg.Any<CancellationToken>());
@@ -443,8 +443,7 @@ public sealed class HostCommandRunnerTests
     }
 
     /// <summary>
-    /// A call that lets ssh look the name up itself has the name learnt afresh first, past the answer kept a moment
-    /// ago, so that whichever address ssh dials is said as the address declared in every line it relays as it comes.
+    /// A call that lets ssh look the name up itself has the name learnt afresh first, so that whichever address ssh dials is said as the address declared in every line it relays as it comes.
     /// </summary>
     [Fact]
     public async Task AnUnpinnedCall_HasTheNameLearntAfreshFirst()
@@ -503,7 +502,7 @@ public sealed class HostCommandRunnerTests
     private static async Task<(Answers Lookup, ResolvedAddresses Learnt)> LearntAsync(IReadOnlyList<string> first, IReadOnlyList<string> later)
     {
         var lookup = new Answers(first, later);
-        var resolver = new HostAddressResolver(lookup, new ManualClock(), TimeSpan.Zero);
+        var resolver = new HostAddressResolver(lookup, new ManualClock(), TimeSpan.FromTicks(1));
         var found = await resolver.ResolveAsync("host.invalid", TestContext.Current.CancellationToken);
 
         return (lookup, new ResolvedAddresses(found, resolver));
@@ -652,11 +651,11 @@ public sealed class HostCommandRunnerTests
         var hosts = new HostCommandRunner(processRunner);
 
         var wsl = await Assert.ThrowsAsync<HarnessException>(
-            () => hosts.ProbeDefaultWslDistributionAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken));
+            () => hosts.ProbeDefaultWslDistributionAsync(TestContext.Current.CancellationToken));
         var running = await Assert.ThrowsAsync<HarnessException>(
-            () => hosts.ListRunningWslDistributionsAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken));
+            () => hosts.ListRunningWslDistributionsAsync(TestContext.Current.CancellationToken));
         var ssh = await Assert.ThrowsAsync<HarnessException>(
-            () => hosts.ProbeShellAsync(Ssh(), TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken));
+            () => hosts.ProbeShellAsync(Ssh(), TestContext.Current.CancellationToken));
 
         Assert.Equal(HarnessExit.HostUnavailable, wsl.ExitCode);
         Assert.Equal("WSL could not be reached: Executable 'wsl.exe' was not found on PATH.", wsl.Message);
@@ -689,9 +688,9 @@ public sealed class HostCommandRunnerTests
             .Returns(Task.FromResult(HostResults.Ok(string.Empty)));
         var hosts = new HostCommandRunner(processRunner);
 
-        await hosts.ProbeShellAsync(Ssh(), TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
-        await hosts.ProbeDefaultWslDistributionAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
-        await hosts.ListRunningWslDistributionsAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        await hosts.ProbeShellAsync(Ssh(), TestContext.Current.CancellationToken);
+        await hosts.ProbeDefaultWslDistributionAsync(TestContext.Current.CancellationToken);
+        await hosts.ListRunningWslDistributionsAsync(TestContext.Current.CancellationToken);
 
         _ = processRunner.Received(3).RunAsync(
             Arg.Is<ProcessRequest>(request => request.StandardInput == string.Empty && !request.HoldStandardInputOpen),

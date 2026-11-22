@@ -12,7 +12,7 @@ internal static class CreateWorktreeCommand
 
     private static readonly Argument<string?> NameArgument = new("name")
     {
-        Description = $"Worktree name: lowercase letters and digits joined by hyphens; at most {WorktreeSettings.DefaultMaxNameLength} characters unless worktrees.maxNameLength says otherwise.",
+        Description = "Worktree name: lowercase letters and digits joined by hyphens; as long as the path budget of the tree it makes allows, or at most worktrees.maxNameLength characters where that is set.",
         Arity = ArgumentArity.ZeroOrOne,
     };
 

@@ -251,12 +251,12 @@ internal sealed class ToyExtractor : ICodeGraphExtractor
     {
         Interlocked.Increment(ref _reads);
 
-        if (input.Text.Contains("boom", StringComparison.Ordinal))
+        if (input.Text.Contains("boom"))
         {
             throw new InvalidOperationException("boom");
         }
 
-        if (input.Text.Contains("hold", StringComparison.Ordinal) && Gate is { } gate)
+        if (input.Text.Contains("hold") && Gate is { } gate)
         {
             Holding.Set();
             gate.Wait(TimeSpan.FromSeconds(30));
@@ -303,6 +303,42 @@ internal sealed class CheckingExtractor : ICodeGraphExtractor
     public bool Outlines => false;
 
     public CodeGraphExtractorHelp Help { get; } = new("chk files", []);
+
+    public FileExtract Extract(CodeFileInput input) => FileExtract.Empty;
+}
+
+/// <summary>An implementation of <c>.dyn</c> that declares nothing and marks every line that says <c>dyn</c> a place it cannot bind, with why.</summary>
+internal sealed class DynamicExtractor : ICodeGraphExtractor
+{
+    public string Language => "dynamic";
+
+    public int Version => 1;
+
+    public CodeGraphClaims Claims { get; } = CodeGraphClaims.OfExtensions(".dyn");
+
+    public bool Outlines => false;
+
+    public CodeGraphExtractorHelp Help { get; } = new("dyn files", []);
+
+    public FileExtract Extract(CodeFileInput input)
+        => new([])
+        {
+            Dynamic = [.. input.Lines.Select((line, at) => (line, at)).Where(one => one.line.StartsWith("dyn", StringComparison.Ordinal)).Select(one => new ExtractDynamic(one.at + 1, $"a call through {one.line}"))],
+        };
+}
+
+/// <summary>One of implementations that claim <c>.mk</c>, each saying a file is its own where its text holds its marker, anywhere in it.</summary>
+internal sealed class MarkedExtractor(string language, string marker) : ICodeGraphExtractor
+{
+    public string Language => language;
+
+    public int Version => 1;
+
+    public CodeGraphClaims Claims { get; } = new([], [new CodeGraphClaim(".mk", text => text.Contains(marker))]);
+
+    public bool Outlines => false;
+
+    public CodeGraphExtractorHelp Help { get; } = new("mk files", []);
 
     public FileExtract Extract(CodeFileInput input) => FileExtract.Empty;
 }

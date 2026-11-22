@@ -52,7 +52,7 @@ public sealed class MachineSettingsTests
     [InlineData("""{ "admission": { "heavyLeg": 3 } }""", "'heavyLeg' could not be mapped")]
     [InlineData("""{ "admission": { "heavyLegs": 3, "heavyLegs": 4 } }""", "Duplicate")]
     [InlineData("""{ "admission": { "heavyLegs": 0 } }""", "could not be read: admission heavyLegs must be at least 1, found 0. ")]
-    [InlineData("""{ "admission": { "minFreeGiB": -1, "pollSeconds": 0 } }""", "could not be read: admission pollSeconds must be from 1 to 3600, found 0; admission minFreeGiB must be from 0 to 1024, found -1. ")]
+    [InlineData("""{ "admission": { "minFreeGiB": -1, "pollSeconds": 0 } }""", "could not be read: admission pollSeconds must be from 1 to 3600, found 0; admission minFreeGiB must be from 0 and under 8589934592, the GiB a count of bytes holds, found -1. ")]
     [InlineData("null", "could not be read: it holds null where an object is expected. ")]
     public void ASettingsFile_ThatConfigJsonWouldRefuse_IsRefused_NamingIt(string json, string problem)
     {

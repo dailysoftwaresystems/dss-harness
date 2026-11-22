@@ -8,15 +8,15 @@ namespace DssHarness.Core.Execution;
 internal sealed class InotifyWatchKind(InotifyHub hub) : IWatchKind
 {
     /// <inheritdoc/>
-    /// <remarks>None: a directory more is one watch more, and this user's watches running out is said as such.</remarks>
-    public int? MostDirectories => null;
+    /// <remarks>Never: a directory more is one watch more, and this user's watches running out is said as the limit it is.</remarks>
+    public bool WatchesTheRootWhole => false;
 
     /// <inheritdoc/>
     public IDisposable Start(IReadOnlyList<WatchTarget> targets, IWatchSink sink)
     {
         ArgumentNullException.ThrowIfNull(targets);
 
-        // A watch with no bound names no directory all the way down; one that did would hear nothing below it here.
+        // A watch through the hub names no directory all the way down; one that did would hear nothing below it here.
         if (targets.FirstOrDefault(target => target.Depth == WatchDepth.AllTheWayDown) is { Directory: { } recursive })
         {
             throw new ArgumentException($"'{recursive}' is to be watched all the way down, which a watch through inotify's hub never is.", nameof(targets));

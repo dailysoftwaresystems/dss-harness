@@ -3,6 +3,7 @@ using System.Globalization;
 using DssHarness.Core.Configuration;
 using DssHarness.Core.Execution;
 using DssHarness.Core.Processes;
+using DssHarness.Core.Waiting;
 
 namespace DssHarness.Tests;
 
@@ -119,31 +120,73 @@ public sealed class KeepAwakeTests
     }
 
     /// <summary>
-    /// A command the stop cannot reach - a descendant running as root under sudo keeps its output
-    /// open - is waited for a bounded time and said, and never holds a leg whose work is done.
+    /// A stopped command slow to end - a descendant running as root under sudo keeps its output open for ten minutes - is
+    /// waited for until it ends, said on the leg's own line every five minutes, never given up at a number of seconds of
+    /// the code's own, as ten once were.
     /// </summary>
     [Fact]
-    public async Task ACommandTheStopCannotReach_IsSaid_AndDoesNotHoldTheLeg()
+    public async Task AKeepAwakeSlowToEnd_IsWaitedForUntilItEnds_AndTold()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var factory = new HarnessFactory();
+        var clock = new TimerClock();
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var host = new LocalHostConfig { KeepAwake = ["sudo", "systemd-inhibit", "sleep", "infinity"] };
+        var holding = new KeepAwake(new SlowToEndProcesses(release.Task), factory.Output, clock)
+            .Hold("test", "native", host, [], cancellationToken);
+
+        var disposing = holding.DisposeAsync().AsTask();
+
+        for (var tellings = 0; tellings < 2; tellings++)
+        {
+            await clock.WaitingAsync().WaitAsync(ClockDrive.Within, cancellationToken);
+            clock.Advance(Waits.SaidEvery);
+        }
+
+        await clock.WaitingAsync().WaitAsync(ClockDrive.Within, cancellationToken);
+        Assert.False(disposing.IsCompleted, "the wait for keepAwake ended before keepAwake did");
+
+        release.SetResult();
+        await disposing.WaitAsync(ClockDrive.Within, cancellationToken);
+
+        var lines = factory.StandardOutput.ToString().Split('\n').Select(line => line.TrimEnd('\r')).Where(line => line.Length > 0).ToList();
+
+        Assert.Equal(["test: native: has waited 5m00s for keepAwake to end", "test: native: has waited 10m00s for keepAwake to end"], lines);
+        Assert.DoesNotContain("keepAwake", factory.StandardError.ToString(), StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A stopped run's keepAwake - the run's stop is what ends its leg's work, and the command with it - is waited for until
+    /// it ends as well, never given up on the run's stop and said as still holding the machine awake when it was ending.
+    /// </summary>
+    [Fact]
+    public async Task AStoppedRunsKeepAwake_IsWaitedForUntilItEnds()
     {
         var factory = new HarnessFactory();
         var host = new LocalHostConfig { KeepAwake = ["sudo", "systemd-inhibit", "sleep", "infinity"] };
-        var holding = new KeepAwake(new UnstoppableProcesses(), factory.Output, TimeSpan.FromMilliseconds(200))
-            .Hold("test", "native", host, [], TestContext.Current.CancellationToken);
-        var clock = Stopwatch.StartNew();
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var run = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        var holding = new KeepAwake(new SlowToEndProcesses(release.Task), factory.Output).Hold("test", "native", host, [], run.Token);
 
-        await holding.DisposeAsync();
+        await run.CancelAsync();
+        var disposing = holding.DisposeAsync().AsTask();
 
-        Assert.True(clock.Elapsed < TimeSpan.FromSeconds(10), $"stopping took {clock.Elapsed}");
-        Assert.Contains("native: keepAwake did not stop within", factory.StandardError.ToString(), StringComparison.Ordinal);
+        await Task.Delay(TimeSpan.FromMilliseconds(200), TestContext.Current.CancellationToken);
+        Assert.False(disposing.IsCompleted, "the wait for keepAwake ended on the run's stop, before keepAwake did");
+
+        release.SetResult();
+        await disposing.WaitAsync(ClockDrive.Within, TestContext.Current.CancellationToken);
+
+        Assert.DoesNotContain("keepAwake", factory.StandardError.ToString(), StringComparison.Ordinal);
     }
 
-    /// <summary>Every program runs on whatever is asked of it, as one out of the stop's reach does.</summary>
-    private sealed class UnstoppableProcesses : IProcessRunner
+    /// <summary>Every program runs, stopped or not, until <paramref name="ends"/> completes, as one out of the stop's reach does.</summary>
+    private sealed class SlowToEndProcesses(Task ends) : IProcessRunner
     {
         public async Task<ProcessResult> RunAsync(ProcessRequest request, CancellationToken cancellationToken = default)
         {
-            await Task.Delay(Timeout.Infinite, CancellationToken.None);
-            throw new UnreachableException();
+            await ends.WaitAsync(CancellationToken.None);
+            throw new OperationCanceledException(cancellationToken);
         }
 
         public string? FindExecutable(string command) => command;

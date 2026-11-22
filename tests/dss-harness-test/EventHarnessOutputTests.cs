@@ -1,12 +1,14 @@
 using System.Diagnostics;
+using DssHarness.Core.FileSystem;
 using DssHarness.Core.Output;
+using DssHarness.Core.Platform;
 
 namespace DssHarness.Tests;
 
 /// <summary>
 /// The output of one operation beside the terminal: every event stamped with the operation, the sequence and the time
-/// as it is published; a slow sink never holding a writer, but told what it missed; a sink that throws swallowed once,
-/// changing no exit code.
+/// as it is published; a slow sink never holding a writer and given every event in the end, those it lagged behind from
+/// the operation's event file; a sink that throws swallowed once, changing no exit code.
 /// </summary>
 public sealed class EventHarnessOutputTests
 {
@@ -41,97 +43,84 @@ public sealed class EventHarnessOutputTests
     }
 
     /// <summary>
-    /// A sink held still stalls no writer: events queue to their bound, and past it they are dropped and counted, said
-    /// to the sink where they fell - after what it was given before them, before what it is given after - stamped with
-    /// the operation and the sequence of the last of them, so everything the sink is given stands in sequence order.
+    /// Ten thousand events published to a sink held still stall no writer and lose none: the first wait in memory, the
+    /// rest in the operation's event file, and once the sink is let go it is given every one of them, in sequence order,
+    /// each as it was stamped - never a few thousand and a count of the rest, as a queue that dropped past its bound once
+    /// gave it.
     /// </summary>
     [Fact]
-    public async Task ASlowSink_StallsNoWriter_AndIsToldWhatItMissed()
+    public async Task TenThousandEventsToAStalledSink_LoseNone()
     {
         var held = new TaskCompletionSource();
         var sink = new HeldSink(held.Task);
         var operation = OperationId.New();
-        using var output = new EventHarnessOutput(sink, operation);
+        using var temp = new TempDirectory();
+        var spill = temp.Combine("events");
+        using var output = new EventHarnessOutput(sink, operation, spill: () => new EventSpill(Files, spill));
 
-        // The first event the sink is given holds it; the queue takes its bound, and what will not fit is dropped.
-        var total = EventHarnessOutput.QueueLimit + 501;
+        var writing = await ParallelAsync(10_000, index => PublishAsync(output, index));
 
-        var writing = await ParallelAsync(total, index => PublishAsync(output, index));
+        Assert.True(writing < TimeSpan.FromSeconds(60), $"the writers were held {writing}");
 
-        Assert.True(writing < TimeSpan.FromSeconds(15), $"the writers were held {writing}");
+        // The sink holds the first it was given and memory its page: the rest wait on disk, in the event file.
+        Assert.InRange(output.WaitingOnDisk, 10_000 - EventHarnessOutput.HeldInMemory - 1, 10_000 - EventHarnessOutput.HeldInMemory);
+        Assert.True(File.Exists(spill));
 
         held.SetResult();
         output.Dispose();
 
-        // Everything published is either delivered or counted as dropped - the sink holds at most one and the queue
-        // its bound, so that is what was delivered - and the count reached the sink before the events that followed
-        // what it missed.
-        var dropped = sink.Seen.OfType<EventsDropped>().Sum(told => told.Count);
-        var delivered = sink.Seen.Where(@event => @event is not EventsDropped).ToList();
-
-        Assert.InRange(delivered.Count, EventHarnessOutput.QueueLimit, EventHarnessOutput.QueueLimit + 1);
-        Assert.Equal(total, dropped + delivered.Count);
-
-        // Every gap is told where it fell: the event before it is the one just before the first it stands for, and the
-        // gap carries the sequence of the last - so the sink is given everything in sequence order, gaps included.
-        Assert.Equal(
-            sink.Seen.Select(@event => @event.Sequence).Order().ToList(),
-            sink.Seen.Select(@event => @event.Sequence).ToList());
-        Assert.Equal(sink.Seen.Count, sink.Seen.Select(@event => @event.Sequence).Distinct().Count());
-
-        foreach (var (gap, index) in sink.Seen.Select((@event, index) => (@event, index)).Where(seen => seen.@event is EventsDropped))
-        {
-            var told = (EventsDropped)gap;
-
-            Assert.Equal(operation, told.Operation);
-            Assert.Equal(told.Sequence - told.Count, index == 0 ? 0 : sink.Seen[index - 1].Sequence);
-        }
-
-        Assert.Equal(total, sink.Seen[^1].Sequence);
+        Assert.Equal(Enumerable.Range(1, 10_000), sink.Seen.Select(@event => (int)@event.Sequence));
+        Assert.All(sink.Seen, @event => Assert.Equal(operation, Assert.IsType<TextLine>(@event).Operation));
+        Assert.Equal(0, output.WaitingOnDisk);
+        Assert.False(File.Exists(spill));
     }
 
     /// <summary>
-    /// Events dropped while a queued sink is held still are told to it once it has room again, exactly where they fell:
-    /// their count, stamped with the operation and the sequence and time of the last of them, after the last event the
-    /// queue took before them and before the first it takes after - told once, and never again at the close.
+    /// An event that waits on disk reaches the sink exactly as it was published - its kind, its words, its operation, its
+    /// sequence and its time - in its place among the rest; and one that the event file would not read back as it wrote
+    /// it, a run's beginning, is held in memory in its place and given as itself.
     /// </summary>
     [Fact]
-    public async Task EventsDroppedWhileASinkIsHeld_AreToldBetweenTheEventsTheyFellBetween()
+    public async Task EventsThatWaitOnDisk_AreGivenAsTheyWerePublished_InTheirPlace()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
         var release = new TaskCompletionSource();
-        var queued = EventHarnessOutput.QueueLimit;
-        var sink = new GatedSink(release.Task, awaited: queued + 1);
+        var queued = EventHarnessOutput.HeldInMemory;
+        var sink = new GatedSink(release.Task, awaited: queued + 4);
         var operation = OperationId.New();
         var clock = new ManualClock(Start);
-        using var output = new EventHarnessOutput(sink, operation, clock: clock);
+        using var temp = new TempDirectory();
+        using var output = new EventHarnessOutput(sink, operation, clock: clock, spill: () => new EventSpill(Files, temp.Combine("events")));
+        var run = DssHarness.Core.Execution.RunId.New();
 
-        // The first event holds the sink and so leaves the queue empty: the next ones fill it to its bound exactly, and
-        // the three after them find it full.
+        // The first event holds the sink and so leaves memory empty: the next ones fill it to its page exactly, and the
+        // three after them wait on disk, a run's beginning among them.
         Publish(1);
         await sink.Holding.WaitAsync(Bound, cancellationToken);
 
-        for (var sequence = 2; sequence <= queued + 4; sequence++)
+        for (var sequence = 2; sequence <= queued + 1; sequence++)
         {
             Publish(sequence);
         }
 
-        // Once the sink has been given everything the queue held there is room again, and the next event is taken with
-        // the gap before it.
+        Publish(queued + 2);
+        clock.Advance(TimeSpan.FromSeconds(1));
+        output.Publish(new DssHarness.Core.Application.RunBegan("run", run));
+        Publish(queued + 4);
+
+        Assert.Equal(3, output.WaitingOnDisk);
+
         release.SetResult();
         await sink.Given.WaitAsync(Bound, cancellationToken);
-        Publish(queued + 5);
-        output.Dispose();
 
-        RunEvent[] expected =
-        [
-            .. Enumerable.Range(1, queued + 1).Select(Published),
-            new EventsDropped(3) { Operation = operation, Sequence = queued + 4, At = Start.AddSeconds(queued + 4) },
-            Published(queued + 5),
-        ];
-
-        Assert.Equal(expected, sink.Seen);
-        Assert.False(output.Abandoned);
+        Assert.Equal(
+            [
+                .. Enumerable.Range(1, queued + 2).Select(Published),
+                new DssHarness.Core.Application.RunBegan("run", run) { Operation = operation, Sequence = queued + 3, At = Start.AddSeconds(queued + 3) },
+                Published(queued + 4),
+            ],
+            sink.Seen);
+        Assert.Same(run, ((DssHarness.Core.Application.RunBegan)sink.Seen[queued + 2]).Run);
 
         // Each event is published a second after the one before it, so each is stamped with a time of its own.
         void Publish(int sequence)
@@ -140,16 +129,16 @@ public sealed class EventHarnessOutputTests
             output.Info("leg", $"event {sequence}");
         }
 
-        TextLine Published(int sequence)
-            => new(LineKind.Info, "leg", $"event {sequence}") { Operation = operation, Sequence = sequence, At = Start.AddSeconds(sequence) };
+        RunEvent Published(int sequence)
+            => new TextLine(LineKind.Info, "leg", $"event {sequence}") { Operation = operation, Sequence = sequence, At = Start.AddSeconds(sequence) };
     }
 
     /// <summary>
-    /// What is published once the queue is closed, before the sink has been given the rest, is dropped and told last,
-    /// stamped where it fell; once the sink has been told the last of it, a publish is refused, never lost without a word.
+    /// What is published once the output is closed, before the sink has been given the rest, is given after it, in its
+    /// place; once the sink has been told the last of it, a publish is refused, never lost without a word.
     /// </summary>
     [Fact]
-    public void WhatIsPublishedOnceTheQueueIsClosed_IsToldLast_AndAPublishAfterIsRefused()
+    public void WhatIsPublishedOnceTheOutputIsClosed_IsGivenAfterTheRest_AndAPublishAfterIsRefused()
     {
         var held = new TaskCompletionSource();
         var sink = new HeldSink(held.Task);
@@ -162,62 +151,68 @@ public sealed class EventHarnessOutputTests
         output.Complete();
         clock.Advance(TimeSpan.FromSeconds(1));
         output.Info("leg", "after the close");
-        clock.Advance(TimeSpan.FromSeconds(1));
-        output.Info("leg", "after the close, again");
 
-        // Time passes before the sink is told: the notice is stamped when the last event it stands for was published,
-        // not when it is told.
-        clock.Advance(TimeSpan.FromSeconds(1));
         held.SetResult();
         output.Dispose();
 
         RunEvent[] expected =
         [
             new TextLine(LineKind.Info, "leg", "before the close") { Operation = operation, Sequence = 1, At = Start.AddSeconds(1) },
-            new EventsDropped(2) { Operation = operation, Sequence = 3, At = Start.AddSeconds(3) },
+            new TextLine(LineKind.Info, "leg", "after the close") { Operation = operation, Sequence = 2, At = Start.AddSeconds(2) },
         ];
 
         Assert.Equal(expected, sink.Seen);
-        Assert.False(output.Abandoned);
         Assert.Throws<ObjectDisposedException>(() => output.Info("leg", "after it was told the last"));
     }
 
     /// <summary>
-    /// A sink still behind when the output is disposed is waited for no longer than its limit, then abandoned, said so,
-    /// and called no more: what it had not been given by then never reaches it.
+    /// Disposing waits for a slow sink to be given every event that waits, however long it takes - here six seconds, past
+    /// the five a drain was once given before the sink was abandoned and what it had not been given was lost.
     /// </summary>
     [Fact]
-    public async Task ASinkStillBehindWhenDisposed_IsAbandoned_AndCalledNoMore()
+    public void Dispose_DrainsASlowSink()
     {
-        var held = new TaskCompletionSource();
-        var sink = new GatedSink(held.Task, awaited: 1);
-        var output = new EventHarnessOutput(sink, OperationId.New(), drainLimit: TimeSpan.FromMilliseconds(50));
+        var sink = new SlowSink(TimeSpan.FromMilliseconds(150));
+        var output = new EventHarnessOutput(sink, OperationId.New());
 
-        output.Info("leg", "one");
-
-        // Behind on the first, for certain: on a busy machine the drain may not have reached it within the limit.
-        await sink.Holding.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
-
-        output.Info("leg", "two");
-        output.Info("leg", "three");
-        output.Dispose();
-
-        Assert.True(output.Abandoned);
-
-        held.SetResult();
-
-        // Told the last of it once the drain finds the sink abandoned: a publish then is refused.
-        var bound = Stopwatch.GetTimestamp();
-
-        while (!Refused(output))
+        for (var index = 0; index < 40; index++)
         {
-            Assert.True(Stopwatch.GetElapsedTime(bound) < TimeSpan.FromSeconds(10), "the drain never finished");
-            await Task.Delay(10, TestContext.Current.CancellationToken);
+            output.Info("leg", $"event {index}");
         }
 
-        Assert.Equal(["one"], sink.Seen.OfType<TextLine>().Select(line => line.Message));
-        Assert.Single(sink.Seen);
+        var started = Stopwatch.GetTimestamp();
+        output.Dispose();
+
+        Assert.True(Stopwatch.GetElapsedTime(started) > TimeSpan.FromSeconds(5), "the sink was given everything before the old limit, so the test proves nothing");
+        Assert.Equal(Enumerable.Range(0, 40).Select(index => $"event {index}"), sink.Seen.OfType<TextLine>().Select(line => line.Message));
     }
+
+    /// <summary>
+    /// An event file that cannot be read back is said to the sink where its events fell - how many, and why - and every
+    /// event held in memory in its place, and every one after it, is still given: a loss is never passed over.
+    /// </summary>
+    [Fact]
+    public void AnEventFileThatCannotBeReadBack_IsSaidWhereItsEventsFell()
+    {
+        using var temp = new TempDirectory();
+        var spill = new EventSpill(new UnreadableAppends(Files), temp.Combine("events"));
+        var run = DssHarness.Core.Execution.RunId.New();
+        var began = new DssHarness.Core.Application.RunBegan("run", run);
+
+        spill.Add(new TextLine(LineKind.Info, "leg", "one"));
+        spill.Add(began);
+        spill.Add(new TextLine(LineKind.Info, "leg", "three"));
+
+        var unread = Assert.IsType<EventsUnread>(spill.Take());
+
+        Assert.Equal((2L, $"the event file '{temp.Combine("events")}' could not be read back: {UnreadableAppends.Why}"), (unread.Count, unread.Why));
+        Assert.Same(began, spill.Take());
+        Assert.Equal(0, spill.Waiting);
+        spill.Dispose();
+    }
+
+    /// <summary>The real file system, for the event files these tests make.</summary>
+    private static readonly PhysicalFileSystem Files = new(FilePermissionsFactory.Create());
 
     /// <summary>
     /// A sink that throws is swallowed once and never called again, and no writer and no disposal is the worse for it -
@@ -312,6 +307,40 @@ public sealed class EventHarnessOutputTests
             {
                 _given.TrySetResult();
             }
+        }
+    }
+
+    /// <summary>A sink that takes a while over each event it is given.</summary>
+    private sealed class SlowSink(TimeSpan each) : IRunEvents
+    {
+        public List<RunEvent> Seen { get; } = [];
+
+        public void Emit(RunEvent @event)
+        {
+            Thread.Sleep(each);
+            Seen.Add(@event);
+        }
+    }
+
+    /// <summary>A file system whose files of lines are written and never read back.</summary>
+    private sealed class UnreadableAppends(IFileSystem inner) : PassThroughFileSystem(inner)
+    {
+        /// <summary>What a read back says.</summary>
+        public const string Why = "the disk would not give it back";
+
+        public override IAppendFile OpenForAppend(string path) => new Unreadable(base.OpenForAppend(path));
+
+        private sealed class Unreadable(IAppendFile inner) : IAppendFile
+        {
+            public long Length => inner.Length;
+
+            public void ReadExactlyAt(long position, Span<byte> buffer) => throw new IOException(Why);
+
+            public void TruncateTo(long length) => inner.TruncateTo(length);
+
+            public void AppendFlushed(ReadOnlySpan<byte> bytes) => inner.AppendFlushed(bytes);
+
+            public void Dispose() => inner.Dispose();
         }
     }
 

@@ -123,15 +123,10 @@ public sealed class SyncExclusionsReachTests
             new SyncConfig { NeverTransfer = [".secrets", "build"] },
             worktreesRoot: ".worktrees");
 
-        var named = exclusions.RootedEntriesMatchingNothing(
-            harness.FileSystem,
-            temp.Path,
-            harness.Platform.PathComparison,
-            TestContext.Current.CancellationToken);
+        var named = Searched(exclusions, harness, temp.Path);
 
         // '.secrets' protects nothing and is named; 'build' is at the root and is not.
         Assert.Equal([".secrets"], named.MatchingNothing);
-        Assert.Null(named.Incomplete);
     }
 
     /// <summary>
@@ -161,15 +156,9 @@ public sealed class SyncExclusionsReachTests
             new SyncConfig { NeverTransfer = ["build", "__pycache__", ".secrets", "node_modules"] },
             worktreesRoot: ".worktrees");
 
-        var report = exclusions.RootedEntriesMatchingNothing(
-            harness.FileSystem,
-            temp.Path,
-            harness.Platform.PathComparison,
-            mostDirectoriesRead: 10,
-            TestContext.Current.CancellationToken);
+        var report = Searched(exclusions, harness, temp.Path);
 
         Assert.Equal(["__pycache__"], report.MatchingNothing);
-        Assert.Null(report.Incomplete);
     }
 
     /// <summary>
@@ -200,15 +189,9 @@ public sealed class SyncExclusionsReachTests
             worktreesRoot: ".harness-config/worktrees",
             gitIgnored: [ignored, ".harness-config/worktrees"]);
 
-        var report = exclusions.RootedEntriesMatchingNothing(
-            harness.FileSystem,
-            temp.Path,
-            harness.Platform.PathComparison,
-            mostDirectoriesRead: 10,
-            TestContext.Current.CancellationToken);
+        var report = Searched(exclusions, harness, temp.Path);
 
         Assert.Equal([".secrets"], report.MatchingNothing);
-        Assert.Null(report.Incomplete);
     }
 
     /// <summary>
@@ -242,47 +225,11 @@ public sealed class SyncExclusionsReachTests
             new SyncConfig { NeverTransfer = ["build", "artifacts", ".secrets", ".env", "node_modules"] },
             worktreesRoot: ".worktrees");
 
-        var report = exclusions.RootedEntriesMatchingNothing(
-            harness.FileSystem,
-            temp.Path,
-            harness.Platform.PathComparison,
-            mostDirectoriesRead: 12,
-            TestContext.Current.CancellationToken);
+        var report = Searched(exclusions, harness, temp.Path);
 
         Assert.Equal(["node_modules"], report.MatchingNothing);
-        Assert.Null(report.Incomplete);
     }
 
-    /// <summary>
-    /// Where what is searched holds more directories than the search may read, it says so - never
-    /// "found none" - and says what it did not count.
-    /// </summary>
-    [Fact]
-    public void ASearchThatRunsOutOfDirectories_SaysSo_AndWhatItDidNotCount()
-    {
-        using var temp = new TempDirectory();
-        var harness = new HarnessFactory();
-
-        for (var index = 0; index < 20; index++)
-        {
-            Directory.CreateDirectory(temp.Combine("src", $"s{index}"));
-        }
-
-        var exclusions = new SyncExclusions(new SyncConfig { NeverTransfer = [".secrets"] }, worktreesRoot: ".worktrees");
-
-        var report = exclusions.RootedEntriesMatchingNothing(
-            harness.FileSystem,
-            temp.Path,
-            harness.Platform.PathComparison,
-            mostDirectoriesRead: 5,
-            TestContext.Current.CancellationToken);
-
-        Assert.Empty(report.MatchingNothing);
-        Assert.Equal(
-            $"more than 5 directories under '{temp.Path}' would have had to be read, though none a sync "
-            + "withholds is read outside the harness's own directory",
-            report.Incomplete);
-    }
 
     /// <summary>
     /// A name counts only where nothing the configuration writes covers it: an entry for any depth, as the
@@ -302,14 +249,9 @@ public sealed class SyncExclusionsReachTests
             new SyncConfig { NeverTransfer = [".env", "**/.env", "worktrees"] },
             worktreesRoot: ".harness-config/worktrees");
 
-        var report = exclusions.RootedEntriesMatchingNothing(
-            harness.FileSystem,
-            temp.Path,
-            harness.Platform.PathComparison,
-            TestContext.Current.CancellationToken);
+        var report = Searched(exclusions, harness, temp.Path);
 
         Assert.Empty(report.MatchingNothing);
-        Assert.Null(report.Incomplete);
     }
 
     /// <summary>
@@ -327,11 +269,7 @@ public sealed class SyncExclusionsReachTests
 
         var exclusions = new SyncExclusions(new SyncConfig { NeverTransfer = ["build", ".secrets"] }, worktreesRoot: ".worktrees");
 
-        var report = exclusions.RootedEntriesMatchingNothing(
-            harness.FileSystem,
-            temp.Path,
-            harness.Platform.PathComparison,
-            TestContext.Current.CancellationToken);
+        var report = Searched(exclusions, harness, temp.Path);
 
         Assert.Equal([".secrets"], report.MatchingNothing);
     }
@@ -359,15 +297,9 @@ public sealed class SyncExclusionsReachTests
             worktreesRoot: ".worktrees",
             gitIgnored: ["web/node_modules"]);
 
-        var report = exclusions.RootedEntriesMatchingNothing(
-            harness.FileSystem,
-            temp.Path,
-            harness.Platform.PathComparison,
-            mostDirectoriesRead: 10,
-            TestContext.Current.CancellationToken);
+        var report = Searched(exclusions, harness, temp.Path);
 
         Assert.Equal(["node_modules"], report.MatchingNothing);
-        Assert.Null(report.Incomplete);
     }
 
     /// <summary>
@@ -386,10 +318,22 @@ public sealed class SyncExclusionsReachTests
             new SyncConfig { NeverTransfer = ["**/__pycache__", "nothing-like-this"] },
             worktreesRoot: ".worktrees");
 
-        Assert.Empty(exclusions.RootedEntriesMatchingNothing(
-            harness.FileSystem,
-            temp.Path,
-            harness.Platform.PathComparison,
-            TestContext.Current.CancellationToken).MatchingNothing);
+        Assert.Empty(Searched(exclusions, harness, temp.Path).MatchingNothing);
+    }
+
+    /// <summary>
+    /// What the search for rooted entries matching nothing finds in the tree at <paramref name="root"/>, made as the tree's
+    /// manifest is read, as a sync reads it.
+    /// </summary>
+    private static RootedEntryReport Searched(SyncExclusions exclusions, HarnessFactory harness, string root)
+    {
+        var search = exclusions.SearchRootedEntries(harness.FileSystem, root);
+
+        new ManifestBuilder(harness.FileSystem, harness.Platform)
+            .BuildAsync(root, exclusions.IsWithheldFromTransfer, search, TestContext.Current.CancellationToken)
+            .GetAwaiter()
+            .GetResult();
+
+        return search.Report();
     }
 }

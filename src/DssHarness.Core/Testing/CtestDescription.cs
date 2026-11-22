@@ -2,6 +2,8 @@ using DssHarness.Core.Build;
 using DssHarness.Core.Configuration;
 using DssHarness.Core.Execution;
 using DssHarness.Core.FileSystem;
+using DssHarness.Core.Hosts;
+using DssHarness.Core.Output;
 using DssHarness.Core.Platform;
 using DssHarness.Core.Processes;
 using DssHarness.Core.Results;
@@ -50,7 +52,7 @@ internal sealed record CtestAsked
     /// <summary>What ctest registered for the binary's red cases; <see langword="null"/> where it could not say.</summary>
     public CtestMatch? Match { get; }
 
-    /// <summary>Why ctest could not say: it would not start, it failed, it ran past the bound, or its answer was no description.</summary>
+    /// <summary>Why ctest could not say: it would not start, it failed, or its answer was no description.</summary>
     public string? Unread { get; }
 
     /// <summary>Ctest answered: <paramref name="match"/> is what it registered.</summary>
@@ -68,17 +70,22 @@ internal sealed record CtestAsked
 /// <summary>
 /// Asks ctest, as the leg's tests start it, what it registers for a red control's binary: the command the
 /// <c>test</c> command of the same settings makes, with no filter and no label and the exclusions a leg working in a copy
-/// is given, <see cref="CtestEntries.ShowOnly"/> appended, started where that command starts, bounded by two minutes. It
-/// owns no rule of the match: <see cref="CtestEntries"/> reads the answer.
+/// is given, <see cref="CtestEntries.ShowOnly"/> appended, started where that command starts, and waited for to its end
+/// (<see cref="ProgramWait"/>): a ctest that lists forty thousand tests is read whole. It owns no rule of the match:
+/// <see cref="CtestEntries"/> reads the answer.
 /// </summary>
-internal sealed class CtestDescription(IProcessRunner processes, IFileSystem fileSystem, IHostPlatform platform) : ICtestDescription
+/// <param name="processes">Starts ctest.</param>
+/// <param name="fileSystem">What the invocation's paths are read through.</param>
+/// <param name="platform">How paths compare here.</param>
+/// <param name="output">Where a wait on ctest is told; nowhere where none is given.</param>
+/// <param name="clock">The clock a wait on ctest is measured on; the machine's own where none is given.</param>
+internal sealed class CtestDescription(IProcessRunner processes, IFileSystem fileSystem, IHostPlatform platform, IHarnessOutput? output = null, TimeProvider? clock = null) : ICtestDescription
 {
-    /// <summary>How long ctest is given to answer: a description is read, not run.</summary>
-    public static readonly TimeSpan Bound = TimeSpan.FromMinutes(2);
-
     private readonly IProcessRunner _processes = processes;
     private readonly IFileSystem _fileSystem = fileSystem;
     private readonly IHostPlatform _platform = platform;
+    private readonly IHarnessOutput? _output = output;
+    private readonly TimeProvider? _clock = clock;
 
     /// <inheritdoc/>
     public async Task<CtestAsked?> AskAsync(CtestQuestion question, CancellationToken cancellationToken = default)
@@ -101,25 +108,24 @@ internal sealed class CtestDescription(IProcessRunner processes, IFileSystem fil
                 labels: null,
                 _fileSystem);
             var start = TestInvocationResolver.StartDirectory(command.WorkingDirectory, question.Worker);
-            var answer = await _processes
-                .RunAsync(
-                    new ProcessRequest
-                    {
-                        FileName = command.Program,
-                        Arguments = [.. command.Arguments, CtestEntries.ShowOnly],
-                        WorkingDirectory = start,
-                        Environment = TestInvocationResolver.EnvironmentFor(question.HostEnvironment, invocation.Env),
-                        ProgramDirectories = question.ProgramDirectories,
-                        Timeout = Bound,
-                        OutputKept = StreamKept.Whole,
-                    },
+            var answer = await ProgramWait
+                .ToItsEndAsync(
+                    token => _processes.RunAsync(
+                        new ProcessRequest
+                        {
+                            FileName = command.Program,
+                            Arguments = [.. command.Arguments, CtestEntries.ShowOnly],
+                            WorkingDirectory = start,
+                            Environment = TestInvocationResolver.EnvironmentFor(question.HostEnvironment, invocation.Env),
+                            ProgramDirectories = question.ProgramDirectories,
+                            OutputKept = StreamKept.Whole,
+                        },
+                        token),
+                    $"ctest to describe the tests of '{question.Program}'",
+                    ProgramWait.Told(_output, Mutations.MutationService.CommandName),
+                    _clock,
                     cancellationToken)
                 .ConfigureAwait(false);
-
-            if (answer.TimedOut)
-            {
-                return CtestAsked.Refused($"ctest did not answer within {Bound.TotalSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture)}s");
-            }
 
             if (answer.ExitCode != 0)
             {

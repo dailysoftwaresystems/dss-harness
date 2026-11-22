@@ -1,5 +1,6 @@
 using DssHarness.Core.Hosts;
 using DssHarness.Core.Output;
+using DssHarness.Core.Pages;
 using DssHarness.Core.Results;
 using System.Globalization;
 
@@ -114,16 +115,19 @@ public sealed record SyncPlan(
     }
 
     /// <summary>
-    /// What this plan would cost a copy that already holds work of its own, worst first and bounded,
-    /// for a refusal somebody has to read and act on.
+    /// What this plan would cost a copy that already holds work of its own, worst first, one to a line, for a refusal
+    /// somebody has to read and act on: every line that fits <paramref name="room"/>, and for the rest how many there are
+    /// and where the whole list is (<see cref="Names.Lines"/>), so a refusal over thirty thousand overwrites names what
+    /// its message holds and sends its reader to the rest - never twenty of them and a count.
     /// </summary>
-    /// <param name="most">How many paths to name before the rest are only counted.</param>
+    /// <param name="whole">Where the whole list is, as the line after the names says it: <see cref="DryRunList"/>.</param>
+    /// <param name="room">The characters the lines named take; <see cref="int.MaxValue"/> names every one.</param>
     /// <param name="links">
     /// Links the copy holds, which no plan can speak for: a link is in no entry, so a file written
     /// at its name replaces it and reads as an ordinary write, and everything behind a linked
     /// directory is outside every list this can build.
     /// </param>
-    public IReadOnlyList<string> DescribeLoss(int most = 20, IReadOnlyList<string>? links = null)
+    public IReadOnlyList<string> DescribeLoss(string whole, int room = PageRoom.Line, IReadOnlyList<string>? links = null)
     {
         // Overwrites first. A deleted file is obvious once it is named; a file whose content is
         // replaced looks like an ordinary write in every other report this command prints.
@@ -131,17 +135,13 @@ public sealed record SyncPlan(
         lost.AddRange(Overwrites.OrderBy(path => path, StringComparer.Ordinal).Select(path => $"overwrite {path}"));
         lost.AddRange(Deletes.OrderBy(path => path, StringComparer.Ordinal).Select(path => $"delete    {path}"));
 
-        var named = lost.Count <= most
-            ? lost
-            : [.. lost.Take(most), $"...and {(lost.Count - most).ToString(CultureInfo.InvariantCulture)} more"];
-
-        // Links are never among what the bound cuts. There are few of them, each stands for an
-        // unknown amount that no other line can show, and appended after the cut they would be the
-        // first thing dropped — in exactly the copy that has the most hidden behind them.
+        // Links are never among what the room leaves for the whole list. There are few of them, each stands for an
+        // unknown amount that no other line can show, and counted among the rest they would be the first thing left
+        // unnamed - in exactly the copy that has the most hidden behind them.
         return
         [
-            .. named,
-            .. (links ?? []).Select(path => $"through   {path} (a link; what it points at is not listed)"),
+            .. Names.Lines(lost, whole, room),
+            .. (links ?? []).Select(path => $"through   {ReportText.Printable(path)} (a link; what it points at is not listed)"),
         ];
     }
 
@@ -242,10 +242,25 @@ public sealed record SyncPlan(
                 + "sync.maxDeleteFraction or run with --dry-run to see the list.",
         };
 
+        // Every deletion is named: the sync command's reader is given those that fit the line and sent to the dry run's
+        // list for the rest, and a sweep's reader, who has no dry run to run, is given every one here. The share the bound
+        // would have to allow is said as the setting is written, rounded up, so it is the value that lets this sync go on.
+        var deleted = Deletes.Order(StringComparer.Ordinal).ToList();
+        var named = reader == SyncBoundReader.Sweep
+            ? Names.Line(deleted, "this refusal", room: int.MaxValue)
+            : Names.Line(deleted, DryRunList);
+        var needed = (Math.Ceiling(share * 100) / 100).ToString("0.##", CultureInfo.InvariantCulture);
+
         return $"This sync would delete {Deletes.Count} of the {ReportText.Counted(destination.Entries.Count, "file")} in "
-            + $"'{destination.Root}', which is {share:P0} of it and over the {maxDeleteFraction:P0} "
-            + $"sync.maxDeleteFraction allows. {check}";
+            + $"'{destination.Root}': {named}. That is {share:P0} of it, over the {maxDeleteFraction:P0} "
+            + $"sync.maxDeleteFraction allows, which would have to be {needed} or more for it to go on. {check}";
     }
+
+    /// <summary>
+    /// Where a sync's message sends its reader for the whole of a list it names only in part: the lines a dry run prints
+    /// (<see cref="Describe"/>), every one of them.
+    /// </summary>
+    public const string DryRunList = "the list --dry-run prints";
 
     /// <summary>The lines <c>--dry-run</c> prints, and the same lines a real sync reports afterwards.</summary>
     /// <param name="verb">Either what would happen, or what did.</param>

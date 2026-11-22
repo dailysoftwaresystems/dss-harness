@@ -826,7 +826,7 @@ public sealed class SideTaskServiceTests
             var connection = new ApiConnection(TimeProvider.System, endpoint);
             var paced = new TempDirectory();
             var indexes = new DssHarness.Core.Web.Index.WebIndexes(harness.FileSystem, new DssHarness.Core.Web.Index.SitemapFill(harness.FileSystem, fetch, TimeProvider.System, (_, _) => Task.CompletedTask), TimeProvider.System);
-            var pace = new WebSearchPace(harness.FileSystem, () => Path.Combine(paced.Path, "pace.json"), TimeProvider.System, (_, _) => Task.CompletedTask);
+            var pace = new WebSearchPace(harness.FileSystem, () => Path.Combine(paced.Path, "pace.json"), TimeProvider.System, (_, _) => Task.CompletedTask, harness.Identity);
             var search = new HarnessWebSearch(WebSearchKinds.OfThisBuild, fetch, indexes, pace, harness.FileSystem, TimeProvider.System);
             var host = new AgentToolHost(harness.FileSystem, harness.Platform, harness.GitClient, new PhaseRunner(harness.ProcessRunner, harness.FileSystem, harness.Output), harness.ChildSessions, fetch, new RunningToolDouble("1.2.3"), TimeProvider.System, search: search);
             opened.AddRange([search, indexes, fetch, connection, paced]);
@@ -1155,6 +1155,116 @@ public sealed class SideTaskServiceTests
         Assert.Equal([$"Records: {LayoutOf(temp, name).Directory}"], first.Details);
         Assert.Equal([$"Records: {LayoutOf(temp, name + "-2").Directory}"], second.Details);
         Assert.Equal(name + "-2", RecordOf(harness, temp, LayoutOf(temp, name + "-2").Directory)!.Name);
+    }
+
+    /// <summary>
+    /// A derived name a thousand side-tasks hold already - each a directory, and one more an owner file alone - is given the
+    /// smallest suffix none of them holds, found from one listing of the side-tasks' directory: no count of tries refuses
+    /// the thousand-and-second, and the claim writes its record under the name it took.
+    /// </summary>
+    [Fact]
+    public void AThousandSameNamedSideTasks_AreAllNamed()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var root = Path.Combine(temp.Path, ".side-tasks");
+
+        for (var each = 1; each <= 1000; each++)
+        {
+            Directory.CreateDirectory(Path.Combine(root, each == 1 ? "same" : $"same-{each}"));
+        }
+
+        File.WriteAllText(Path.Combine(root, "same-1001" + SideTaskLayout.OwnerSuffix), "{}");
+        var owner = new SideTaskOwner(harness.FileSystem, harness.OrchestrationStore, harness.Identity, new NoPathLimit());
+
+        var (layout, record, reclaimed) = owner.ClaimNew(root, "same", derived: true, taken => new SideTaskRecord(taken, DateTimeOffset.UnixEpoch));
+
+        Assert.Equal(("same-1002", "same-1002", (string?)null), (layout.Name, record.Name, reclaimed));
+        Assert.Equal("same-1002", new SideTaskStore(harness.FileSystem).Read(layout)!.Name);
+
+        // Nothing else was written: the thousand directories and the lone owner file are as they were.
+        Assert.Equal(1001, Directory.EnumerateDirectories(root).Count());
+        Assert.Empty(Directory.EnumerateFileSystemEntries(Path.Combine(root, "same-1000")));
+    }
+
+    /// <summary>
+    /// A name of two hundred characters is a side-task's where this machine's paths hold its records - taken, its records
+    /// under it - and refused where they do not, saying so by the machine's own limit on a path's length; never by a
+    /// ceiling of the tool's own on a name.
+    /// </summary>
+    [Fact]
+    public async Task ATwoHundredCharacterSideTaskName_IsTakenWhereThePathBudgetAllows()
+    {
+        var (harness, temp, service, _, _) = await RepoAsync();
+        using var tree = temp;
+        var name = new string('n', 200);
+        var layout = LayoutOf(temp, name);
+
+        var outcome = await service.RunAsync(new SideTaskCall(temp.Path, Prompt: "x", Model: "glm-5.3", Name: name), Token);
+
+        var owner = new PathBudget(harness.Platform).Check(layout.OwnerFile, 0, 0);
+
+        if (owner.IsWithinBudget && new PathBudget(harness.Platform).Check(layout.Directory, SideTaskLayout.TaskFileName.Length, 0).IsWithinBudget)
+        {
+            Assert.Equal(HarnessExit.Success, outcome.ExitCode);
+            Assert.Equal([$"Records: {layout.Directory}"], outcome.Details);
+            Assert.Equal(name, RecordOf(harness, temp, layout.Directory)!.Name);
+        }
+        else
+        {
+            // Past this machine's limit - Windows' path length, under a temporary root as long as this one - the refusal
+            // names it, and nothing of the side-task was written.
+            Assert.Equal(
+                (HarnessExit.Refused, $"side-task '{name}' cannot keep its records on this machine: {owner.Describe(layout.OwnerFile)} --name gives it a shorter name. Nothing was changed."),
+                (outcome.ExitCode, outcome.Message));
+            Assert.False(File.Exists(layout.OwnerFile));
+            Assert.False(Directory.Exists(layout.Directory));
+        }
+    }
+
+    /// <summary>
+    /// A one shot whose agent fails is tried again after a doubling wait, each wait told, for as long as it fails in a new
+    /// way; a try that fails as an earlier one did, on the same model, ends it and says so - three tries here, each a turn
+    /// of its record, never a count of the tool's own.
+    /// </summary>
+    [Fact]
+    public async Task ASideTaskFailingTheSameWayTwice_StopsAndTells()
+    {
+        var clock = new TimerClock();
+        var (harness, temp, service, stored, _) = await RepoAsync(clock);
+        using var tree = temp;
+        var errors = new Queue<string>(["the first failure", "the second failure", "the second failure"]);
+        stored.Script = (run, _, _) => Task.FromResult(new AgentRunResult(AgentRunStatus.Failed, Model: run.Model, Error: errors.Dequeue()));
+
+        var outcome = await ClockDrive.UntilEndedAsync(
+            clock,
+            service.RunAsync(new SideTaskCall(temp.Path, Prompt: "x", Model: "glm-5.3", Name: "failing"), Token),
+            SideTaskService.RetryFirstWait,
+            mostSteps: 10,
+            Token);
+
+        Assert.Equal(
+            (HarnessExit.CommandFailed, $"side-task 'failing' ended Failed: the second failure, {Working.FailedTheSameWay}"),
+            (outcome.ExitCode, outcome.Message));
+        Assert.Equal(3, stored.Runs.Count);
+        Assert.Empty(errors);
+        Assert.Equal(
+            [(AgentRunStatus?)AgentRunStatus.Failed, AgentRunStatus.Failed, AgentRunStatus.Failed],
+            RecordOf(harness, temp, LayoutOf(temp, "failing").Directory)!.Turns.Select(turn => turn.Status));
+        Assert.Equal(
+            [
+                $"{SideTaskService.RunCommand}: waits for the turn of side-task 'failing': the turn ended Failed: the first failure; tries again in 30s",
+                $"{SideTaskService.RunCommand}: has waited 30s for the turn of side-task 'failing': the turn ended Failed: the second failure; tries again in 1m00s",
+            ],
+            harness.StandardOutput.ToString().Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+    }
+
+    /// <summary>A machine that sets no limit on a path's length, as Linux and macOS set none: every path is within it.</summary>
+    private sealed class NoPathLimit : IPathBudget
+    {
+        public PathBudgetResult Check(string directory, int reserve, int margin, int? limit = null) => PathBudgetResult.Unbounded();
+
+        public bool Bounds(int? limit = null) => false;
     }
 
     /// <summary>
@@ -2038,15 +2148,16 @@ public sealed class SideTaskServiceTests
     }
 
     /// <summary>
-    /// Making Claude Code ready can end on a change npm did not finish - not within its bound, or the registry not
-    /// reached - which is the code every program's update begun and not finished ends on (21), passed through as the
-    /// finder answers it with its own words: never read as a model cut short, never as a program missing.
+    /// Making Claude Code ready can end on a change npm did not finish - the registry or the download not reached, for an
+    /// install is given no time of its own to end it - which is the code every program's update begun and not finished
+    /// ends on (21), passed through as the finder answers it with its own words: never read as a model cut short, never
+    /// as a program missing.
     /// </summary>
     [Fact]
     public async Task AnInstallOfClaudeCodeNotFinished_RefusesTheSideTask_Incomplete()
     {
         using var kit = new ClaudeCodeUpdateServiceTests.Kit(package: "2.1.201", program: "2.1.201");
-        kit.Runner.Install = new ProcessResult(-1, "running postinstall\n", string.Empty, ToolPackage.ChangeBudget, TimedOut: true);
+        kit.Runner.Install = new ProcessResult(1, "running postinstall\n", "npm ERR! code ETIMEDOUT\n", TimeSpan.FromMinutes(3), TimedOut: false);
         var finder = await kit.Service().ReadyAsync(kit.Layout, [], client: null, DssHarness.Core.Agents.ClaudeCode.ClaudeCodeAsker.SideTask("unfinished"), Token);
         var (_, temp, service, _, rendered) = await RepoAsync(updates: kit.Service());
         using var tree = temp;

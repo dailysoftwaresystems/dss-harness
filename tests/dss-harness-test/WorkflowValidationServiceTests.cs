@@ -1142,7 +1142,8 @@ public sealed class WorkflowValidationServiceTests
         Assert.Contains(
             "It holds a definition to the configuration too: a `run` step whose runner, or a runner its run checks name, writes the tree "
                 + "(`writesTree`) names with `in` the create-agent step whose worktree it works in; the agents a run makes, `a` and a number up to "
-                + "the workflow's `maxInstances`, fit `worktrees.maxNameLength`; and a commit step gives a value for every variable "
+                + "the workflow's `maxInstances`, fit `worktrees.maxNameLength` where the repository sets one, and the path budget of their "
+                + "worktrees in every case; and a commit step gives a value for every variable "
                 + "`commit.template` requires and none for one it does not declare - with no template, a `message` and no `variables`.",
             readme,
             StringComparison.Ordinal);
@@ -1150,7 +1151,8 @@ public sealed class WorkflowValidationServiceTests
             "A definition is held to the `config.json` it is checked under as well: a `run` step whose runner - or a runner its run checks "
                 + "name - says `writesTree` names with `in` the create-agent step whose worktree it works in, since the run reads its definition "
                 + "in the main tree and folds into it; the agents a run makes, named `a` and a number that grows to the workflow's "
-                + "`maxInstances`, fit `worktrees.maxNameLength`; and a commit step gives a value for every variable `commit.template` requires "
+                + "`maxInstances`, fit `worktrees.maxNameLength` where the repository sets one, and the path budget of their worktrees in every "
+                + "case; and a commit step gives a value for every variable `commit.template` requires "
                 + "and none for one it does not declare - or, with no template, a `message` and no `variables`.",
             architecture,
             StringComparison.Ordinal);

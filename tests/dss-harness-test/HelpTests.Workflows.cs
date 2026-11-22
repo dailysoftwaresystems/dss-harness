@@ -1,0 +1,608 @@
+using System.Globalization;
+using System.Text.Json;
+using System.Text.RegularExpressions;
+using DssHarness.Core.Anchors;
+using DssHarness.Core.Ci;
+using DssHarness.Core.Agents.Policy;
+using DssHarness.Core.Configuration;
+using DssHarness.Core.Execution;
+using DssHarness.Core.FileSystem;
+using DssHarness.Core.Git;
+using DssHarness.Core.Help;
+using DssHarness.Core.Hosts;
+using DssHarness.Core.Legs;
+using DssHarness.Core.Mutations;
+using DssHarness.Core.Orchestration;
+using DssHarness.Core.Orchestration.Flow;
+using DssHarness.Core.Output;
+using DssHarness.Core.Platform;
+using DssHarness.Core.Processes;
+using DssHarness.Core.Repository;
+using DssHarness.Core.Results;
+using DssHarness.Core.Runners;
+using DssHarness.Core.Runs;
+using DssHarness.Core.Sync;
+
+namespace DssHarness.Tests;
+
+public sealed partial class HelpTests
+{
+    /// <summary>
+    /// The workflows topic says how a test step's filter is read as units, joined by the invocation's filterJoin, skipped
+    /// where it reads none, switched by filterWhen and kept under its affected key for run.affectedTests, and what union
+    /// joins; the orchestrators topic names the run's record of affected tests among its files.
+    /// </summary>
+    [Fact]
+    public void WorkflowsTopic_SaysHowATestStepsUnitsAreRead_Kept_AndJoined()
+    {
+        var prose = Prose.Words(HelpText.Of("workflows").StandardOutput);
+
+        Assert.Contains(
+            "A test step's filter names the tests it runs as units - a list, or an expression read where it starts - each given after "
+                + "the invocation's filterArg, all joined into one value by its filterJoin - by '|' for ctest, dotnet test and dart test "
+                + "where it declares none; a filter that reads no unit runs no test, and the step ends skipped, saying its noTests. Its "
+                + "filterWhen switches the filter: where it reads "
+                + "false every test of its legs runs, as the shipped gate does where the run's input finalTests is all. Its affected keeps "
+                + "the units it runs in the run's affected-tests.json under the key it fills, before the step runs: a later step under "
+                + "that key replaces them, and one for a work item a plan update takes back, or one its when skips, removes them. "
+                + "run.affectedTests reads every unit kept, each once: the shipped verify steps test each item on its own units alone, "
+                + "and the gate on run.affectedTests.",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains("'union(list, list, ...)' for the lists joined, each value once in the order first read and a null read as none", prose, StringComparison.Ordinal);
+        Assert.Contains(
+            Prose.Words($"{OrchestratorLayout.AffectedTestsFileName} the run's record of affected tests: the units each test step that keeps them (affected) ran"),
+            Prose.Words(HelpText.Of("orchestrators").StandardOutput),
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The workflows topic says what a leg step's red entry carries of the units its build failed - failedUnits, which the
+    /// output's schema declares - and that {run.red} says what the leg's line said of them.
+    /// </summary>
+    [Fact]
+    public void WorkflowsTopic_SaysWhatARedLegsEntryCarriesOfItsUnits()
+    {
+        var prose = Prose.Words(HelpText.Of("workflows").StandardOutput);
+
+        Assert.Contains(
+            "keepGoing its builds of its legs go on past the units that fail to build, as --keep-going has them, so each red leg's "
+                + "entry in the step's red names, in failedUnits, every unit its build failed - by source and step, with what its line "
+                + "said of them - and {run.red} says that line's words",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains("a red leg, with what its line said of the units its build failed where its own tool failed it, a red check of CI,", prose, StringComparison.Ordinal);
+
+        foreach (var type in new[] { "build", "test", "run" })
+        {
+            Assert.Contains("\"failedUnits\":{\"type\":[\"object\",\"null\"]", WorkflowStepTypes.Find(type)!.Output, StringComparison.Ordinal);
+        }
+
+        Assert.DoesNotContain("failedUnits", WorkflowStepTypes.Find("check-mutations")!.Output, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The workflows topic says what the fold family's steps do - read their dry run's standing, ask with what it names,
+    /// hold the apply to it and a fold to its ledger and its within, take others in turn - and the orchestrators topic
+    /// names the files they keep, each from the code's own names.
+    /// </summary>
+    [Fact]
+    public void TheHelp_SaysWhatTheFoldFamilysStepsDo_AndTheFilesTheyKeep()
+    {
+        var workflows = Prose.Words(HelpText.Of("workflows").StandardOutput);
+        var orchestrators = Prose.Words(HelpText.Of("orchestrators").StandardOutput);
+
+        Assert.Contains(
+            "fold, delete-agent, refresh and rebase make their verb's dry run first and read what it stood, typed, never its "
+                + "code: sound, they apply; a run holding the tree the apply takes is waited out, as a held "
+                + $"lock is ({HarnessExit.Refused} after the retries), and one holding only a copy a deletion removes is run again, as an "
+                + $"incomplete step is ({HarnessExit.Incomplete} after them);",
+            workflows,
+            StringComparison.Ordinal);
+
+        // Only a fold and a deletion hand their verb what the dry run named: a refresh's and a rebase's requests take none.
+        Assert.Contains(
+            "A fold's apply, and a deletion's, is held to exactly what its dry run named: measured again under its hold and found "
+                + "to write anything else - the trees moved between the two - it writes nothing; an apply of any of the four refused "
+                + "under its hold so is weighed again, pass after pass, until it applies, or fails with what it said once its trees "
+                + "come back to what a pass weighed before. A fold, and a deletion that "
+                + $"folds, write each path they mean to write, with what the main tree holds there, to the run's ledger ({OrchestratorLayout.FoldsFileName}) "
+                + "before the verb is called, and what they left after, written by the verb under the main tree's lock it wrote "
+                + "under, before it lets that lock go",
+            workflows,
+            StringComparison.Ordinal);
+
+        // What a fold left is recorded through the intent its request carries; the one read of the tree after is marked.
+        Assert.NotNull(typeof(FoldAgentRequest).GetProperty(nameof(FoldAgentRequest.Intent)));
+        Assert.NotNull(typeof(DeleteAgentRequest).GetProperty(nameof(DeleteAgentRequest.Intent)));
+        Assert.Contains(
+            "The one limit is a fold that dies inside its own hold, part way through its write: the next attempt reads what it left "
+                + $"from the tree, under that lock, and marks it {JsonNamingPolicy.CamelCase.ConvertName(nameof(FlowFoldEntry.ReadFromTree))}",
+            workflows,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            $"an intent an earlier release left unsettled, which does not say {JsonNamingPolicy.CamelCase.ConvertName(nameof(FlowFoldEntry.RecordsWrite))} - "
+                + "its verb recorded nothing of its write - is read so too",
+            workflows,
+            StringComparison.Ordinal);
+        Assert.Null(typeof(RefreshAgentRequest).GetProperty(nameof(FoldAgentRequest.Expected)));
+        Assert.Null(typeof(RebaseAgentRequest).GetProperty(nameof(FoldAgentRequest.Expected)));
+        Assert.NotNull(typeof(DeleteAgentRequest).GetProperty(nameof(FoldAgentRequest.Expected)));
+
+        // Whether a fold is committed is the run's commits' and the main tree's to say, whoever committed it.
+        Assert.Contains(
+            "a run stopped with a fold in its ledger whose change no commit took yet - a path it changed that no commit step of the "
+                + "run took, that git does not ignore and that the main tree still holds otherwise than its HEAD, whoever commits it - "
+                + "is unfinished, as one with an agent open is. A deletion run again "
+                + "once its agent is deleted - its ending cut off before it was recorded - is done, with what its directory kept of its apply.",
+            workflows,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            $"recorded in the step's directory ({OrchestratorLayout.StepTargetsDirectoryName}/<agent>/), one closed before its turn "
+                + "passed over; a target that fails ends its own turn, and the step ends done, or failed with the code of the first "
+                + "that failed, once each has had its turn. Each step keeps what its dry run named and how its apply ended in its "
+                + $"directory ({OrchestratorLayout.StepFoldFileName}).",
+            workflows,
+            StringComparison.Ordinal);
+        // What a commit step does, held to the codes it ends with, the file it writes and the types that are checks.
+        Assert.Contains(
+            "commit commits the folds upstream of it in the flow - every visit and iteration of them, never another work item's - "
+                + "and no other work: each path one of them changed that no commit of the run took yet, holding what the newest fold "
+                + "that names it left there, so a registry two items' folds wrote is taken whole. A fold upstream whose intent "
+                + "nobody settled - a crash cut it off, and its step has not run again - leaves what it wrote untold, and fails the "
+                + $"step ({HarnessExit.Refused}) naming it, nothing staged. With none owed it is done, "
+                + "committed false, and runs no git at all.",
+            workflows,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Otherwise it works on the branch the run started on alone: the main checkout on another - a person checked one out "
+                + $"while the run was paused - or its HEAD detached fails it ({HarnessExit.Refused}) naming both, nothing staged, as it "
+                + "does push and pull-request. The index must be empty and each path hold what its fold left there, and where either "
+                + $"does not - a path edited and not committed, or its fold's change undone - the step fails ({HarnessExit.Refused}) naming each, nothing staged",
+            workflows,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "told by the blob git would store against HEAD's and never by git's status, which does not look at a path marked "
+                + "assume-unchanged or skip-worktree - was committed by hand, and is marked taken by HEAD; one left to stage that the "
+                + $"index marks so fails it ({HarnessExit.Refused}) naming each with its mark, since git add would not stage it.",
+            workflows,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "The commit is held to the set over the commit the branch named before it: one that stands on anything but that commit "
+                + "alone - a hook moved the branch to a commit of its own, its parent carrying anything - took more against it - a "
+                + "hook staged another file - or left a path of the set out fails the step "
+                + $"({HarnessExit.CommandFailed}) naming each, and is left as it is "
+                + "for a person to keep or undo, the set staged in the ledger beside it. A set an attempt before left staged is "
+                + "settled first: committed where HEAD moved and holds each of its paths as the set staged it, else unstaged and "
+                + "staged again whole. It answers committed, sha, paths and ignored - each path its folds changed that git ignores, "
+                + "folded and never committed, which what the run's end leaves for a person names too",
+            workflows,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            $"else the step's own message - none, or a blank one, fails it ({HarnessExit.ConfigInvalid}) - and the rest is written to the ledger",
+            workflows,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            $"the message written to the step's directory ({OrchestratorLayout.StepCommitMessageFileName}), with -s where commit.signOff - "
+                + $"and marked committed with each fold path it took; git refusing, a hook among the reasons, unstages it and fails the step ({HarnessExit.CommandFailed}).",
+            workflows,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            $"The checks are the steps of type {string.Join(", ", WorkflowStepTypes.All.Where(type => type.Checks).Select(type => type.Type))} and a reason step marked independent, whatever each is named.",
+            workflows,
+            StringComparison.Ordinal);
+        Assert.Contains($"{OrchestratorLayout.FoldsFileName} the ledger of the run's folds:", orchestrators, StringComparison.Ordinal);
+        Assert.Contains("and each commit a commit step staged of them and what became of it", orchestrators, StringComparison.Ordinal);
+        Assert.Contains($"<step>/{OrchestratorLayout.StepCommitMessageFileName} a commit step: the message it commits with", orchestrators, StringComparison.Ordinal);
+        Assert.Contains($"<step>/{OrchestratorLayout.StepPullRequestBodyFileName} a pull-request step that opened one: the body it opened it with", orchestrators, StringComparison.Ordinal);
+
+        // What push and pull-request do, held to the codes they end with, the file one writes and the closed list of
+        // commands the publishing steps run, each with its own limit.
+        Assert.Contains(
+            "{run.leftover}, {run.assumptions} and {run.preExisting} - what the run's loops left, what its agents assumed (each "
+                + "'<step>' assumed about <what>: <assumption> (<why>), joined by '; ') and the issues it found there before - say 'none' alike where they name nothing.",
+            workflows,
+            StringComparison.Ordinal);
+        Assert.Equal(WorkflowExpressions.RunTexts.Order(StringComparer.Ordinal), ["assumptions", "leftover", "notRun", "preExisting", "ran", "red"]);
+        Assert.Contains(
+            "push pushes the commit the run's commit steps recorded last, else the one the run started on - never what the branch "
+                + "names by then, which a hook or a build working in the main checkout could have moved - to the branch of the name "
+                + "the main checkout is on, on a remote - the step's remote, else "
+                + "the one the run's branch goes to (the push step's, else the one the branch tracks, else origin, else the only one) - "
+                + "as a fast-forward and never forced, and answers pushed",
+            workflows,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Every push step that names a remote names the same one, the remote the run's branch goes to: a definition whose push "
+                + "steps name two is refused. HEAD detached, the main checkout on another branch than the run started on, a run that "
+                + "made no commit and started on none, no remote it can name and one the repository does not have each refuse it",
+            workflows,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            $"each refuse it ({HarnessExit.Refused}), nothing pushed; the remote refusing the push - its branch moved on since - fails it "
+                + $"({HarnessExit.CommandFailed}) in git's words. A checkpoint push runs only where the workflow says pushCheckpoints, and is skipped otherwise.",
+            workflows,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            $"written to the step's directory ({OrchestratorLayout.StepPullRequestBodyFileName}) for gh to read. One already open from "
+                + "that branch to that base is answered as it is, created false, and never edited: a step run again opens no second. "
+                + "One open from a fork's branch of the same name is none of the run's, as gh says of each (isCrossRepository).",
+            workflows,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            $"A title blank once filled fails it ({HarnessExit.ConfigInvalid}), as a body that cannot be read or reads nothing does; "
+                + "HEAD detached, the main checkout on another branch than the run started on, no remote, no base it can tell and a "
+                + $"base that is its own branch each refuse it ({HarnessExit.Refused}), nothing opened; gh not there fails it "
+                + $"{HarnessExit.ToolMissing}, and gh saying no {HarnessExit.CommandFailed}.",
+            workflows,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "each one it opened or found is left for a person, by its address, in what the run's end says (leftForAPerson), "
+                + "as is each path its folds changed that git ignores, never committed.",
+            workflows,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "The commands commit, push and pull-request run are a closed list - git --literal-pathspecs add -- (15 minutes); "
+                + "git --literal-pathspecs rm --cached --ignore-unmatch -q -- (15 minutes); git --literal-pathspecs reset -q -- (15 minutes); "
+                + "git commit --cleanup=whitespace -F (15 minutes); git push --porcelain (5 minutes); "
+                + "gh pr list --state open --json number,url,isCrossRepository (5 minutes); gh pr create (5 minutes) - each given the step's "
+                + $"timeoutMinutes where it says one, else its own; one past it is not done ({HarnessExit.Incomplete}), and the step runs "
+                + "again, a commit's set left staged settled by its next attempt.",
+            workflows,
+            StringComparison.Ordinal);
+        Assert.Contains($"<step>/{OrchestratorLayout.StepFoldFileName} a fold, delete-agent, refresh or rebase step:", orchestrators, StringComparison.Ordinal);
+        Assert.Contains($"<step>/{OrchestratorLayout.StepTargetsDirectoryName}/<agent>/ a refresh or a rebase of others:", orchestrators, StringComparison.Ordinal);
+        Assert.Contains($"<step>/{OrchestratorLayout.StepGraphFileName} a reason step that has a codebase graph: the line of its prompt - what its pack cost, or why none was given", orchestrators, StringComparison.Ordinal);
+        Assert.Contains("one line for each call of the graph tool, and one for each escape of its narrowing of reads and each whole read that narrowing refused", orchestrators, StringComparison.Ordinal);
+        Assert.Contains($"<step>/{OrchestratorLayout.StepWorkingSetFileName} a reason step that has a codebase graph: the nodes it edited, served, read and found", orchestrators, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The workflows topic carries its worked examples - the two ways a step is raised by another step's ending, and
+    /// the loops a repository can build its own work around - each printed as a whole workflow and each holding as it
+    /// is printed, read by the same reader that reads a workflow's own file and checked by the same check.
+    /// </summary>
+    [Fact]
+    public void TheWorkflowsTopic_CarriesItsWorkedExamples_EachHoldingAsPrinted()
+    {
+        var topic = HelpText.Of("workflows").StandardOutput;
+
+        Assert.Contains(
+            "Worked examples, each a whole workflow as a file holds it: the two ways a step is raised by another step's ending - a repair that goes back to what failed, and a check that runs whenever a builder ends - and two loops a repository can build its own work around. Each holds as it is printed, read by the same reader that reads a workflow's own file.",
+            Prose.Words(topic),
+            StringComparison.Ordinal);
+
+        // Each example is opened by a comment naming it and ends at the first line the file's own text takes; what
+        // the topic prints is what the reader reads.
+        var examples = new Dictionary<string, string>(StringComparer.Ordinal);
+        string? open = null;
+        var held = new List<string>();
+
+        foreach (var line in topic.Split(["\r\n", "\n"], StringSplitOptions.None))
+        {
+            if (line.StartsWith("  # example: ", StringComparison.Ordinal))
+            {
+                if (open is not null)
+                {
+                    examples[open] = string.Join('\n', held);
+                }
+
+                open = line["  # example: ".Length..].Trim();
+                held = [];
+            }
+            else if (open is not null && line.StartsWith("  ", StringComparison.Ordinal))
+            {
+                held.Add(line[2..]);
+            }
+            else if (open is not null && held.Count > 0)
+            {
+                examples[open] = string.Join('\n', held);
+                open = null;
+                held = [];
+            }
+        }
+
+        Assert.Equal(["issues", "repair", "review", "smoke"], [.. examples.Keys.Order(StringComparer.Ordinal)]);
+
+        // Each is read and then checked as validate-workflow checks a definition - every rule the yml alone can break; the
+        // files it names are not printed, so none is read - and holds: an example that says a key the check refuses is
+        // no example to copy.
+        foreach (var (slug, yaml) in examples)
+        {
+            var definition = WorkflowFileParser.Parse($"workflows/example-{slug}/example-{slug}.yml", yaml + "\n");
+
+            Assert.Equal($"example-{slug}", definition.Name);
+            Assert.NotEmpty(definition.Steps);
+            Assert.Equal(string.Empty, string.Join('\n', WorkflowValidator.Validate(definition, hasCommitTemplate: false)));
+        }
+    }
+
+    /// <summary>
+    /// The workflows topic says what a workflow is, where it lives, what this build does with one and what it does not,
+    /// and lists every key from the tables the reader itself reads - so what is listed is what is read.
+    /// </summary>
+    [Fact]
+    public async Task TheWorkflowsTopic_SaysWhatAWorkflowIs_AndListsEveryKeyTheReaderTakes()
+    {
+        var result = HelpText.Of("workflows");
+
+
+        var prose = Prose.Words(result.StandardOutput);
+
+        Assert.Contains(
+            "A workflow is a flow of typed steps that depend on one another by name, declared by name under workflows in config.json and defined by a yml file of its own:",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "This build checks a workflow's definition, with 'dssharness validate-workflow <name>', and starts and drives a run of one with "
+                + "'dssharness run-orchestrator <name>' (see 'help orchestrators'). The steps served so far are orient, graphify-codebase, validate-plan, "
+                + "create-agent, reason, build, test, run, check-mutations, anchor-balance, anchor-citations, class-closure, ci-read, ci-wait, fold, delete-agent, "
+                + "refresh, rebase, commit, push, pull-request, each below; a step of "
+                + "any other type fails, saying no runner serves its type.",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "every path the yml names is relative to that directory and stays inside it, as an action's files are relative to its own directory",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "What the steps served so far do. orient reads the main checkout and the repository once, and answers: the branch (failed, refused, where HEAD is detached), baseBranch - the pull-request step's base, filled from the run's inputs and its name, else the default branch of the remote the run's branch goes to (the push step's remote, else the one the branch tracks, else origin, else the only one), null where there is none - startCommit, the commit the run started from;",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "validate-plan checks the work items its items yields and answers ok, problems and the items, never a failure: at least one item, and as many as the work needs - no count is refused, for a round runs its items in waves of the run's maxOpenAgents;",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "each thing it creates; and each item declaring the classes of the decisions it changes or saying in noClass why it "
+                + "decides none, the classes held to what the tree and the item's own paths say of them: a class id used once in the "
+                + "plan, each home and each site a path inside the tree as a path an item reuses is, the home among the item's own "
+                + "paths and there in the tree where it exists, a site marked home exactly where it is the home by its path and "
+                + "symbol, every other site - which changes, reading the home or deleted - the item's too - patching some of a "
+                + "class's sites is never done - more than one site consolidated at the home, as one site that is not the home is, "
+                + "each class searched by data its queries name again, its universe holding the axes the repository declares, and "
+                + "one home belonging to one item, two classes of one item sharing one as they may; and each item naming the tests its change affects in "
+                + "tests, one unit to an entry and none blank, or saying in noTests why it affects none - exactly one of the two.",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "create-agent makes the agent the engine named for it - a<N>, one past the highest the run's agent directories and step records hold, never given twice - for the model of the first reason step that works in it, or the default tier's first model where none does, both written to the step's record before the agent is made.",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "reason works the step's agent: the one its in names or the work it goes on with (resume), or - where it names neither - the engine's own read-only agent, with no worktree, made before the step runs and deleted once no "
+                + "step can go on with its work; the step's model resolved with its agent definition below its own and its order built as entries of a model and one of its provider's keys, each entry's credential read from the slot "
+                + "('help agent-clients'); its prompt file read and filled where the step starts, its writes given as an expression read there too - the names it yielded narrowing what it may write as a written-out list does - "
+                + "and each skill it names looked up again and the folder handed over in the agent's work directory; the work it goes on with rendered as its continuation record, "
+                + "and its going on by the client's kind - the stored conversation handed where the client goes on with one, a new launch rendered where it does not; and its answer, held to the schema its outputs names - one the engine reads, "
+                + "refused otherwise where the workflow is checked and again before any client is asked - the step's output. Where the repository declares legs, a step whose agent runs commands (its capabilities hold run) is given the measure tool on every client: one call takes a leg, its "
+                + "variant - the build configuration the leg's own configuration declares - a test filter and the cell of a universe being measured, runs those tests of that leg through the test service as a test step's legs are run, in the agent's worktree "
+                + "where it has one and in a local copy of the main tree where it does not, under the agents' isolation and the step's own record of what its legs start, and answers what they showed - passed where the leg passed, failed where its "
+                + "build or its tests failed, and unmeasured with why for anything else: a leg refused by another run's lock, skipped, stopped, a filter that matched no test, a leg not declared - the verdict as the ledger spells it, with the "
+                + "run's directory and the call's own records (measures/<call id>/ of the step's directory: the ledger, and what the call answered, which is what class-closure reads of what it measured); the call is a tool call of "
+                + "the step's stored stream, its id what a closure record's measuredBy cites. A failed "
+                + "agent is tried again on its model - the step's retries, absent the workflow's maxRetries, waiting its backoffSeconds, absent the workflow's, twice as long before each later try - and then on each model of its order; a run that ended "
+                + "on a key the provider refused moves to the next key at once, with no wait, and the run's pause ends the wait before a try and begins no "
+                + "launch after one ended, the step handed off with no handoff, saying so; what its agents "
+                + "assumed without asking is kept, read as the step's own assumptions fact and named in the run's. Where the step may ask (ask) its agent's questions pause it - askRounds times in one attempt, the answer or decide going on in the same "
+                + "attempt as the agent's next message; a limit of its own (turns, budget, a truncated answer, a full context) asks, more offered only where a stored conversation of the attempt can be handed, and compact for a full context goes on "
+                + "from the engine's reduction of it, the attempt's bounds counting still; every account at a limit, and a provider's service failing past the client's own tries, pause the run safely, and the resume runs that very step. What a "
+                + "step spends is charged to the run's budget turn by turn as its agent works - every token of every kind, and its cost at the configuration's prices for the model serving it - and each launch is held to what is left of the "
+                + "run's dollars before its reserve where that is less than its agent's own maxBudgetUsd, or where it names none: a launch that bound ended has reached the run's reserve, not the step's own budget, so the workflow's answers may "
+                + "allow more and the step runs again given its handoff, or else the run pauses for its budget - and a launch whose share was reckoned before more was granted runs again given its handoff, its share reckoned anew. "
+                + "A turn whose cost could not be counted leaves the run's dollars known only as at least what was counted: status, the report, flow.json and every --json say so, uncounted beside usd naming why; "
+                + "in a run budgeted in dollars such a turn reaches the run's reserve for the grant that stands, so the run asks, and a grant of more lets it go on, each launch held to what is left as far as the dollars were counted. "
+                + "A safe pause asks each reason step in flight for its handoff in its own conversation, all at once, and waits for the agent's answer within the "
+                + "workflow's handoffSeconds; an agent that has not answered by then is ended. Where an "
+                + "agent gave no handoff of its own - a limit ended its run, a crash cut the attempt off, its handoff turn passed its bound or failed - the engine writes one from the stored stream of the step, its first line saying why: the files the "
+                + "attempt wrote, the last commands it ran and how each ended, its last messages word for word, and the steps before it that left notes, named by step.",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "the question is open while the advice runs - an answer ends the asking, the question saying so, and the step that asked starts again only once the advice's runner has ended; "
+                + "a pause or a stop ends it too, the question saying the recommendation is sought at the resume - the recommendation written to the question with who gave it and where its records are, "
+                + "and none obtained said so, a bar that could not be read among the reasons; what every advice spent, an ended one's among them, is counted against the run's budget; "
+                + "and where the orchestrator names no advisor the question says so plainly. The advisor takes no question of a step that may ask (its agent recommends within its own), "
+                + "nor a pause step's that shows an upstream step's questions (they carry their recommendations), nor one the run's input answers, nor the budget's own, nor a kind its kinds leave out, "
+                + "and while the run is pausing the question says the recommendation is sought at the resume.",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains("params - its own knobs, defaulted in the file and read as param.<name>", prose, StringComparison.Ordinal);
+        Assert.Contains(
+            "A step gives a failure nothing handles to the workflow's recover by saying onFailure: recover, itself or through a group around it - never "
+                + "a reasoning step, whose agent is tried again (retries, waiting backoffSeconds, twice as long each time) and on each model of its fallback, and which asks "
+                + "where it still fails; where every account it could use is at its limit, or its provider's service fails past the client's own tries, the run pauses safely "
+                + "instead and resumes that very step. The recovery's steps, written once, read the step that failed as source and see every step of the flow, find what "
+                + "went wrong and put it right; then the run goes where its onSuccess says - failed-step, the step that gave it its failure, which runs again "
+                + "from where it stopped - and a failure of its own work, past its steps' retries, does what its onFailure says: pause or stop; the recovery "
+                + "never calls itself. A step that fails again goes to the recovery again by its own onFailure, until it passes, a person is asked, or maxVisits is met (absent, "
+                + $"the engine's bound of {FlowRecover.MostVisits} visits); past it the run asks (recoveryBound), with the advisor's recommendation of a fix: "
+                + "more, one more recovery; direct, with the fix in words, for the next one; skip, where the step is skippable; or abort.",
+            prose,
+            StringComparison.Ordinal);
+
+        // A type's required key is said to be required, from the one table the parser refuses its absence by.
+        Assert.Contains("the prompt file the step is asked with; required", result.StandardOutput, StringComparison.Ordinal);
+        Assert.Contains("the predefined runner the step runs; required", result.StandardOutput, StringComparison.Ordinal);
+        Assert.All(
+            WorkflowStepTypes.All.SelectMany(type => type.Keys.Where(key => key.Required)),
+            key => Assert.Contains($"{key.Meaning}; required", result.StandardOutput, StringComparison.Ordinal));
+
+        // What init writes of the implementation workflow, and where: the one owner of that rule is InitService, held to it by
+        // InitServiceTests, and this sentence says what those hold. The flow's own head and graph serving are said with it:
+        // the build first, the graph after it, and each type of reason step's keys.
+        Assert.Contains(
+            "init writes one - the implementation workflow, from a request to a pull request whose checks are green - and declares it in "
+                + "the config it creates. It builds first: the baseline is split in two - a build step, which fails red and is taken by the "
+                + "recovery and built again - and the test step it was, which waits for the build - and the flow makes its codebase graph "
+                + "after that build, beside the baseline's tests and the CI read, passed over where it cannot be made; every reason step "
+                + "after it is served from the graph as the twenty-run measurement of 2026-11-11 set each type's value: the steps that work on "
+                + "code keep the tool - the implementer and the pre-existing-issue triage say nothing and are given it "
+                + "and their task's seeds by default, as the planner is, which the measurement left as it was, and the "
+                + "reviewers, the self-audit, the diagnosis and the steps that verify and fix say graphFrom: changes - "
+                + "the request triage and the plan audit, whose work is text the map does not light, ask none, as the "
+                + "item audit does, the plan audit's agent on a later round's items, searching by its own text search, the "
+                + "prioritiser and a review's scope are given the map alone, and the scribe's steps, which write the "
+                + "run's records, ask none of it. Where config.json declares "
+                + $"{WorkflowTemplates.ShippedWorkflowName}, init writes each of its "
+                + "files that is missing - the whole set where the repository has no definition of it yet, and where it has one only "
+                + "the shipped files that definition names, the workflows it uses among them - a shipped one taken out whole read from "
+                + "the copy init writes, so it comes back whole in one run - so a file taken out with its step stays out - and keeps each "
+                + "one that is there, whatever it holds, so an init that stopped part way is "
+                + "finished by the next - where a file is missing and the definition there does not read, or uses a workflow of the "
+                + "repository's that does not resolve, init refuses (12, naming each problem; 13 where it "
+                + "cannot be read), since which files it names cannot be told; nothing that exists is ever overwritten, and a config that "
+                + "does not declare it gets none of it. A file such a definition names that this tool ships elsewhere now - one of the item "
+                + "pipeline's, moved into its own folder - is not brought back, and init says so.",
+            prose,
+            StringComparison.Ordinal);
+
+        // What an expression's reads are typed by, and what each operator, each key and the run's own standing take: the
+        // statuses are the code's one list of them, so the sentence cannot name another.
+        Assert.Contains(
+            "every path it reads is typed by what holds it - a reason step's schema, the output a built-in type answers, the "
+                + "engine's facts of a step, the run's own names - and every operator takes what it says: !, && and || a boolean, == and != "
+                + "no list and no object, any a list and a test that yields a boolean, union lists. A when, an until and a blocking yield a boolean, and "
+                + "a forEach and a key that takes a list a list; how the run stands without its always steps "
+                + $"({string.Join(", ", WorkflowExpressions.RunStatuses.Select(status => $"run.{status}"))}) is read by an always step "
+                + "alone. A placeholder in braces - '{step.member}' - in a template key reads the same names, typed the same way, as one in "
+                + "a prompt does; one in any other key is refused, and a pull request's base reads nothing but the run's inputs and "
+                + "run.name, the same for every pull request. A brace meant literally is written twice, {{ and }} alike, another "
+                + "expander's ${...} is left as written, and a placeholder that names nothing is refused. Every template key of a step "
+                + $"is filled where the step starts, and one that reads nothing fails it ({HarnessExit.ConfigInvalid}) before its runner is asked. "
+                + "A prompt alone is filled further: a placeholder in it that names a step this run left no output - it was skipped, or "
+                + "failed and was passed over - is filled with a sentence that says so and why, as (step 'ci' left no output: it failed "
+                + "and was passed over: no run of the matrix was found), so the agent is told what it does not have; a member of a step "
+                + "that did leave an output is not that case, and reads nothing as any other name does.",
+            prose,
+            StringComparison.Ordinal);
+
+        // What the checks that run no legs do and answer, and what red does to them: each default and code is its owner's.
+        Assert.Contains(
+            "anchor-balance and anchor-citations run the checks of those names in the main checkout - the balance from its base, the "
+                + $"citations of its subject ({string.Join(", ", AnchorCitationSubjects.Names)}; "
+                + $"{AnchorCitationSubjects.Default} where it names none) - each held to its rows or its paths where it names them: the anchors "
+                + "among those rows the change opened, closed and lost, a problem at a line of one of them and every problem of a registry as a "
+                + "whole, or the citations in those files; a rows or paths expression that reads nothing names nothing. Each answers passed and "
+                + "findings, each a line as the check prints it. class-closure runs before every fold of an item, judging the work of the agent "
+                + "its in names: it judges the classes the item's plan declares against the closing record its builder answered - every planned "
+                + "site accounted for and the planned home kept or its move said (homeMoved), a deleted site no longer declaring its symbol in "
+                + "the worktree (the graph's view of it, synced where the step starts, or its text), a site that reads its home among the paths "
+                + "the agent changed (what its fold would write and what its earlier folds of the run changed), every search a tool call of the "
+                + "item's stored streams that ran, however its program exited - a search that found nothing exits 1 - and never one refused or "
+                + "whose input did not read, one of whose input's texts holds its query, every neighbour measured by a measure call of the same "
+                + "streams - whichever client called it, whatever it answered - whose own record (measures/<call id>/measure.json of the "
+                + "directory of the step whose stream holds it) can be read, names the neighbour's cell and answered its result, failed for "
+                + "failed-fixed - the newest call of that measurement, the same leg, variant, filter and cell, to measure anything answering "
+                + "passed: the call cited or a later one for passed, one whose record was written after the failing call's for failed-fixed - "
+                + "or reasoned why not, every test of the pin declared, the arm one of the registry its "
+                + "worktree holds and mutating the home's own file or a reason the class has nothing to mutate, the universe holding every "
+                + "planned axis and the claim naming each - and each home's touches since its base, the item's own commits left out, a record "
+                + "without a home audit refused where the home was touched by other work; a class's paths - the plan's and the record's, the "
+                + "paths changed, an arm's site and the touches - are read as the plan check reads them, either separator, and compared as this "
+                + "machine compares paths; a fold it cannot weigh fails it with the weighing's "
+                + "own code. Its problems are the record's (1, which close-class repairs) apart from a missing home audit (2, which home-audit "
+                + "makes), and it answers passed, problems, hotspots - the homes touched hotspot times or more - and touches. "
+                + "ci-read reads the legs check-ci-legs reads, of its branch - the one checked out "
+                + "in the main checkout where it names none - and its newest limit runs, answering passed, branch, matrixRan, legs and red, each leg as "
+                + "check-ci-legs --json gives it. ci-wait waits for every check run and commit status the forge lists for its commit - the "
+                + $"commit the run last pushed where it names none, refused ({HarnessExit.Refused}) where it pushed none - less those its ignore "
+                + "names - a job by its own name, as its workflow names it, a status by its context - written out or with * for any run of "
+                + $"characters, reading them every pollSeconds ({CiChecksRequest.DefaultPollSeconds}): "
+                + "a red one - one that concluded failure, a status of failure or error - ends it at once, answered with its name, url and, of a "
+                + "job of a workflow run, the job, its workflow, the step that failed, its leg as check-ci-legs classifies it, whether it overran "
+                + "its budget, and its whole log kept in the step's directory "
+                + $"({OrchestratorLayout.StepLogsDirectoryName}/<job>.<id>{PhaseLogs.Extension}, the job's id telling two of one name apart) "
+                + "given by reference in log, with how many lines it holds in lines and, in failing, the page of it where the job "
+                + "failed - the one holding its last line GitHub marks an error (##[error]), else its last page - each line by its number, "
+                + "both masked by the repository's runner secrets, and in unread why any of that could not be "
+                + "read; every check ended green - success, neutral or skipped - on two reads running that found the same checks, at its "
+                + "wait's end on the last alone, passes it; and no check within "
+                + $"appearSeconds ({CiChecksRequest.DefaultAppearSeconds}) - or waitMinutes where that is shorter - checks still running at waitMinutes ({CiChecksRequest.DefaultWaitMinutes}) "
+                + "or one ended neither green nor red asks (noChecks, checksPending, checksUnsettled), never failing it; answered accept, it "
+                + "reads once more, waiting for nothing, and is done with the checks as they are, its passed true only where they are green. "
+                + "A check that finds red is "
+                + "red: under failOn red - every check's default but ci-read's, never - it fails with its check's code "
+                + $"(an anchor finding {AnchorExit.Findings}, a red CI leg {CiExit.LegRed} and no matrix run {CiExit.MatrixDidNotRun}, a red check "
+                + $"{CiExit.LegRed}), and under never it is done, its passed false. Every read of the forge is given the step's "
+                + $"timeoutMinutes where it says one, else {ReportText.Limit(GhProcess.Limit)}, and never outlasts the step's attempt, which "
+                + $"ends a read in flight with it: a ci-read's read past its limit ends the step incomplete ({HarnessExit.Incomplete}), which "
+                + "runs it again; a ci-wait reads again where a read failed or passed its limit, saying each, for as long as its failure can "
+                + "change - a dropped network, a server error and a rate limit however often they come, another failure while it is new - and "
+                + "ends with that read's code where the same failure comes again, at once where no read changes it (the forge refusing the "
+                + "credential, or saying what was asked is not there), or where its wait is spent.",
+            prose,
+            StringComparison.Ordinal);
+
+        // What a leg step runs, answers, lets go and keeps: the names of its records are the layout's own.
+        Assert.Contains(
+            "build, test, run and check-mutations run their legs as the commands of those names do, in the worktree of the agent "
+                + "their in names, else the main checkout: test with its filter, exclude and labels and run with its inputs - a filter, "
+                + "an exclusion or a label that fills to nothing is not given - and check-mutations with its arms, every arm the registry "
+                + "declares where it names none, and pending. Each answers passed, true where every leg passed; exitCode, the command's; "
+                + "verdicts, each leg's own; red, the red legs alone - a leg that failed, with the phase that did not pass, the ledger's "
+                + "line and the last lines it printed, and of a sweep each arm that violated, survived or was unattributed, with its arm "
+                + "and its line; runDirectory, null where the run made none; and isolation, what the work of its legs ran under. What "
+                + "its legs build, test and run is what the run's agents wrote, so the work of each leg this machine runs - every phase "
+                + "it starts, a set-up's lines apart - runs inside the operating system's isolation of the agents' work ('help "
+                + "agent-clients'); where this machine has none, agentPolicy.isolation required fails the step "
+                + $"({HarnessExit.ToolMissing}) with nothing run, and preferred runs its legs outside, each leg's line saying so. "
+                + "A leg that works in a copy - its own under .legs, or a "
+                + "host's - lets the step's hold on its tree go once its copy is made, or once it ends without one, and a leg in the tree "
+                + "itself once it ends: the step's record then says copied. A run whose runner, or a runner its run checks name, writes "
+                + "the tree holds write on it, and its legs work in the tree itself. A leg run refused part way, cut off, or ended with a "
+                + "leg it placed left with no line ends the step with the run's own code; one its legs ended - none could run, another "
+                + "run owns its records - is read by their verdicts. The step keeps the ledger in its directory "
+                + $"({OrchestratorLayout.StepLedgerFileName}) and, in an agent's worktree, the log of each red leg's phase that did not "
+                + "pass, whole, where this machine ran the leg "
+                + $"({OrchestratorLayout.StepLogsDirectoryName}/<leg>.<phase>{PhaseLogs.Extension}, the phase named as its log is), "
+                + "each attempt's own.",
+            prose,
+            StringComparison.Ordinal);
+
+        // The refusals' codes are the ones the command answers with, held here so the sentence cannot drift from them.
+        Assert.Contains(
+            "'dssharness validate-workflow' checks the definition - the shape of every key, every name an expression, a template key "
+                + "or a prompt reads, every file the definition names, each step's schema one the engine reads (each problem naming "
+                + "the file, the step and the place in the schema; a step's start holds it there again) - and refuses "
+                + $"({HarnessExit.ConfigInvalid}) naming each problem, without running anything, as a "
+                + "config.json that does not hold is refused. A schema may share a definition with the schema files beside it: a "
+                + "$ref of the form plan.schema.json#/$defs/workItem names one, and where the schema is read - the check, a run, "
+                + "a path typed by it - the definition is taken into the schema's own $defs, so the work-item shape the shipped "
+                + "plan, self-audit and diagnosis schemas hold is one definition among them; a reference nothing beside the schema "
+                + "answers is refused where the schema is checked, naming the file. Where config.json declares no workflow there is nothing to check, and it "
+                + $"is refused ({HarnessExit.Refused}), saying that \"workflows\": [\"{WorkflowTemplates.ShippedWorkflowName}\"] "
+                + "declares the one init writes.",
+            prose,
+            StringComparison.Ordinal);
+
+        // Every key of the file, of every step and of every group, from the tables the reader reads.
+        Assert.All(WorkflowKeys.File, key => Assert.Contains($"  {key.Name}", result.StandardOutput, StringComparison.Ordinal));
+        Assert.All(WorkflowStepTypes.Common, key => Assert.Contains($"  {key.Name}", result.StandardOutput, StringComparison.Ordinal));
+        Assert.All(WorkflowStepTypes.Group, key => Assert.Contains($"  {key.Name}", result.StandardOutput, StringComparison.Ordinal));
+        Assert.All(WorkflowStepTypes.Running, key => Assert.Contains($"  {key.Name}", result.StandardOutput, StringComparison.Ordinal));
+        Assert.All(WorkflowStepTypes.All, type => Assert.Contains($"  {type.Type}", result.StandardOutput, StringComparison.Ordinal));
+        Assert.Contains(
+            "What every step that runs takes, beyond the common keys - every typed step but pause, which only asks:",
+            prose,
+            StringComparison.Ordinal);
+
+        // A step's time limit, from the bounds the validator and the coordinator hold.
+        Assert.Contains(
+            $"A step that runs may bound each of its attempts with timeoutMinutes, from 1 to {WorkflowStep.MostTimeoutMinutes.ToString("N0", CultureInfo.InvariantCulture)}: "
+                + "the engine counts it from each start of the step - an attempt, or its run after a question of its own was answered - and "
+                + "never while it waits on a question. Past it the step is stopped as a stop stops one and ends incomplete "
+                + $"({HarnessExit.Incomplete}), saying it passed its timeoutMinutes: a reasoning step goes to what handles its failure, any other "
+                + $"runs again as an incomplete step does; one whose runner does not end within {PointOfNoReturn.SafePauseDrain.TotalSeconds.ToString(CultureInfo.InvariantCulture)} s "
+                + "of that stop fails all the same, goes to what handles its failure and is not retried - a step of others fails the target "
+                + "whose turn it was and goes on with the next - and what it claimed stays held until that runner ends. A reasoning step's "
+                + "handoff turn at a pause is bounded by handoffSeconds, not by this. A ci-wait's is always more than its waitMinutes (absent, "
+                + $"{WorkflowStep.DefaultWaitMinutes}); a group and a pause step take none, running nothing of their own; a type whose step "
+                + "has a limit of its own where it says none says so beside its name below.",
+            prose,
+            StringComparison.Ordinal);
+
+        // The type that has one says it beside its name, from the table.
+        Assert.Contains("graphify-codebase (timeoutMinutes 30 by default)", result.StandardOutput, StringComparison.Ordinal);
+    }
+}

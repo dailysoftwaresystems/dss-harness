@@ -198,6 +198,24 @@ public sealed class AnchorRegistryDocumentTests
         Assert.Contains("`TASK-AREA-TOPIC-DETAIL-PART4`", skeleton, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// Two rows whose Anchor cells hold no id are told apart by the whole of each cell's text, never by its first eighty
+    /// characters: two that share those eighty and differ after them stay two rows, each identified by its whole text.
+    /// Red with the eighty-character identity put back.
+    /// </summary>
+    [Fact]
+    public void TwoIdlessRowsSharingEightyCharacters_StayTwo()
+    {
+        var shared = new string('x', 80);
+        var first = $"{shared} the first";
+        var second = $"{shared} the second";
+        var document = Parse(Registry($"| {first} | P1 | 🟠 OPEN | first | work | refs |", $"| ~~{second}~~ | P2 | 🟠 OPEN | second | work | refs |"));
+
+        Assert.Equal([first, second], document.Rows.Select(row => row.Id));
+        Assert.NotEqual(Rules.Identify(first), Rules.Identify(second));
+        Assert.Equal(second, Rules.Identify($"~~{second}~~"));
+    }
+
     private static AnchorRegistryDocument Parse(string text) => AnchorRegistryDocument.Parse(text, Rules);
 
     private static string Registry(params string[] rows)

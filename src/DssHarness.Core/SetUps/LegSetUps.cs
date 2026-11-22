@@ -7,7 +7,7 @@ using DssHarness.Core.Results;
 using DssHarness.Core.Runners;
 using DssHarness.Core.Runs;
 using DssHarness.Core.Testing;
-using DssHarness.Core.Worktrees;
+using DssHarness.Core.Waiting;
 
 namespace DssHarness.Core.SetUps;
 
@@ -57,10 +57,10 @@ public sealed class LegSetUps(ISetUpService setUps, SetUpHolds holds, PhaseRunne
     private readonly PhaseRunner _phases = phases;
 
     /// <summary>
-    /// How long the command line waits for a run interrupted while its legs hold set-ups, as it waits for an interrupted
-    /// deletion: what came up comes down within it (<see cref="PointOfNoReturn.StoppedAfter"/>). Tests shorten it.
+    /// The clock the bringing down of a leg's set-ups is timed on as it goes on to its end, told every
+    /// <see cref="Waits.SaidEvery"/>; tests give one of their own.
     /// </summary>
-    internal TimeSpan InterruptionGrace { get; init; } = WorktreeService.DefaultInterruptionGrace;
+    internal TimeProvider Clock { get; init; } = TimeProvider.System;
 
     /// <summary>
     /// Refuses a run asked to set up, before any host is measured, where nothing its legs run names a set-up, where a leg
@@ -205,10 +205,6 @@ public sealed class LegSetUps(ISetUpService setUps, SetUpHolds holds, PhaseRunne
         var facts = new SetUpFact?[uses.Count];
         var held = new Held?[uses.Count];
 
-        // From the interruption on, not from when the work it stopped lets go: the command line counts from it too.
-        using var stopping = new CancellationTokenSource();
-        using var interrupted = cancellationToken.Register(() => stopping.CancelAfter(PointOfNoReturn.StoppedAfter(InterruptionGrace)));
-
         try
         {
             foreach (var index in Enumerable.Range(0, uses.Count).OrderBy(index => uses[index].Name, StringComparer.OrdinalIgnoreCase))
@@ -262,7 +258,18 @@ public sealed class LegSetUps(ISetUpService setUps, SetUpHolds holds, PhaseRunne
         {
             try
             {
-                await LetGoAsync(config, leg, runId, runDirectory, confinement, [.. held.OfType<Held>()], facts, progress, stopping.Token).ConfigureAwait(false);
+                // Past its point of no return: what came up comes down whatever interrupted the run - a set-up left up runs on
+                // after every run that used it - told while it lasts. Only a second interruption, the hard stop, ends it, the
+                // process with it.
+                await Waits.ForAsync(
+                        async _ =>
+                        {
+                            await LetGoAsync(config, leg, runId, runDirectory, confinement, [.. held.OfType<Held>()], facts, progress).ConfigureAwait(false);
+                            return true;
+                        },
+                        new WaitWatch($"{leg.Name}'s set-ups to come down", told => progress(told.Line()), Bound: null, Clock),
+                        CancellationToken.None)
+                    .ConfigureAwait(false);
             }
             finally
             {
@@ -274,8 +281,7 @@ public sealed class LegSetUps(ISetUpService setUps, SetUpHolds holds, PhaseRunne
     /// <summary>
     /// Lets each of <paramref name="held"/> go, in the reverse of the order named - one set-up may stand on another -
     /// bringing down each this leg is the last to use and whose up line started; never throwing, so no set-up is left
-    /// unreleased for one that could not be. A down line still running when <paramref name="stopping"/> ends is
-    /// stopped, and its set-up said as not brought down.
+    /// unreleased for one that could not be. Each down line runs to its end, whatever interrupted the run.
     /// </summary>
     private async Task LetGoAsync(
         HarnessConfig config,
@@ -285,8 +291,7 @@ public sealed class LegSetUps(ISetUpService setUps, SetUpHolds holds, PhaseRunne
         SetUpConfinement? confinement,
         IReadOnlyList<Held> held,
         SetUpFact?[] facts,
-        Action<string> progress,
-        CancellationToken stopping)
+        Action<string> progress)
     {
         var tree = leg.HostTreeRoot;
 
@@ -326,7 +331,7 @@ public sealed class LegSetUps(ISetUpService setUps, SetUpHolds holds, PhaseRunne
 
             progress($"bringing set-up '{taken.Name}' down");
 
-            var why = await RunAsync(config, leg, taken, SetUpDirection.Down, runDirectory, confinement, started: null, stopping).ConfigureAwait(false);
+            var why = await RunAsync(config, leg, taken, SetUpDirection.Down, runDirectory, confinement, started: null, CancellationToken.None).ConfigureAwait(false);
 
             facts[taken.Fact] = why is null
                 ? fact with { Down = SetUpFact.BroughtDown }
