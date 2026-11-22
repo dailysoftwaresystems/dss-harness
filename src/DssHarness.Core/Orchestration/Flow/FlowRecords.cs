@@ -229,6 +229,11 @@ public sealed record FlowEvent(
 /// The record of an iteration of a repeat that decides at a step of its own (<c>decideAfter</c>): the decision read at
 /// that step's ending, and the visit it was read at; null until one is read, and for every other record.
 /// </param>
+/// <param name="Measure">
+/// What the instance's work measured, written by the engine as it runs: when it was ready, how long it waited and for
+/// what, and what each of its attempts used - the model that served it, the tokens of every kind, the dollars at the
+/// price of that moment. Null until the engine draws the instance, and for a step that never ran.
+/// </param>
 public sealed record FlowStepRecord(
     string Instance,
     string Step,
@@ -280,8 +285,10 @@ public sealed record FlowStepRecord(
     long? EndedIn = null,
     long? ReportedIn = null,
     JsonObject? Inputs = null,
-    FlowLoopDecision? Decided = null)
+    FlowLoopDecision? Decided = null,
+    FlowStepMeasure? Measure = null)
 {
+    /// <summary>Where a failure can leave the run, as the record names each of <see cref="FlowFailure"/>'s values.</summary>
     /// <summary>Where a failure can leave the run, as the record names each of <see cref="FlowFailure"/>'s values.</summary>
     public static readonly IReadOnlyList<string> Failures = [.. Enum.GetValues<FlowFailure>().Select(NameOf)];
 
@@ -1112,6 +1119,7 @@ public sealed record FlowSnapshot(
 /// <param name="ReportedIn">A triage instance's: where the attempt that reported its issue began (<see cref="FlowStepRecord.ReportedIn"/>); null for every other.</param>
 /// <param name="Inputs">A use's scope's own record: what its with filled the used workflow's inputs with (<see cref="FlowStepRecord.Inputs"/>); null for every other.</param>
 /// <param name="Decided">An iteration's of a repeat that says decideAfter: the decision read at its deciding step (<see cref="FlowStepRecord.Decided"/>); null for every other.</param>
+/// <param name="Measure">What the instance's work measured (<see cref="FlowStepRecord.Measure"/>); null until the engine draws it.</param>
 public sealed record FlowSnapshotStep(
     string Instance,
     string Step,
@@ -1163,4 +1171,5 @@ public sealed record FlowSnapshotStep(
     long? EndedIn = null,
     long? ReportedIn = null,
     JsonObject? Inputs = null,
-    FlowLoopDecision? Decided = null);
+    FlowLoopDecision? Decided = null,
+    FlowStepMeasure? Measure = null);

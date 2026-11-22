@@ -432,7 +432,7 @@ public sealed class AdvisorRunner(
 
         public void LegEnded(string leg) { }
 
-        public void Used(long tokens, double? usd, string? uncounted = null) { }
+        public void Used(long tokens, double? usd, string? uncounted = null, Agents.AgentUsage? turn = null, string? serving = null) { }
 
         public void HandoffTaken() { }
     }

@@ -346,7 +346,9 @@ public interface IFlowRunEvents
     /// <param name="tokens">The tokens the clients report: input, cache write, cache read and output.</param>
     /// <param name="usd">What they cost, at the prices the configuration gives each model; null where it could not be counted.</param>
     /// <param name="uncounted">Why it could not be counted - the price missing, the model no provider lists - where it could not; null otherwise.</param>
-    void Used(long tokens, double? usd, string? uncounted = null);
+    /// <param name="turn">The turn's tokens by kind, where the caller knows them; null where only the total is known.</param>
+    /// <param name="serving">The model that served the turn - the last after any fallback; null where the caller does not know it.</param>
+    void Used(long tokens, double? usd, string? uncounted = null, Agents.AgentUsage? turn = null, string? serving = null);
 
     /// <summary>
     /// The prompt that holds this attempt's <see cref="FlowStepRun.Handoff"/> is written: the handoff is spent, and its

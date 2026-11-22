@@ -84,7 +84,7 @@ public sealed class FlowStepRunnerTests : IDisposable
 
         public void LegEnded(string leg) { }
 
-        public void Used(long tokens, double? usd, string? uncounted = null) { }
+        public void Used(long tokens, double? usd, string? uncounted = null, DssHarness.Core.Agents.AgentUsage? turn = null, string? serving = null) { }
 
         public void HandoffTaken() { }
     }

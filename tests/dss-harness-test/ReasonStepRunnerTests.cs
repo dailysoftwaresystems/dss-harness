@@ -30,7 +30,7 @@ public sealed class ReasonStepRunnerTests
 
         public void LegEnded(string leg) { }
 
-        public void Used(long tokens, double? usd, string? uncounted = null) { }
+        public void Used(long tokens, double? usd, string? uncounted = null, DssHarness.Core.Agents.AgentUsage? turn = null, string? serving = null) { }
 
         public void HandoffTaken() { }
     }
@@ -1554,7 +1554,7 @@ public sealed class ReasonStepRunnerTests
 
         public void LegEnded(string leg) { }
 
-        public void Used(long tokens, double? usd, string? uncounted = null) => Spent.Add((tokens, usd, uncounted));
+        public void Used(long tokens, double? usd, string? uncounted = null, DssHarness.Core.Agents.AgentUsage? turn = null, string? serving = null) => Spent.Add((tokens, usd, uncounted));
 
         public void HandoffTaken() { }
     }
@@ -1573,7 +1573,7 @@ public sealed class ReasonStepRunnerTests
 
         public void LegEnded(string leg) { }
 
-        public void Used(long tokens, double? usd, string? uncounted = null) { }
+        public void Used(long tokens, double? usd, string? uncounted = null, DssHarness.Core.Agents.AgentUsage? turn = null, string? serving = null) { }
 
         public void HandoffTaken() => Taken++;
     }

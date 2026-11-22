@@ -113,7 +113,7 @@ public sealed class LegStepRunnerTests : IDisposable
 
         public void LegEnded(string leg) => Add($"{leg} ended");
 
-        public void Used(long tokens, double? usd, string? uncounted = null) => Add("used");
+        public void Used(long tokens, double? usd, string? uncounted = null, DssHarness.Core.Agents.AgentUsage? turn = null, string? serving = null) => Add("used");
 
         public void HandoffTaken() => Add("handoff taken");
 

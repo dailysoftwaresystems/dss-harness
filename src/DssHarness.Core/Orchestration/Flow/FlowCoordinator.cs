@@ -208,6 +208,20 @@ public sealed class FlowInstance(string id, WorkflowStep step, string path)
     public string? MadeModel { get; internal set; }
 
     /// <summary>
+    /// What this instance's work measured, as the engine writes it while it runs - when it was ready, how long it
+    /// waited and for what, and what each of its attempts used. Kept on the instance's record
+    /// (<see cref="FlowStepRecord.Measure"/>) at every write, so a resume reads it back; null until the engine draws it.
+    /// </summary>
+    public FlowStepMeasure? Measure { get; internal set; }
+
+    /// <summary>
+    /// What the attempt the instance is on now has used so far, as its turns report it - charged by the one place a
+    /// token is counted (<see cref="FlowCoordinator.TakeMessage"/>'s usage branch) and written into
+    /// <see cref="Measure"/>'s attempt entry when the attempt ends. A machine step never uses it.
+    /// </summary>
+    internal FlowStepSpend Spent { get; } = new();
+
+    /// <summary>
     /// The agent this step works in or acts on - the one its <c>in</c> or <c>of</c> names, as that step's create-agent made
     /// it, or the one the step it goes on with works in - stored where the step is drawn, or else where it first starts, as
     /// <see cref="Made"/> is: a later visit of that create-agent making another agent never changes which agent this one
@@ -1787,6 +1801,36 @@ public sealed class FlowCoordinator
             // It ended, with a failure of its own.
             return true;
         }
+    }
+
+    /// <summary>
+    /// Writes what this attempt measured into the instance's measure: its spend - tokens by kind, dollars, the model
+    /// that served it, the uncounted reason where a part could not be counted - with how it ended. The entry is
+    /// appended, so a retried step holds one per attempt, and the totals are the sum.
+    /// </summary>
+    /// <param name="instance">The instance whose attempt ended.</param>
+    /// <param name="result">What the attempt's runner answered.</param>
+    private void MeasureAttempt(FlowInstance instance, FlowStepResult result)
+    {
+        var (passed, exit, error, cause) = Ends(instance.Step, result);
+
+        var spent = instance.Spent;
+        List<FlowStepAttempt> attempts = [.. instance.Measure?.Attempts ?? [], new FlowStepAttempt(
+            N: instance.Attempt,
+            StartedAt: instance.StartedAt,
+            FinishedAt: _clock.GetUtcNow(),
+            Outcome: passed ? nameof(FlowInstanceState.Done) : nameof(FlowInstanceState.Failed),
+            Exit: exit,
+            Error: error,
+            Cause: cause is OutcomeCause.None ? null : cause.ToString(),
+            Model: spent.Serving,
+            Tokens: spent.Reported ? spent.Tokens : null,
+            Usd: spent.Usd,
+            Uncounted: spent.Uncounted)];
+
+        instance.Measure = instance.Measure is { } measure
+            ? measure with { Attempts = attempts, Totals = FlowStepTotals.Of(attempts) }
+            : new FlowStepMeasure(Attempts: attempts, Totals: FlowStepTotals.Of(attempts));
     }
 
     /// <summary>
@@ -7069,6 +7113,10 @@ public sealed class FlowCoordinator
         // The budget's minutes are the time reason steps ran, each attempt and each handoff turn counted.
         CountMinutes(instance);
 
+        // What the attempt measured is written into the instance's measure: its own spend - tokens by kind, dollars,
+        // the model that served it - with how the attempt ended. The measure is the report's per-step record.
+        MeasureAttempt(instance, result);
+
         // What the attempt's agent assumed, asked or not: kept whatever else the attempt ends by, for a later step, a
         // report and the person read what an unattended run took for granted.
         if (result.Assumptions is [_, ..] assumed)
@@ -10264,8 +10312,21 @@ public sealed class FlowCoordinator
         {
             // What a reason step's conversation spent as it ran, counted against the run's budget the moment it
             // is reported - an attempt that is over among them, for what it spent was spent - a cost that could not be
-            // counted leaving the run's dollars not known past what was.
+            // counted leaving the run's dollars not known past what was. The instance's own measure is charged with the
+            // same numbers, at the same moment - the one place a token is counted, two outputs: the instance the report
+            // reads, and the run the budget holds.
             Charge(usage.Tokens, usage.Dollars);
+
+            if (message.Turn is { } turn)
+            {
+                message.Instance.Spent.Charge(turn, usage.Dollars.Counted > 0 ? usage.Dollars.Counted : null, usage.Dollars.Uncounted);
+
+                if (message.Serving is { } serving)
+                {
+                    message.Instance.Spent.Serving = serving;
+                }
+            }
+
             return;
         }
 
@@ -12602,7 +12663,8 @@ public sealed class FlowCoordinator
             instance.EndedIn == 0 ? null : instance.EndedIn,
             instance.ReportedIn == 0 ? null : instance.ReportedIn,
             OwnScopeOf(instance)?.UseInputs?.DeepClone().AsObject(),
-            instance.ScopeOf?.Decision);
+            instance.ScopeOf?.Decision,
+            instance.Measure);
 
     /// <summary>
     /// The scope a group instance's own record speaks for: a block's, a handler's or a recovery visit's own, or the item or
@@ -13495,6 +13557,7 @@ public sealed class FlowCoordinator
             instance.EndedFor = record.EndedFor;
             instance.Targets = record.Targets;
             instance.FromResume = true;
+            instance.Measure = record.Measure;
 
             if (OwnScopeOf(instance) is { } own)
             {
@@ -13576,7 +13639,7 @@ public sealed class FlowCoordinator
     /// spent, an answer offered from outside, a handoff taken, or a step's time limit passing - named by the timer it came
     /// from, so the timer of a run that has answered already says nothing.
     /// </summary>
-    private readonly record struct Message(FlowInstance Instance, FlowStepResult? Result, FlowLegEvent? Leg, (FlowDollars Dollars, long Tokens)? Usage = null, int Attempt = 0, Offer? Offered = null, bool HandoffTaken = false, CancellationTokenSource? TimeLimit = null);
+    private readonly record struct Message(FlowInstance Instance, FlowStepResult? Result, FlowLegEvent? Leg, (FlowDollars Dollars, long Tokens)? Usage = null, int Attempt = 0, Offer? Offered = null, bool HandoffTaken = false, CancellationTokenSource? TimeLimit = null, Agents.AgentUsage? Turn = null, string? Serving = null);
 
     /// <summary>
     /// What is handed to a running session from outside it - an answer, a change of an answer, or an amendment of the
@@ -13743,8 +13806,8 @@ public sealed class FlowCoordinator
 
         /// <inheritdoc/>
         /// <remarks>A cost said uncounted with no reason is said of the step it came from.</remarks>
-        public void Used(long tokens, double? usd, string? uncounted = null)
-            => _ = coordinator._messages.Writer.TryWrite(new Message(instance, null, null, (FlowDollars.Of(usd, uncounted ?? $"what '{instance.Id}' spent came with no cost said or counted of it"), tokens), attempt));
+        public void Used(long tokens, double? usd, string? uncounted = null, Agents.AgentUsage? turn = null, string? serving = null)
+            => _ = coordinator._messages.Writer.TryWrite(new Message(instance, null, null, (FlowDollars.Of(usd, uncounted ?? $"what '{instance.Id}' spent came with no cost said or counted of it"), tokens), attempt, Turn: turn, Serving: serving));
 
         /// <inheritdoc/>
         public void HandoffTaken()

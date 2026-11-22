@@ -66,7 +66,7 @@ public sealed class AgentRunSpend(AgentProviders providers, string? serving, IFl
                 Tokens += tokens;
                 Dollars = Dollars.Plus(FlowDollars.Of(usd, uncounted));
                 Reported = true;
-                events?.Used(tokens, usd, uncounted);
+                events?.Used(tokens, usd, uncounted, used.Turn, _serving);
                 break;
         }
 

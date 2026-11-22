@@ -380,7 +380,7 @@ public sealed class AgentRunSpendTests
 
         public void LegEnded(string leg) { }
 
-        public void Used(long tokens, double? usd, string? uncounted = null) => Spent.Add((tokens, usd, uncounted));
+        public void Used(long tokens, double? usd, string? uncounted = null, DssHarness.Core.Agents.AgentUsage? turn = null, string? serving = null) => Spent.Add((tokens, usd, uncounted));
 
         public void HandoffTaken() { }
     }
