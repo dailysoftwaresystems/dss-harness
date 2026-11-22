@@ -69,6 +69,10 @@ The work is in the main tree, committed; `git diff {orient.startCommit} HEAD` sh
 - The registry's checks on the round: {round-checks.findings}
 - What the review loops left: {run.leftover}
 - What was assumed without asking a person: {run.assumptions}
+- The issues this run owes its next round, each with its id and its size - the files its fix touches, what must be
+  built, and what must be measured first:
+
+{run.nextRound}
 
 Where a line says that a step left no output, that thing was not read or did not run in this run: it is unknown, and never a pass.
 Name it under unverified; it is a finding only where the line says the step failed, not where it was skipped.
@@ -84,7 +88,11 @@ Name it under unverified; it is a finding only where the line says the step fail
    and so is each finding of the item audit above that the tree does not settle: a site it found that still decides on
    its own, a cell of the universe still left out. Give every finding a work item that repairs it, unless only a
    person can: say so in the finding, and give it no item.
-4. Say unverified of what you could not verify.
+4. Each issue the run owes its next round, listed above, becomes the first work item of that round: make it one, with
+   its size and a class - it is a defect too, and the plan's rules of a class apply to it - and name the issue it
+   settles in `settles`, by its id exactly. The round's check refuses a round whose items leave one unsettled, and the
+   rounds do not end while one is.
+5. Say unverified of what you could not verify.
 
 ## The tests a work item names
 
@@ -106,7 +114,7 @@ Whether the round is clean, which is true exactly when you give no work item; th
 verify; and the work items of a further round, shaped as the plan's items are, as many as the findings need: each sized to one
 builder's cycle, never more and never a sliver of one, each with its own definition of done - statements a check can
 answer one by one, the first of them the finding it settles - and each that changes a decision with its classes, or
-saying why in noClass where it decides none. Each takes a name no work item of this run has had, in this round or an
+saying why in noClass where it decides none. An item that settles an issue the run owes names it in `settles`. Each takes a name no work item of this run has had, in this round or an
 earlier one: the run knows a work item by its name, and keeps its tests and its updates under it, so a further item
 named as one already built would stand in that item's place - a follow-up to an item is a work item of its own, named
 for what it settles. Where the item audit found a site an item's class lacked or a cell its

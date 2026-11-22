@@ -299,6 +299,18 @@ public static class WorkflowStepTypes
             null,
             ClassClosureOutput),
         new(
+            "route-findings",
+            [
+                new("in", "the create-agent step whose agent's item the closure ledger is of, which it waits for through dependsOn") { Required = true },
+                new("findings", "an expression yielding the review's findings, each classed introduced or reopened") { Required = true },
+            ],
+            [],
+            null,
+            "RouteFindingsStepRunner: FlowClosureLedgerFile over OrchestrationStore",
+            ["read main"],
+            null,
+            RouteOutput),
+        new(
             "ci-read",
             [new("branch", "the branch it reads"), new("limit", "how many of the branch's runs it looks at"), new("failOn", "what a red leg does: never (the default) or red")],
             ["branch"],
@@ -620,6 +632,12 @@ public static class WorkflowStepTypes
         ("problems", ListOf(Text)),
         ("hotspots", ListOf(ObjectOf(("class", Text), ("path", Text), ("touches", WholeNumber)))),
         ("touches", ListOf(ObjectOf(("class", Text), ("path", Text), ("byOthers", WholeNumber), ("all", WholeNumber)))));
+
+    /// <summary>What routing the review's findings answers: the send-backs - every introduced finding, and one whole class a first reopening - the classes whose second reopening asks for a home audit, and how often each class was reopened.</summary>
+    private static string RouteOutput => ObjectOf(
+        ("rework", UntypedList),
+        ("homeAudit", ListOf(ObjectOf(("class", Text), ("reopens", WholeNumber), ("severity", Text), ("findings", UntypedList)))),
+        ("reopened", ListOf(ObjectOf(("class", Text), ("reopens", WholeNumber)))));
 
     /// <summary>How many touches of a home by other work require a home audit, where a workflow says nothing.</summary>
     public const int DefaultTouches = 1;

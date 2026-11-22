@@ -16,7 +16,7 @@ Implemented today: `init`, `verify-git`, `create-worktree`, `delete-worktree`,
 `list-worktree`, the orchestrator commands (`create-orchestrator`, `delete-orchestrator`,
 `list-orchestrator`, `create-agent`, `seed-agent`, `refresh-agent`, `rebase-agent`,
 `fold-agent`, `delete-agent`), the run commands (`run-orchestrator`, `resume-orchestrator`,
-`answer-orchestrator`, `amend-orchestrator-request`, `pause-orchestrator`, `stop-orchestrator`, `ask-orchestrator-status`, `ask-orchestrator`; the steps `FlowStepRunners.Served` lists are served - `orient`, `graphify-codebase`, `validate-plan`, `create-agent`, `reason`, `build`, `test`, `run`, `check-mutations`, `anchor-balance`, `anchor-citations`, `class-closure`, `ci-read`, `ci-wait`, `fold`, `delete-agent`, `refresh`, `rebase`, `commit`, `push`, `pull-request` - and a step of any other type fails until its runner lands), the side-task commands (`run-side-task`, `list-side-tasks`), `validate-workflow`, `export-workflow`, `list-agent-providers`, `check-root-litter`, the anchor commands (`write-anchor`, `set-anchor`,
+`answer-orchestrator`, `amend-orchestrator-request`, `pause-orchestrator`, `stop-orchestrator`, `ask-orchestrator-status`, `ask-orchestrator`; the steps `FlowStepRunners.Served` lists are served - `orient`, `graphify-codebase`, `validate-plan`, `create-agent`, `reason`, `build`, `test`, `run`, `check-mutations`, `anchor-balance`, `anchor-citations`, `class-closure`, `route-findings`, `ci-read`, `ci-wait`, `fold`, `delete-agent`, `refresh`, `rebase`, `commit`, `push`, `pull-request` - and a step of any other type fails until its runner lands), the side-task commands (`run-side-task`, `list-side-tasks`), `validate-workflow`, `export-workflow`, `list-agent-providers`, `check-root-litter`, the anchor commands (`write-anchor`, `set-anchor`,
 `read-anchor`, `read-anchors`, `check-anchor-balance`, `check-anchor-arms`, `check-anchor-citations`),
 `fix-line-endings`, `check-ci-legs`, `legs`, `host-exec`, `install-missing-tools`,
 `update-tool`, `sync`, `build`, `test`, `run`, `check-mutations`, `stop-run`, `query-codebase-graph`, `clean`, `up`,
@@ -2220,11 +2220,14 @@ takes no `on`, `when` or `always`, sends
 a fix to a declared `recover`, and names no triage of its own, which would be it calling itself;
 where a workflow has one, every other reasoning step names it. Its agent reproduces the issue on the
 base commit and answers `fix` (in a step's way, related to the work, or critical: given to the
-recovery, the step it was in the way of running again after), `list` (added, proven, to the run's
-`pre-existing-issues.json`, shown in the pull request's body and the handoff, a quote or an output
+recovery, the step it was in the way of running again after), `next` (a defect in code the run's
+change does not touch that blocks nothing: owed the run's next round, sized - its files, what must
+be built, what measured first, an answer whose size names no file refused - never holding the round
+it came from; see the routing paragraph below), `list` (added, proven, to the run's
+`pre-existing-issues.json`, given to the work sync, a quote or an output
 kept whole), `duplicate` (naming in `duplicates` the listed issue it
-repeats) or `unproven`; an answer whose course is none of the four, or whose issue to list does not
-read back, fails the triage step (12) before it ends. The engine raises it for each issue a reason
+repeats) or `unproven`; an answer whose course is none of the five, or whose issue to list or send
+to the next round does not read back, fails the triage step (12) before it ends. The engine raises it for each issue a reason
 step's answer reports under `preExisting` (`FlowPreExistingReport.In`, as the shipped schemas spell
 one) - once for an issue: a repeat of the same title at the same place raises nothing while a triage
 of it holds the issue (`FlowCoordinator.HolderOf`: one waiting, running, paused, stopped or ended done,
@@ -3252,6 +3255,26 @@ anything is folded. The same rules judge a manual lane's `closure.json` where `a
 and measurements read as given, a record naming no class refused, its arms against the registry its worktree holds); a
 run's own folds - its `fold` and `delete-agent` steps, the engine's own deleting of an agent and the check's weighing,
 each request `ByRun` - are held to no `closure.json`, for the builder's answer is their record and the check judged it.
+After a review's gather and before its revise stands the `route-findings` step (`RouteFindingsStepRunner`, the one owner
+of the routing), reading the findings expression the review's gather collected - each finding classed `introduced` or
+`reopened` by its reviewers, a reopened one naming its class in `reopens` - and writing the item's ledger
+(`closure-ledger.json` in its agent's directory, `FlowClosureLedgerFile`): how often each class was reopened, one
+send-back a round, kept across the fix loop's iterations and across a resume, where no reviewer could carry it - for
+reviewers are fresh each round and `previous.*` is refused in every prompt. Every introduced finding goes back in
+`rework` as itself; the reopened findings of one class go back as one send-back - the class, its count and all its
+findings, graded by the worst of them, so the loop's `blocking` reads `route.rework` as it read `review.findings`; and a
+class reopened a second time goes to `homeAudit` instead, which the loop's `until` reads beside `rework` and the
+`class-closure` check asks its home audit for - the one mechanism, whichever cause asks. A finding with no class, and a
+reopened one that names none, fail it. The shipped flow's fix loop decides after `route` (`decideAfter`), and its
+`rework.md` reads `route.rework` and `route.homeAudit`. A pre-existing issue the triage answers `next` for - a defect in
+code the run's change does not touch that blocks nothing - is owed the run's next round instead: `FlowCoordinator` sizes
+it from the triage's answer (`size`: its files, what must be built, what measured first - an answer whose size names no
+file refused) into `next-round.json` (`FlowNextRoundFile`, written as the run's issues are), which `run.nextRound` reads
+as the issues no ended work item of the run has settled - an item settles one by naming its id in `settles`, and the
+round's plan check (`PlanCheckRunner`, handed the owed issues under `next`) refuses a round whose items leave one
+unsettled, refuses an item that names an issue the run does not owe, and orders the settling items first - and the
+rounds' `until` reads `empty(run.nextRound)`, so a clean self-audit does not end them while one is left; never holding
+the round the issue came from, for the triage never holds a loop.
 `CreateAgentRunner` makes the agent the coordinator named
 (`OrchestrationRules.NextAgentName` over the run's agent directories, read under the orchestrator's lock by
 `IFlowRecords.NameAgent`, and every name its steps hold) for the model `WorkflowValidator.AgentModels` resolved, both

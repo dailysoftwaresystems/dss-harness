@@ -275,6 +275,13 @@ public sealed class ClassClosureStepRunner(
         List<string> homes = [.. entries.Select(entry => entry.HomePath).Distinct(platform.PathComparer())];
         var touches = await TouchesAsync(place, layout, store, run, homes, cancellationToken).ConfigureAwait(false);
 
+        // The classes the run's reviews reopened a second time, from the item's ledger - what route-findings keeps and
+        // the home audit is asked for again here, whichever course sent the class back.
+        var reopened = store.ReadClosureLedger(layout, agent)?.Classes
+            .Where(entry => entry.Reopens >= 2)
+            .Select(entry => entry.Class)
+            .ToHashSet(platform.PathComparer());
+
         var judged = ClassClosureRules.Judge(planned, entries, new ClassClosureProof(
             changed,
             calls,
@@ -286,6 +293,7 @@ public sealed class ClassClosureStepRunner(
             TouchesAll: touches.All,
             TouchesRequired: run.Step.Touches ?? WorkflowStepTypes.DefaultTouches,
             HotspotAt: run.Step.Hotspot ?? WorkflowStepTypes.DefaultHotspot,
+            ReopenedTwice: reopened,
             platform.PathComparison));
 
         var output = new JsonObject

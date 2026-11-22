@@ -614,7 +614,7 @@ public sealed class WorkflowFileParserTests
             """);
 
         Assert.Equal(
-            ["line 4, column 11: 'tests' is not a step type. Known: 'orient', 'graphify-codebase', 'reason', 'build', 'test', 'run', 'check-mutations', 'create-agent', 'fold', 'delete-agent', 'refresh', 'rebase', 'validate-plan', 'anchor-balance', 'anchor-citations', 'class-closure', 'ci-read', 'ci-wait', 'commit', 'push', 'pull-request', 'pause'."],
+            ["line 4, column 11: 'tests' is not a step type. Known: 'orient', 'graphify-codebase', 'reason', 'build', 'test', 'run', 'check-mutations', 'create-agent', 'fold', 'delete-agent', 'refresh', 'rebase', 'validate-plan', 'anchor-balance', 'anchor-citations', 'class-closure', 'route-findings', 'ci-read', 'ci-wait', 'commit', 'push', 'pull-request', 'pause'."],
             problems);
     }
 

@@ -223,9 +223,14 @@ public static partial class HelpTopics
         builder.AppendLine("whose triage failed, or met again after its fix was done, is raised anew; and it is never scheduled, as the");
         builder.AppendLine("recovery is not - and onAddress: recover: it reproduces the issue on the");
         builder.AppendLine("run's base commit, gives the recovery one that is in a step's way, related to the work or");
-        builder.AppendLine("critical, to fix at its root (a step it was in the way of runs again from where it stopped),");
-        builder.AppendLine("and lists the rest, proven, with a title and a description, in the run's");
-        builder.AppendLine("pre-existing-issues.json, shown at the end. Where a workflow has such a step, every other");
+        builder.AppendLine("critical, to fix at its root (a step it was in the way of runs again from where it stopped);");
+        builder.AppendLine("sends a defect in code the run's change does not touch, that blocks nothing, to the run's next");
+        builder.AppendLine("round - sized, by its files, what must be built and what measured first, in next-round.json,");
+        builder.AppendLine("which run.nextRound reads and a round's plan check holds its items to: each issue named in an");
+        builder.AppendLine("item's settles, none left unsettled, the settling items first, and the rounds going on while one");
+        builder.AppendLine("is left - never holding the round the issue came from; and");
+        builder.AppendLine("lists the rest, proven, with a title and a description, in the run's");
+        builder.AppendLine("pre-existing-issues.json, given to the work sync at the end. Where a workflow has such a step, every other");
         builder.AppendLine("reasoning step names it, so no issue is lost.");
         builder.AppendLine();
         builder.AppendLine("A reasoning step names its tier or its model and its effort: one level for every model it");
@@ -471,8 +476,14 @@ public static partial class HelpTopics
             + "record's, the paths changed, an arm's site and the touches - are read as the plan check reads them, either "
             + "separator, and compared as this machine compares paths; a fold it cannot weigh fails it with "
             + "the weighing's own code. Its problems are the record's (1, which close-class repairs) apart from a missing "
-            + "home audit (2, which home-audit makes), and it answers passed, problems, hotspots - the homes touched hotspot "
-            + "times or more - and touches. ci-read reads the legs check-ci-legs reads, of its branch - the one checked out in the main checkout where "
+            + "home audit (2, which home-audit makes - a home touched by other work, or a class the item's ledger says a "
+            + "review reopened a second time), and it answers passed, problems, hotspots - the homes touched hotspot "
+            + "times or more - and touches. route-findings routes the review's findings by the class of each, keeping "
+            + "the item's ledger (closure-ledger.json in its agent's directory) of how often each class was reopened: "
+            + "every introduced finding - a defect the diff made - goes back in rework as itself, the reopened findings "
+            + "of one class go back as one send-back carrying them all and graded by the worst of them, and a class "
+            + "reopened a second time goes to homeAudit instead, for the next action is the home audit; it answers "
+            + "rework, homeAudit and reopened, the count per class. ci-read reads the legs check-ci-legs reads, of its branch - the one checked out in the main checkout where "
             + "it names none - and its newest limit runs, answering passed, branch, matrixRan, legs and red, each leg as check-ci-legs --json "
             + "gives it. ci-wait waits for every check run and commit status the forge lists for its commit - the commit the run last "
             + $"pushed where it names none, refused ({HarnessExit.Refused}) where it pushed none - less those its ignore names - a job "

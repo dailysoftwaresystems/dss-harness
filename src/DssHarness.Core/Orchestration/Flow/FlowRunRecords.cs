@@ -408,6 +408,9 @@ public sealed class FlowRunRecords : IFlowRecords, IDisposable
     /// <summary>The issues last written, so a change whose snapshot holds the same list writes no file for it.</summary>
     private IReadOnlyList<PreExistingIssue>? _issuesWritten;
 
+    /// <summary>The next round's issues last written, as the issues are.</summary>
+    private IReadOnlyList<FlowNextIssue>? _nextRoundWritten;
+
     /// <summary>One writer of the run's status, and of nothing else.</summary>
     public WorkflowStatusWriter Status => _status;
 
@@ -448,6 +451,7 @@ public sealed class FlowRunRecords : IFlowRecords, IDisposable
         {
             // A resume's first change writes the run's issues only where its list differs from the file's.
             _issuesWritten = _store.ReadPreExistingIssues(_layout)?.Issues;
+            _nextRoundWritten = _store.ReadNextRound(_layout)?.Issues;
             return;
         }
 
@@ -463,6 +467,13 @@ public sealed class FlowRunRecords : IFlowRecords, IDisposable
         {
             _issues.Write([], _clock.GetUtcNow());
             _issuesWritten = [];
+        }
+
+        // The next round's issues are created empty with it too: what run.nextRound reads has a file from the start.
+        if (_store.ReadNextRound(_layout) is null)
+        {
+            _store.WriteNextRound(_layout, new FlowNextRoundFile(1, _context.Run, _clock.GetUtcNow(), []));
+            _nextRoundWritten = [];
         }
 
         // The run's questions and answers are created empty with it too: the one owner of what every question said
@@ -552,6 +563,12 @@ public sealed class FlowRunRecords : IFlowRecords, IDisposable
         {
             _issues.Write(issues, at);
             _issuesWritten = [.. issues];
+        }
+
+        if (snapshot.NextRound is { } next && (_nextRoundWritten is null || !next.SequenceEqual(_nextRoundWritten)))
+        {
+            _store.WriteNextRound(_layout, new FlowNextRoundFile(1, _context.Run, at, next));
+            _nextRoundWritten = [.. next];
         }
 
         // Then the event that tells of it, last: a client woken by it reads the files already written.

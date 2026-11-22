@@ -28,9 +28,9 @@ public sealed class WorkflowTemplatesTests
         var definition = WorkflowTemplates.ShippedDefinition();
 
         Assert.Equal(WorkflowTemplates.ShippedWorkflowName, definition.Name);
-        Assert.Equal(89, Count(definition.Steps));
-        Assert.Equal(57, Count(definition.Recover!.Steps));
-        Assert.Equal(58, Count([.. definition.Steps, .. definition.Recover.Steps], "reason"));
+        Assert.Equal(91, Count(definition.Steps));
+        Assert.Equal(59, Count(definition.Recover!.Steps));
+        Assert.Equal(60, Count([.. definition.Steps, .. definition.Recover.Steps], "reason"));
         Assert.Equal(6, definition.Inputs.Count);
         Assert.Contains(definition.Inputs, input => input.Name == "finalTests" && input.Default == "affected");
         Assert.Equal(["affected", "all"], definition.Inputs.Single(input => input.Name == "finalTests").Options);
@@ -170,6 +170,7 @@ public sealed class WorkflowTemplatesTests
             ("types", null, "changes"),
             ("comments", null, "changes"),
             ("simplicity", null, "changes"),
+            ("closure", "tools", "changes"),
             ("rework", null, "changes"),
             ("remend", null, "changes"),
             ("reclose-class", null, "changes"),
@@ -537,9 +538,9 @@ public sealed class WorkflowTemplatesTests
         var triage = JsonNode.Parse(WorkflowTemplates.TextOf("schemas/pre-existing.schema.json")!)!.AsObject();
 
         Assert.Equal(
-            ["course", "title", "description", "where", "proof", "blocks", "related", "critical", "why", "duplicates"],
+            ["course", "title", "description", "where", "proof", "size", "blocks", "related", "critical", "why", "duplicates"],
             triage["required"]!.AsArray().Select(member => member!.GetValue<string>()));
-        Assert.Equal(["fix", "list", "duplicate", "unproven"], triage["properties"]!["course"]!["enum"]!.AsArray().Select(value => value!.GetValue<string>()));
+        Assert.Equal(["fix", "next", "list", "duplicate", "unproven"], triage["properties"]!["course"]!["enum"]!.AsArray().Select(value => value!.GetValue<string>()));
     }
 
     /// <summary>
@@ -553,7 +554,7 @@ public sealed class WorkflowTemplatesTests
         var agents = WorkflowTemplates.Files.Where(file =>
             file.StartsWith("agents/", StringComparison.Ordinal) || file.StartsWith("item-pipeline/agents/", StringComparison.Ordinal)).ToList();
 
-        Assert.Equal(18, agents.Count);
+        Assert.Equal(19, agents.Count);
 
         foreach (var agent in agents)
         {
@@ -613,7 +614,7 @@ public sealed class WorkflowTemplatesTests
 
         Assert.Contains("rounds: 3", pipeline, StringComparison.Ordinal);
         Assert.Contains(
-            "blocking: \"any(review.findings, it.severity != 'low' && it.severity != 'nit')\"",
+            "blocking: \"any(route.rework, it.severity != 'low' && it.severity != 'nit')\"",
             pipeline,
             StringComparison.Ordinal);
         Assert.DoesNotContain("it.production && it.severity", pipeline, StringComparison.Ordinal);
@@ -621,8 +622,8 @@ public sealed class WorkflowTemplatesTests
         var fix = StepAt(WorkflowTemplates.ShippedDefinition().Steps, "rounds", "items", "fix");
 
         Assert.Equal(3, fix.Repeat!.BlockersLimitRounds);
-        Assert.Equal("review.findings", fix.Repeat.Leftover);
-        Assert.Equal("review", fix.Repeat.DecideAfter);
+        Assert.Equal("route.rework", fix.Repeat.Leftover);
+        Assert.Equal("route", fix.Repeat.DecideAfter);
         Assert.Equal(new FlowAnswer("accept", null, null), fix.Answers["loopBound"]);
     }
 
@@ -885,9 +886,9 @@ public sealed class WorkflowTemplatesTests
             Prose.Words(WorkflowTemplates.TextOf("item-pipeline/agents/implementer.md")!),
             StringComparison.Ordinal);
 
-        // The builders and the goings-on alone read the classes; no other shipped file does.
+        // The builders, the goings-on and the review alone read the classes; no other shipped file does.
         Assert.Equal(
-            [.. goesOn.Append("item-pipeline/prompts/implement.md").Append("item-pipeline/prompts/remedy.md").Order(StringComparer.Ordinal)],
+            [.. goesOn.Append("item-pipeline/prompts/implement.md").Append("item-pipeline/prompts/remedy.md").Append("item-pipeline/prompts/review.md").Order(StringComparer.Ordinal)],
             [.. WorkflowTemplates.Files
                 .Where(file => WorkflowTemplates.TextOf(file)!.Contains("{input.item.classes}", StringComparison.Ordinal))
                 .Order(StringComparer.Ordinal)]);
@@ -1051,7 +1052,7 @@ public sealed class WorkflowTemplatesTests
         Assert.Equal(["item-problems", "item-audit"], StepAt(definition.Steps, "rounds", "items").DependsOn);
         Assert.Equal("item-check.items", StepAt(definition.Steps, "rounds", "items").ForEach);
         Assert.Equal(
-            "self-audit.clean && (gate.passed ?? true) && (mutations.passed ?? true) && empty(round-checks.findings)",
+            "self-audit.clean && (gate.passed ?? true) && (mutations.passed ?? true) && empty(round-checks.findings) && empty(run.nextRound)",
             StepAt(definition.Steps, "rounds").Repeat!.Until);
 
         Assert.Equal(["direction"], StepAt(recover, "redirect").DependsOn);

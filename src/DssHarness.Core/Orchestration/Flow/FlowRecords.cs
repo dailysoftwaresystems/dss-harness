@@ -866,6 +866,100 @@ public sealed record PreExistingProof(string Kind, string At, string? File = nul
 }
 
 /// <summary>
+/// The run's record of the issues its triages sent to its next round, <c>next-round.json</c>: each a defect the run
+/// took from a round's work and owes its next round as its first item, with its size. What <c>run.nextRound</c> reads:
+/// the issues no ended work item of the run has settled, for the rounds to go on while one is left. Nothing else writes
+/// the file, and it holds nothing but the issue and its size.
+/// </summary>
+/// <param name="Schema">The file's schema; 1.</param>
+/// <param name="Run">The run's name.</param>
+/// <param name="UpdatedAt">When this record was written.</param>
+/// <param name="Issues">Each issue owed a next round, in the order added.</param>
+public sealed record FlowNextRoundFile(
+    int Schema,
+    string Run,
+    [property: JsonConverter(typeof(FlowTimeConverter))] DateTimeOffset UpdatedAt,
+    IReadOnlyList<FlowNextIssue> Issues)
+{
+    /// <summary>What is wrong with this file; null when nothing is.</summary>
+    public string? Problem()
+        => Schema != 1 ? $"its schema is {Schema.ToString(CultureInfo.InvariantCulture)}, and this build reads 1"
+            : string.IsNullOrWhiteSpace(Run) ? "it names no run"
+            : Issues.Any(issue => issue.Problem() is { } problem) ? Issues.First(issue => issue.Problem() is not null).Problem()!
+            : Issues.Select((issue, at) => (issue, at)).Any(pair => !string.Equals(pair.issue.Id, $"nx-{(pair.at + 1).ToString(CultureInfo.InvariantCulture)}", StringComparison.Ordinal))
+                ? "ids are nx-<n>, in the order added"
+            : null;
+}
+
+/// <summary>
+/// One issue the run owes its next round, with its size: what the self-audit is told to make the round's first item of,
+/// which names it in <c>settles</c>, and what item-check holds the round to.
+/// </summary>
+/// <param name="Id">The issue's id: <c>nx-&lt;n&gt;</c>, in the order added.</param>
+/// <param name="Title">What it is, in a line.</param>
+/// <param name="Description">What it is, in the words the triage gave.</param>
+/// <param name="Where">The files it is in, as the repository spells them.</param>
+/// <param name="Files">The files fixing it touches, as the triage sized it.</param>
+/// <param name="Build">What must be built to fix it; empty where nothing must.</param>
+/// <param name="MeasureFirst">What must be measured before it is fixed; empty where nothing must.</param>
+/// <param name="FoundBy">The triage instance that sent it to the next round.</param>
+/// <param name="FoundAt">When it was sent.</param>
+public sealed record FlowNextIssue(
+    string Id,
+    string Title,
+    string Description,
+    IReadOnlyList<string> Where,
+    IReadOnlyList<string> Files,
+    string Build,
+    IReadOnlyList<string> MeasureFirst,
+    string FoundBy,
+    [property: JsonConverter(typeof(FlowTimeConverter))] DateTimeOffset FoundAt)
+{
+    /// <summary>What is wrong with this issue; null when nothing is.</summary>
+    public string? Problem()
+        => string.IsNullOrWhiteSpace(Id) || !Id.StartsWith("nx-", StringComparison.Ordinal) ? "its id is nx-<n>"
+            : string.IsNullOrWhiteSpace(Title) ? "it names nothing in its title"
+            : string.IsNullOrWhiteSpace(Description) ? "it says nothing in its description"
+            : Where.Count == 0 || Where.Any(path => string.IsNullOrWhiteSpace(path)) ? "it names no file it is in"
+            : Files.Count == 0 || Files.Any(path => string.IsNullOrWhiteSpace(path)) ? "its size names no file it touches"
+            : !FlowInstanceId.IsWellFormed(FoundBy) ? $"'{FoundBy}' is not an instance id"
+            : null;
+}
+
+/// <summary>
+/// One item's closure ledger, <c>closure-ledger.json</c> in its agent's directory: how often each of its classes was
+/// reopened by a review, kept by the engine across the fix loop's iterations and across a resume. The
+/// <c>route-findings</c> step writes it and the <c>class-closure</c> check reads it: a class reopened a second time is
+/// the check's own cause for a home audit, whichever course asks for it.
+/// </summary>
+/// <param name="Schema">The file's schema; 1.</param>
+/// <param name="Agent">The agent whose item the ledger is of.</param>
+/// <param name="Classes">Each class of the item's record the run's reviews have reopened, with how often.</param>
+public sealed record FlowClosureLedgerFile(int Schema, string Agent, IReadOnlyList<FlowClosureReopens> Classes)
+{
+    /// <summary>What is wrong with this file; null when nothing is.</summary>
+    public string? Problem()
+        => Schema != 1 ? $"its schema is {Schema.ToString(CultureInfo.InvariantCulture)}, and this build reads 1"
+            : string.IsNullOrWhiteSpace(Agent) ? "it names no agent"
+            : Classes.Any(entry => entry.Problem() is { } problem) ? Classes.First(entry => entry.Problem() is not null).Problem()
+            : Classes.GroupBy(entry => entry.Class, StringComparer.Ordinal).FirstOrDefault(group => group.Count() > 1) is { } twice
+                ? $"it holds the class '{twice.Key}' twice, and a class holds one entry"
+            : null;
+}
+
+/// <summary>One class of an item's record, and how often the run's reviews reopened it.</summary>
+/// <param name="Class">The class, by the id the item's plan knows it by.</param>
+/// <param name="Reopens">How many rounds of review found another instance of it, one send-back a round.</param>
+public sealed record FlowClosureReopens(string Class, int Reopens)
+{
+    /// <summary>What is wrong with this entry; null when nothing is.</summary>
+    public string? Problem()
+        => string.IsNullOrWhiteSpace(Class) ? "an entry names no class"
+            : Reopens < 1 ? $"the class '{Class}' is reopened {Reopens.ToString(CultureInfo.InvariantCulture)} times"
+            : null;
+}
+
+/// <summary>
 /// The run's live owner, <c>.orchestrators/&lt;run&gt;.owner.json</c>: the process that drives it. A live owner refuses
 /// a session (13); a dead one is reclaimed and said - and what its steps started is ended at the resume before anything
 /// is continued.
@@ -947,6 +1041,10 @@ public enum FlowChangeKind
 /// them in this change's own order - after the run's status, before the event - where the list differs from the one
 /// last written; null where the change says nothing of them.
 /// </param>
+/// <param name="NextRound">
+/// Every issue the run owes its next round, whole, where the change holds them: the records write the run's file of
+/// them as they write its listed issues; null where the change says nothing of them.
+/// </param>
 public sealed record FlowSnapshot(
     FlowRunStatus Status,
     DateTimeOffset? EndedAt,
@@ -959,7 +1057,8 @@ public sealed record FlowSnapshot(
     IReadOnlyList<FlowRedirectRecord>? Redirects = null,
     FlowHoldRecord? Hold = null,
     WorkflowPreExisting? PreExisting = null,
-    IReadOnlyList<PreExistingIssue>? Issues = null);
+    IReadOnlyList<PreExistingIssue>? Issues = null,
+    IReadOnlyList<FlowNextIssue>? NextRound = null);
 
 /// <summary>One step instance as the snapshot holds it: everything its own record and the index say of it.</summary>
 /// <param name="Instance">The instance's id.</param>

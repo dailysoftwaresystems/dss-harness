@@ -1097,6 +1097,9 @@ public sealed record WorkflowStep
     /// <summary>An expression yielding the list of work items a plan check checks.</summary>
     public string? Items { get; init; } = null;
 
+    /// <summary>An expression yielding the findings a route-findings step routes by class.</summary>
+    public string? Findings { get; init; } = null;
+
     /// <summary>An expression yielding the pieces of a plan update, checked with the items.</summary>
     public string? Scope { get; init; } = null;
 

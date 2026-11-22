@@ -724,6 +724,13 @@ public static class WorkflowValidator
 
                         break;
 
+                    case "route-findings":
+                        // The findings are read where the step starts, as an expression the engine resolves: the review's
+                        // own, each classed introduced or reopened by the reviewers that found them.
+                        Expression(entry, entry.Step.Findings ?? string.Empty, "findings");
+
+                        break;
+
                     case "ci-read":
                     case "ci-wait":
                         Positive(entry.Step.Limit, $"{where}: limit");

@@ -353,6 +353,10 @@ public sealed record ClassClosureMeasured(string Leg, string Variant, string Fil
 /// <param name="TouchesAll">How often each home path was touched in this run, this item's own commits among them.</param>
 /// <param name="TouchesRequired">How many touches by others require a home audit; 0 where none is required.</param>
 /// <param name="HotspotAt">How many touches name a home a hotspot; never reached, nothing is listed.</param>
+/// <param name="ReopenedTwice">
+/// The classes the item's ledger says the run's reviews reopened a second time, by id - what <c>route-findings</c> keeps
+/// and this check asks for; null where none is read, as a manual lane's fold holds no ledger.
+/// </param>
 /// <param name="PathComparison">How this machine compares paths (<see cref="Platform.IHostPlatform.PathComparison"/>), as the plan check compares a class's.</param>
 public sealed record ClassClosureProof(
     IReadOnlyList<string>? Changed,
@@ -365,6 +369,7 @@ public sealed record ClassClosureProof(
     IReadOnlyDictionary<string, int> TouchesAll,
     int TouchesRequired,
     int HotspotAt,
+    IReadOnlySet<string>? ReopenedTwice,
     StringComparison PathComparison)
 {
     /// <summary>Whether the record is a manual lane's, judged by hand: no stored stream holds its calls.</summary>
@@ -400,6 +405,7 @@ public sealed record ClassClosureProof(
             new Dictionary<string, int>(),
             TouchesRequired: 0,
             HotspotAt: int.MaxValue,
+            ReopenedTwice: null,
             pathComparison);
 }
 
@@ -445,8 +451,9 @@ public sealed record ClassClosureJudged(
 /// it was not;
 /// every test of the pin is declared in the worktree; where the worktree's configuration declares an arms registry, the
 /// arm is one of its arms and mutates the home's own file, or the record says why the class has none; the universe holds
-/// every axis the plan names, and the claim names every axis of it; and where the home was touched by other work, the
-/// record carries a home audit. A class's paths - in the plan and in the record, the paths changed, an arm's site and the
+/// every axis the plan names, and the claim names every axis of it; and where the home was touched by other work, or the
+/// item's ledger says the run's reviews reopened the class a second time, the record carries a home audit. A class's
+/// paths - in the plan and in the record, the paths changed, an arm's site and the
 /// touches - are read as the plan check reads them, either separator, and compared as this machine compares paths
 /// (<see cref="ClassClosureProof.SamePath"/>).
 /// </summary>
@@ -750,9 +757,18 @@ public static class ClassClosureRules
             hotspots.Add(new ClassClosureHotspot(entry.Class, entry.HomePath, all));
         }
 
-        if (entry.HomeAudit is null && proof.TouchesRequired > 0 && byOthers >= proof.TouchesRequired)
+        if (entry.HomeAudit is not null)
+        {
+            return;
+        }
+
+        if (proof.TouchesRequired > 0 && byOthers >= proof.TouchesRequired)
         {
             audits.Add($"class '{entry.Class}': home touched {byOthers.ToString(System.Globalization.CultureInfo.InvariantCulture)} times in this run by other work");
+        }
+        else if (proof.ReopenedTwice?.Contains(entry.Class) == true)
+        {
+            audits.Add($"class '{entry.Class}' reopened twice");
         }
     }
 }

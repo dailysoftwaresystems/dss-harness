@@ -92,7 +92,7 @@ public static class WorkflowTemplates
     private static IReadOnlyList<string> PipelineAgents =>
     [
         "implementer", "review-scope", "reviewer-correctness", "reviewer-errors", "reviewer-tests",
-        "reviewer-types", "reviewer-comments", "reviewer-simplicity",
+        "reviewer-types", "reviewer-comments", "reviewer-simplicity", "reviewer-closure",
     ];
 
     /// <summary>The prompt files the item pipeline names, the two its uses hand it among them.</summary>
@@ -124,6 +124,7 @@ public static class WorkflowTemplates
         $"item-pipeline/{HarnessLayout.WorkflowAgentsDirectoryName}/reviewer-types.md",
         $"item-pipeline/{HarnessLayout.WorkflowAgentsDirectoryName}/reviewer-comments.md",
         $"item-pipeline/{HarnessLayout.WorkflowAgentsDirectoryName}/reviewer-simplicity.md",
+        $"item-pipeline/{HarnessLayout.WorkflowAgentsDirectoryName}/reviewer-closure.md",
         .. PipelinePrompts.Select(prompt => $"item-pipeline/prompts/{prompt}.md"),
         .. PipelineSchemas.Select(schema => $"item-pipeline/schemas/{schema}.schema.json"),
         $"item-pipeline/item-pipeline{HarnessLayout.WorkflowFileExtension}",

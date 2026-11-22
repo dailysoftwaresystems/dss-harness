@@ -260,7 +260,7 @@ steps:
   - name: rounds
     dependsOn: [planning]
     repeat:
-      until: 'self-audit.clean && (gate.passed ?? true) && (mutations.passed ?? true) && empty(round-checks.findings)'
+      until: 'self-audit.clean && (gate.passed ?? true) && (mutations.passed ?? true) && empty(round-checks.findings) && empty(run.nextRound)'
       maxIterations: 2
       leftover: 'self-audit.findings'
     answers:

@@ -1040,6 +1040,7 @@ public sealed class CheckStepRunnerTests : IDisposable
                 TouchesAll: new Dictionary<string, int> { ["src/Rates/Home.cs"] = 3 },
                 TouchesRequired: 1,
                 HotspotAt: 5,
+                ReopenedTwice: null,
                 comparison);
     }
 
@@ -1469,7 +1470,8 @@ public sealed class CheckStepRunnerTests : IDisposable
         IReadOnlyList<string> changed,
         IReadOnlyList<DssHarness.Core.Agents.AgentStreamCall> calls,
         Func<string, string, bool>? declares = null,
-        IReadOnlyDictionary<string, ClassClosureMeasure>? measures = null)
+        IReadOnlyDictionary<string, ClassClosureMeasure>? measures = null,
+        IReadOnlySet<string>? reopenedTwice = null)
         => new(
             changed,
             calls.ToDictionary(call => call.Id, StringComparer.Ordinal),
@@ -1481,6 +1483,7 @@ public sealed class CheckStepRunnerTests : IDisposable
             new Dictionary<string, int>(),
             TouchesRequired: WorkflowStepTypes.DefaultTouches,
             HotspotAt: WorkflowStepTypes.DefaultHotspot,
+            ReopenedTwice: reopenedTwice,
             StringComparison.Ordinal);
 
     /// <summary>An agent service whose fold's dry weighing plans to write <paramref name="written"/>, and nothing else.</summary>
@@ -1498,6 +1501,110 @@ public sealed class CheckStepRunnerTests : IDisposable
     }
 
     /// <summary>The class-closure runner over the kit's own services, the agent service and the graph given.</summary>
+    /// <summary>
+    /// The <c>route-findings</c> step routes the review's findings by their class: every introduced finding goes back
+    /// as itself, the reopened findings of one class go back as one send-back - the class, its count and all its
+    /// findings, graded by the worst of them - and a class reopened a second time goes to <c>homeAudit</c> instead, for
+    /// the next action is the home audit. The item's ledger keeps the counts in its agent's directory, so a later
+    /// visit knows what the rounds before it reopened, and a round that reopens nothing moves nothing.
+    /// </summary>
+    [Fact]
+    public async Task TheRouteFindingsStep_SendsAClassBackOnce_RaisesAHomeAuditOnTheSecondReopening_AndKeepsItsLedger()
+    {
+        var temp = new TempDirectory();
+        _made.Add(temp);
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        await kit.CreateAgentAsync("builder");
+
+        var first = await Route(kit).RunAsync(RouteRun(kit,
+            Routed(text: "the report ships without its frame", severity: "high"),
+            Routed(text: "the rate is decided again in the report", severity: "medium", @class: "reopened", reopens: "c-rate"),
+            Routed(text: "the rate is decided again in the summary", severity: "low", @class: "reopened", reopens: "c-rate")), Token);
+
+        Assert.True(first.Passed);
+        var rework = first.Output!["rework"]!.AsArray();
+        Assert.Equal(2, rework.Count);
+        Assert.Equal("introduced", rework[0]!["class"]!.GetValue<string>());
+        Assert.Equal("the report ships without its frame", rework[0]!["text"]!.GetValue<string>());
+        var sendBack = rework[1]!;
+        Assert.Equal(("c-rate", 1, "medium"), (sendBack["class"]!.GetValue<string>(), sendBack["reopens"]!.GetValue<int>(), sendBack["severity"]!.GetValue<string>()));
+        Assert.Equal(2, sendBack["findings"]!.AsArray().Count);
+        Assert.Empty(first.Output["homeAudit"]!.AsArray());
+        Assert.Equal(("c-rate", 1), (first.Output["reopened"]!.AsArray()[0]!["class"]!.GetValue<string>(), first.Output["reopened"]!.AsArray()[0]!["reopens"]!.GetValue<int>()));
+
+        var ledger = kit.Harness.OrchestrationStore.ReadClosureLedger(kit.Layout, "builder");
+
+        Assert.NotNull(ledger);
+        Assert.Equal(new FlowClosureReopens("c-rate", 1), Assert.Single(ledger.Classes));
+
+        // A second visit reopening the same class: the send-back is a home audit now, the count kept by the ledger.
+        var second = await Route(kit).RunAsync(RouteRun(kit, Routed(text: "once more", @class: "reopened", reopens: "c-rate")), Token);
+
+        Assert.Empty(second.Output!["rework"]!.AsArray());
+        var audit = Assert.Single(second.Output["homeAudit"]!.AsArray());
+        Assert.Equal(("c-rate", 2, "medium"), (audit!["class"]!.GetValue<string>(), audit["reopens"]!.GetValue<int>(), audit["severity"]!.GetValue<string>()));
+        Assert.Equal(2, kit.Harness.OrchestrationStore.ReadClosureLedger(kit.Layout, "builder")!.Classes[0].Reopens);
+
+        // A round that reopens nothing leaves the ledger where it was and routes nothing.
+        var third = await Route(kit).RunAsync(RouteRun(kit), Token);
+
+        Assert.Empty(third.Output!["rework"]!.AsArray());
+        Assert.Empty(third.Output["homeAudit"]!.AsArray());
+        Assert.Equal(("c-rate", 2), (third.Output["reopened"]!.AsArray()[0]!["class"]!.GetValue<string>(), third.Output["reopened"]!.AsArray()[0]!["reopens"]!.GetValue<int>()));
+        Assert.Equal(2, kit.Harness.OrchestrationStore.ReadClosureLedger(kit.Layout, "builder")!.Classes[0].Reopens);
+    }
+
+    /// <summary>A finding the route cannot read - no class, or a reopened one that names no class - fails the step naming it, for no finding may vanish unsaid.</summary>
+    [Fact]
+    public async Task AFindingsTheRouteCannotRead_FailsTheStep_NamingIt()
+    {
+        var temp = new TempDirectory();
+        _made.Add(temp);
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        await kit.CreateAgentAsync("builder");
+
+        var bare = new JsonObject { ["aspect"] = "correctness", ["path"] = "src/one/one.cs:1", ["text"] = "wrong", ["severity"] = "high", ["production"] = true };
+        var unclassed = await Route(kit).RunAsync(RouteRun(kit, bare), Token);
+
+        Assert.Equal(HarnessExit.ConfigInvalid, unclassed.Exit);
+        Assert.Equal("'rounds#1.items[0].route' cannot route a finding whose class is 'none': every finding is introduced or reopened", unclassed.Error);
+
+        var unnamed = await Route(kit).RunAsync(RouteRun(kit, Routed(@class: "reopened", reopens: "")), Token);
+
+        Assert.Equal(HarnessExit.ConfigInvalid, unnamed.Exit);
+        Assert.Equal("'rounds#1.items[0].route' cannot route a reopened finding that names no class it reopens: reopens holds the class id, as the item's classes name it", unnamed.Error);
+        Assert.Null(kit.Harness.OrchestrationStore.ReadClosureLedger(kit.Layout, "builder"));
+    }
+
+    /// <summary>
+    /// The class-closure check asks a home audit of a class the item's ledger says the reviews reopened a second time -
+    /// the audit the route asked for, made by the one mechanism the check owns - and the record that carries one passes.
+    /// </summary>
+    [Fact]
+    public async Task TheClassClosureCheck_RequiresAHomeAuditOfAClassTheLedgerReopenedTwice()
+    {
+        var temp = new TempDirectory();
+        _made.Add(temp);
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        await kit.CreateAgentAsync("builder");
+        kit.Harness.OrchestrationStore.WriteClosureLedger(kit.Layout, "builder", new FlowClosureLedgerFile(1, "builder", [new FlowClosureReopens("c-rate", 2)]));
+
+        var entry = Entry("c-rate", home: "src/Home.cs", sites: [], searches: [], neighbours: [], tests: [], axes: ["format"], claim: "The rate holds over every format");
+
+        var refused = await Closure(kit, Weighing()).RunAsync(ClosureRun(kit, Class("c-rate", home: "src/Home.cs", symbol: "Home"), entry), Token);
+
+        Assert.Equal(
+            ["class 'c-rate' reopened twice"],
+            [.. refused.Output!["problems"]!.AsArray().Select(problem => problem!.GetValue<string>())]);
+        Assert.Equal(ClassClosureExit.HomeAudit, refused.Exit);
+
+        entry["homeAudit"] = new JsonObject { ["consolidated"] = new JsonArray("the rate"), ["invariants"] = new JsonArray("one place"), ["structural"] = new JsonArray("Home holds it") };
+
+        var audited = await Closure(kit, Weighing()).RunAsync(ClosureRun(kit, Class("c-rate", home: "src/Home.cs", symbol: "Home"), (JsonObject)entry.DeepClone()), Token);
+
+        Assert.True(audited.Output!["passed"]!.GetValue<bool>());
+    }
+
     private static ClassClosureStepRunner Closure(OrchestrationKit kit, DssHarness.Core.Orchestration.IAgentService agents, DssHarness.Core.Codebase.ICodebaseGraphService? graphs = null)
         => new(
             kit.Harness.ContextLoader,
@@ -1522,6 +1629,36 @@ public sealed class CheckStepRunnerTests : IDisposable
             worksIn: "builder",
             instance: "rounds#1.items[0].class-closure",
             run: OrchestrationKit.Orchestrator);
+
+    /// <summary>A route-findings step of the kit's run, working in the agent 'builder', routing the findings given.</summary>
+    private static RouteFindingsStepRunner Route(OrchestrationKit kit)
+        => new(kit.Harness.ContextLoader, kit.Harness.Platform, kit.Harness.OrchestrationStore);
+
+    /// <summary>A route-findings run of the kit's, routing <paramref name="findings"/>.</summary>
+    private static FlowStepRun RouteRun(OrchestrationKit kit, params JsonObject[] findings)
+        => Run(
+            new WorkflowStep { Name = "route", Type = "route-findings", In = "item-agent", Findings = "review.findings" },
+            kit.Main,
+            read: new Dictionary<string, FlowValue>
+            {
+                ["findings"] = FlowValue.Of(new JsonArray([.. findings])),
+            },
+            worksIn: "builder",
+            instance: "rounds#1.items[0].route",
+            run: OrchestrationKit.Orchestrator);
+
+    /// <summary>One finding of a review, as the review's schema holds it: classed introduced or reopened, the reopened naming its class.</summary>
+    private static JsonObject Routed(string text = "wrong", string severity = "medium", string @class = "introduced", string reopens = "")
+        => new()
+        {
+            ["aspect"] = "closure",
+            ["path"] = "src/one/one.cs:1",
+            ["text"] = text,
+            ["severity"] = severity,
+            ["production"] = true,
+            ["class"] = @class,
+            ["reopens"] = reopens,
+        };
 
     /// <summary>One planned class of the item's plan, as the plan's own check reads it.</summary>
     private static JsonObject Class(string id, string home, string symbol, string? site = null)

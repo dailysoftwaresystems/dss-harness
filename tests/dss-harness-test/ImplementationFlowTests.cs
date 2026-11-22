@@ -177,6 +177,7 @@ public sealed class ImplementationFlowTests
                 new OrientRunner(harness.ContextLoader, harness.Platform, harness.GitClient, fileSystem, store, harness.WorktreeService, harness.RunLock, new TreeHolders(harness.RunLock, harness.Slots, harness.Identity)),
                 new GraphifyCodebaseRunner(harness.ContextLoader, harness.Platform, harness.CodebaseGraph, harness.PathBudget, DssHarness.Core.Codebase.CodeGraphExtractors.OfThisBuild, store),
                 new PlanCheckRunner(harness.ContextLoader, harness.Platform, new PlanValidator(fileSystem, harness.PathBudget, harness.Platform)),
+                new RouteFindingsStepRunner(harness.ContextLoader, harness.Platform, store),
                 create,
                 reason,
                 .. own,
@@ -1114,8 +1115,8 @@ public sealed class ImplementationFlowTests
         };
     }
 
-    /// <summary>One finding of a review: what goes wrong, where, how much it matters and whether the product ships it.</summary>
-    private static JsonObject Finding(string aspect = "correctness", string severity = "medium", string text = "The report ships without its frame, so a week of orders reads as one run", bool production = true)
+    /// <summary>One finding of a review: what goes wrong, where, how much it matters, whether the product ships it, and its class - introduced, a defect the change made, or reopened with the class id another instance is of.</summary>
+    private static JsonObject Finding(string aspect = "correctness", string severity = "medium", string text = "The report ships without its frame, so a week of orders reads as one run", bool production = true, string @class = "introduced", string reopens = "")
         => new()
         {
             ["aspect"] = aspect,
@@ -1123,6 +1124,8 @@ public sealed class ImplementationFlowTests
             ["text"] = text,
             ["severity"] = severity,
             ["production"] = production,
+            ["class"] = @class,
+            ["reopens"] = reopens,
         };
 
     /// <summary>The run's own audit: clean or not, with the next round's items where it is not.</summary>
@@ -1974,6 +1977,142 @@ public sealed class ImplementationFlowTests
             var handoff = kit.Agents.Of("scribe").Single();
 
             Assert.Contains("The report ships without its frame", handoff.Prompt, StringComparison.Ordinal);
+        }
+
+        /// <summary>
+        /// A finding classed reopened - another instance of a class the item closes - never goes back as one finding
+        /// alone: the routing step sends the class back once as one send-back carrying all its findings, and where a
+        /// later round reopens the same class again it sends back a home audit instead, the count kept in the item's
+        /// ledger across the loop's rounds. The loop ends only where no send-back and no audit stands.
+        /// </summary>
+        [Fact]
+        public async Task AClassReopenedByTheReview_IsSentBackWhole_AndASecondReopeningAsksForItsHomeAudit()
+        {
+            using var temp = new TempDirectory();
+            var kit = await PrepareAsync(
+                temp,
+                script: agents =>
+                {
+                    agents.Queue("implementer", Completed(Implement()), Completed(Implement()), Completed(Implement()));
+                    agents.Queue(
+                        "reviewer-correctness",
+                        Completed(Review(Finding(text: "the frame is decided again in the report", @class: "reopened", reopens: "c-frame"))),
+                        Completed(Review(Finding(text: "the frame is decided again in the summary", @class: "reopened", reopens: "c-frame"))),
+                        Completed(Review()));
+                });
+
+            var end = await StartAsync(kit, "request=Ship the orders report.", "preapproved=yes");
+
+            Assert.True(HarnessExit.Success == end.ExitCode, $"{end.Message} | {string.Join(" | ", end.Details ?? [])}");
+            Assert.Equal(nameof(FlowRunStatus.Done), kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf())!.Status);
+
+            // Three rounds: the first reopened the class, the second reopened it again, the third was clean - and each
+            // of the first two was worked, for the loop ends only where the routing holds nothing.
+            Assert.Equal(3, kit.Agents.Of("reviewer-correctness").Count);
+            Assert.Equal(3, kit.Agents.Of("implementer").Count);
+
+            // The builder's rework prompts read the routing: the first round's the class send-back with both its
+            // findings, the second's the home audit the second reopening asked for.
+            Assert.Contains("c-frame", kit.Agents.Of("implementer")[1].Prompt, StringComparison.Ordinal);
+            Assert.Contains("the frame is decided again in the report", kit.Agents.Of("implementer")[1].Prompt, StringComparison.Ordinal);
+            Assert.Contains("reopened a second time", kit.Agents.Of("implementer")[2].Prompt, StringComparison.Ordinal);
+            Assert.Contains("\"reopens\":2", kit.Agents.Of("implementer")[2].Prompt, StringComparison.Ordinal);
+
+            // The item's ledger kept both reopenings, in its agent's directory.
+            var ledger = kit.Harness.OrchestrationStore.ReadClosureLedger(kit.RunOf(), AgentWorkingTheItem(kit));
+
+            Assert.NotNull(ledger);
+            Assert.Equal(new FlowClosureReopens("c-frame", 2), Assert.Single(ledger.Classes));
+        }
+
+        /// <summary>The name of the agent the item pipeline's item-agent step made for the run's one item.</summary>
+        private static string AgentWorkingTheItem(Kit kit)
+        {
+            var made = kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf())!.Steps.Single(step => step.Step.EndsWith(".item-agent", StringComparison.Ordinal));
+
+            return made.Made!;
+        }
+
+        /// <summary>
+        /// A pre-existing issue the triage answers next for never holds the round it came from - the item folds and
+        /// checkpoints as any other - and is owed the next round: the self-audit is told of it, the item that settles it
+        /// is built by the round after, first, and the rounds do not end while it is unsettled, ending clean once it is.
+        /// </summary>
+        [Fact]
+        public async Task APreExistingIssueAnsweredNext_IsTheNextRoundsFirstItem_AndNeverHoldsItsOwn()
+        {
+            using var temp = new TempDirectory();
+            var kit = await PrepareAsync(
+                temp,
+                agents =>
+                {
+                    agents.Queue("implementer", Completed(Implement()), Completed(Implement()));
+                    var reporting = Review();
+                    reporting["preExisting"] = new JsonArray(new JsonObject
+                    {
+                        ["title"] = "the frame is decided twice in the parser",
+                        ["description"] = "what it is",
+                        ["where"] = new JsonArray("src/tool.cs"),
+                        ["evidence"] = "read the file and saw it",
+                        ["blocks"] = false,
+                    });
+                    agents.Queue("reviewer-correctness", Completed(reporting), Completed(Review()));
+                    agents.Queue(
+                        "pre-existing-triage",
+                        Completed(new JsonObject
+                        {
+                            ["course"] = "next",
+                            ["title"] = "the frame is decided twice in the parser",
+                            ["description"] = "what it is",
+                            ["where"] = new JsonArray("src/tool.cs"),
+                            ["size"] = new JsonObject { ["files"] = new JsonArray("src/tool.cs"), ["build"] = "nothing", ["measureFirst"] = new JsonArray() },
+                            ["blocks"] = false,
+                            ["related"] = false,
+                            ["critical"] = false,
+                            ["why"] = "a defect in code the run's change does not touch that blocks nothing",
+                            ["duplicates"] = "",
+                            ["proof"] = new JsonObject
+                            {
+                                ["kind"] = "read",
+                                ["at"] = "abc123",
+                                ["file"] = "src/tool.cs",
+                                ["lines"] = "1-3",
+                                ["quote"] = "the frame, twice",
+                                ["command"] = "",
+                                ["output"] = "",
+                            },
+                        }));
+                    var settling = One(name: "settle-the-frame", owned: "src/tool.cs");
+                    settling["settles"] = "nx-1";
+                    agents.Queue("auditor", Completed(SelfAudit(clean: false, items: [settling])), Completed(SelfAudit(clean: true)));
+                });
+
+            var end = await StartAsync(kit, "request=Ship the orders report.", "preapproved=yes");
+
+            Assert.True(HarnessExit.Success == end.ExitCode, $"{end.Message} | {string.Join(" | ", end.Details ?? [])} | {Shown(kit)}");
+            Assert.Equal(nameof(FlowRunStatus.Done), kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf())!.Status);
+
+            // The issue never held its own round: the item was folded and its review loop ran whole. The item that
+            // settles it was built by the round after, and the clean round after that ended the rounds with nothing owed.
+            Assert.Equal(2, kit.Agents.Of("implementer").Count);
+            Assert.Equal(2, kit.Agents.Of("reviewer-correctness").Count);
+
+            // The self-audit of the round the issue came from was told of it, with its size.
+            Assert.Contains("nx-1", kit.Agents.Of("auditor")[0].Prompt, StringComparison.Ordinal);
+            Assert.Contains("src/tool.cs", kit.Agents.Of("auditor")[0].Prompt, StringComparison.Ordinal);
+
+            // The rounds ended by their until, the issue settled by the round's ended work - no bound was asked.
+            Assert.DoesNotContain(Questions(kit).Questions, question => question.Kind == "loopBound");
+
+            // The run's file of next-round issues holds it, sized; its round's check read the item that settles it.
+            var owed = kit.Harness.OrchestrationStore.ReadNextRound(kit.RunOf());
+
+            Assert.NotNull(owed);
+            var issue = Assert.Single(owed.Issues);
+            Assert.Equal("nx-1", issue.Id);
+            Assert.Equal("the frame is decided twice in the parser", issue.Title);
+            Assert.Equal(["src/tool.cs"], issue.Files);
+            Assert.Empty(kit.Harness.OrchestrationStore.ReadPreExistingIssues(kit.RunOf())!.Issues);
         }
 
         /// <summary>

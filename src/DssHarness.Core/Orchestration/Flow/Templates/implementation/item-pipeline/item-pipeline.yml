@@ -301,21 +301,22 @@ steps:
     dependsOn: [checkpoint-push]
     when: "(item-blocked.answer ?? 'continue') != 'skip'"
     repeat:
-      until: 'empty(review.findings)'
-      # The loop decides where its review ends (decideAfter), not where the whole
-      # iteration does: the until, the blocking and the bound are read on what review
-      # found, before revise acts on it, so the last rework of a round that ends at the
-      # bound is reviewed by the round after it, and what a bound-ended loop leaves is
-      # what its last review found, none of it acted on.
-      decideAfter: review
+      until: 'empty(route.rework) && empty(route.homeAudit)'
+      # The loop decides where its routing ends (decideAfter), not where the whole
+      # iteration does: the until, the blocking and the bound are read on what route
+      # made of the review's findings, before revise acts on it, so the last rework of
+      # a round that ends at the bound is reviewed by the round after it, and what a
+      # bound-ended loop leaves is what its last routing holds, none of it acted on.
+      decideAfter: route
       rounds: 3
       # Three rounds; past them the loop goes on only while a critical, high or medium finding
-      # stands, three rounds more at most. What is left then - a low or a nit after the three,
+      # stands, three rounds more at most - graded as the review graded it, a class reopened
+      # by the worst of its findings. What is left then - a low or a nit after the three,
       # anything after the six - is written to the backlog and named in the pull request and
       # the handoff, for the person who reads them at the end; the run goes on.
-      blocking: "any(review.findings, it.severity != 'low' && it.severity != 'nit')"
+      blocking: "any(route.rework, it.severity != 'low' && it.severity != 'nit')"
       blockersLimitRounds: 3
-      leftover: 'review.findings'
+      leftover: 'route.rework'
     answers:
       loopBound: accept
     onFailure: '{input.failTo}'
@@ -421,9 +422,34 @@ steps:
             graphFrom: changes
             prompt: prompts/review.md
             outputs: schemas/review.schema.json
-      - name: revise
+          # The closure reviewer runs wherever the item has classes, never gated by
+          # review-scope: it judges the record against the data itself, measures cells
+          # of the universe, and classes every finding of the round reopened or
+          # introduced as the rest do.
+          - name: closure
+            type: reason
+            agent: reviewer-closure
+            tier: high
+            effort: xhigh
+            independent: true
+            when: '!empty(input.item.classes)'
+            retries: 3
+            backoffSeconds: 30
+            onFailure: pause
+            onPreExisting: triage-pre-existing-issue
+            graph: tools
+            graphFrom: changes
+            prompt: prompts/review.md
+            outputs: schemas/review.schema.json
+      - name: route
+        type: route-findings
+        in: item-agent
+        findings: 'review.findings'
         dependsOn: [review]
-        when: '!empty(review.findings)'
+        onFailure: '{input.failTo}'
+      - name: revise
+        dependsOn: [route]
+        when: '!empty(route.rework) || !empty(route.homeAudit)'
         onFailure: '{input.failTo}'
         steps:
           - name: rework

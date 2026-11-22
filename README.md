@@ -711,7 +711,23 @@ the same rule opt-in: `anchors.closure: "required"` has `fold-agent` refuse a ro
 moves to closed unless its directory holds `closure.json` naming a class at least, judged by the
 same rules, its searches and measurements read as given and its arms against the registry its
 worktree holds - no consent lifts it. A run's own folds are held to no `closure.json`: the
-builder's answer is its record, which the check judged.
+builder's answer is its record, which the check judged. The review judges the record too: a seventh
+reviewer, of aspect `closure`, runs wherever the item has classes - never gated by review-scope -
+searching the data itself for sites the record's list missed, measuring cells of the universe the
+pin does not name and the optimised form, and reading the diff only for what the record claims; and
+every reviewer reads the record first and classes each finding `introduced`, a defect the diff made,
+or `reopened`, another instance of a class the item closes, naming the class. After the review's
+gather the `route-findings` step routes the findings by that class: every introduced finding goes
+back as itself, the reopened findings of one class go back as one send-back carrying them all -
+never the one finding alone, for the class is swept whole - and a class reopened a second time goes
+to a home audit instead, the fix before it having been wrong at its root. How often each class was
+reopened the engine keeps in the item's ledger, across the review loop's rounds and across a resume
+- counts no reviewer could carry, fresh each round as reviewers are - and the class-closure check
+asks the home audit of a reopened-twice class, the one mechanism whichever cause asks. A pre-existing
+issue the triage answers `next` for - a defect in code the run's change does not touch that blocks
+nothing - is owed the run's next round as its first item, sized by its files: the self-audit makes
+it one with its class, the round's check refuses a round whose items leave one unsettled, and the
+rounds go on while one is left - never the round the issue came from, which no fold waits for.
 
 Before a person is left with a question the engine raises itself, the orchestrator's `advisor`
 recommends on it: one reason step that only reads, run wherever the asking step works with its
@@ -2169,7 +2185,7 @@ rest), which a template reads and an expression does not. The engine starts and 
 (`run-orchestrator`, `dssharness help orchestrators`), from the main checkout's HEAD on a branch of its own: a start is
 refused where HEAD is detached, where the checkout is on the branch the run's pull request goes to, where a merge is under
 way and where changes are staged - the staged paths named as the line has room for them, every one
-in the --json document's `named.staged`. Twenty-one steps are served so far: `orient`, which reads what the repository is and has once
+in the --json document's `named.staged`. Twenty-two steps are served so far: `orient`, which reads what the repository is and has once
 (its branch and the pull request's base branch, the commit the run started on, a remote, legs and how each tests, anchors,
 CI, mutation arms, what is dirty, the open agents and who holds the tree); `graphify-codebase`, which syncs the run's one map
 of the repository - every file a node, whatever its size - each read by position, never as one
@@ -2223,7 +2239,10 @@ failed as `failedUnits` (null where its own tool failed no build of it), a sweep
 tree go once its copy is made, and keep the ledger, and in an agent's worktree each red leg's failing log, in the step's
 directory, the work of each leg this machine runs held inside the isolation of the agents' work and answered as
 `isolation` (none here and `agentPolicy.isolation: required` fails the step, 14, nothing run); the checks `anchor-balance` and `anchor-citations`, each held to the rows or files a step names; `class-closure`, which judges
-an item's closing record before its fold with no model, as the class-closure paragraph above says; `ci-read`,
+an item's closing record before its fold with no model, as the class-closure paragraph above says; `route-findings`, which
+routes the review's findings by their class - every `introduced` finding back as itself, the reopened findings of one class
+back as one send-back carrying them all, and a class reopened a second time to a home audit instead - keeping how often
+each class was reopened in the item's ledger, which the class-closure check reads; `ci-read`,
 the legs `check-ci-legs` reads; and `ci-wait`, which waits for every check the forge runs on a commit - the one the run
 last pushed where it names none - ends at the first red one with its job's failing step and whole
 log, given by reference with the page of it where the job failed (`failing`) and its lines counted

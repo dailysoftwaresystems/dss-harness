@@ -69,7 +69,8 @@ public static class WorkflowExpressions
     /// <summary>
     /// The run's own values an expression reads after <c>run</c>: its name, how it stands without its <c>always</c>
     /// steps - its status, whether it is done, failed, paused or stopped, and how many failed steps were passed over -
-    /// and the test units its record of affected tests holds, every entry's, each once.
+    /// the test units its record of affected tests holds, every entry's, each once, and the issues it owes its next
+    /// round, none of its ended work having settled them.
     /// </summary>
     public static IReadOnlyDictionary<string, JsonSchemaSubset.Reading> RunValues { get; } = new Dictionary<string, JsonSchemaSubset.Reading>(StringComparer.Ordinal)
     {
@@ -81,6 +82,26 @@ public static class WorkflowExpressions
         ["stopped"] = JsonSchemaSubset.Reading.Of("boolean"),
         ["passedOver"] = JsonSchemaSubset.Reading.Of("integer"),
         [AffectedTests] = JsonSchemaSubset.Reading.ListOf(JsonSchemaSubset.Reading.Of("string")),
+        [NextRound] = JsonSchemaSubset.Read(new System.Text.Json.Nodes.JsonObject
+        {
+            ["type"] = "array",
+            ["items"] = new System.Text.Json.Nodes.JsonObject
+            {
+                ["type"] = "object",
+                ["additionalProperties"] = false,
+                ["required"] = new System.Text.Json.Nodes.JsonArray("id", "title", "description", "where", "files", "build", "measureFirst"),
+                ["properties"] = new System.Text.Json.Nodes.JsonObject
+                {
+                    ["id"] = new System.Text.Json.Nodes.JsonObject { ["type"] = "string" },
+                    ["title"] = new System.Text.Json.Nodes.JsonObject { ["type"] = "string" },
+                    ["description"] = new System.Text.Json.Nodes.JsonObject { ["type"] = "string" },
+                    ["where"] = new System.Text.Json.Nodes.JsonObject { ["type"] = "array", ["items"] = new System.Text.Json.Nodes.JsonObject { ["type"] = "string" } },
+                    ["files"] = new System.Text.Json.Nodes.JsonObject { ["type"] = "array", ["items"] = new System.Text.Json.Nodes.JsonObject { ["type"] = "string" } },
+                    ["build"] = new System.Text.Json.Nodes.JsonObject { ["type"] = "string" },
+                    ["measureFirst"] = new System.Text.Json.Nodes.JsonObject { ["type"] = "array", ["items"] = new System.Text.Json.Nodes.JsonObject { ["type"] = "string" } },
+                },
+            },
+        }),
     };
 
     /// <summary>
@@ -88,6 +109,12 @@ public static class WorkflowExpressions
     /// (<c>affected</c>), in the order the entries were first written, each once.
     /// </summary>
     public const string AffectedTests = "affectedTests";
+
+    /// <summary>
+    /// The run's value that reads its issues owed its next round: each a defect a triage took from a round's work with
+    /// its size, none of the run's ended work having settled it - what the rounds go on while one is left of.
+    /// </summary>
+    public const string NextRound = "nextRound";
 
     /// <summary>
     /// The run's values that say how it stands without its <c>always</c> steps, which only an <c>always</c> step - or a

@@ -38,11 +38,16 @@ empty where none is:
 1. Reproduce it on `{orient.startCommit}`, read-only: quote what you read at that commit, or keep a command that reads it
    and what it printed.
 2. Choose the course: `unproven` where you could not reproduce it; `duplicate` where the list above holds it,
-   whatever became of it; `fix` where it blocks that step, is related or is critical; `list` where none of these
-   holds.
+   whatever became of it; `fix` where it blocks that step, is related or is critical; `next` where it is a defect in
+   code this run's change does not touch, that blocks nothing, no relation of the work and not critical - a defect
+   worth a round of its own, which becomes the first work item of the run's next round and never holds this one, the
+   fold never waiting for it; `list` where none of these holds.
 3. Write the title and the description from what you proved.
+4. For `next`, size it: the files the fix touches (one at least), what must be built, and what must be measured
+   first - the item that settles it is built to this size.
 
 ## What to return
 
-The course; the title and the description; where; the proof; whether it blocks, is related and is critical; why the
+The course; the title and the description; where; the proof; the size - the files, what to build and what to measure
+first, each empty but for `next`; whether it blocks, is related and is critical; why the
 course; and the id it duplicates, where it does.

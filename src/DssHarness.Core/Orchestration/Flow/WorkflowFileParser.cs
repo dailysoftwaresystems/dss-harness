@@ -1457,6 +1457,13 @@ public static class WorkflowFileParser
                 };
                 break;
 
+            case "route-findings":
+                step = step with
+                {
+                    Findings = ScalarIn(keys, $"{where}.findings", problems),
+                };
+                break;
+
             case "ci-read":
                 step = step with
                 {

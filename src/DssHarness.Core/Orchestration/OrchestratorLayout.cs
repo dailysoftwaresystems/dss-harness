@@ -129,6 +129,12 @@ public sealed record OrchestratorLayout(string Name, string Directory)
     /// <summary>The name of the file a run's pre-existing issues are kept in.</summary>
     public const string PreExistingIssuesFileName = "pre-existing-issues.json";
 
+    /// <summary>The name of the file a run's issues owed its next round are kept in.</summary>
+    public const string NextRoundFileName = "next-round.json";
+
+    /// <summary>The name of the file an agent's item keeps its closure ledger in, under the agent's directory.</summary>
+    public const string ClosureLedgerFileName = "closure-ledger.json";
+
     /// <summary>The name of the file a run's record of affected tests is kept in.</summary>
     public const string AffectedTestsFileName = "affected-tests.json";
 
@@ -519,6 +525,13 @@ public sealed record OrchestratorLayout(string Name, string Directory)
 
     /// <summary>The issues the run found and left: each proven, with a title and a description.</summary>
     public string PreExistingIssuesFile => Path.Combine(Directory, PreExistingIssuesFileName);
+
+    /// <summary>The issues the run owes its next round, with their size: what <c>run.nextRound</c> reads.</summary>
+    public string NextRoundFile => Path.Combine(Directory, NextRoundFileName);
+
+    /// <summary>The item's closure ledger, in its agent's directory: how often each of its classes a review reopened.</summary>
+    /// <param name="agent">The agent whose item the ledger is of.</param>
+    public string ClosureLedgerFile(string agent) => Path.Combine(AgentDirectory(agent), ClosureLedgerFileName);
 
     /// <summary>The test units each test step that keeps them ran, under the key it names: what <c>run.affectedTests</c> reads.</summary>
     public string AffectedTestsFile => Path.Combine(Directory, AffectedTestsFileName);

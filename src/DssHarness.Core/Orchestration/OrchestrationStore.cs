@@ -47,6 +47,12 @@ public sealed class OrchestrationStore(IFileSystem fileSystem, IHarnessOutput ou
     /// <summary>What a run's record of affected tests is, as its refusals and <see cref="RecordWritten"/> name it.</summary>
     public const string AffectedTestsKind = "the run's record of affected tests";
 
+    /// <summary>What a run's issues owed its next round are, as its refusals and <see cref="RecordWritten"/> name it.</summary>
+    public const string NextRoundKind = "the run's issues owed its next round";
+
+    /// <summary>What an agent's item's closure ledger is, as its refusals and <see cref="RecordWritten"/> name it.</summary>
+    public const string ClosureLedgerKind = "an item's closure ledger";
+
     /// <summary>What a step's own record is, as its refusals and <see cref="RecordWritten"/> name it.</summary>
     public const string StepRecordKind = "a step's own record";
 
@@ -388,6 +394,48 @@ public sealed class OrchestrationStore(IFileSystem fileSystem, IHarnessOutput ou
         ArgumentNullException.ThrowIfNull(orchestrator);
         ArgumentNullException.ThrowIfNull(affected);
         Write(orchestrator.AffectedTestsFile, AffectedTestsKind, affected, affected.Problem());
+    }
+
+    /// <summary>The run's issues owed its next round, or null where the run holds none.</summary>
+    /// <param name="orchestrator">The run's orchestrator.</param>
+    /// <exception cref="HarnessException">The file cannot be read as one (<see cref="HarnessExit.Refused"/>).</exception>
+    public FlowNextRoundFile? ReadNextRound(OrchestratorLayout orchestrator)
+    {
+        ArgumentNullException.ThrowIfNull(orchestrator);
+        return Read<FlowNextRoundFile>(orchestrator.NextRoundFile, NextRoundKind, next => next.Problem());
+    }
+
+    /// <summary>Writes the run's issues owed its next round.</summary>
+    /// <param name="orchestrator">The run's orchestrator.</param>
+    /// <param name="next">The issues, which must be one.</param>
+    public void WriteNextRound(OrchestratorLayout orchestrator, FlowNextRoundFile next)
+    {
+        ArgumentNullException.ThrowIfNull(orchestrator);
+        ArgumentNullException.ThrowIfNull(next);
+        Write(orchestrator.NextRoundFile, NextRoundKind, next, next.Problem());
+    }
+
+    /// <summary>One agent's item's closure ledger, or null where its directory holds none.</summary>
+    /// <param name="orchestrator">The run's orchestrator.</param>
+    /// <param name="agent">The agent whose item the ledger is of.</param>
+    /// <exception cref="HarnessException">The file cannot be read as one (<see cref="HarnessExit.Refused"/>).</exception>
+    public FlowClosureLedgerFile? ReadClosureLedger(OrchestratorLayout orchestrator, string agent)
+    {
+        ArgumentNullException.ThrowIfNull(orchestrator);
+        ArgumentException.ThrowIfNullOrWhiteSpace(agent);
+        return Read<FlowClosureLedgerFile>(orchestrator.ClosureLedgerFile(agent), ClosureLedgerKind, ledger => ledger.Problem());
+    }
+
+    /// <summary>Writes one agent's item's closure ledger.</summary>
+    /// <param name="orchestrator">The run's orchestrator.</param>
+    /// <param name="agent">The agent whose item the ledger is of.</param>
+    /// <param name="ledger">The ledger, which must be one.</param>
+    public void WriteClosureLedger(OrchestratorLayout orchestrator, string agent, FlowClosureLedgerFile ledger)
+    {
+        ArgumentNullException.ThrowIfNull(orchestrator);
+        ArgumentException.ThrowIfNullOrWhiteSpace(agent);
+        ArgumentNullException.ThrowIfNull(ledger);
+        Write(orchestrator.ClosureLedgerFile(agent), ClosureLedgerKind, ledger, ledger.Problem());
     }
 
     /// <summary>One step's own record, wherever the run keeps it, or null where the step's directory holds none.</summary>

@@ -336,7 +336,7 @@ public sealed partial class HelpTests
         Assert.Contains(
             "This build checks a workflow's definition, with 'dssharness validate-workflow <name>', and starts and drives a run of one with "
                 + "'dssharness run-orchestrator <name>' (see 'help orchestrators'). The steps served so far are orient, graphify-codebase, validate-plan, "
-                + "create-agent, reason, build, test, run, check-mutations, anchor-balance, anchor-citations, class-closure, ci-read, ci-wait, fold, delete-agent, "
+                + "create-agent, reason, build, test, run, check-mutations, anchor-balance, anchor-citations, class-closure, route-findings, ci-read, ci-wait, fold, delete-agent, "
                 + "refresh, rebase, commit, push, pull-request, each below; a step of "
                 + "any other type fails, saying no runner serves its type.",
             prose,
@@ -504,7 +504,13 @@ public sealed partial class HelpTests
                 + "paths changed, an arm's site and the touches - are read as the plan check reads them, either separator, and compared as this "
                 + "machine compares paths; a fold it cannot weigh fails it with the weighing's "
                 + "own code. Its problems are the record's (1, which close-class repairs) apart from a missing home audit (2, which home-audit "
-                + "makes), and it answers passed, problems, hotspots - the homes touched hotspot times or more - and touches. "
+                + "makes - a home touched by other work, or a class the item's ledger says a review reopened a second time), and it answers "
+                + "passed, problems, hotspots - the homes touched hotspot times or more - and touches. "
+                + "route-findings routes the review's findings by the class of each, keeping the item's ledger (closure-ledger.json in its "
+                + "agent's directory) of how often each class was reopened: every introduced finding - a defect the diff made - goes back in "
+                + "rework as itself, the reopened findings of one class go back as one send-back carrying them all and graded by the worst of "
+                + "them, and a class reopened a second time goes to homeAudit instead, for the next action is the home audit; it answers "
+                + "rework, homeAudit and reopened, the count per class. "
                 + "ci-read reads the legs check-ci-legs reads, of its branch - the one checked out "
                 + "in the main checkout where it names none - and its newest limit runs, answering passed, branch, matrixRan, legs and red, each leg as "
                 + "check-ci-legs --json gives it. ci-wait waits for every check run and commit status the forge lists for its commit - the "

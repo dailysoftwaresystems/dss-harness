@@ -654,6 +654,68 @@ public sealed class FlowStepRunnerTests : IDisposable
         Assert.Equal("'check' checks the work items its items yields, and it yields no list", notAList.Error);
     }
 
+    /// <summary>
+    /// The plan check holds a round's items to the issues the run owes its next round: each named in an item's
+    /// <c>settles</c>, none left unsettled, an item may name only an issue the run owes, and the items that settle them
+    /// come first in its output - what the run took from its own rounds is built before the work planned around it.
+    /// </summary>
+    [Fact]
+    public async Task ThePlanCheck_HoldsItsItemsToTheRunsNextRound_AndOrdersTheSettlingOnesFirst()
+    {
+        var (harness, repository) = await RepositoryAsync();
+        var runner = new PlanCheckRunner(harness.ContextLoader, harness.Platform, Validator(harness));
+        var step = new WorkflowStep { Name = "check", Type = "validate-plan", Items = "plan.items" };
+        JsonObject Issue(string id) => new()
+        {
+            ["id"] = id,
+            ["title"] = "a defect in the parser",
+            ["description"] = "what it is",
+            ["where"] = new JsonArray("src/Parser.cs"),
+            ["files"] = new JsonArray("src/Parser.cs"),
+            ["build"] = "the leg the parser tests build",
+            ["measureFirst"] = new JsonArray(),
+        };
+
+        // The round settles the issue with its own item, planned after the work around it: the check answers ok, and
+        // its items carry the settling one first.
+        var settling = Item("settle-the-parser", "src/Parser.cs");
+        settling["settles"] = "nx-1";
+        var items = FlowValue.Of(new JsonArray(Item("around"), settling));
+
+        var ordered = await runner.RunAsync(
+            Run(step, repository.Path, new Dictionary<string, FlowValue>
+            {
+                ["items"] = items,
+                ["next"] = FlowValue.Of(new JsonArray(Issue("nx-1"))),
+            }),
+            Token);
+
+        Assert.True(ordered.Passed, ordered.Error);
+        Assert.True((bool)ordered.Output!["ok"]!, string.Join("; ", ordered.Output["problems"]!.AsArray().Select(problem => problem!.GetValue<string>())));
+        Assert.Equal(["settle-the-parser", "around"], [.. ordered.Output["items"]!.AsArray().Select(item => item!["name"]!.GetValue<string>())]);
+
+        // An item that names an issue the run does not owe, and an owed issue no item settles, are each a problem.
+        var stranger = Item("settle-what-it-owes-not", "src/Parser.cs");
+        stranger["settles"] = "nx-9";
+
+        var unsettled = await runner.RunAsync(
+            Run(step, repository.Path, new Dictionary<string, FlowValue>
+            {
+                ["items"] = FlowValue.Of(new JsonArray(Item("around"), stranger)),
+                ["next"] = FlowValue.Of(new JsonArray(Issue("nx-1"))),
+            }),
+            Token);
+
+        Assert.True(unsettled.Passed, unsettled.Error);
+        Assert.False((bool)unsettled.Output!["ok"]!);
+        Assert.Equal(
+            [
+                "the item 'settle-what-it-owes-not' settles 'nx-9', which is not an issue the run owes its next round",
+                "the issue 'nx-1' (a defect in the parser) is owed the next round, and no work item settles it",
+            ],
+            [.. unsettled.Output!["problems"]!.AsArray().Select(problem => problem!.GetValue<string>())]);
+    }
+
     /// <summary>One piece of a plan update, as the plan's scope concluded it.</summary>
     private static JsonObject Piece(string kind, JsonObject? item = null, string? forId = null, string changed = "what the update changes")
         => new()

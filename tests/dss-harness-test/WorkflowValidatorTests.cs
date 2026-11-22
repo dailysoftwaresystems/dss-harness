@@ -4573,7 +4573,7 @@ public sealed class WorkflowValidatorTests
                 "'d.when' reads 'make.ready', and step 'make', a create-agent step, has no output to read",
                 "'e.when' reads 'check.code.x', and the engine's fact 'code' of step 'check' says 'check.code' is a whole number, which has no property 'x'",
                 "'f.when' reads 'input.request.x', and input 'request' says 'input.request' is a text, which has no property 'x'",
-                "'g.when' reads 'run.statuz', and the run has no 'statuz': an expression reads run.name, run.status, run.done, run.failed, run.paused, run.stopped, run.passedOver, run.affectedTests, and a template run.ran, run.notRun, run.red, run.leftover, run.assumptions, run.preExisting too",
+                "'g.when' reads 'run.statuz', and the run has no 'statuz': an expression reads run.name, run.status, run.done, run.failed, run.paused, run.stopped, run.passedOver, run.affectedTests, run.nextRound, and a template run.ran, run.notRun, run.red, run.leftover, run.assumptions, run.preExisting too",
                 "'h.when' reads 'run.ran', which is text for a template, not a value for an expression: the engine writes it from its step records for a person to read",
                 "'items.inner.when' reads 'item.path', and the work item of group 'items' says 'item' is a text, which has no property 'path'",
                 "'i.when' reads 'checks.found', and group 'checks' holds no step 'found' and gathers none of that name",

@@ -2,10 +2,22 @@ Your work was folded and reviewed, and the review found something. Act on it.
 
 ## The findings
 
-Round {iteration} of the review. Each finding names the aspect that reported it, the place, what is wrong, how much it
-matters and whether it is in production code:
+Round {iteration} of the review. Each finding the review classed introduced - a defect your change made - names the
+aspect that reported it, the place, what is wrong, how much it matters and whether it is in production code:
 
-{review.findings}
+{route.rework}
+
+Each entry of the list above that holds a class is not one finding but a class reopened: the class, how many rounds
+have reopened it, and all its findings.
+
+## The classes reopened
+
+{route.homeAudit}
+
+Where this list holds a class of yours, it was reopened a second time: the fix the last round made was wrong at its
+root. Do not edit the code for it first - make the home audit, reading the whole home and every consumer the graph
+gives you, and deliver what makes its invariants structural, one decision, one place; record it in `homeAudit` of the
+record. The check refuses the record of a reopened-twice class that carries none.
 
 ## The class you are closing
 
@@ -17,8 +29,9 @@ The record of each class so far, as the last report gave it:
 
 {implement.latest.closure}
 
-Act by them: a site the list missed is yours to add and to close with the rest, and nothing of the class is done
-while one of its sites is left.
+Act by them. For a class reopened once, never fix the one finding alone: sweep its neighbours whole, extend the site
+list and the record, and close the class - a site the list missed is yours to add and to close with the rest, and
+nothing of the class is done while one of its sites is left.
 
 ## What to do
 

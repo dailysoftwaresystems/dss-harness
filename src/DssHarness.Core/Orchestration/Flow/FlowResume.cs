@@ -21,6 +21,7 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// <param name="Issues">Every pre-existing issue the run listed, proven, as the run's own file of them holds it.</param>
 /// <param name="Refused">Every answer handed over through the inbox that the run refused, as its file of questions holds them; null where none was.</param>
 /// <param name="AffectedTests">Each key's test units the run kept, as its own record of them holds them; null where the state was read from no record.</param>
+/// <param name="NextRound">Every issue the run owes its next round, as its own file of them holds it; none where the run's directory holds no file of them.</param>
 public sealed record FlowResumeState(
     FlowFile File,
     IReadOnlyList<string> Differing,
@@ -29,7 +30,8 @@ public sealed record FlowResumeState(
     IReadOnlyList<FlowQuestionEntry>? Questions = null,
     IReadOnlyList<PreExistingIssue>? Issues = null,
     IReadOnlyList<FlowRefusedAnswer>? Refused = null,
-    IReadOnlyList<FlowAffectedTests>? AffectedTests = null);
+    IReadOnlyList<FlowAffectedTests>? AffectedTests = null,
+    IReadOnlyList<FlowNextIssue>? NextRound = null);
 
 /// <summary>
 /// Reads what a killed or stopped run left and hands it to a resume: the run's state in one file checked against the
@@ -99,6 +101,10 @@ public sealed class FlowResume(OrchestrationStore store, OrchestratorLayout layo
         var affected = _store.ReadAffectedTests(_layout)
             ?? throw Missing(_layout.AffectedTestsFile, "its affected tests", "the tests its finished work affects would be lost from every step that reads run.affectedTests");
 
+        // The next round's issues are read as none where the run's directory holds no file of them: a run an older
+        // build began never had one, and an empty round in its place loses nothing it owed.
+        var next = _store.ReadNextRound(_layout)?.Issues ?? [];
+
         var records = StepRecords();
         var steps = new List<FlowStepRecord>();
         var differing = new List<string>();
@@ -138,7 +144,7 @@ public sealed class FlowResume(OrchestrationStore store, OrchestratorLayout layo
 
         _store.WriteFlow(_layout, reconciled);
 
-        return new FlowResumeState(reconciled, differing, adopted, handoffs, questions.Questions, issues.Issues, questions.Refused, affected.Entries);
+        return new FlowResumeState(reconciled, differing, adopted, handoffs, questions.Questions, issues.Issues, questions.Refused, affected.Entries, next);
     }
 
     /// <summary>Every step record the run's directories hold - the run's, then each agent's - by instance id, each with any handoff its record does not name yet taken back.</summary>

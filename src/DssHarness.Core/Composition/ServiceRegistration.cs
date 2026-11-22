@@ -195,6 +195,7 @@ public static class ServiceRegistration
         services.AddSingleton<IFlowStepTypeRunner, AnchorBalanceStepRunner>();
         services.AddSingleton<IFlowStepTypeRunner, AnchorCitationsStepRunner>();
         services.AddSingleton<IFlowStepTypeRunner, ClassClosureStepRunner>();
+        services.AddSingleton<IFlowStepTypeRunner, RouteFindingsStepRunner>();
         services.AddSingleton<IFlowStepTypeRunner, CiReadStepRunner>();
         services.AddSingleton<IFlowStepTypeRunner, CiWaitStepRunner>();
         services.AddSingleton<FoldLedger>();
