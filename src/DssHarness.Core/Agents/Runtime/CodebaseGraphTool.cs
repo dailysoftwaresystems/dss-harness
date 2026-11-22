@@ -472,7 +472,7 @@ public sealed class CodebaseGraphTool(
             [GraphOp.Related] = $"related - the nodes a relation reaches, as many hops as you ask, {RelatedLines} a page",
             [GraphOp.Outline] = $"outline - a file's or a type's declarations, or the repository's, {OutlineLines} a page",
             [GraphOp.Body] = $"body - the lines of the nodes you name, read fresh and numbered, {BodyLines} lines a page",
-            [GraphOp.Sites] = $"sites - every place that decides data you name - a symbol, a key path, a quoted literal or a diagnostic id: what defines, calls, uses, makes, implements or overrides it, every literal that holds it, every key it names - each a card saying how it decides, {RelatedLines} a page, the files the graph lists only or is unsure of searched by text and said by the coverage lines that end every answer",
+            [GraphOp.Sites] = $"sites - every place that decides data you name - a symbol, a key path, a quoted literal or a diagnostic id: what defines, calls, uses, makes, implements or overrides it, every literal that holds it, every key it names - each a card saying how it decides, {RelatedLines} a page, the files the graph lists only or is unsure of searched by text and said by the coverage lines that end every answer, with what the implementation of each language searched by text does not see",
             [GraphOp.Edit] = "edit - a node's lines replaced where the hash you give is its hash now",
             [GraphOp.WholeFile] = "wholeFile - lifts the narrowing of reads for one file for the rest of the step, with why",
             [GraphOp.Pack] = "pack - a page of the context pack your first message began, best first, its last line saying how to ask for the next",
@@ -912,8 +912,9 @@ public sealed class CodebaseGraphTool(
     /// overrides it, every literal that holds it and every key it names, each a card in a section of how it
     /// decides - joined with a text search of the files the graph answers nothing of but their text, whose hits
     /// are cards where their file holds a node at the line and raw lines where it does not, and the coverage
-    /// lines that end the answer: the files it lists only, the files it is unsure of, and that nothing is assumed
-    /// of a language with no extractor. A quoted data asks by its value alone, never the symbols; a hub - a
+    /// lines that end the answer: the files it lists only, the files it is unsure of, that nothing is assumed
+    /// of a language with no extractor, and what the implementation of each language searched by text does not
+    /// see (<see cref="Unseen"/>). A quoted data asks by its value alone, never the symbols; a hub - a
     /// definer many call, a name many files use - is listed and never walked through, for only the definers' own
     /// edges are walked, one hop each: what decides is answered, never what the deciders reach.
     /// </summary>
@@ -1074,6 +1075,11 @@ public sealed class CodebaseGraphTool(
                 notes.Add("coverage: nothing is assumed of a language with no extractor; those files are read by text alone");
             }
 
+            // What the implementations of the languages whose files the graph was unsure of do not see where those files show it
+            // (<see cref="CodebaseGraphQueries.SignsOf"/>): a limit by the sign it explains - a dynamic mark's kind in the file,
+            // or references the linker left candidates - each said once a language, read before trusting what the answer says of their files.
+            notes.AddRange(Unseen(unsureFiles.Select(held => (Language: on.FileAt(held)?.Language, Signs: on.SignsOf(held))).OfType<(string Language, IReadOnlyList<string> Signs)>()));
+
             notes.AddRange(search.LeftOut(ReportText.Printable, search.Refused - outOfScope));
             notes.AddRange(Notes(left));
 
@@ -1086,6 +1092,30 @@ public sealed class CodebaseGraphTool(
 
             return new GraphAnswer(leading, sections, notes, named, []);
         }, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// What the implementations of <paramref name="searched"/> languages do not see where the files searched show it: for each language
+    /// once, in order, every limit (<see cref="CodeGraphLimit"/>) one of its files gives a sign of - the kind of a dynamic mark the
+    /// file holds, or references the linker left candidates - in the order the help says them, and none other. What a <c>sites</c> answer
+    /// ends with where it searched files of theirs by text, since a limit is read before what the answer says of their files is trusted.
+    /// A language no implementation reads says nothing here - the answer says that nothing is assumed of it.
+    /// </summary>
+    private IEnumerable<string> Unseen(IEnumerable<(string Language, IReadOnlyList<string> Signs)> searched)
+    {
+        foreach (var language in searched.GroupBy(file => file.Language, StringComparer.Ordinal).Select(group => (Language: group.Key, Signs: group.SelectMany(file => file.Signs).ToHashSet(StringComparer.Ordinal))).OrderBy(language => language.Language, StringComparer.Ordinal))
+        {
+            if (CodeGraphExtractors.OfThisBuild.Find(language.Language) is not { Help: { DoesNotSee: { } limits } } extractor)
+            {
+                continue;
+            }
+
+            // Each limit the signs explain, in the order the help says them, once.
+            foreach (var limit in limits.Where(limit => limit.Signs.Any(language.Signs.Contains)))
+            {
+                yield return $"{extractor.Language} does not see {limit.Says}.";
+            }
+        }
     }
 
     /// <summary>

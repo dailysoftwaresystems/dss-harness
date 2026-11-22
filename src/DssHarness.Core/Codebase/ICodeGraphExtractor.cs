@@ -94,10 +94,32 @@ public sealed record CodeGraphClaims(IReadOnlyList<CodeGraphClaim> Names, IReadO
 /// </param>
 public sealed record CodeGraphClaim(string Value, Func<CodeText, bool>? ContentTest = null);
 
+/// <summary>
+/// What an implementation does not see: a clause the help prints after <c>does not see</c>, a line a person reads before trusting
+/// an answer of the graph, and the signs by which a file shows the limit applies to it (<see cref="Signs"/>), so that an answer
+/// says of the files it searched only the limits they show.
+/// </summary>
+/// <param name="Says">What it does not see: a clause with no final stop.</param>
+public sealed record CodeGraphLimit(string Says)
+{
+    /// <summary>The sign of a file more than a quarter of whose references the linker left candidates (<see cref="CodebaseGraphQueries.UnsureOfFile"/>).</summary>
+    public const string Candidates = "candidates";
+
+    /// <summary>
+    /// The signs a file gives that the limit applies to it: <see cref="Candidates"/>, or the kind of a dynamic mark its reading
+    /// made (<see cref="ExtractDynamic.Kind"/>) - a sign names one limit as another may name it, where both tell of one thing.
+    /// None where the code gives no sign of it, which only the help says.
+    /// </summary>
+    public IReadOnlyList<string> Signs { get; init; } = [];
+
+    /// <summary>A limit the code gives no sign of: its clause alone.</summary>
+    public static implicit operator CodeGraphLimit(string says) => new(says);
+}
+
 /// <summary>What <c>help codebase-graph</c> says of one implementation.</summary>
 /// <param name="Reads">One line: what it reads, and through what.</param>
-/// <param name="DoesNotSee">What it does not see, each a line a person reads before trusting an answer of the graph.</param>
-public sealed record CodeGraphExtractorHelp(string Reads, IReadOnlyList<string> DoesNotSee)
+/// <param name="DoesNotSee">What it does not see, each a line a person reads before trusting an answer of the graph, with the signs that tell where it applies.</param>
+public sealed record CodeGraphExtractorHelp(string Reads, IReadOnlyList<CodeGraphLimit> DoesNotSee)
 {
     /// <summary>
     /// What reading a file holds beyond what the implementation keeps of it, where a library it reads through keeps more -

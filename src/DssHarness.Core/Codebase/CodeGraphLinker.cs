@@ -80,7 +80,7 @@ public static class CodeGraphLinker
     /// revision that made it (<see cref="CodeGraphSymbolsFile.Linker"/>), so a graph linked by another one is linked again
     /// though no file changed, and no file is read again.
     /// </summary>
-    public const int Revision = 10;
+    public const int Revision = 11;
 
     /// <summary>
     /// Links <paramref name="files"/>, one tree's every file, into its symbols and edges. The keys of the configuration
@@ -205,6 +205,12 @@ public static class CodeGraphLinker
         /// template's path: what a template's code reads by itself is found on.
         /// </summary>
         Templates,
+
+        /// <summary>
+        /// The directories a unit of their language's layout is around the files in them (<see cref="FileExtract.FolderUnit"/>), each by
+        /// its path: what an import of a layout's place in one is passed over by.
+        /// </summary>
+        Unit,
     }
 
     /// <summary>One reference's finding: its edges, whether it named nothing, and every key it read.</summary>
@@ -413,6 +419,9 @@ public static class CodeGraphLinker
         /// <summary>Each file read in the scope a directory above it names, by its path (<see cref="Folded"/>).</summary>
         private readonly Dictionary<string, FolderRead> _folders = new(StringComparer.Ordinal);
         private readonly HashSet<string> _paths;
+
+        /// <summary>The directories a file of the tree says are a unit of their language's layout (<see cref="FileExtract.FolderUnit"/>): what an import of a layout's place in one is passed over by (<see cref="IsUnit"/>).</summary>
+        private readonly HashSet<string> _units = new(StringComparer.Ordinal);
         private readonly Dictionary<string, CodeGraphFile> _byPath = new(StringComparer.Ordinal);
         private readonly LinkMemory? _previous;
         private readonly LinkKeys _keys;
@@ -630,6 +639,12 @@ public static class CodeGraphLinker
                 if (SuffixLengths(extract) is { Length: > 0 } suffixes)
                 {
                     _suffixesByFile[file] = suffixes;
+                }
+
+                // The file that says its directory is a unit of its language's layout: the files in it look a bare name up from above it.
+                if (extract.FolderUnit)
+                {
+                    _units.Add(DirectoryOf(file.Path));
                 }
 
                 foreach (var node in extract.Nodes)
@@ -1063,7 +1078,9 @@ public static class CodeGraphLinker
                 return;
             }
 
-            if (finding.External)
+            // A reference that asked whether a declaration is there, and found none (<see cref="ExtractReference.Probe"/>), is no
+            // external callee: nothing it depends on is missing.
+            if (finding.External && !reference.Probe)
             {
                 Count(_external, from.Id.Whole());
             }
@@ -1215,7 +1232,9 @@ public static class CodeGraphLinker
                 }
             }
 
-            return (Repository(from, name, accepts), CodeConfidences.Unique);
+            // A name this file's language binds within the file alone - by its scopes or its imports - is bound by nothing where
+            // neither does (<see cref="FileExtract.BoundWithin"/>): the repository's names are not looked through for it.
+            return (from.File.Extract is { BoundWithin: true } ? [] : Repository(from, name, accepts), CodeConfidences.Unique);
         }
 
         /// <summary>
@@ -1415,6 +1434,14 @@ public static class CodeGraphLinker
                     // A key qualifier names a configuration key wherever the repository declares one so - the property a
                     // project reads - of its own kind alone, as Takes keeps it; one with a name, of the language it names alone.
                     return (Distinct(RepositoryNamed(from.File, name).Where(target => accepts(target) && (qualifier.Name is null || target.File.Language is { } language && qualifier.Name.Is(language)))), CodeConfidences.Exact);
+
+                case CodeQualifierKinds.Fixture:
+                    // A fixture a test's parameter names: what the test's own scopes declare so, exact - the test file's own
+                    // fixture; else one the repository declares wherever, unique where one - a conftest.py's, provided to every
+                    // test under it and imported by none. Takes keeps it to fixtures (<see cref="CodeSubKinds.Fixture"/>).
+                    return Scoped(from, name, accepts) is { Count: > 0 } near
+                        ? (near, CodeConfidences.Exact)
+                        : (Repository(from, name, accepts), CodeConfidences.Unique);
 
                 default:
                     // A value the scopes hold, nearer than any type or scope of its name, is that value; a type or a scope is
@@ -2399,7 +2426,9 @@ public static class CodeGraphLinker
         /// <summary>
         /// What <paramref name="import"/>, made by <paramref name="file"/>, makes visible named <paramref name="name"/> - with
         /// the nodes standing for a suffix written onto others' that stand for it where <paramref name="suffixed"/> - the files
-        /// <paramref name="walked"/> holds, which a walk before reached, not walked again.
+        /// <paramref name="walked"/> holds, which a walk before reached, not walked again. An import that takes what the file it
+        /// names publishes (<see cref="ExtractImport.Published"/>) makes visible those names alone
+        /// (<see cref="FileExtract.Published"/>), reached as any other is.
         /// </summary>
         private IReadOnlyList<Declaration> Imported(ExtractImport import, CodeGraphFile file, string name, Func<Declaration, bool> accepts, HashSet<string>? walked = null, bool suffixed = false)
         {
@@ -2408,7 +2437,28 @@ public static class CodeGraphLinker
                 return InScope(OpenKey(import.Target), name, accepts, withBases: true);
             }
 
-            return Distinct(FilesOf(import, file).SelectMany(target => Visible(target, name, walked, suffixed)).Where(accepts));
+            var found = new List<Declaration>();
+
+            foreach (var path in FilesOf(import, file))
+            {
+                var visible = Visible(path, name, walked, suffixed);
+
+                if (!import.Published)
+                {
+                    found.AddRange(visible);
+                    continue;
+                }
+
+                // What the file publishes is read as what an import of it by its path makes visible is: under the file's own key.
+                Touch(Read.Opens, path);
+
+                if (_byPath.GetValueOrDefault(path)?.Extract?.Published is { } published)
+                {
+                    found.AddRange(visible.Where(declaration => published.Contains(declaration.Node.Name, StringComparer.Ordinal)));
+                }
+            }
+
+            return Distinct(found.Where(accepts));
         }
 
         /// <summary>
@@ -2429,46 +2479,78 @@ public static class CodeGraphLinker
         /// <summary>
         /// What <see cref="Visible"/> finds from the file at <paramref name="start"/>, the files <paramref name="seen"/> holds
         /// not visited and each it visits added to it: each file visited once, so exports that come round again end, followed
-        /// on a stack of its own rather than the call's.
+        /// on a stack of its own rather than the call's. Each file reached is asked for the name it is reached by: the one asked
+        /// of <paramref name="start"/>, or the one a renamed re-export shows a file's name by (<see cref="Reached"/>).
         /// </summary>
         private List<Declaration> VisibleFrom(string start, string name, HashSet<string> seen, bool suffixed)
         {
             var visible = new List<Declaration>();
-            var pending = new Stack<string>([start]);
+            var pending = new Stack<(string Path, string Name)>([(start, name)]);
 
-            while (pending.TryPop(out var path))
+            while (pending.TryPop(out var next))
             {
-                if (!seen.Add(path))
+                if (!seen.Add(next.Path))
                 {
                     continue;
                 }
 
-                visible.AddRange(TopNamed(path, name).Concat(OpensOf(path).SelectMany(scope => ScopeNamed(OpenKey(scope), name))).Concat(ExportedNamed(path, name)));
-                var file = _byPath.GetValueOrDefault(path);
+                visible.AddRange(TopNamed(next.Path, next.Name).Concat(OpensOf(next.Path).SelectMany(scope => ScopeNamed(OpenKey(scope), next.Name))).Concat(ExportedNamed(next.Path, next.Name)));
+                var file = _byPath.GetValueOrDefault(next.Path);
 
                 if (file is not null)
                 {
-                    visible.AddRange(Suffixed(file, name, exported: true));
+                    visible.AddRange(Suffixed(file, next.Name, exported: true));
 
                     if (suffixed)
                     {
-                        visible.AddRange(Suffixed(file, name, exported: false));
+                        visible.AddRange(Suffixed(file, next.Name, exported: false));
                     }
                 }
 
-                Touch(Read.Imports, path);
+                Touch(Read.Imports, next.Path);
 
                 if (file?.Extract is not null)
                 {
-                    // Each exported file in the order the file exports it, a file before what it exports in turn.
-                    foreach (var target in Taken(file).Where(import => import.Export && import.Lets(name)).SelectMany(export => FilesOf(export, file)).Reverse())
+                    // Each file whose names this one makes its importers's, the file before what it reaches in turn.
+                    foreach (var reached in Reached(file, next.Name).Reverse())
                     {
-                        pending.Push(target);
+                        pending.Push(reached);
                     }
                 }
             }
 
             return visible;
+        }
+
+        /// <summary>
+        /// Each file whose names <paramref name="file"/> makes its importers's, asked for the name <paramref name="name"/>: those of
+        /// its exports, and - where what an import binds is the importing file's importers's too (<see cref="ExtractImport.Reexports"/>) -
+        /// those of the imports that bind that name, a renamed one reached by the name it binds it under there, since that is the name
+        /// the file it names declares. In the order the file writes them; none for a name none of them lets.
+        /// </summary>
+        private IEnumerable<(string Path, string Name)> Reached(CodeGraphFile file, string name)
+        {
+            foreach (var import in Taken(file))
+            {
+                if (!(import.Export || import.Reexports))
+                {
+                    continue;
+                }
+
+                // One with no name of its own lets the name asked or nothing; a renamed one is reached by the name the file gives
+                // it, and shows the name the file it names declares it by.
+                var shown = import.Prefix is null ? import.Lets(name) ? name : null : import.Prefix == name && import.Show is [var one] ? one : null;
+
+                if (shown is null)
+                {
+                    continue;
+                }
+
+                foreach (var target in FilesOf(import, file))
+                {
+                    yield return (target, shown);
+                }
+            }
         }
 
         /// <summary>The files of the tree <paramref name="import"/> names, by its form: found once for each import of each file.</summary>
@@ -2480,6 +2562,13 @@ public static class CodeGraphLinker
             switch (import.Form)
             {
                 case CodeImportForms.Relative:
+                    // A place of a layout (<see cref="ExtractImport.Layout"/>) in a directory that is a unit of it around the file is
+                    // passed over: the name is looked for from the first directory above the units the file is in.
+                    if (import.Layout && IsUnit(ReadFrom(file.Path, import.Target)))
+                    {
+                        return [];
+                    }
+
                     var relative = CodeGraphIds.Beside(file.Path, import.Target);
 
                     if (relative is null)
@@ -2515,6 +2604,30 @@ public static class CodeGraphLinker
                     return [.. PathsNamed(CodeGraphIds.FileName(ending)).Where(path => path == ending || path.EndsWith("/" + ending, StringComparison.Ordinal)).Order(StringComparer.Ordinal)];
             }
         }
+
+        /// <summary>Whether <paramref name="directory"/> is a unit of its language's layout: a file in it says so (<see cref="FileExtract.FolderUnit"/>).</summary>
+        private bool IsUnit(string directory)
+        {
+            Touch(Read.Unit, directory);
+            return _units.Contains(directory);
+        }
+
+        /// <summary>The directory a relative <paramref name="target"/> is read from for the file at <paramref name="path"/>: the file's own, one level less for each <c>../</c> the target begins with.</summary>
+        private static string ReadFrom(string path, string target)
+        {
+            var directory = DirectoryOf(path);
+
+            for (var at = 0; target.AsSpan(at).StartsWith("../"); at += 3)
+            {
+                directory = DirectoryOf(directory);
+            }
+
+            return directory;
+        }
+
+        /// <summary>The directory of the file at <paramref name="path"/>: the tree's root as empty.</summary>
+        private static string DirectoryOf(string path)
+            => path.LastIndexOf('/') is var slash && slash >= 0 ? path[..slash] : string.Empty;
 
         /// <summary>
         /// What <paramref name="file"/> imports, in order; then what each file it shares the imports of imports; then what
@@ -3490,6 +3603,17 @@ public static class CodeGraphLinker
                 Named(Read.Opens, file.Path, scope.Name);
             }
 
+            // What a file publishes to an import that takes its published names (<see cref="ExtractImport.Published"/>): under the
+            // file's own key, so a name it gains or loses is found again.
+            Named(Read.Opens, file.Path, extract.Published is { } published ? string.Join(PartEnd, published) : None);
+
+            // Whether the file says its directory is a unit of its language's layout: under the directory's key, so a unit come or gone
+            // is found again by every import of a layout's place passed over or taken in it.
+            if (extract.FolderUnit)
+            {
+                Named(Read.Unit, DirectoryOf(file.Path), file.Path);
+            }
+
             Named(Read.Imports, file.Path, file.Language ?? None);
 
             foreach (var import in extract.Imports)
@@ -3924,6 +4048,12 @@ public static class CodeGraphLinker
         if (reference.Qualifier?.Kind == CodeQualifierKinds.Module)
         {
             return reference.Kind == CodeEdgeKinds.Uses && Renamed(target.Node);
+        }
+
+        // A fixture a test's parameter names reaches a fixture and nothing else.
+        if (reference.Qualifier?.Kind == CodeQualifierKinds.Fixture)
+        {
+            return target.Node.SubKind == CodeSubKinds.Fixture;
         }
 
         if (CodeSubKinds.ReachedBy(reference.Qualifier?.Kind) is { } reached)

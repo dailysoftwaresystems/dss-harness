@@ -53,7 +53,7 @@ public sealed partial class HelpTests
         Assert.Contains(Prose.Words("a deletion writes no lines, and is counted with the writes placed nowhere, as a whole file's write is where the file does not read as the step left it."), prose, StringComparison.Ordinal);
         Assert.Contains(Prose.Words("body and edit reach a file only inside the tree, each link resolved, never through a link out of it."), prose, StringComparison.Ordinal);
         Assert.Contains(Prose.Words($"{DssHarness.Core.Agents.Runtime.CodebaseGraphTool.NameOf(DssHarness.Core.Agents.Runtime.GraphOp.Sites)} - every place that decides data, a name, a key path, a diagnostic id or a quoted literal asked by its value alone"), prose, StringComparison.Ordinal);
-        Assert.Contains(Prose.Words("with the coverage lines that end every such answer: the files searched by text alone, and that nothing is assumed of a language with no extractor"), prose, StringComparison.Ordinal);
+        Assert.Contains(Prose.Words("with the coverage lines that end every such answer: the files searched by text alone, that nothing is assumed of a language with no extractor, and - where files of a language the graph is unsure of were searched - what that language's implementation does not see where they show it, each limit a line by the sign the file gives of it"), prose, StringComparison.Ordinal);
         Assert.Contains(Prose.Words("--body <symbol>... or --sites <data>, any of them with --page <n>"), prose, StringComparison.Ordinal);
     }
 
@@ -75,7 +75,7 @@ public sealed partial class HelpTests
         {
             Assert.Contains($"{extractor.Language} (version {extractor.Version.ToString(CultureInfo.InvariantCulture)};", topic, StringComparison.Ordinal);
             Assert.Contains(Prose.Words($"reads {extractor.Help.Reads}."), prose, StringComparison.Ordinal);
-            Assert.All(extractor.Help.DoesNotSee, unseen => Assert.Contains(Prose.Words($"does not see {unseen}."), prose, StringComparison.Ordinal));
+            Assert.All(extractor.Help.DoesNotSee, limit => Assert.Contains(Prose.Words($"does not see {limit.Says}."), prose, StringComparison.Ordinal));
         }
 
         Assert.Contains("listed (version 1; every file no other claims)", topic, StringComparison.Ordinal);

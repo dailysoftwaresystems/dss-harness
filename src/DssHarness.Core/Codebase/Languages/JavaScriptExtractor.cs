@@ -38,7 +38,7 @@ public sealed class JavaScriptExtractor : ICodeGraphExtractor
 internal static class JsHelp
 {
     /// <summary>What neither language's reading sees.</summary>
-    public static IReadOnlyList<string> Unseen { get; } =
+    public static IReadOnlyList<CodeGraphLimit> Unseen { get; } =
     [
         "types inferred: a call on a value whose type the file does not write or make with new - a local given a call's result, a parameter with no type, a property another module declares - is bound by its name alone",
         "members added at run time - Object.assign, a constructor's this.x = ..., a prototype member given a value and not a function (X.prototype.y = value): not nodes, so no call reaches them, but X.prototype.y = function () {} is a member of X",

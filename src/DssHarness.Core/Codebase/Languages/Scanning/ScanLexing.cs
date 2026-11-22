@@ -212,6 +212,9 @@ internal abstract class ScanLexing(CodeLineIndex lines, ScanCloses? closes = nul
         /// <summary>What the lexer keeps of the literal the reading is in.</summary>
         public TMark Mark => _frames[^1].Mark;
 
+        /// <summary>How many braces the interpolation's code the reading is in holds open: a closing brace stands at none of them ends it.</summary>
+        public int Depth => _frames[^1].Depth;
+
         /// <summary>The constant parts of the literal's own value read so far.</summary>
         public IReadOnlyList<ScanLiteralPart> Parts => _outermost?.Parts ?? [];
 
@@ -289,6 +292,32 @@ internal abstract class ScanLexing(CodeLineIndex lines, ScanCloses? closes = nul
             EndPart(holder, sigil);
             holder.Holes = true;
             holder.Part = past;
+        }
+
+        /// <summary>
+        /// Ends the interpolation's code the reading is in at <paramref name="at"/>, where the language's own syntax ends it
+        /// short of its closer - an f-string's <c>!</c> before a conversion and <c>:</c> before its format - recorded as the
+        /// code of the literal that holds it; what stands from there to the closer is the field's own, none of it the value's
+        /// constant text, which <see cref="CloseCode"/> says goes on.
+        /// </summary>
+        public void EndCode(long at)
+        {
+            var top = _frames[^1];
+
+            _frames.RemoveAt(_frames.Count - 1);
+
+            var holder = _frames[^1];
+            Span(holder, top.Start, at);
+            holder.Part = -1;
+        }
+
+        /// <summary>
+        /// The closer at <paramref name="at"/> of an interpolation whose code <see cref="EndCode"/> ended short of it: the
+        /// constant text of the literal's value goes on past it.
+        /// </summary>
+        public void CloseCode(long at)
+        {
+            _frames[^1].Part = at + 1;
         }
 
         /// <summary>Ends the constant part of <paramref name="holder"/>'s value being read at <paramref name="at"/>.</summary>

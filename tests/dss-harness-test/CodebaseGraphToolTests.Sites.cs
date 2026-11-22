@@ -4,6 +4,7 @@ using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using DssHarness.Core.Agents.Runtime;
 using DssHarness.Core.Codebase;
+using DssHarness.Core.Codebase.Languages;
 
 namespace DssHarness.Tests;
 
@@ -62,38 +63,57 @@ public sealed partial class CodebaseGraphToolTests
     }
 
     /// <summary>
-    /// <c>sites</c> of a key path answers the joins the graph makes: the key node it names, the code that holds a
-    /// literal of it - a use at candidates, recall and never a doubt - and the literal's own place, its card beside
-    /// its file and line; nothing defines a key.
+    /// Where a <c>sites</c> answer searched files the graph is unsure of by text, it ends with the limits of their language's
+    /// implementation that the files show the sign of - a dynamic mark's kind the file holds, or references the linker left
+    /// candidates - each once, as its help says them, and with no other limit, which is the help's alone, and with nothing of a
+    /// language whose files it did not search: read before what the answer says of their files is trusted.
     /// </summary>
     [Fact]
-    public async Task Sites_OfAKeyName_AnswersTheKeysJoin_TheLiteralAndItsHolder()
+    public async Task Sites_WhereFilesOfALanguageAreSearchedByText_EndWithTheLimitsItsFilesShow()
     {
-        using var tree = await TreeAsync(
-            ("appsettings.json", "{\n  \"Payments\": {\n    \"TimeoutSeconds\": 30\n  }\n}\n"),
-            ("src/Keys.cs", "namespace Demo;\n\npublic static class Keys\n{\n    public static string Of()\n    {\n        return \"TimeoutSeconds\";\n    }\n}\n"));
-        var tool = Tool(tree, await QueriesAsync(tree));
+        // A file holding a mark of one kind; a file the linker left candidates in and holds no mark; and the tree every tree of these
+        // tests holds, whose C# limits the code gives no sign of.
+        using var marked = await TreeAsync(("shop/total.py", "def total(cart):\n    \"\"\"The cart's total.\"\"\"\n    return sum(getattr(line, \"cents\") for line in cart.lines)\n"));
+        using var typed = await TreeAsync(("shop/total.py", "class Tea:\n    def cents(self):\n        return 350\n\n\nclass Cake:\n    def cents(self):\n        return 500\n\n\ndef total(cart):\n    return cart.cents()\n"));
+        using var other = await TreeAsync();
 
-        var answer = await AskAsync(tool, """{"op":"sites","data":"TimeoutSeconds"}""");
+        var computed = (await AskAsync(Tool(marked, await QueriesAsync(marked)), """{"op":"sites","data":"total"}""")).Text.Split('\n');
+        var duck = (await AskAsync(Tool(typed, await QueriesAsync(typed)), """{"op":"sites","data":"total"}""")).Text.Split('\n');
+        var plain = (await AskAsync(Tool(other, await QueriesAsync(other)), """{"op":"sites","data":"Area"}""")).Text.Split('\n');
 
-        Assert.Equal(GraphToolOutcome.Answered, answer.Outcome);
-        Assert.Equal(
-            [
-                "every place that decides 'TimeoutSeconds':",
-                "uses (1):",
-                "  f8d51c member public static string Of() | src/Keys.cs:5-8 #0a1b0ead",
-                "holds the key (1):",
-                "  7c4a6e member Payments.TimeoutSeconds | appsettings.json:3-3 #8996c28c | 30",
-                "holds the literal (1):",
-                "  f8d51c member public static string Of() | src/Keys.cs:5-8 #0a1b0ead | holds 'TimeoutSeconds' at src/Keys.cs:7",
-                "coverage: 1 file(s) the graph lists only (.txt) searched by text - 0 hit(s)",
-                "coverage: 2 file(s) the graph is unsure of, searched by text too - 0 hit(s)",
-                "coverage: nothing is assumed of a language with no extractor; those files are read by text alone",
-            ],
-            answer.Text.Split('\n')[..^1]);
-        Assert.Matches(@"^\[\d+ file\(s\) you may not read were left out\]$", answer.Text.Split('\n')[^1]);
-        Assert.Equal(3, answer.Paging!.Total);
+        // The coverage lines, then the limits the files show, then the files left out: the notes in their order.
+        string[] Tail(string[] answer)
+        {
+            var coverage = Array.FindIndex(answer, line => line.Contains("unsure of", StringComparison.Ordinal));
+
+            Assert.True(coverage >= 0, string.Join('\n', answer));
+            Assert.Matches(@"^\[\d+ file\(s\) you may not read were left out\]$", answer[^1]);
+
+            return answer[(coverage + 2)..^1];
+        }
+
+        // A mark of one kind shows one limit: the limit that names the kind, and no other of the language's. The expected line is
+        // taken by the limit's words, never by the sign, so a limit that loses its sign is seen to lose its place in the answer.
+        Assert.Equal([Said("computed attribute access")], Tail(computed));
+        Assert.Equal("coverage: 3 file(s) the graph is unsure of, searched by text too - 2 hit(s)", computed.Single(line => line.Contains("unsure of", StringComparison.Ordinal)));
+
+        // A file left candidates in shows the limit that names candidates.
+        Assert.Equal([Said("a duck-typed receiver")], Tail(duck));
+
+        // What makes each shown: the signs the limits name - the kind of the mark the one file holds, candidates the other is left.
+        var limits = CodeGraphExtractors.OfThisBuild.Find("python")!.Help.DoesNotSee;
+
+        Assert.Equal([PythonReading.ComputedAttribute], Assert.Single(limits, limit => limit.Says.StartsWith("computed attribute access", StringComparison.Ordinal)).Signs);
+        Assert.Equal([CodeGraphLimit.Candidates, PythonReading.FunctionValue], Assert.Single(limits, limit => limit.Says.StartsWith("a duck-typed receiver", StringComparison.Ordinal)).Signs);
+        Assert.Equal(5, limits.Count(limit => limit.Signs.Count > 0));
+
+        // A language whose limits the code gives no sign of: nothing said of them, where its files were searched as they were here.
+        Assert.Empty(Tail(plain));
     }
+
+    /// <summary>The one Python limit whose clause holds <paramref name="names"/>, as a <c>sites</c> answer ends with it.</summary>
+    private static string Said(string names)
+        => "python does not see " + Assert.Single(CodeGraphExtractors.OfThisBuild.Find("python")!.Help.DoesNotSee, limit => limit.Says.Contains(names, StringComparison.Ordinal)).Says + ".";
 
     /// <summary>
     /// A quoted data asks by its value alone, never the symbols: a name the graph holds declarations of answers no

@@ -74,6 +74,29 @@ public sealed record FileExtract(IReadOnlyList<ExtractNode> Nodes)
     public IReadOnlyList<ExtractLiteral>? Literals { get; init; }
 
     /// <summary>
+    /// The names an import of the file that takes what it publishes alone makes visible (<see cref="ExtractImport.Published"/>):
+    /// what the file publishes to such an import - a Python module's <c>__all__</c> where it is a list of string literals, else
+    /// every name bound at its top that is not written with a leading underscore, as the implementation says. <see langword="null"/>
+    /// where nothing of the file's language imports it so.
+    /// </summary>
+    public IReadOnlyList<string>? Published { get; init; }
+
+    /// <summary>
+    /// Whether a name the file's code reads that none of its scopes declares and none of its imports makes visible is bound by
+    /// nothing: the linker then does not look for it among the repository's declarations, as a Python module's name is bound by
+    /// its module's own names and its imports or not at all. False where a name bound by neither may still be one any file declares.
+    /// </summary>
+    public bool BoundWithin { get; init; }
+
+    /// <summary>
+    /// Whether the file is the one that says its directory is one unit of its language's layout - a Python package's
+    /// <c>__init__.py</c>. An import marked <see cref="ExtractImport.Layout"/> is passed over where it names a place in a unit
+    /// around its file, so a bare name is looked for from the first directory above the units the file is in, as a Python import
+    /// is from above the file's package.
+    /// </summary>
+    public bool FolderUnit { get; init; }
+
+    /// <summary>
     /// What is wrong with this extract of a file of <paramref name="lineCount"/> lines made by
     /// <paramref name="language"/>; <see langword="null"/> where nothing is. The shape alone: a node's digest is checked
     /// against the file's lines where the lines are at hand.
@@ -709,6 +732,29 @@ public sealed record ExtractImport(string Form, string Target, int Line)
     public bool Export { get; init; }
 
     /// <summary>
+    /// Whether the names it binds in the file that makes it are that file's importers's too, and not only its own: a module's
+    /// own imported names are names of the module, so an importer of the module reaches them through it - <c>from pkg import
+    /// a</c> reaches what a package's <c>__init__.py</c> binds by <c>from .x import a</c>, by the name it binds it under.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool Reexports { get; init; }
+
+    /// <summary>
+    /// Whether it makes visible the names the file it names publishes alone (<see cref="FileExtract.Published"/>), and none of
+    /// its others: an import that takes every name the module gives, as a Python <c>from m import *</c> does.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool Published { get; init; }
+
+    /// <summary>
+    /// Whether it names one place a bare name of the file's language is looked for - in the file's own directory or in one above
+    /// it, each further place standing in for the one before it - and is passed over where that directory is a unit of the layout
+    /// around the file (<see cref="FileExtract.FolderUnit"/>): the first directory above the units the file is in is tried first.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool Layout { get; init; }
+
+    /// <summary>
     /// Whether the file it names shares its imports with this one: what that file imports - each import's filters and
     /// prefix with it - this file imports too, after its own, as a Dart part does its library's. What the file it names
     /// shares in turn is not followed.
@@ -739,6 +785,10 @@ public sealed record ExtractImport(string Form, string Target, int Line)
             : Fallback && Form is CodeImportForms.Scope or CodeImportForms.Directory ? "it is of a scope, and stands in for another import: only an import of a file does"
             : Export && Form is CodeImportForms.Scope or CodeImportForms.Directory ? "it is of a scope, and is an export: only an import of a file is exported"
             : Export && Prefix is not null ? "it is an export with a prefix: an export makes names visible by themselves"
+            : Published && (Prefix is not null || Show is not null || Export || Reexports) ? "it takes the names a file publishes, and so names no prefix, filters none and stands for nothing else"
+            : Published && Form is CodeImportForms.Scope or CodeImportForms.Directory ? "it is of a scope, and takes the names a file publishes: only an import of a file does"
+            : Layout && Form != CodeImportForms.Relative ? "it names a place of a layout, which only a path relative to the file does"
+            : Layout && Export ? "it names a place a name is looked for, which is no export: an export names a file"
             : Shares && Form is CodeImportForms.Scope or CodeImportForms.Directory ? "it is of a scope, and shares its imports: only a file's are shared"
             : Shares && (Export || Prefix is not null || Show is not null || Hide is not null) ? "it shares its imports, and is an export or has a prefix or a filter: what is shared is the file's imports as they are"
             : Namespace && (Form != CodeImportForms.Directory || Prefix is not null || Show is not null || Hide is not null) ? "it is the scope a directory's files are declared in, and is no import of a directory's whole scope"
@@ -808,6 +858,14 @@ public sealed record ExtractReference(QualifiedName From, string Kind, string Na
 
     /// <summary>Where the name is looked for, and nowhere else, where the code says: a receiver's type or value, a type's name, <c>this</c>, an import's prefix, a scope.</summary>
     public ExtractQualifier? Qualifier { get; init; }
+
+    /// <summary>
+    /// Whether it asks whether a declaration is there rather than naming one the code depends on: where none is, that is no doubt -
+    /// never counted an external callee of the node it is made from, so it makes no node unsure - as a method's name asked of its
+    /// type's bases is in a language where no word says it overrides; where one is, an edge is made as of any reference.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool Probe { get; init; }
 
     /// <summary>What is wrong with this reference; <see langword="null"/> where nothing is.</summary>
     internal string? Problem(int lineCount)
@@ -951,14 +1009,31 @@ public static class CodeQualifierKinds
     /// </summary>
     public const string Module = "module";
 
+    /// <summary>
+    /// A fixture a test is given a parameter by, as pytest names one - by the parameter's name alone, never by an import: the
+    /// name is looked for among the fixtures (<see cref="ExtractNode.SubKind"/> <c>fixture</c>) the test's own scopes declare,
+    /// exact, else among those the repository declares wherever - a conftest.py provides them to every test under it and no
+    /// test imports it - and in nothing else.
+    /// </summary>
+    public const string Fixture = "fixture";
+
     /// <summary>Every kind.</summary>
-    public static IReadOnlyList<string> All { get; } = [This, Base, Named, Type, Prefix, Value, Scope, Selector, Key, StyleVariable, StyleMixin, StyleFunction, Keyframes, FontFace, Own, Module];
+    public static IReadOnlyList<string> All { get; } = [This, Base, Named, Type, Prefix, Value, Scope, Selector, Key, StyleVariable, StyleMixin, StyleFunction, Keyframes, FontFace, Own, Module, Fixture];
 }
 
 /// <summary>A place an implementation saw something it cannot bind, or stopped reading.</summary>
 /// <param name="Line">The line.</param>
 /// <param name="Why">What it saw: a call a macro writes, a member named by a string to reflection, a call through a pointer, a file that stops parsing there.</param>
-public sealed record ExtractDynamic(int Line, string Why);
+public sealed record ExtractDynamic(int Line, string Why)
+{
+    /// <summary>
+    /// The kind of thing the implementation saw, where its help tells a limit by it (<see cref="CodeGraphLimit.Signs"/>): the same
+    /// word in a limit and in every mark of the kind, so an answer says of a file only the limits its marks show.
+    /// <see langword="null"/> where none is named.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Kind { get; init; }
+}
 
 /// <summary>
 /// One string value a file's literals hold, kept once however many literals of it the file writes, with every place one

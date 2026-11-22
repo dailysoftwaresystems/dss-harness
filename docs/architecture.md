@@ -4478,8 +4478,11 @@ written, an HTML character reference by its grammar whatever its length; an inte
 constant parts each a literal of its own, its holes read as code, a character constant, a regular
 expression and JSX markup none, a JSX attribute's text one - and five marks - a prototype, a test, a part of a
 declaration other files hold parts of too (`Part`), generated code with why, and each line it saw something it cannot
-bind or stopped reading at (`dynamic`), with why - of which the linker reads the first three. Beside the calls, every
-reader of C#, JavaScript, TypeScript, PHP, Dart, C and C++ gives each member a member reads or writes without calling
+bind or stopped reading at (`dynamic`), with why - of which the linker reads the first three; a dynamic mark may carry a
+kind (`ExtractDynamic.Kind`), and what an implementation's help says it does not see is a limit that names the signs
+telling a file it applies (`CodeGraphLimit.Signs`) - the kind of a mark, or references the linker left candidates - so
+that an answer says of a file only the limits its marks show. Beside the calls, every
+reader of C#, JavaScript, TypeScript, PHP, Dart, C, C++ and Python gives each member a member reads or writes without calling
 it - a field, a property, a constant, an enum member, any name a `nameof` names, a `case`'s constant (Dart's pattern
 constants among them), the first name of a receiver's chain - a member's or, in JavaScript and TypeScript, an
 element's - where the reader takes it for a value (JavaScript and TypeScript by what the file says of the name: a
@@ -4600,11 +4603,12 @@ from many threads, a sound model, tolerance of any cut of a fixture, pure conten
 another's, the same answer read over a file in blocks of three characters as from its string, the
 extracts stored with the tests for its version (`fixtures/codebase-graph/<language>/v<version>/`,
 written where missing with `DSSHARNESS_STORE_EXTRACTS=1`), and the edges its fixtures name through the linker. The saving
-itself is measured (`CodebaseGraphServingTests`) over eight fixture repositories under `fixtures/codebase-graph/serving/` - C#,
-C and Dart, and one each of HTML, CSS and TypeScript, of Vue, of Angular, of Razor and Blazor, of JSON, YAML and XML read by C#
+itself is measured (`CodebaseGraphServingTests`) over nine fixture repositories under `fixtures/codebase-graph/serving/` - C#,
+C and Dart, and one each of HTML, CSS and TypeScript, of Vue, of Angular, of Razor and Blazor, of JSON, YAML and XML read by C#, of Python
 - each with its `tasks.json`, the declarations a task's reference answer needs, and its `sites.json`, the data a site task
 decides by and every place that decides it: the bytes the pack and the bodies serve against the whole files', the bytes each
-`sites` answer serves against the files its places stand in, each pinned, and every place checked to be in its answer, so a
+`sites` answer serves against the files its places stand in - the line that ends it among them: where a file searched by text
+shows the sign of a limit of its language's implementation, that limit, and no other - each pinned, and every place checked to be in its answer, so a
 change that drops a use, a literal's place, a key's join or a selector's reach from an answer goes red.
 
 A language no parser this tool can carry reads goes through the structural scanner (`Codebase\Languages\Scanning\`),
@@ -4729,6 +4733,39 @@ node's. `composer`, over `PackageManifest` - the one reader of a package manager
 package by its name and refers to each package its `require` and `require-dev` name, a name with no `/` - PHP's
 platform's: `php`, `ext-*`, `lib-*`, `composer-plugin-api` - none; it declares no address root, since a class is found by
 its namespace.
+
+Python's reader (`PythonReading`, over `PythonLexer`) reads by indentation, which is no token: each token says its line, and
+the reader finds its column from where it begins. A statement ends where the next logical line begins - the first token on a
+later line outside every bracketed group, one a backslash does not continue - that starts no deeper than the statement's own
+column; a header's suite is deeper than its header and is passed over whole however deep it nests, and a decorator's line is
+the declaration's it stands above. The module is a namespace named by its dotted path - `pkg/sub/mod.py` is `pkg.sub.mod`, an
+`__init__.py` its directory's package - one open scope that every name it declares is reachable from and that its own
+top-level code is looked up in. A class is a type and a scope; a function is no scope of the model's - what it declares is
+declared in the scope the function itself is, its class or the module, and held by the function as its `Parent`. The lexer
+keeps a string whole with its prefix - raw, bytes, formatted, combined, in any case - a triple-quoted one over lines, and
+says where an f-string's fields hold code (`LiteralStack`, as Dart's, JavaScript's and PHP's lexers do): a field's code ends
+at the `!` of a conversion or the `:` of a format, which are passed over to the brace that closes the field, none of them the
+value's; its escapes are Python's. Each `import a.b` and `from a.b import c, d as e` is looked for by the package layout,
+which the extract says and the linker reads without knowing the language: the module is tried in the file's own directory and
+in each one above it to the tree's root, the nearest first, as the package's `__init__.py` and else the module's `.py`, every
+place an import marked `Layout` that stands in for the one before it (`Fallback`); a package's `__init__.py` is the one file
+that knows its directory is a package, and its extract says so (`FolderUnit`), so the linker passes a layout's place over where
+its directory is a unit around the file - the first directory above the file's package is tried first, as a Python import is
+searched from above its package. A relative import is a path beside the file. What a `from` import binds is the file's
+importers' too (`ExtractImport.Reexports`): `from pkg import Cart` reaches what the package's `__init__.py` imports, under the
+name it gives it. `from m import *` is an import marked `Published`, which makes visible the names the module publishes alone
+(`FileExtract.Published`): its `__all__` where it is a list of string literals the code changes nowhere, else every name bound
+at its top that is not written with a leading underscore - one the code computes or changes marked `dynamic`. A Python file's
+extract says its names are bound within it (`BoundWithin`), so a name a file neither declares nor imports is not looked for
+through the repository. `self` and `cls` qualify a `this` reference, `super()` a `base` one, an import's module a `prefix`
+one; a call of a name written with a capital first letter is an `instantiates`; a type an annotation, an `isinstance` or an
+`except` names is a `references`. A parameter a test requires is a reference with a `fixture` qualifier
+(`CodeQualifierKinds.Fixture`), reached by the fixtures - nodes of sub-kind `fixture`, functions `pytest.fixture` decorates -
+the test's scopes declare, else the repository's: a `conftest.py` provides them to every test under it and imports none. A
+test file's `test*` functions, its `Test*` classes and `TestCase` subclasses with their `test*` methods are tests. A method is
+bound by its name alone, so each carries an `overrides` reference of its own name with a `base` qualifier, an edge where a
+base of its type declares it along the chain; no word of the language says a method overrides, so the reference is a probe
+(`ExtractReference.Probe`) - it asks whether a declaration is there, and where none is it is no external callee.
 
 The one linker (`CodeGraphLinker`) resolves every reference by the same steps for every language - the qualifier's
 scope, a type and its bases among it; the enclosing scopes from the inside out; a scope import's prefix (an alias),
@@ -5113,7 +5150,10 @@ over every other readable file by its own will and never counting one such as a 
 (`CodebaseGraphQueries.AtLine`) and a raw line where it does not. Every `sites` answer ends with its coverage lines: how
 many files the graph lists only were searched by text and with how many hits, the kinds of them named; how many files it is
 unsure of were searched too; and, where any was, that nothing is assumed of a language with no extractor, its files read by
-text alone - so a plan's site list is never read as covered where the graph was silent. The prompts that search for a class's
+text alone - so a plan's site list is never read as covered where the graph was silent. Where files of a language the graph is
+unsure of were searched, the answer ends besides with what that language's implementation does not see where they show it
+(`CodebaseGraphTool.Unseen`, by `CodebaseGraphQueries.SignsOf`): each limit a file gives the sign of - the kind of a dynamic
+mark it holds, or references the linker left candidates - a line, and no limit it shows no sign of, which is the help's alone. The prompts that search for a class's
 sites - `plan.md`, `plan-audit.md`, `item-audit.md` and the plan's `searches` - name `sites` first and text search after it.
 No answer of a read of the graph is cut: each is pages of whole entries (`Codebase\GraphPages.cs`, the graph's use of
 `Pages\Paging`, the one owner of an answer's pages and of the one rule a piece is cut by, over the graph's own entry,

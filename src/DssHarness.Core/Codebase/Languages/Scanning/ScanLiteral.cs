@@ -53,6 +53,13 @@ internal enum ScanEscapes
     /// any other character after a backslash itself, a space among them.
     /// </summary>
     Css,
+
+    /// <summary>
+    /// Python's, in a string no prefix makes raw: a backslash before a line break dropping both; <c>\n</c> and the other
+    /// letters, an octal of up to three digits, <c>\x</c> of two, <c>\u</c> of four and <c>\U</c> of eight, and any other
+    /// character after a backslash itself - <c>\N</c> and what follows it kept as written, <c>\'</c> a quote.
+    /// </summary>
+    Python,
 }
 
 /// <summary>One constant part of a literal's value as its text writes it.</summary>
@@ -304,6 +311,32 @@ internal sealed record ScanLiteral(IReadOnlyList<ScanLiteralPart> Parts, ScanEsc
                 };
             }
 
+            case ScanEscapes.Python:
+            {
+                if (ScanLexing.LineBreakAt(source, at + 1, end) is var spliced and > 0)
+                {
+                    return at + 1 + spliced;
+                }
+
+                return next switch
+                {
+                    'a' => value.Char('\a', after),
+                    'b' => value.Char('\b', after),
+                    'f' => value.Char('\f', after),
+                    'n' => value.Char('\n', after),
+                    'r' => value.Char('\r', after),
+                    't' => value.Char('\t', after),
+                    'v' => value.Char('\v', after),
+                    >= '0' and <= '7' => Number(source, at + 1, end, 8, 3, value, asByte: false),
+                    'x' when Hex(source, after, end, 2) is { } code => value.Code(code, after + 2),
+                    'u' when Hex(source, after, end, 4) is { } code => value.Code(code, after + 4),
+                    'U' when Hex(source, after, end, 8) is { } code => value.Code(code is > 0x10FFFF or (>= 0xD800 and <= 0xDFFF) ? 0xFFFD : code, after + 8),
+                    // \N{LATIN SMALL LETTER A} names a character as no number: kept as written, the graph reads no name of one.
+                    'N' when after < end && source[after] == '{' && source.Find('}', after, end) is var named && named > 0 => Kept(source, at, named + 1, value),
+                    _ => value.Char(next, after),
+                };
+            }
+
             default:
                 return next switch
                 {
@@ -332,6 +365,13 @@ internal sealed record ScanLiteral(IReadOnlyList<ScanLiteralPart> Parts, ScanEsc
         }
 
         return at > open + 1 && at < end && source[at] == '}' ? at : 0;
+    }
+
+    /// <summary>The text from <paramref name="start"/> to <paramref name="end"/> as written, added to <paramref name="value"/>; answers <paramref name="end"/>.</summary>
+    private static long Kept(CodeText source, long start, long end, Decoded value)
+    {
+        value.Text(source.Slice(start, end));
+        return end;
     }
 
     /// <summary>The character the hex digits from <paramref name="start"/> to the <c>}</c> at <paramref name="close"/> name, added; answers past the brace.</summary>

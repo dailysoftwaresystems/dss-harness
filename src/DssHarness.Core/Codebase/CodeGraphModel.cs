@@ -190,6 +190,13 @@ public static class CodeSubKinds
     /// </summary>
     public const string Sheet = "sheet";
 
+    /// <summary>
+    /// A fixture a test framework provides a test's parameter by - pytest's, a function a test is given by its parameter's
+    /// name (<c>@pytest.fixture</c>, a conftest.py's among them): reached by a fixture qualifier
+    /// (<see cref="CodeQualifierKinds.Fixture"/>), the parameter's name, and by a call that writes its name as any function is.
+    /// </summary>
+    public const string Fixture = "fixture";
+
     /// <summary>Whether <paramref name="subKind"/> is a data file's or a style sheet's, which no reference reaches by its name alone.</summary>
     /// <param name="subKind">A node's kind within its kind, or <see langword="null"/>.</param>
     public static bool IsData(string? subKind) => subKind is Key or Element or Rule or Keyframes or StyleMixin or StyleFunction or FontFace or StyleVariable or Sheet;

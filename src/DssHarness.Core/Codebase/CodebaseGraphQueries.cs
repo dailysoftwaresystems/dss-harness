@@ -798,6 +798,45 @@ public sealed class CodebaseGraphQueries
             return "the graph holds it as generated code";
         }
 
+        return LeftCandidates(held) is { } left && left.Unsure * 4 > left.Edges
+            ? $"more than a quarter of its {left.Edges.ToString(CultureInfo.InvariantCulture)} references the linker left candidates"
+            : null;
+    }
+
+    /// <summary>
+    /// The signs the file at <paramref name="path"/> gives of what the implementation of its language does not see
+    /// (<see cref="CodeGraphLimit.Signs"/>): the kind of each dynamic mark its reading made, and <see cref="CodeGraphLimit.Candidates"/>
+    /// where more than a quarter of its references the linker left candidates (<see cref="UnsureOfFile"/>); none where the graph is
+    /// sure of it, and none of a limit the code gives no sign of, which only the help says.
+    /// </summary>
+    /// <param name="path">A file's path, relative to the tree, as an agent or the tool spells it.</param>
+    public IReadOnlyList<string> SignsOf(string path)
+    {
+        if (HeldPath(path) is not { } held)
+        {
+            return [];
+        }
+
+        var signs = ((_extracts.TryGetValue(held, out var extract) ? extract : _read.Extract(held))?.Dynamic ?? [])
+            .Where(mark => mark.Kind is not null)
+            .Select(mark => mark.Kind!)
+            .ToList();
+
+        if (LeftCandidates(held) is { } left && left.Unsure * 4 > left.Edges)
+        {
+            signs.Add(CodeGraphLimit.Candidates);
+        }
+
+        return [.. signs.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)];
+    }
+
+    /// <summary>
+    /// The references the nodes of the file at <paramref name="held"/> make that say how sure the graph is of what they name, and
+    /// how many of them the linker left candidates: a use is recall and never a doubt, and no edge of the file's structure is one.
+    /// None where the file makes none.
+    /// </summary>
+    private (int Edges, int Unsure)? LeftCandidates(string held)
+    {
         var edges = 0;
         var unsure = 0;
 
@@ -807,7 +846,6 @@ public sealed class CodebaseGraphQueries
             {
                 if (string.Equals(edge.Kind, CodeEdgeKinds.Contains, StringComparison.Ordinal)
                     || string.Equals(edge.Kind, CodeEdgeKinds.Declares, StringComparison.Ordinal)
-                    // A use is recall, never a doubt: its confidence says nothing of how sure the graph is of what it declares.
                     || CodeEdgeKinds.Recall(edge.Kind))
                 {
                     continue;
@@ -822,9 +860,7 @@ public sealed class CodebaseGraphQueries
             }
         }
 
-        return edges > 0 && unsure * 4 > edges
-            ? $"more than a quarter of its {edges.ToString(CultureInfo.InvariantCulture)} references the linker left candidates"
-            : null;
+        return edges > 0 ? (edges, unsure) : null;
     }
 
     /// <summary>

@@ -26,6 +26,15 @@ internal sealed class ScanExtract
     /// <summary>Why the file is generated code, where the reader knows; <see langword="null"/> where it is not.</summary>
     public string? Generated { get; set; }
 
+    /// <summary>The names an import of the file that takes what it publishes makes visible (<see cref="FileExtract.Published"/>); <see langword="null"/> where its language has no such import.</summary>
+    public IReadOnlyList<string>? Published { get; set; }
+
+    /// <summary>Whether a name the file's code reads that none of its scopes declares and none of its imports makes visible is bound by nothing (<see cref="FileExtract.BoundWithin"/>).</summary>
+    public bool BoundWithin { get; set; }
+
+    /// <summary>Whether the file is the one that says its directory is one unit of its language's layout (<see cref="FileExtract.FolderUnit"/>).</summary>
+    public bool FolderUnit { get; set; }
+
     /// <summary>
     /// One string literal of the file, decoded, on <paramref name="line"/>, written in the code of the node of the key
     /// <paramref name="from"/> - none where it is written at the file's top, outside every declaration, whose node it is
@@ -91,16 +100,17 @@ internal sealed class ScanExtract
     /// <summary>
     /// Adds a reference made from the node of the key <paramref name="from"/>; answers its place among the file's
     /// references - what a reference made for the next name of a chain links its qualifier to
-    /// (<see cref="ExtractQualifier.Link"/>) - or -1 where it names nothing and is not added.
+    /// (<see cref="ExtractQualifier.Link"/>) - or -1 where it names nothing and is not added. A <paramref name="probe"/> asks
+    /// whether a declaration is there (<see cref="ExtractReference.Probe"/>): where none is, no doubt is counted.
     /// </summary>
-    public int Reference(QualifiedName from, string kind, string name, int line, int? arity = null, ExtractQualifier? qualifier = null)
+    public int Reference(QualifiedName from, string kind, string name, int line, int? arity = null, ExtractQualifier? qualifier = null, bool probe = false)
     {
         if (name.Length == 0)
         {
             return -1;
         }
 
-        _references.Add(new ExtractReference(from, kind, name, line) { Arity = arity, Qualifier = qualifier });
+        _references.Add(new ExtractReference(from, kind, name, line) { Arity = arity, Qualifier = qualifier, Probe = probe });
         return _references.Count - 1;
     }
 
@@ -109,6 +119,12 @@ internal sealed class ScanExtract
 
     /// <summary>Marks <paramref name="line"/> dynamic, with why.</summary>
     public void Dynamic(int line, string why) => _dynamic.Add(new ExtractDynamic(line, why));
+
+    /// <summary>
+    /// Marks <paramref name="line"/> dynamic, with why, of the <paramref name="kind"/> its implementation's help tells a limit by
+    /// (<see cref="CodeGraphLimit.Signs"/>), so an answer says of the file that limit and no other.
+    /// </summary>
+    public void Dynamic(int line, string why, string kind) => _dynamic.Add(new ExtractDynamic(line, why) { Kind = kind });
 
     /// <summary>The extract, every node given its id: those with a body first, in the order they were added, then those without.</summary>
     public FileExtract Build()
@@ -135,6 +151,9 @@ internal sealed class ScanExtract
             Generated = Generated,
             Dynamic = _dynamic,
             Literals = _literals.Kept(from => from ?? _top),
+            Published = Published,
+            BoundWithin = BoundWithin,
+            FolderUnit = FolderUnit,
         }.Renamed(key => given[key]);
     }
 

@@ -1,0 +1,10 @@
+[
+  {
+    "data": "largest",
+    "sites": ["shop/geometry.py:11", "shop/geometry.py:44", "tests/test_shape.py:18"]
+  },
+  {
+    "data": "describe",
+    "sites": ["shop/report.py:6", "shop/report.py:16", "tests/test_shape.py:22"]
+  }
+]

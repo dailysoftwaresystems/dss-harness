@@ -8,9 +8,9 @@ using DssHarness.Core.Codebase;
 namespace DssHarness.Tests;
 
 /// <summary>
-/// The mechanism of the saving, in the suite, with no model (part 08, "What the saving is"; part 02, section 7): over eight
+/// The mechanism of the saving, in the suite, with no model (part 08, "What the saving is"; part 02, section 7): over nine
 /// fixture repositories kept with the tests - one C#, one C, one Dart, and one each of HTML, CSS and TypeScript, of Vue, of
-/// Angular, of Razor and Blazor, of JSON, YAML and XML read by C# - a list of tasks each names the declarations its reference
+/// Angular, of Razor and Blazor, of JSON, YAML and XML read by C#, of Python - a list of tasks each names the declarations its reference
 /// answer needs, and a list of site tasks each the data a reference answer decides by and every place that decides it; for each
 /// task the step's context pack is made from the task's text and the <c>graph</c> tool is driven the way the pack and the tool's
 /// description lead an agent - the cards, the bodies needed - and for each site task the tool's <c>sites</c> is read page by
@@ -105,9 +105,10 @@ public sealed class CodebaseGraphServingTests
 
     /// <summary>
     /// For every task of the markup and data fixture repositories - one of HTML, CSS and TypeScript, one of Vue components, one
-    /// of Angular, one of Razor and Blazor, one of JSON, YAML and XML read by C#: the pack made from the task's text holds every
-    /// declaration the task needs, the bodies of those declarations cost under half the bytes of the whole files that hold them,
-    /// the pack stays within its cap, and the bytes the pack and the bodies serve together are a pinned share of the whole files'.
+    /// of Angular, one of Razor and Blazor, one of JSON, YAML and XML read by C#, one of Python: the pack made from the task's text
+    /// holds every declaration the task needs, the bodies of those declarations cost under half the bytes of the whole files that
+    /// hold them, the pack stays within its cap, and the bytes the pack and the bodies serve together are a pinned share of the
+    /// whole files'.
     /// </summary>
     [Fact]
     public async Task EveryTaskOfTheMarkupAndDataFixtureRepositories_IsServedItsDeclarationsForAPinnedShareOfTheWholeFiles()
@@ -160,6 +161,8 @@ public sealed class CodebaseGraphServingTests
                 ("config", "Read the payment timeout and the retries from the configuration", 129.1),
                 ("config", "Find the most items an order may hold", 132.9),
                 ("config", "Tell whether shipping is free for a cart", 165.5),
+                ("python", "Find the largest of the shapes by its area", 183.9),
+                ("python", "Build the report table of the shapes with each described", 271.5),
             ],
             ratios);
     }
@@ -168,7 +171,10 @@ public sealed class CodebaseGraphServingTests
     /// For every site task of every fixture repository: the <c>sites</c> answer, read page by page to its last, holds every place
     /// the task says decides its datum - recall of 100%, a declaration, a call, a read, a literal, a key and a line of markup alike,
     /// across every language the fixture holds - and the bytes it serves are a pinned share of the whole files those places stand in.
-    /// A change that drops a use, a literal's place, a key's join or a selector's reach from the answer turns it red.
+    /// A change that drops a use, a literal's place, a key's join or a selector's reach from the answer turns it red. The share is
+    /// of the whole answer, the line that ends it among them: where a file searched by text shows the sign of a limit of its
+    /// language's implementation, that limit is said - Python's fixtures are unsure by candidates, so the duck-typed receiver's
+    /// limit ends their answers - and no limit a file shows no sign of is.
     /// </summary>
     [Fact]
     public async Task EverySiteTask_IsAnsweredWithEveryPlaceThatDecides_AtFullRecall_ForAPinnedShareOfTheWholeFiles()
@@ -231,12 +237,14 @@ public sealed class CodebaseGraphServingTests
                 ("config", "MaxItems", 25.1),
                 ("config", "freeOverCents", 25.6),
                 ("config", "rules", 15.6),
+                ("python", "largest", 61.9),
+                ("python", "describe", 35.5),
             ],
             ratios);
     }
 
-    /// <summary>The fixture repositories of part 02's markup, frameworks and configuration files, beside the three plan 1 measured.</summary>
-    private static readonly string[] MarkupAndData = ["web", "vue", "angular", "razor-blazor", "config"];
+    /// <summary>The fixture repositories of part 02's markup, frameworks and configuration files, and Python's of its own lane, beside the three plan 1 measured.</summary>
+    private static readonly string[] MarkupAndData = ["web", "vue", "angular", "razor-blazor", "config", "python"];
 
     /// <summary>
     /// Whether the <paramref name="answer"/> names the line <paramref name="site"/> places a decision on: a card whose range

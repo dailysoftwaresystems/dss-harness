@@ -63,9 +63,9 @@ public static partial class HelpTopics
                 AppendWrapped(builder, $"    holds {holds}.");
             }
 
-            foreach (var unseen in extractor.Help.DoesNotSee)
+            foreach (var limit in extractor.Help.DoesNotSee)
             {
-                AppendWrapped(builder, $"    does not see {unseen}.");
+                AppendWrapped(builder, $"    does not see {limit.Says}.");
             }
 
             builder.AppendLine();
