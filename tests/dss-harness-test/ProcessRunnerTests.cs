@@ -1210,6 +1210,37 @@ public sealed class ProcessRunnerTests
     }
 
     /// <summary>
+    /// A look at a child's output settles on a quiet pipe only where a read of it waits and the pipe itself holds
+    /// nothing: on Linux and macOS a read can wait merely to be run, its task no answer at all while what the child
+    /// wrote already sits in the pipe - and what a runner once read from such a look was that the pipe was held by a
+    /// leftover, the child's own answer given up with it, so git asked to size an object, or to name a repository,
+    /// answered nothing. Where the pipe answers while a read pends on it, it is asked: a read whose pipe holds what
+    /// the child wrote is no quiet pipe, whatever its task says; one whose pipe holds nothing, still waiting, is - the
+    /// leftover's hold, told as it always was.
+    /// </summary>
+    [Fact]
+    public void AReadWhosePipeHoldsTheChildsAnswer_IsNotAQuietPipe()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "The pipe is asked only where a read pending on it leaves it askable: Linux and macOS.");
+
+        using var server = new AnonymousPipeServerStream(PipeDirection.In);
+        using var client = new AnonymousPipeClientStream(PipeDirection.Out, server.GetClientHandleAsString());
+
+        // The child's answer, in the pipe before any read has taken it.
+        var said = "the child's answer"u8;
+        client.Write(said);
+        client.Flush();
+
+        var first = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var reader = new HeldRead(first.Task, first.Task, server);
+        var capture = new ProcessRunner.StreamCapture(reader, onLine: null, StreamKept.Whole, cut: null, pieced: null, log: null);
+
+        // The read waits - by its task alone, a quiet pipe, twice over - while the pipe holds the child's answer.
+        Assert.False(capture.ReadAll());
+        Assert.False(capture.ReadAll(), "a read whose pipe holds the child's answer was read as a pipe waiting on a leftover");
+    }
+
+    /// <summary>
     /// A look at a child's output settles on a quiet pipe only where a read of it waits - a read whose task is still to
     /// end: one being made, its task not yet given, has not returned, and what a runner once read from such a look was
     /// that the pipe was held by a leftover while the child's own answer was still coming - git asked to name a

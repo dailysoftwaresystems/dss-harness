@@ -1409,9 +1409,12 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
         /// anything more would have ended the waiting read - what a process the child left running holds open, once
         /// the child has ended. A read is waiting only where its own task has not completed: one whose task has
         /// completed has returned, and what it returned is the child's own, kept, however long a busy machine holds
-        /// back the loop that keeps it. The system is asked nothing: the pending read is itself the answer, and on
-        /// Windows the handle a synchronous read pends on answers no other question - a peek on it waits for that
-        /// read, which is what the child left running holds. A stream that is no pipe of a child's is read to its end.
+        /// back the loop that keeps it. And where the pipe itself answers - Linux and macOS, where a read can wait
+        /// merely to be run, its task no answer while what the child wrote sits in the pipe - the pipe is asked, and
+        /// holds nothing only where it says so. The system is asked nothing on Windows, where the handle a synchronous
+        /// read pends on answers no other question - a peek on it waits for that read, which is what the child left
+        /// running holds - and a read there is submitted to the system as it is made, so its task alone tells whether
+        /// anything waits. A stream that is no pipe of a child's is read to its end.
         /// </summary>
         public bool ReadAll()
         {
@@ -1421,7 +1424,7 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
             }
 
             var reads = Interlocked.Read(ref _reads);
-            var quiet = _waiting && _pipe is not null && _pending is { IsCompleted: false };
+            var quiet = _waiting && _pipe is not null && _pending is { IsCompleted: false } && !PipeBytes.HoldsData(_pipe);
             var settled = quiet && reads == _lookedAt;
 
             _lookedAt = quiet ? reads : -1;
