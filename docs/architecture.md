@@ -3708,7 +3708,30 @@ is kept with what was spent, never in the engine's memory alone (`FlowBudgetSpen
 `spent.reserveMetAt`, absent where nothing met the reserve past its count and refused at a grant the run was never
 given): the uncounted part's with its charge, the share's set before the write that records the launch's end, so a
 resume after a crash at any write from there asks once, before anything starts again - never by running the step past
-the reserve to meet it a second time - and a grant of more recorded since goes on. A step that says `ask` is paused on its agent's questions
+the reserve to meet it a second time - and a grant of more recorded since goes on.
+
+Every step instance's work is measured as it runs, on its own record (`FlowStepMeasure`, `step.json`'s and
+`flow.json`'s `measure`, one owner in `Orchestration\Flow\FlowStepMeasure.cs`): when it was ready (`readyAt`, the first
+admission walk that found everything it depends on ended), how long it waited and on what (`waited[]`, by the words a
+record's `waitsOn` holds - the reasoning limit, a claim, a person's answer - folded where the causes change at every
+write and every walk), how long it ran (`ran`, the wall time of its attempts) and how long it stood stopped for the
+run's own pause (`paused`, the resume's wait kept apart). The open wait is kept in the record with its time
+(`waitingOn`, `waitingSince`), so a wait that spans two sessions is one wait, whole. One entry per attempt
+(`attempts[]`) holds its own times and outcome, what served it - the provider, the model, the effort, where a fallback
+moved it from and why - the price copied as its cost was counted (a price changed in the configuration later never
+changes what a past attempt cost), its tokens by kind and dollars, the uncounted reason where a part could not be
+counted, the turns, the tool calls by name with their failures, and the compactions; the failed attempt the engine
+runs again carries its backoff (`retryAfter`). What an attempt spends is counted once, at the one place a token is
+counted (`FlowCoordinator.TakeMessage`'s usage branch): the same numbers charge the run's budget and the instance's
+own measure (`ChargeTheAttempt`, a turn that reaches its attempt after its entry was written - a handoff turn answered
+while the step stood paused - folded into that entry by its attempt's number), so the run's `spent` is the sum of its
+instances'. What the advisor spent answering a step's own questions is kept beside them (`measure.advice`, never in an
+attempt, for the advisor's turns are its own records'). An attempt a crash cut off - its record still `Running` - has
+its measure completed at the resume from its own stored stream (`IFlowHandoffRunner.AttemptOf`: the attempt's events
+replayed through the engine's own count of a run's spending, priced as the configuration stands now), and the run's
+budget charged with the same numbers there, for the session that crashed never read them.
+
+A step that says `ask` is paused on its agent's questions
 (`AgentRunStatus.Asked` mapped to a question of the kind `ask`, the agent's questions riding with it and the
 recommendation saying the agent recommends within each), and the answer - `answer` with a text, or `decide` - goes back
 into the same attempt (`FlowAnswerGiven` carrying its text and kind): the runner sends the person's words as the

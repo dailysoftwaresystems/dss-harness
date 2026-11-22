@@ -452,6 +452,9 @@ public sealed class FlowPauseTests
             Asked.Add(run);
             return body;
         }
+
+        public Task<FlowStepAttempt?> AttemptOf(FlowStepRun run, CancellationToken cancellationToken)
+            => Task.FromResult<FlowStepAttempt?>(null);
     }
 
     /// <summary>A handoff turn that runs past its bound - the workflow's handoffSeconds, or 180 where it says none - is ended there, and the engine writes the handoff, saying the bound it passed.</summary>

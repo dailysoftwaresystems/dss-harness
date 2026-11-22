@@ -535,6 +535,15 @@ public sealed record FlowStepResult
     public IReadOnlyList<Agents.AgentSkill> Skills { get; init; } = [];
 
     /// <summary>
+    /// The attempt's own account, as its runner hands it back: what served it and what that cost - the provider, the
+    /// model, the effort, where a fallback moved it from and why, and the price copied as its cost was counted - with
+    /// the turns it took, the tools it called and how often its conversation was compacted. Its spend is not here: the
+    /// engine counts that turn by turn as each was reported, the one place a token is counted. Null for a step that no
+    /// agent served.
+    /// </summary>
+    public FlowStepAttempt? Attempt { get; init; }
+
+    /// <summary>
     /// What the step's codebase graph gave and what it saved, as its <c>step.json</c> holds it: its mode, its view, what
     /// the map and the pack - or the changes a conversation gone on with was told - its last launch was given cost, what
     /// the tool served, and what the agent still read whole; null where the step was given no graph, or its agent never

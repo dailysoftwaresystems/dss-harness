@@ -95,6 +95,12 @@ public sealed class FlowStepRunners : IFlowStepRunner, IFlowStreamAccount
             ? handoff.Account(run)
             : _none.Account(run);
 
+    /// <inheritdoc/>
+    public async Task<FlowStepAttempt?> AttemptOf(FlowStepRun run, CancellationToken cancellationToken)
+        => run.Step.Type is { } type && _byType.TryGetValue(type, out var runner) && runner is IFlowHandoffRunner handoff
+            ? await handoff.AttemptOf(run, cancellationToken).ConfigureAwait(false)
+            : null;
+
     /// <summary>
     /// The run <paramref name="run"/>'s step belongs to, and the repository's context loaded from its main checkout, as
     /// every command over the orchestrator loads it.

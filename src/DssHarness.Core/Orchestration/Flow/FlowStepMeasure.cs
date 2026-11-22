@@ -14,28 +14,133 @@ namespace DssHarness.Core.Orchestration.Flow;
 /// When everything the instance depends on ended and it was free to be drawn; null where the engine never drew it.
 /// </param>
 /// <param name="Waited">
-/// How long it waited, split by the engine's own causes (<see cref="FlowWaits"/>): the dispatch queue, admission's
-/// memory or room, a run limit, a person's answer. Each entry names its cause and its seconds.
+/// How long it waited, split by the engine's own causes (<see cref="FlowWaits"/> and the words a record's
+/// <c>waitsOn</c> holds): the dispatch queue, admission's memory or room, a run limit, a person's answer. Each entry
+/// names its cause and its seconds, and one cause that waited more than once is one entry, summed.
 /// </param>
 /// <param name="Ran">The wall-clock seconds of its attempts, summed - the time its own work took.</param>
-/// <param name="Paused">The seconds it spent at a safe pause, its work held for a person or a limit.</param>
+/// <param name="Paused">
+/// The seconds it stood stopped for the run's own pause - a safe pause, a stop, a crash - waiting on the resume;
+/// waits on every other cause are <paramref name="Waited"/>'s, and none is counted twice.
+/// </param>
 /// <param name="Attempts">One entry per attempt the instance made, in order.</param>
+/// <param name="Advice">
+/// What the advisor spent answering the instance's own questions, summed; null where none was asked of it. It is no
+/// attempt's own spend - the advisor works in its own records, beside the step - and the run's total counts it with
+/// the attempts'.
+/// </param>
 /// <param name="Totals">The attempts summed: every token, every dollar, the turns and the uncounted reasons; null where none ran.</param>
+/// <param name="WaitingOn">
+/// What the instance waits on now, in the words a record's <c>waitsOn</c> holds; null where it waits on nothing. The
+/// open period is kept with <paramref name="WaitingSince"/> so a resume closes it as this session would - a wait that
+/// spans two sessions is one wait, whole.
+/// </param>
+/// <param name="WaitingSince">When the open wait began; null where none is open.</param>
 public sealed record FlowStepMeasure(
     [property: JsonConverter(typeof(FlowTimeConverter)), JsonIgnore(Condition = JsonIgnoreCondition.Never)] DateTimeOffset? ReadyAt = null,
     IReadOnlyList<FlowStepWait>? Waited = null,
     double? Ran = null,
     double? Paused = null,
     IReadOnlyList<FlowStepAttempt>? Attempts = null,
-    FlowStepTotals? Totals = null)
+    FlowStepAdvice? Advice = null,
+    FlowStepTotals? Totals = null,
+    IReadOnlyList<string>? WaitingOn = null,
+    [property: JsonConverter(typeof(FlowTimeConverter)), JsonIgnore(Condition = JsonIgnoreCondition.Never)] DateTimeOffset? WaitingSince = null)
 {
     /// <summary>What is wrong with this measure; null when nothing is.</summary>
     public string? Problem()
         => Attempts is { } attempts && attempts.Any(attempt => attempt.Problem() is { } problem) ? attempts.First(attempt => attempt.Problem() is not null).Problem()
+            : Waited is { } waits && waits.Any(wait => wait.Problem() is { } wrong) ? waits.First(wait => wait.Problem() is not null).Problem()
             : Attempts is { Count: > 0 } && Totals is null ? "it holds attempts and no totals"
+            : WaitingSince is null != (WaitingOn is null || WaitingOn.Count == 0) ? "an open wait without its time, or a time without its wait"
             : Ran is < 0 ? $"it ran {Ran?.ToString("0.0", CultureInfo.InvariantCulture)} seconds"
             : null;
+
+    /// <summary>
+    /// This measure with its open wait brought to <paramref name="on"/> at <paramref name="at"/>: the period that was
+    /// open, where the causes changed, is closed into <see cref="Waited"/> by its causes - or into <see cref="Paused"/>
+    /// where the cause was the resume - and the new period opens where there is one to open. The engine settles this at
+    /// every place it writes what an instance waits on, so the causes are always the record's own words, and an
+    /// unchanged set of causes keeps the period open as it was.
+    /// </summary>
+    /// <param name="on">What the instance waits on now; empty where it waits on nothing.</param>
+    /// <param name="at">Now, as the engine's clock says it.</param>
+    public FlowStepMeasure Waiting(IReadOnlyList<string> on, DateTimeOffset at)
+    {
+        ArgumentNullException.ThrowIfNull(on);
+
+        if (WaitingOn is not null && WaitingOn.Count == on.Count && !WaitingOn.Where((cause, at_) => on[at_] != cause).Any())
+        {
+            return this;
+        }
+
+        var waited = Waited;
+        var paused = Paused;
+
+        if (WaitingOn is { Count: > 0 } causes && WaitingSince is { } since && at > since)
+        {
+            // The closed period's seconds, whole to one decimal, folded into its causes - each merged with its own
+            // earlier periods, so a cause that waited twice is one entry.
+            var seconds = Math.Round((at - since).TotalSeconds, 1, MidpointRounding.AwayFromZero);
+
+            foreach (var cause in causes)
+            {
+                if (cause == FlowWaits.Resume)
+                {
+                    paused = (paused ?? 0) + seconds;
+                    continue;
+                }
+
+                var held = waited?.FirstOrDefault(wait => wait.Cause == cause);
+
+                waited = held is { } wait
+                    ? [.. waited!.Where(other => other != wait), wait with { Seconds = wait.Seconds + seconds }]
+                    : [.. waited ?? [], new FlowStepWait(cause, seconds)];
+            }
+        }
+
+        return this with
+        {
+            Waited = waited,
+            Paused = paused,
+            WaitingOn = on.Count > 0 ? on : null,
+            WaitingSince = on.Count > 0 ? at : null,
+        };
+    }
+
+    /// <summary>
+    /// This measure with <paramref name="advice"/>'s spend added to its advice: the advisor's tokens and dollars are
+    /// the run's, charged with the attempt's own at the one place a token is counted, and kept here beside them.
+    /// </summary>
+    /// <param name="advice">What one asking of the advisor spent, as its answer carried it.</param>
+    public FlowStepMeasure Advised(FlowAdvice advice)
+    {
+        ArgumentNullException.ThrowIfNull(advice);
+
+        if (advice.Tokens is null && advice.Usd is null)
+        {
+            return this;
+        }
+
+        return this with
+        {
+            Advice = Advice is { } held
+                ? held with { Tokens = held.Tokens + advice.Tokens, Usd = held.Usd + advice.Usd, Uncounted = held.Uncounted ?? advice.Uncounted }
+                : new FlowStepAdvice(advice.Model, advice.Tokens, advice.Usd, advice.Uncounted),
+        };
+    }
 }
+
+/// <summary>
+/// What the advisor spent answering one step's own questions: its tokens and dollars, charged to the run as any
+/// attempt's are and kept on the step's measure beside them - never in an attempt, for the advisor's turns are its
+/// own, in its own records, and an attempt's tokens are its stream's alone.
+/// </summary>
+/// <param name="Model">The model that served the advisor, where one did.</param>
+/// <param name="Tokens">Every token its turns used, of every kind; null where none was reported.</param>
+/// <param name="Usd">What they cost, as far as each turn could be counted; null where none was reported.</param>
+/// <param name="Uncounted">Why a turn's cost could not be counted; null where every turn's was.</param>
+public sealed record FlowStepAdvice(string? Model = null, long? Tokens = null, double? Usd = null, string? Uncounted = null);
 
 /// <summary>One cause the instance waited on, and how long.</summary>
 /// <param name="Cause">The cause, as <see cref="FlowWaits"/> names it.</param>
@@ -100,7 +205,30 @@ public sealed record FlowStepAttempt(
         => N < 1 ? $"its number is {N.ToString(CultureInfo.InvariantCulture)}, and the first is 1"
             : Usd is < 0 ? $"it cost {Usd?.ToString("0.0000", CultureInfo.InvariantCulture)} USD"
             : RetryAfter is < 0 ? $"it waited {RetryAfter?.ToString("0.0", CultureInfo.InvariantCulture)} seconds to run again"
+            : Tools is { } tools && tools.Any(tool => tool.Problem() is { } wrong) ? tools.First(tool => tool.Problem() is not null).Problem()
             : null;
+
+    /// <summary>
+    /// This attempt with one turn's usage added - the turn the attempt's runner answered after its entry was written,
+    /// a handoff turn among them - its dollars and its uncounted reason folded in with it, and the model that served
+    /// the turn kept where the entry holds none.
+    /// </summary>
+    /// <param name="turn">The turn's tokens, by kind.</param>
+    /// <param name="usd">What the turn cost, where it could be counted.</param>
+    /// <param name="uncounted">Why it could not, where it could not.</param>
+    /// <param name="serving">The model that served the turn; null where the answer that carried it does not know.</param>
+    public FlowStepAttempt Charged(AgentUsage turn, double? usd, string? uncounted, string? serving)
+    {
+        ArgumentNullException.ThrowIfNull(turn);
+
+        return this with
+        {
+            Tokens = (Tokens ?? AgentUsage.None).Plus(turn),
+            Usd = (Usd ?? 0) + (usd ?? 0),
+            Uncounted = Uncounted ?? uncounted,
+            Model = Model ?? serving,
+        };
+    }
 }
 
 /// <summary>The price an attempt's cost was counted at, as the configuration gave it when it was counted.</summary>
@@ -195,7 +323,8 @@ public sealed record FlowStepTotals(
 
 /// <summary>
 /// What one attempt has used so far, as its turns report it - the engine's own accumulator, charged by the one place a
-/// token is counted and read when the attempt ends to write the measure's entry. One owner of the counting per attempt.
+/// token is counted and read when the attempt ends to write the measure's entry. One owner of the counting per
+/// attempt: it is emptied where an attempt begins, so an attempt's entry is its own turns' alone.
 /// </summary>
 public sealed class FlowStepSpend
 {
@@ -226,5 +355,15 @@ public sealed class FlowStepSpend
         Usd = (Usd ?? 0) + (usd ?? 0);
         Uncounted ??= uncounted;
         Reported = true;
+    }
+
+    /// <summary>Empties the accumulator where an attempt begins, so the next attempt counts its own turns alone.</summary>
+    public void Reset()
+    {
+        Tokens = null;
+        Usd = null;
+        Uncounted = null;
+        Reported = false;
+        Serving = null;
     }
 }

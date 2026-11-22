@@ -1403,6 +1403,74 @@ public sealed class ReasonStepRunnerTests
     }
 
     /// <summary>
+    /// The attempt's own account rides its answer back to the engine: what served it and what that cost - the
+    /// provider, the model, the effort, where a fallback moved it from and why - with the price copied as its cost was
+    /// counted, the turns, the tools by name with their failures, and the compactions. Its spend is not in it: the
+    /// engine counts that turn by turn as each was reported.
+    /// </summary>
+    [Fact]
+    public async Task TheAttemptsOwnAccount_RidesItsAnswer_WithItsPriceCopiedAsItWasCounted()
+    {
+        using var temp = new TempDirectory();
+        var (kit, agents) = await ReadyAsync(temp);
+        File.WriteAllText(
+            Path.Combine(kit.Main, ".harness-config", "config.json"),
+            """
+            {
+              "worktrees": { "root": ".worktrees" },
+              "providers": [
+                {
+                  "name": "anthropic",
+                  "type": "anthropic",
+                  "api": "https://api.anthropic.com",
+                  "apiKeyNames": ["ANTHROPIC_KEY"],
+                  "client": "claude-api",
+                  "currency": "USD",
+                  "readOn": "2026-10-01",
+                  "models": [
+                    { "code": "claude-opus-5-5", "name": "Opus", "tiers": ["best"], "efforts": ["high"], "contextTokens": 200000, "maxOutputTokens": 32000,
+                      "priceInputMiss": 10, "priceInputHit": 1, "priceOutput": 50, "priceCacheWrite": 12.5, "priceCacheWrite1h": 20 },
+                    { "code": "claude-sonnet-5-5", "name": "Sonnet", "tiers": ["fallback"], "efforts": ["low"], "contextTokens": 200000, "maxOutputTokens": 32000,
+                      "priceInputMiss": 2, "priceInputHit": 0.2, "priceOutput": 10, "priceCacheWrite": 2.5, "priceCacheWrite1h": 4 }
+                  ]
+                }
+              ],
+              "tierConfig": { "best": ["claude-opus-5-5"], "fallback": ["claude-sonnet-5-5"] },
+              "defaults": { "agentTier": "best" }
+            }
+            """);
+        await kit.CreateReadingAgentAsync("reader");
+        agents.Says.Add(new SessionStarted("claude-api", "claude-opus-5-5", "sha", [], [], HandedConversation: false, Provider: "anthropic", Effort: "high"));
+        agents.Says.Add(new TurnFinished(1, "claude-opus-5-5", new AgentUsage(1000, 100, 0, 0, 0, 0), "tool_use"));
+        agents.Says.Add(new ToolCallStarted("t1", "read", default));
+        agents.Says.Add(new ToolCallFinished("t1", Ok: true, TimeSpan.FromSeconds(1), "{}", "{}"));
+        agents.Says.Add(new UsageReported(new AgentUsage(1000, 100, 0, 0, 0, 0), new AgentUsage(1000, 100, 0, 0, 0, 0)));
+        agents.Says.Add(new Compacted("the context was full", "what it left", "where it began", KeptWordForWord: 2, Reduced: 3, SizeBefore: 10, SizeAfter: 4));
+        agents.Says.Add(new FallbackStarted(
+            FromModel: "claude-opus-5-5", FromProvider: "anthropic", FromClient: "claude-api",
+            ToModel: "claude-sonnet-5-5", ToProvider: "anthropic", ToClient: "claude-api",
+            Why: "the account is out of credit", How: "the request is sent again", Turn: 1, ThrewAway: false, CreditAsked: false,
+            ToEffort: "low"));
+        agents.Says.Add(new TurnFinished(2, "claude-sonnet-5-5", new AgentUsage(500, 50, 0, 0, 0, 0), "end_turn"));
+        agents.Says.Add(new ToolCallStarted("t2", "read", default));
+        agents.Says.Add(new ToolCallFinished("t2", Ok: false, TimeSpan.FromSeconds(1), "{}", "the read failed"));
+        agents.Says.Add(new UsageReported(new AgentUsage(500, 50, 0, 0, 0, 0), new AgentUsage(1500, 150, 0, 0, 0, 0)));
+
+        var result = await Runner(kit, agents).RunAsync(Run(kit, agent: "reader"), Token);
+
+        Assert.True(result.Passed, result.Error);
+        var account = result.Attempt!;
+        Assert.Equal(("anthropic", "claude-sonnet-5-5", "low"), (account.Provider, account.Model, account.Effort));
+        Assert.Equal(("claude-opus-5-5", "the account is out of credit"), (account.FallbackFrom, account.FallbackReason));
+
+        // The price is the one the last counted turn was costed at, copied as the configuration gave it then.
+        Assert.Equal(("claude-sonnet-5-5", "2026-10-01", 2.0, 0.2, 10.0), (account.Price!.Model, account.Price.ReadOn, account.Price.InputMiss, account.Price.InputHit, account.Price.Output));
+        Assert.Equal(2, account.Turns);
+        Assert.Equal([new FlowStepToolUse("read", 2, 1)], account.Tools);
+        Assert.Equal(1, account.Compactions);
+    }
+
+    /// <summary>
     /// An attempt's launch is held to what is left of the run's dollars before its reserve where that is less than its
     /// agent's own bound, and a launch that bound ended reaches the run's reserve - the run pauses for its budget - never
     /// the step's own budget; where its own bound is the less, it ends at the step's own budget, which asks.

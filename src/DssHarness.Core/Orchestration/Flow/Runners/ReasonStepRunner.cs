@@ -386,7 +386,11 @@ public sealed class ReasonStepRunner(
         {
             // What the attempt spends is charged to the run's budget turn by turn, as its agent works, at the prices of
             // the model serving it then: the run's reserve is reached while a long attempt runs, not only once it ends.
-            var result = await runner.RunAsync(request, new AgentRunSpend(providers, resolution.Serving.Model, run.Events), cancellationToken).ConfigureAwait(false);
+            // The count also keeps the attempt's own account - what served it, the price copied as its cost was counted,
+            // the turns, the tools, the compactions - which the engine writes into the step's measure when the attempt
+            // ends, beside the spend it counted itself.
+            var counter = new AgentRunSpend(providers, resolution.Serving.Model, run.Events, resolution.Serving.Effort);
+            var result = await runner.RunAsync(request, counter, cancellationToken).ConfigureAwait(false);
 
             // A limit's question says whether a stored conversation of the attempt can be handed, which is where the
             // answer `more` is offered; no other ending reads it.
@@ -416,7 +420,7 @@ public sealed class ReasonStepRunner(
                 FlowStepGraph.PutAwayPages(fileSystem, harnessOutput, StepDirectoryOf(layout, run.Instance, agent), run.Instance);
             }
 
-            return result.Status == AgentRunStatus.NotStarted ? ended : ended with { Skills = skills, Graph = graphUse };
+            return result.Status == AgentRunStatus.NotStarted ? ended : ended with { Skills = skills, Graph = graphUse, Attempt = counter.Account() };
         }
         catch (HarnessException refused)
         {
@@ -611,6 +615,73 @@ public sealed class ReasonStepRunner(
         // Its last messages word for word, as many as the compaction keeps of its last iterations: every message is in
         // the continuation record whole, which the account is a part of.
         return AgentStreamAccount.Of(stream, before, AgentCompactionBounds.LastIterations);
+    }
+
+    /// <summary>
+    /// The measure entry of the step's newest stored attempt, where a crash cut that attempt off before the engine
+    /// read its answer: the attempt's events - its window, from its own <c>RunStarted</c> to the end the crash left -
+    /// are replayed through the engine's own count of what a run spends (<see cref="AgentRunSpend"/>), which prices
+    /// each turn as it is reported, copies the price and tracks what served it; the entry is that count's account with
+    /// the attempt's number and its times, from its events' own clocks. The spend is counted here and nowhere else for
+    /// that attempt, for the engine never read its turns: the stream is the only place they were written. Null where
+    /// the stream holds no attempt, or a whole line of it does not read - a measure is never written from part of a
+    /// stream, which would say less than the attempt spent as though it were all.
+    /// </summary>
+    /// <param name="run">The step, the instance and its scope, as it was last asked.</param>
+    /// <param name="cancellationToken">Cancels the reading of the repository.</param>
+    async Task<FlowStepAttempt?> IFlowHandoffRunner.AttemptOf(FlowStepRun run, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(run);
+
+        var (place, context) = await FlowStepRunners.PlaceOf(run, contextLoader, platform, cancellationToken).ConfigureAwait(false);
+
+        if (AgentProviders.Resolve(context.Config) is not { Providers: { } providers })
+        {
+            return null;
+        }
+
+        var agent = run.WorksIn ?? run.Made?.Name;
+
+        if (agent is null)
+        {
+            return null;
+        }
+
+        var layout = OrchestratorLayout.Of(new HarnessLayout(place.Repository, place.Repository), place.Run);
+        IReadOnlyList<AgentEvent> stream;
+
+        try
+        {
+            stream = StreamOf(layout, agent, run.Instance);
+        }
+        catch (HarnessException)
+        {
+            return null;
+        }
+
+        var window = AgentAttempt.Newest(stream);
+
+        if (window is not [RunStarted { Attempt: var attempt, At: var began }, ..])
+        {
+            return null;
+        }
+
+        var spend = new AgentRunSpend(providers, serving: null);
+
+        foreach (var happened in window)
+        {
+            _ = spend.EmitAsync(happened);
+        }
+
+        return spend.Account() with
+        {
+            N = attempt,
+            StartedAt = began,
+            FinishedAt = window[^1].At,
+            Tokens = spend.Reported ? spend.Usage : null,
+            Usd = spend.Reported ? spend.Dollars.Counted : null,
+            Uncounted = spend.Dollars.Uncounted,
+        };
     }
 
     /// <summary>
@@ -1270,6 +1341,17 @@ public interface IFlowHandoffRunner
     /// </summary>
     /// <param name="run">The step, the instance and its scope, as it was last asked.</param>
     string? Account(FlowStepRun run);
+
+    /// <summary>
+    /// The measure entry of the step's newest stored attempt, where that attempt ended without the engine reading its
+    /// answer - a crash cut it off: its tokens by kind and its cost, read from the stream's own events and counted at
+    /// the configuration's prices as they stand now, with the model that served it, the price copied as it was counted,
+    /// the turns, the tools and the compactions, and the attempt's own times as its events were written. Null where the
+    /// stream holds no attempt to read, or a whole line of it does not read.
+    /// </summary>
+    /// <param name="run">The step, the instance and its scope, as it was last asked.</param>
+    /// <param name="cancellationToken">Cancels the reading of the repository.</param>
+    Task<FlowStepAttempt?> AttemptOf(FlowStepRun run, CancellationToken cancellationToken);
 }
 
 /// <summary>
@@ -1286,4 +1368,12 @@ public interface IFlowStreamAccount
     /// </summary>
     /// <param name="run">The step, the instance and its scope, as it was last asked.</param>
     string? Account(FlowStepRun run);
+
+    /// <summary>
+    /// The measure entry of the step's newest stored attempt, where that attempt was cut off before the engine read
+    /// its answer (<see cref="IFlowHandoffRunner.AttemptOf"/>); null where the runner's type keeps no stream.
+    /// </summary>
+    /// <param name="run">The step, the instance and its scope, as it was last asked.</param>
+    /// <param name="cancellationToken">Cancels the reading of the repository.</param>
+    Task<FlowStepAttempt?> AttemptOf(FlowStepRun run, CancellationToken cancellationToken);
 }

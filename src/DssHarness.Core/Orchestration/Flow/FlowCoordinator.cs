@@ -316,6 +316,12 @@ public sealed class FlowInstance(string id, WorkflowStep step, string path)
     /// </summary>
     internal long AttemptBegan;
 
+    /// <summary>
+    /// When the attempt the instance is on now began - each attempt's time its own, unlike <see cref="StartedAt"/>,
+    /// which keeps the first attempt's for the record; null where no attempt began.
+    /// </summary>
+    internal DateTimeOffset? AttemptStartedAt;
+
     /// <summary>Where the instance ended in the run's own order; 0 where it has not ended, or its record says none.</summary>
     internal long EndedIn;
 
@@ -1176,7 +1182,7 @@ public sealed class FlowCoordinator
             // goes on.
             if (!stopPending)
             {
-                GoOnWhereTheRunStood();
+                await GoOnWhereTheRunStood(cancellationToken).ConfigureAwait(false);
             }
 
             // The session is recorded where a run's records are: begun, or taken up from one another left.
@@ -1364,11 +1370,14 @@ public sealed class FlowCoordinator
 
     /// <summary>
     /// A session's start where the run goes on, made before anything runs: what a pause, a stop or a crash stopped runs
-    /// again as a new attempt, its handoff given; a failure that ended the run runs again, and what its stop left is
-    /// drawn again; the always steps are drawn for this session; and what the run owed is made - owed failures, endings
-    /// owed their handlers, endings whose handlers all ended, issues owed their triage, fixes owed the recovery.
+    /// again as a new attempt, its handoff given - an attempt a crash cut off having its measure completed from its own
+    /// stored stream, and the run's budget charged with what it spent; a failure that ended the run runs again, and
+    /// what its stop left is drawn again; the always steps are drawn for this session; and what the run owed is made -
+    /// owed failures, endings owed their handlers, endings whose handlers all ended, issues owed their triage, fixes
+    /// owed the recovery.
     /// </summary>
-    private void GoOnWhereTheRunStood()
+    /// <param name="cancellationToken">Stops the session's start; nothing of the run is changed by a cancellation.</param>
+    private async Task GoOnWhereTheRunStood(CancellationToken cancellationToken)
     {
         // An instance a plan update was bringing to rest when the session before ended goes on being brought to rest:
         // what was in flight in it ended with that session, and what a pause or a stop stopped in it, each stopped for
@@ -1409,6 +1418,20 @@ public sealed class FlowCoordinator
             if (was is FlowInstanceState.Running)
             {
                 Release(stopped);
+
+                if (stopped.Step.Type == "reason"
+                    && _streamAccount is { } account
+                    && await account.AttemptOf(RunOf(stopped, stopped.Step, stopped.Attempt, new Dictionary<string, FlowValue>(StringComparer.Ordinal), handoff: null), cancellationToken).ConfigureAwait(false) is { } cut)
+                {
+                    // The attempt a crash cut off spent turns the session never read, which the run's own budget was
+                    // never charged with - a crash loses at most the attempt, for its stream was written first. Its
+                    // measure entry is completed from the stream's own events - the tokens by kind, the cost at the
+                    // prices as they stand now, the model that served it, the attempt's own times - and the same
+                    // numbers charge the run here, the one place a token is counted reaching both still, so the run's
+                    // total stays the sum of its instances'.
+                    AttemptClosed(stopped, cut with { Outcome = FlowInstanceState.Stopped.ToString(), Error = "the engine's process ended" });
+                    Charge(cut.Tokens?.AllTokens ?? 0, FlowDollars.Of(cut.Usd, cut.Uncounted));
+                }
             }
 
             if (stopped.Step.Type == "reason" && stopped.Handoff is null)
@@ -1805,32 +1828,181 @@ public sealed class FlowCoordinator
 
     /// <summary>
     /// Writes what this attempt measured into the instance's measure: its spend - tokens by kind, dollars, the model
-    /// that served it, the uncounted reason where a part could not be counted - with how it ended. The entry is
-    /// appended, so a retried step holds one per attempt, and the totals are the sum.
+    /// that served it, the uncounted reason where a part could not be counted - with how it ended, what served it and
+    /// what it called, as its runner accounted them. The entry is appended, so a retried step holds one per attempt,
+    /// and the totals and the run time are the sum. A turn of the attempt that is reported after this - a handoff turn
+    /// answered while the step stands paused - is folded into the entry by its attempt's number.
     /// </summary>
     /// <param name="instance">The instance whose attempt ended.</param>
     /// <param name="result">What the attempt's runner answered.</param>
     private void MeasureAttempt(FlowInstance instance, FlowStepResult result)
     {
         var (passed, exit, error, cause) = Ends(instance.Step, result);
+        var spent = instance.Spent;
+        var account = result.Attempt;
+
+        // How the attempt left the step, in the words a record names its states by: an asking or a limit's question
+        // leaves it paused, a safe pause leaves it stopped for the resume, and every other ending is done or failed as
+        // it passed - the engine's own endings (a stop's drain, a terminal ending) refine the entry where they end the
+        // step themselves.
+        var outcome = result.Asked is not null || result.Limit is not null || result.Checks is not null || result.DryRun is not null
+            ? FlowInstanceState.Paused
+            : result.Pauses is not null
+                ? FlowInstanceState.Stopped
+                : passed ? FlowInstanceState.Done : FlowInstanceState.Failed;
+
+        AttemptClosed(instance, (account ?? new FlowStepAttempt(0)) with
+        {
+            N = instance.Attempt,
+            StartedAt = instance.AttemptStartedAt,
+            FinishedAt = _clock.GetUtcNow(),
+            Outcome = outcome.ToString(),
+            Exit = exit,
+            Error = error,
+            Cause = cause == OutcomeCause.None ? null : cause.ToString(),
+            Model = spent.Serving ?? account?.Model,
+            Tokens = spent.Reported ? spent.Tokens : null,
+            Usd = spent.Usd,
+            Uncounted = spent.Uncounted,
+        });
+    }
+
+    /// <summary>
+    /// The instance's measure with <paramref name="attempt"/>'s entry in it: new entries appended, an entry the
+    /// attempt already closed written again where the engine itself ended the attempt - a stop's drain, a terminal
+    /// ending after the runner answered - and the totals and the run time - the wall time of every attempt that began
+    /// and ended - summed from the entries.
+    /// </summary>
+    /// <param name="instance">The instance the attempt was made of.</param>
+    /// <param name="attempt">The attempt's entry, whole.</param>
+    private static void AttemptClosed(FlowInstance instance, FlowStepAttempt attempt)
+    {
+        var attempts = new List<FlowStepAttempt>(instance.Measure?.Attempts ?? []);
+        var at = attempts.FindIndex(other => other.N == attempt.N);
+
+        if (at >= 0)
+        {
+            attempts[at] = attempt;
+        }
+        else
+        {
+            attempts.Add(attempt);
+        }
+
+        instance.Measure = MeasureOf(instance, attempts);
+    }
+
+    /// <summary>
+    /// Charges one turn's usage to the attempt it belongs to: the attempt the instance is on now, while it runs - or,
+    /// where that attempt's entry is already written, into that entry, which a handoff turn answered while the step
+    /// stood paused reaches. A turn of an older attempt still reaches that attempt's entry, for the run's total and the
+    /// instance's hold the same turns whichever attempt they came from.
+    /// </summary>
+    /// <param name="instance">The instance the turn's step is.</param>
+    /// <param name="attempt">The attempt the turn belongs to.</param>
+    /// <param name="turn">The turn's tokens, by kind.</param>
+    /// <param name="usd">What the turn cost, where it could be counted.</param>
+    /// <param name="uncounted">Why it could not, where it could not.</param>
+    /// <param name="serving">The model that served the turn; null where the report that carried it does not know.</param>
+    private static void ChargeTheAttempt(FlowInstance instance, int attempt, Agents.AgentUsage turn, double? usd, string? uncounted, string? serving)
+    {
+        if (instance.Measure?.Attempts is { Count: > 0 } entries)
+        {
+            var list = new List<FlowStepAttempt>(entries);
+            var index = list.FindIndex(entry => entry.N == attempt);
+
+            if (index >= 0 && (index == list.Count - 1 || attempt != instance.Attempt))
+            {
+                // The attempt's entry is written and its turn arrives - a handoff turn answered while the step stood
+                // paused among them - or the turn belongs to an attempt older than the one in flight: folded into its
+                // own entry either way, that it holds every turn its stream does, for no attempt's spend is another's.
+                list[index] = list[index].Charged(turn, usd, uncounted, serving);
+                instance.Measure = MeasureOf(instance, list);
+                return;
+            }
+        }
+
+        instance.Spent.Charge(turn, usd, uncounted);
+
+        if (serving is { } model)
+        {
+            instance.Spent.Serving = model;
+        }
+    }
+
+    /// <summary>
+    /// The engine's own ending of <paramref name="instance"/>'s attempt, wherever it ends the step without a runner's
+    /// answer - a stop's drain above all: the entry the attempt never wrote (its runner answered nothing) is written
+    /// from what its turns spent, and one it wrote is refined to the ending the engine gave it, its outcome, its code
+    /// and its error. A step that never began an attempt - skipped, not run - holds no entry to write.
+    /// </summary>
+    /// <param name="instance">The instance whose attempt the engine ended.</param>
+    /// <param name="state">Where the engine ended the instance.</param>
+    /// <param name="exit">The code the ending gives; null where the ending keeps what the attempt answered.</param>
+    /// <param name="error">The error the ending gives; null where the ending keeps what the attempt answered.</param>
+    private void AttemptEnded(FlowInstance instance, FlowInstanceState state, int? exit, string? error)
+    {
+        if (instance.Measure?.Attempts is { Count: > 0 } attempts && attempts[^1].N == instance.Attempt)
+        {
+            var refined = new List<FlowStepAttempt>(attempts);
+            refined[^1] = refined[^1] with { Outcome = state.ToString(), Exit = exit ?? refined[^1].Exit, Error = error ?? refined[^1].Error };
+            instance.Measure = MeasureOf(instance, refined);
+            return;
+        }
+
+        if (instance.AttemptStartedAt is null)
+        {
+            return;
+        }
 
         var spent = instance.Spent;
-        List<FlowStepAttempt> attempts = [.. instance.Measure?.Attempts ?? [], new FlowStepAttempt(
+        AttemptClosed(instance, new FlowStepAttempt(
             N: instance.Attempt,
-            StartedAt: instance.StartedAt,
+            StartedAt: instance.AttemptStartedAt,
             FinishedAt: _clock.GetUtcNow(),
-            Outcome: passed ? nameof(FlowInstanceState.Done) : nameof(FlowInstanceState.Failed),
+            Outcome: state.ToString(),
             Exit: exit,
             Error: error,
-            Cause: cause is OutcomeCause.None ? null : cause.ToString(),
             Model: spent.Serving,
             Tokens: spent.Reported ? spent.Tokens : null,
             Usd: spent.Usd,
-            Uncounted: spent.Uncounted)];
+            Uncounted: spent.Uncounted));
+    }
 
-        instance.Measure = instance.Measure is { } measure
-            ? measure with { Attempts = attempts, Totals = FlowStepTotals.Of(attempts) }
-            : new FlowStepMeasure(Attempts: attempts, Totals: FlowStepTotals.Of(attempts));
+    /// <summary>
+    /// The backoff the engine waits before the instance's last attempt runs again, written onto that attempt's entry:
+    /// the wait is the failed attempt's own - what its ending cost the run in time before the next began.
+    /// </summary>
+    /// <param name="instance">The instance whose attempt will run again.</param>
+    /// <param name="wait">The backoff the retry table gives.</param>
+    private static void AttemptRetryingIn(FlowInstance instance, TimeSpan wait)
+    {
+        if (instance.Measure?.Attempts is { Count: > 0 } attempts && attempts[^1].N == instance.Attempt)
+        {
+            var retried = new List<FlowStepAttempt>(attempts);
+            retried[^1] = retried[^1] with { RetryAfter = Math.Round(wait.TotalSeconds, 1, MidpointRounding.AwayFromZero) };
+            instance.Measure = MeasureOf(instance, retried);
+        }
+    }
+
+    /// <summary>
+    /// The measure that holds <paramref name="attempts"/>: their totals summed, their wall time summed, and everything
+    /// else the instance's measure held - its waits, its pauses, its advice - kept as it was.
+    /// </summary>
+    /// <param name="instance">The instance the attempts were made of.</param>
+    /// <param name="attempts">Every attempt's entry, in order.</param>
+    private static FlowStepMeasure MeasureOf(FlowInstance instance, IReadOnlyList<FlowStepAttempt> attempts)
+    {
+        var ran = attempts
+            .Where(attempt => attempt.StartedAt is { } began && attempt.FinishedAt is { } ended && ended > began)
+            .Sum(attempt => (attempt.FinishedAt!.Value - attempt.StartedAt!.Value).TotalSeconds);
+
+        return (instance.Measure ?? new FlowStepMeasure()) with
+        {
+            Attempts = [.. attempts],
+            Totals = FlowStepTotals.Of([.. attempts]),
+            Ran = ran > 0 ? Math.Round(ran, 1, MidpointRounding.AwayFromZero) : null,
+        };
     }
 
     /// <summary>
@@ -3563,6 +3735,7 @@ public sealed class FlowCoordinator
         instance.Failure = null;
         instance.FinishedAt = null;
         instance.EndedIn = 0;
+        instance.AttemptStartedAt = null;
 
         // What the attempt before it said of its tree is its own: the next has let nothing go yet.
         instance.Copied = false;
@@ -6580,7 +6753,8 @@ public sealed class FlowCoordinator
     /// <param name="Instance">The step.</param>
     /// <param name="Claims">The claims it takes where it starts.</param>
     /// <param name="WaitsOn">What it waits on, in the words its record says them; empty where it starts.</param>
-    private readonly record struct Admission(FlowInstance Instance, IReadOnlyList<FlowClaim> Claims, IReadOnlyList<string> WaitsOn)
+    /// <param name="Ready">Whether everything the step depends on has ended, so what it waits on is room alone.</param>
+    private readonly record struct Admission(FlowInstance Instance, IReadOnlyList<FlowClaim> Claims, IReadOnlyList<string> WaitsOn, bool Ready = false)
     {
         /// <summary>Whether the step starts now.</summary>
         public bool Starts => WaitsOn.Count == 0;
@@ -6628,9 +6802,11 @@ public sealed class FlowCoordinator
                 continue;
             }
 
+            // With nothing holding it, everything the instance depends on has ended: it is ready, and what keeps it
+            // waiting now is room alone - the queue's own pace, which its measure times from here.
             if (running.Any(other => other.Step.Alone == true))
             {
-                decisions.Add(new(instance, [], [FlowWaits.Quiet]));
+                decisions.Add(new(instance, [], [FlowWaits.Quiet], Ready: true));
                 continue;
             }
 
@@ -6641,7 +6817,7 @@ public sealed class FlowCoordinator
 
             if (barrier is not null && (!ReferenceEquals(instance, barrier) || running.Count > 0))
             {
-                decisions.Add(new(instance, [], [FlowWaits.Quiet]));
+                decisions.Add(new(instance, [], [FlowWaits.Quiet], Ready: true));
                 continue;
             }
 
@@ -6653,19 +6829,19 @@ public sealed class FlowCoordinator
             if (claims.Any(claim => held.Concat(reserved).Any(claim.Conflicts)))
             {
                 reserved.AddRange(claims);
-                decisions.Add(new(instance, [], [FlowWaits.Claim]));
+                decisions.Add(new(instance, [], [FlowWaits.Claim], Ready: true));
                 continue;
             }
 
             if (CounterFull(instance, running) is { } counter)
             {
-                decisions.Add(new(instance, [], [counter]));
+                decisions.Add(new(instance, [], [counter], Ready: true));
                 continue;
             }
 
             running.Add(instance);
             held.AddRange(claims);
-            decisions.Add(new(instance, claims, []));
+            decisions.Add(new(instance, claims, [], Ready: true));
         }
 
         return decisions;
@@ -6768,6 +6944,28 @@ public sealed class FlowCoordinator
         // An alone step the walk left waiting for quiet is the barrier from now until it starts.
         _barrier = walk.FirstOrDefault(decision => decision.Instance.Step.Alone == true && decision.WaitsOn is [FlowWaits.Quiet]).Instance;
 
+        // Everything a decision says is ready to draw depends on nothing more: the moment is written once, the first
+        // walk that found it so, and the measure times every wait after it - the room the run alone gives. What the
+        // walk leaves waiting is settled here as well as at every write, so a wait whose cause the run's own pace
+        // changed - a claim given back, a counter freed - is split at the change and not folded whole into the cause
+        // it began on.
+        var now = _clock.GetUtcNow();
+
+        foreach (var decision in walk)
+        {
+            if (decision.Ready && decision.Instance.Measure?.ReadyAt is null)
+            {
+                decision.Instance.Measure = decision.Instance.Measure is { } measure
+                    ? measure with { ReadyAt = now }
+                    : new FlowStepMeasure(ReadyAt: now);
+            }
+
+            if (!decision.Starts)
+            {
+                decision.Instance.Measure = (decision.Instance.Measure ?? new FlowStepMeasure()).Waiting(decision.WaitsOn, now);
+            }
+        }
+
         foreach (var decision in walk.Where(decision => decision.Starts))
         {
             if (_answeredAtOnce || _hardStop || decision.Instance.State is not FlowInstanceState.NotStarted)
@@ -6820,7 +7018,13 @@ public sealed class FlowCoordinator
 
         instance.State = FlowInstanceState.Running;
         instance.StartedAt ??= _clock.GetUtcNow();
+        instance.AttemptStartedAt = _clock.GetUtcNow();
         instance.AttemptBegan = ++_order;
+
+        // What the attempt spends is counted from nothing: each attempt's entry is its own turns' alone, and a turn of
+        // the attempt before it - a handoff turn answered while the step stood paused - is folded into that attempt's
+        // own entry, by its number.
+        instance.Spent.Reset();
         // What an attempt says of its legs is its own: the attempt before it placed its legs where it did.
         instance.HeldClaims.Clear();
         instance.HeldClaims.AddRange(claims);
@@ -7312,8 +7516,9 @@ public sealed class FlowCoordinator
             }
 
             // Its attempt is over, its claims go back, and its next attempt waits as the table says - at once, where
-            // the table says no wait.
+            // the table says no wait. The wait is the failed attempt's own ending's, kept with its entry.
             Release(instance);
+            AttemptRetryingIn(instance, wait);
             _wakes.Add(new Wake(instance, _clock.GetUtcNow() + wait, wait == TimeSpan.Zero ? Task.CompletedTask : Task.Delay(wait, _clock)));
             return;
         }
@@ -9408,6 +9613,15 @@ public sealed class FlowCoordinator
         }
 
         Charge(advice.Tokens ?? 0, advice.Dollars);
+
+        // The advice's spend is the asking step's own measure's, beside its attempts': never in an attempt, for the
+        // advisor's turns are its own, in its own records - and the run's total is the sum of its instances', this
+        // among them, so the one charge reaches both.
+        if (advice.Tokens is not null || advice.Usd is not null)
+        {
+            pending.Instance.Measure = (pending.Instance.Measure ?? new FlowStepMeasure()).Advised(advice);
+        }
+
         return advice;
     }
 
@@ -9712,6 +9926,7 @@ public sealed class FlowCoordinator
         instance.Error ??= error;
         instance.FinishedAt ??= _clock.GetUtcNow();
         instance.EndedIn = ++_order;
+        AttemptEnded(instance, state, exit, error);
 
         if (state is FlowInstanceState.Failed && instance.DeclaredScope is not null)
         {
@@ -10018,7 +10233,7 @@ public sealed class FlowCoordinator
 
         var stalled = AdmissionWalk().Where(decision => !decision.Starts).ToList();
 
-        foreach (var (instance, _, waitsOn) in stalled)
+        foreach (var (instance, _, waitsOn, _) in stalled)
         {
             if (instance.State is not FlowInstanceState.NotStarted)
             {
@@ -10319,12 +10534,7 @@ public sealed class FlowCoordinator
 
             if (message.Turn is { } turn)
             {
-                message.Instance.Spent.Charge(turn, usage.Dollars.Counted > 0 ? usage.Dollars.Counted : null, usage.Dollars.Uncounted);
-
-                if (message.Serving is { } serving)
-                {
-                    message.Instance.Spent.Serving = serving;
-                }
+                ChargeTheAttempt(message.Instance, message.Attempt, turn, usage.Dollars.Counted > 0 ? usage.Dollars.Counted : null, usage.Dollars.Uncounted, message.Serving);
             }
 
             return;
@@ -12612,7 +12822,15 @@ public sealed class FlowCoordinator
 
     /// <summary>One instance, as its records read it, what it waits on as the admission walk said it.</summary>
     private FlowSnapshotStep SnapshotStepOf(FlowInstance instance, IReadOnlyDictionary<FlowInstance, Admission> walk)
-        => new(
+    {
+        // What the instance waits on is settled into its measure here, where every write of the run's records passes
+        // with the causes in hand: the period that was open closes where the causes changed, and the new one opens
+        // where there is one - so the measure's waits are the record's own words, timed to the moment of the write
+        // that says them, whole across a resume, for the open period is kept in the record too.
+        var waitsOn = WaitsOnOf(instance, walk);
+        instance.Measure = (instance.Measure ?? new FlowStepMeasure()).Waiting(waitsOn, _clock.GetUtcNow());
+
+        return new(
             instance.Id,
             instance.Path,
             instance.Step.Type,
@@ -12665,6 +12883,7 @@ public sealed class FlowCoordinator
             OwnScopeOf(instance)?.UseInputs?.DeepClone().AsObject(),
             instance.ScopeOf?.Decision,
             instance.Measure);
+    }
 
     /// <summary>
     /// The scope a group instance's own record speaks for: a block's, a handler's or a recovery visit's own, or the item or
