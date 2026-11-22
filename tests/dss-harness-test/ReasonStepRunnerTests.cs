@@ -1664,7 +1664,7 @@ public sealed class ReasonStepRunnerTests
         Assert.NotNull(support);
         Assert.NotNull(support.Tool);
         Assert.True(support.Narrow);
-        Assert.Equal([GraphOp.Find, GraphOp.Node, GraphOp.Related, GraphOp.Outline, GraphOp.Body, GraphOp.Edit, GraphOp.WholeFile, GraphOp.Pack], support.Operations!.Order());
+        Assert.Equal([GraphOp.Find, GraphOp.Node, GraphOp.Related, GraphOp.Outline, GraphOp.Body, GraphOp.Sites, GraphOp.Edit, GraphOp.WholeFile, GraphOp.Pack], support.Operations!.Order());
 
         var promptLine = Assert.IsType<GraphPromptLine>(Assert.Single(LinesOf(kit, "think")));
         Assert.Null(promptLine.Why);
