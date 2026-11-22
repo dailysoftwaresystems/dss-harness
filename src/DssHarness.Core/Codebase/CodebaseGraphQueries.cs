@@ -107,6 +107,13 @@ public sealed class CodebaseGraphQueries
             var representative = Representative(symbol, at).Node;
             byQualified.Add((representative.Qualified.Whole(), symbol.Id));
             bySimple.Add((representative.Name, symbol.Id));
+
+            // A component is named by each of its element selectors too, as markup writes them: app-cart reaches its component.
+            foreach (var selector in representative.Selectors ?? [])
+            {
+                bySimple.Add((selector, symbol.Id));
+            }
+
             words[symbol.Id] = [.. Split(representative.Qualified.Whole())];
         }
 
@@ -352,7 +359,7 @@ public sealed class CodebaseGraphQueries
     /// <summary>
     /// Every declaration the view holds that <paramref name="data"/> names - by its simple name, by its qualified
     /// name, by one written with its language's own separators (<see cref="Dotted"/>), or by a qualified name it
-    /// ends with at a dot - each once, ordered by id then by path: the definers of the data, whose calls, uses,
+    /// ends with at a dot - each once, ordered by id then by path: the definers of the data, whose calls, uses, instantiations,
     /// implementations and overrides the <c>sites</c> operation answers beside them. A data the view holds no
     /// declaration of answers empty, which that answer says - the graph's silence is never read as the data's
     /// absence, for the text search answers beside it.

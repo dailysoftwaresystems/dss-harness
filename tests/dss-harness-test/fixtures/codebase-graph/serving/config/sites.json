@@ -1,0 +1,22 @@
+[
+  {
+    "data": "TimeoutSeconds",
+    "sites": ["config/payments.json:3", "src/PaymentsOptions.cs:10", "src/OptionsReader.cs:7"]
+  },
+  {
+    "data": "Retries",
+    "sites": ["config/payments.json:4", "src/PaymentsOptions.cs:13", "src/OptionsReader.cs:22"]
+  },
+  {
+    "data": "MaxItems",
+    "sites": ["config/rules.xml:3", "src/OptionsReader.cs:31"]
+  },
+  {
+    "data": "freeOverCents",
+    "sites": ["config/shipping.yaml:2", "src/OptionsReader.cs:10", "src/PaymentsOptions.cs:16"]
+  },
+  {
+    "data": "rules",
+    "sites": ["src/OptionsReader.cs:13"]
+  }
+]

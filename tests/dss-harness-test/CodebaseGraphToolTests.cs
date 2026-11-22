@@ -953,7 +953,7 @@ public sealed partial class CodebaseGraphToolTests
         Assert.Contains("edit - a node's lines replaced where the hash you give is its hash now; wholeFile", writing, StringComparison.Ordinal);
         Assert.Contains("related - the nodes a relation reaches, as many hops as you ask, 60 a page", reading, StringComparison.Ordinal);
         Assert.Contains("body - the lines of the nodes you name, read fresh and numbered, 600 lines a page", reading, StringComparison.Ordinal);
-        Assert.Contains("sites - every place that decides data you name - a symbol, a key path, a quoted literal or a diagnostic id: what defines, calls, uses, implements or overrides it, every literal that holds it, every key it names - each a card saying how it decides, 60 a page, the files the graph lists only or is unsure of searched by text and said by the coverage lines that end every answer", reading, StringComparison.Ordinal);
+        Assert.Contains("sites - every place that decides data you name - a symbol, a key path, a quoted literal or a diagnostic id: what defines, calls, uses, makes, implements or overrides it, every literal that holds it, every key it names - each a card saying how it decides, 60 a page, the files the graph lists only or is unsure of searched by text and said by the coverage lines that end every answer", reading, StringComparison.Ordinal);
         Assert.Contains("\"data\"", CodebaseGraphTool.Schema(CodebaseGraphTool.Operations(write: false, narrow: false)), StringComparison.Ordinal);
         Assert.Contains("wholeFile - lifts the narrowing of reads for one file", writing, StringComparison.Ordinal);
     }

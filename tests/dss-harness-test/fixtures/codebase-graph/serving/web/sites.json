@@ -1,0 +1,18 @@
+[
+  {
+    "data": "money",
+    "sites": ["src/format.ts:2", "src/receipt.ts:10"]
+  },
+  {
+    "data": "total",
+    "sites": ["src/cart.ts:23", "src/receipt.ts:10"]
+  },
+  {
+    "data": ".btn-primary",
+    "sites": ["site/styles.css:14", "site/index.html:11"]
+  },
+  {
+    "data": "\"Your receipt\"",
+    "sites": ["src/format.ts:34"]
+  }
+]

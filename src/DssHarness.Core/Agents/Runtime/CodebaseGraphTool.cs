@@ -29,7 +29,7 @@ public enum GraphOp
     /// <summary>The exact lines of nodes, read fresh.</summary>
     Body,
 
-    /// <summary>Every place that decides data: what defines, calls, uses, implements or overrides it, every literal that holds it and every key it names.</summary>
+    /// <summary>Every place that decides data: what defines, calls, uses, makes, implements or overrides it, every literal that holds it and every key it names.</summary>
     Sites,
 
     /// <summary>A node's lines replaced where its hash is unchanged.</summary>
@@ -472,7 +472,7 @@ public sealed class CodebaseGraphTool(
             [GraphOp.Related] = $"related - the nodes a relation reaches, as many hops as you ask, {RelatedLines} a page",
             [GraphOp.Outline] = $"outline - a file's or a type's declarations, or the repository's, {OutlineLines} a page",
             [GraphOp.Body] = $"body - the lines of the nodes you name, read fresh and numbered, {BodyLines} lines a page",
-            [GraphOp.Sites] = $"sites - every place that decides data you name - a symbol, a key path, a quoted literal or a diagnostic id: what defines, calls, uses, implements or overrides it, every literal that holds it, every key it names - each a card saying how it decides, {RelatedLines} a page, the files the graph lists only or is unsure of searched by text and said by the coverage lines that end every answer",
+            [GraphOp.Sites] = $"sites - every place that decides data you name - a symbol, a key path, a quoted literal or a diagnostic id: what defines, calls, uses, makes, implements or overrides it, every literal that holds it, every key it names - each a card saying how it decides, {RelatedLines} a page, the files the graph lists only or is unsure of searched by text and said by the coverage lines that end every answer",
             [GraphOp.Edit] = "edit - a node's lines replaced where the hash you give is its hash now",
             [GraphOp.WholeFile] = "wholeFile - lifts the narrowing of reads for one file for the rest of the step, with why",
             [GraphOp.Pack] = "pack - a page of the context pack your first message began, best first, its last line saying how to ask for the next",
@@ -908,7 +908,7 @@ public sealed class CodebaseGraphTool(
     }
 
     /// <summary>
-    /// <c>sites</c>: every place that decides the data named - what defines it, calls it, uses it, implements or
+    /// <c>sites</c>: every place that decides the data named - what defines it, calls it, uses it, makes it, implements or
     /// overrides it, every literal that holds it and every key it names, each a card in a section of how it
     /// decides - joined with a text search of the files the graph answers nothing of but their text, whose hits
     /// are cards where their file holds a node at the line and raw lines where it does not, and the coverage
@@ -980,6 +980,7 @@ public sealed class CodebaseGraphTool(
                 ("defines", defines),
                 ("calls", ReachedBy([(GraphSide.In, CodeEdgeKinds.Calls)])),
                 ("uses", ReachedBy([(GraphSide.In, CodeEdgeKinds.Uses)])),
+                ("instantiates", ReachedBy([(GraphSide.In, CodeEdgeKinds.Instantiates)])),
                 ("implements", ReachedBy([(GraphSide.In, CodeEdgeKinds.Implements), (GraphSide.Out, CodeEdgeKinds.Dispatches)])),
                 ("overrides", ReachedBy([(GraphSide.Out, CodeEdgeKinds.Overrides), (GraphSide.In, CodeEdgeKinds.Overrides)])),
                 ("holds the key", keys),
@@ -1762,7 +1763,7 @@ public sealed class CodebaseGraphTool(
         ("depth", "integer", "how many hops, from 1; 1 where it is left out."),
         ("symbols", "array", "the nodes to read, one or more, each a handle, an id or a name."),
         ("full", "boolean", "whether a type's members' bodies are given too."),
-        ("data", "string", "the data whose deciding places are asked: a name, a key path or a diagnostic id as symbol accepts a name, or a quoted literal, asked by its value alone."),
+        ("data", "string", "the data whose deciding places are asked: a name, a key path or a diagnostic id as symbol accepts a name, a rule's selector as a rule writes it (.btn, #main), or a quoted literal, asked by its value alone."),
         ("hash", "string", "the node's hash as you last saw it; the edit is refused where its lines moved since."),
         ("text", "string", "the node's new lines."),
         ("reason", "string", "why the whole file is needed."),

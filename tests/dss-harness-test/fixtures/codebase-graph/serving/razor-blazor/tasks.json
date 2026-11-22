@@ -1,0 +1,10 @@
+[
+  {
+    "task": "Add a Line from a Blazor cart's button",
+    "needs": ["AddTea", "CartService.Add", "Line"]
+  },
+  {
+    "task": "Render a cart's receipt total",
+    "needs": ["CartService.Total", "MaxLines"]
+  }
+]

@@ -756,7 +756,7 @@ public sealed class WorkflowTemplatesTests
                 .Where(file => file.StartsWith("prompts/", StringComparison.Ordinal) && Prose.Words(WorkflowTemplates.TextOf(file)!).Contains("graph's sites first", StringComparison.Ordinal))
                 .Order(StringComparer.Ordinal)]);
         Assert.Contains(
-            "graph's sites first: it joins every place that decides the data - what defines, calls, uses, implements or overrides it, every literal that holds it and every key it names - and its coverage lines say what it searched by text alone",
+            "graph's sites first: it joins every place that decides the data - what defines, calls, uses, makes, implements or overrides it, every literal that holds it and every key it names - and its coverage lines say what it searched by text alone",
             Prose.Words(WorkflowTemplates.TextOf("prompts/plan.md")!),
             StringComparison.Ordinal);
         Assert.Contains(

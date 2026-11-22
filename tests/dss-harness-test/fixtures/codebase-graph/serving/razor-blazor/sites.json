@@ -1,0 +1,18 @@
+[
+  {
+    "data": "Total",
+    "sites": ["src/CartService.cs:15", "src/Cart.razor:13", "src/Pages/_Total.cshtml:3"]
+  },
+  {
+    "data": "AddTea",
+    "sites": ["src/Cart.razor:12", "src/Cart.razor:16"]
+  },
+  {
+    "data": "Add",
+    "sites": ["src/CartService.cs:11", "src/Cart.razor:18"]
+  },
+  {
+    "data": ".btn-primary",
+    "sites": ["src/site.css:1", "src/Cart.razor:12"]
+  }
+]

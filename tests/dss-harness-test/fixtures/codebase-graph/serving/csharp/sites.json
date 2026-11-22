@@ -1,0 +1,14 @@
+[
+  {
+    "data": "Largest",
+    "sites": ["src/Geometry.cs:22", "src/Geometry.cs:116", "tests/GeometryTests.cs:19"]
+  },
+  {
+    "data": "Describe",
+    "sites": ["src/Report.cs:10", "src/Report.cs:22", "src/Report.cs:37", "tests/GeometryTests.cs:26"]
+  },
+  {
+    "data": "Items",
+    "sites": ["src/Catalog.cs:9", "src/Catalog.cs:20", "src/Catalog.cs:32"]
+  }
+]

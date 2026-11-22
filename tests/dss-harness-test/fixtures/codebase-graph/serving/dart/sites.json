@@ -1,0 +1,10 @@
+[
+  {
+    "data": "largest",
+    "sites": ["lib/geometry.dart:18", "lib/geometry.dart:60", "test/shape_test.dart:12"]
+  },
+  {
+    "data": "describe",
+    "sites": ["lib/report.dart:18", "lib/report.dart:21", "test/shape_test.dart:16"]
+  }
+]

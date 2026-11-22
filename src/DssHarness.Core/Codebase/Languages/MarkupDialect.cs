@@ -246,7 +246,7 @@ internal sealed class MarkupDialect
     /// What an Angular attribute is, by its name as HTML names it, in lower case so a directive's is read alike however it is
     /// cased: an event's - <c>(click)</c>, <c>on-click</c>; a binding's - <c>[x]</c>, <c>bind-x</c>, <c>[(x)]</c>, and another
     /// structural directive's, <c>*ngIf</c> and <c>ngIf</c> among them; a loop's - <c>*ngFor</c>, <c>ngFor</c>; a name declared for
-    /// what the element holds - <c>#x</c>, <c>ref-x</c>; HTML's own, nothing.
+    /// what the element holds - <c>#x</c>, <c>ref-x</c>; HTML's own, nothing. HTML's <c>on*=</c> is no Angular mark: a page's own.
     /// </summary>
     private static MarkupRole AngularRole(MarkupAttribute attribute)
     {

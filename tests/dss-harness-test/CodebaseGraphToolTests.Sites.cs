@@ -187,9 +187,9 @@ public sealed partial class CodebaseGraphToolTests
         var stray = await AskAsync(tool, """{"op":"sites","data":"Area","kind":"type"}""");
 
         Assert.Equal(
-            (GraphToolOutcome.Usage, "op 'sites' needs data: the data whose deciding places are asked: a name, a key path or a diagnostic id as symbol accepts a name, or a quoted literal, asked by its value alone."),
+            (GraphToolOutcome.Usage, "op 'sites' needs data: the data whose deciding places are asked: a name, a key path or a diagnostic id as symbol accepts a name, a rule's selector as a rule writes it (.btn, #main), or a quoted literal, asked by its value alone."),
             (missing.Outcome, missing.Text));
-        Assert.Equal((GraphToolOutcome.Usage, "data is empty: the data whose deciding places are asked: a name, a key path or a diagnostic id as symbol accepts a name, or a quoted literal, asked by its value alone."), (blank.Outcome, blank.Text));
+        Assert.Equal((GraphToolOutcome.Usage, "data is empty: the data whose deciding places are asked: a name, a key path or a diagnostic id as symbol accepts a name, a rule's selector as a rule writes it (.btn, #main), or a quoted literal, asked by its value alone."), (blank.Outcome, blank.Text));
         Assert.Equal((GraphToolOutcome.Usage, "op 'sites' does not read kind: it reads data, page"), (stray.Outcome, stray.Text));
     }
 

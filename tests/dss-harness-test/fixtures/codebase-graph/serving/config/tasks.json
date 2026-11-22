@@ -1,0 +1,14 @@
+[
+  {
+    "task": "Read the payment timeout and the retries from the configuration",
+    "needs": ["OptionsReader.Payments", "PaymentsOptions.TimeoutSeconds", "TimeoutKey"]
+  },
+  {
+    "task": "Find the most items an order may hold",
+    "needs": ["OptionsReader.MaxItems"]
+  },
+  {
+    "task": "Tell whether shipping is free for a cart",
+    "needs": ["OptionsReader.ShipsFree"]
+  }
+]

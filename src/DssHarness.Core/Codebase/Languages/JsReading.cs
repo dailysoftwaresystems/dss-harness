@@ -1857,6 +1857,13 @@ internal sealed class JsReading
     private static bool Element(string selector)
         => selector.Length > 0 && char.IsAsciiLetter(selector[0]) && selector.All(character => char.IsAsciiLetterOrDigit(character) || character == '-');
 
+    /// <summary>
+    /// Angular's decorators - <c>@Component</c>, <c>@Directive</c>, <c>@Injectable</c>, <c>@Pipe</c>, <c>@NgModule</c>, and a
+    /// member's <c>@Input</c> and <c>@Output</c> - metadata the framework reads and the reader reads itself (<see cref="Angular"/>), so
+    /// never a call the repository does not declare.
+    /// </summary>
+    private static readonly HashSet<string> AngularDecorators = new(StringComparer.Ordinal) { "Component", "Directive", "Injectable", "Pipe", "NgModule", "Input", "Output" };
+
     // ---- Decorators ----
 
     /// <summary>
@@ -1887,12 +1894,17 @@ internal sealed class JsReading
         return at;
     }
 
-    /// <summary>What each decorator of <paramref name="decorators"/> calls, from the node of <paramref name="key"/>: one written with its arguments a call, one written alone a call of what it names.</summary>
+    /// <summary>What each decorator of <paramref name="decorators"/> calls, from the node of <paramref name="key"/>: one written with its arguments a call, one written alone a call of what it names - but an Angular decorator, which is read as the metadata it is (<see cref="Angular"/>), no call.</summary>
     private void DecoratorCalls(QualifiedName key, List<(int Start, int End)> decorators, string? owner)
     {
         foreach (var (start, end) in decorators)
         {
             var (names, past) = ChainAt(_scan, _scan.Next(start), end);
+
+            if (_typescript && names.Count > 0 && AngularDecorators.Contains(_scan.Text(names[^1])))
+            {
+                continue;
+            }
 
             if (past < end)
             {

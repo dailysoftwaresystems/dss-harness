@@ -51,14 +51,14 @@ public sealed class HtmlExtractor : ICodeGraphExtractor
 
     /// <inheritdoc/>
     public CodeGraphExtractorHelp Help { get; } = new(
-        "HTML documents (.html, .htm): each landmark and each element with an id as a section from its start tag to its end tag, a template's content among them, each class and id as a use of the rule that styles it, a custom element as an instantiates of a component of that name, a script src, link href, img src and a href naming a local file by a relative path as an import of it, an on*= handler as the body of the function HTML makes of it, given event, read by the JavaScript reader - return validate(this) a call of validate, go alone a use - each inline script of JavaScript read by the JavaScript reader as a program of its own - a module where its type says - and each style element by the style sheet's reader, in the syntax its lang or type names (CSS where it names none, text/less, text/scss, text/x-scss, text/sass), on the lines they stand on; a file whose content is an Angular template - an element's (click), [x], *ngFor or #x, an @if or @for block in its text - read as one: its component tags, the selectors of components declared elsewhere, as instantiates, and each attribute's, mustache's and block's code read by the JavaScript reader as Angular compiles it - (click)=\"save()\" a call of save, [x] and {{ }} what their expressions read, *ngFor's list and @for's list with their aliases, #x a name declared - each name read by itself a member of the component whose templateUrl names the file, joined where a TypeScript file declares it",
+        "HTML documents (.html, .htm): each landmark and each element with an id as a section from its start tag to its end tag, a template's content among them, each class and id as a use of the rule that styles it, a custom element as an instantiates of a component of that name, a script src, link href, img src and a href naming a local file by a relative path as an import of it, an on*= handler as the body of the function HTML makes of it, given event, read by the JavaScript reader - return validate(this) a call of validate, go alone a use - each inline script of JavaScript read by the JavaScript reader as a program of its own - a module where its type says - and each style element by the style sheet's reader, in the syntax its lang or type names (CSS where it names none, text/less, text/scss, text/x-scss, text/sass), on the lines they stand on; a file whose content is an Angular template - an element's (click), [x], *ngFor or #x, a {{ }} or an @if or @for block in its text - read as one: its component tags, the selectors of components declared elsewhere, as instantiates, and each attribute's, mustache's and block's code read by the JavaScript reader as Angular compiles it - (click)=\"save()\" a call of save, [x] and {{ }} what their expressions read, *ngFor's list and @for's list with their aliases, #x a name declared - each name read by itself a member of the component whose templateUrl names the file, joined where a TypeScript file declares it",
         [
             "a style attribute's declarations: no rule of their own",
             "a script of another type - a JSON block, an import map, a template a framework reads: its text read as no code",
             "a style element of another syntax (lang=\"stylus\", a template's type): its text read as no style sheet",
             "an element with no id and no landmark tag: no node of its own, its lines its enclosing section's",
             "an href or src that names no file of the tree - another site's, a rooted path, an anchor, data: - no import of it",
-            "an Angular template no component names by templateUrl, and one written in a file of another extension: its names are bound to no component, so a call or a read its code makes by itself reaches nothing",
+            "an Angular template no component names by templateUrl, and one written in a file of another extension: its names are bound to no component, so a call or a read its code makes by itself reaches nothing; a template of another engine in an .html file (Handlebars, Jinja): its {{ }} read as a framework's expressions, bound to no component alike",
             "a file of more than 2,147,483,647 characters, past the Int32 the HTML tokenizer (AngleSharp) counts a position in: nothing in it read, the line its count ends on marked dynamic, with why",
         ])
     {
@@ -114,6 +114,9 @@ public sealed class HtmlExtractor : ICodeGraphExtractor
         // The section each element is inside - itself, where it is one - by its index: its parent's, held once.
         var sectionOf = new ExtractNode?[elements.Count];
 
+        // The node each element's references and code are the code of: its section, as a page's handlers are.
+        var holders = new Dictionary<MarkupElement, QualifiedName>();
+
         if (bodyAt < 0)
         {
             nodes.Add(body);
@@ -145,18 +148,20 @@ public sealed class HtmlExtractor : ICodeGraphExtractor
 
             sectionOf[at] = inside;
             var from = (inside ?? body).Id;
+            holders[element] = from;
 
             // A template's own reader reads every element, its classes and id among them (<see cref="Angular"/> below); a page's
             // elements are read here.
             if (!angular)
             {
                 MarkupDialect.Html.Read(element, from, references);
+            }
 
-                // Each handler is the body of a function HTML makes of it, given the event: its code the section's.
-                foreach (var handler in element.Attributes.Where(attribute => MarkupDialect.Html.Role(attribute) == MarkupRole.Handler && !string.IsNullOrWhiteSpace(attribute.Value)))
-                {
-                    handlers.Add(new CodeRegion(from, "event", handler.ValueAt, handler.Value));
-                }
+            // Each on*= handler is the body of a function HTML makes of it, given the event: its code the section's - a page's, and
+            // a template's where a page mixed one in.
+            foreach (var handler in element.Attributes.Where(attribute => MarkupDialect.Html.Role(attribute) == MarkupRole.Handler && !string.IsNullOrWhiteSpace(attribute.Value)))
+            {
+                handlers.Add(new CodeRegion(from, "event", handler.ValueAt, handler.Value));
             }
 
             if (Linked.FirstOrDefault(linked => linked.Element == element.Name) is ({ }, { } named)
@@ -178,8 +183,9 @@ public sealed class HtmlExtractor : ICodeGraphExtractor
         }
 
         // An Angular template, told by its content: its elements and its code read by the template's one reader, as a Vue
-        // component's template is, each name its code reads by itself a member of the component that names this file its template.
-        if (angular && MarkupTemplates.Read(markup, MarkupDialect.Angular, body.Id, references, null) is { Count: > 0 } regions)
+        // component's template is, each name its code reads by itself a member of the component that names this file its template,
+        // each element's references its own section's.
+        if (angular && MarkupTemplates.Read(markup, MarkupDialect.Angular, body.Id, references, null, element => holders[element]) is { Count: > 0 } regions)
         {
             embedded.Add(MarkupTemplates.Members(EmbeddedCode.Script(Language, input.Path, markup.Text, markup.Lines, regions, typescript: false)));
         }
@@ -189,12 +195,14 @@ public sealed class HtmlExtractor : ICodeGraphExtractor
 
     /// <summary>
     /// Whether the markup is an Angular template, as its content says: an element writes one of Angular's attributes - an event's
-    /// <c>(click)</c>, a binding's <c>[x]</c>, a loop's <c>*ngFor</c>, a name's <c>#x</c> - or its text a control-flow block. A component's
+    /// <c>(click)</c>, a binding's <c>[x]</c>, a loop's <c>*ngFor</c>, a name's <c>#x</c> - its text a control-flow block or a
+    /// <c>{{ }}</c>, which every framework's template writes and this reader reads as a framework's expression. A component's
     /// <c>templateUrl</c> names it its template at link time wherever it stands (<see cref="ExtractNode.Templates"/>); its content is
     /// what tells its reader, which sees the one file.
     /// </summary>
     private static bool Angular(MarkupText markup)
         => markup.Elements.Any(element => element.Attributes.Any(attribute => MarkupDialect.Angular.Role(attribute) != MarkupRole.None))
+            || markup.Texts.Any(text => !markup.InsideRaw(text.Start, text.End) && markup.Text.Find("{{", text.Start, text.End) >= 0)
             || MarkupDialect.Angular.Blocks(markup).Any();
 
     /// <summary>The name a section is given: its id, where it has one; its tag otherwise.</summary>

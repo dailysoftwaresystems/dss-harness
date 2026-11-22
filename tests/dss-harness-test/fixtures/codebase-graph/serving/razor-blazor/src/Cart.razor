@@ -1,0 +1,30 @@
+@using Shop.Web.Data
+@namespace Shop.Web.Data
+@inject CartService Carts
+
+<h3>Your cart</h3>
+<ul class="lines">
+    @foreach (var line in Carts.Lines)
+    {
+        <li>@line.Name x@line.Count</li>
+    }
+</ul>
+<button class="btn btn-primary" @onclick="AddTea">Add tea</button>
+<p>Total: @Carts.Total()</p>
+
+@code {
+    private void AddTea()
+    {
+        Carts.Add(new Line("tea", 1, 350));
+    }
+
+    private int Count()
+    {
+        return Carts.Lines.Count;
+    }
+
+    private void Clear()
+    {
+        Carts.Lines.Clear();
+    }
+}

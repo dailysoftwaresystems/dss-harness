@@ -184,6 +184,14 @@ internal sealed class MarkupText
         return inner.Start > outer.Start && inner.Start < Math.Max(outer.Close, outer.OpenEnd);
     }
 
+    /// <summary>
+    /// Whether the stretch of text from <paramref name="start"/> to <paramref name="end"/> is what a <c>script</c> or a
+    /// <c>style</c> element holds, written as such: code its own language's reader reads, so no template's expression - a
+    /// <c>textarea</c>'s or a <c>title</c>'s text is a template's still, as a framework interpolates it.
+    /// </summary>
+    public bool InsideRaw(long start, long end)
+        => _elements.Any(element => element.Close > element.OpenEnd && start >= element.OpenEnd && end <= element.Close && element.Tag is "script" or "style");
+
     /// <summary>The one walk over the tokens: each element opened, matched to the end tag that closes it, and closed.</summary>
     private void Walk()
     {

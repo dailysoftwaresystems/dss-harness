@@ -1,0 +1,6 @@
+{
+  "Payments": {
+    "TimeoutSeconds": 30,
+    "Retries": 3
+  }
+}

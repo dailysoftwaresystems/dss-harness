@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rules>
+  <rule name="MaxItems" value="50" />
+  <rule name="MaxCents" value="100000" />
+</rules>

@@ -37,10 +37,11 @@ internal static class MarkupTemplates
     /// </summary>
     /// <param name="markup">The markup read.</param>
     /// <param name="dialect">The kind of markup, whose roles, loops and blocks are read.</param>
-    /// <param name="component">The node the template's code is the code of: a Vue component, an Angular template's own node.</param>
+    /// <param name="component">The node the template's text holds code of, and every element's where <paramref name="within"/> names none: a Vue component, an Angular template file's own node.</param>
     /// <param name="references">Where the elements' references go.</param>
     /// <param name="inside">The element the template is written inside, a Vue template block; null for the whole markup.</param>
-    public static List<CodeRegion> Read(MarkupText markup, MarkupDialect dialect, QualifiedName component, List<ExtractReference> references, MarkupElement? inside)
+    /// <param name="within">The node each element's references and attribute code are the code of, where the markup's own sections say - a page's landmarks and ids; null for the component's alone.</param>
+    public static List<CodeRegion> Read(MarkupText markup, MarkupDialect dialect, QualifiedName component, List<ExtractReference> references, MarkupElement? inside, Func<MarkupElement, QualifiedName>? within = null)
     {
         ArgumentNullException.ThrowIfNull(markup);
         ArgumentNullException.ThrowIfNull(dialect);
@@ -49,7 +50,9 @@ internal static class MarkupTemplates
         var elements = markup.Elements;
         var regions = new List<CodeRegion>();
         var declared = new DeclaredNames();
-        var texts = markup.Texts.Where(text => inside is null || text.Start >= inside.OpenEnd && text.End <= inside.Close).ToList();
+
+        // What a script or a style element holds is no template's: its own language's reader reads it.
+        var texts = markup.Texts.Where(text => (inside is null || text.Start >= inside.OpenEnd && text.End <= inside.Close) && !markup.InsideRaw(text.Start, text.End)).ToList();
         var blocks = dialect.Blocks(markup).ToList();
         var nextBlock = 0;
         var nextText = 0;
@@ -78,14 +81,14 @@ internal static class MarkupTemplates
                 {
                     if (header < headers.Count && (mustache >= mustaches.Count || headers[header].At < mustaches[mustache].At))
                     {
-                        Block(dialect, declared, headers[header].Block, Add);
+                        Block(dialect, declared, headers[header].Block, (offset, code) => Add(component, offset, code));
                         header++;
                         continue;
                     }
 
                     if (mustaches[mustache].Value is { Length: > 0 } code && !string.IsNullOrWhiteSpace(code))
                     {
-                        Add(mustaches[mustache].At, $"({code});");
+                        Add(component, mustaches[mustache].At, $"({code});");
                     }
 
                     mustache++;
@@ -105,8 +108,9 @@ internal static class MarkupTemplates
             }
 
             var end = Math.Max(element.Close, element.OpenEnd);
+            var holder = within?.Invoke(element) ?? component;
             declared.Leave(element.Start);
-            dialect.Read(element, component, references);
+            dialect.Read(element, holder, references);
 
             // A loop's list is read in the scope around the element; its aliases are the element's own, its attributes' too.
             var lists = new Dictionary<MarkupAttribute, CodeRegion>();
@@ -116,7 +120,7 @@ internal static class MarkupTemplates
             {
                 if (dialect.Role(attribute) == MarkupRole.Loop && dialect.Loop(attribute.Value) is var (bound, list, listAt))
                 {
-                    lists[attribute] = Piece(attribute.ValueAt + listAt, $"({list});");
+                    lists[attribute] = Piece(holder, attribute.ValueAt + listAt, $"({list});");
                     aliases.AddRange(JsReading.Binds(bound));
                 }
             }
@@ -131,7 +135,7 @@ internal static class MarkupTemplates
                 // A directive's dynamic argument - :[key], @[event], #[slot] - is an expression of its own, as written.
                 if (ReferenceEquals(dialect, MarkupDialect.Vue) && role != MarkupRole.None && Argument(markup.Text, attribute) is var (argumentAt, argument))
                 {
-                    Add(argumentAt, $"({argument});");
+                    Add(holder, argumentAt, $"({argument});");
                 }
 
                 // A name an element declares for what it holds is written in the attribute's own name - Angular's #ref.
@@ -152,18 +156,18 @@ internal static class MarkupTemplates
                         break;
 
                     case MarkupRole.Handler:
-                        Add(attribute.ValueAt, Handler(attribute.Value));
+                        Add(holder, attribute.ValueAt, Handler(attribute.Value));
                         break;
 
                     case MarkupRole.Binding:
-                        Add(attribute.ValueAt, $"({attribute.Value});");
+                        Add(holder, attribute.ValueAt, $"({attribute.Value});");
                         break;
 
                     // A slot's pattern is a function's parameters, read where it is written; the names it binds are what the
                     // element holds.
                     case MarkupRole.Declares when ReferenceEquals(dialect, MarkupDialect.Vue):
                         var given = declared.Given(attribute.Value);
-                        regions.Add(new CodeRegion(component, given.Length > 0 ? $"{given}, {attribute.Value}" : attribute.Value, attribute.ValueAt, string.Empty));
+                        regions.Add(new CodeRegion(holder, given.Length > 0 ? $"{given}, {attribute.Value}" : attribute.Value, attribute.ValueAt, string.Empty));
                         names.AddRange(JsReading.Binds(attribute.Value));
                         break;
 
@@ -177,13 +181,13 @@ internal static class MarkupTemplates
 
         return regions;
 
-        // A piece of code, in a function of the names declared where it stands that it names.
-        CodeRegion Piece(long offset, string code) => new(component, declared.Given(code), offset, code);
+        // A piece of code, the code of <paramref name="node"/>, in a function of the names declared where it stands that it names.
+        CodeRegion Piece(QualifiedName node, long offset, string code) => new(node, declared.Given(code), offset, code);
 
         // The piece, among the template's regions.
-        CodeRegion Add(long offset, string code)
+        CodeRegion Add(QualifiedName node, long offset, string code)
         {
-            var region = Piece(offset, code);
+            var region = Piece(node, offset, code);
             regions.Add(region);
             return region;
         }

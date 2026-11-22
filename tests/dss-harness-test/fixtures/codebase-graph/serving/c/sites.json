@@ -1,0 +1,10 @@
+[
+  {
+    "data": "largest_area",
+    "sites": ["src/shape.c:30", "src/shape.c:109", "src/main.c:32"]
+  },
+  {
+    "data": "area_circle",
+    "sites": ["src/shape.c:4", "src/shape.c:23", "src/shape.c:37", "src/shape.c:56", "src/shape.c:86", "src/shape.c:121", "src/shape.c:201", "src/shape.c:212", "src/shape.c:231", "src/report.c:9"]
+  }
+]

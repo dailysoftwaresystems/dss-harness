@@ -1,0 +1,7 @@
+shipping:
+  freeOverCents: 5000
+  carriers:
+    - name: standard
+      zones: [uk, eu]
+    - name: express
+      zones: [uk]

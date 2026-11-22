@@ -4599,7 +4599,13 @@ implementation that breaks it) hold it to fixtures for each claim, determinism w
 from many threads, a sound model, tolerance of any cut of a fixture, pure content tests that never both say yes with
 another's, the same answer read over a file in blocks of three characters as from its string, the
 extracts stored with the tests for its version (`fixtures/codebase-graph/<language>/v<version>/`,
-written where missing with `DSSHARNESS_STORE_EXTRACTS=1`), and the edges its fixtures name through the linker.
+written where missing with `DSSHARNESS_STORE_EXTRACTS=1`), and the edges its fixtures name through the linker. The saving
+itself is measured (`CodebaseGraphServingTests`) over eight fixture repositories under `fixtures/codebase-graph/serving/` - C#,
+C and Dart, and one each of HTML, CSS and TypeScript, of Vue, of Angular, of Razor and Blazor, of JSON, YAML and XML read by C#
+- each with its `tasks.json`, the declarations a task's reference answer needs, and its `sites.json`, the data a site task
+decides by and every place that decides it: the bytes the pack and the bodies serve against the whole files', the bytes each
+`sites` answer serves against the files its places stand in, each pinned, and every place checked to be in its answer, so a
+change that drops a use, a literal's place, a key's join or a selector's reach from an answer goes red.
 
 A language no parser this tool can carry reads goes through the structural scanner (`Codebase\Languages\Scanning\`),
 whose core knows no language: a language's lexer cuts the text into tokens (`ScanToken`), its comments apart and each
@@ -5093,13 +5099,13 @@ found its lines moved, and reads a file whole whatever it holds. `sites` answers
 (`data`: a name, a key path or a diagnostic id as `symbol` accepts a name, or a quoted literal, asked by its value alone and
 never by the symbols): every definer of the name across files and languages (`CodebaseGraphQueries.DefinersOf`, by simple
 name, qualified name or the scopes a name is written with), then one hop off the definers' own edges - their callers, their
-users, what implements them and what they override, a part of a declaration walked as the node itself - and no site's own
-edges walked, so a hub is listed and never gone through; every literal whose value is the datum or holds it as a whole word,
+users, what makes them, what implements them and what they override, a part of a declaration walked as the node itself - and no
+site's own edges walked, so a hub is listed and never gone through; every literal whose value is the datum or holds it as a whole word,
 the one whole-word rule the text fallback reads (`CodebaseGraphTool.WordPattern`), read once an ask over the literals of every
 extract the view holds (`CodebaseGraphQueries.LiteralSites` - no node of the graph is a literal's, so the read is the one
 index of them), each as the card of the node whose code holds it with the file, the line and the value; and every key the
 datum names (`CodeSubKinds.Key`), held and never defined. Each is a card in a section of how it decides - `defines`, `calls`,
-`uses`, `implements`, `overrides`, `holds the literal`, `holds the key` - at `CodebaseGraphTool.RelatedLines` a page. What
+`uses`, `instantiates`, `implements`, `overrides`, `holds the literal`, `holds the key` - at `CodebaseGraphTool.RelatedLines` a page. What
 the graph cannot answer of the datum is searched by text and said: the files it lists only, which no extractor reads
 (`CodebaseGraphQueries.TextOnly`), and the files it is unsure of (`CodebaseGraphQueries.UnsureOfFile`), the search passing
 over every other readable file by its own will and never counting one such as a file the reader may not read

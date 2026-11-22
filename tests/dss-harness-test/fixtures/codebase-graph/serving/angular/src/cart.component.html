@@ -1,0 +1,6 @@
+<main class="cart">
+  <h2>Your cart</h2>
+  <app-line *ngFor="let line of lines" [line]="line"></app-line>
+  <button class="btn btn-primary" (click)="add({ name: 'tea', count: 1, cents: 350 })">Add tea</button>
+  <p>Total: {{ total() }}</p>
+</main>

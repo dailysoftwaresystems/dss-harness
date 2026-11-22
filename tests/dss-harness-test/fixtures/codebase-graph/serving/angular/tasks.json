@@ -1,0 +1,10 @@
+[
+  {
+    "task": "Show a cart's lines with a button that adds one and its total",
+    "needs": ["CartComponent.add", "CartComponent.total", "CartComponent.MAX_LINES"]
+  },
+  {
+    "task": "Change what a line of the cart shows",
+    "needs": ["LineComponent.lineText"]
+  }
+]
