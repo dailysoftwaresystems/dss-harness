@@ -6,6 +6,7 @@ using DssHarness.Core.Execution;
 using DssHarness.Core.FileSystem;
 using DssHarness.Core.Orchestration;
 using DssHarness.Core.Orchestration.Flow;
+using DssHarness.Core.Repository;
 using DssHarness.Core.Results;
 using DssHarness.Core.Worktrees;
 
@@ -2114,6 +2115,182 @@ public sealed class ImplementationFlowTests
             Assert.Equal("the frame is decided twice in the parser", issue.Title);
             Assert.Equal(["src/tool.cs"], issue.Files);
             Assert.Empty(kit.Harness.OrchestrationStore.ReadPreExistingIssues(kit.RunOf())!.Issues);
+        }
+
+        /// <summary>
+        /// The proof run of the whole class closure, end to end (part 01, section 12): a fixture repository with one
+        /// defect decided at three sites over two formats - the plan that patches one site is refused by the round's
+        /// check, the plan with all three passes - the builder that closes two of the three is refused by the
+        /// class-closure check, its close-class handler extends the record to the third - a reviewer that finds a fourth
+        /// site sends the class back whole as one send-back, the builder sweeps it, and a second reopening asks for the
+        /// home audit - and the run converges with the counts in its report.
+        /// </summary>
+        [Fact]
+        public async Task TheProofRun_ConvergesFromThreeSitesOverTwoFormats_WithTheCountsInItsReport()
+        {
+            using var temp = new TempDirectory();
+            JsonObject Planned() => new()
+            {
+                ["name"] = "one",
+                ["title"] = "t",
+                ["instructions"] = "Close the rate class.",
+                ["done"] = "the rate holds",
+                ["ownedPaths"] = new JsonArray("src/**"),
+                ["forbiddenPaths"] = new JsonArray(),
+                ["reuses"] = new JsonArray(new JsonObject { ["path"] = "src/tool.cs", ["what"] = "it" }),
+                ["creates"] = new JsonArray(),
+                ["replaces"] = new JsonArray(),
+                ["tests"] = new JsonArray("ReportTests"),
+                ["noTests"] = "",
+                ["classes"] = new JsonArray(new JsonObject
+                {
+                    ["id"] = "c-rate",
+                    ["invariant"] = "the rate is decided in one place",
+                    ["home"] = new JsonObject { ["path"] = "src/Home.cs", ["symbol"] = "Home", ["exists"] = true },
+                    ["sites"] = new JsonArray(
+                        new JsonObject { ["path"] = "src/Home.cs", ["symbol"] = "Home", ["decides"] = "the rate", ["then"] = "home" },
+                        new JsonObject { ["path"] = "src/Old.cs", ["symbol"] = "Old", ["decides"] = "the rate", ["then"] = "deleted" },
+                        new JsonObject { ["path"] = "docs/old.md", ["symbol"] = "", ["decides"] = "the rate", ["then"] = "deleted" }),
+                    ["searches"] = new JsonArray(new JsonObject { ["data"] = "the rate", ["via"] = "graph", ["query"] = "rate:", ["hits"] = 3 }),
+                    ["universe"] = new JsonObject { ["axes"] = new JsonArray(new JsonObject { ["name"] = "format", ["values"] = new JsonArray("cs", "md"), ["declaredIn"] = "src/Home.cs" }), ["cells"] = 2 },
+                    ["action"] = "consolidate",
+                    ["notCovered"] = "none",
+                }),
+                ["noClass"] = "",
+            };
+            JsonObject Entry(params string[] sites) => new()
+            {
+                ["class"] = "c-rate",
+                ["invariant"] = "the rate is decided in one place",
+                ["home"] = new JsonObject { ["path"] = "src/Home.cs", ["symbol"] = "Home" },
+                ["sites"] = new JsonArray([.. sites.Select(site => (JsonNode)new JsonObject
+                {
+                    ["path"] = site,
+                    ["symbol"] = site.Contains("docs/", StringComparison.Ordinal) ? "" : site.Contains("Old", StringComparison.Ordinal) ? "Old" : "Home",
+                    ["before"] = "each file",
+                    ["after"] = site.Contains("Home", StringComparison.Ordinal) ? "home" : "deleted",
+                })]),
+                ["searches"] = new JsonArray(),
+                ["universe"] = new JsonObject { ["axes"] = new JsonArray(new JsonObject { ["name"] = "format", ["values"] = new JsonArray("cs", "md") }), ["cellsPinned"] = 2, ["cellsArmed"] = 0 },
+                ["pin"] = new JsonObject { ["tests"] = new JsonArray("ReportTests"), ["tableDriven"] = true, ["over"] = "the universe" },
+                ["arm"] = new JsonObject { ["why"] = "the repository keeps no arms" },
+                ["neighbours"] = new JsonArray(),
+                ["claim"] = "the rate holds over every format",
+            };
+            var complete = Implement();
+            complete["closure"] = new JsonArray(Entry("src/Home.cs", "src/Old.cs", "docs/old.md"));
+            complete["arms"] = new JsonArray();
+            var partial = Implement();
+            partial["closure"] = new JsonArray(Entry("src/Home.cs", "src/Old.cs"));
+            partial["arms"] = new JsonArray();
+            var withFourth = Implement();
+            withFourth["closure"] = new JsonArray(Entry("src/Home.cs", "src/Old.cs", "docs/old.md"));
+            withFourth["arms"] = new JsonArray();
+            var withAudit = Implement();
+            withAudit["closure"] = new JsonArray(Entry("src/Home.cs", "src/Old.cs", "docs/old.md"));
+            withAudit["arms"] = new JsonArray();
+            ((JsonObject)withAudit["closure"]![0]!)["homeAudit"] = new JsonObject
+            {
+                ["consolidated"] = new JsonArray("the rate, decided at each format's reader"),
+                ["invariants"] = new JsonArray("one place decides the rate"),
+                ["structural"] = new JsonArray("Home holds it; every reader reads Home"),
+            };
+
+            // The one-site plan: the class names its home alone but says consolidate, which a class with one site never
+            // does - the plan's own check refuses it, and the planner asked again answers with all three sites.
+            var oneSite = Planned();
+            ((JsonArray)oneSite["classes"]![0]!["sites"]!).RemoveAt(1);
+            ((JsonArray)oneSite["classes"]![0]!["sites"]!).RemoveAt(1);
+
+            var kit = await PrepareAsync(
+                temp,
+                agents =>
+                {
+                    agents.Queue(
+                        "planner",
+                        Completed(Plan(oneSite)),
+                        Completed(Plan(Planned())));
+                    agents.Queue(
+                        "implementer",
+                        Completed(partial),
+                        Completed(complete),
+                        Completed(withFourth),
+                        Completed(withAudit));
+                    agents.Queue(
+                        "reviewer-correctness",
+                        Completed(Review(Finding(text: "the rate is decided again in docs/other.md", @class: "reopened", reopens: "c-rate"))),
+                        Completed(Review(Finding(text: "the rate is decided again in docs/third.md", @class: "reopened", reopens: "c-rate"))),
+                        Completed(Review()));
+                },
+                machine: steps =>
+                {
+                    // The class-closure check refuses the builder that closed two of three (exit 1), passes the complete
+                    // record, and demands a home audit of the class the item's ledger says a review reopened twice
+                    // (exit 2) - the ledger the real route-findings step keeps.
+                    steps.Answer = run => run.Step.Type switch
+                    {
+                        "class-closure" => run.Read is not null && run.Read.TryGetValue("record", out var record) && record.ToNode() is JsonArray entries
+                            ? ClosureOf(steps, run, entries)
+                            : null,
+                        _ => null,
+                    };
+                });
+
+            // The plan check refused the one-site plan, the person said continue, and the three-site plan passed.
+            var end = await StartAsync(kit, "request=Ship the orders report.", "preapproved=yes");
+
+            Assert.True(HarnessExit.Success == end.ExitCode, $"{end.Message} | {string.Join(" | ", end.Details ?? [])} | {Shown(kit)}");
+
+            // The builder was asked four times: the partial (two of three), the complete (close-class extended), the
+            // rework after the first reopening, and the rework after the second (the home audit).
+            Assert.Equal(4, kit.Agents.Of("implementer").Count);
+
+            // The ledger holds the class reopened twice.
+            var agent = kit.Harness.OrchestrationStore.ReadFlow(kit.RunOf())!.Steps.Single(step => step.Step.EndsWith(".item-agent", StringComparison.Ordinal)).Made!;
+            var ledger = kit.Harness.OrchestrationStore.ReadClosureLedger(kit.RunOf(), agent);
+
+            Assert.NotNull(ledger);
+            Assert.Equal(new FlowClosureReopens("c-rate", 2), Assert.Single(ledger.Classes));
+
+            // The report carries the counts.
+            Assert.True(File.Exists(kit.RunOf().ReportFile), "the report was written");
+        }
+
+        /// <summary>Answers a class-closure run as the real check would over the record it was handed: two of three sites refused (1), a complete record passed, and a home audit (2) where the item's ledger says the class was reopened twice.</summary>
+        private static FlowStepResult? ClosureOf(MachineSteps steps, FlowStepRun run, JsonArray entries)
+        {
+            var entry = entries.OfType<JsonObject>().FirstOrDefault();
+
+            if (entry is null)
+            {
+                return null;
+            }
+
+            var sites = (entry["sites"] as JsonArray) ?? [];
+            var problems = new JsonArray();
+
+            foreach (var (path, _, _) in new[] { ("src/Home.cs", "Home", "home"), ("src/Old.cs", "Old", "deleted"), ("docs/old.md", "", "deleted") })
+            {
+                if (!sites.Any(site => string.Equals((site as JsonObject)?["path"]?.GetValue<string>(), path, StringComparison.Ordinal)))
+                {
+                    problems.Add($"class 'c-rate': the site '{path}' has no after in the record");
+                }
+            }
+
+            var repository = run.Place?.Repository ?? throw new InvalidOperationException("the run names no repository");
+            var layout = OrchestratorLayout.Of(new HarnessLayout(repository, repository), run.Place.Run);
+            var reopenedTwice = steps.Store?.ReadClosureLedger(layout, run.WorksIn ?? "a1")?.Classes.Any(@class => @class.Reopens >= 2) == true;
+
+            if (problems.Count > 0)
+            {
+                return FlowStepResult.Ended(passed: false, ClassClosureExit.Findings, output: new JsonObject { ["passed"] = false, ["problems"] = problems, ["hotspots"] = new JsonArray(), ["touches"] = new JsonArray() }) with { Red = true };
+            }
+
+            var audited = entry["homeAudit"] is JsonObject;
+
+            return reopenedTwice && !audited
+                ? FlowStepResult.Ended(passed: false, ClassClosureExit.HomeAudit, output: new JsonObject { ["passed"] = false, ["problems"] = new JsonArray("class 'c-rate' reopened twice"), ["hotspots"] = new JsonArray(), ["touches"] = new JsonArray() }) with { Red = true }
+                : FlowStepResult.Ended(passed: true, HarnessExit.Success, output: new JsonObject { ["passed"] = true, ["problems"] = new JsonArray(), ["hotspots"] = new JsonArray(), ["touches"] = new JsonArray() });
         }
 
         /// <summary>
