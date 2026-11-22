@@ -1518,7 +1518,59 @@ public sealed class FlowPreExistingTests
         }
     }
 
-    /// <summary>The issues a run owes its next round are its file's too: a resume by another engine restores them, and the run's words say what became of each.</summary>
+    /// <summary>
+    /// The run's words of the classes its items closed gather every item's newest record - a record its rework
+    /// answered again is the one that stands - beside the hotspots of their closure checks, for the self-audit's
+    /// instance-closure lens; where the run holds neither, each says none.
+    /// </summary>
+    [Fact]
+    public async Task TheRunsWords_GatherEveryItemsNewestClassRecord_AndTheClosureChecksHotspots()
+    {
+        using var temp = new TempDirectory();
+        var definition = Parse("""
+            name: flow
+            steps:
+              - name: build
+                type: reason
+                prompt: work.md
+                outputs: work.json
+              - name: check
+                type: reason
+                prompt: work.md
+                outputs: work.json
+              - name: tell
+                type: pause
+                always: true
+                question: |-
+                  records: {run.closure}
+                  hotspots: {run.hotspots}
+                options: [ok]
+            """);
+        FlowStepResult Answer(JsonObject output) => FlowStepResult.Ended(passed: true, HarnessExit.Success, output: output);
+        JsonObject Class(string @class, string claim) => new() { ["class"] = @class, ["claim"] = claim };
+        var runner = new FakeRunner()
+            .On("build", (FlowStepRun _) => Answer(new JsonObject
+            {
+                ["summary"] = "done",
+                ["closure"] = new JsonArray(Class("c-rate", "named a case: one format")),
+            }))
+            .On("check", (FlowStepRun _) => Answer(new JsonObject
+            {
+                ["passed"] = true,
+                ["hotspots"] = new JsonArray(new JsonObject { ["class"] = "c-rate", ["path"] = "src/Rates/Home.cs", ["touches"] = 6 }),
+            }));
+        var coordinator = new FlowCoordinator(definition, runner, new RunnerFacts(), new JumpingClock());
+
+        _ = await coordinator.RunAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+        var asked = coordinator.OpenQuestions.Single(question => question.Kind == "pause");
+        Assert.StartsWith("records: ", asked.Problem, StringComparison.Ordinal);
+        Assert.Contains("\"class\":\"c-rate\"", asked.Problem, StringComparison.Ordinal);
+        Assert.Contains("\"claim\":\"named a case: one format\"", asked.Problem, StringComparison.Ordinal);
+        Assert.EndsWith("hotspots: 'c-rate' home 'src/Rates/Home.cs' touched 6 times", asked.Problem, StringComparison.Ordinal);
+    }
+
+    /// <summary>The issues a run owes its next round are their file's too: a resume by another engine restores them, and the run's words say what became of each.</summary>
     [Fact]
     public async Task TheIssuesARunOwesItsNextRound_AreRestoredAtAResume()
     {

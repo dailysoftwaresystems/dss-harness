@@ -11144,6 +11144,22 @@ public sealed class FlowCoordinator
             .SelectMany(instance => instance.Assumptions.Select(one => $"'{instance.Step.Name}' assumed about {one.About}: {one.Assumed} ({one.Why})"))
             .ToList();
 
+        // Every item's record, gathered - the newest answer of each item's implement family, for the self-audit's
+        // instance-closure lens - and the hotspots of every class-closure check the run made.
+        var closure = _created
+            .Where(instance => instance.Output?["closure"] is JsonArray && instance.State == FlowInstanceState.Done)
+            .GroupBy(instance => FlowInstanceId.ItemOf(instance.Id), StringComparer.Ordinal)
+            .Select(group => group.Last())
+            .Select(instance => instance.Output!["closure"]!.ToJsonString())
+            .ToList();
+        var hotspots = _created
+            .Where(instance => instance.Output?["hotspots"] is JsonArray { Count: > 0 } && instance.State == FlowInstanceState.Done)
+            .GroupBy(instance => FlowInstanceId.ItemOf(instance.Id), StringComparer.Ordinal)
+            .Select(group => group.Last())
+            .SelectMany(instance => (instance.Output!["hotspots"] as JsonArray)!.Select(hotspot
+                => $"'{TextOf(hotspot?["class"])}' home '{TextOf(hotspot?["path"])}' touched {(hotspot?["touches"]?.ToString() ?? "none")} times"))
+            .ToList();
+
         return new JsonObject
         {
             ["name"] = _runName ?? string.Empty,
@@ -11162,6 +11178,8 @@ public sealed class FlowCoordinator
             ["ran"] = FlowChecks.Ran(checks.Select(CheckOf)),
             ["notRun"] = FlowChecks.NotRun(checks.Select(CheckOf), PendingChecks(path => true, checks), passedOver: false),
             ["red"] = FlowChecks.Red(checks.Select(CheckOf)),
+            [WorkflowExpressions.RunClosure] = closure.Count > 0 ? string.Join("; ", closure) : FlowChecks.None,
+            [WorkflowExpressions.RunHotspots] = hotspots.Count > 0 ? string.Join("; ", hotspots) : FlowChecks.None,
         };
     }
 
@@ -11940,6 +11958,7 @@ public sealed class FlowCoordinator
             "validate-plan" => [("items", step.Items, false, StartRead.Value), ("scope", step.Scope, true, StartRead.Value)],
             "reason" => [("writes", step.Writes?.Expression, false, StartRead.Names)],
             "anchor-balance" => [("rows", step.Rows?.Expression, true, StartRead.Names)],
+            "check-mutations" => [("arms", step.Arms?.Expression, true, StartRead.Names)],
             "anchor-citations" => [("paths", step.AnchorPaths?.Expression, true, StartRead.Names)],
             "class-closure" => [("classes", step.Classes, false, StartRead.Value), ("record", step.Record, true, StartRead.Value)],
             "route-findings" => [("findings", step.Findings, false, StartRead.Value)],

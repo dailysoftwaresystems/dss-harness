@@ -3275,6 +3275,21 @@ round's plan check (`PlanCheckRunner`, handed the owed issues under `next`) refu
 unsettled, refuses an item that names an issue the run does not owe, and orders the settling items first - and the
 rounds' `until` reads `empty(run.nextRound)`, so a clean self-audit does not end them while one is left; never holding
 the round the issue came from, for the triage never holds a loop.
+After the checkpoint of an item's first fold, and never holding a thing, `item-arms` sweeps the arms the builder's
+answer lists (`arms: 'implement.latest.arms'`, read where the step starts, `pending: true`) on a copy of the commit
+the item's fold landed as - `base: item` is the newest commit the run's ledger attributes to the item, so a rearm's
+refold is the bytes a re-run sweeps - the copy a detached worktree under the run's temp, made and taken away under
+`MainTreeWriteLock` (`SweepStepRunner.TreeOfAsync`, an item whose ledger holds no commit refused with nothing swept);
+an arm that is not as it should be raises `rearm`, a group that goes on with the implementation on
+`prompts/rearm.md` and carries its change the way a rework's does - `rearm-verify`, `rearm-closure`, `rearm-fold`,
+`rearm-checkpoint` - before the sweep runs again; the item's agent is not released until both its review and its arms
+stand (`release` depends on `fix` and `item-arms`). The run's words `{run.closure}` and `{run.hotspots}` (new
+`RunTexts`) gather every item's newest record and every closure check's hotspots, read by the self-audit's
+instance-closure lens (`self-audit.md`, `auditor.md`: the tells - one site and a case named, a theme in the run's
+commit subjects, a hotspot's path, a pin listing the case by hand - and the disproof, searching the data and
+measuring unnamed cells and the optimised form); the report (`FlowReports`) and the pull request's body
+(`pr-body.md`) carry the counts: each item's closing claim, the classes the reviews reopened with how often, and the
+homes touched often enough to name.
 `CreateAgentRunner` makes the agent the coordinator named
 (`OrchestrationRules.NextAgentName` over the run's agent directories, read under the orchestrator's lock by
 `IFlowRecords.NameAgent`, and every name its steps hold) for the model `WorkflowValidator.AgentModels` resolved, both

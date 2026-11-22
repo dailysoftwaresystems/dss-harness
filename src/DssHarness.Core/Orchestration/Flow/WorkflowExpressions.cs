@@ -124,10 +124,17 @@ public static class WorkflowExpressions
 
     /// <summary>
     /// The run's texts after <c>run</c>, written by the engine from its step records for a template - what it checked,
-    /// what it has not yet, what it knows to be red, what its loops left, what its agents assumed, and the pre-existing
-    /// issues it took - never values for an expression.
+    /// what it has not yet, what it knows to be red, what its loops left, what its agents assumed, the pre-existing
+    /// issues it took, every class record its items answered gathered, and the hotspots of their closure checks - never
+    /// values for an expression.
     /// </summary>
-    public static IReadOnlyList<string> RunTexts { get; } = ["ran", "notRun", "red", "leftover", "assumptions", "preExisting"];
+    public static IReadOnlyList<string> RunTexts { get; } = ["ran", "notRun", "red", "leftover", "assumptions", "preExisting", "closure", "hotspots"];
+
+    /// <summary>The run's text of every class record its items answered, gathered - the newest of each item's implement family - for the self-audit's instance-closure lens.</summary>
+    public const string RunClosure = "closure";
+
+    /// <summary>The run's text of every hotspot its items' closure checks named, with the touches that named each.</summary>
+    public const string RunHotspots = "hotspots";
 
     /// <summary>The texts after <c>carried</c>: the same three of what one commit carries, for its message and its variables alone.</summary>
     public static IReadOnlyList<string> CarriedTexts { get; } = ["ran", "notRun", "red"];

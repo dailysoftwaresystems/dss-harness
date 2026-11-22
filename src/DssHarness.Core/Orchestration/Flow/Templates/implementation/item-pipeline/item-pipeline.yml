@@ -297,6 +297,87 @@ steps:
     dependsOn: [checkpoint]
     when: 'input.orient.hasRemote'
     onFailure: '{input.failTo}'
+  # The item's own arms, swept on a copy of the commit its fold landed as - never the main tree as it moves - beside
+  # the review, holding nothing: the checkpoint and its push are done, and no other item waits for this.
+  - name: item-arms
+    type: check-mutations
+    pending: true
+    arms: 'implement.latest.arms'
+    base: item
+    dependsOn: [checkpoint-push]
+    when: "input.orient.hasLegs && input.orient.hasMutations && (item-blocked.answer ?? 'continue') != 'skip'"
+    onFailure: '{input.failTo}'
+  # An arm that is not as it should be goes back to the builder with the sweep's own words for it, and its change goes
+  # the way a rework's does - tested, checked against the classes, folded and committed - before the sweep runs again
+  # on the bytes the fix landed as.
+  - name: rearm
+    on:
+      step: item-arms
+      outcome: failure
+    then: item-arms
+    maxVisits: 2
+    onFailure: pause
+    steps:
+      - name: rearm-work
+        type: reason
+        resume: implement
+        retries: 3
+        backoffSeconds: 30
+        onFailure: pause
+        onPreExisting: triage-pre-existing-issue
+        graphFrom: changes
+        prompt: prompts/rearm.md
+        outputs: schemas/implement.schema.json
+      - name: rearm-verify
+        type: test
+        in: item-agent
+        filter: 'union(input.item.tests, implement.latest.tests)'
+        affected: '{input.testsKey}'
+        noTests: '{input.item.noTests}'
+        dependsOn: [rearm-work]
+        when: 'input.orient.hasLegs'
+        onFailure: '{input.failTo}'
+      - name: rearm-closure
+        type: class-closure
+        in: item-agent
+        classes: 'input.item.classes'
+        record: 'implement.latest.closure'
+        base: '{input.orient.startCommit}'
+        dependsOn: [rearm-work, rearm-verify]
+        onFailure: '{input.failTo}'
+      - name: rearm-fold
+        type: fold
+        of: item-agent
+        within: 'input.item.ownedPaths'
+        allow:
+          new: 'implement.latest.newRows'
+        answers:
+          foldNewRows: allow
+          foldTwoChanges: merge
+          foldConflicts: fail
+          foldOutside: fail
+        dependsOn: [rearm-verify, rearm-closure]
+        onFailure: '{input.failTo}'
+      - name: rearm-checkpoint
+        type: commit
+        dependsOn: [rearm-fold]
+        onFailure: '{input.failTo}'
+        message: |-
+          {input.item.title}: arms repaired
+
+          Committed when the arm the item's own sweep found red was put right, before the sweep runs again.
+          Checked:
+          {carried.ran}
+          Not checked:
+          {carried.notRun}
+          Known red:
+          {carried.red}
+      - name: rearm-push
+        type: push
+        checkpoint: true
+        dependsOn: [rearm-checkpoint]
+        when: 'input.orient.hasRemote'
+        onFailure: '{input.failTo}'
   - name: fix
     dependsOn: [checkpoint-push]
     when: "(item-blocked.answer ?? 'continue') != 'skip'"
@@ -627,7 +708,9 @@ steps:
     answers:
       foldNewRows: allow
       foldTwoChanges: merge
-    dependsOn: [fix]
+    # The item is not released until its own arms are as they should be: the sweep runs beside the review, and a rearm
+    # it raised is not done until the fix is folded and the sweep has passed on the bytes it landed as.
+    dependsOn: [fix, item-arms]
     when: "(item-blocked.answer ?? 'continue') != 'skip'"
     onFailure: '{input.failTo}'
   - name: drop

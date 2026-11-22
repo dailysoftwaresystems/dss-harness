@@ -1048,6 +1048,7 @@ public sealed class ImplementationFlowTests
             ["done"] = new JsonArray(new JsonObject { ["statement"] = "the report ships", ["holds"] = true, ["shows"] = "its code, read again" }),
             ["claims"] = new JsonObject { ["built"] = "src/one/one.cs", ["tested"] = "nothing run: the repository keeps no legs" },
             ["closure"] = new JsonArray(),
+            ["arms"] = new JsonArray(),
             ["tests"] = new JsonArray([.. (tests ?? []).Select(unit => (JsonNode?)unit)]),
             ["reuse"] = "",
             ["newRows"] = new JsonArray(),
@@ -2452,8 +2453,11 @@ public sealed class ImplementationFlowTests
                 (nameof(FlowInstanceState.Skipped), "its filter names no test: no work item built in this run names a test its change affects"),
                 (gate.State, gate.SkippedBecause));
 
-            // The round went on past it, as past a gate that held: the sweep and the self-audit ran.
-            Assert.Single(kit.Steps.Of("check-mutations"));
+            // The round went on past it, as past a gate that held: the round's sweep and the self-audit ran - beside the
+            // items' own sweeps, each on the commit its fold landed as.
+            Assert.Equal(
+                ["rounds#1.items[0].item-arms", "rounds#1.items[1].item-arms", "rounds#1.mutations"],
+                kit.Steps.Of("check-mutations").Select(run => run.Instance).Order(StringComparer.Ordinal));
             Assert.Equal(
                 [("rounds.mutations", nameof(FlowInstanceState.Done)), ("rounds.self-audit", nameof(FlowInstanceState.Done))],
                 [.. flow.Where(step => step.Step is "rounds.mutations" or "rounds.self-audit").Select(step => (step.Step, step.State)).OrderBy(step => step.Step, StringComparer.Ordinal)]);
@@ -3879,8 +3883,9 @@ public sealed class ImplementationFlowTests
             Assert.All(pending.SelectMany(question => question.Answers), answer => Assert.Equal("configuration", answer.By!.Who));
             Assert.Empty(kit.Harness.OrchestrationStore.ReadFlowQuestions(kit.RunOf())!.Open);
 
-            // The sweep swept, pending only, as its step says.
-            Assert.True(kit.Steps.Of("check-mutations").Single().Step.Pending);
+            // The sweep swept, pending only, as its step says - the round's own, beside the item's, which is pending too.
+            Assert.All(kit.Steps.Of("check-mutations"), run => Assert.True(run.Step.Pending));
+            Assert.Contains(kit.Steps.Of("check-mutations"), run => run.Instance.EndsWith(".mutations", StringComparison.Ordinal));
         }
 
         /// <summary>

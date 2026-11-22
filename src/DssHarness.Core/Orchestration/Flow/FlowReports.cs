@@ -361,6 +361,15 @@ public static class FlowReports
             _ => "no recommendation was sought",
         };
 
+    /// <summary>A value of a record as text; "none" where it is none - a report line never shows a null. A number is its own text.</summary>
+    private static string TextOf(JsonNode? node)
+        => node switch
+        {
+            JsonValue value when value.TryGetValue<string>(out var text) && text.Length > 0 => text,
+            null => "none",
+            _ => node.ToString(),
+        };
+
     /// <summary>What a run spent, as the documents hold it: its dollars as far as they were counted, and why the rest is not known where a part's cost could not be.</summary>
     private static JsonObject SpentOf(FlowBudgetRecord spent) => WithUncounted(
         new JsonObject
@@ -584,6 +593,56 @@ public static class FlowReports
             text.Add(string.Empty);
             text.Add("## What the run's loops left");
             text.AddRange(leftover.Select(step => $"- {step.Instance}: {FlowValue.Of(step.Leftover!.DeepClone()).AsTemplateText()}"));
+        }
+
+        // What the run's items closed, so a repository can see whether its rounds converge: each item's newest record,
+        // the classes its reviews reopened with how often, and the homes touched often enough to name.
+        var records = flow.Steps
+            .Where(step => step.Output?["closure"] is JsonArray && step.State == nameof(FlowInstanceState.Done))
+            .GroupBy(step => FlowInstanceId.ItemOf(step.Instance), StringComparer.Ordinal)
+            .Select(group => group.Last())
+            .ToList();
+
+        if (records.Count > 0)
+        {
+            text.Add(string.Empty);
+            text.Add("## The classes this run closed");
+
+            foreach (var record in records)
+            {
+                foreach (var entry in (record.Output!["closure"] as JsonArray)!.OfType<JsonObject>())
+                {
+                    text.Add($"- '{TextOf(entry["class"])}': {TextOf(entry["claim"])}");
+                }
+            }
+        }
+
+        var reopened = flow.Steps
+            .Where(step => step.Output?["reopened"] is JsonArray { Count: > 0 } && step.State == nameof(FlowInstanceState.Done))
+            .GroupBy(step => FlowInstanceId.ItemOf(step.Instance), StringComparer.Ordinal)
+            .Select(group => group.Last())
+            .SelectMany(step => (step.Output!["reopened"] as JsonArray)!.OfType<JsonObject>())
+            .ToList();
+
+        if (reopened.Count > 0)
+        {
+            text.Add(string.Empty);
+            text.Add("## Classes the reviews reopened");
+            text.AddRange(reopened.Select(entry => $"- '{TextOf(entry["class"])}', reopened {TextOf(entry["reopens"])} time(s)"));
+        }
+
+        var hotspots = flow.Steps
+            .Where(step => step.Output?["hotspots"] is JsonArray { Count: > 0 } && step.State == nameof(FlowInstanceState.Done))
+            .GroupBy(step => FlowInstanceId.ItemOf(step.Instance), StringComparer.Ordinal)
+            .Select(group => group.Last())
+            .SelectMany(step => (step.Output!["hotspots"] as JsonArray)!.OfType<JsonObject>())
+            .ToList();
+
+        if (hotspots.Count > 0)
+        {
+            text.Add(string.Empty);
+            text.Add("## Homes the run touched often enough to name");
+            text.AddRange(hotspots.Select(hotspot => $"- '{TextOf(hotspot["class"])}' home '{TextOf(hotspot["path"])}', touched {TextOf(hotspot["touches"])} time(s)"));
         }
 
         if (handoffs.Count > 0)

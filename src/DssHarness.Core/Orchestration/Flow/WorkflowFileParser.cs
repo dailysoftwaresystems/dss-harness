@@ -1366,8 +1366,9 @@ public static class WorkflowFileParser
             case "check-mutations":
                 step = step with
                 {
-                    Arms = StringListIn(keys, $"{where}.arms", problems) ?? [],
+                    Arms = FlowListIn(keys, $"{where}.arms", problems),
                     Pending = BooleanIn(keys, $"{where}.pending", problems),
+                    Base = ScalarIn(keys, $"{where}.base", problems),
                 };
                 break;
 

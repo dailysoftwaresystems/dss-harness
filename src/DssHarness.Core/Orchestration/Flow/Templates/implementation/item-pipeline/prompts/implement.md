@@ -60,7 +60,8 @@ source as `closure.md` names it, on each leg and on each reference separately; f
 cell you cannot measure is named unmeasured, with the reason. Your report carries the record of each class:
 invariant, home, sites before and after, the searches, the universe covered, the pin, the arm, each neighbour and
 its measurement, and the closing claim, which names the universe and never the case. Nothing is folded without
-the record.
+the record. Beside the record, your answer's `arms` lists every arm the record names - the item's own sweep runs
+those alone, on the bytes your fold lands as, and an arm left out of the list is never swept.
 
 ## How you measure
 

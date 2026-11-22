@@ -690,6 +690,23 @@ public static class WorkflowValidator
                             WorksIn(entry, entry.Step.In);
                         }
 
+                        // The arms a sweep runs may be read where the step starts, as an expression the engine resolves -
+                        // the item's own, from the record its builder answered - and a base names the commit whose copy it
+                        // sweeps - a template naming one, or 'item', the newest commit the run's ledger gives this item -
+                        // so the bytes are the item's own and never the main tree as it moves.
+                        if (type.Type == "check-mutations")
+                        {
+                            if (entry.Step.Arms?.Expression is { } arms)
+                            {
+                                Expression(entry, arms, "arms");
+                            }
+
+                            if (entry.Step.Base is { Length: 0 })
+                            {
+                                _problems.Add($"{where}: base is empty; it names the commit whose copy the sweep runs on - a template naming one, or 'item', the newest commit the run's ledger gives this item");
+                            }
+                        }
+
                         if (type.Type == "test")
                         {
                             TestRules(entry, where);

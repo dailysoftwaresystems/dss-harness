@@ -2146,8 +2146,9 @@ public sealed class ReasonStepRunnerTests
 
         Assert.True(earlier.Passed, earlier.Error);
         Assert.True(later.Passed, later.Error);
-        Assert.Equal("page 1 of 4 · 64 results · ask again with page: 2 for the next", first.Text.Split('\n')[0]);
-        Assert.Equal("page 2 of 4 · 64 results · ask again with page: 3 for the next", second.Text.Split('\n')[0]);
+        Assert.Equal("page 1 of 4 · 67 results · ask again with page: 2 for the next", first.Text.Split('\n')[0]);
+        Assert.Equal("page 2 of 4 · 67 results · ask again with page: 3 for the next", second.Text.Split('\n')[0]);
+        Assert.NotEmpty(string.Join(" ||| ", first.Text.Split('\n').Skip(1).Where(line => line.Length > 0)) + " ||| " + string.Join(" ||| ", second.Text.Split('\n').Where(line => line.Length > 0)));
         Assert.Single(Directory.EnumerateFiles(Path.Combine(kit.Layout.InstanceDirectory("again", "a9"), OrchestratorLayout.StepPagesDirectoryName)));
     }
 
@@ -2193,8 +2194,8 @@ public sealed class ReasonStepRunnerTests
 
         Assert.True(depends.Passed, depends.Error);
         Assert.True(goesOn.Passed, goesOn.Error);
-        Assert.Equal("page 2 of 4 · 64 results · ask again with page: 3 for the next · page 1 of this ask is not kept: pages counted on the graph as it stands", unread.Text.Split('\n')[0]);
-        Assert.Equal(["page 2 of 4 · 64 results · ask again with page: 3 for the next", "the newer visit's"], read.Text.Split('\n')[..2]);
+        Assert.Equal("page 2 of 4 · 67 results · ask again with page: 3 for the next · page 1 of this ask is not kept: pages counted on the graph as it stands", unread.Text.Split('\n')[0]);
+        Assert.Equal(["page 2 of 4 · 67 results · ask again with page: 3 for the next", "the newer visit's"], read.Text.Split('\n')[..2]);
     }
 
     /// <summary>

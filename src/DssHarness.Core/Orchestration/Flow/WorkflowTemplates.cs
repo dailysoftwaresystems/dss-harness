@@ -99,7 +99,7 @@ public static class WorkflowTemplates
     private static IReadOnlyList<string> PipelinePrompts =>
     [
         "implement", "remedy", "redo", "undo", "unblock", "mend", "reconcile", "anchors",
-        "closure-record", "home-audit",
+        "closure-record", "home-audit", "rearm",
         "review-scope", "review", "rework",
     ];
 

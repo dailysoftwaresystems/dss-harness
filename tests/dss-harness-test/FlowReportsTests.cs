@@ -82,6 +82,54 @@ public sealed class FlowReportsTests
     }
 
     /// <summary>
+    /// The report carries the counts by which a repository sees whether its rounds converge: each item's newest class
+    /// record with its closing claim - never a case - the classes its reviews reopened with how often, and the homes
+    /// touched often enough to name, with their counts.
+    /// </summary>
+    [Fact]
+    public void TheReportCarriesTheClosureCounts_OfRecordsReopeningsAndHotspots()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var layout = OrchestratorLayout.Of(new HarnessLayout(temp.Path, temp.Path), "r1");
+        var file = new FlowFile(
+            1,
+            "r1",
+            "flow",
+            "digest",
+            new Dictionary<string, string>(),
+            "Done",
+            new FlowBudgetRecord(0, 0, 0),
+            0,
+            [
+                new FlowStepRecord("rounds#1.items[0].implement", "implement", false, "Done", 1, 1, [], [], Type: "reason", Output: JsonNode.Parse("""{"closure":[{"class":"c-rate","claim":"named a case: one format"}]}""")),
+                new FlowStepRecord("rounds#1.items[0].rework", "rework", false, "Done", 1, 1, [], [], Type: "reason", Output: JsonNode.Parse("""{"closure":[{"class":"c-rate","claim":"the rate holds over every format"}]}""")),
+                new FlowStepRecord("rounds#1.items[1].implement", "implement", false, "Done", 1, 1, [], [], Type: "reason", Output: JsonNode.Parse("""{"closure":[{"class":"c-frame","claim":"the frame is decided once"}]}""")),
+                new FlowStepRecord("rounds#1.items[0].fix#1.route", "route", false, "Done", 1, 1, [], [], Type: "route-findings", Output: JsonNode.Parse("""{"reopened":[{"class":"c-rate","reopens":2}]}""")),
+                new FlowStepRecord("rounds#1.items[0].class-closure", "class-closure", false, "Done", 1, 1, [], [], Type: "class-closure", Output: JsonNode.Parse("""{"hotspots":[{"class":"c-rate","path":"src/Rates/Home.cs","touches":6}]}""")),
+            ],
+            [],
+            DateTimeOffset.UnixEpoch);
+
+        _ = FlowReports.Write(harness.FileSystem, layout, file, null, "done", 0, DateTimeOffset.UnixEpoch);
+
+        var report = harness.FileSystem.ReadAllText(layout.ReportFile).Split('\n');
+
+        Assert.Equal(
+            "- 'c-rate': the rate holds over every format",
+            report[Array.IndexOf(report, "## The classes this run closed") + 1]);
+        Assert.Equal(
+            "- 'c-frame': the frame is decided once",
+            report[Array.IndexOf(report, "## The classes this run closed") + 2]);
+        Assert.Equal(
+            "- 'c-rate', reopened 2 time(s)",
+            report[Array.IndexOf(report, "## Classes the reviews reopened") + 1]);
+        Assert.Equal(
+            "- 'c-rate' home 'src/Rates/Home.cs', touched 6 time(s)",
+            report[Array.IndexOf(report, "## Homes the run touched often enough to name") + 1]);
+    }
+
+    /// <summary>
     /// What a run spent, a part of whose cost could not be counted, is said in the report, in <c>report.json</c> and in a
     /// command's <c>--json</c> as the dollars counted and why the rest is not known - never the counted sum as though it
     /// were the whole - and a run whose every part was counted holds no such member.

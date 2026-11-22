@@ -6,6 +6,7 @@ using DssHarness.Core.Configuration;
 using DssHarness.Core.Application.Legs;
 using DssHarness.Core.Execution;
 using DssHarness.Core.FileSystem;
+using DssHarness.Core.Git;
 using DssHarness.Core.Output;
 using DssHarness.Core.Platform;
 using DssHarness.Core.Processes;
@@ -45,6 +46,9 @@ public abstract class LegStepRunner(IHarnessContextLoader contextLoader, IHostPl
 {
     private readonly FlowStepLegs _legs = new(fileSystem, children, isolation);
 
+    /// <summary>Reads the run's records - the agent a step works in, and the folds and commits its ledger attributes to an item.</summary>
+    protected OrchestrationStore Store => store;
+
     /// <inheritdoc/>
     public abstract string Type { get; }
 
@@ -72,6 +76,27 @@ public abstract class LegStepRunner(IHarnessContextLoader contextLoader, IHostPl
             }
 
             tree = worktree;
+        }
+
+        // A type whose legs work on a copy of their own - a sweep of an item's own arms, on the bytes its fold landed
+        // as - makes it here, and it goes when the legs are done with it, however they ended. One that cannot make
+        // its copy - no commit of the item's in the ledger, a worktree git refused - is refused, nothing run.
+        FlowStepTree? made;
+
+        try
+        {
+            made = await TreeOfAsync(run, place, context, layout, tree, cancellationToken).ConfigureAwait(false);
+        }
+        catch (HarnessException refused)
+        {
+            return FlowStepResult.Ended(passed: false, refused.ExitCode, refused.Message);
+        }
+
+        await using var copy = made;
+
+        if (copy is not null)
+        {
+            tree = copy.Path;
         }
 
         // The legs run as every step of the engine runs them: the isolation their work is held inside decided before
@@ -125,6 +150,20 @@ public abstract class LegStepRunner(IHarnessContextLoader contextLoader, IHostPl
     /// <param name="isolation">Holds the work of each leg this machine runs inside the operating system's isolation.</param>
     /// <param name="cancellationToken">Stops the legs.</param>
     protected abstract Task<LegRunResult> RunLegsAsync(FlowStepRun run, HarnessContext context, string tree, ILegRunWatch watch, ILegIsolation isolation, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// The tree of its own a type's legs work on instead of <paramref name="tree"/> - null for every type but a sweep
+    /// that names a commit in <c>base</c>, whose arms are driven on a copy of that commit, so other items' folds never
+    /// move the bytes under it. The copy goes when the step is done with it, however its legs ended.
+    /// </summary>
+    /// <param name="run">The step, its keys filled.</param>
+    /// <param name="place">The run and its definition.</param>
+    /// <param name="context">The repository and its configuration, as the main checkout reads them.</param>
+    /// <param name="layout">The run's layout.</param>
+    /// <param name="tree">The tree the step works in as the engine sees it.</param>
+    /// <param name="cancellationToken">Stops the making of the copy.</param>
+    protected virtual Task<FlowStepTree?> TreeOfAsync(FlowStepRun run, FlowRunPlace place, HarnessContext context, OrchestratorLayout layout, string tree, CancellationToken cancellationToken)
+        => Task.FromResult<FlowStepTree?>(null);
 
     /// <summary>
     /// What a leg's work writes inside the tool's state beside its tree and its records, by the tree the leg works in -
@@ -336,22 +375,89 @@ public sealed class RunStepRunner(IHarnessContextLoader contextLoader, IHostPlat
 }
 
 /// <summary>
-/// The <c>check-mutations</c> step: the arms it names - every arm the registry declares where it names none - swept on
-/// its legs through <see cref="IMutationLegs"/>, as <c>check-mutations</c> sweeps them; with <c>pending</c>, on each leg
-/// only the arms with no recorded pass that still holds. Each red entry names its arm.
+/// The <c>check-mutations</c> step: the arms it names - every arm the registry declares where it names none, or those
+/// its <c>arms</c> expression yields, the item's own from the record its builder answered - swept on its legs through
+/// <see cref="IMutationLegs"/>, as <c>check-mutations</c> sweeps them; with <c>pending</c>, on each leg only the arms
+/// with no recorded pass that still holds; and on a copy of the commit its <c>base</c> names where it names one - 'item'
+/// is the newest commit the run's ledger gives the item the step is one of - made and taken away under the main tree's
+/// lock, so other items' folds never move the bytes under it. Each red entry names its arm.
 /// </summary>
 /// <param name="contextLoader">Finds the repository and its configuration.</param>
 /// <param name="platform">This machine.</param>
-/// <param name="store">Reads the record of the agent the step works in.</param>
+/// <param name="store">Reads the record of the agent the step works in, and the run's ledger of its folds and commits.</param>
 /// <param name="fileSystem">Keeps the step's records.</param>
 /// <param name="children">Records the group of what the step's legs start bound, while anything is in it.</param>
 /// <param name="mutations">Sweeps the arms on the legs.</param>
 /// <param name="isolation">Decides the isolation the work of the step's legs is held inside.</param>
-public sealed class SweepStepRunner(IHarnessContextLoader contextLoader, IHostPlatform platform, OrchestrationStore store, IFileSystem fileSystem, ChildSessions children, IMutationLegs mutations, IAgentIsolation isolation)
+/// <param name="gitClient">Makes and takes away the copy of the commit the sweep runs on.</param>
+public sealed class SweepStepRunner(IHarnessContextLoader contextLoader, IHostPlatform platform, OrchestrationStore store, IFileSystem fileSystem, ChildSessions children, IMutationLegs mutations, IAgentIsolation isolation, IGitClient gitClient)
     : LegStepRunner(contextLoader, platform, store, fileSystem, children, isolation)
 {
     /// <inheritdoc/>
     public override string Type => "check-mutations";
+
+    /// <summary>The word a sweep's <c>base</c> names the item's own newest commit by: the newest commit the run's ledger attributes to the item the step is one of.</summary>
+    public const string ItemBase = "item";
+
+    /// <inheritdoc/>
+    protected override async Task<FlowStepTree?> TreeOfAsync(FlowStepRun run, FlowRunPlace place, HarnessContext context, OrchestratorLayout layout, string tree, CancellationToken cancellationToken)
+    {
+        if (run.Step.Base is not { Length: > 0 } named)
+        {
+            return null;
+        }
+
+        // The item's own newest commit, as the run's ledger attributes its commits to the item the step is one of: a
+        // rearm's refold and its commit are the bytes a re-run sweeps, never the first checkpoint alone.
+        var commit = string.Equals(named, ItemBase, StringComparison.Ordinal)
+            ? NewestCommitOfItem(layout, FlowInstanceId.ItemOf(run.Instance))
+            : named;
+
+        if (commit is null)
+        {
+            throw new HarnessException(
+                HarnessExit.Refused,
+                $"'{run.Instance}' sweeps the arms of the item's own newest commit, and the run's ledger holds no commit of item '{FlowInstanceId.ItemOf(run.Instance)}'. Nothing was swept.");
+        }
+
+        var main = context.Layout.MainCheckoutRoot;
+        var path = Path.Combine(layout.TempDirectory, $"sweep-{FlowInstanceId.DirectoryOf(run.Instance)}");
+
+        // The copy is made and taken away under the main tree's lock, for its making writes into the repository's git
+        // directory as a fold's commit does; the sweep itself runs on the frozen bytes, holding nothing.
+        using (await MainTreeWriteLock.HoldAsync(main, cancellationToken).ConfigureAwait(false) ?? throw new OperationCanceledException(cancellationToken))
+        {
+            var made = await gitClient.RunAsync(main, ["worktree", "add", "--detach", "--force", path, commit], cancellationToken: cancellationToken).ConfigureAwait(false);
+
+            if (!made.Succeeded)
+            {
+                throw new HarnessException(
+                    HarnessExit.CommandFailed,
+                    $"'{run.Instance}' could not make its copy of commit '{commit}' to sweep on: {made.FailureMessage}. Nothing was swept.");
+            }
+        }
+
+        return new FlowStepTree(
+            path,
+            async () =>
+            {
+                using (await MainTreeWriteLock.HoldAsync(main, cancellationToken).ConfigureAwait(false))
+                {
+                    // Best effort: a copy left behind is inside the run's own directory, and goes with the run.
+                    _ = await gitClient.RunAsync(main, ["worktree", "remove", "--force", path], cancellationToken: cancellationToken).ConfigureAwait(false);
+                }
+            });
+    }
+
+    /// <summary>The newest commit the run's ledger attributes to a step of <paramref name="item"/>, or null where it holds none of its.</summary>
+    private string? NewestCommitOfItem(OrchestratorLayout layout, string item)
+    {
+        var ledger = Store.ReadFolds(layout);
+
+        return ledger?.Commits
+            .Where(commit => commit.Folds.Any(fold => ledger.Of(fold) is { } attributed && FlowInstanceId.ItemOf(attributed.Instance) == item))
+            .LastOrDefault()?.Sha;
+    }
 
     /// <inheritdoc/>
     protected override Task<LegRunResult> RunLegsAsync(FlowStepRun run, HarnessContext context, string tree, ILegRunWatch watch, ILegIsolation isolation, CancellationToken cancellationToken)
@@ -360,7 +466,7 @@ public sealed class SweepStepRunner(IHarnessContextLoader contextLoader, IHostPl
             {
                 Directory = tree,
                 LegNames = LegsOf(run.Step),
-                ArmNames = run.Step.Arms.Count == 0 ? null : run.Step.Arms,
+                ArmNames = FlowStepKeys.NamesOf(run.Step.Arms, run, "arms") is { } arms && arms.Count > 0 ? arms : null,
                 Pending = run.Step.Pending == true,
                 Watch = watch,
                 Isolation = isolation,
@@ -371,4 +477,30 @@ public sealed class SweepStepRunner(IHarnessContextLoader contextLoader, IHostPl
     /// <inheritdoc/>
     /// <remarks>The workers its arms are swept in, kept in the slot for them of the tree the leg works in.</remarks>
     protected override IReadOnlyList<string> WritesBeside(string legTree) => [Path.Combine(legTree, HarnessLayout.MutationsDirectoryName)];
+}
+
+/// <summary>
+/// A tree of its own that a step's legs work on, made where they start and gone when they are done with it: the copy of
+/// a commit an item's own sweep runs on, so other items' folds never move the bytes under it. Its going is best effort -
+/// a copy left behind is inside the run's own directory, and goes with the run.
+/// </summary>
+/// <param name="Path">The copy's directory, a detached worktree of the commit it was made of.</param>
+/// <param name="remove">Takes the copy away, called once the step is done with it, however its legs ended.</param>
+public sealed class FlowStepTree(string Path, Func<Task> remove) : IAsyncDisposable
+{
+    /// <summary>The copy's directory.</summary>
+    public string Path { get; } = Path;
+
+    /// <inheritdoc/>
+    public async ValueTask DisposeAsync()
+    {
+        try
+        {
+            await remove().ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is IOException or InvalidOperationException or HarnessException)
+        {
+            // Best effort: the copy is inside the run's directory, and goes with the run.
+        }
+    }
 }

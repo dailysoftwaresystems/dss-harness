@@ -6,6 +6,7 @@
     "done",
     "claims",
     "closure",
+    "arms",
     "tests",
     "reuse",
     "newRows",
@@ -63,6 +64,13 @@
         }
       },
       "description": "What you claim of your own work. The engine builds and tests it itself, so say what you saw, not what you expect."
+    },
+    "arms": {
+      "type": "array",
+      "description": "The arms this item's classes armed, by id, as each entry of the record names it in its own arm - the sweep of the item's own arms runs these alone, on the bytes its fold landed as. Empty where the repository keeps no arms registry or the record arms nothing.",
+      "items": {
+        "type": "string"
+      }
     },
     "closure": {
       "type": "array",

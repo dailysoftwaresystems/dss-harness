@@ -85,8 +85,8 @@ public sealed class LegStepRunnerTests : IDisposable
         };
     }
 
-    private static FlowStepRun Run(WorkflowStep step, string repository, IFlowRunEvents? events = null, string? worksIn = null)
-        => new(step, step.Name, 1, FlowValue.Missing, null, null, [], events ?? new Said(), Place: new FlowRunPlace(repository, "r1", null, Flow), WorksIn: worksIn);
+    private static FlowStepRun Run(WorkflowStep step, string repository, IFlowRunEvents? events = null, string? worksIn = null, IReadOnlyDictionary<string, FlowValue>? read = null, string? instance = null)
+        => new(step, instance ?? step.Name, 1, FlowValue.Missing, null, null, [], events ?? new Said(), Place: new FlowRunPlace(repository, "r1", null, Flow), Read: read, WorksIn: worksIn);
 
     /// <summary>Every event a step's runner said, in the words a test reads them in.</summary>
     private sealed class Said : IFlowRunEvents
@@ -361,7 +361,7 @@ public sealed class LegStepRunnerTests : IDisposable
         Assert.Equal("""{"mode":"preferred","none":"bubblewrap is not here"}""", ran.Output!["isolation"]!.ToJsonString());
 
         var sweeping = new TestIsolation();
-        _ = await new SweepStepRunner(preferring.ContextLoader, preferring.Platform, preferring.OrchestrationStore, preferring.FileSystem, preferring.ChildSessions, legs, sweeping)
+        _ = await new SweepStepRunner(preferring.ContextLoader, preferring.Platform, preferring.OrchestrationStore, preferring.FileSystem, preferring.ChildSessions, legs, sweeping, preferring.GitClient)
             .RunAsync(Run(new WorkflowStep { Name = "arms", Type = "check-mutations" }, preferred.Path), Token);
         var copy = Path.Combine(preferred.Path, HarnessLayout.LegsDirectoryName, "a-copy");
         var actionBuild = Path.Combine(copy, HarnessLayout.ActionBuildRelative("probe", "r9", "native"));
@@ -423,7 +423,7 @@ public sealed class LegStepRunnerTests : IDisposable
             new BuildStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.ChildSessions, legs, new TestIsolation()),
             new TestStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.ChildSessions, legs, new TestIsolation()),
             new RunStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.ChildSessions, legs, new TestIsolation()),
-            new SweepStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.ChildSessions, legs, new TestIsolation()),
+            new SweepStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.ChildSessions, legs, new TestIsolation(), harness.GitClient),
         ];
         WorkflowStep[] steps =
         [
@@ -434,7 +434,7 @@ public sealed class LegStepRunnerTests : IDisposable
             new() { Name = "build past", Type = "build", KeepGoing = true },
             new() { Name = "test past", Type = "test", KeepGoing = true },
             new() { Name = "sweep", Type = "check-mutations" },
-            new() { Name = "pending", Type = "check-mutations", Arms = ["A-ONE"], Pending = true },
+            new() { Name = "pending", Type = "check-mutations", Arms = new FlowList(["A-ONE"], Expression: null), Pending = true },
         ];
 
         foreach (var step in steps)
@@ -461,6 +461,80 @@ public sealed class LegStepRunnerTests : IDisposable
             asked => Assert.Equivalent(new MutationLegsRequest { Directory = repository.Path, ArmNames = ["A-ONE"], Pending = true, Watch = asked.Watch, Isolation = asked.Isolation }, asked, strict: true));
         Assert.All(legs.Asked, asked => Assert.NotNull(asked.Watch));
         Assert.All(legs.Asked, asked => Assert.NotNull(asked.Isolation));
+    }
+
+    /// <summary>
+    /// A sweep that names a commit in <c>base</c> runs on a copy of that commit - made and taken away under the main
+    /// tree's lock, so other items' folds never move the bytes under it - and <c>item</c> is the newest commit the
+    /// run's ledger attributes to the item the step is one of. Its arms it takes from what the engine read where it
+    /// started, pending as it says, and an item whose ledger holds no commit is refused, nothing swept.
+    /// </summary>
+    [Fact]
+    public async Task ASweepThatNamesACommit_RunsItsArmsPendingOnACopyOfIt_TakenAwayAfter()
+    {
+        var (harness, repository) = await RepositoryAsync(Config(localCopy: false));
+        OrchestrationKit.Write(repository.Path, "src/rate.cs", "the rate\n");
+        await harness.CommitAllAsync(repository.Path, "the item's fold", Token);
+        var commit = (await harness.GitClient.ResolveCommitAsync(repository.Path, "HEAD", Token))!;
+        var layout = OrchestratorLayout.Of(new HarnessLayout(repository.Path, repository.Path), "r1");
+
+        harness.OrchestrationStore.UpdateFolds(
+            layout,
+            ledger => ledger with
+            {
+                Folds = [new FlowFoldEntry("f1", "rounds#1.items[0].fold", 1, "fold", "a1", FlowFoldEntry.Intended, DateTimeOffset.UtcNow, [new FlowFoldPath("src/rate.cs", "written", null)], [])],
+                Commits = [new FlowCommitEntry("c1", "rounds#1.items[0].checkpoint", 1, FlowCommitEntry.Committed, null, [new FlowCommitPath("src/rate.cs", null)], ["f1"], DateTimeOffset.UtcNow, DateTimeOffset.UtcNow) { Sha = commit }],
+            });
+
+        string? copy = null;
+        string? swept = null;
+        FakeLegs? made = null;
+        FakeLegs legs = new()
+        {
+            WhileItRuns = _ =>
+            {
+                copy = made!.Asked[^1].Directory;
+                swept = File.ReadAllText(Path.Combine(copy!, "src", "rate.cs"));
+            },
+        };
+        made = legs;
+        var runner = new SweepStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.ChildSessions, legs, new TestIsolation(), harness.GitClient);
+
+        var byItem = await runner.RunAsync(
+            Run(
+                new WorkflowStep { Name = "item-arms", Type = "check-mutations", Base = SweepStepRunner.ItemBase, Pending = true, Arms = new FlowList([], Expression: "implement.latest.arms") },
+                repository.Path,
+                read: new Dictionary<string, FlowValue> { ["arms"] = FlowValue.Of(new JsonArray("A-ONE")) },
+                instance: "rounds#1.items[0].item-arms"),
+            Token);
+
+        Assert.True(byItem.Passed, byItem.Error);
+        Assert.NotEqual(repository.Path, copy);
+        Assert.StartsWith(layout.TempDirectory, copy, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal("the rate\n", swept);
+        Assert.False(Directory.Exists(copy), $"{copy} was left behind");
+        Assert.Equivalent(
+            new MutationLegsRequest { Directory = copy!, ArmNames = ["A-ONE"], Pending = true, Watch = legs.Asked[0].Watch, Isolation = legs.Asked[0].Isolation },
+            legs.Asked[0],
+            strict: true);
+
+        // A base naming a commit outright sweeps a copy of that commit.
+        legs.Asked.Clear();
+        _ = await runner.RunAsync(
+            Run(new WorkflowStep { Name = "sweep", Type = "check-mutations", Base = commit }, repository.Path, instance: "rounds#1.items[0].item-arms"),
+            Token);
+
+        Assert.NotEqual(repository.Path, legs.Asked[0].Directory);
+
+        // An item whose ledger holds no commit is refused, nothing swept.
+        var none = await runner.RunAsync(
+            Run(new WorkflowStep { Name = "sweep", Type = "check-mutations", Base = SweepStepRunner.ItemBase }, repository.Path, instance: "rounds#2.items[0].item-arms"),
+            Token);
+
+        Assert.False(none.Passed);
+        Assert.Equal(HarnessExit.Refused, none.Exit);
+        Assert.StartsWith("'rounds#2.items[0].item-arms' sweeps the arms of the item's own newest commit", none.Error, StringComparison.Ordinal);
+        Assert.Single(legs.Asked);
     }
 
     /// <summary>

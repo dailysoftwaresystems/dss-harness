@@ -1046,8 +1046,8 @@ public sealed record WorkflowStep
     /// <summary>The values a <c>run</c> step hands its runner's inputs, each a template.</summary>
     public IReadOnlyDictionary<string, string> Inputs { get; init; } = NoInputValues;
 
-    /// <summary>The arms a sweep runs, by id; every arm where the file says nothing.</summary>
-    public IReadOnlyList<string> Arms { get; init; } = [];
+    /// <summary>The arms a sweep runs, by id, written out or as an expression yielding them - the item's own, for its sweep; every arm where the file says nothing.</summary>
+    public FlowList? Arms { get; init; } = null;
 
     /// <summary>Whether a sweep drives only the arms with no recorded <c>passed</c> that still holds.</summary>
     public bool? Pending { get; init; } = null;

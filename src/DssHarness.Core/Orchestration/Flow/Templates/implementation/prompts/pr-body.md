@@ -22,6 +22,16 @@
 
 {run.leftover}
 
+## The classes this run closed
+
+Each item's closing claim, as its record holds it - the universe it ranges over, never a case:
+
+{run.closure}
+
+The homes the run touched often enough to name, with how often:
+
+{run.hotspots}
+
 ## Found by the last audit, and not settled
 
 {rounds.self-audit.findings}

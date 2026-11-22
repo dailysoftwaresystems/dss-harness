@@ -723,7 +723,19 @@ never the one finding alone, for the class is swept whole - and a class reopened
 to a home audit instead, the fix before it having been wrong at its root. How often each class was
 reopened the engine keeps in the item's ledger, across the review loop's rounds and across a resume
 - counts no reviewer could carry, fresh each round as reviewers are - and the class-closure check
-asks the home audit of a reopened-twice class, the one mechanism whichever cause asks. A pre-existing
+asks the home audit of a reopened-twice class, the one mechanism whichever cause asks. Each item's
+own arms are swept too, beside its review and never holding it: `item-arms` runs the arms the
+builder's answer lists, pending only, on a copy of the commit its fold landed as - made and taken
+away under the main tree's lock, so other items folding at the same time never move the bytes under
+it - and an arm that is not as it should be goes back to the builder as `rearm`, whose fix goes the
+way a rework's does before the sweep runs again on the bytes it landed as. The run's report and its
+pull request's body carry the counts by which a repository sees whether its rounds converge: each
+item's closing claim - the universe, never a case - the classes its reviews reopened with how often,
+the homes touched often enough to name, and the issues carried to a later round; the self-audit
+reads the same gathered records and hotspots as `{run.closure}` and `{run.hotspots}`, through the
+instance-closure lens: a diff that touches one site and names a case, a theme repeating in the run's
+commit subjects, a hotspot's path, a pin that lists the case by hand - each disproved or made a work
+item. A pre-existing
 issue the triage answers `next` for - a defect in code the run's change does not touch that blocks
 nothing - is owed the run's next round as its first item, sized by its files: the self-audit makes
 it one with its class, the round's check refuses a round whose items leave one unsettled, and the

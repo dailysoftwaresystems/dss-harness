@@ -69,6 +69,14 @@ The work is in the main tree, committed; `git diff {orient.startCommit} HEAD` sh
 - The registry's checks on the round: {round-checks.findings}
 - What the review loops left: {run.leftover}
 - What was assumed without asking a person: {run.assumptions}
+- Every class record the run's items answered, gathered - each item's newest, whole:
+
+{run.closure}
+
+- The homes the run touched often enough to name, with how often:
+
+{run.hotspots}
+
 - The issues this run owes its next round, each with its id and its size - the files its fix touches, what must be
   built, and what must be measured first:
 
@@ -88,11 +96,18 @@ Name it under unverified; it is a finding only where the line says the step fail
    and so is each finding of the item audit above that the tree does not settle: a site it found that still decides on
    its own, a cell of the universe still left out. Give every finding a work item that repairs it, unless only a
    person can: say so in the finding, and give it no item.
-4. Each issue the run owes its next round, listed above, becomes the first work item of that round: make it one, with
+4. Read the class records above for a class left open: a diff that touches one site and whose closing names a case -
+   one format, one target, one form - instead of a universe; the same theme in earlier commit subjects of the run
+   (`git log {orient.startCommit}..HEAD --format=%s` shows them); a path among the hotspots above; a pin that lists
+   the reported case by hand. Disprove it where you can - search the data across every tier, format and file kind and
+   compare what you find with the records, and measure two cells of the universe the pin does not name, plus the
+   optimised form, with the measure tool on each leg and reference it reaches - and where you cannot, a site still
+   deciding the same thing, or a neighbour that fails, is a finding, green or not, and gets a work item.
+5. Each issue the run owes its next round, listed above, becomes the first work item of that round: make it one, with
    its size and a class - it is a defect too, and the plan's rules of a class apply to it - and name the issue it
    settles in `settles`, by its id exactly. The round's check refuses a round whose items leave one unsettled, and the
    rounds do not end while one is.
-5. Say unverified of what you could not verify.
+6. Say unverified of what you could not verify.
 
 ## The tests a work item names
 

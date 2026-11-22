@@ -203,7 +203,7 @@ public sealed partial class HelpTests
                 + "'<step>' assumed about <what>: <assumption> (<why>), joined by '; ') and the issues it found there before - say 'none' alike where they name nothing.",
             workflows,
             StringComparison.Ordinal);
-        Assert.Equal(WorkflowExpressions.RunTexts.Order(StringComparer.Ordinal), ["assumptions", "leftover", "notRun", "preExisting", "ran", "red"]);
+        Assert.Equal(WorkflowExpressions.RunTexts.Order(StringComparer.Ordinal), ["assumptions", "closure", "hotspots", "leftover", "notRun", "preExisting", "ran", "red"]);
         Assert.Contains(
             "push pushes the commit the run's commit steps recorded last, else the one the run started on - never what the branch "
                 + "names by then, which a hook or a build working in the main checkout could have moved - to the branch of the name "
@@ -547,7 +547,11 @@ public sealed partial class HelpTests
             "build, test, run and check-mutations run their legs as the commands of those names do, in the worktree of the agent "
                 + "their in names, else the main checkout: test with its filter, exclude and labels and run with its inputs - a filter, "
                 + "an exclusion or a label that fills to nothing is not given - and check-mutations with its arms, every arm the registry "
-                + "declares where it names none, and pending. Each answers passed, true where every leg passed; exitCode, the command's; "
+                + "declares where it names none, or those its arms expression yielded - the item's own, from the record its builder "
+                + "answered - and pending; a sweep whose base names a commit - a template naming one, or 'item', the newest commit the "
+                + "run's ledger gives the item the step is one of - runs on a copy of that commit, made and taken away under the main "
+                + "tree's lock, so other items folding into the main tree never move the bytes under it: an item whose ledger holds no "
+                + "commit is refused, nothing swept. Each answers passed, true where every leg passed; exitCode, the command's; "
                 + "verdicts, each leg's own; red, the red legs alone - a leg that failed, with the phase that did not pass, the ledger's "
                 + "line and the last lines it printed, and of a sweep each arm that violated, survived or was unattributed, with its arm "
                 + "and its line; runDirectory, null where the run made none; and isolation, what the work of its legs ran under. What "

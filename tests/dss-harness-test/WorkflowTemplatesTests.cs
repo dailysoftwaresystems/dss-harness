@@ -28,9 +28,9 @@ public sealed class WorkflowTemplatesTests
         var definition = WorkflowTemplates.ShippedDefinition();
 
         Assert.Equal(WorkflowTemplates.ShippedWorkflowName, definition.Name);
-        Assert.Equal(91, Count(definition.Steps));
-        Assert.Equal(59, Count(definition.Recover!.Steps));
-        Assert.Equal(60, Count([.. definition.Steps, .. definition.Recover.Steps], "reason"));
+        Assert.Equal(99, Count(definition.Steps));
+        Assert.Equal(67, Count(definition.Recover!.Steps));
+        Assert.Equal(62, Count([.. definition.Steps, .. definition.Recover.Steps], "reason"));
         Assert.Equal(6, definition.Inputs.Count);
         Assert.Contains(definition.Inputs, input => input.Name == "finalTests" && input.Default == "affected");
         Assert.Equal(["affected", "all"], definition.Inputs.Single(input => input.Name == "finalTests").Options);
@@ -163,6 +163,7 @@ public sealed class WorkflowTemplatesTests
             ("cite", null, "changes"),
             ("close-class", null, "changes"),
             ("home-audit", null, "changes"),
+            ("rearm-work", null, "changes"),
             ("review-scope", "map", "changes"),
             ("correctness", null, "changes"),
             ("errors", null, "changes"),
@@ -680,7 +681,7 @@ public sealed class WorkflowTemplatesTests
         static bool GoesOn(WorkflowStep step) => step.Resume == "implement" || step.Steps.Any(GoesOn);
 
         Assert.Equal(
-            [("unblock", "item-blocked"), ("mend", "item-blocked"), ("close-class", "item-blocked"), ("home-audit", "item-blocked"), ("reconcile", "item-blocked"), ("cite", "item-blocked")],
+            [("unblock", "item-blocked"), ("mend", "item-blocked"), ("close-class", "item-blocked"), ("home-audit", "item-blocked"), ("reconcile", "item-blocked"), ("cite", "item-blocked"), ("rearm", "item-arms")],
             [.. items.Steps.Where(step => step.On is not null && GoesOn(step)).Select(step => (step.Name, step.Then ?? string.Empty))]);
         Assert.Equal(
             [("remend", "reverify"), ("reclose-class", "reverify"), ("rehome-audit", "reverify"), ("rereconcile", "reverify"), ("recite", "reverify")],
@@ -851,6 +852,7 @@ public sealed class WorkflowTemplatesTests
             "item-pipeline/prompts/closure-record.md",
             "item-pipeline/prompts/home-audit.md",
             "item-pipeline/prompts/mend.md",
+            "item-pipeline/prompts/rearm.md",
             "item-pipeline/prompts/redo.md",
             "item-pipeline/prompts/reconcile.md",
             "item-pipeline/prompts/rework.md",
@@ -897,9 +899,10 @@ public sealed class WorkflowTemplatesTests
 
         Assert.Contains(schema.GetProperty("required").EnumerateArray(), member => member.GetString() == "closure");
 
-        // Each class's arm is its own entry's: no flat list of arms beside the record, which nothing would read.
-        Assert.DoesNotContain(schema.GetProperty("required").EnumerateArray(), member => member.GetString() == "arms");
-        Assert.False(schema.GetProperty("properties").TryGetProperty("arms", out _));
+        // Each class's arm is its own entry's: the record names it there, and the answer gathers the ids into its own
+        // list, which the item's sweep runs.
+        Assert.Contains(schema.GetProperty("required").EnumerateArray(), member => member.GetString() == "arms");
+        Assert.Equal("array", schema.GetProperty("properties").GetProperty("arms").GetProperty("type").GetString());
 
         // The builders measure on declared legs alone, and name any other reference unmeasured; a neighbour's result is
         // what the call it cites answered for its cell, as the class-closure check holds it to that call's own record, and

@@ -1,4 +1,4 @@
-﻿using System.Text.Json.Nodes;
+using System.Text.Json.Nodes;
 using DssHarness.Core.Agents.Runtime;
 using DssHarness.Core.Codebase;
 using DssHarness.Core.Codebase.Languages;
@@ -189,18 +189,19 @@ public sealed class CodebaseGraphQueryServiceTests
         var second = await CliRunner.RunAsync(["query-codebase-graph", "run", "--find", "M", "--page", "2", "--json", "-C", tree.Tree], Token);
         var third = await service.QueryAsync(tree.Tree, new CodebaseGraphQuery("run", null) { Find = "M", Page = 3 }, json: true, Token);
         var fourth = await service.QueryAsync(tree.Tree, new CodebaseGraphQuery("run", null) { Find = "M", Page = 4 }, json: true, Token);
-        var past = await service.QueryAsync(tree.Tree, new CodebaseGraphQuery("run", null) { Find = "M", Page = 5 }, json: true, Token);
+        var fifth = await service.QueryAsync(tree.Tree, new CodebaseGraphQuery("run", null) { Find = "M", Page = 5 }, json: true, Token);
+        var past = await service.QueryAsync(tree.Tree, new CodebaseGraphQuery("run", null) { Find = "M", Page = 6 }, json: true, Token);
         var before = await CliRunner.RunAsync(["query-codebase-graph", "run", "--find", "M", "--page", "0", "-C", tree.Tree], Token);
-        var pages = new[] { JsonNode.Parse(Assert.Single(first.Data))!.AsObject(), JsonNode.Parse(second.StandardOutput)!.AsObject(), JsonNode.Parse(Assert.Single(third.Data))!.AsObject(), JsonNode.Parse(Assert.Single(fourth.Data))!.AsObject() };
+        var pages = new[] { JsonNode.Parse(Assert.Single(first.Data))!.AsObject(), JsonNode.Parse(second.StandardOutput)!.AsObject(), JsonNode.Parse(Assert.Single(third.Data))!.AsObject(), JsonNode.Parse(Assert.Single(fourth.Data))!.AsObject(), JsonNode.Parse(Assert.Single(fifth.Data))!.AsObject() };
         var pastDocument = JsonNode.Parse(Assert.Single(past.Data))!.AsObject();
 
         Assert.Equal(HarnessExit.Success, outline.ExitCode);
         Assert.StartsWith("outline of src/Shapes.cs (6 declaration(s)):\n", Assert.Single(outline.Data), StringComparison.Ordinal);
-        Assert.Equal("page 1 of 4 · 79 results · ask again with page: 2 for the next", Assert.Single(text.Data).Split('\n')[0]);
+        Assert.Equal("page 1 of 5 · 82 results · ask again with page: 2 for the next", Assert.Single(text.Data).Split('\n')[0]);
         Assert.Equal(Assert.Single(text.Data), pages[0]["answer"]!.GetValue<string>());
         Assert.Equal(0, second.ExitCode);
-        Assert.Equal(["page 2 of 4 · 79 results · ask again with page: 3 for the next", "page 3 of 4 · 79 results · ask again with page: 4 for the next", "page 4 of 4 · the last"], pages[1..].Select(page => page["answer"]!.GetValue<string>().Split('\n')[0]));
-        Assert.Equal([(1, 4, 79, graph), (2, 4, 79, graph), (3, 4, 79, graph), (4, 4, 79, graph)], pages.Select(page => (page["page"]!.GetValue<int>(), page["pages"]!.GetValue<int>(), page["total"]!.GetValue<int>(), page["graph"]!.GetValue<string>())));
+        Assert.Equal(["page 2 of 5 · 82 results · ask again with page: 3 for the next", "page 3 of 5 · 82 results · ask again with page: 4 for the next", "page 4 of 5 · 82 results · ask again with page: 5 for the next", "page 5 of 5 · the last"], pages[1..].Select(page => page["answer"]!.GetValue<string>().Split('\n')[0]));
+        Assert.Equal([(1, 5, 82, graph), (2, 5, 82, graph), (3, 5, 82, graph), (4, 5, 82, graph), (5, 5, 82, graph)], pages.Select(page => (page["page"]!.GetValue<int>(), page["pages"]!.GetValue<int>(), page["total"]!.GetValue<int>(), page["graph"]!.GetValue<string>())));
 
         // A page's entries are its answer's lines past the header, each with what it counts; summed over the pages, the total.
         foreach (var page in pages)
@@ -211,7 +212,7 @@ public sealed class CodebaseGraphQueryServiceTests
             Assert.Equal(page["answer"]!.GetValue<string>().Split('\n')[1..], entries.Select(entry => entry["text"]!.GetValue<string>()));
         }
 
-        Assert.Equal(79, pages.Sum(page => page["entries"]!.AsArray().Sum(entry => entry!["counts"]!.GetValue<int>())));
+        Assert.Equal(82, pages.Sum(page => page["entries"]!.AsArray().Sum(entry => entry!["counts"]!.GetValue<int>())));
 
         // A body's head says something and counts nothing; each line it serves counts one, all of them the node's.
         var body = JsonNode.Parse(Assert.Single((await service.QueryAsync(tree.Tree, new CodebaseGraphQuery("run", null) { Body = ["Twice"] }, json: true, Token)).Data))!.AsObject();
@@ -220,8 +221,8 @@ public sealed class CodebaseGraphQueryServiceTests
             [(0, "csharp:Demo.Geometry.Twice(IShape)"), (1, "csharp:Demo.Geometry.Twice(IShape)"), (1, "csharp:Demo.Geometry.Twice(IShape)"), (1, "csharp:Demo.Geometry.Twice(IShape)"), (1, "csharp:Demo.Geometry.Twice(IShape)")],
             body["entries"]!.AsArray().Select(entry => (entry!["counts"]!.GetValue<int>(), entry["node"]!.GetValue<string>())));
         Assert.Equal(4, body["total"]!.GetValue<int>());
-        Assert.Equal((HarnessExit.UsageError, "page 5 of 'find M': it has 4 pages (1 to 4)"), (past.ExitCode, past.Message));
-        Assert.Equal((5, 4, 79, graph), (pastDocument["page"]!.GetValue<int>(), pastDocument["pages"]!.GetValue<int>(), pastDocument["total"]!.GetValue<int>(), pastDocument["graph"]!.GetValue<string>()));
+        Assert.Equal((HarnessExit.UsageError, "page 6 of 'find M': it has 5 pages (1 to 5)"), (past.ExitCode, past.Message));
+        Assert.Equal((6, 5, 82, graph), (pastDocument["page"]!.GetValue<int>(), pastDocument["pages"]!.GetValue<int>(), pastDocument["total"]!.GetValue<int>(), pastDocument["graph"]!.GetValue<string>()));
         Assert.Empty(pastDocument["entries"]!.AsArray());
         Assert.Equal((HarnessExit.UsageError, $"{CodebaseGraphQueryService.CommandName}: FAIL - page is 0: pages start at 1"), (before.ExitCode, before.StandardError.Trim()));
     }
