@@ -52,6 +52,11 @@ internal static class QueryCodebaseGraphCommand
         AllowMultipleArgumentsPerToken = true,
     };
 
+    private static readonly Option<string> SitesOption = new("--sites")
+    {
+        Description = "Every place that decides data - a name, a key path, a diagnostic id, or a quoted literal asked by its value alone: what defines, calls, uses, implements or overrides it, every literal that holds it and every key it names, with the coverage lines.",
+    };
+
     private static readonly Option<int?> PageOption = new("--page")
     {
         Description = "Which page of the answer to give, from 1; the first where it is left out.",
@@ -71,7 +76,7 @@ internal static class QueryCodebaseGraphCommand
     {
         var command = new Command(
             Name,
-            "Read a run's codebase graph: one of the graph tool's read operations - find, node, related, outline or body - on the base or an agent's view, printing the answer an agent would be given, in pages of whole entries with any page asked by --page. It reads only: no sync, nothing written.");
+            "Read a run's codebase graph: one of the graph tool's read operations - find, node, related, outline, body or sites - on the base or an agent's view, printing the answer an agent would be given, in pages of whole entries with any page asked by --page. It reads only: no sync, nothing written.");
 
         command.Arguments.Add(RunArgument);
         command.Options.Add(FindOption);
@@ -81,6 +86,7 @@ internal static class QueryCodebaseGraphCommand
         command.Options.Add(DepthOption);
         command.Options.Add(OutlineOption);
         command.Options.Add(BodyOption);
+        command.Options.Add(SitesOption);
         command.Options.Add(PageOption);
         command.Options.Add(AgentOption);
         command.Options.Add(JsonOption);
@@ -106,6 +112,7 @@ internal static class QueryCodebaseGraphCommand
             Outline = parseResult.GetResult(OutlineOption) is { Implicit: false },
             OutlineOf = parseResult.GetValue(OutlineOption),
             Body = parseResult.GetResult(BodyOption) is { Implicit: false } ? parseResult.GetValue(BodyOption) : null,
+            Sites = parseResult.GetValue(SitesOption),
             Page = parseResult.GetValue(PageOption),
         };
 }

@@ -150,6 +150,17 @@ public sealed record GraphReached(GraphCard Card, int Distance)
     public bool Recall { get; init; }
 }
 
+/// <summary>
+/// One place a string literal that names the data of a <c>sites</c> ask is written: the node whose code holds it
+/// - the innermost declaration around it - where the view holds one, and the file, the line and the value
+/// whatever holds it.
+/// </summary>
+/// <param name="Node">The node whose code holds the literal; null where none does or the view holds none of it.</param>
+/// <param name="Path">The file, relative to the tree with forward separators.</param>
+/// <param name="Line">The line the literal's value begins on.</param>
+/// <param name="Value">The literal's whole value, which names the data or holds it as a whole word.</param>
+public sealed record GraphLiteralPlace(GraphCard? Node, string Path, int Line, string Value);
+
 /// <summary>The repository at a glance: its projects, its top directories with their files, its namespaces with what they declare.</summary>
 /// <param name="Projects">Each project node.</param>
 /// <param name="Directories">Each top directory - '.' for the files at the root - with the files the view holds in it.</param>

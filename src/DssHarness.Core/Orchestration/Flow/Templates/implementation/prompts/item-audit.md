@@ -15,8 +15,10 @@ This is round {iteration}. These are the round's work items, as its plan check p
 
 For each class of each item:
 
-1. Search the data yourself - the kind, the key, the diagnostic, the verb, the literal - by your own text search,
-   never the plan's searches, and never the file the defect was seen in alone: across every tier, format, target and
+1. Search the data yourself - the kind, the key, the diagnostic, the verb, the literal - the graph's sites first -
+   it joins every place that decides the data, and its coverage lines say what it searched by text alone - and your
+   own text search beside it for what the graph lists only, never the plan's searches, and never the file the defect
+   was seen in alone: across every tier, format, target and
    file kind.
 2. Compare what you find with the item's site list: a site it lacks is a finding, named by its path and symbol.
 3. Hold the item's universe against the closure text above: an axis it leaves out without a reason is a finding.

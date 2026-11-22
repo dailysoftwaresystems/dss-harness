@@ -523,13 +523,19 @@ public sealed record AgentSearch(
     /// left out, and the files it could not read, with why the first was not.
     /// </summary>
     /// <param name="said">How a file is said, from its path relative to the directory searched.</param>
-    public IEnumerable<string> LeftOut(Func<string, string> said)
+    /// <param name="refused">
+    /// How many files the reader may not read were left out, where the caller knows better than the search: a search
+    /// whose reader passed over files for a reason of its own - out of its scope, though readable - says the search's own
+    /// count less those, so a file merely out of scope is never said to be one the reader may not read; null for the
+    /// search's own count.
+    /// </param>
+    public IEnumerable<string> LeftOut(Func<string, string> said, int? refused = null)
     {
         ArgumentNullException.ThrowIfNull(said);
 
-        if (Refused > 0)
+        if ((refused ?? Refused) > 0)
         {
-            yield return AgentListing.Refused(Refused);
+            yield return AgentListing.Refused(refused ?? Refused);
         }
 
         if (Passed > 0)

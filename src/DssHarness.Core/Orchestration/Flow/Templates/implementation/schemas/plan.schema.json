@@ -386,7 +386,7 @@
         },
         "searches": {
           "type": "array",
-          "description": "Each search made to find the sites, by the data that decides - a kind, a schema key, a diagnostic, a verb, a literal - so the list can be made again: the graph first where it sees the data - its find, node and related operations - and text search for what it does not see, each such search said in notCovered.",
+          "description": "Each search made to find the sites, by the data that decides - a kind, a schema key, a diagnostic, a verb, a literal - so the list can be made again: the graph's sites first, which joins every place that decides the data and says by its coverage lines what it searched by text alone - its find, node and related beside it for the names and for what reads and calls them - and text search for what it does not see, each such search said in notCovered.",
           "items": {
             "type": "object",
             "additionalProperties": false,

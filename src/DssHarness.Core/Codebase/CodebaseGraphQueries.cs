@@ -1,6 +1,8 @@
 using System.Collections.Concurrent;
 using System.Globalization;
+using System.Text.RegularExpressions;
 using DssHarness.Core.Output;
+using DssHarness.Core.Text;
 
 namespace DssHarness.Core.Codebase;
 
@@ -346,6 +348,87 @@ public sealed class CodebaseGraphQueries
             _ => GraphResolve.Many([.. ids.Select(Card).OrderBy(card => card.Id, StringComparer.Ordinal)]),
         };
     }
+
+    /// <summary>
+    /// Every declaration the view holds that <paramref name="data"/> names - by its simple name, by its qualified
+    /// name, by one written with its language's own separators (<see cref="Dotted"/>), or by a qualified name it
+    /// ends with at a dot - each once, ordered by id then by path: the definers of the data, whose calls, uses,
+    /// implementations and overrides the <c>sites</c> operation answers beside them. A data the view holds no
+    /// declaration of answers empty, which that answer says - the graph's silence is never read as the data's
+    /// absence, for the text search answers beside it.
+    /// </summary>
+    /// <param name="data">A name as an agent wrote it: a symbol, a key path, a diagnostic id.</param>
+    public IReadOnlyList<GraphCard> DefinersOf(string data)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(data);
+
+        var dotted = Dotted(data);
+        var ids = new HashSet<string>(StringComparer.Ordinal);
+        ids.UnionWith(_bySimple[data]);
+        ids.UnionWith(_byQualified[data]);
+
+        if (dotted != data)
+        {
+            ids.UnionWith(_byQualified[dotted]);
+        }
+
+        // A name written with some of its scopes (Order.Total) names each node whose qualified name ends with it, at a dot.
+        if (dotted.LastIndexOf('.') is > 0 and var dot && dot < dotted.Length - 1)
+        {
+            ids.UnionWith(_bySimple[dotted[(dot + 1)..]].Where(id => Card(id).Qualified.EndsWith("." + dotted, StringComparison.Ordinal)));
+        }
+
+        return [.. ids.Where(Holds).Select(Card).OrderBy(card => card.Id, StringComparer.Ordinal).ThenBy(card => card.Path, StringComparer.Ordinal)];
+    }
+
+    /// <summary>
+    /// Every place the view holds a string literal that names <paramref name="word"/>: each place, among the
+    /// literals of every extract the view holds (<see cref="FileExtract.Literals"/> - no node of the graph is a
+    /// literal's, so this read of them is the one index of them), whose literal's value is the word or holds it
+    /// as a whole word, the boundaries the text search reads - with the node whose code holds it, its file and
+    /// its line. Ordered by path, then line. No literal is masked here: the answer that serves these places
+    /// masks them as it computes, as it masks every line it shows.
+    /// </summary>
+    /// <param name="word">The data a <c>sites</c> ask names, or a quoted literal's value.</param>
+    public IReadOnlyList<GraphLiteralPlace> LiteralSites(string word)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(word);
+
+        // The one whole-word rule, as the text fallback reads it, asked of each literal's value: the same linear
+        // engine, never timed.
+        var pattern = LinearRegex.Compile($@"(?:^|[^\p{{L}}\p{{N}}_]){Regex.Escape(word)}(?:$|[^\p{{L}}\p{{N}}_])");
+        var places = new List<GraphLiteralPlace>();
+
+        foreach (var (path, extract) in _extracts.OrderBy(file => file.Key, StringComparer.Ordinal))
+        {
+            foreach (var literal in extract?.Literals ?? [])
+            {
+                if (literal.Value != word && !pattern.IsMatch(literal.Value))
+                {
+                    continue;
+                }
+
+                foreach (var place in literal.Places)
+                {
+                    var id = place.Node is { } node && Holds(node.Whole()) ? node.Whole() : null;
+                    places.Add(new(id is null ? null : Part(id, path), path, place.Line, literal.Value));
+                }
+            }
+        }
+
+        return [.. places.OrderBy(place => place.Path, StringComparer.Ordinal).ThenBy(place => place.Line)];
+    }
+
+    /// <summary>
+    /// Whether the graph answers nothing of the file it holds at <paramref name="path"/> but that it lists it: no
+    /// implementation reads its language, or the view holds no entry of it at all. What a <c>sites</c> answer
+    /// searches by text alone and says among its coverage lines - nothing is assumed of a language with no
+    /// extractor.
+    /// </summary>
+    /// <param name="path">A file's path, relative to the tree, as the reader spells it.</param>
+    public bool TextOnly(string path)
+        => HeldPath(path) is not { } held
+            || (_read.Files.TryGetValue(held, out var entry) && string.Equals(entry.State, CodeFileStates.Listed, StringComparison.Ordinal));
 
     /// <summary>
     /// The nodes that match <paramref name="query"/>, best first, bounded by <paramref name="limit"/> after

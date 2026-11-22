@@ -39,6 +39,9 @@ public sealed record CodebaseGraphQuery(string Run, string? Agent)
     /// <summary>A <c>body</c>: the symbols to read, in the order given.</summary>
     public IReadOnlyList<string>? Body { get; init; }
 
+    /// <summary>A <c>sites</c>: the data whose deciding places are asked.</summary>
+    public string? Sites { get; init; }
+
     /// <summary>The page of the answer to give, from 1; the first where it is left out.</summary>
     public int? Page { get; init; }
 }
@@ -96,7 +99,7 @@ public sealed class CodebaseGraphQueryService(
         if (Input(query) is not { } chosen)
         {
             return CodebaseGraphQueryReports.Render(
-                CommandOutcome.Usage("give exactly one of --find, --node, --related, --outline or --body"),
+                CommandOutcome.Usage("give exactly one of --find, --node, --related, --outline, --body or --sites"),
                 query.Run,
                 view: null,
                 head: null,
@@ -250,6 +253,11 @@ public sealed class CodebaseGraphQueryService(
         if (query.Body is { Count: > 0 } body)
         {
             chosen.Add((GraphOp.Body, new JsonObject { ["op"] = "body", ["symbols"] = new JsonArray([.. body.Select(symbol => (JsonNode)symbol)]) }));
+        }
+
+        if (query.Sites is { } sites)
+        {
+            chosen.Add((GraphOp.Sites, new JsonObject { ["op"] = "sites", ["data"] = sites }));
         }
 
         return chosen.Count == 1 ? chosen[0] : null;

@@ -96,7 +96,9 @@ The work of this run: {update.work}
 9. Weigh each assumption: is it one a careful colleague would make, or one that should have been a question?
 10. Where a person decided something when the run stopped to ask them, check that the plan holds to it.
 11. Audit each class, never taking the plan's word for its sites: search the data yourself - the kind, the key, the
-    diagnostic, the verb, the literal - by your own text search across every tier, format, target and file kind, never
+    diagnostic, the verb, the literal - the graph's sites first - it joins every place that decides the data, and
+    its coverage lines say what it searched by text alone - and your own text search beside it for what the graph
+    lists only, across every tier, format, target and file kind, never
     the plan's searches; compare what you find with the plan's site list; hold the universe of each class against the
     repository's closure text above; and check that a class with one site has searches that prove the home is the only
     one.

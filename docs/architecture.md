@@ -5055,7 +5055,7 @@ the hook looks for it, which its runner finds as it does.
 `delete-orchestrator` removes the graph with its run, outside what `--delete-evidence` guards.
 
 What an agent asks of the graph is one tool, `graph` (`Agents\Runtime\CodebaseGraphTool`), whose `op` is `find`, `node`,
-`related`, `outline`, `body`, `pack`, `changes`, `edit` or `wholeFile`, over the lookups of `CodebaseGraphQueries` - each node by its id,
+`related`, `outline`, `body`, `sites`, `pack`, `changes`, `edit` or `wholeFile`, over the lookups of `CodebaseGraphQueries` - each node by its id,
 handle, qualified name (one written with its language's `::` or `\` read as the model's `.`, or with only its last
 parts, `Order.Total`) and simple name and `path:line`, each file's nodes, each node's edges in and out by kind, the words its
 name splits into weighed by how rare they are - built once
@@ -5067,7 +5067,27 @@ pack or a working set it was given, a file its `writes` covers, a file its agent
 holds) and then by id; `related` walks as many hops as asked, from 1, going through every node it reaches: it keeps the
 nodes it reached and never reaches one again, so it is linear in the edges it follows, cycles among them, and a hop that
 reaches nothing new ends it; `body` serves each node named once and reads each file once, again only where an extract of it
-found its lines moved, and reads a file whole whatever it holds. No answer of a read of the graph is cut: each is pages of whole entries (`Codebase\GraphPages.cs`, the graph's use of
+found its lines moved, and reads a file whole whatever it holds. `sites` answers "every place that decides this" of one datum
+(`data`: a name, a key path or a diagnostic id as `symbol` accepts a name, or a quoted literal, asked by its value alone and
+never by the symbols): every definer of the name across files and languages (`CodebaseGraphQueries.DefinersOf`, by simple
+name, qualified name or the scopes a name is written with), then one hop off the definers' own edges - their callers, their
+users, what implements them and what they override, a part of a declaration walked as the node itself - and no site's own
+edges walked, so a hub is listed and never gone through; every literal whose value is the datum or holds it as a whole word,
+the one whole-word rule the text fallback reads (`CodebaseGraphTool.WordPattern`), read once an ask over the literals of every
+extract the view holds (`CodebaseGraphQueries.LiteralSites` - no node of the graph is a literal's, so the read is the one
+index of them), each as the card of the node whose code holds it with the file, the line and the value; and every key the
+datum names (`CodeSubKinds.Key`), held and never defined. Each is a card in a section of how it decides - `defines`, `calls`,
+`uses`, `implements`, `overrides`, `holds the literal`, `holds the key` - at `CodebaseGraphTool.RelatedLines` a page. What
+the graph cannot answer of the datum is searched by text and said: the files it lists only, which no extractor reads
+(`CodebaseGraphQueries.TextOnly`), and the files it is unsure of (`CodebaseGraphQueries.UnsureOfFile`), the search passing
+over every other readable file by its own will and never counting one such as a file the reader may not read
+(`AgentSearch.LeftOut`'s refused count); a hit is the card of the node at its line where its file holds one
+(`CodebaseGraphQueries.AtLine`) and a raw line where it does not. Every `sites` answer ends with its coverage lines: how
+many files the graph lists only were searched by text and with how many hits, the kinds of them named; how many files it is
+unsure of were searched too; and, where any was, that nothing is assumed of a language with no extractor, its files read by
+text alone - so a plan's site list is never read as covered where the graph was silent. The prompts that search for a class's
+sites - `plan.md`, `plan-audit.md`, `item-audit.md` and the plan's `searches` - name `sites` first and text search after it.
+No answer of a read of the graph is cut: each is pages of whole entries (`Codebase\GraphPages.cs`, the graph's use of
 `Pages\Paging`, the one owner of an answer's pages and of the one rule a piece is cut by, over the graph's own entry,
 `GraphEntry`: `GraphSection`, `GraphPageSection` and `GraphPageAnswer` are its `PageSection`, `PageOfSection` and
 `PageAnswer`, by the graph's names), an operation's page holding up to

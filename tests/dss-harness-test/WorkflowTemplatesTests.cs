@@ -742,6 +742,30 @@ public sealed class WorkflowTemplatesTests
     }
 
     /// <summary>
+    /// The prompts that search for a class's sites name the graph's <c>sites</c> operation first and text search after
+    /// it - the plan's, the plan audit's and the item audit's, and the plan's searches - so a class's site list is
+    /// never searched by text alone where the graph joins the data, and what the graph lists only is said by the
+    /// answer's coverage lines rather than assumed covered.
+    /// </summary>
+    [Fact]
+    public void ThePromptsThatSearchForAClassSites_NameTheGraphsSitesFirst_AndTextSearchAfterIt()
+    {
+        Assert.Equal(
+            ["prompts/item-audit.md", "prompts/plan-audit.md", "prompts/plan.md"],
+            [.. WorkflowTemplates.Files
+                .Where(file => file.StartsWith("prompts/", StringComparison.Ordinal) && Prose.Words(WorkflowTemplates.TextOf(file)!).Contains("graph's sites first", StringComparison.Ordinal))
+                .Order(StringComparer.Ordinal)]);
+        Assert.Contains(
+            "graph's sites first: it joins every place that decides the data - what defines, calls, uses, implements or overrides it, every literal that holds it and every key it names - and its coverage lines say what it searched by text alone",
+            Prose.Words(WorkflowTemplates.TextOf("prompts/plan.md")!),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "the graph's sites first, which joins every place that decides the data and says by its coverage lines what it searched by text alone",
+            WorkflowTemplates.TextOf("schemas/plan.schema.json")!,
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// Every prompt of the item pipeline that builds or goes on with an item reads the item's classes: the builders'
     /// prompts hold the class-closure paragraph beside the item's classes, its noClass reason and the repository's
     /// universe, the implementer's definition holds the paragraph, and every prompt that goes on with an item - mend
