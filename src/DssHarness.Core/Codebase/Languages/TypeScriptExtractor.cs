@@ -13,7 +13,7 @@ public sealed class TypeScriptExtractor : ICodeGraphExtractor
     public string Language => "typescript";
 
     /// <inheritdoc/>
-    public int Version => 3;
+    public int Version => 4;
 
     /// <inheritdoc/>
     public CodeGraphClaims Claims { get; } = CodeGraphClaims.OfExtensions(".ts", ".mts", ".cts", ".tsx");
@@ -23,7 +23,7 @@ public sealed class TypeScriptExtractor : ICodeGraphExtractor
 
     /// <inheritdoc/>
     public CodeGraphExtractorHelp Help { get; } = new(
-        "TypeScript (.ts, .mts, .cts, .tsx), through the reader JavaScript is read by, with its types: every class, interface, enum, type alias, namespace, function, variable, constructor and its parameter properties, method, accessor and field with its signature, summary and body - a declaration file's (.d.ts) each a prototype; imports and exports, each tried as TypeScript tries it, a module one scope whose own names no importer sees; extends, implements and override; each member a member reads or writes without calling it, and each string literal the file holds - a template's constant parts each one of its own, a JSX attribute's text, a regular expression none - by its value as JavaScript reads its escapes, a String.raw template's as written, its line and the node it is written in; each call with what its receiver is where the file says, a value typed any marked dynamic; describe, it and test calls in test files",
+        "TypeScript (.ts, .mts, .cts, .tsx), through the reader JavaScript is read by, with its types: every class, interface, enum, type alias, namespace, function, variable, constructor and its parameter properties, method, accessor and field with its signature, summary and body - a declaration file's (.d.ts) each a prototype; imports and exports, each tried as TypeScript tries it, a module one scope whose own names no importer sees; extends, implements and override; each member a member reads or writes without calling it, and each string literal the file holds - a template's constant parts each one of its own, a JSX attribute's text, a regular expression none - by its value as JavaScript reads its escapes, a String.raw template's as written, its line and the node it is written in; each call with what its receiver is where the file says, a JSX element's component among them, and a JSX attribute's className, class and id a use of each rule it names; an Angular @Component's or @Directive's selector the elements its component is reached by from markup, its templateUrl the file that is its template and its styleUrls imports; a value typed any marked dynamic; describe, it and test calls in test files",
         [
             .. JsHelp.Unseen,
             "an overload chosen by its argument types: a call binds each overload of its name that takes its arguments' count",

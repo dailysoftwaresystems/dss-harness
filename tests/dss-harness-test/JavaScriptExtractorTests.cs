@@ -873,10 +873,12 @@ public sealed class JavaScriptExtractorTests : CodeGraphExtractorContractTests<J
 
     /// <summary>
     /// A JSX element's component - a capitalized tag, a member's chain - is a call of it, an element of markup's own none;
-    /// the code its attributes and children hold is read, a comment in it not.
+    /// the code its attributes and children hold is read, a comment in it not; and each JSX attribute's string - a
+    /// <c>className</c>, a <c>class</c>, an <c>id</c> - a use of each rule it names, as markup's own are, read where the
+    /// attribute's name stands before its string.
     /// </summary>
     [Fact]
-    public void AnElementsComponent_IsACallOfIt_AndItsCodeIsRead()
+    public void AnElementsComponent_IsACallOfIt_AndItsCodeIsRead_AndItsClassAndIdUseTheirRules()
     {
         var extract = Read("src/e.jsx", """
             import Layout from './layout.jsx';
@@ -884,7 +886,8 @@ public sealed class JavaScriptExtractorTests : CodeGraphExtractorContractTests<J
               return (
                 <Layout title={heading()}>
                   <Layout.Side open />
-                  <div className="x">{body()}{/* hidden() */}</div>
+                  <div className="x" id="main">{body()}{/* hidden() */}</div>
+                  <p class="a b" />
                   <custom-element />
                 </Layout>
               );
@@ -892,8 +895,12 @@ public sealed class JavaScriptExtractorTests : CodeGraphExtractorContractTests<J
             """);
 
         Assert.Equal(
-            [("heading", null, null), ("body", null, null), ("default", "prefix", "Layout"), ("Side", "named", "Layout.default")],
+            [
+                (".x", CodeQualifierKinds.Selector, null), ("#main", CodeQualifierKinds.Selector, null), (".a", CodeQualifierKinds.Selector, null), (".b", CodeQualifierKinds.Selector, null),
+                ("heading", null, null), ("body", null, null), ("default", "prefix", "Layout"), ("Side", "named", "Layout.default"),
+            ],
             extract.References.Select(reference => (reference.Name, reference.Qualifier?.Kind, extract.Written(reference.Qualifier))));
+        Assert.Equal([6, 6, 7, 7], extract.References.Where(reference => reference.Qualifier?.Kind == CodeQualifierKinds.Selector).Select(reference => reference.Line));
     }
 
     /// <summary>
@@ -1303,6 +1310,78 @@ public sealed class JavaScriptExtractorTests : CodeGraphExtractorContractTests<J
             """);
 
         Assert.Equal(["^\\d+$ raw pattern", "tab\tseparated text"], LiteralRow.Of(extract).Select(literal => literal.Value));
+    }
+
+    /// <summary>
+    /// A type Backbone builds by a call of extend - <c>var View = Backbone.View.extend({...})</c> - is a type that inherits what it
+    /// extends, the object it is given its members: each function a method and each value a field; its <c>events</c> hash's keys
+    /// uses of the rules their selectors name and its handlers calls of the methods they name, a method the events bind reached
+    /// from the type; and a member a prototype assignment adds - <c>View.prototype.x = function () {}</c> - a member of the type that
+    /// extends it, reached by a call on the type and reading its own <c>this</c> as the type's.
+    /// </summary>
+    [Fact]
+    public void ABackboneType_ExtendCallIsATypeInheritingItsBase_WithTheObjectsMembers_AndAPrototypeMemberIsItsMember()
+    {
+        const string Text = """
+            var Backbone = require('backbone');
+
+            var InvoiceView = Backbone.View.extend({
+              tagName: 'li',
+              initialize: function () { this.listenTo(this.model, 'change', this.render); },
+              render: function () { this.$el.html(this.template()); },
+              events: { 'click .save': 'save', 'dblclick #delete': 'remove' },
+              save: function () { this.model.save(); }
+            });
+
+            InvoiceView.prototype.template = function () { return this.render(); };
+
+            new InvoiceView().template();
+            """;
+        var extract = Read("lib/invoice.js", Text);
+        var type = "javascript:lib/invoice.js.InvoiceView";
+
+        Assert.Equal((CodeNodeKinds.Type, "class", 3, 9), (Node(extract, type).Kind, Node(extract, type).SubKind, Node(extract, type).Start, Node(extract, type).End));
+
+        // The object's functions are methods and its values fields, each a member of the type over its own lines.
+        Assert.Equal(
+            [("field", 4, 4), ("method", 5, 5), ("method", 6, 6), ("method", 8, 8)],
+            [.. new[] { "tagName", "initialize", "render", "save" }.Select(name => (Node(extract, $"{type}.{name}").SubKind, Node(extract, $"{type}.{name}").Start, Node(extract, $"{type}.{name}").End))]);
+        Assert.Equal(type, Node(extract, $"{type}.save").Parent);
+
+        // It inherits what it extends, read as the chain names it: through the import Backbone is bound by.
+        Assert.Equal([("View", 3, CodeQualifierKinds.Prefix, "Backbone")], [.. extract.References.Where(reference => reference.From == type && reference.Kind == CodeEdgeKinds.Inherits).Select(reference => (reference.Name, reference.Line, reference.Qualifier?.Kind, extract.Written(reference.Qualifier)))]);
+
+        // The events hash: each key a use of the rules its selector names, each handler a call of the method it names.
+        Assert.Equal([(".save", 7), ("#delete", 7)], [.. extract.References.Where(reference => reference.From == type && reference.Qualifier?.Kind == CodeQualifierKinds.Selector).Select(reference => (reference.Name, reference.Line))]);
+        Assert.Equal([("save", 7), ("remove", 7)], [.. extract.References.Where(reference => reference.From == type && reference.Kind == CodeEdgeKinds.Calls && reference.Qualifier?.Kind == CodeQualifierKinds.This).Select(reference => (reference.Name, reference.Line))]);
+
+        // A prototype assignment's member extends the type the chain before prototype names.
+        Assert.Equal(("method", "InvoiceView", 11, 11), (Node(extract, "javascript:lib/invoice.js.template").SubKind, Node(extract, "javascript:lib/invoice.js.template").Extends, Node(extract, "javascript:lib/invoice.js.template").Start, Node(extract, "javascript:lib/invoice.js.template").End));
+
+        // Linked: the events reach the methods they bind, the prototype member's own this reads the type's members, and a call on
+        // the type reaches the prototype member, as a member extending it does.
+        var linked = Link(("lib/invoice.js", Text));
+
+        Assert.Contains(new CodeEdge(type, $"{type}.save", CodeEdgeKinds.Calls, 7, CodeConfidences.Exact), linked.Edges);
+        Assert.Contains(new CodeEdge("javascript:lib/invoice.js.template", $"{type}.render", CodeEdgeKinds.Calls, 11, CodeConfidences.Exact), linked.Edges);
+        Assert.Contains(new CodeEdge("javascript:lib/invoice.js.(module)", "javascript:lib/invoice.js.template", CodeEdgeKinds.Calls, 13, CodeConfidences.Unique), linked.Edges);
+    }
+
+    /// <summary>A Backbone router's routes: each handler a string names a call of the method it names, and the functions it is given its methods.</summary>
+    [Fact]
+    public void ABackboneRouter_RoutesAreCallsOfTheirHandlers()
+    {
+        var extract = Read("lib/router.js", """
+            var Router = Backbone.Router.extend({
+              routes: { 'orders': 'list', 'orders/:id': 'show' },
+              list: function () {},
+              show: function (id) {}
+            });
+            """);
+        var type = "javascript:Router";
+
+        Assert.Equal([("list", 2), ("show", 2)], [.. extract.References.Where(reference => reference.From == type && reference.Kind == CodeEdgeKinds.Calls).Select(reference => (reference.Name, reference.Line))]);
+        Assert.Equal([("method", 3, 3), ("method", 4, 4)], [.. new[] { "list", "show" }.Select(name => (Node(extract, $"{type}.{name}").SubKind, Node(extract, $"{type}.{name}").Start, Node(extract, $"{type}.{name}").End))]);
     }
 
     private static FileExtract Read(string path, string text) => new JavaScriptExtractor().Extract(new CodeFileInput(path, text));

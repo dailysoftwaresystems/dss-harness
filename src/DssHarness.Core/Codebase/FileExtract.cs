@@ -479,7 +479,7 @@ public sealed record FileExtract(IReadOnlyList<ExtractNode> Nodes)
 
     /// <summary>Every text the extract holds, each of which a store writes.</summary>
     private IEnumerable<string> Texts()
-        => (Nodes ?? []).SelectMany(node => (string?[])[node.Id.ToString(), node.Kind, node.Name, node.Qualified.ToString(), node.Signature, node.SubKind, node.Scope?.ToString(), node.Parent?.ToString(), node.Summary, node.ValueType, node.Extends, node.SeenIn?.ToString(), .. node.Modifiers ?? [], .. node.Exports ?? [], .. (node.SuffixOf ?? []).Select(id => id.ToString())])
+        => (Nodes ?? []).SelectMany(node => (string?[])[node.Id.ToString(), node.Kind, node.Name, node.Qualified.ToString(), node.Signature, node.SubKind, node.Scope?.ToString(), node.Parent?.ToString(), node.Summary, node.ValueType, node.Extends, node.SeenIn?.ToString(), .. node.Modifiers ?? [], .. node.Exports ?? [], .. (node.SuffixOf ?? []).Select(id => id.ToString()), .. node.Selectors ?? [], .. node.Templates ?? []])
             .Concat((Scopes ?? []).SelectMany(scope => (string?[])[scope.Name.ToString(), scope.Parent?.ToString()]))
             .Concat((Imports ?? []).SelectMany(import => (string?[])[import.Form, import.Target, import.Prefix, .. import.Show ?? [], .. import.Hide ?? []]))
             .Concat((AddressRoots ?? []).SelectMany(root => (string?[])[root.Prefix, root.Directory]))
@@ -601,6 +601,25 @@ public sealed record ExtractNode(QualifiedName Id, string Kind, string Name, Qua
     public IReadOnlyList<QualifiedName>? SuffixOf { get; init; }
 
     /// <summary>
+    /// The element selectors a component declares itself by, as Angular's <c>@Component</c> writes them -
+    /// <c>app-cart</c> - each the name of an element of markup, so a tag markup writes (<c>&lt;app-cart&gt;</c>)
+    /// instantiates the component whose selector it is: a name the repository finds the declaration by, as its own
+    /// name, from markup alone - for no code's name holds a dash, nothing code writes reaches one. Only a selector
+    /// that names an element alone is kept; a class's, an attribute's or a combinator's names none.
+    /// <see langword="null"/> where it declares none.
+    /// </summary>
+    public IReadOnlyList<string>? Selectors { get; init; }
+
+    /// <summary>
+    /// The files that are a component's templates, each a path relative to its own file's directory as Angular's
+    /// <c>templateUrl</c> names one: what a template's code reads by itself is a member of this declaration, as
+    /// <c>this</c> reads one, wherever the template names no type of its own - the linker finds each such name on
+    /// the declarations that name the template theirs (<see cref="CodeQualifierKinds.This"/>). <see langword="null"/>
+    /// where it has none.
+    /// </summary>
+    public IReadOnlyList<string>? Templates { get; init; }
+
+    /// <summary>
     /// The SHA-256 of its lines (<see cref="CodeGraphIds.Digest(CodeText, int, int)"/>): set by the core once the implementation has answered,
     /// never by it, and what says whether the bytes served are the ones extracted.
     /// </summary>
@@ -630,6 +649,8 @@ public sealed record ExtractNode(QualifiedName Id, string Kind, string Name, Qua
             : SuffixOf is { } suffixOf && (suffixOf.Count == 0 || suffixOf.Any(id => string.IsNullOrWhiteSpace(id.Whole()))) ? "a node its names are written onto is empty, or it names none"
             : SuffixOf is not null && Name is not ['&', _, ..] ? "it stands for names written onto others', and its name is no & and the suffix it writes"
             : SuffixOf is not null && Exports is { } suffixes && suffixes.Any(exported => exported is not ['&', ..]) ? "it stands for names written onto others', and a name it is exported by is no & and a suffix"
+            : Selectors is { } selectors && (selectors.Count == 0 || selectors.Any(string.IsNullOrWhiteSpace)) ? "an element selector it declares is empty, or it declares none"
+            : Templates is { } templates && (templates.Count == 0 || templates.Any(string.IsNullOrWhiteSpace)) ? "a template it names is empty, or it names none"
             : Digest is { } digest && !OrchestrationRules.IsDigest(digest) ? "its digest is no SHA-256"
             : null;
 }

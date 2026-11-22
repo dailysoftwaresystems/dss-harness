@@ -80,7 +80,7 @@ public static class CodeGraphLinker
     /// revision that made it (<see cref="CodeGraphSymbolsFile.Linker"/>), so a graph linked by another one is linked again
     /// though no file changed, and no file is read again.
     /// </summary>
-    public const int Revision = 9;
+    public const int Revision = 10;
 
     /// <summary>
     /// Links <paramref name="files"/>, one tree's every file, into its symbols and edges. The keys of the configuration
@@ -199,6 +199,12 @@ public static class CodeGraphLinker
 
         /// <summary>The parts a Blazor component's file and its code-behind's declare, by the component's path: which parts their files join.</summary>
         Siblings,
+
+        /// <summary>
+        /// The declarations of other files that name one file their template (<see cref="ExtractNode.Templates"/>), by the
+        /// template's path: what a template's code reads by itself is found on.
+        /// </summary>
+        Templates,
     }
 
     /// <summary>One reference's finding: its edges, whether it named nothing, and every key it read.</summary>
@@ -561,6 +567,12 @@ public static class CodeGraphLinker
         /// <summary>The parts each type's files join to it though their qualified names differ (<see cref="CodeBehinds"/>), by the type's id: each of the other side, by id.</summary>
         private readonly Dictionary<QualifiedName, List<QualifiedName>> _siblings = [];
 
+        /// <summary>
+        /// The declarations that name the file at a path their template (<see cref="ExtractNode.Templates"/>), each resolved
+        /// beside the file that names it: what a template's own names are members of, where its file declares no type.
+        /// </summary>
+        private readonly Dictionary<string, List<Declaration>> _templates = new(StringComparer.Ordinal);
+
         public Linking(IReadOnlyList<CodeGraphFile> files, LinkMemory? previous, IReadOnlyList<string> keyNaming)
         {
             _chains = NewChains();
@@ -652,6 +664,22 @@ public static class CodeGraphLinker
                     else
                     {
                         Add(_byName, node.Name, declaration);
+                    }
+
+                    // A component's element selectors are names the repository finds it by, as its own: a tag markup
+                    // writes names one, and no code's name does - nothing code writes holds a dash.
+                    foreach (var selector in node.Selectors ?? [])
+                    {
+                        Add(_byName, selector, declaration);
+                    }
+
+                    // A file a declaration names its template: what that file's code reads by itself is its member.
+                    foreach (var template in node.Templates ?? [])
+                    {
+                        if (CodeGraphIds.Beside(file.Path, template) is { } named)
+                        {
+                            Add(_templates, named, declaration);
+                        }
                     }
 
                     if (node.Extends is not null)
@@ -1334,7 +1362,18 @@ public static class CodeGraphLinker
             switch (qualifier.Kind)
             {
                 case CodeQualifierKinds.This:
-                    return EnclosingType(from) is { } self ? Typed(from, [self], null, name, accepts, withSelf: true) : ([], CodeConfidences.Exact);
+                    // A template's own names are its component's members: where the node the reference is made from declares no type
+                    // of its own, the declarations that name its file their template are what it is read on.
+                    if (EnclosingType(from) is { } self)
+                    {
+                        return Typed(from, [self], null, name, accepts, withSelf: true);
+                    }
+
+                    Touch(Read.Templates, from.File.Path);
+
+                    return _templates.TryGetValue(from.File.Path, out var templates)
+                        ? Typed(from, templates, null, name, accepts, withSelf: true)
+                        : ([], CodeConfidences.Exact);
 
                 case CodeQualifierKinds.Base:
                     return EnclosingType(from) is { } derived ? Typed(from, [derived], null, name, accepts, withSelf: false) : ([], CodeConfidences.Exact);
@@ -3183,8 +3222,9 @@ public static class CodeGraphLinker
 
         /// <summary>
         /// The type <paramref name="from"/> is declared in, or is: the one what holds it reaches - else, where what holds it
-        /// reaches none, the type whose scope it is declared in, as a member defined outside its type's body is; none where
-        /// neither is.
+        /// reaches none, the type whose scope it is declared in, as a member defined outside its type's body is; else the type a
+        /// member declared to extend one extends (<see cref="ExtractNode.Extends"/>), as a prototype assignment's member does; none
+        /// where neither is.
         /// </summary>
         private Declaration? EnclosingType(Declaration from)
         {
@@ -3195,9 +3235,12 @@ public static class CodeGraphLinker
             {
                 if (at.Node.Parent is not { } parent || !seen.Add(parent) || !_owners[from.File].TryGetValue(parent, out var holder))
                 {
-                    return from.ScopeKey is { } key
-                        ? ContainersOf(key.Name).FirstOrDefault(container => container.Node.Kind == CodeNodeKinds.Type && KeyOf(container.File, container.Node.Qualified) == key)
-                        : null;
+                    if (from.ScopeKey is { } key && ContainersOf(key.Name).FirstOrDefault(container => container.Node.Kind == CodeNodeKinds.Type && KeyOf(container.File, container.Node.Qualified) == key) is { } scoped)
+                    {
+                        return scoped;
+                    }
+
+                    return from.Node.Extends is { } extended ? Containers(from, extended).FirstOrDefault(container => container.Node.Kind == CodeNodeKinds.Type) : null;
                 }
 
                 at = holder;
@@ -3502,9 +3545,27 @@ public static class CodeGraphLinker
                     node.Qualified,
                     node.Prototype,
                     string.Join(PartEnd, node.Exports ?? []),
-                    string.Join(PartEnd, (node.SuffixOf ?? []).Select(id => id.Whole())));
+                    string.Join(PartEnd, (node.SuffixOf ?? []).Select(id => id.Whole())),
+                    string.Join(PartEnd, node.Selectors ?? []),
+                    string.Join(PartEnd, node.Templates ?? []));
 
                 Named(Read.Name, node.Name, shape);
+
+                // A selector is a name the declaration is found by, as its own: one changed moves it from one name's key to another's.
+                foreach (var selector in node.Selectors ?? [])
+                {
+                    Named(Read.Name, selector, shape);
+                }
+
+                // What a template's code reads is found on the declarations naming it their template, each under the template's
+                // own path: a component that names a file its template, stops naming it or names another alters that file's key.
+                foreach (var template in node.Templates ?? [])
+                {
+                    if (CodeGraphIds.Beside(file.Path, template) is { } named)
+                    {
+                        Named(Read.Templates, named, $"{node.Id.Whole()}{FieldEnd}{template}");
+                    }
+                }
 
                 foreach (var exported in node.Exports ?? [])
                 {
@@ -3562,7 +3623,9 @@ public static class CodeGraphLinker
             QualifiedName Qualified,
             bool Prototype,
             string Exports,
-            string SuffixOf);
+            string SuffixOf,
+            string Selectors,
+            string Templates);
 
         /// <summary>The keys of the types whose bases are not what they were: what a finding that went through them read.</summary>
         private IEnumerable<int> Moved(Dictionary<QualifiedName, List<string[]>>? before, Dictionary<QualifiedName, List<string[]>> now)

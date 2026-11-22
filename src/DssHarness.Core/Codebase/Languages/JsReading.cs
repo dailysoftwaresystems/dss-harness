@@ -1,4 +1,6 @@
+using System.Text.RegularExpressions;
 using DssHarness.Core.Codebase.Languages.Scanning;
+using DssHarness.Core.Text;
 
 namespace DssHarness.Core.Codebase.Languages;
 
@@ -1076,6 +1078,12 @@ internal sealed class JsReading
             return common;
         }
 
+        // A member Backbone adds to a type from outside its body - X.prototype.y = function () {} - is a member of that type.
+        if (Prototyped(start, head, at, end, frame, marks, decorators, seenIn) is var prototyped and >= 0)
+        {
+            return prototyped;
+        }
+
         // Code: what it calls is the module's - but the CommonJS exports its blocks hold, read as the top's are.
         var stop = StatementEnd(at, end);
         NestedCommonJs(at, stop, frame);
@@ -1293,14 +1301,23 @@ internal sealed class JsReading
     /// The keys of an option's object at <paramref name="open"/> - a <c>methods</c>', a <c>computed</c>'s, a
     /// <c>props</c>' - each a member of the component of <paramref name="subKind"/> over its piece: a function its
     /// function, a value a member whose code is what the value holds; a key written alone names the script's own
-    /// declaration, already the component's, and is its code.
+    /// declaration, already the component's, and is its code. A key among <paramref name="hashes"/> whose value is an object is
+    /// read by the framework's own rule (<see cref="Watched"/>), and a value is a member of <paramref name="fields"/> where it is
+    /// given, as a Backbone object's fields are.
     /// </summary>
-    private void OptionMembers(int open, int end, QualifiedName key, ScanFrame members, string subKind, QualifiedName? seenIn)
+    private void OptionMembers(int open, int end, QualifiedName key, ScanFrame members, string subKind, QualifiedName? seenIn, IReadOnlyDictionary<string, Hash>? hashes = null, string? fields = null)
     {
         foreach (var (pieceStart, pieceEnd) in ScanCalls.Split(_scan, open + 1, Math.Min(_scan.Bounds(open, end).Inner, end), null))
         {
             var name = MemberName(pieceStart);
             var next = _scan.Next(pieceStart);
+
+            // A hash the framework reads by its own rule: a Backbone object's events or routes.
+            if (name is not null && hashes is not null && _scan.Is(next, ":") && _scan.Is(_scan.Next(next), "{") && hashes.TryGetValue(name, out var hash))
+            {
+                Watched(_scan.Next(next), pieceEnd, key, hash);
+                continue;
+            }
 
             if (MethodNameAt(pieceStart, pieceEnd) is var methodAt and >= 0 && FunctionAt(methodAt, pieceEnd, methodName: true) is { } method)
             {
@@ -1312,7 +1329,7 @@ internal sealed class JsReading
             }
             else if (name is not null && _scan.Is(next, ":"))
             {
-                var member = OptionMember(pieceStart, pieceEnd, name, members, subKind, seenIn);
+                var member = OptionMember(pieceStart, pieceEnd, name, members, fields ?? subKind, seenIn);
                 var valueAt = _scan.Next(next);
                 Defer(() => Calls(_text, valueAt, pieceEnd, member, new Locals(), null));
             }
@@ -1390,21 +1407,34 @@ internal sealed class JsReading
     }
 
     /// <summary>
-    /// A component's <c>watch</c> option at <paramref name="open"/>: each key a use of the member it watches - the first
-    /// name of a path - a handler a string names a call of that method, and every handler's code the component's.
+    /// A component's <c>watch</c> option at <paramref name="open"/> (<see cref="Hash.Watch"/>): each key a use of the member it
+    /// watches - the first name of a path - a handler a string names a call of that method, and every handler's code the
+    /// component's. A Backbone object's <c>events</c> hash (<see cref="Hash.Events"/>): each key a use of every rule its selector
+    /// names - <c>'click .save'</c> the rule <c>.save</c> - and a handler a string names a call of that method; its <c>routes</c>
+    /// (<see cref="Hash.Routes"/>): each handler a string names a call of that method, as a watch's does.
     /// </summary>
-    private void Watched(int open, int end, QualifiedName key)
+    private void Watched(int open, int end, QualifiedName key, Hash hash = Hash.Watch)
     {
         foreach (var (pieceStart, pieceEnd) in ScanCalls.Split(_scan, open + 1, Math.Min(_scan.Bounds(open, end).Inner, end), null))
         {
-            if (MemberName(pieceStart, path: true) is { } watched)
+            var next = _scan.Next(pieceStart);
+            var valueAt = _scan.Next(next);
+
+            if (hash == Hash.Watch && MemberName(pieceStart, path: true) is { } watched)
             {
                 _extract.Reference(key, CodeEdgeKinds.Uses, watched, _scan[pieceStart].Line, qualifier: new ExtractQualifier(CodeQualifierKinds.This));
             }
 
-            var next = _scan.Next(pieceStart);
+            // An event's selector names the rules that style the element the handler is bound to: a use of each, as markup's class is.
+            if (hash == Hash.Events && IsText(pieceStart) && _scan.Value(pieceStart) is { } selector)
+            {
+                foreach (Match rule in EventRules.Matches(selector))
+                {
+                    _extract.Reference(key, CodeEdgeKinds.Uses, rule.Value, _scan[pieceStart].Line, qualifier: MarkupDialect.Selector);
+                }
+            }
 
-            if (_scan.Is(next, ":") && _scan.Next(next) is var valueAt && valueAt < pieceEnd && _scan.Next(valueAt) >= pieceEnd && MemberName(valueAt) is { } method && IsText(valueAt))
+            if (_scan.Is(next, ":") && valueAt < pieceEnd && _scan.Next(valueAt) >= pieceEnd && MemberName(valueAt) is { } method && IsText(valueAt))
             {
                 _extract.Reference(key, CodeEdgeKinds.Calls, method, _scan[valueAt].Line, qualifier: new ExtractQualifier(CodeQualifierKinds.This));
             }
@@ -1412,6 +1442,22 @@ internal sealed class JsReading
             Code(pieceStart, pieceEnd, key);
         }
     }
+
+    /// <summary>What an object a framework is given holds, each read as the framework reads it.</summary>
+    private enum Hash
+    {
+        /// <summary>A Vue component's <c>watch</c>: a key a path, a handler the method it names.</summary>
+        Watch,
+
+        /// <summary>A Backbone object's <c>events</c>: a key an event and a selector, a handler the method it names.</summary>
+        Events,
+
+        /// <summary>A Backbone router's <c>routes</c>: a key a path, a handler the method it names.</summary>
+        Routes,
+    }
+
+    /// <summary>The rules an event's selector names, as Backbone binds a handler to an element: each class's and each id's, with its marker.</summary>
+    private static readonly Regex EventRules = LinearRegex.Compile(@"[.#][A-Za-z_][\w-]*");
 
     /// <summary>
     /// The name the token at <paramref name="at"/> gives a member: a name, or a string's value that is one - the first
@@ -1678,6 +1724,139 @@ internal sealed class JsReading
         return at < end && _scan.IsName(at) && _scan.Is(_scan.Next(at), "(") ? at : -1;
     }
 
+    // ---- Backbone and Angular ----
+
+    /// <summary>
+    /// A call of <c>extend</c> on a chain of names, given an object, from <paramref name="at"/>: what Backbone builds a type by -
+    /// <c>Backbone.View.extend({...})</c>, <c>BaseView.extend({...})</c> - the chain it extends and the braces of the object it is
+    /// given, the index past its closing brace among them; <see langword="null"/> where none is written there.
+    /// </summary>
+    private (List<string> Chain, int Open, int Close)? ExtendedAt(int at, int end)
+    {
+        var (names, past) = ChainAt(_scan, at, end);
+        var open = _scan.Next(past);
+
+        if (names.Count < 2 || !_scan.Is(names[^1], "extend") || !_scan.Is(past, "(") || !_scan.Is(open, "{"))
+        {
+            return null;
+        }
+
+        return ([.. names[..^1].Select(index => _scan.Text(index))], open, Math.Min(_scan.Bounds(open, end).Past, end));
+    }
+
+    /// <summary>
+    /// The type a call of <c>extend</c> builds, named <paramref name="name"/> at <paramref name="nameAt"/>, given the object from
+    /// <paramref name="open"/> to <paramref name="close"/>: a type node over the declarator, an <c>inherits</c> edge to what the
+    /// chain <paramref name="chain"/> names - <c>Backbone.View</c>, a repository type's - and the object its members, each function
+    /// a method and each value a field; its <c>events</c> hash's keys uses of the rules their selectors name and its handlers calls
+    /// of the methods they name, and its <c>routes</c>' handlers calls of theirs.
+    /// </summary>
+    private void Extended(int start, int head, int nameAt, string name, List<string> chain, int open, int close, ScanFrame frame, List<string> marks, List<(int Start, int End)> decorators, List<string> modifiers, QualifiedName? seenIn)
+    {
+        var key = DeclareType(start, head, _scan.LastOf(close), frame, name, "class", modifiers, marks, signatureEnd: open, seenIn);
+        var members = frame.Inside(frame.Qualify(name), frame.Qualify(name), key, name);
+
+        Mention(key, CodeEdgeKinds.Inherits, string.Join('.', chain), _scan[nameAt].Line);
+        DecoratorCalls(key, decorators, frame.Owner);
+        OptionMembers(open, close, key, members, "method", _module ? QualifiedName.Of(_path) : null, BackboneHashes, "field");
+    }
+
+    /// <summary>The hashes of the object a call of <c>extend</c> is given, each read as Backbone reads it.</summary>
+    private static readonly IReadOnlyDictionary<string, Hash> BackboneHashes = new Dictionary<string, Hash>(StringComparer.Ordinal) { ["events"] = Hash.Events, ["routes"] = Hash.Routes };
+
+    /// <summary>
+    /// A member a statement adds to a type from outside its body, as Backbone's prototype assignments do -
+    /// <c>X.prototype.y = function () {}</c>, <c>ns.X.prototype.y = () =&gt; {}</c>: a member named <c>y</c> that extends the type the
+    /// chain before <c>prototype</c> names, what its body calls its own. Answers where the next statement begins, or -1 where no
+    /// such assignment stands at <paramref name="at"/>.
+    /// </summary>
+    private int Prototyped(int start, int head, int at, int end, ScanFrame frame, List<string> marks, List<(int Start, int End)> decorators, QualifiedName? seenIn)
+    {
+        var (names, past) = ChainAt(_scan, at, end);
+        var assigned = _scan.Next(past);
+
+        if (names.Count < 3 || !_scan.Is(names[^2], "prototype") || !_scan.Is(past, "=") || FunctionAt(assigned, StatementEnd(at, end)) is not { } function)
+        {
+            return -1;
+        }
+
+        var nameAt = names[^1];
+        Bound(start, head, nameAt, _scan.Text(nameAt), function, frame, marks, decorators, [], "method", seenIn, exports: null, string.Join('.', names[..^2].Select(index => _scan.Text(index))));
+        return function.Last + 1;
+    }
+
+    /// <summary>
+    /// What an Angular <c>@Component</c>'s or <c>@Directive</c>'s object says of the type of <paramref name="key"/>, among its
+    /// <paramref name="decorators"/>: its <c>selector</c>'s element selectors the type is reached by from markup
+    /// (<see cref="ExtractNode.Selectors"/>); its <c>templateUrl</c> the file that is its template (<see cref="ExtractNode.Templates"/>),
+    /// imported as a page's script is; each of its <c>styleUrls</c> a file imported. An inline <c>template</c> and <c>styles</c> are
+    /// read as no markup and no style sheet.
+    /// </summary>
+    private void Angular(QualifiedName key, List<(int Start, int End)> decorators)
+    {
+        var selectors = new List<string>();
+        var templates = new List<string>();
+
+        foreach (var (start, end) in decorators)
+        {
+            var (names, past) = ChainAt(_scan, _scan.Next(start), end);
+            var open = _scan.Next(past);
+
+            if (names.Count == 0 || _scan.Text(names[^1]) is not ("Component" or "Directive") || !_scan.Is(past, "(") || !_scan.Is(open, "{"))
+            {
+                continue;
+            }
+
+            foreach (var (pieceStart, pieceEnd) in ScanCalls.Split(_scan, open + 1, Math.Min(_scan.Bounds(open, end).Inner, end), null))
+            {
+                var option = _scan.IsName(pieceStart) ? _scan.Text(pieceStart) : null;
+                var valueAt = option is null || !_scan.Is(_scan.Next(pieceStart), ":") ? -1 : _scan.Next(_scan.Next(pieceStart));
+                var line = _scan[Math.Clamp(pieceStart, 0, _scan.Count - 1)].Line;
+
+                if (valueAt < 0 || valueAt >= pieceEnd)
+                {
+                    continue;
+                }
+
+                switch (option)
+                {
+                    case "selector" when _scan.Value(valueAt) is { } written:
+                        selectors.AddRange(written.Split(',', StringSplitOptions.RemoveEmptyEntries).Select(part => part.Trim()).Where(Element));
+                        break;
+
+                    case "templateUrl" when _scan.Value(valueAt) is { Length: > 0 } url:
+                        var template = Beside(url);
+                        templates.Add(template);
+                        Run(template, line, null, null, export: false);
+                        break;
+
+                    case "styleUrls" when _scan.Is(valueAt, "["):
+                        foreach (var (itemStart, itemEnd) in ScanCalls.Split(_scan, valueAt + 1, Math.Min(_scan.Bounds(valueAt, pieceEnd).Inner, pieceEnd), null))
+                        {
+                            if (itemStart < itemEnd && _scan.Value(itemStart) is { Length: > 0 } style)
+                            {
+                                Run(Beside(style), line, null, null, export: false);
+                            }
+                        }
+
+                        break;
+                }
+            }
+        }
+
+        if (selectors.Count > 0 || templates.Count > 0)
+        {
+            _extract.Change(key, node => node with { Selectors = selectors.Count == 0 ? null : selectors, Templates = templates.Count == 0 ? null : templates });
+        }
+
+        // A path a component names is relative to its own file's directory, as Angular resolves it, whatever it writes.
+        static string Beside(string path) => path.StartsWith("./", StringComparison.Ordinal) || path.StartsWith("../", StringComparison.Ordinal) ? path : "./" + path;
+    }
+
+    /// <summary>Whether <paramref name="selector"/> names an element alone - <c>app-cart</c>, <c>table</c> - and no class, attribute or pseudo-class of one, or a combinator.</summary>
+    private static bool Element(string selector)
+        => selector.Length > 0 && char.IsAsciiLetter(selector[0]) && selector.All(character => char.IsAsciiLetterOrDigit(character) || character == '-');
+
     // ---- Decorators ----
 
     /// <summary>
@@ -1782,6 +1961,7 @@ internal sealed class JsReading
         {
             Clauses(key, cursor, open);
             DecoratorCalls(key, decorators, frame.Owner);
+            Angular(key, decorators);
             Members(open, inner, frame.Inside(frame.Qualify(name), frame.Qualify(name), key, name), MemberPlace.Class, ambient);
         }
 
@@ -2602,6 +2782,14 @@ internal sealed class JsReading
                 return index + 1;
             }
 
+            // A type Backbone builds by a call of extend on another - `var View = Backbone.View.extend({...})`: a type that
+            // inherits what it extends, the object it is given its members.
+            if (valueAt >= 0 && ExtendedAt(valueAt, pieceEnd) is { } extended)
+            {
+                Extended(begins, header, nameAt, name, extended.Chain, extended.Open, extended.Close, frame, marks, decorators, named, seenIn);
+                return index + 1;
+            }
+
             var key = _extract.Add(new ExtractNode(Id(frame.Qualify(name)), CodeNodeKinds.Member, name, frame.Qualify(name), _scan[begins].Line, _scan[_scan.LastOf(pieceEnd)].EndLine, ExtractText.Signature(ExtractText.Flat($"{_scan.Spelled(head, _scan.Next(at))} {_scan.Spelled(nameAt, assign)}")))
             {
                 SubKind = word == "const" ? "constant" : "variable",
@@ -2691,17 +2879,18 @@ internal sealed class JsReading
     /// <summary>
     /// A function, a method, an accessor or an arrow bound to a name, named <paramref name="name"/> at
     /// <paramref name="nameAt"/>, of <paramref name="function"/>'s shape: a member node over its head and body, what its
-    /// signature names, the member it overrides, its decorators' calls and what its body calls. Answers where the next
+    /// signature names, the member it overrides, its decorators' calls and what its body calls - a member that extends the type
+    /// <paramref name="extends"/> names where one is given (<see cref="ExtractNode.Extends"/>). Answers where the next
     /// declaration begins.
     /// </summary>
-    private int Bound(int start, int head, int nameAt, string name, FunctionShape function, ScanFrame frame, List<string> marks, List<(int Start, int End)> decorators, List<string> modifiers, string subKind, QualifiedName? seenIn, IReadOnlyList<string>? exports)
+    private int Bound(int start, int head, int nameAt, string name, FunctionShape function, ScanFrame frame, List<string> marks, List<(int Start, int End)> decorators, List<string> modifiers, string subKind, QualifiedName? seenIn, IReadOnlyList<string>? exports, string? extends = null)
     {
-        Callable(start, head, nameAt, name, function, frame, marks, decorators, modifiers, subKind, seenIn, exports);
+        Callable(start, head, nameAt, name, function, frame, marks, decorators, modifiers, subKind, seenIn, exports, extends);
         return function.Last + 1;
     }
 
-    /// <summary>The member node <see cref="Bound"/> makes; answers its key.</summary>
-    private QualifiedName Callable(int start, int head, int nameAt, string name, FunctionShape function, ScanFrame frame, List<string> marks, List<(int Start, int End)> decorators, List<string> modifiers, string subKind, QualifiedName? seenIn, IReadOnlyList<string>? exports)
+    /// <summary>The member node <see cref="Bound"/> makes, a member extending the type <paramref name="extends"/> where one is given; answers its key.</summary>
+    private QualifiedName Callable(int start, int head, int nameAt, string name, FunctionShape function, ScanFrame frame, List<string> marks, List<(int Start, int End)> decorators, List<string> modifiers, string subKind, QualifiedName? seenIn, IReadOnlyList<string>? exports, string? extends = null)
     {
         var qualified = frame.Qualify(name);
         var getter = subKind == "getter";
@@ -2722,6 +2911,7 @@ internal sealed class JsReading
             ValueType = getter && function.ReturnStart >= 0 && TypeKey(_scan, function.ReturnStart, function.ReturnEnd) is { } type and not "any" ? type : null,
             SeenIn = seenIn,
             Exports = exports,
+            Extends = extends,
         });
 
         Registered(key, frame, name);
@@ -3601,6 +3791,9 @@ internal sealed class JsReading
                 {
                     _extract.Literal(value, part, key);
                 }
+
+                // A JSX attribute's string - className, class, id - names the rules that style the element, as any markup's do.
+                Selects(scan, token, From);
 
                 var tags = text.Elements is { } elements && elements.TryGetValue(token.Start, out var named) ? named : null;
 
@@ -4579,6 +4772,61 @@ internal sealed class JsReading
         => _bindings.TryGetValue(word, out var binding) && binding.Prefixed
             ? (binding.Export ?? "default", new ExtractQualifier(CodeQualifierKinds.Prefix, word))
             : (word, null);
+
+    /// <summary>
+    /// The rules each JSX attribute's string of the markup <paramref name="token"/> names, as markup's own class and id do
+    /// (<see cref="MarkupDialect.Read"/>): a <c>className</c> or <c>class</c> a use of each class of its list, an <c>id</c> a use
+    /// of the id, each looked for among rules alone. The attribute's name is read where it stands, before the string's quote -
+    /// a few characters, by position; a value a hole writes, or an attribute of another name, none.
+    /// </summary>
+    private void Selects(ScannedText scan, ScanToken token, Func<QualifiedName> from)
+    {
+        var source = scan.Source;
+
+        foreach (var (value, start, _, line) in scan.MarkupStrings(token))
+        {
+            var at = start - 1;
+
+            if (at < 0 || source[at] is not ('"' or '\''))
+            {
+                continue;
+            }
+
+            for (at--; at >= 0 && char.IsWhiteSpace(source[at]); at--)
+            {
+            }
+
+            if (at < 0 || source[at] != '=')
+            {
+                continue;
+            }
+
+            for (at--; at >= 0 && char.IsWhiteSpace(source[at]); at--)
+            {
+            }
+
+            var end = at + 1;
+
+            for (; at >= 0 && (char.IsAsciiLetterOrDigit(source[at]) || source[at] is '_' or '$'); at--)
+            {
+            }
+
+            switch (source.Slice(at + 1, end))
+            {
+                case "className" or "class":
+                    foreach (var named in MarkupDialect.Classes(value))
+                    {
+                        _extract.Reference(from(), CodeEdgeKinds.Uses, $".{named}", line, qualifier: MarkupDialect.Selector);
+                    }
+
+                    break;
+
+                case "id" when MarkupDialect.Plain(value) is { } id:
+                    _extract.Reference(from(), CodeEdgeKinds.Uses, $"#{id}", line, qualifier: MarkupDialect.Selector);
+                    break;
+            }
+        }
+    }
 
     /// <summary>
     /// A JSX element's tag named <paramref name="tag"/>, on <paramref name="line"/>: a component - a capitalized name, or a

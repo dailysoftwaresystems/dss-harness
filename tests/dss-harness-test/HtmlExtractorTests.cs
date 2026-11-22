@@ -413,5 +413,71 @@ public sealed class HtmlExtractorTests : CodeGraphExtractorContractTests<HtmlExt
             Read("plain.html", "<style>\n// .ghost { a: b; }\n</style>\n").Nodes.Where(node => CodeSubKinds.IsData(node.SubKind)).Select(node => node.Name));
     }
 
+    /// <summary>
+    /// A file whose content is an Angular template is read as one: each component tag - a component's selector - an instantiates of
+    /// that component; each event attribute's handler, each binding, each loop's list, each <c>{{ }}</c> and each control-flow block
+    /// read by the JavaScript reader as Angular compiles it, each name read by itself a member of the component that names the file
+    /// its template - the linker joining the template's names to that component (<see cref="ExtractNode.Templates"/>) and the tag to
+    /// the class by its selector (<see cref="ExtractNode.Selectors"/>); a loop's alias a parameter of its own, and a name the
+    /// component does not declare reached by nothing.
+    /// </summary>
+    [Fact]
+    public void AnAngularTemplate_IsReadAsOne_AndLinkedToItsComponentByItsSelectorAndItsTemplate()
+    {
+        const string Template = """
+            <h2>{{ title }}</h2>
+            <button (click)="save()" [disabled]="busy" #box>Save</button>
+            <app-cart [items]="items" (added)="onAdded($event)"></app-cart>
+            <li *ngFor="let item of items; trackBy: trackItem">{{ item.name }}</li>
+            @if (shown) { <p>{{ message }}</p> }
+            @for (line of lines; track line.id) { <span>{{ line }}</span> }
+            """;
+        const string Component = """
+            import { Component } from '@angular/core';
+
+            @Component({ selector: 'app-cart', templateUrl: './cart.component.html' })
+            export class CartComponent {
+              title = 'Cart';
+              items = [];
+              save() {}
+              onAdded(event) {}
+              trackItem(index, item) {}
+            }
+            """;
+        var extract = Read("src/cart.component.html", Template);
+        var body = "html:src/cart.component.html#body";
+
+        Assert.Equal("body", Assert.Single(extract.Nodes, node => node.Id == body).SubKind);
+
+        // Each reference is the template's own, made from its node: the component by its selector, each name by itself the component's.
+        Assert.Equal(
+            [
+                ("app-cart", CodeEdgeKinds.Instantiates, 3, (string?)null), ("title", CodeEdgeKinds.Uses, 1, CodeQualifierKinds.This),
+                ("save", CodeEdgeKinds.Calls, 2, CodeQualifierKinds.This), ("busy", CodeEdgeKinds.Uses, 2, CodeQualifierKinds.This),
+                ("items", CodeEdgeKinds.Uses, 3, CodeQualifierKinds.This), ("onAdded", CodeEdgeKinds.Calls, 3, CodeQualifierKinds.This),
+                ("items", CodeEdgeKinds.Uses, 4, CodeQualifierKinds.This), ("name", CodeEdgeKinds.Uses, 4, CodeQualifierKinds.Value),
+                ("shown", CodeEdgeKinds.Uses, 5, CodeQualifierKinds.This), ("message", CodeEdgeKinds.Uses, 5, CodeQualifierKinds.This),
+                ("lines", CodeEdgeKinds.Uses, 6, CodeQualifierKinds.This),
+            ],
+            extract.References.Select(reference => (reference.Name, reference.Kind, reference.Line, reference.Qualifier?.Kind)));
+
+        // Linked with the component that names this file its template: the tag reaches the class by its selector, each name the
+        // template reads by itself is the component's member, exact, and a name it does not declare reaches nothing.
+        var linked = CodeGraphLinker.Link(
+        [
+            new CodeGraphFile("src/cart.component.ts", "typescript", new TypeScriptExtractor().Extract(new CodeFileInput("src/cart.component.ts", Component))),
+            new CodeGraphFile("src/cart.component.html", "html", extract),
+        ]);
+        var component = "typescript:src/cart.component.ts.CartComponent";
+
+        Assert.Contains(new CodeEdge(body, component, CodeEdgeKinds.Instantiates, 3, CodeConfidences.Unique), linked.Edges);
+        Assert.Contains(new CodeEdge("file:src/cart.component.ts", "file:src/cart.component.html", CodeEdgeKinds.Imports, 3, CodeConfidences.Exact), linked.Edges);
+        Assert.Equal(
+            [($"{component}.title", CodeEdgeKinds.Uses, 1, CodeConfidences.Exact), ($"{component}.save", CodeEdgeKinds.Calls, 2, CodeConfidences.Exact), ($"{component}.items", CodeEdgeKinds.Uses, 3, CodeConfidences.Exact),
+             ($"{component}.onAdded", CodeEdgeKinds.Calls, 3, CodeConfidences.Exact), ($"{component}.items", CodeEdgeKinds.Uses, 4, CodeConfidences.Exact)],
+            [.. linked.Edges.Where(edge => edge.From == body && edge.To.StartsWith(component, StringComparison.Ordinal) && edge.To != component).Select(edge => (edge.To, edge.Kind, edge.Line, edge.Confidence))]);
+        Assert.DoesNotContain(linked.Edges, edge => edge.From == body && new[] { $"{component}.busy", $"{component}.shown", $"{component}.message", $"{component}.lines" }.Contains(edge.To));
+    }
+
     private static FileExtract Read(string path, string text) => new HtmlExtractor().Extract(new CodeFileInput(path, text));
 }

@@ -4668,7 +4668,29 @@ member, `eval`, a function a parameter, a local or a function-typed field holds,
 import of a module the code computes - is marked dynamic. A function a body declares is the body's own wherever it calls
 it. A declaration file's (`.d.ts`) members are prototypes, and code at a module's top is held by its file's `(module)`
 node - over the file's lines, or, in code a markup file embeds, over the lines that code is written on, from the first
-to the last, never the markup's - CommonJS exports its blocks hold read as the top's. `npm`, over `JsonOutline` (the reader of a project file's
+to the last, never the markup's - CommonJS exports its blocks hold read as the top's. The frameworks are read by the
+reader of the file kind they live in, each turned into the same vocabulary. A JSX attribute's string - `className`,
+`class`, `id` - is a use of each rule it names, as markup's own are (`JsReading.Selects`: the attribute's name read
+where it stands before its string, a few characters by position, never the element as one text); a type Backbone
+builds by a call of `extend` on a chain - `var View = Backbone.View.extend({...})` - is a type inheriting what the
+chain names, the object it is given its members, each function a method and each value a field (`Extended`), its
+`events` hash's keys uses of the rules their selectors name and its handlers, and its `routes`' handlers, calls of
+the methods they name (`Watched`, the one reading of a hash by its framework's rule, a Vue `watch`'s among them); a
+member a prototype assignment adds - `X.prototype.y = function () {}` - is a member extending the type the chain
+before `prototype` names (`Prototyped`, `ExtractNode.Extends`, as a Dart extension's members are reached), its own
+`this` read on that type (`CodeGraphLinker.EnclosingType`). An Angular `@Component`'s or `@Directive`'s object is read
+(`Angular`): its `selector`'s element selectors are names the repository finds the class by as its own
+(`ExtractNode.Selectors`, among the linker's names - `app-cart`, which no code writes), so a template's `<app-cart>`
+instantiates it; its `templateUrl` is the file that is the class's template (`ExtractNode.Templates`), imported as a
+page's script is, and each of its `styleUrls` a file imported. A file whose content is an Angular template - an
+element's `(click)`, `[x]`, `*ngFor` or `#x`, a control-flow block in its text - is read by the one template reader
+every framework's template shares (`MarkupTemplates`, which a Vue component's template block is read by too, over
+`MarkupDialect`: each kind says which tag is a component's and what each attribute's value is to it, how a loop's
+value is read and which blocks its text writes): each attribute's, mustache's and block's code by the JavaScript reader
+as the framework's compiler writes it, and each name it reads by itself a `this` reference, which the linker finds on
+the class that names the template's file its template, where the template declares no type of its own (the `Templates`
+key of a link: a component that names, renames or drops a template file makes that file's references found again).
+`npm`, over `JsonOutline` (the reader of a project file's
 JSON, which keeps the line each value begins on as the core counts lines and says where and why a file is no object),
 names a package by its name, refers to each package it depends on, and declares its address roots: its name alone each
 file its entry may be - its `exports`' `.` conditions in the order written, then `source`, `module`, `main`, `types`

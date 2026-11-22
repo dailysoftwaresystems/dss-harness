@@ -810,6 +810,38 @@ public sealed class TypeScriptExtractorTests : CodeGraphExtractorContractTests<T
             $"{extract.Nodes.Count} nodes, m {depth} deep, {string.Join(", ", extract.References.Select(reference => $"{reference.Kind} {reference.Name}"))}; {extract.Dynamic.Count} dynamic");
     });
 
+    /// <summary>
+    /// An Angular component's decorator is read: its <c>selector</c>'s element - <c>app-cart</c> - a name the component is reached by
+    /// from markup, its <c>templateUrl</c> the file that is its template, both said on the class; its <c>templateUrl</c> and each of
+    /// its <c>styleUrls</c> a file imported beside it. A selector naming a class is no element, and an inline template no markup.
+    /// </summary>
+    [Fact]
+    public void AnAngularComponentsDecorator_NamesItsSelectorAndItsTemplate_AndImportsItsFiles()
+    {
+        var extract = Read("src/cart.component.ts", """
+            import { Component } from '@angular/core';
+
+            @Component({
+              selector: 'app-cart, .cart',
+              templateUrl: './cart.component.html',
+              styleUrls: ['cart.component.css', './theme.css'],
+              template: '<i>{{ inline }}</i>'
+            })
+            export class CartComponent {
+              title = 'Cart';
+            }
+
+            @Directive({ selector: '[appHighlight]' })
+            export class HighlightDirective {}
+            """);
+        var component = Node(extract, "typescript:src/cart.component.ts.CartComponent");
+
+        Assert.Equal(["app-cart"], component.Selectors);
+        Assert.Equal(["./cart.component.html"], component.Templates);
+        Assert.Equal(["./cart.component.html", "./cart.component.css", "./theme.css"], extract.Imports.Where(import => import.Form == CodeImportForms.Relative).Select(import => import.Target));
+        Assert.Null(Node(extract, "typescript:src/cart.component.ts.HighlightDirective").Selectors);
+    }
+
     private static FileExtract Read(string path, string text) => new TypeScriptExtractor().Extract(new CodeFileInput(path, text));
 
     private static ExtractNode Node(FileExtract extract, string id) => Assert.Single(extract.Nodes, node => node.Id == id);

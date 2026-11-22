@@ -135,6 +135,8 @@ internal sealed class FileExtractJson : JsonConverter<FileExtract>
                     SeenIn = node.SeenIn is { } seenIn ? Name("scope", seenIn) : null,
                     Exports = node.Exports,
                     SuffixOf = node.SuffixOf is { } onto ? [.. onto.Select(id => Place(id, $"its node '{node.Id}' stands for names written onto"))] : null,
+                    Selectors = node.Selectors,
+                    Templates = node.Templates,
                     Digest = node.Digest,
                 };
             }
@@ -241,6 +243,8 @@ internal sealed class FileExtractJson : JsonConverter<FileExtract>
                         Extends = stored.Extends,
                         SeenIn = stored.SeenIn is { } seenIn ? Name(seenIn, "scope") : null,
                         Exports = stored.Exports,
+                        Selectors = stored.Selectors,
+                        Templates = stored.Templates,
                         Digest = stored.Digest,
                     };
                 },
@@ -353,6 +357,10 @@ internal sealed class FileExtractJson : JsonConverter<FileExtract>
         public IReadOnlyList<string>? Exports { get; init; }
 
         public IReadOnlyList<int>? SuffixOf { get; init; }
+
+        public IReadOnlyList<string>? Selectors { get; init; }
+
+        public IReadOnlyList<string>? Templates { get; init; }
 
         public string? Digest { get; init; }
     }

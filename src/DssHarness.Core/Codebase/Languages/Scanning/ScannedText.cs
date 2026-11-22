@@ -59,6 +59,16 @@ internal sealed class ScannedText
         => token.Kind == ScanTokenKind.Text && _literals.TryGetValue(token.Start, out var literal) ? literal.Values(Source) : [];
 
     /// <summary>
+    /// Each string the markup <paramref name="token"/> holds - a JSX element's attribute values - decoded, with where the
+    /// string is written, past its quote and before it, and its line; none of a token that is no markup. The attribute's
+    /// name is read where it stands, before the string, by whoever asks (<see cref="JsReading"/>).
+    /// </summary>
+    public IEnumerable<(string Value, long Start, long End, int Line)> MarkupStrings(ScanToken token)
+        => token.Kind == ScanTokenKind.Text && _literals.TryGetValue(token.Start, out var literal) && literal.Markup
+            ? literal.Parts.Select(part => (ScanLiteral.Decode(Source, part.Start, part.End, literal.Escapes, 0, lineStart: false), part.Start, part.End, part.Line))
+            : [];
+
+    /// <summary>
     /// The value of the string literal at <paramref name="at"/>, decoded, where it is one string with no holes - what an
     /// import, an include or a directive names; <see langword="null"/> where the token is no such string.
     /// </summary>

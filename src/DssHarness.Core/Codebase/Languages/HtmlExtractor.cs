@@ -15,6 +15,11 @@ namespace DssHarness.Core.Codebase.Languages;
 /// <c>&lt;style&gt;</c> by the style sheet's, in the syntax its <c>lang</c> or <c>type</c> names (<c>text/less</c>,
 /// <c>text/x-scss</c>), each embedded as every markup embeds code (<see cref="EmbeddedCode"/>), so its declarations carry
 /// the lines they stand on and nothing its reader saw is lost.
+/// A file whose content is an Angular template - an element's <c>(click)</c>, <c>[x]</c>, <c>*ngFor</c> or <c>#x</c>, a control-flow
+/// block in its text - is read as one (<see cref="MarkupDialect.Angular"/>, <see cref="MarkupTemplates"/>): its component tags - the
+/// selectors of the components declared elsewhere - instantiates, each attribute's and text's code read by the JavaScript reader as
+/// Angular's compiler writes it, each name it reads by itself a member of the component that names this file its template by
+/// <c>templateUrl</c> (<see cref="ExtractNode.Templates"/>), which the linker joins.
 /// </summary>
 public sealed class HtmlExtractor : ICodeGraphExtractor
 {
@@ -36,7 +41,7 @@ public sealed class HtmlExtractor : ICodeGraphExtractor
     public string Language => "html";
 
     /// <inheritdoc/>
-    public int Version => 2;
+    public int Version => 3;
 
     /// <inheritdoc/>
     public CodeGraphClaims Claims { get; } = CodeGraphClaims.OfExtensions(".html", ".htm");
@@ -46,13 +51,14 @@ public sealed class HtmlExtractor : ICodeGraphExtractor
 
     /// <inheritdoc/>
     public CodeGraphExtractorHelp Help { get; } = new(
-        "HTML documents (.html, .htm): each landmark and each element with an id as a section from its start tag to its end tag, a template's content among them, each class and id as a use of the rule that styles it, a custom element as an instantiates of a component of that name, a script src, link href, img src and a href naming a local file by a relative path as an import of it, an on*= handler as the body of the function HTML makes of it, given event, read by the JavaScript reader - return validate(this) a call of validate, go alone a use - each inline script of JavaScript read by the JavaScript reader as a program of its own - a module where its type says - and each style element by the style sheet's reader, in the syntax its lang or type names (CSS where it names none, text/less, text/scss, text/x-scss, text/sass), on the lines they stand on",
+        "HTML documents (.html, .htm): each landmark and each element with an id as a section from its start tag to its end tag, a template's content among them, each class and id as a use of the rule that styles it, a custom element as an instantiates of a component of that name, a script src, link href, img src and a href naming a local file by a relative path as an import of it, an on*= handler as the body of the function HTML makes of it, given event, read by the JavaScript reader - return validate(this) a call of validate, go alone a use - each inline script of JavaScript read by the JavaScript reader as a program of its own - a module where its type says - and each style element by the style sheet's reader, in the syntax its lang or type names (CSS where it names none, text/less, text/scss, text/x-scss, text/sass), on the lines they stand on; a file whose content is an Angular template - an element's (click), [x], *ngFor or #x, an @if or @for block in its text - read as one: its component tags, the selectors of components declared elsewhere, as instantiates, and each attribute's, mustache's and block's code read by the JavaScript reader as Angular compiles it - (click)=\"save()\" a call of save, [x] and {{ }} what their expressions read, *ngFor's list and @for's list with their aliases, #x a name declared - each name read by itself a member of the component whose templateUrl names the file, joined where a TypeScript file declares it",
         [
             "a style attribute's declarations: no rule of their own",
             "a script of another type - a JSON block, an import map, a template a framework reads: its text read as no code",
             "a style element of another syntax (lang=\"stylus\", a template's type): its text read as no style sheet",
             "an element with no id and no landmark tag: no node of its own, its lines its enclosing section's",
             "an href or src that names no file of the tree - another site's, a rooted path, an anchor, data: - no import of it",
+            "an Angular template no component names by templateUrl, and one written in a file of another extension: its names are bound to no component, so a call or a read its code makes by itself reaches nothing",
             "a file of more than 2,147,483,647 characters, past the Int32 the HTML tokenizer (AngleSharp) counts a position in: nothing in it read, the line its count ends on marked dynamic, with why",
         ])
     {
@@ -73,6 +79,7 @@ public sealed class HtmlExtractor : ICodeGraphExtractor
 
         var markup = MarkupText.Read(text, MarkupDialect.Html.ClosesAsHtml);
         var elements = markup.Elements;
+        var angular = Angular(markup);
         var lineCount = input.Lines.Count;
         var ids = new ExtractIds();
         var nodes = new List<ExtractNode>();
@@ -139,12 +146,17 @@ public sealed class HtmlExtractor : ICodeGraphExtractor
             sectionOf[at] = inside;
             var from = (inside ?? body).Id;
 
-            MarkupDialect.Html.Read(element, from, references);
-
-            // Each handler is the body of a function HTML makes of it, given the event: its code the section's.
-            foreach (var handler in element.Attributes.Where(attribute => MarkupDialect.Html.Role(attribute) == MarkupRole.Handler && !string.IsNullOrWhiteSpace(attribute.Value)))
+            // A template's own reader reads every element, its classes and id among them (<see cref="Angular"/> below); a page's
+            // elements are read here.
+            if (!angular)
             {
-                handlers.Add(new CodeRegion(from, "event", handler.ValueAt, handler.Value));
+                MarkupDialect.Html.Read(element, from, references);
+
+                // Each handler is the body of a function HTML makes of it, given the event: its code the section's.
+                foreach (var handler in element.Attributes.Where(attribute => MarkupDialect.Html.Role(attribute) == MarkupRole.Handler && !string.IsNullOrWhiteSpace(attribute.Value)))
+                {
+                    handlers.Add(new CodeRegion(from, "event", handler.ValueAt, handler.Value));
+                }
             }
 
             if (Linked.FirstOrDefault(linked => linked.Element == element.Name) is ({ }, { } named)
@@ -165,8 +177,25 @@ public sealed class HtmlExtractor : ICodeGraphExtractor
             embedded.Add(EmbeddedCode.Script(Language, input.Path, markup.Text, markup.Lines, handlers, typescript: false));
         }
 
+        // An Angular template, told by its content: its elements and its code read by the template's one reader, as a Vue
+        // component's template is, each name its code reads by itself a member of the component that names this file its template.
+        if (angular && MarkupTemplates.Read(markup, MarkupDialect.Angular, body.Id, references, null) is { Count: > 0 } regions)
+        {
+            embedded.Add(MarkupTemplates.Members(EmbeddedCode.Script(Language, input.Path, markup.Text, markup.Lines, regions, typescript: false)));
+        }
+
         return EmbeddedCode.Merged(new FileExtract([.. nodes]) { References = references, Imports = imports }, embedded);
     }
+
+    /// <summary>
+    /// Whether the markup is an Angular template, as its content says: an element writes one of Angular's attributes - an event's
+    /// <c>(click)</c>, a binding's <c>[x]</c>, a loop's <c>*ngFor</c>, a name's <c>#x</c> - or its text a control-flow block. A component's
+    /// <c>templateUrl</c> names it its template at link time wherever it stands (<see cref="ExtractNode.Templates"/>); its content is
+    /// what tells its reader, which sees the one file.
+    /// </summary>
+    private static bool Angular(MarkupText markup)
+        => markup.Elements.Any(element => element.Attributes.Any(attribute => MarkupDialect.Angular.Role(attribute) != MarkupRole.None))
+            || MarkupDialect.Angular.Blocks(markup).Any();
 
     /// <summary>The name a section is given: its id, where it has one; its tag otherwise.</summary>
     private static string SectionName(MarkupElement element)
