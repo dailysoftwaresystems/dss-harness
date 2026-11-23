@@ -9,9 +9,9 @@ namespace DssHarness.Core.Codebase.Languages;
 /// token, a backslash escaping the character after it for where the string ends, a raw one's too, as Python reads one; with
 /// every replacement field an f-string or a t-string holds (<c>{name}</c>, <c>{f(x)!r:&gt;10}</c>, <c>{v:.{digits}f}</c>, <c>{x=}</c>),
 /// never read as code, and where its value's constant parts are written - between its quotes and its fields, a field's
-/// debugging <c>=</c>, conversion and format its own, the fields a format holds code too - and how they are decoded (each by
-/// <see cref="Prefix.Escapes"/>): a raw one's as written, a bytes one's by the escapes of bytes, any other's by Python's, and
-/// a formatted one's doubled braces a brace; names that may hold <c>$</c>; numbers with their separators; <c>**=</c>,
+/// debugging <c>=</c>, conversion and format its own, the fields a format holds code too, and a debugging field's text to its
+/// <c>=</c> the value's as written - and how they are decoded (each by <see cref="Prefix.Escapes"/>): a raw one's as written,
+/// a bytes one's by the escapes of bytes, any other's by Python's, and a formatted one's doubled braces a brace; names that may hold <c>$</c>; numbers with their separators; <c>**=</c>,
 /// <c>//=</c>, <c>&lt;&lt;=</c>, <c>&gt;&gt;=</c>, <c>...</c>, <c>**</c>, <c>//</c>, <c>&lt;&lt;</c>, <c>&gt;&gt;</c>,
 /// <c>&lt;=</c>, <c>&gt;=</c>, <c>==</c>, <c>!=</c>, <c>-&gt;</c>, <c>:=</c> and the assigning <c>+=</c> and the rest whole,
 /// and every other punctuator alone; a backslash that continues a line no token. A line's indentation is no token either:
@@ -131,7 +131,8 @@ internal static class PythonLexer
         /// a backslash escaping the character after it in every string (<see cref="Escaped"/>), past every field an f-string
         /// or a t-string holds - each <c>{</c> code to its own <c>}</c>, or to where the field's code ends short of it
         /// (<see cref="FieldEnds"/>): its tail, a debugging <c>=</c>, a conversion and a format, to the brace that closes the
-        /// field, none of it the value's and every field a format holds code of its own - read with a stack of what it is in,
+        /// field, none of it the value's and every field a format holds code of its own, while a debugging field's text, to its
+        /// <c>=</c> and the blanks after it, is the value's as written, as Python's value holds it - read with a stack of what it is in,
         /// never a call into itself, so no nesting reaches past the reader's stack; its value's parts between its quotes and its
         /// fields. A string of one line left open ends at its line, and what holds it with it. A string a scan of the text before
         /// this one read is taken as it was read (<see cref="ScanCloses"/>), and passed over at once; what this reading finds of
@@ -210,10 +211,11 @@ internal static class PythonLexer
                         continue;
                     }
 
-                    // The field's own end short of its closer, its tail's to the closer.
-                    if (grouped[^1] == 0 && literals.Depth == 0 && FieldEnds(at, end))
+                    // The field's own end short of its closer, its tail's to the closer - a debugging field's text to its = the value's as
+                    // written.
+                    if (grouped[^1] == 0 && literals.Depth == 0 && FieldEnds(at, end, out var written))
                     {
-                        literals.EndCode(at);
+                        literals.EndCode(at, written);
                         grouped.RemoveAt(grouped.Count - 1);
                         continue;
                     }
@@ -309,10 +311,13 @@ internal static class PythonLexer
         /// Whether the code of a field ends at <paramref name="at"/>, outside every group it holds, short of the field's closer:
         /// at the <c>=</c> that makes the field one that writes its code beside its value - one <c>==</c>, <c>!=</c>,
         /// <c>&lt;=</c>, <c>&gt;=</c> and <c>:=</c> write none of, and only before blanks and then a conversion, a format or the
-        /// closer - at the <c>!</c> of a conversion, or at the <c>:</c> of a format.
+        /// closer - with <paramref name="written"/> past those blanks, where the field's text that Python's value holds as
+        /// written ends; at the <c>!</c> of a conversion, or at the <c>:</c> of a format, with <paramref name="written"/> -1.
         /// </summary>
-        private bool FieldEnds(long at, long end)
+        private bool FieldEnds(long at, long end, out long written)
         {
+            written = -1;
+
             switch (text[at])
             {
                 case ':':
@@ -330,7 +335,13 @@ internal static class PythonLexer
                         past++;
                     }
 
-                    return past < end && text[past] is '!' or ':' or '}';
+                    if (past < end && text[past] is '!' or ':' or '}')
+                    {
+                        written = past;
+                        return true;
+                    }
+
+                    return false;
                 }
 
                 default:

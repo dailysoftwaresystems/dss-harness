@@ -828,9 +828,9 @@ public sealed class PythonExtractorTests : CodeGraphExtractorContractTests<Pytho
         { """X = f"{V:{W}.{P}}" """, [], ["uses V", "uses W", "uses P"] },
         { """X = f"{V:{W}}}}" """, ["}"], ["uses V", "uses W"] },
         { """X = f"{V:>3} {{x}} {W} end" """, [" {x} ", " end"], ["uses V", "uses W"] },
-        { """X = f"{RETRIES=}" """, [], ["uses RETRIES"] },
-        { """X = f"{TOTAL = }" """, [], ["uses TOTAL"] },
-        { """X = f"{A + B=!r:>{W}}" """, [], ["uses A", "uses B", "uses W"] },
+        { """X = f"{RETRIES=}" """, ["RETRIES="], ["uses RETRIES"] },
+        { """X = f"{TOTAL = }" """, ["TOTAL = "], ["uses TOTAL"] },
+        { """X = f"{A + B=!r:>{W}}" """, ["A + B="], ["uses A", "uses B", "uses W"] },
         { """X = t"Hello {USER}" """, ["Hello "], ["uses USER"] },
         { """X = Rt"\d{USER}" """, ["\\d"], ["uses USER"] },
         { """X = f"\N{EM DASH} {TITLE}" """, ["\\N{EM DASH} "], ["uses TITLE"] },
@@ -847,6 +847,28 @@ public sealed class PythonExtractorTests : CodeGraphExtractorContractTests<Pytho
         { """X = r'[\'"]' """, ["[\\'\"]"], [] },
         { """X = rf"\"{NAME}" """, ["\\\""], ["uses NAME"] },
     };
+
+    /// <summary>
+    /// A debugging field's text, to its <c>=</c> and the blanks after it, is a constant part of the string's value as written - never
+    /// decoded - going on from the text before the field, as Python's value holds it, and its code is read as any field's; a field a
+    /// format holds stands in no value's text, so its text is none of the value's.
+    /// </summary>
+    [Fact]
+    public void ADebuggingFieldsText_IsAConstantPartOfTheValue_AsWritten()
+    {
+        var extract = Read("pkg/debug.py", """
+            A = f"{RETRIES=}"
+            B = f"tries: {RETRIES = !r}"
+            C = f"{'\n'=}"
+            D = f"{V:{W=}}"
+            """);
+
+        // The last is the string the field of C holds, decoded as any string is: its own, not C's value.
+        Assert.Equal(["RETRIES=", "tries: RETRIES = ", "'\\n'=", "\n"], (extract.Literals ?? []).Select(literal => literal.Value));
+        Assert.Equal([("RETRIES", CodeEdgeKinds.Uses, 1, (string?)null)], References(extract, "python:pkg.debug.A"));
+        Assert.Equal([("RETRIES", CodeEdgeKinds.Uses, 2, (string?)null)], References(extract, "python:pkg.debug.B"));
+        Assert.Equal([("V", CodeEdgeKinds.Uses, 4, (string?)null), ("W", CodeEdgeKinds.Uses, 4, (string?)null)], References(extract, "python:pkg.debug.D"));
+    }
 
     /// <summary>
     /// A raw string's escaped quote closes nothing, as Python's tokenizer reads a raw string - the backslash kept in its value - so the

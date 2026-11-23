@@ -266,10 +266,11 @@ internal abstract class ScanLexing(CodeLineIndex lines, ScanCloses? closes = nul
         public void OpenCode(long sigil, long at)
         {
             var holder = _frames[^1];
+            var follows = holder.Part >= 0;
 
             EndPart(holder, sigil);
             holder.Holes = true;
-            _frames.Add(new LiteralFrame(default!, code: true, at, at));
+            _frames.Add(new LiteralFrame(default!, code: true, at, at) { Follows = follows ? holder.Parts.Count - 1 : -1 });
         }
 
         /// <summary>
@@ -306,9 +307,12 @@ internal abstract class ScanLexing(CodeLineIndex lines, ScanCloses? closes = nul
         /// its format - recorded as the code of the literal that holds it; what stands from there to the closer is the field's
         /// tail (<see cref="InTail"/>), none of it the value's constant text, which <see cref="CloseCode"/> says goes on. A
         /// field the tail holds - a format's own - is opened as any interpolation is (<see cref="OpenCode"/>), and closing it
-        /// leaves the reading in the tail.
+        /// leaves the reading in the tail. Where <paramref name="written"/> is given, the code's own text to it - a debugging
+        /// field's, to its <c>=</c> and the blanks after it - is the value's as written, going on from the part that ended where
+        /// the field began (<see cref="ScanLiteralPart.Written"/>); of a field a format holds, which stands in no value's text,
+        /// nothing is.
         /// </summary>
-        public void EndCode(long at)
+        public void EndCode(long at, long written = -1)
         {
             var top = _frames[^1];
 
@@ -316,6 +320,12 @@ internal abstract class ScanLexing(CodeLineIndex lines, ScanCloses? closes = nul
 
             var holder = _frames[^1];
             Span(holder, top.Start, at);
+
+            if (written > top.Start && top.Follows >= 0)
+            {
+                holder.Parts[top.Follows] = holder.Parts[top.Follows] with { Written = (top.Start, written) };
+            }
+
             holder.Part = -1;
             holder.Tails++;
         }
@@ -482,6 +492,12 @@ internal abstract class ScanLexing(CodeLineIndex lines, ScanCloses? closes = nul
             /// its closer, and each a format of it holds whose own code did, the innermost last.
             /// </summary>
             public int Tails { get; set; }
+
+            /// <summary>
+            /// The index, among the parts of the literal that holds it, of the part code's field follows - the one that ended where
+            /// the field began; -1 where it follows none, as a field a format holds does.
+            /// </summary>
+            public int Follows { get; init; } = -1;
         }
     }
 

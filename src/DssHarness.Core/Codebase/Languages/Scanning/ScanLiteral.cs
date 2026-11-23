@@ -79,7 +79,16 @@ internal enum ScanEscapes
 /// <param name="Start">Where it begins in the text.</param>
 /// <param name="End">Where it ends: the first character after it.</param>
 /// <param name="Line">The line it begins on, from 1: the part's own, for each part of a literal over lines.</param>
-internal readonly record struct ScanLiteralPart(long Start, long End, int Line);
+internal readonly record struct ScanLiteralPart(long Start, long End, int Line)
+{
+    /// <summary>
+    /// Where the text is written that the part's value goes on with as written, never decoded: a debugging field's source - an
+    /// f-string's <c>{x=}</c> to its <c>=</c> and the blanks after it - which Python's value holds after the text before the
+    /// field, <c>f"a{x=}"</c> holding <c>ax=</c>; <see langword="null"/> where the part goes on with none, as every other
+    /// language's.
+    /// </summary>
+    public (long Start, long End)? Written { get; init; }
+}
 
 /// <summary>
 /// One string literal as its lexer read it: where each constant part of its value is written - a plain string's one part,
@@ -121,12 +130,22 @@ internal sealed record ScanLiteral(IReadOnlyList<ScanLiteralPart> Parts, ScanEsc
     /// <summary>Each constant part's value, decoded, with the line it begins on.</summary>
     /// <param name="source">The text the literal is written in.</param>
     public IEnumerable<(string Value, int Line)> Values(CodeText source)
-        => Parts.Select(part => (Decode(source, part.Start, part.End, Escapes, Indent, Indent > 0 && part.Start == Content), part.Line));
+        => Parts.Select(part => (Value(source, part, Indent > 0 && part.Start == Content), part.Line));
 
     /// <summary>Its whole value, decoded, where it is one closed string of one part and no holes; <see langword="null"/> where it is not.</summary>
     /// <param name="source">The text the literal is written in.</param>
     public string? Whole(CodeText source)
-        => Interpolated || Markup || LeftOpen || Parts.Count != 1 ? null : Decode(source, Parts[0].Start, Parts[0].End, Escapes, Indent, Indent > 0);
+        => Interpolated || Markup || LeftOpen || Parts.Count != 1 ? null : Value(source, Parts[0], Indent > 0);
+
+    /// <summary>
+    /// The value of <paramref name="part"/>: its text decoded by the literal's escapes - its first line's indentation taken off
+    /// where <paramref name="lineStart"/> - and the text it goes on with as written (<see cref="ScanLiteralPart.Written"/>).
+    /// </summary>
+    private string Value(CodeText source, ScanLiteralPart part, bool lineStart)
+    {
+        var decoded = Decode(source, part.Start, part.End, Escapes, Indent, lineStart);
+        return part.Written is { } written ? decoded + source.Slice(written.Start, written.End) : decoded;
+    }
 
     /// <summary>
     /// The value the text from <paramref name="start"/> to <paramref name="end"/> writes, by <paramref name="escapes"/>:
