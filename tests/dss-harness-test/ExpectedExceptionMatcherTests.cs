@@ -21,6 +21,40 @@ public sealed class ExpectedExceptionMatcherTests
                 new RunFailure("IOException", "device or resource busy (16)")));
     }
 
+    /// <summary>
+    /// What was expected is often the cause under what was thrown: an entry's type matches the record's causes too,
+    /// each one however deep it sits, and its messages still match the texts - so an excusal declared against a cause
+    /// is not lost the day the same failure arrives wrapped.
+    /// </summary>
+    [Fact]
+    public void Find_MatchesATypeTheRecordCausessAsToo_HoweverDeepItSits()
+    {
+        var entry = Entry(exceptionType: "ArgumentException", messages: ["the argument was wrong"]);
+
+        var wrapped = new DssHarness.Core.Results.ExceptionRecord(
+            "System.InvalidOperationException",
+            "The operation is invalid.",
+            [],
+            [new DssHarness.Core.Results.ExceptionRecord(
+                "System.ArgumentException",
+                "the argument was wrong",
+                [],
+                [new DssHarness.Core.Results.ExceptionRecord("System.Exception", "deepest", [], [])])]);
+
+        Assert.Same(
+            entry,
+            Matcher().Find(
+                Scope("corpus", ["linux-arm64-qemu"], entry),
+                "linux-arm64-qemu",
+                new RunFailure("InvalidOperationException", "The operation is invalid.", Exception: wrapped)));
+
+        Assert.Null(
+            Matcher().Find(
+                Scope("corpus", ["linux-arm64-qemu"], entry),
+                "linux-arm64-qemu",
+                new RunFailure("IOException", "device busy", Exception: new DssHarness.Core.Results.ExceptionRecord("IOException", "device busy", [], []))));
+    }
+
     [Fact]
     public void Find_MatchesAMessageAsPlainText_WhenItIsNotARegularExpression()
     {

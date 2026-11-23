@@ -537,6 +537,7 @@ public sealed class CiWaitStepRunner(
             string? kept = null;
             long? lines = null;
             IReadOnlyList<string> failing = [];
+            ResultDigest? digest = null;
 
             // Named for its job and the job's id: two red jobs of one name - in two workflows, or named apart only by
             // case or by a character no path carries - would otherwise keep one file, each the other's log.
@@ -560,6 +561,11 @@ public sealed class CiWaitStepRunner(
                     cancellationToken).ConfigureAwait(false);
                 lines = pages.Lines;
                 failing = [.. (await FailingPageAsync(pages, masked.Contains(ErrorMark, StringComparison.Ordinal), cancellationToken).ConfigureAwait(false)).Entries.Select(entry => entry.Text)];
+
+                // The kept log digested: the forge's decoration stripped, the workflow's own annotations first, then
+                // whatever forms a CI log holds - so a red job's entry starts from what failed, not from a page.
+                digest = PhaseParsers.DigestOf(PhaseParsers.StrippedCi(masked), PhaseParsers.ForCi(context.Config.Results.Matchers))
+                    ?.WithInTree(context.Layout.MainCheckoutRoot);
             }
 
             red.Add(new JsonObject
@@ -574,6 +580,7 @@ public sealed class CiWaitStepRunner(
                 ["failing"] = new JsonArray([.. failing.Select(line => (JsonNode?)line)]),
                 ["log"] = kept,
                 ["lines"] = lines,
+                ["digest"] = digest?.ForAModel(),
                 ["conclusion"] = check.Check.Conclusion,
                 ["description"] = check.Check.Description,
                 ["unread"] = check.Unread,

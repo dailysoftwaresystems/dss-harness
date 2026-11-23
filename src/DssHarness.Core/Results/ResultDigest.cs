@@ -258,7 +258,9 @@ public sealed record ResultDigest(
     {
         var said = Diagnostics.Where(diagnostic => diagnostic.Severity == "error").ToList();
         var first = First ?? (said.Count > 0 ? said[0] : null);
-        var more = said.Where(diagnostic => !ReferenceEquals(diagnostic, first)).Take(Math.Max(0, 4 - (first is null ? 0 : 1))).ToList();
+
+        // The next distinct errors after the first, four in all with it - a rule of rendering, never of the record.
+        var more = (first is null ? said : said.Where(diagnostic => !diagnostic.SameAs(first))).Take(first is null ? 4 : 3).ToList();
 
         return new JsonObject
         {

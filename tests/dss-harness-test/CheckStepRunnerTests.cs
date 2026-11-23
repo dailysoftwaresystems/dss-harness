@@ -328,6 +328,44 @@ public sealed class CheckStepRunnerTests : IDisposable
     }
 
     /// <summary>
+    /// A red job's kept log is digested: the forge's timestamps and group markers stripped, the annotations the workflow
+    /// itself wrote first - the forge's own reading of what failed - and whatever forms a CI log holds beside them, so
+    /// the job's entry starts from what failed and not from a page of its log.
+    /// </summary>
+    [Fact]
+    public async Task ARedJobsKeptLog_IsDigested_AnnotationsFirst_TheForgesMarksStripped()
+    {
+        var (harness, repository) = await RepositoryAsync();
+        var log = string.Join(
+            "\n",
+            "2026-11-23T00:39:53.9245022Z ##[group]Build the project",
+            "2026-11-23T00:39:54.1000000Z ##[endgroup]",
+            "2026-11-23T00:40:01.0000000Z src/Program.cs(12,35): error CS0103: The name 'x' does not exist in the current context [src/App.csproj]",
+            "2026-11-23T00:40:02.0000000Z ##[error] file=src/Program.cs,line=12::The build failed") + "\n";
+        var job = new CiCheck("build", CiCheckState.Red, "failure", "https://ci/build", 7, 70, null);
+        var checks = Substitute.For<ICiChecksService>();
+        checks.WaitAsync(Arg.Any<string>(), Arg.Any<CiChecksRequest>(), Arg.Any<CancellationToken>()).Returns(
+            new CiChecksReading("c1", CiChecksFound.Red, [job], [new CiRedCheck(job, "build", "Pipeline", "Build", null, false, log, null)]));
+
+        var result = await Runner(harness, checks).RunAsync(Run(new WorkflowStep { Name = "wait", Type = "ci-wait", Commit = "c1" }, repository.Path), Token);
+
+        var digest = Assert.Single(result.Output!["red"]!.AsArray())!["digest"]!.AsObject();
+
+        Assert.Equal(2, digest["errors"]!.GetValue<int>());
+
+        // The annotation first, the compiler's error second: what the workflow marked is the forge's own reading.
+        var first = digest["first"]!.AsObject();
+
+        Assert.Equal(("github-actions", "src/Program.cs", 12, "The build failed"), (first["tool"]!.GetValue<string>(), first["file"]!.GetValue<string>(), first["line"]!.GetValue<int>(), first["message"]!.GetValue<string>()));
+
+        var more = digest["diagnostics"]!.AsArray().Single()!.AsObject();
+
+        Assert.Contains("CS0103", more["said"]!.GetValue<string>(), StringComparison.Ordinal);
+        Assert.Empty(digest["unparsed"]!.AsArray());
+        Assert.Empty(JsonSchemaSubset.Problems(JsonNode.Parse(WorkflowStepTypes.Find("ci-wait")!.Output!)!, result.Output));
+    }
+
+    /// <summary>
     /// Rows or paths given as an expression the engine handed nothing for are its own fault (70) - never read as naming
     /// nothing, which would judge nothing and pass.
     /// </summary>

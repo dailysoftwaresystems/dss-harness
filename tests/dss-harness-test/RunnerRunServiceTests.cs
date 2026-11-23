@@ -1054,6 +1054,52 @@ public sealed class RunnerRunServiceTests
         Assert.Equal("a known confound", result.Outcome.Message);
     }
 
+    /// <summary>
+    /// A failing step whose log printed a whole stack is excused by the cause under what was thrown: the record read
+    /// from the stack - its type, its message, its causes - is what the entry is matched against, so an excusal
+    /// declared against the cause holds though the exception that reached the log wraps it.
+    /// </summary>
+    [Fact]
+    public async Task AFailingStepsStack_IsReadForItsCauses_ForWhatAnExpectedExceptionRecognises()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        var printed = temp.WriteFile(
+            "printed.txt",
+            "Unhandled: System.InvalidOperationException: The operation is invalid.\n"
+            + "   at App.Program.Run() in /src/Program.cs:line 12\n"
+            + "--- End of inner exception stack trace ---\n"
+            + "System.ArgumentException: the argument was wrong\n"
+            + "   at App.Program.Check() in /src/Program.cs:line 30\n");
+
+        var runner = new RunnerConfig
+        {
+            Phases = [Phase("measure", "print-file", [printed], successPattern: "all cases passed")],
+            ExpectedExceptions =
+            [
+                new ExpectedException
+                {
+                    ExceptionType = "ArgumentException",
+                    Messages = ["the argument was wrong"],
+                    Success = true,
+                    Warning = true,
+                    ResultCode = 0,
+                    Message = "a known confound",
+                    EarnedOn = "lin-gcc-release",
+                    EarnedAt = "2026-09-16",
+                    Mechanism = "the fixture server refuses the seventh connection of a session",
+                    Anchor = "D-TEST-RUNNER-GATE",
+                },
+            ],
+        };
+
+        var result = await Service(factory).RunAsync(Config(), Request(temp, runner), TestContext.Current.CancellationToken);
+
+        Assert.NotNull(result.ExpectedException);
+        Assert.Equal(LegVerdict.Passed, result.Verdict.Verdict);
+        Assert.Equal("a known confound", result.Outcome.Message);
+    }
+
     [Fact]
     public async Task AnExpectedExceptionWhoseCheckIsNotConfirmed_LeavesTheFailureGenuine()
     {

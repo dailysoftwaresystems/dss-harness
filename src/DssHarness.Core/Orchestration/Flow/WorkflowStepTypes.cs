@@ -677,7 +677,7 @@ public static class WorkflowStepTypes
         ("passed", Flag),
         ("commit", Text),
         ("checks", ListOf(ObjectOf(("name", Text), ("state", Text), ("conclusion", TextOrNull), ("url", Text)))),
-        ("red", ListOf(ObjectOf(("name", Text), ("job", TextOrNull), ("workflow", TextOrNull), ("step", TextOrNull), ("leg", TextOrNull), ("overran", Flag), ("url", Text), ("failing", ListOf(Text)), ("log", TextOrNull), ("lines", WholeNumberOrNull), ("conclusion", TextOrNull), ("description", TextOrNull), ("unread", TextOrNull)))),
+        ("red", ListOf(ObjectOf(("name", Text), ("job", TextOrNull), ("workflow", TextOrNull), ("step", TextOrNull), ("leg", TextOrNull), ("overran", Flag), ("url", Text), ("failing", ListOf(Text)), ("log", TextOrNull), ("lines", WholeNumberOrNull), ("digest", DigestOutput), ("conclusion", TextOrNull), ("description", TextOrNull), ("unread", TextOrNull)))),
         ("pending", UntypedList),
         ("unsettled", UntypedList));
 

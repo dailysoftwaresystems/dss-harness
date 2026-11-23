@@ -10,7 +10,7 @@ namespace DssHarness.Core.Results;
 /// specific names - a test's by its runner, and a configured matcher everywhere, for <c>results.matchers</c> is the
 /// way a tool this build does not know is read. A parser never runs over output it was not chosen for.
 /// </summary>
-public static class PhaseParsers
+public static partial class PhaseParsers
 {
     /// <summary>The parsers a build phase's log is read by, for the toolchain the leg resolved.</summary>
     /// <param name="toolchain">The toolchain the leg's variant resolved, or null where none did.</param>
@@ -95,6 +95,64 @@ public static class PhaseParsers
 
         return diagnostics.Count == 0 && failures.Count == 0 && unparsed.Count == 0 ? null : ResultDigest.Of(diagnostics, failures, unparsed);
     }
+
+    /// <summary>
+    /// The parsers a CI job's log is read by: its phases are not known from the outside - a job holds whatever steps
+    /// the workflow wrote - so every form a CI log holds is chosen, the compilers and their drivers, the linkers, the
+    /// TypeScript checker, the test consoles and .NET's stack traces, and the annotations the workflow itself wrote
+    /// (<c>##[error] file=...,line=...::</c>), which come first, for what a workflow marked is the forge's own reading
+    /// of what failed. The configured matchers, as everywhere.
+    /// </summary>
+    /// <param name="matchers">The configured matchers, which apply to every phase.</param>
+    public static IReadOnlyList<IResultParser> ForCi(IReadOnlyList<ProblemMatcher> matchers)
+        => With(
+            [
+                ResultParsers.Of("ci-annotations")!,
+                ResultParsers.Of("msbuild")!, ResultParsers.Of("msvc")!, ResultParsers.Of("gcc")!, ResultParsers.Of("clang")!,
+                ResultParsers.Of("cmake")!, ResultParsers.Of("ninja")!, ResultParsers.Of("link")!, ResultParsers.Of("tsc")!,
+                ResultParsers.Of("xunit-console")!, ResultParsers.Of("gtest-console")!, ResultParsers.Of("ctest-console")!,
+                ResultParsers.Of("dotnet-stack")!,
+            ],
+            matchers);
+
+    /// <summary>
+    /// A CI job's log with the forge's own decoration taken off, as the digest reads it: the timestamp every line is
+    /// prefixed with gone, the group markers a workflow folded gone, and every other word left as the job printed it -
+    /// the error markers among them, which are the annotations.
+    /// </summary>
+    /// <param name="log">The job's log, whole, masked as it was kept.</param>
+    public static IReadOnlyList<string> StrippedCi(string log)
+    {
+        ArgumentNullException.ThrowIfNull(log);
+
+        return
+        [
+            .. log.Split('\n')
+                .Select(line => line.TrimEnd('\r'))
+                .Select(line => Timestamp().Replace(line, string.Empty))
+                .Where(line => line.Length > 0 && !Group().IsMatch(line)),
+        ];
+    }
+
+    [GeneratedRegex(@"^\d{4}-\d{2}-\d{2}T[\d:.]+Z ?")]
+    private static partial Regex Timestamp();
+
+    [GeneratedRegex(@"^##\[(?:group|endgroup)\]$")]
+    private static partial Regex Group();
+
+    /// <summary>
+    /// The stack parsers of every runtime, for output whose program is not known from the outside - a runner's step,
+    /// a CI job's script: whichever runtime printed the stack, its form is chosen.
+    /// </summary>
+    /// <param name="matchers">The configured matchers, which apply everywhere.</param>
+    public static IReadOnlyList<IResultParser> ForStacks(IReadOnlyList<ProblemMatcher> matchers)
+        => With(
+            [
+                ResultParsers.Of("dotnet-stack")!, ResultParsers.Of("jvm-stack")!, ResultParsers.Of("python-stack")!,
+                ResultParsers.Of("v8-stack")!, ResultParsers.Of("dart-stack")!, ResultParsers.Of("go-panic")!,
+                ResultParsers.Of("rust-panic")!, ResultParsers.Of("sanitizer")!,
+            ],
+            matchers);
 
     private static IReadOnlyList<IResultParser> With(IReadOnlyList<IResultParser> chosen, IReadOnlyList<ProblemMatcher> matchers)
         => [.. chosen, .. matchers.Where(matcher => matcher.Compiled is not null).Select(matcher => new MatcherParser(matcher))];

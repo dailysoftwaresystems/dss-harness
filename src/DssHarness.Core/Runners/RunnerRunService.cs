@@ -584,6 +584,29 @@ public sealed class RunnerRunService(
     }
 
     /// <summary>
+    /// The thrown error the failing step's log printed, where it printed a stack: its type, message, whole stack held
+    /// to the frame bound and its causes, read by the stack parsers of every runtime. Null where the log printed no
+    /// stack, or could not be read back.
+    /// </summary>
+    /// <param name="output">The failing step's output.</param>
+    private static Results.ExceptionRecord? ExceptionIn(PhaseOutput output)
+    {
+        ArgumentNullException.ThrowIfNull(output);
+
+        try
+        {
+            return PhaseParsers
+                .DigestOf([.. output.Lines()], PhaseParsers.ForStacks([]))
+                ?.Failures.FirstOrDefault(failure => failure.Exception is not null)
+                ?.Exception;
+        }
+        catch (PhaseOutputUnreadException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
     /// The runner's steps, with every program it can start already vetted.
     /// </summary>
     /// <exception cref="HarnessException">
@@ -1191,10 +1214,14 @@ public sealed class RunnerRunService(
             null);
 
         var scope = RunnerScope.From(request.RunnerName, request.Runner, request.ResolvedLegs);
+
+        // The thrown error as the log printed it, where it printed a stack: its type, message, whole stack and causes,
+        // the record an entry is matched against - and the type name a first *Exception line gave, where it did not.
+        var thrown = ExceptionIn(failed.Output);
         var entry = _expectedExceptionMatcher.Find(
             scope,
             request.Leg,
-            new RunFailure(FailureTypeIn(failed.Output), values.Redact(failed.Verdict.Detail), failed.Output));
+            new RunFailure(thrown?.Type ?? FailureTypeIn(failed.Output), values.Redact(failed.Verdict.Detail), failed.Output, thrown));
 
         if (entry is null)
         {

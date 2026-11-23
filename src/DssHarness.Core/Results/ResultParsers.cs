@@ -35,6 +35,7 @@ public static class ResultParsers
         new LinkerParser(), new TscParser(), new DartAnalyserParser(), new DotNetStackParser(), new JvmStackParser(),
         new PythonStackParser(), new V8StackParser(), new DartStackParser(), new GoPanicParser(), new RustPanicParser(),
         new SanitizerParser(), new XUnitConsoleParser(), new GTestConsoleParser(), new CTestConsoleParser(),
+        new CiAnnotationsParser(),
     ];
 
     /// <summary>The parser named <paramref name="name"/>, where one of the built-ins is; null where none is (a configured matcher's, read by the configuration).</summary>
@@ -860,5 +861,43 @@ internal sealed class CTestConsoleParser : IResultParser
         }
 
         return ([], failures, []);
+    }
+}
+
+/// <summary>
+/// Reads the annotations a workflow itself wrote, as the job's log records them: <c>##[error] file=path,line=12::message</c>
+/// (the <c>::error</c> command a step wrote, rendered by the forge ahead of the line it marked). What a workflow marked
+/// is the forge's own reading of what failed, and comes first in a CI log's digest.
+/// </summary>
+internal sealed class CiAnnotationsParser : IResultParser
+{
+    private static readonly Regex Form = new(
+        @"^(?:##\[|::)(?<severity>error|warning)\](?:\s+file=(?<file>[^,\s]+),line=(?<line>\d+)(?:,col=(?<column>\d+))?(?:,title=(?<title>[^:]*?))?::(?<message>.*))?\s*$",
+        RegexOptions.Compiled);
+
+    public string Name => "ci-annotations";
+
+    public (IReadOnlyList<Diagnostic> Diagnostics, IReadOnlyList<TestFailure> Failures, IReadOnlyList<string> Unparsed) Read(IReadOnlyList<string> lines)
+    {
+        var diagnostics = new List<Diagnostic>();
+
+        foreach (var (line, at) in lines.Select((line, at) => (line, at)))
+        {
+            if (Form.Match(line) is { Success: true } found)
+            {
+                diagnostics.Add(new(
+                    "github-actions",
+                    found.Groups["severity"].Value,
+                    Code: null,
+                    found.Groups["message"].Success ? found.Groups["message"].Value : line,
+                    found.Groups["file"].Success ? found.Groups["file"].Value : null,
+                    found.Groups["line"].Success ? int.Parse(found.Groups["line"].Value, CultureInfo.InvariantCulture) : null,
+                    found.Groups["column"].Success ? int.Parse(found.Groups["column"].Value, CultureInfo.InvariantCulture) : null,
+                    Project: found.Groups["title"].Success ? found.Groups["title"].Value : null,
+                    Log: (at + 1, at + 1)));
+            }
+        }
+
+        return (diagnostics, [], []);
     }
 }

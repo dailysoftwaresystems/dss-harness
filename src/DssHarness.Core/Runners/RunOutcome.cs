@@ -94,11 +94,18 @@ public sealed record RunOutcome(bool Success, bool Warning, int ResultCode, stri
 /// <param name="ExceptionType">The exception's type name, as the run reported it.</param>
 /// <param name="Message">The exception's message, when one was reported.</param>
 /// <param name="Output">The failing unit's output, when it was captured: read from its log a line at a time, never held.</param>
-public sealed record RunFailure(string ExceptionType, string? Message = null, PhaseOutput? Output = null)
+/// <param name="Exception">
+/// The thrown error as the failing step's log printed it, where it printed a stack: its type, its message, its whole
+/// stack held to the frame bound and its causes - the record <see cref="ExpectedExceptionMatcher"/> matches an entry
+/// against, so what was expected is matched against what was thrown and not only against a first type name. Null
+/// where the log printed no stack.
+/// </param>
+public sealed record RunFailure(string ExceptionType, string? Message = null, PhaseOutput? Output = null, DssHarness.Core.Results.ExceptionRecord? Exception = null)
 {
     /// <summary>
-    /// Everything an entry's messages are matched against: the message, then each line the unit printed, as every
-    /// pattern read from a phase's output is matched against each line as its log keeps it.
+    /// Everything an entry's messages are matched against: the message, the thrown error's own message and each of its
+    /// causes' where a record was read, then each line the unit printed, as every pattern read from a phase's output is
+    /// matched against each line as its log keeps it.
     /// </summary>
     public IEnumerable<string> Texts
     {
@@ -109,9 +116,32 @@ public sealed record RunFailure(string ExceptionType, string? Message = null, Ph
                 yield return Message;
             }
 
+            if (Exception is { } thrown)
+            {
+                yield return thrown.Message;
+
+                foreach (var cause in Causes(thrown))
+                {
+                    yield return cause.Message;
+                }
+            }
+
             foreach (var line in Output?.Lines() ?? [])
             {
                 yield return line;
+            }
+
+            static IEnumerable<DssHarness.Core.Results.ExceptionRecord> Causes(DssHarness.Core.Results.ExceptionRecord record)
+            {
+                foreach (var cause in record.CausedBy)
+                {
+                    yield return cause;
+
+                    foreach (var deeper in Causes(cause))
+                    {
+                        yield return deeper;
+                    }
+                }
             }
         }
     }

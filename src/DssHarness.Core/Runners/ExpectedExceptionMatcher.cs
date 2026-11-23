@@ -130,9 +130,14 @@ public sealed class ExpectedExceptionMatcher(IHarnessOutput output)
         ArgumentNullException.ThrowIfNull(failure);
 
         // Each text against every message, rather than each message against every text: the texts are the failing
-        // unit's output, read from its log, and read once.
-        return MatchesType(entry.ExceptionType, failure.ExceptionType)
+        // unit's output, read from its log, and read once. The type matches the reported one or any cause the record
+        // holds, for what was expected is often the cause under what was thrown.
+        return (MatchesType(entry.ExceptionType, failure.ExceptionType)
+                || (failure.Exception is { } thrown && AnyCause(thrown, entry.ExceptionType)))
             && failure.Texts.Any(text => entry.Messages.Any(message => MatchesMessage(message, text)));
+
+        static bool AnyCause(DssHarness.Core.Results.ExceptionRecord record, string declared)
+            => record.CausedBy.Any(cause => MatchesType(declared, cause.Type) || AnyCause(cause, declared));
     }
 
     /// <summary>

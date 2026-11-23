@@ -9714,6 +9714,15 @@ are one read away" in place of "read the output and find the first thing that we
 `rediagnose.md` say the same, and the continuation record carries each red leg's digest instead of a pointer to logs
 (`ReasonStepRunner.RedLegsOf`), so a step that goes on starts from the first error and not from a directory to search.
 
+CI is digested the same way (`CheckStepRunners`): each red job's kept log is read with the forge's own decoration
+stripped - the timestamp prefixed to every line, the group markers a workflow folded - and the annotations the
+workflow itself wrote (`##[error] file=...,line=...::`) come first, for what a workflow marked is the forge's own
+reading of what failed; then every form a CI log holds, its phases being unknown from the outside
+(`PhaseParsers.ForCi`). A run check's failure is read for the error it threw (`RunnerRunService.ExceptionIn`, by
+`PhaseParsers.ForStacks`): the thrown error's whole record - type, message, stack, causes - is what an expected
+exception is matched against, so an excusal declared against a cause holds though the exception that reached the log
+wraps it (`RunFailure.Exception`, `ExpectedExceptionMatcher`).
+
 ## Reporting
 
 Progress is one line per leg transition, not a stream of child process output.
