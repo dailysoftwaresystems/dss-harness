@@ -206,8 +206,11 @@ public sealed record ResultDigest(
 
     /// <summary>
     /// This digest with every frame of every stack it holds marked by whether its file is inside <paramref name="root"/>:
-    /// a rooted file under it, or a relative one, which a tool run in the tree names by its place there. The one place
-    /// a frame is marked, so every reader of a digest reads one mark.
+    /// a rooted file under it, or a relative one that climbs out of nothing, which a tool run in the tree names by its
+    /// place there - each read in the form the tool wrote it, the same on every machine
+    /// (<see cref="Platform.PlatformPaths.IsInsideAsWritten"/>), a <c>file:</c> URI as the path it names. A frame that names
+    /// no file, or names a place that is no file - a runtime's own <c>dart:</c> or <c>node:</c> module - is in no tree. The
+    /// one place a frame is marked, so every reader of a digest reads one mark.
     /// </summary>
     /// <param name="root">The tree the phase ran in.</param>
     public ResultDigest WithInTree(string root)
@@ -231,10 +234,10 @@ public sealed record ResultDigest(
         IReadOnlyList<StackFrame> Marked(IReadOnlyList<StackFrame>? stack)
             => stack is null ? [] : [.. stack.Select(frame => frame with { InTree = Inside(frame.File) })];
 
+        // Read as the tool wrote it, never by this machine's own rules: a Windows path a tool printed is no path relative
+        // to the tree where a POSIX machine reads it. A frame that names no file is in no tree.
         bool Inside(string? file)
-            => file is null
-                || !DssHarness.Core.Platform.PlatformPaths.IsRootedOnAnyPlatform(file)
-                || DssHarness.Core.FileSystem.PathContainment.IsStrictlyInside(root, file, StringComparison.OrdinalIgnoreCase);
+            => file is not null && DssHarness.Core.Platform.PlatformPaths.IsInsideAsWritten(root, file);
     }
 
     /// <summary>

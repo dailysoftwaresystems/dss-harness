@@ -59,4 +59,45 @@ public sealed class PlatformPathsTests
     [InlineData(@"C:\tools\cmake.exe", true)]
     public void AProgramIsAPath_WhenItCarriesASeparatorOrADrive(string program, bool path)
         => Assert.Equal(path, ProcessRunner.IsPath(program));
+
+    /// <summary>
+    /// A path a tool wrote is placed in a tree by its own text, read in the form it is written in, and the same answer
+    /// comes on every machine: both forms of path against both forms of root, on whichever system the suite runs - a
+    /// Windows path is never read as relative where a POSIX machine reads it, and never joined to that machine's own
+    /// directory. Windows' form ignores case and takes either slash; the POSIX form compares exactly and parts at '/'
+    /// alone; '..' resolves by the text, a relative path inside unless it climbs out; a file URI is the path it names, and
+    /// a URI of another scheme - a runtime's own module - is in no tree; a place the text cannot tell is in none.
+    /// </summary>
+    [Theory]
+    [InlineData(@"C:\work\tree", @"C:\work\tree\src\a.cs", true)]
+    [InlineData(@"C:\work\tree", "c:/WORK/Tree/src/a.cs", true)]
+    [InlineData(@"C:\work\tree", @"C:\work\tree", false)]
+    [InlineData(@"C:\work\tree", @"C:\work\treehouse\a.cs", false)]
+    [InlineData(@"C:\work\tree", @"C:\work\tree\..\other\a.cs", false)]
+    [InlineData(@"C:\work\tree", @"C:\work\other\..\tree\a.cs", true)]
+    [InlineData(@"C:\work\tree", @"D:\work\tree\a.cs", false)]
+    [InlineData(@"C:\work\tree", "/work/tree/a.cs", false)]
+    [InlineData(@"C:\work\tree", "C:a.cs", false)]
+    [InlineData(@"C:\work\tree", @"\work\tree\a.cs", false)]
+    [InlineData(@"C:\work\tree", "file:///C:/work/tree/src/a%20b.cs", true)]
+    [InlineData(@"\\server\share\tree", "//server/share/tree/a.cs", true)]
+    [InlineData(@"\\server\share\tree", @"\\server\share\..\tree\a.cs", true)]
+    [InlineData("/home/u/tree", "/home/u/tree/src/a.c", true)]
+    [InlineData("/home/u/tree", "/home/u/Tree/src/a.c", false)]
+    [InlineData("/home/u/tree", "/home/u/tree/../other/a.c", false)]
+    [InlineData("/home/u/tree", "/../home/u/tree/a.c", true)]
+    [InlineData("/home/u/tree", "C:/home/u/tree/a.c", false)]
+    [InlineData("/home/u/tree", @"C:\src\a.c", false)]
+    [InlineData("/home/u/tree", "d:/src/test/charge_test.dart", false)]
+    [InlineData("/home/u/tree", "file:///home/u/tree/test/a.dart", true)]
+    [InlineData("/home/u/tree", "file:///d:/src/test/a.dart", false)]
+    [InlineData("/home/u/tree", "dart:isolate-patch/isolate_patch.dart", false)]
+    [InlineData("/home/u/tree", "node:internal/process/task_queues", false)]
+    [InlineData("/home/u/tree", "src/a.c", true)]
+    [InlineData(@"C:\work\tree", @"src\a.cs", true)]
+    [InlineData("/home/u/tree", "../a.c", false)]
+    [InlineData(@"C:\work\tree", @"src\..\..\a.cs", false)]
+    [InlineData("/home/u/tree", "./", false)]
+    public void APathAToolWrote_IsInsideATree_ByItsOwnForm_OnEveryMachine(string root, string path, bool inside)
+        => Assert.Equal(inside, PlatformPaths.IsInsideAsWritten(root, path));
 }

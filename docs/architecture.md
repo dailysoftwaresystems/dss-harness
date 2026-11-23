@@ -9732,7 +9732,10 @@ the tails, and `{run.red}` says it on each red line. A build's failing phase is 
 toolchain chose and a test's by its runner's, with the configured matchers everywhere
 (`Results\PhaseParsers.cs`, the one owner of the choice; a test's structured results files are read first, and its
 console only where they gave nothing); every frame is marked by whether its file is inside the tree where the digest
-is made (`ResultDigest.WithInTree`, the one place a frame is marked).
+is made (`ResultDigest.WithInTree`, the one place a frame is marked), read by its own text in the form it is written
+in (`PlatformPaths.IsInsideAsWritten`) and never by the reading machine's rules - a Windows path a tool wrote is in
+no POSIX tree, a runtime's own module (`dart:`, `node:`) in none, a `file:` URI the path it names, and the same answer
+comes on every machine.
 
 The model surfaces read it the same way: `mend.md` starts from the digest's `first` - "the log lines its `log` names
 are one read away" in place of "read the output and find the first thing that went wrong" - `diagnose.md` and
