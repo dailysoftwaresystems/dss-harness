@@ -17,8 +17,11 @@ namespace DssHarness.Core.Codebase;
 /// import's prefix, a value's type. One without is looked for in the scopes it is written in, from the inside out, then
 /// as a scope import's prefix (an alias) for what that import stands for, then in what its file imports, in order, each
 /// import's filter applied - a file imported making visible what it declares, what it declares exported by another
-/// name by that name, and what it exports, an export's filter applied in turn - then in the repository by name and arity. A type qualifier is a type or a scope found as
-/// such a name is: in those scopes, by its whole qualified name, as an alias it is or begins with, in the imports, in
+/// name by that name, and what it exports, an export's filter applied in turn - then in the repository by name and arity - a
+/// call to what takes arguments alone and a use to a value alone where the file keeps its names' kinds apart
+/// (<see cref="FileExtract.KindsApart"/>). A type qualifier is a type or a scope found as such a name is: where the file writes
+/// its names whole (<see cref="FileExtract.WrittenWhole"/>), the one of that whole qualified name alone; else in those scopes,
+/// by its whole qualified name, as an alias it is or begins with, in the imports, in
 /// the repository; else every type or scope its name ends. A named qualifier is that too, unless a value the scopes hold
 /// is nearer - a member, and the call goes through the type that member is declared with, a chain of names through each
 /// one's type in turn. A value of a type the code does not say is looked for through the member it is, else by the
@@ -249,7 +252,12 @@ public static class CodeGraphLinker
         /// <summary>The paths of one file name.</summary>
         FileName,
 
-        /// <summary>The open scopes one file declares: what an import of it by its path makes visible.</summary>
+        /// <summary>
+        /// The open scopes one file declares - what an import of it by its path makes visible - and, under its path, what it says of itself
+        /// that a finding made in another file reads: the names it publishes and whether what its own such imports take is among them,
+        /// whether it binds its names within it and whether it writes its type names whole, each a part the link keeps of the file
+        /// (<c>Parts</c>).
+        /// </summary>
         Opens,
 
         /// <summary>What one file imports, and its language.</summary>
@@ -1433,8 +1441,9 @@ public static class CodeGraphLinker
             // What an import of the file that declares it makes visible: a name it binds may be data the file exports.
             bool Imports(Declaration target) => (Takes(from, reference, target, imported: true) || Made(target)) && Sees(from, target);
 
-            // A new of a constructor function another file writes the prototype of makes one, as a new of a type does.
-            bool Made(Declaration target) => reference.Kind == CodeEdgeKinds.Instantiates && Constructs(target);
+            // A new of a constructor function another file writes the prototype of makes one, as a new of a type does - save in a file
+            // that keeps its names' kinds apart (FileExtract.KindsApart), where a new names a type alone.
+            bool Made(Declaration target) => from.File.Extract is not { KindsApart: true } && reference.Kind == CodeEdgeKinds.Instantiates && Constructs(target);
 
             // A value of a type the code does not say: through the type of the member it is - nothing the repository
             // declares where that type is not the repository's - else, where no value is so named and an import's prefix
@@ -1736,7 +1745,7 @@ public static class CodeGraphLinker
                     return InChain(from, Containers(from, qualifier.Name!.Whole()), () => Containers(from, $"{qualifier.Name!.Whole()}.{name}"), qualifier.Name!.Whole(), name, accepts);
 
                 case CodeQualifierKinds.Scope:
-                    // The scope the code names, else what no scope holds: a PHP function's namespace, then the global one -
+                    // The scope the code names, else what no scope holds: a PHP function's or constant's namespace, then the global one -
                     // its language's, as another language's top is no namespace of its own.
                     bool Own(Declaration target) => target.File.Language == from.File.Language && accepts(target);
 
@@ -2033,9 +2042,6 @@ public static class CodeGraphLinker
         /// </summary>
         private const string StaticModifier = "static";
 
-        /// <summary>Whether <paramref name="declaration"/> is a function: a member a call is made of by its arguments, which a constructor function is.</summary>
-        private static bool IsFunction(Declaration declaration) => declaration.Node is { Kind: CodeNodeKinds.Member, MinArity: not null };
-
         /// <summary>
         /// Whether <paramref name="function"/> is a constructor function another file writes the prototype of: a function some member
         /// declared to extend a type extends (<see cref="Extended"/>) - the type it is, though its own file declares no type, so its
@@ -2295,7 +2301,7 @@ public static class CodeGraphLinker
             switch (before.Kind)
             {
                 case ChainedKind.Head:
-                    return Step(from, Typing(NamedContainers(from, before.Head!)), name) is { Kind: ChainedKind.Values } held ? held : Chained.None;
+                    return Step(from, Typing(WrittenWhole(from) ? Containers(from, before.Head!) : NamedContainers(from, before.Head!)), name) is { Kind: ChainedKind.Values } held ? held : Chained.None;
 
                 case ChainedKind.Types:
                     var typed = before.Found.Count > 0 ? InTypes(before.Found, name, IsValue, withSelf: true) : [];
@@ -2316,12 +2322,34 @@ public static class CodeGraphLinker
         }
 
         /// <summary>
-        /// The types and scopes <paramref name="written"/> names from where <paramref name="from"/> stands: those
-        /// <see cref="NamedContainers(Declaration, string)"/> finds, else every one whose qualified name ends with it - but where
-        /// <paramref name="from"/>'s file binds its names within it (<see cref="BoundWithin"/>), where a name is no ending's.
+        /// What the file of <paramref name="from"/> says of itself (<see cref="CodeGraphFile.Extract"/>), read under the file's own key -
+        /// <see cref="Read.Opens"/> by its path, which holds what a file says of itself (<c>Parts</c>): whether it binds its names
+        /// within it (<see cref="BoundWithin"/>) and whether it writes its type names whole (<see cref="WrittenWhole"/>) are read of another
+        /// file through the value it declares, so a finding that read either is found again when it changes. The one place that key is read;
+        /// a file's own findings read it of their own file, and are found again when it changes whatever they read.
+        /// </summary>
+        private FileExtract? Said(Declaration from)
+        {
+            Touch(Read.Opens, from.File.Path);
+            return from.File.Extract;
+        }
+
+        /// <summary>
+        /// Whether <paramref name="from"/>'s file writes its type and scope names whole (<see cref="FileExtract.WrittenWhole"/>): a name it
+        /// writes is the type or scope of that whole qualified name alone. The one place that rule is read.
+        /// </summary>
+        private bool WrittenWhole(Declaration from) => Said(from) is { WrittenWhole: true };
+
+        /// <summary>
+        /// The types and scopes <paramref name="written"/> names from where <paramref name="from"/> stands: where <paramref name="from"/>'s
+        /// file writes its names whole (<see cref="WrittenWhole"/>), those whose whole qualified name it is, alone and <c>exact</c> - never
+        /// one looked for from where the code stands; else those <see cref="NamedContainers(Declaration, string)"/> finds, else every one
+        /// whose qualified name ends with it - but where <paramref name="from"/>'s file binds its names within it (<see cref="BoundWithin"/>),
+        /// where a name is no ending's.
         /// </summary>
         private Finds Containers(Declaration from, string written)
-            => NamedContainers(from, written) is { Found.Count: > 0 } named ? named : new Finds(BoundWithin(from) ? [] : Ending(from, written), CodeConfidences.Unique);
+            => WrittenWhole(from) ? new Finds(Distinct(ContainersOf(written).Where(container => IsContainer(container) && Sees(from, container))), CodeConfidences.Exact)
+                : NamedContainers(from, written) is { Found.Count: > 0 } named ? named : new Finds(BoundWithin(from) ? [] : Ending(from, written), CodeConfidences.Unique);
 
         /// <summary>The types among <paramref name="containers"/>, a chain's first types (<see cref="ChainedKind.Types"/>), as doubted as they are.</summary>
         private static Chained Typing(Finds containers)
@@ -2355,9 +2383,10 @@ public static class CodeGraphLinker
         /// <summary>
         /// Whether <paramref name="from"/>'s file binds its names within it (<see cref="FileExtract.BoundWithin"/>): a name neither its
         /// scopes nor its imports bind is bound by nothing - neither a declaration of the repository's by its name, nor the type or
-        /// scope whose whole qualified name a qualifier writes or whose name ends with it. The one place that rule is read.
+        /// scope whose whole qualified name a qualifier writes or whose name ends with it. The one place that rule is read, of the file
+        /// under its own key (<see cref="Said"/>).
         /// </summary>
-        private static bool BoundWithin(Declaration from) => from.File.Extract is { BoundWithin: true };
+        private bool BoundWithin(Declaration from) => Said(from) is { BoundWithin: true };
 
         /// <summary>Every type and scope <paramref name="from"/>'s file sees whose qualified name ends with <paramref name="written"/> at a name's boundary: found once for each.</summary>
         private IReadOnlyList<Declaration> Ending(Declaration from, string written)
@@ -2371,11 +2400,13 @@ public static class CodeGraphLinker
 
         /// <summary>
         /// The types and scopes the chain <paramref name="written"/> names from where <paramref name="from"/> stands, as
-        /// <see cref="Containers(Declaration, string)"/> finds those its names written out name: those
+        /// <see cref="Containers(Declaration, string)"/> finds those its names written out name: where <paramref name="from"/>'s file
+        /// writes its names whole (<see cref="WrittenWhole"/>), those of the whole name its names spell; else those
         /// <see cref="NamedContainers(Declaration, ChainName)"/> finds, else every one whose qualified name ends with it.
         /// </summary>
         private Finds Containers(Declaration from, ChainName written)
-            => NamedContainers(from, written) is { Found.Count: > 0 } named ? named : new Finds(BoundWithin(from) ? [] : Ending(from, written), CodeConfidences.Unique);
+            => WrittenWhole(from) ? Containers(from, written.Text())
+                : NamedContainers(from, written) is { Found.Count: > 0 } named ? named : new Finds(BoundWithin(from) ? [] : Ending(from, written), CodeConfidences.Unique);
 
         /// <summary>
         /// What <see cref="NamedContainers(Declaration, string)"/> finds of the names the chain <paramref name="written"/>
@@ -4630,7 +4661,8 @@ public static class CodeGraphLinker
         /// <summary>
         /// What <paramref name="file"/> holds of each key a finding may read, in order: each of its declarations under its
         /// name and its id - and, for a type or a scope, under its qualified name, its name's last run and its own scope's -
-        /// each scope's parent, its open scopes, its imports with its language, what every file of its language imports, and
+        /// each scope's parent, its open scopes, whether its names are bound within it and written whole, its imports with its
+        /// language, what every file of its language imports, and
         /// its address roots, each whole or not and local or not. A declaration's part is what a finding reads of it, by
         /// whichever key it was reached: its id, its file's language, its kind and its kind within it - what
         /// <see cref="Takes"/> decides by - the scope it is declared in and the scope it is, the declaration that holds it - which says whether it is its file's top - what it takes, its value's type, what
@@ -4666,6 +4698,12 @@ public static class CodeGraphLinker
             // its own such imports take is published too: under the file's own key, so a name it gains or loses is found again.
             Named(Read.Opens, file.Path, extract.Published is { } published ? string.Join(PartEnd, published) : None);
             Named(Read.Opens, file.Path, extract.PublishesTaken ? "publishes-taken" : None);
+
+            // Whether a name the file's code reads that none of its scopes or imports binds is bound by nothing (<see cref="FileExtract.BoundWithin"/>),
+            // and whether every type name it writes is written whole (<see cref="FileExtract.WrittenWhole"/>): both read of another file through
+            // the value it declares (BoundWithin, WrittenWhole), so under the file's own key, as each is touched where it is read.
+            Named(Read.Opens, file.Path, extract.BoundWithin ? "bound-within" : None);
+            Named(Read.Opens, file.Path, extract.WrittenWhole ? "written-whole" : None);
 
             // Whether the file says its directory is a unit of its language's layout: under the directory's key, so a unit come or gone
             // is found again by every import of a layout's place passed over or taken in it - and under the roots' one key, since a
@@ -5155,7 +5193,9 @@ public static class CodeGraphLinker
     /// keyframes (<see cref="Renamed"/>) - is reached by its name only from a node of a style sheet, its own sheet's
     /// <c>composes</c> or <c>@extend</c>: the module renames it, so a class markup writes - a component's
     /// <c>class="red"</c> beside its <c>&lt;style module&gt;</c> - reaches none of it; its exports do, through an import
-    /// and through a binding of its own file's module (<see cref="CodeQualifierKinds.Module"/>), which reaches nothing else.
+    /// and through a binding of its own file's module (<see cref="CodeQualifierKinds.Module"/>), which reaches nothing else; and from a
+    /// file that keeps its names' kinds apart (<see cref="FileExtract.KindsApart"/>) a call reaches what takes arguments alone, a use a
+    /// value alone and a new a type alone - none of them the other's kind, a call and a use never a type.
     /// </summary>
     /// <param name="from">The declaration the reference is made in.</param>
     /// <param name="reference">The reference.</param>
@@ -5189,6 +5229,13 @@ public static class CodeGraphLinker
             return false;
         }
 
+        // A file that keeps its names' kinds apart calls what takes arguments alone and reads a value alone: neither a type - which a new
+        // and a type's place name - nor a member of the other kind (FileExtract.KindsApart).
+        if (from.File.Extract is { KindsApart: true } && reference.Kind is CodeEdgeKinds.Calls or CodeEdgeKinds.Uses)
+        {
+            return reference.Kind == CodeEdgeKinds.Calls ? IsFunction(target) && target.Node.TakesArity(reference.Arity) : IsValue(target);
+        }
+
         return reference.Kind switch
         {
             CodeEdgeKinds.Calls => (target.Node.Kind == CodeNodeKinds.Member && target.Node.TakesArity(reference.Arity)) || target.Node.Kind == CodeNodeKinds.Type,
@@ -5204,7 +5251,17 @@ public static class CodeGraphLinker
 
     private static bool IsContainer(ExtractNode node) => node.Kind is CodeNodeKinds.Type or CodeNodeKinds.Namespace;
 
-    /// <summary>Whether <paramref name="declaration"/> is a value: a member no call is made of by its arguments - a field, a property, an event.</summary>
+    /// <summary>
+    /// Whether <paramref name="declaration"/> is a function: a member a call is made of by its arguments, which a constructor function is.
+    /// What a call alone reaches from a file that keeps its names' kinds apart (<see cref="Takes"/>), as a value is what a use does.
+    /// </summary>
+    private static bool IsFunction(Declaration declaration) => declaration.Node is { Kind: CodeNodeKinds.Member, MinArity: not null };
+
+    /// <summary>
+    /// Whether <paramref name="declaration"/> is a value: a member no call is made of by its arguments - a field, a property, an event, a
+    /// constant, an enum's case. What a use alone reaches from a file that keeps its names' kinds apart (<see cref="Takes"/>), as a function
+    /// is what a call does.
+    /// </summary>
     private static bool IsValue(Declaration declaration)
         => declaration.Node is { Kind: CodeNodeKinds.Member, MinArity: null, MaxArity: null };
 

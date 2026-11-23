@@ -4480,8 +4480,11 @@ they are declared in and its bases - said by a type of its own members, and by a
 its body of the members of the scope it is declared in) among what they say - the scopes they are put in (open to
 other files or closed: what a closed one declares, and the type or scope it is the scope of, its file's alone), imports by scope, relative path, address, path ending, directory (a scope every file under a directory imports) or a path under a root of the layout (`Rooted`), with their prefixes and filters, an import that stands in for the one before it (`Fallback`), an export (`Export`), an import of a file whose imports this one shares (`Shares`), one whose names are the file's importers' too (`Reexports`), one that takes the names a file publishes alone (`Published`), one that names a place a bare name is looked for (`Layout`), one whose prefix stands for the one name it shows (`Binds`), one of two places a name may stand at that the file cannot tell apart (`Either`) and one that serves one qualifier's references alone (`Serves`),
 address roots, the names the file publishes (`Published`, with `PublishesTaken` where what its own such imports take is
-among them), whether its names are bound within it (`BoundWithin`), whether its directory is a unit of its language's
-layout (`FolderUnit`) and the roots of the layout it declares (`LayoutRoots`), references by name with their qualifiers -
+among them), whether its names are bound within it (`BoundWithin`), whether it keeps its names' kinds apart (`KindsApart`:
+a call reaches a member taking arguments alone, a use a value alone, neither a type), whether it writes its type names
+whole (`WrittenWhole`: a qualifier's or a value's type is the type of that whole name alone), whether its directory is a
+unit of its language's layout (`FolderUnit`) and the roots of the layout it declares (`LayoutRoots`), references by name
+with their qualifiers -
 one that asks whether a declaration is there, and is no external callee where none is (`Probe`), one made around the node
 it is made from rather than in that node's body - a decorator, a parameter's annotation or default - looked for from where
 the node is declared, its body's own closed scope passed over (`Around`), and one whose qualifier names a fixture, reached by
@@ -4530,11 +4533,12 @@ type as one past a field is - and reads an enum
 member's value as the member's code - C's, C++'s and
 TypeScript's as C#'s, PHP's and Dart's. A type the code writes is no use but a `references` edge, in every reader - a
 declaration's, a cast's, a `sizeof`'s, a template's or a call's type arguments (a C++ template's value argument read as
-code), a parameter's of a lambda, a closure, an arrow or a function a body writes and its return type, an `as`'s or an
-`is`'s, a pattern's, a TypeScript assertion's (`<T>x`) - C and C++ taking a bare name in parentheses for a type's where
-the file knows it as no value, a C# `x is State.Done` both a reference and a use of `Done`, which the syntax cannot tell
-apart; a declaration is no use either - each declarator of `int a = 1, b`, a pattern's variables, a macro's parameter, a
-function pointer's own parameters, a structured binding, a discard - nor is a type or a namespace a member is reached
+code), a parameter's of a lambda, a closure, an arrow or a function a body writes and its return type, a PHP anonymous
+class's bases, traits and member types, an `as`'s or an `is`'s, a pattern's, a TypeScript assertion's (`<T>x`) - C and C++
+taking a bare name in parentheses for a type's where the file knows it as no value, a C# `x is State.Done` both a
+reference and a use of `Done`, which the syntax cannot tell apart; a declaration is no use either - each declarator of
+`int a = 1, b`, a pattern's variables, a macro's parameter, a function pointer's own parameters, a structured binding, a
+discard - nor is a type or a namespace a member is reached
 through, nor a label a `goto`, a `break` or a `continue` names (`ScanCalls.NamesLabel`), and a member named as a word of
 the language - PHP's `$node->parent`, `FieldType::String` - is its member's use. A use that names nothing the
 repository declares is the common case and counts nowhere: a use is recall, never a doubt, so it makes neither a node
@@ -4591,8 +4595,9 @@ are reached only by a reference that says it names one - a `key` qualifier, a `s
 `style-variable`, `style-mixin`, `style-function`, `keyframes` or `font-face` qualifier (`CodeSubKinds.ReachedBy`), a
 use through an import's prefix, a use an import makes visible by a name the file that declares the node exports it by
 (`import { btn } from './x.module.css'`) - and by the keys' join, never by a name alone as code names code (`Takes`, the
-one place that says what a reference may reach), so a PHP `$radius` reaches no SCSS `$radius` and a C# `Button()` no
-mixin `Button`. The linker joins each key to the code
+one place that says what a reference may reach; from a file that keeps its names' kinds apart a call reaches what takes
+arguments alone, a use a value alone and a new a type alone), so a PHP `$radius` reaches no SCSS `$radius` and a C#
+`Button()` no mixin `Button`. The linker joins each key to the code
 that names it: a string literal equal to the key's last segment, its whole path, the path as .NET's configuration spells
 it (`Payments:TimeoutSeconds`, `Payments__TimeoutSeconds`, `Limits:1:Value`, `Logging:LogLevel:Microsoft.AspNetCore`
 naming `Logging.LogLevel["Microsoft.AspNetCore"]`, read by `CodeKeyPaths.Dotted`) or a path
@@ -4757,7 +4762,8 @@ scopes those names name - a declaration no type holds, or a type's member its ow
 never an instance's member, a member a prototype is given among them whether `Lib`'s own file gives it or another -
 `Lib.Widget` is never `Lib.prototype.Widget` - so what one extension extends is never found from what another extends,
 and no finding of it asks for itself), whose own `this` is read on it too and whose `new` makes it (`Constructs`, by the
-members extending each name it is reached by, its own and each it is exported by); two chains naming a type the
+members extending each name it is reached by, its own and each it is exported by - save a `new` written in a file that
+keeps its names' kinds apart, `FileExtract.KindsApart`, which makes none); two chains naming a type the
 repository does not declare name it alike where one is the other or ends it at a name (`WrittenAlike`), never two modules'
 `default`s. Such a member is the type's own wherever the type is (`ExtractNode.Joined`) - the assignment adds it to the type itself when its file runs - so a
 call on a value of the type, or of a type built on it, reaches it whatever loaded the file that writes it, an import for its
@@ -4833,10 +4839,24 @@ where a double-quoted string's or a heredoc's `{$...}` and `${...}` hold code, a
 token. The reader writes PHP's `\` as the model's dot: each namespace - in braces, or ended by its semicolon to the next -
 is an open scope and a node of each file that declares it, each type an open scope in it; each name a reference writes
 is written out as PHP resolves it, by the file's `use` declarations and its namespace - a class in the namespace that
-names it alone, a function in its namespace and then the global one (a `scope` qualifier) - and each `use` is an import
-of the class it names, its alias the prefix, or of a function's or a constant's namespace, showing its name. A property
+names it alone, a function and a constant - a `use function`'s or a `use const`'s (matched by its case) where one names
+it - in its namespace and then the global one (a `scope` qualifier), so a name written alone never reaches a member of
+the class it is written in, which PHP reaches through `$this->`, `self::`, `static::` and `parent::` alone: no reference
+PHP's reader writes is unqualified, and its types say no `MembersByReceiver`, whose lookup past a class's members goes
+on through the scopes around it, which PHP's does not - and each `use` is an import of the class it names, its alias the
+prefix, or of a function's or a constant's namespace, showing its name; its `new` an `instantiates` reference; its
+extracts say `KindsApart` - a function, a constant and a class never one another's - and `WrittenWhole`, every class
+name found as the whole name it is written out to, never from where the code stands. A property
 is named by its variable (`$name`), a constructor's promoted parameters properties of its type, and what a property's
-hooks call its calls. A receiver's type is the call's qualifier where the file states it - a typed parameter, a local a
+hooks call its calls. What a body declares is read as declared: the classes an anonymous class - or a class a function's
+body declares - extends, implements and uses, and the types its properties and constants write, are references of the
+code it is written in; the names it declares, an enum's cases and a property's hooks among them, no use, what a hook
+calls and reads being the code's own; a constructor's promoted parameter is read past its attributes and modifiers as a
+type's own member's are, a visibility of setting's `(set)` being one modifier; and `yield from`'s `from` no name. A
+`define` whose first argument is a text naming a name is a constant of the namespace that name writes - the current one
+does not apply - held by that namespace's node, the file's own where it declares the namespace, else one of its own over
+the define's lines, an open scope. A receiver's type is the call's qualifier
+where the file states it - a typed parameter, a local a
 `new` made, a caught exception, a typed property reached through `$this` - `self::`, `static::` and `$this::` a `this`
 qualifier and `parent::` a `base` one. `require` and `include` of a path the code writes - a text, or one joined to
 `__DIR__` or `dirname(__DIR__)` - import it by a path from the file's directory; one the code computes is marked dynamic,
@@ -4990,7 +5010,10 @@ declares at its top, what it declares exported by another name by that name, the
 file it exports does, each export's filter applied and
 each file once, an export making nothing visible to the file that makes it, and a file that shares another's imports
 (`ExtractImport.Shares`, a Dart part's of its library) importing those after its own; the repository by name and arity, but
-for a file whose names are bound within it (`FileExtract.BoundWithin`), whose name no import binds is bound by nothing - a
+for a file whose names are bound within it (`FileExtract.BoundWithin`), whose name no import binds is bound by nothing (a
+type's name written by a file that writes its type names whole, `FileExtract.WrittenWhole`, being the type or scope of that
+whole qualified name alone and no other, and a call, a use and a `new` written in a file that keeps its names' kinds apart,
+`FileExtract.KindsApart`, reaching a member taking arguments, a value and a type alone) - a
 qualifier being read as such a prefix too where no type or scope has it as its whole qualified name, from the file
 that makes the import or, made global, from every file of its language, and a name no value or type has that an import's
 prefix is standing for that import, written as a value or before a type's name - and derives `dispatches`, `declares`,
@@ -5020,10 +5043,11 @@ path's ending where the including file's folder lacks it - and is taken only whe
 prototype found beside its body - the same language and qualified name - is that body; and a member defined outside
 its type's body, as C++ writes `T::f`, is in the type its declaration's scope names. A qualified reference is looked for where its qualifier says alone. A `type` qualifier is a type or
 scope found as a name is - nearest first in the scopes it is written in, then the container of its whole qualified
-name, an alias, an import's, the repository's - else every container its name ends; a `named` one is that too, unless
-a value a scope it is written in holds (a base's among them) is nearer; a `scope` one is the scope it names alone, else
-the declarations in no scope - with no name those alone - each of its own language, `exact`, as PHP finds a function in
-its namespace and then the global one. A `type` or `named` qualifier written as links is the chain its links write
+name, an alias, an import's, the repository's - else every container its name ends, or, where the file writes its type
+names whole (`WrittenWhole`), the container of that whole qualified name alone and no other; a `named` one is that too,
+unless a value a scope it is written in holds (a base's among them) is nearer; a `scope` one is the scope it names alone,
+else the declarations in no scope - with no name those alone - each of its own language, `exact`, as PHP finds a function
+or a constant in its namespace and then the global one. A `type` or `named` qualifier written as links is the chain its links write
 (`ExtractQualifier.Link`), found as its names written out are: past an import's prefix it is or begins with - however many
 names the prefix writes, Python's `pkg.mod` - its first name what the import makes visible by it, each next a member of what
 the one before came to, each chain of a file answered once from the chain before its last name (`AliasedBy`), so a chain of

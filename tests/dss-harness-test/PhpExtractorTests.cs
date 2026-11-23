@@ -251,6 +251,65 @@ public sealed class PhpExtractorTests : CodeGraphExtractorContractTests<PhpExtra
         }
         """;
 
+    /// <summary>
+    /// A function's and a class's method of one name, a namespace's constant and the class's own of one name, a constant a
+    /// <c>define</c> names: a bare name in the method must reach the function and the namespace's constants, never the method
+    /// nor the class's constant.
+    /// </summary>
+    private const string Bare = """
+        <?php
+        namespace Bare;
+
+        const LIMIT = 10;
+
+        function helper(): int
+        {
+            return LIMIT + STAMP;
+        }
+
+        class Box
+        {
+            public const LIMIT = 5;
+
+            public function helper(): int
+            {
+                return helper() + LIMIT + self::LIMIT + \Bare\LIMIT;
+            }
+        }
+
+        define('Bare\STAMP', 2);
+        """;
+
+    /// <summary>
+    /// What a body declares: an anonymous class with a base, interfaces, traits, typed properties - one attributed, one a visibility of
+    /// setting modifies, one with hooks - typed constants, and - in another function - a class with a hooked property of its own, an
+    /// interface, an enum and a <c>yield from</c>.
+    /// </summary>
+    private const string Anonymous = """
+        <?php
+        namespace Made;
+        use Lib\Base;
+        function make() {
+            return new class(LIMIT) extends Base implements \Countable, Shape {
+                use Helps, Logs { Helps::run insteadof Logs; }
+                public Foo|Bar $p;
+                private readonly ?Baz $q;
+                const int N = 1, M = SIZE;
+                public function count(): int { return N; }
+                #[A] public Foo $x;
+                private(set) Bar $y;
+                public Foo $z { #[A] get => helper(); final set(string $v) { $this->z = $v; } }
+            };
+        }
+        function boot() {
+            class Inner extends Outer {}
+            class Wired { public Foo $w { get; set => helper(); } }
+            interface Shaped extends Sized {}
+            enum Suit: string { case Hearts = 'h'; case Spades = HEARTS; }
+            yield from gen();
+        }
+        """;
+
     /// <inheritdoc/>
     public override IReadOnlyList<CodeGraphFixture> Fixtures { get; } =
     [
@@ -391,6 +450,38 @@ public sealed class PhpExtractorTests : CodeGraphExtractorContractTests<PhpExtra
                 new("php:resources/views/home.phtml.(script)", "php:app_path", CodeEdgeKinds.Calls, 5, CodeConfidences.Exact),
             ],
         },
+        new("src/bare.php", Bare)
+        {
+            Nodes =
+            [
+                new("php:Bare", CodeNodeKinds.Namespace, (2, 21)),
+                new("php:Bare.LIMIT", CodeNodeKinds.Member, (4, 4)),
+                new("php:Bare.helper", CodeNodeKinds.Member, (6, 9)),
+                new("php:Bare.Box", CodeNodeKinds.Type, (11, 19)),
+                new("php:Bare.Box.LIMIT", CodeNodeKinds.Member, (13, 13)),
+                new("php:Bare.Box.helper", CodeNodeKinds.Member, (15, 18)),
+                new("php:Bare.STAMP", CodeNodeKinds.Member, (21, 21)),
+            ],
+            Edges =
+            [
+                // A name written alone in a method is the namespace's, never its class's: the function, and the constant - however written,
+                // a const's or a define's.
+                new("php:Bare.helper", "php:Bare.LIMIT", CodeEdgeKinds.Uses, 8, CodeConfidences.Exact),
+                new("php:Bare.helper", "php:Bare.STAMP", CodeEdgeKinds.Uses, 8, CodeConfidences.Exact),
+                new("php:Bare.Box.helper", "php:Bare.helper", CodeEdgeKinds.Calls, 17, CodeConfidences.Exact),
+                new("php:Bare.Box.helper", "php:Bare.LIMIT", CodeEdgeKinds.Uses, 17, CodeConfidences.Exact),
+                new("php:Bare.Box.helper", "php:Bare.Box.LIMIT", CodeEdgeKinds.Uses, 17, CodeConfidences.Exact),
+            ],
+        },
+        new("src/anonymous.php", Anonymous)
+        {
+            Nodes =
+            [
+                new("php:Made", CodeNodeKinds.Namespace, (2, 22)),
+                new("php:Made.make", CodeNodeKinds.Member, (4, 15)),
+                new("php:Made.boot", CodeNodeKinds.Member, (16, 22)),
+            ],
+        },
     ];
 
     /// <summary>
@@ -509,7 +600,10 @@ public sealed class PhpExtractorTests : CodeGraphExtractorContractTests<PhpExtra
             extract.References.Where(reference => reference.Kind is CodeEdgeKinds.Inherits or CodeEdgeKinds.Implements or CodeEdgeKinds.MixesIn)
                 .Select(reference => (reference.From.Whole(), reference.Kind, reference.Name, reference.Qualifier?.Kind, extract.Written(reference.Qualifier))));
         Assert.Equal(["strtoupper", "name", "apply"], Calls(extract, "php:Shop.Cart.$label"));
-        Assert.Equal(["Cart"], Calls(extract, "php:Shop.Cart.make"));
+        Assert.Empty(Calls(extract, "php:Shop.Cart.make"));
+
+        // Its `new static()` makes the type it is written in: an instantiation of it, never a call.
+        Assert.Equal([(CodeEdgeKinds.Instantiates, "Cart", "type", "Shop")], extract.References.Where(reference => reference.From == "php:Shop.Cart.make").Select(reference => (reference.Kind, reference.Name, reference.Qualifier?.Kind, extract.Written(reference.Qualifier))));
     }
 
     /// <summary>
@@ -590,7 +684,8 @@ public sealed class PhpExtractorTests : CodeGraphExtractorContractTests<PhpExtra
     /// <summary>
     /// A name is written out as PHP resolves it: after a leading <c>\</c> the name itself, <c>namespace\</c> the file's
     /// namespace's, a class's in its namespace alone; an unqualified function's in its namespace and then the global one,
-    /// as the linker finds it - and one of the global namespace among its declarations alone.
+    /// as the linker finds it - and one of the global namespace among its declarations alone; a <c>new</c> an instantiation
+    /// of the class it names.
     /// </summary>
     [Fact]
     public void AName_IsWrittenOutAsPhpResolvesIt_AFunctionsInItsNamespaceThenTheGlobalOne()
@@ -612,6 +707,8 @@ public sealed class PhpExtractorTests : CodeGraphExtractorContractTests<PhpExtra
         Assert.Equal(
             [("full", "type", "Lib"), ("strlen", "scope", null), ("local", "type", "App"), ("inner", "type", "App.Sub"), ("plain", "scope", "App"), ("Top", "scope", null), ("Near", "type", "App")],
             extract.References.Select(reference => (reference.Name, reference.Qualifier?.Kind, extract.Written(reference.Qualifier))));
+        Assert.Equal([CodeEdgeKinds.Instantiates, CodeEdgeKinds.Instantiates], extract.References.Where(reference => reference.Name is "Top" or "Near").Select(reference => reference.Kind));
+        Assert.All(extract.References.Where(reference => reference.Name is "Top" or "Near"), reference => Assert.Null(reference.Arity));
 
         var linked = Link(
             ("src/a.php", "<?php\nnamespace App;\nfunction go() {\n    helper();\n    local();\n    strlen('x');\n}\n"),
@@ -668,11 +765,14 @@ public sealed class PhpExtractorTests : CodeGraphExtractorContractTests<PhpExtra
         Assert.Equal(
             [
                 ("go", "this", null), ("send", "value", "$mailer"), ("queue", "value", "$mailer"), ("direct", "type", "Lib.Mailer"), ("loose", "value", null),
-                ("Mailer", "type", "Lib"), ("fresh", "type", "Lib.Mailer"), ("again", "value", "$instance"), ("stat", "this", null), ("late", "this", null),
+                ("fresh", "type", "Lib.Mailer"), ("again", "value", "$instance"), ("stat", "this", null), ("late", "this", null),
                 ("up", "base", null), ("make", "type", "Lib.Mailer"), ("full", "type", "Lib.Mailer"), ("mine", "this", null), ("report", "type", "App.Problem"),
                 ("closure", "type", "Lib.Mailer"), ("b", "value", null), ("make", "scope", "App"), ("chained", "value", null),
             ],
             extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Calls).Select(reference => (reference.Name, reference.Qualifier?.Kind, extract.Written(reference.Qualifier))));
+
+        // The new of a class the file imports is an instantiation of it, by the name it is written out to, with no arity.
+        Assert.Equal([("Mailer", "type", "Lib", 15, null)], extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Instantiates).Select(reference => (reference.Name, reference.Qualifier?.Kind, extract.Written(reference.Qualifier), reference.Line, reference.Arity)));
         Assert.Contains(extract.References, reference => reference is { Kind: CodeEdgeKinds.References, Name: "Problem", Line: 24 });
     }
 
@@ -1289,9 +1389,9 @@ public sealed class PhpExtractorTests : CodeGraphExtractorContractTests<PhpExtra
     /// <summary>
     /// A use is of a value the code reads: a nullsafe read's property by its <c>$</c>, each branch of a conditional and a
     /// short one, a named argument's value and not its name; a word or a type of the language - <c>true</c>, a cast's, a
-    /// closure's return type - is none; and a constant's, a property's and an enum case's value, a parameter's default, and
-    /// the arguments of the attributes each of them - a parameter among them - is written with are the code of what they
-    /// are written on.
+    /// closure's return type - is none; a constant read alone looked for in its namespace and then the global one; and a
+    /// constant's, a property's and an enum case's value, a parameter's default, and the arguments of the attributes each of
+    /// them - a parameter among them - is written with are the code of what they are written on.
     /// </summary>
     [Fact]
     public void AUseIsOfAValueTheCodeReads_DeclaredValuesAndAttributesTheirDeclarations()
@@ -1344,8 +1444,8 @@ public sealed class PhpExtractorTests : CodeGraphExtractorContractTests<PhpExtra
             LiteralRow.Of(extract));
         Assert.Equal(
             [
-                (List, "DEFAULT_MODE", 13, ""), (List, "$name", 15, "type App.User"), (List, "DEBUG_LEVEL", 16, ""), (List, "INFO_LEVEL", 16, ""), (List, "FALLBACK_LEVEL", 17, ""),
-                (List, "VALUE", 19, ""),
+                (List, "DEFAULT_MODE", 13, "scope App"), (List, "$name", 15, "type App.User"), (List, "DEBUG_LEVEL", 16, "scope App"), (List, "INFO_LEVEL", 16, "scope App"),
+                (List, "FALLBACK_LEVEL", 17, "scope App"), (List, "VALUE", 19, "scope App"),
             ],
             extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Uses).Select(reference => (reference.From.Whole(), reference.Name, reference.Line, $"{reference.Qualifier?.Kind} {extract.Written(reference.Qualifier)}".Trim())));
     }
@@ -1429,6 +1529,432 @@ public sealed class PhpExtractorTests : CodeGraphExtractorContractTests<PhpExtra
                 (CodeEdgeKinds.Uses, "String", 10), (CodeEdgeKinds.Uses, "$parent", 10), (CodeEdgeKinds.Uses, "$object", 10), (CodeEdgeKinds.References, "Foo", 10),
             ],
             extract.References.Where(reference => reference.From == "php:App.V.go").Select(reference => (reference.Kind, reference.Name, reference.Line)));
+    }
+
+    /// <summary>
+    /// A name written alone in a class's code - a constant read in a method, a closure, an arrow function, a constant's, a property's and a
+    /// parameter's default value, and a call - reaches the constant or the function PHP resolves it to, in the namespace and then the global
+    /// one, never a member of the class, of its base or of its trait; <c>$this-&gt;</c> and <c>self::</c> reach those.
+    /// </summary>
+    [Fact]
+    public void ABareName_InAClassesCode_NeverReachesAMemberOfTheClassItsBasesOrItsTraits()
+    {
+        var linked = Link(
+            ("src/box.php", """
+                <?php
+                namespace App;
+
+                const LIMIT = 10;
+
+                function helper(): int { return 1; }
+
+                trait Helps
+                {
+                    public const DEPTH = 2;
+                    public function assist(): int { return 0; }
+                }
+
+                class Base
+                {
+                    public const ROOT = 1;
+                }
+
+                class Box extends Base
+                {
+                    use Helps;
+
+                    public const LIMIT = 5;
+                    public const ALIAS = LIMIT;
+                    public int $size = LIMIT;
+
+                    public function helper(int $n = LIMIT): int
+                    {
+                        $f = function () { return $this->assist() + LIMIT; };
+                        $g = static fn () => helper();
+                        return helper() + LIMIT + ROOT + DEPTH + assist() + self::LIMIT + $this->assist();
+                    }
+                }
+                """),
+            ("src/top.php", "<?php\nconst DEPTH = 7;\nfunction assist(): int { return 0; }\n"));
+        var own = linked.Edges.Where(edge => edge.From.StartsWith("php:App.Box.", StringComparison.Ordinal) && edge.Kind is CodeEdgeKinds.Calls or CodeEdgeKinds.Uses).ToList();
+
+        Assert.Equal(
+            [
+                (24, "php:App.Box.ALIAS", CodeEdgeKinds.Uses, "php:App.LIMIT"),
+                (25, "php:App.Box.$size", CodeEdgeKinds.Uses, "php:App.LIMIT"),
+                (27, "php:App.Box.helper", CodeEdgeKinds.Uses, "php:App.LIMIT"),
+                (29, "php:App.Box.helper", CodeEdgeKinds.Calls, "php:App.Helps.assist"),
+                (29, "php:App.Box.helper", CodeEdgeKinds.Uses, "php:App.LIMIT"),
+                (30, "php:App.Box.helper", CodeEdgeKinds.Calls, "php:App.helper"),
+                (31, "php:App.Box.helper", CodeEdgeKinds.Calls, "php:App.Helps.assist"),
+                (31, "php:App.Box.helper", CodeEdgeKinds.Calls, "php:App.helper"),
+                (31, "php:App.Box.helper", CodeEdgeKinds.Calls, "php:assist"),
+                (31, "php:App.Box.helper", CodeEdgeKinds.Uses, "php:App.Box.LIMIT"),
+                (31, "php:App.Box.helper", CodeEdgeKinds.Uses, "php:App.LIMIT"),
+                (31, "php:App.Box.helper", CodeEdgeKinds.Uses, "php:DEPTH"),
+            ],
+            own.Select(edge => (edge.Line, edge.From, edge.Kind, edge.To))
+                .OrderBy(edge => edge.Line).ThenBy(edge => edge.From, StringComparer.Ordinal).ThenBy(edge => edge.Kind, StringComparer.Ordinal).ThenBy(edge => edge.To, StringComparer.Ordinal));
+        Assert.All(own, edge => Assert.Equal(CodeConfidences.Exact, edge.Confidence));
+    }
+
+    /// <summary>
+    /// A bare constant is written out as PHP resolves it: the one a <c>use const</c> gives it - single, aliased, grouped, matched by its case -
+    /// else its namespace's and then the global one; one after a leading <c>\</c> the name itself, and a qualified one by its first part as a
+    /// class's is.
+    /// </summary>
+    [Fact]
+    public void ABareConstant_IsWrittenOutAsPhpResolvesIt_AUseConstsElseItsNamespacesThenTheGlobalOne()
+    {
+        var extract = Read("src/n.php", """
+            <?php
+            namespace App;
+            use Lib\Config;
+            use const Lib\MAX;
+            use const Lib\MIN as FLOOR;
+            use Lib\{const DEPTH};
+            function go() {
+                return LIMIT + \LIMIT + \Lib\TOP + Sub\DEEP + namespace\OWN + MAX + FLOOR + DEPTH + Max + Config\SIZE;
+            }
+            """);
+
+        Assert.Equal(
+            [
+                ("LIMIT", "scope", "App"), ("LIMIT", "scope", null), ("TOP", "type", "Lib"), ("DEEP", "type", "App.Sub"), ("OWN", "type", "App"),
+                ("MAX", "type", "Lib"), ("MIN", "type", "Lib"), ("DEPTH", "type", "Lib"), ("Max", "scope", "App"), ("SIZE", "type", "Lib.Config"),
+            ],
+            extract.References.Where(reference => reference.Kind == CodeEdgeKinds.Uses).Select(reference => (reference.Name, reference.Qualifier?.Kind, extract.Written(reference.Qualifier))));
+
+        var global = Read("src/g.php", """
+            <?php
+            function go() { return LIMIT + namespace\OWN + \Top\X; }
+            """);
+
+        Assert.Equal(
+            [("LIMIT", "scope", null), ("OWN", "scope", null), ("X", "type", "Top")],
+            global.References.Select(reference => (reference.Name, reference.Qualifier?.Kind, global.Written(reference.Qualifier))));
+    }
+
+    /// <summary>
+    /// A bare constant is its namespace's, else the global one - never another namespace's, never the repository's by its name: a global
+    /// function's bare name is the global declaration's alone where a namespaced one of that name exists too.
+    /// </summary>
+    [Fact]
+    public void ABareConstant_IsItsNamespacesElseTheGlobalOne_NeverAnotherNamespacesNorTheRepositorys()
+    {
+        var linked = Link(
+            ("src/a.php", "<?php\nnamespace App;\nuse const Lib\\MAX;\nfunction go() {\n    return LIMIT + ONLY_GLOBAL + MAX + NOWHERE;\n}\n"),
+            ("src/app.php", "<?php\nnamespace App;\nconst LIMIT = 1;\nconst ONLY_APP = 7;\n"),
+            ("src/top.php", "<?php\nconst LIMIT = 2;\nconst ONLY_GLOBAL = 3;\nfunction top() {\n    return LIMIT + ONLY_APP;\n}\n"),
+            ("src/lib.php", "<?php\nnamespace Lib;\nconst MAX = 9;\n"),
+            ("src/other.php", "<?php\nnamespace Other;\nconst NOWHERE = 5;\n"));
+
+        Assert.Equal(
+            [
+                ("php:App.go", "php:App.LIMIT", 5, CodeConfidences.Exact),
+                ("php:App.go", "php:Lib.MAX", 5, CodeConfidences.Exact),
+                ("php:App.go", "php:ONLY_GLOBAL", 5, CodeConfidences.Exact),
+                ("php:top", "php:LIMIT", 5, CodeConfidences.Exact),
+            ],
+            linked.Edges.Where(edge => edge.Kind == CodeEdgeKinds.Uses).Select(edge => (edge.From, edge.To, edge.Line, edge.Confidence))
+                .OrderBy(edge => edge.From, StringComparer.Ordinal).ThenBy(edge => edge.Line).ThenBy(edge => edge.To, StringComparer.Ordinal));
+    }
+
+    /// <summary>
+    /// An anonymous class's head, traits and member types are references of the code it is written in - an attributed property's and one a
+    /// visibility of setting modifies alike, the attribute and the <c>set</c> of its <c>private(set)</c> no use - and the names it declares
+    /// - its constants, a hooked property's hooks - no use, what a hook calls and reads the code's; <c>new readonly class</c> and
+    /// <c>new #[A] class</c> are anonymous classes too, their <c>readonly</c> and their attribute no class and their clauses clauses.
+    /// </summary>
+    [Fact]
+    public void AnAnonymousClassesHeadTraitsAndMemberTypes_AreReferences_AndTheNamesItDeclaresNoUses()
+    {
+        var extract = Read("src/anonymous.php", Anonymous);
+
+        Assert.Equal(
+            [
+                (CodeEdgeKinds.Uses, "LIMIT", "scope", "Made", 5), (CodeEdgeKinds.References, "Base", "type", "Lib", 5),
+                (CodeEdgeKinds.References, "Countable", "scope", null, 5), (CodeEdgeKinds.References, "Shape", "type", "Made", 5),
+                (CodeEdgeKinds.References, "Helps", "type", "Made", 6), (CodeEdgeKinds.References, "Logs", "type", "Made", 6),
+                (CodeEdgeKinds.References, "Foo", "type", "Made", 7), (CodeEdgeKinds.References, "Bar", "type", "Made", 7),
+                (CodeEdgeKinds.References, "Baz", "type", "Made", 8), (CodeEdgeKinds.Uses, "SIZE", "scope", "Made", 9),
+                (CodeEdgeKinds.Uses, "N", "scope", "Made", 10),
+                (CodeEdgeKinds.References, "Foo", "type", "Made", 11), (CodeEdgeKinds.References, "Bar", "type", "Made", 12),
+                (CodeEdgeKinds.References, "Foo", "type", "Made", 13), (CodeEdgeKinds.Calls, "helper", "scope", "Made", 13),
+                (CodeEdgeKinds.Uses, "$z", "this", null, 13),
+            ],
+            extract.References.Where(reference => reference.From == "php:Made.make")
+                .Select(reference => (reference.Kind, reference.Name, reference.Qualifier?.Kind, extract.Written(reference.Qualifier), reference.Line)));
+
+        var readonlyClass = Read("src/r.php", "<?php\nfunction f() { return new readonly class extends Base {}; }\nfunction g() { return new #[A] class extends Base {}; }\n");
+
+        Assert.Equal(
+            [(CodeEdgeKinds.References, "Base", "scope", (string?)null, 2), (CodeEdgeKinds.References, "Base", "scope", (string?)null, 3)],
+            readonlyClass.References.Select(reference => (reference.Kind, reference.Name, reference.Qualifier?.Kind, readonlyClass.Written(reference.Qualifier), reference.Line)));
+    }
+
+    /// <summary>
+    /// A class, an interface and an enum a function's body declares are read as declared: the types their heads name references of the body, and
+    /// no name they declare - the types, an enum's cases - a use; the <c>from</c> of a <c>yield</c> is a keyword, no name.
+    /// </summary>
+    [Fact]
+    public void AClassABodyDeclares_UsesNoneOfItsNames_AndYieldsFromIsNoName()
+    {
+        var extract = Read("src/anonymous.php", Anonymous);
+
+        Assert.Equal(
+            [
+                (CodeEdgeKinds.References, "Outer", "type", "Made", 17),
+                (CodeEdgeKinds.References, "Foo", "type", "Made", 18), (CodeEdgeKinds.Calls, "helper", "scope", "Made", 18),
+                (CodeEdgeKinds.References, "Sized", "type", "Made", 19),
+                (CodeEdgeKinds.Uses, "HEARTS", "scope", "Made", 20), (CodeEdgeKinds.Calls, "gen", "scope", "Made", 21),
+            ],
+            extract.References.Where(reference => reference.From == "php:Made.boot")
+                .Select(reference => (reference.Kind, reference.Name, reference.Qualifier?.Kind, extract.Written(reference.Qualifier), reference.Line)));
+    }
+
+    /// <summary>
+    /// A property with hooks that a body declares - in an anonymous class, or in a class a function's body declares - is no node: each hook's
+    /// name, where the hook begins - past its attributes, its <c>final</c> and its <c>&amp;</c>, as a type's own hooks begin - is a declared name and
+    /// no use, a short hook's among them, and what its arrow's expression or its body calls and reads is the call and the use of the
+    /// declaration the code is written in. A call an arrow's expression begins with is a call, never taken for a hook's name.
+    /// </summary>
+    [Fact]
+    public void AHookedPropertyABodyDeclares_DeclaresItsHooksNames_AndReadsWhatTheyCall()
+    {
+        const string Text = """
+            <?php
+            namespace App;
+            function make() {
+                return new class {
+                    public Foo $x { get => helper(); set(string $v) { $this->x = $v; } }
+                    public int $count { get => count($this->items); }
+                    public Bar $y { #[A] get; final set => strtoupper('a'); }
+                };
+            }
+            function build() {
+                class Wired { public Foo $w { &get => strtoupper('b'); } }
+            }
+            """;
+        var extract = Read("src/h.php", Text);
+
+        Assert.Equal(
+            [
+                (CodeEdgeKinds.References, "Foo", 5), (CodeEdgeKinds.Calls, "helper", 5), (CodeEdgeKinds.Uses, "$x", 5),
+                (CodeEdgeKinds.Calls, "count", 6), (CodeEdgeKinds.Uses, "$items", 6),
+                (CodeEdgeKinds.References, "Bar", 7), (CodeEdgeKinds.Calls, "strtoupper", 7),
+            ],
+            extract.References.Where(reference => reference.From == "php:App.make").Select(reference => (reference.Kind, reference.Name, reference.Line)));
+        Assert.Equal(
+            [(CodeEdgeKinds.References, "Foo", 11), (CodeEdgeKinds.Calls, "strtoupper", 11)],
+            extract.References.Where(reference => reference.From == "php:App.build").Select(reference => (reference.Kind, reference.Name, reference.Line)));
+        Assert.Null(extract.Problem("php", CodeFileText.Lines(Text).Count));
+    }
+
+    /// <summary>
+    /// A constructor's promoted parameter that a body declares - in an anonymous class, or in a class a function's body declares - is read
+    /// past its attributes and its modifiers as a type's own is: a visibility of setting, <c>private(set)</c>, is one modifier, whose
+    /// <c>set</c> is no class and no constant; the class each parameter is typed is a reference, and nothing else of its head a use.
+    /// </summary>
+    [Fact]
+    public void APromotedParameterABodyDeclares_IsReadPastItsModifiers_AVisibilityOfSettingOneOfThem()
+    {
+        var extract = Read("src/p.php", """
+            <?php
+            namespace App;
+            function make() {
+                return new class {
+                    public function __construct(private(set) Foo $x, #[A] protected readonly Bar $y = null) { $this->x = $y; }
+                };
+            }
+            function build() {
+                class Wired { public function __construct(public(set) Baz $z, public Qux $w = QUUX) {} }
+            }
+            """);
+
+        Assert.Equal(
+            [(CodeEdgeKinds.References, "Foo", 5), (CodeEdgeKinds.References, "Bar", 5), (CodeEdgeKinds.Uses, "$x", 5)],
+            extract.References.Where(reference => reference.From == "php:App.make").Select(reference => (reference.Kind, reference.Name, reference.Line)));
+        Assert.Equal(
+            [(CodeEdgeKinds.References, "Baz", 9), (CodeEdgeKinds.References, "Qux", 9), (CodeEdgeKinds.Uses, "QUUX", 9)],
+            extract.References.Where(reference => reference.From == "php:App.build").Select(reference => (reference.Kind, reference.Name, reference.Line)));
+    }
+
+    /// <summary>
+    /// A constant a <c>define</c> names by a text is a node of the namespace that name writes - the file's current namespace not applied to it -
+    /// held by that namespace's node, so a name written whole and a bare name alike reach it as a <c>const</c>'s is reached; a <c>define</c> of a
+    /// name the code computes, or of a text that is no name, declares none.
+    /// </summary>
+    [Fact]
+    public void ADefinedConstant_IsANodeOfTheNamespaceItsNameWrites_AndABareNameReachesIt()
+    {
+        const string Text = """
+            <?php
+            namespace App;
+            define('LIMIT', 10);
+            define('App\STAMP', 2);
+            define('Other\FLAG', 3);
+            define($computed, 3);
+            define('not-a-name', 4);
+            function go() {
+                if (!defined('DEBUG')) { define('DEBUG', false); }
+                return LIMIT + STAMP + DEBUG + \Other\FLAG;
+            }
+            """;
+        var extract = Read("src/d.php", Text);
+
+        Assert.Equal(
+            [("php:LIMIT", (string?)null, (string?)null, 3, 3), ("php:App.STAMP", "App", "php:App", 4, 4), ("php:Other.FLAG", "Other", "php:Other", 5, 5), ("php:DEBUG", null, null, 9, 9)],
+            extract.Nodes.Where(node => node.SubKind == "constant").Select(node => (node.Id.Whole(), node.Scope?.Whole(), node.Parent?.Whole(), node.Start, node.End)));
+
+        // A namespace a define names that the file does not declare is a node of its own over the define's lines, an open scope.
+        Assert.Equal((CodeNodeKinds.Namespace, 5, 5, "namespace Other"), (Node(extract, "php:Other").Kind, Node(extract, "php:Other").Start, Node(extract, "php:Other").End, Node(extract, "php:Other").Signature));
+        Assert.Equal([("Other", true)], extract.Scopes.Where(scope => scope.Name == "Other").Select(scope => (scope.Name.Whole(), scope.Open)));
+
+        var linked = Link(("src/d.php", Text));
+        var uses = linked.Edges.Where(edge => edge.From == "php:App.go" && edge.Kind == CodeEdgeKinds.Uses).ToList();
+
+        Assert.Equal(
+            [("php:App.STAMP", 10), ("php:DEBUG", 10), ("php:LIMIT", 10), ("php:Other.FLAG", 10)],
+            uses.Select(edge => (edge.To, edge.Line)).OrderBy(edge => edge.To, StringComparer.Ordinal));
+        Assert.All(uses, edge => Assert.Equal(CodeConfidences.Exact, edge.Confidence));
+    }
+
+    /// <summary>
+    /// A <c>define</c> declares its constant wherever the code runs - in a string's interpolation too, read as code of its own - held by the
+    /// file where it names no namespace.
+    /// </summary>
+    [Fact]
+    public void ADefinedConstant_IsANodeWhereverTheCodeRuns()
+    {
+        const string Text = """
+            <?php
+            function go($x) {
+                return "{$x = define('HOLE', 1)}";
+            }
+            """;
+        var extract = Read("src/i.php", Text);
+
+        Assert.Equal([("php:HOLE", (string?)null, (string?)null, 3, 3, "define('HOLE', 1)")], extract.Nodes.Where(node => node.SubKind == "constant").Select(node => (node.Id.Whole(), node.Scope?.Whole(), node.Parent?.Whole(), node.Start, node.End, node.Signature)));
+        Assert.Equal([("define", CodeEdgeKinds.Calls, 3)], extract.References.Select(reference => (reference.Name, reference.Kind, reference.Line)));
+        Assert.Null(extract.Problem("php", CodeFileText.Lines(Text).Count));
+    }
+
+    /// <summary>
+    /// A PHP name reaches only the kind PHP resolves it to: a call a function or a method - a member taking arguments - a constant read a
+    /// constant, a <c>const</c>'s, a <c>define</c>'s, an enum case or a property, and a <c>new</c> a class; of one name, never another kind.
+    /// </summary>
+    [Fact]
+    public void APhpName_ReachesOnlyTheKindPhpResolvesItTo_AFunctionAConstantOrAClass()
+    {
+        const string Text = """
+            <?php
+            namespace App;
+            const Cart = 1;
+            define('App\Total', 2);
+            function Cart(): int { return 3; }
+            function Total(): int { return 4; }
+            class Cart
+            {
+                public const Size = 5;
+                public static function Size(): int { return 6; }
+                public function go(): array
+                {
+                    $made = new Cart();
+                    $called = Cart();
+                    $read = Cart;
+                    $sized = [self::Size, self::Size(), Cart::Size, Cart::Size()];
+                    $suits = [Suit::Hearts, Suit::Hearts()];
+                    return [Total, Total()];
+                }
+            }
+            enum Suit
+            {
+                case Hearts;
+                public static function Hearts(): int { return 7; }
+            }
+            """;
+        var extract = Read("src/k.php", Text);
+        var linked = Link(("src/k.php", Text));
+        var reached = linked.Edges.Where(edge => edge.From == "php:App.Cart.go").ToList();
+
+        string Of(string qualified, string subKind) => Assert.Single(extract.Nodes, node => node.Qualified.Whole() == qualified && node.SubKind == subKind).Id.Whole();
+
+        Assert.Equal(
+            [
+                (13, CodeEdgeKinds.Instantiates, Of("App.Cart", "class")), (14, CodeEdgeKinds.Calls, Of("App.Cart", "function")), (15, CodeEdgeKinds.Uses, Of("App.Cart", "constant")),
+                (16, CodeEdgeKinds.Calls, Of("App.Cart.Size", "method")), (16, CodeEdgeKinds.Uses, Of("App.Cart.Size", "constant")), (17, CodeEdgeKinds.Calls, Of("App.Suit.Hearts", "method")),
+                (17, CodeEdgeKinds.Uses, Of("App.Suit.Hearts", "case")), (18, CodeEdgeKinds.Calls, Of("App.Total", "function")), (18, CodeEdgeKinds.Uses, Of("App.Total", "constant")),
+            ],
+            reached.Select(edge => (edge.Line, edge.Kind, edge.To)).Distinct()
+                .OrderBy(edge => edge.Line).ThenBy(edge => edge.Kind, StringComparer.Ordinal).ThenBy(edge => edge.To, StringComparer.Ordinal));
+        Assert.All(reached, edge => Assert.Equal(CodeConfidences.Exact, edge.Confidence));
+    }
+
+    /// <summary>
+    /// A class name PHP's reader writes out is the one of that whole name: found as the file's <c>use</c> declarations and its namespace write
+    /// it out to, whatever the scopes the code is in declare by that name, whatever an import makes visible where its target is not in the
+    /// tree, and whatever the repository declares whose name ends with it - as a property's type is too.
+    /// </summary>
+    [Fact]
+    public void AClassNamePhpWritesOut_IsTheOneOfThatWholeName_NeverOneTheScopesOrItsEndingFind()
+    {
+        const string Clock = "<?php\nclass Clock { public function tick(): int { return 0; } public static function make(): int { return 0; } }\n";
+        var linked = Link(
+            ("src/clock.php", Clock),
+            ("src/app.php", Clock.Replace("<?php\n", "<?php\nnamespace App;\n", StringComparison.Ordinal)),
+            ("src/lib.php", "<?php\nnamespace App\\Lib;\nclass Mailer { public function send(): void {} }\n"),
+            ("src/box.php", """
+                <?php
+                namespace App;
+                use Lib\Mailer;
+                class Box
+                {
+                    private \Clock $clock;
+                    private Mailer $mailer;
+                    public function go(): void
+                    {
+                        $this->clock->tick();
+                        \Clock::make();
+                        $this->mailer->send();
+                        \Lib\Mailer::send();
+                        Clock::make();
+                    }
+                }
+                """));
+        var calls = linked.Edges.Where(edge => edge is { From: "php:App.Box.go", Kind: CodeEdgeKinds.Calls }).ToList();
+
+        Assert.Equal([(10, "php:Clock.tick"), (11, "php:Clock.make"), (14, "php:App.Clock.make")], calls.Select(edge => (edge.Line, edge.To)));
+        Assert.All(calls, edge => Assert.Equal(CodeConfidences.Exact, edge.Confidence));
+    }
+
+    /// <summary>
+    /// No reference PHP's reader writes is unqualified: each says where PHP looks - a namespace and the global one, a type, <c>$this</c>, a base,
+    /// a value - so no PHP name is ever looked for through the scopes its code is in.
+    /// </summary>
+    [Fact]
+    public void EveryReferenceThePhpReaderWrites_SaysWhereItIsLookedFor()
+    {
+        foreach (var fixture in Fixtures)
+        {
+            Assert.All(Read(fixture.Path, fixture.Text).References, reference => Assert.NotNull(reference.Qualifier));
+        }
+    }
+
+    /// <summary>
+    /// Every extract of PHP's says what its reader alone says of a file: that it keeps its functions, its constants and its classes apart, and
+    /// that every class name it writes is written whole.
+    /// </summary>
+    [Fact]
+    public void EveryExtractOfPhp_SaysItKeepsItsNamesKindsApart_AndWritesItsClassNamesWhole()
+    {
+        Assert.All(Fixtures, fixture =>
+        {
+            var extract = Read(fixture.Path, fixture.Text);
+
+            Assert.True(extract.KindsApart, fixture.Path);
+            Assert.True(extract.WrittenWhole, fixture.Path);
+        });
     }
 
     /// <summary>How deep the depth tests nest what they read.</summary>

@@ -193,8 +193,9 @@ public sealed class CodebaseGraphRecordsTests
     /// standing for the name it shows, whether its names are its importers' too, whether it takes a file's published names, whether it
     /// names a place of a layout, whether it is one of two places, whether it is under a root of the layout and the qualifier it
     /// serves; a reference that is a probe, and one made around its node; the names a file publishes, whether what its imports take
-    /// is among them, whether its names are bound within it, whether its directory is a unit of its layout and the roots it declares;
-    /// and a dynamic mark's kind. Written again, the extract read back is the very text it was read from.
+    /// is among them, whether its names are bound within it, whether it keeps its names' kinds apart, whether it writes its type names whole,
+    /// whether its directory is a unit of its layout and the roots it declares; and a dynamic mark's kind. Written again, the extract read back
+    /// is the very text it was read from.
     /// </summary>
     [Fact]
     public void EveryFieldOfAnExtract_IsWrittenByTheStore_AndReadBackAsItWas()
@@ -220,6 +221,8 @@ public sealed class CodebaseGraphRecordsTests
             Published = ["A", "b"],
             PublishesTaken = true,
             BoundWithin = true,
+            KindsApart = true,
+            WrittenWhole = true,
             FolderUnit = true,
             LayoutRoots = ["src", "."],
             Dynamic = [new ExtractDynamic(3, "a module's __all__ the code computes", "computed-exports")],
@@ -248,6 +251,7 @@ public sealed class CodebaseGraphRecordsTests
         Assert.Equal([(true, false), (false, true)], back.References.Select(reference => (reference.Probe, reference.Around)));
         Assert.Equal(["A", "b"], back.Published!);
         Assert.Equal((true, true, true), (back.PublishesTaken, back.BoundWithin, back.FolderUnit));
+        Assert.Equal((true, true), (back.KindsApart, back.WrittenWhole));
         Assert.Equal(["src", "."], back.LayoutRoots!);
         Assert.Equal("computed-exports", Assert.Single(back.Dynamic).Kind);
 
@@ -261,6 +265,9 @@ public sealed class CodebaseGraphRecordsTests
         Assert.DoesNotContain("publishesTaken", plain, StringComparison.Ordinal);
         Assert.DoesNotContain("layoutRoots", plain, StringComparison.Ordinal);
         Assert.DoesNotContain("folderUnit", plain, StringComparison.Ordinal);
+        Assert.DoesNotContain("boundWithin", plain, StringComparison.Ordinal);
+        Assert.DoesNotContain("kindsApart", plain, StringComparison.Ordinal);
+        Assert.DoesNotContain("writtenWhole", plain, StringComparison.Ordinal);
     }
 
     /// <summary>

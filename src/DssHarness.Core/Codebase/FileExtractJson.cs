@@ -97,6 +97,12 @@ internal sealed class FileExtractJson : JsonConverter<FileExtract>
         public bool BoundWithin { get; init; }
 
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+        public bool KindsApart { get; init; }
+
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+        public bool WrittenWhole { get; init; }
+
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
         public bool FolderUnit { get; init; }
 
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
@@ -195,6 +201,8 @@ internal sealed class FileExtractJson : JsonConverter<FileExtract>
                     : null,
                 Published = extract.Published,
                 BoundWithin = extract.BoundWithin,
+                KindsApart = extract.KindsApart,
+                WrittenWhole = extract.WrittenWhole,
                 FolderUnit = extract.FolderUnit,
                 PublishesTaken = extract.PublishesTaken,
                 LayoutRoots = extract.LayoutRoots,
@@ -352,6 +360,8 @@ internal sealed class FileExtractJson : JsonConverter<FileExtract>
                 Literals = Literals is null ? null : [.. Literals.Select(literal => new ExtractLiteral(literal.Value, [.. literal.Places.Select(place => new ExtractLiteralPlace(place.Line) { Node = place.Node is { } node ? IdAt(node, $"a place of the literal '{literal.Value}' is held by") : null })]))],
                 Published = Published,
                 BoundWithin = BoundWithin,
+                KindsApart = KindsApart,
+                WrittenWhole = WrittenWhole,
                 FolderUnit = FolderUnit,
                 PublishesTaken = PublishesTaken,
                 LayoutRoots = LayoutRoots,

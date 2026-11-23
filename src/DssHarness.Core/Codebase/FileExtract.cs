@@ -14,8 +14,10 @@ namespace DssHarness.Core.Codebase;
 /// <remarks>
 /// The linker resolves every reference by the same steps for every language - the qualifier's scope, the enclosing
 /// scopes from the inside out, the imports in order, the repository by name and arity where the file's names are not bound
-/// within it (<see cref="BoundWithin"/>) (<see cref="CodeGraphLinker"/>) - so a language says in its extract what its scopes
-/// and imports are, and never adds a rule to the linker.
+/// within it (<see cref="BoundWithin"/>), the type of a name's whole qualified name alone where the file writes them whole
+/// (<see cref="WrittenWhole"/>), and a declaration of the kind a reference names alone where the file keeps its names' kinds
+/// apart (<see cref="KindsApart"/>) (<see cref="CodeGraphLinker"/>) - so a language says in its extract what its scopes,
+/// imports and names are, and never adds a rule to the linker.
 /// <para>
 /// Its record (<see cref="FileExtractJson"/>) writes each node's names against its parent's and every node a field names
 /// by its place, so what is kept of a file nested any depth grows with the file, never with the square of its depth; read
@@ -107,6 +109,24 @@ public sealed record FileExtract(IReadOnlyList<ExtractNode> Nodes)
     /// any file declares.
     /// </summary>
     public bool BoundWithin { get; init; }
+
+    /// <summary>
+    /// Whether the file's language keeps the kinds of its names apart - a function's, a value's, a type's each its own, as PHP keeps
+    /// its functions, its constants and its classes: a call it makes then reaches a member that takes arguments alone, a use a value
+    /// alone - a constant, a property, an enum's case - and neither a type, which a <c>new</c> (<see cref="CodeEdgeKinds.Instantiates"/>)
+    /// and a type's place (<see cref="CodeEdgeKinds.References"/>) name; nor is a <c>new</c> of it ever a constructor function's.
+    /// False where one name may stand for any of them, as a C# or a JavaScript name may.
+    /// </summary>
+    public bool KindsApart { get; init; }
+
+    /// <summary>
+    /// Whether every type or scope name the file writes - a qualifier's (<see cref="CodeQualifierKinds.Type"/>), a value's type
+    /// (<see cref="ExtractNode.ValueType"/>) - is written whole, as its language resolved it: the linker then finds the type or scope
+    /// whose whole qualified name it is, and no other - never one the scopes its code is in declare by that name, one an import makes
+    /// visible, the repository's of its last name, nor one whose name ends with it - as PHP's reader writes every class name out by
+    /// the file's <c>use</c> declarations and its namespace. False where a name may be written from where the code stands.
+    /// </summary>
+    public bool WrittenWhole { get; init; }
 
     /// <summary>
     /// Whether the file is the one that says its directory is one unit of its language's layout - a Python package's
@@ -660,7 +680,8 @@ public sealed record ExtractNode(QualifiedName Id, string Kind, string Name, Qua
 
     /// <summary>
     /// The type a value of it is declared with - a field's, a property's, an event's - as a type qualifier names it, where
-    /// the code says one: what a call on that value is looked for through.
+    /// the code says one: what a call on that value is looked for through; where the file writes its names whole
+    /// (<see cref="FileExtract.WrittenWhole"/>), the type or scope of that whole qualified name alone.
     /// </summary>
     public string? ValueType { get; init; }
 
@@ -1097,7 +1118,8 @@ public static class CodeQualifierKinds
 
     /// <summary>
     /// A type, by its name as the code writes it where the code says it is a type's - a variable's declared type, a type
-    /// made or cast, a type named in a declaration: looked for as a type or a scope alone, never as a value.
+    /// made or cast, a type named in a declaration: looked for as a type or a scope alone, never as a value; where the file
+    /// writes its names whole (<see cref="FileExtract.WrittenWhole"/>), the type or scope of that whole qualified name alone.
     /// </summary>
     public const string Type = "type";
 
@@ -1117,8 +1139,8 @@ public static class CodeQualifierKinds
 
     /// <summary>
     /// A scope by its qualified name, and past it the repository's own top: the name is looked for as that scope declares
-    /// it, else as a declaration in no scope, and nowhere else - as PHP finds a function its namespace declares, else the
-    /// global one; with no name, among the declarations in no scope alone - a name PHP writes from its global namespace,
+    /// it, else as a declaration in no scope, and nowhere else - as PHP finds a function or a constant its namespace declares,
+    /// else the global one; with no name, among the declarations in no scope alone - a name PHP writes from its global namespace,
     /// or after a leading <c>\</c>. Either is looked for among the declarations of the reference's own language alone.
     /// </summary>
     public const string Scope = "scope";

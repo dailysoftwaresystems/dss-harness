@@ -1987,8 +1987,25 @@ public sealed class CodeGraphLinkerTests
         reader = "t:Go";
         static ExtractNode RunAt(string id) => Member("Run", 0) with { Id = id };
         static CodeGraphFile Within(CodeGraphFile file) => file with { Extract = file.Extract! with { BoundWithin = true } };
+        static CodeGraphFile Whole(CodeGraphFile file) => file with { Extract = file.Extract! with { WrittenWhole = true } };
         var throughMid = Within(File("use.t", [go], [Call("Go", "Run", 0)], imports: [Import(CodeImportForms.Relative, "mid.t")]));
         var runs = new[] { File("a.t", [RunAt("t:a.Run")]), File("b.t", [RunAt("t:b.Run")]) };
+
+        // Whether a file writes its type names whole, read of another file through the value it declares: the type of the value's type
+        // looked for from where the value stands - the repository's of its last name - or, written whole, the one of its whole name alone.
+        var throughCart = File("use.t", [Member("app.Go", 0)], [Call("app.Go", "Run", 0, new ExtractQualifier(CodeQualifierKinds.Value, "cart"))], scopes: [Open("app")]);
+        var cart = File("x.t", [Type("x.Cart"), Member("x.Cart.Run", 0) with { Parent = "t:x.Cart" }]);
+        var valued = File("cart.t", [Value("app.cart", "Cart")], scopes: [Open("app")]);
+
+        reader = "t:app.Go";
+        Case("whether a file writes its names whole", [throughCart, cart], valued, Whole(valued));
+        Case("whether a file writes its names whole, no longer", [throughCart, cart], Whole(valued), valued);
+
+        // Whether a file binds its names within it, read the same way: the type of the value's type looked for in the repository by its
+        // name where the file binds none, and nowhere where it binds all.
+        Case("whether a file binds its names within it, read through its value", [throughCart, cart], valued, Within(valued));
+        Case("whether a file binds its names within it, read through its value, no longer", [throughCart, cart], Within(valued), valued);
+        reader = "t:Go";
 
         // Whether what another file's import binds is its importers' too: a re-export become one.
         Case(
@@ -2094,6 +2111,140 @@ public sealed class CodeGraphLinkerTests
 
         Assert.Equal([Edge("t:lib.Cart.render", "t:lib.render", CodeEdgeKinds.Calls, CodeConfidences.Exact)], linked.Edges.Where(edge => edge.From == "t:lib.Cart.render"));
         Assert.Equal([Edge("t:lib.Box.paint", "t:lib.draw", CodeEdgeKinds.Calls, CodeConfidences.Exact)], linked.Edges.Where(edge => edge.From == "t:lib.Box.paint"));
+    }
+
+    /// <summary>
+    /// A file that keeps its names' kinds apart (<see cref="FileExtract.KindsApart"/>) calls what takes arguments alone, uses a value alone and
+    /// reaches a type by neither: where one name is a type, a function and a value, its call is an edge to the function alone, its use to the
+    /// value alone, each exact, and a new of the name to the type alone. A file that says so of itself not reaches all three by a call and by a
+    /// use, as candidates, and makes the type's edge an instantiation - as every language's file does that keeps no kinds apart.
+    /// </summary>
+    [Fact]
+    public void AFileThatKeepsItsNamesKindsApart_CallsAFunction_UsesAValue_AndReachesATypeByNeither()
+    {
+        var declared = File("x.t", [Type("x.Cart"), Member("x.Cart", 0) with { Id = "t:x.Cart~2" }, Value("x.Cart", null) with { Id = "t:x.Cart~3" }], scopes: [Open("x")]);
+        var use = File(
+            "use.t",
+            [Member("Go", 0)],
+            [
+                Call("Go", "Cart", 0, new ExtractQualifier(CodeQualifierKinds.Scope, "x")),
+                Ref("Go", CodeEdgeKinds.Uses, "Cart") with { Qualifier = new ExtractQualifier(CodeQualifierKinds.Scope, "x"), Line = 2 },
+                Ref("Go", CodeEdgeKinds.Instantiates, "Cart") with { Qualifier = new ExtractQualifier(CodeQualifierKinds.Scope, "x"), Line = 3 },
+            ]);
+        var apart = Link(declared, use with { Extract = use.Extract! with { KindsApart = true } }).Edges.Where(edge => edge.From == "t:Go").OrderBy(edge => edge.Line).ToList();
+
+        Assert.Equal(
+            [
+                Edge("t:Go", "t:x.Cart~2", CodeEdgeKinds.Calls, CodeConfidences.Exact),
+                Edge("t:Go", "t:x.Cart~3", CodeEdgeKinds.Uses, CodeConfidences.Exact) with { Line = 2 },
+                Edge("t:Go", "t:x.Cart", CodeEdgeKinds.Instantiates, CodeConfidences.Exact) with { Line = 3 },
+            ],
+            apart);
+
+        var together = Link(declared, use).Edges.Where(edge => edge.From == "t:Go").OrderBy(edge => edge.Line).ThenBy(edge => edge.Kind, StringComparer.Ordinal).ThenBy(edge => edge.To, StringComparer.Ordinal).ToList();
+
+        Assert.Equal(
+            [
+                Edge("t:Go", "t:x.Cart~2", CodeEdgeKinds.Calls, CodeConfidences.Candidates),
+                Edge("t:Go", "t:x.Cart~3", CodeEdgeKinds.Calls, CodeConfidences.Candidates),
+                Edge("t:Go", "t:x.Cart", CodeEdgeKinds.Instantiates, CodeConfidences.Candidates),
+                Edge("t:Go", "t:x.Cart", CodeEdgeKinds.Uses, CodeConfidences.Candidates) with { Line = 2 },
+                Edge("t:Go", "t:x.Cart~2", CodeEdgeKinds.Uses, CodeConfidences.Candidates) with { Line = 2 },
+                Edge("t:Go", "t:x.Cart~3", CodeEdgeKinds.Uses, CodeConfidences.Candidates) with { Line = 2 },
+                Edge("t:Go", "t:x.Cart", CodeEdgeKinds.Instantiates, CodeConfidences.Exact) with { Line = 3 },
+            ],
+            together);
+    }
+
+    /// <summary>
+    /// A new in a file that keeps its names' kinds apart (<see cref="FileExtract.KindsApart"/>) makes no constructor function: it is a type
+    /// alone, though a member another file declares to extend the function makes one of it - where a new of the name, in a file that says
+    /// nothing of the kinds of its names, is an edge to the function.
+    /// </summary>
+    [Fact]
+    public void ANewInAFileThatKeepsItsNamesKindsApart_MakesNoConstructorFunction()
+    {
+        var declared = new[] { File("widget.t", [Member("Widget", 0)]), File("ext.t", [Member("Widget.draw", 0) with { Extends = "Widget" }]) };
+        var use = File("use.t", [Member("Go", 0)], [Ref("Go", CodeEdgeKinds.Instantiates, "Widget")]);
+
+        var kept = Link([.. declared, use with { Extract = use.Extract! with { KindsApart = true } }]).Edges.Where(edge => edge.From == "t:Go").ToList();
+
+        Assert.Equal([Edge("t:Go", "t:Widget", CodeEdgeKinds.Instantiates, CodeConfidences.Unique)], Link([.. declared, use]).Edges.Where(edge => edge.From == "t:Go"));
+        Assert.Equal([], kept);
+    }
+
+    /// <summary>
+    /// A file that writes its type names whole (<see cref="FileExtract.WrittenWhole"/>) finds the type or scope of a name's whole qualified name
+    /// alone - by a type's qualifier, through the value it declares, by a chain whose head names a type and by a type's chain written as links
+    /// past an import's prefix: the one of that whole name, exact, and nothing where none is - never one the scopes its code is in declare by
+    /// that name, one an import makes visible nor one whose name ends with it. A file that writes them not is looked for from where the code
+    /// stands, as before: the scope's, the import's, the ending's and the value's.
+    /// </summary>
+    [Fact]
+    public void AFileThatWritesItsNamesWhole_FindsTheTypeOfThatWholeNameAlone()
+    {
+        var declared = new[]
+        {
+            File(
+                "lib.t",
+                [
+                    Type("Clock"), Member("Clock.Tick", 0) with { Parent = "t:Clock" }, Value("Clock.inner", "Inner") with { Parent = "t:Clock" },
+                    Type("Inner"), Member("Inner.Run", 0) with { Parent = "t:Inner" },
+                ]),
+            File(
+                "app.t",
+                [
+                    Type("app.Clock"), Member("app.Clock.Tick", 0) with { Parent = "t:app.Clock" }, Value("app.Clock.inner", "app.Inner") with { Parent = "t:app.Clock" },
+                    Type("app.Inner"), Member("app.Inner.Run", 0) with { Parent = "t:app.Inner" }, Type("app.Lib.Mailer"), Member("app.Lib.Mailer.Send", 0) with { Parent = "t:app.Lib.Mailer" },
+                ],
+                scopes: [Open("app"), Open("app.Lib")]),
+        };
+        var use = File(
+            "use.t",
+            [Member("app.Go", 0), Value("app.clock", "Clock")],
+            [
+                Call("app.Go", "Tick", 0, new ExtractQualifier(CodeQualifierKinds.Type, "Clock")),
+                Call("app.Go", "Send", 0, new ExtractQualifier(CodeQualifierKinds.Type, "Lib.Mailer")) with { Line = 2 },
+                Call("app.Go", "Tick", 0, new ExtractQualifier(CodeQualifierKinds.Value, "clock")) with { Line = 3 },
+                Call("app.Go", "Run", 0, new ExtractQualifier(CodeQualifierKinds.Value, "Clock.inner")) with { Line = 4 },
+            ],
+            scopes: [Open("app")]);
+
+        Assert.Equal(
+            [
+                new CodeEdge("t:app.Go", "t:Clock.Tick", CodeEdgeKinds.Calls, 1, CodeConfidences.Exact),
+                new CodeEdge("t:app.Go", "t:Clock.Tick", CodeEdgeKinds.Calls, 3, CodeConfidences.Exact),
+                new CodeEdge("t:app.Go", "t:Inner.Run", CodeEdgeKinds.Calls, 4, CodeConfidences.Exact),
+            ],
+            Link([.. declared, use with { Extract = use.Extract! with { WrittenWhole = true } }]).Edges.Where(edge => edge.From == "t:app.Go").OrderBy(edge => edge.Line));
+
+        Assert.Equal(
+            [
+                new CodeEdge("t:app.Go", "t:app.Clock.Tick", CodeEdgeKinds.Calls, 1, CodeConfidences.Exact),
+                new CodeEdge("t:app.Go", "t:app.Lib.Mailer.Send", CodeEdgeKinds.Calls, 2, CodeConfidences.Exact),
+                new CodeEdge("t:app.Go", "t:app.Clock.Tick", CodeEdgeKinds.Calls, 3, CodeConfidences.Exact),
+                new CodeEdge("t:app.Go", "t:app.Inner.Run", CodeEdgeKinds.Calls, 4, CodeConfidences.Exact),
+            ],
+            Link([.. declared, use]).Edges.Where(edge => edge.From == "t:app.Go").OrderBy(edge => edge.Line));
+
+        // A type's chain written as links past an import's prefix is, written whole, the whole name its links spell - which nothing declares -
+        // and never what the import makes visible.
+        var shapes = File("lib/shapes.t", [Type("Outer"), Type("Outer.Inner"), Type("Outer.Inner.Deep"), Member("Outer.Inner.Deep.Run", 0)]);
+        var chain = File(
+            "typed.t",
+            [Member("Typed", 0)],
+            [
+                Ref("Typed", CodeEdgeKinds.Uses, "Outer") with { Qualifier = Prefix("lib.shapes") },
+                Ref("Typed", CodeEdgeKinds.Uses, "Inner") with { Qualifier = new ExtractQualifier(CodeQualifierKinds.Type) { Link = 0 } },
+                Ref("Typed", CodeEdgeKinds.Uses, "Deep") with { Qualifier = new ExtractQualifier(CodeQualifierKinds.Type) { Link = 1 } },
+                Call("Typed", "Run", 0, new ExtractQualifier(CodeQualifierKinds.Type) { Link = 2 }),
+            ],
+            imports: [Import(CodeImportForms.Relative, "lib/shapes.t") with { Prefix = "lib.shapes" }]);
+        var typed = Link(shapes, chain).Edges.Where(edge => edge is { From: "t:Typed", Kind: CodeEdgeKinds.Calls }).ToList();
+        var whole = Link(shapes, chain with { Extract = chain.Extract! with { WrittenWhole = true } }).Edges.Where(edge => edge is { From: "t:Typed", Kind: CodeEdgeKinds.Calls }).ToList();
+
+        Assert.Equal([Edge("t:Typed", "t:Outer.Inner.Deep.Run", CodeEdgeKinds.Calls, CodeConfidences.Exact)], typed);
+        Assert.Equal([], whole);
     }
 
     /// <summary>
@@ -2370,8 +2521,9 @@ public sealed class CodeGraphLinkerTests
             references.Add(RandomReference(random, Pick(random, nodes).Id.Whole(), made, Pick(random, nodes).Id.Whole()));
         }
 
-        // Now and then a file of a language that binds its names within it, one that says its directory is a unit of its layout or
-        // declares a root of it, and one that publishes names - and what its own imports that take published names take.
+        // Now and then a file of a language that binds its names within it, one that keeps its names' kinds apart, one that writes its type names
+        // whole, one that says its directory is a unit of its layout or declares a root of it, and one that publishes names - and what its own
+        // imports that take published names take.
         IReadOnlyList<string>? published = Chance(random, 3) ? [.. RandomNames.Where(_ => Chance(random, 4))] : null;
 
         return new CodeGraphFile(path, Chance(random, 12) ? "u" : "t", new FileExtract(nodes)
@@ -2382,6 +2534,8 @@ public sealed class CodeGraphLinkerTests
             AddressRoots = Chance(random, 5) ? [RandomRoot(random)] : [],
             Literals = nodes.Count > 0 && Chance(random, 3) ? LiteralRow.Table(new LiteralRow(Pick(random, RandomData), 1)) : [],
             BoundWithin = Chance(random, 4),
+            KindsApart = Chance(random, 4),
+            WrittenWhole = Chance(random, 4),
             FolderUnit = Chance(random, 4),
             LayoutRoots = Chance(random, 6) ? [Pick(random, RandomLayoutRoots)] : null,
             Published = published,
@@ -2763,15 +2917,17 @@ public sealed class CodeGraphLinkerTests
                 break;
 
             case 20:
-                // What a file says of itself that another file's finding reads: whether its names are bound within it, whether its
-                // directory is a unit of its layout, the roots it declares, the names it publishes and whether what its imports take
-                // is among them.
-                extract = random.Next(5) switch
+                // What a file says of itself that another file's finding reads: whether its names are bound within it, whether it keeps its
+                // names' kinds apart, whether it writes its type names whole, whether its directory is a unit of its layout, the roots it
+                // declares, the names it publishes and whether what its imports take is among them.
+                extract = random.Next(7) switch
                 {
                     0 => extract with { BoundWithin = !extract.BoundWithin },
                     1 => extract with { FolderUnit = !extract.FolderUnit },
                     2 => extract with { LayoutRoots = extract.LayoutRoots is null ? [Pick(random, RandomLayoutRoots)] : null },
                     3 => extract with { Published = extract.Published is null ? [Pick(random, RandomNames)] : null, PublishesTaken = false },
+                    5 => extract with { KindsApart = !extract.KindsApart },
+                    6 => extract with { WrittenWhole = !extract.WrittenWhole },
                     _ => extract.Published is null ? extract : extract with { PublishesTaken = !extract.PublishesTaken },
                 };
                 break;
