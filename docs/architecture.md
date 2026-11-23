@@ -9692,8 +9692,10 @@ their failures (xUnit's, gtest's, ctest's list); each is chosen for the output i
 runs over another's. `results.matchers` in `config.json` declares one for any other tool - a regex
 with named groups saying where its file, line, column, code and message are, and optionally a frame
 pattern with an end, read as a stack - compiled and its groups checked at load
-(`Configuration\ProblemMatcher.cs`). Where a step's runner throws an error the engine did not
-expect, the attempt's measure entry keeps it whole (`FlowStepAttempt.Exception`, built from the
+(`Configuration\ProblemMatcher.cs`), each pattern by `LinearRegex` as every pattern of the file is,
+so one holding a construct that matcher lacks refuses the file, naming the matcher, the pattern and
+the construct. Where a step's runner throws an error the engine did not expect, the attempt's
+measure entry keeps it whole (`FlowStepAttempt.Exception`, built from the
 live exception's own stack, each frame marked by whether its file is inside the run's tree).
 
 Before any log line is parsed, what a tool wrote as data is read (`Results\ResultFiles.cs`): a

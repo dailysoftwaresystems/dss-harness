@@ -1,6 +1,7 @@
 using System.Text.RegularExpressions;
 using DssHarness.Core.Execution;
 using DssHarness.Core.Output;
+using DssHarness.Core.Text;
 
 namespace DssHarness.Core.Testing;
 
@@ -51,7 +52,7 @@ internal static class Ctest
     private static readonly string[] UnionArgs = ["-U", "--union"];
 
     /// <summary>The line ctest ends a run that ran tests with, which it never prints where it ran none.</summary>
-    private static readonly Regex Summary = new(@"^\d+% tests passed, \d+ tests failed out of \d+$", RegexOptions.CultureInvariant);
+    private static readonly Regex Summary = LinearRegex.Compile(@"^\d+% tests passed, \d+ tests failed out of \d+$");
 
     /// <summary>
     /// What ctest's patterns read specially - every other character matches itself - and more besides, so a pattern

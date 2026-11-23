@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text.RegularExpressions;
+using DssHarness.Core.Text;
 
 namespace DssHarness.Core.Results;
 
@@ -47,7 +48,7 @@ public static class ResultParsers
 /// <summary>Reads MSBuild's and csc's form: <c>path(line,col): error CS0103: message [project]</c>, folding the same error printed once per target framework.</summary>
 internal sealed class MsBuildParser : IResultParser
 {
-    private static readonly Regex Form = new(@"^(?<file>[^(\s][^(:]*?)\((?<line>\d+)(?:,(?<col>\d+)(?:-(?<endline>\d+),(?<endcol>\d+))?)?\):\s+(?<severity>error|warning)\s+(?<code>[A-Z0-9]+):\s+(?<message>.+?)(?:\s+\[(?<project>[^\]]+)\])?$", RegexOptions.Compiled);
+    private static readonly Regex Form = LinearRegex.Compile(@"^(?<file>[^(\s][^(:]*?)\((?<line>\d+)(?:,(?<col>\d+)(?:-(?<endline>\d+),(?<endcol>\d+))?)?\):\s+(?<severity>error|warning)\s+(?<code>[A-Z0-9]+):\s+(?<message>.+?)(?:\s+\[(?<project>[^\]]+)\])?$");
 
     public string Name => "msbuild";
 
@@ -90,7 +91,7 @@ internal sealed class MsBuildParser : IResultParser
 /// <summary>Reads MSVC's form: <c>path(line): error C2065: message</c>, and the linker's <c>LNK</c> errors beside it.</summary>
 internal sealed class MsvcParser : IResultParser
 {
-    private static readonly Regex Form = new(@"^(?<file>[^(\s][^(:]*?)\((?<line>\d+)\):\s+(?<severity>error|warning|note)\s+(?<code>[A-Z]\d+):\s+(?<message>.*)$", RegexOptions.Compiled);
+    private static readonly Regex Form = LinearRegex.Compile(@"^(?<file>[^(\s][^(:]*?)\((?<line>\d+)\):\s+(?<severity>error|warning|note)\s+(?<code>[A-Z]\d+):\s+(?<message>.*)$");
 
     public string Name => "msvc";
 
@@ -120,7 +121,7 @@ internal sealed class MsvcParser : IResultParser
 /// <summary>Reads gcc's form: <c>path:line:col: error: message [-Wflag]</c>, with the include and macro chain as the error's stack.</summary>
 internal sealed class GccParser : IResultParser
 {
-    private static readonly Regex Form = new(@"^(?<file>.+?):(?<line>\d+):(?<col>\d+):\s+(?<severity>error|warning|note):\s+(?<message>.+?)(?:\s+\[(?<code>[-\w]+)\])?$", RegexOptions.Compiled);
+    private static readonly Regex Form = LinearRegex.Compile(@"^(?<file>.+?):(?<line>\d+):(?<col>\d+):\s+(?<severity>error|warning|note):\s+(?<message>.+?)(?:\s+\[(?<code>[-\w]+)\])?$");
 
     public string Name => "gcc";
 
@@ -152,7 +153,7 @@ internal sealed class GccParser : IResultParser
 /// <summary>Reads clang's form: gcc's, with the instantiation and macro chain as the error's stack.</summary>
 internal sealed class ClangParser : IResultParser
 {
-    private static readonly Regex Form = new(@"^(?<file>.+?):(?<line>\d+):(?<col>\d+):\s+(?<severity>error|warning|note):\s+(?<message>.+?)(?:\s+\[(?<code>[-\w]+)\])?$", RegexOptions.Compiled);
+    private static readonly Regex Form = LinearRegex.Compile(@"^(?<file>.+?):(?<line>\d+):(?<col>\d+):\s+(?<severity>error|warning|note):\s+(?<message>.+?)(?:\s+\[(?<code>[-\w]+)\])?$");
 
     public string Name => "clang";
 
@@ -188,8 +189,8 @@ internal sealed class ClangParser : IResultParser
 /// </summary>
 internal static class CompilerChains
 {
-    private static readonly Regex Included = new(@"^(?:In file included from|from)\s+(?<file>.+?):(?<line>\d+)(?::(?<col>\d+))?:?,?\s*$", RegexOptions.Compiled);
-    private static readonly Regex Instantiated = new(@"^(?<file>.+?):(?<line>\d+)(?::(?<col>\d+))?:\s+(?:note:\s+)?(?:in instantiation of |in expansion of macro )?.*?(?:requested from here|required from here|in expansion of macro)", RegexOptions.Compiled);
+    private static readonly Regex Included = LinearRegex.Compile(@"^(?:In file included from|from)\s+(?<file>.+?):(?<line>\d+)(?::(?<col>\d+))?:?,?\s*$");
+    private static readonly Regex Instantiated = LinearRegex.Compile(@"^(?<file>.+?):(?<line>\d+)(?::(?<col>\d+))?:\s+(?:note:\s+)?(?:in instantiation of |in expansion of macro )?.*?(?:requested from here|required from here|in expansion of macro)");
 
     /// <summary>The chain before the error at <paramref name="at"/>, innermost first, each frame marked by its kind.</summary>
     /// <param name="lines">The compiler's output lines.</param>
@@ -223,7 +224,7 @@ internal static class CompilerChains
 /// <summary>Reads CMake's form: <c>CMake Error at path:line (command):</c> with the message block under it.</summary>
 internal sealed class CMakeParser : IResultParser
 {
-    private static readonly Regex Form = new(@"^CMake (?<severity>Error|Warning)(?: at (?<file>[^:\s][^:]*?):(?<line>\d+)(?: \((?<command>\w+)\))?)?", RegexOptions.Compiled);
+    private static readonly Regex Form = LinearRegex.Compile(@"^CMake (?<severity>Error|Warning)(?: at (?<file>[^:\s][^:]*?):(?<line>\d+)(?: \((?<command>\w+)\))?)?");
 
     public string Name => "cmake";
 
@@ -256,7 +257,7 @@ internal sealed class CMakeParser : IResultParser
 /// <summary>Reads Ninja's <c>FAILED:</c> block, naming the output whose diagnostics follow.</summary>
 internal sealed class NinjaParser : IResultParser
 {
-    private static readonly Regex Form = new(@"^FAILED:\s*(?<output>.+)$", RegexOptions.Compiled);
+    private static readonly Regex Form = LinearRegex.Compile(@"^FAILED:\s*(?<output>.+)$");
 
     public string Name => "ninja";
 
@@ -282,7 +283,7 @@ internal sealed class NinjaParser : IResultParser
 /// <summary>Reads the linkers' forms: <c>undefined reference to</c>, <c>unresolved external symbol</c>, <c>ld: symbol(s) not found</c>.</summary>
 internal sealed class LinkerParser : IResultParser
 {
-    private static readonly Regex Form = new(@"^(?:.*?(?<code>undefined reference to|unresolved external symbol|symbol\(s\) not found|duplicate symbol)\s*(?<message>.*)|ld:\s+(?<ldmessage>.*))$", RegexOptions.Compiled);
+    private static readonly Regex Form = LinearRegex.Compile(@"^(?:.*?(?<code>undefined reference to|unresolved external symbol|symbol\(s\) not found|duplicate symbol)\s*(?<message>.*)|ld:\s+(?<ldmessage>.*))$");
 
     public string Name => "link";
 
@@ -307,7 +308,7 @@ internal sealed class LinkerParser : IResultParser
 /// <summary>Reads tsc's form: <c>path(line,col): error TS2304: message</c>.</summary>
 internal sealed class TscParser : IResultParser
 {
-    private static readonly Regex Form = new(@"^(?<file>[^(\s][^(:]*?)\((?<line>\d+),(?<col>\d+)\):\s+(?<severity>error|warning)\s+(?<code>TS\d+):\s+(?<message>.*)$", RegexOptions.Compiled);
+    private static readonly Regex Form = LinearRegex.Compile(@"^(?<file>[^(\s][^(:]*?)\((?<line>\d+),(?<col>\d+)\):\s+(?<severity>error|warning)\s+(?<code>TS\d+):\s+(?<message>.*)$");
 
     public string Name => "tsc";
 
@@ -338,7 +339,7 @@ internal sealed class TscParser : IResultParser
 /// <summary>Reads the Dart analyser's form: <c>error • message • path:line:col • code</c>.</summary>
 internal sealed class DartAnalyserParser : IResultParser
 {
-    private static readonly Regex Form = new(@"^\s*(?<severity>error|warning|info)\s+•\s+(?<message>.+?)\s+•\s+(?<file>[^:•]+):(?<line>\d+):(?<col>\d+)\s+•\s+(?<code>[\w_]+)\s*$", RegexOptions.Compiled);
+    private static readonly Regex Form = LinearRegex.Compile(@"^\s*(?<severity>error|warning|info)\s+•\s+(?<message>.+?)\s+•\s+(?<file>[^:•]+):(?<line>\d+):(?<col>\d+)\s+•\s+(?<code>[\w_]+)\s*$");
 
     public string Name => "dart";
 
@@ -369,9 +370,9 @@ internal sealed class DartAnalyserParser : IResultParser
 /// <summary>Reads a .NET stack trace: <c>   at N.C.M() in path:line N</c>, with the exception line above and the inner-exception marker between.</summary>
 internal sealed class DotNetStackParser : IResultParser
 {
-    private static readonly Regex Thrown = new(@"^(?<type>[\w.]*Exception(?:\w*)?): (?<message>.*)$", RegexOptions.Compiled);
-    private static readonly Regex Frame = new(@"^\s+at (?<symbol>[\w.<>`+\[\],\s]+\([^)]*\))(?: in (?<file>.+?):line (?<line>\d+))?", RegexOptions.Compiled);
-    private static readonly Regex Inner = new(@"^--- End of (?:inner exception )?stack trace(?: from previous location where the exception was thrown)? ---", RegexOptions.Compiled);
+    private static readonly Regex Thrown = LinearRegex.Compile(@"^(?<type>[\w.]*Exception(?:\w*)?): (?<message>.*)$");
+    private static readonly Regex Frame = LinearRegex.Compile(@"^\s+at (?<symbol>[\w.<>`+\[\],\s]+\([^)]*\))(?: in (?<file>.+?):line (?<line>\d+))?");
+    private static readonly Regex Inner = LinearRegex.Compile(@"^--- End of (?:inner exception )?stack trace(?: from previous location where the exception was thrown)? ---");
 
     public string Name => "dotnet-stack";
 
@@ -461,9 +462,9 @@ internal sealed class DotNetStackParser : IResultParser
 /// <summary>Reads a JVM stack trace: <c>at p.C.m(File.java:12)</c>, with <c>Caused by:</c> chains.</summary>
 internal sealed class JvmStackParser : IResultParser
 {
-    private static readonly Regex Thrown = new(@"^(?<type>[\w.$]+(?:Exception|Error)): (?<message>.*)$", RegexOptions.Compiled);
-    private static readonly Regex Frame = new(@"^\s+at (?<symbol>[\w.$]+\.[\w$<>]+)\((?<file>[^)]*?)(?::(?<line>\d+))?\)", RegexOptions.Compiled);
-    private static readonly Regex Caused = new(@"^Caused by: (?<type>[\w.$]+(?:Exception|Error)): (?<message>.*)$", RegexOptions.Compiled);
+    private static readonly Regex Thrown = LinearRegex.Compile(@"^(?<type>[\w.$]+(?:Exception|Error)): (?<message>.*)$");
+    private static readonly Regex Frame = LinearRegex.Compile(@"^\s+at (?<symbol>[\w.$]+\.[\w$<>]+)\((?<file>[^)]*?)(?::(?<line>\d+))?\)");
+    private static readonly Regex Caused = LinearRegex.Compile(@"^Caused by: (?<type>[\w.$]+(?:Exception|Error)): (?<message>.*)$");
 
     public string Name => "jvm-stack";
 
@@ -510,9 +511,9 @@ internal sealed class JvmStackParser : IResultParser
 /// <summary>Reads a Python traceback: <c>Traceback (most recent call last):</c>, frames <c>File "path", line N, in f</c>, the error line last.</summary>
 internal sealed class PythonStackParser : IResultParser
 {
-    private static readonly Regex Head = new(@"^Traceback \(most recent call last\):$", RegexOptions.Compiled);
-    private static readonly Regex Frame = new(@"^\s+File ""(?<file>[^""]+)"", line (?<line>\d+), in (?<symbol>\w+)", RegexOptions.Compiled);
-    private static readonly Regex Thrown = new(@"^(?<type>[\w.]+(?:Error|Exception|Interrupt|Exit)[\w.]*): (?<message>.*)$", RegexOptions.Compiled);
+    private static readonly Regex Head = LinearRegex.Compile(@"^Traceback \(most recent call last\):$");
+    private static readonly Regex Frame = LinearRegex.Compile(@"^\s+File ""(?<file>[^""]+)"", line (?<line>\d+), in (?<symbol>\w+)");
+    private static readonly Regex Thrown = LinearRegex.Compile(@"^(?<type>[\w.]+(?:Error|Exception|Interrupt|Exit)[\w.]*): (?<message>.*)$");
 
     public string Name => "python-stack";
 
@@ -565,8 +566,8 @@ internal sealed class PythonStackParser : IResultParser
 /// <summary>Reads V8's stack trace (Node and the browsers): <c>at f (/path/file.js:12:34)</c>, with the error line above.</summary>
 internal sealed class V8StackParser : IResultParser
 {
-    private static readonly Regex Thrown = new(@"^(?<type>[\w]+(?:Error)?)?: (?<message>.*)$", RegexOptions.Compiled);
-    private static readonly Regex Frame = new(@"^\s+at (?<symbol>[\w.$<>]+)?\s*\(?(?<file>[^()\s]+?):(?<line>\d+):(?<col>\d+)\)?", RegexOptions.Compiled);
+    private static readonly Regex Thrown = LinearRegex.Compile(@"^(?<type>[\w]+(?:Error)?)?: (?<message>.*)$");
+    private static readonly Regex Frame = LinearRegex.Compile(@"^\s+at (?<symbol>[\w.$<>]+)?\s*\(?(?<file>[^()\s]+?):(?<line>\d+):(?<col>\d+)\)?");
 
     public string Name => "v8-stack";
 
@@ -610,8 +611,8 @@ internal sealed class V8StackParser : IResultParser
 /// <summary>Reads Dart's stack form: <c>#0 f (file:line:col)</c>, with the error line above.</summary>
 internal sealed class DartStackParser : IResultParser
 {
-    private static readonly Regex Thrown = new(@"^(?:Unhandled exception:\n)?(?<type>[\w.]+(?:Exception|Error))?:?\s*(?<message>.+)$", RegexOptions.Compiled);
-    private static readonly Regex Frame = new(@"^#(?<n>\d+)\s+(?<symbol>[\w.<>]+)\s+\((?<file>.+?):(?<line>\d+):(?<col>\d+)\)", RegexOptions.Compiled);
+    private static readonly Regex Thrown = LinearRegex.Compile(@"^(?:Unhandled exception:\n)?(?<type>[\w.]+(?:Exception|Error))?:?\s*(?<message>.+)$");
+    private static readonly Regex Frame = LinearRegex.Compile(@"^#(?<n>\d+)\s+(?<symbol>[\w.<>]+)\s+\((?<file>.+?):(?<line>\d+):(?<col>\d+)\)");
 
     public string Name => "dart-stack";
 
@@ -677,9 +678,9 @@ internal sealed class DartStackParser : IResultParser
 /// <summary>Reads Go's panic: the <c>panic:</c> line with the goroutine's stack under it.</summary>
 internal sealed class GoPanicParser : IResultParser
 {
-    private static readonly Regex Thrown = new(@"^panic:\s+(?<message>.*)$", RegexOptions.Compiled);
-    private static readonly Regex Frame = new(@"^\s*(?<symbol>[\w./()+\[\]*]+\.(?:\(\*\w+\.)?\w+)\(.*?\)\s*$", RegexOptions.Compiled);
-    private static readonly Regex Place = new(@"^\s*(?<file>[^:\s]+\.go):(?<line>\d+)\s", RegexOptions.Compiled);
+    private static readonly Regex Thrown = LinearRegex.Compile(@"^panic:\s+(?<message>.*)$");
+    private static readonly Regex Frame = LinearRegex.Compile(@"^\s*(?<symbol>[\w./()+\[\]*]+\.(?:\(\*\w+\.)?\w+)\(.*?\)\s*$");
+    private static readonly Regex Place = LinearRegex.Compile(@"^\s*(?<file>[^:\s]+\.go):(?<line>\d+)\s");
 
     public string Name => "go-panic";
 
@@ -730,8 +731,8 @@ internal sealed class GoPanicParser : IResultParser
 /// <summary>Reads Rust's panic: <c>thread 'main' panicked at src/x.rs:12:5:</c> with its message and backtrace.</summary>
 internal sealed class RustPanicParser : IResultParser
 {
-    private static readonly Regex Thrown = new(@"^thread '[^']+' panicked at (?<file>[^:]+):(?<line>\d+):(?<col>\d+):$", RegexOptions.Compiled);
-    private static readonly Regex Frame = new(@"^\s+\d+:\s+0x[0-9a-f]+\s+-\s+(?<symbol>[\w:<>*]+)", RegexOptions.Compiled);
+    private static readonly Regex Thrown = LinearRegex.Compile(@"^thread '[^']+' panicked at (?<file>[^:]+):(?<line>\d+):(?<col>\d+):$");
+    private static readonly Regex Frame = LinearRegex.Compile(@"^\s+\d+:\s+0x[0-9a-f]+\s+-\s+(?<symbol>[\w:<>*]+)");
 
     public string Name => "rust-panic";
 
@@ -767,8 +768,8 @@ internal sealed class RustPanicParser : IResultParser
 /// <summary>Reads the sanitizers' report: <c>#0 0x55... in f /src/x.c:12</c>.</summary>
 internal sealed class SanitizerParser : IResultParser
 {
-    private static readonly Regex Head = new(@"^==\d+==ERROR: (?<kind>[\w-]+): (?<message>.*)$", RegexOptions.Compiled);
-    private static readonly Regex Frame = new(@"^\s+#\d+\s+0x[0-9a-f]+\s+in (?<symbol>[\w:<>.~]+)?\s+(?<file>[^:\s]+):(?<line>\d+)", RegexOptions.Compiled);
+    private static readonly Regex Head = LinearRegex.Compile(@"^==\d+==ERROR: (?<kind>[\w-]+): (?<message>.*)$");
+    private static readonly Regex Frame = LinearRegex.Compile(@"^\s+#\d+\s+0x[0-9a-f]+\s+in (?<symbol>[\w:<>.~]+)?\s+(?<file>[^:\s]+):(?<line>\d+)");
 
     public string Name => "sanitizer";
 
@@ -804,8 +805,8 @@ internal sealed class SanitizerParser : IResultParser
 /// <summary>Reads the xUnit console's failed-test form: <c>Failed DssHarness.Tests.X.Y [duration]</c> with its message and stack under it.</summary>
 internal sealed class XUnitConsoleParser : IResultParser
 {
-    private static readonly Regex Failed = new(@"^\s+Failed\s+(?<id>[\w.+<>]+)\s+\[[\d.]+\s*(?<unit>ms|s)\]", RegexOptions.Compiled);
-    private static readonly Regex Message = new(@"^\s+Error Message:\s*$", RegexOptions.Compiled);
+    private static readonly Regex Failed = LinearRegex.Compile(@"^\s+Failed\s+(?<id>[\w.+<>]+)\s+\[[\d.]+\s*(?<unit>ms|s)\]");
+    private static readonly Regex Message = LinearRegex.Compile(@"^\s+Error Message:\s*$");
 
     public string Name => "xunit-console";
 
@@ -849,7 +850,7 @@ internal sealed class XUnitConsoleParser : IResultParser
 /// <summary>Reads gtest's failed-test form: <c>[  FAILED  ] Suite.Name (12 ms)</c> over its failure blocks.</summary>
 internal sealed class GTestConsoleParser : IResultParser
 {
-    private static readonly Regex Failed = new(@"^\[\s+FAILED\s+\]\s+(?<suite>\w+)\.(?<name>\w+)", RegexOptions.Compiled);
+    private static readonly Regex Failed = LinearRegex.Compile(@"^\[\s+FAILED\s+\]\s+(?<suite>\w+)\.(?<name>\w+)");
 
     public string Name => "gtest-console";
 
@@ -872,8 +873,8 @@ internal sealed class GTestConsoleParser : IResultParser
 /// <summary>Reads ctest's failed list: <c>The following tests FAILED:</c> with <c>N - Name (Failed)</c> under it.</summary>
 internal sealed class CTestConsoleParser : IResultParser
 {
-    private static readonly Regex Head = new(@"^The following tests FAILED:", RegexOptions.Compiled);
-    private static readonly Regex One = new(@"^\s*\d+\s+-\s+(?<name>.+?)\s+\((?<outcome>Failed|Timeout|Not Run)\)", RegexOptions.Compiled);
+    private static readonly Regex Head = LinearRegex.Compile(@"^The following tests FAILED:");
+    private static readonly Regex One = LinearRegex.Compile(@"^\s*\d+\s+-\s+(?<name>.+?)\s+\((?<outcome>Failed|Timeout|Not Run)\)");
 
     public string Name => "ctest-console";
 
@@ -908,9 +909,7 @@ internal sealed class CTestConsoleParser : IResultParser
 /// </summary>
 internal sealed class CiAnnotationsParser : IResultParser
 {
-    private static readonly Regex Form = new(
-        @"^(?:##\[|::)(?<severity>error|warning)\](?:\s+file=(?<file>[^,\s]+),line=(?<line>\d+)(?:,col=(?<column>\d+))?(?:,title=(?<title>[^:]*?))?::(?<message>.*))?\s*$",
-        RegexOptions.Compiled);
+    private static readonly Regex Form = LinearRegex.Compile(@"^(?:##\[|::)(?<severity>error|warning)\](?:\s+file=(?<file>[^,\s]+),line=(?<line>\d+)(?:,col=(?<column>\d+))?(?:,title=(?<title>[^:]*?))?::(?<message>.*))?\s*$");
 
     public string Name => "ci-annotations";
 

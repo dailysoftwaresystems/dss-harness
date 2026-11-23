@@ -2057,13 +2057,18 @@ public static partial class HarnessConfigValidator
             return true;
         }
 
-        problems.Add(Refused(setting, refusal));
+        problems.Add(PatternRefused(setting, refusal));
         regex = null!;
         return false;
     }
 
-    /// <summary>A pattern refused, said of <paramref name="setting"/> in the linear engine's words (<see cref="LinearRegex"/>).</summary>
-    private static string Refused(string setting, string refusal) => $"{setting} is not a valid regular expression: {refusal}";
+    /// <summary>
+    /// A pattern refused, said of <paramref name="setting"/> in the linear engine's words (<see cref="LinearRegex"/>): the one
+    /// wording of every refused pattern a file declares, a problem matcher's among them.
+    /// </summary>
+    /// <param name="setting">What the problem calls the setting that declares the pattern.</param>
+    /// <param name="refusal">The linear engine's refusal of it.</param>
+    internal static string PatternRefused(string setting, string refusal) => $"{setting} is not a valid regular expression: {refusal}";
 
     /// <summary>Checks the parts of a test section that can be wrong without being malformed.</summary>
     private static void ValidateTest(HarnessConfig config, TestConfig? test, string owner, List<string> problems)
@@ -2632,6 +2637,6 @@ public static partial class HarnessConfigValidator
     {
         ArgumentNullException.ThrowIfNull(pattern);
 
-        return LinearRegex.TryCompile(pattern, RegexOptions.None, out _, out var refusal) ? null : Refused(setting, refusal);
+        return LinearRegex.TryCompile(pattern, RegexOptions.None, out _, out var refusal) ? null : PatternRefused(setting, refusal);
     }
 }

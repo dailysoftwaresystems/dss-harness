@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using DssHarness.Core.Configuration;
 using DssHarness.Core.Orchestration.Flow;
 using DssHarness.Core.Results;
@@ -207,6 +208,54 @@ public sealed class ResultDigestTests
         reading.Compile();
 
         Assert.Null(reading.Problem());
+    }
+
+    /// <summary>
+    /// A matcher's patterns are compiled as every pattern the tool runs is, linear in what they read with no timeout: one
+    /// that holds what that matcher lacks - its pattern, its frame's, its end's - refuses the configuration at load, naming
+    /// the matcher, which pattern and the construct, in the words every refused pattern of a configuration is said in; and
+    /// a matcher that reads compiles all three, so its frames are read with no engine of their own.
+    /// </summary>
+    [Fact]
+    public void AMatchersPatternTheLinearMatcherLacks_RefusesTheConfigurationAtLoad_NamingIt()
+    {
+        static IReadOnlyList<string> Problems(ProblemMatcher matcher)
+            => [.. HarnessConfigValidator.Validate(new HarnessConfig { Results = new ResultsConfig { Matchers = [matcher] } })
+                .Where(problem => problem.StartsWith("results.", StringComparison.Ordinal))];
+
+        Assert.Equal(
+            ["results.matchers: matcher 'mytool': its pattern is not a valid regular expression: The pattern '^(?<file>.+)(?=:)' holds a lookahead or lookbehind, which .NET's linear-time matcher lacks."],
+            Problems(new ProblemMatcher("mytool", "^(?<file>.+)(?=:)", Severity: "error", File: "file")));
+        Assert.Equal(
+            [@"results.matchers: matcher 'mytool': its frame pattern is not a valid regular expression: The pattern '(?<file>\w+)\1' holds a backreference, which .NET's linear-time matcher lacks."],
+            Problems(new ProblemMatcher("mytool", "^(?<file>.+)$", Severity: "error", File: "file", Frame: @"(?<file>\w+)\1")));
+        Assert.Equal(
+            ["results.matchers: matcher 'mytool': its until pattern is not a valid regular expression: The pattern '(?>end)' holds an atomic group, which .NET's linear-time matcher lacks."],
+            Problems(new ProblemMatcher("mytool", "^(?<file>.+)$", Severity: "error", File: "file", Frame: "(?<file>.+)", Until: "(?>end)")));
+
+        var reading = new ProblemMatcher("mytool", "^(?<file>.+)$", Severity: "error", File: "file", Frame: "^  at (?<file>.+)$", Until: "^end$");
+
+        Assert.Empty(Problems(reading));
+        Assert.Equal(
+            [RegexOptions.NonBacktracking, RegexOptions.NonBacktracking, RegexOptions.NonBacktracking],
+            new[] { reading.Compiled!, reading.FrameCompiled!, reading.UntilCompiled! }.Select(regex => regex.Options & RegexOptions.NonBacktracking));
+    }
+
+    /// <summary>
+    /// A frame a matcher reads names its line and column only where its own pattern captured a whole number there: one
+    /// that captured anything else names no place, as a diagnostic's line does, and the digest is read on, never stopped.
+    /// </summary>
+    [Fact]
+    public void AMatchersFrameWhoseLineIsNoNumber_NamesNoLine_AndTheDigestIsReadOn()
+    {
+        var matcher = new ProblemMatcher("mytool", @"^ERROR (?<message>.+)$", Severity: "error", Message: "message", Frame: @"^  at (?<file>\S+):(?<line>\w+)$");
+        matcher.Compile();
+
+        var digest = PhaseParsers.DigestOf(["ERROR it broke", "  at src/a.c:twelve", "  at src/b.c:7"], PhaseParsers.ForBuild(null, [matcher]))!;
+
+        Assert.Equal(
+            [("src/a.c", (int?)null), ("src/b.c", 7)],
+            digest.First!.Stack!.Select(frame => (frame.File, frame.Line)));
     }
 
     /// <summary>The digest's bounds: at most 50 diagnostics and 50 failures, the rest folded and counted.</summary>

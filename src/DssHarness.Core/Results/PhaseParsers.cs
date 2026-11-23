@@ -200,8 +200,8 @@ internal sealed class MatcherParser(ProblemMatcher matcher) : IResultParser
                         stack.Add(new(
                             said,
                             frame.Groups["file"].Success ? frame.Groups["file"].Value : null,
-                            frame.Groups["line"].Success ? int.Parse(frame.Groups["line"].Value, CultureInfo.InvariantCulture) : null,
-                            frame.Groups["column"].Success ? int.Parse(frame.Groups["column"].Value, CultureInfo.InvariantCulture) : null,
+                            Whole(frame.Groups["line"]),
+                            Whole(frame.Groups["column"]),
                             frame.Groups["module"].Success ? frame.Groups["module"].Value : null,
                             frame.Groups["symbol"].Success ? frame.Groups["symbol"].Value : null));
                         at = inner;
@@ -214,6 +214,11 @@ internal sealed class MatcherParser(ProblemMatcher matcher) : IResultParser
 
             string Group(string? name)
                 => name is not null && found.Groups[name].Success ? found.Groups[name].Value : string.Empty;
+
+            // A frame's line or column as the matcher's own pattern captured it: a whole number, or none - a group that
+            // captured anything else names no place, as a diagnostic's does, and never stops the digest.
+            static int? Whole(Group group)
+                => group.Success && int.TryParse(group.Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var number) ? number : null;
 
             var severity = matcher.Severity is { } literal && Diagnostic.Severities.Contains(literal, StringComparer.Ordinal)
                 ? literal

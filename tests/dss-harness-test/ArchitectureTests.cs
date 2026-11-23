@@ -184,35 +184,75 @@ public sealed class ArchitectureTests
     }
 
     /// <summary>
-    /// No regex is made outside the one owner of the code's patterns: every <c>new Regex(</c> and every static
-    /// <c>Regex.IsMatch(</c> outside <c>Text\LinearRegex.cs</c> is a pattern compiled by its own rule, with a timeout
-    /// or an engine of its own, and the linear engine's refusal of what it cannot run in a line never reaches it. The
-    /// owner compiles every pattern the code holds as <c>NonBacktracking</c> with no timeout; nothing else compiles
-    /// one, so the walk holds no exception - a regex made anywhere else goes red here.
+    /// No regex is made outside the one owner of the code's patterns: no instruction of any of Core's types but the
+    /// owner's own (<c>Text\LinearRegex.cs</c>) constructs a <see cref="Regex"/> - however its source spells the
+    /// construction, <c>new Regex(</c> or a target-typed <c>new(</c> - or calls one of <see cref="Regex"/>'s static
+    /// matches, each of which compiles its pattern by its own rule; and no line of the command line's source does either.
+    /// A pattern compiled by its own rule has a timeout or an engine of its own, and the linear engine's refusal of what
+    /// it cannot run in a line never reaches it. The owner compiles every pattern the code holds as <c>NonBacktracking</c>
+    /// with no timeout; nothing else compiles one, so the walk holds no exception - a regex made anywhere else goes red
+    /// here. Read from Core's own instructions, never from its source's text, which a target-typed construction hides from.
     /// </summary>
     [Fact]
     public void NoRegexIsMadeOutsideLinearRegex()
     {
-        var made = new List<string>();
+        const BindingFlags Everything = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static | BindingFlags.DeclaredOnly;
+        var owner = typeof(DssHarness.Core.Text.LinearRegex);
+        var made = new SortedSet<string>(StringComparer.Ordinal);
 
-        foreach (var (relative, lines) in SourcesUnderSrc())
+        foreach (var type in owner.Assembly.GetTypes().Where(type => OutermostOf(type) != owner))
         {
-            for (var i = 0; i < lines.Count; i++)
+            foreach (var method in type.GetMethods(Everything).Cast<MethodBase>().Concat(type.GetConstructors(Everything)))
             {
-                var text = lines[i];
-
-                if (text.Contains("new Regex(", StringComparison.Ordinal)
-                    || Regex.Match(text, @"(?<!\.)Regex\.IsMatch\(", RegexOptions.CultureInvariant).Success)
+                if (method.GetMethodBody() is not { } body)
                 {
-                    made.Add($"{relative.Replace('/', '\\')}:{i + 1}: {text.Trim()}");
+                    continue;
+                }
+
+                var typeArguments = type.IsGenericTypeDefinition ? type.GetGenericArguments() : null;
+                var methodArguments = method.IsGenericMethodDefinition ? method.GetGenericArguments() : null;
+
+                foreach (var (code, token) in OperandsIn(body.GetILAsByteArray() ?? []))
+                {
+                    var compiles = type.Module.ResolveMember(token, typeArguments, methodArguments) switch
+                    {
+                        ConstructorInfo constructed => code == OpCodes.Newobj && constructed.DeclaringType == typeof(Regex),
+                        MethodInfo { IsStatic: true } called => called.DeclaringType == typeof(Regex) && StaticMatches.Contains(called.Name),
+                        _ => false,
+                    };
+
+                    if (compiles)
+                    {
+                        made.Add($"{Name(type)}.{method.Name}");
+                    }
                 }
             }
         }
 
-        made.RemoveAll(line => line.StartsWith("DssHarness.Core\\Text\\LinearRegex.cs:", StringComparison.Ordinal));
+        foreach (var (relative, lines) in SourcesUnderSrc().Where(source => source.Relative.StartsWith(@"DssHarness.Cli\", StringComparison.Ordinal)))
+        {
+            for (var i = 0; i < lines.Count; i++)
+            {
+                if (RegexMadeInText.Match(lines[i]).Success)
+                {
+                    made.Add($"{relative}:{i + 1}: {lines[i].Trim()}");
+                }
+            }
+        }
 
         Assert.Empty(made);
     }
+
+    /// <summary>The static members of <see cref="Regex"/> that compile the pattern they are handed, each by its own rule.</summary>
+    private static readonly HashSet<string> StaticMatches =
+        ["IsMatch", "Match", "Matches", "Replace", "Split", "Count", "EnumerateMatches", "EnumerateSplits"];
+
+    /// <summary>A line of source that makes a regex: <c>new Regex(</c>, a target-typed <c>new(</c> a regex is given, or one of its static matches.</summary>
+    private static readonly Regex RegexMadeInText = DssHarness.Core.Text.LinearRegex.Compile(
+        @"new\s+(System\.Text\.RegularExpressions\.)?Regex\s*\(|\bRegex\??\s+\w+\s*(\{[^}]*\}\s*)?=\s*new\s*\(|(^|[^.\w])Regex\.(IsMatch|Match|Matches|Replace|Split|Count|EnumerateMatches|EnumerateSplits)\s*\(");
+
+    /// <summary>The type a nested type is nested in at the outermost; the type itself where it is nested in none.</summary>
+    private static Type OutermostOf(Type type) => type.DeclaringType is { } outer ? OutermostOf(outer) : type;
 
     /// <summary>
     /// No JSON is parsed or written without the one owner of its options: every <c>JsonSerializer</c> call, every
@@ -685,7 +725,7 @@ public sealed class ArchitectureTests
             var typeArguments = type.IsGenericTypeDefinition ? type.GetGenericArguments() : null;
             var methodArguments = method.IsGenericMethodDefinition ? method.GetGenericArguments() : null;
 
-            foreach (var token in TokensIn(body.GetILAsByteArray() ?? []))
+            foreach (var (_, token) in OperandsIn(body.GetILAsByteArray() ?? []))
             {
                 switch (type.Module.ResolveMember(token, typeArguments, methodArguments))
                 {
@@ -753,8 +793,8 @@ public sealed class ArchitectureTests
         }
     }
 
-    /// <summary>The metadata tokens an IL body's instructions carry for a type, a method or a field, in order.</summary>
-    private static IEnumerable<int> TokensIn(byte[] il)
+    /// <summary>The metadata tokens an IL body's instructions carry for a type, a method or a field, each with the instruction that carries it, in order.</summary>
+    private static IEnumerable<(OpCode Code, int Token)> OperandsIn(byte[] il)
     {
         var at = 0;
 
@@ -767,7 +807,7 @@ public sealed class ArchitectureTests
             switch (code.OperandType)
             {
                 case OperandType.InlineField or OperandType.InlineMethod or OperandType.InlineTok or OperandType.InlineType:
-                    yield return BitConverter.ToInt32(il, at);
+                    yield return (code, BitConverter.ToInt32(il, at));
                     at += 4;
                     break;
 

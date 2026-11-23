@@ -1,7 +1,7 @@
-using System.Globalization;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using DssHarness.Core.Results;
+using DssHarness.Core.Text;
 
 namespace DssHarness.Core.Configuration;
 
@@ -53,7 +53,12 @@ public sealed record ProblemMatcher(
     /// <summary>The named groups a matcher's frame pattern may name.</summary>
     public static readonly IReadOnlyList<string> FrameGroups = ["file", "line", "column", "symbol", "module"];
 
-    /// <summary>Why this matcher does not read; null where it does. Its regexes are compiled and their groups checked.</summary>
+    /// <summary>
+    /// Why this matcher does not read; null where it does. Its patterns are compiled as every pattern the tool runs is -
+    /// linear in the text they read, with no timeout (<see cref="LinearRegex"/>) - and one that holds what that matcher
+    /// lacks is refused naming it, as any other pattern a configuration declares is
+    /// (<see cref="HarnessConfigValidator.PatternProblem"/>); then the groups it names are checked.
+    /// </summary>
     public string? Problem()
     {
         if (string.IsNullOrWhiteSpace(Name))
@@ -61,12 +66,12 @@ public sealed record ProblemMatcher(
             return "a matcher names no name";
         }
 
-        if (Compiled is null)
+        if (PatternRefusal is { } refused)
         {
-            return $"matcher '{Name}': its pattern does not compile";
+            return HarnessConfigValidator.PatternRefused($"matcher '{Name}': its pattern", refused);
         }
 
-        var found = Compiled.GetGroupNames();
+        var found = Compiled!.GetGroupNames();
 
         foreach (var named in new[] { File, Line, Column, Code, Message })
         {
@@ -82,61 +87,48 @@ public sealed record ProblemMatcher(
             return $"matcher '{Name}': its severity '{severity}' is neither a severity nor a group its pattern names";
         }
 
-        if (FrameCompiled is null)
+        if (FrameRefusal is { } frameRefused)
         {
-            return $"matcher '{Name}': its frame pattern does not compile";
+            return HarnessConfigValidator.PatternRefused($"matcher '{Name}': its frame pattern", frameRefused);
         }
 
-        if (Until is not null && UntilCompiled is null)
+        if (UntilRefusal is { } untilRefused)
         {
-            return $"matcher '{Name}': its until pattern does not compile";
+            return HarnessConfigValidator.PatternRefused($"matcher '{Name}': its until pattern", untilRefused);
         }
 
         return null;
     }
 
-    /// <summary>The matcher's pattern, compiled; null where it does not compile.</summary>
+    /// <summary>The matcher's pattern, compiled; null where it is refused, or before <see cref="Compile"/>.</summary>
     [JsonIgnore]
     public Regex? Compiled { get; private set; }
 
-    /// <summary>The matcher's frame pattern, compiled; null where there is none or it does not compile.</summary>
+    /// <summary>The matcher's frame pattern, compiled; null where it names none, where it is refused, or before <see cref="Compile"/>.</summary>
     [JsonIgnore]
     public Regex? FrameCompiled { get; private set; }
 
-    /// <summary>The matcher's until pattern, compiled; null where there is none or it does not compile.</summary>
+    /// <summary>The matcher's until pattern, compiled; null where it names none, where it is refused, or before <see cref="Compile"/>.</summary>
     [JsonIgnore]
     public Regex? UntilCompiled { get; private set; }
 
-    /// <summary>Compiles the matcher's regexes; called at load, before any output is read.</summary>
+    /// <summary>Why the matcher's pattern is refused, in the linear matcher's words; null where it compiled.</summary>
+    private string? PatternRefusal { get; set; }
+
+    /// <summary>Why the matcher's frame pattern is refused; null where it compiled or there is none.</summary>
+    private string? FrameRefusal { get; set; }
+
+    /// <summary>Why the matcher's until pattern is refused; null where it compiled or there is none.</summary>
+    private string? UntilRefusal { get; set; }
+
+    /// <summary>Compiles the matcher's patterns through the one maker of every pattern (<see cref="LinearRegex"/>); called at load, before any output is read.</summary>
     public void Compile()
     {
-        try
-        {
-            Compiled = new Regex(Pattern, RegexOptions.Compiled, TimeSpan.FromSeconds(2));
-        }
-        catch (ArgumentException)
-        {
-            Compiled = null;
-        }
+        (Compiled, PatternRefusal) = Made(Pattern);
+        (FrameCompiled, FrameRefusal) = Frame is { } frame ? Made(frame) : (null, null);
+        (UntilCompiled, UntilRefusal) = Until is { } until ? Made(until) : (null, null);
 
-        try
-        {
-            FrameCompiled = Frame is { } frame ? new Regex(frame, RegexOptions.Compiled, TimeSpan.FromSeconds(2)) : MatchNothing;
-        }
-        catch (ArgumentException)
-        {
-            FrameCompiled = null;
-        }
-
-        try
-        {
-            UntilCompiled = Until is { } until ? new Regex(until, RegexOptions.Compiled, TimeSpan.FromSeconds(2)) : null;
-        }
-        catch (ArgumentException)
-        {
-            UntilCompiled = null;
-        }
+        static (Regex? Regex, string? Refusal) Made(string pattern)
+            => LinearRegex.TryCompile(pattern, RegexOptions.None, out var regex, out var refusal) ? (regex, null) : (null, refusal);
     }
-
-    private static readonly Regex MatchNothing = new("(?!)");
 }

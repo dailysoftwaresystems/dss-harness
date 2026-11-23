@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text.RegularExpressions;
 using System.Xml;
 using System.Xml.Linq;
+using DssHarness.Core.Text;
 
 namespace DssHarness.Core.Mutations;
 
@@ -181,7 +182,7 @@ public sealed class JUnitReport
         => (failed.Value ?? string.Empty).Split('\n').Select(text => text.TrimEnd('\r')).ToList();
 
     /// <summary>The place doctest writes a failure at: <c>path(line): what failed</c>.</summary>
-    private static readonly Regex Place = new(@"^(?<file>.+?)\((?<line>\d+)\)\s*:", RegexOptions.Compiled);
+    private static readonly Regex Place = LinearRegex.Compile(@"^(?<file>.+?)\((?<line>\d+)\)\s*:");
 
     /// <summary>
     /// Whether <paramref name="xml"/> declares a document type: one follows its prolog - white space, processing
