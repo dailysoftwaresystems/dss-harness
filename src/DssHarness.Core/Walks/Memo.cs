@@ -21,8 +21,8 @@ namespace DssHarness.Core.Walks;
 /// by their rule (<see cref="MadeOnce{TKey, TAnswer}"/>): an answer that read a cycle's placeholder - its own cycle's or one
 /// through any of those stores - is held for the making of the outermost key it leans on, each key of a cycle answered once
 /// there; once that making ends, the outermost key's own answer, made from those, is kept - the one kept that a placeholder
-/// reached - an answer that read its placeholder is answered again after it, and the rest are set aside under the key met
-/// inside it that they lean on, taken back by that key's next making, none of them kept; where a memo of its own keeps every
+/// reached - and every answer held for it is answered again at its next ask, never kept, so a cycle's keys asked one after
+/// another from outside it each answer again the keys below them: a cost only a cycle pays. A memo of its own keeps every
 /// answer it gives.
 /// </para>
 /// <para>

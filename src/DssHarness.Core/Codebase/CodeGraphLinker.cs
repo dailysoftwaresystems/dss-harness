@@ -4541,9 +4541,10 @@ public static class CodeGraphLinker
         /// any other cache, is given <paramref name="none"/> - what is known of it then, nothing, which reads nothing - and never
         /// makes it inside itself. An answer made from that placeholder is held for the making of the outermost key it leans on, each
         /// key of a cycle made once there; once that making ends, the outermost key's own answer, made from those, is kept - the one
-        /// answer kept that a placeholder reached - an answer that read its placeholder is made again after it, from that answer,
-        /// what it read read again with it, and the rest are set aside under the key met inside it that they lean on, taken back by
-        /// that key's next making, none of them kept (<see cref="MadeOnce{TKey, TAnswer}"/>).
+        /// answer kept that a placeholder reached - and every answer held for it is made again at its next ask, from that answer,
+        /// what it read read again with it, never kept (<see cref="MadeOnce{TKey, TAnswer}"/>). So a cycle's keys asked one after
+        /// another from outside it each make again the keys below them: a cost only a cycle pays, and no making of the link reaches
+        /// one.
         /// </summary>
         private T Cached<TKey, T>(MadeOnce<TKey, (T Value, KeptReads Reads)> cache, TKey key, T none, Func<T> make)
             where TKey : notnull
