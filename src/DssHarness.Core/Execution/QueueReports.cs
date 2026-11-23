@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using DssHarness.Core.Output;
 using DssHarness.Core.Results;
@@ -7,8 +8,9 @@ namespace DssHarness.Core.Execution;
 
 /// <summary>
 /// The dispatch queue as the <c>queue</c> command says it: each class's capacity, its holders and its waiting units, by
-/// tenant, and what the fair order rests on - each waiting unit's cost and the share it waits for - in text or in the
-/// command's one JSON document, which every exit answers in.
+/// tenant, the waiting ones in the order the queue serves them, and what that order rests on - each waiting unit's cost,
+/// the share its tenant is credited each round and its tenant's deficit - in text or in the command's one JSON document,
+/// which every exit answers in.
 /// </summary>
 public static class QueueReports
 {
@@ -38,18 +40,22 @@ public static class QueueReports
 
         foreach (var @class in classes)
         {
-            lines.Add($"{@class.Class}: {ReportText.Counted(@class.Capacity, "unit")} at once");
+            var capacity = @class.Capacity is { } count
+                ? $"{ReportText.Counted(count, "unit")} at once"
+                : "no section declares admission, so every unit at once";
+
+            lines.Add($"{NameOf(@class.Class)}: {capacity}{(@class.Asked ? string.Empty : ", asked by no unit yet")}");
 
             foreach (var holder in @class.Holders)
             {
-                lines.Add($"  holding (tenant '{holder.Tenant}'): {holder.Said}");
+                lines.Add($"  holding ({Weighed(holder)}): {holder.Said}");
             }
 
-            foreach (var waiting in @class.Waiting)
+            foreach (var (waiting, at) in @class.Waiting.Select((waiting, at) => (waiting, at + 1)))
             {
                 var waited = waiting.Waited is { } wait ? $", waited {LedgerReport.SaidDuration(wait)}" : string.Empty;
 
-                lines.Add($"  waiting (tenant '{waiting.Tenant}', cost {Number(waiting.Cost)}, weight {Number(waiting.Weight)}, priority {waiting.Priority.ToString(CultureInfo.InvariantCulture)}{waited}): {waiting.Said}");
+                lines.Add($"  waiting {at.ToString(CultureInfo.InvariantCulture)} ({Weighed(waiting)}{waited}): {waiting.Said}");
             }
         }
 
@@ -64,6 +70,28 @@ public static class QueueReports
     /// <param name="summary">The line the command ends on.</param>
     public static string Stopped(int exitCode, string summary) => Document(exitCode, summary, null);
 
+    /// <summary>A class as the command names it: <c>heavy</c>, <c>process</c>, <c>agent</c>.</summary>
+    /// <param name="name">The class.</param>
+    public static string NameOf(DispatchClassName name) => JsonNamingPolicy.CamelCase.ConvertName(name.ToString());
+
+    /// <summary>What a unit is weighed by, as its line says it: its tenant and what the fair order rests on, or that an older build asked it.</summary>
+    private static string Weighed(DispatchUnit unit)
+    {
+        if (unit.Queued is not { } queued)
+        {
+            return "asked by an older build, which admits it in the order the line was asked in";
+        }
+
+        var said = $"tenant '{queued.Tenant}', cost {Number(queued.Cost)}";
+
+        if (unit.Share is { } share)
+        {
+            said += $", share {(double.IsFinite(share) ? Number(share) : "past any cost")}, deficit {Number(unit.Deficit ?? 0)}";
+        }
+
+        return said + $", weight {Number(queued.Weight)}, priority {queued.Priority.ToString(CultureInfo.InvariantCulture)}";
+    }
+
     /// <summary>The queue as one JSON document, its shape held on every exit.</summary>
     /// <param name="exitCode">The code the command exits with.</param>
     /// <param name="summary">The line the command ends on.</param>
@@ -76,21 +104,38 @@ public static class QueueReports
             {
                 ["queue"] = classes is null ? null : new JsonArray([.. classes.Select(@class => (JsonNode)new JsonObject
                 {
-                    ["class"] = @class.Class,
+                    ["class"] = NameOf(@class.Class),
                     ["capacity"] = @class.Capacity,
+                    ["asked"] = @class.Asked,
                     ["holding"] = new JsonArray([.. @class.Holders.Select(Unit)]),
                     ["waiting"] = new JsonArray([.. @class.Waiting.Select(Unit)]),
                 })]),
             });
 
-    /// <summary>One unit as the document says it.</summary>
+    /// <summary>
+    /// One unit as the document says it: its entry's own fields, and what the fair order weighs it by - its share null where
+    /// it holds, an older build asked it, or the share is past any number a document holds: an aging bound of no minutes,
+    /// or more doublings than a number holds, under which its cost is covered at once.
+    /// </summary>
     private static JsonObject Unit(DispatchUnit unit) => new()
     {
-        ["tenant"] = unit.Tenant,
-        ["weight"] = unit.Weight,
-        ["priority"] = unit.Priority,
-        ["cost"] = unit.Cost,
-        ["waited"] = unit.Waited is { } wait ? LedgerReport.SaidDuration(wait) : null,
+        ["tenant"] = unit.Queued?.Tenant,
+        ["olderBuild"] = unit.Queued is null,
+        ["weight"] = unit.Queued?.Weight,
+        ["priority"] = unit.Queued?.Priority,
+        ["cost"] = unit.Queued?.Cost,
+        ["share"] = unit.Share is { } share && double.IsFinite(share) ? share : null,
+        ["deficit"] = unit.Deficit,
+        ["heldSinceUtc"] = unit.Queued?.HeldSinceUtc,
+        ["waitedSeconds"] = unit.Waited is { } wait ? LedgerReport.Seconds(wait) : null,
+        ["askedUtc"] = unit.Entry.AskedUtc,
+        ["command"] = unit.Entry.Command,
+        ["leg"] = unit.Entry.Leg,
+        ["host"] = unit.Entry.Host,
+        ["tree"] = unit.Entry.Tree,
+        ["variant"] = unit.Entry.Variant,
+        ["processId"] = unit.Entry.ProcessId,
+        ["runId"] = unit.Entry.RunId,
         ["unit"] = unit.Said,
     };
 

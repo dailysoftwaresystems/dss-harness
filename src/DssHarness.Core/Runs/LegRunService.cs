@@ -1183,6 +1183,10 @@ public sealed class LegRunService(
             return null;
         }
 
+        // Charged to its repository whichever tree it works in - a worktree, a leg's copy, a host's copy of either - as the
+        // one owner of that question spells it on this machine.
+        var repository = await _contextLoader.RepositoryOfAsync(context, cancellationToken).ConfigureAwait(false);
+
         // On an ssh host, under the run of the machine that dispatched the leg: its command's other legs there ask under
         // it too, and a wait for slots only they hold does not count.
         return await _admission
@@ -1197,7 +1201,8 @@ public sealed class LegRunService(
                     leg.Variant.DirectoryName,
                     message => ledger.Transition(leg.Name, message),
                     room,
-                    request.Priority)
+                    request.Priority,
+                    repository)
                 {
                     Settle = settle,
                     WorkBegunBy = workBegunBy,

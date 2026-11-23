@@ -26,7 +26,7 @@ public static class WorkflowKeys
         new("maxInstances", $"the most step instances a run may have; absent, {WorkflowDefinition.DefaultMaxInstances}"),
         new("pushCheckpoints", "push checkpoint commits as they are made; absent, the final push alone"),
         new("handoffSeconds", "how long a paused reasoning step is given to write its handoff; absent, 180"),
-        new("priority", "the run's priority in the machine's dispatch queue, a whole number from 1; absent, 1"),
+        new("priority", $"the run's priority in the machine's dispatch queue, which multiplies its share of the machine, a whole number from {Execution.DispatchOrder.LeastPriority}; absent, {Execution.DispatchOrder.LeastPriority}"),
         new("budget", "what a whole run's reasoning may cost, and the reserve that pauses the run first") { Keys = Budget },
         new("recommendations", "the file holding the repository's bar for recommendations, in this directory"),
         new("texts", "the workflow's texts: each name a markdown file in this directory, read in a prompt as {text.<name>}; the shipped flow declares its recommendations and its closure here"),

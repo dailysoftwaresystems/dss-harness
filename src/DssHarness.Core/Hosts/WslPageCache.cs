@@ -172,7 +172,7 @@ public sealed class WslPageCache(
     /// the drop is made for, while it lasts.
     /// </summary>
     private Task<ProcessResult> WaitedAsync(Func<CancellationToken, Task<ProcessResult>> run, string subject, CancellationToken cancellationToken)
-        => ProgramWait.ToItsEndAsync(run, subject, ProgramWait.Told(_output, HeavyLegSlots.CommandName), _clock, cancellationToken);
+        => ProgramWait.ToItsEndAsync(run, subject, ProgramWait.Told(_output, MachineDispatchQueue.CommandName), _clock, cancellationToken);
 
     /// <summary>
     /// How much of the cache <paramref name="printed"/> - what <see cref="DropCommand"/> prints - says was dropped, or

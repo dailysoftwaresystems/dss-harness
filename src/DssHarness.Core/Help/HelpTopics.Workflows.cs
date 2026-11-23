@@ -167,7 +167,8 @@ public static partial class HelpTopics
         builder.AppendLine("use; its maxInstances caps the instances its steps open, across every instance of the use");
         builder.AppendLine("and in the place of the run's own cap for them; its maxRetries and backoffSeconds are what");
         builder.AppendLine("its steps fall back to; its handoffSeconds bounds the handoff of its paused reasoning steps;");
-        builder.AppendLine("and its advisor recommends for its steps' questions in the place of the run's - its files");
+        builder.AppendLine("its priority is what its steps' legs ask the machine's dispatch queue at, in the place of");
+        builder.AppendLine("the run's; and its advisor recommends for its steps' questions in the place of the run's - its files");
         builder.AppendLine("read in its own directory, its prompt handed the inputs the use filled and the texts its");
         builder.AppendLine("steps see, its bar the workflow's own texts.recommendations where it declares one, and each");
         builder.AppendLine("recommendation credited to it. A question of its steps is answered nearest first: the");

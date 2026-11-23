@@ -2314,6 +2314,8 @@ public sealed class ConfigStoreTests
     [InlineData("""{ "defaults": { "admission": { "heavyLegs": -2 } } }""", "defaults.admission heavyLegs must be at least 1, found -2")]
     [InlineData("""{ "defaults": { "admission": { "minFreeGiB": -0.5 } } }""", "defaults.admission minFreeGiB must be from 0 and under 8589934592, the GiB a count of bytes holds, found -0.5")]
     [InlineData("""{ "hosts": { "local": { "admission": { "minFreeGiB": 1e10 } } } }""", "hosts.local admission minFreeGiB must be from 0 and under 8589934592, the GiB a count of bytes holds, found 10000000000")]
+    [InlineData("""{ "defaults": { "admission": { "processes": 0 } } }""", "defaults.admission processes must be at least 1, found 0")]
+    [InlineData("""{ "hosts": { "local": { "admission": { "agents": 0 } } } }""", "hosts.local admission agents must be at least 1, found 0")]
     public void Admission_ThatNoMachineCouldAdmitBy_IsRefused(string json, string expected)
         => Assert.Contains(expected, LoadInvalid(json).Message, StringComparison.Ordinal);
 

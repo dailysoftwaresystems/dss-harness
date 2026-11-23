@@ -69,6 +69,42 @@ public sealed partial class HelpTests
     }
 
     /// <summary>
+    /// The admission topic says the dispatch queue's whole rule, its numbers read from the code: slots granted in its fair
+    /// order and held to their end, the round-robin's share, the cost from the newest runs a name kept and one quantum
+    /// where none is, the first unit that does not fit holding back those behind it, the aging bound's range and its 0,
+    /// and the records the queue keeps beside the slots.
+    /// </summary>
+    [Fact]
+    public void TheAdmissionTopic_SaysTheDispatchQueuesRule_FromTheCode()
+    {
+        var said = Prose.Words(HelpText.Of("admission").StandardOutput);
+
+        foreach (var expected in new[]
+        {
+            "given in the dispatch queue's fair order, below;",
+            "A unit holds a slot once the queue grants it one - written in the same change of the record that grants it - and holds it to its end: nothing is pre-empted.",
+            string.Create(
+                CultureInfo.InvariantCulture,
+                $"Each round, a tenant with a unit waiting is credited its share: its weight ({DispatchOrder.LocalWeight}) times its run's priority (a workflow's priority key, {DispatchOrder.LeastPriority} where none), doubled for each whole period of ageAfterMinutes its unit has waited"),
+            string.Create(
+                CultureInfo.InvariantCulture,
+                $"A unit's cost is the median of the newest {UnitDurations.Kept} times a unit of its name - its repository, its command and its leg, or a sweep's worker or arm - held its slot on this machine, in minutes, and {UnitDurations.Quantum} where none is kept"),
+            "The unit the order puts first that does not fit - its own count allows fewer legs at once than hold slots - holds back every unit behind it until it fits, so none is passed for ever.",
+            string.Create(
+                CultureInfo.InvariantCulture,
+                $"from 0, where every unit is served in the order it asked, to the most minutes a span of time holds, {AdmissionSettings.MostAgeAfterMinutes} ({AdmissionSettings.DefaultAgeAfterMinutes})"),
+            "admission-<machine id>.queue.json, the times units of each name held their slots in admission-<machine id>.durations",
+            $"once, at least 1 ({AdmissionSettings.MachinesProcessors}); shown by queue, asked by no step yet",
+            $"once, at least 1 ({AdmissionSettings.DefaultAgents}); shown by queue, asked by no agent yet",
+        })
+        {
+            Assert.Contains(expected, said, StringComparison.Ordinal);
+        }
+
+        Assert.DoesNotContain("in the order legs asked", said, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// The admission topic says a waiting leg says where it stands at least every five minutes, the minutes read from
     /// the code, and that a poll or a settle longer than that keeps to it.
     /// </summary>

@@ -435,22 +435,20 @@ public static class ServiceRegistration
         services.AddSingleton(provider => new MachineSettingsFile(
             provider.GetRequiredService<IFileSystem>(),
             () => MachineSettingsFile.PathFor(provider.GetRequiredService<IHostPlatform>(), provider.GetRequiredService<IHarnessOutput>())));
-        services.AddSingleton<MachineDispatchQueue>(provider => new MachineDispatchQueue(
+        services.AddSingleton(provider => new MachineDispatchQueue(
             provider.GetRequiredService<IFileSystem>(),
             provider.GetRequiredService<IHarnessOutput>(),
             provider.GetRequiredService<IProcessIdentity>(),
-            () => HeavyLegSlots.PathFor(provider.GetRequiredService<IHostPlatform>(), provider.GetRequiredService<IHarnessOutput>()),
+            () => MachineDispatchQueue.PathFor(provider.GetRequiredService<IHostPlatform>(), provider.GetRequiredService<IHarnessOutput>()),
             () => provider.GetRequiredService<MachineSettingsFile>().Read().Admission?.HeavyLegs,
-            settings: () => provider.GetRequiredService<MachineSettingsFile>()));
-        services.AddSingleton(provider => provider.GetRequiredService<MachineDispatchQueue>() as HeavyLegSlots);
+            provider.GetRequiredService<IHostPlatform>().PathComparer()));
         services.AddSingleton<IShowQueue, ShowQueue>();
         services.AddSingleton(provider => new TreeHolders(
             provider.GetRequiredService<RunLock>(),
-            provider.GetRequiredService<HeavyLegSlots>(),
+            provider.GetRequiredService<MachineDispatchQueue>(),
             provider.GetRequiredService<IProcessIdentity>()));
         services.AddSingleton(provider => new LegAdmission(
-            provider.GetRequiredService<HeavyLegSlots>(),
-            provider.GetRequiredService<IFileSystem>(),
+            provider.GetRequiredService<MachineDispatchQueue>(),
             provider.GetRequiredService<IMemoryGauge>()));
         services.AddSingleton<IWslPageCache, WslPageCache>();
         services.AddSingleton<RunStops>();

@@ -40,6 +40,44 @@ internal sealed class ScriptedGauge(params double?[] percents) : IMemoryGauge
     }
 }
 
+/// <summary>
+/// A machine whose memory is 10% in use, which notes at every reading - each a unit's, once the queue has let it start -
+/// what the dispatch queue beside the slots at <paramref name="record"/> keeps of each unit: its name and its priority,
+/// read under the slots' own machine-wide step, as every reader of the queue's record is.
+/// </summary>
+/// <param name="record">The slots' record.</param>
+internal sealed class QueueNotingGauge(string record) : IMemoryGauge
+{
+    private readonly List<(string Unit, int Priority)> _noted = [];
+
+    /// <summary>Each unit the queue kept at a reading, with its priority, in the order read.</summary>
+    public IReadOnlyList<(string Unit, int Priority)> Noted
+    {
+        get
+        {
+            lock (_noted)
+            {
+                return [.. _noted];
+            }
+        }
+    }
+
+    public (MemoryReading? Reading, string? Unmeasured) Read()
+    {
+        var kept = MachineWideFile.Update(
+            Path.GetFullPath(record),
+            MachineWideFile.Window,
+            () => JsonSerializer.Deserialize<DispatchRecord>(File.ReadAllText(MachineDispatchQueue.QueuePathFor(record)), JsonStateFile.Options)!);
+
+        lock (_noted)
+        {
+            _noted.AddRange(kept.Units.Select(unit => (unit.Holder.Leg, unit.Priority)));
+        }
+
+        return (new MemoryReading(10, "10 of 100 by the test"), null);
+    }
+}
+
 /// <summary>WSL's page cache, whose every drop comes to what a test says, recording each repository a drop was asked for.</summary>
 /// <param name="drop">What each drop comes to; nothing to drop where none is given.</param>
 internal sealed class ScriptedPageCache(PageCacheDrop? drop = null) : IWslPageCache
@@ -116,7 +154,7 @@ internal static class AdmissionKit
 {
     /// <summary>
     /// An admission over the slots kept at <paramref name="record"/>, on <paramref name="fileSystem"/> or the real one;
-    /// see <see cref="Admission(HeavyLegSlots, IMemoryGauge, ManualClock, TimeSpan?, Action?)"/>.
+    /// see <see cref="Admission(MachineDispatchQueue, IMemoryGauge, ManualClock, TimeSpan?, Action?)"/>.
     /// </summary>
     public static LegAdmission Admission(
         HarnessFactory harness,
@@ -133,13 +171,12 @@ internal static class AdmissionKit
     /// then does <paramref name="onWait"/>, and whose every settle lasts <paramref name="settle"/>, or its least where
     /// none is given. A wait that runs past any a machine allows, or turns without end, fails the test rather than hang it.
     /// </summary>
-    public static LegAdmission Admission(HeavyLegSlots slots, IMemoryGauge gauge, ManualClock clock, TimeSpan? settle = null, Action? onWait = null)
+    public static LegAdmission Admission(MachineDispatchQueue slots, IMemoryGauge gauge, ManualClock clock, TimeSpan? settle = null, Action? onWait = null)
     {
         var turns = 0;
 
         return new(
             slots,
-            new DssHarness.Core.FileSystem.PhysicalFileSystem(DssHarness.Core.Platform.FilePermissionsFactory.Create()),
             gauge,
             clock,
             (delay, token) =>
@@ -165,7 +202,7 @@ internal static class AdmissionKit
     private const int MostTurns = 100_000;
 
     /// <summary>The slots kept at <paramref name="record"/>, on <paramref name="fileSystem"/> or the real one.</summary>
-    public static HeavyLegSlots Slots(HarnessFactory harness, string record, IFileSystem? fileSystem = null)
+    public static MachineDispatchQueue Slots(HarnessFactory harness, string record, IFileSystem? fileSystem = null)
         => new(fileSystem ?? harness.FileSystem, harness.Output, harness.Identity, record);
 
     /// <summary>A rule with the numbers a test gives, the rest the built-in values a section left out takes.</summary>
@@ -188,10 +225,11 @@ internal static class AdmissionKit
 
     /// <summary>
     /// A leg asking by <paramref name="rule"/>, whose every line of progress goes to <paramref name="said"/>, and whose
-    /// build needs <paramref name="room"/> where it says.
+    /// build needs <paramref name="room"/> where it says: its tree, <c>/src/&lt;leg&gt;</c>, a repository of its own and so
+    /// its tenant, unless <paramref name="repository"/> names another, and its run's priority <paramref name="priority"/>.
     /// </summary>
-    public static AdmissionRequest Request(AdmissionRule rule, List<string> said, string leg = "mine", RoomNeed? room = null)
-        => new(rule, $"run-{leg}", "build", leg, "local", $"/src/{leg}", "x86_64-gcc-debug", said.Add, room);
+    public static AdmissionRequest Request(AdmissionRule rule, List<string> said, string leg = "mine", RoomNeed? room = null, string? repository = null, int priority = 1)
+        => new(rule, $"run-{leg}", "build", leg, "local", $"/src/{leg}", "x86_64-gcc-debug", said.Add, room, priority, repository ?? $"/src/{leg}");
 
     /// <summary>What a test's leg's build needs: <paramref name="gibibytes"/> on the filesystem of its build directory.</summary>
     public static RoomNeed Room(double gibibytes, string leg = "mine")
@@ -200,7 +238,7 @@ internal static class AdmissionKit
     /// <summary>Writes <paramref name="claims"/> as the room's record beside the slots' at <paramref name="record"/>.</summary>
     public static void WriteClaims(string record, params RoomClaim[] claims)
     {
-        var path = HeavyLegSlots.RoomPathFor(record);
+        var path = MachineDispatchQueue.RoomPathFor(record);
 
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         File.WriteAllText(path, JsonSerializer.Serialize(claims, JsonStateFile.Options));
@@ -208,8 +246,8 @@ internal static class AdmissionKit
 
     /// <summary>What the room's record beside the slots' at <paramref name="record"/> holds now.</summary>
     public static IReadOnlyList<RoomClaim> ReadClaims(string record)
-        => File.Exists(HeavyLegSlots.RoomPathFor(record))
-            ? JsonSerializer.Deserialize<List<RoomClaim>>(File.ReadAllText(HeavyLegSlots.RoomPathFor(record)), JsonStateFile.Options) ?? []
+        => File.Exists(MachineDispatchQueue.RoomPathFor(record))
+            ? JsonSerializer.Deserialize<List<RoomClaim>>(File.ReadAllText(MachineDispatchQueue.RoomPathFor(record)), JsonStateFile.Options) ?? []
             : [];
 
     /// <summary>A gibibyte, as a test counts room.</summary>
@@ -252,5 +290,5 @@ internal static class AdmissionKit
     /// </summary>
     public static (IReadOnlyList<SlotEntry> Slots, IReadOnlyList<RoomClaim> Claims) ReadWhileAsked(string record)
         => (MachineWideFile.Update(Path.GetFullPath(record), MachineWideFile.Window, () => Read(record)),
-            MachineWideFile.Update(Path.GetFullPath(HeavyLegSlots.RoomPathFor(record)), MachineWideFile.Window, () => ReadClaims(record)));
+            MachineWideFile.Update(Path.GetFullPath(MachineDispatchQueue.RoomPathFor(record)), MachineWideFile.Window, () => ReadClaims(record)));
 }

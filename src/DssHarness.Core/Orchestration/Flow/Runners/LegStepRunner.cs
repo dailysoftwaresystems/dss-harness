@@ -177,6 +177,18 @@ public abstract class LegStepRunner(IHarnessContextLoader contextLoader, IHostPl
     protected static IReadOnlyList<string>? LegsOf(WorkflowStep step) => step.Legs.Count == 0 ? null : step.Legs;
 
     /// <summary>
+    /// The priority a step's legs ask the machine's dispatch queue at (<see cref="FlowUse.PriorityOf"/>): the governing use's,
+    /// else the run's; the least a run has for a step run outside any run's definition.
+    /// </summary>
+    /// <param name="run">The step's run.</param>
+    protected static int PriorityOf(FlowStepRun run)
+    {
+        ArgumentNullException.ThrowIfNull(run);
+
+        return run.Place is { } place ? FlowUse.PriorityOf(place.Definition, run.DeclarationPath) : DispatchOrder.LeastPriority;
+    }
+
+    /// <summary>
     /// What a leg step answers: whether every leg passed, the command's own code, each leg's verdict, the red legs alone -
     /// each with the phase that did not pass, the ledger's line for it and the last lines it printed, or of a sweep each
     /// arm that is not as its registry says - and where the run's records are.
@@ -290,7 +302,7 @@ public sealed class BuildStepRunner(IHarnessContextLoader contextLoader, IHostPl
     /// <inheritdoc/>
     protected override Task<LegRunResult> RunLegsAsync(FlowStepRun run, HarnessContext context, string tree, ILegRunWatch watch, ILegIsolation isolation, CancellationToken cancellationToken)
         => builds.RunAsync(
-            new BuildLegsRequest { Directory = tree, LegNames = LegsOf(run.Step), KeepGoing = run.Step.KeepGoing == true, Watch = watch, Isolation = isolation, Priority = run.Place?.Definition.Priority ?? 1 },
+            new BuildLegsRequest { Directory = tree, LegNames = LegsOf(run.Step), KeepGoing = run.Step.KeepGoing == true, Watch = watch, Isolation = isolation, Priority = PriorityOf(run) },
             RunId.New(),
             cancellationToken);
 }
@@ -328,7 +340,7 @@ public sealed class TestStepRunner(IHarnessContextLoader contextLoader, IHostPla
                 KeepGoing = run.Step.KeepGoing == true,
                 Watch = watch,
                 Isolation = isolation,
-                Priority = run.Place?.Definition.Priority ?? 1,
+                Priority = PriorityOf(run),
             },
             RunId.New(),
             cancellationToken);
@@ -370,7 +382,7 @@ public sealed class RunStepRunner(IHarnessContextLoader contextLoader, IHostPlat
                 KeepGoing = run.Step.KeepGoing == true,
                 Watch = watch,
                 Isolation = isolation,
-                Priority = run.Place?.Definition.Priority ?? 1,
+                Priority = PriorityOf(run),
             },
             RunId.New(),
             cancellationToken);
@@ -473,7 +485,7 @@ public sealed class SweepStepRunner(IHarnessContextLoader contextLoader, IHostPl
                 Pending = run.Step.Pending == true,
                 Watch = watch,
                 Isolation = isolation,
-                Priority = run.Place?.Definition.Priority ?? 1,
+                Priority = PriorityOf(run),
             },
             RunId.New(),
             cancellationToken);

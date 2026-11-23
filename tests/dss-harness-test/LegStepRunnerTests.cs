@@ -466,7 +466,8 @@ public sealed class LegStepRunnerTests : IDisposable
     /// <summary>
     /// Every leg step asks its legs at its run's priority, as the run's workflow declares it - a build's, a test's, a
     /// run's and a sweep's alike - so every unit of the run is charged against its tenant's share by the one priority;
-    /// a workflow that declares none asks at 1.
+    /// a workflow that declares none asks at 1, and a step inside a use that governs itself asks at the priority the
+    /// used workflow declares.
     /// </summary>
     [Fact]
     public async Task EachLegStep_AsksItsLegsAtItsRunsPriority()
@@ -481,19 +482,27 @@ public sealed class LegStepRunnerTests : IDisposable
             new SweepStepRunner(harness.ContextLoader, harness.Platform, harness.OrchestrationStore, harness.FileSystem, harness.ChildSessions, legs, new TestIsolation(), harness.GitClient),
         ];
         var urgent = new FlowRunPlace(repository.Path, "r1", null, Flow with { Priority = 3 });
+        var governing = new WorkflowStep
+        {
+            Name = "items",
+            Use = new FlowUse("./pipeline/pipeline.yml", "flow/pipeline", "fingerprint", [], [], [], null, [], new FlowUseOwn(Priority: 7)),
+        };
+        var governed = new FlowRunPlace(repository.Path, "r1", null, Flow with { Priority = 3, Steps = [governing] });
 
         foreach (var runner in runners)
         {
             var step = new WorkflowStep { Name = runner.Type, Type = runner.Type, Runner = runner.Type == "run" ? "probe" : null };
             var declared = await runner.RunAsync(Run(step, repository.Path, instance: $"{runner.Type}-urgent") with { Place = urgent }, Token);
             var undeclared = await runner.RunAsync(Run(step, repository.Path, instance: $"{runner.Type}-plain"), Token);
+            var used = await runner.RunAsync(Run(step, repository.Path, instance: $"{runner.Type}-used") with { Place = governed, Path = $"items.{runner.Type}" }, Token);
 
             Assert.True(declared.Passed, declared.Error);
             Assert.True(undeclared.Passed, undeclared.Error);
+            Assert.True(used.Passed, used.Error);
         }
 
         Assert.Equal(
-            [("build", 3), ("build", 1), ("test", 3), ("test", 1), ("run", 3), ("run", 1), ("check-mutations", 3), ("check-mutations", 1)],
+            [("build", 3), ("build", 1), ("build", 7), ("test", 3), ("test", 1), ("test", 7), ("run", 3), ("run", 1), ("run", 7), ("check-mutations", 3), ("check-mutations", 1), ("check-mutations", 7)],
             legs.Asked.Select(asked => (asked switch { BuildLegsRequest => "build", TestLegsRequest => "test", RunnerLegsRequest => "run", _ => "check-mutations" }, asked.Priority)));
     }
 

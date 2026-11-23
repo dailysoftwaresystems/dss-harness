@@ -8,7 +8,7 @@ using DssHarness.Core.Results;
 namespace DssHarness.Tests;
 
 /// <summary>
-/// A heavy leg waits for its machine to take it: one of the machine's slots, in the order legs asked, then the memory
+/// A heavy leg waits for its machine to take it: one of the machine's slots, in the dispatch queue's fair order, then the memory
 /// in use below the limit - read again after a settle where another leg holds a slot. Four worktrees' builds on one machine
 /// drove its committed memory to 81 of 113.7 GiB and the process that started them died; the limit of 76% is the one
 /// the consumer's own scripts kept, and a slot is held by the process that asked for it, so one that crashed never keeps it.
@@ -508,7 +508,6 @@ public sealed class LegAdmissionTests
 
         var admission = new LegAdmission(
             AdmissionKit.Slots(harness, record),
-            harness.FileSystem,
             new ScriptedGauge(30),
             clock,
             (delay, _) =>
@@ -859,8 +858,8 @@ public sealed class LegAdmissionTests
     [Fact]
     public void EachMachine_KeepsARecordOfItsOwn_NamedByWhatTellsItApart()
     {
-        Assert.Equal("admission-0f0e0d0c-0b0a-4908-8706-050403020100.json", HeavyLegSlots.FileNameFor("0f0e0d0c-0b0a-4908-8706-050403020100"));
-        Assert.Equal("admission-a-b-c.json", HeavyLegSlots.FileNameFor("a/b\\c"));
+        Assert.Equal("admission-0f0e0d0c-0b0a-4908-8706-050403020100.json", MachineDispatchQueue.FileNameFor("0f0e0d0c-0b0a-4908-8706-050403020100"));
+        Assert.Equal("admission-a-b-c.json", MachineDispatchQueue.FileNameFor("a/b\\c"));
 
         var machine = new HarnessFactory().Platform.MachineId;
 
@@ -888,7 +887,7 @@ public sealed class LegAdmissionTests
         var platform = Substitute.For<IHostPlatform>();
         platform.MachineId.Returns(new MachineIdentity("build-box", "neither /etc/machine-id nor /var/lib/dbus/machine-id holds one"));
 
-        var path = HeavyLegSlots.PathFor(platform, named.Output);
+        var path = MachineDispatchQueue.PathFor(platform, named.Output);
 
         Assert.Equal("admission-build-box.json", Path.GetFileName(path));
         Assert.Contains(
@@ -900,7 +899,7 @@ public sealed class LegAdmissionTests
         var identified = new HarnessFactory();
         platform.MachineId.Returns(new MachineIdentity("0f0e0d0c-0b0a-4908-8706-050403020100", null));
 
-        HeavyLegSlots.PathFor(platform, identified.Output);
+        MachineDispatchQueue.PathFor(platform, identified.Output);
 
         Assert.Empty(identified.StandardOutput.ToString());
         Assert.Empty(identified.StandardError.ToString());
@@ -1044,7 +1043,7 @@ public sealed class LegAdmissionTests
     public async Task ARecordWithNowhereToBeKept_RefusesTheLeg_NeverKeptWhereEveryUserCanWrite()
     {
         var harness = new HarnessFactory();
-        var slots = new HeavyLegSlots(
+        var slots = new MachineDispatchQueue(
             harness.FileSystem,
             harness.Output,
             harness.Identity,
@@ -1118,7 +1117,7 @@ public sealed class LegAdmissionTests
         AdmissionKit.Write(record, AdmissionKit.Holder(harness, "killed", processId: 1001, slots: 1));
 
         var admission = AdmissionKit.Admission(
-            new HeavyLegSlots(harness.FileSystem, harness.Output, identity, record),
+            new MachineDispatchQueue(harness.FileSystem, harness.Output, identity, record),
             new ScriptedGauge(10),
             clock,
             onWait: () => identity.End(1001));
@@ -1152,7 +1151,7 @@ public sealed class LegAdmissionTests
             AdmissionKit.Holder(harness, "waiting", processId: 1002, slots: 1));
 
         var admission = AdmissionKit.Admission(
-            new HeavyLegSlots(harness.FileSystem, harness.Output, identity, record),
+            new MachineDispatchQueue(harness.FileSystem, harness.Output, identity, record),
             new ScriptedGauge(10),
             new ManualClock(),
             onWait: () => identity.End(++waits == 1 ? 1001 : 1002));
@@ -1220,7 +1219,6 @@ public sealed class LegAdmissionTests
         var record = temp.Combine("admission.json");
         var admission = new LegAdmission(
             AdmissionKit.Slots(harness, record),
-            harness.FileSystem,
             new ScriptedGauge(10),
             TimeProvider.System,
             (_, token) => Task.Delay(TimeSpan.FromMilliseconds(5), token),
@@ -1447,11 +1445,11 @@ public sealed class LegAdmissionTests
                 + "beside ~35 GiB claimed by '/src/first'",
             admitted.Refusal,
             StringComparison.Ordinal);
-        Assert.EndsWith($"; the room each heavy leg claims is recorded in '{HeavyLegSlots.RoomPathFor(record)}'", admitted.Refusal, StringComparison.Ordinal);
+        Assert.EndsWith($"; the room each heavy leg claims is recorded in '{MachineDispatchQueue.RoomPathFor(record)}'", admitted.Refusal, StringComparison.Ordinal);
         Assert.Single(admitted.Fact.Holders ?? []);
 
         // Its line points at the record of the room, where the legs it names are, and says the room it last read.
-        Assert.Equal(HeavyLegSlots.RoomPathFor(record), admitted.Fact.Record);
+        Assert.Equal(MachineDispatchQueue.RoomPathFor(record), admitted.Fact.Record);
         Assert.StartsWith("this leg needs ~10 GiB, as the test says; 40 GiB free on '/data', beside ~35 GiB claimed by '/src/first'", admitted.Fact.Room, StringComparison.Ordinal);
         Assert.Equal("first", Assert.Single(AdmissionKit.ReadClaims(record)).Holder.Leg);
         Assert.Empty(AdmissionKit.Read(record));

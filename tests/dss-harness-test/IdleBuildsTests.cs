@@ -401,7 +401,7 @@ public sealed class IdleBuildsTests
     /// names another for some - holding 40 GiB, its clock's time the one the notes say, and the heavy-leg records the test's
     /// own, or <paramref name="slots"/>.
     /// </summary>
-    private static IdleBuilds Idle(TempDirectory temp, Func<string, string>? filesystemOf = null, HeavyLegSlots? slots = null)
+    private static IdleBuilds Idle(TempDirectory temp, Func<string, string>? filesystemOf = null, MachineDispatchQueue? slots = null)
     {
         var harness = new HarnessFactory();
         var room = new FilesystemsOf(harness.FileSystem, filesystemOf ?? (_ => "/data"));

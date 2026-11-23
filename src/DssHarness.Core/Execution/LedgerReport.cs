@@ -139,16 +139,6 @@ public sealed record LedgerLine(
     public bool TestCountDiffers => TestCountNote is not null;
 }
 
-/// <summary>What a ledger document says of how long its legs took (<see cref="LedgerReport.DurationsIn"/>).</summary>
-/// <param name="RunId">The run the ledger is of, as its document names it; null where it names none.</param>
-/// <param name="Legs">Each leg's line, as the document holds them; null where it holds none.</param>
-public sealed record LedgerDurations(string? RunId, IReadOnlyList<LedgerLegDuration?>? Legs);
-
-/// <summary>One leg's line of a ledger document, as far as how long it took.</summary>
-/// <param name="Leg">The leg; null where the line names none.</param>
-/// <param name="DurationSeconds">Its wall time in seconds; 0 where it never ran.</param>
-public sealed record LedgerLegDuration(string? Leg, double DurationSeconds);
-
 /// <summary>
 /// The per-leg ledger a run ends with: the table a reader sees, and the same facts as data.
 /// </summary>
@@ -766,20 +756,6 @@ public sealed class LedgerReport
     }
 
     /// <summary>
-    /// How long each leg a ledger document ran took, and the run it was - read back from the document as this type writes
-    /// it (<see cref="ToJson(int, string, string?, Func{string, string}?, RunId?, string?)"/>), by the names it writes them
-    /// under, so the reader and the writer cannot spell a member two ways.
-    /// </summary>
-    /// <param name="document">A ledger document, as a run's <c>--json</c> answered it or a step kept it.</param>
-    /// <exception cref="JsonException">The document is no JSON, or not of the ledger's shape.</exception>
-    public static LedgerDurations? DurationsIn(string document)
-    {
-        ArgumentNullException.ThrowIfNull(document);
-
-        return JsonSerializer.Deserialize<LedgerDurations>(document, JsonOptions);
-    }
-
-    /// <summary>
     /// The ledger as data for a command that stopped before any leg had a line - a leg nobody
     /// declared, a configuration that does not load, a runner nobody declared - with none, and the
     /// code the process exits with and the line it ends on.
@@ -1168,7 +1144,9 @@ public sealed class LedgerReport
         return marks;
     }
 
-    private static TimeSpan Median(IEnumerable<TimeSpan> durations)
+    /// <summary>The middle of <paramref name="durations"/> by length - the mean of the two middle ones where they are even - or nothing where there are none.</summary>
+    /// <param name="durations">The durations.</param>
+    internal static TimeSpan Median(IEnumerable<TimeSpan> durations)
     {
         var ordered = durations.Order().ToList();
 

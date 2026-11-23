@@ -1122,26 +1122,63 @@ can leave it partly done on any platform, and running `delete-worktree <name> --
 
 ## The dispatch queue
 
-The admission owner is the machine's dispatch queue (`Execution\MachineDispatchQueue.cs`, `HeavyLegSlots` grown, not
-replaced beside): one queue per machine, three classes of unit each with its own capacity - heavy legs (the slots this
-topic's admission keys have always governed, `heavyLegs`, 2), machine steps of the process class (`processes`, the
-machine's logical processors) and reasoning agents of every run (`agents`, 8) - and every unit charged to a tenant: a
-local command's repository, `local/<tree>`, until environments name a finer one. The order is fair by tenant:
-of the units waiting, the one whose tenant is charged the least against its share goes next, ties by arrival - its
-share its weight times its run's priority (a workflow's `priority` key, 1 where none), the charge what its running
-units were estimated to cost, the median of the last ten durations the tree's records hold for the same leg - the
-newest ten, by the run each was of, of the ledgers every run's steps and its agents' steps kept, each read by the
-ledger's own reader (`DispatchCosts`, `LedgerReport.DurationsIn`), a leg that never ran no duration and a ledger that
-cannot be read none; one quantum where none is known - so a tenant with a burst of short arms and a tenant with one long build each get
-the machine in proportion, and neither waits for the other's whole burst. A unit waiting past `ageAfterMinutes` (10)
-has its tenant's share doubled for each further period, so no weight setting starves a tenant. Nothing is pre-empted:
-a started unit runs to its end, and a WSL sweep - one unit whole, one worker - is charged its whole estimated cost.
-The slots' own room rules are kept whole inside the fair order (no unit runs beside more than the fewest any holder or
-it allows, and the machine's own count, where its settings file declares one, overrides every entry's). The record is
-the one the slots kept, extended with each entry's tenant, weight, priority, cost and aging bound; the crash rule with
-it. `queue` shows it - each class's capacity, holders and waiting units, by tenant - and changes nothing; the process
-and agent classes are configured and shown, and nothing asks them yet (a server queues every unit it runs; the agent
-class arrives with its wiring). A machine shared by several users is not seen whole: each user's queue is their own.
+The admission owner is the machine's dispatch queue (`Execution\MachineDispatchQueue.cs`): one queue per machine and
+per user of it, three classes of unit each with its own capacity - heavy legs (`heavyLegs`, 2), machine steps of the
+process class (`processes`, the machine's logical processors) and reasoning agents of every run (`agents`, 8). Only
+heavy legs ask it yet; the process and agent classes are configured and shown by `queue` with their capacities.
+
+**Granting.** A unit holds a slot once the queue grants it one, and the grant is a mark (`QueuedUnit.HeldSinceUtc`)
+written in the same change of the record that grants it: the marked units hold until they give their slots back,
+whatever arrives after them - nothing is pre-empted - and the order chooses only among the units not marked. Every
+look a waiting leg takes reads the line under the record's lock, reclaims the holders whose processes have ended, and
+grants the slots left in the one order (`DispatchOrder.Read`), which `Look`, a dry run's `Line` and `queue` all read.
+The slots' own room rules stay whole: a unit is granted one only while the holders are fewer than the machine's own
+count, where its settings file declares one, else than the fewest any holder or the unit itself allows; and the unit
+the order puts first that does not fit holds back every unit behind it, so a unit whose own count allows fewer legs at
+once is never passed for ever - the holders end, none is granted beside them meanwhile, and it fits.
+
+**The order.** Deficit round-robin over the tenants of the units waiting, as plan 2.0 part 06 sets it. Each round,
+every tenant with a unit waiting is credited its share - its weight (`DispatchOrder.LocalWeight`, 1 for every tenant
+of a local command) times its run's priority (a workflow's `priority`, a limit a use that governs itself declares for
+its steps, `FlowUse.PriorityOf`; 1 where none), doubled for each whole period of `ageAfterMinutes` its head unit has
+waited (`DispatchOrder.ShareOf`) - and a unit starts once its tenant's deficit covers its cost, which is then debited.
+The rounds are counted, never stepped: a tenant's turn comes after as many rounds as its deficit is short of its unit's
+cost, over its share, so one decision is linear in the units waiting whatever their costs. Within a tenant its units go
+in the order they asked; a tie between tenants goes to the unit that asked first. A tenant's deficit is kept in the
+record while it has a unit waiting, and dropped once it has none. An `ageAfterMinutes` of 0 counts every period at
+once - a share past any cost - and so serves the units in the order they asked; a wait of more doublings than a number
+holds is the same.
+
+**The cost.** A unit's cost is the median of the newest ten times a unit of its name held its slot on this machine, in
+minutes, by when each ended, and one quantum (a minute) where none is kept (`UnitDurations`): the queue measures each
+unit itself, from when it was let start to when it gave its slot back, on the monotonic clock, and keeps one history a
+name - its repository, its command and its unit (the leg, or a sweep's worker or arm) - in a file of its own named by a
+digest of that name, read whole at one ask, never a scan. A history that cannot be read is said, and charges one
+quantum. A WSL sweep, sent whole as one unit, is measured whole, so it is charged its whole time and its tenant waits
+that much before its next.
+
+**The records.** The slots' record (`admission-<machine id>.json`) keeps exactly the members an older build reads, and
+what the queue keeps of each unit - its tenant, weight, priority, cost, aging bound and grant - and each waiting
+tenant's deficit is kept beside it in `admission-<machine id>.queue.json`, read and written only inside the slots'
+record's own machine-wide step, joined to the live entries; a row whose entry has gone counts for nothing and leaves
+with the next write. An entry with no row is an older build's, which admits its own leg while the leg is fewer from
+the front of the line than every count up to it allows: it is counted holding exactly where that build holds it, and
+while one waits no unit behind it is granted a slot - that build counts every unit ahead of its own, so a unit granted
+behind it would run beside it once the units ahead of it left. The histories are kept in
+`admission-<machine id>.durations`. The crash rule is the slots': a holder whose process has ended is released by the
+next look.
+
+**Departures from part 06, said.** The tenant is a local command's repository (`local/<repository>`, the repository
+as `IHarnessContextLoader.RepositoryOfAsync` spells its main checkout, whichever worktree or copy the leg works in):
+part 06's `local` tenant with the repository its sub-tenant, the round-robin served over the sub-tenants, for with no
+environment every local command is of the one tenant `local`. The cost is the queue's own measure of each unit, not a
+reading of the ledgers and `step.json`: a ledger's duration is a whole leg's, waits included, never a sweep's worker or
+arm, and kept per tree, where the slot a unit holds is what the machine gives it, and one history a name is read in
+constant time where the records would be scanned at every ask. The rule that the first unit of the order that does not
+fit holds back the units behind it, the older builds' rule, and an aging bound of 0 serving the units in the order they
+asked are this build's, which part 06 does not say. A server holding the queue in memory, the process and agent
+classes' askers and an environment's weight arrive with their parts. A machine shared by several users is not seen
+whole: each user's queue is their own.
 
 ## Orchestrators and agents
 
@@ -1201,7 +1238,7 @@ requests the apply takes (`AgentService.Holds`, the one spelling of them, shared
 main tree and the agent's worktree for a fold, a refresh and a live agent's deletion; the worktree alone for a rebase,
 and for the deletion of an agent already closed or whose worktree is gone. Every live
 holder in the way is printed on a `held now:` line (`RunLock.Holders`, read as `HeldBy` reads: nothing reclaimed,
-nothing written), said with where that run's leg stands, from this machine's record of heavy legs (`HeavyLegSlots.Line`,
+nothing written), said with where that run's leg stands, from this machine's record of heavy legs (`MachineDispatchQueue.Line`,
 joined by `TreeHolders`, the one sentence: it waits in line with how many are ahead, or it holds a slot, or a leg on
 an ssh host's own record says; a run that asked for no slot is said by the lock's own words alone, `running
 '<command>'`, and so is every run of a leg of this machine - a WSL distribution's among them, whose slot this machine's
@@ -1974,7 +2011,9 @@ own in the place of the run's, counted across every instance of the use (`Counte
 place of the run's own cap for them (`InstanceBoundOf`); its `maxRetries` and `backoffSeconds` are
 what its steps fall back to where they say neither (`FlowUse.RetriesOf`, which `RetryCap` and the
 reason runner both read, and `BackoffSecondsOf`, which the reason runner reads); its
-`handoffSeconds` bounds the handoff of its paused reasoning steps; and its advisor recommends for
+`handoffSeconds` bounds the handoff of its paused reasoning steps; its `priority` is what its
+steps' legs ask the machine's dispatch queue at, in the place of the run's (`FlowUse.PriorityOf`,
+which every leg step's request reads); and its advisor recommends for
 its steps' questions in the place of the run's (`SeekAdvice`): its agent and prompt files read in its own directory, its prompt handed the
 inputs the use filled and the texts its steps see, its bar the workflow's own `texts.recommendations`
 where it declares one (`BarOf`, reading `texts.recommendations` first, then the run's
@@ -6920,7 +6959,7 @@ it (*The machine declares what it holds* below) - each heavy leg, its tree synce
 taken, waits for the machine to take it:
 
 1. **One of the machine's `heavyLegs` slots** (2, at least 1), shared by every command this user
-   runs there, given in the order legs asked for one. The slots are kept in
+   runs there, given in the dispatch queue's fair order (*The dispatch queue*). The slots are kept in
    `<user data>/dssharness/admission-<machine id>.json` - the user data being `LOCALAPPDATA` on
    Windows, `~/Library/Application Support` on macOS, and `$XDG_DATA_HOME` or `~/.local/share` on
    Linux - beside the hold that keeps the machine awake: one per user of the machine, whichever
@@ -6949,9 +6988,10 @@ taken, waits for the machine to take it:
 Where the machine's settings file says nothing, what a command's own configuration declares is the
 rule its legs are admitted by: a repository that declares none never joins the line. Each entry of
 the record carries the count its command's rule allows, since commands of repositories that declare
-different counts share one record, and a leg starts only while it is fewer legs from the front than
-the fewest any leg up to it allows: the legs holding slots are always the front of the line, no leg
-runs beside more legs than its own configuration allows, and none passes a leg that asked before it.
+different counts share one record, and a unit is granted a slot only while fewer hold one than its own
+count and every holder's allow: no leg runs beside more legs than its own configuration allows, and
+the unit the fair order puts first that does not fit holds back every unit behind it, so none is
+passed for ever.
 Where the settings file declares `heavyLegs`, that count is every leg's in line, whatever count its
 entry carries, read again at each look - so a machine whose count is raised while legs wait takes them
 by it. The entries keep the members a build before this one reads, which refuses a record holding a
@@ -6959,8 +6999,8 @@ member it does not know; such a build still weighs each entry's own count.
 
 **The machine declares what it holds.** `config.json` is tracked, so every worktree holds the copy of
 its last commit: a consumer's main checkout raised `hosts.local.admission.heavyLegs` to 3 while the
-agents' worktrees made before still said 2, and since a leg starts only while every count up to it in
-line allows it, the main checkout's legs waited on "one of this machine's 2 heavy-leg slot(s)". What a
+agents' worktrees made before still said 2, and since a leg is granted a slot only while every holder's
+count allows it, the main checkout's legs waited on "one of this machine's 2 heavy-leg slot(s)". What a
 machine can hold is the machine's, so it is declared once, for the machine, in its settings file:
 `<user data>/dssharness/settings-<machine id>.json`, beside the slots' record and named the same way,
 one per machine and per user (`MachineSettingsFile`). It holds `{ "admission": { ... } }` in the keys
@@ -6976,7 +7016,7 @@ leg that has run. Its refusal is a configuration's, which ends the run in the fi
 heavy leg of the machine would meet it (`AdmissionReading.RuleInForce`), never one leg's defect; a light
 leg asks no rule, and runs, its page cache left where the rule could not be read, saying why. Only the
 count of slots is read again at each look of the slots' record, which turns a refusal of the file into
-that record's own (`HeavyLegSlots`): a dry run reading the line - naming a tree's holders among them -
+that record's own (`MachineDispatchQueue`): a dry run reading the line - naming a tree's holders among them -
 says it could not be read rather than failing, and a leg's own admission, before its work, is refused by
 it. A unit of a leg whose work has begun - an arm of a sweep, a worker made - asks for its slot carrying
 the reading that work began by (`AdmissionRequest.WorkBegunBy`, kept by its `SlotPlace`), and a look
@@ -7118,7 +7158,7 @@ back, its build staying. What each build holds is weighed first, by what its las
 recorded or else by what it holds, and none is removed where all that could be comes to less than the
 least the leg lacks - at the floor, what brings it back to it: destroying every one would not let the
 leg go on. One leg makes room on a filesystem at a time, across every command this user runs on the
-machine (`HeavyLegSlots.MakeRoomOn`, a third record beside the slots',
+machine (`MachineDispatchQueue.MakeRoomOn`, a third record beside the slots',
 `admission-<machine id>.making.json`, held by its process as a slot is): two legs short of room there would each read the room before the
 other's removals gave it back, each remove the whole of what it lacked, and meet in one build. A leg
 that finds another making room there removes nothing beside it and is told so - at admission it waits

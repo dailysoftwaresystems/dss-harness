@@ -82,7 +82,8 @@ public sealed class AdmissionSettings
 
     /// <summary>
     /// Heavy legs the machine runs at once, across every command this user runs there, at least one: each takes a slot
-    /// before it starts, in the order they asked, and gives it back when its work ends.
+    /// before it starts, in the dispatch queue's fair order (<see cref="Execution.DispatchOrder"/>), and gives it back when
+    /// its work ends.
     /// </summary>
     public int? HeavyLegs { get; init; }
 
@@ -129,19 +130,22 @@ public sealed class AdmissionSettings
     /// <summary>
     /// Machine steps the machine runs at once, of the process class - every process a step starts, heavy or not - when a
     /// section says nothing: the machine's logical processors. Each run's own <c>maxParallelProcesses</c> keeps capping its
-    /// counted types within it.
+    /// counted types within it. The dispatch queue shows it as that class's capacity; no unit asks the class yet.
     /// </summary>
     public int? Processes { get; init; }
 
     /// <summary>
     /// Reasoning agents the machine runs at once, of every run and side-task on it, at least one. Each run's own
-    /// <c>maxReasoningAgents</c> keeps capping its agents within it.
+    /// <c>maxReasoningAgents</c> keeps capping its agents within it. The dispatch queue shows it as that class's capacity;
+    /// no unit asks the class yet.
     /// </summary>
     public int? Agents { get; init; }
 
     /// <summary>
-    /// Minutes a unit waits before its tenant's share of the dispatch queue begins to age - doubled for each further
-    /// period - so no weight setting starves a tenant. The default where a section says nothing.
+    /// Minutes a waiting unit's tenant's share of the dispatch queue holds before it doubles, doubling again each such
+    /// period after, so no weight setting starves a tenant (<see cref="Execution.DispatchOrder.ShareOf"/>): from 0, under
+    /// which every period has passed at once and the units are served in the order they asked, to the most a span of time
+    /// holds (<see cref="MostAgeAfterMinutes"/>).
     /// </summary>
     public double? AgeAfterMinutes { get; init; }
 

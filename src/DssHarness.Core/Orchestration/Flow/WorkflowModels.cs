@@ -415,6 +415,7 @@ public sealed record WorkflowOutput(
 /// </param>
 /// <param name="CodebaseGraph">The shape of the run's one graph where the run's own workflow declares none (<see cref="FlowUse.GraphOf"/>).</param>
 /// <param name="Amends">Whether the used workflow declares an amend - never applied, for an amend is a run's own, and refused where the use says false.</param>
+/// <param name="Priority">The priority its steps' legs ask the machine's dispatch queue at, where the file says.</param>
 public sealed record FlowUseOwn(
     FlowBudget? Budget = null,
     int? MaxReasoningAgents = null,
@@ -428,7 +429,8 @@ public sealed record FlowUseOwn(
     FlowReporter? Reporter = null,
     IReadOnlyDictionary<string, FlowAnswer>? Answers = null,
     FlowCodebaseGraph? CodebaseGraph = null,
-    bool Amends = false)
+    bool Amends = false,
+    int? Priority = null)
 {
     /// <summary>Whether the used workflow declares nothing of its own, so every key stays the caller's.</summary>
     [JsonIgnore]
@@ -446,6 +448,7 @@ public sealed record FlowUseOwn(
             FlowUseKey.BackoffSeconds => BackoffSeconds is not null,
             FlowUseKey.MaxInstances => MaxInstances is not null,
             FlowUseKey.HandoffSeconds => HandoffSeconds is not null,
+            FlowUseKey.Priority => Priority is not null,
             FlowUseKey.Advisor => Advisor is not null,
             _ => throw new ArgumentOutOfRangeException(nameof(key), key, "no run-level key a use governs by"),
         };
@@ -463,7 +466,7 @@ public sealed record FlowUseOwn(
                 declared.Add("budget");
             }
 
-            if (MaxReasoningAgents is not null || MaxParallelProcesses is not null || MaxOpenAgents is not null || MaxRetries is not null || BackoffSeconds is not null || HandoffSeconds is not null)
+            if (MaxReasoningAgents is not null || MaxParallelProcesses is not null || MaxOpenAgents is not null || MaxRetries is not null || BackoffSeconds is not null || HandoffSeconds is not null || Priority is not null)
             {
                 declared.Add("limits");
             }
@@ -638,6 +641,20 @@ public sealed record FlowUse(
     }
 
     /// <summary>
+    /// The priority the legs of the step at <paramref name="path"/> ask the machine's dispatch queue at: the
+    /// <c>priority</c> of the use that governs it where one declares it (<see cref="Governing"/>), else the run's own, and
+    /// the least a run has where neither says - the one rule every leg step's request reads.
+    /// </summary>
+    /// <param name="definition">The resolved definition the run holds.</param>
+    /// <param name="path">The step's declaration path.</param>
+    public static int PriorityOf(WorkflowDefinition definition, string path)
+    {
+        ArgumentNullException.ThrowIfNull(definition);
+
+        return Governing(definition, path, FlowUseKey.Priority)?.Own.Priority ?? definition.Priority ?? Execution.DispatchOrder.LeastPriority;
+    }
+
+    /// <summary>
     /// The shape of the run's one codebase graph, settled once for the run: the run's own workflow's where it declares
     /// one - a governing use's then said as not applied (<see cref="NotApplied"/>) - else the first a use that governs
     /// itself declares, in declaration order - the uses in recoveries among them - and null where none does, every
@@ -679,6 +696,9 @@ public enum FlowUseKey
 
     /// <summary><c>handoffSeconds</c>: how long a paused reasoning step of it is given to write its handoff.</summary>
     HandoffSeconds,
+
+    /// <summary><c>priority</c>: what its steps' legs ask the machine's dispatch queue at.</summary>
+    Priority,
 
     /// <summary><c>advisor</c>: the agent that recommends an answer to its steps' questions.</summary>
     Advisor,

@@ -221,7 +221,7 @@ public sealed class WslPageCacheTests
         Assert.True(drop.Done, drop.Said);
         Assert.Null(Assert.Single(commands).Timeout);
         output.Received().Info(
-            DssHarness.Core.Execution.HeavyLegSlots.CommandName,
+            DssHarness.Core.Execution.MachineDispatchQueue.CommandName,
             Arg.Is<string>(line => line == "has waited 5m00s for WSL to say which distributions run"));
     }
     /// <summary>

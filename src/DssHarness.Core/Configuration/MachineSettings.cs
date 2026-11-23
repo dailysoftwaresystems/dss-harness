@@ -79,7 +79,7 @@ public sealed class MachineSettingsFile(IFileSystem fileSystem, Func<string> pat
     /// <param name="output">Says the file is named by the machine's name, where it is.</param>
     /// <exception cref="DirectoryNotFoundException">No directory of this user's own could be named.</exception>
     public static string PathFor(IHostPlatform platform, IHarnessOutput output)
-        => UserState.MachineFile(platform, output, Execution.HeavyLegSlots.CommandName, FilePrefix, "settings", "reads the settings file named by the new name, not the old one");
+        => UserState.MachineFile(platform, output, Execution.MachineDispatchQueue.CommandName, FilePrefix, "settings", "reads the settings file named by the new name, not the old one");
 
     /// <summary>The file's name for the machine <paramref name="machineId"/> tells apart.</summary>
     /// <param name="machineId">What tells the machine from every other.</param>

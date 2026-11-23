@@ -130,7 +130,7 @@ public sealed record IdleBuildsScope(IReadOnlyList<RepositoryTree> Trees, Harnes
 /// </para>
 /// <para>
 /// One leg makes room on a filesystem at a time, across every command this user runs on the machine
-/// (<see cref="HeavyLegSlots.MakeRoomOn"/>): a leg that finds another making room there removes nothing beside it, and is
+/// (<see cref="MachineDispatchQueue.MakeRoomOn"/>): a leg that finds another making room there removes nothing beside it, and is
 /// told so, to read the room again once that one has; the room is read again once the making is held, and what another
 /// leg made since the caller read it is room the leg no longer lacks.
 /// </para>
@@ -143,14 +143,14 @@ public sealed record IdleBuildsScope(IReadOnlyList<RepositoryTree> Trees, Harnes
 /// <param name="fileSystem">Lists, measures and removes the builds.</param>
 /// <param name="slots">The machine's heavy-leg records, which hold which leg makes room on each filesystem.</param>
 /// <param name="clock">When a build was removed, as its note says it.</param>
-public sealed class IdleBuilds(RunLock runLock, IFileSystem fileSystem, HeavyLegSlots slots, TimeProvider clock)
+public sealed class IdleBuilds(RunLock runLock, IFileSystem fileSystem, MachineDispatchQueue slots, TimeProvider clock)
 {
     /// <summary>The command a removal asks the lock under: the leg's admission's.</summary>
-    public const string CommandName = HeavyLegSlots.CommandName;
+    public const string CommandName = MachineDispatchQueue.CommandName;
 
     private readonly RunLock _runLock = runLock;
     private readonly IFileSystem _fileSystem = fileSystem;
-    private readonly HeavyLegSlots _slots = slots;
+    private readonly MachineDispatchQueue _slots = slots;
     private readonly TimeProvider _clock = clock;
     private readonly BuildDirectoryRemoval _removal = new(runLock, fileSystem);
 

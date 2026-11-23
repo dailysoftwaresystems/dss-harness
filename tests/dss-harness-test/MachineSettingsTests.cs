@@ -184,7 +184,7 @@ public sealed class MachineSettingsTests
 
         AdmissionKit.Write(record, AdmissionKit.Holder(harness, "stale-first", slots: 2), AdmissionKit.Holder(harness, "stale-second", slots: 2));
 
-        var slots = new HeavyLegSlots(harness.FileSystem, harness.Output, harness.Identity, record, () => 3);
+        var slots = new MachineDispatchQueue(harness.FileSystem, harness.Output, harness.Identity, record, () => 3);
 
         using var admitted = await AdmissionKit.Admission(slots, new ScriptedGauge(10), new ManualClock(), settle: TimeSpan.Zero)
             .AdmitAsync(AdmissionKit.Request(AdmissionKit.Rule(heavyLegs: 3, maxWaitMinutes: 1), []), TestContext.Current.CancellationToken);
@@ -209,7 +209,7 @@ public sealed class MachineSettingsTests
 
         AdmissionKit.Write(record, AdmissionKit.Holder(harness, "first", slots: 1), AdmissionKit.Holder(harness, "second", slots: 1), AdmissionKit.Holder(harness, "third", slots: 1));
 
-        var slots = new HeavyLegSlots(harness.FileSystem, harness.Output, harness.Identity, record, () => 3);
+        var slots = new MachineDispatchQueue(harness.FileSystem, harness.Output, harness.Identity, record, () => 3);
 
         using var refused = await AdmissionKit.Admission(slots, new ScriptedGauge(10), new ManualClock())
             .AdmitAsync(AdmissionKit.Request(AdmissionKit.Rule(heavyLegs: 3, maxWaitMinutes: 1), said), TestContext.Current.CancellationToken);
@@ -230,7 +230,7 @@ public sealed class MachineSettingsTests
         using var temp = new TempDirectory();
         var harness = new HarnessFactory();
         const string Unread = "This machine's settings file '/u/settings.json' could not be read: a key it does not know.";
-        var slots = new HeavyLegSlots(harness.FileSystem, harness.Output, harness.Identity, temp.Combine("admission.json"), () => throw new ConfigException(Unread));
+        var slots = new MachineDispatchQueue(harness.FileSystem, harness.Output, harness.Identity, temp.Combine("admission.json"), () => throw new ConfigException(Unread));
         var holder = new LockEntry("local", "/src/tree", LockScope.TreeShared, new LockHolder(harness.Identity.CurrentMachine, harness.Identity.CurrentId, RunId.New().Value, DateTimeOffset.UtcNow, "test"), "debug");
         var wanted = new LockRequest { Host = "local", Tree = "/src/tree", Scope = LockScope.TreeExclusive, RunId = RunId.New(), Command = "delete-agent" };
 
@@ -256,7 +256,7 @@ public sealed class MachineSettingsTests
         var cancellationToken = TestContext.Current.CancellationToken;
         var record = temp.Combine("admission.json");
         const string Unread = "This machine's settings file '/u/settings.json' could not be read: admission heavyLegs must be at least 1, found 0.";
-        var slots = new HeavyLegSlots(harness.FileSystem, harness.Output, harness.Identity, record, () => throw new ConfigException(Unread));
+        var slots = new MachineDispatchQueue(harness.FileSystem, harness.Output, harness.Identity, record, () => throw new ConfigException(Unread));
         var admission = AdmissionKit.Admission(slots, new ScriptedGauge(10), new ManualClock());
         var rule = AdmissionKit.Rule(heavyLegs: 3, settleLeast: 0, settleMost: 0, maxWaitMinutes: 1);
         var begun = new AdmissionReading(null, new AdmissionSettings { HeavyLegs = 3 }, null);

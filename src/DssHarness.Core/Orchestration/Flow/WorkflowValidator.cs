@@ -365,10 +365,9 @@ public static class WorkflowValidator
                     MaxRetries: _definition.MaxRetries,
                     BackoffSeconds: _definition.BackoffSeconds,
                     MaxInstances: _definition.MaxInstances,
-                    HandoffSeconds: _definition.HandoffSeconds),
+                    HandoffSeconds: _definition.HandoffSeconds,
+                    Priority: _definition.Priority),
                 lead: string.Empty);
-
-            Within(_definition.Priority, 1, int.MaxValue, "priority");
 
             if (_definition.Budget is { } budget)
             {
@@ -454,6 +453,7 @@ public static class WorkflowValidator
             Within(limits.BackoffSeconds, 1, WorkflowStep.MostBackoffSeconds, $"{lead}backoffSeconds");
             Within(limits.MaxInstances, 100, 100_000, $"{lead}maxInstances");
             Within(limits.HandoffSeconds, 30, 900, $"{lead}handoffSeconds");
+            Within(limits.Priority, Execution.DispatchOrder.LeastPriority, int.MaxValue, $"{lead}priority");
         }
 
         /// <summary>

@@ -3557,7 +3557,7 @@ public sealed class LegRunServiceTests
         var harness = new HarnessFactory();
         var record = AdmissionRecord(temp);
         var settings = HostDoubles.MachineSettings(harness.FileSystem);
-        var slots = new HeavyLegSlots(harness.FileSystem, harness.Output, harness.Identity, record, () => settings.Read().Admission?.HeavyLegs);
+        var slots = new MachineDispatchQueue(harness.FileSystem, harness.Output, harness.Identity, record, () => settings.Read().Admission?.HeavyLegs);
         var taken = new List<(bool Admitted, double Waited)>();
 
         Directory.CreateDirectory(Path.GetDirectoryName(settings.Location)!);
