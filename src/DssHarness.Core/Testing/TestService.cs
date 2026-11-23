@@ -331,30 +331,32 @@ public sealed class TestService(
         // whole by the rule a test preset beside it was read by, so both are the same directory.
         var working = TestInvocationResolver.StartDirectory(command.WorkingDirectory, request.TreeRoot);
 
-        var phase = await _phaseRunner
-            .RunAsync(
-                new PhaseRequest
-                {
-                    Leg = request.Leg,
-                    Phase = request.PhaseName,
+        // The run's own results directory, empty before the runner starts: whatever an earlier run of this phase left
+        // there is gone, so a results file read after it is this run's.
+        TestResults.MakeEmpty(_fileSystem, paths.ResultsDirectory!);
 
-                    // A runner named by a relative path is read from the directory it starts in, as
-                    // its arguments are: './unit_tests' with a workingDirectory of '{buildDir}' is
-                    // the build's own. Left to the start, it would be read against wherever this
-                    // process began, which for a leg on a worktree is the main checkout.
-                    FileName = ProcessRunner.Anchored(command.Program, working),
-                    Arguments = command.Arguments,
-                    LogFile = logFile,
-                    ProgramDirectories = request.ProgramDirectories,
-                    WorkingDirectory = working,
-                    Environment = TestInvocationResolver.EnvironmentFor(request.HostEnvironment, command.Environment),
-                    SuccessPattern = invocation.SuccessPattern,
-                    StallSeconds = config.Defaults.StallSeconds,
-                    TimingPatterns = TimingPatterns(config, request),
-                    ClockStepToleranceMilliseconds = config.Defaults.ClockStepToleranceMilliseconds,
-                },
-                cancellationToken)
-            .ConfigureAwait(false);
+        var asked = new PhaseRequest
+        {
+            Leg = request.Leg,
+            Phase = request.PhaseName,
+
+            // A runner named by a relative path is read from the directory it starts in, as
+            // its arguments are: './unit_tests' with a workingDirectory of '{buildDir}' is
+            // the build's own. Left to the start, it would be read against wherever this
+            // process began, which for a leg on a worktree is the main checkout.
+            FileName = ProcessRunner.Anchored(command.Program, working),
+            Arguments = command.Arguments,
+            LogFile = logFile,
+            ProgramDirectories = request.ProgramDirectories,
+            WorkingDirectory = working,
+            Environment = TestInvocationResolver.EnvironmentFor(request.HostEnvironment, command.Environment),
+            SuccessPattern = invocation.SuccessPattern,
+            StallSeconds = config.Defaults.StallSeconds,
+            TimingPatterns = TimingPatterns(config, request),
+            ClockStepToleranceMilliseconds = config.Defaults.ClockStepToleranceMilliseconds,
+        };
+
+        var phase = await _phaseRunner.RunAsync(asked, cancellationToken).ConfigureAwait(false);
 
         var seen = await guards.CloseAsync(cancellationToken).ConfigureAwait(false);
         var contention = seen.Contention!;
@@ -380,29 +382,19 @@ public sealed class TestService(
                     cancellationToken)
                 .ConfigureAwait(false);
 
-        // What the invocation named as its structured results, read where they are - evidence beside the verdict, as
-        // the keeps are, but never copied: what a file holds typed already is the digest, and nothing searches a log
-        // for it. A file naming nothing, or no form owning it, is said inside the digest, not refused. Where nothing
-        // was named or nothing read, the phase's own log is parsed by the runner's parsers, for a red run's console
-        // says what its file forgot to.
-        var digest = reached.Verdict == LegVerdict.Passed
+        // The digest only where the tests' failure is the verdict, as a build's is: one a moving tree or a shared
+        // directory outranked was a run of a tree that never existed. What the invocation named as its structured
+        // results is read first, where the runner wrote it - nothing copied, its text masked as the phase's log is - for
+        // what a file holds typed already is the digest; where the files gave no finding, the phase's own log is read
+        // by the runner's parsers, for a red run's console says what its file never got to, and what the files could
+        // not give is said beside it.
+        var digest = reached.Verdict != LegVerdict.Failed
             ? null
-            : TestResults.Read(_fileSystem, invocation.Results, paths, request.BuildDirectory, mask: null, cancellationToken)
-                ?? LogDigest();
-
-        ResultDigest? LogDigest()
-        {
-            try
-            {
-                return PhaseParsers
-                    .DigestOf([.. phase.Output.Lines()], PhaseParsers.ForTests(command.Program, config.Results.Matchers))
-                    ?.WithInTree(request.TreeRoot);
-            }
-            catch (PhaseOutputUnreadException)
-            {
-                return null;
-            }
-        }
+            : PhaseDigest.Of(
+                phase.Output,
+                PhaseParsers.ForTests(command.Program, config.Results.Matchers),
+                new DigestTree(request.TreeRoot, working, _fileSystem),
+                TestResults.Read(_fileSystem, invocation.Results, paths, paths.ResultsDirectory!, asked.Mask, cancellationToken));
 
         var entry = new LegEntry
         {
@@ -472,6 +464,7 @@ public sealed class TestService(
             Product = request.Product,
             ProductProblem = request.ProductProblem,
             Compilers = built ? request.Compilers : CMakeToolchainReader.BeforeTheBuild(request.Project),
+            ResultsDirectory = TestResults.DirectoryFor(request.RunDirectory, request.Leg, request.PhaseName),
         };
         IReadOnlyList<string> remote = request.InCopy ? invocation.RemoteExcludes ?? [] : [];
 

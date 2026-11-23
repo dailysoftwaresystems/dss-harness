@@ -135,9 +135,10 @@ public sealed record BuildResult(
     public FailedUnits? FailedUnits { get; init; }
 
     /// <summary>
-    /// The failing phase's log digested by the parsers its toolchain chose, where the build did not pass: the typed
-    /// diagnostics with the first error in the order the tool met it. <see langword="null"/> where it passed, or
-    /// nothing the parsers chose read anything in what the phase printed.
+    /// The failing phase's log digested by the parsers its toolchain chose, where the build's failure is its verdict:
+    /// the typed diagnostics with the first error in the order the tool met it. <see langword="null"/> where it passed,
+    /// where something else decided its verdict - a moving tree, a shared directory - and where nothing the parsers chose
+    /// read anything in what the phase printed.
     /// </summary>
     public ResultDigest? Digest { get; init; }
 
@@ -649,38 +650,23 @@ public sealed class BuildService(
                 }
             }
 
-            // The units only where the build's failure is the verdict: one a moving tree or a shared directory outranked was
-            // a build of a tree that never existed, and what it failed says nothing of the code. The digest with them:
-            // the failing phase's log read by the parsers its toolchain chose, so a red build's line starts from what
-            // the compiler already said instead of a tail searched for it.
+            // The units and the digest only where the build's failure is the verdict: one a moving tree or a shared
+            // directory outranked was a build of a tree that never existed, and what it failed says nothing of the code.
+            // The digest is the failing phase's log read by the parsers its toolchain chose, so a red build's line starts
+            // from what the compiler already said instead of a tail searched for it.
+            var failing = verdict.Verdict == LegVerdict.Failed ? PhaseResult.LastFailing(phases) : null;
+
             return new BuildResult(verdict, buildDirectory, phases, rebuilt, dependencies)
             {
                 Compilers = compilers,
-                FailedUnits = verdict.Verdict == LegVerdict.Failed ? failedUnits : null,
-                Digest = verdict.Verdict == LegVerdict.Passed ? null : DigestOf(),
+                FailedUnits = failing is null ? null : failedUnits,
+                Digest = failing is null
+                    ? null
+                    : PhaseDigest.Of(
+                        failing.Output,
+                        PhaseParsers.ForBuild(request.Variant.Toolchain, config.Results.Matchers),
+                        new DigestTree(request.TreeRoot, failing.WorkingDirectory, _fileSystem)),
             };
-
-            ResultDigest? DigestOf()
-            {
-                var failed = phases.LastOrDefault(phase => !phase.Passed);
-
-                if (failed is null)
-                {
-                    return null;
-                }
-
-                try
-                {
-                    return PhaseParsers
-                        .DigestOf([.. failed.Output.Lines()], PhaseParsers.ForBuild(request.Variant.Toolchain, config.Results.Matchers))
-                        ?.WithInTree(request.TreeRoot);
-                }
-                catch (PhaseOutputUnreadException)
-                {
-                    // The log the digest would be read from is gone: the tail may be too, and the verdict already says what it is.
-                    return null;
-                }
-            }
         }
     }
 

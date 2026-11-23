@@ -101,8 +101,9 @@ public sealed partial class HelpTests
                 + "stack rendered to the frames inside the tree, its log's line range one read away - the next distinct errors to four as "
                 + "one line each, every test failure of the four with its stack, and the rest counted by code and by file, and where the "
                 + "digest holds typed errors the entry's tail holds only the lines no parser held, for a model reads either the typed "
-                + "errors or the raw lines, never both repeated. The ledger's --json keeps the whole digest typed for a reader that asks, "
-                + "each red leg's first error is said under its verdict in the table, and {run.red} says it on its line",
+                + "errors or the raw lines, never both repeated. The ledger's --json keeps the digest typed for a reader that asks, "
+                + "its bounds said - the first 50 diagnostics of each severity and the first 50 failures, the rest counted, a stack "
+                + "held to its first 48 and last 16 frames with the cut counted - each red leg's first error is said under its verdict in the table, and {run.red} says it on its line",
             prose,
             StringComparison.Ordinal);
     }
@@ -585,8 +586,9 @@ public sealed partial class HelpTests
                 + "stack rendered to the frames inside the tree, its log's line range one read away - the next distinct errors to four "
                 + "as one line each, every test failure of the four with its stack, and the rest counted by code and by file, and where "
                 + "the digest holds typed errors the entry's tail holds only the lines no parser held, for a model reads either the "
-                + "typed errors or the raw lines, never both repeated. The ledger's --json keeps the whole digest typed for a reader "
-                + "that asks, each red leg's first error is said under its verdict in the table, and {run.red} says it on its line. What "
+                + "typed errors or the raw lines, never both repeated. The ledger's --json keeps the digest typed for a reader "
+                + "that asks, its bounds said - the first 50 diagnostics of each severity and the first 50 failures, the rest "
+                + "counted, a stack held to its first 48 and last 16 frames with the cut counted - each red leg's first error is said under its verdict in the table, and {run.red} says it on its line. What "
                 + "its legs build, test and run is what the run's agents wrote, so the work of each leg this machine runs - every phase "
                 + "it starts, a set-up's lines apart - runs inside the operating system's isolation of the agents' work ('help "
                 + "agent-clients'); where this machine has none, agentPolicy.isolation required fails the step "

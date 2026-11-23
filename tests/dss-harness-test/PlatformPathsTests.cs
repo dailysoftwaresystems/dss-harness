@@ -100,4 +100,24 @@ public sealed class PlatformPathsTests
     [InlineData("/home/u/tree", "./", false)]
     public void APathAToolWrote_IsInsideATree_ByItsOwnForm_OnEveryMachine(string root, string path, bool inside)
         => Assert.Equal(inside, PlatformPaths.IsInsideAsWritten(root, path));
+
+    /// <summary>
+    /// A path inside a tree is named below its root by '/' on every machine, whichever form and separators it was written
+    /// in; a relative path is read from the directory the tool that wrote it ran in - a compiler in the build directory
+    /// writing <c>../../src/a.c</c> names the tree's <c>src/a.c</c> - and from the root where none is given; a path not
+    /// strictly inside is named nothing.
+    /// </summary>
+    [Theory]
+    [InlineData(@"C:\work\tree", @"C:\work\tree\src\a.cs", null, "src/a.cs")]
+    [InlineData(@"C:\work\tree", "c:/WORK/Tree/src/a.cs", null, "src/a.cs")]
+    [InlineData(@"C:\work\tree", @"..\..\src\a.cs", @"C:\work\tree\build\debug", "src/a.cs")]
+    [InlineData(@"C:\work\tree", @"..\..\..\a.cs", @"C:\work\tree\build\debug", null)]
+    [InlineData(@"C:\work\tree", @"src\a.cs", null, "src/a.cs")]
+    [InlineData("/home/u/tree", "../../src/a.c", "/home/u/tree/build/debug", "src/a.c")]
+    [InlineData("/home/u/tree", "a.c", "/home/u/elsewhere", null)]
+    [InlineData("/home/u/tree", "/home/u/tree/src/./a.c", "/home/u/tree/build", "src/a.c")]
+    [InlineData("/home/u/tree", "file:///home/u/tree/test/a%20b.dart", null, "test/a b.dart")]
+    [InlineData("/home/u/tree", "/home/u/tree", null, null)]
+    public void APathInsideATree_IsNamedBelowItsRootBySlashes_ARelativeOneFromWhereItsToolRan(string root, string path, string? from, string? named)
+        => Assert.Equal(named, PlatformPaths.RelativeAsWritten(root, path, from));
 }

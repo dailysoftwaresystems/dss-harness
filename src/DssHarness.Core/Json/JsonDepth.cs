@@ -104,4 +104,17 @@ public static class JsonDepth
 
         return JsonNode.Parse(json, Nodes, Document);
     }
+
+    /// <summary>
+    /// The node the UTF-8 JSON <paramref name="utf8Json"/> holds, read from the stream at any depth - a file's whole
+    /// document, never first read into a string - or <see langword="null"/> where it is JSON's null.
+    /// </summary>
+    /// <param name="utf8Json">The stream, at the document's start.</param>
+    /// <exception cref="JsonException">The stream holds no JSON.</exception>
+    public static JsonNode? ParseStream(Stream utf8Json)
+    {
+        ArgumentNullException.ThrowIfNull(utf8Json);
+
+        return JsonNode.Parse(utf8Json, Nodes, Document);
+    }
 }

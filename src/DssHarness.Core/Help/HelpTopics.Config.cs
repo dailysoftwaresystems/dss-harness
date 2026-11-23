@@ -339,19 +339,27 @@ public static partial class HelpTopics
         builder.AppendLine();
         AppendWrapped(
             builder,
-            "A test invocation may also name where its runner writes its structured results: results, paths under "
-            + "the leg's build directory named as keepOnFailure names its own. Where the invocation does not pass, each "
-            + "file is read where it is - nothing is copied - and digested into the typed diagnostics and test failures "
-            + "the leg's entry carries, so a red result starts from what a file already holds instead of a log searched "
-            + "for it. A file is known by its own shape, never by its name: a TRX (dotnet test --logger trx, xUnit v3 "
-            + "--report-trx), the JUnit XML family (ctest --output-junit, gtest --gtest_output=xml, Catch2, jest-junit, "
-            + "vitest), Dart's --reporter json stream, and a SARIF log (csc -errorlog, gcc -fdiagnostics-format=sarif-file, "
-            + "clang -fdiagnostics-format=sarif) are read with their messages, their places, their stacks and their "
-            + "durations, masked as the log is; a file no form owns, or a path naming nothing, is said in the digest's "
-            + "unparsed lines, not refused - the failure may have been before the file was written. A pass reads "
-            + "nothing, as it keeps nothing. init seeds the arguments the shipped runners take for these files - ctest "
-            + "--output-junit, dotnet test --logger trx with --results-directory, dart test --file-reporter - each "
-            + "writing straight into the build directory, and names the files under results to match.");
+            "A test invocation may also name where its runner writes its structured results: results, paths under the "
+            + $"run's results directory, {{{LegPathNames.ResultsDirectory}}} - files or patterns, named as keepOnFailure names its own, "
+            + "and refused when config.json is read where one names anything else. Each run of the invocation has a results "
+            + "directory of its own, in the leg's records of the run (<run>/<leg>/results/<phase>/), made empty before the "
+            + $"runner starts; its args point the runner there through {{{LegPathNames.ResultsDirectory}}}, which nothing but a test "
+            + "invocation's args and results may name, so a file read there is that run's and never an earlier run's. Where "
+            + "the tests' failure is the leg's verdict, each file is read where it is - nothing is copied, nothing is read "
+            + "through a link, a file is read as a stream however large - and digested with every other into the typed "
+            + "diagnostics and test failures the leg's entry carries, so a red result starts from what a file already holds "
+            + "instead of a log searched for it. A file is known by its own shape, never by its name: a TRX (dotnet test "
+            + "--logger trx, xUnit v3 --report-trx), the JUnit XML family (ctest --output-junit, gtest --gtest_output=xml, "
+            + "Catch2, jest-junit, vitest), Dart's --reporter json stream, and a SARIF log in its 2.1 and 1.0 forms (csc "
+            + "-errorlog, gcc -fdiagnostics-format=sarif-file, clang -fdiagnostics-format=sarif) are read with their "
+            + "messages, their places, their stacks and their durations, masked as the phase's log is; a skipped test is no "
+            + "failure. A file no form owns, a path naming nothing, a file a crash cut short past what it gave, and a line of "
+            + "the Dart stream that is no event are said in the digest's unparsed lines, not refused - the failure may have "
+            + "been before the file was written - and where the files gave no finding, the phase's own log is read by its "
+            + "runner's parsers beside what they said. A pass reads nothing, as it keeps nothing. init seeds the arguments the "
+            + "shipped runners take for these files - ctest --output-junit, dotnet test --logger trx with --results-directory, "
+            + $"dart test --file-reporter - each writing into {{{LegPathNames.ResultsDirectory}}}, and names the files under results "
+            + "to match.");
         builder.AppendLine();
         builder.AppendLine("A leg on a host reached through WSL or ssh runs in that host's copy of its tree:");
         builder.AppendLine("the files the sync writes there from this tree, in a git repository of the host's own -");

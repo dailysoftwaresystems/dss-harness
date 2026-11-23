@@ -390,6 +390,7 @@ public sealed class PhaseRunner(
             // In the order the lines came, masked as each came, whichever stream carried each.
             LastLines = reading.LastLines,
             Uncontained = result.Uncontained,
+            WorkingDirectory = request.WorkingDirectory,
         };
     }
 

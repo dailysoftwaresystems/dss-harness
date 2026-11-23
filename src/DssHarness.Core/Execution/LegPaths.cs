@@ -120,6 +120,13 @@ public sealed record LegPaths
     public LegCompilers? Compilers { get; init; }
 
     /// <summary>
+    /// The directory this run of a test invocation has its runner write its structured results into, or
+    /// <see langword="null"/> outside one: made empty by the harness before the runner starts, inside the leg's own
+    /// records of the run, so a results file read there is this run's and no earlier one's.
+    /// </summary>
+    public string? ResultsDirectory { get; init; }
+
+    /// <summary>
     /// Where this run of the action writes while it runs, or <see langword="null"/> outside an
     /// action.
     /// </summary>
@@ -307,6 +314,12 @@ public static partial class LegPathNames
     /// <summary>Names the tree's <c>.harness-config</c> directory.</summary>
     public const string HarnessDirectory = "harnessDir";
 
+    /// <summary>
+    /// Names the directory a test invocation's run has its runner write its structured results into - made empty for
+    /// each run, so what is read there is that run's - in the invocation's <c>args</c> and <c>results</c> alone.
+    /// </summary>
+    public const string ResultsDirectory = "resultsDir";
+
     /// <summary>Names the leg, as <c>legs</c> declares it.</summary>
     public const string Leg = "leg";
 
@@ -389,7 +402,7 @@ public static partial class LegPathNames
     /// <remarks>A WSL item's distribution, <c>{distribution.&lt;item&gt;}</c>, is one of a family, by the item's name: see <see cref="IsOwned"/>.</remarks>
     public static IReadOnlyList<string> All { get; } =
     [
-        BuildDirectory, TreeRoot, HarnessDirectory,
+        BuildDirectory, TreeRoot, HarnessDirectory, ResultsDirectory,
         Leg, Os, Processor, Toolchain, Config, Variant, Host, RunId, Distribution,
         Product, CompilerC, CompilerCxx, ActionBuild, ActionArtifacts, StepBuild, RunArtifacts,
     ];
@@ -411,13 +424,13 @@ public static partial class LegPathNames
 
     /// <summary>
     /// The names whose value is a directory that is never under a leg's build directory: the tree, the harness's own
-    /// directory, and the run-of-an-action ones. A setting whose paths are relative to the build directory - a test
-    /// invocation's <c>keepOnFailure</c> - refuses an entry naming any of them, naming the key, when the configuration
-    /// is read.
+    /// directory, a test run's results directory, and the run-of-an-action ones. A setting whose paths are relative to the
+    /// build directory - a test invocation's <c>keepOnFailure</c> - refuses an entry naming any of them, naming the key,
+    /// when the configuration is read.
     /// </summary>
     public static IReadOnlyList<string> Directories { get; } =
     [
-        TreeRoot, HarnessDirectory, ActionBuild, ActionArtifacts, StepBuild, RunArtifacts,
+        TreeRoot, HarnessDirectory, ResultsDirectory, ActionBuild, ActionArtifacts, StepBuild, RunArtifacts,
     ];
 
     /// <summary>
@@ -806,6 +819,14 @@ public static partial class LegPathNames
                     HarnessExit.ConfigInvalid,
                     $"{setting} names '{{{Product}}}', and {paths.ProductProblem ?? "this leg has no build product"}.");
 
+            case ResultsDirectory when paths.ResultsDirectory is null:
+                // Never another directory in its place: a results file read anywhere but the one emptied for this run
+                // may be any earlier run's.
+                throw new HarnessException(
+                    HarnessExit.ConfigInvalid,
+                    $"{setting} names '{{{ResultsDirectory}}}', and only a run of a test invocation has a results directory, "
+                    + "made empty for it: name it in a test invocation's args or results.");
+
             case ActionBuild or ActionArtifacts or StepBuild or RunArtifacts
                 when paths.ActionBuild is null:
                 throw new HarnessException(
@@ -915,6 +936,7 @@ public static partial class LegPathNames
         BuildDirectory => paths.BuildDirectory,
         TreeRoot => paths.TreeRoot,
         HarnessDirectory => paths.HarnessDirectory,
+        ResultsDirectory => paths.ResultsDirectory,
         Product => paths.Product,
         ActionBuild => paths.ActionBuild,
         ActionArtifacts => paths.ActionArtifacts,

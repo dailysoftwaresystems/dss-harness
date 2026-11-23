@@ -236,7 +236,7 @@ public abstract class LegStepRunner(IHarnessContextLoader contextLoader, IHostPl
                 ["verdict"] = Verdicts.Display(verdict),
                 ["phase"] = phase,
                 ["detail"] = detail,
-                ["tail"] = new JsonArray([.. (digest is { Diagnostics: { Count: > 0 } } or { Failures: { Count: > 0 } } ? digest.Unparsed ?? [] : tail).Select(line => (JsonNode?)line)]),
+                ["tail"] = new JsonArray([.. (digest?.TailBeside(tail) ?? tail).Select(line => (JsonNode?)line)]),
                 ["digest"] = digest?.ForAModel(),
             };
 

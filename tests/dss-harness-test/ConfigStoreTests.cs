@@ -818,18 +818,24 @@ public sealed class ConfigStoreTests
     }
 
     /// <summary>
-    /// A test invocation's <c>results</c> names the files that hold the runner's structured results, under the leg's
-    /// build directory as the keep's paths are: what could never name one is refused when the file is read, before a
-    /// run has spent its build on results it could never digest.
+    /// A test invocation's <c>results</c> names the files that hold the runner's structured results, under the directory
+    /// the harness makes empty for each run of it, as the keep's paths are under the build directory: a path anywhere else
+    /// - the build directory, which every earlier run wrote too - could be any run's, and is refused when the file is read,
+    /// as a path that could never name a file is. The run's results directory is neither evidence under the build directory
+    /// nor where a runner starts.
     /// </summary>
     [Theory]
     [InlineData("""{ "projects": [ { "name": "main", "type": "cmake", "test": { "all": { "runner": "ctest", "successPattern": "x", "results": [] } } } ] }""", "test.all.results is given empty")]
-    [InlineData("""{ "projects": [ { "name": "main", "type": "cmake", "test": { "all": { "runner": "ctest", "successPattern": "x", "results": ["../out.trx"] } } } ] }""", "test.all.results entry '../out.trx' must be a relative path inside the build directory")]
-    [InlineData("""{ "projects": [ { "name": "main", "type": "cmake", "test": { "all": { "runner": "ctest", "successPattern": "x", "results": ["{buildDir}"] } } } ] }""", "test.all.results names '{buildDir}', which is the build directory itself")]
-    [InlineData("""{ "projects": [ { "name": "main", "type": "cmake", "test": { "windows": { "results": ["{treeDir}/out.trx"] } } } ] }""", "test.windows.results names '{treeDir}', which is not under the build directory")]
+    [InlineData("""{ "projects": [ { "name": "main", "type": "cmake", "test": { "all": { "runner": "ctest", "successPattern": "x", "results": ["../out.trx"] } } } ] }""", "test.all.results entry '../out.trx' must be a relative path inside the run's results directory")]
+    [InlineData("""{ "projects": [ { "name": "main", "type": "cmake", "test": { "all": { "runner": "ctest", "successPattern": "x", "results": ["{resultsDir}"] } } } ] }""", "test.all.results names '{resultsDir}', which is the run's results directory itself")]
+    [InlineData("""{ "projects": [ { "name": "main", "type": "cmake", "test": { "all": { "runner": "ctest", "successPattern": "x", "results": ["{resultsDir}/."] } } } ] }""", "test.all.results names '{resultsDir}/.', which is the run's results directory itself")]
+    [InlineData("""{ "projects": [ { "name": "main", "type": "cmake", "test": { "all": { "runner": "ctest", "successPattern": "x", "results": ["{buildDir}/*.trx"] } } } ] }""", "test.all.results names '{buildDir}', which is not under the run's results directory")]
+    [InlineData("""{ "projects": [ { "name": "main", "type": "cmake", "test": { "windows": { "results": ["{treeDir}/out.trx"] } } } ] }""", "test.windows.results names '{treeDir}', which is not under the run's results directory")]
     [InlineData("""{ "projects": [ { "name": "main", "type": "cmake", "test": { "all": { "runner": "ctest", "successPattern": "x", "results": ["out/**x"] } } } ] }""", "which holds '**' inside a segment")]
-    [InlineData("""{ "projects": [ { "name": "main", "type": "cmake", "test": { "all": { "runner": "ctest", "successPattern": "x", "results": ["{buildDir}/*.trx"] } } } ] }""", null)]
-    public void Load_HoldsResultsToTheKeepsOwnRules(string json, string? refused)
+    [InlineData("""{ "projects": [ { "name": "main", "type": "cmake", "test": { "all": { "runner": "ctest", "successPattern": "x", "keepOnFailure": ["{resultsDir}/junit.xml"] } } } ] }""", "test.all.keepOnFailure names '{resultsDir}', which is not under the build directory")]
+    [InlineData("""{ "projects": [ { "name": "main", "type": "cmake", "test": { "all": { "runner": "ctest", "successPattern": "x", "workingDirectory": "{resultsDir}/run" } } } ] }""", "test.all.workingDirectory names '{resultsDir}', which is where the runner writes its results, never where it starts")]
+    [InlineData("""{ "projects": [ { "name": "main", "type": "cmake", "test": { "all": { "runner": "ctest", "successPattern": "x", "results": ["{resultsDir}/*.trx", "junit.xml"] } } } ] }""", null)]
+    public void Load_HoldsResultsToTheRunsResultsDirectory(string json, string? refused)
     {
         if (refused is null)
         {

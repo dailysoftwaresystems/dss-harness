@@ -411,16 +411,10 @@ internal sealed class DotNetStackParser : IResultParser
             }
 
             var record = ExceptionRecordOf(lines, ref at, thrown);
-            failures.Add(new("dotnet", $"{record.Type}: {record.Message}", Exception: record, Outcome: "errored", File: TopInTreeOf(record.Stack), Line: TopLineOf(record.Stack)));
+            failures.Add(new("dotnet", $"{record.Type}: {record.Message}", Exception: record, Outcome: "errored"));
         }
 
         return ([], failures, []);
-
-        static string? TopInTreeOf(IReadOnlyList<StackFrame> stack)
-            => stack.FirstOrDefault(frame => frame.InTree)?.File ?? stack.FirstOrDefault()?.File;
-
-        static int? TopLineOf(IReadOnlyList<StackFrame> stack)
-            => (stack.FirstOrDefault(frame => frame.InTree) ?? stack.FirstOrDefault())?.Line;
     }
 
     /// <summary>One thrown error and its causes, read from <paramref name="at"/> on; <paramref name="at"/> lands past the record.</summary>
@@ -554,7 +548,7 @@ internal sealed class PythonStackParser : IResultParser
 
             if (thrown is { } record)
             {
-                failures.Add(new("python", $"{record.Type}: {record.Message}", File: record.Stack.FirstOrDefault()?.File, Exception: record, Outcome: "errored"));
+                failures.Add(new("python", $"{record.Type}: {record.Message}", Exception: record, Outcome: "errored"));
                 at = inner;
             }
         }

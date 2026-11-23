@@ -7289,68 +7289,8 @@ public sealed class FlowCoordinator
                 // Anything else is the engine's own fault, and ends the step 70 with what it was: the exception's own
                 // record - its type, its message, its stack and its causes - kept on the attempt's measure entry, for
                 // the report and the digest read.
-                _ = _messages.Writer.TryWrite(new Message(instance, FlowStepResult.Ended(passed: false, HarnessExit.InternalError, ex.Message) with { Thrown = ExceptionRecordOf(ex) }, null, Attempt: attempt));
+                _ = _messages.Writer.TryWrite(new Message(instance, FlowStepResult.Ended(passed: false, HarnessExit.InternalError, ex.Message) with { Thrown = Results.ExceptionRecord.Of(ex) }, null, Attempt: attempt));
             }
-        }
-    }
-
-    /// <summary>
-    /// One thrown error as the engine records it: the exception's type, its message, its whole stack held to the
-    /// frame bound with how many were cut, and its inner-exception chain followed to the cause bound - the harness's
-    /// own stack trace, with each frame marked by whether its file is inside the run's repository.
-    /// </summary>
-    /// <param name="thrown">The exception a step's runner threw that nothing of the engine's caught.</param>
-    private static Results.ExceptionRecord ExceptionRecordOf(Exception thrown)
-    {
-        ArgumentNullException.ThrowIfNull(thrown);
-
-        var stack = StackTrace.Held([.. thrown.StackTrace?.Split('\n').Select(line => line.TrimEnd('\r')).Where(line => line.Length > 0).Select(line => FrameOf(line)) ?? []], out _);
-
-        return new Results.ExceptionRecord(
-            thrown.GetType().FullName ?? thrown.GetType().Name,
-            thrown.Message,
-            stack,
-            CausesOf(thrown));
-
-        static IReadOnlyList<Results.ExceptionRecord> CausesOf(Exception outer)
-        {
-            var causes = new List<Results.ExceptionRecord>();
-
-            for (var inner = outer.InnerException; inner is not null && inner != outer && causes.Count < Results.ExceptionRecord.CauseBound; inner = inner.InnerException)
-            {
-                var held = StackTrace.Held([.. inner.StackTrace?.Split('\n').Select(line => line.TrimEnd('\r')).Where(line => line.Length > 0).Select(FrameOf) ?? []], out _);
-
-                causes.Add(new Results.ExceptionRecord(
-                    inner.GetType().FullName ?? inner.GetType().Name,
-                    inner.Message,
-                    held,
-                    []));
-            }
-
-            return causes;
-        }
-
-        static Results.StackFrame FrameOf(string line)
-        {
-            // The runtime's own form: `   at N.C.M() in path:line N` or `   at N.C.M()` - the frame's line kept whole,
-            // its place and symbol read out of it, each frame marked by whether its file is inside the run's tree.
-            var at = line.IndexOf(" at ", StringComparison.Ordinal);
-            var text = line.Trim();
-            var symbol = at >= 0 ? line[(at + 4)..] : text;
-            var inFile = symbol.IndexOf(" in ", StringComparison.Ordinal);
-
-            if (inFile < 0)
-            {
-                return new Results.StackFrame(text, Symbol: symbol.Contains('(') ? symbol[..symbol.IndexOf('(')] : symbol);
-            }
-
-            var place = symbol[(inFile + 4)..];
-            symbol = symbol[..inFile];
-            var colon = place.LastIndexOf(':');
-
-            return colon > 0 && int.TryParse(place[(colon + 1)..], System.Globalization.CultureInfo.InvariantCulture, out var line_)
-                ? new Results.StackFrame(text, place[..colon].Trim(), line_, Symbol: symbol.Contains('(') ? symbol[..symbol.IndexOf('(')] : symbol)
-                : new Results.StackFrame(text, Symbol: symbol.Contains('(') ? symbol[..symbol.IndexOf('(')] : symbol);
         }
     }
 

@@ -1,16 +1,16 @@
-using DssHarness.Core.Execution;
 using DssHarness.Core.Results;
 
 namespace DssHarness.Tests;
 
 /// <summary>
-/// The structured results a tool writes as data, read by their own shape: a TRX, a JUnit XML, Dart's JSON stream and
-/// a SARIF log each give the typed failures and diagnostics they hold - masked through the mask they are given - and
-/// a file no form owns is refused with a reason, never guessed at.
+/// The structured results a tool writes as data, read by their own shape as a stream: a TRX, a JUnit XML, Dart's JSON
+/// stream and a SARIF log each give the typed failures and diagnostics they hold, their places as the tool wrote them; a
+/// skipped test is no failure; a file no form owns is said with a reason, never guessed at; and a file a crash cut short,
+/// or of a shape the form does not hold, gives what it held before the break and says the break - never throws.
 /// </summary>
 public sealed class ResultFileTests
 {
-    /// <summary>A TRX as <c>dotnet test --logger trx</c> writes it: a failed result with its message and its stack.</summary>
+    /// <summary>A TRX as <c>dotnet test --logger trx</c> writes it: a failed result with its message and its stack, a passed one, a skipped one.</summary>
     private const string Trx = """
         <?xml version="1.0" encoding="utf-8"?>
         <TestRun id="2ce50b0c-cc33-4785-92a6-9e0f4f5a3a06" xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010" name="name@machine 2026-11-23 10:00:00">
@@ -43,13 +43,13 @@ public sealed class ResultFileTests
     /// <summary>Dart's JSON stream as <c>--file-reporter json</c> writes it: a failing test with its error, and an unowned error.</summary>
     private const string Dart = """
         {"type":"testStart","test":{"id":1,"name":"charge test","suiteID":0,"metadata":{},"url":"file:///d:/src/test/charge_test.dart","line":7,"column":3},"time":"2026-11-23T10:00:00.000Z"}
-        {"type":"testDone","testID":1,"result":"failure","hidden":false,"time":"2026-11-23T10:00:00.250Z"}
         {"type":"error","testID":1,"error":"Expected: 3\n  Actual: 4","stackTrace":"#0 main (d:/src/test/charge_test.dart:8:5)\n#1 _main (d:/src/test/charge_test.dart:3:9)","isFailure":true,"time":"2026-11-23T10:00:00.250Z"}
+        {"type":"testDone","testID":1,"result":"failure","hidden":false,"time":"2026-11-23T10:00:00.250Z"}
         {"type":"error","testID":null,"error":"Failed to load \"suite_test.dart\": compilation failed","stackTrace":null,"isFailure":false,"time":"2026-11-23T10:00:01.000Z"}
         {"type":"done","success":false,"time":"2026-11-23T10:00:01.000Z"}
         """;
 
-    /// <summary>A SARIF log as csc writes it with <c>-errorlog</c>.</summary>
+    /// <summary>A SARIF 2.1 log as csc writes it with <c>-errorlog:x,version=2.1</c>: an error, and a result naming no level.</summary>
     private const string Sarif = """
         {
           "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
@@ -66,9 +66,8 @@ public sealed class ResultFileTests
                 },
                 {
                   "ruleId": "CS0219",
-                  "level": "warning",
                   "message": { "text": "The variable 'y' is assigned but its value is never used" },
-                  "locations": [ { "physicalLocation": { "artifactLocation": { "uri": "file:///d:/src/Program.cs" }, "region": { "startLine": 20, "startColumn": 13 } } } ]
+                  "locations": [ { "physicalLocation": { "artifactLocation": { "uri": "src/Program.cs" }, "region": { "startLine": 20, "startColumn": 13 } } } ]
                 }
               ]
             }
@@ -76,127 +75,290 @@ public sealed class ResultFileTests
         }
         """;
 
+    /// <summary>A SARIF 1.0 log, the form csc writes with a bare <c>-errorlog</c>: the message a string, the place a result file.</summary>
+    private const string Sarif1 = """
+        {
+          "$schema": "http://json.schemastore.org/sarif-1.0.0",
+          "version": "1.0.0",
+          "runs": [
+            {
+              "tool": { "name": "Microsoft (R) Visual C# Compiler", "version": "4.8.0" },
+              "results": [
+                {
+                  "ruleId": "CS0103",
+                  "level": "error",
+                  "message": "The name 'x' does not exist in the current context",
+                  "locations": [ { "resultFile": { "uri": "file:///d:/src/Program.cs", "region": { "startLine": 12, "startColumn": 35 } } } ]
+                }
+              ]
+            }
+          ]
+        }
+        """;
+
+    /// <summary>
+    /// A TRX is read by its root, a result at a time: a failed one with its message, its stack read by the .NET frame
+    /// owner and its duration; a passed one and a skipped one - <c>NotExecuted</c> - are no failures. Its place is none
+    /// before the digest is read against a tree, which takes it from the top frame the tree holds.
+    /// </summary>
     [Fact]
-    public void ATrx_IsReadByItsRoot_ItsFailuresTheirMessagesStacksAndPlaces()
+    public void ATrx_IsReadByItsRoot_ItsFailuresTheirMessagesAndStacks_ASkipNoFailure()
     {
-        var digest = ResultFiles.Digest(Trx, null, out var problem);
+        var digest = ResultFiles.Digest(Trx, out var problem);
 
         Assert.Null(problem);
-        Assert.NotNull(digest);
-        Assert.Empty(digest!.Diagnostics);
-        Assert.Equal(2, digest.Failures.Count);
+        Assert.Empty(digest.Diagnostics);
 
-        var one = digest.Failures[0];
+        var one = Assert.Single(digest.Failures);
 
         Assert.Equal(("trx", "DssHarness.Tests.Demo.One", "One", "DssHarness.Tests.Demo", "failed"), (one.Framework, one.Id, one.Name, one.Class, one.Outcome));
         Assert.Equal(1.25, one.Duration);
-        Assert.Contains("Sub-string not found", one.Message, StringComparison.Ordinal);
-        Assert.Equal(2, one.Stack!.Count);
-        Assert.Equal(("D:/src/tests/Demo.cs", 12, "DssHarness.Tests.Demo.One()"), (one.File, one.Line, one.Stack[0].Symbol));
-        Assert.Equal(30, one.Stack[1].Line);
-
-        var notRun = digest.Failures[1];
-
-        Assert.Equal(("DssHarness.Tests.Demo.Three", "errored"), (notRun.Id, notRun.Outcome));
+        Assert.Equal("Assert.Contains() Failure: Sub-string not found\rCollection: [\"one\"]", one.Message);
+        Assert.Equal(
+            [("D:/src/tests/Demo.cs", (int?)12, "DssHarness.Tests.Demo.One()"), ("D:/src/tests/Runner.cs", 30, "DssHarness.Tests.Demo.Runner()")],
+            one.Stack.Select(frame => (frame.File, frame.Line, frame.Symbol)));
+        Assert.Null(one.File);
+        Assert.Equal((1, 0, 0, 0), (digest.Failed, digest.Errored, digest.TimedOut, digest.Crashed));
     }
 
+    /// <summary>
+    /// A TRX's other failing outcomes are read for what they are - an error errored, a timeout timed out, an abort and a
+    /// lost test host crashed - and a data-driven test by each of its rows, never by the row-holding result again.
+    /// </summary>
+    [Fact]
+    public void ATrxsOtherOutcomes_AreReadForWhatTheyAre_ADataDrivenTestByItsRows()
+    {
+        const string Outcomes = """
+            <TestRun xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010"><Results>
+              <UnitTestResult testName="N.Errored" outcome="Error" />
+              <UnitTestResult testName="N.Slow" outcome="Timeout" />
+              <UnitTestResult testName="N.Aborted" outcome="Aborted" />
+              <UnitTestResult testName="N.Lost" outcome="Disconnected" />
+              <UnitTestResult testName="N.Inconclusive" outcome="Inconclusive" />
+              <UnitTestResult testName="N.Rows" outcome="Failed">
+                <InnerResults>
+                  <UnitTestResult testName="N.Rows (1)" outcome="Passed" />
+                  <UnitTestResult testName="N.Rows (2)" outcome="Failed"><Output><ErrorInfo><Message>row two</Message></ErrorInfo></Output></UnitTestResult>
+                </InnerResults>
+              </UnitTestResult>
+            </Results></TestRun>
+            """;
+
+        var digest = ResultFiles.Digest(Outcomes, out var problem);
+
+        Assert.Null(problem);
+        Assert.Equal(
+            [("N.Errored", "errored"), ("N.Slow", "timedOut"), ("N.Aborted", "crashed"), ("N.Lost", "crashed"), ("N.Rows (2)", "failed")],
+            digest.Failures.Select(failure => (failure.Id, failure.Outcome)));
+        Assert.Equal("row two", digest.Failures[^1].Message);
+    }
+
+    /// <summary>A JUnit XML is read through the mutation arm's reader, a case at a time: its failed case said, its passing one not.</summary>
     [Fact]
     public void AJUnitReport_IsReadThroughTheMutatorArmsReader_ItsFailuresSaid()
     {
-        var digest = ResultFiles.Digest(JUnit, null, out var problem);
+        var digest = ResultFiles.Digest(JUnit, out var problem);
 
         Assert.Null(problem);
-        Assert.NotNull(digest);
 
-        var one = Assert.Single(digest!.Failures);
+        var one = Assert.Single(digest.Failures);
 
         Assert.Equal(("junit", "demo.one", "one", "demo", "failed", "the charge was wrong", 0.006), (one.Framework, one.Id, one.Name, one.Class, one.Outcome, one.Message, one.Duration));
     }
 
+    /// <summary>
+    /// Dart's stream is read a line at a time: a failing test with its error event as its message and its stack - a failed
+    /// expectation's stack the failure's own, held once - its place the test's URI as the tool wrote it, and an error no
+    /// test owns as a diagnostic.
+    /// </summary>
     [Fact]
     public void ADartStream_IsReadByItsLines_ItsFailuresAndItsUnownedErrors()
     {
-        var digest = ResultFiles.Digest(Dart, null, out var problem);
+        var digest = ResultFiles.Digest(Dart, out var problem);
 
         Assert.Null(problem);
-        Assert.NotNull(digest);
 
-        var one = Assert.Single(digest!.Failures);
+        var one = Assert.Single(digest.Failures);
 
-        Assert.Equal(("dart", "charge test", "failed"), (one.Framework, one.Id, one.Outcome));
-        Assert.Contains("Expected: 3", one.Message, StringComparison.Ordinal);
-        Assert.Equal(("d:/src/test/charge_test.dart", 7), (one.File, one.Line));
-        Assert.Equal(2, one.Stack!.Count);
-        Assert.Equal(("d:/src/test/charge_test.dart", 8, "main"), (one.Stack[0].File, one.Stack[0].Line, one.Stack[0].Symbol));
+        Assert.Equal(("dart", "charge test", "failed", "Expected: 3\n  Actual: 4"), (one.Framework, one.Id, one.Outcome, one.Message));
+        Assert.Equal(("file:///d:/src/test/charge_test.dart", (int?)7), (one.File, one.Line));
+        Assert.Equal([("d:/src/test/charge_test.dart", (int?)8, "main"), ("d:/src/test/charge_test.dart", 3, "_main")], one.Stack.Select(frame => (frame.File, frame.Line, frame.Symbol)));
         Assert.Null(one.Exception);
 
         var unowned = Assert.Single(digest.Diagnostics);
 
-        Assert.Equal(("dart", "error"), (unowned.Tool, unowned.Severity));
-        Assert.Contains("compilation failed", unowned.Message, StringComparison.Ordinal);
+        Assert.Equal(("dart", "error", "Failed to load \"suite_test.dart\": compilation failed"), (unowned.Tool, unowned.Severity, unowned.Message));
     }
 
+    /// <summary>
+    /// A Dart test that met an error after it ended in success failed, as the protocol says: it is read as errored, with
+    /// that error its message, in the order it was found failed - after one that failed as it ended.
+    /// </summary>
     [Fact]
-    public void ASarifLog_IsReadByItsRuns_ItsDiagnosticsTyped()
+    public void ADartTestThatMetAnErrorAfterItPassed_Failed()
     {
-        var digest = ResultFiles.Digest(Sarif, null, out var problem);
+        const string Late = """
+            {"type":"testStart","test":{"id":1,"name":"keeps records","url":"file:///d:/src/test/store_test.dart","line":3},"time":"t"}
+            {"type":"testDone","testID":1,"result":"success","hidden":false,"time":"t"}
+            {"type":"testStart","test":{"id":2,"name":"charges","url":"file:///d:/src/test/charge_test.dart","line":7},"time":"t"}
+            {"type":"testDone","testID":2,"result":"failure","hidden":false,"time":"t"}
+            {"type":"error","testID":1,"error":"This test failed after it had already completed.","stackTrace":"","isFailure":false,"time":"t"}
+            """;
+
+        var digest = ResultFiles.Digest(Late, out var problem);
 
         Assert.Null(problem);
-        Assert.NotNull(digest);
-        Assert.Empty(digest!.Failures);
+        Assert.Equal([("charges", "failed", (string?)null), ("keeps records", "errored", "This test failed after it had already completed.")], digest.Failures.Select(failure => (failure.Id, failure.Outcome, failure.Message)));
+        Assert.Equal("error", digest.Failures[1].Exception!.Type);
+    }
+
+    /// <summary>
+    /// A Dart stream a stop cut short gives every failure before its torn line and says the line - counted, the first
+    /// named - as it does an event whose test it cannot name; the rest of the stream is read on.
+    /// </summary>
+    [Fact]
+    public void ADartStreamCutShort_GivesWhatItHeld_AndSaysItsTornLines()
+    {
+        var torn = string.Join("\n", Dart.Split('\n').Take(3)) + "\n{\"type\":\"testStart\",\"test\":{\"id\":\"two\"}}\n{\"type\":\"testDone\",\"testID\":2,\"res";
+
+        var digest = ResultFiles.Digest(torn, out var problem);
+
+        Assert.Equal("2 of its lines are no event of the stream, the first line 4", problem);
+        Assert.Equal(["charge test"], digest.Failures.Select(failure => failure.Id));
+    }
+
+    /// <summary>
+    /// A SARIF 2.1 log is read by its runs, each result a diagnostic: the driver's name, the level - warning where it names
+    /// none, as SARIF says - the rule, the message, its place as the tool wrote it, a file URI among them, and its range.
+    /// </summary>
+    [Fact]
+    public void ASarifLog_IsReadByItsRuns_ItsDiagnosticsTyped_ALevelLeftOutAWarning()
+    {
+        var digest = ResultFiles.Digest(Sarif, out var problem);
+
+        Assert.Null(problem);
+        Assert.Empty(digest.Failures);
         Assert.Equal(2, digest.Diagnostics.Count);
 
         var one = digest.Diagnostics[0];
 
-        Assert.Equal(("Microsoft Visual C# Compiler", "error", "CS0103", "d:/src/Program.cs", 12, 35, 12, 36), (one.Tool, one.Severity, one.Code, one.File, one.Line, one.Column, one.EndLine, one.EndColumn));
-        Assert.Contains("does not exist", one.Message, StringComparison.Ordinal);
-        Assert.Equal(digest.Diagnostics[0], digest.First);
+        Assert.Equal(("Microsoft Visual C# Compiler", "error", "CS0103", "The name 'x' does not exist in the current context.", "file:///d:/src/Program.cs", (int?)12, (int?)35, (int?)12, (int?)36), (one.Tool, one.Severity, one.Code, one.Message, one.File, one.Line, one.Column, one.EndLine, one.EndColumn));
+        Assert.Same(digest.Diagnostics[0], digest.First);
 
-        var warning = digest.Diagnostics[1];
+        var unlevelled = digest.Diagnostics[1];
 
-        Assert.Equal("warning", warning.Severity);
-        Assert.Null(warning.EndLine);
+        Assert.Equal(("warning", "src/Program.cs", (int?)20, (int?)null), (unlevelled.Severity, unlevelled.File, unlevelled.Line, unlevelled.EndLine));
+        Assert.Equal((1, 1, 0), (digest.Errors, digest.Warnings, digest.Notes));
     }
 
-    /// <summary>Text read from a results file is masked through the mask it is given: a copied file is not masked as a log line is.</summary>
+    /// <summary>A SARIF 1.0 log - csc's own form - is read as the 2.1 one is: its tool's name, its message as a string, its place in a result file.</summary>
     [Fact]
-    public void AResultsFile_IsMaskedThroughTheMaskItIsGiven()
+    public void ASarif1Log_IsReadAsThe21OneIs()
     {
-        var digest = ResultFiles.Digest(JUnit.Replace("the charge was wrong", "the key sk-secret-one was wrong"), new FixedMask("***"), out _);
+        var digest = ResultFiles.Digest(Sarif1, out var problem);
 
-        Assert.NotNull(digest);
-        Assert.Contains("the key *** was wrong", Assert.Single(digest!.Failures).Message, StringComparison.Ordinal);
+        Assert.Null(problem);
+
+        var one = Assert.Single(digest.Diagnostics);
+
+        Assert.Equal(("Microsoft (R) Visual C# Compiler", "error", "CS0103", "The name 'x' does not exist in the current context", "file:///d:/src/Program.cs", (int?)12, (int?)35), (one.Tool, one.Severity, one.Code, one.Message, one.File, one.Line, one.Column));
     }
 
-    /// <summary>A file no form owns is refused with a reason, never guessed at: no XML and no JSON, an XML root no form owns, JSON of no form's shape.</summary>
+    /// <summary>
+    /// A SARIF member of another shape than the form's is read as absent, never thrown over: a level that is a number is
+    /// the default, a line that is text names no line, a message that is a number says none - and a result saying no
+    /// message is said among the unparsed lines as one not held, never dropped unsaid.
+    /// </summary>
+    [Fact]
+    public void ASarifMemberOfAnotherShape_IsReadAsAbsent_NeverThrownOver()
+    {
+        const string Shapeless = """
+            {"version":"2.1.0","runs":[{"tool":{"driver":"csc"},"results":[
+              {"ruleId":"CS1","level":3,"message":{"text":"one"},"locations":[{"physicalLocation":{"region":{"startLine":"twelve"}}}]},
+              {"ruleId":7,"message":42}
+            ]}]}
+            """;
+
+        var digest = ResultFiles.Digest(Shapeless, out var problem);
+
+        Assert.Null(problem);
+
+        var one = Assert.Single(digest.Diagnostics);
+
+        Assert.Equal(("sarif", "warning", "CS1", "one", (string?)null, (int?)null), (one.Tool, one.Severity, one.Code, one.Message, one.File, one.Line));
+        Assert.Equal(["sarif: (no message) - not held, for a diagnostic says no message"], digest.Unparsed);
+    }
+
+    /// <summary>A results file a crash cut short gives every finding before the break and says where it broke - an XML form as a JSON one - never throws.</summary>
+    [Fact]
+    public void AResultsFileCutShort_GivesWhatItHeld_AndSaysTheBreak()
+    {
+        var xml = ResultFiles.Digest(JUnit[..JUnit.IndexOf("<testcase classname=\"demo\" name=\"two\"", StringComparison.Ordinal)], out var xmlProblem);
+
+        Assert.Equal(["demo.one"], xml.Failures.Select(failure => failure.Id));
+        Assert.StartsWith("it is no XML: ", xmlProblem, StringComparison.Ordinal);
+
+        var json = ResultFiles.Digest(Sarif[..(Sarif.Length / 2)], out var jsonProblem);
+
+        Assert.Empty(json.Diagnostics);
+        Assert.StartsWith("it is no whole JSON document: ", jsonProblem, StringComparison.Ordinal);
+    }
+
+    /// <summary>A file no form owns is said with its reason, never guessed at: no XML and no JSON, an XML root no form owns, JSON of no form's shape.</summary>
     [Theory]
     [InlineData("some output a tool printed", "it is no XML and no JSON")]
-    [InlineData("<report><case name='one'/></report>", "none of the results forms owns it")]
-    [InlineData("{\"answer\": 42}", "none of the results forms owns it")]
-    public void AFileNoFormOwns_IsRefusedWithItsReason(string text, string because)
+    [InlineData("<report><case name='one'/></report>", "its root is 'report', and none of the results forms owns it")]
+    [InlineData("{\"answer\": 42}", "it is JSON, and none of the results forms owns it")]
+    public void AFileNoFormOwns_IsSaidWithItsReason(string text, string because)
     {
-        var digest = ResultFiles.Digest(text, null, out var problem);
+        var digest = ResultFiles.Digest(text, out var problem);
 
-        Assert.Null(digest);
-        Assert.Contains(because, problem, StringComparison.Ordinal);
+        Assert.False(digest.HoldsAFinding);
+        Assert.Equal(because, problem);
     }
 
     /// <summary>A results file that declares a document type is refused as the mutation arm's reports are: no reader reaches for other files.</summary>
     [Fact]
     public void AResultsFileDeclaringADocumentType_IsRefused()
     {
-        var digest = ResultFiles.Digest("<!DOCTYPE testsuites [<!ENTITY xxe \"file\">]><testsuites/>", null, out var problem);
+        var digest = ResultFiles.Digest("<!DOCTYPE testsuites [<!ENTITY xxe \"file\">]><testsuites/>", out var problem);
 
-        Assert.Null(digest);
-        Assert.NotNull(problem);
+        Assert.False(digest.HoldsAFinding);
+        Assert.Equal("it declares a document type, which no report needs and this never reads", problem);
     }
 
-    /// <summary>One mask over fixed text, for what the reading does with it.</summary>
-    private sealed class FixedMask(string replacement) : ILineMask
+    /// <summary>
+    /// What a test invocation's results name in its run's results directory is read as one digest - every file's findings
+    /// gathered before the bounds, so the counts are over all of them - through the mask the phase's log is written
+    /// through, and what a path could not give said beside it, masked too.
+    /// </summary>
+    [Fact]
+    public void AnInvocationsResults_AreReadAsOneDigest_ThroughThePhasesMask()
     {
-        public string Redact(string? text)
-            => text?.Replace("sk-secret-one", replacement, StringComparison.Ordinal) ?? string.Empty;
+        const string Secret = "sk-secret-one";
+        using var temp = new TempDirectory();
+        var results = temp.Combine("results");
+        temp.WriteFile(Path.Combine("results", "a.xml"), Report("one", $"saw {Secret}"));
+        temp.WriteFile(Path.Combine("results", "b.xml"), Report("two", "plain"));
+        var paths = new Core.Execution.LegPaths(temp.Path, temp.Combine("build")) { ResultsDirectory = results };
 
-        public int Cut(string text) => text.Length;
+        var digest = Core.Testing.TestResults.Read(
+            new HarnessFactory().FileSystem,
+            ["{resultsDir}/*.xml", $"{Secret}.xml"],
+            paths,
+            results,
+            new Masking(Secret),
+            TestContext.Current.CancellationToken);
+
+        Assert.NotNull(digest);
+        Assert.Equal(
+            [("demo.one", "saw ***"), ("demo.two", "plain")],
+            digest.Failures.Select(failure => (failure.Id, failure.Message)));
+        Assert.Equal(2, digest.Failed);
+        Assert.Equal(["results: '***.xml' named no file"], digest.Unparsed);
+
+        static string Report(string name, string message) => $"""
+            <testsuites><testsuite name="demo"><testcase classname="demo" name="{name}"><failure message="{message}"/></testcase></testsuite></testsuites>
+            """;
     }
 }

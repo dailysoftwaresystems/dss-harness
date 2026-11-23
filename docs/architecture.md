@@ -9721,14 +9721,22 @@ shapes (`Results\ResultDigest.cs`) and one of the parsers that read them
 severity, its code, its message, its file, line and column, its project, how many times it was
 printed again (once per translation unit or per target framework, folded into one), the chain that
 led to it as `StackFrame`s and the line range of its log - and a `TestFailure` is a failed test's
-identity, its assertion, its duration, its outcome (`failed`, `errored`, `timedOut`, `crashed`)
-and, where the failure is a thrown error, its `ExceptionRecord`: type, message, stack and the
-cause chain. A `StackFrame` carries its line as printed, its place, its symbol, its kind (`call`,
-`include`, `instantiation`, `macro`, `async`) and whether its file is inside the tree; a stack is
-held to 64 frames - the first 48 and the last 16, the middle cut and said, which the log range
-still holds - and a cause chain to 8. A `ResultDigest` folds both, counts each by severity and
-outcome, keeps the first error in the order the tool met it, and says whether output the parsers
-did not understand remains: never a guess. The built-in parsers read the .NET and C compilers
+identity, its assertion, its duration, its outcome (`failed`, `errored`, `timedOut`, `crashed`),
+its log range and, where the failure is a thrown error, its `ExceptionRecord`: type, message, stack
+and the cause chain, each cause a record nested under the one it caused - the failure's stack held
+there, never twice. A `StackFrame` carries its line as printed, its place, its symbol, its kind
+(`call`, `include`, `instantiation`, `macro`, `async`) and whether the tree holds its file. A
+`ResultDigest` is made in one place (`ResultDigest.Gathering`), a finding at a time in the order
+the output met them, and applies every bound there, each said: a diagnostic printed again is
+folded into the one held where it stands, its count grown, so the first error is the first the
+tool met and the fold is linear; the first 50 diagnostics of each severity are held - an error is
+never displaced by warnings - with the first 50 failures and the first 50 unparsed lines, and the
+rest are counted by severity, by outcome, by code and by file over the whole output; every stack
+is held to 64 frames - the first 48 and the last 16, the middle cut and its count kept
+(`stackCut`), which the log range still holds - and every cause chain to 8 deep, the records below
+counted (`causesCut`); and a finding that is not one a digest holds - a severity, an outcome or a
+line no tool means - is said among the unparsed lines with why, never held and never dropped
+unsaid. A digest says whether output the parsers did not understand remains: never a guess. The built-in parsers read the .NET and C compilers
 (MSBuild/csc, MSVC, gcc with its include chain, clang), CMake, Ninja's `FAILED:` block, the
 linkers, tsc, the Dart analyser, the stack traces the runtimes print (.NET with its
 inner-exception marker, the JVM with `Caused by:`, Python's traceback, V8's, Dart's `#n` frames,
@@ -9740,45 +9748,63 @@ pattern with an end, read as a stack - compiled and its groups checked at load
 (`Configuration\ProblemMatcher.cs`), each pattern by `LinearRegex` as every pattern of the file is,
 so one holding a construct that matcher lacks refuses the file, naming the matcher, the pattern and
 the construct. Where a step's runner throws an error the engine did not expect, the attempt's
-measure entry keeps it whole (`FlowStepAttempt.Exception`, built from the
-live exception's own stack, each frame marked by whether its file is inside the run's tree).
+measure entry keeps its record (`FlowStepAttempt.Exception`, `ExceptionRecord.Of`): the live
+exception's own stack read by the one owner of the .NET frame form, each inner exception nested
+under the one it caused, held to the bounds every record is with its cuts counted - its frames the
+tool's own, in no tree of the run's.
 
-Before any log line is parsed, what a tool wrote as data is read (`Results\ResultFiles.cs`): a
-test invocation names the files under `test.results`, paths under the leg's build directory held
-to the same rules the keep's are, and where the invocation does not pass each is read where it is
-(`Testing\TestResults.cs`) - never copied - and digested with every other onto the leg's entry
-(`LegEntry.Digest`). A file is known by its own shape, never by its name: a TRX by its `TestRun`
-root (each failed `UnitTestResult` with its `ErrorInfo` message and its stack, parsed by the one
-owner of the .NET frame form), a JUnit XML by the mutation arm's reader (`JUnitReport`, extended to
-read the message, file, line, time and outcome of a failed case - GoogleTest's attributes,
-Catch2's summaries, doctest's `path(line):` places - its DTD guard kept), Dart's JSON reporter
-stream by its `type`-carrying lines (a failing test with its error event as its message and its
-`#n` stack, an error no test owns as a diagnostic), and a SARIF log by its runs (each result a
-diagnostic: the driver's name, the level, the rule, the message, the place and its range). Text
-read from these files is masked through the mask it is given, for a copied file is not masked as a
-log line is. A path naming nothing, or a file no form owns, is said in the digest's unparsed
-lines - never refused, for the failure may have been before the file was written. `init` seeds the
-arguments the shipped runners take for these files where they take them: `ctest --output-junit`,
-`dotnet test --logger trx` with `--results-directory`, `dart test --file-reporter` - each writing
-straight into the build directory, which exists, and each named under `results` to match
-(`Configuration\DefaultConfigFactory.cs`).
+Before any log line is parsed, what a tool wrote as data is read (`Results\ResultFiles.cs`). Each
+run of a test invocation has a results directory of its own, `{resultsDir}`
+(`Testing\TestResults.cs`, `<run>/<leg>/results/<phase>/`), made empty before its runner starts,
+so a results file read there is that run's and never an earlier one's: its args point the runner
+there, `test.results` names paths under it - refused at load where an entry names anything else -
+and nothing but a test invocation's args and results may name it. The files one names are found
+by the one owner of an invocation's declared paths (`Testing\DeclaredFiles.cs`, which the keep
+finds its files by too: patterns over one listing, never through a link), and where the tests'
+failure is the leg's verdict each is read where it is - never copied, as a stream - and digested
+with every other onto the leg's entry (`LegEntry.Digest`), every file's findings gathered before
+the digest's bounds apply. A file is known by its own shape, never by its name: a TRX by its
+`TestRun` root, a test result at a time (each that failed - `Failed`, `Error`, `Timeout`,
+`Aborted`, `Disconnected` - with its `ErrorInfo` message and its stack, parsed by the one owner of
+the .NET frame form, a data-driven test by its rows; a skipped one is no failure), a JUnit XML by
+the mutation arm's reader a case at a time (`JUnitReport`, which reads the message, file, line,
+time and outcome of a failed case - GoogleTest's attributes, Catch2's summaries, doctest's
+`path(line):` places - through its one reader that takes no document type), Dart's JSON reporter
+stream a line at a time by its `type`-carrying lines (a failing test with its error event as its
+message and its `#n` stack, an error no test owns as a diagnostic), and a SARIF log by its runs in
+its 2.1 and 1.0 forms (each result a diagnostic: the driver's name, the level - `warning` where it
+names none - the rule, the message, the place and its range). A member of another shape than the
+form's is read as absent; a file a crash cut short gives every finding before the break and says
+the break, and a line of the Dart stream that is no event is counted and the first said. Text read
+from these files is masked as the phase's log is, through the one mask its log is written through
+(`ResultDigest.MaskedBy`), every text a digest holds. A path naming nothing, or a file no form
+owns, is said in the digest's unparsed lines - never refused, for the failure may have been before
+the file was written. `init` seeds the arguments the shipped runners take for these files where
+they take them: `ctest --output-junit`, `dotnet test --logger trx` with `--results-directory`,
+`dart test --file-reporter` - each writing into `{resultsDir}`, and each named under `results` to
+match (`Configuration\DefaultConfigFactory.cs`).
 
 Where a digest goes (`LegStepRunner.Output`, `Execution\LedgerReport.cs`, `Orchestration\Flow\FlowChecks.cs`): every
 red entry of a leg step's output carries one, in `digest`, said for a model - the first error whole with its stack
 rendered to the frames inside the tree (the crossing frame on each side, a line for each run left out, which module
 held them), the next distinct errors to four as one line each, every test failure of the four with its stack, the rest
-counted by code and by file, the lines no parser held - and where the digest holds typed errors the entry's tail
-holds only those lines, for a model reads either the typed errors or the raw lines, never both repeated. The cut is a
-rule of rendering, never of the record: the ledger's `--json` carries the whole digest typed
-(`ResultDigest.Document`), the text ledger says each red leg's first error under its verdict, before the units and
-the tails, and `{run.red}` says it on each red line. A build's failing phase is digested by the parsers its
-toolchain chose and a test's by its runner's, with the configured matchers everywhere
-(`Results\PhaseParsers.cs`, the one owner of the choice; a test's structured results files are read first, and its
-console only where they gave nothing); every frame is marked by whether its file is inside the tree where the digest
-is made (`ResultDigest.WithInTree`, the one place a frame is marked), read by its own text in the form it is written
-in (`PlatformPaths.IsInsideAsWritten`) and never by the reading machine's rules - a Windows path a tool wrote is in
-no POSIX tree, a runtime's own module (`dart:`, `node:`) in none, a `file:` URI the path it names, and the same answer
-comes on every machine.
+counted by code and by file, the lines no parser held - and where the digest holds an error or a failure the entry's
+tail holds only those lines, for a model reads either the typed errors or the raw lines, never both repeated; a digest
+of warnings alone leaves the tail as it is (`ResultDigest.TailBeside`). The four is a rule of rendering, never of the
+record: the ledger's `--json` carries the digest typed (`ResultDigest.Document`) with its bounds said - the first
+problem, each stack's and each cause chain's cut, how many diagnostics, failures and unparsed lines the bound left out,
+and the counts by code and by file over the whole output - the text ledger says each red leg's first error under its
+verdict, before the units and the tails, and `{run.red}` says it on each red line. A phase is digested in one place
+(`Results\PhaseDigest.cs`) wherever its failure is the leg's verdict - a moving tree's or a shared directory's says
+nothing of the code - a build's failing phase by the parsers its toolchain chose and a test's by its runner's, with the
+configured matchers everywhere (`Results\PhaseParsers.cs`, the one owner of the choice): a test's structured results
+files first, and its log only where they gave no finding, what they could not give said beside it. Every place is then
+read against the tree once (`ResultDigest.WithInTree`): a path - relative ones read from the directory the tool ran in
+- is the tree's where the tree holds that file, named relative to its root with `/`, read by its own text in the form
+it is written in (`PlatformPaths.RelativeAsWritten`) and never by the reading machine's rules - a Windows path a tool
+wrote is in no POSIX tree, a runtime's own module (`dart:`, `node:`) in none, a bare name the tree has no file of
+(`Thread.java`) in none, a `file:` URI the path it names - and a failure's place is the top frame of its stack the tree
+holds, where one is.
 
 The model surfaces read it the same way: `mend.md` starts from the digest's `first` - "the log lines its `log` names
 are one read away" in place of "read the output and find the first thing that went wrong" - `diagnose.md` and

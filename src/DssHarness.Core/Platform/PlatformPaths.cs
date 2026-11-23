@@ -150,38 +150,65 @@ public static class PlatformPaths
     /// </remarks>
     /// <param name="root">The directory, as the machine that holds it writes it.</param>
     /// <param name="path">The path, as whatever wrote it wrote it.</param>
-    public static bool IsInsideAsWritten(string root, string path)
+    public static bool IsInsideAsWritten(string root, string path) => RelativeAsWritten(root, path) is not null;
+
+    /// <summary>
+    /// Where <paramref name="path"/> is inside <paramref name="root"/>, read as <see cref="IsInsideAsWritten"/> reads the
+    /// two: its parts below the root's, <c>.</c> and <c>..</c> resolved, joined by <c>/</c> - the one spelling of a place
+    /// in the tree on every machine - or <see langword="null"/> where it is not strictly inside. A relative path is read
+    /// against <paramref name="from"/>, the directory the tool that wrote it ran in, where one is given - so
+    /// <c>../../src/a.c</c> a compiler wrote in the build directory is the tree's <c>src/a.c</c> - and against the root
+    /// where none is.
+    /// </summary>
+    /// <param name="root">The directory, as the machine that holds it writes it.</param>
+    /// <param name="path">The path, as whatever wrote it wrote it.</param>
+    /// <param name="from">The directory a relative path is read from, as the machine that holds it writes it; <see langword="null"/> for the root.</param>
+    public static string? RelativeAsWritten(string root, string path, string? from = null)
     {
         ArgumentNullException.ThrowIfNull(root);
         ArgumentNullException.ThrowIfNull(path);
 
         if (AsAPath(path) is not { } named || named.Length == 0)
         {
-            return false;
+            return null;
         }
 
         if (!IsRootedOnAnyPlatform(named))
         {
-            return Resolved(named, windows: true, relative: true) is { Count: > 0 };
+            if (from is null)
+            {
+                return Resolved(named, windows: true, relative: true) is { Count: > 0 } parts ? string.Join('/', parts) : null;
+            }
+
+            // Joined by its text, the directory's own form deciding how the whole is parted: a drive or a share parts at
+            // either slash, a leading '/' at '/' alone.
+            named = $"{from.TrimEnd('/', '\\')}/{named}";
+
+            if (!IsRootedOnAnyPlatform(named))
+            {
+                return null;
+            }
         }
 
         var form = FormOf(named);
 
         if (form is null || form != FormOf(root))
         {
-            return false;
+            return null;
         }
 
         var windows = form == PathForm.Windows;
 
-        if (Resolved(root, windows, relative: false) is not { } rootParts || Resolved(named, windows, relative: false) is not { } parts || parts.Count <= rootParts.Count)
+        if (Resolved(root, windows, relative: false) is not { } rootParts || Resolved(named, windows, relative: false) is not { } below || below.Count <= rootParts.Count)
         {
-            return false;
+            return null;
         }
 
         var comparison = windows ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
 
-        return rootParts.Select((part, at) => string.Equals(part, parts[at], comparison)).All(same => same);
+        return rootParts.Select((part, at) => string.Equals(part, below[at], comparison)).All(same => same)
+            ? string.Join('/', below.Skip(rootParts.Count))
+            : null;
     }
 
     /// <summary>The two forms a rooted path is written in.</summary>

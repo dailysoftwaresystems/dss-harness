@@ -2147,71 +2147,31 @@ public static partial class HarnessConfigValidator
                 [CoreCounts.PlaceholderName],
                 config.WslDistros);
 
-            // What a run that did not pass keeps of the files its build directory holds, as evidence beside its verdict.
-            // Given empty it is refused as every such list is; an entry that is not a path inside the build directory,
-            // or names a directory besides it, could never name evidence, and saying so here names the line to fix
-            // before a run has spent its build on it.
+            // What a run that did not pass keeps of the files its build directory holds, as evidence beside its verdict,
+            // and where it reads the structured results its runner wrote: each a list of paths under one directory, held
+            // to one rule. Given empty it is refused as every such list is; an entry that is not a path inside its
+            // directory, or names a directory besides it, could never name what it is for, and saying so here names the
+            // line to fix before a run has spent its build on it.
             RefuseGivenEmpty(invocation.KeepOnFailure, $"{setting}.keepOnFailure", "name the files a failed run keeps as evidence", "no evidence kept", problems);
-            RequireRelativePaths(invocation.KeepOnFailure ?? [], $"{setting}.keepOnFailure", problems, inside: "the build directory");
-
-            foreach (var kept in invocation.KeepOnFailure ?? [])
-            {
-                if (Escapes(kept))
-                {
-                    continue;
-                }
-
-                if (NamesTheBuildDirectory(kept))
-                {
-                    problems.Add($"{setting}.keepOnFailure names '{kept}', which is the build directory itself; name a path inside it");
-                }
-                else if (BeyondTheBuildDirectory(kept) is { } beyond)
-                {
-                    problems.Add($"{setting}.keepOnFailure names '{{{beyond}}}', which is not under the build directory; name a path inside it");
-                }
-                else if (GlobPattern.Problem(kept) is { } problem)
-                {
-                    // Asked of the entry whether it holds a wildcard or not: the misspelling rule is one the whole
-                    // file's path lists are held to, and the name the keep reports is the entry as written.
-                    problems.Add($"{setting}.keepOnFailure names '{kept}', which {problem}");
-                }
-            }
-
-            CheckPlaceholders(invocation.KeepOnFailure, $"{setting}.keepOnFailure", problems);
+            DeclaredPathsUnder(invocation.KeepOnFailure, $"{setting}.keepOnFailure", LegPathNames.BuildDirectory, "the build directory", problems);
 
             if (invocation.KeepOnFailureCapBytes is < 1)
             {
                 problems.Add($"{setting}.keepOnFailureCapBytes must be at least 1 byte, found {invocation.KeepOnFailureCapBytes}");
             }
 
-            // What a run that did not pass reads where the runner wrote its structured results: the same paths the keep
-            // names, held to the same rules, for a file outside the build directory could never be named by an
-            // invocation whose own work writes inside it.
+            // A results file is read only from the directory the harness makes empty for each run of the invocation, so
+            // what is read is that run's: a path anywhere else - the build directory a runner's earlier runs wrote too -
+            // could be any run's.
             RefuseGivenEmpty(invocation.Results, $"{setting}.results", "name the files that hold the runner's structured results", "no results read", problems);
-            RequireRelativePaths(invocation.Results ?? [], $"{setting}.results", problems, inside: "the build directory");
+            DeclaredPathsUnder(invocation.Results, $"{setting}.results", LegPathNames.ResultsDirectory, "the run's results directory", problems);
 
-            foreach (var named in invocation.Results ?? [])
+            // The directory a runner starts in is never where its results go: the results directory is made for what the
+            // runner writes, and refused where nothing makes one.
+            if (invocation.WorkingDirectory is { } start && LegPathNames.NamesIn(start).Contains(LegPathNames.ResultsDirectory, StringComparer.Ordinal))
             {
-                if (Escapes(named))
-                {
-                    continue;
-                }
-
-                if (NamesTheBuildDirectory(named))
-                {
-                    problems.Add($"{setting}.results names '{named}', which is the build directory itself; name a path inside it");
-                }
-                else if (BeyondTheBuildDirectory(named) is { } beyond)
-                {
-                    problems.Add($"{setting}.results names '{{{beyond}}}', which is not under the build directory; name a path inside it");
-                }
-                else if (GlobPattern.Problem(named) is { } problem)
-                {
-                    problems.Add($"{setting}.results names '{named}', which {problem}");
-                }
+                problems.Add($"{setting}.workingDirectory names '{{{LegPathNames.ResultsDirectory}}}', which is where the runner writes its results, never where it starts; name another directory");
             }
-
-            CheckPlaceholders(invocation.Results, $"{setting}.results", problems);
         }
 
         // What runs on a platform is its own section merged over 'all', field by field. Every
@@ -2431,19 +2391,53 @@ public static partial class HarnessConfigValidator
         => string.IsNullOrWhiteSpace(path) || PlatformPaths.IsRootedOnAnyPlatform(path) || PlatformPaths.ClimbsOut(path);
 
     /// <summary>
-    /// The first directory name <paramref name="entry"/> names that is never under a leg's build directory, or
-    /// <see langword="null"/>: the keep copies only what the build directory holds, so a directory besides it names
-    /// evidence no run could ever keep.
+    /// Records a problem for every entry of <paramref name="entries"/> that names no path inside the directory
+    /// <paramref name="directory"/> names - blank, absolute, climbing out, the directory itself, another of the leg's
+    /// directories, or a pattern that matches nothing it looks like it matches - and for every name in braces nothing
+    /// fills in: the one rule of a test invocation's lists of paths under one directory, <c>keepOnFailure</c>'s under the
+    /// build directory and <c>results</c>' under the run's results directory.
     /// </summary>
-    private static string? BeyondTheBuildDirectory(string entry)
-        => LegPathNames.NamesIn(entry).FirstOrDefault(name => LegPathNames.Directories.Contains(name, StringComparer.Ordinal));
+    /// <param name="entries">The entries, as written.</param>
+    /// <param name="setting">What to call the setting in a problem.</param>
+    /// <param name="directory">The name of the directory the entries are relative to, without its braces.</param>
+    /// <param name="said">The directory as a problem says it.</param>
+    /// <param name="problems">Where problems are collected.</param>
+    private static void DeclaredPathsUnder(IReadOnlyList<string>? entries, string setting, string directory, string said, List<string> problems)
+    {
+        RequireRelativePaths(entries ?? [], setting, problems, inside: said);
+
+        foreach (var entry in entries ?? [])
+        {
+            if (Escapes(entry))
+            {
+                continue;
+            }
+
+            if (NamesTheDirectory(entry, directory))
+            {
+                problems.Add($"{setting} names '{entry}', which is {said} itself; name a path inside it");
+            }
+            else if (LegPathNames.NamesIn(entry).FirstOrDefault(name => name != directory && LegPathNames.Directories.Append(LegPathNames.BuildDirectory).Contains(name, StringComparer.Ordinal)) is { } beyond)
+            {
+                problems.Add($"{setting} names '{{{beyond}}}', which is not under {said}; name a path inside it");
+            }
+            else if (GlobPattern.Problem(entry) is { } problem)
+            {
+                // Asked of the entry whether it holds a wildcard or not: the misspelling rule is one the whole file's path
+                // lists are held to, and the name a reader reports is the entry as written.
+                problems.Add($"{setting} names '{entry}', which {problem}");
+            }
+        }
+
+        CheckPlaceholders(entries, setting, problems);
+    }
 
     /// <summary>
-    /// Whether <paramref name="entry"/> names the build directory itself - spelled plainly, as <c>.</c>, or as
-    /// <c>{buildDir}</c> with nothing after it - which no path inside it is: an entry read as evidence that names only
-    /// where evidence lives keeps nothing on every failure.
+    /// Whether <paramref name="entry"/> names the directory <paramref name="directory"/> names itself - spelled plainly, as
+    /// <c>.</c>, or as that name in braces with nothing after it - which no path inside it is: an entry that names only where
+    /// the files live names no file on every run.
     /// </summary>
-    private static bool NamesTheBuildDirectory(string entry)
+    private static bool NamesTheDirectory(string entry, string directory)
     {
         var normalized = PathPatterns.Normalize(entry);
 
@@ -2452,8 +2446,8 @@ public static partial class HarnessConfigValidator
             return true;
         }
 
-        return normalized.StartsWith($"{{{LegPathNames.BuildDirectory}}}", StringComparison.Ordinal)
-            && PathPatterns.Normalize(normalized[(LegPathNames.BuildDirectory.Length + 2) ..]) is "" or ".";
+        return normalized.StartsWith($"{{{directory}}}", StringComparison.Ordinal)
+            && PathPatterns.Normalize(normalized[(directory.Length + 2) ..]) is "" or ".";
     }
 
     /// <summary>Refuses each name in one of a tool's scopes that names nothing declared.</summary>

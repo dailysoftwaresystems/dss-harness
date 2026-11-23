@@ -584,27 +584,16 @@ public sealed class RunnerRunService(
     }
 
     /// <summary>
-    /// The thrown error the failing step's log printed, where it printed a stack: its type, message, whole stack held
-    /// to the frame bound and its causes, read by the stack parsers of every runtime. Null where the log printed no
-    /// stack, or could not be read back.
+    /// The thrown error the failing step's log printed, where it printed a stack: its type, message, stack and causes, held
+    /// to the bounds every record is, read by the stack parsers of every runtime through the one owner of a phase's
+    /// digest. Null where the log printed no stack, or could not be read back.
     /// </summary>
     /// <param name="output">The failing step's output.</param>
-    private static Results.ExceptionRecord? ExceptionIn(PhaseOutput output)
-    {
-        ArgumentNullException.ThrowIfNull(output);
-
-        try
-        {
-            return PhaseParsers
-                .DigestOf([.. output.Lines()], PhaseParsers.ForStacks([]))
-                ?.Failures.FirstOrDefault(failure => failure.Exception is not null)
-                ?.Exception;
-        }
-        catch (PhaseOutputUnreadException)
-        {
-            return null;
-        }
-    }
+    /// <param name="tree">The tree the step ran in.</param>
+    private static Results.ExceptionRecord? ExceptionIn(PhaseOutput output, DigestTree tree)
+        => PhaseDigest.Of(output, PhaseParsers.ForStacks([]), tree)
+            ?.Failures.FirstOrDefault(failure => failure.Exception is not null)
+            ?.Exception;
 
     /// <summary>
     /// The runner's steps, with every program it can start already vetted.
@@ -1217,7 +1206,7 @@ public sealed class RunnerRunService(
 
         // The thrown error as the log printed it, where it printed a stack: its type, message, whole stack and causes,
         // the record an entry is matched against - and the type name a first *Exception line gave, where it did not.
-        var thrown = ExceptionIn(failed.Output);
+        var thrown = ExceptionIn(failed.Output, new DigestTree(request.TreeRoot, null, _fileSystem));
         var entry = _expectedExceptionMatcher.Find(
             scope,
             request.Leg,

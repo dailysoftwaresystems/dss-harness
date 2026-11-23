@@ -565,7 +565,7 @@ public sealed class CiWaitStepRunner(
                 // The kept log digested: the forge's decoration stripped, the workflow's own annotations first, then
                 // whatever forms a CI log holds - so a red job's entry starts from what failed, not from a page.
                 digest = PhaseParsers.DigestOf(PhaseParsers.StrippedCi(masked), PhaseParsers.ForCi(context.Config.Results.Matchers))
-                    ?.WithInTree(context.Layout.MainCheckoutRoot);
+                    ?.WithInTree(new DigestTree(context.Layout.MainCheckoutRoot, null, fileSystem));
             }
 
             red.Add(new JsonObject

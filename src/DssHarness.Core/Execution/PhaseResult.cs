@@ -118,6 +118,12 @@ public sealed record PhaseResult(
     public string? Uncontained { get; init; }
 
     /// <summary>
+    /// The directory the child ran in, which a relative path it printed is read from; <see langword="null"/> where it ran
+    /// in the directory this process did.
+    /// </summary>
+    public string? WorkingDirectory { get; init; }
+
+    /// <summary>
     /// <see cref="LastLines"/> where the phase did not pass; empty where it did. What a reader who cannot
     /// open the log - another host's, which stays on that host - needs first.
     /// </summary>
@@ -137,8 +143,12 @@ public sealed record PhaseResult(
     /// <param name="phases">The phases, in the order they ran.</param>
     public static string? TailPhaseOf(IEnumerable<PhaseResult> phases) => LastFailing(phases)?.Phase;
 
-    /// <summary>The last of <paramref name="phases"/> that did not pass, or <see langword="null"/> where every one passed.</summary>
-    private static PhaseResult? LastFailing(IEnumerable<PhaseResult> phases)
+    /// <summary>
+    /// The last of <paramref name="phases"/> that did not pass - the one a build stopped at, or a run's last failure, whose
+    /// tail and digest a leg's line carries - or <see langword="null"/> where every one passed.
+    /// </summary>
+    /// <param name="phases">The phases, in the order they ran.</param>
+    public static PhaseResult? LastFailing(IEnumerable<PhaseResult> phases)
     {
         ArgumentNullException.ThrowIfNull(phases);
 

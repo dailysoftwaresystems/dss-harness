@@ -288,15 +288,20 @@ passed by and named where an entry could have named what it holds, and a stop na
 left. The leg's line names the directory and the counts — files kept, refused over the cap,
 unreadable, left as links, naming nothing, or left uncopied by a stop, and directories that
 could not be read. An invocation may also name where its runner writes its structured results:
-`results`, paths under the build directory named as `keepOnFailure` names its own, read where
-they are when the verdict is anything but a pass — never copied — and digested into the typed
-diagnostics and test failures the leg's entry carries. A file is known by its shape, never its
-name: a TRX, the JUnit XML family, Dart's `--reporter json` stream and a SARIF log are read
-with their messages, places, stacks and durations, masked as the log is; a path naming nothing
-or a file no form owns is said in the digest, not refused. `init` seeds the arguments the
-shipped runners take for these files (`ctest --output-junit`, `dotnet test --logger trx` with
-`--results-directory`, `dart test --file-reporter`) and names the files under `results` to
-match.
+`results`, paths under the run's own results directory `{resultsDir}` — refused when
+`config.json` is read where one names anything else. Each run of the invocation gets that
+directory in the leg's records of the run, made empty before the runner starts, so a file read
+there is that run's and never an earlier one's. Where the tests' failure is the leg's verdict,
+each file is read where it is — never copied, never through a link, as a stream — and digested
+into the typed diagnostics and test failures the leg's entry carries. A file is known by its
+shape, never its name: a TRX, the JUnit XML family, Dart's `--reporter json` stream and a SARIF
+log (2.1 or 1.0) are read with their messages, places, stacks and durations, masked as the
+phase's log is; a skipped test is no failure. A path naming nothing, a file no form owns or one
+a crash cut short is said in the digest, not refused, and where the files gave no finding the
+phase's log is read by its runner's parsers beside it. `init` seeds the arguments the shipped
+runners take for these files (`ctest --output-junit`, `dotnet test --logger trx` with
+`--results-directory`, `dart test --file-reporter`), each writing into `{resultsDir}`, and names
+the files under `results` to match.
 
 **Refuse early, with the arithmetic.** `create-worktree` will not create a worktree
 whose files or build paths cannot fit inside Windows' path limit, because that failure

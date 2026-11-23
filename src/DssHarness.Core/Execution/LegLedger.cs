@@ -215,11 +215,13 @@ public sealed record LegEntry
     public KeptOnFailure? KeptOnFailure { get; init; }
 
     /// <summary>
-    /// What the invocation's structured results digested to, where it did not pass and named any: the typed
-    /// diagnostics and test failures the files it named hold - a TRX, a JUnit XML, Dart's JSON stream, a SARIF log -
-    /// folded, with the counts of each and the first error in the order the tool met it. What the parsers did not
-    /// understand stays in its unparsed lines. <see langword="null"/> where it named nothing, or passed, or nothing
-    /// it named gave anything to say.
+    /// What the leg's failing phase digested to, where its failure is the leg's verdict (<see cref="Results.PhaseDigest"/>):
+    /// a test's structured results files first - a TRX, a JUnit XML, Dart's JSON stream, a SARIF log - and the phase's
+    /// own log, a build's or a test's, read by the parsers chosen for it wherever the files gave no finding. The typed
+    /// diagnostics and test failures, folded and held to the digest's bounds, with the counts of each over the whole
+    /// output and the first error in the order the tool met it; what the parsers did not understand, and what a results
+    /// path could not give, stays in its unparsed lines. <see langword="null"/> where the leg passed, where something
+    /// else decided its verdict, and where nothing was read and nothing said.
     /// </summary>
     public ResultDigest? Digest { get; init; }
 

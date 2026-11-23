@@ -1,6 +1,8 @@
 using System.Text.RegularExpressions;
 using DssHarness.Core.Configuration;
+using DssHarness.Core.FileSystem;
 using DssHarness.Core.Orchestration.Flow;
+using DssHarness.Core.Platform;
 using DssHarness.Core.Results;
 
 namespace DssHarness.Tests;
@@ -325,26 +327,33 @@ public sealed class ResultDigestTests
     }
 
     /// <summary>
-    /// Every frame of every stack is marked by whether its file is inside the tree: a rooted file under it, a relative
-    /// one, and a rooted file elsewhere - the one place a frame is marked, so every reader reads one.
+    /// Every frame of every stack is marked by whether the tree holds its file, on the machine's own file system: a rooted
+    /// file under the tree and a relative one read from where the tool ran are in it, named relative to its root; a file
+    /// the tree does not hold under it, and a rooted file elsewhere, are not - the one place a frame is marked, so every
+    /// reader reads one.
     /// </summary>
     [Fact]
-    public void EveryFrameOfEveryStack_IsMarkedByWhetherItsFileIsInTheTree()
+    public void EveryFrameOfEveryStack_IsMarkedByWhetherTheTreeHoldsItsFile()
     {
-        var root = Path.GetFullPath(Path.Combine("x", "tree"));
+        using var temp = new TempDirectory();
+        var main = temp.WriteFile(Path.Combine("src", "main.c"), "int main;");
+        var elsewhere = Path.Combine(Path.GetPathRoot(temp.Path) ?? "/", "elsewhere", "out.c");
         var digest = ResultDigest.Of(
             [new Diagnostic("gcc", "error", null, "jammed", "src/main.c", 3, 9, Stack:
             [
-                new StackFrame("in src/main.c", "src/main.c", 3),
-                new StackFrame("in /usr/include/stdio.h", Path.Combine(Path.GetPathRoot(root) ?? "/", "usr", "include", "stdio.h"), 12),
-                new StackFrame("elsewhere", Path.Combine(Path.GetPathRoot(root) ?? "/", "elsewhere", "out.c"), 1),
+                new StackFrame("in main.c", main, 3),
+                new StackFrame("from ../src/main.c", "../src/main.c", 1),
+                new StackFrame("in src/gone.c", Path.Combine(temp.Path, "src", "gone.c"), 12),
+                new StackFrame("elsewhere", elsewhere, 1),
             ])],
             [],
             []);
 
-        var marked = digest.WithInTree(root);
+        var marked = digest.WithInTree(new DigestTree(temp.Path, temp.Combine("build"), new PhysicalFileSystem(FilePermissionsFactory.Create())));
 
-        Assert.Equal([true, false, false], marked.Diagnostics[0].Stack!.Select(frame => frame.InTree).ToList());
+        Assert.Equal(
+            [("src/main.c", true), ("src/main.c", true), (Path.Combine(temp.Path, "src", "gone.c"), false), (elsewhere, false)],
+            marked.Diagnostics[0].Stack.Select(frame => (frame.File, frame.InTree)));
     }
 
     /// <summary>The digest as one JSON document keeps everything: every diagnostic and failure whole, its counts, its unparsed lines.</summary>

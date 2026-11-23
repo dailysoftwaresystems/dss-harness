@@ -16,6 +16,9 @@ public sealed class ResultFixturesTests
 {
     private static string Root => Path.Combine(Prose.RepositoryRoot(), "tests", "dss-harness-test", "fixtures", "results");
 
+    /// <summary>The tree each fixture's places are read against: this repository's, which holds none of the files the fixtures' tools named.</summary>
+    private static DigestTree Tree => new(Prose.RepositoryRoot(), null, new DssHarness.Core.FileSystem.PhysicalFileSystem(DssHarness.Core.Platform.FilePermissionsFactory.Create()));
+
     /// <summary>The bytes every fixture's digest said for a model costs, in all: the bound a change that grows them fails against.</summary>
     private const int HeldBytes = 19_000;
 
@@ -47,7 +50,7 @@ public sealed class ResultFixturesTests
         Assert.NotNull(digest);
         Assert.Null(digest!.Problem());
 
-        var document = digest.WithInTree(Prose.RepositoryRoot()).Document().ToJsonString();
+        var document = digest.WithInTree(Tree).Document().ToJsonString();
         var stored = Path.Combine(directory, "digest.json");
 
         if (Environment.GetEnvironmentVariable("DSSHARNESS_REGENERATE_RESULTS") is not null)
@@ -81,7 +84,7 @@ public sealed class ResultFixturesTests
 
             var lines = File.ReadAllLines(output);
             var before = Encoding.UTF8.GetByteCount(string.Join("\n", lines.TakeLast(50))) + Encoding.UTF8.GetByteCount(string.Join("\n", lines));
-            var held = digest!.WithInTree(Prose.RepositoryRoot()).ForAModel().ToJsonString();
+            var held = digest!.WithInTree(Tree).ForAModel().ToJsonString();
 
             Assert.True(
                 Encoding.UTF8.GetByteCount(held) <= before,
@@ -99,7 +102,7 @@ public sealed class ResultFixturesTests
 
         if (Path.GetExtension(output) is ".xml" or ".trx" or ".json" or ".jsonl")
         {
-            return ResultFiles.Digest(text, null, out _);
+            return ResultFiles.Digest(text, out _);
         }
 
         if (tool == "ci-wait")

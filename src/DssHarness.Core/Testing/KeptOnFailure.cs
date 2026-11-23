@@ -111,144 +111,15 @@ public sealed record KeptOnFailure(
         // the tree's root down, never through a link the work put on the way (UnfollowedFiles); a build directory outside the
         // tree, which the work writes nothing of, is the root of its own files.
         var root = PathContainment.IsStrictlyInside(paths.TreeRoot, buildDirectory, StringComparison.OrdinalIgnoreCase) ? paths.TreeRoot : buildDirectory;
+        var found = DeclaredFiles.Find(fileSystem, declared, paths, buildDirectory, root, "test.keepOnFailure");
         var kept = new List<string>();
         var overCap = new List<string>();
-        var unreadable = new List<string>();
-        var links = new List<string>();
-        var unreadableDirectories = new List<string>();
+        var unreadable = new List<string>(found.Unreadable);
+        var links = new List<string>(found.Links);
         var leftAtStop = new List<string>();
-        var namedNothing = new List<string>();
         long bytes = 0;
 
-        // A directory beneath what a walk lists that cannot be read is passed by, and named once where an entry could have
-        // named what it holds: what it holds is evidence asked for and not kept, and the files beside it are kept all the same.
-        void PassedBy(string directory)
-        {
-            var relative = PathPatterns.Normalize(Path.GetRelativePath(buildDirectory, directory));
-
-            if (!unreadableDirectories.Contains(relative, StringComparer.Ordinal))
-            {
-                unreadableDirectories.Add(relative);
-            }
-        }
-
-        // The directories the listing of the whole build directory passed by, which each pattern is asked about.
-        var unlisted = new List<string>();
-
-        // Every file the entries name, relative to the build directory with forward slashes, each once: the order the
-        // cap spends itself in, so the same configuration keeps the same files on every machine.
-        var matched = new SortedList<string, string>(StringComparer.Ordinal);
-
-        // The build directory's files, listed once however many patterns name them: a build tree can hold a hundred
-        // thousand files, and the walk is the expensive half of matching a pattern against it.
-        List<(string Relative, string File)>? listed = null;
-
-        List<(string Relative, string File)> List()
-        {
-            if (listed is not null)
-            {
-                return listed;
-            }
-
-            listed =
-            [
-                .. fileSystem
-                    .EnumerateReachableFiles(buildDirectory, (directory, _) => unlisted.Add(directory))
-                    .Select(file => (Relative: PathPatterns.Normalize(Path.GetRelativePath(buildDirectory, file)), File: file))
-                    .Where(entry => GlobPattern.Reads(entry.Relative)),
-            ];
-
-            return listed;
-        }
-
-        foreach (var entry in declared)
-        {
-            string expanded;
-
-            try
-            {
-                expanded = LegPathNames.Expand(entry, paths, "test.keepOnFailure");
-            }
-            catch (HarnessException)
-            {
-                // A name nothing fills in, refused everywhere else, is said here: the verdict is already reached, and
-                // the entry is evidence that was asked for and not kept.
-                namedNothing.Add(entry);
-                continue;
-            }
-
-            if (!Within(buildDirectory, expanded, out var relative))
-            {
-                namedNothing.Add(entry);
-                continue;
-            }
-
-            try
-            {
-                if (GlobPattern.IsPattern(relative))
-                {
-                    var pattern = GlobPattern.Parse(relative);
-                    var found = List().Where(file => pattern.Matches(file.Relative)).Select(file => file.Relative).ToList();
-
-                    // A directory the listing passed by is named where the pattern could have named what it holds, and
-                    // no other.
-                    var reachable = unlisted
-                        .Where(directory => PathPatterns.Normalize(Path.GetRelativePath(buildDirectory, directory)) is var under
-                            && GlobPattern.Reads(under) && pattern.Overlaps(GlobPattern.Parse(under + "/**")))
-                        .ToList();
-
-                    reachable.ForEach(PassedBy);
-
-                    if (found.Count == 0)
-                    {
-                        if (reachable.Count == 0)
-                        {
-                            namedNothing.Add(entry);
-                        }
-
-                        continue;
-                    }
-
-                    foreach (var file in found)
-                    {
-                        matched[file] = file;
-                    }
-                }
-                else
-                {
-                    var full = Path.Combine(buildDirectory, relative);
-
-                    // Never through a link, wherever on the way from the tree's root it stands.
-                    if (UnfollowedFiles.LinkOnTheWay(fileSystem, root, full, itself: true) is not null)
-                    {
-                        links.Add(relative);
-                    }
-                    else if (fileSystem.FileExists(full))
-                    {
-                        matched[relative] = relative;
-                    }
-                    else if (fileSystem.DirectoryExists(full))
-                    {
-                        // Walked as the patterns' listing is: one subdirectory that cannot be read is passed by and
-                        // named, never the whole entry lost with it.
-                        foreach (var file in fileSystem.EnumerateReachableFiles(full, (directory, _) => PassedBy(directory)).Select(file => PathPatterns.Normalize(Path.GetRelativePath(buildDirectory, file))))
-                        {
-                            matched[file] = file;
-                        }
-                    }
-                    else
-                    {
-                        namedNothing.Add(entry);
-                    }
-                }
-            }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-            {
-                unreadable.Add(relative);
-            }
-        }
-
-        var waiting = matched.Values.ToList();
+        var waiting = found.Files;
 
         for (var next = 0; next < waiting.Count; next++)
         {
@@ -311,10 +182,10 @@ public sealed record KeptOnFailure(
             }
         }
 
-        return new KeptOnFailure(destination, bytes, kept, overCap, unreadable, namedNothing)
+        return new KeptOnFailure(destination, bytes, kept, overCap, unreadable, found.NamedNothing)
         {
             Links = links,
-            UnreadableDirectories = unreadableDirectories,
+            UnreadableDirectories = found.UnreadableDirectories,
             LeftAtStop = leftAtStop,
         };
     }
@@ -353,35 +224,5 @@ public sealed record KeptOnFailure(
     /// <summary>A file that held more, as it was read, than the cap had left: refused over the cap, its part-copy gone.</summary>
     private sealed class PastTheCapException : Exception
     {
-    }
-
-    /// <summary>
-    /// Whether <paramref name="expanded"/> names something under <paramref name="buildDirectory"/>, and what it names
-    /// there, in the one spelling both sides agree on; false for the build directory itself, which no entry names, and
-    /// for an absolute path on another root, which names nothing under this one however it is spelled.
-    /// </summary>
-    private static bool Within(string buildDirectory, string expanded, out string relative)
-    {
-        if (!PlatformPaths.IsRootedOnAnyPlatform(expanded))
-        {
-            relative = PathPatterns.Normalize(expanded);
-        }
-        else
-        {
-            var beneath = Path.GetRelativePath(buildDirectory, expanded);
-
-            // Another drive, or a share: no path of .. segments leads there, and the whole path back - still rooted -
-            // would be taken for relative and copied over itself.
-            if (PlatformPaths.IsRootedOnAnyPlatform(beneath)
-                || beneath.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar).Any(segment => segment == ".."))
-            {
-                relative = PathPatterns.Normalize(expanded);
-                return false;
-            }
-
-            relative = PathPatterns.Normalize(beneath);
-        }
-
-        return relative.Length > 0 && relative != ".";
     }
 }

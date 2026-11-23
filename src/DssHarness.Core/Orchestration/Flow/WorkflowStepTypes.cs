@@ -600,10 +600,11 @@ public static class WorkflowStepTypes
         ("isolation", IsolationOutput));
 
     /// <summary>
-    /// What a red entry's digest holds, as a model reads it: the counts by severity and outcome, the first error said
-    /// whole - its stack rendered to its frames in the tree, its log range one read away - the next distinct errors to
-    /// four in all as one line each, every test failure of the four with its rendered stack, the rest counted by code
-    /// and by file, and the lines no parser held. Null where the phase's output was never digested.
+    /// What a red entry's digest holds, as a model reads it: the counts by severity and outcome over the whole output,
+    /// the first problem said whole - its stack rendered to its frames in the tree with its causes under it, its log
+    /// range one read away - the next distinct problems to four in all, an error one line each and a test failure with
+    /// its rendered stack, the rest counted by code and by file, and the lines no parser held. Null where the phase's
+    /// output was never digested.
     /// </summary>
     private static string DigestOutput => ObjectOrNullOf(
         ("errors", WholeNumber),
@@ -613,7 +614,7 @@ public static class WorkflowStepTypes
         ("errored", WholeNumber),
         ("timedOut", WholeNumber),
         ("crashed", WholeNumber),
-        ("first", ObjectOrNullOf(("kind", Text), ("tool", TextOrNull), ("framework", TextOrNull), ("code", TextOrNull), ("severity", TextOrNull), ("message", TextOrNull), ("file", TextOrNull), ("line", WholeNumberOrNull), ("column", WholeNumberOrNull), ("count", WholeNumber), ("log", WholeNumbersOrNull), ("stack", ListOf(Text)), ("said", Text))),
+        ("first", ObjectOrNullOf(("kind", Text), ("tool", TextOrNull), ("framework", TextOrNull), ("id", TextOrNull), ("outcome", TextOrNull), ("code", TextOrNull), ("severity", TextOrNull), ("message", TextOrNull), ("file", TextOrNull), ("line", WholeNumberOrNull), ("column", WholeNumberOrNull), ("count", WholeNumber), ("log", WholeNumbersOrNull), ("stack", ListOf(Text)), ("said", Text))),
         ("diagnostics", ListOf(ObjectOf(("said", Text), ("count", WholeNumber), ("log", WholeNumbersOrNull)))),
         ("failures", ListOf(ObjectOf(("framework", Text), ("id", Text), ("message", TextOrNull), ("file", TextOrNull), ("line", WholeNumberOrNull), ("outcome", Text), ("stack", ListOf(Text))))),
         ("byCode", ListOf(ObjectOf(("of", Text), ("count", WholeNumber)))),
