@@ -361,7 +361,7 @@ public sealed class CodebaseGraphQueries
         }
 
         // The first rule a name is read by that names any node decides: a qualified name before a simple one, and so on.
-        var ids = named.FirstOrDefault(found => found.Count > 0) ?? [];
+        var ids = named.Select(rule => rule.Ids).FirstOrDefault(found => found.Count > 0) ?? [];
 
         return ids.Count switch
         {
@@ -404,7 +404,7 @@ public sealed class CodebaseGraphQueries
             return [exact];
         }
 
-        return [.. named.SelectMany(found => found).Distinct(StringComparer.Ordinal).Where(Holds).Select(Card)
+        return [.. named.SelectMany(rule => rule.Ids).Distinct(StringComparer.Ordinal).Where(Holds).Select(Card)
             .OrderBy(card => card.Id, StringComparer.Ordinal).ThenBy(card => card.Path, StringComparer.Ordinal)];
     }
 
@@ -414,7 +414,7 @@ public sealed class CodebaseGraphQueries
     /// with backslashes read as the file the view holds, as a path typed on Windows is - or, where it names none so, the
     /// ids each rule a name is read by finds, in the rules' order (<see cref="NamedBy"/>).
     /// </summary>
-    private (GraphCard? Exact, IEnumerable<IReadOnlyList<string>> Named) Naming(string symbol)
+    private (GraphCard? Exact, IEnumerable<NamedRule> Named) Naming(string symbol)
     {
         if (_handles.TryGetValue(symbol, out var byHandle))
         {
@@ -442,43 +442,49 @@ public sealed class CodebaseGraphQueries
     /// qualified name ends with it - and, last, each key whose own name spells such a path as .NET's configuration reads a
     /// key's name - an environment variable's (<c>Payments__TimeoutSeconds</c> under a compose file's <c>environment</c>), a
     /// settings file's flat key - which names that path wherever it stands (<see cref="CodeKeyPaths.Spellings"/>). A key path
-    /// in any spelling so finds the same keys, and a name the earlier rules find resolves as it did.
+    /// in any spelling so finds the same keys, and a name the earlier rules find resolves as it did. Each rule says whether it
+    /// reads the name as it is written - by itself, with its language's own separators as dots, and either with some of its
+    /// scopes - or as the key path it spells, the keys whose own names spell that path among them (<see cref="NamedRule"/>): the
+    /// one owner of which form found a definer, which a <c>sites</c> answer reads the data by (<see cref="SitesSearch"/>).
     /// </summary>
-    private IEnumerable<IReadOnlyList<string>> NamedBy(string symbol)
+    private IEnumerable<NamedRule> NamedBy(string symbol)
     {
-        yield return [.. _byQualified[symbol]];
-        yield return [.. _bySimple[symbol]];
+        yield return new([.. _byQualified[symbol]], AsWritten: true);
+        yield return new([.. _bySimple[symbol]], AsWritten: true);
 
         var forms = Forms(symbol);
 
-        foreach (var form in forms.Where(form => form != symbol))
+        foreach (var form in forms.Where(form => form.Text != symbol))
         {
-            yield return [.. _byQualified[form]];
+            yield return new([.. _byQualified[form.Text]], form.AsWritten);
         }
 
         // A name written with some of its scopes names each node named by its last place - as it is written, a data file's
         // item with its brackets as its key is named - whose qualified name ends with it at a dot.
-        foreach (var form in forms.Where(form => SelectorName(form) is null))
+        foreach (var form in forms.Where(form => SelectorName(form.Text) is null))
         {
-            if (CodeKeyPaths.Last(form) is var last && last != form)
+            if (CodeKeyPaths.Last(form.Text) is var last && last != form.Text)
             {
-                yield return [.. _bySimple[last].Where(id => Card(id).Qualified.EndsWith("." + form, StringComparison.Ordinal))];
+                yield return new([.. _bySimple[last].Where(id => Card(id).Qualified.EndsWith("." + form.Text, StringComparison.Ordinal))], form.AsWritten);
             }
         }
 
-        foreach (var spelt in forms.SelectMany(CodeKeyPaths.Spellings).Distinct(StringComparer.Ordinal))
+        foreach (var spelt in forms.SelectMany(form => CodeKeyPaths.Spellings(form.Text)).Distinct(StringComparer.Ordinal))
         {
-            yield return [.. _bySimple[spelt].Where(id => string.Equals(Card(id).SubKind, CodeSubKinds.Key, StringComparison.Ordinal))];
+            yield return new([.. _bySimple[spelt].Where(id => string.Equals(Card(id).SubKind, CodeSubKinds.Key, StringComparison.Ordinal))], AsWritten: false);
         }
     }
 
+    /// <summary>The ids one rule a written name is read by finds (<see cref="NamedBy"/>), and whether it reads the name as it is written or as the key path it spells.</summary>
+    private readonly record struct NamedRule(IReadOnlyList<string> Ids, bool AsWritten);
+
     /// <summary>
     /// The qualified names <paramref name="symbol"/> may be written as, each once: with its language's own separators written
-    /// as dots (<see cref="Dotted"/>), and, where it is spelt as .NET's configuration spells a key path
+    /// as dots (<see cref="Dotted"/>), the name as it is written, and, where it is spelt as .NET's configuration spells a key path
     /// (<see cref="SpeltAsAKeyPath"/>), that path, as the key's own reader writes it.
     /// </summary>
-    private static IReadOnlyList<string> Forms(string symbol)
-        => SpeltAsAKeyPath(symbol) is { } spelt && spelt != Dotted(symbol) ? [Dotted(symbol), spelt] : [Dotted(symbol)];
+    private static IReadOnlyList<(string Text, bool AsWritten)> Forms(string symbol)
+        => SpeltAsAKeyPath(symbol) is { } spelt && spelt != Dotted(symbol) ? [(Dotted(symbol), true), (spelt, false)] : [(Dotted(symbol), true)];
 
     /// <summary>
     /// The key path <paramref name="symbol"/> spells as .NET's configuration spells one - its places parted by colons or by
@@ -496,15 +502,16 @@ public sealed class CodebaseGraphQueries
     /// the selector it is written as, a rule's (<c>.btn</c>, <c>.card__title</c>), whole; else its last name
     /// (<see cref="CodeKeyPaths.LastName"/>) - <c>Total</c> of <c>Order.Total</c> and of <c>Order::Total</c>, <c>this[]</c> of
     /// <c>Canvas.this[]</c> - read as a key path where it is spelt as one (<see cref="SpeltAsAKeyPath"/>): where it names a key;
-    /// where its definers, none a key, are found by the path it spells and none is named by it as it is written - a member the
-    /// options pattern binds a section to, <c>Api.JwtSettings.Secret</c> of <c>JwtSettings:Secret</c>; and where nothing names
-    /// it and it is written as no node's id and no file's line (<see cref="WrittenAsAPlace"/>) - <c>TimeoutSeconds</c> of
-    /// <c>Payments:TimeoutSeconds</c> and of <c>Payments__TimeoutSeconds</c>, <c>Secret</c> of <c>JwtSettings:Secret</c>. Where none
-    /// of its definers is a key and one is named by it as it is written (<see cref="NamedAsWritten"/>) it is read as that name, as
-    /// code that declares <c>RETRY__LIMIT</c> writes it. The key paths are those of the keys among its definers, and the path
-    /// the data spells where it is read as one, each as an environment variable writes it (<see cref="CodeKeyPaths.Environment"/>):
-    /// <c>Payments__TimeoutSeconds</c>, which no whole word of its last key is held by. A node the data names by itself, a
-    /// selector, and a name read as the name it is written as spell no path of their own.
+    /// where its definers, none a key, are found only by the path it spells - a member the options pattern binds a section to,
+    /// <c>Api.JwtSettings.Secret</c> of <c>JwtSettings:Secret</c>; and where nothing names it and it is written as no node's id and
+    /// no file's line (<see cref="WrittenAsAPlace"/>) - <c>TimeoutSeconds</c> of <c>Payments:TimeoutSeconds</c> and of
+    /// <c>Payments__TimeoutSeconds</c>, <c>Secret</c> of <c>JwtSettings:Secret</c>. Where none of its definers is a key and one was
+    /// found by it as it is written - by its name, its qualified name, or with some of its scopes, as the one reading of a name
+    /// says (<see cref="NamedBy"/>) - it is read as that name, as code that declares <c>RETRY__LIMIT</c> writes it:
+    /// <c>RETRY__LIMIT</c> of <c>Retry.RETRY__LIMIT</c>, <c>__validate</c> of <c>Foo.__validate</c>. The key paths are those of the
+    /// keys among its definers, and the path the data spells where it is read as one, each as an environment variable writes it
+    /// (<see cref="CodeKeyPaths.Environment"/>): <c>Payments__TimeoutSeconds</c>, which no whole word of its last key is held by.
+    /// A node the data names by itself, a selector, and a name read as the name it is written as spell no path of their own.
     /// </summary>
     /// <param name="data">The data as it is written, asked by a name.</param>
     /// <param name="definers">The data's definers.</param>
@@ -514,9 +521,9 @@ public sealed class CodebaseGraphQueries
         ArgumentNullException.ThrowIfNull(definers);
 
         var keys = definers.Where(card => string.Equals(card.SubKind, CodeSubKinds.Key, StringComparison.Ordinal)).ToList();
-        var exact = NamedExactly(data);
+        var (exact, named) = Naming(data);
         var spelt = exact is null && SpeltAsAKeyPath(data) is { } path
-            && (keys.Count > 0 || (definers.Count > 0 ? !NamedAsWritten(data, definers) : !WrittenAsAPlace(data)))
+            && (keys.Count > 0 || (definers.Count > 0 ? !FoundAsWritten(named, definers) : !WrittenAsAPlace(data)))
             ? path
             : null;
         var word = exact?.Name ?? (SelectorName(data) is not null ? data : CodeKeyPaths.LastName(spelt ?? Dotted(data)));
@@ -524,16 +531,12 @@ public sealed class CodebaseGraphQueries
         return GraphSitesSearch.Of(word, keys.Select(card => card.Qualified).Append(spelt).OfType<string>().Select(CodeKeyPaths.Environment).OfType<string>());
     }
 
-    /// <summary>
-    /// Whether one of <paramref name="definers"/> is named by <paramref name="data"/> as it is written - its name or its qualified
-    /// name the data, or the data with its language's own separators written as dots (<see cref="Dotted"/>) - and not by the key
-    /// path the data spells: a name code declares, <c>RETRY__LIMIT</c>, which the data is read as.
-    /// </summary>
-    private static bool NamedAsWritten(string data, IReadOnlyList<GraphCard> definers)
+    /// <summary>Whether a rule of <paramref name="named"/> that reads a name as it is written (<see cref="NamedRule.AsWritten"/>) found one of <paramref name="definers"/>.</summary>
+    private static bool FoundAsWritten(IEnumerable<NamedRule> named, IReadOnlyList<GraphCard> definers)
     {
-        var dotted = Dotted(data);
+        var found = named.Where(rule => rule.AsWritten).SelectMany(rule => rule.Ids).ToHashSet(StringComparer.Ordinal);
 
-        return definers.Any(card => card.Name == data || card.Qualified == data || card.Name == dotted || card.Qualified == dotted);
+        return definers.Any(card => found.Contains(card.Id));
     }
 
     /// <summary>

@@ -1640,16 +1640,19 @@ public sealed class JavaScriptExtractorTests : CodeGraphExtractorContractTests<J
     }
 
     /// <summary>
-    /// A chain names a constructor function by what the names before its last hold, never by a member a prototype is given, which
-    /// is an instance's and no name its type holds: <c>Lib.Widget</c> is never <c>Lib.prototype.Widget</c>, so the members a file
-    /// adds to <c>Lib.Widget</c>'s prototype extend nothing the repository declares, and their <c>this</c> reaches nothing - not
-    /// the sibling the scope of that chain holds.
+    /// A chain names a constructor function by what the names before its last hold statically, never by an instance's member, a
+    /// member a prototype is given among them: <c>Lib.Widget</c> is never <c>Lib.prototype.Widget</c>, whether another file gives
+    /// the prototype its member or <c>Lib</c>'s own file does, so the members a file adds to <c>Lib.Widget</c>'s prototype extend
+    /// nothing the repository declares, and their <c>this</c> reaches nothing - not the sibling the scope of that chain holds; a
+    /// static member of a class is what the class holds, and the chain names it.
     /// </summary>
-    [Fact]
-    public void AChainNamesAConstructorByWhatItsNamesHold_NeverByAMemberAPrototypeIsGiven()
+    [Theory]
+    [InlineData("lib/lib.js", "function Lib() {}", "lib/widget.js", "Lib.prototype.Widget = function () {};")]
+    [InlineData("lib/lib.js", "function Lib() {}\nLib.prototype.Widget = function () {};", "lib/other.js", "")]
+    public void AChainNamesAConstructorByWhatItsNamesHold_NeverByAMemberAPrototypeIsGiven(string libPath, string lib, string widgetPath, string widget)
     {
         const string Render = "Lib.Widget.prototype.render = function () { this.paint(); };\nLib.Widget.prototype.paint = function () {};";
-        var linked = Link(("lib/lib.js", "function Lib() {}"), ("lib/widget.js", "Lib.prototype.Widget = function () {};"), ("lib/render.js", Render));
+        var linked = Link((libPath, lib), (widgetPath, widget), ("lib/render.js", Render));
 
         // Both extend the chain, which no file declares; the one a prototype is given is Lib's, never the chain's.
         Assert.Equal(
@@ -1657,6 +1660,13 @@ public sealed class JavaScriptExtractorTests : CodeGraphExtractorContractTests<J
             Read("lib/render.js", Render).Nodes.Where(node => node.Extends is not null).Select(node => (node.Id.Whole(), node.Extends!)));
         Assert.DoesNotContain(linked.Edges, edge => edge.Kind == CodeEdgeKinds.Calls);
         Assert.Equal(1, linked.External["javascript:Lib.Widget.render"]);
+
+        // A class's static member is the class's own: the chain names it, and the members its prototype is given reach each other.
+        var owned = Link(("lib/lib.js", "class Lib { static Widget() {} }"), ("lib/render.js", Render));
+
+        Assert.Equal(
+            [new CodeEdge("javascript:Lib.Widget.render", "javascript:Lib.Widget.paint", CodeEdgeKinds.Calls, 1, CodeConfidences.Exact)],
+            owned.Edges.Where(edge => edge.Kind == CodeEdgeKinds.Calls));
     }
 
     /// <summary>

@@ -1223,6 +1223,51 @@ public sealed partial class CodebaseGraphToolTests
     }
 
     /// <summary>
+    /// A name a definer, none of them a key, is found by as it is written - with some of its scopes, a double underscore in its
+    /// last part - is searched for as that name, never as the key path it would spell: <c>Retry.RETRY__LIMIT</c> by
+    /// <c>RETRY__LIMIT</c>, so a Dockerfile's <c>ENV RETRY__LIMIT</c> line and a literal of it are its places and a query's
+    /// <c>LIMIT 10</c> is none, and Python's <c>Foo.__validate</c> by <c>__validate</c>, so its call is a place and an unrelated
+    /// <c>validate</c> is none; a key path whose definers only the path it spells finds is still read as that path.
+    /// </summary>
+    [Fact]
+    public async Task ANameADefinerIsFoundByAsItIsWritten_IsSearchedAsThatName_NeverAsTheKeyPathItWouldSpell()
+    {
+        using var tree = await TreeAsync(
+            ("src/Retry.cs", "namespace Demo;\n\npublic static class Retry\n{\n    public const int RETRY__LIMIT = 3;\n\n    public static string Name() => \"RETRY__LIMIT\";\n}\n"),
+            ("src/JwtSettings.cs", "namespace Api;\n\npublic sealed class JwtSettings\n{\n    public string Secret { get; set; } = \"\";\n}\n"),
+            ("app/foo.py", "class Foo:\n    def __validate(self):\n        return True\n\n    def run(self):\n        return self.__validate()\n"),
+            ("app/check.py", "def validate(order):\n    return order\n"),
+            ("Dockerfile", "FROM base\nENV RETRY__LIMIT=5\n"),
+            ("db/report.sql", "SELECT * FROM t LIMIT 10;\n"));
+        var queries = await QueriesAsync(tree);
+        var tool = Tool(tree, queries);
+
+        GraphSitesSearch SearchOf(string data) => queries.SitesSearch(data, queries.DefinersOf(data));
+
+        Assert.Equal(("RETRY__LIMIT", 0), (SearchOf("Retry.RETRY__LIMIT").Word, SearchOf("Retry.RETRY__LIMIT").Spellings.Count));
+        Assert.Equal(("__validate", 0), (SearchOf("Foo.__validate").Word, SearchOf("Foo.__validate").Spellings.Count));
+        Assert.Equal("Secret", SearchOf("JwtSettings:Secret").Word);
+        Assert.Equal(["JwtSettings__Secret"], SearchOf("JwtSettings:Secret").Spellings);
+
+        // The ENV line and the literal by the name whole, the query's LIMIT none of them, and no key path searched.
+        Assert.Equal(
+            [
+                "every place that decides 'Retry.RETRY__LIMIT':",
+                "Dockerfile in directory . (1):",
+                "  Dockerfile:2 ENV RETRY__LIMIT=5",
+                "csharp in directory src/ (2):",
+                $"  {GraphLines.Of(CardOf(queries, "Retry.RETRY__LIMIT"))} | defines",
+                $"  {GraphLines.Of(CardOf(queries, "Retry.Name"))} | holds the literal",
+                "      src/Retry.cs:7 holds the literal 'RETRY__LIMIT'",
+                "coverage: 3 file(s) the graph lists only (.sql, .txt, Dockerfile) searched by text - 1 hit(s)",
+                "coverage: 2 file(s) the graph is unsure of, searched by text too - 0 hit(s)",
+                OutlinedReadme,
+                NoExtractor,
+            ],
+            (await AskAsync(tool, """{"op":"sites","data":"Retry.RETRY__LIMIT"}""")).Text.Split('\n')[..11]);
+    }
+
+    /// <summary>
     /// A key path spelt as .NET's configuration spells one whose definers its path finds - code's members, none a key, as the
     /// options pattern binds a section to a class - is read as that key path in either spelling: searched for by its last key,
     /// as code writes it, and by its places as an environment variable writes them - a Dockerfile's <c>ENV</c> line, a literal

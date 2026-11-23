@@ -523,7 +523,7 @@ public static class CodeGraphLinker
         private readonly Dictionary<string, List<string>> _byFileName = new(StringComparer.Ordinal);
 
         /// <summary>The files each import of each file names, once found, with what finding them read.</summary>
-        private readonly Dictionary<CodeGraphFile, Dictionary<ExtractImport, (IReadOnlyList<string> Value, KeptReads Reads)>> _imported = new(ReferenceEqualityComparer.Instance);
+        private readonly Dictionary<CodeGraphFile, MadeOnce<ExtractImport, (IReadOnlyList<string> Value, KeptReads Reads)>> _imported = new(ReferenceEqualityComparer.Instance);
         private readonly List<Declaration> _declarations = [];
 
         /// <summary>Each file's declarations by id: the one a reference of that file is made from.</summary>
@@ -595,13 +595,13 @@ public static class CodeGraphLinker
         /// reached by a receiver alone (<see cref="ByReceiver"/>) - everything the answer depends on
         /// (<see cref="NamedContainers(Declaration, string)"/>): a name such as a type no file declares is looked for once.
         /// </summary>
-        private readonly Dictionary<(string Path, ScopeKey? Scope, bool ByReceiver, string Written), (Finds Value, KeptReads Reads)> _containersFound = [];
+        private readonly MadeOnce<(string Path, ScopeKey? Scope, bool ByReceiver, string Written), (Finds Value, KeptReads Reads)> _containersFound = new();
 
         /// <summary>Every type's and scope's qualified name by the run of a name's characters it ends with, in ordinal order: where an ending is looked for.</summary>
         private readonly Dictionary<string, List<QualifiedName>> _byTrailing = new(StringComparer.Ordinal);
 
         /// <summary>The containers each written name ends, as the last way a qualifier is found: looked for once.</summary>
-        private readonly Dictionary<string, (IReadOnlyList<Declaration> Value, KeptReads Reads)> _endings = new(StringComparer.Ordinal);
+        private readonly MadeOnce<string, (IReadOnlyList<Declaration> Value, KeptReads Reads)> _endings = new(StringComparer.Ordinal);
 
         /// <summary>Each chain of names written as links, by the chain before its last name and that name: one for each such names, however many write them.</summary>
         private readonly Dictionary<(ChainName? Before, string Name), ChainName> _chainNames = [];
@@ -616,10 +616,10 @@ public static class CodeGraphLinker
         /// The containers a chain of names was found to be, as doubted as they are, from one file and scope, by whether what asks is
         /// reached by a receiver alone (<see cref="NamedContainers(Declaration, ChainName)"/>).
         /// </summary>
-        private readonly Dictionary<(string Path, ScopeKey? Scope, bool ByReceiver, ChainName Written), (Finds Value, KeptReads Reads)> _chainContainersFound = [];
+        private readonly MadeOnce<(string Path, ScopeKey? Scope, bool ByReceiver, ChainName Written), (Finds Value, KeptReads Reads)> _chainContainersFound = new();
 
         /// <summary>The containers each chain of names ends (<see cref="Ending(Declaration, ChainName)"/>), looked for once.</summary>
-        private readonly Dictionary<ChainName, (IReadOnlyList<Declaration> Value, KeptReads Reads)> _chainEndings = new(ReferenceEqualityComparer.Instance);
+        private readonly MadeOnce<ChainName, (IReadOnlyList<Declaration> Value, KeptReads Reads)> _chainEndings = new(ReferenceEqualityComparer.Instance);
 
         /// <summary>Every type's and scope's qualified name as the names its dots part it into, made where a chain is first looked for in it.</summary>
         private NameTrie? _qualifiedTrie;
@@ -637,22 +637,22 @@ public static class CodeGraphLinker
         private Memo<(string Path, ChainName Chain), AliasAnswer> _aliases;
 
         /// <summary>The imports each file makes by a prefix, by the chain of names the prefix writes (<see cref="PrefixedBy"/>), found once for the file.</summary>
-        private readonly Dictionary<string, (Dictionary<ChainName, List<(ExtractImport Import, CodeGraphFile File)>> Value, KeptReads Reads)> _prefixesFound = new(StringComparer.Ordinal);
+        private readonly MadeOnce<string, (Dictionary<ChainName, List<(ExtractImport Import, CodeGraphFile File)>> Value, KeptReads Reads)> _prefixesFound = new(StringComparer.Ordinal);
 
         /// <summary>No import by a prefix: what is known of a file's imports by a prefix while they are being found (<see cref="Cached"/>), which nothing adds to.</summary>
         private static readonly Dictionary<ChainName, List<(ExtractImport Import, CodeGraphFile File)>> NoPrefixes = new(ReferenceEqualityComparer.Instance);
 
         /// <summary>What each file imported by path makes visible of each name, its exports followed: found once, every later finding reading it again.</summary>
-        private readonly Dictionary<(string Path, string Name, bool Suffixed), (IReadOnlyList<Declaration> Value, KeptReads Reads)> _visible = [];
+        private readonly MadeOnce<(string Path, string Name, bool Suffixed), (IReadOnlyList<Declaration> Value, KeptReads Reads)> _visible = new();
 
         /// <summary>Whether each file publishes each name to an import that takes its published names (<see cref="Publishes"/>): found once.</summary>
-        private readonly Dictionary<(string Path, string Name), (bool Value, KeptReads Reads)> _publishes = [];
+        private readonly MadeOnce<(string Path, string Name), (bool Value, KeptReads Reads)> _publishes = new();
 
         /// <summary>The names each file's own list publishes, as a set (<see cref="PublishedOf"/>).</summary>
         private readonly Dictionary<CodeGraphFile, HashSet<string>> _publishedSets = new(ReferenceEqualityComparer.Instance);
 
         /// <summary>What each file imported makes visible by each name an extension is let by (<see cref="Exposed"/>): found once, every later check reading it again.</summary>
-        private readonly Dictionary<(string Start, string Shown), (Exposure Value, KeptReads Reads)> _exposed = [];
+        private readonly MadeOnce<(string Start, string Shown), (Exposure Value, KeptReads Reads)> _exposed = new();
 
         /// <summary>Every member declared to extend a type, by its name: what a call a type does not hold may be.</summary>
         private readonly Dictionary<string, List<Declaration>> _extensions = new(StringComparer.Ordinal);
@@ -661,10 +661,10 @@ public static class CodeGraphLinker
         private readonly Dictionary<string, List<Declaration>> _extending = new(StringComparer.Ordinal);
 
         /// <summary>What each extension extends, as its own file names it (<see cref="Extended"/>): found once.</summary>
-        private readonly Dictionary<Declaration, (IReadOnlyList<Declaration> Value, KeptReads Reads)> _extended = new(ReferenceEqualityComparer.Instance);
+        private readonly MadeOnce<Declaration, (IReadOnlyList<Declaration> Value, KeptReads Reads)> _extended = new(ReferenceEqualityComparer.Instance);
 
         /// <summary>Whether each function is a constructor function another file writes the prototype of (<see cref="Constructs"/>): found once.</summary>
-        private readonly Dictionary<Declaration, (bool Value, KeptReads Reads)> _constructs = new(ReferenceEqualityComparer.Instance);
+        private readonly MadeOnce<Declaration, (bool Value, KeptReads Reads)> _constructs = new(ReferenceEqualityComparer.Instance);
 
         /// <summary>What each file's references found, by the file.</summary>
         private readonly Dictionary<CodeGraphFile, FileFound> _found = new(ReferenceEqualityComparer.Instance);
@@ -686,6 +686,12 @@ public static class CodeGraphLinker
 
         /// <summary>What the finding under way has read; null outside one.</summary>
         private Reading? _reads;
+
+        /// <summary>
+        /// The makings under way of every cache a finding asks (<see cref="Cached"/>): one for them all, so a making that asks for
+        /// its own key through another cache is told as one that asks it directly.
+        /// </summary>
+        private readonly Makings _makings = new();
 
         /// <summary>What each chain a link ends comes to, from each declaration that reads through it (<see cref="ChainTo"/>).</summary>
         private Memo<ChainKey, ChainAnswer> _chains;
@@ -1976,14 +1982,16 @@ public static class CodeGraphLinker
         /// <summary>
         /// The functions a call of the chain <paramref name="chain"/> finds from <paramref name="from"/>, that it sees, by the ways a
         /// call's reference written with it finds what its names hold - a name alone as one written alone is (its scopes, its file's
-        /// imports, the repository's), the last name past the prefix of an import of its file through that import
-        /// (<see cref="Prefixed"/>, as a constructor a <c>require</c> or a default import binds is, its module's <c>default</c>), else
-        /// what the types and scopes the names before it name hold by it (<see cref="Inside"/>) - and never a member a prototype is
-        /// given (<see cref="Extensions"/>), which is an instance's and no name the type holds: <c>Lib.Widget</c> is what <c>Lib</c>
-        /// holds, never <c>Lib.prototype.Widget</c>. The one reading of a chain that names a constructor function, what a prototype's
-        /// members extend (<see cref="Extended"/>) and what a value of the type the chain writes is (<see cref="Extensions"/>) alike;
-        /// and since it reads no extension, what one extension extends is never found from what another extends, so no finding of
-        /// what an extension extends asks for itself, through however many others.
+        /// imports, the repository's), and a chain's last name as what the names before it hold by it statically: through the import its
+        /// prefix is (<see cref="Prefixed"/>, as a constructor a <c>require</c> or a default import binds is, its module's
+        /// <c>default</c>), else in the types and scopes those names name (<see cref="Inside"/>) - a declaration no type holds, and a
+        /// type's member its own code says is the type's own (<see cref="OfAnInstance"/>) - never an instance's member, a member a
+        /// prototype is given among them, whether the type's own file gives it or another (<see cref="Extensions"/>):
+        /// <c>Lib.Widget</c> is what <c>Lib</c> holds, never <c>Lib.prototype.Widget</c>, wherever that is written. The one reading of
+        /// a chain that names a constructor function, what a prototype's members extend (<see cref="Extended"/>) and what a value of the
+        /// type the chain writes is (<see cref="Extensions"/>) alike; and since it reads no extension, what one extension extends is
+        /// never found from what another extends, so no finding of what an extension extends asks for itself, through however many
+        /// others.
         /// </summary>
         private IReadOnlyList<Declaration> FunctionsCalled(Declaration from, string chain)
         {
@@ -1996,10 +2004,27 @@ public static class CodeGraphLinker
 
             var (before, last) = (chain[..dot], chain[(dot + 1)..]);
 
-            return Prefixed(from, before, last, Function) is { Found.Count: > 0 } through
+            // What a chain reaches by the names before its last is what they hold statically, never an instance's member.
+            bool Held(Declaration function) => Function(function) && !OfAnInstance(function);
+
+            return Prefixed(from, before, last, Held) is { Found.Count: > 0 } through
                 ? through.Found
-                : Inside(Containers(from, before).Found, last, Function, withSelf: true);
+                : Inside(Containers(from, before).Found, last, Held, withSelf: true);
         }
+
+        /// <summary>
+        /// Whether <paramref name="member"/> is an instance's: a type of its file holds it, and its own code does not say it is the
+        /// type's own (<see cref="StaticModifier"/>) - a method, a member a prototype is given in the type's own file.
+        /// </summary>
+        private bool OfAnInstance(Declaration member)
+            => !member.Node.Modifiers.Contains(StaticModifier, StringComparer.Ordinal)
+                && member.Node.Parent is { } parent && _owners[member.File].TryGetValue(parent, out var holder) && holder.Node.Kind == CodeNodeKinds.Type;
+
+        /// <summary>
+        /// The modifier a member's own code says it is its type's own and no instance's by, as every language whose types hold both
+        /// writes it and its reader names it (<see cref="ExtractNode.Modifiers"/>).
+        /// </summary>
+        private const string StaticModifier = "static";
 
         /// <summary>Whether <paramref name="declaration"/> is a function: a member a call is made of by its arguments, which a constructor function is.</summary>
         private static bool IsFunction(Declaration declaration) => declaration.Node is { Kind: CodeNodeKinds.Member, MinArity: not null };
@@ -4501,47 +4526,35 @@ public static class CodeGraphLinker
         /// What <paramref name="cache"/> holds for <paramref name="key"/>, made once by <paramref name="make"/>: the finding
         /// under way reads what making it read, whether it made it or found it made - those reads kept once, with the answer,
         /// and read through whole (<see cref="KeptReads"/>), so a check every finding makes costs each of them a reference.
-        /// The key is held from the moment its making begins, as <paramref name="none"/> - what is known of it then, nothing -
-        /// so a finding its making makes that asks for it again, through any other, is given that and never makes it inside
-        /// itself: the walk of what findings ask keeps every key it stands in, as every walk keeps what it has visited, as
-        /// <see cref="Memo{TKey, TAnswer}"/> answers a key met again while it is answered. A making that throws leaves the key
-        /// unheld, so a later finding makes it afresh.
+        /// Every cache shares the link's makings (<see cref="_makings"/>), so a making that asks for its own key again, through
+        /// any other cache, is given <paramref name="none"/> - what is known of it then, nothing, which reads nothing - and never
+        /// makes it inside itself; and an answer made from that placeholder is never kept, but made again from the key's own
+        /// answer once it is known (<see cref="MadeOnce{TKey, TAnswer}"/>), what it read read again with it.
         /// </summary>
-        private T Cached<TKey, T>(Dictionary<TKey, (T Value, KeptReads Reads)> cache, TKey key, T none, Func<T> make)
+        private T Cached<TKey, T>(MadeOnce<TKey, (T Value, KeptReads Reads)> cache, TKey key, T none, Func<T> make)
             where TKey : notnull
         {
-            if (cache.TryGetValue(key, out var known))
+            if (!cache.TryKept(key, out var known))
             {
-                _reads?.Through.Add(known.Reads);
-                return known.Value;
-            }
-
-            var outer = _reads;
-            var reads = _reads = new Reading();
-            var made = false;
-            T value;
-
-            cache[key] = (none, KeptReads.None);
-
-            try
-            {
-                value = make();
-                made = true;
-            }
-            finally
-            {
-                _reads = outer;
-
-                if (!made)
+                known = cache.Of(_makings, key, (none, KeptReads.None), () =>
                 {
-                    cache.Remove(key);
-                }
+                    var outer = _reads;
+                    var reads = _reads = new Reading();
+
+                    try
+                    {
+                        var value = make();
+                        return (value, reads.Kept());
+                    }
+                    finally
+                    {
+                        _reads = outer;
+                    }
+                });
             }
 
-            var kept = reads.Kept();
-            cache[key] = (value, kept);
-            outer?.Through.Add(kept);
-            return value;
+            _reads?.Through.Add(known.Reads);
+            return known.Value;
         }
 
         /// <summary>

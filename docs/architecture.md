@@ -101,6 +101,9 @@ console or `IHarnessOutput`; and nothing in them branches on the operating syste
   a page is read by seeking to its own, so a two-gigabyte log costs a page's memory.
 - `Walks\`: a walk on an explicit stack or queue that keeps a set of what it met (`Walk`); a memo that answers each key
   once from its dependencies' answers, and a key met again while it is being answered by the cycle's own rule (`Memo`);
+  answers made once where making one asks for others as it is made, through any store sharing its makings - a key asked
+  again while it is made given what is known of it then, and an answer made from that placeholder held only for that
+  key's making and made again after it, never kept (`MadeOnce`, `Makings`);
   a chain followed to its end or its first revisit (`Chain`); a step repeated until it says it is done or its state
   repeats, which is told as a cycle (`Fixpoint`); and a recursion moved onto a thread of a larger stack where the stack
   runs short - our own at each level (`DeepCalls.Run`), a library's we do not own on a thread whose stack holds the depth
@@ -4737,13 +4740,14 @@ name an import binds as the export it binds, a `require`'s or a default import's
 on that type (`CodeGraphLinker.EnclosingTypes`: every type its scope or its `Extends` names, several a unique finding and
 never the first of them) - and where no type of X's name is, on the constructor function another file declares, found as a
 call of X is (`CodeGraphLinker.Extended`: a name alone in the scopes, the imports and the repository, a chain's last name
-through the import its prefix is - `Prefixed` - else what the types and scopes the names before it name hold by it, never a
-member a prototype is given, which is an instance's and no name the type holds - `Lib.Widget` is never
-`Lib.prototype.Widget` - so what one extension extends is never found from what another extends, and no finding of it asks
-for itself), whose own `this` is read on it too and whose `new` makes it (`Constructs`, by the members extending each name
-it is reached by, its own and each it is exported by); two chains naming a type the repository does not declare name it
-alike where one is the other or ends it at a name (`WrittenAlike`), never two modules' `default`s. Such a member is the
-type's own wherever the type is (`ExtractNode.Joined`) - the assignment adds it to the type itself when its file runs - so a
+as what the names before it hold by it statically - through the import its prefix is, `Prefixed`, else in the types and
+scopes those names name - a declaration no type holds, or a type's member its own code says is `static` (`OfAnInstance`),
+never an instance's member, a member a prototype is given among them whether `Lib`'s own file gives it or another -
+`Lib.Widget` is never `Lib.prototype.Widget` - so what one extension extends is never found from what another extends,
+and no finding of it asks for itself), whose own `this` is read on it too and whose `new` makes it (`Constructs`, by the
+members extending each name it is reached by, its own and each it is exported by); two chains naming a type the
+repository does not declare name it alike where one is the other or ends it at a name (`WrittenAlike`), never two modules'
+`default`s. Such a member is the type's own wherever the type is (`ExtractNode.Joined`) - the assignment adds it to the type itself when its file runs - so a
 call on a value of the type, or of a type built on it, reaches it whatever loaded the file that writes it, an import for its
 side effect alone that binds no name among them, where a C# or a Dart extension is reached only where the call's file
 reaches it (`Reaches`); a value of a type a chain names that no type is, is of the constructor function a call of the chain
@@ -5042,10 +5046,11 @@ and finds again only the references of the files not given as the very object th
 finding read a key whose part - what each changed file holds of it - is not what it was, the bases each round found moved
 among them; every other reference keeps its finding, and `References` counts what was found. What findings ask again -
 what a written name is from a file and a scope, what an extension extends, what a file imported makes visible by a name -
-is found once, with what finding it read (`CodeGraphLinker.Cached`), its key held from the moment its making begins: a
+is found once, with what finding it read (`CodeGraphLinker.Cached`, every cache sharing the link's makings, `MadeOnce`): a
 making that asks for its own key again, through however many others, is given what is known of it then, nothing, and
-never makes it inside itself, as `Memo` answers a key met again while it is answered. A global import is read from the
-file that makes it, so a relative one names the same file from every file of its language. An interface's member dispatches, for each type that implements it -
+never makes it inside itself, and an answer made from that placeholder is never kept but made again from the key's own
+answer once it is known, so no finding reads an answer made from nothing. A global import is read from the file that
+makes it, so a relative one names the same file from every file of its language. An interface's member dispatches, for each type that implements it -
 itself or through a base, the interface itself or one extending it - to the member with a body that answers it: the type's
 own, else its nearest base's it inherits or mixes in, never an interface's own, which has none. A dispatch is as sure as
 the least sure edge on its way up, each of several bases that answer alike is one of the candidates, however many, and
@@ -5383,14 +5388,16 @@ path's places read by `CodeKeyPaths.Places`, which reads a place in brackets onl
 a quoted name, whose dot parts nothing - so `this[]` of `Canvas.this[]` and `operator[]` of `Vec::operator[]` are names), for a
 name written with its scopes and a key path in any spelling are written in code and in data by their last name (`shape.Area()`,
 `"TimeoutSeconds": 30`) - a datum spelt as .NET's configuration spells a key path read as one where it names a key, where
-the path it spells finds code's members, none a key (`Secret` of `JwtSettings:Secret`, a member the options pattern binds a
-section to), or where nothing names it and it is written as no node's id and no file's line, and as the name code declares
-where a definer, none of them a key, is named by it as it is written (`RETRY__LIMIT`); a selector never, so `.card__title`
-is the class a BEM element names and never the path `.card.title` - and each key path it names by its places as an
-environment variable writes them too, every key's among its definers however many and the path it spells where it is read
-as one (`CodeKeyPaths.Environment`: `Payments__TimeoutSeconds`, which no whole word of its last key is held by) - by the one whole-word rule every search of the graph reads (`GraphWord.Whole`: a boundary beside each
-edge of the word that is a word character, an edge that is none its own boundary, so `.btn-primary` is held by
-`button.btn-primary`) and, for a selector, the selector with no character of a class's name after it, so `.btn` is not held by
+only the path it spells finds its definers, code's members, none a key (`Secret` of `JwtSettings:Secret`, a member the
+options pattern binds a section to), or where nothing names it and it is written as no node's id and no file's line, and as
+the name code declares where a definer, none of them a key, is found by it as it is written - by its name, its qualified
+name or with some of its scopes, each rule of the one reading of a name saying which form found what it found
+(`CodebaseGraphQueries.NamedBy`): `RETRY__LIMIT` of `Retry.RETRY__LIMIT`, `__validate` of `Foo.__validate`; a selector
+never, so `.card__title` is the class a BEM element names and never the path `.card.title` - and each key path it names by
+its places as an environment variable writes them too, every key's among its definers however many and the path it spells
+where it is read as one (`CodeKeyPaths.Environment`: `Payments__TimeoutSeconds`, which no whole word of its last key is held
+by) - by the one whole-word rule every search of the graph reads (`GraphWord.Whole`: a boundary beside each edge of the word
+that is a word character, an edge that is none its own boundary, so `.btn-primary` is held by `button.btn-primary`) and, for a selector, the selector with no character of a class's name after it, so `.btn` is not held by
 `.btn-primary`, and its bare name as a whole word of a class list too (`class="btn btn-primary"`, `addClass('btn-primary')`), the
 one owner of what a value or a line holds of the datum (`GraphSitesSearch`): no pattern is compiled of the word or of the key
 paths, so none is refused for its length - a quoted value of twenty thousand characters is searched as one of five - and none
