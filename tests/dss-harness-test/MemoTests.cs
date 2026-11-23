@@ -12,8 +12,9 @@ public sealed class MemoTests
 {
     /// <summary>
     /// A key two others depend on is answered once and asked what it depends on once; a key that depends, through
-    /// another, on itself is given the cycle's answer where it is met again, and is recorded as a cycle; and a key asked
-    /// again later is given its first answer, nothing asked anew.
+    /// another, on itself is of a cycle - it is given the cycle's answer where it is met again, it and the key that met
+    /// it again keep that answer, and it is recorded as a cycle - while the keys they depend on outside the cycle keep
+    /// what they were answered; and a key asked again later is given its first answer, nothing asked anew.
     /// </summary>
     [Fact]
     public void EachKeyIsAnsweredOnce_AndACycleByOnCycle()
@@ -41,8 +42,8 @@ public sealed class MemoTests
             key => $"cycle:{key}",
             StringComparer.Ordinal);
 
-        Assert.Equal("a(b(d()),c(d(),cycle:a),b(d()))", memo.Of("a"));
-        Assert.Equal("c(d(),cycle:a)", memo.Of("c"));
+        Assert.Equal("cycle:a", memo.Of("a"));
+        Assert.Equal(("cycle:c", "b(d())", "d()"), (memo.Of("c"), memo.Of("b"), memo.Of("d")));
 
         Assert.Equal(["d", "b", "c", "a"], answered);
         Assert.Equal(["a", "b", "d", "c"], asked);

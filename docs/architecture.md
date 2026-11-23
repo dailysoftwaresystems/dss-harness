@@ -102,11 +102,14 @@ console or `IHarnessOutput`; and nothing in them branches on the operating syste
 - `Walks\`: a walk on an explicit stack or queue that keeps a set of what it met (`Walk`); a memo that answers each key
   once from its dependencies' answers, and a key met again while it is being answered by the cycle's own rule (`Memo`);
   answers made once where making one asks for others as it is made, through any store sharing its makings, a memo
-  given them among them - a key asked again while it is made given what is known of it then, an answer made from that
-  placeholder held for the making of the outermost key it leans on, each key of a cycle made once there; once it ends,
-  the outermost key's own answer, made from those, the one kept, every answer held for it made again at its next ask,
-  never kept - so a cycle's keys asked one after another from outside it each make again the keys below them, a cost
-  only a cycle pays (`MadeOnce`, `Makings`);
+  given them among them (`MadeOnce`, `Makings`), the makings taken as the graph they make and its strongly connected sets
+  found as they close, on the making stack alone and with no recursion: a key asked again while it is being made -
+  directly or through any store that shares the makings - is a cycle; every key of a strongly connected set of makings
+  that holds a cycle answers its placeholder, nothing known, with whatever its store keeps beside it of what the whole set
+  read, and every read of such a key, while the set is made and after, is given that answer; every other key keeps the
+  answer its making made; each key is made once, each set is closed once as its outermost making ends, and nothing kept
+  is ever made again - so the answer a key keeps does not depend on which key of it is asked first, and the work is
+  linear in the makings and the reads, however deep the cycles nest;
   a chain followed to its end or its first revisit (`Chain`); a step repeated until it says it is done or its state
   repeats, which is told as a cycle (`Fixpoint`); and a recursion moved onto a thread of a larger stack where the stack
   runs short - our own at each level (`DeepCalls.Run`), a library's we do not own on a thread whose stack holds the depth
@@ -5092,13 +5095,16 @@ finding read a key whose part - what each changed file holds of it - is not what
 among them; every other reference keeps its finding, and `References` counts what was found. What findings ask again -
 what a written name is from a file and a scope, what an extension extends, what a file imported makes visible by a name -
 is found once, with what finding it read (`CodeGraphLinker.Cached`), every cache of the link - those, the chains' and the
-aliases' memos, the links of chains stepped - sharing one set of makings (`MadeOnce`, `Makings`): a making that asks for
-its own key again, through however many others, is given what is known of it then, nothing, and never makes it inside
-itself; an answer made from that placeholder is held for the making of the outermost key it leans on, each key of a cycle
-made once there however deep the cycles nest; once that making ends, the outermost key's own answer, made from those, is
-kept - the one answer kept that a placeholder reached - and every answer held for it is made again at its next ask from
-that answer, never kept. So a cycle's keys asked one after another from outside it each make again the keys below them:
-a cost only a cycle pays, and no making of the link reaches one. A global import is read from the file that makes it, so a
+aliases' memos, the links of chains stepped - sharing one set of makings (`MadeOnce`, `Makings`), the makings taken as the
+graph they make and its strongly connected sets found as they close, on the making stack alone and with no recursion: a
+key asked again while it is being made - directly or through any store that shares the makings - is a cycle; every key of a
+strongly connected set of makings that holds a cycle answers its placeholder, nothing known, with whatever its store keeps beside
+it of what the whole set read - here each member's made reads, joined once into the one `KeptReads` every member's kept answer
+carries - and every read of such a key, while the set is made and after, is given that answer; every other key keeps the answer
+its making made; each key is made once, each set is closed once as its outermost making ends, and nothing kept is ever made
+again - so the link's work is linear in the makings and the reads, whatever key is asked first and however deep the cycles nest. No
+making of the link reaches a cycle: what comes round in a language's imports, re-exports or bases is walked inside one
+making, each file once, the union of what it reaches. A global import is read from the file that makes it, so a
 relative one names the same file from every file of its language. An interface's member dispatches, for each type that implements it -
 itself or through a base, the interface itself or one extending it - to the member with a body that answers it: the type's
 own, else its nearest base's it inherits or mixes in, never an interface's own, which has none. A dispatch is as sure as

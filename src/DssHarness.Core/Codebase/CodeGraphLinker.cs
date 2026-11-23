@@ -312,10 +312,11 @@ public static class CodeGraphLinker
     /// What a finding read, kept so that a part many findings read is kept once: the keys read directly, as
     /// <see cref="LinkKeys"/> numbers them, and the reads read through whole - a chain's link's, its own keys and the reads
     /// of the link before it - so a chain of n links keeps each link's keys once, however many of its references read it.
+    /// What one is read through is never one made after it, so reads read through never come round.
     /// </summary>
     /// <param name="keys">The keys read directly.</param>
     /// <param name="through">The reads read through, each whole.</param>
-    internal sealed class KeptReads(int[] keys, KeptReads[] through)
+    internal sealed class KeptReads(int[] keys, IReadOnlyList<KeptReads> through)
     {
         /// <summary>No read at all.</summary>
         public static KeptReads None { get; } = new([], []);
@@ -324,7 +325,27 @@ public static class CodeGraphLinker
         public int[] Keys { get; } = keys;
 
         /// <summary>The reads read through, each whole.</summary>
-        public KeptReads[] Through { get; } = through;
+        public IReadOnlyList<KeptReads> Through { get; } = through;
+    }
+
+    /// <summary>
+    /// What a cycle of the link's makings read, all of it (<see cref="Linking.Cached"/>): one <see cref="KeptReads"/> read through
+    /// every member's made reads, each joined in as the cycle closes, so that the same object is what every member's kept
+    /// answer carries and a finding reading any member after the cycle closed reads the whole cycle. Grown only while the
+    /// cycle closes, read only after: a member's made reads are the placeholder's, none, where it read another member.
+    /// </summary>
+    private sealed class CycleReads(List<KeptReads> through)
+    {
+        /// <summary>The reads of the whole cycle, which every member's kept answer carries.</summary>
+        public KeptReads Joined { get; } = new([], through);
+
+        /// <summary>Joins what a member <paramref name="made"/> its reads into the cycle's, and gives the cycle's.</summary>
+        /// <param name="made">The member's made reads.</param>
+        public KeptReads Joins(KeptReads made)
+        {
+            through.Add(made);
+            return Joined;
+        }
     }
 
     /// <summary>
@@ -603,13 +624,13 @@ public static class CodeGraphLinker
         /// reached by a receiver alone (<see cref="ByReceiver"/>) - everything the answer depends on
         /// (<see cref="NamedContainers(Declaration, string)"/>): a name such as a type no file declares is looked for once.
         /// </summary>
-        private readonly MadeOnce<(string Path, ScopeKey? Scope, bool ByReceiver, string Written), (Finds Value, KeptReads Reads)> _containersFound = new();
+        private readonly MadeOnce<(string Path, ScopeKey? Scope, bool ByReceiver, string Written), (Finds Value, KeptReads Reads)> _containersFound = Store<(string Path, ScopeKey? Scope, bool ByReceiver, string Written), Finds>(Finds.None);
 
         /// <summary>Every type's and scope's qualified name by the run of a name's characters it ends with, in ordinal order: where an ending is looked for.</summary>
         private readonly Dictionary<string, List<QualifiedName>> _byTrailing = new(StringComparer.Ordinal);
 
         /// <summary>The containers each written name ends, as the last way a qualifier is found: looked for once.</summary>
-        private readonly MadeOnce<string, (IReadOnlyList<Declaration> Value, KeptReads Reads)> _endings = new(StringComparer.Ordinal);
+        private readonly MadeOnce<string, (IReadOnlyList<Declaration> Value, KeptReads Reads)> _endings = Store<string, IReadOnlyList<Declaration>>([], StringComparer.Ordinal);
 
         /// <summary>Each chain of names written as links, by the chain before its last name and that name: one for each such names, however many write them.</summary>
         private readonly Dictionary<(ChainName? Before, string Name), ChainName> _chainNames = [];
@@ -624,10 +645,10 @@ public static class CodeGraphLinker
         /// The containers a chain of names was found to be, as doubted as they are, from one file and scope, by whether what asks is
         /// reached by a receiver alone (<see cref="NamedContainers(Declaration, ChainName)"/>).
         /// </summary>
-        private readonly MadeOnce<(string Path, ScopeKey? Scope, bool ByReceiver, ChainName Written), (Finds Value, KeptReads Reads)> _chainContainersFound = new();
+        private readonly MadeOnce<(string Path, ScopeKey? Scope, bool ByReceiver, ChainName Written), (Finds Value, KeptReads Reads)> _chainContainersFound = Store<(string Path, ScopeKey? Scope, bool ByReceiver, ChainName Written), Finds>(Finds.None);
 
         /// <summary>The containers each chain of names ends (<see cref="Ending(Declaration, ChainName)"/>), looked for once.</summary>
-        private readonly MadeOnce<ChainName, (IReadOnlyList<Declaration> Value, KeptReads Reads)> _chainEndings = new(ReferenceEqualityComparer.Instance);
+        private readonly MadeOnce<ChainName, (IReadOnlyList<Declaration> Value, KeptReads Reads)> _chainEndings = Store<ChainName, IReadOnlyList<Declaration>>([], ReferenceEqualityComparer.Instance);
 
         /// <summary>Every type's and scope's qualified name as the names its dots part it into, made where a chain is first looked for in it.</summary>
         private NameTrie? _qualifiedTrie;
@@ -645,22 +666,22 @@ public static class CodeGraphLinker
         private Memo<(string Path, ChainName Chain), AliasAnswer> _aliases;
 
         /// <summary>The imports each file makes by a prefix, by the chain of names the prefix writes (<see cref="PrefixedBy"/>), found once for the file.</summary>
-        private readonly MadeOnce<string, (Dictionary<ChainName, List<(ExtractImport Import, CodeGraphFile File)>> Value, KeptReads Reads)> _prefixesFound = new(StringComparer.Ordinal);
+        private readonly MadeOnce<string, (Dictionary<ChainName, List<(ExtractImport Import, CodeGraphFile File)>> Value, KeptReads Reads)> _prefixesFound = Store<string, Dictionary<ChainName, List<(ExtractImport Import, CodeGraphFile File)>>>(NoPrefixes, StringComparer.Ordinal);
 
-        /// <summary>No import by a prefix: what is known of a file's imports by a prefix while they are being found (<see cref="Cached"/>), which nothing adds to.</summary>
+        /// <summary>No import by a prefix: what is known of a file's imports by a prefix while they are being found, and of one of a cycle kept (<see cref="Cached"/>), which nothing adds to.</summary>
         private static readonly Dictionary<ChainName, List<(ExtractImport Import, CodeGraphFile File)>> NoPrefixes = new(ReferenceEqualityComparer.Instance);
 
         /// <summary>What each file imported by path makes visible of each name, its exports followed: found once, every later finding reading it again.</summary>
-        private readonly MadeOnce<(string Path, string Name, bool Suffixed), (IReadOnlyList<Declaration> Value, KeptReads Reads)> _visible = new();
+        private readonly MadeOnce<(string Path, string Name, bool Suffixed), (IReadOnlyList<Declaration> Value, KeptReads Reads)> _visible = Store<(string Path, string Name, bool Suffixed), IReadOnlyList<Declaration>>([]);
 
         /// <summary>Whether each file publishes each name to an import that takes its published names (<see cref="Publishes"/>): found once.</summary>
-        private readonly MadeOnce<(string Path, string Name), (bool Value, KeptReads Reads)> _publishes = new();
+        private readonly MadeOnce<(string Path, string Name), (bool Value, KeptReads Reads)> _publishes = Store<(string Path, string Name), bool>(false);
 
         /// <summary>The names each file's own list publishes, as a set (<see cref="PublishedOf"/>).</summary>
         private readonly Dictionary<CodeGraphFile, HashSet<string>> _publishedSets = new(ReferenceEqualityComparer.Instance);
 
         /// <summary>What each file imported makes visible by each name an extension is let by (<see cref="Exposed"/>): found once, every later check reading it again.</summary>
-        private readonly MadeOnce<(string Start, string Shown), (Exposure Value, KeptReads Reads)> _exposed = new();
+        private readonly MadeOnce<(string Start, string Shown), (Exposure Value, KeptReads Reads)> _exposed = Store<(string Start, string Shown), Exposure>(Exposure.None);
 
         /// <summary>Every member declared to extend a type, by its name: what a call a type does not hold may be.</summary>
         private readonly Dictionary<string, List<Declaration>> _extensions = new(StringComparer.Ordinal);
@@ -669,10 +690,10 @@ public static class CodeGraphLinker
         private readonly Dictionary<string, List<Declaration>> _extending = new(StringComparer.Ordinal);
 
         /// <summary>What each extension extends, as its own file names it (<see cref="Extended"/>): found once.</summary>
-        private readonly MadeOnce<Declaration, (IReadOnlyList<Declaration> Value, KeptReads Reads)> _extended = new(ReferenceEqualityComparer.Instance);
+        private readonly MadeOnce<Declaration, (IReadOnlyList<Declaration> Value, KeptReads Reads)> _extended = Store<Declaration, IReadOnlyList<Declaration>>([], ReferenceEqualityComparer.Instance);
 
         /// <summary>Whether each function is a constructor function another file writes the prototype of (<see cref="Constructs"/>): found once.</summary>
-        private readonly MadeOnce<Declaration, (bool Value, KeptReads Reads)> _constructs = new(ReferenceEqualityComparer.Instance);
+        private readonly MadeOnce<Declaration, (bool Value, KeptReads Reads)> _constructs = Store<Declaration, bool>(false, ReferenceEqualityComparer.Instance);
 
         /// <summary>What each file's references found, by the file.</summary>
         private readonly Dictionary<CodeGraphFile, FileFound> _found = new(ReferenceEqualityComparer.Instance);
@@ -698,7 +719,7 @@ public static class CodeGraphLinker
         /// <summary>
         /// The makings under way of every cache a finding asks - each <see cref="Cached"/> store, the chains' and the aliases' memos,
         /// the links of chains stepped: one for them all, so a making that asks for its own key through another cache is told as one
-        /// that asks it directly, and no cache keeps an answer made from a placeholder but the cycle's outermost key's.
+        /// that asks it directly, and every key of a cycle keeps nothing known of it, with all that the cycle read.
         /// </summary>
         private readonly Makings _makings = new();
 
@@ -706,7 +727,7 @@ public static class CodeGraphLinker
         private Memo<ChainKey, ChainAnswer> _chains;
 
         /// <summary>Each link of a chain stepped, by its declaration, the chain before it and its names (<see cref="NewChains"/>).</summary>
-        private readonly MadeOnce<ChainLink, ChainAnswer> _chainSteps = new(ChainLink.Comparer);
+        private readonly MadeOnce<ChainLink, ChainAnswer> _chainSteps = new(_ => ChainAnswer.None, (_, made, cycle) => NothingKnown(made, cycle), ChainLink.Comparer);
 
         /// <summary>How many links of chains were stepped (<see cref="CodeGraphLinked.ChainLinks"/>).</summary>
         private int _chainLinks;
@@ -1980,7 +2001,7 @@ public static class CodeGraphLinker
         /// file writes. Found once.
         /// </summary>
         private IReadOnlyList<Declaration> Extended(Declaration extension)
-            => Cached(_extended, extension, [], () =>
+            => Cached(_extended, extension, () =>
             {
                 var extends = extension.Node.Extends!;
 
@@ -2050,7 +2071,7 @@ public static class CodeGraphLinker
         /// chain it extends (<c>Cart.default</c>). Found once.
         /// </summary>
         private bool Constructs(Declaration function)
-            => IsFunction(function) && Cached(_constructs, function, false, () =>
+            => IsFunction(function) && Cached(_constructs, function, () =>
             {
                 foreach (var name in ((string[])[function.Node.Name, .. function.Node.Exports ?? []]).Distinct(StringComparer.Ordinal))
                 {
@@ -2129,7 +2150,7 @@ public static class CodeGraphLinker
         /// and a name, every later check reading the first one's answer and what it read.
         /// </summary>
         private Exposure Exposed(string start, string shown)
-            => Cached(_exposed, (start, shown), Exposure.None, () =>
+            => Cached(_exposed, (start, shown), () =>
             {
                 var exposure = new Exposure(new HashSet<string>(StringComparer.Ordinal), []);
                 var pending = new Stack<string>([start]);
@@ -2163,7 +2184,7 @@ public static class CodeGraphLinker
         /// <summary>What a file imported makes visible by a name (<see cref="Exposed"/>): the files it reaches, and the open scopes they declare.</summary>
         private sealed record Exposure(HashSet<string> Files, HashSet<ScopeKey> Opens)
         {
-            /// <summary>Nothing made visible: what is known of an exposure while it is being found (<see cref="Cached"/>), which nothing adds to.</summary>
+            /// <summary>Nothing made visible: what is known of an exposure while it is being found, and of one of a cycle kept (<see cref="Cached"/>), which nothing adds to.</summary>
             public static Exposure None { get; } = new(new HashSet<string>(StringComparer.Ordinal), []);
         }
 
@@ -2234,7 +2255,7 @@ public static class CodeGraphLinker
                 var prefix = before.Count > 0 ? before[0] : null;
                 var link = new ChainLink(key.From, prefix, prefix is null ? reference.Qualifier?.Name?.Whole() : null, prefix is null && reference.Qualifier?.Kind is CodeQualifierKinds.Type or CodeQualifierKinds.This ? reference.Qualifier.Kind : null, reference.Name);
 
-                return _chainSteps.Of(_makings, link, ChainAnswer.None, () =>
+                return _chainSteps.Of(_makings, link, () =>
                 {
                     var outer = _reads;
                     var reads = _reads = new Reading();
@@ -2266,7 +2287,8 @@ public static class CodeGraphLinker
             },
             _ => ChainAnswer.None,
             ChainKey.Comparer,
-            _makings);
+            _makings,
+            (_, made, cycle) => NothingKnown(made, cycle));
 
         /// <summary>What the chain of names <paramref name="written"/> comes to from where <paramref name="from"/> stands, a name at a time.</summary>
         private Chained Fold(Declaration from, string written)
@@ -2367,7 +2389,7 @@ public static class CodeGraphLinker
 
             // What a name is from one place it is the same from every declaration there that is alike reached by a receiver alone or
             // not - which the scopes looked in (Scoped) and what is seen (Sees) answer by: found once for each.
-            return Cached(_containersFound, (from.File.Path, from.ScopeKey, ByReceiver(from), written), Finds.None, () =>
+            return Cached(_containersFound, (from.File.Path, from.ScopeKey, ByReceiver(from), written), () =>
             {
                 if (Scoped(from, written, Seen) is { Count: > 0 } scoped)
                 {
@@ -2391,7 +2413,7 @@ public static class CodeGraphLinker
         /// <summary>Every type and scope <paramref name="from"/>'s file sees whose qualified name ends with <paramref name="written"/> at a name's boundary: found once for each.</summary>
         private IReadOnlyList<Declaration> Ending(Declaration from, string written)
         {
-            var ending = Cached(_endings, written, [], () => Distinct(QualifiedEnding(Trailing(written))
+            var ending = Cached(_endings, written, () => Distinct(QualifiedEnding(Trailing(written))
                 .Where(qualified => EndsWithName(qualified.Whole(), written))
                 .SelectMany(qualified => ContainersOf(qualified))));
 
@@ -2421,7 +2443,7 @@ public static class CodeGraphLinker
         {
             bool Seen(Declaration container) => IsContainer(container) && Sees(from, container);
 
-            return Cached(_chainContainersFound, (from.File.Path, from.ScopeKey, ByReceiver(from), written), Finds.None, () =>
+            return Cached(_chainContainersFound, (from.File.Path, from.ScopeKey, ByReceiver(from), written), () =>
             {
                 _dottedTrie ??= DottedTrie();
 
@@ -2510,7 +2532,8 @@ public static class CodeGraphLinker
                 }
             },
             _ => new AliasAnswer([], [], KeptReads.None),
-            makings: _makings);
+            makings: _makings,
+            cycled: (_, made, cycle) => new AliasAnswer([], [], ReadsOfCycle(cycle, made.Reads)));
 
         /// <summary>
         /// Where <paramref name="state"/> stands one name - <paramref name="name"/> - further: a scope import's, at that name under
@@ -2538,7 +2561,7 @@ public static class CodeGraphLinker
         /// into the chain it writes, once for the file, the finding under way reading what finding its imports read.
         /// </summary>
         private IReadOnlyList<(ExtractImport Import, CodeGraphFile File)> PrefixedBy(CodeGraphFile file, ChainName chain)
-            => Cached(_prefixesFound, file.Path, NoPrefixes, () =>
+            => Cached(_prefixesFound, file.Path, () =>
             {
                 var byChain = new Dictionary<ChainName, List<(ExtractImport Import, CodeGraphFile File)>>(ReferenceEqualityComparer.Instance);
 
@@ -2618,7 +2641,7 @@ public static class CodeGraphLinker
         /// <summary>The containers each chain of names ends, as <see cref="Ending(Declaration, string)"/> finds those its names written out end, each compared from its last name back: found once.</summary>
         private IReadOnlyList<Declaration> Ending(Declaration from, ChainName written)
         {
-            var ending = Cached(_chainEndings, written, [], () => Distinct(QualifiedEnding(Trailing(written.Name))
+            var ending = Cached(_chainEndings, written, () => Distinct(QualifiedEnding(Trailing(written.Name))
                 .Where(qualified => written.EndsName(qualified.Whole()))
                 .SelectMany(qualified => ContainersOf(qualified))));
 
@@ -3017,7 +3040,11 @@ public static class CodeGraphLinker
         /// <summary>What a chain a link ends comes to, with everything reading it read.</summary>
         private sealed record ChainAnswer(Chained State, KeptReads Reads)
         {
-            /// <summary>Nothing known: a chain no value is, which read nothing - what a link is while it is being stepped, and a cycle's.</summary>
+            /// <summary>
+            /// Nothing known: a chain no value is, which read nothing - what a link is while it is being stepped, and what one of a
+            /// cycle is read as while its cycle is made; kept for a link of a cycle with all the cycle read instead
+            /// (<see cref="NothingKnown"/>).
+            /// </summary>
             public static ChainAnswer None { get; } = new(Chained.None, KeptReads.None);
         }
 
@@ -3130,7 +3157,7 @@ public static class CodeGraphLinker
         /// </summary>
         private readonly record struct Finds(IReadOnlyList<Declaration> Found, string Confidence, ImportDoubt Doubt = ImportDoubt.None)
         {
-            /// <summary>Nothing found: what is known of a finding while it is being made (<see cref="Cached"/>).</summary>
+            /// <summary>Nothing found: what is known of a finding while it is being made, and of one of a cycle kept (<see cref="Cached"/>).</summary>
             public static Finds None { get; } = new([], CodeConfidences.Exact);
         }
 
@@ -3280,7 +3307,7 @@ public static class CodeGraphLinker
         /// publishes is read under the file's own key, as what an import of it by its path makes visible is.
         /// </summary>
         private bool Publishes(string path, string name)
-            => Cached(_publishes, (path, name), false, () =>
+            => Cached(_publishes, (path, name), () =>
             {
                 var seen = new HashSet<string>(StringComparer.Ordinal);
                 var pending = new Stack<string>([path]);
@@ -3334,7 +3361,7 @@ public static class CodeGraphLinker
         /// </summary>
         private IReadOnlyList<Declaration> Visible(string start, string name, HashSet<string>? walked, bool suffixed)
             => walked is null
-                ? Cached(_visible, (start, name, suffixed), [], () => VisibleFrom(start, name, new HashSet<string>(StringComparer.Ordinal), suffixed))
+                ? Cached(_visible, (start, name, suffixed), () => VisibleFrom(start, name, new HashSet<string>(StringComparer.Ordinal), suffixed))
                 : VisibleFrom(start, name, walked, suffixed);
 
         /// <summary>
@@ -3432,7 +3459,7 @@ public static class CodeGraphLinker
 
         /// <summary>The files of the tree <paramref name="import"/> names, by its form: found once for each import of each file.</summary>
         private IReadOnlyList<string> FilesOf(ExtractImport import, CodeGraphFile file)
-            => Cached(_imported.TryGetValue(file, out var ofFile) ? ofFile : _imported[file] = new(ReferenceEqualityComparer.Instance), import, [], () => FindFiles(import, file));
+            => Cached(_imported.TryGetValue(file, out var ofFile) ? ofFile : _imported[file] = Store<ExtractImport, IReadOnlyList<string>>([], ReferenceEqualityComparer.Instance), import, () => FindFiles(import, file));
 
         private IReadOnlyList<string> FindFiles(ExtractImport import, CodeGraphFile file)
         {
@@ -4577,21 +4604,23 @@ public static class CodeGraphLinker
         /// What <paramref name="cache"/> holds for <paramref name="key"/>, made once by <paramref name="make"/>: the finding
         /// under way reads what making it read, whether it made it or found it made - those reads kept once, with the answer,
         /// and read through whole (<see cref="KeptReads"/>), so a check every finding makes costs each of them a reference.
-        /// Every cache of the link shares its makings (<see cref="_makings"/>), so a making that asks for its own key again, through
-        /// any other cache, is given <paramref name="none"/> - what is known of it then, nothing, which reads nothing - and never
-        /// makes it inside itself. An answer made from that placeholder is held for the making of the outermost key it leans on, each
-        /// key of a cycle made once there; once that making ends, the outermost key's own answer, made from those, is kept - the one
-        /// answer kept that a placeholder reached - and every answer held for it is made again at its next ask, from that answer,
-        /// what it read read again with it, never kept (<see cref="MadeOnce{TKey, TAnswer}"/>). So a cycle's keys asked one after
-        /// another from outside it each make again the keys below them: a cost only a cycle pays, and no making of the link reaches
-        /// one.
+        /// Every cache of the link shares its makings (<see cref="_makings"/>). A key asked again while it is being made - directly
+        /// or through any store that shares the makings - is a cycle. Every key of a strongly connected set of makings that holds a
+        /// cycle answers its placeholder - nothing known, what its cache was made with (<see cref="Store{TKey, T}"/>), which reads
+        /// nothing - with whatever its store keeps beside it of what the whole set read: each member's made reads, joined once into
+        /// the one <see cref="KeptReads"/> every member's kept answer carries (<see cref="CycleReads"/>); every read of such a key,
+        /// while the set is made and after, is given that answer. Every other key keeps the answer its making made. Each key is made once,
+        /// each set is closed once as its outermost making ends, and nothing kept is ever made again: the link's work is linear in
+        /// the makings and the reads, whatever key is asked first and however deep the cycles nest
+        /// (<see cref="MadeOnce{TKey, TAnswer}"/>). No making of the link reaches a cycle today: what comes round in the imports,
+        /// re-exports and bases of a language is walked inside one making, each file once, the union of what it reaches.
         /// </summary>
-        private T Cached<TKey, T>(MadeOnce<TKey, (T Value, KeptReads Reads)> cache, TKey key, T none, Func<T> make)
+        private T Cached<TKey, T>(MadeOnce<TKey, (T Value, KeptReads Reads)> cache, TKey key, Func<T> make)
             where TKey : notnull
         {
             if (!cache.TryKept(key, out var known))
             {
-                known = cache.Of(_makings, key, (none, KeptReads.None), () =>
+                known = cache.Of(_makings, key, () =>
                 {
                     var outer = _reads;
                     var reads = _reads = new Reading();
@@ -4611,6 +4640,29 @@ public static class CodeGraphLinker
             _reads?.Through.Add(known.Reads);
             return known.Value;
         }
+
+        /// <summary>
+        /// A cache of the link (<see cref="Cached"/>): a key's answer is made once, and what is known of it while it is made,
+        /// and kept for it on a cycle, is <paramref name="none"/> - then with all the cycle read (<see cref="ReadsOfCycle"/>).
+        /// </summary>
+        /// <param name="none">What is known of a key while it is being made: nothing.</param>
+        /// <param name="comparer">What makes two keys one; the key's own equality where none is given.</param>
+        private static MadeOnce<TKey, (T Value, KeptReads Reads)> Store<TKey, T>(T none, IEqualityComparer<TKey>? comparer = null)
+            where TKey : notnull
+            => new(_ => (none, KeptReads.None), (_, made, cycle) => (none, ReadsOfCycle(cycle, made.Reads)), comparer);
+
+        /// <summary>
+        /// What a cycle of the link read, kept for a key of it: every member's made reads joined once, into the one
+        /// <see cref="KeptReads"/> each of their kept answers carries.
+        /// </summary>
+        /// <param name="cycle">The cycle closing.</param>
+        /// <param name="made">The reads the member's making made.</param>
+        private static KeptReads ReadsOfCycle(Cycle cycle, KeptReads made) => cycle.Shared(() => new CycleReads([])).Joins(made);
+
+        /// <summary>What a chain's link, a key of a cycle, keeps: nothing known of it, with all the cycle read.</summary>
+        /// <param name="made">The answer its making made.</param>
+        /// <param name="cycle">The cycle closing.</param>
+        private static ChainAnswer NothingKnown(ChainAnswer made, Cycle cycle) => new(Chained.None, ReadsOfCycle(cycle, made.Reads));
 
         /// <summary>
         /// Every key a change altered since the link this is made from: of each file not given as the very object that link
