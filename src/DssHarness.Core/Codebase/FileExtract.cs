@@ -602,6 +602,17 @@ public sealed record ExtractNode(QualifiedName Id, string Kind, string Name, Qua
     public bool Test { get; init; }
 
     /// <summary>
+    /// Whether it is a test where a type is a test type that its own file cannot tell is one - a type built on bases, of which
+    /// one may be a test type another file declares, and each member such a type holds that is named as its language names a
+    /// test: a type so marked is a test type where one of its bases is, along the bases the linker found, however deep, and a
+    /// member so marked is a test where the type that holds it is - as a Python test file's class built on a <c>TestCase</c>
+    /// subclass another module declares is, with its <c>test*</c> methods. The linker gives each such test its <c>tests</c>
+    /// edges as it gives a marked one (<see cref="Test"/>).
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool TestByType { get; init; }
+
+    /// <summary>
     /// Whether it says it is one part of a declaration another file holds the rest of - a XAML view whose
     /// <c>x:Class</c> names a C# partial type, a Blazor component and its code-behind - which the linker joins as
     /// <see cref="CodeEdgeKinds.PartOf"/> to every other part of the same qualified name that says so.
@@ -711,6 +722,7 @@ public sealed record ExtractNode(QualifiedName Id, string Kind, string Name, Qua
             : SuffixOf is { } suffixOf && (suffixOf.Count == 0 || suffixOf.Any(id => string.IsNullOrWhiteSpace(id.Whole()))) ? "a node its names are written onto is empty, or it names none"
             : SuffixOf is not null && Name is not ['&', _, ..] ? "it stands for names written onto others', and its name is no & and the suffix it writes"
             : SuffixOf is not null && Exports is { } suffixes && suffixes.Any(exported => exported is not ['&', ..]) ? "it stands for names written onto others', and a name it is exported by is no & and a suffix"
+            : TestByType && Kind is not (CodeNodeKinds.Type or CodeNodeKinds.Member) ? $"it is a test by its type, and a node of kind '{Kind}' is neither a type nor a member a type holds"
             : Selectors is { } selectors && (selectors.Count == 0 || !selectors.All(IsSelector)) ? "a selector it declares names no element with a dash and no pipe after a bar, or it declares none"
             : Templates is { } templates && (templates.Count == 0 || templates.Any(string.IsNullOrWhiteSpace)) ? "a template it names is empty, or it names none"
             : Digest is { } digest && !OrchestrationRules.IsDigest(digest) ? "its digest is no SHA-256"
@@ -736,6 +748,13 @@ public sealed record ExtractNode(QualifiedName Id, string Kind, string Name, Qua
 /// file that declares it; a closed scope is its file's alone, and what is declared in it - and the type or scope it is
 /// the scope of - is seen from no other file.
 /// </param>
+/// <remarks>
+/// A closed scope a file declares under the qualified name of one of its members - no type's and no namespace's - is that
+/// member's body: what the member declares inside it is put in it, and a reference the member makes is looked for from it
+/// first, then from its parent, save one made around the member (<see cref="ExtractReference.Around"/>) - as a Python
+/// function's body is, whose parent is the function or the module around it and never a class, which encloses no
+/// function's body.
+/// </remarks>
 public sealed record ExtractScope(QualifiedName Name, bool Open)
 {
     /// <summary>The scope it is declared in, by its qualified name, which the linker looks in next; <see langword="null"/> where none is.</summary>
@@ -957,6 +976,18 @@ public sealed record ExtractReference(QualifiedName From, string Kind, string Na
     /// </summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public bool Probe { get; init; }
+
+    /// <summary>
+    /// Whether it is made around the node it is made from rather than in that node's body - a function's decorator, a
+    /// parameter's annotation or default, a fixture a parameter names - where the body is a scope of its own: a closed scope
+    /// the file declares under the node's qualified name (<see cref="ExtractScope"/>), which every other reference the node
+    /// makes is looked for from first, and that scope's parent after it, as a Python function's body is looked up, which the
+    /// class around it does not enclose. One made around the node is looked for from where the node itself is declared, as
+    /// Python evaluates a function's header where the function is defined. Of a node whose body is no scope of its own, it
+    /// changes nothing.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool Around { get; init; }
 
     /// <summary>What is wrong with this reference; <see langword="null"/> where nothing is.</summary>
     internal string? Problem(int lineCount)

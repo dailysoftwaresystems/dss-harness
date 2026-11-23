@@ -79,9 +79,10 @@ public sealed class CodebaseGraphQueries
             .SelectMany(file => (file.Value?.References ?? []).Where(reference => !reference.Probe).Select(reference => (reference.Name, Place: (file.Key, reference.From.Whole(), reference.Line))))
             .ToLookup(reference => reference.Name, reference => reference.Place, StringComparer.Ordinal));
 
-        // A file that declares a test - its implementation marks the test - is test code whole: its classes, fixtures and
-        // helpers beside the tests.
-        _testFiles = extracts.Where(file => file.Value?.Nodes.Any(node => node.Test) == true).Select(file => file.Key).ToHashSet(StringComparer.Ordinal);
+        // A file that declares a test - its implementation marks the test, or a declaration that is one by a type another file
+        // declares (<see cref="ExtractNode.TestByType"/>), which only a test file marks - is test code whole: its classes,
+        // fixtures and helpers beside the tests.
+        _testFiles = extracts.Where(file => file.Value?.Nodes.Any(node => node.Test || node.TestByType) == true).Select(file => file.Key).ToHashSet(StringComparer.Ordinal);
 
         // Each file's nodes by their ids, made once a file rather than looked for once a node.
         var declared = extracts.ToDictionary(file => file.Key, file => (file.Value?.Nodes ?? []).ToLookup(node => node.Id), StringComparer.Ordinal);

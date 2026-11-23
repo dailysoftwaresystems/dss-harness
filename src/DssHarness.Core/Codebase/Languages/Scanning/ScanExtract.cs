@@ -39,6 +39,13 @@ internal sealed class ScanExtract
     public bool PublishesTaken { get; set; }
 
     /// <summary>
+    /// Whether the references added now are made around their node rather than in its body (<see cref="ExtractReference.Around"/>):
+    /// set while a reader reads a declaration's header - a Python function's decorators, annotations and defaults, a class's decorators
+    /// and the bases its code computes - and unset after.
+    /// </summary>
+    public bool Around { get; set; }
+
+    /// <summary>
     /// One string literal of the file, decoded, on <paramref name="line"/>, written in the code of the node of the key
     /// <paramref name="from"/> - none where it is written at the file's top, outside every declaration, whose node it is
     /// once the reader makes one (<see cref="Top"/>) - kept by the one rule every reader keeps them by
@@ -104,7 +111,8 @@ internal sealed class ScanExtract
     /// Adds a reference made from the node of the key <paramref name="from"/>; answers its place among the file's
     /// references - what a reference made for the next name of a chain links its qualifier to
     /// (<see cref="ExtractQualifier.Link"/>) - or -1 where it names nothing and is not added. A <paramref name="probe"/> asks
-    /// whether a declaration is there (<see cref="ExtractReference.Probe"/>): where none is, no doubt is counted.
+    /// whether a declaration is there (<see cref="ExtractReference.Probe"/>): where none is, no doubt is counted. One added while
+    /// <see cref="Around"/> is set is made around its node (<see cref="ExtractReference.Around"/>).
     /// </summary>
     public int Reference(QualifiedName from, string kind, string name, int line, int? arity = null, ExtractQualifier? qualifier = null, bool probe = false)
     {
@@ -113,7 +121,7 @@ internal sealed class ScanExtract
             return -1;
         }
 
-        _references.Add(new ExtractReference(from, kind, name, line) { Arity = arity, Qualifier = qualifier, Probe = probe });
+        _references.Add(new ExtractReference(from, kind, name, line) { Arity = arity, Qualifier = qualifier, Probe = probe, Around = Around });
         return _references.Count - 1;
     }
 

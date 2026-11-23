@@ -7,16 +7,18 @@ namespace DssHarness.Core.Codebase.Languages;
 /// One Python file's reading over the structural scanner: its module, a namespace named by the dotted path the file is
 /// written at - a package's <c>__init__.py</c> its directory's - and one open scope, every name of which an importer may
 /// reach; what stands at its top and in its classes - each <c>class</c> a type, each <c>def</c> and <c>async def</c> a function
-/// or a method, <c>__init__</c> a constructor, each name assigned at the top or in a class a constant or a field, nested
-/// classes and functions kept with the node that holds them - with its lines, signature and summary; its imports - a bare
-/// module looked for by the package layout and its roots, a relative one beside the file - each name they bind for the code of
-/// the declaration they are written in; its base lists,
-/// the first an <c>inherits</c> and the others <c>mixesIn</c>; each call a body makes by its name and arity, with what its
-/// receiver is where the code says - <c>self</c>, <c>cls</c>, <c>super()</c>, a class, an import's name - each class a call
-/// makes where the code writes a capitalized name, each type an annotation, an <c>isinstance</c> or an <c>except</c> names,
-/// each attribute and name a body reads without calling it, and each string literal the file holds; and a test file's
-/// <c>test*</c> functions, <c>Test*</c> classes and <c>TestCase</c> subclasses as tests, each fixture a parameter of a test
-/// or of a fixture names a reference of it.
+/// or a method, <c>__init__</c> a constructor, each name assigned at the top or in a class a constant or a field, a target
+/// list's each, each attribute a method assigns through <c>self</c> or <c>cls</c> a field of its class, each <c>type</c>
+/// alias a type, nested classes and functions kept with the node that holds them - with its lines, signature and summary;
+/// its imports - a bare module looked for by the package layout and its roots, a relative one beside the file - each name
+/// they bind for the code of the declaration they are written in; its base lists, the first an <c>inherits</c> and the others
+/// <c>mixesIn</c>; each call a body makes by its name and arity, with what its receiver is where the code says - <c>self</c>,
+/// <c>cls</c>, <c>super()</c>, a class, what an import reaches - and the head and each member of a chain on its way, each
+/// class a call makes where the code writes a capitalized name, each type an annotation, a string annotation, an
+/// <c>isinstance</c>, an <c>except</c> or a <c>case</c>'s class pattern names, each attribute and name a body reads without
+/// calling it and does not bind - a local, a parameter, a lambda's, a comprehension's or a closure's being the code's own -
+/// each decorator's code, and each string literal the file holds; and a test file's <c>test*</c> functions, <c>Test*</c>
+/// classes and <c>TestCase</c> subclasses as tests, each fixture a parameter of a test or of a fixture names a reference of it.
 /// </summary>
 /// <remarks>
 /// Python's blocks are made by indentation, which is no token: each token says its line, and the reader finds its column
@@ -25,20 +27,29 @@ namespace DssHarness.Core.Codebase.Languages;
 /// does not continue (<see cref="Continued"/>) - that starts no deeper than the statement's own column: the next
 /// statement of its block, or the dedent that ends the block. A header's suite is deeper than its header, and so is passed
 /// over whole, however deep it nests; the suite itself is the statements that begin at one column, or the simple statements
-/// of the header's own line. A decorator's line belongs to the declaration it stands above. Each block's statements are read
+/// of the header's own line. The file's logical lines and where each one's block ends are found once, in one pass with a
+/// stack of the lines still open (<see cref="Lines"/>), so where a statement ends is looked up, never walked again by each
+/// block it is nested in. A decorator's line belongs to the declaration it stands above. Each block's statements are read
 /// in a walk of the reader's stack (<see cref="ScanStack"/>), never a call into the reading from inside one, so a block nested
-/// any depth is read in the order the text writes it and no nesting reaches past the reader's stack. A body's code is read
-/// once every declaration in it is made: a run over its tokens (<see cref="Calls"/>) that passes what a declaration keeps to
-/// itself - a name declared, a parameter, an annotation, an import, a decorator, a nested declaration's own lines - marked as
-/// it is read (<see cref="Keep"/>), so each token is read once, by the one node it is the code of.
+/// any depth is read in the order the text writes it and no nesting reaches past the reader's stack. A function's body is a
+/// scope of its own, closed, whose parent is the function or the module around it and never a class (<see cref="ExtractScope"/>),
+/// as Python looks a body's names up. A declaration's head and body are read once every declaration of the file is made, each
+/// before the declarations it holds, the functions around a body open while it is read, so a closure's names are its own
+/// (<see cref="Bodies"/>): a run over its tokens (<see cref="Calls"/>) that passes a nested declaration over whole, at once, and
+/// what a statement keeps to itself - a name declared, an annotation, an import, a pattern's captures - marked as it is read
+/// (<see cref="Keep"/>), so each token is read once, by the one node it is the code of.
 /// </remarks>
 internal sealed class PythonReading
 {
-    /// <summary>The words of the language: no call is made by them and no value the code reads.</summary>
+    /// <summary>
+    /// The words of the language: no call is made by them and no value the code reads. Its soft keywords - <c>match</c>,
+    /// <c>case</c>, <c>type</c> - are names, a keyword only where they head a statement of their own (<see cref="CompoundAt"/>,
+    /// <see cref="TypeAlias"/>): a function or a variable may be named by one.
+    /// </summary>
     private static readonly HashSet<string> Words = new(StringComparer.Ordinal)
     {
         "and", "as", "assert", "async", "await", "break", "class", "continue", "def", "del", "elif", "else", "except", "finally", "for", "from", "global", "if",
-        "import", "in", "is", "lambda", "nonlocal", "not", "or", "pass", "raise", "return", "try", "while", "with", "yield", "match", "case",
+        "import", "in", "is", "lambda", "nonlocal", "not", "or", "pass", "raise", "return", "try", "while", "with", "yield",
     };
 
     /// <summary>The names the language and its standard library answer to, which every file sees and the repository does not: no call a reference names.</summary>
@@ -56,10 +67,20 @@ internal sealed class PythonReading
         "UnboundLocalError", "UnicodeDecodeError", "UnicodeEncodeError", "UnicodeError", "UnicodeTranslateError", "ValueError", "ZeroDivisionError",
     };
 
-    /// <summary>The decorators the language, its standard library and <c>functools</c> declare, and those a repository's frameworks declare by a name every reader of them keeps as one: a modifier alone, their arguments the code they are.</summary>
+    /// <summary>
+    /// The decorators the language, its standard library and <c>functools</c> declare, and those a repository's frameworks
+    /// declare by a name every reader of them keeps as one, by the last name of the dotted name each is written with -
+    /// <c>@property</c>, <c>@functools.wraps(f)</c>, <c>@x.setter</c>, <c>@pytest.fixture</c>,
+    /// <c>@pytest.mark.parametrize(...)</c>, <c>@app.route("/x")</c>, <c>@router.get("/x")</c>, <c>@celery.task</c>: a
+    /// modifier by that dotted name, never a call of the repository's, what each is given the code it is. A head alone -
+    /// <c>pytest</c>, <c>app</c> - is no decorator.
+    /// </summary>
     private static readonly HashSet<string> OwnDecorators = new(StringComparer.Ordinal)
     {
-        "property", "staticmethod", "classmethod", "abstractmethod", "cached_property", "dataclass", "override", "final", "overload", "fixture", "task", "shared_task", "app", "pytest",
+        "property", "setter", "getter", "deleter", "staticmethod", "classmethod", "abstractmethod", "cached_property", "dataclass", "override", "final", "overload",
+        "wraps", "lru_cache", "cache", "total_ordering", "singledispatch", "singledispatchmethod", "contextmanager", "asynccontextmanager",
+        "fixture", "parametrize", "usefixtures", "skip", "skipif", "xfail", "task", "shared_task",
+        "route", "get", "post", "put", "patch", "delete", "head", "options", "websocket", "api_route",
     };
 
     /// <summary>The assigning punctuators, each a read and a write of the name it follows.</summary>
@@ -80,8 +101,11 @@ internal sealed class PythonReading
         ComputedExports = "computed-exports",
         Unclosed = "unclosed";
 
-    /// <summary>The keywords a compound statement begins with: its header to a colon, then its suite.</summary>
-    private static readonly HashSet<string> Compound = new(StringComparer.Ordinal) { "if", "elif", "else", "while", "for", "try", "except", "finally", "with", "match", "case" };
+    /// <summary>
+    /// The keywords a compound statement begins with: its header to a colon, then its suite. <c>async for</c> and <c>async
+    /// with</c>, and <c>match</c> with its <c>case</c> clauses, are told apart where they head a statement (<see cref="CompoundAt"/>).
+    /// </summary>
+    private static readonly HashSet<string> Compound = new(StringComparer.Ordinal) { "if", "elif", "else", "while", "for", "try", "except", "finally", "with" };
 
     /// <summary>How Python writes its calls: a name that is no word of the language, then <c>(</c>; a trailing comma ends the arguments.</summary>
     private static readonly ScanCallRules PythonMemberCalls = new(new HashSet<string>(StringComparer.Ordinal), null, TrailingComma: true);
@@ -133,8 +157,69 @@ internal sealed class PythonReading
     /// <summary>The functions the file declares, by name: called by their name, never through a value.</summary>
     private readonly HashSet<string> _functions = new(StringComparer.Ordinal);
 
-    /// <summary>The test classes the file declares, by name: a method of one named <c>test*</c> is a test.</summary>
+    /// <summary>The test classes the file declares, by name: a class built on one is a test class too.</summary>
     private readonly HashSet<string> _testClasses = new(StringComparer.Ordinal);
+
+    /// <summary>The test classes the file declares, by key: a method of one named <c>test*</c> is a test.</summary>
+    private readonly HashSet<QualifiedName> _testTypes = [];
+
+    /// <summary>
+    /// The classes of a test file that may be test classes by a base another file declares, by key: each is marked so
+    /// (<see cref="ExtractNode.TestByType"/>), and each method of one named <c>test*</c> too, for the linker to decide.
+    /// </summary>
+    private readonly HashSet<QualifiedName> _maybeTestTypes = [];
+
+    /// <summary>The names of the functions and classes the file declares outside every class - at its top or in a function: each, as a name the module's top binds (<see cref="_bound"/>) or an import does, one a builtin of its name gives way to (<see cref="Shadows"/>).</summary>
+    private readonly HashSet<string> _free = new(StringComparer.Ordinal);
+
+    /// <summary>Where each declaration the file holds - a function's or a class's, with the decorators above it - begins, by its first token, and the index past its last: what the code around it, and what that code binds, passes over whole, at once.</summary>
+    private readonly Dictionary<int, int> _declared = [];
+
+    /// <summary>Where each name a <c>case</c>'s pattern binds begins - a capture, a name <c>as</c> gives, a starred one: bound by the body around it, as a <c>for</c>'s targets are.</summary>
+    private readonly HashSet<long> _captures = [];
+
+    /// <summary>
+    /// The reading of each declaration's head and body, in the order the text writes the declarations - each before those it holds -
+    /// read once every declaration of the file is made (<see cref="Bodies"/>).
+    /// </summary>
+    private readonly List<Body> _bodies = [];
+
+    /// <summary>
+    /// The names the functions around the code under way bind - their locals and parameters, a closure's - by how many of them bind
+    /// each: the code's own, nearer than any declaration or import of its name, as a body's locals are (<see cref="Bodies"/>).
+    /// </summary>
+    private readonly Dictionary<string, int> _closure = new(StringComparer.Ordinal);
+
+    /// <summary>Each class's own code its statements give - the values its names are assigned - by the class's key: read with the class's body (<see cref="Body"/>).</summary>
+    private readonly Dictionary<QualifiedName, List<Action>> _classCode = [];
+
+    /// <summary>
+    /// For each scope the file puts declarations in, by name: the scope a function declared there finds the names its body
+    /// reads in next after its own - a function's or the module's own scope, and a class's the one around the class, since
+    /// a class encloses no function's body.
+    /// </summary>
+    private readonly Dictionary<QualifiedName, QualifiedName> _enclosing = [];
+
+    /// <summary>Each class the file declares, by its key: its scope and the names it declares - what an attribute a method assigns is a field of.</summary>
+    private readonly Dictionary<QualifiedName, ClassInfo> _classInfo = [];
+
+    /// <summary>Each method that takes a receiver - <c>self</c>, or a class method's <c>cls</c> - by its key: the class an attribute its body assigns through it is a field of.</summary>
+    private readonly Dictionary<QualifiedName, ClassInfo> _methods = [];
+
+    /// <summary>For each token, the logical line it is on, by its place among <see cref="_lineStarts"/> (<see cref="Lines"/>).</summary>
+    private readonly int[] _lineOf;
+
+    /// <summary>Where each logical line begins, by its first token, in order.</summary>
+    private readonly List<int> _lineStarts;
+
+    /// <summary>For each logical line, the first later one that begins no deeper - the line its block ends at, the next statement of its own block or a dedent - by its place; how many lines there are where none does.</summary>
+    private readonly int[] _blockEnd;
+
+    /// <summary>For each scanned text a run reads, the brackets that open a comprehension - each that holds a <c>for</c> of its own - and those <c>for</c>s, by their index; found once a text (<see cref="ComprehensionsOf"/>).</summary>
+    private readonly Dictionary<ScannedText, Comprehensions> _comprehensions = new(ReferenceEqualityComparer.Instance);
+
+    /// <summary>The names the lambdas and comprehensions the run under way is inside bind, by how many of them bind each: their own, as a body's locals are.</summary>
+    private readonly Dictionary<string, int> _inner = new(StringComparer.Ordinal);
 
     /// <summary>Reads <paramref name="text"/>, the file <paramref name="path"/>.</summary>
     /// <param name="language">The implementation's name, which prefixes every id.</param>
@@ -151,7 +236,19 @@ internal sealed class PythonReading
         _testFile = name.StartsWith("test_", StringComparison.Ordinal) || name.EndsWith("_test.py", StringComparison.Ordinal)
             || path.StartsWith("tests/", StringComparison.Ordinal) || path.StartsWith("test/", StringComparison.Ordinal)
             || path.Contains("/tests/", StringComparison.Ordinal) || path.Contains("/test/", StringComparison.Ordinal);
+        (_lineOf, _lineStarts, _blockEnd) = Lines();
     }
+
+    /// <summary>A class the file declares: its key, its qualified name - its scope - and the names it declares, each once.</summary>
+    private sealed record ClassInfo(QualifiedName Key, QualifiedName Qualified, HashSet<string> Names);
+
+    /// <summary>
+    /// A declaration's reading (<see cref="_bodies"/>): the scope of the function around it, or the module's, where its head runs
+    /// (<paramref name="Outer"/>); its own scope where it is a function, whose locals the functions it holds see
+    /// (<paramref name="Own"/>), none for a class, whose names no function it holds sees; what its head runs, read where it is
+    /// defined; and its body, which answers the names it binds where it is a function's.
+    /// </summary>
+    private sealed record Body(QualifiedName Outer, QualifiedName? Own, Action Head, Func<HashSet<string>?> Code);
 
     /// <summary>The file's extract.</summary>
     public FileExtract Read()
@@ -171,6 +268,7 @@ internal sealed class PythonReading
             });
 
             _extract.Scope(module, open: true, parent: null);
+            _enclosing[module] = module;
 
             // A conftest.py's fixtures are given by pytest to every test under its directory, which no test imports: its module's
             // scope is an import of every file under it that serves the references a fixture qualifier makes alone.
@@ -181,8 +279,15 @@ internal sealed class PythonReading
 
             Walk(statements, ScanFrame.Top.Inside(module, module, key, null));
 
-            // What the top does outside its declarations is the module's own code.
-            Calls(_text, 0, _scan.Count, key, Bind(0, _scan.Count), null);
+            // Each body is read once every declaration of the file is made, as Python runs a body once the module is: a name it
+            // reads that the file declares or imports below it is the file's, not a builtin's or a value's.
+            Bodies();
+
+            // What the top does outside its declarations is the module's own code; a name the module assigns is what it declares,
+            // so a read of it there is a use of it, as anywhere else.
+            var bound = Bind(0, _scan.Count);
+            bound.ExceptWith(_bound);
+            Calls(_text, 0, _scan.Count, key, bound, null);
         }
 
         MarkUnclosed();
@@ -217,6 +322,54 @@ internal sealed class PythonReading
             {
                 _extract.Dynamic(_scan[at].Line, bracket ? "a bracket that never closes: what follows it is read as held in it" : "a string that never closes: what follows its quote is read as its text", Unclosed);
             }
+        }
+    }
+
+    /// <summary>
+    /// Reads each declaration's head and body (<see cref="_bodies"/>), in the order the text writes them, each before those it holds:
+    /// the head where the declaration is defined - the function around it, whose names are bound while it is read - then the body,
+    /// whose own locals and parameters, where it is a function's, are bound while the functions it holds are read (<see cref="_closure"/>),
+    /// as a closure sees them. The functions open are a stack: each pushed once, and popped once a declaration is reached that the
+    /// function does not hold, so every name is bound and unbound once.
+    /// </summary>
+    private void Bodies()
+    {
+        var open = new Stack<(QualifiedName Scope, HashSet<string> Names)>();
+
+        void Close()
+        {
+            foreach (var name in open.Pop().Names)
+            {
+                if (--_closure[name] == 0)
+                {
+                    _closure.Remove(name);
+                }
+            }
+        }
+
+        foreach (var body in _bodies)
+        {
+            while (open.TryPeek(out var top) && !top.Scope.Equals(body.Outer))
+            {
+                Close();
+            }
+
+            body.Head();
+
+            if (body.Code() is { } names && body.Own is { } own)
+            {
+                open.Push((own, names));
+
+                foreach (var name in names)
+                {
+                    _closure[name] = _closure.GetValueOrDefault(name) + 1;
+                }
+            }
+        }
+
+        while (open.Count > 0)
+        {
+            Close();
         }
     }
 
@@ -265,12 +418,68 @@ internal sealed class PythonReading
     {
         var statements = new List<(int From, int To)>();
 
-        for (var at = from; at < to && at < _scan.Count && Column(at) == column && !Continued(_scan.Previous(at), at); at = StatementEnd(at, to, column))
+        for (var at = from; at < to && at < _scan.Count && Column(at) == column && !Continued(_scan.Previous(at), at);)
         {
-            statements.Add((at, StatementEnd(at, to, column)));
+            var end = StatementEnd(at, to, column);
+            statements.Add((at, end));
+            at = end;
         }
 
         return statements;
+    }
+
+    /// <summary>
+    /// The file's logical lines, found once: for each token the line it is on, where each line begins - the first token on a
+    /// later line than the one before it, outside every bracketed group and not continued by a backslash - and for each line
+    /// the first later one that begins no deeper, its block's end, found with a stack of the lines whose blocks are still
+    /// open, each pushed and popped once.
+    /// </summary>
+    private (int[] LineOf, List<int> Starts, int[] BlockEnd) Lines()
+    {
+        var lineOf = new int[_scan.Count];
+        var starts = new List<int>();
+
+        for (var at = 0; at < _scan.Count;)
+        {
+            var next = _scan.Count;
+
+            // Each token is tried before the group it opens is passed over, so a bracket that begins a line begins it - the line's
+            // first token's own group among them.
+            for (var index = _scan.Opens(at) ? _scan.Past(at) : _scan.Next(at); index < _scan.Count; index = _scan.Opens(index) ? _scan.Past(index) : _scan.Next(index))
+            {
+                if (_scan[index].Line > _scan[_scan.Previous(index)].EndLine && !Continued(_scan.Previous(index), index))
+                {
+                    next = index;
+                    break;
+                }
+            }
+
+            Array.Fill(lineOf, starts.Count, at, next - at);
+            starts.Add(at);
+            at = next;
+        }
+
+        var blockEnd = new int[starts.Count];
+        var open = new Stack<int>();
+
+        for (var line = 0; line < starts.Count; line++)
+        {
+            var column = Column(starts[line]);
+
+            while (open.TryPeek(out var top) && Column(starts[top]) >= column)
+            {
+                blockEnd[open.Pop()] = line;
+            }
+
+            open.Push(line);
+        }
+
+        while (open.TryPop(out var left))
+        {
+            blockEnd[left] = starts.Count;
+        }
+
+        return (lineOf, starts, blockEnd);
     }
 
     /// <summary>
@@ -300,27 +509,27 @@ internal sealed class PythonReading
     /// <paramref name="column"/> - the next statement of a block or its dedent, where the column is the block's; any line, where
     /// the column is past every one. Every bracketed group is passed over whole, so a line a bracket holds is no line of its own
     /// wherever it begins, and the token a group lands on is tried like any other. <paramref name="to"/>, or the text's end, where
-    /// none stands.
+    /// none stands. Read from the file's logical lines (<see cref="Lines"/>): the block of a line deeper than the column is passed
+    /// over whole at once, by where it ends - its own line's, where the column is that line's.
     /// </summary>
     private int NextLine(int at, int to, int column)
     {
         var limit = Math.Min(to, _scan.Count);
 
-        for (var index = _scan.Next(at); index < limit; index = _scan.Next(index))
+        if (at < 0 || at >= _scan.Count)
         {
-            if (_scan.Opens(index))
-            {
-                index = _scan.Past(index) - 1;
-                continue;
-            }
-
-            if (Column(index) <= column && _scan[index].Line > _scan[_scan.Previous(index)].EndLine && !Continued(_scan.Previous(index), index))
-            {
-                return index;
-            }
+            return limit;
         }
 
-        return limit;
+        var own = _lineOf[at];
+        var line = _lineStarts[own] == at && Column(at) == column ? _blockEnd[own] : own + 1;
+
+        while (line < _lineStarts.Count && Column(_lineStarts[line]) > column)
+        {
+            line = _blockEnd[line];
+        }
+
+        return line < _lineStarts.Count ? Math.Min(_lineStarts[line], limit) : limit;
     }
 
     /// <summary>
@@ -449,6 +658,13 @@ internal sealed class PythonReading
             return;
         }
 
+        // async for, async with and match: a compound statement told by more than its first word.
+        if (CompoundAt(at, to) is { } compound)
+        {
+            Header(at, compound.Keyword, compound.Colon, to, frame);
+            return;
+        }
+
         if (Is(at, "def") || (Is(at, "async") && Is(_scan.Next(at), "def")))
         {
             Function(at, to, frame, decorators);
@@ -475,31 +691,77 @@ internal sealed class PythonReading
         => ScanCalls.TopLevel(_scan, at, to, ":", null) is { } colon && colon < to && colon < _scan.Count ? colon : -1;
 
     /// <summary>
-    /// A compound statement's header, from its keyword at <paramref name="at"/> to its colon at <paramref name="colon"/>: what the header keeps
-    /// to itself - a <c>for</c>'s targets to the <c>in</c>, a <c>case</c>'s pattern to its guard, the names <c>as</c> gives - marked so the
-    /// body's run reads the rest as its code; then its suite read as statements of the same frame.
+    /// The compound statement the statement at <paramref name="at"/>, ending at <paramref name="to"/>, is where its first word alone
+    /// does not tell it: <c>async for</c> and <c>async with</c>, whose keyword is the word after <c>async</c>; and <c>match</c>, a
+    /// keyword only where it heads a header whose colon ends its line and whose suite's first clause is a <c>case</c> - so
+    /// <c>match = ...</c>, <c>match: str</c> and <c>match(x)</c> are what they read as. Its keyword and its colon;
+    /// <see langword="null"/> where it is none of them.
     /// </summary>
-    private void Header(int at, int colon, int to, ScanFrame frame)
+    private (int Keyword, int Colon)? CompoundAt(int at, int to)
     {
-        var word = Text(at);
-
-        if (word is "for" or "case")
+        if (Is(at, "async") && (Is(_scan.Next(at), "for") || Is(_scan.Next(at), "with")) && HeaderColon(_scan.Next(at), to) is var colon && colon >= 0)
         {
-            var end = ScanCalls.TopLevel(_scan, _scan.Next(at), colon, word == "for" ? "in" : "if", null);
-            Keep(_scan.Next(at), end < colon ? end : colon);
+            return (_scan.Next(at), colon);
         }
-        else if (word == "except" && frame.Parent is { } holder)
+
+        if (Is(at, "match") && HeaderColon(_scan.Next(at), to) is var header && header > _scan.Next(at) && _scan.Next(header) is var first
+            && first < to && first < _scan.Count && _scan[first].Line > _scan[header].EndLine && Column(first) > Column(at) && Is(first, "case"))
+        {
+            return (at, header);
+        }
+
+        return null;
+    }
+
+    /// <summary>A compound statement's header whose keyword is its first word (<see cref="Header(int, int, int, int, ScanFrame)"/>).</summary>
+    private void Header(int at, int colon, int to, ScanFrame frame) => Header(at, at, colon, to, frame);
+
+    /// <summary>
+    /// A compound statement's header, from its first word at <paramref name="at"/> - its keyword at <paramref name="keyword"/>, the
+    /// word after <c>async</c> where one is written - to its colon at <paramref name="colon"/>: what the header keeps to itself - a
+    /// <c>for</c>'s targets to the <c>in</c>, the names <c>as</c> gives, a soft keyword itself - marked so the body's run reads the
+    /// rest as its code, a <c>case</c>'s pattern read for what it names and binds (<see cref="Pattern"/>), an <c>except</c>'s types
+    /// named (<see cref="TypeNames"/>); then its suite read as statements of the same frame - a <c>match</c>'s, its clauses.
+    /// </summary>
+    private void Header(int at, int keyword, int colon, int to, ScanFrame frame)
+    {
+        var word = Text(keyword);
+
+        if (word == "match")
+        {
+            Match(at, colon, to, frame);
+            return;
+        }
+
+        if (word == "for")
+        {
+            var end = ScanCalls.TopLevel(_scan, _scan.Next(keyword), colon, "in", null);
+            Keep(_scan.Next(keyword), end < colon ? end : colon);
+        }
+        else if (word == "case" && frame.Parent is { } holder)
+        {
+            // case is a keyword here alone: kept; its pattern to its guard read for what it names and what it binds, the guard the
+            // body's code.
+            var end = ScanCalls.TopLevel(_scan, _scan.Next(keyword), colon, "if", null);
+            Keep(keyword, _scan.Next(keyword));
+            Pattern(_scan.Next(keyword), end < colon ? end : colon, holder);
+        }
+        else if (word == "except" && frame.Parent is { } catcher)
         {
             // What the clause catches - a type, or a tuple of them - is named for the node whose code the block is; the language's own
-            // exceptions, ValueError among them, name nothing of the repository's (<see cref="TypeMention"/>).
-            var from = _scan.Next(at);
+            // exceptions, ValueError among them, name nothing of the repository's (<see cref="TypeNames"/>). Written as anything but
+            // types - a call that answers them - it is the body's code.
+            var from = _scan.Next(keyword);
             var end = ScanCalls.TopLevel(_scan, from, colon, "as", null) is var asWord && asWord < colon ? asWord : colon;
 
-            TypeMention(from, end, holder);
-            Keep(from, end);
+            if (IsTypeList(_scan, from, end))
+            {
+                TypeNames(_scan, from, end, catcher, null);
+                Keep(from, end);
+            }
         }
 
-        for (var index = at; index < colon && index < _scan.Count; index = _scan.Opens(index) ? Math.Min(_scan.Past(index), colon) : _scan.Next(index))
+        for (var index = keyword; index < colon && index < _scan.Count; index = _scan.Opens(index) ? Math.Min(_scan.Past(index), colon) : _scan.Next(index))
         {
             // with ... as name, except ... as name: the name is bound, no value the code reads.
             if (Is(index, "as") && _scan.IsName(_scan.Next(index)))
@@ -509,6 +771,82 @@ internal sealed class PythonReading
         }
 
         Walk(Suite(colon, to, Column(at)).Statements, frame);
+    }
+
+    /// <summary>
+    /// A <c>match</c> statement from <paramref name="at"/>, its header's colon at <paramref name="colon"/>: <c>match</c> kept, a keyword
+    /// here alone, its subject the body's code; each clause of its suite a <c>case</c> header (<see cref="Header(int, int, int, int, ScanFrame)"/>)
+    /// read in its turn, in a walk of the reader's stack.
+    /// </summary>
+    private void Match(int at, int colon, int to, ScanFrame frame)
+    {
+        Keep(at, _scan.Next(at));
+        var clauses = Suite(colon, to, Column(at)).Statements;
+
+        _walks.Walk(0, clauses.Count, index =>
+        {
+            var (from, end) = clauses[index];
+
+            if (Is(from, "case") && HeaderColon(_scan.Next(from), end) is var clause && clause > _scan.Next(from))
+            {
+                Header(from, from, clause, end, frame);
+            }
+            else
+            {
+                Statement(from, end, frame);
+            }
+
+            return index + 1;
+        });
+    }
+
+    /// <summary>
+    /// A <c>case</c>'s pattern from <paramref name="from"/> to <paramref name="to"/>, read as Python reads one for the node of
+    /// <paramref name="key"/>: a class pattern's class - a name, or a dotted one, before <c>(</c> - a reference to it, never a call;
+    /// a value pattern - a dotted name - the body's code, a use of what it names; a literal the body's code, a string's value kept; a
+    /// keyword pattern's attribute name no value read; and a capture - a name alone, one after <c>as</c>, <c>*</c> or <c>**</c> -
+    /// bound by the body, as a <c>for</c>'s target is (<see cref="_captures"/>).
+    /// </summary>
+    private void Pattern(int from, int to, QualifiedName key)
+    {
+        for (var at = from; at < to && at < _scan.Count;)
+        {
+            if (!_scan.IsName(at) || _scan.Is(_scan.Previous(at), "."))
+            {
+                at = _scan.Next(at);
+                continue;
+            }
+
+            var chain = Chain(_scan, at);
+            var next = _scan.Next(chain[^1]);
+            var word = Text(at);
+
+            if (_scan.Is(next, "("))
+            {
+                // Point(x=0, y=yy): the class it matches against named, its own parentheses read on for what they bind.
+                TypeNames(_scan, at, next, key, null);
+                Keep(at, next);
+                at = next;
+                continue;
+            }
+
+            if (chain.Count > 1 || Words.Contains(word) || word is "None" or "True" or "False")
+            {
+                // Status.PAID, a word, a literal of the language's: the body's code.
+                at = next;
+                continue;
+            }
+
+            Keep(at, next);
+
+            // A keyword pattern's attribute - x in Point(x=0) - binds nothing; any other name alone is a capture.
+            if (!_scan.Is(next, "="))
+            {
+                _captures.Add(_scan[at].Start);
+            }
+
+            at = next;
+        }
     }
 
     /// <summary>
@@ -530,7 +868,7 @@ internal sealed class PythonReading
         }
 
         // The module's __all__ taken away - del __all__ - or changed after it was assigned - __all__ += [...]: no list of literals
-        // names what a * import of it binds.
+        // names what a * import of it binds. What a del takes away - a name, an item a key names - is the body's code, read as any is.
         if (Is(at, "del"))
         {
             for (var index = _scan.Next(at); index < to && index < _scan.Count && !_scan.Is(index, ";"); index = _scan.Next(index))
@@ -541,7 +879,7 @@ internal sealed class PythonReading
                 }
             }
 
-            Keep(at, to);
+            Keep(at, _scan.Next(at));
             return;
         }
 
@@ -550,19 +888,29 @@ internal sealed class PythonReading
             ChangedAll(_scan[at].Line);
         }
 
-        // a = b = value: each name before an = declares what the frame keeps; the last's value is its code.
-        var target = at;
-
-        while (_scan.IsName(target) && Assignment(target, to) is { } assignment)
+        if (TypeAlias(at, to, frame))
         {
-            Assign(target, assignment, to, frame);
+            return;
+        }
 
-            if (assignment.Value < 0)
+        // a = b = value, a, *b = value, self.x = value: each target list before an = at the statement's top is what it assigns,
+        // the last one's value the statement's.
+        var attributes = frame.Parent is { } holder && _methods.ContainsKey(holder);
+        var groups = new List<Targets>();
+
+        for (var target = at; target < to && TargetsAt(target, to, attributes) is { } targets; target = targets.Value)
+        {
+            groups.Add(targets);
+
+            if (targets.Value < 0)
             {
-                return;
+                break;
             }
+        }
 
-            target = assignment.Value;
+        if (groups.Count > 0)
+        {
+            Assign(at, groups, to, frame);
         }
     }
 
@@ -590,42 +938,220 @@ internal sealed class PythonReading
     /// <summary>An assignment of the name at its head: where its annotation ends, its <c>=</c> where one is written, and where its value begins; -1 where a member is none.</summary>
     private sealed record Assigned(int AnnotationEnd, int Assign, int Value);
 
-    /// <summary>
-    /// The name at <paramref name="at"/> assigned by <paramref name="assignment"/>: at the file's top or in a class a constant where its name is
-    /// written in capitals and a field otherwise, its value the node's code; inside a function a local, its annotation's types the
-    /// function's references and its value the function's code.
-    /// </summary>
-    private void Assign(int at, Assigned assignment, int to, ScanFrame frame)
-    {
-        var name = Text(at);
-        var annotation = assignment.AnnotationEnd < 0 ? -1 : _scan.Next(_scan.Next(at));
-        var value = assignment.Value;
-        var end = value < 0 ? to : LineEnd(assignment.Assign, to);
+    /// <summary>One name a target list writes, by its index: a name, or the attribute a method's receiver reaches (<c>x</c> of <c>self.x</c>), and whether it is starred.</summary>
+    private sealed record Target(int At, bool Attribute, bool Starred);
 
-        // Inside a function - a frame below the module's that is no type's own - a local, its annotation's types the function's.
-        if (frame.Owner is null && frame.Depth > 1)
+    /// <summary>One target list of an assignment: the names it writes, where its annotation ends, its <c>=</c>, and where its value begins; -1 where a member is none.</summary>
+    private sealed record Targets(IReadOnlyList<Target> Names, int AnnotationEnd, int Assign, int Value);
+
+    /// <summary>
+    /// The targets the assignment at <paramref name="at"/> writes before an <c>=</c> at the statement's top: one name, with its
+    /// annotation where one is written (<c>x: int = 1</c>, <c>x: int</c>); or names joined by commas, each maybe starred, the list
+    /// maybe in parentheses or brackets (<c>a, *b = ...</c>, <c>(a, b) = ...</c>); and, where <paramref name="attributes"/> says the
+    /// statement is a method's, an attribute its receiver reaches among them (<c>self.x = ...</c>, <c>cls.x: int = 0</c>).
+    /// <see langword="null"/> where the tokens are no targets: an expression, a call, a subscript, an attribute of another value.
+    /// </summary>
+    private Targets? TargetsAt(int at, int to, bool attributes)
+    {
+        if (_scan.IsName(at) && !Words.Contains(Text(at)) && Assignment(at, to) is { } single)
         {
-            if (annotation >= 0)
+            return new Targets([new Target(at, false, false)], single.AnnotationEnd, single.Assign, single.Value);
+        }
+
+        if (attributes && AttributeAt(at) is var name and >= 0 && Assignment(name, to) is { } attribute)
+        {
+            return new Targets([new Target(name, true, false)], attribute.AnnotationEnd, attribute.Assign, attribute.Value);
+        }
+
+        var close = _scan.Is(at, "(") || _scan.Is(at, "[") ? _scan.Match(at) : -1;
+        var cursor = close > at ? _scan.Next(at) : at;
+        var stop = close > at ? close : Math.Min(to, _scan.Count);
+        var names = new List<Target>();
+        var commas = 0;
+
+        while (cursor < stop && !_scan.Is(cursor, "="))
+        {
+            var starred = _scan.Is(cursor, "*");
+            cursor = starred ? _scan.Next(cursor) : cursor;
+
+            if (_scan.IsName(cursor) && !Words.Contains(Text(cursor)) && !_scan.Is(_scan.Next(cursor), "."))
             {
-                TypeMention(annotation, assignment.AnnotationEnd, frame.Parent!);
-                Keep(_scan.Next(at), assignment.AnnotationEnd);
+                names.Add(new Target(cursor, false, starred));
+                cursor = _scan.Next(cursor);
+            }
+            else if (attributes && AttributeAt(cursor) is var reached and >= 0)
+            {
+                names.Add(new Target(reached, true, starred));
+                cursor = _scan.Next(reached);
+            }
+            else
+            {
+                return null;
             }
 
-            Keep(at, value < 0 ? to : value);
+            if (cursor >= stop || _scan.Is(cursor, "="))
+            {
+                break;
+            }
+
+            if (!_scan.Is(cursor, ","))
+            {
+                return null;
+            }
+
+            commas++;
+            cursor = _scan.Next(cursor);
+        }
+
+        var equal = close > at ? _scan.Next(close) : cursor;
+
+        return names.Count > 0 && (close > at || commas > 0) && equal < to && _scan.Is(equal, "=")
+            ? new Targets(names, -1, equal, _scan.Next(equal))
+            : null;
+    }
+
+    /// <summary>The index of the attribute <c>x</c> where the tokens at <paramref name="at"/> are a method's receiver reaching it alone - <c>self.x</c>, <c>cls.x</c>, no member of it after; -1 where they are not.</summary>
+    private int AttributeAt(int at)
+        => (Is(at, "self") || Is(at, "cls")) && _scan.Is(_scan.Next(at), ".") && _scan.Next(_scan.Next(at)) is var name && _scan.IsName(name) && !_scan.Is(_scan.Next(name), ".") ? name : -1;
+
+    /// <summary>
+    /// The target lists <paramref name="groups"/> of the statement at <paramref name="at"/> assign, the last one's value the
+    /// statement's: at the file's top or in a class each name a constant where it is written in capitals and a field otherwise
+    /// (<see cref="AssignName"/>), the value the code of the name it is given to - each element of a tuple the name's in its place
+    /// where the two are as long and none is starred, else the whole value the last name's; inside a function each name a local, its
+    /// annotation's types the function's references and its value the function's code, and an attribute a method assigns through its
+    /// receiver a field of its class where the class declares it nowhere else (<see cref="Attribute"/>), a write of the field
+    /// otherwise, which the method's code reads as a use.
+    /// </summary>
+    private void Assign(int at, List<Targets> groups, int to, ScanFrame frame)
+    {
+        var last = groups[^1];
+        var value = last.Value;
+        var end = value < 0 ? to : LineEnd(last.Assign, to);
+        var local = frame.Owner is null && frame.Depth > 1;
+        var owner = frame.Parent is { } holder && _methods.TryGetValue(holder, out var method) ? method : null;
+        var keys = new List<QualifiedName>();
+
+        // Each name's signature is its target list's, from where the list begins - (a, b) = of each of a and b.
+        var from = at;
+
+        foreach (var group in groups)
+        {
+            keys.Clear();
+            var signatureEnd = group.Value < 0 ? end : group.Value;
+
+            foreach (var target in group.Names)
+            {
+                if (target.Attribute)
+                {
+                    if (owner is not null && Attribute(target.At, from, signatureEnd, end, owner) is { } field)
+                    {
+                        keys.Add(field);
+                    }
+                }
+                else if (local)
+                {
+                    Keep(target.At, _scan.Next(target.At));
+                }
+                else
+                {
+                    keys.Add(AssignName(target.At, from, signatureEnd, value, end, frame));
+                }
+            }
+
+            if (group.AnnotationEnd >= 0)
+            {
+                // name: T = value - the annotation's types named by the node it declares, else by the node whose code the line is.
+                var annotation = _scan.Next(_scan.Next(group.Names[0].At));
+                TypeNames(_scan, annotation, group.AnnotationEnd, keys.Count > 0 ? keys[0] : frame.Parent!, null);
+                Keep(_scan.Next(group.Names[0].At), group.AnnotationEnd);
+            }
+
+            from = group.Value;
+        }
+
+        // Inside a function the value is the function's code, read by its run; an annotation alone gives no value.
+        if (local)
+        {
             return;
         }
 
+        Keep(at, value < 0 ? to : value);
+
+        if (value < 0)
+        {
+            return;
+        }
+
+        var pieces = Pieces(value, end);
+        var given = keys.ToList();
+
+        void Read()
+        {
+            if (given.Count > 1 && given.Count == pieces.Count && !last.Names.Any(target => target.Starred))
+            {
+                for (var index = 0; index < given.Count; index++)
+                {
+                    Calls(_text, pieces[index].Start, pieces[index].End, given[index], Bind(pieces[index].Start, pieces[index].End), frame.Owner);
+                }
+            }
+            else
+            {
+                Calls(_text, value, end, given[^1], Bind(value, end), frame.Owner);
+            }
+
+            Keep(value, end);
+        }
+
+        // A class's own code is read with the class's (<see cref="Body"/>), where the functions around the class are open; the
+        // module's, now.
+        if (frame.Parent is { } held && _classCode.TryGetValue(held, out var code))
+        {
+            code.Add(Read);
+        }
+        else
+        {
+            Read();
+        }
+    }
+
+    /// <summary>The elements of the value from <paramref name="value"/> to <paramref name="end"/>, split at its top's commas - a tuple's, a parenthesized or bracketed one's inside its brackets.</summary>
+    private List<(int Start, int End)> Pieces(int value, int end)
+    {
+        var pieces = ScanCalls.Split(_scan, value, end, null);
+
+        return pieces.Count == 1 && (_scan.Is(value, "(") || _scan.Is(value, "[")) && _scan.Match(value) is var close and > 0 && _scan.Next(close) >= end
+            ? ScanCalls.Split(_scan, _scan.Next(value), close, null)
+            : pieces;
+    }
+
+    /// <summary>Whether <paramref name="name"/> is written in capitals: a letter at least, and nothing but capitals, digits and underscores.</summary>
+    private static bool Capitals(string name)
+        => name.Any(char.IsAsciiLetter) && name.All(character => char.IsAsciiLetter(character) && char.IsUpper(character) || char.IsAsciiDigit(character) || character == '_');
+
+    /// <summary>
+    /// The name at <paramref name="at"/> assigned at the file's top or in a class, its signature its target list's, from
+    /// <paramref name="signatureStart"/> to <paramref name="signatureEnd"/>, the statement's value from <paramref name="value"/> to <paramref name="end"/>: a constant where its name is written in capitals
+    /// and a field otherwise, the module's or the class's name. Answers its key.
+    /// </summary>
+    private QualifiedName AssignName(int at, int signatureStart, int signatureEnd, int value, int end, ScanFrame frame)
+    {
+        var name = Text(at);
         var qualified = frame.Qualify(name);
-        var capitals = name.Any(char.IsAsciiLetter) && name.All(character => char.IsAsciiLetter(character) && char.IsUpper(character) || char.IsAsciiDigit(character) || character == '_');
 
         if (frame.Depth == 1)
         {
             Top(name);
         }
 
-        var key = _extract.Add(new ExtractNode(Id(qualified), CodeNodeKinds.Member, name, qualified, _scan[at].Line, _scan[_scan.LastOf(end)].EndLine, _scan.Signature(at, value < 0 ? end : value))
+        if (frame.Parent is { } holder && _classInfo.TryGetValue(holder, out var info))
         {
-            SubKind = capitals ? "constant" : "field",
+            info.Names.Add(name);
+        }
+
+        var key = _extract.Add(new ExtractNode(Id(qualified), CodeNodeKinds.Member, name, qualified, _scan[at].Line, _scan[_scan.LastOf(end)].EndLine, _scan.Signature(signatureStart, signatureEnd))
+        {
+            SubKind = Capitals(name) ? "constant" : "field",
             Scope = frame.Scope,
             Parent = frame.Parent,
             Summary = ScanComments.Summary(_scan, at),
@@ -652,19 +1178,147 @@ internal sealed class PythonReading
             }
         }
 
-        if (annotation >= 0)
+        return key;
+    }
+
+    /// <summary>
+    /// The attribute at <paramref name="at"/> a method assigns through its receiver - <c>self.x = ...</c>, <c>cls.x: int = 0</c> - its
+    /// signature its target list's, from <paramref name="signatureStart"/> to <paramref name="signatureEnd"/>, and its statement to
+    /// <paramref name="end"/>, in a method of <paramref name="owner"/>:
+    /// the first assignment of a name the class declares nowhere else - in its body, by a method, by an earlier assignment of a method -
+    /// is a field of the class, a constant where its name is written in capitals, over the statement's lines and held by the class, as a
+    /// name its body assigns is; the receiver and the name kept to it. Any later one is a write of that field, which the method's code
+    /// reads as a use of it, as a name the language keeps to itself - <c>__dict__</c> - is no field. Answers the field's key where it
+    /// declares one.
+    /// </summary>
+    private QualifiedName? Attribute(int at, int signatureStart, int signatureEnd, int end, ClassInfo owner)
+    {
+        var name = Text(at);
+        var receiver = _scan.Previous(_scan.Previous(at));
+
+        if ((name.StartsWith("__", StringComparison.Ordinal) && name.EndsWith("__", StringComparison.Ordinal)) || !owner.Names.Add(name))
         {
-            TypeMention(annotation, assignment.AnnotationEnd, key);
-            Keep(_scan.Next(at), assignment.AnnotationEnd);
+            return null;
         }
 
-        Keep(at, value < 0 ? to : value);
-
-        if (value >= 0)
+        var qualified = ExtractText.Qualify(owner.Qualified, name);
+        var key = _extract.Add(new ExtractNode(Id(qualified), CodeNodeKinds.Member, name, qualified, _scan[receiver].Line, _scan[_scan.LastOf(end)].EndLine, _scan.Signature(signatureStart, signatureEnd))
         {
-            Calls(_text, value, end, key, Bind(value, end), frame.Owner);
-            Keep(value, end);
+            SubKind = Capitals(name) ? "constant" : "field",
+            Scope = owner.Qualified,
+            Parent = owner.Key,
+            Summary = ScanComments.Summary(_scan, receiver),
+        });
+
+        Keep(receiver, _scan.Next(at));
+        return key;
+    }
+
+    /// <summary>
+    /// A type alias at <paramref name="at"/> - <c>type Name[params] = value</c>, Python 3.12's - where the statement is one: at the
+    /// file's top or in a class a type of sub-kind <c>alias</c> over its line, the types its value names its references; inside a
+    /// function a local, its value's types the function's. Its type parameters are its own: names no reference is made of, their
+    /// bounds' types named. Whether it was one.
+    /// </summary>
+    private bool TypeAlias(int at, int to, ScanFrame frame)
+    {
+        var nameAt = _scan.Next(at);
+
+        if (!Is(at, "type") || !_scan.IsName(nameAt))
+        {
+            return false;
         }
+
+        var types = TypeParameters(nameAt);
+        var equal = types.Close >= 0 ? _scan.Next(types.Close) : _scan.Next(nameAt);
+
+        if (!_scan.Is(equal, "=") || equal >= to)
+        {
+            return false;
+        }
+
+        var value = _scan.Next(equal);
+        var end = LineEnd(equal, to);
+        var name = Text(nameAt);
+
+        if (frame.Owner is null && frame.Depth > 1)
+        {
+            TypeNames(_scan, value, end, frame.Parent!, TypeParameterNames(types, frame.Parent!));
+            Keep(at, end);
+            return true;
+        }
+
+        var qualified = frame.Qualify(name);
+        var key = _extract.Add(new ExtractNode(Id(qualified), CodeNodeKinds.Type, name, qualified, _scan[at].Line, _scan[_scan.LastOf(end)].EndLine, _scan.Signature(at, value))
+        {
+            SubKind = "alias",
+            Scope = frame.Scope,
+            Parent = frame.Parent,
+            Summary = ScanComments.Summary(_scan, at),
+        });
+
+        _classes.Add(name);
+
+        if (frame.Depth == 1)
+        {
+            Top(name);
+            _free.Add(name);
+        }
+
+        if (frame.Parent is { } holder && _classInfo.TryGetValue(holder, out var info))
+        {
+            info.Names.Add(name);
+        }
+
+        TypeNames(_scan, value, end, key, TypeParameterNames(types, key));
+        Keep(at, end);
+        return true;
+    }
+
+    /// <summary>
+    /// The type-parameter list written after the name at <paramref name="nameAt"/> - <c>def f[T](...)</c>, <c>class C[T: Base]</c>,
+    /// <c>type A[T] = ...</c>, Python 3.12's: its brackets; (-1, -1) where none is written.
+    /// </summary>
+    private (int Open, int Close) TypeParameters(int nameAt)
+        => _scan.IsName(nameAt) && _scan.Is(_scan.Next(nameAt), "[") && _scan.Match(_scan.Next(nameAt)) is var close and > 0 ? (_scan.Next(nameAt), close) : (-1, -1);
+
+    /// <summary>
+    /// The names the type-parameter list <paramref name="types"/> declares - <c>T</c>, <c>*Ts</c>, <c>**P</c> - which its declaration's
+    /// annotations, bases and value name as its own and no type of the repository's; each bound, constraint and default the types it
+    /// names, references of the node of <paramref name="key"/>; the list kept to the declaration. <see langword="null"/> where there is
+    /// no list.
+    /// </summary>
+    private HashSet<string>? TypeParameterNames((int Open, int Close) types, QualifiedName key)
+    {
+        if (types.Open < 0)
+        {
+            return null;
+        }
+
+        var names = new HashSet<string>(StringComparer.Ordinal);
+
+        foreach (var (from, end) in ScanCalls.Split(_scan, _scan.Next(types.Open), types.Close, null))
+        {
+            var at = from;
+
+            while (_scan.Is(at, "*") || _scan.Is(at, "**"))
+            {
+                at = _scan.Next(at);
+            }
+
+            if (_scan.IsName(at))
+            {
+                names.Add(Text(at));
+
+                if ((_scan.Is(_scan.Next(at), ":") || _scan.Is(_scan.Next(at), "=")) && _scan.Next(_scan.Next(at)) < end)
+                {
+                    TypeNames(_scan, _scan.Next(_scan.Next(at)), end, key, names);
+                }
+            }
+        }
+
+        Keep(types.Open, _scan.Next(types.Close));
+        return names;
     }
 
     /// <summary>Marks the tokens from <paramref name="from"/> to <paramref name="to"/>: each kept to the reading that declares it, read by no run of the body it stands in.</summary>
@@ -760,22 +1414,28 @@ internal sealed class PythonReading
     /// <summary>
     /// A <c>def</c> at <paramref name="at"/>, with the <paramref name="decorators"/> above it: a member node over its decorators, its head and
     /// its suite - a function at the top or inside another declaration, a method in a class, <c>__init__</c> a constructor - with how many
-    /// arguments it takes positionally, each parameter's annotation and its return annotation the types they name, each decorator's
-    /// expression and each parameter's default its code, its suite's statements read in its own frame and its code read as its calls. A
-    /// test file's <c>test*</c> function and a test class's <c>test*</c> method are tests; each parameter a test requires names, as a
-    /// fixture does, the fixture that provides it; a function pytest's <c>@fixture</c> decorates is a fixture, never a test.
+    /// arguments it takes positionally, a receiver taken off a method's but a static method's, each parameter's annotation and its return
+    /// annotation the types they name, its type parameters its own, each decorator's expression and each parameter's default its code -
+    /// each of them made around the function, where the function is defined (<see cref="ExtractReference.Around"/>); its body a scope of
+    /// its own, closed, whose parent is the function or the module around it and never a class, its suite's statements read in it, and its
+    /// head and its code read once every declaration of the file is made (<see cref="Bodies"/>). A test file's <c>test*</c> function and a test class's <c>test*</c>
+    /// method are tests, and one of a class that may be a test class by a base another file declares a test by its type; each parameter a
+    /// test requires names, as a fixture does, the fixture that provides it; a function pytest's <c>@fixture</c> decorates is a fixture,
+    /// never a test. A <c>def</c> whose head cannot be read is marked so, its lines the code around it.
     /// </summary>
     private void Function(int at, int to, ScanFrame frame, List<(int From, int To)> decorators)
     {
         var asynchronous = Is(at, "async");
         var def = asynchronous ? _scan.Next(at) : at;
         var nameAt = _scan.Next(def);
-        var open = _scan.Next(nameAt);
-        var close = _scan.Match(open);
-        var colon = HeaderColon(close, to);
+        var types = TypeParameters(nameAt);
+        var open = types.Close >= 0 ? _scan.Next(types.Close) : _scan.Next(nameAt);
+        var close = _scan.Is(open, "(") ? _scan.Match(open) : -1;
+        var colon = close >= 0 ? HeaderColon(close, to) : -1;
 
-        if (!_scan.IsName(nameAt) || !_scan.Is(open, "(") || close < 0 || colon < 0)
+        if (!_scan.IsName(nameAt) || close < 0 || colon < 0)
         {
+            _extract.Dynamic(_scan[def].Line, "a def whose head the reader cannot read: its lines read as the code around it");
             return;
         }
 
@@ -785,8 +1445,11 @@ internal sealed class PythonReading
         var (suite, end) = Suite(colon, to, Column(first));
         var name = Text(nameAt);
         var method = frame.Owner is not null;
+        var receives = method && !decorators.Any(decorator => DecoratorCallee(decorator) == "staticmethod");
         var fixture = decorators.Any(IsFixture);
-        var test = !fixture && name.StartsWith("test", StringComparison.Ordinal) && (_testFile && !method || method && IsTestClass(frame.Owner!));
+        var named = !fixture && _testFile && name.StartsWith("test", StringComparison.Ordinal);
+        var test = named && (!method || _testTypes.Contains(frame.Parent!));
+        var byType = named && !test && method && _maybeTestTypes.Contains(frame.Parent!);
         var qualified = frame.Qualify(name);
         var body = suite.Count > 0 ? suite[0].From : colon + 1;
         var key = _extract.Add(new ExtractNode(Id(qualified), CodeNodeKinds.Member, name, qualified, _scan[first].Line, _scan[_scan.LastOf(end)].EndLine, _scan.Signature(first, colon))
@@ -797,17 +1460,28 @@ internal sealed class PythonReading
             BodyStart = suite.Count > 0 ? _scan[suite[0].From].Line : null,
             Summary = ScanComments.Summary(_scan, first) ?? Docstring(suite),
             Modifiers = [.. (asynchronous ? ["async"] : Array.Empty<string>()), .. decorators.Select(DecoratorName)],
-            MinArity = Math.Max(0, parameters.Least - (method ? 1 : 0)),
-            MaxArity = parameters.Most is { } most ? Math.Max(0, most - (method ? 1 : 0)) : null,
+            MinArity = Math.Max(0, parameters.Least - (receives ? 1 : 0)),
+            MaxArity = parameters.Most is { } most ? Math.Max(0, most - (receives ? 1 : 0)) : null,
             Test = test,
+            TestByType = byType,
         });
 
         _functions.Add(name);
-        Keep(first, _scan.Next(nameAt) + 1);
+        _declared[first] = end;
+
+        if (!method)
+        {
+            _free.Add(name);
+        }
 
         if (frame.Depth == 1)
         {
             Top(name);
+        }
+
+        if (receives && _classInfo.TryGetValue(frame.Parent!, out var owner))
+        {
+            _methods[key] = owner;
         }
 
         // A method is bound by its name alone: where a base of its type declares one of that name, along the chain, the method
@@ -818,66 +1492,81 @@ internal sealed class PythonReading
             _extract.Reference(key, CodeEdgeKinds.Overrides, name, _scan[nameAt].Line, qualifier: new ExtractQualifier(CodeQualifierKinds.Base), probe: true);
         }
 
-        if (returns >= 0)
-        {
-            TypeMention(returns, colon, key);
-            Keep(returns, colon);
-        }
+        // The function's body is a scope of its own, closed - what it declares is its own and seen from no other file - whose parent is
+        // the function or the module around it and never a class: Python looks a name a body reads up through the functions around it to
+        // the module, and reaches a class's names through self, cls or the class's name alone. What it declares is held by the function
+        // (<see cref="ScanFrame.Parent"/>) and named under it.
+        var outer = Enclosing(frame.Scope)!;
+        _extract.Scope(qualified, open: false, parent: outer);
+        _enclosing[qualified] = qualified;
 
-        foreach (var (from, endOf) in parameters.Annotations)
-        {
-            TypeMention(from, endOf, key);
-        }
-
-        foreach (var (from, endOf) in parameters.Defaults)
-        {
-            // Before the parameter list is kept to the declaration: a default is the declaration's code, read here and by no run around it.
-            Calls(_text, from, endOf, key, Bind(from, endOf), frame.Owner);
-        }
-
-        Keep(open, _scan.Next(close));
-
-        foreach (var decorator in decorators)
-        {
-            Decorator(decorator, key, frame.Owner);
-        }
-
-        if (test || fixture)
-        {
-            // Each parameter a test or a fixture requires names the fixture that provides it, by its name alone: as pytest finds it,
-            // the test's own class's or module's, else a conftest.py's of its directory or of one above it, the nearest first, which
-            // no test imports.
-            foreach (var (needed, line) in parameters.Required.Where(required => required.Name != "self" && required.Name != "cls"))
+        // Read once every declaration of the file is made, before what it holds (<see cref="_bodies"/>): first its head, where the
+        // function is defined, as Python runs it - its decorators, its type parameters' bounds, its annotations and defaults, the
+        // fixtures its parameters name, each made around the function - then its body, whose locals and parameters are its own and
+        // the functions' it holds.
+        _bodies.Add(new Body(outer, qualified,
+            () =>
             {
-                _extract.Reference(key, CodeEdgeKinds.References, needed, line, qualifier: new ExtractQualifier(CodeQualifierKinds.Fixture));
-            }
-        }
+                _extract.Around = true;
 
-        // A function is no scope of the model's: what it declares is declared in the scope the function itself is - its class, the
-        // module - and held by the function (<see cref="ScanFrame.Parent"/>), named under it; so a name a nested function reads is
-        // looked for from that scope outward, as Python looks a name up through the functions around it to the module.
-        var inside = frame.Inside(qualified, frame.Scope, key, null);
+                try
+                {
+                    foreach (var decorator in decorators)
+                    {
+                        Decorator(decorator, key, frame.Owner);
+                    }
+
+                    var own = TypeParameterNames(types, key);
+
+                    if (returns >= 0)
+                    {
+                        TypeNames(_scan, returns, colon, key, own);
+                    }
+
+                    foreach (var (from, endOf) in parameters.Annotations)
+                    {
+                        TypeNames(_scan, from, endOf, key, own);
+                    }
+
+                    foreach (var (from, endOf) in parameters.Defaults)
+                    {
+                        Calls(_text, from, endOf, key, Bind(from, endOf), frame.Owner);
+                    }
+
+                    if (test || byType || fixture)
+                    {
+                        // Each parameter a test or a fixture requires names the fixture that provides it, by its name alone: as pytest
+                        // finds it, the test's own class's or module's, else a conftest.py's of its directory or of one above it, the
+                        // nearest first, which no test imports.
+                        foreach (var (needed, line) in parameters.Required.Where(required => required.Name != "self" && required.Name != "cls"))
+                        {
+                            _extract.Reference(key, CodeEdgeKinds.References, needed, line, qualifier: new ExtractQualifier(CodeQualifierKinds.Fixture));
+                        }
+                    }
+                }
+                finally
+                {
+                    _extract.Around = false;
+                }
+            },
+            () =>
+            {
+                var bound = Bind(body, end);
+                bound.UnionWith(parameters.Names);
+                Calls(_text, body, end, key, bound, frame.Owner);
+                return bound;
+            }));
+
+        var inside = frame.Inside(qualified, qualified, key, null);
         _walks.Walk(0, 1, _ =>
         {
             Walk(suite, inside);
             return 1;
         });
-        _walks.Walk(0, 1, _ =>
-        {
-            var bound = Bind(body, end);
-
-            foreach (var parameter in parameters.Names)
-            {
-                bound.Add(parameter);
-            }
-
-            Calls(_text, body, end, key, bound, frame.Owner);
-
-            // The whole of the declaration is its own: no run of the body it stands in reads a token of it.
-            Keep(first, end);
-            return 1;
-        });
     }
+
+    /// <summary>The scope a function declared in the scope <paramref name="scope"/> finds the names its body reads in after its own (<see cref="_enclosing"/>): a class's the one around it.</summary>
+    private QualifiedName? Enclosing(QualifiedName? scope) => scope is not null && _enclosing.TryGetValue(scope, out var enclosing) ? enclosing : scope;
 
     /// <summary>
     /// Whether the <paramref name="decorator"/> is pytest's fixture - <c>@fixture</c> or <c>@pytest.fixture</c>, whatever it is
@@ -894,58 +1583,58 @@ internal sealed class PythonReading
             ? "@" + string.Join('.', Chain(_scan, decorator.From).TakeWhile(index => index < decorator.To).Select(Text))
             : "@...";
 
+    /// <summary>The last name of the dotted name a <paramref name="decorator"/> is written with - <c>staticmethod</c>, <c>route</c> of <c>@app.route("/x")</c>; <see langword="null"/> where it begins with no name.</summary>
+    private string? DecoratorCallee((int From, int To) decorator)
+        => _scan.IsName(decorator.From) && Chain(_scan, decorator.From).TakeWhile(index => index < decorator.To).LastOrDefault(-1) is var last and >= 0 ? Text(last) : null;
+
     /// <summary>
-    /// The expression of a <paramref name="decorator"/>, the code of the node of <paramref name="key"/>: what it calls and holds - where a
-    /// decorator the language or a framework declares by its own name (<see cref="OwnDecorators"/>) is a modifier alone, its arguments
-    /// alone the code, the route path or the task name among them.
+    /// The expression of a <paramref name="decorator"/>, the code of the node of <paramref name="key"/>: what it calls, reads and holds.
+    /// A decorator the language or a framework declares - told by the last name of its dotted name (<see cref="OwnDecorators"/>):
+    /// <c>@property</c>, <c>@pytest.mark.parametrize(...)</c>, <c>@app.route("/x")</c> - is a modifier by that name, and what it is
+    /// given is code, the route path or the task name among its literals; any other - the repository's, one the code computes - is
+    /// code whole, a call of what it names among it.
     /// </summary>
     private void Decorator((int From, int To) decorator, QualifiedName key, string? owner)
     {
         var (from, to) = decorator;
-        var bare = _scan.IsName(from) && OwnDecorators.Contains(Text(from));
-        var dotted = _scan.IsName(from) && _scan.Is(_scan.Next(from), ".") && _scan.IsName(_scan.Next(_scan.Next(from))) && OwnDecorators.Contains(Text(_scan.Next(_scan.Next(from))));
-        var head = bare ? from : dotted ? _scan.Next(_scan.Next(from)) : -1;
-        var open = _scan.Next(head);
 
-        if (head < 0)
+        if (_scan.IsName(from) && Chain(_scan, from).TakeWhile(index => index < to).ToList() is { Count: > 0 } chain
+            && OwnDecorators.Contains(Text(chain[^1])) && !chain.Any(index => Words.Contains(Text(index))))
         {
-            // A decorator the repository declares: its expression is the decorated node's code, whole.
-            Calls(_text, from, to, key, Bind(from, to), owner);
+            var given = _scan.Next(chain[^1]);
+            Keep(from, given);
+            Calls(_text, given, to, key, Bind(given, to), owner);
             Keep(from, to);
             return;
         }
 
-        // The decorator's own name - property, functools.cached_property, app.route, pytest.fixture - is a modifier; what it is given is code.
-        Keep(from, _scan.Next(open));
-
-        if (_scan.Is(open, "(") && _scan.Match(open) is var close && close > open)
-        {
-            Keep(close, to);
-            Calls(_text, _scan.Next(open), close, key, Bind(_scan.Next(open), close), owner);
-            return;
-        }
-
+        // A decorator the repository declares, or one the code computes: its expression is the decorated node's code, whole.
+        Calls(_text, from, to, key, Bind(from, to), owner);
         Keep(from, to);
     }
-
-    /// <summary>Whether the class <paramref name="owner"/> is a test class: its name written <c>Test*</c>, or built on <c>TestCase</c>.</summary>
-    private bool IsTestClass(string owner) => owner.StartsWith("Test", StringComparison.Ordinal) || _testClasses.Contains(owner);
 
     // ---- Classes ----
 
     /// <summary>
     /// A <c>class</c> at <paramref name="at"/>, with the <paramref name="decorators"/> above it: a type node over its decorators, its head and
-    /// its suite; each base its parentheses name - a name, or a dotted one through an import - an <c>inherits</c> edge to the first and
-    /// <c>mixesIn</c> to the others, a base the code computes or a keyword of the class its code; its suite's statements read in its
-    /// own frame, and what the suite holds outside its declarations the class's code. A <c>Test*</c> class, or one built on
-    /// <c>TestCase</c>, is a test class.
+    /// its suite; its type parameters its own; each base its parentheses name - a name, or a dotted one through an import, a subscript
+    /// after it its types' references - an <c>inherits</c> edge to the first and <c>mixesIn</c> to the others, a base the code computes or a
+    /// keyword of the class its code; its suite's statements read in its own frame, the names it declares found first so an attribute a
+    /// method assigns is told from them, and what the suite holds outside its declarations the class's code. In a test file, a
+    /// <c>Test*</c> class, or one built on <c>TestCase</c>, a class whose name ends so or a test class of the file, is a test class; any
+    /// other class of a test file built on bases may be one by a base another file declares, and says so. A <c>class</c> whose head cannot
+    /// be read is marked so, its lines the code around it.
     /// </summary>
     private void Class(int at, int to, ScanFrame frame, List<(int From, int To)> decorators)
     {
         var nameAt = _scan.Next(at);
+        var types = TypeParameters(nameAt);
+        var head = types.Close >= 0 ? _scan.Next(types.Close) : _scan.Next(nameAt);
+        var colon = _scan.IsName(nameAt) ? HeaderColon(head, to) : -1;
 
-        if (!_scan.IsName(nameAt) || HeaderColon(_scan.Next(nameAt), to) is var colon && colon < 0)
+        if (colon < 0)
         {
+            _extract.Dynamic(_scan[at].Line, "a class whose head the reader cannot read: its lines read as the code around it");
             return;
         }
 
@@ -954,7 +1643,7 @@ internal sealed class PythonReading
         var name = Text(nameAt);
         var qualified = frame.Qualify(name);
         var body = suite.Count > 0 ? suite[0].From : colon + 1;
-        var test = name.StartsWith("Test", StringComparison.Ordinal);
+        var test = _testFile && name.StartsWith("Test", StringComparison.Ordinal);
         var key = _extract.Add(new ExtractNode(Id(qualified), CodeNodeKinds.Type, name, qualified, _scan[first].Line, _scan[_scan.LastOf(end)].EndLine, _scan.Signature(first, colon))
         {
             SubKind = "class",
@@ -967,73 +1656,171 @@ internal sealed class PythonReading
         });
 
         _classes.Add(name);
-        Keep(first, _scan.Next(nameAt) + 1);
+        _declared[first] = end;
+
+        if (frame.Owner is null)
+        {
+            _free.Add(name);
+        }
 
         if (frame.Depth == 1)
         {
             Top(name);
         }
 
+        var own = TypeParameterNames(types, key);
+        var computed = new List<(int From, int To)>();
         var bases = 0;
 
-        if (_scan.Is(_scan.Next(nameAt), "(") && _scan.Match(_scan.Next(nameAt)) is var close && close > 0)
+        if (_scan.Is(head, "(") && _scan.Match(head) is var close && close > 0)
         {
-            foreach (var (from, endOf) in ScanCalls.Split(_scan, _scan.Next(_scan.Next(nameAt)), close, null))
+            foreach (var (from, endOf) in ScanCalls.Split(_scan, _scan.Next(head), close, null))
             {
                 if (BaseName(from, endOf, frame.Parent!) is { } named)
                 {
-                    var (written, qualifier) = named;
+                    var (written, qualifier, subscript) = named;
                     var target = Simple(written);
                     _extract.Reference(key, bases++ == 0 ? CodeEdgeKinds.Inherits : CodeEdgeKinds.MixesIn, target, _scan[from].Line, qualifier: qualifier);
-                    test |= target == "TestCase";
+                    test |= _testFile && (target.EndsWith("TestCase", StringComparison.Ordinal) || _testClasses.Contains(target));
+
+                    // Repository[User]: the base is Repository, the types its subscript names references of the class.
+                    if (subscript >= 0)
+                    {
+                        TypeNames(_scan, _scan.Next(subscript), _scan.Match(subscript), key, own);
+                    }
                 }
                 else
                 {
-                    // A base the code computes - a call - or a keyword of the class, metaclass=: the class's code.
-                    Calls(_text, from, endOf, key, Bind(from, endOf), name);
+                    // A base the code computes - a call - or a keyword of the class, metaclass=: the code around the class.
+                    computed.Add((from, endOf));
                 }
             }
-
-            Keep(_scan.Next(nameAt), _scan.Next(close));
         }
 
         if (test)
         {
             _extract.Change(key, node => node with { Test = true });
             _testClasses.Add(name);
+            _testTypes.Add(key);
         }
-
-        foreach (var decorator in decorators)
+        else if (_testFile && bases > 0)
         {
-            Decorator(decorator, key, name);
+            // Built on bases another file may make a test class: said, for the linker to decide.
+            _extract.Change(key, node => node with { TestByType = true });
+            _maybeTestTypes.Add(key);
         }
 
-        // The suite's declarations are read in their own walk, and what the class holds outside them in a walk after it.
+        // The class's names are found before any of its methods is read, so an attribute a method assigns is told from a name the
+        // class declares below the method. A function declared in the class finds the names its body reads in the scope around the
+        // class, which a class does not enclose.
+        var declared = ClassNames(suite);
+        var outer = Enclosing(frame.Scope)!;
+        var code = _classCode[key] = [];
+        _classInfo[key] = new ClassInfo(key, qualified, [.. declared]);
+        _enclosing[qualified] = outer;
+
+        // Read once every declaration of the file is made, before what it holds (<see cref="_bodies"/>): first what its head runs
+        // where it is defined - its decorators, a base the code computes - made around it, so an import of its own binds none of it;
+        // then what its suite holds outside its declarations, the class's own code. A name the suite declares is what the class
+        // declares: a read of it in that code is a use of the class's own, as the body sees its own names and none of its bases'.
+        _bodies.Add(new Body(outer, null,
+            () =>
+            {
+                _extract.Around = true;
+
+                try
+                {
+                    foreach (var decorator in decorators)
+                    {
+                        Decorator(decorator, key, frame.Owner);
+                    }
+
+                    foreach (var (from, endOf) in computed)
+                    {
+                        Calls(_text, from, endOf, key, Bind(from, endOf), frame.Owner);
+                    }
+                }
+                finally
+                {
+                    _extract.Around = false;
+                }
+            },
+            () =>
+            {
+                foreach (var read in code)
+                {
+                    read();
+                }
+
+                var bound = Bind(body, end);
+                bound.ExceptWith(declared);
+                Calls(_text, body, end, key, bound, name, declared);
+                return null;
+            }));
+
         var inside = frame.Inside(qualified, qualified, key, name);
         _walks.Walk(0, 1, _ =>
         {
             Walk(suite, inside);
             return 1;
         });
-        _walks.Walk(0, 1, _ =>
-        {
-            Calls(_text, body, end, key, Bind(body, end), name);
-            Keep(first, end);
-            return 1;
-        });
     }
 
     /// <summary>
-    /// The base the tokens from <paramref name="from"/> to <paramref name="to"/> name, where they are a name or a dotted one alone, read in
-    /// the code of the node of <paramref name="key"/>: written out in dots, a name an import binds read as what it reaches and a dotted one
-    /// through the import its head is (<see cref="ThroughImport"/>), a class the file declares named as a type; <see langword="null"/>
-    /// where they are anything else.
+    /// The names a class's <paramref name="suite"/> declares in its own statements: each function's and class's, each name assigned or
+    /// annotated, each type alias's - what is the class's whatever line declares it, found before any of its statements is read.
     /// </summary>
-    private (string Written, ExtractQualifier? Qualifier)? BaseName(int from, int to, QualifiedName key)
+    private HashSet<string> ClassNames(List<(int From, int To)> suite)
+    {
+        var names = new HashSet<string>(StringComparer.Ordinal);
+
+        foreach (var (from, to) in suite)
+        {
+            var at = from;
+
+            while (_scan.Is(at, "@") && LineEnd(_scan.Next(at), to) is var next && next > at && next < to)
+            {
+                at = next;
+            }
+
+            var keyword = Is(at, "async") ? _scan.Next(at) : at;
+
+            if ((Is(keyword, "def") || Is(keyword, "class") || Is(keyword, "type")) && _scan.IsName(_scan.Next(keyword)))
+            {
+                names.Add(Text(_scan.Next(keyword)));
+                continue;
+            }
+
+            foreach (var (start, end) in Simple(at, Math.Min(to, _scan.Count)))
+            {
+                for (var target = start; target < end && TargetsAt(target, end, attributes: false) is { } targets; target = targets.Value)
+                {
+                    names.UnionWith(targets.Names.Select(name => Text(name.At)));
+
+                    if (targets.Value < 0)
+                    {
+                        break;
+                    }
+                }
+            }
+        }
+
+        return names;
+    }
+
+    /// <summary>
+    /// The base the tokens from <paramref name="from"/> to <paramref name="to"/> name, where they are a name or a dotted one, alone or with
+    /// one subscript after it (<c>Repository[User]</c>), read in the code of the node of <paramref name="key"/>: written out in dots, a
+    /// name an import binds read as what it reaches and a dotted one through the import its head is (<see cref="ThroughImport"/>), a
+    /// class the file declares named as a type, and the subscript's bracket; <see langword="null"/> where they are anything else.
+    /// </summary>
+    private (string Written, ExtractQualifier? Qualifier, int Subscript)? BaseName(int from, int to, QualifiedName key)
     {
         var chain = Chain(_scan, from);
+        var after = _scan.Next(chain[^1]);
+        var subscript = _scan.Is(after, "[") && _scan.Match(after) is var close && close > after && _scan.Next(close) >= to ? after : -1;
 
-        if (!_scan.IsName(from) || Words.Contains(Text(from)) || chain[^1] != _scan.Previous(to) || chain.Any(index => Words.Contains(Text(index))))
+        if (!_scan.IsName(from) || Words.Contains(Text(from)) || (subscript < 0 && chain[^1] != _scan.Previous(to)) || chain.Any(index => Words.Contains(Text(index))))
         {
             return null;
         }
@@ -1044,15 +1831,15 @@ internal sealed class PythonReading
         if (chain.Count == 1 && through is not null)
         {
             // A base an import binds: from m import A as B; class C(B) is built on A, through B.
-            return through.Kind == BindingKind.Module ? null : (through.Name, Itself(through));
+            return through.Kind == BindingKind.Module ? null : (through.Name, Itself(through), subscript);
         }
 
         if (chain.Count > 1 && through is not null)
         {
-            return (written, ThroughImport(_scan, chain, through));
+            return (written, ThroughImport(_scan, chain, through), subscript);
         }
 
-        return (written, chain.Count > 1 && _classes.Contains(Text(chain[0])) ? new ExtractQualifier(CodeQualifierKinds.Type, QualifiedName.Of(Text(chain[0]))) : null);
+        return (written, chain.Count > 1 && _classes.Contains(Text(chain[0])) ? new ExtractQualifier(CodeQualifierKinds.Type, QualifiedName.Of(Text(chain[0]))) : null, subscript);
     }
 
     // ---- Imports ----
@@ -1233,18 +2020,23 @@ internal sealed class PythonReading
     }
 
     /// <summary>
-    /// The binding an import makes of <paramref name="name"/> for the code of the node of <paramref name="key"/>: the nearest declaration's
-    /// it is written in that imports it - itself, then each function that holds it, as Python looks a name up through the functions
-    /// around it, a class's for the class's own code alone - its body's and its fields' values - as no class's names are a method's
-    /// or a nested class's - else the module's top's; none where no import binds it.
+    /// The binding an import makes of <paramref name="name"/> for the code of the node of <paramref name="key"/> - the one place a name
+    /// the code reads is bound to an import, in whatever text the file's code is, a string annotation's and an f-string's field among it:
+    /// the nearest declaration's it is written in that imports it - itself, then each function that holds it, as Python looks a name up
+    /// through the functions around it, a class's for the class's own code alone - its body's and its fields' values - as no class's
+    /// names are a method's or a nested class's - else the module's top's; none where no import binds it. What a declaration's head runs,
+    /// made around it (<see cref="ScanExtract.Around"/>) - its decorators, annotations and defaults - is the code of where the
+    /// declaration stands, as Python runs it where the declaration is defined: its names are bound there, never by the declaration's own
+    /// imports.
     /// </summary>
     private Binding? BindingOf(string name, QualifiedName key)
     {
+        var code = _extract.Around ? key.BeforeLastDot() : key;
         QualifiedName? below = null;
 
-        for (var holder = _local.Count > 0 ? key : null; holder is not null; below = holder, holder = holder.BeforeLastDot())
+        for (var holder = _local.Count > 0 ? code : null; holder is not null; below = holder, holder = holder.BeforeLastDot())
         {
-            if (_local.TryGetValue(holder, out var held) && held.Names.TryGetValue(name, out var local) && (!held.Class || holder == key || (below == key && OfClassBody(key))))
+            if (_local.TryGetValue(holder, out var held) && held.Names.TryGetValue(name, out var local) && (!held.Class || holder == code || (below == code && OfClassBody(code!))))
             {
                 return local;
             }
@@ -1255,9 +2047,6 @@ internal sealed class PythonReading
 
     /// <summary>Whether the node of <paramref name="key"/> is a name a class's body assigns - a field or a constant - whose value is the class's own code.</summary>
     private bool OfClassBody(QualifiedName key) => _extract.Node(key) is { Kind: CodeNodeKinds.Member, SubKind: "field" or "constant" };
-
-    /// <summary>The binding an import makes of <paramref name="name"/> for the code of <paramref name="key"/>, read in <paramref name="scan"/> (<see cref="BindingOf"/>).</summary>
-    private Binding? ImportBound(ScannedText scan, string name, QualifiedName key) => ReferenceEquals(scan, _scan) ? BindingOf(name, key) : null;
 
     /// <summary>
     /// What a reference to the name an import binds is qualified by: the prefix of the import that shows it, where one has a prefix -
@@ -1276,6 +2065,21 @@ internal sealed class PythonReading
     /// </summary>
     private ExtractQualifier ThroughImport(ScannedText scan, List<int> chain, Binding binding)
     {
+        var (step, covered) = Steps(scan, chain, binding);
+        var prefix = Reached(step, binding);
+
+        return covered == chain.Count - 1
+            ? new ExtractQualifier(CodeQualifierKinds.Prefix, QualifiedName.Of(prefix))
+            : new ExtractQualifier(CodeQualifierKinds.Type, QualifiedName.Of(string.Join('.', [prefix, .. chain.Skip(covered).Take(chain.Count - 1 - covered).Select(index => scan.Text(index))])));
+    }
+
+    /// <summary>
+    /// The module path of <paramref name="chain"/> of <paramref name="scan"/>, whose head <paramref name="binding"/> binds: the step of the
+    /// binding's dotted import the longest run of the chain's names before its last reaches - its head, then each name a step past the one
+    /// before it - and how many names that run is, the head among them. The chain's names past it are what the module holds.
+    /// </summary>
+    private static (ImportStep Step, int Covered) Steps(ScannedText scan, List<int> chain, Binding binding)
+    {
         var step = binding.Head;
         var covered = 1;
 
@@ -1285,11 +2089,7 @@ internal sealed class PythonReading
             covered++;
         }
 
-        var prefix = Reached(step, binding);
-
-        return covered == chain.Count - 1
-            ? new ExtractQualifier(CodeQualifierKinds.Prefix, QualifiedName.Of(prefix))
-            : new ExtractQualifier(CodeQualifierKinds.Type, QualifiedName.Of(string.Join('.', [prefix, .. chain.Skip(covered).Take(chain.Count - 1 - covered).Select(index => scan.Text(index))])));
+        return (step, covered);
     }
 
     /// <summary>
@@ -1432,26 +2232,53 @@ internal sealed class PythonReading
     // ---- What a body binds and calls ----
 
     /// <summary>
-    /// Each name the tokens from <paramref name="from"/> to <paramref name="to"/> bind, as Python binds them: a name before an <c>=</c> or
-    /// an assigning operator at no call's depth, a <c>for</c>'s targets, the names <c>as</c> gives, a lambda's parameters - and the
-    /// names a <c>global</c> or a <c>nonlocal</c> declares bound nowhere here, taken out.
+    /// Each name the tokens from <paramref name="from"/> to <paramref name="to"/> bind as locals, as Python binds them: each name of the
+    /// target lists a statement assigns or annotates (<see cref="TargetsAt"/>: <c>x = ...</c>, <c>x: int</c>, <c>a, *b = ...</c>,
+    /// <c>(a, b) = ...</c>), a name before an <c>=</c> or an assigning operator at no group's depth, a walrus's name at any depth, a
+    /// <c>for</c>'s targets, the names <c>as</c> gives, a <c>case</c>'s captures (<see cref="_captures"/>) - and the names a
+    /// <c>global</c> or a <c>nonlocal</c> declares bound nowhere here, wherever they are written. What binds names of its own is passed
+    /// over: a declaration the tokens hold, whole and at once (<see cref="_declared"/>); an import, whose names the code is bound to
+    /// through it (<see cref="BindingOf"/>); and a lambda's parameters and a comprehension's targets, which the run of its own code binds
+    /// (<see cref="CallAt"/>). Each token is looked at once.
     /// </summary>
     private HashSet<string> Bind(int from, int to)
     {
         var bound = new HashSet<string>(StringComparer.Ordinal);
-        int parentheses = 0;
+        var outer = new HashSet<string>(StringComparer.Ordinal);
+        var comprehensions = ComprehensionsOf(_scan);
+        var depth = 0;
 
         for (var at = from; at < to && at < _scan.Count; at = _scan.Next(at))
         {
-            if (_scan.Is(at, "("))
+            if (_declared.TryGetValue(at, out var past))
             {
-                parentheses++;
+                at = past - 1;
                 continue;
             }
 
-            if (_scan.Is(at, ")"))
+            if (_captures.Contains(_scan[at].Start))
             {
-                parentheses = Math.Max(0, parentheses - 1);
+                bound.Add(Text(at));
+                continue;
+            }
+
+            // A statement's target lists: each name bound, and the reading goes on from the value, past what the targets and an
+            // annotation write - no name of an annotation is bound by the = after it.
+            if (depth == 0 && StatementHead(at) && AssignedFrom(at, to, bound) is var value && value > at)
+            {
+                at = value - 1;
+                continue;
+            }
+
+            if (_scan.Opens(at))
+            {
+                depth++;
+                continue;
+            }
+
+            if (_scan.Is(at, ")") || _scan.Is(at, "]") || _scan.Is(at, "}"))
+            {
+                depth = Math.Max(0, depth - 1);
                 continue;
             }
 
@@ -1464,87 +2291,301 @@ internal sealed class PythonReading
 
             if (Words.Contains(word))
             {
-                if (word is "for" or "as" or "lambda")
+                if (word == "lambda")
+                {
+                    // A lambda's parameters are its own: passed over to its colon.
+                    at = Math.Min(ScanCalls.TopLevel(_scan, _scan.Next(at), to, ":", null), to) - 1;
+                }
+                else if ((word == "for" && !comprehensions.Fors.Contains(at)) || word == "as")
                 {
                     at = BindTargets(at, to, bound);
                 }
+                else if (word == "import")
+                {
+                    at = StatementStop(at, to) - 1;
+                }
                 else if (word is "global" or "nonlocal")
                 {
-                    for (var index = _scan.Next(at); index < to && index < _scan.Count && _scan.IsName(index); index = _scan.Next(index))
+                    for (var index = _scan.Next(at); index < to && index < _scan.Count && (_scan.IsName(index) || _scan.Is(index, ",")); index = _scan.Next(index))
                     {
-                        bound.Remove(Text(index));
+                        if (_scan.IsName(index))
+                        {
+                            outer.Add(Text(index));
+                        }
                     }
                 }
 
                 continue;
             }
 
-            // A keyword argument's name, or a default's, inside a call's parentheses binds nothing.
+            // An attribute - self.x = ... - binds no local; a keyword argument's name, or a default's, inside a group binds nothing.
             var next = _scan.Next(at);
 
-            if (next >= _scan.Count)
+            if (next >= _scan.Count || _scan.Is(_scan.Previous(at), "."))
             {
                 continue;
             }
 
-            if (parentheses == 0 && (_scan.Is(next, "=") || _scan.Is(next, ":=") || (_scan[next].Kind == ScanTokenKind.Punctuation && Augments.Contains(Text(next)))))
+            if (_scan.Is(next, ":=") || (depth == 0 && (_scan.Is(next, "=") || (_scan[next].Kind == ScanTokenKind.Punctuation && Augments.Contains(Text(next))))))
             {
                 bound.Add(word);
             }
         }
 
+        bound.ExceptWith(outer);
         return bound;
     }
 
     /// <summary>
-    /// The names a <c>for</c>'s targets, an <c>as</c> or a lambda's parameters bind from the keyword at <paramref name="at"/>, added to
-    /// <paramref name="bound"/>; answers the index the reading goes on from.
+    /// Where the value of the statement whose first token is at <paramref name="at"/> begins, where the statement assigns or annotates
+    /// target lists before <paramref name="to"/> - each name of them added to <paramref name="bound"/>; the statement's end where it
+    /// annotates and gives no value; <paramref name="at"/> where it assigns none.
+    /// </summary>
+    private int AssignedFrom(int at, int to, HashSet<string> bound)
+    {
+        var stop = StatementStop(at, to);
+        var value = at;
+
+        for (var target = at; target < stop && TargetsAt(target, stop, attributes: false) is { } targets; target = targets.Value)
+        {
+            foreach (var name in targets.Names)
+            {
+                bound.Add(Text(name.At));
+            }
+
+            value = targets.Value < 0 ? stop : targets.Value;
+
+            if (targets.Value < 0)
+            {
+                break;
+            }
+        }
+
+        return value;
+    }
+
+    /// <summary>Whether the token at <paramref name="at"/> begins a statement: a logical line's first, or the first after a <c>;</c> or a header's colon on its line.</summary>
+    private bool StatementHead(int at)
+        => _lineStarts[_lineOf[at]] == at || _scan.Is(_scan.Previous(at), ";") || (_scan.Is(_scan.Previous(at), ":") && _lineOf[_scan.Previous(at)] == _lineOf[at]);
+
+    /// <summary>Where the simple statement the token at <paramref name="at"/> is in ends: at the next <c>;</c> at its own depth or where its logical line does; never past <paramref name="to"/>.</summary>
+    private int StatementStop(int at, int to)
+    {
+        for (var index = _scan.Next(at); index < to && index < _scan.Count; index = _scan.Opens(index) ? _scan.Past(index) : _scan.Next(index))
+        {
+            if (_scan.Is(index, ";") || _lineOf[index] != _lineOf[at])
+            {
+                return index;
+            }
+        }
+
+        return Math.Min(to, _scan.Count);
+    }
+
+    /// <summary>
+    /// The names a <c>for</c>'s targets or an <c>as</c> bind from the keyword at <paramref name="at"/> - a target in parentheses or
+    /// brackets among them, <c>for (a, b) in</c>, <c>as (x, y)</c> - added to <paramref name="bound"/>; answers the index the reading goes
+    /// on from.
     /// </summary>
     private int BindTargets(int at, int to, HashSet<string> bound)
     {
-        var word = Text(at);
+        var next = _scan.Next(at);
 
-        if (word == "as")
+        if (Is(at, "as"))
         {
-            if (_scan.IsName(_scan.Next(at)))
+            if (_scan.IsName(next))
             {
-                bound.Add(Text(_scan.Next(at)));
+                bound.Add(Text(next));
+                return next;
             }
 
-            return _scan.Next(at);
+            if ((_scan.Is(next, "(") || _scan.Is(next, "[")) && _scan.Match(next) is var close and > 0)
+            {
+                for (var index = _scan.Next(next); index < close; index = _scan.Next(index))
+                {
+                    if (_scan.IsName(index) && !Words.Contains(Text(index)))
+                    {
+                        bound.Add(Text(index));
+                    }
+                }
+
+                return close;
+            }
+
+            return at;
         }
 
-        // for: its targets to the in; lambda: its parameters to its colon, groups passed over.
-        var stop = word == "for" ? "in" : ":";
+        // for: its targets to the in, at any depth.
+        var stop = Math.Min(ScanCalls.TopLevel(_scan, next, to, "in", null), to);
 
-        for (var index = _scan.Next(at); index < to && index < _scan.Count && !_scan.Is(index, stop); index = _scan.Opens(index) ? Math.Min(_scan.Past(index), to) : _scan.Next(index))
+        for (var index = next; index < stop && index < _scan.Count; index = _scan.Next(index))
         {
-            if (_scan.IsName(index))
+            if (_scan.IsName(index) && !Words.Contains(Text(index)))
             {
                 bound.Add(Text(index));
             }
         }
 
-        return Math.Min(ScanCalls.TopLevel(_scan, _scan.Next(at), to, stop, null), to) - 1;
+        return stop - 1;
+    }
+
+    /// <summary>
+    /// The comprehensions of <paramref name="scan"/>: each bracket that opens one - a group a <c>for</c> stands in directly, as only a
+    /// comprehension's can - and each such <c>for</c>, by index; found once a text, in one pass with a stack of the groups open.
+    /// </summary>
+    private Comprehensions ComprehensionsOf(ScannedText scan)
+    {
+        if (_comprehensions.TryGetValue(scan, out var found))
+        {
+            return found;
+        }
+
+        found = new Comprehensions([], []);
+        var open = new Stack<int>();
+
+        for (var at = 0; at < scan.Count; at++)
+        {
+            if (scan.Opens(at))
+            {
+                if (scan.Match(at) > at)
+                {
+                    open.Push(at);
+                }
+
+                continue;
+            }
+
+            if (open.TryPeek(out var top) && scan.Match(top) == at)
+            {
+                open.Pop();
+                continue;
+            }
+
+            if (scan.Is(at, "for") && open.TryPeek(out var holder))
+            {
+                found.Openers.Add(holder);
+                found.Fors.Add(at);
+            }
+        }
+
+        return _comprehensions[scan] = found;
+    }
+
+    /// <summary>The brackets of a text that open a comprehension, and the <c>for</c>s of them, by index.</summary>
+    private sealed record Comprehensions(HashSet<int> Openers, HashSet<int> Fors);
+
+    /// <summary>The names the comprehension the bracket at <paramref name="open"/> opens binds: each of its own <c>for</c>s' targets, to its <c>in</c>.</summary>
+    private static List<string> ComprehensionTargets(ScannedText scan, int open, int close)
+    {
+        var names = new List<string>();
+
+        for (var at = scan.Next(open); at < close && at < scan.Count;)
+        {
+            if (scan.Is(at, "for"))
+            {
+                var stop = Math.Min(ScanCalls.TopLevel(scan, scan.Next(at), close, "in", null), close);
+
+                for (var index = scan.Next(at); index < stop; index = scan.Next(index))
+                {
+                    if (scan.IsName(index) && !Words.Contains(scan.Text(index)))
+                    {
+                        names.Add(scan.Text(index));
+                    }
+                }
+
+                at = stop;
+                continue;
+            }
+
+            at = scan.Opens(at) ? Math.Min(scan.Past(at), close) : scan.Next(at);
+        }
+
+        return names;
+    }
+
+    /// <summary>The names a lambda's <paramref name="parameters"/> bind: each parameter's, starred or not, and none its default reads.</summary>
+    private static List<string> LambdaParameters(ScannedText scan, List<(int Start, int End)> parameters)
+    {
+        var names = new List<string>();
+
+        foreach (var (start, _) in parameters)
+        {
+            var name = start;
+
+            while (scan.Is(name, "*") || scan.Is(name, "**"))
+            {
+                name = scan.Next(name);
+            }
+
+            if (scan.IsName(name))
+            {
+                names.Add(scan.Text(name));
+            }
+        }
+
+        return names;
+    }
+
+    /// <summary>
+    /// Where the body of the lambda whose colon is at <paramref name="colon"/> ends: at the first comma, <c>;</c>, closing bracket or
+    /// comprehension's <c>for</c> at its own depth, or where its logical line does - every group within passed over; never past
+    /// <paramref name="to"/>.
+    /// </summary>
+    private int LambdaEnd(ScannedText scan, int colon, int to)
+    {
+        var own = ReferenceEquals(scan, _scan);
+
+        for (var at = scan.Next(colon); at < to && at < scan.Count;)
+        {
+            if (scan.Is(at, ",") || scan.Is(at, ";") || scan.Is(at, ")") || scan.Is(at, "]") || scan.Is(at, "}") || scan.Is(at, "for")
+                || (scan.Is(at, "async") && scan.Is(scan.Next(at), "for")) || (own && _lineOf[at] != _lineOf[colon]))
+            {
+                return at;
+            }
+
+            at = scan.Opens(at) ? scan.Past(at) : scan.Next(at);
+        }
+
+        return Math.Min(to, scan.Count);
     }
 
     /// <summary>
     /// Each call the tokens of <paramref name="text"/> from <paramref name="from"/> to <paramref name="to"/> make, from the node of
     /// <paramref name="key"/>: a reference by its name and arity, qualified by its receiver where the code says, a class a call makes
-    /// where the code writes a capitalized name, a type an annotation, an <c>isinstance</c>, an <c>except</c> or a bare name names, each
-    /// attribute and name the code reads without calling it, and what it cannot bind marked dynamic. A string's fields are read as
-    /// text of their own, the first on top, before the run it stands in goes on.
+    /// where the code writes a capitalized name, a type an <c>isinstance</c> or a bare name names, each attribute and name the code reads
+    /// without calling it, each member of a chain on its way, and what it cannot bind marked dynamic. A string's fields, a lambda's body
+    /// and a comprehension are read as runs of their own, the first on top, before the run they stand in goes on - a lambda's and a
+    /// comprehension's with the names they bind bound while they are read (<see cref="_inner"/>).
     /// </summary>
-    private void Calls(InterpolatedText text, int from, int to, QualifiedName key, HashSet<string> bound, string? owner)
+    private void Calls(InterpolatedText text, int from, int to, QualifiedName key, HashSet<string> bound, string? owner, IReadOnlySet<string>? own = null)
     {
         var runs = new Stack<CodeRun>();
-        runs.Push(new CodeRun(text, from, to, key, bound));
+        runs.Push(new CodeRun(text, from, to, key, bound) { Own = own });
 
         while (runs.TryPeek(out var run))
         {
+            if (!run.Entered)
+            {
+                run.Entered = true;
+
+                foreach (var name in run.Binds ?? [])
+                {
+                    _inner[name] = _inner.GetValueOrDefault(name) + 1;
+                }
+            }
+
             if (run.At >= run.To || run.At >= run.Text.Scan.Count)
             {
                 runs.Pop();
+
+                foreach (var name in run.Binds ?? [])
+                {
+                    if (--_inner[name] == 0)
+                    {
+                        _inner.Remove(name);
+                    }
+                }
+
                 continue;
             }
 
@@ -1552,7 +2593,7 @@ internal sealed class PythonReading
         }
     }
 
-    /// <summary>One run of code <see cref="Calls"/> reads (<see cref="ScanRun{TKey, TLocals}"/>).</summary>
+    /// <summary>One run of code <see cref="Calls"/> reads (<see cref="ScanRun{TKey, TLocals}"/>), and the names it binds of its own - a lambda's parameters, a comprehension's targets - while it is read.</summary>
     private sealed class CodeRun : ScanRun<QualifiedName, HashSet<string>>
     {
         public CodeRun(InterpolatedText text, int from, int to, QualifiedName key, HashSet<string> bound)
@@ -1564,6 +2605,19 @@ internal sealed class PythonReading
             : base(scanned, key, bound)
         {
         }
+
+        /// <summary>The names it binds of its own while it is read; none where it binds none.</summary>
+        public IReadOnlyList<string>? Binds { get; init; }
+
+        /// <summary>
+        /// The names the class whose own code it is declares - a class's body outside its declarations, and a string's field or a
+        /// call's argument there - read as the class's own; none for any other code, a lambda's and a comprehension's in a class
+        /// among it, which see no name of the class, as Python reads them.
+        /// </summary>
+        public IReadOnlySet<string>? Own { get; init; }
+
+        /// <summary>Whether it was reached, and its names bound.</summary>
+        public bool Entered { get; set; }
     }
 
     /// <summary>Reads the token where <paramref name="run"/> stands, as <see cref="Calls"/> reads each, stacking on <paramref name="runs"/> the code it holds that is read as code of its own; answers the index of the last token it read.</summary>
@@ -1576,10 +2630,20 @@ internal sealed class PythonReading
         var bound = run.Locals;
         var token = scan[at];
 
-        // What a declaration keeps to itself: read by its own reading, by no run of the body it stands in.
-        if (ReferenceEquals(scan, _scan) && _kept.Contains(token.Start))
+        if (ReferenceEquals(scan, _scan))
         {
-            return at;
+            // A declaration the code holds - a nested function's or class's, with its decorators - is read by its own reading: passed
+            // over whole, at once.
+            if (_declared.TryGetValue(at, out var past))
+            {
+                return past - 1;
+            }
+
+            // What a declaration keeps to itself: read by its own reading, by no run of the body it stands in.
+            if (_kept.Contains(token.Start))
+            {
+                return at;
+            }
         }
 
         if (token.Kind == ScanTokenKind.Text)
@@ -1595,11 +2659,19 @@ internal sealed class PythonReading
                 for (var index = spans.Count - 1; index >= 0; index--)
                 {
                     var (start, end) = spans[index];
-                    runs.Push(new CodeRun(() => PythonLexer.Scan(scan.Source, start, end, text.Lines, text.Closes), key, bound));
+                    runs.Push(new CodeRun(() => PythonLexer.Scan(scan.Source, start, end, text.Lines, text.Closes), key, bound) { Own = run.Own });
                 }
             }
 
             return at;
+        }
+
+        // A comprehension - [f(x) for x in xs], a generator a call's parentheses hold - binds its targets of its own: read as a run of
+        // its own, its targets bound while it is.
+        if (ComprehensionsOf(scan).Openers.Contains(at) && scan.Match(at) is var close and > 0)
+        {
+            runs.Push(new CodeRun(text, scan.Next(at), close, key, bound) { Binds = ComprehensionTargets(scan, at, close) });
+            return close;
         }
 
         if (token.Kind != ScanTokenKind.Name)
@@ -1653,38 +2725,43 @@ internal sealed class PythonReading
             return at;
         }
 
-        // A member of a chain is read when the chain's head is - save one a call's or a subscript's result reaches, a value by no name
-        // the file types, and one super(...) reaches, its base's.
+        // A chain a call's or a subscript's result reaches - f().a.b, x[0].a - each name of it read, the first through a value by no
+        // name the file types, and through the base where super(...) reached it; each after it a value. A member of any other chain
+        // is read when the chain's head is.
         if (scan.Is(previous, "."))
         {
             var before = scan.Previous(previous);
-
-            if (scan.Is(before, ")") && scan.Match(before) is var group && group >= 0 && scan.Is(scan.Previous(group), "super"))
-            {
-                Member(scan, word, next, line, key, new ExtractQualifier(CodeQualifierKinds.Base));
-                return at;
-            }
 
             if (!scan.Is(before, ")") && !scan.Is(before, "]"))
             {
                 return at;
             }
 
-            Member(scan, word, next, line, key, new ExtractQualifier(CodeQualifierKinds.Value));
-            return at;
-        }
+            var reached = scan.Is(before, ")") && scan.Match(before) is var group && group >= 0 && scan.Is(scan.Previous(group), "super")
+                ? new ExtractQualifier(CodeQualifierKinds.Base)
+                : new ExtractQualifier(CodeQualifierKinds.Value);
 
-        if (Words.Contains(word) || Builtins.Contains(word))
-        {
-            if ((word == "isinstance" || word == "issubclass") && scan.Is(next, "("))
+            for (var index = 0; index < chain.Count; index++)
             {
-                return InstanceOf(scan, at, key);
+                Member(scan, scan.Text(chain[index]), scan.Next(chain[index]), scan[chain[index]].Line, key, index == 0 ? reached : new ExtractQualifier(CodeQualifierKinds.Value));
             }
 
-            return at;
+            return last;
         }
 
-        var through = ImportBound(scan, word, key);
+        if (Words.Contains(word))
+        {
+            return word == "lambda" ? Lambda(run, at, runs) : at;
+        }
+
+        // A name the language answers to that the file binds nowhere of its own (<see cref="Shadows"/>) names no declaration of the
+        // repository's; the types isinstance and issubclass are given are named.
+        if (Builtins.Contains(word) && !Shadows(word, bound, key))
+        {
+            return (word == "isinstance" || word == "issubclass") && scan.Is(next, "(") ? InstanceOf(run, at, runs) : at;
+        }
+
+        var through = BindingOf(word, key);
 
         // A name the language keeps to itself - __name__, __doc__: no value the code reads.
         if (word.StartsWith("__", StringComparison.Ordinal))
@@ -1692,8 +2769,9 @@ internal sealed class PythonReading
             return at;
         }
 
-        // A name a body binds: a call through its value is dynamic, and a read of it is no use of a declaration.
-        if (chain.Count == 1 && through is null && bound.Contains(word))
+        // A name a body binds - a local, a parameter, a lambda's or a comprehension's own - is the body's, nearer than any import or
+        // declaration of its name: a call through its value is dynamic, and a read of it is no use of a declaration.
+        if (chain.Count == 1 && Local(word, bound))
         {
             if (called)
             {
@@ -1702,6 +2780,10 @@ internal sealed class PythonReading
 
             return at;
         }
+
+        // A name the class declares, read by the class's own code, is the class's own, nearer than an import of its name (<see cref="CodeRun.Own"/>).
+        var mine = run.Own?.Contains(word) == true;
+        through = mine ? null : through;
 
         // A module's name alone names no declaration.
         if (chain.Count == 1 && through is { Kind: BindingKind.Module })
@@ -1718,23 +2800,177 @@ internal sealed class PythonReading
 
         // A name an import binds is read as what it reaches, never as itself.
         var target = chain.Count == 1 && through is { Kind: not BindingKind.Module } ? through.Name : scan.Text(last);
-        var qualifier = chain.Count > 1 ? Receiver(scan, chain, owner, through) : through is not null ? Itself(through) : null;
+        var qualifier = chain.Count > 1 ? Receiver(scan, chain, owner, bound, through) : AloneQualifier(through, mine);
+
+        // The head of a chain a member is reached through - CONFIG of CONFIG.get(), Cart of Cart.parse() - is read as a name alone is;
+        // a local, a receiver - self, cls - and a module's name are none.
+        if (chain.Count > 1 && word is not ("self" or "cls") && !Local(word, bound) && through is not { Kind: BindingKind.Module })
+        {
+            ReadAlone(word, through, mine, line, key);
+        }
+
+        // Each member the chain passes on its way to its last - items of self.items.append(x) - is read, a use of it, qualified as the
+        // chain to it is (<see cref="Receiver"/>): the first as its head says, each after it a value by no name the file types. The names
+        // of a module path an import reaches are no members (<see cref="Steps"/>): what the chain passes begins after them, the first
+        // reached through the module and each after it through what the names before it stand for in the module.
+        var passed = through is not null && !Local(word, bound) ? Steps(scan, chain, through).Covered : 1;
+
+        for (var index = passed; index < chain.Count - 1; index++)
+        {
+            Member(scan, scan.Text(chain[index]), scan.Next(chain[index]), scan[chain[index]].Line, key, Receiver(scan, chain.GetRange(0, index + 1), owner, bound, through));
+        }
 
         if (called)
         {
             var makes = Capital(target) && !_functions.Contains(target);
             _extract.Reference(key, makes ? CodeEdgeKinds.Instantiates : CodeEdgeKinds.Calls, target, line, makes ? null : ScanCalls.CallArity(scan, after, scan.CloseOf(after), PythonMemberCalls), qualifier);
         }
+        else if (chain.Count == 1)
+        {
+            ReadAlone(word, through, mine, line, key);
+        }
         else
         {
-            // A name the code reads without calling it: a reference where a single name is written as a class's and is one an import
-            // binds or the file declares - it names a type, of another module or of this one - and a use otherwise: a function, a
-            // constant, a member.
-            var type = chain.Count == 1 && Capital(target) && (through is { Kind: not BindingKind.Module } || _classes.Contains(target));
-            _extract.Reference(key, type ? CodeEdgeKinds.References : CodeEdgeKinds.Uses, target, line, qualifier: qualifier);
+            _extract.Reference(key, CodeEdgeKinds.Uses, target, line, qualifier: qualifier);
         }
 
         return last;
+    }
+
+    /// <summary>
+    /// The name <paramref name="word"/> the code reads alone, without calling it, from the node of <paramref name="key"/>: a reference
+    /// where it is written as a class's and is one an import binds or the file declares - it names a type, of another module or of this
+    /// one - and a use otherwise, a function, a constant, a member; a name an import binds read as what it reaches
+    /// (<paramref name="through"/>), qualified as <see cref="AloneQualifier"/> says.
+    /// </summary>
+    private void ReadAlone(string word, Binding? through, bool mine, int line, QualifiedName key)
+    {
+        var target = through is { Kind: not BindingKind.Module } ? through.Name : word;
+        var type = Capital(target) && (through is { Kind: not BindingKind.Module } || _classes.Contains(target));
+        _extract.Reference(key, type ? CodeEdgeKinds.References : CodeEdgeKinds.Uses, target, line, qualifier: AloneQualifier(through, mine));
+    }
+
+    /// <summary>
+    /// What a name written alone is qualified by: the class's own where the class's own code reads a name it declares
+    /// (<paramref name="mine"/>), as a class's body sees its own names and none of its bases'; where an import binds it
+    /// (<paramref name="through"/>), the prefix of the import that shows it, where one has a prefix (<see cref="Itself"/>); none
+    /// otherwise, looked for in the scopes it is written in.
+    /// </summary>
+    private static ExtractQualifier? AloneQualifier(Binding? through, bool mine)
+        => mine ? new ExtractQualifier(CodeQualifierKinds.This) : through is not null ? Itself(through) : null;
+
+    /// <summary>
+    /// Whether the code binds <paramref name="name"/>, a name the language answers to, of its own, so the name is the code's and no
+    /// builtin: a local of the body - <paramref name="bound"/>'s - a lambda's or a comprehension's own, a name the module's top binds,
+    /// a function or a class the file declares outside every class, a name an import binds for the code of the node of
+    /// <paramref name="key"/> (<see cref="BindingOf"/>).
+    /// </summary>
+    private bool Shadows(string name, HashSet<string>? bound, QualifiedName key)
+        => Local(name, bound) || _bound.Contains(name) || _free.Contains(name) || BindingOf(name, key) is not null;
+
+    /// <summary>
+    /// Whether <paramref name="name"/> is a local of the code under way: one its body binds - <paramref name="bound"/>'s, a parameter
+    /// among them - one a lambda or a comprehension it is inside binds (<see cref="_inner"/>), or one a function around it binds
+    /// (<see cref="_closure"/>), as Python looks a name up through the functions around a body before the module.
+    /// </summary>
+    private bool Local(string name, HashSet<string>? bound)
+        => bound?.Contains(name) == true || _inner.ContainsKey(name) || _closure.ContainsKey(name);
+
+    /// <summary>
+    /// The lambda at <paramref name="at"/> of <paramref name="run"/>'s code: its body a run of its own, its parameters bound while it
+    /// is read, and each parameter's default a run of the code around it, read before the body as Python evaluates it - each on top,
+    /// in the order the text writes them. Answers the index of the last token of its body, where the code around it goes on.
+    /// </summary>
+    private int Lambda(CodeRun run, int at, Stack<CodeRun> runs)
+    {
+        var scan = run.Text.Scan;
+        var colon = ScanCalls.TopLevel(scan, scan.Next(at), run.To, ":", null);
+
+        if (colon >= run.To || colon >= scan.Count)
+        {
+            return at;
+        }
+
+        var end = LambdaEnd(scan, colon, run.To);
+        var parameters = ScanCalls.Split(scan, scan.Next(at), colon, null);
+        runs.Push(new CodeRun(run.Text, scan.Next(colon), end, run.Key, run.Locals) { Binds = LambdaParameters(scan, parameters) });
+
+        for (var index = parameters.Count - 1; index >= 0; index--)
+        {
+            var (start, stop) = parameters[index];
+
+            if (ScanCalls.TopLevel(scan, start, stop, "=", null) is var equal && equal < stop)
+            {
+                runs.Push(new CodeRun(run.Text, scan.Next(equal), stop, run.Key, run.Locals) { Own = run.Own });
+            }
+        }
+
+        return end - 1;
+    }
+
+    /// <summary>
+    /// The <c>isinstance</c> or <c>issubclass</c> at <paramref name="at"/> of <paramref name="run"/>'s code: the value it tests a run of
+    /// code of its own, read on top; what it tests against the types it names (<see cref="TypeNames"/>) where it is written as types -
+    /// names, dotted or not, a tuple or a union of them - and code like any other where it is not, a call that answers the types among
+    /// it. Answers the index of its closing parenthesis; where it is given one argument alone, of its name, the code around reading it.
+    /// </summary>
+    private int InstanceOf(CodeRun run, int at, Stack<CodeRun> runs)
+    {
+        var scan = run.Text.Scan;
+        var open = scan.Next(at);
+        var close = scan.CloseOf(open);
+        var comma = ScanCalls.TopLevel(scan, scan.Next(open), close, ",", null);
+
+        if (comma >= close)
+        {
+            return at;
+        }
+
+        var types = scan.Next(comma);
+
+        if (IsTypeList(scan, types, close))
+        {
+            TypeNames(scan, types, close, run.Key, null);
+        }
+        else
+        {
+            runs.Push(new CodeRun(run.Text, types, close, run.Key, run.Locals) { Own = run.Own });
+        }
+
+        runs.Push(new CodeRun(run.Text, scan.Next(open), comma, run.Key, run.Locals) { Own = run.Own });
+        return close;
+    }
+
+    /// <summary>
+    /// Whether the tokens of <paramref name="scan"/> from <paramref name="from"/> to <paramref name="to"/> are written as types alone:
+    /// names that are no word of the language, dots, commas, parentheses and <c>|</c> - <c>Cart</c>, <c>models.Cart</c>,
+    /// <c>(A, B)</c>, <c>A | B</c> - and nothing else, no call, subscript or literal, and at least one name.
+    /// </summary>
+    private static bool IsTypeList(ScannedText scan, int from, int to)
+    {
+        var named = false;
+
+        for (var at = from; at < to && at < scan.Count; at = scan.Next(at))
+        {
+            if (scan.IsName(at) && !Words.Contains(scan.Text(at)))
+            {
+                named = true;
+
+                if (scan.Is(scan.Next(at), "("))
+                {
+                    return false;
+                }
+
+                continue;
+            }
+
+            if (!(scan.Is(at, ".") || scan.Is(at, ",") || scan.Is(at, "(") || scan.Is(at, ")") || scan.Is(at, "|")))
+            {
+                return false;
+            }
+        }
+
+        return named;
     }
 
     /// <summary>
@@ -1755,15 +2991,18 @@ internal sealed class PythonReading
 
     /// <summary>
     /// What a member reached through the chain <paramref name="chain"/> of <paramref name="scan"/> is qualified by: one whose head
-    /// <paramref name="through"/> - a name an import binds - is, what the import reaches (<see cref="ThroughImport"/>), a module path
-    /// however long; else <c>self</c> and <c>cls</c> in a class the type's own, <c>super()</c> its base's, a class the file declares named
-    /// as a type, any other a value by no name the file types.
+    /// <paramref name="through"/> - a name an import binds, and no local of the body - is, what the import reaches
+    /// (<see cref="ThroughImport"/>), a module path however long; else <c>self</c> and <c>cls</c> in a class the type's own,
+    /// <c>super()</c> its base's, a local of the body - <paramref name="bound"/>'s, a lambda's, a comprehension's or a closure's - a
+    /// value by no name the file types, nearer than any import or class of its name, a class the file declares named as a type, and
+    /// any other a value by no name the file types.
     /// </summary>
-    private ExtractQualifier Receiver(ScannedText scan, List<int> chain, string? owner, Binding? through)
+    private ExtractQualifier Receiver(ScannedText scan, List<int> chain, string? owner, HashSet<string>? bound, Binding? through)
     {
         var head = scan.Text(chain[0]);
+        var local = bound is not null && Local(head, bound);
 
-        if (through is not null)
+        if (through is not null && !local)
         {
             return ThroughImport(scan, chain, through);
         }
@@ -1785,7 +3024,12 @@ internal sealed class PythonReading
             return new ExtractQualifier(CodeQualifierKinds.Base);
         }
 
-        if (ReferenceEquals(scan, _scan) && _classes.Contains(head))
+        if (local)
+        {
+            return new ExtractQualifier(CodeQualifierKinds.Value);
+        }
+
+        if (_classes.Contains(head))
         {
             return new ExtractQualifier(CodeQualifierKinds.Type, QualifiedName.Of(head));
         }
@@ -1818,54 +3062,14 @@ internal sealed class PythonReading
     }
 
     /// <summary>
-    /// The second argument of the <c>isinstance</c> or <c>issubclass</c> whose parenthesis is after <paramref name="at"/>: the type the code
-    /// tests against, each name of it a reference from the node of <paramref name="key"/>; answers where the reading goes on.
+    /// A reference of <paramref name="kind"/> from the node of <paramref name="key"/> to the member the chain <paramref name="chain"/> of
+    /// <paramref name="scan"/> ends in, read as the code reaches it - through what the import its head is binds, in any text the file's
+    /// code is - on <paramref name="line"/> where it is given, else the chain's own.
     /// </summary>
-    private int InstanceOf(ScannedText scan, int at, QualifiedName key)
-    {
-        var open = scan.Next(at);
-        var close = scan.CloseOf(open);
-        var comma = ScanCalls.TopLevel(scan, open + 1, close, ",", null);
-
-        if (comma >= close)
-        {
-            return at;
-        }
-
-        for (var index = scan.Next(comma); index < close && index < scan.Count;)
-        {
-            if (!scan.IsName(index) || scan.Is(scan.Previous(index), "."))
-            {
-                index = scan.Next(index);
-                continue;
-            }
-
-            var chain = Chain(scan, index);
-
-            // A type the language answers to - str, int, a tuple of them - names no declaration of the repository's.
-            if (Words.Contains(scan.Text(index)) || Builtins.Contains(scan.Text(index)))
-            {
-                index = scan.Next(chain[^1]);
-                continue;
-            }
-
-            Mention(scan, chain, key, CodeEdgeKinds.References);
-            index = scan.Next(chain[^1]);
-        }
-
-        if (ReferenceEquals(scan, _scan))
-        {
-            Keep(scan.Next(comma), close);
-        }
-
-        return close - 1;
-    }
-
-    /// <summary>A reference of <paramref name="kind"/> from the node of <paramref name="key"/> to the member the chain <paramref name="chain"/> of <paramref name="scan"/> ends in, read as the code reaches it.</summary>
-    private void Mention(ScannedText scan, List<int> chain, QualifiedName key, string kind)
+    private void Mention(ScannedText scan, List<int> chain, QualifiedName key, string kind, int? line = null)
     {
         var target = scan.Text(chain[^1]);
-        var through = ImportBound(scan, scan.Text(chain[0]), key);
+        var through = BindingOf(scan.Text(chain[0]), key);
 
         // A module's name alone names no declaration, as a call's reading says (<see cref="CallAt"/>).
         if (chain.Count == 1 && through is { Kind: BindingKind.Module })
@@ -1874,48 +3078,119 @@ internal sealed class PythonReading
         }
 
         var written = chain.Count == 1 && through is not null ? through.Name : target;
-        var qualifier = chain.Count > 1 ? Receiver(scan, chain, null, through) : through is not null ? Itself(through) : null;
-        _extract.Reference(key, kind, written, scan[chain[^1]].Line, qualifier: qualifier);
+        var qualifier = chain.Count > 1 ? Receiver(scan, chain, null, null, through) : through is not null ? Itself(through) : null;
+        _extract.Reference(key, kind, written, line ?? scan[chain[^1]].Line, qualifier: qualifier);
     }
 
     /// <summary>
-    /// Each type the tokens from <paramref name="from"/> to <paramref name="to"/> of an annotation name: each capitalized name not reached
-    /// through a dot a reference to the type it names - through an import's name where the chain's head is one - and a string annotation
-    /// read as the text of its own.
+    /// Each type the tokens of <paramref name="scan"/> from <paramref name="from"/> to <paramref name="to"/> name, read as a type
+    /// expression for the node of <paramref name="key"/> - an annotation, a return annotation, an <c>except</c>'s types, an
+    /// <c>isinstance</c>'s, a class pattern's class, a base's subscript, a type alias's value, a type parameter's bound - the one reading
+    /// of a type the code names: each chain not reached through a dot whose last name is written as a class's - <c>Cart</c>,
+    /// <c>models.Cart</c> - or one name the file declares as a type or an import binds, a reference to what it names, through the
+    /// import its head is (<see cref="Mention"/>); a string in it the type expression it holds - <c>"Cart"</c>, <c>"models.Cart"</c> -
+    /// read the same way, with the file's imports, on the string's line; the language's words and builtins, and the names
+    /// <paramref name="skip"/> holds - a declaration's own type parameters - naming nothing. The values a type expression holds are no
+    /// types: <c>Literal</c>'s arguments and <c>Annotated</c>'s metadata are read as code where the file's own text writes them
+    /// (<see cref="Calls"/>) - so a literal there is one of the node's - and a string's text keeps its literals. Read on a stack of the
+    /// texts its strings open, never a call into itself; the code a value is read as holds no type expression of its own but an
+    /// <c>isinstance</c>'s, whose types are names alone.
     /// </summary>
-    private void TypeMention(int from, int to, QualifiedName key)
+    private void TypeNames(ScannedText scan, int from, int to, QualifiedName key, HashSet<string>? skip)
     {
-        for (var at = from; at < to && at < _scan.Count;)
-        {
-            if (_scan[at].Kind == ScanTokenKind.Text)
-            {
-                // "ClassName" as an annotation, read as the names it writes.
-                foreach (var (value, line) in _scan.LiteralParts(_scan[at]))
-                {
-                    var inner = PythonLexer.Scan(value);
+        var texts = new Stack<(ScannedText Scan, int From, int To, int? Line)>();
+        texts.Push((scan, from, to, null));
 
-                    for (var index = 0; index < inner.Scan.Count; index++)
+        while (texts.TryPop(out var piece))
+        {
+            var (text, start, end, line) = piece;
+
+            for (var at = start; at < end && at < text.Count;)
+            {
+                if (text[at].Kind == ScanTokenKind.Text)
+                {
+                    foreach (var (value, part) in text.LiteralParts(text[at]))
                     {
-                        if (inner.Scan.IsName(index) && Capital(inner.Scan.Text(index)) && !inner.Scan.Is(inner.Scan.Previous(index), ".") && !Words.Contains(inner.Scan.Text(index)) && !Builtins.Contains(inner.Scan.Text(index)))
-                        {
-                            _extract.Reference(key, CodeEdgeKinds.References, inner.Scan.Text(index), line);
-                        }
+                        var inner = PythonLexer.Scan(value).Scan;
+                        texts.Push((inner, 0, inner.Count, line ?? part));
                     }
+
+                    at = text.Next(at);
+                    continue;
                 }
 
-                at = _scan.Next(at);
-                continue;
-            }
+                if (!text.IsName(at) || text.Is(text.Previous(at), "."))
+                {
+                    at = text.Next(at);
+                    continue;
+                }
 
-            if (_scan.IsName(at) && Capital(Text(at)) && !_scan.Is(_scan.Previous(at), ".") && !Words.Contains(Text(at)) && !Builtins.Contains(Text(at)))
+                var chain = Chain(text, at);
+
+                while (chain.Count > 1 && chain[^1] >= end)
+                {
+                    chain.RemoveAt(chain.Count - 1);
+                }
+
+                var head = text.Text(at);
+                var named = text.Text(chain[^1]);
+                var after = text.Next(chain[^1]);
+
+                if (!Words.Contains(head) && !(chain.Count == 1 && (skip?.Contains(head) == true || (Builtins.Contains(head) && !Shadows(head, null, key))))
+                    && (Capital(named) || (chain.Count == 1 && (_classes.Contains(head) || BindingOf(head, key) is { Kind: not BindingKind.Module }))))
+                {
+                    Mention(text, chain, key, CodeEdgeKinds.References, line);
+                }
+
+                // Literal["paid"], Annotated[int, Field(gt=0)]: the values it holds, past the type Annotated is given first.
+                if ((named == "Literal" || named == "Annotated") && text.Is(after, "[") && text.Match(after) is var close && close > after && close < end)
+                {
+                    var values = text.Next(after);
+
+                    if (named == "Annotated")
+                    {
+                        var comma = ScanCalls.TopLevel(text, values, close, ",", null);
+                        texts.Push((text, values, comma, line));
+                        values = comma < close ? text.Next(comma) : close;
+                    }
+
+                    Values(text, values, close, key, line);
+                    at = text.Next(close);
+                    continue;
+                }
+
+                at = after;
+            }
+        }
+    }
+
+    /// <summary>
+    /// The values a type expression holds from <paramref name="from"/> to <paramref name="to"/> of <paramref name="scan"/>, for the node
+    /// of <paramref name="key"/>: code where the file's own text writes them, read as code is (<see cref="Calls"/>); in a string's text,
+    /// each string literal's value one of the node's literals, on <paramref name="line"/>.
+    /// </summary>
+    private void Values(ScannedText scan, int from, int to, QualifiedName key, int? line)
+    {
+        if (from >= to)
+        {
+            return;
+        }
+
+        if (ReferenceEquals(scan, _scan))
+        {
+            Calls(_text, from, to, key, Bind(from, to), null);
+            return;
+        }
+
+        for (var at = from; at < to && at < scan.Count; at = scan.Next(at))
+        {
+            if (scan[at].Kind == ScanTokenKind.Text)
             {
-                var chain = Chain(_scan, at);
-                Mention(_scan, chain, key, CodeEdgeKinds.References);
-                at = _scan.Next(chain[^1]);
-                continue;
+                foreach (var (value, part) in scan.LiteralParts(scan[at]))
+                {
+                    _extract.Literal(value, line ?? part, key);
+                }
             }
-
-            at = _scan.Next(at);
         }
     }
 

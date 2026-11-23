@@ -510,6 +510,9 @@ public static class CodeGraphLinker
         /// <summary>The names of the closed scopes each file's extract declares: found once a file, as every key of one of its names is.</summary>
         private readonly Dictionary<CodeGraphFile, HashSet<QualifiedName>> _closed = new(ReferenceEqualityComparer.Instance);
 
+        /// <summary>Each member whose body is a scope of its own, as what the references made in that body are looked for from (<see cref="LookedFrom"/>): made once a member.</summary>
+        private readonly Dictionary<Declaration, Declaration> _bodies = new(ReferenceEqualityComparer.Instance);
+
         /// <summary>The containers a written name was found to be, from one file and scope: a name such as a type no file declares is looked for once.</summary>
         private readonly Dictionary<(string Path, ScopeKey? Scope, string Written), (IReadOnlyList<Declaration> Value, KeptReads Reads)> _containersFound = [];
 
@@ -1156,7 +1159,7 @@ public static class CodeGraphLinker
 
             try
             {
-                var (all, confidence) = Found(from, reference, new ReferenceAt(file, at));
+                var (all, confidence) = Found(LookedFrom(from, reference), reference, new ReferenceAt(file, at));
                 var found = Bodied(all);
 
                 if (found.Count == 0)
@@ -1180,6 +1183,28 @@ public static class CodeGraphLinker
             {
                 _reads = outer;
             }
+        }
+
+        /// <summary>
+        /// Where <paramref name="reference"/>, made from <paramref name="member"/>, is looked for from: the member's body, where
+        /// its file declares a closed scope under the qualified name of the member it is (<see cref="ExtractScope"/>) - that
+        /// scope first and its parent after it, as a Python function's body is, which the class around it does not enclose -
+        /// save a reference made around the member (<see cref="ExtractReference.Around"/>), looked for where the member is
+        /// declared; else the member itself, from the scope it is declared in. Its edges are the member's either way.
+        /// </summary>
+        private Declaration LookedFrom(Declaration member, ExtractReference reference)
+        {
+            if (reference.Around || member.Node.Kind != CodeNodeKinds.Member || !_closed.TryGetValue(member.File, out var closed) || !closed.Contains(member.Node.Qualified))
+            {
+                return member;
+            }
+
+            if (!_bodies.TryGetValue(member, out var body))
+            {
+                _bodies[member] = body = member with { ScopeKey = ClosedKey(member.File.Path, member.Node.Qualified) };
+            }
+
+            return body;
         }
 
         /// <summary>
@@ -3136,15 +3161,63 @@ public static class CodeGraphLinker
             }
         }
 
-        /// <summary>Each <c>tests</c> edge: from a test to each member it calls directly, as sure as the call.</summary>
+        /// <summary>
+        /// Each <c>tests</c> edge: from a test to each member it calls directly, as sure as the call - a test its own file
+        /// marks, and one that is a test by its type (<see cref="TestsByType"/>).
+        /// </summary>
         private void Tests()
         {
             var tests = _declarations.Where(declaration => declaration.Node.Test).Select(declaration => declaration.Id.Whole()).ToHashSet(StringComparer.Ordinal);
+            tests.UnionWith(TestsByType());
 
             foreach (var call in _edges.Where(edge => edge.Kind == CodeEdgeKinds.Calls && tests.Contains(edge.From)).ToList())
             {
                 _edges.Add(call with { Kind = CodeEdgeKinds.Tests });
             }
+        }
+
+        /// <summary>
+        /// The declarations that are tests by their type (<see cref="ExtractNode.TestByType"/>), by id: each type so marked
+        /// that is built on a test type - one marked a test, or built on one in turn, along the <c>inherits</c> and
+        /// <c>mixesIn</c> edges found, however deep - and each member so marked that such a type holds. Walked from the test
+        /// types out along the edges, each type once, so a chain of bases of any length, a cycle among them, is walked once.
+        /// </summary>
+        private List<string> TestsByType()
+        {
+            var marked = _declarations.Where(declaration => declaration.Node.TestByType).ToList();
+            var found = new List<string>();
+
+            if (marked.Count == 0)
+            {
+                return found;
+            }
+
+            var types = marked.Where(declaration => declaration.Node.Kind == CodeNodeKinds.Type).Select(declaration => declaration.Id.Whole()).ToHashSet(StringComparer.Ordinal);
+            var built = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+
+            foreach (var edge in _edges.Where(edge => edge.Kind is CodeEdgeKinds.Inherits or CodeEdgeKinds.MixesIn && types.Contains(edge.From)))
+            {
+                Add(built, edge.To, edge.From);
+            }
+
+            var tested = _declarations.Where(declaration => declaration.Node is { Test: true, Kind: CodeNodeKinds.Type }).Select(declaration => declaration.Id.Whole()).ToHashSet(StringComparer.Ordinal);
+            var pending = new Stack<string>(tested);
+
+            while (pending.TryPop(out var type))
+            {
+                foreach (var derived in built.GetValueOrDefault(type) ?? [])
+                {
+                    if (tested.Add(derived))
+                    {
+                        found.Add(derived);
+                        pending.Push(derived);
+                    }
+                }
+            }
+
+            found.AddRange(marked.Where(declaration => declaration.Node.Kind == CodeNodeKinds.Member && declaration.Node.Parent is { } holder && tested.Contains(holder.Whole()))
+                .Select(declaration => declaration.Id.Whole()));
+            return found;
         }
 
         /// <summary>

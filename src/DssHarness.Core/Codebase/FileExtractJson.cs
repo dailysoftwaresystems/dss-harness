@@ -144,6 +144,7 @@ internal sealed class FileExtractJson : JsonConverter<FileExtract>
                     MaxArity = node.MaxArity,
                     Prototype = node.Prototype,
                     Test = node.Test,
+                    TestByType = node.TestByType,
                     Part = node.Part,
                     MembersByReceiver = node.MembersByReceiver,
                     ValueType = node.ValueType,
@@ -178,6 +179,7 @@ internal sealed class FileExtractJson : JsonConverter<FileExtract>
                 {
                     Arity = reference.Arity,
                     Probe = reference.Probe,
+                    Around = reference.Around,
                     Qualifier = reference.Qualifier is not { } qualifier ? null
                         : qualifier is { Kind: CodeQualifierKinds.Own, Name: { } own } ? new StoredQualifier(qualifier.Kind) { Node = Place(own, $"a reference to '{reference.Name}' names the node") }
                         : new StoredQualifier(qualifier.Kind) { Name = qualifier.Name?.Whole(), Link = qualifier.Link },
@@ -260,6 +262,7 @@ internal sealed class FileExtractJson : JsonConverter<FileExtract>
                         MaxArity = stored.MaxArity,
                         Prototype = stored.Prototype,
                         Test = stored.Test,
+                        TestByType = stored.TestByType,
                         Part = stored.Part,
                         MembersByReceiver = stored.MembersByReceiver,
                         ValueType = stored.ValueType,
@@ -329,6 +332,7 @@ internal sealed class FileExtractJson : JsonConverter<FileExtract>
                 {
                     Arity = reference.Arity,
                     Probe = reference.Probe,
+                    Around = reference.Around,
                     Qualifier = reference.Qualifier is not { } qualifier ? null
                         : qualifier.Node is { } own
                             ? qualifier.Kind == CodeQualifierKinds.Own && qualifier.Name is null && qualifier.Link is null
@@ -375,6 +379,9 @@ internal sealed class FileExtractJson : JsonConverter<FileExtract>
         public bool Test { get; init; }
 
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+        public bool TestByType { get; init; }
+
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
         public bool Part { get; init; }
 
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
@@ -414,6 +421,9 @@ internal sealed class FileExtractJson : JsonConverter<FileExtract>
 
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
         public bool Probe { get; init; }
+
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+        public bool Around { get; init; }
     }
 
     /// <summary>A reference's qualifier as its record holds it: a node of its own file by its place.</summary>

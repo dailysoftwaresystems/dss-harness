@@ -4483,9 +4483,10 @@ value `ScanLiteral` decodes from what each lexer saw of the literal's form - a p
 triple quote, a heredoc's label and closing indentation - by its language's escapes, a `String.raw` template's as
 written, an HTML character reference by its grammar whatever its length; an interpolated or template string's
 constant parts each a literal of its own, its holes read as code, a character constant, a regular
-expression and JSX markup none, a JSX attribute's text one - and five marks - a prototype, a test, a part of a
-declaration other files hold parts of too (`Part`), generated code with why, and each line it saw something it cannot
-bind or stopped reading at (`dynamic`), with why - of which the linker reads the first three; a dynamic mark may carry a
+expression and JSX markup none, a JSX attribute's text one - and six marks - a prototype, a test, a test by a type
+another file declares (`TestByType`), a part of a declaration other files hold parts of too (`Part`), generated code
+with why, and each line it saw something it cannot bind or stopped reading at (`dynamic`), with why - of which the
+linker reads the first four; a dynamic mark may carry a
 kind (`ExtractDynamic.Kind`), and what an implementation's help says it does not see is a limit that names the signs
 telling a file it applies (`CodeGraphLimit.Signs`) - the kind of a mark, references the linker left candidates, or
 references it counted external - so that an answer says of a file only the limits its marks show. Beside the calls, every
@@ -4496,7 +4497,8 @@ element's - where the reader takes it for a value (JavaScript and TypeScript by 
 variable, a function, an import's binding but a namespace's and a type-only one's, whatever its case), a conditional's
 branches - as a `uses` reference, qualified as its receiver is where the file says - a chain of
 any length written as links, each name's use qualified by a link to the use of the name before it
-(`ExtractQualifier.Link`, its names spelt back by `FileExtract.Written`) - one past a C# variable
+(`ExtractQualifier.Link`, its names spelt back by `FileExtract.Written`), but Python's, whose names past the first member
+are values by no name the file types (below) - one past a C# variable
 of a declared type its first name's use qualified by that type, so it is read through each name's
 type as one past a field is - and reads an enum
 member's value as the member's code - C's, C++'s and
@@ -4775,21 +4777,36 @@ and pytest's `pythonpath`. A value no string writes, or one a setup.cfg's interp
 bracket or string never closes is read to the file's end, the line it begins on marked dynamic.
 
 Python's reader (`PythonReading`, over `PythonLexer`) reads by indentation, which is no token: each token says its line, and
-the reader finds its column from where it begins - counted, as Python's tokenizer counts it, from past the last form feed among
-the blanks its line begins with. A statement ends where the next logical line begins - the first token on a later line outside
-every bracketed group, one a backslash ending its line's code does not continue (a comment's backslash is the comment's) - that
-starts no deeper than the statement's own column; a header's suite is deeper than its header and is passed over whole however deep it nests, and a decorator's line is
-the declaration's it stands above. The module is a namespace named by its dotted path - `pkg/sub/mod.py` is `pkg.sub.mod`, an
+the reader finds its column from where it begins - counted, as Python's tokenizer counts it, from past the last form feed
+among the blanks its line begins with. A statement ends where the next logical line begins - the first token on a later line
+outside every bracketed group, one a backslash ending its line's code does not continue (a comment's backslash is the
+comment's) - that starts no deeper than the statement's own column; a header's suite is deeper than its header and is passed
+over whole however deep it nests, and a decorator's line is the declaration's it stands above. The file's logical lines and
+where each one's block ends are found once, in one pass with a stack of the lines still open, so a block nested any depth
+costs its lines once. `async for`, `async with` and `match` head compound statements of their own; `match`, `case` and
+`type` are soft keywords, names wherever they head no statement of their own. The module is a namespace named by its dotted
+path - `pkg/sub/mod.py` is `pkg.sub.mod`, an
 `__init__.py` its directory's package - one open scope that every name it declares is reachable from and that its own
-top-level code is looked up in. A class is a type and a scope; a function is no scope of the model's - what it declares is
-declared in the scope the function itself is, its class or the module, and held by the function as its `Parent`. The lexer
-keeps a string whole with its prefix - raw, bytes, formatted (an f-string or a t-string), combined, in any case - a
-triple-quoted one over lines, a backslash escaping the character after it for where the string ends, a raw one's too, as
-Python's tokenizer reads one; and it says where an f-string's fields hold code (`LiteralStack`, as Dart's, JavaScript's and
-PHP's lexers do): a field's code ends at the `=` of a debugging field, the `!` of a conversion or the `:` of a format, and
-what follows to the brace that closes the field is the field's tail (`LiteralStack.InTail`), none of it the value's, each
-field a format holds code of its own; a debugging field's text, to its `=` and the blanks after it, is the value's as
-written, going on from the part before the field as Python's value holds it (`f"a{x=}"` holds `ax=`;
+top-level code is looked up in. A class is a type and a scope; a function's body is a closed scope under the function's
+qualified name, whose parent is the function or the module around it and never a class, as Python looks a body's names up -
+what it declares is held by the function as its `Parent` and named under it. What a function's head runs where the function
+is defined - its decorators, annotations and defaults, the fixtures its parameters name - is made around it
+(`ExtractReference.Around`). A declaration's head and body are read once every declaration of the file is made - each before
+the declarations it holds, the functions around a body open while it is read - so a name the file declares or imports below
+a function is the file's there too, and a closure's names are its own. Each name of a target list - `a, *b = ...`, `(a, b) =
+...` - is a constant or a field at the top and in a class and a local in a function; an attribute a method first assigns
+through `self` or `cls` is a field of its class where the class declares no member of its name; `type X = ...` is a type of
+sub-kind `alias`; and a type parameter - `def f[T]`, `class C[T: Base]` - is its declaration's own, naming no type. A local,
+a parameter, a lambda's parameter, a comprehension's target and a name a function around the code binds are the code's own,
+nearer than an import or a builtin of the name; a name a class's own code reads that the class declares is the class's, a
+`this` reference, as a class's body sees its names and none of its bases'; and a builtin the file declares or imports is the
+file's. The lexer keeps a string whole with its prefix - raw, bytes, formatted (an f-string or a t-string), combined, in any
+case - a triple-quoted one over lines, a backslash escaping the character after it for where the string ends, a raw one's
+too, as Python's tokenizer reads one; and it says where an f-string's fields hold code (`LiteralStack`, as Dart's,
+JavaScript's and PHP's lexers do): a field's code ends at the `=` of a debugging field, the `!` of a conversion or the `:`
+of a format, and what follows to the brace that closes the field is the field's tail (`LiteralStack.InTail`), none of it the
+value's, each field a format holds code of its own; a debugging field's text, to its `=` and the blanks after it, is the
+value's as written, going on from the part before the field as Python's value holds it (`f"a{x=}"` holds `ax=`;
 `ScanLiteralPart.Written`). Its escapes are Python's - one Python does not know kept with its backslash, a character's name
 (`\N{...}`) kept as written, a bytes string's the escapes of bytes, a formatted one's doubled braces a brace. A bracket or a
 string that never closes, which Python refuses, marks its line `dynamic` (`unclosed`, a limit's sign), since what follows it
@@ -4825,16 +4842,25 @@ it makes is counted external, which is the sign (`CodeGraphLimit.External`) of t
 not show, the names nothing binds and the fixtures no `conftest.py` above the test declares. `self` and `cls` qualify a
 `this` reference, `super()` a `base` one; a chain whose head an import binds is qualified by what the import reaches - the
 `prefix` of the module the longest run of its names before the member reaches, else the `type` those names stand for inside
-it - a module path however long and never a value, one rule for a call's, a use's, an annotation's and a base's chain; a
-call of a name written with a capital first letter is an `instantiates`; a type an annotation, an `isinstance` or an
-`except` names is a `references`. A parameter a test or a fixture requires is a reference with a `fixture` qualifier
-(`CodeQualifierKinds.Fixture`), reached by the fixtures alone - nodes of sub-kind `fixture`, functions `pytest.fixture`
-decorates - as pytest finds one: what the test's scopes declare, its class's and its module's, else what the nearest
-`conftest.py` that declares it holds of its directory and each above it - a `conftest.py`'s module is a `directory` import
-that serves the fixture references of every file under its directory alone (`ExtractImport.Serves`) - and nowhere else. A
-test file's `test*` functions, its `Test*` classes and `TestCase` subclasses with their `test*` methods are tests. A method
-is bound by its name alone, so each carries an `overrides` reference of its own name with a `base` qualifier, an edge where
-a base of its type declares it along the chain; no word of the language says a method overrides, so the reference is a probe
+it - a module path however long and never a value, one rule for a call's, a use's, an annotation's and a base's chain; the
+head of a chain the file declares or imports - `CONFIG` of `CONFIG.get()` - and each member a chain passes on its way to its
+last - `items` of `self.items.append(x)` - is a `uses` (a `references` where it names a class), the later ones values by no
+name the file types rather than links, since a `self` chain's head writes no name to link to and a function's body sees no
+name of its class; a call of a name written with a capital first letter is an `instantiates`; a type an annotation, a string
+annotation, an `isinstance`, an `except` or a `case`'s class pattern names - dotted or not, through the import its head is -
+is a `references`, every one read by the one reader of a type expression, which reads `Literal`'s values and `Annotated`'s
+metadata as code; a `case`'s dotted value is a `uses` and its captures are bound. A decorator is read whole, a framework's
+or the language's by the last name of its dotted name a modifier, what it is given code. A parameter a test or a fixture
+requires is a reference with a `fixture` qualifier (`CodeQualifierKinds.Fixture`), reached by the fixtures alone - nodes of
+sub-kind `fixture`, functions `pytest.fixture` decorates - as pytest finds one: what the test's scopes declare, its class's
+and its module's, else what the nearest `conftest.py` that declares it holds of its directory and each above it - a
+`conftest.py`'s module is a `directory` import that serves the fixture references of every file under its directory alone
+(`ExtractImport.Serves`) - and nowhere else. A test file's `test*` functions, its `Test*` classes and `TestCase` subclasses
+with their `test*` methods are tests, and no other file's; a class of a test file built on a base another file declares says
+it may be a test class by that base (`ExtractNode.TestByType`), as does each `test*` method it holds, and the link makes
+them tests where a base of the class is a test class. A method is bound by its name alone, so each carries an `overrides`
+reference of its own name with a `base` qualifier, an edge where a base of its type declares it along the chain; no word of
+the language says a method overrides, so the reference is a probe
 (`ExtractReference.Probe`) - it asks whether a declaration is there, and where none is it is no external callee.
 
 The one linker (`CodeGraphLinker`) resolves every reference by the same steps for every language - the qualifier's
@@ -4848,7 +4874,9 @@ for a file whose names are bound within it (`FileExtract.BoundWithin`), whose na
 qualifier being read as such a prefix too where no type or scope has it as its whole qualified name, from the file
 that makes the import or, made global, from every file of its language, and a name no value or type has that an import's
 prefix is standing for that import, written as a value or before a type's name - and derives `dispatches`, `declares`,
-`tests` and `partOf` from the `implements` edges and the marks, and the keys' join from the literals and the fields
+`tests` and `partOf` from the `implements` edges and the marks - a declaration marked a test by its type a test where a
+base its type is built on, along the `inherits` and `mixesIn` edges any number of levels up, is a test type, each type
+walked once - and the keys' join from the literals and the fields
 and properties that name a key. A type is looked in before its bases and its bases a level at a
 time, each level nearest first, the first rank that holds the name deciding with all it holds: the mixins each type of
 the level names, a rank each, the last first - each applied over what comes before it - then one rank of everything
@@ -4860,7 +4888,11 @@ earlier round found (`Fixpoint`): a base named through bases of bases any number
 found, and what a base is never hangs on the order the files come in. A declaration kept to a scope (`ExtractNode.SeenIn`) is seen only from the
 declarations written in that scope or inside it, as the scopes they are written in climb. A closed scope at a file's top - one no scope holds and that is no type's or namespace's own, as a C
 file's for its `static` names - is one every declaration of the file is written in, looked in after its own scopes, so
-what it declares is found `exact` from anywhere in the file. An import marked `Fallback` stands in for the one before it - a C `#include` in quotes, found by its
+what it declares is found `exact` from anywhere in the file. A closed scope under a member's own qualified name is that
+member's body - a Python function's, whose parent is the function or the module around it and never a class: a reference
+the member makes is looked for from that scope, then its parent, so a body never reaches the names of a class around it
+but through what qualifies them; one made around the member (`ExtractReference.Around`) - its decorators', its
+annotations', its defaults', the fixtures its parameters name - is looked for where the member is declared. An import marked `Fallback` stands in for the one before it - a C `#include` in quotes, found by its
 path's ending where the including file's folder lacks it - and is taken only where that one names no file; a
 prototype found beside its body - the same language and qualified name - is that body; and a member defined outside
 its type's body, as C++ writes `T::f`, is in the type its declaration's scope names. A qualified reference is looked for where its qualifier says alone. A `type` qualifier is a type or
