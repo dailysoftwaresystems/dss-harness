@@ -138,23 +138,64 @@ public sealed class MachineDispatchQueueTests
         Assert.Equal(["lone"], holding.Select(entry => entry.Leg));
     }
 
-    /// <summary>What a unit costs is the median of the last ten durations the tree's ledgers hold for the same leg; one quantum where none is known.</summary>
+    /// <summary>
+    /// What a unit costs is the median of the newest ten durations the tree's ledgers hold for the same leg - newest by
+    /// the run each was of - read from every run's step ledgers, its agents' steps' among them, as the step kept the
+    /// leg run's own ledger document; a leg that never ran is no duration, a ledger that cannot be read holds none, and
+    /// one quantum is the cost where none is known.
+    /// </summary>
     [Fact]
-    public void TheCost_IsTheMedianOfTheLastTenDurations_OfTheSameLeg()
+    public void TheCost_IsTheMedianOfTheNewestTenDurations_TheLedgersHoldForTheSameLeg()
     {
         using var temp = new TempDirectory();
-        var steps = temp.Combine(".orchestrators", "r1", "steps", "items[0].build");
-        Directory.CreateDirectory(steps);
-        File.WriteAllText(
-            Path.Combine(steps, "ledger.json"),
-            """{"legs":[{"leg":"linux-release","duration":"00:01:00"},{"leg":"linux-release","duration":"00:03:00"},{"leg":"linux-release","duration":"00:09:00"},{"leg":"win-release","duration":"00:05:00"}]}""");
 
+        // Twelve runs of the leg in the order they began, the two oldest the longest (30 and 20 minutes), the rest 3 to 12,
+        // the newest four kept by an agent's step of the last of twenty-one runs: the newest ten are 3 to 12, whose median
+        // is 7.5 - where every run counted, or the ten longest were taken, or the agents' steps or any run were passed
+        // over, it would be 8.5, 9.5 or 6.5.
+        for (var run = 1; run <= 12; run++)
+        {
+            var steps = run <= 8
+                ? temp.Combine(".orchestrators", $"o{run:00}", "steps", $"items[{run}].build")
+                : temp.Combine(".orchestrators", "o21", "agents", "a1", "steps", $"items[{run}].build");
+
+            Kept(steps, Run(run), ("linux-release", TimeSpan.FromMinutes(run switch { 1 => 30, 2 => 20, _ => run })), ("win-release", TimeSpan.Zero));
+        }
+
+        for (var run = 9; run <= 20; run++)
+        {
+            Directory.CreateDirectory(temp.Combine(".orchestrators", $"o{run:00}", "steps"));
+        }
+
+        Kept(temp.Combine(".orchestrators", "o01", "steps", "items[0].build"), Run(13), ("win-release", TimeSpan.FromMinutes(5)));
+        File.WriteAllText(temp.Combine(".orchestrators", "o01", "steps", "items[0].build", "nested", "ledger.json"), "not a ledger");
         var fileSystem = new HarnessFactory().FileSystem;
 
-        Assert.Equal(3, DispatchCosts.Of(fileSystem, temp.Path, "linux-release"));
+        Assert.Equal(7.5, DispatchCosts.Of(fileSystem, temp.Path, "linux-release"));
         Assert.Equal(5, DispatchCosts.Of(fileSystem, temp.Path, "win-release"));
         Assert.Equal(1, DispatchCosts.Of(fileSystem, temp.Path, "unknown-leg"));
         Assert.Equal(1, DispatchCosts.Of(fileSystem, temp.Combine("no-orchestrators-here"), "linux-release"));
+
+        // The run a ledger is of: one begun on the given minute of a day, so the runs' order is the minutes'.
+        static RunId Run(int minute) => RunId.Parse($"20261123-{(minute / 60):00}{(minute % 60):00}00-0000000a");
+
+        // A step's ledger, as the step keeps it: the leg run's own document, written by the ledger's own writer.
+        static void Kept(string steps, RunId run, params (string Leg, TimeSpan Took)[] legs)
+        {
+            Directory.CreateDirectory(Path.Combine(steps, "nested"));
+            var result = new DssHarness.Core.Runs.LegRunResult(
+                "build",
+                run,
+                "/runs/r",
+                LedgerReport.From([.. legs.Select(leg => new LegEntry { Leg = leg.Leg, Verdict = LegVerdict.Passed, Duration = leg.Took })], 0),
+                HarnessExit.Success,
+                "passed",
+                Cancelled: false,
+                Unfinished: [],
+                Details: []);
+
+            File.WriteAllText(Path.Combine(steps, "ledger.json"), result.ToDocument(path => path) + "\n");
+        }
     }
 
     /// <summary>The queue command answers each class's capacity, holders and waiting units, by tenant, in text and as one JSON document.</summary>

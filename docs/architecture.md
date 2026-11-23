@@ -1129,8 +1129,10 @@ machine's logical processors) and reasoning agents of every run (`agents`, 8) - 
 local command's repository, `local/<tree>`, until environments name a finer one. The order is fair by tenant:
 of the units waiting, the one whose tenant is charged the least against its share goes next, ties by arrival - its
 share its weight times its run's priority (a workflow's `priority` key, 1 where none), the charge what its running
-units were estimated to cost, the median of the last ten durations the tree's records hold for the same leg (`DispatchCosts`,
-one quantum where none is known) - so a tenant with a burst of short arms and a tenant with one long build each get
+units were estimated to cost, the median of the last ten durations the tree's records hold for the same leg - the
+newest ten, by the run each was of, of the ledgers every run's steps and its agents' steps kept, each read by the
+ledger's own reader (`DispatchCosts`, `LedgerReport.DurationsIn`), a leg that never ran no duration and a ledger that
+cannot be read none; one quantum where none is known - so a tenant with a burst of short arms and a tenant with one long build each get
 the machine in proportion, and neither waits for the other's whole burst. A unit waiting past `ageAfterMinutes` (10)
 has its tenant's share doubled for each further period, so no weight setting starves a tenant. Nothing is pre-empted:
 a started unit runs to its end, and a WSL sweep - one unit whole, one worker - is charged its whole estimated cost.
