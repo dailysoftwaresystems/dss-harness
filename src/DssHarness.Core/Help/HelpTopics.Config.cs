@@ -37,7 +37,7 @@ public static partial class HelpTopics
 
         builder.AppendLine("config.json");
         builder.AppendLine();
-        builder.AppendLine("  defaults       buildCores and testCores (6 each), maxParallelLegs (per");
+        builder.AppendLine($"  defaults       buildCores and testCores ({HarnessDefaults.DefaultCores} each), maxParallelLegs (per");
         builder.AppendLine("                 machine) and maxParallelLegsTotal (the whole fleet), default project,");
         builder.AppendLine("                 localCopy, where this machine's own legs work for every leg at once");
         builder.AppendLine("                 ('help legs'), stallSeconds, the stall bound nothing more specific replaces");
@@ -46,7 +46,9 @@ public static partial class HelpTopics
         builder.AppendLine("                 signals are computed by ('help orchestrators')");
         builder.AppendLine("  results        matchers: a problem matcher for any other tool - a regex with");
         builder.AppendLine("                 named groups saying where its file, line, column, code and message");
-        builder.AppendLine("                 are, so its output is digested as every tool's is; validated at load");
+        builder.AppendLine("                 are, so its output is digested as every tool's is; validated at load,");
+        builder.AppendLine("                 each pattern matched in time linear in what it reads, so one holding");
+        builder.AppendLine("                 a backreference, a lookaround or an atomic group is refused, naming it");
         builder.AppendLine("  toolchains     compilers, as environment and cache variables (msvc, gcc, clang)");
         builder.AppendLine("  sanitizers     instrumentation overlays composed onto a build");
         builder.AppendLine("  buildConfigs   named configurations (debug, release, o1, o2)");
