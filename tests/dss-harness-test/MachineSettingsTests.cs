@@ -102,7 +102,7 @@ public sealed class MachineSettingsTests
             new AdmissionRule(3, 80, TimeSpan.FromSeconds(15), TimeSpan.FromSeconds(90), TimeSpan.FromSeconds(30), TimeSpan.FromMinutes(60), 4L << 30)
             {
                 ReclaimIdleBuilds = true,
-                Processes = Environment.ProcessorCount,
+                Processes = null,
                 Agents = AdmissionSettings.DefaultAgents,
                 AgeAfter = TimeSpan.FromMinutes(AdmissionSettings.DefaultAgeAfterMinutes),
             },
@@ -116,14 +116,14 @@ public sealed class MachineSettingsTests
                 new AdmissionField("maxWaitMinutes", "60", AdmissionSettings.BuiltIn),
                 new AdmissionField("minFreeGiB", "4", "config.json's hosts.local admission"),
                 new AdmissionField("reclaimIdleBuilds", "true", "the machine's settings file '/u/settings.json'"),
-                new AdmissionField("processes", Environment.ProcessorCount.ToString(System.Globalization.CultureInfo.InvariantCulture), AdmissionSettings.BuiltIn),
+                new AdmissionField("processes", "the machine's logical processors", AdmissionSettings.BuiltIn),
                 new AdmissionField("agents", AdmissionSettings.DefaultAgents.ToString(System.Globalization.CultureInfo.InvariantCulture), AdmissionSettings.BuiltIn),
                 new AdmissionField("ageAfterMinutes", AdmissionSettings.DefaultAgeAfterMinutes.ToString(System.Globalization.CultureInfo.InvariantCulture), AdmissionSettings.BuiltIn),
             ],
             inForce.Fields);
         Assert.Equal(
             "heavyLegs 3, reclaimIdleBuilds true from the machine's settings file '/u/settings.json'; maxMemoryPercent 80 from config.json's "
-            + $"defaults.admission; settleSeconds [15, 90], pollSeconds 30, maxWaitMinutes 60, processes {Environment.ProcessorCount}, agents {AdmissionSettings.DefaultAgents}, "
+            + $"defaults.admission; settleSeconds [15, 90], pollSeconds 30, maxWaitMinutes 60, processes the machine's logical processors, agents {AdmissionSettings.DefaultAgents}, "
             + $"ageAfterMinutes {AdmissionSettings.DefaultAgeAfterMinutes.ToString(System.Globalization.CultureInfo.InvariantCulture)} built in; minFreeGiB 4 from config.json's hosts.local admission",
             inForce.Describe());
     }
@@ -145,6 +145,29 @@ public sealed class MachineSettingsTests
         Assert.Null(AdmissionSettings.InForce(AdmissionSection.SettingsFile(null, "/u/settings.json"), AdmissionSection.Host(null, HostId.Local), AdmissionSection.Defaults(null)));
         Assert.Equal("config.json's hosts.ssh 'vps' admission", AdmissionSection.Host(null, HostId.Ssh("vps")).From);
         Assert.Equal("config.json's hosts.local admission", AdmissionSection.Host(null, HostId.Wsl("Ubuntu")).From);
+    }
+
+    /// <summary>
+    /// The machine steps a machine runs at once are its own logical processors where no section declares a count - which
+    /// only that machine knows: an ssh host's rule, read on the machine that surveys it, says so rather than the surveying
+    /// machine's own count, and carries no count for the host to admit by; a count a section declares is that count.
+    /// </summary>
+    [Fact]
+    public void AnUndeclaredProcessCount_IsTheAdmittingMachinesOwn_NeverTheReadersCount()
+    {
+        var undeclared = AdmissionSettings.InForce(
+            AdmissionSection.SettingsFile(new AdmissionSettings { HeavyLegs = 4 }, "~/settings.json"),
+            AdmissionSection.Host(null, HostId.Ssh("vps")),
+            AdmissionSection.Defaults(null))!;
+        var declared = AdmissionSettings.InForce(
+            AdmissionSection.SettingsFile(new AdmissionSettings { HeavyLegs = 4 }, "~/settings.json"),
+            AdmissionSection.Host(new AdmissionSettings { Processes = 64 }, HostId.Ssh("vps")),
+            AdmissionSection.Defaults(new AdmissionSettings { Processes = 2 }))!;
+
+        Assert.Null(undeclared.Rule.Processes);
+        Assert.Equal(new AdmissionField("processes", "the machine's logical processors", "built in"), undeclared.Fields.Single(field => field.Key == "processes"));
+        Assert.Equal(64, declared.Rule.Processes);
+        Assert.Equal(new AdmissionField("processes", "64", "config.json's hosts.ssh 'vps' admission"), declared.Fields.Single(field => field.Key == "processes"));
     }
 
     /// <summary>
@@ -308,7 +331,7 @@ public sealed class MachineSettingsTests
         Assert.Equal(
             [
                 "local: admission: heavyLegs 3 from the machine's settings file '/u/settings.json'; maxMemoryPercent 76, settleSeconds [15, 90], "
-                    + $"pollSeconds 30, maxWaitMinutes 60, reclaimIdleBuilds false, processes {Environment.ProcessorCount}, agents {AdmissionSettings.DefaultAgents}, "
+                    + $"pollSeconds 30, maxWaitMinutes 60, reclaimIdleBuilds false, processes the machine's logical processors, agents {AdmissionSettings.DefaultAgents}, "
                     + $"ageAfterMinutes {AdmissionSettings.DefaultAgeAfterMinutes.ToString(System.Globalization.CultureInfo.InvariantCulture)} built in; minFreeGiB 4 from config.json's hosts.local admission",
                 $"ssh vps: admission: {unread}",
             ],

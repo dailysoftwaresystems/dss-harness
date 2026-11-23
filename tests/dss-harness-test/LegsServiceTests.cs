@@ -952,7 +952,8 @@ public sealed class LegsServiceTests
         var report = await fixture.Service.CheckAsync(Root, null, LegWorkload.BuildAndTest, here: null, cancellationToken: TestContext.Current.CancellationToken);
         var hosts = report.Hosts.ToDictionary(host => host.Host);
         var local = "heavyLegs 3 from the machine's settings file '/u/settings.json'; maxMemoryPercent 80 from config.json's defaults.admission; "
-            + "settleSeconds [15, 90], pollSeconds 30, maxWaitMinutes 60, reclaimIdleBuilds false built in; minFreeGiB 4 from config.json's hosts.local admission";
+            + "settleSeconds [15, 90], pollSeconds 30, maxWaitMinutes 60, reclaimIdleBuilds false, processes the machine's logical processors, agents 8, "
+            + "ageAfterMinutes 10 built in; minFreeGiB 4 from config.json's hosts.local admission";
 
         Assert.Equal(local, hosts[HostId.Local].Admission?.Describe());
         Assert.Equal(local, hosts[HostId.Wsl("Ubuntu")].Admission?.Describe());
@@ -989,7 +990,8 @@ public sealed class LegsServiceTests
         Assert.Null(local.AdmissionUnread);
         Assert.Equal(
             "heavyLegs 4 from the settings file of the machine that sent the leg; maxMemoryPercent 80 from config.json's defaults.admission; "
-                + "settleSeconds [15, 90], pollSeconds 30, maxWaitMinutes 60, reclaimIdleBuilds false built in; minFreeGiB 4 from config.json's hosts.local admission",
+                + "settleSeconds [15, 90], pollSeconds 30, maxWaitMinutes 60, reclaimIdleBuilds false, processes the machine's logical processors, agents 8, "
+                + "ageAfterMinutes 10 built in; minFreeGiB 4 from config.json's hosts.local admission",
             local.Admission?.Describe());
     }
 

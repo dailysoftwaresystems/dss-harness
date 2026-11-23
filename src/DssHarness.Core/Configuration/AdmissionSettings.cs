@@ -54,6 +54,13 @@ public sealed class AdmissionSettings
     /// <summary>The room, in GiB, a heavy leg's build leaves free on each filesystem it fills when a section says nothing.</summary>
     public const double DefaultMinFreeGiB = 2;
 
+    /// <summary>
+    /// The machine steps a machine runs at once when a section says nothing, as a line says it: its own logical processors,
+    /// which only it knows - the rule of an ssh host is read on the machine that surveys it, whose processors are not the
+    /// host's.
+    /// </summary>
+    public const string MachinesProcessors = "the machine's logical processors";
+
     /// <summary>Reasoning agents the machine runs at once when a section says nothing.</summary>
     public const int DefaultAgents = 8;
 
@@ -194,6 +201,19 @@ public sealed class AdmissionSettings
             return value;
         }
 
+        // A field whose built-in value is the admitting machine's own, which a rule read anywhere else cannot know - an ssh
+        // host's rule is read on the machine that surveys it: null where no section declares it, said as what it stands for,
+        // and decided by that machine as it admits.
+        TValue? Declared<TValue>(string key, Func<AdmissionSettings, TValue?> read, string builtIn, Func<TValue, string> said)
+            where TValue : struct
+        {
+            var from = sections.FirstOrDefault(section => section.Settings is { } settings && read(settings) is not null);
+            var value = from is null ? null : read(from.Settings!);
+
+            fields.Add(new AdmissionField(key, value is { } declared ? said(declared) : builtIn, from?.From ?? BuiltIn));
+            return value;
+        }
+
         var merged = new AdmissionSettings
         {
             HeavyLegs = Value("heavyLegs", settings => settings.HeavyLegs, DefaultHeavyLegs, count => Number(count)),
@@ -203,7 +223,7 @@ public sealed class AdmissionSettings
             MaxWaitMinutes = Value("maxWaitMinutes", settings => settings.MaxWaitMinutes, DefaultMaxWaitMinutes, Number),
             MinFreeGiB = Value("minFreeGiB", settings => settings.MinFreeGiB, DefaultMinFreeGiB, Number),
             ReclaimIdleBuilds = Value("reclaimIdleBuilds", settings => settings.ReclaimIdleBuilds, false, reclaim => reclaim ? "true" : "false"),
-            Processes = Value("processes", settings => settings.Processes, Environment.ProcessorCount, count => Number(count)),
+            Processes = Declared("processes", settings => settings.Processes, MachinesProcessors, count => Number(count)),
             Agents = Value("agents", settings => settings.Agents, DefaultAgents, count => Number(count)),
             AgeAfterMinutes = Value("ageAfterMinutes", settings => settings.AgeAfterMinutes, DefaultAgeAfterMinutes, Number),
         };
@@ -410,7 +430,11 @@ public sealed record AdmissionRule(
     /// </summary>
     public bool ReclaimIdleBuilds { get; init; }
 
-    /// <summary>Machine steps of the process class the machine runs at once (<see cref="AdmissionSettings.Processes"/>).</summary>
+    /// <summary>
+    /// Machine steps of the process class the machine runs at once (<see cref="AdmissionSettings.Processes"/>), or
+    /// <see langword="null"/> where no section declares a count: the admitting machine's own logical processors, which that
+    /// machine decides as it admits (<see cref="AdmissionSettings.MachinesProcessors"/>).
+    /// </summary>
     public int? Processes { get; init; }
 
     /// <summary>Reasoning agents of every run the machine runs at once (<see cref="AdmissionSettings.Agents"/>).</summary>

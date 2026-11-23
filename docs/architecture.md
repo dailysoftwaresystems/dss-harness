@@ -6996,7 +6996,10 @@ an ssh host's own section, then `defaults.admission`. `legs` says, for each host
 in force and where each field came from, or why the settings file could not be read: an ssh host
 answers its own file in the survey's answer (`HostAgentInfo.MachineSettings`), its
 home written `~`, and `--json` gives each host's `settingsFile`, its `admission` fields (`key`,
-`value`, `from`) and `admissionUnread`.
+`value`, `from`) and `admissionUnread`. A field whose built-in value only the admitting machine knows -
+`processes`, its own logical processors - is said as that (`AdmissionSettings.MachinesProcessors`), never
+as the count of the machine reading the rule, and the rule carries no count for it; the machine decides
+it as it admits.
 
 A waiting leg says where it stands as it starts each wait - who holds the slots, the memory in use, or
 the room and who claims it - again whenever the holders or the claimants change, and again, as it reads

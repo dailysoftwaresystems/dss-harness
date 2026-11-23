@@ -98,7 +98,7 @@ public static partial class HelpTopics
         builder.AppendLine("  reclaimIdleBuilds true or false: whether a leg short of room first removes other");
         builder.AppendLine("                    trees' idle builds on the same filesystem (false)");
         builder.AppendLine("  processes         machine steps the machine runs at once, of the process class,");
-        builder.AppendLine("                    at least 1 (the machine's logical processors)");
+        builder.AppendLine($"                    at least 1 ({AdmissionSettings.MachinesProcessors})");
         builder.AppendLine($"  agents            reasoning agents the machine runs at once, at least 1 ({AdmissionSettings.DefaultAgents})");
         builder.AppendLine($"  ageAfterMinutes   minutes a unit waits before its tenant's share ages, doubled for each further period, from 0 ({AdmissionSettings.DefaultAgeAfterMinutes})");
         builder.AppendLine();

@@ -2287,11 +2287,11 @@ public sealed class ConfigStoreTests
         var local = AdmissionSettings.RuleFor(config.Hosts.Local.Admission, config.Defaults.Admission);
         var vps = AdmissionSettings.RuleFor(config.Hosts.Ssh["vps"].Admission, config.Defaults.Admission);
 
-        Assert.Equal(new AdmissionRule(1, 80, TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(30), 0) { Processes = Environment.ProcessorCount, Agents = AdmissionSettings.DefaultAgents }, local);
-        Assert.Equal(new AdmissionRule(3, 80, TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(30), TimeSpan.FromMinutes(60), 9L << 29) { Processes = Environment.ProcessorCount, Agents = AdmissionSettings.DefaultAgents }, vps);
+        Assert.Equal(new AdmissionRule(1, 80, TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(30), 0) { Processes = null, Agents = AdmissionSettings.DefaultAgents }, local);
+        Assert.Equal(new AdmissionRule(3, 80, TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(30), TimeSpan.FromMinutes(60), 9L << 29) { Processes = null, Agents = AdmissionSettings.DefaultAgents }, vps);
         Assert.Null(AdmissionSettings.RuleFor(null, null));
         Assert.Equal(
-            new AdmissionRule(2, 76, TimeSpan.FromSeconds(15), TimeSpan.FromSeconds(90), TimeSpan.FromSeconds(30), TimeSpan.FromMinutes(60), 2L << 30) { Processes = Environment.ProcessorCount, Agents = AdmissionSettings.DefaultAgents },
+            new AdmissionRule(2, 76, TimeSpan.FromSeconds(15), TimeSpan.FromSeconds(90), TimeSpan.FromSeconds(30), TimeSpan.FromMinutes(60), 2L << 30) { Processes = null, Agents = AdmissionSettings.DefaultAgents },
             AdmissionSettings.RuleFor(new AdmissionSettings(), null));
     }
 
@@ -2325,10 +2325,10 @@ public sealed class ConfigStoreTests
         var least = LoadValid("""{ "defaults": { "admission": { "maxMemoryPercent": 0.5, "settleSeconds": [5, 5], "pollSeconds": 1, "maxWaitMinutes": 0.1, "minFreeGiB": 0 } } }""");
 
         Assert.Equal(
-            new AdmissionRule(1, 100, TimeSpan.Zero, TimeSpan.FromSeconds(3600), TimeSpan.FromSeconds(3600), TimeSpan.FromMinutes(10080), 1L << 40) { Processes = Environment.ProcessorCount, Agents = AdmissionSettings.DefaultAgents },
+            new AdmissionRule(1, 100, TimeSpan.Zero, TimeSpan.FromSeconds(3600), TimeSpan.FromSeconds(3600), TimeSpan.FromMinutes(10080), 1L << 40) { Processes = null, Agents = AdmissionSettings.DefaultAgents },
             AdmissionSettings.RuleFor(null, most.Defaults.Admission));
         Assert.Equal(
-            new AdmissionRule(2, 0.5, TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(1), TimeSpan.FromMinutes(0.1), 0) { Processes = Environment.ProcessorCount, Agents = AdmissionSettings.DefaultAgents },
+            new AdmissionRule(2, 0.5, TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(1), TimeSpan.FromMinutes(0.1), 0) { Processes = null, Agents = AdmissionSettings.DefaultAgents },
             AdmissionSettings.RuleFor(null, least.Defaults.Admission));
     }
 
