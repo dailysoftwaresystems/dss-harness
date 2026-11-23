@@ -1054,8 +1054,10 @@ public static class CodeQualifierKinds
     /// <summary>
     /// The type the reference is written in, and its bases. With a name, a value of that type by the names the code writes after
     /// <c>this</c> - <c>this.cart.lines</c> - each a member of what the one before is, the reference looked for in the type the last
-    /// is declared with, by its name alone where nothing says that type: what a receiver reaches through <c>this</c>, never a name
-    /// written alone, which a type whose members are reached by a receiver alone does not answer (<see cref="ExtractNode.MembersByReceiver"/>).
+    /// is declared with, by its name alone where nothing says that type, or where a name the chain passes through is none the type
+    /// it comes to declares - a member the code adds at run time, or one a base the repository does not hold gives - never by
+    /// nothing: what a receiver reaches through <c>this</c>, never a name written alone, which a type whose members are reached by
+    /// a receiver alone does not answer (<see cref="ExtractNode.MembersByReceiver"/>).
     /// </summary>
     public const string This = "this";
 

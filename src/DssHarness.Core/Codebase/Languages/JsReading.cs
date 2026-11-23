@@ -205,10 +205,11 @@ internal sealed class JsReading
     private readonly Dictionary<(QualifiedName? Region, string Name), List<QualifiedName>> _topKeys = [];
 
     /// <summary>
-    /// What the file exports by a list or an assignment rather than where it declares it: each local name, the name it is
-    /// exported by, the line, and the wrapper's scope it is written in - none at the file's top - where the local is looked for.
+    /// What the file exports by a list or an assignment: each local name, the name it is exported by, the line, the wrapper's
+    /// scope it is written in - none at the file's top - where the local is looked for, and the key of the declaration where the
+    /// export declares what it exports in place (<c>exports.x = function () {}</c>), which no name is looked for.
     /// </summary>
-    private readonly List<(string Local, string Exported, int Line, QualifiedName? Region)> _exported = [];
+    private readonly List<(string Local, string Exported, int Line, QualifiedName? Region, QualifiedName? Key)> _exported = [];
 
     /// <summary>The names of the type parameters in force: no type the repository declares.</summary>
     private readonly HashSet<string> _typeParameters = new(StringComparer.Ordinal);
@@ -245,6 +246,13 @@ internal sealed class JsReading
 
     /// <summary>The specifiers a <c>require</c> or an <c>import(...)</c> imports already, each imported once.</summary>
     private readonly HashSet<string> _required = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Each member a body assigns through <c>this</c> - <c>this.x = ...</c> - in the order the bodies are read: the key of the
+    /// node whose body it is, the name, and where the assignment's <c>this</c> and its <c>=</c> stand; what the file's fields
+    /// are made of once it is read (<see cref="ThisFields"/>).
+    /// </summary>
+    private readonly List<(QualifiedName From, string Name, int This, int Assign)> _assigned = [];
 
     /// <summary>The bodies read once the declarations around them are: the file's, then each type's members'.</summary>
     private List<Action>? _bodies;
@@ -336,6 +344,7 @@ internal sealed class JsReading
             _bodies = null;
         }
 
+        ThisFields();
         Exported();
         _extract.Generated = Generated();
 
@@ -1645,8 +1654,9 @@ internal sealed class JsReading
 
     /// <summary>
     /// A CommonJS export at <paramref name="at"/> - <c>module.exports = ...</c>, <c>module.exports.x = ...</c>,
-    /// <c>exports.x = ...</c> - what it assigns exported by its name, <c>default</c> for the whole of it; answers where the
-    /// next statement begins, or 0 where none is there.
+    /// <c>exports.x = ...</c> - what it assigns exported by its name, <c>default</c> for the whole of it
+    /// (<see cref="ExportedValue"/>), at the file's top or a wrapper's; answers where the next statement begins, or 0 where none
+    /// is there.
     /// </summary>
     private int CommonJs(int start, int at, int end, ScanFrame frame)
     {
@@ -1688,9 +1698,29 @@ internal sealed class JsReading
         }
 
         var stop = StatementEnd(at, end);
+        ExportedValue(start, assign, _scan.Next(assign), stop, exported, frame, _scan[at].Line);
+        return stop;
+    }
+
+    /// <summary>
+    /// What a module exports by <paramref name="exported"/> - <c>default</c> for the whole of it - given the value at
+    /// <paramref name="value"/> of the statement from <paramref name="start"/> to <paramref name="stop"/>, its head written to
+    /// <paramref name="head"/>: a CommonJS export's (<see cref="CommonJs"/>) and an AMD factory's <c>return</c>
+    /// (<see cref="Factory"/>) alike. A name the module declares or binds exported by it; a <c>require</c>'s file re-exported - all
+    /// of it by <c>default</c>, its namespace alone by any other name; an object given the whole export each of its names and
+    /// functions (<see cref="ExportedObject"/>); a class, a function or any other value declared where it is written - named by
+    /// its own name where a class or a default's function expression writes one, by <paramref name="exported"/> otherwise - and
+    /// exported by the one rule every export is (<see cref="Export(QualifiedName, string, int)"/>), so what a wrapper's body
+    /// declares so is its importers' as what the file's top declares is.
+    /// </summary>
+    private void ExportedValue(int start, int head, int value, int stop, string exported, ScanFrame frame, int line)
+    {
         var boundary = _scan.Is(_scan.LastOf(stop), ";") ? _scan.LastOf(stop) : stop;
-        var value = _scan.Next(assign);
-        var line = _scan[at].Line;
+
+        if (value >= boundary)
+        {
+            return;
+        }
 
         if (_scan.IsName(value) && _scan.Next(value) >= boundary && !Reserved.Contains(_scan.Text(value)))
         {
@@ -1702,44 +1732,44 @@ internal sealed class JsReading
             Run(required.Specifier, line, null, exported == "default" ? null : [], export: exported == "default");
             _required.Add(required.Specifier);
         }
-        else if (exported == "default" && _scan.Is(value, "{"))
+        else if (exported == "default" && _scan.Is(value, "{") && _scan.Bounds(value, boundary).Past >= boundary)
         {
             ExportedObject(value, boundary, frame);
         }
         else if (_scan.Is(value, "class"))
         {
             var name = _scan.IsName(_scan.Next(value)) && !_scan.Is(_scan.Next(value), "extends") ? _scan.Text(_scan.Next(value)) : exported;
-            Class(start, start, value, boundary, frame, [], [], [], seenIn: name == exported ? null : _scope, name, nameIsDefault: false, ambient: false);
 
-            if (name != exported)
+            if (DeclaredClass(start, start, value, boundary, frame, [], [], [], seenIn: _scope, name, nameIsDefault: false, ambient: false).Key is { } key)
             {
-                Export(name, exported, line);
+                Export(key, exported, line);
             }
         }
         else if (FunctionAt(value, boundary) is { } function)
         {
             var name = function.Name >= 0 && exported == "default" ? _scan.Text(function.Name) : exported;
-            Bound(start, start, value, name, function, frame, [], [], [], "function", seenIn: name == exported ? null : _scope, exports: name == exported ? null : [exported]);
+            Export(Callable(start, start, value, name, function, frame, [], [], [], "function", seenIn: _scope, exports: null), exported, line);
         }
         else
         {
-            var key = _extract.Add(new ExtractNode(Id(frame.Qualify(exported)), CodeNodeKinds.Member, exported, frame.Qualify(exported), _scan[start].Line, _scan[_scan.LastOf(stop)].EndLine, _scan.Signature(start, assign))
+            var key = _extract.Add(new ExtractNode(Id(frame.Qualify(exported)), CodeNodeKinds.Member, exported, frame.Qualify(exported), _scan[start].Line, _scan[_scan.LastOf(stop)].EndLine, _scan.Signature(start, head))
             {
                 SubKind = "variable",
                 Scope = frame.Scope,
                 Summary = ScanComments.Summary(_scan, start),
+                SeenIn = _scope,
             });
 
             Registered(key, frame, exported);
+            Export(key, exported, line);
             Defer(() => Calls(_text, value, boundary, key, new Locals(), null));
         }
-
-        return stop;
     }
 
     /// <summary>
-    /// The object literal <c>module.exports</c> is given at <paramref name="open"/>: each name it takes by itself
-    /// (<c>{ a }</c>) or as another's (<c>{ b: c }</c>) exported by its key, each function it holds a function of its key.
+    /// The object literal <c>module.exports</c> - or an AMD factory's <c>return</c> - is given at <paramref name="open"/>: each
+    /// name it takes by itself (<c>{ a }</c>) or as another's (<c>{ b: c }</c>) exported by its key, each function it holds a
+    /// function of its key exported by it.
     /// </summary>
     private void ExportedObject(int open, int end, ScanFrame frame)
     {
@@ -1775,11 +1805,11 @@ internal sealed class JsReading
             }
             else if (key is not null && _scan.Is(next, ":") && FunctionAt(_scan.Next(next), pieceEnd) is { } function)
             {
-                Bound(pieceStart, pieceStart, _scan.Next(next), key, function, frame, [], [], [], "function", seenIn: null, exports: null);
+                Export(Callable(pieceStart, pieceStart, _scan.Next(next), key, function, frame, [], [], [], "function", seenIn: _scope, exports: null), key, line);
             }
             else if (MethodNameAt(pieceStart, pieceEnd) is var methodAt and >= 0 && FunctionAt(methodAt, pieceEnd, methodName: true) is { } method)
             {
-                Bound(pieceStart, pieceStart, methodAt, _scan.Text(methodAt), method, frame, [], [], [], "function", seenIn: null, exports: null);
+                Export(Callable(pieceStart, pieceStart, methodAt, _scan.Text(methodAt), method, frame, [], [], [], "function", seenIn: _scope, exports: null), _scan.Text(methodAt), line);
             }
             else
             {
@@ -1910,7 +1940,8 @@ internal sealed class JsReading
             return -1;
         }
 
-        var extended = string.Join('.', names[..(whole ? ^1 : ^2)].Select(index => _scan.Text(index)));
+        List<string> written = [.. names[..(whole ? ^1 : ^2)].Select(index => _scan.Text(index))];
+        var extended = string.Join('.', written);
         var type = DeclaredType(frame, extended);
 
         // The type's own scope where the file declares it, else the one its name names from here, which holds nothing else and
@@ -1918,21 +1949,34 @@ internal sealed class JsReading
         var scope = type is { } declared ? _extract.Node(declared).Qualified : frame.Qualify(extended);
         var members = frame.Inside(scope, scope, type, extended);
 
+        // A type the file does not declare is the one a call or a new of its chain makes, as the linker reads that chain (Called):
+        // a constructor function an import binds, its module's default where a require or a default import binds it.
+        var extends = type is null ? string.Join('.', Called(written)) : null;
+
         if (type is null)
         {
             _extract.Scope(scope, open: true, parent: frame.Scope);
         }
 
+        var last = whole ? Math.Min(_scan.Bounds(assigned, stop).Past, stop) - 1 : function!.Last;
+
         if (whole)
         {
-            var close = Math.Min(_scan.Bounds(assigned, stop).Past, stop);
-            OptionMembers(assigned, close, type, members, "method", seenIn: null, fields: "field", extends: type is null ? extended : null);
-            return close;
+            OptionMembers(assigned, last + 1, type, members, "method", seenIn: null, fields: "field", extends: extends);
+        }
+        else
+        {
+            var nameAt = names[^1];
+            Bound(start, head, nameAt, _scan.Text(nameAt), function!, members, marks, decorators, [], "method", seenIn: null, exports: null, extends);
         }
 
-        var nameAt = names[^1];
-        Bound(start, head, nameAt, _scan.Text(nameAt), function!, members, marks, decorators, [], "method", seenIn: null, exports: null, type is null ? extended : null);
-        return function!.Last + 1;
+        // A type the file declares holds the members its prototype is given, wherever they are written: its lines hold theirs.
+        if (type is { } holder)
+        {
+            _extract.Change(holder, node => node with { Start = Math.Min(node.Start, _scan[start].Line), End = Math.Max(node.End, _scan[last].EndLine) });
+        }
+
+        return last + 1;
     }
 
     /// <summary>Whether <paramref name="frame"/> is the file's top, or one a wrapper's body is read in (<see cref="Wrapping"/>): where a wrapper's body is read as the top is.</summary>
@@ -2175,29 +2219,14 @@ internal sealed class JsReading
     }
 
     /// <summary>
-    /// An AMD factory's <c>return</c> at <paramref name="at"/>: what it returns the module's export, as
-    /// <c>module.exports = ...</c>'s is - a name it declares exported by default, an object's keys each by its own - and what
-    /// it computes besides the module's code. Answers where the next statement begins.
+    /// An AMD factory's <c>return</c> at <paramref name="at"/>: what it returns the module's export by <c>default</c>, read as
+    /// <c>module.exports = ...</c>'s is (<see cref="ExportedValue"/>) - a name it declares, an object's names and functions, a
+    /// function, a class or any other value. Answers where the next statement begins.
     /// </summary>
     private int Factory(int at, int end, ScanFrame frame)
     {
         var stop = StatementEnd(at, end);
-        var boundary = _scan.Is(_scan.LastOf(stop), ";") ? _scan.LastOf(stop) : stop;
-        var value = _scan.Next(at);
-
-        if (_scan.IsName(value) && _scan.Next(value) >= boundary && !Reserved.Contains(_scan.Text(value)))
-        {
-            Export(_scan.Text(value), "default", _scan[at].Line);
-        }
-        else if (_scan.Is(value, "{") && _scan.Bounds(value, boundary).Past >= boundary)
-        {
-            ExportedObject(value, boundary, frame);
-        }
-        else if (value < boundary)
-        {
-            Defer(() => Calls(_text, value, boundary, null, new Locals(), null));
-        }
-
+        ExportedValue(at, _scan.Next(at), _scan.Next(at), stop, "default", frame, _scan[at].Line);
         return stop;
     }
 
@@ -2478,6 +2507,10 @@ internal sealed class JsReading
     /// <paramref name="bindingNames"/> where the binding's name is its name whatever its own.
     /// </summary>
     private int Class(int start, int head, int at, int end, ScanFrame frame, List<string> modifiers, List<string> marks, List<(int Start, int End)> decorators, QualifiedName? seenIn, string? named, bool nameIsDefault, bool ambient, bool bindingNames = false)
+        => DeclaredClass(start, head, at, end, frame, modifiers, marks, decorators, seenIn, named, nameIsDefault, ambient, bindingNames).Close;
+
+    /// <summary>The class <see cref="Class"/> reads: where the next declaration begins, and the key of the class's node - none where no class is declared there.</summary>
+    private (int Close, QualifiedName? Key) DeclaredClass(int start, int head, int at, int end, ScanFrame frame, List<string> modifiers, List<string> marks, List<(int Start, int End)> decorators, QualifiedName? seenIn, string? named, bool nameIsDefault, bool ambient, bool bindingNames = false)
     {
         var cursor = _scan.Next(at);
         string name;
@@ -2494,7 +2527,7 @@ internal sealed class JsReading
         }
         else
         {
-            return StatementEnd(at, end);
+            return (StatementEnd(at, end), null);
         }
 
         var typeParameters = _typescript && _scan.Is(cursor, "<") ? TypeParameters(cursor, end) : [];
@@ -2508,7 +2541,7 @@ internal sealed class JsReading
 
         if (open < 0)
         {
-            return StatementEnd(at, end);
+            return (StatementEnd(at, end), null);
         }
 
         var (inner, close) = _scan.Bounds(open, end);
@@ -2528,7 +2561,7 @@ internal sealed class JsReading
             Members(open, inner, frame.Inside(frame.Qualify(name), frame.Qualify(name), key, name), MemberPlace.Class, ambient);
         }
 
-        return close;
+        return (close, key);
     }
 
     /// <summary>
@@ -3620,7 +3653,13 @@ internal sealed class JsReading
     private IReadOnlyList<QualifiedName> TopKeys(string name) => TopKeys(name, _region);
 
     /// <summary>Notes that the file exports what <paramref name="local"/> names, by <paramref name="exported"/>, as of the place the reading stands (<see cref="_region"/>).</summary>
-    private void Export(string local, string exported, int line) => _exported.Add((local, exported, line, _region));
+    private void Export(string local, string exported, int line) => _exported.Add((local, exported, line, _region, null));
+
+    /// <summary>
+    /// Notes that the file exports the declaration of <paramref name="key"/>, which the export at <paramref name="line"/> declares
+    /// where it is written, by <paramref name="exported"/>: made visible by the one rule every export is (<see cref="Exported"/>).
+    /// </summary>
+    private void Export(QualifiedName key, string exported, int line) => _exported.Add((_extract.Node(key).Name, exported, line, _region, key));
 
     /// <summary>The index of the <c>{</c> that opens a type's body from <paramref name="at"/>, past its clauses; -1 where a <c>;</c> or a closing brace comes first.</summary>
     private int BodyOpen(int at, int end)
@@ -5165,6 +5204,13 @@ internal sealed class JsReading
             // Kept for the member after it, whose chain goes on from this one's (Receiver).
             var qualifier = Receiver(scan, previous, locals, out _, out var anyLocal);
             _chains[(scan, at)] = new ChainLink(_extract.Reference(key(), CodeEdgeKinds.Uses, word, line, qualifier: qualifier), qualifier, anyLocal);
+
+            // this.x = ...: a member the body assigns, which its type may declare nowhere else (ThisFields).
+            if (qualifier is { Kind: CodeQualifierKinds.This, Name: null } && scan.Is(next, "=") && scan == _scan)
+            {
+                _assigned.Add((key(), word, FirstOfChain(scan, at), next));
+            }
+
             return;
         }
 
@@ -5409,11 +5455,19 @@ internal sealed class JsReading
     private List<string> Expanded(IReadOnlyList<string> names)
         => _bindings.TryGetValue(names[0], out var binding) && binding is { Prefixed: true, Export: { } export } ? [names[0], export, .. names.Skip(1)] : [.. names];
 
-    /// <summary>What a call of <paramref name="word"/> written alone names, and what qualifies it: the export a default, renamed or namespace import binds, by its prefix; itself otherwise.</summary>
+    /// <summary>
+    /// <paramref name="names"/>, a chain the file calls, makes with <c>new</c>, builds on or writes the prototype of, as the linker
+    /// reads what it stands for: as <see cref="Expanded"/> reads it, and a name alone that a namespace's binding binds - a
+    /// <c>require</c>'s, <c>var Cart = require('./cart')</c> - with that module's <c>default</c> after it, its whole export, which a
+    /// call of it calls. The one reading of what a chain called or made is, which a call (<see cref="Callee"/>), a <c>new</c>, a base
+    /// (<see cref="Mention"/>, <see cref="Made(ScannedText, int)"/>) and a prototype's type (<see cref="Prototyped"/>) share.
+    /// </summary>
+    private List<string> Called(IReadOnlyList<string> names)
+        => names.Count == 1 && _bindings.TryGetValue(names[0], out var binding) && binding is { Prefixed: true, Export: null } ? [names[0], "default"] : Expanded(names);
+
+    /// <summary>What a call of <paramref name="word"/> written alone names, and what qualifies it: the export a default, renamed or namespace import binds, by its prefix (<see cref="Called"/>); itself otherwise.</summary>
     private (string Name, ExtractQualifier? Qualifier) Callee(string word)
-        => _bindings.TryGetValue(word, out var binding) && binding.Prefixed
-            ? (binding.Export ?? "default", new ExtractQualifier(CodeQualifierKinds.Prefix, word))
-            : (word, null);
+        => Called([word]) is [var prefix, var export] ? (export, new ExtractQualifier(CodeQualifierKinds.Prefix, prefix)) : (word, null);
 
     /// <summary>
     /// The rules each JSX attribute's string of the markup <paramref name="token"/> names, by the one rule of markup's class and id
@@ -5540,7 +5594,7 @@ internal sealed class JsReading
         }
 
         var written = ChainAt(scan, first, scan.Next(at)).Names.Select(index => scan.Text(index)).ToList();
-        return written[0] is "this" or "Function" ? null : string.Join('.', Expanded(written));
+        return written[0] is "this" or "Function" ? null : string.Join('.', Called(written));
     }
 
     /// <summary>The type the value from <paramref name="at"/> to <paramref name="end"/> makes, where it is a <c>new</c> of one and nothing more; <see langword="null"/> otherwise.</summary>
@@ -5574,7 +5628,7 @@ internal sealed class JsReading
         }
 
         var written = names.Select(index => scan.Text(index)).ToList();
-        return written[0] is "this" or "Function" ? null : string.Join('.', Expanded(written));
+        return written[0] is "this" or "Function" ? null : string.Join('.', Called(written));
     }
 
     /// <summary>A test call's shape: where its description's arguments open and close, and whether it is a group's.</summary>
@@ -5678,16 +5732,19 @@ internal sealed class JsReading
 
     /// <summary>
     /// What the file exports by a list, an assignment or a default, once it is read: each declaration at its top - or a
-    /// wrapper's, where the export is written in one (<see cref="TopKeys(string, QualifiedName?)"/>) - so named exported: one at
-    /// the file's top by its own name, seen from everywhere; one by another name, or one a wrapper's body declares by any, that
-    /// name its importers' (<see cref="ExtractNode.Exports"/>) and its own still where it was seen - the module's, the wrapper's
-    /// code alone - and each name an import binds made visible to the file's importers as an export of the file it imports.
+    /// wrapper's, where the export is written in one (<see cref="TopKeys(string, QualifiedName?)"/>) - so named exported, and each
+    /// one an export declares in place (<see cref="Export(QualifiedName, string, int)"/>): one at the file's top by its own name,
+    /// seen from everywhere; one by another name, or one a wrapper's body declares by any, that name its importers'
+    /// (<see cref="ExtractNode.Exports"/>) and its own still where it was seen - the module's, the wrapper's code alone - and each
+    /// name an import binds made visible to the file's importers as an export of the file it imports.
     /// </summary>
     private void Exported()
     {
-        foreach (var (local, exported, line, region) in _exported)
+        foreach (var (local, exported, line, region, declared) in _exported)
         {
-            if (TopKeys(local, region) is { Count: > 0 } keys)
+            IReadOnlyList<QualifiedName> keys = declared is { } own ? [own] : TopKeys(local, region);
+
+            if (keys.Count > 0)
             {
                 foreach (var key in keys)
                 {
@@ -5700,6 +5757,40 @@ internal sealed class JsReading
             {
                 Run(binding.Specifier, line, null, [name], export: true);
             }
+        }
+    }
+
+    /// <summary>
+    /// The fields the file's types hold by what their members' bodies assign through <c>this</c>, once the file is read
+    /// (<see cref="_assigned"/>): each name a constructor, a method or an accessor of a type the file declares assigns -
+    /// <c>this.lines = []</c> - that the type declares nothing of by that name, a field of the type from its first such
+    /// assignment, over that statement's lines and held by the type, as one its body declares is, and of the type that
+    /// assignment's value makes where it is a <c>new</c> of one, as a field its body declares is (<see cref="ValueTypeOf"/>); so a
+    /// chain through it, <c>this.lines.sum()</c>, is read on that field - on the type it is made of, else by its name alone. A
+    /// member a body assigns on a type another file declares - a member extending it - is no field of it: what that type declares
+    /// is the other file's to say.
+    /// </summary>
+    private void ThisFields()
+    {
+        foreach (var (from, name, thisAt, assign) in _assigned)
+        {
+            if (_extract.Node(from).Parent is not { } holder || _extract.Node(holder) is not { Kind: CodeNodeKinds.Type } type
+                || _extract.Holds(holder, name) || _extract.Holds(holder, name + "="))
+            {
+                continue;
+            }
+
+            var stop = StatementEnd(assign, _scan.Count);
+            var boundary = _scan.Is(_scan.LastOf(stop), ";") ? _scan.LastOf(stop) : stop;
+            var qualified = ExtractText.Qualify(type.Qualified, name);
+            _extract.Add(new ExtractNode(Id(qualified), CodeNodeKinds.Member, name, qualified, _scan[thisAt].Line, _scan[_scan.LastOf(stop)].EndLine, _scan.Signature(thisAt, assign))
+            {
+                SubKind = "field",
+                Scope = type.Qualified,
+                Parent = holder,
+                Summary = ScanComments.Summary(_scan, thisAt),
+                ValueType = ValueTypeOf(-1, -1, assign, boundary),
+            });
         }
     }
 
@@ -5748,12 +5839,12 @@ internal sealed class JsReading
 
     /// <summary>
     /// A reference of <paramref name="kind"/> to the type <paramref name="chain"/> names: its last name, qualified by the
-    /// names before it - an import's prefix where one is them, a type's otherwise - a default or renamed import's name
-    /// written as the export it binds.
+    /// names before it - an import's prefix where one is them, a type's otherwise - a name an import binds written as the
+    /// export it binds (<see cref="Called"/>).
     /// </summary>
     private void Mention(QualifiedName key, string kind, string chain, int line)
     {
-        var names = Expanded(chain.Split('.'));
+        var names = Called(chain.Split('.'));
 
         if (names.Count == 1)
         {

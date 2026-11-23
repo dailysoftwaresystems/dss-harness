@@ -13,6 +13,7 @@ internal sealed class ScanExtract
 
     private readonly List<ExtractNode> _nodes = [];
     private readonly List<QualifiedName> _wanted = [];
+    private readonly HashSet<(QualifiedName Parent, string Name)> _held = [];
     private readonly Dictionary<(QualifiedName Wanted, string Kind, QualifiedName? Parent), QualifiedName> _parts = [];
     private readonly Dictionary<QualifiedName, ExtractScope> _scopes = [];
     private readonly List<ExtractImport> _imports = [];
@@ -69,8 +70,17 @@ internal sealed class ScanExtract
 
         _wanted.Add(node.Id);
         _nodes.Add(node with { Id = key });
+
+        if (node.Parent is { } parent)
+        {
+            _held.Add((parent, node.Name));
+        }
+
         return key;
     }
+
+    /// <summary>Whether the node of the key <paramref name="parent"/> holds a node named <paramref name="name"/>, as the nodes were added.</summary>
+    public bool Holds(QualifiedName parent, string name) => _held.Contains((parent, name));
 
     /// <summary>
     /// <paramref name="node"/> as a part of the node of its id, kind and holder the file already declares, which then runs

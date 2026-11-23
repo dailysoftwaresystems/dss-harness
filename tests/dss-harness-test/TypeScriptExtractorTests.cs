@@ -564,6 +564,34 @@ public sealed class TypeScriptExtractorTests : CodeGraphExtractorContractTests<T
         Assert.DoesNotContain(linked.Edges, edge => edge.From == $"{album}.render" && edge.To is var to && (to == $"{album}.label" || to == $"{album}.label~2"));
     }
 
+    /// <summary>
+    /// Where TypeScript merges a class and a namespace of one name, a name of a type both the namespace and an import of the file
+    /// give is the import's from the class's method, which sees nothing of the namespace, and the namespace's own from its function -
+    /// each found as what asks is, whichever asks first: what a name is from one scope is kept apart for what is reached by a
+    /// receiver alone and what is not.
+    /// </summary>
+    [Fact]
+    public void AClassAndANamespaceMerged_EachFindTheTypeOfOneNameTheyEachSee_WhicheverAsksFirst()
+    {
+        var linked = Link(
+            ("src/tokens.ts", "export class Tokens { static read(s: string) { return [s]; } }"),
+            ("src/parser.ts", """
+                import { Tokens } from './tokens';
+                export class Parser { parse(s: string) { return Tokens.read(s); } }
+                export namespace Parser {
+                  export class Tokens { static read(s: string) { return []; } }
+                  export function quick(s: string) { return Tokens.read(s); }
+                }
+                """));
+
+        Assert.Equal(
+            [
+                new CodeEdge("typescript:src/parser.ts.Parser.parse", "typescript:src/tokens.ts.Tokens.read", CodeEdgeKinds.Calls, 2, CodeConfidences.Exact),
+                new CodeEdge("typescript:src/parser.ts.Parser.quick", "typescript:src/parser.ts.Parser.Tokens.read", CodeEdgeKinds.Calls, 5, CodeConfidences.Exact),
+            ],
+            linked.Edges.Where(edge => edge.Kind == CodeEdgeKinds.Calls).OrderBy(edge => edge.From, StringComparer.Ordinal));
+    }
+
     /// <summary>A declaration file's every member is a prototype, its declarations the repository's where it imports and exports nothing; it is no generated file by that alone.</summary>
     [Fact]
     public void ADeclarationFilesMembers_AreEachAPrototype()

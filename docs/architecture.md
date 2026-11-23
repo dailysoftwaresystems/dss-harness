@@ -4727,18 +4727,32 @@ among them). A member a prototype assignment adds - `X.prototype.y = function ()
 `X.prototype = {...}` - is a member of X in X's own scope where the file declares X at its top, a function whose
 prototype the file writes being a type, a constructor function whose `constructor` is its body (`Constructors`,
 `Constructed`) - a chain the file assigns one, `App.Cart = function () {}`, among them, the type named by the chain's last
-name in an open scope of the names before it and seen wherever the object is (`AssignedConstructor`); else it is a member
-extending the type the chain names (`Prototyped`, `ExtractNode.Extends`, as a Dart extension's members are reached), in a
-scope of X's name that no name of the file binds. Its own `this` is read on that type (`CodeGraphLinker.EnclosingTypes`:
-every type its scope or its `Extends` names, several a unique finding and never the first of them) - and where no type of
-X's name is, on the constructor function another file declares, found as a call of X is (`CodeGraphLinker.Extended`),
-whose own `this` is read on it too and whose `new` makes it (`Constructs`, by the members extending its name). A
+name in an open scope of the names before it and seen wherever the object is (`AssignedConstructor`), which a chain naming
+it, `new App.Cart()`, finds by its names together where no declaration stands for the names before the last
+(`CodeGraphLinker.InChain`) - and the type holds those members wherever the file writes them, its lines widened over theirs;
+else it is a member extending the type the chain names (`Prototyped`, `ExtractNode.Extends`, as a Dart extension's members
+are reached), in a scope of X's name that no name of the file binds, the chain written as a call or a `new` of it is - a
+name an import binds as the export it binds, a `require`'s or a default import's binding followed by its module's
+`default` (`JsReading.Called`, the one reading a call, a `new`, a base and a prototype's type share). Its own `this` is read
+on that type (`CodeGraphLinker.EnclosingTypes`: every type its scope or its `Extends` names, several a unique finding and
+never the first of them) - and where no type of X's name is, on the constructor function another file declares, found as a
+call of X is (`CodeGraphLinker.Extended`: a name alone in the scopes, the imports and the repository, a chain's last name
+through the import its prefix is - `Prefixed` - else in what the names before it name), whose own `this` is read on it
+too and whose `new` makes it (`Constructs`, by the members extending each name it is reached by, its own and each it is
+exported by); two chains naming a type the repository does not declare name it alike where one is the other or ends it
+at a name (`WrittenAlike`), never two modules' `default`s. A member a constructor, a method or an accessor of a type the
+file declares assigns through `this` - `this.lines = []` - is a field of the type where it declares nothing of that name,
+from the first such assignment (`JsReading.ThisFields`), as Python's `self` fields are, of the type the assignment's `new`
+makes where it is one, as a field the type's body declares is (`ValueTypeOf`). A
 class's, an extend type's and a constructor function's members, and those a file adds to a type it does not declare,
 are reached by a receiver alone (`ExtractNode.MembersByReceiver`): a name their code writes by itself is looked for past
 that scope and its bases, so a method's `render(x)` reaches the module's `render`, never the method; a namespace
 TypeScript merges with the class into one scope keeps its own names, which its own code finds and the class's members
-do not, in their scopes nor past them (`CodeGraphLinker.Scoped`, `Sees`, `ByReceiver`); and `this.a.b()` is read on the type `this` is, link by link
-(`CodeQualifierKinds.This` with the chain's names). An AMD module's `define` given its factory and a function called where it is written at the file's top - an
+do not, in their scopes nor past them (`CodeGraphLinker.Scoped`, `Sees`, `ByReceiver`), so what a name is from one scope is
+found once for what is reached by a receiver alone and once for what is not (`NamedContainers`); and `this.a.b()` is read
+on the type `this` is, link by link (`CodeQualifierKinds.This` with the chain's names), by its name alone where a link is
+none the type it comes to declares - a member the code adds at run time, or one a base the repository does not hold
+gives - never by nothing (`CodeGraphLinker.OfThis`). An AMD module's `define` given its factory and a function called where it is written at the file's top - an
 IIFE, `(function ($) {...})(jQuery)` - are wrappers (`JsReading.Wrapped`), whose body is read as the file's top is, in a
 closed scope of its own as a function's body is (`Wrapping`): its code outside its declarations is the calls of a node of
 its own, `(wrapper 3:2)` by its function's line and column, and the scope is under that node's name, which the linker
@@ -4746,10 +4760,13 @@ looks the node's references up from (`CodeGraphLinker.LookedFrom`), its parent t
 it, or in a script a closed scope of the file's path that declares nothing; what the body declares keeps the file's path
 before its name and, as what a member's body declares, is seen from the body's own code alone, so no other code of the
 file sees it or finds it by its name, and the reader looks a name of the top's - an export's, a prototype's type's - up
-from the wrapper it is written in outward (`TopKeys`): what the body exports by its own name - `module.exports = { helper }`
-written in it - is its importers' by that name (`ExtractNode.Exports`), its own name still the body's. Each parameter an AMD factory is given a dependency for is an import of it by that name,
+from the wrapper it is written in outward (`TopKeys`): what the body exports in any CommonJS form - `module.exports =
+{ helper }`, `exports.total = function () {}`, `module.exports = class {}`, `exports.rate = 0.2` - is its importers' by
+the name it is exported by (`ExtractNode.Exports`), its own name still the body's, a declaration an export makes where it
+is written exported by the one rule every export is (`JsReading.ExportedValue`). Each parameter an AMD factory is given a dependency for is an import of it by that name,
 as a `require` declared by it is - but `require`, `exports` and `module`, the loader's own (`AmdOwn`), none - each other a
-value, and an AMD factory's own `return` the module's export, as `module.exports =`'s is. An Angular `@Component`'s, `@Directive`'s or
+value, and an AMD factory's own `return` the module's export, read as `module.exports =`'s is - a name, an object's names
+and functions, a function, a class or any other value. An Angular `@Component`'s, `@Directive`'s or
 `@Pipe`'s object is read (`Angular`) where the decorator is what an import of `@angular/core` binds, never by its name
 alone: its `selector`'s element selectors, each with a dash as a custom element's name has (`ExtractNode.IsSelector`),
 are names the repository finds the class by as its own (`ExtractNode.Selectors`, among the linker's names - `app-cart`,
