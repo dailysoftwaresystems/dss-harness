@@ -5280,8 +5280,10 @@ it as a string literal - the search passing over every other readable file by it
 file the reader may not read (`AgentSearch.LeftOut`'s refused count). Each place is one card, the node at it, saying every way
 it decides - an edge's other than exact with how sure it is, as the `node` operation marks a candidates edge - with the lines
 a literal and a text hit stand on beneath it, a hit at a line a literal already names passed over - a hit's node the innermost
-at its line (`CodebaseGraphQueries.AtLine`: the one that begins last, of those the one that ends first, of nodes with the same
-lines the one declared deepest, so a page's landmark is never its body of the same lines by the order of their ids); or a raw
+at its line (`CodebaseGraphQueries.AtLine`: the one that begins last, of those the one that ends first; of nodes with the same
+lines one no other of them is declared inside, never the file's own node, which holds them all, and of those one that makes a
+reference at the line - so a Vue component spanning its file is never the file's node, a page's landmark never its body of
+the same lines, and a Razor page's markup never the class it compiles to, by the order of their ids); or a raw
 line where the graph read no node of the file. The cards are grouped by file kind and tier, as part 02 has it (`CodebaseGraphQueries.KindOf`: the
 language that read the file, else its extension or its name; `CodebaseGraphQueries.TierOf`: the project nearest above it as
 the repository's map names its projects, else its top directory as the outline names it), at `CodebaseGraphTool.RelatedLines`

@@ -620,18 +620,25 @@ public sealed partial class CodebaseGraphToolTests
     /// <summary>
     /// The node at a line - a text hit's card, a <c>path:line</c>'s node - is the innermost: of nodes with the same lines, the
     /// one declared inside the other, never one of them by the order of their ids - a page's landmark before the body of the
-    /// same lines, a type's only member on its line before the type.
+    /// same lines, a type's only member on its line before the type, and a Vue component that spans its whole file before the
+    /// file's own node, whose id the order would put first - and of those no other is declared inside, the one that makes a
+    /// reference at the line: a Razor page's markup, not the class it compiles to, whose id the order would put first.
     /// </summary>
     [Fact]
     public async Task TheNodeAtALine_IsTheInnermost_OfNodesWithTheSameLinesTheOneDeclaredInside()
     {
         using var tree = await TreeAsync(
             ("web/page.html", "<main>\n  <p>Okapi</p>\n</main>\n"),
-            ("src/One.cs", "namespace Demo;\n\npublic sealed class One { public int Two() => 2; }\n"));
+            ("src/One.cs", "namespace Demo;\n\npublic sealed class One { public int Two() => 2; }\n"),
+            ("src/Cart.vue", "<template>\n  <p>{{ total() }}</p>\n</template>\n<script setup>\nfunction total() { return 1; }\n</script>\n"),
+            ("src/CartService.cs", "namespace Shop;\n\npublic sealed class CartService\n{\n    public int Total() => 0;\n}\n"),
+            ("src/Pages/_Total.cshtml", "@model Shop.CartService\n\n<p>Total: @Model.Total()</p>\n"));
         var queries = await QueriesAsync(tree);
 
         Assert.Equal("landmark", queries.AtLine("web/page.html", 2)!.SubKind);
         Assert.Equal("Two", queries.AtLine("src/One.cs", 3)!.Name);
+        Assert.Equal(("vue:src/Cart.vue", CodeNodeKinds.Type), (queries.AtLine("src/Cart.vue", 2)!.Id, queries.AtLine("src/Cart.vue", 2)!.Kind));
+        Assert.Equal("razor:src/Pages/_Total.cshtml#view", queries.AtLine("src/Pages/_Total.cshtml", 3)!.Id);
     }
 
     /// <summary>

@@ -1243,38 +1243,52 @@ public sealed class CodebaseGraphQueries
     /// <summary>
     /// The innermost node of the file at <paramref name="path"/> whose lines hold <paramref name="line"/>, as a text hit is
     /// turned to a card where one covers its line and a <c>path:line</c> names one: the one that begins last, of those the
-    /// one that ends first, of nodes with the same lines the one declared deepest inside the others - a landmark inside the
-    /// body of a page with no body element, a type's only member on its line - so the node at a line is the one the file's
-    /// references at it are made from, never one of its enclosing nodes by the order of their ids.
+    /// one that ends first; of nodes with the same lines, one no other of them is declared inside - a landmark, not the body
+    /// of a page with no body element around it, a type's only member on its line, not the type - and never the file's own
+    /// node, which holds every node the file declares, a Vue component or a Markdown section that spans the whole file among
+    /// them; of those, one that makes a reference at the line - a Razor page's markup, not the class it compiles to, whose
+    /// lines are its page's too - and then the first by id. So the node at a line is the one the file's references at it
+    /// are made from, never one of its enclosing nodes by the order of their ids.
     /// </summary>
     /// <param name="path">A file's path, relative to the tree with forward separators.</param>
     /// <param name="line">A line of that file, from 1.</param>
     public GraphCard? AtLine(string path, int line)
-        => (_inFile.TryGetValue(path, out var ids) ? ids : [])
+    {
+        var spanning = (_inFile.TryGetValue(path, out var ids) ? ids : [])
             .Select(id => Card(id, path))
             .Where(card => card.Path == path && card.Start <= line && line <= card.End)
             .OrderByDescending(card => card.Start)
             .ThenBy(card => card.End)
-            .ThenByDescending(card => DepthOf(card.Id, path))
+            .ToList();
+
+        if (spanning.Count == 0)
+        {
+            return null;
+        }
+
+        // The nodes of the tightest lines, and of them those no other is declared inside: the file's own node holds every one.
+        var tightest = spanning.TakeWhile(card => card.Start == spanning[0].Start && card.End == spanning[0].End).ToList();
+        var outer = tightest.SelectMany(card => AroundOf(card.Id, path)).ToHashSet(StringComparer.Ordinal);
+        var inner = tightest.Where(card => !outer.Contains(card.Id) && !string.Equals(card.Kind, CodeNodeKinds.File, StringComparison.Ordinal)).ToList();
+
+        return (inner.Count > 0 ? inner : tightest)
+            .OrderByDescending(card => _out[card.Id].Any(edge => edge.Line == line))
             .ThenBy(card => card.Id, StringComparer.Ordinal)
-            .Cast<GraphCard?>()
-            .FirstOrDefault();
+            .First();
+    }
 
     /// <summary>
-    /// How many nodes the node <paramref name="id"/> is declared inside, as the file at <paramref name="path"/> declares it:
-    /// its parent, that one's, and so on - each once, so a parent named twice ends the walk.
+    /// The nodes the node <paramref name="id"/> is declared inside, as the file at <paramref name="path"/> declares it: its
+    /// parent, that one's, and so on - each once, so a parent named twice ends the walk.
     /// </summary>
-    private int DepthOf(string id, string path)
+    private IEnumerable<string> AroundOf(string id, string path)
     {
-        var depth = 0;
         var seen = new HashSet<string>(StringComparer.Ordinal) { id };
 
         for (var at = id; _nodes.TryGetValue(at, out var placed) && placed.FirstOrDefault(one => one.Path == path)?.Node.Parent?.Whole() is { } parent && seen.Add(parent); at = parent)
         {
-            depth++;
+            yield return parent;
         }
-
-        return depth;
     }
 
     /// <summary>Whether <paramref name="symbol"/> is written as a file is - with a separator, or as a <c>path:line</c> - rather than as a name.</summary>
