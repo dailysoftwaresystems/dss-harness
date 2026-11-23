@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text.RegularExpressions;
 using DssHarness.Core.Configuration;
+using DssHarness.Core.Text;
 
 namespace DssHarness.Core.Results;
 
@@ -10,7 +11,7 @@ namespace DssHarness.Core.Results;
 /// specific names - a test's by its runner, and a configured matcher everywhere, for <c>results.matchers</c> is the
 /// way a tool this build does not know is read. A parser never runs over output it was not chosen for.
 /// </summary>
-public static partial class PhaseParsers
+public static class PhaseParsers
 {
     /// <summary>The parsers a build phase's log is read by, for the toolchain the leg resolved.</summary>
     /// <param name="toolchain">The toolchain the leg's variant resolved, or null where none did.</param>
@@ -129,16 +130,16 @@ public static partial class PhaseParsers
         [
             .. log.Split('\n')
                 .Select(line => line.TrimEnd('\r'))
-                .Select(line => Timestamp().Replace(line, string.Empty))
-                .Where(line => line.Length > 0 && !Group().IsMatch(line)),
+                .Select(line => Timestamp.Replace(line, string.Empty))
+                .Where(line => line.Length > 0 && !Group.IsMatch(line)),
         ];
     }
 
-    [GeneratedRegex(@"^\d{4}-\d{2}-\d{2}T[\d:.]+Z ?")]
-    private static partial Regex Timestamp();
+    /// <summary>The timestamp a forge prefixes each line of a job's log with.</summary>
+    private static readonly Regex Timestamp = LinearRegex.Compile(@"^\d{4}-\d{2}-\d{2}T[\d:.]+Z ?");
 
-    [GeneratedRegex(@"^##\[(?:group|endgroup)\]$")]
-    private static partial Regex Group();
+    /// <summary>A group marker a workflow folds its log with.</summary>
+    private static readonly Regex Group = LinearRegex.Compile(@"^##\[(?:group|endgroup)\]$");
 
     /// <summary>
     /// The stack parsers of every runtime, for output whose program is not known from the outside - a runner's step,

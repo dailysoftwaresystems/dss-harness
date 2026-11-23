@@ -189,9 +189,11 @@ public sealed class ArchitectureTests
     /// construction, <c>new Regex(</c> or a target-typed <c>new(</c> - or calls one of <see cref="Regex"/>'s static
     /// matches, each of which compiles its pattern by its own rule; and no line of the command line's source does either.
     /// A pattern compiled by its own rule has a timeout or an engine of its own, and the linear engine's refusal of what
-    /// it cannot run in a line never reaches it. The owner compiles every pattern the code holds as <c>NonBacktracking</c>
-    /// with no timeout; nothing else compiles one, so the walk holds no exception - a regex made anywhere else goes red
+    /// it cannot run in a line never reaches it. The owner compiles every pattern the code makes as <c>NonBacktracking</c>
+    /// with no timeout; nothing else constructs one, so the walk holds no exception - a regex made anywhere else goes red
     /// here. Read from Core's own instructions, never from its source's text, which a target-typed construction hides from.
+    /// A source-generated pattern (<c>[GeneratedRegex]</c>) is compiled by the generator into a type of its own, which
+    /// derives from <see cref="Regex"/> and constructs none, so it is not one this walk sees.
     /// </summary>
     [Fact]
     public void NoRegexIsMadeOutsideLinearRegex()
